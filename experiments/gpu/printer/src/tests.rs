@@ -4,7 +4,7 @@ use crate::{
     predicate::Constants,
 };
 use cq_lang_structures as ir;
-use quote::{ToTokens, quote};
+use quote::{quote, ToTokens};
 use std::collections::BTreeMap;
 
 fn shared() -> ir::Program {
@@ -43,8 +43,11 @@ fn pure_projection_uses_runtime_without_a_redundant_copy_kernel() {
         .to_string();
     assert!(!generated.contains("cuda_module"));
     assert!(generated.contains("__execution . dedup"));
-    assert!(generated.contains("encode_slice"));
-    assert!(generated.contains("decode_value :: < i64 >"));
+    assert!(generated.contains("bind_host"));
+    assert!(generated.contains("into_columns :: < (i64 ,) , :: cq_gpu_runtime :: Plain >"));
+    assert!(!generated.contains("download"));
+    assert!(!generated.contains("decode_value"));
+    assert!(!generated.contains("into_iter"));
     assert_eq!(generated.matches("pub fn cq_gpu_stream_").count(), 0);
     assert!(generated.contains("project_table"));
     assert!(!generated.contains("prepare_run"));
@@ -74,7 +77,7 @@ fn every_keyed_read_has_exactly_one_provenance_entry_and_witness_does_not_reprob
         "witness:s"
     );
     assert!(reads.iter().all(|r| r.build == "b" && r.keys == ["x"]));
-    let generated = compile(&source, Options::default())
+    let generated = compile(&source, syn::parse2(quote!(capacity(R))).unwrap())
         .unwrap()
         .to_token_stream()
         .to_string();
@@ -83,11 +86,8 @@ fn every_keyed_read_has_exactly_one_provenance_entry_and_witness_does_not_reprob
     assert_eq!(generated.matches("pub fn cq_gpu_stream_").count(), 1);
     assert!(generated.contains("cuda_module"));
     assert!(generated.contains("p:b[x]:witness:s"));
-    assert!(
-        generated.contains(
-            "let (__cq_gpu_begin_p , __cq_gpu_end_p) = (__cq_gpu_begin_s , __cq_gpu_end_s)"
-        )
-    );
+    assert!(generated
+        .contains("let (__cq_gpu_begin_p , __cq_gpu_end_p) = (__cq_gpu_begin_s , __cq_gpu_end_s)"));
     assert!(generated.contains("while __cq_gpu_row_p < __cq_gpu_end_p"));
     assert!(!generated.contains("tiles :: owner"));
 }
@@ -101,7 +101,7 @@ fn unshared_first_probe_still_expands_every_range_row() {
             ir::Structure::Share { .. } | ir::Structure::Repr { .. }
         )
     });
-    let generated = compile(&source, Options::default())
+    let generated = compile(&source, syn::parse2(quote!(capacity(R))).unwrap())
         .unwrap()
         .to_token_stream()
         .to_string();
@@ -117,16 +117,19 @@ fn recorded_expand_enables_frontier_and_zero_disables_it() {
         .structures
         .entries
         .push(syn::parse_quote!(p stage = batch 32 expand;));
-    let enabled = compile(&source, Options::default())
+    let enabled = compile(&source, syn::parse2(quote!(capacity(R))).unwrap())
         .unwrap()
         .to_token_stream()
         .to_string();
     assert!(enabled.contains("frontier_claim"));
     assert!(enabled.contains("32usize"));
-    let disabled = compile(&source, Options { frontier: 0 })
-        .unwrap()
-        .to_token_stream()
-        .to_string();
+    let disabled = compile(
+        &source,
+        syn::parse2(quote!(capacity(R), frontier(0))).unwrap(),
+    )
+    .unwrap()
+    .to_token_stream()
+    .to_string();
     assert!(!disabled.contains("frontier_claim"));
     assert!(disabled.contains("false &&"));
 }
@@ -211,12 +214,10 @@ fn backend_rejection_codes_name_unsupported_recorded_storage() {
         .unwrap()
         .types
         .insert("x".into(), syn::parse_quote!(String));
-    assert!(
-        validate(&source, &bad_types)
-            .unwrap_err()
-            .to_string()
-            .contains("CQ_GPU_NON_INTEGRAL_KEY")
-    );
+    assert!(validate(&source, &bad_types)
+        .unwrap_err()
+        .to_string()
+        .contains("CQ_GPU_NON_INTEGRAL_KEY"));
 }
 
 #[test]
@@ -231,12 +232,10 @@ fn printer_options_are_explicit_and_checked() {
             "CQ_GPU_DUPLICATE_ARGUMENT",
         ),
     ] {
-        assert!(
-            syn::parse2::<Options>(args)
-                .unwrap_err()
-                .to_string()
-                .contains(code)
-        );
+        assert!(syn::parse2::<Options>(args)
+            .unwrap_err()
+            .to_string()
+            .contains(code));
     }
 }
 
@@ -245,13 +244,11 @@ fn dictionary_order_is_never_silently_integer_order() {
     let vars = BTreeMap::from([("name".into(), quote!(__name))]);
     let types = BTreeMap::from([("name".into(), syn::parse_quote!(String))]);
     let theta = syn::parse_quote!(name < "z");
-    assert!(
-        Constants::default()
-            .theta(&theta, &vars, &types)
-            .unwrap_err()
-            .to_string()
-            .contains("CQ_GPU_STRING_ORDER")
-    );
+    assert!(Constants::default()
+        .theta(&theta, &vars, &types)
+        .unwrap_err()
+        .to_string()
+        .contains("CQ_GPU_STRING_ORDER"));
 }
 
 #[test]
@@ -274,14 +271,14 @@ fn recorded_prefix_run_preserves_all_residual_key_comparisons() {
     assert_eq!(reads.len(), 1);
     assert_eq!(reads[0].keys, ["x", "y"]);
     assert_eq!(reads[0].source, "rank-point+residual");
-    let generated = compile(&source, Options::default())
+    let generated = compile(&source, syn::parse2(quote!(capacity(R))).unwrap())
         .unwrap()
         .to_token_stream()
         .to_string();
     assert_eq!(generated.matches("prepare_run").count(), 1);
     let residual = quote!(
         ::cq_gpu_runtime::run_column(__cq_gpu_run_view_r, 1usize, __cq_gpu_row_p)
-            == ::cq_gpu_runtime::column(__driver, 1usize, __row)
+            == __cq_gpu_tile_column_1[__stripe / 256]
     )
     .to_string();
     assert!(generated.contains(&residual));
@@ -330,7 +327,7 @@ fn recorded_join_filter_keeps_its_exact_covering_read_and_budget() {
         reads.iter().find(|read| read.reader == "s").unwrap().source,
         "rank-point"
     );
-    let generated = compile(&source, Options::default())
+    let generated = compile(&source, syn::parse2(quote!(capacity(R))).unwrap())
         .unwrap()
         .to_token_stream()
         .to_string();
@@ -418,4 +415,177 @@ fn provider_names_must_resolve_to_the_supported_recorded_paths() {
         .unwrap_err()
         .to_string();
     assert!(error.contains("CQ_GPU_ROWS_TYPE"), "{error}");
+}
+
+#[test]
+fn resident_host_binding_preserves_codec_ownership_and_explicit_download() {
+    let source: ir::Program = syn::parse_quote! { physical {
+        relation Input(k:i64,label:&str) = (&resident);
+        scan = pipe rename Input@0 {k -> x,label -> name};
+        output = pipe canon project scan keep {x,name};
+        return output as answer(name,x,name);
+    } structures {
+        scan host scan = ::cq_gpu_runtime::DeviceColumns<'_,(i64,&str),::cq_gpu_runtime::Delta> [];
+        output canon = ::cq_gpu_runtime::DeviceSet<_>;
+    }};
+    let generated = compile(&source, Options::default())
+        .unwrap()
+        .to_token_stream()
+        .to_string();
+    assert!(generated.contains("HostColumns :: pool"));
+    assert!(generated.contains("with_runtime_for"));
+    assert!(generated.contains("bind_host"));
+    assert!(generated.contains("HostColumns :: seed_dictionary"));
+    assert!(generated.find("seed_dictionary").unwrap() < generated.find("bind_host").unwrap());
+    assert!(generated
+        .contains("into_columns :: < (& str , i64 , & str ,) , :: cq_gpu_runtime :: Plain >"));
+    assert!(generated.contains("& [0usize , 1usize , 0usize]"));
+    assert!(generated.contains("__execution . dedup"));
+    assert!(!generated.contains("Codec :: Delta"));
+    assert!(!generated.contains("encode_slice"));
+    assert!(!generated.contains("decode_value"));
+    assert!(!generated.contains("download"));
+}
+
+#[test]
+fn derived_codecs_follow_only_recorded_provider_types() {
+    for (marker, codec) in [
+        (quote!(::cq_gpu_runtime::Plain), "Plain"),
+        (quote!(::cq_gpu_runtime::For), "For"),
+        (quote!(::cq_gpu_runtime::Delta), "Delta"),
+        (quote!(::cq_gpu_runtime::DictionaryCodec), "Dictionary"),
+    ] {
+        let mut source = shared();
+        source.structures.entries[4] =
+            syn::parse_quote!(p canon = ::cq_gpu_runtime::DeviceSet<_,#marker>;);
+        let generated = compile(&source, Options::default())
+            .unwrap()
+            .to_token_stream()
+            .to_string();
+        assert!(
+            generated.contains(&format!("Codec :: {codec}")),
+            "{generated}"
+        );
+        assert!(generated.contains("__CQ_GPU_DERIVED_CODECS"));
+        assert_eq!(generated.matches("__execution . dedup").count(), 1);
+        assert!(generated.contains(&format!("(\"p\" , \"{codec}\")")));
+    }
+    let mut source = shared();
+    source.structures.entries[2] = syn::parse_quote! {
+        b rows = ::cq_gpu_runtime::DeviceColumns<_,::cq_gpu_runtime::For>;
+    };
+    let generated = compile(&source, Options::default())
+        .unwrap()
+        .to_token_stream()
+        .to_string();
+    assert!(generated.contains("(\"b\" , \"For\")"));
+    assert!(generated.contains("into_columns :: < (i64 , i64 ,) , :: cq_gpu_runtime :: Plain >"));
+    assert_eq!(generated.matches("__execution . dedup").count(), 1);
+}
+
+#[test]
+fn unknown_codec_aliases_and_conflicting_materializations_are_rejected() {
+    for marker in [
+        quote!(For),
+        quote!(::user::For),
+        quote!(::cq_gpu_runtime::Unknown),
+    ] {
+        let mut source = shared();
+        source.structures.entries[4] =
+            syn::parse_quote!(p canon = ::cq_gpu_runtime::DeviceSet<_,#marker>;);
+        let error = compile(&source, Options::default())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("CQ_GPU_CODEC_TYPE"), "{error}");
+    }
+    let mut source = shared();
+    source.physical.program.definitions[1].canon = Some(Default::default());
+    source.structures.entries.push(syn::parse_quote! {
+        b canon = ::cq_gpu_runtime::DeviceSet<_,::cq_gpu_runtime::For>;
+    });
+    let error = compile(&source, Options::default())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("CQ_GPU_CODEC_CONFLICT"), "{error}");
+}
+
+#[test]
+fn capacity_is_explicit_and_names_a_declared_input() {
+    let options: Options = syn::parse2(quote!(capacity(R), frontier(0))).unwrap();
+    assert_eq!(options.capacity.as_ref().unwrap(), "R");
+    let generated = compile(&shared(), options)
+        .unwrap()
+        .to_token_stream()
+        .to_string();
+    assert!(generated.contains("__cq_gpu_host_R"));
+    assert!(generated.contains("__CQ_GPU_CAPACITY"));
+    assert!(generated.contains("execute_bounded"));
+    assert!(!generated.contains("execute_resumable"));
+    let options: Options = syn::parse2(quote!(capacity(invented))).unwrap();
+    let error = compile(&shared(), options).unwrap_err().to_string();
+    assert!(error.contains("CQ_GPU_CAPACITY"), "{error}");
+    assert!(syn::parse2::<Options>(quote!(capacity(L), capacity(R))).is_err());
+}
+
+#[test]
+fn kernels_read_resident_logical_count_not_allocation_capacity() {
+    let generated = compile(&shared(), syn::parse2(quote!(capacity(R))).unwrap())
+        .unwrap()
+        .to_token_stream()
+        .to_string();
+    assert!(generated.contains("table_len (__driver)"));
+    assert!(!generated.contains("__row < __driver . len"));
+    assert!(generated.contains("__driver . len . div_ceil"));
+}
+
+#[test]
+fn unbounded_expansion_uses_saved_device_execution_state() {
+    let generated = compile(&shared(), Options::default())
+        .unwrap()
+        .to_token_stream()
+        .to_string();
+    assert!(generated.contains("execute_resumable"));
+    assert!(generated.contains("__resume_pc"));
+    assert!(generated.contains("__resume_registers"));
+    assert!(!generated.contains("execute_bounded"));
+    assert!(!generated.contains("download"));
+}
+
+#[test]
+fn resumable_expansion_preserves_recorded_batch_and_frontier() {
+    let mut source = shared();
+    source.structures.entries.push(syn::parse_quote! {
+        p stage = batch 32 expand;
+    });
+    let generated = compile(&source, Options::default())
+        .unwrap()
+        .to_token_stream()
+        .to_string();
+    assert!(generated.contains("execute_resumable"));
+    assert!(generated.contains("frontier_claim"));
+    assert!(generated.contains("32usize"));
+    assert!(generated.contains("p:b[x]:witness:s"));
+}
+
+#[test]
+fn fixed_full_tile_scan_decodes_four_register_values_once_per_vector() {
+    let generated = compile(&shared(), syn::parse2(quote!(capacity(R))).unwrap())
+        .unwrap()
+        .to_token_stream()
+        .to_string();
+    assert_eq!(generated.matches("column_tile (").count(), 1);
+    assert!(generated.contains("__cq_gpu_tile_column_0 [__stripe / 256]"));
+    assert!(generated.find("column_tile (").unwrap() < generated.find("let mut __stripe").unwrap());
+    assert!(!generated.contains("column (__driver"));
+
+    let mut source = shared();
+    source.structures.entries.push(syn::parse_quote! {
+        p stage = batch 32 expand;
+    });
+    let partial = compile(&source, syn::parse2(quote!(capacity(R))).unwrap())
+        .unwrap()
+        .to_token_stream()
+        .to_string();
+    assert!(!partial.contains("column_tile ("));
+    assert!(partial.contains("column (__driver"));
 }

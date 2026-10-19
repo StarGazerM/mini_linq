@@ -132,6 +132,7 @@ dependencies = [
  "cuda-device",
  "cuda-host",
  "gpu-blocked-run",
+ "gpu-device-columns",
  "gpu-tiles",
  "rccl-memory",
 ]
@@ -543,6 +544,23 @@ dependencies = [
  "cuda-host",
  "gpu-tiles",
  "rccl-memory",
+]
+
+[[package]]
+name = "gpu-device-columns"
+version = "0.1.0"
+dependencies = [
+ "cuda-core",
+ "cuda-device",
+ "cuda-host",
+ "rccl-memory",
+]
+
+[[package]]
+name = "gpu-device-columns-oracle"
+version = "0.1.0"
+dependencies = [
+ "gpu-device-columns",
 ]
 
 [[package]]

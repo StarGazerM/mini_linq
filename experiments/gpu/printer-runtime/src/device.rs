@@ -8,8 +8,10 @@ use gpu_blocked_run::RankView;
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct TableView {
-    pub columns: *const *const i64,
+    pub columns: *const gpu_device_columns::ColumnView,
     pub len: u64,
+    pub count: *const u64,
+    pub error: *mut u32,
 }
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
@@ -17,6 +19,7 @@ pub struct RunView {
     pub rank: RankView,
     pub columns: *const *const i64,
     pub len: u64,
+    pub count: *const u32,
 }
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
@@ -30,8 +33,7 @@ pub struct OutputView {
 #[repr(C)]
 pub struct MembershipView {
     pub bits: *const u64,
-    pub min_key: i64,
-    pub max_key: i64,
+    pub bounds: *const u64,
 }
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
@@ -41,6 +43,41 @@ pub struct FrontierView {
     pub descriptor_words: u32,
     pub cursor: *mut u64,
     pub remaining: *mut u64,
+}
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct ResumeView {
+    pub state: *mut u64,
+    pub control: *mut u32,
+}
+unsafe impl DeviceCopy for ResumeView {}
+
+#[device]
+#[inline(always)]
+pub unsafe fn resume_requested(resume: ResumeView) -> bool {
+    unsafe { DeviceAtomicU32::from_ptr(resume.control) }.load(AtomicOrdering::Relaxed) != 0
+}
+#[device]
+#[inline(always)]
+pub unsafe fn resume_suspend(resume: ResumeView) {
+    unsafe { DeviceAtomicU32::from_ptr(resume.control) }.store(1, AtomicOrdering::Relaxed);
+}
+/// Failed reservations change no counters, so saved continuations resume
+/// exactly once without replaying previously written rows.
+#[device]
+#[inline(always)]
+pub unsafe fn resume_reserve(output: OutputView, rows: u64) -> u64 {
+    let count = unsafe { DeviceAtomicU64::from_ptr(output.count) };
+    let mut current = count.load(AtomicOrdering::Relaxed);
+    loop {
+        if current > output.capacity || rows > output.capacity - current {
+            return u64::MAX;
+        }
+        match count.compare_exchange_relaxed(current, current + rows) {
+            Ok(_) => return current,
+            Err(next) => current = next,
+        }
+    }
 }
 // SAFETY: C-layout records of device pointers and scalars. Views own no storage.
 unsafe impl DeviceCopy for TableView {}
@@ -52,10 +89,12 @@ unsafe impl DeviceCopy for MembershipView {}
 #[device]
 #[inline(always)]
 pub unsafe fn membership_contains(view: MembershipView, key: i64) -> bool {
-    if key < view.min_key || key > view.max_key {
+    let min_key = unsafe { view.bounds.read() } as i64;
+    let max_key = unsafe { view.bounds.add(1).read() } as i64;
+    if key < min_key || key > max_key {
         return false;
     }
-    let position = (key as u64).wrapping_sub(view.min_key as u64);
+    let position = (key as u64).wrapping_sub(min_key as u64);
     unsafe { view.bits.add((position / 64) as usize).read() & (1u64 << (position % 64)) != 0 }
 }
 
@@ -68,7 +107,32 @@ pub unsafe fn flag_error(output: OutputView, code: u32) {
 #[device]
 #[inline(always)]
 pub unsafe fn column(table: TableView, column: usize, row: u64) -> i64 {
-    unsafe { table.columns.add(column).read().add(row as usize).read() }
+    unsafe { gpu_device_columns::decode(table.columns.add(column).read(), row) }
+}
+
+/// Decode a root scan vector into this lane's four striped registers.
+#[device]
+#[inline(always)]
+pub unsafe fn column_tile(table: TableView, column: usize, vector: u64, lane: u32) -> [i64; 4] {
+    unsafe { gpu_device_columns::decode_tile(table.columns.add(column).read(), vector, lane) }
+}
+/// Logical initialized row count. Host `len` is only an allocation bound.
+#[device]
+#[inline(always)]
+pub unsafe fn table_len(table: TableView) -> u64 {
+    if !table.error.is_null() && unsafe { table.error.read() } != 0 {
+        return 0;
+    }
+    if table.count.is_null() {
+        table.len
+    } else {
+        unsafe { table.count.read() }.min(table.len)
+    }
+}
+#[device]
+#[inline(always)]
+pub unsafe fn run_len(run: RunView) -> u64 {
+    (unsafe { run.count.read() }) as u64
 }
 #[device]
 #[inline(always)]

@@ -11,7 +11,8 @@ fn main() {
             relation Input(value:i64) = (&input);
             answer(value) :- Input(value);
         }
-        .collect();
+        .to_host()
+        .expect("GPU smoke download");
         let mut expected: Vec<_> = mini_linq::compile! {
             pipeline {}
             struct PullSmoke;
@@ -50,7 +51,8 @@ fn main() {
             relation Right(key:i64,value:i64) = (&right);
             answer(value) :- Left(key), Right(key,value);
         }
-        .collect();
+        .to_host()
+        .expect("GPU fanout download");
         actual.sort_unstable();
         let expected: Vec<_> = (delta..delta + 4097).map(|value| (value,)).collect();
         assert_eq!(

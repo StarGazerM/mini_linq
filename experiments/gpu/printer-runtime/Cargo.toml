@@ -9,4 +9,5 @@ cuda-device.workspace = true
 cuda-host.workspace = true
 gpu-blocked-run = { path = "../blocked-run" }
 gpu-tiles = { path = "../tiles" }
+gpu-device-columns = { path = "../device-columns" }
 rccl-memory = { path = "/data/rccl/rccl-memory" }

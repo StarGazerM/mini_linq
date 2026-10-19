@@ -16,7 +16,8 @@ fn main() {
         relation Input(a:i64,b:i64,name:String) = (&rows);
         answer(a,b,name) :- Input(a,b,name);
     }
-    .collect();
+    .to_host()
+    .expect("wide-key answer download");
     let mut expected = rows.clone();
     expected.sort_unstable();
     expected.dedup();
@@ -53,7 +54,8 @@ fn main() {
             p stage = batch 32 expand;
         }
     }
-    .collect();
+    .to_host()
+    .expect("expanded answer download");
     expanded.sort_unstable();
     assert_eq!(
         expanded, right,

@@ -6,7 +6,7 @@ use cq_lang_structures::{
 };
 use cq_print::Context;
 use proc_macro2::{Span, TokenStream as Tokens};
-use quote::{ToTokens, format_ident, quote};
+use quote::{format_ident, quote, ToTokens};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use syn::{Ident, Type};
@@ -38,6 +38,92 @@ fn known_vec(ty: &Type) -> bool {
                 && (path.path.segments[0].ident == "std" || path.path.segments[0].ident == "alloc")
                 && path.path.segments[1].ident == "vec"
                 && path.path.segments[2].ident == "Vec")))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RecordedCodec {
+    Plain,
+    For,
+    Delta,
+    Dictionary,
+}
+impl RecordedCodec {
+    fn marker(self) -> Tokens {
+        match self {
+            Self::Plain => quote!(::cq_gpu_runtime::Plain),
+            Self::For => quote!(::cq_gpu_runtime::For),
+            Self::Delta => quote!(::cq_gpu_runtime::Delta),
+            Self::Dictionary => quote!(::cq_gpu_runtime::DictionaryCodec),
+        }
+    }
+    fn value(self) -> Tokens {
+        match self {
+            Self::Plain => quote!(::cq_gpu_runtime::Codec::Plain),
+            Self::For => quote!(::cq_gpu_runtime::Codec::For),
+            Self::Delta => quote!(::cq_gpu_runtime::Codec::Delta),
+            Self::Dictionary => quote!(::cq_gpu_runtime::Codec::Dictionary),
+        }
+    }
+}
+
+// Host codecs belong to the bound value. Only derived representations read
+// codec choices from a recorded provider type; no data/property inference occurs.
+fn provider_codec(ty: &Type) -> syn::Result<RecordedCodec> {
+    let Type::Path(path) = ty else {
+        return fail(ty, "CQ_GPU_CODEC_TYPE", "expected a recorded provider type");
+    };
+    let syn::PathArguments::AngleBracketed(arguments) =
+        &path.path.segments.last().unwrap().arguments
+    else {
+        return fail(ty, "CQ_GPU_CODEC_TYPE", "provider must name its row type");
+    };
+    let mut types = Vec::new();
+    for argument in &arguments.args {
+        match argument {
+            syn::GenericArgument::Type(ty) => types.push(ty),
+            syn::GenericArgument::Lifetime(_) => {}
+            _ => return fail(ty, "CQ_GPU_CODEC_TYPE", "expected row and codec types"),
+        }
+    }
+    match types.as_slice() {
+        [_] => Ok(RecordedCodec::Plain),
+        [_, codec] if qualified(codec, "cq_gpu_runtime", "Plain") => Ok(RecordedCodec::Plain),
+        [_, codec] if qualified(codec, "cq_gpu_runtime", "For") => Ok(RecordedCodec::For),
+        [_, codec] if qualified(codec, "cq_gpu_runtime", "Delta") => Ok(RecordedCodec::Delta),
+        [_, codec] if qualified(codec, "cq_gpu_runtime", "DictionaryCodec") => {
+            Ok(RecordedCodec::Dictionary)
+        }
+        _ => fail(
+            ty,
+            "CQ_GPU_CODEC_TYPE",
+            "record one row type and optional cq_gpu_runtime::{Plain,For,Delta,DictionaryCodec}",
+        ),
+    }
+}
+
+fn materialized_codec(facts: &ir::Analysis, name: &str) -> syn::Result<RecordedCodec> {
+    let rows = facts
+        .retained
+        .get(name)
+        .map(|ty| {
+            if known_vec(ty) {
+                Ok(RecordedCodec::Plain)
+            } else {
+                provider_codec(ty)
+            }
+        })
+        .transpose()?;
+    let dedup = facts.dedup.get(name).map(provider_codec).transpose()?;
+    if let (Some(rows), Some(dedup)) = (rows, dedup) {
+        if rows != dedup {
+            return fail(
+                &facts.retained[name],
+                "CQ_GPU_CODEC_CONFLICT",
+                "retained rows and canon must record the same materialized codec",
+            );
+        }
+    }
+    Ok(rows.or(dedup).unwrap_or(RecordedCodec::Plain))
 }
 fn integral(ty: &Type) -> bool {
     matches!(
@@ -221,6 +307,7 @@ pub(crate) fn validate(program: &ir::Program, facts: &ir::Analysis) -> syn::Resu
                         "canon must explicitly record ::cq_gpu_runtime::DeviceSet<_>",
                     );
                 }
+                provider_codec(ty)?;
             }
             ir::Structure::Host { reader, .. } if reader != "scan" => {
                 let name = symbol_name(reader);
@@ -236,8 +323,16 @@ pub(crate) fn validate(program: &ir::Program, facts: &ir::Analysis) -> syn::Resu
                     );
                 }
             }
-            ir::Structure::Rows { ty, .. } if !known_vec(ty) => {
-                return fail(entry, "CQ_GPU_ROWS_TYPE", "retained rows must record Vec");
+            ir::Structure::Rows { ty, .. } => {
+                if qualified(ty, "cq_gpu_runtime", "DeviceColumns") {
+                    provider_codec(ty)?;
+                } else if !known_vec(ty) {
+                    return fail(
+                        entry,
+                        "CQ_GPU_ROWS_TYPE",
+                        "retained rows must record Vec or cq_gpu_runtime::DeviceColumns",
+                    );
+                }
             }
             ir::Structure::Repr {
                 repr: ir::Repr::Positions { .. },
@@ -291,6 +386,9 @@ pub(crate) fn validate(program: &ir::Program, facts: &ir::Analysis) -> syn::Resu
             }
         }
     }
+    for definition in &program.physical.program.definitions {
+        materialized_codec(facts, &symbol_name(&definition.name))?;
+    }
     let mut reads = Vec::new();
     for (build, items) in &facts.physical.keyed_reads {
         for (reader, keys, supply) in items {
@@ -336,13 +434,107 @@ pub(crate) fn validate(program: &ir::Program, facts: &ir::Analysis) -> syn::Resu
     Ok(reads)
 }
 
+// A fixed 1024-row root consumes the four values decoded by each lane once.
+// Rewrite generated scalar column expressions structurally, including the
+// demand-driven expressions kept in State and scan-filter predicates.
+fn tile_root(root: &mut Tokens, columns: &mut BTreeMap<String, Tokens>) -> syn::Result<Tokens> {
+    use syn::visit_mut::VisitMut;
+
+    #[derive(Default)]
+    struct Decode {
+        columns: BTreeMap<usize, Ident>,
+    }
+    impl VisitMut for Decode {
+        fn visit_expr_mut(&mut self, expression: &mut syn::Expr) {
+            let index = if let syn::Expr::Call(call) = expression {
+                let runtime_column = matches!(&*call.func, syn::Expr::Path(path)
+                    if path.qself.is_none() && path.path.segments.len() == 2
+                        && path.path.segments[0].ident == "cq_gpu_runtime"
+                        && path.path.segments[1].ident == "column");
+                if runtime_column
+                    && call.args.len() == 3
+                    && matches!(&call.args[0], syn::Expr::Path(path)
+                        if path.path.is_ident("__driver"))
+                    && matches!(&call.args[2], syn::Expr::Path(path)
+                        if path.path.is_ident("__row"))
+                {
+                    match &call.args[1] {
+                        syn::Expr::Lit(syn::ExprLit {
+                            lit: syn::Lit::Int(index),
+                            ..
+                        }) => index.base10_parse::<usize>().ok(),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            if let Some(index) = index {
+                let values = self
+                    .columns
+                    .entry(index)
+                    .or_insert_with(|| id("tile_column", &index.to_string()));
+                *expression = syn::parse_quote!(#values[__stripe / 256]);
+            } else {
+                syn::visit_mut::visit_expr_mut(self, expression);
+            }
+        }
+    }
+
+    let mut decode = Decode::default();
+    let mut block: syn::Block = syn::parse2(quote!({#root}))?;
+    decode.visit_block_mut(&mut block);
+    let statements = block.stmts;
+    *root = quote!(#(#statements)*);
+    for tokens in columns.values_mut() {
+        let mut expression: syn::Expr = syn::parse2(tokens.clone())?;
+        decode.visit_expr_mut(&mut expression);
+        *tokens = expression.to_token_stream();
+    }
+    let loads = decode.columns.iter().map(|(index, values)| {
+        quote!(
+            let #values = ::cq_gpu_runtime::column_tile(__driver,#index,__tile,__tid as u32);
+        )
+    });
+    Ok(quote!(#(#loads)*))
+}
+
 pub(crate) fn compile(
     program: &ir::Program,
     options: crate::options::Options,
 ) -> syn::Result<syn::Expr> {
     let facts = ir::contract::check(program)?;
     let provenance = validate(program, &facts)?;
-    // GPU join filters read uploaded columns, not host PositionalRows handles.
+    let capacity = options
+        .capacity
+        .as_ref()
+        .map(|relation| {
+            let name = symbol_name(relation);
+            if !program
+                .physical
+                .inputs()
+                .any(|input| symbol_name(&input.name) == name)
+            {
+                return fail(
+                    relation,
+                    "CQ_GPU_CAPACITY",
+                    "capacity must name a declared input relation",
+                );
+            }
+            let table = id("host", &name);
+            Ok(quote!(__execution.table_view(#table)?.len as usize))
+        })
+        .transpose()?;
+    let recorded_capacity = match &options.capacity {
+        Some(relation) => {
+            let name = symbol_name(relation);
+            quote!(Some(#name))
+        }
+        None => quote!(None),
+    };
+    // GPU join filters read bound device columns, not host PositionalRows handles.
     // Keep the checked filter facts below; suppress only the CPU source binder.
     let mut source_facts = facts.clone();
     source_facts.join_filters.clear();
@@ -363,17 +555,21 @@ pub(crate) fn compile(
     let module_number = MODULE.fetch_add(1, Ordering::Relaxed);
     let module_id = format_ident!("__cq_gpu_module_{module_number}");
     let mut host = Vec::new();
+    let mut host_pools = Vec::new();
+    let mut host_dictionaries = Vec::new();
     for input in program.physical.inputs() {
         let name = symbol_name(&input.name);
         let value = &context.hosts[&name].value;
         let table = id("host", &name);
         let width = input.columns.len();
         let schema = input.to_token_stream().to_string();
-        let encoders = (0..width).map(|i| {
-            let field = syn::Index::from(i);
-            quote!(__encoded[#i]=::cq_gpu_runtime::encode_value(&__row.#field,__dictionary)?;)
-        });
-        host.push(quote!(let #table=__execution.encode_slice(::core::convert::AsRef::<[_]>::as_ref(#value),#schema,#width,|__row,__dictionary,__encoded| {#(#encoders)* Ok(())})?;));
+        host_pools.push(quote!(::cq_gpu_runtime::HostColumns::pool(#value)));
+        host_dictionaries.push(quote!(
+            ::cq_gpu_runtime::HostColumns::seed_dictionary(
+                #value,__execution.dictionary_mut()
+            )?;
+        ));
+        host.push(quote!(let #table=__execution.bind_host(#value,#schema,#width)?;));
     }
     let mut kernels = Vec::new();
     let mut kernel_reads = Vec::new();
@@ -487,7 +683,9 @@ pub(crate) fn compile(
             Operator::Unit(_) => (
                 quote!(::cq_gpu_runtime::TableView {
                     columns: ::core::ptr::null(),
-                    len: 1
+                    len: 1,
+                    count: ::core::ptr::null(),
+                    error: ::core::ptr::null_mut()
                 }),
                 quote!(),
                 State::default(),
@@ -608,7 +806,21 @@ pub(crate) fn compile(
             frontier_threshold: options.frontier,
             descriptors: Vec::new(),
         };
-        let body = emitter.steps(start, &mut state)?;
+        let resume = if capacity.is_none() && selection.is_none() {
+            Some(emitter.resumable(start, &state, root.clone())?)
+        } else {
+            None
+        };
+        let root_tile = if resume.is_none() && selection.is_none() && batch == 1024 {
+            tile_root(&mut root, &mut state.columns)?
+        } else {
+            Tokens::new()
+        };
+        let body = if resume.is_some() {
+            Tokens::new()
+        } else {
+            emitter.steps(start, &mut state)?
+        };
         let shared_words = emitter.shared_words;
         let descriptor_words = emitter.descriptors.iter().copied().max().unwrap_or(1);
         let continuations = emitter.continuations;
@@ -636,7 +848,9 @@ pub(crate) fn compile(
             kernel,
             driver,
             root,
+            root_tile,
             body,
+            resume,
             run_ids,
             run_types,
             run_bindings,
@@ -679,13 +893,21 @@ pub(crate) fn compile(
         .collect();
     let constants=all_constants.values.iter().map(|(id,value)|quote!(let #id=::cq_gpu_runtime::encode_value(&(#value),__execution.dictionary_mut())?;));
     let mut device = Vec::new();
+    let mut launches = Vec::new();
     for kernel in kernels {
-        let (item, launch) = kernel.emit(&module_id, &constant_ids, &context, &facts);
+        let (item, launch) = kernel.emit(
+            &module_id,
+            &constant_ids,
+            &context,
+            &facts,
+            capacity.as_ref(),
+        );
         device.push(item);
-        host.push(launch);
+        launches.push(launch);
     }
     let output = id("table", &returned);
-    let mut decoded = Vec::new();
+    let mut output_types = Vec::new();
+    let mut output_columns = Vec::new();
     for expression in &program.physical.program.head.args {
         let Some(variable) = syntax::rust::variable(expression) else {
             return fail(
@@ -705,14 +927,10 @@ pub(crate) fn compile(
                 "head column is not carried",
             );
         };
-        let ty = &facts.physical.rows[&returned].types[&column];
-        let ty: Type = if string(ty) {
-            syn::parse_quote!(::std::string::String)
-        } else {
-            ty.clone()
-        };
-        decoded.push(quote!(::cq_gpu_runtime::decode_value::<#ty>(__columns[#index][__row],__execution.dictionary())?));
+        output_types.push(&facts.physical.rows[&returned].types[&column]);
+        output_columns.push(index);
     }
+    let output_codec = materialized_codec(&facts, &returned)?.marker();
     let final_dedup = facts.head_dedup.contains_key(&returned);
     if final_dedup {
         return fail(
@@ -741,6 +959,20 @@ pub(crate) fn compile(
         .entries
         .iter()
         .map(|entry| entry.to_token_stream().to_string());
+    let derived_codecs = program
+        .physical
+        .program
+        .definitions
+        .iter()
+        .filter(|definition| endpoints.contains(&symbol_name(&definition.name)))
+        .map(|definition| {
+            let name = symbol_name(&definition.name);
+            let codec = format!(
+                "{:?}",
+                materialized_codec(&facts, &name).expect("validated materialized codec")
+            );
+            quote!((#name,#codec))
+        });
     let source_bindings = &context.statements;
     let has_kernels = device.iter().any(|item| !item.is_empty());
     let module = has_kernels.then(|| {
@@ -760,18 +992,22 @@ pub(crate) fn compile(
         const __CQ_GPU_KERNEL_READS: &[(&str,&str)]=&[#(#kernel_reads),*];
         const __CQ_GPU_JOIN_FILTER_READS: &[(&str,&str)]=&[#(#filter_reads),*];
         const __CQ_GPU_RECORDED_STRUCTURES: &[&str]=&[#(#recorded_structures),*];
+        const __CQ_GPU_DERIVED_CODECS: &[(&str,&str)]=&[#(#derived_codecs),*];
+        const __CQ_GPU_CAPACITY: ::core::option::Option<&str>=#recorded_capacity;
         #(#source_bindings)*
-        ::cq_gpu_runtime::with_runtime(|__runtime| {
+        let __pool=None #(.or_else(|| #host_pools))*;
+        ::cq_gpu_runtime::with_runtime_for(__pool,|__runtime| {
             let mut __execution=__runtime.execution();
             #load
-            #(#constants)*
+            #(#host_dictionaries)*
             #(#host)*
-            let __count=__execution.table_view(#output)?.len as usize;
-            let __columns=__execution.download(#output)?;
-            let mut __answer=::std::vec::Vec::with_capacity(__count);
-            for __row in 0..__count { __answer.push((#(#decoded,)*)); }
+            #(#constants)*
+            #(#launches)*
+            let __answer=__execution.into_columns::<(#(#output_types,)*),#output_codec>(
+                #output,&[#(#output_columns),*]
+            )?;
             __execution.finish()?;
-            Ok(__answer.into_iter())
+            Ok(__answer)
         }).unwrap_or_else(|error|panic!("CQ_GPU_EXECUTION: {error}"))
     }))
 }
@@ -780,6 +1016,379 @@ pub(crate) fn compile(
 struct State {
     columns: BTreeMap<String, Tokens>,
     witnesses: BTreeMap<String, (Tokens, Tokens)>,
+}
+
+// The growing path is a defunctionalized traversal, not a second query pass.
+// Each PC denotes the next operation; reservations advance it only after all
+// output writes complete. Registers and every live descriptor are spilled only
+// when a launch suspends, including the cursors of all enclosing expansions.
+struct ResumeProgram {
+    blocks: Vec<Tokens>,
+    registers: usize,
+    shared_words: usize,
+    descriptor_words: usize,
+    serial: bool,
+}
+
+struct ResumeEmitter<'a, 'b, 'c> {
+    source: &'c mut Emitter<'a, 'b>,
+    program: ResumeProgram,
+    dispatch: Vec<Tokens>,
+}
+
+impl ResumeEmitter<'_, '_, '_> {
+    fn register(&mut self) -> Tokens {
+        let slot = self.program.registers;
+        self.program.registers += 1;
+        quote!(__resume_registers[#slot])
+    }
+
+    fn block(&mut self, body: Tokens) -> u32 {
+        let pc = self.program.blocks.len() as u32;
+        self.program.blocks.push(body);
+        pc
+    }
+
+    fn steps(&mut self, index: usize, mut state: State, next: u32) -> syn::Result<u32> {
+        let context = self.source.context;
+        let facts = self.source.facts;
+        if index == self.source.chain.len() {
+            let values = context.carried_columns[self.source.endpoint]
+                .iter()
+                .map(|column| {
+                    state.columns.get(column).cloned().ok_or_else(|| {
+                        syn::Error::new(
+                            Span::call_site(),
+                            format!("CQ_GPU_COLUMN: missing output {column}"),
+                        )
+                    })
+                })
+                .collect::<syn::Result<Vec<_>>>()?;
+            let writes = values.iter().enumerate().map(|(column, value)| {
+                quote!(::cq_gpu_runtime::write_output(__output,#column,__destination,#value);)
+            });
+            return Ok(if self.source.serial {
+                self.block(quote! {
+                    if __valid {
+                        let __destination=::cq_gpu_runtime::resume_reserve(__output,1);
+                        if __destination==u64::MAX {
+                            ::cq_gpu_runtime::resume_suspend(__resume);
+                            __resume_pause=true;
+                        } else {
+                            #(#writes)*
+                            __resume_pc=#next;
+                        }
+                    } else { __resume_pc=#next; }
+                })
+            } else {
+                self.block(quote! {
+                    let (__offset,__total)=::cq_gpu_runtime::tiles::scan(__valid as u32,__scratch);
+                    if __tid==0 {
+                        *(__scratch.add(8) as *mut u64)=::cq_gpu_runtime::resume_reserve(__output,__total as u64);
+                    }
+                    ::cuda_device::thread::sync_threads();
+                    let __base=*(__scratch.add(8) as *const u64);
+                    if __base==u64::MAX {
+                        if __tid==0 {::cq_gpu_runtime::resume_suspend(__resume);}
+                        __resume_pause=true;
+                    } else {
+                        let __destination=__base+__offset as u64;
+                        if __valid {#(#writes)*}
+                        __resume_pc=#next;
+                    }
+                })
+            });
+        }
+        let name = self.source.chain[index].clone();
+        let definition = context.physical[&name];
+        match &definition.operator {
+            Operator::Select(s) | Operator::Point(_, s) | Operator::Range(_, s) => {
+                let condition = self.source.constants.theta(
+                    &s.condition,
+                    &state.columns,
+                    &facts.physical.rows[&symbol_name(&s.input)].types,
+                )?;
+                state
+                    .columns
+                    .retain(|column, _| context.carried_columns[&name].contains(column));
+                let rest = self.steps(index + 1, state, next)?;
+                Ok(self.block(quote! {__valid=__valid && (#condition);__resume_pc=#rest;}))
+            }
+            Operator::Project(_) => {
+                state
+                    .columns
+                    .retain(|column, _| context.carried_columns[&name].contains(column));
+                self.steps(index + 1, state, next)
+            }
+            Operator::Semi(_, k) | Operator::Probe(_, k)
+                if membership(facts, &symbol_name(&k.right)) =>
+            {
+                let right = symbol_name(&k.right);
+                let provider = read_provider(facts, k);
+                let view = provider_id("run_view", &right, provider);
+                let key = state.columns[directory_column(facts, &right, provider)].clone();
+                if matches!(&definition.operator, Operator::Probe(_, _)) {
+                    for column in &facts.physical.headings[&right] {
+                        if !context.carried_columns[&name].contains(column)
+                            || state.columns.contains_key(column)
+                        {
+                            continue;
+                        }
+                        let binding = facts.filtered.get(&right).and_then(|f| {
+                            f.constants.iter().find(|b| symbol_name(&b.column) == *column)
+                        }).ok_or_else(|| syn::Error::new_spanned(
+                            k, "CQ_GPU_MEMBERSHIP_PAYLOAD: membership probe cannot expose unrecorded payload",
+                        ))?;
+                        let value = self.source.constants.term(&binding.value, &state.columns)?;
+                        state.columns.insert(column.clone(), value);
+                    }
+                }
+                state
+                    .columns
+                    .retain(|column, _| context.carried_columns[&name].contains(column));
+                let rest = self.steps(index + 1, state, next)?;
+                Ok(self.block(quote! {
+                    __valid=__valid && ::cq_gpu_runtime::membership_contains(#view,#key);
+                    __resume_pc=#rest;
+                }))
+            }
+            Operator::Semi(_, k) => {
+                let right = symbol_name(&k.right);
+                let provider = read_provider(facts, k);
+                let run = provider_id("run_view", &right, provider);
+                let key = state.columns[directory_column(facts, &right, provider)].clone();
+                let begin = self.register();
+                let end = self.register();
+                if facts.witnesses.contains_key(&name) {
+                    state
+                        .witnesses
+                        .insert(name.clone(), (quote!(#begin as u32), quote!(#end as u32)));
+                }
+                let residual = self.source.residual(k, &state, quote!(__candidate))?;
+                state
+                    .columns
+                    .retain(|column, _| context.carried_columns[&name].contains(column));
+                let rest = self.steps(index + 1, state, next)?;
+                Ok(self.block(quote! {
+                    let (__begin,__end)=if __valid {
+                        ::cq_gpu_runtime::blocked_run::point(#run.rank,#key).unwrap_or((0,0))
+                    } else {(0,0)};
+                    #begin=__begin as u64;
+                    #end=__end as u64;
+                    let mut __candidate=__begin;
+                    let mut __found=false;
+                    while __candidate<__end && !__found {
+                        __found=#residual;
+                        __candidate+=1;
+                    }
+                    __valid=__valid && __found;
+                    __resume_pc=#rest;
+                }))
+            }
+            Operator::Probe(_, k) => self.expand(index, state, k, next),
+            _ => fail(
+                &definition.name,
+                "CQ_GPU_STREAM_OPERATOR",
+                "unsupported stream operator",
+            ),
+        }
+    }
+
+    fn expand(
+        &mut self,
+        index: usize,
+        mut state: State,
+        k: &physical::Keyed,
+        next: u32,
+    ) -> syn::Result<u32> {
+        let context = self.source.context;
+        let facts = self.source.facts;
+        let name = self.source.chain[index].clone();
+        let right = symbol_name(&k.right);
+        let provider = read_provider(facts, k);
+        let run = provider_id("run_view", &right, provider);
+        let witness = facts
+            .witnesses
+            .keys()
+            .find(|origin| facts.shares[*origin].force == name)
+            .cloned();
+        let lookup = if let Some(origin) = witness {
+            let (a, b) = state.witnesses.remove(&origin).ok_or_else(|| {
+                syn::Error::new_spanned(k, "CQ_GPU_WITNESS: forcing read lost its recorded witness")
+            })?;
+            quote!((#a,#b))
+        } else {
+            let key = &state.columns[directory_column(facts, &right, provider)];
+            quote!(::cq_gpu_runtime::blocked_run::point(#run.rank,#key).unwrap_or((0,0)))
+        };
+        let mut child = State::default();
+        let mut save = Vec::new();
+        let mut restore = Vec::new();
+        let offset = (self.program.shared_words + 1) & !1;
+        let mut words = 516usize;
+        if self.source.serial {
+            child = state;
+        } else {
+            for (column, value) in &state.columns {
+                let slot = words;
+                words += 512;
+                let register = self.register();
+                save.push(quote! {*(__descriptor.add(#slot) as *mut i64).add(__tid)=#value;});
+                restore.push(quote! {
+                    #register=if __valid {*(__descriptor.add(#slot) as *const i64).add(__parent) as u64}else{0};
+                });
+                child
+                    .columns
+                    .insert(column.clone(), quote!(#register as i64));
+            }
+            for (origin, (a, b)) in &state.witnesses {
+                let slot = words;
+                words += 512;
+                let begin = self.register();
+                let end = self.register();
+                save.push(quote! {*__descriptor.add(#slot+__tid)=#a;*__descriptor.add(#slot+256+__tid)=#b;});
+                restore.push(quote! {
+                    #begin=if __valid {*__descriptor.add(#slot+__parent) as u64}else{0};
+                    #end=if __valid {*__descriptor.add(#slot+256+__parent) as u64}else{0};
+                });
+                child
+                    .witnesses
+                    .insert(origin.clone(), (quote!(#begin as u32), quote!(#end as u32)));
+            }
+            self.program.shared_words = offset + words;
+            self.program.descriptor_words = self.program.descriptor_words.max(words);
+        }
+        let row = self.register();
+        let end = self.register();
+        let external = (!self.source.serial).then(|| self.register());
+        let guard = self.block(Tokens::new());
+        let advance = self.block(quote! {#row+=1;__resume_pc=#guard;});
+        let mut loads = Vec::new();
+        for column in &facts.physical.headings[&right] {
+            if !context.carried_columns[&name].contains(column)
+                || child.columns.contains_key(column)
+            {
+                continue;
+            }
+            let value = if let Some(slot) = context.carried_columns[&right]
+                .iter()
+                .position(|c| c == column)
+            {
+                quote!(::cq_gpu_runtime::run_column(#run,#slot,__build_row))
+            } else if let Some(constant) = facts.filtered.get(&right).and_then(|f| {
+                f.constants
+                    .iter()
+                    .find(|b| symbol_name(&b.column) == *column)
+            }) {
+                self.source
+                    .constants
+                    .term(&constant.value, &child.columns)?
+            } else {
+                return fail(
+                    k,
+                    "CQ_GPU_PAYLOAD_COLUMN",
+                    format!("recorded run {right} does not carry {column}"),
+                );
+            };
+            let register = self.register();
+            loads.push(quote! {#register=if __valid {(#value) as u64}else{0};});
+            child
+                .columns
+                .insert(column.clone(), quote!(#register as i64));
+        }
+        let residual = self.source.residual(k, &child, quote!(__build_row))?;
+        child
+            .columns
+            .retain(|column, _| context.carried_columns[&name].contains(column));
+        let rest = self.steps(index + 1, child, advance)?;
+        if self.source.serial {
+            let load = self.block(quote! {
+                let __build_row=#row as u32;
+                __valid=true;
+                #(#loads)*
+                __valid=#residual;
+                __resume_pc=#rest;
+            });
+            self.program.blocks[guard as usize] = quote! {
+                __resume_pc=if #row<#end {#load}else{#next};
+            };
+            return Ok(self.block(quote! {
+                let (__begin,__end)=if __valid {#lookup}else{(0,0)};
+                #row=__begin as u64;
+                #end=__end as u64;
+                __resume_pc=#guard;
+            }));
+        }
+        let external = external.expect("cooperative expansion has an external-task flag");
+        let batch = self.source.batch as u32;
+        let load = self.block(quote! {
+            let __descriptor=__scratch.add(#offset);
+            let __position=#row * #batch as u64 + __tid as u64;
+            let __total=*__descriptor.add(514);
+            __valid=__tid<#batch as usize && __position<__total as u64;
+            let __parent=if __valid {
+                ::cq_gpu_runtime::tiles::owner(__descriptor.add(258),256,__position as u32) as usize
+            }else{0};
+            let __build_row=if __valid {
+                *__descriptor.add(2+__parent)+__position as u32-*__descriptor.add(258+__parent)
+            }else{0};
+            #(#restore)* #(#loads)*
+            __valid=__valid && (#residual);
+            __resume_pc=#rest;
+        });
+        // PC 3 retires an externally claimed frontier task. An inline child
+        // instead returns to its enclosing frame, whose cursors remain live.
+        self.program.blocks[guard as usize] = quote! {
+            __resume_pc=if #row<#end {#load}else if #external!=0 {3}else{#next};
+        };
+        let stage = self.dispatch.len() as u32 + 1;
+        self.dispatch.push(quote! {
+            #stage=>{
+                let mut __word=__tid;
+                while __word<#words {
+                    *__scratch.add(#offset+__word)=*__descriptor.add(__word);
+                    __word+=256;
+                }
+                #row=__chunk as u64;
+                #end=__chunk as u64+1;
+                #external=1;
+                __resume_pc=#guard;
+            }
+        });
+        let publish = self.source.frontier && facts.expands.contains(&name);
+        let threshold = self.source.frontier_threshold as u64 * 1024;
+        Ok(self.block(quote! {
+            let (__begin,__end)=if __valid {#lookup}else{(0,0)};
+            let __descriptor=__scratch.add(#offset);
+            if __tid==0 {*__descriptor=#stage;*__descriptor.add(1)=0;*__descriptor.add(515)=0;}
+            *__descriptor.add(2+__tid)=__begin;
+            #(#save)*
+            let (__offset,mut __total)=::cq_gpu_runtime::tiles::scan(__end-__begin,__scratch);
+            let __wrapped=__offset.checked_add(__end-__begin).is_none();
+            let (_,__overflows)=::cq_gpu_runtime::tiles::scan(__wrapped as u32,__scratch);
+            if __overflows!=0 {
+                if __tid==0 {::cq_gpu_runtime::flag_error(__output,2);}
+                __total=0;
+            }
+            *__descriptor.add(258+__tid)=__offset;
+            if __tid==0 {*__descriptor.add(514)=__total;}
+            ::cuda_device::thread::sync_threads();
+            let __chunks=(__total as u64).div_ceil(#batch as u64) as u32;
+            let __published=if #publish && __total as u64>#threshold {
+                let mut __padding=#words+__tid;
+                while __padding<__frontier.descriptor_words as usize {
+                    *__descriptor.add(__padding)=0;
+                    __padding+=256;
+                }
+                ::cuda_device::thread::sync_threads();
+                ::cq_gpu_runtime::frontier_publish(__frontier,__descriptor,__chunks,__scratch.add(12))
+            }else{false};
+            #row=0;
+            #end=__chunks as u64;
+            #external=0;
+            __resume_pc=if __published {#next}else{#guard};
+        }))
+    }
 }
 struct Continuation {
     name: Ident,
@@ -803,6 +1412,115 @@ struct Emitter<'a, 'b> {
     descriptors: Vec<usize>,
 }
 impl Emitter<'_, '_> {
+    fn resumable(
+        &mut self,
+        start: usize,
+        initial: &State,
+        root: Tokens,
+    ) -> syn::Result<ResumeProgram> {
+        let batch = self
+            .chain
+            .iter()
+            .filter_map(|n| self.facts.stages.get(n))
+            .copied()
+            .min()
+            .unwrap_or(1024)
+            .min(1024);
+        let serial = self.serial;
+        let frontier = self.frontier;
+        let mut emitter = ResumeEmitter {
+            source: self,
+            program: ResumeProgram {
+                // 0 initializes a worker; 1 schedules a root/task; 2 advances a
+                // stripe; 3 retires a claimed frontier task; 4 loads a root.
+                blocks: vec![Tokens::new(); 5],
+                registers: 1,
+                shared_words: 16,
+                descriptor_words: 1,
+                serial,
+            },
+            dispatch: Vec::new(),
+        };
+        let tile = emitter.register();
+        let stripe = emitter.register();
+        let mut state = State::default();
+        let mut save = Vec::new();
+        for (column, value) in &initial.columns {
+            let register = emitter.register();
+            save.push(quote!(#register=if __valid {(#value) as u64}else{0};));
+            state
+                .columns
+                .insert(column.clone(), quote!(#register as i64));
+        }
+        for (origin, (a, b)) in &initial.witnesses {
+            let begin = emitter.register();
+            let end = emitter.register();
+            save.push(quote!(#begin=(#a) as u64;#end=(#b) as u64;));
+            state
+                .witnesses
+                .insert(origin.clone(), (quote!(#begin as u32), quote!(#end as u32)));
+        }
+        let entry = emitter.steps(start, state, 2)?;
+        emitter.program.blocks[0] = quote! {
+            #tile=::cuda_device::thread::blockIdx_x() as u64;
+            #stripe=0;
+            __resume_pc=1;
+        };
+        emitter.program.blocks[4] = quote! {
+            let __slot=#stripe as usize+__tid;
+            let __row=#tile * #batch as u64+__slot as u64;
+            __valid=__slot<#batch && __row<::cq_gpu_runtime::table_len(__driver);
+            #root #(#save)*
+            __resume_pc=#entry;
+        };
+        if frontier {
+            let dispatch = emitter.dispatch;
+            emitter.program.blocks[1] = quote! {
+                if __tid==0 {*(__scratch.add(8) as *mut u64)=::cq_gpu_runtime::frontier_next_root(__frontier);}
+                ::cuda_device::thread::sync_threads();
+                #tile=*(__scratch.add(8) as *const u64);
+                if #tile<__driver.len.div_ceil(#batch as u64) {
+                    #stripe=0;
+                    __resume_pc=4;
+                } else {
+                    let __descriptor=__scratch.add(__resume_shared_words);
+                    if let Some(__chunk)=::cq_gpu_runtime::frontier_claim(__frontier,__descriptor,__scratch.add(12)) {
+                        match *__descriptor {#(#dispatch)* _=>{
+                            if __tid==0 {::cq_gpu_runtime::flag_error(__output,2);}
+                            __resume_pc=3;
+                        }}
+                    } else {
+                        if __tid==0 {*(__scratch.add(8) as *mut u64)=::cq_gpu_runtime::frontier_pending(__frontier);}
+                        ::cuda_device::thread::sync_threads();
+                        if *(__scratch.add(8) as *const u64)==0 {__resume_pc=u32::MAX;}
+                    }
+                }
+            };
+            emitter.program.blocks[2] = quote! {
+                #stripe+=256;
+                __resume_pc=if #stripe<#batch as u64 {4}else{3};
+            };
+            emitter.program.blocks[3] = quote! {
+                if __tid==0 {::cq_gpu_runtime::frontier_done(__frontier);}
+                __resume_pc=1;
+            };
+        } else {
+            emitter.program.blocks[1] = quote! {
+                __resume_pc=if #tile<::cq_gpu_runtime::table_len(__driver).div_ceil(#batch as u64) {4}else{u32::MAX};
+            };
+            emitter.program.blocks[2] = quote! {
+                #stripe+=256;
+                if #stripe<#batch as u64 {__resume_pc=4;}else{
+                    #stripe=0;
+                    #tile+=::cuda_device::thread::gridDim_x() as u64;
+                    __resume_pc=1;
+                }
+            };
+            emitter.program.blocks[3] = quote! {__resume_pc=u32::MAX;};
+        }
+        Ok(emitter.program)
+    }
+
     fn steps(&mut self, index: usize, state: &mut State) -> syn::Result<Tokens> {
         if index == self.chain.len() {
             let values = self.context.carried_columns[self.endpoint]
@@ -1215,7 +1933,9 @@ struct Kernel {
     kernel: Ident,
     driver: Tokens,
     root: Tokens,
+    root_tile: Tokens,
     body: Tokens,
+    resume: Option<ResumeProgram>,
     run_ids: Vec<Ident>,
     run_types: Vec<Tokens>,
     run_bindings: Vec<Tokens>,
@@ -1234,12 +1954,15 @@ impl Kernel {
         constants: &[Ident],
         context: &Context<'_>,
         facts: &ir::Analysis,
+        capacity: Option<&Tokens>,
     ) -> (Tokens, Tokens) {
         let Self {
             kernel,
             driver,
             root,
+            root_tile,
             body,
+            resume,
             run_ids,
             run_types,
             run_bindings,
@@ -1254,10 +1977,17 @@ impl Kernel {
         let prepare = format_ident!("prepare_{}", kernel);
         let table = id("table", &endpoint);
         let width = context.carried_columns[&endpoint].len();
+        let (shared_words, descriptor_words) = resume
+            .as_ref()
+            .map(|program| (program.shared_words, program.descriptor_words))
+            .unwrap_or((shared_words, descriptor_words));
         let shared_bytes =
             ((shared_words + if frontier { descriptor_words + 2 } else { 0 }) * 4) as u32;
         let common = quote!(__driver,#(#run_ids,)*#(#constants,)*__output,__frontier);
         let signature = quote!(__driver: ::cq_gpu_runtime::TableView,#(#run_ids: #run_types,)*#(#constants:i64,)*__output: ::cq_gpu_runtime::OutputView,__frontier: ::cq_gpu_runtime::FrontierView);
+        let resume_args = resume
+            .as_ref()
+            .map(|_| quote!(__resume: ::cq_gpu_runtime::ResumeView,));
         let selection_args = selection
             .as_ref()
             .map(|_| quote!(__counts:*mut u32,__scatter:bool,));
@@ -1281,7 +2011,7 @@ impl Kernel {
                 .collect()
         }
         let body = substitute(body, &common);
-        let functions=continuations.iter().map(|c| {
+        let functions=continuations.iter().filter(|_|resume.is_none()).map(|c| {
             let name=&c.name;let body=substitute(c.body.clone(),&common);
             quote!{#[device] #[inline(always)] unsafe fn #name(#signature,__descriptor:*mut u32,__chunk:u32) {
                 let __tid=::cuda_device::thread::threadIdx_x() as usize;
@@ -1301,11 +2031,12 @@ impl Kernel {
                     ::cuda_device::thread::sync_threads();
                     let __tile=*(__scratch.add(8) as *const u64);
                     if __tile<__driver.len.div_ceil(#batch as u64) {
+                        #root_tile
                         let mut __stripe=0usize;
                         while __stripe<#batch {
                             let __slot=__stripe+__tid;
                             let __row=__tile*#batch as u64+__slot as u64;
-                            let mut __valid=__slot<#batch && __row<__driver.len;
+                            let mut __valid=__slot<#batch && __row<::cq_gpu_runtime::table_len(__driver);
                             #root #body
                             __stripe+=256;
                         }
@@ -1327,12 +2058,13 @@ impl Kernel {
         } else {
             quote! {
                 let mut __tile=::cuda_device::thread::blockIdx_x() as u64;
-                while __tile<__driver.len.div_ceil(#batch as u64) {
+                while __tile<::cq_gpu_runtime::table_len(__driver).div_ceil(#batch as u64) {
+                    #root_tile
                     let mut __stripe=0usize;
                     while __stripe<#batch {
                         let __slot=__stripe+__tid;
                         let __row=__tile*#batch as u64+__slot as u64;
-                        let mut __valid=__slot<#batch && __row<__driver.len;
+                        let mut __valid=__slot<#batch && __row<::cq_gpu_runtime::table_len(__driver);
                         #root #body
                         __stripe+=256;
                     }
@@ -1343,8 +2075,97 @@ impl Kernel {
         let scheduler = if selection.is_some() {
             quote! {
                 let __row=::cuda_device::thread::blockIdx_x() as u64*256+__tid as u64;
-                let mut __valid=__row<__driver.len;
+                let mut __valid=__row<::cq_gpu_runtime::table_len(__driver);
                 #root #body
+            }
+        } else {
+            scheduler
+        };
+        let checkpoint_words = resume
+            .as_ref()
+            .map(|program| {
+                256 * (program.registers + 1) + (shared_bytes as usize / 4 - 16).div_ceil(2)
+            })
+            .unwrap_or(0);
+        let scheduler = if let Some(program) = &resume {
+            let registers = program.registers;
+            let thread_words = registers + 1;
+            let shared_checkpoint = 256 * thread_words;
+            let total_shared_words = shared_bytes as usize / 4;
+            let blocks = program.blocks.iter().enumerate().map(|(pc, body)| {
+                let pc = pc as u32;
+                quote!(#pc=>{#body})
+            });
+            let restore_shared = (!program.serial).then(|| {
+                quote! {
+                    let __saved_shared=__checkpoint.add(#shared_checkpoint) as *const u32;
+                    let mut __word=16+__tid;
+                    while __word<#total_shared_words {
+                        *__scratch.add(__word)=*__saved_shared.add(__word-16);
+                        __word+=256;
+                    }
+                    ::cuda_device::thread::sync_threads();
+                }
+            });
+            let save_shared = (!program.serial).then(|| {
+                quote! {
+                    let __saved_shared=__checkpoint.add(#shared_checkpoint) as *mut u32;
+                    let mut __word=16+__tid;
+                    while __word<#total_shared_words {
+                        *__saved_shared.add(__word-16)=*__scratch.add(__word);
+                        __word+=256;
+                    }
+                }
+            });
+            let stop = if program.serial {
+                quote!(if ::cq_gpu_runtime::resume_requested(__resume) {
+                    break;
+                })
+            } else {
+                quote! {
+                    if __tid==0 {*__scratch.add(15)=::cq_gpu_runtime::resume_requested(__resume) as u32;}
+                    ::cuda_device::thread::sync_threads();
+                    if *__scratch.add(15)!=0 {break;}
+                }
+            };
+            quote! {
+                let __resume_shared_words=#shared_words;
+                let __checkpoint=__resume.state.add(
+                    ::cuda_device::thread::blockIdx_x() as usize * #checkpoint_words
+                );
+                let __lane_checkpoint=__checkpoint.add(__tid * #thread_words);
+                let mut __resume_pc=*__lane_checkpoint as u32;
+                if __resume_pc==u32::MAX {return;}
+                let mut __resume_registers=[0u64;#registers];
+                let mut __register=0usize;
+                while __register<#registers {
+                    __resume_registers[__register]=*__lane_checkpoint.add(1+__register);
+                    __register+=1;
+                }
+                let mut __valid=__resume_registers[0]!=0;
+                let mut __resume_pause=false;
+                #restore_shared
+                loop {
+                    if __resume_pc==u32::MAX || __resume_pause {break;}
+                    #stop
+                    match __resume_pc {
+                        #(#blocks,)*
+                        _=>{
+                            ::cq_gpu_runtime::flag_error(__output,2);
+                            __resume_pc=u32::MAX;
+                        }
+                    }
+                }
+                if __resume_pc!=u32::MAX {
+                    __resume_registers[0]=__valid as u64;
+                    let mut __register=0usize;
+                    while __register<#registers {
+                        *__lane_checkpoint.add(1+__register)=__resume_registers[__register];
+                        __register+=1;
+                    }
+                    #save_shared
+                }
+                *__lane_checkpoint=__resume_pc as u64;
             }
         } else {
             scheduler
@@ -1354,7 +2175,7 @@ impl Kernel {
             #[kernel]
             #[launch_bounds(256)]
             #[launch_contract(domain=1,block=(256,1,1),dynamic_shared_range=(#shared_bytes,#shared_bytes))]
-            pub fn #kernel(#signature,#selection_args) {
+            pub fn #kernel(#signature,#resume_args #selection_args) {
                 let __tid=::cuda_device::thread::threadIdx_x() as usize;
                 let __scratch=::cuda_device::DynamicSharedArray::<u8>::get_raw() as *mut u32;
                 unsafe {#scheduler}
@@ -1362,6 +2183,10 @@ impl Kernel {
         };
         let canon = facts.dedup.contains_key(&endpoint);
         let dedup = canon.then(|| quote!(let #table=__execution.dedup(#table)?;));
+        let codec = materialized_codec(facts, &endpoint)
+            .expect("validated materialized codec")
+            .value();
+        let encode = quote!(let #table=__execution.reencode_table(#table,#codec)?;);
         let build = facts.built.get(&endpoint).map(|builds| {
             let providers = builds.iter().enumerate().map(|(provider, build)| {
                 let run = provider_id("run", &endpoint, provider);
@@ -1398,6 +2223,27 @@ impl Kernel {
             }
         }
         let slots = if frontier { 64u32 } else { 0 };
+        let execute = if resume.is_some() {
+            quote! {
+                __execution.execute_resumable(
+                    #width,__driver.len as usize,__grid as usize * #checkpoint_words,
+                    |__stream,__output,__resume| {
+                        unsafe {__module.#kernel(__stream,&__launch,#common,__resume)?;}
+                        Ok(())
+                    },
+                )?
+            }
+        } else {
+            let capacity = capacity
+                .cloned()
+                .unwrap_or_else(|| quote!(__driver.len as usize));
+            quote! {
+                __execution.execute_bounded(#width,#capacity,|__stream,__output| {
+                    unsafe {__module.#kernel(__stream,&__launch,#common)?;}
+                    Ok(())
+                })?
+            }
+        };
         let launch = quote! {
             let #table={
                 let __driver=#driver;
@@ -1406,13 +2252,10 @@ impl Kernel {
                 let __frontier=__pool.view();
                 let __grid=__driver.len.div_ceil(#batch as u64).clamp(1,568) as u32;
                 let __launch=__module.#prepare(::cuda_core::LaunchConfig1D::new(__grid,256,#shared_bytes))?;
-                __execution.execute(#width,__driver.len as usize,|__stream,__output| {
-                    __pool.reset(__driver.len.div_ceil(#batch as u64))?;
-                    unsafe {__module.#kernel(__stream,&__launch,#common)?;}
-                    Ok(())
-                })?
+                __pool.reset(__driver.len.div_ceil(#batch as u64))?;
+                #execute
             };
-            #dedup #build #(#filter_builds)*
+            #dedup #encode #build #(#filter_builds)*
         };
         let device = if selection
             .as_ref()
@@ -1426,7 +2269,7 @@ impl Kernel {
             if projection {
                 quote! {
                     let #table=__execution.project_table(#source,&[#(#columns),*])?;
-                    #dedup #build #(#filter_builds)*
+                    #dedup #encode #build #(#filter_builds)*
                 }
             } else {
                 quote! {
@@ -1442,7 +2285,7 @@ impl Kernel {
                             Ok(())
                         })?
                     };
-                    #dedup #build #(#filter_builds)*
+                    #dedup #encode #build #(#filter_builds)*
                 }
             }
         } else {

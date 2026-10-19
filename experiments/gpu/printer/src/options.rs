@@ -1,17 +1,21 @@
 use std::collections::BTreeSet;
 use syn::{
-    Ident, LitInt, Token,
     parse::{Parse, ParseStream},
+    Ident, LitInt, Token,
 };
 
 /// Control choices do not alter any Structures representation decision.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct Options {
     pub frontier: u32,
+    pub capacity: Option<Ident>,
 }
 impl Default for Options {
     fn default() -> Self {
-        Self { frontier: 8 }
+        Self {
+            frontier: 8,
+            capacity: None,
+        }
     }
 }
 impl Parse for Options {
@@ -51,6 +55,9 @@ impl Parse for Options {
                             "CQ_GPU_DIRECTORY: only directory(rank) is supported",
                         ));
                     }
+                }
+                "capacity" => {
+                    options.capacity = Some(args.parse()?);
                 }
                 _ => {
                     return Err(syn::Error::new_spanned(
