@@ -434,10 +434,20 @@ pub(crate) fn validate(program: &ir::Program, facts: &ir::Analysis) -> syn::Resu
     Ok(reads)
 }
 
-// A fixed 1024-row root consumes the four values decoded by each lane once.
-// Rewrite generated scalar column expressions structurally, including the
-// demand-driven expressions kept in State and scan-filter predicates.
-fn tile_root(root: &mut Tokens, columns: &mut BTreeMap<String, Tokens>) -> syn::Result<Tokens> {
+#[derive(Clone, Copy)]
+enum RootDecode {
+    Tile,
+    Stripe,
+}
+
+// Rewrite root columns structurally, including demand-driven expressions and
+// scan filters. Decode convergently before filtering: Delta needs every warp
+// lane even when that row is invalid or fails an earlier predicate.
+fn decode_root(
+    root: &mut Tokens,
+    columns: &mut BTreeMap<String, Tokens>,
+    layout: RootDecode,
+) -> syn::Result<(Tokens, Vec<usize>)> {
     use syn::visit_mut::VisitMut;
 
     #[derive(Default)]
@@ -476,7 +486,7 @@ fn tile_root(root: &mut Tokens, columns: &mut BTreeMap<String, Tokens>) -> syn::
                     .columns
                     .entry(index)
                     .or_insert_with(|| id("tile_column", &index.to_string()));
-                *expression = syn::parse_quote!(#values[__stripe / 256]);
+                *expression = syn::parse_quote!(#values);
             } else {
                 syn::visit_mut::visit_expr_mut(self, expression);
             }
@@ -493,12 +503,34 @@ fn tile_root(root: &mut Tokens, columns: &mut BTreeMap<String, Tokens>) -> syn::
         decode.visit_expr_mut(&mut expression);
         *tokens = expression.to_token_stream();
     }
-    let loads = decode.columns.iter().map(|(index, values)| {
-        quote!(
-            let #values = ::cq_gpu_runtime::column_tile(__driver,#index,__tile,__tid as u32);
-        )
-    });
-    Ok(quote!(#(#loads)*))
+    let mut loads = Tokens::new();
+    let mut rows = Tokens::new();
+    for (index, value) in &decode.columns {
+        let view = id("root_column", &index.to_string());
+        match layout {
+            RootDecode::Tile => {
+                let [a, b] = [0, 1].map(|stripe| id("tile_register", &format!("{index}_{stripe}")));
+                loads.extend(quote! {
+                    let [#a,#b] = ::cq_gpu_runtime::decode_tile_pair(
+                        #view,__tile,__tid as u32,__pair
+                    );
+                });
+                // Keep only one decoded pair live across the join body. Named
+                // scalar selection avoids dynamically indexed PTX local arrays.
+                rows.extend(quote! {
+                    let #value = if __stripe % 512 == 0 { #a } else { #b };
+                });
+            }
+            RootDecode::Stripe => loads.extend(quote! {
+                let #value = ::cq_gpu_runtime::decode_stripe(
+                    #view,__row / 1024,__tid as u32,
+                    ((__row % 1024) / 256) as usize
+                );
+            }),
+        }
+    }
+    *root = quote!(#rows #root);
+    Ok((loads, decode.columns.into_keys().collect()))
 }
 
 pub(crate) fn compile(
@@ -643,7 +675,7 @@ pub(crate) fn compile(
         } else {
             None
         };
-        let (driver, mut root, mut state) = match &first.operator {
+        let (driver, mut root, mut state, driver_table) = match &first.operator {
             Operator::Rename(rename) => {
                 let host_name = symbol_name(&rename.relation);
                 let table = id("host", &host_name);
@@ -678,6 +710,7 @@ pub(crate) fn compile(
                     quote!(__execution.table_view(#table)?),
                     quote!(#(#loads)*),
                     state,
+                    Some(table),
                 )
             }
             Operator::Unit(_) => (
@@ -689,6 +722,7 @@ pub(crate) fn compile(
                 }),
                 quote!(),
                 State::default(),
+                None,
             ),
             _ => {
                 let input = symbol_name(first.operator.input().ok_or_else(|| {
@@ -709,6 +743,7 @@ pub(crate) fn compile(
                     quote!(__execution.table_view(#table)?),
                     quote!(#(#loads)*),
                     state,
+                    Some(table),
                 )
             }
         };
@@ -811,11 +846,27 @@ pub(crate) fn compile(
         } else {
             None
         };
-        let root_tile = if resume.is_none() && selection.is_none() && batch == 1024 {
-            tile_root(&mut root, &mut state.columns)?
+        let (root_tile, root_indices) = if selection.is_some() {
+            decode_root(&mut root, &mut state.columns, RootDecode::Stripe)?
+        } else if resume.is_none() && batch == 1024 {
+            decode_root(&mut root, &mut state.columns, RootDecode::Tile)?
         } else {
-            Tokens::new()
+            (Tokens::new(), Vec::new())
         };
+        let root_columns: Vec<_> = root_indices
+            .iter()
+            .map(|index| id("root_column", &index.to_string()))
+            .collect();
+        let root_bindings = root_indices
+            .iter()
+            .zip(&root_columns)
+            .map(|(index, view)| {
+                let table = driver_table
+                    .as_ref()
+                    .expect("column reads have a table root");
+                quote!(let #view=__execution.column_view(#table,#index)?;)
+            })
+            .collect();
         let body = if resume.is_some() {
             Tokens::new()
         } else {
@@ -849,6 +900,8 @@ pub(crate) fn compile(
             driver,
             root,
             root_tile,
+            root_columns,
+            root_bindings,
             body,
             resume,
             run_ids,
@@ -984,8 +1037,30 @@ pub(crate) fn compile(
             }
         }
     });
-    let load =
-        has_kernels.then(|| quote!(let __module=unsafe {#module_id::load(__runtime.context())?};));
+    let load = has_kernels.then(|| {
+        quote! {
+            ::std::thread_local! {
+                static __CQ_GPU_MODULE: ::std::cell::RefCell<
+                    Option<(
+                        ::std::sync::Arc<::cuda_core::CudaContext>,
+                        ::std::rc::Rc<#module_id::LoadedModule>
+                    )>
+                > = const { ::std::cell::RefCell::new(None) };
+            }
+            let __module = __CQ_GPU_MODULE.with(|__cache| -> ::cq_gpu_runtime::Result<_> {
+                if let Some((__context,__module)) = __cache.borrow().as_ref() {
+                    if ::std::sync::Arc::ptr_eq(__context,__runtime.context()) {
+                        return Ok(__module.clone());
+                    }
+                }
+                let __module = ::std::rc::Rc::new(unsafe {
+                    #module_id::load(__runtime.context())?
+                });
+                *__cache.borrow_mut() = Some((__runtime.context().clone(),__module.clone()));
+                Ok(__module)
+            })?;
+        }
+    });
     syn::parse2(quote!({
         #module
         const __CQ_GPU_KEYED_READS: &[&str]=&[#(#reads),*];
@@ -1694,6 +1769,7 @@ impl Emitter<'_, '_> {
             let key = &state.columns[prefix];
             quote!(::cq_gpu_runtime::blocked_run::point(#run.rank,#key).unwrap_or((0,0)))
         };
+        let mut payloads = Vec::new();
         let mut loads = Vec::new();
         for column in &self.facts.physical.headings[&right] {
             if !self.context.carried_columns[name].contains(column)
@@ -1706,7 +1782,9 @@ impl Emitter<'_, '_> {
                 .iter()
                 .position(|c| c == column)
             {
-                quote!(::cq_gpu_runtime::run_column(#run,#slot,#row))
+                let payload = id("payload", &format!("{name}_{column}"));
+                payloads.push(quote!(let #payload=#run.columns.add(#slot).read();));
+                quote!(#payload.add(#row as usize).read())
             } else if let Some(constant) = self.facts.filtered.get(&right).and_then(|f| {
                 f.constants
                     .iter()
@@ -1731,12 +1809,18 @@ impl Emitter<'_, '_> {
         Ok(quote! {
             if __valid {
                 let (#begin,#end)=#lookup;
-                let mut #row=#begin;
-                while #row<#end {
-                    #(#loads)*
-                    let mut __valid=#residual;
-                    #rest
-                    #row+=1;
+                if #begin<#end {
+                    // Run payload addresses are immutable while this expansion
+                    // writes its distinct output; avoid a pointer-table load
+                    // for every candidate without touching an empty run.
+                    #(#payloads)*
+                    let mut #row=#begin;
+                    while #row<#end {
+                        #(#loads)*
+                        let mut __valid=#residual;
+                        #rest
+                        #row+=1;
+                    }
                 }
             }
         })
@@ -1934,6 +2018,8 @@ struct Kernel {
     driver: Tokens,
     root: Tokens,
     root_tile: Tokens,
+    root_columns: Vec<Ident>,
+    root_bindings: Vec<Tokens>,
     body: Tokens,
     resume: Option<ResumeProgram>,
     run_ids: Vec<Ident>,
@@ -1961,6 +2047,8 @@ impl Kernel {
             driver,
             root,
             root_tile,
+            root_columns,
+            root_bindings,
             body,
             resume,
             run_ids,
@@ -1983,8 +2071,9 @@ impl Kernel {
             .unwrap_or((shared_words, descriptor_words));
         let shared_bytes =
             ((shared_words + if frontier { descriptor_words + 2 } else { 0 }) * 4) as u32;
-        let common = quote!(__driver,#(#run_ids,)*#(#constants,)*__output,__frontier);
-        let signature = quote!(__driver: ::cq_gpu_runtime::TableView,#(#run_ids: #run_types,)*#(#constants:i64,)*__output: ::cq_gpu_runtime::OutputView,__frontier: ::cq_gpu_runtime::FrontierView);
+        let common =
+            quote!(__driver,#(#root_columns,)*#(#run_ids,)*#(#constants,)*__output,__frontier);
+        let signature = quote!(__driver: ::cq_gpu_runtime::TableView,#(#root_columns: ::cq_gpu_runtime::ColumnView,)*#(#run_ids: #run_types,)*#(#constants:i64,)*__output: ::cq_gpu_runtime::OutputView,__frontier: ::cq_gpu_runtime::FrontierView);
         let resume_args = resume
             .as_ref()
             .map(|_| quote!(__resume: ::cq_gpu_runtime::ResumeView,));
@@ -2024,6 +2113,52 @@ impl Kernel {
             let name = &c.name;
             quote!(#stage=>#name(#common,__descriptor,__chunk),)
         });
+        // The full-vector decoder assigns each warp two independent 64-row
+        // sequences, returning adjacent pairs at offsets 0, 1, 64 and 65.
+        // Partial batches and selection kernels retain their striped ABI.
+        let root_slot = if !root_tile.is_empty() && selection.is_none() {
+            quote!(
+                (__tid / 32) * 128
+                    + (__tid % 32) * 2
+                    + (__stripe / 512) * 64
+                    + (__stripe / 256) % 2
+            )
+        } else {
+            quote!(__stripe + __tid)
+        };
+        let root_len = if frontier {
+            quote!(::cq_gpu_runtime::table_len(__driver))
+        } else {
+            quote!(__driver_len)
+        };
+        let row = quote! {
+            let __slot=#root_slot;
+            let __row=__tile*#batch as u64+__slot as u64;
+            let mut __valid=__slot<#batch && __row<#root_len;
+            #root #body
+        };
+        let root_rows = if !root_tile.is_empty() && selection.is_none() {
+            quote! {
+                let mut __pair=0usize;
+                while __pair<2 {
+                    #root_tile
+                    let mut __stripe=__pair*512;
+                    while __stripe<(__pair+1)*512 {
+                        #row
+                        __stripe+=256;
+                    }
+                    __pair+=1;
+                }
+            }
+        } else {
+            quote! {
+                let mut __stripe=0usize;
+                while __stripe<#batch {
+                    #row
+                    __stripe+=256;
+                }
+            }
+        };
         let scheduler = if frontier {
             quote! {
                 loop {
@@ -2031,15 +2166,7 @@ impl Kernel {
                     ::cuda_device::thread::sync_threads();
                     let __tile=*(__scratch.add(8) as *const u64);
                     if __tile<__driver.len.div_ceil(#batch as u64) {
-                        #root_tile
-                        let mut __stripe=0usize;
-                        while __stripe<#batch {
-                            let __slot=__stripe+__tid;
-                            let __row=__tile*#batch as u64+__slot as u64;
-                            let mut __valid=__slot<#batch && __row<::cq_gpu_runtime::table_len(__driver);
-                            #root #body
-                            __stripe+=256;
-                        }
+                        #root_rows
                         if __tid==0 {::cq_gpu_runtime::frontier_done(__frontier);}
                     } else {
                         let __descriptor=__scratch.add(#shared_words);
@@ -2057,17 +2184,11 @@ impl Kernel {
             }
         } else {
             quote! {
+                // Upstream extent and error are immutable during this launch.
+                let __driver_len=::cq_gpu_runtime::table_len(__driver);
                 let mut __tile=::cuda_device::thread::blockIdx_x() as u64;
-                while __tile<::cq_gpu_runtime::table_len(__driver).div_ceil(#batch as u64) {
-                    #root_tile
-                    let mut __stripe=0usize;
-                    while __stripe<#batch {
-                        let __slot=__stripe+__tid;
-                        let __row=__tile*#batch as u64+__slot as u64;
-                        let mut __valid=__slot<#batch && __row<::cq_gpu_runtime::table_len(__driver);
-                        #root #body
-                        __stripe+=256;
-                    }
+                while __tile<__driver_len.div_ceil(#batch as u64) {
+                    #root_rows
                     __tile+=::cuda_device::thread::gridDim_x() as u64;
                 }
             }
@@ -2075,6 +2196,7 @@ impl Kernel {
         let scheduler = if selection.is_some() {
             quote! {
                 let __row=::cuda_device::thread::blockIdx_x() as u64*256+__tid as u64;
+                #root_tile
                 let mut __valid=__row<::cq_gpu_runtime::table_len(__driver);
                 #root #body
             }
@@ -2170,10 +2292,17 @@ impl Kernel {
         } else {
             scheduler
         };
+        // Four resident 256-thread blocks bound decoder register pressure on
+        // the serial scan path. Frontier/resume kernels retain their own needs.
+        let min_blocks = if !frontier && resume.is_none() && selection.is_none() {
+            4u32
+        } else {
+            0
+        };
         let device = quote! {
             #(#functions)*
             #[kernel]
-            #[launch_bounds(256)]
+            #[launch_bounds(256, #min_blocks)]
             #[launch_contract(domain=1,block=(256,1,1),dynamic_shared_range=(#shared_bytes,#shared_bytes))]
             pub fn #kernel(#signature,#resume_args #selection_args) {
                 let __tid=::cuda_device::thread::threadIdx_x() as usize;
@@ -2247,6 +2376,7 @@ impl Kernel {
         let launch = quote! {
             let #table={
                 let __driver=#driver;
+                #(#root_bindings)*
                 #(#run_bindings)*
                 let __pool=__execution.frontier(#slots,#descriptor_words as u32)?;
                 let __frontier=__pool.view();
@@ -2275,6 +2405,7 @@ impl Kernel {
                 quote! {
                     let #table={
                         let __driver=#driver;
+                        #(#root_bindings)*
                         #(#run_bindings)*
                         let __pool=__execution.frontier(0,#descriptor_words as u32)?;
                         let __frontier=__pool.view();

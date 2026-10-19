@@ -54,7 +54,7 @@ impl Pool {
     }
 }
 
-/// An initialized device allocation retaining its allocator, context and stream.
+/// An owned device allocation retaining its allocator, context and stream.
 /// Deallocation is ordered on that stream; there is no host-runtime lifetime.
 pub struct Buffer<T: DeviceCopy> {
     block: Option<DeviceBlock>,
@@ -64,6 +64,26 @@ pub struct Buffer<T: DeviceCopy> {
 }
 impl<T: DeviceCopy> Buffer<T> {
     pub fn zeroed(pool: Arc<Pool>, len: usize) -> Result<Self> {
+        let buffer = unsafe { Self::uninitialized(pool, len)? };
+        if buffer.bytes() != 0 {
+            unsafe {
+                cuda_core::memory::memset_d8_async(
+                    buffer.cu_deviceptr(),
+                    0,
+                    buffer.bytes(),
+                    buffer.pool.stream().cu_stream(),
+                )?;
+            }
+        }
+        Ok(buffer)
+    }
+    /// Allocate pooled storage without clearing it.
+    ///
+    /// # Safety
+    /// Every element must be initialized on this pool's stream before it is
+    /// read, downloaded, or exposed to an operation that may read it. Unwritten
+    /// capacity may only be passed to operations gated by an initialized count.
+    pub unsafe fn uninitialized(pool: Arc<Pool>, len: usize) -> Result<Self> {
         let layout = Layout::array::<T>(len)?;
         if std::mem::size_of::<T>() == 0 {
             return Err("zero-sized device elements".into());
@@ -72,26 +92,15 @@ impl<T: DeviceCopy> Buffer<T> {
             .memory
             .allocate(layout, pool.stream())
             .map_err(allocation_error)?;
-        let buffer = Self {
+        Ok(Self {
             block: Some(block),
             pool,
             len,
             marker: PhantomData,
-        };
-        if layout.size() != 0 {
-            unsafe {
-                cuda_core::memory::memset_d8_async(
-                    buffer.cu_deviceptr(),
-                    0,
-                    layout.size(),
-                    buffer.pool.stream().cu_stream(),
-                )?;
-            }
-        }
-        Ok(buffer)
+        })
     }
     pub fn from_host(pool: Arc<Pool>, values: &[T]) -> Result<Self> {
-        let buffer = Self::zeroed(pool, values.len())?;
+        let buffer = unsafe { Self::uninitialized(pool, values.len())? };
         if !values.is_empty() {
             unsafe {
                 cuda_core::memory::memcpy_htod_async(
@@ -168,8 +177,8 @@ impl<T: DeviceCopy> Drop for Buffer<T> {
         }
     }
 }
-// SAFETY: zero initialization establishes all device-copy scalar bits, the owner
-// retains the pool/context/stream, and exposes exactly the allocated extent.
+// SAFETY: the owner retains the pool/context/stream and exposes exactly the
+// allocated extent; uninitialized allocation requires initialization before reads.
 unsafe impl<T: DeviceCopy> ContiguousDeviceRange<T> for Buffer<T> {
     fn len(&self) -> usize {
         self.len

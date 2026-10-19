@@ -760,6 +760,20 @@ Host loading obtains the exact encoded extent before allocation. Derived
 outputs retain a conservative device allocation rather than reading their
 extent back merely to resize the answer.
 
+Resident execution retains allocation capacity separately from the device live
+count. Result columns and decode scratch are allocated without clearing unused
+tails; every consumer is count-gated. Plain results adopt their native column
+buffers and count owner without encoding or copying. Recorded compressed results
+build headers, offsets and payloads only for live vectors, including the partial
+last vector. A runtime retains dedup scratch capacity across calls, but clears
+the device-count-sized active set on each call; no relation data is reused.
+Membership bitmap allocations are capped by the recorded key bounds as well as
+the recorded byte budget. Runtime and generated code-object caches retain the
+actual context owner, not just a potentially recycled context identifier.
+Sorted-run starts/directory construction and per-bin ordering use bounded grids
+with device-count/domain grid strides, avoiding capacity-sized grids whose
+threads immediately exit on sparse filtered relations.
+
 Derived storage is different: its codec is an explicit Structures provider
 fact, selected by a rewrite rather than guessed from a query or Rust host
 value. The default recorded device canon is plain:
@@ -790,6 +804,20 @@ an entire decompressed relation back to global memory. The paper's speedups
 are not measurements of this Rust implementation. The 1024-value storage
 vector is not a requirement to keep 1024 decoded values live per thread.
 
+Root decoding keeps two named scalar values at a time rather than an indexed
+local-memory array. Each warp owns paired positions in two 64-value Delta sequences; one
+warp-prefix sum per sequence replaces duplicate lower-half decoding. Narrow
+residuals use exact 32-bit sums with the signed frame base added separately;
+wider residuals retain wrapping 64-bit arithmetic. Selection kernels decode
+convergently before validity filtering. These paths use lane shifts and warp
+shuffles, not shared-memory decode buffers or block barriers.
+Root column descriptors are passed as immutable kernel parameters, retaining
+their device count pointers; there is no per-tile descriptor-table round trip.
+Serial scan kernels request four resident blocks per multiprocessor to limit
+register pressure. Packed payload accesses remain scalar/coalesced UTL loads:
+paired logical values are not contiguous packed words, so blindly substituting
+vector loads would fetch unrelated lanes.
+
 ### Lifetime, VRAM and capacity errors
 
 All device buffers, including codec headers, payloads and scratch space, use
@@ -814,8 +842,8 @@ source /data/rccl/scripts/oxide-env.sh
 cargo oxide build --arch sm_89 -- --release -p gpu-h05-compiled --bin printer-smoke
 ./target/release/printer-smoke
 cargo oxide build --arch sm_89 -- --release -p gpu-h05-compiled --bin gpu-h05-compiled
-./target/release/gpu-h05-compiled /data/tpch-gpu/sf1 both compare/gpu_h05_compiled.resident.results.json
-./target/release/gpu-h05-compiled /data/tpch-gpu/sf10 both compare/gpu_h05_compiled.resident.results.json
+./target/release/gpu-h05-compiled /data/tpch-gpu/sf1 both compare/gpu_h05_compiled.resident.optimized.results.json
+./target/release/gpu-h05-compiled /data/tpch-gpu/sf10 both compare/gpu_h05_compiled.resident.optimized.results.json
 ```
 
 The standalone smoke compares GPU answers with the pull printer, including
@@ -845,23 +873,23 @@ The resident JSON records, separately:
   Resident result `raw_bytes` describes uncompressed capacity, not an implicit
   readback of live row count; encoded answer storage may be conservative.
 
-The measured resident results are in `gpu_h05_compiled.resident.results.json`;
+The repaired resident results are in `gpu_h05_compiled.resident.optimized.results.json`;
 the before/after comparison and evidence ledger are in
 `gpu_h05_compiled.resident.summary.json`. Profile separately from unprofiled samples:
 
 ```sh
 CQ_GPU_PROFILE=1 nsys profile --trace=cuda --capture-range=cudaProfilerApi \
-  --capture-range-end=stop --force-overwrite=true -o compare/compiled_resident \
+  --capture-range-end=stop --force-overwrite=true -o compare/compiled_resident_optimized_A \
   ./target/release/gpu-h05-compiled /data/tpch-gpu/sf10 A \
-  compare/gpu_h05_compiled.resident.profile.results.json
+  compare/gpu_h05_compiled.resident.optimized.profile.results.json
 nsys stats --report cuda_gpu_kern_sum,cuda_api_sum --format csv \
-  compare/compiled_resident.nsys-rep
+  compare/compiled_resident_optimized_A.nsys-rep
 ncu --target-processes all --kernel-name 'regex:cq_gpu_stream_0_r21' \
   --launch-skip 1 --launch-count 1 \
   --metrics dram__bytes.sum,gpu__time_duration.sum,dram__throughput.avg.pct_of_peak_sustained_elapsed \
-  --force-overwrite -o compare/compiled_resident \
+  --force-overwrite -o compare/compiled_resident_optimized \
   ./target/release/gpu-h05-compiled /data/tpch-gpu/sf10 A \
-  compare/gpu_h05_compiled.resident.ncu.results.json
+  compare/gpu_h05_compiled.resident.optimized.ncu.results.json
 /opt/nvidia/hpc_sdk/Linux_x86_64/25.5/cuda/12.9/bin/ptxas \
   -v -arch=sm_89 target/oxide-ir/gpu_h05_compiled.ptx -o /dev/null
 ```
@@ -883,34 +911,106 @@ It compares independently constructed paper-layout bits and headers, not only
 encode/decode round trips, and exercises empty/partial vectors, signed extrema,
 all widths, per-lane delta restarts, and device-count-below-capacity encoding.
 
-#### Resident measurements (2026-10-18)
+#### Resident phase repair measurements (2026-10-18)
 
-RTX 6000 Ada, sm_89; one warmup and five unprofiled calls. Both H05 plans
-and their second compiled queries were exact in every SF1/SF10 call
-(7,242 / 72,983 distinct answers). The device codec oracle passed **534**
-cases; printer smoke/expansion oracles, all **30** printer tests including UI
-fixtures, and **3** dictionary unit tests passed.
+RTX 6000 Ada, sm_89; one warmup and five unprofiled measured calls. Both plans
+and their chained queries were exact in every SF1/SF10 call (7,242 / 72,983
+answers). The final codec oracle passed **595** cases, the blocked-run oracle
+passed **42** data cases plus invalid-input checks, printer smoke/expansion
+oracles passed, and **32** printer tests including UI fixtures passed.
 
-SF10 Plan A:
+SF10 A medians, from `gpu_h05_compiled.results.json`,
+`gpu_h05_compiled.resident.before.results.json` and
+`gpu_h05_compiled.resident.optimized.results.json`, respectively:
 
-| Per-call median | Before: re-upload | Resident FastLanes |
+| Per-call median | Pre-resident re-upload | Initial resident | Repaired resident |
+|---|---:|---:|---:|
+| Build | 1.972 ms | 14.512 ms | **1.880 ms** |
+| Kernel phase | 1.044 ms | 11.338 ms | **1.004 ms** |
+| Dedup phase | 0.069 ms | 12.459 ms | **0.039 ms** |
+| Total | 3.087 ms | 38.319 ms | **2.924 ms** |
+| Wall | 894.274 ms | 39.554 ms | **3.054 ms** |
+
+All five repaired A totals are below 3.5 ms; the largest wall-minus-total
+difference is **0.143 ms**. Phase medians need not sum to the median total.
+Warmup is retained in JSON but excluded from these medians; code loading and
+initial pool growth are not steady-state query costs.
+
+| Repaired plan | SF | Build ms | Kernel ms | Dedup ms | Total ms | Wall ms | Exact |
+|---|---:|---:|---:|---:|---:|---:|---|
+| A | 1 | 0.491 | 0.130 | 0.033 | 0.656 | 0.778 | yes |
+| B | 1 | 1.408 | 0.115 | 0.035 | 1.558 | 1.699 | yes |
+| B | 10 | 15.090 | 0.488 | 0.037 | 15.620 | 15.776 | yes |
+
+Fresh nsys captures bracket the first measured compiled query and its compiled
+consumer, not just the main kernel. The following complete operation list sums
+the first query's build/kernel/dedup work, excluding the consumer. Full per-phase
+lists, launch counts, memset bytes, timelines and event residuals are recorded
+in `gpu_h05_compiled.resident.before.attribution.json` and
+`gpu_h05_compiled.resident.optimized.{A,B}.attribution.json`.
+
+| SF10 A operation | Before repair GPU ms | After repair GPU ms |
 |---|---:|---:|
-| Wall | 894.274 ms | 37.885 ms |
-| Build | 1.972 ms | 13.738 ms |
-| Kernel phase | 1.044 ms | 10.875 ms |
-| Dedup phase | 0.069 ms | 12.061 ms |
+| `memset` | 13.403 | 0.203 |
+| `offsets` | 11.951 | 0.009 |
+| `encode` | 5.044 | 0.071 |
+| `cq_gpu_stream_0_r8` (Orders selection, two passes) | 2.940 | 0.568 |
+| `headers` | 1.797 | 0.020 |
+| `cq_gpu_stream_0_r21` (main) | 1.790 | **0.988** |
+| `gather` | 0.258 | 0.262 |
+| `sorted_starts` | 0.156 | 0.121 |
+| `sorted_directory` | 0.142 | 0.104 |
+| `order_bins` | 0.128 | 0.005 |
+| `word_offsets` | 0.074 | 0.074 |
+| `decode_column` | 0.065 | 0.006 |
+| `sorted_check` | 0.041 | 0.041 |
+| `set_insert` | 0.040 | 0.013 |
+| `scatter` | 0.038 | 0.038 |
+| `histogram` | 0.038 | 0.038 |
+| `cq_gpu_stream_0_r5` | 0.036 | 0.038 |
+| `scan_blocks` | 0.035 | 0.035 |
+| `initialize_pointer` | 0.022 | 0.021 |
+| `initialize_view` | 0.020 | 0.019 |
+| `add_prefix` | 0.015 | 0.015 |
+| `initialize_count` | 0.010 | 0.010 |
+| `pack` | 0.010 | 0.004 |
+| `fences` | 0.008 | 0.007 |
+| `validate_output` | 0.007 | 0.006 |
+| `cq_gpu_stream_0_r3` | 0.006 | 0.006 |
+| `cq_gpu_stream_0_r2` | 0.005 | 0.005 |
+| `clear_histogram` | 0.005 | 0.005 |
+| `complete_stats` | 0.005 | 0.005 |
+| `initialize` | 0.004 | 0.004 |
+| `count_u32` | 0.004 | 0.004 |
+| `run_status` | 0.004 | 0.004 |
+| `membership_insert` | 0.002 | 0.002 |
+| `membership_bounds` | 0.002 | 0.002 |
+| `clear_set` | 0.000 | 0.003 |
 
-Wall time improves **23.60×**. The phase scopes are not identical:
-resident kernel/dedup phases also initialize conservative-capacity buffers and
-encode persistent outputs. The separately profiled main kernel takes **1.741 ms**
-in nsys, not the 10.875-ms kernel phase. This implementation trades more device
-work for eliminating per-call host preparation/transfers; the phase regressions
-are not hidden. In the captured call pair, serial codec offset construction
-accounts for 15.715 ms and device memset for 19.441 ms.
+There was **no individual 10-ms kernel**. The regressions were aggregates:
+initialization plus codec work consumed **10.271 ms in build**, **9.549 ms in
+the kernel phase**, and **12.373 ms in dedup**. The main kernel added 1.790 ms
+to the kernel phase; actual set insertion took only 0.040 ms. Clearing 5.398 GB
+and encoding capacity-sized Plain columns, not set probing, caused the dedup
+regression. The repaired set clears only its device-count-sized active prefix;
+recorded For result encoding processes 72,983 rows, not 59,986,052 capacity rows.
 
-One-time SF10 load/encode is **1,825.256 ms**, including runtime setup,
+| nsys A phase | Before GPU work ms | After GPU work ms | Before event residual ms | After event residual ms |
+|---|---:|---:|---:|---:|
+| Build | 14.322 | 1.729 | 0.577 | 0.541 |
+| Kernel | 11.348 | 0.996 | 0.031 | 0.019 |
+| Dedup | 12.431 | 0.027 | 0.037 | 0.028 |
+
+Residuals are event-interval time not occupied by the listed device operations:
+launch gaps and host/profiler overhead, not attributed to invented kernels.
+Profiled timings are not substituted for the unprofiled table. Plan B's separate
+trace reports a 0.475-ms main kernel; its larger build includes 5.773 ms of
+per-bin stable ordering and 1.532 ms of Lineitem decoding, retained explicitly
+in the B attribution rather than hidden in A's improvement.
+
+One-time SF10 load/encode is **1,893.642 ms**, including runtime setup,
 host column preparation, upload and completed GPU encoding; file/oracle loading
-is separately **1,519.972 ms**.
+is separately **1,578.936 ms**. Input storage remains:
 
 | Relation | Raw column bytes | FastLanes bytes |
 |---|---:|---:|
@@ -926,18 +1026,21 @@ payloads. Byte accounting includes encoded data, per-vector headers and extent
 metadata, not pool reserve or host dictionary strings.
 
 Separate ncu kernel-replay captures measure main-kernel DRAM traffic falling
-from **532,209,024** to **205,408,896 bytes** (**61.40%** lower). The profiler
-kernel duration is 2.905 ms and is not substituted for unprofiled timing.
-`compiled_resident.ncu.csv` contains the hardware counters.
+from **532,209,024** pre-resident bytes to **202,497,920 bytes** (**61.95%**
+lower). The replay duration is **2.360 ms**, not the unprofiled timing.
+`compiled_resident_optimized.ncu.csv` and `.resources.json` retain the evidence:
+64 registers/thread, no block barriers in the main kernel, a 64-byte stack,
+88 bytes of spill stores and 104 bytes of spill loads. The occupancy bound
+deliberately trades these spills for the measured 0.988-ms nsys main kernel;
+this is not a zero-spill claim.
 
-The nsys CUDA-profiler capture covers the first measured query **and** its
-compiled consumer, excluding loading and final `.to_host()`. It records
-**zero HtoD and zero DtoH calls**, no memcpy activity, and 163 device memsets.
-Evidence is in `compiled_resident_cuda_api_sum.csv`,
-`compiled_resident_cuda_gpu_mem_time_sum.csv` and
-`compiled_resident_cuda_gpu_kern_sum.csv`. The explicit-capacity measured path
-also has no control readback; generic grow-and-resume's permitted four-byte
-control flag is a separate execution contract.
+Both `compiled_resident_optimized_A` and `_B` nsys captures include the first
+query and its compiled consumer, excluding loading and final `.to_host()`.
+Each records **zero HtoD and zero DtoH calls**, no memcpy activity and no module
+loads; A/B contain 30/33 device memsets respectively. Their `_cuda_api_sum.csv`,
+`_cuda_gpu_kern_sum.csv` and attribution JSON retain the measured evidence.
+The explicit-capacity path has no control readback; generic grow-and-resume's
+permitted four-byte control flag remains a separate execution contract.
 
 
 The following tables and `gpu_h05_compiled.results.json`, `.profile.json`,

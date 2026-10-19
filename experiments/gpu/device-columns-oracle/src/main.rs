@@ -35,10 +35,11 @@ fn inspect(
     order: &[usize],
 ) -> Result<()> {
     let (headers, actual) = column.inspect()?;
+    assert_eq!(column.capacity(), capacity, "{label}: capacity");
     assert_eq!(
         headers.len(),
-        capacity.div_ceil(1024),
-        "{label}: header count"
+        input.len().div_ceil(1024),
+        "{label}: live header count"
     );
     let mut expected = Vec::new();
     for (vector, header) in headers.iter().enumerate() {
@@ -183,6 +184,47 @@ fn device_output(pool: &Arc<Pool>, codec: Codec, len: usize, order: &[usize]) ->
     Ok(())
 }
 
+fn owned_plain(pool: &Arc<Pool>, len: usize) -> Result<()> {
+    let capacity = 3073;
+    let mut input: Vec<i64> = (0..capacity).map(|i| i as i64 - 1700).collect();
+    input[len..].fill(i64::MIN);
+    let raw = Buffer::from_host(pool.clone(), &input)?;
+    let pointer = raw.ptr();
+    // Exercise an aligned count field that is not the first metadata word.
+    let count = Arc::new(Buffer::from_host(pool.clone(), &[u64::MAX, len as u64])?);
+    let owner = Arc::downgrade(&count);
+    let column = EncodedColumn::from_plain_buffer(raw, count.clone(), 8, (-1700, 1372))?;
+    drop(count);
+    assert!(
+        owner.upgrade().is_some(),
+        "Plain must retain count ownership"
+    );
+    assert!(column.view().headers.is_null());
+    assert_eq!(column.view().data, pointer.cast_const().cast::<u64>());
+    assert_eq!(
+        column.bytes(),
+        capacity * 8,
+        "Plain adoption allocates no metadata"
+    );
+    assert_eq!(column.to_host()?, input[..len]);
+    // No capacity initialization: decode writes only the prefix read below.
+    let scratch = unsafe { Buffer::<i64>::uninitialized(pool.clone(), capacity)? };
+    unsafe { column.decode_into(scratch.ptr())? };
+    assert_eq!(scratch.to_host_prefix(len)?, input[..len]);
+    drop(column);
+    assert!(owner.upgrade().is_none(), "Plain count owner leaked");
+    Ok(())
+}
+
+fn invalid_plain_count(pool: &Arc<Pool>) -> Result<()> {
+    for offset in [1, 8, usize::MAX] {
+        let raw = Buffer::from_host(pool.clone(), &[1i64])?;
+        let count = Arc::new(Buffer::from_host(pool.clone(), &[1u64])?);
+        assert!(EncodedColumn::from_plain_buffer(raw, count, offset, (1, 1)).is_err());
+    }
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let pool = Pool::new(0, 8 << 20, 256 << 20)?;
     let order = paper_order();
@@ -246,11 +288,21 @@ fn main() -> Result<()> {
             check(&pool, &format!("width-{width}"), &values, codec, &order)?;
             cases += 1;
         }
-        for len in [0, 1, 65, 1025, 2049] {
+        for len in [
+            0, 1, 31, 32, 33, 63, 64, 65, 255, 256, 257, 1023, 1024, 1025, 2049, 3073,
+        ] {
             device_output(&pool, codec, len, &order)?;
             cases += 1;
         }
     }
+    for len in [
+        0, 1, 31, 32, 33, 63, 64, 65, 255, 256, 257, 1023, 1024, 1025, 2049, 3073,
+    ] {
+        owned_plain(&pool, len)?;
+        cases += 1;
+    }
+    invalid_plain_count(&pool)?;
+    cases += 1;
     // IDs belong to one shared dictionary across independently encoded
     // columns: repeated IDs and different local subsets must remain global.
     let dictionary = ["alpha", "beta", "delta", "omega", "zeta"];
@@ -284,6 +336,6 @@ fn main() -> Result<()> {
             );
         }
     }
-    println!("gpu-device-columns exactness: {} cases passed; CPU-paper headers/UTL/packing, GPU decode, shared IDs, device-only re-encode", cases + 2);
+    println!("gpu-device-columns exactness: {} cases passed; CPU-paper live headers/UTL/packing, GPU decode, shared IDs, device-only re-encode, owned Plain, uninitialized scratch", cases + 2);
     Ok(())
 }

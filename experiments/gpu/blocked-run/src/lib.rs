@@ -263,7 +263,7 @@ impl<'a> Run<'a> {
             module.clear_histogram(stream, &clear, domain, ptr(&stats), bins_ptr, cursors_ptr)?;
         }
         let bits = DeviceBuffer::zeroed_in(memory, stream, words)?;
-        let adjacent = module.prepare_sorted_starts(config(n))?;
+        let adjacent = module.prepare_sorted_starts(bounded_config(n))?;
         unsafe {
             module.sorted_starts(
                 stream,
@@ -332,7 +332,7 @@ impl<'a> Run<'a> {
                 permutation_ptr,
             )?;
         }
-        let order = module.prepare_order_bins(config(domain))?;
+        let order = module.prepare_order_bins(bounded_config(domain))?;
         unsafe {
             module.order_bins(
                 stream,
@@ -349,7 +349,7 @@ impl<'a> Run<'a> {
                 ptr(&unique_keys),
             )?;
         }
-        let sorted_directory = module.prepare_sorted_directory(config(n))?;
+        let sorted_directory = module.prepare_sorted_directory(bounded_config(n))?;
         unsafe {
             module.sorted_directory(
                 stream,
@@ -458,6 +458,13 @@ fn invalid(message: impl Into<String>) -> Box<dyn Error> {
 fn config(items: usize) -> LaunchConfig1D {
     LaunchConfig1D::new(items.div_ceil(THREADS as usize).max(1) as u32, THREADS, 0)
 }
+fn bounded_config(items: usize) -> LaunchConfig1D {
+    LaunchConfig1D::new(
+        items.div_ceil(THREADS as usize).clamp(1, 568) as u32,
+        THREADS,
+        0,
+    )
+}
 
 fn ptr<T: DeviceCopy>(buffer: &Buffer<'_, T>) -> *mut T {
     buffer.cu_deviceptr() as *mut T
@@ -480,7 +487,7 @@ mod kernels {
     use super::RunStats;
     use cuda_device::atomic::{AtomicOrdering, DeviceAtomicU32, DeviceAtomicU64};
     use cuda_device::{
-        DynamicSharedArray, device, kernel, launch_bounds, launch_contract, thread, warp,
+        device, kernel, launch_bounds, launch_contract, thread, warp, DynamicSharedArray,
     };
 
     #[kernel]
@@ -574,14 +581,19 @@ mod kernels {
         if unsafe { (*stats).sorted == 0 || (*stats).invalid != 0 } {
             return;
         }
-        let i = thread::index_1d().get();
-        if i < unsafe { (*stats).rows } as usize && (i == 0 || keys[i - 1] != keys[i]) {
-            let bin = (keys[i] as u64).wrapping_sub(min_key as u64) as usize;
-            unsafe {
-                bins.add(bin).write(i as u32);
-                DeviceAtomicU64::from_ptr(bits.add(bin >> 6))
-                    .fetch_or(1u64 << (bin & 63), AtomicOrdering::Relaxed);
+        let mut i = thread::index_1d().get();
+        let stride = thread::gridDim_x() as usize * 256;
+        let rows = unsafe { (*stats).rows } as usize;
+        while i < rows {
+            if i == 0 || keys[i - 1] != keys[i] {
+                let bin = (keys[i] as u64).wrapping_sub(min_key as u64) as usize;
+                unsafe {
+                    bins.add(bin).write(i as u32);
+                    DeviceAtomicU64::from_ptr(bits.add(bin >> 6))
+                        .fetch_or(1u64 << (bin & 63), AtomicOrdering::Relaxed);
+                }
             }
+            i += stride;
         }
     }
 
@@ -601,10 +613,11 @@ mod kernels {
         if unsafe { (*stats).sorted == 0 || (*stats).invalid != 0 } {
             return;
         }
-        let i = thread::index_1d().get();
+        let mut i = thread::index_1d().get();
+        let stride = thread::gridDim_x() as usize * 256;
         let rows = unsafe { (*stats).rows } as usize;
         let mut maximum = 0;
-        if i < rows {
+        while i < rows {
             let bin = (keys[i] as u64).wrapping_sub(min_key as u64) as usize;
             if i == 0 || keys[i - 1] != keys[i] {
                 let mask = 1u64 << (bin & 63);
@@ -615,8 +628,9 @@ mod kernels {
                 }
             }
             if i + 1 == rows || keys[i + 1] != keys[i] {
-                maximum = i as u32 + 1 - unsafe { bins.add(bin).read() };
+                maximum = maximum.max(i as u32 + 1 - unsafe { bins.add(bin).read() });
             }
+            i += stride;
         }
         let lane = warp::lane_id();
         let mut distance = 1;
@@ -842,8 +856,9 @@ mod kernels {
         if unsafe { (*stats).sorted != 0 || (*stats).invalid != 0 } {
             return;
         }
-        let bin = thread::index_1d().get();
-        if bin < domain && unsafe { (*stats).invalid } == 0 {
+        let mut bin = thread::index_1d().get();
+        let stride = thread::gridDim_x() as usize * 256;
+        while bin < domain {
             let begin = word_rows[bin >> 6] + unsafe { bins.add(bin).read() };
             let end = if bin + 1 < domain {
                 word_rows[(bin + 1) >> 6] + unsafe { bins.add(bin + 1).read() }
@@ -875,6 +890,7 @@ mod kernels {
                     }
                 }
             }
+            bin += stride;
         }
     }
 

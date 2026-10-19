@@ -1,8 +1,8 @@
 #[cuda_device::cuda_module]
 pub(crate) mod runtime_kernels {
     use crate::{
-        column, flag_error, reserve, table_len, write_output, FrontierView, OutputCount,
-        OutputView, TableView,
+        column, column_stripe, flag_error, reserve, table_len, write_output, FrontierView,
+        OutputCount, OutputView, TableView,
     };
     use cuda_device::atomic::{AtomicOrdering, DeviceAtomicU64};
     use cuda_device::{kernel, launch_bounds, launch_contract, thread};
@@ -81,14 +81,27 @@ pub(crate) mod runtime_kernels {
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
     pub unsafe fn decode_column(table: TableView, index: usize, output: *mut i64) {
-        let mut row = thread::index_1d().get() as u64;
+        let lane = thread::threadIdx_x();
+        let mut base = thread::blockIdx_x() as u64 * 256;
         let stride = thread::gridDim_x() as u64 * 256;
         let count = unsafe { table_len(table) };
-        while row < count {
-            unsafe {
-                output.add(row as usize).write(column(table, index, row));
+        while base < count {
+            let row = base + lane as u64;
+            let value = unsafe {
+                column_stripe(
+                    table,
+                    index,
+                    row / 1024,
+                    lane,
+                    ((row % 1024) / 256) as usize,
+                )
+            };
+            if row < count {
+                unsafe {
+                    output.add(row as usize).write(value);
+                }
             }
-            row += stride;
+            base += stride;
         }
     }
     #[kernel]
@@ -177,6 +190,11 @@ pub(crate) mod runtime_kernels {
         let stride = thread::gridDim_x() as u64 * 256;
         let count = unsafe { table_len(input) };
         while row < count {
+            if width == 0 {
+                unsafe {
+                    packed.add(row as usize * words).write(0);
+                }
+            }
             let mut col = 0;
             while col < width {
                 unsafe {
@@ -187,6 +205,30 @@ pub(crate) mod runtime_kernels {
                 col += 1;
             }
             row += stride;
+        }
+    }
+    #[inline(always)]
+    fn active_set_capacity(rows: u64, allocation: usize) -> usize {
+        let needed = (rows as usize).saturating_mul(2).max(2);
+        let mut capacity = 2usize;
+        while capacity < needed && capacity < allocation {
+            capacity *= 2;
+        }
+        capacity.min(allocation)
+    }
+    /// Only the live-row-sized set can be probed by set_insert.
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub unsafe fn clear_set(input: TableView, slots: *mut u64, allocation: usize) {
+        let capacity = active_set_capacity(unsafe { table_len(input) }, allocation);
+        let mut slot = thread::index_1d().get() as usize;
+        let stride = thread::gridDim_x() as usize * 256;
+        while slot < capacity {
+            unsafe {
+                slots.add(slot).write(0);
+            }
+            slot += stride;
         }
     }
     /// Slots publish immutable row IDs. Compare every word, never a fingerprint.
@@ -205,6 +247,7 @@ pub(crate) mod runtime_kernels {
         let mut row = thread::index_1d().get() as u64;
         let stride = thread::gridDim_x() as u64 * 256;
         let count = unsafe { table_len(input) };
+        let capacity = active_set_capacity(count, capacity);
         while row < count {
             let key = unsafe { packed.add(row as usize * words) };
             let mut hash = 0x9e37_79b9_7f4a_7c15u64;

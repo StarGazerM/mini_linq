@@ -110,11 +110,19 @@ pub unsafe fn column(table: TableView, column: usize, row: u64) -> i64 {
     unsafe { gpu_device_columns::decode(table.columns.add(column).read(), row) }
 }
 
-/// Decode a root scan vector into this lane's four striped registers.
+/// Convergent root scan stripe; all lanes participate before row filtering.
 #[device]
 #[inline(always)]
-pub unsafe fn column_tile(table: TableView, column: usize, vector: u64, lane: u32) -> [i64; 4] {
-    unsafe { gpu_device_columns::decode_tile(table.columns.add(column).read(), vector, lane) }
+pub unsafe fn column_stripe(
+    table: TableView,
+    column: usize,
+    vector: u64,
+    lane: u32,
+    stripe: usize,
+) -> i64 {
+    unsafe {
+        gpu_device_columns::decode_stripe(table.columns.add(column).read(), vector, lane, stripe)
+    }
 }
 /// Logical initialized row count. Host `len` is only an allocation bound.
 #[device]

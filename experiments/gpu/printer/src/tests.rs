@@ -90,6 +90,8 @@ fn every_keyed_read_has_exactly_one_provenance_entry_and_witness_does_not_reprob
         .contains("let (__cq_gpu_begin_p , __cq_gpu_end_p) = (__cq_gpu_begin_s , __cq_gpu_end_s)"));
     assert!(generated.contains("while __cq_gpu_row_p < __cq_gpu_end_p"));
     assert!(!generated.contains("tiles :: owner"));
+    assert!(generated.contains("let __cq_gpu_payload_p_y = __cq_gpu_run_view_b . columns"));
+    assert!(generated.contains("__cq_gpu_payload_p_y . add (__cq_gpu_row_p as usize) . read ()"));
 }
 
 #[test]
@@ -278,7 +280,7 @@ fn recorded_prefix_run_preserves_all_residual_key_comparisons() {
     assert_eq!(generated.matches("prepare_run").count(), 1);
     let residual = quote!(
         ::cq_gpu_runtime::run_column(__cq_gpu_run_view_r, 1usize, __cq_gpu_row_p)
-            == __cq_gpu_tile_column_1[__stripe / 256]
+            == __cq_gpu_tile_column_1
     )
     .to_string();
     assert!(generated.contains(&residual));
@@ -568,15 +570,36 @@ fn resumable_expansion_preserves_recorded_batch_and_frontier() {
 }
 
 #[test]
-fn fixed_full_tile_scan_decodes_four_register_values_once_per_vector() {
+fn fixed_full_tile_scan_keeps_only_two_decoded_registers_live_per_column() {
     let generated = compile(&shared(), syn::parse2(quote!(capacity(R))).unwrap())
         .unwrap()
         .to_token_stream()
         .to_string();
-    assert_eq!(generated.matches("column_tile (").count(), 1);
-    assert!(generated.contains("__cq_gpu_tile_column_0 [__stripe / 256]"));
-    assert!(generated.find("column_tile (").unwrap() < generated.find("let mut __stripe").unwrap());
+    assert_eq!(generated.matches("decode_tile_pair (").count(), 1);
+    assert!(generated.contains("launch_bounds (256 , 4u32)"));
+    assert!(generated.contains("__cq_gpu_root_column_0 : :: cq_gpu_runtime :: ColumnView"));
+    assert!(generated.contains("column_view (__cq_gpu_host_L , 0usize)"));
+    assert!(generated.contains("decode_tile_pair (__cq_gpu_root_column_0"));
+    assert!(generated.contains("let [__cq_gpu_tile_register_0_0"));
+    assert!(generated.contains("let __cq_gpu_tile_column_0 = if __stripe % 512 == 0"));
+    assert!(generated.contains("while __pair < 2"));
+    assert!(generated.contains("while __stripe < (__pair + 1) * 512"));
+    assert!(!generated.contains("__cq_gpu_tile_register_0_2"));
+    assert!(!generated.contains("[__stripe / 256]"));
+    assert!(!generated.contains("sync_threads"));
+    assert!(
+        generated.find("decode_tile_pair (").unwrap() < generated.find("let mut __stripe").unwrap()
+    );
     assert!(!generated.contains("column (__driver"));
+    assert!(generated.contains("let __driver_len = :: cq_gpu_runtime :: table_len (__driver)"));
+    assert!(generated.contains("while __tile < __driver_len . div_ceil"));
+    assert!(generated.contains("__row < __driver_len"));
+    let paired_slot = quote!(
+        let __slot = (__tid / 32) * 128 + (__tid % 32) * 2
+            + (__stripe / 512) * 64 + (__stripe / 256) % 2;
+    )
+    .to_string();
+    assert!(generated.contains(&paired_slot));
 
     let mut source = shared();
     source.structures.entries.push(syn::parse_quote! {
@@ -586,6 +609,79 @@ fn fixed_full_tile_scan_decodes_four_register_values_once_per_vector() {
         .unwrap()
         .to_token_stream()
         .to_string();
-    assert!(!partial.contains("column_tile ("));
+    assert!(!partial.contains("decode_tile_pair ("));
+    assert!(!partial.contains("__cq_gpu_root_column_0"));
     assert!(partial.contains("column (__driver"));
+    assert!(!partial.contains(&paired_slot));
+}
+
+#[test]
+fn selection_decodes_one_convergent_stripe_before_row_predicates() {
+    let source: ir::Program = syn::parse_quote! { physical {
+        relation Arbitrary(k:i64,v:i64);
+        scan = pipe rename Arbitrary@0 {k -> key,v -> value};
+        selected = pipe select scan if (key > 0);
+        output = pipe canon project selected keep {key,value};
+        return output as result(key,value);
+    } structures {
+        scan host scan = ::core::iter::Map<_,_> [];
+        output canon = ::cq_gpu_runtime::DeviceSet<_>;
+    } };
+    let generated = compile(&source, Options::default())
+        .unwrap()
+        .to_token_stream()
+        .to_string();
+    assert!(generated.contains("execute_selection"));
+    assert_eq!(generated.matches("decode_stripe (").count(), 2);
+    assert!(generated.contains("column_view (__cq_gpu_host_Arbitrary , 0usize)"));
+    assert!(generated.contains("column_view (__cq_gpu_host_Arbitrary , 1usize)"));
+    assert!(generated.contains("__row / 1024"));
+    assert!(generated.contains("(__row % 1024) / 256"));
+    assert!(
+        generated.find("decode_stripe (").unwrap() < generated.find("let mut __valid").unwrap()
+    );
+    assert!(!generated.contains("decode_tile_pair ("));
+    assert!(!generated.contains("column (__driver"));
+    assert!(!generated.contains("execute_resumable"));
+}
+
+#[test]
+fn decoded_root_descriptors_come_from_the_materialized_table() {
+    let source: ir::Program = syn::parse_quote! { physical {
+        relation Input(k:i64);
+        stored = let rename Input@0 {k -> x};
+        filtered = pipe select stored if (x > 0);
+        output = pipe canon project filtered keep {x};
+        return output as result(x);
+    } structures {
+        stored host scan = ::core::iter::Map<_,_> [];
+        stored rows = ::std::vec::Vec<_>;
+        output canon = ::cq_gpu_runtime::DeviceSet<_>;
+    } };
+    let generated = compile(&source, syn::parse2(quote!(capacity(Input))).unwrap())
+        .unwrap()
+        .to_token_stream()
+        .to_string();
+    assert!(generated.contains("decode_tile_pair (__cq_gpu_root_column_0"));
+    assert!(generated.contains("column_view (__cq_gpu_table_stored , 0usize)"));
+    assert!(!generated.contains("column_view (__cq_gpu_host_Input"));
+}
+
+#[test]
+fn generated_module_cache_is_thread_local_and_context_owned() {
+    let generated = compile(&shared(), syn::parse2(quote!(capacity(R))).unwrap())
+        .unwrap()
+        .to_token_stream()
+        .to_string();
+    assert!(generated.contains(":: std :: thread_local !"));
+    assert!(generated.contains(":: std :: sync :: Arc < :: cuda_core :: CudaContext >"));
+    assert!(generated.contains(":: std :: rc :: Rc <"));
+    assert!(generated.contains("Arc :: ptr_eq (__context , __runtime . context ())"));
+    assert_eq!(
+        generated
+            .matches(":: load (__runtime . context ())")
+            .count(),
+        1
+    );
+    assert!(generated.contains("__cache . borrow_mut ()"));
 }

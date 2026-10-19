@@ -7,7 +7,7 @@ mod encoding;
 mod host;
 mod kernels;
 mod memory;
-use cuda_core::{CudaContext, LaunchConfig1D};
+use cuda_core::{CudaContext, DeviceCopy, LaunchConfig1D};
 pub use device::*;
 pub use encoding::{decode_value, encode_value, DecodeValue, Dictionary, EncodeValue};
 pub use host::*;
@@ -40,12 +40,38 @@ fn config(items: usize) -> LaunchConfig1D {
     LaunchConfig1D::new(items.div_ceil(256).clamp(1, 568) as u32, 256, 0)
 }
 
+enum ColumnData {
+    Packed(Buffer<u64>),
+    Plain(Buffer<i64>),
+}
+impl ColumnData {
+    fn ptr(&self) -> *const u64 {
+        match self {
+            Self::Packed(data) => data.ptr(),
+            Self::Plain(data) => data.ptr().cast(),
+        }
+    }
+    fn pool(&self) -> &Arc<Pool> {
+        match self {
+            Self::Packed(data) => data.pool(),
+            Self::Plain(data) => data.pool(),
+        }
+    }
+    fn bytes(&self) -> usize {
+        match self {
+            Self::Packed(data) => data.bytes(),
+            Self::Plain(data) => data.bytes(),
+        }
+    }
+}
+
 /// Immutable encoded data plus per-vector codec facts. Bounds enclose logical
 /// values; they are not a relational ordering or uniqueness guarantee.
 pub struct EncodedColumn {
-    headers: Buffer<VectorHeader>,
-    data: Buffer<u64>,
-    extent: Buffer<u64>,
+    headers: Option<Buffer<VectorHeader>>,
+    data: ColumnData,
+    extent: Option<Buffer<u64>>,
+    _count_owner: Option<Arc<dyn std::any::Any>>,
     capacity: usize,
     count: *const u64,
     codec: Codec,
@@ -68,12 +94,13 @@ impl EncodedColumn {
             codec,
         )?;
         let words = usize::try_from(extent.to_host()?[0])?;
-        let data = Buffer::zeroed(pool, words)?;
-        Self::pack(&headers, &data, input.ptr())?;
+        let data = unsafe { Buffer::uninitialized(pool, words)? };
+        Self::pack(&headers, &data, input.ptr(), values.len(), std::ptr::null())?;
         Ok(Self {
-            headers,
-            data,
-            extent,
+            headers: Some(headers),
+            data: ColumnData::Packed(data),
+            extent: Some(extent),
+            _count_owner: None,
             capacity: values.len(),
             count: std::ptr::null(),
             codec,
@@ -81,9 +108,57 @@ impl EncodedColumn {
         })
     }
 
+    /// Adopt an owned native-i64 result without copying, transposing, clearing,
+    /// or launching kernels. The count field is a device u64 at `count_offset`
+    /// bytes within `count`; its owner is retained for the column's lifetime.
+    /// Bounds must enclose logical values. Count is clamped to buffer capacity.
+    pub fn from_plain_buffer<T: DeviceCopy + 'static>(
+        input: Buffer<i64>,
+        count: Arc<Buffer<T>>,
+        count_offset: usize,
+        bounds: (i64, i64),
+    ) -> Result<Self> {
+        if !Arc::ptr_eq(input.pool(), count.pool()) {
+            return Err("plain column and count must share a pool".into());
+        }
+        if count_offset
+            .checked_add(8)
+            .is_none_or(|end| end > count.bytes())
+            || (count.cu_deviceptr() as usize).wrapping_add(count_offset) % 8 != 0
+        {
+            return Err("plain column count must be an aligned in-bounds u64".into());
+        }
+        let count_ptr = (count.cu_deviceptr() + count_offset as u64) as *const u64;
+        Ok(Self {
+            headers: None,
+            capacity: input.len(),
+            data: ColumnData::Plain(input),
+            extent: None,
+            _count_owner: Some(count),
+            count: count_ptr,
+            codec: Codec::Plain,
+            bounds,
+        })
+    }
+    /// Borrow native storage for a device-count-gated operation.
+    ///
+    /// # Safety
+    /// Consumers must read only the initialized logical prefix, not capacity,
+    /// and must not mutate this immutable column.
+    pub unsafe fn plain_buffer(&self) -> Option<&Buffer<i64>> {
+        match &self.data {
+            ColumnData::Plain(buffer) => Some(buffer),
+            ColumnData::Packed(_) => None,
+        }
+    }
+
     /// Encode a device result, retaining logical count on the device. No data
-    /// or metadata is downloaded. Input and count must be ready on pool.stream;
-    /// count must outlive this column (the typed relation owns that metadata).
+    /// or metadata is downloaded. Only the live row prefix is encoded.
+    ///
+    /// # Safety
+    /// Input and count must be ready on pool.stream. The live input prefix must
+    /// be initialized; unused capacity need not be. Count must remain unchanged
+    /// and outlive this column (the typed relation owns that metadata).
     /// Bounds must enclose all logical values; no sampled bound is sufficient.
     pub unsafe fn from_device(
         pool: Arc<Pool>,
@@ -108,12 +183,13 @@ impl EncodedColumn {
             .div_ceil(1024)
             .checked_mul(per_vector)
             .ok_or("device encoded capacity overflow")?;
-        let data = Buffer::zeroed(pool, words)?;
-        Self::pack(&headers, &data, input)?;
+        let data = unsafe { Buffer::uninitialized(pool, words)? };
+        Self::pack(&headers, &data, input, capacity, count)?;
         Ok(Self {
-            headers,
-            data,
-            extent,
+            headers: Some(headers),
+            data: ColumnData::Packed(data),
+            extent: Some(extent),
+            _count_owner: None,
             capacity,
             count,
             codec,
@@ -129,10 +205,11 @@ impl EncodedColumn {
         codec: Codec,
     ) -> Result<(Buffer<VectorHeader>, Buffer<u64>)> {
         let vectors = capacity.div_ceil(1024);
-        let headers = Buffer::zeroed(pool.clone(), vectors)?;
-        let extent = Buffer::zeroed(pool.clone(), 1)?;
+        // Only the live prefix is written and all kernel readers are count-gated.
+        let headers = unsafe { Buffer::uninitialized(pool.clone(), vectors)? };
+        let extent = unsafe { Buffer::uninitialized(pool.clone(), 1)? };
         let module = module(&pool)?;
-        let header_launch = module.prepare_headers(config(vectors))?;
+        let header_launch = module.prepare_headers(config(vectors * 32))?;
         let offset_launch = module.prepare_offsets(config(1))?;
         unsafe {
             module.headers(
@@ -148,13 +225,20 @@ impl EncodedColumn {
                 pool.stream(),
                 &offset_launch,
                 headers.ptr(),
-                vectors,
+                capacity as u64,
+                count,
                 extent.ptr(),
             )?;
         }
         Ok((headers, extent))
     }
-    fn pack(headers: &Buffer<VectorHeader>, data: &Buffer<u64>, input: *const i64) -> Result<()> {
+    fn pack(
+        headers: &Buffer<VectorHeader>,
+        data: &Buffer<u64>,
+        input: *const i64,
+        capacity: usize,
+        count: *const u64,
+    ) -> Result<()> {
         if headers.is_empty() {
             return Ok(());
         }
@@ -167,7 +251,8 @@ impl EncodedColumn {
                 &launch,
                 input,
                 headers.ptr(),
-                headers.len(),
+                capacity as u64,
+                count,
                 data.ptr(),
             )?;
         }
@@ -175,7 +260,7 @@ impl EncodedColumn {
     }
     pub fn view(&self) -> ColumnView {
         ColumnView {
-            headers: self.headers.ptr(),
+            headers: self.headers.as_ref().map_or(std::ptr::null(), |h| h.ptr()),
             data: self.data.ptr(),
             len: self.capacity as u64,
             count: self.count,
@@ -186,7 +271,9 @@ impl EncodedColumn {
         self.capacity
     }
     pub fn bytes(&self) -> usize {
-        self.headers.bytes() + self.data.bytes() + self.extent.bytes()
+        self.headers.as_ref().map_or(0, Buffer::bytes)
+            + self.data.bytes()
+            + self.extent.as_ref().map_or(0, Buffer::bytes)
     }
     pub fn bounds(&self) -> (i64, i64) {
         self.bounds
@@ -197,8 +284,11 @@ impl EncodedColumn {
     pub fn pool(&self) -> &Arc<Pool> {
         self.data.pool()
     }
+    /// Device packed-word extent, or the retained row count for native Plain.
     pub fn extent_ptr(&self) -> *const u64 {
-        self.extent.ptr()
+        self.extent
+            .as_ref()
+            .map_or(self.count, |extent| extent.ptr())
     }
     /// Device-only decoded scratch for builds which consume native integers.
     pub fn decoded(&self) -> Result<Buffer<i64>> {
@@ -209,17 +299,22 @@ impl EncodedColumn {
         Ok(output)
     }
     /// # Safety
-    /// Output must have capacity initialized i64 slots on this pool's stream.
+    /// Output must have capacity writable i64 slots on this pool's stream.
+    /// Only the live prefix is initialized; inactive slots remain untouched.
     pub unsafe fn decode_into(&self, output: *mut i64) -> Result<()> {
         let module = module(self.pool())?;
-        let launch = module.prepare_fastlanes_decode_column(config(self.capacity))?;
+        let launch = module.prepare_fastlanes_decode_column(LaunchConfig1D::new(
+            self.capacity.div_ceil(1024).clamp(1, 568) as u32,
+            256,
+            0,
+        ))?;
         unsafe {
             module.fastlanes_decode_column(self.pool().stream(), &launch, self.view(), output)?;
         }
         Ok(())
     }
-    pub fn to_host(&self) -> Result<Vec<i64>> {
-        let len = if self.count.is_null() {
+    fn logical_rows(&self) -> Result<usize> {
+        Ok(if self.count.is_null() {
             self.capacity
         } else {
             let mut len = 0u64;
@@ -233,13 +328,34 @@ impl EncodedColumn {
             }
             self.pool().stream().synchronize()?;
             usize::try_from(len)?.min(self.capacity)
-        };
+        })
+    }
+    pub fn to_host(&self) -> Result<Vec<i64>> {
+        let len = self.logical_rows()?;
+        if let ColumnData::Plain(data) = &self.data {
+            return data.to_host_prefix(len);
+        }
         self.decoded()?.to_host_prefix(len)
     }
-    /// Explicit diagnostic download; never called by the compute path.
+    /// Explicit diagnostic download of live headers and packed words; never
+    /// called by the compute path. Native Plain returns no headers and raw words.
     pub fn inspect(&self) -> Result<(Vec<VectorHeader>, Vec<u64>)> {
-        let words = usize::try_from(self.extent.to_host()?[0])?;
-        Ok((self.headers.to_host()?, self.data.to_host_prefix(words)?))
+        match (&self.headers, &self.extent, &self.data) {
+            (Some(headers), Some(extent), ColumnData::Packed(data)) => {
+                let words = usize::try_from(extent.to_host()?[0])?;
+                let rows = self.logical_rows()?;
+                Ok((
+                    headers.to_host_prefix(rows.div_ceil(1024))?,
+                    data.to_host_prefix(words)?,
+                ))
+            }
+            // Native Plain deliberately has no FastLanes headers or payload.
+            (None, None, ColumnData::Plain(_)) => Ok((
+                Vec::new(),
+                self.to_host()?.into_iter().map(|v| v as u64).collect(),
+            )),
+            _ => unreachable!(),
+        }
     }
 }
 

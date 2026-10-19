@@ -10,10 +10,103 @@
     "build_ms_median": 1.9716800465248525,
     "kernel_ms_median": 1.0442880392074585,
     "dedup_ms_median": 0.0689919963479042,
-    "main_kernel_dram_bytes": 532209024
+    "main_kernel_dram_bytes": 532209024,
+    "total_ms_median": 3.0871040145866573
   },
   "after": {
-    "source": "gpu_h05_compiled.resident.results.json",
+    "source": "gpu_h05_compiled.resident.optimized.results.json",
+    "storage": "resident FastLanes inputs; owned zero-copy native Plain intermediates; recorded For result encoded only over live rows; capacity(Lineitem)",
+    "build_ms_median": 1.8802879583090544,
+    "kernel_ms_median": 1.0035200119018557,
+    "dedup_ms_median": 0.038784001022577286,
+    "total_ms_median": 2.923584000207484,
+    "wall_ms_median": 3.053938,
+    "main_kernel_dram_bytes": 202497920,
+    "main_kernel_nsys_ns": 987555,
+    "main_kernel_ncu_ns": 2359712,
+    "host_file_load_ms": 1578.9359439999998,
+    "one_time_load_encode_ms": 1893.642046,
+    "answer_rows": 72983,
+    "phase_scope": "Build includes selection, run construction and recorded final For encoding; kernel includes bounded output ownership; dedup includes device-count-sized set clearing, packing, insertion and zero-copy Plain ownership. All retain device counts, with no query readback."
+  },
+  "wall_speedup": 292.8265249654708,
+  "main_kernel_dram_reduction_percent": 61.951430571759715,
+  "relations": [
+    {
+      "name": "customer",
+      "rows": 1500000,
+      "raw_bytes": 24000000,
+      "fastlanes_bytes": 1218896
+    },
+    {
+      "name": "orders",
+      "rows": 15000000,
+      "raw_bytes": 360000000,
+      "fastlanes_bytes": 74534136
+    },
+    {
+      "name": "lineitem",
+      "rows": 59986052,
+      "raw_bytes": 959776832,
+      "fastlanes_bytes": 176211664
+    },
+    {
+      "name": "supplier",
+      "rows": 100000,
+      "raw_bytes": 1600000,
+      "fastlanes_bytes": 81552
+    },
+    {
+      "name": "nation",
+      "rows": 25,
+      "raw_bytes": 400,
+      "fastlanes_bytes": 592
+    },
+    {
+      "name": "region",
+      "rows": 5,
+      "raw_bytes": 80,
+      "fastlanes_bytes": 592
+    }
+  ],
+  "bytes_scope": "raw i64/dictionary-ID columns versus FastLanes payload, 32-byte vector headers and extent metadata; excludes allocator reserve and host dictionary strings",
+  "transfer_evidence": {
+    "A": {
+      "capture": "compiled_resident_optimized_A.nsys-rep",
+      "scope": "first measured compiled query plus its compiled consumer; loading and explicit to_host excluded",
+      "htod_calls": 0,
+      "dtoh_calls": 0,
+      "memcpy_activity_rows": 0,
+      "memset_activity_rows": 30,
+      "query_module_loads": 0,
+      "source": "compiled_resident_optimized_A_cuda_api_sum.csv",
+      "timeline_source": "gpu_h05_compiled.resident.optimized.A.attribution.json"
+    },
+    "B": {
+      "capture": "compiled_resident_optimized_B.nsys-rep",
+      "scope": "first measured compiled query plus its compiled consumer; loading and explicit to_host excluded",
+      "htod_calls": 0,
+      "dtoh_calls": 0,
+      "memcpy_activity_rows": 0,
+      "memset_activity_rows": 33,
+      "query_module_loads": 0,
+      "source": "compiled_resident_optimized_B_cuda_api_sum.csv",
+      "timeline_source": "gpu_h05_compiled.resident.optimized.B.attribution.json"
+    }
+  },
+  "hardware_counter_evidence": "compiled_resident_optimized.ncu.csv",
+  "verification": {
+    "codec_oracle_cases": 595,
+    "blocked_run_oracle_data_cases": 42,
+    "blocked_run_invalid_input_checks": "passed",
+    "printer_smoke": "passed: tiny, empty, 4097-row fanout and shifted keys",
+    "printer_oracle": "passed: multiword dedup/string decoding and 20000-row resumable frontier expansion",
+    "printer_tests": "32 passed including UI fixtures",
+    "h05": "SF1 and SF10 A/B, every warmup and measured call and chained answer exact; 7242 and 72983 rows",
+    "build": "pinned cargo oxide sm_89 release build passed; rustfmt restricted to changed Rust files"
+  },
+  "initial_resident_published_summary": {
+    "source": "original gpu_h05_compiled.resident.summary.json ledger at 6f3f6c0; retained separately from the inherited later results samples",
     "storage": "persistent FastLanes DeviceColumns, recorded For result, explicit capacity(Lineitem)",
     "wall_ms_median": 37.885481,
     "build_ms_median": 13.738336235284805,
@@ -27,18 +120,7 @@
     "answer_rows": 72983,
     "phase_scope": "kernel/dedup phases include resident output encoding and conservative-capacity allocation/initialization; these are broader than historical kernel/dedup phases"
   },
-  "wall_speedup": 23.604664066426924,
-  "main_kernel_dram_reduction_percent": 61.40446953413552,
-  "relations": [
-    {"name":"customer","rows":1500000,"raw_bytes":24000000,"fastlanes_bytes":1218896},
-    {"name":"orders","rows":15000000,"raw_bytes":360000000,"fastlanes_bytes":74534136},
-    {"name":"lineitem","rows":59986052,"raw_bytes":959776832,"fastlanes_bytes":176211664},
-    {"name":"supplier","rows":100000,"raw_bytes":1600000,"fastlanes_bytes":81552},
-    {"name":"nation","rows":25,"raw_bytes":400,"fastlanes_bytes":592},
-    {"name":"region","rows":5,"raw_bytes":80,"fastlanes_bytes":592}
-  ],
-  "bytes_scope": "raw i64/dictionary-ID columns versus FastLanes payload, 32-byte vector headers and extent metadata; excludes allocator reserve and host dictionary strings",
-  "transfer_evidence": {
+  "initial_transfer_evidence": {
     "capture": "first measured H05 A call plus second compiled identity query; loading and explicit final to_host outside capture",
     "source": "compiled_resident_cuda_api_sum.csv",
     "memory_source": "compiled_resident_cuda_gpu_mem_time_sum.csv",
@@ -48,8 +130,7 @@
     "memset_activity_rows": 163,
     "note": "The exported nsys database contains no CUPTI_ACTIVITY_KIND_MEMCPY table and the API summary contains no memcpy calls. General unbounded grow-and-resume queries may read a four-byte control flag; this explicit-capacity H05 capture does not."
   },
-  "hardware_counter_evidence": "compiled_resident.ncu.csv",
-  "verification": {
+  "initial_verification": {
     "codec_oracle_cases": 534,
     "codec_scope": "independent paper-layout headers and payload bits, all codecs, widths 0..64, empty and partial vectors, signed extrema, delta restarts, device-only re-encode",
     "printer_smoke": "passed, including empty and 4097-row fanout with shifted keys",
@@ -57,5 +138,92 @@
     "printer_tests": "30 passed including UI fixtures",
     "dictionary_unit_tests": "3 passed",
     "h05": "SF1 and SF10 both plans, all warmup/measured calls and chained queries exact; 7242 and 72983 distinct answers"
+  },
+  "initial_resident_results": {
+    "source": "gpu_h05_compiled.resident.before.results.json",
+    "build_ms_median": 14.511967966333032,
+    "kernel_ms_median": 11.337727546691895,
+    "dedup_ms_median": 12.45900821685791,
+    "total_ms_median": 38.31859233416617,
+    "wall_ms_median": 39.554069999999996
+  },
+  "resources": {
+    "source": "compiled_resident_optimized.resources.json",
+    "main_registers_per_thread": 64,
+    "main_stack_bytes": 64,
+    "main_spill_store_bytes": 88,
+    "main_spill_load_bytes": 104,
+    "main_block_barriers": 0,
+    "note": "Four-block occupancy bound wins measured throughput despite compiler spills; no zero-spill claim."
+  },
+  "plans": [
+    {
+      "sf": 10,
+      "plan": "A",
+      "exact": true,
+      "answer_rows": 72983,
+      "build_ms_median": 1.8802879583090544,
+      "kernel_ms_median": 1.0035200119018557,
+      "dedup_ms_median": 0.038784001022577286,
+      "total_ms_median": 2.923584000207484,
+      "wall_ms_median": 3.053938
+    },
+    {
+      "sf": 10,
+      "plan": "B",
+      "exact": true,
+      "answer_rows": 72983,
+      "build_ms_median": 15.08950394578278,
+      "kernel_ms_median": 0.4884479939937592,
+      "dedup_ms_median": 0.03686400130391121,
+      "total_ms_median": 15.62015993706882,
+      "wall_ms_median": 15.776457
+    },
+    {
+      "sf": 1,
+      "plan": "A",
+      "exact": true,
+      "answer_rows": 7242,
+      "build_ms_median": 0.49065600242465734,
+      "kernel_ms_median": 0.130048006772995,
+      "dedup_ms_median": 0.03276799991726875,
+      "total_ms_median": 0.6555200098082423,
+      "wall_ms_median": 0.777669
+    },
+    {
+      "sf": 1,
+      "plan": "B",
+      "exact": true,
+      "answer_rows": 7242,
+      "build_ms_median": 1.4076799899339676,
+      "kernel_ms_median": 0.11468800157308578,
+      "dedup_ms_median": 0.03465599939227104,
+      "total_ms_median": 1.5575040131807327,
+      "wall_ms_median": 1.699213
+    }
+  ],
+  "phase_attribution": {
+    "before": "gpu_h05_compiled.resident.before.attribution.json",
+    "after_A": "gpu_h05_compiled.resident.optimized.A.attribution.json",
+    "after_B": "gpu_h05_compiled.resident.optimized.B.attribution.json",
+    "before_profile_results": "gpu_h05_compiled.resident.before.profile.results.json",
+    "after_profile_results": "gpu_h05_compiled.resident.optimized.profile.results.json",
+    "baseline_init_plus_codec_ms": {
+      "build": 10.271228,
+      "kernel": 9.549211,
+      "dedup": 12.373387999999998
+    },
+    "note": "No individual baseline kernel took 10 ms. Capacity clears and codec operations aggregate to the phase regressions. Event residuals are explicit launch/profiler gaps, not assigned to invented kernels."
+  },
+  "acceptance": {
+    "sf10_A_exact": true,
+    "sf10_B_exact": true,
+    "sf10_A_all_measured_totals_below_3_5_ms": true,
+    "sf10_A_max_measured_total_ms": 2.9361279690638185,
+    "sf10_A_max_wall_minus_total_ms": 0.1431380309361816,
+    "sf10_A_max_dedup_ms": 0.03891199827194214,
+    "main_kernel_nsys_below_1_04_ms": true,
+    "query_htod_calls_A_B": 0,
+    "query_dtoh_calls_A_B": 0
   }
 }

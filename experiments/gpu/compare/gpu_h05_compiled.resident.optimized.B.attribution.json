@@ -1,0 +1,1818 @@
+{
+  "capture": "compiled_resident_optimized_B.nsys-rep",
+  "plan": "B",
+  "phase_assignment": "Chronological GPU operations mapped to runtime prepare/execute/dedup/reencode calls; result reencoding belongs to build. Non-kernel residual includes launch gaps and event intervals, not invented device work.",
+  "phases": {
+    "build": {
+      "event_ms": 15.674687661230564,
+      "gpu_work_ms": 14.936907,
+      "event_residual_ms": 0.7377806612305644,
+      "kernels": {
+        "order_bins": {
+          "calls": 5,
+          "ms": 5.8445540000000005,
+          "bytes": 0
+        },
+        "gather": {
+          "calls": 10,
+          "ms": 2.6470589999999996,
+          "bytes": 0
+        },
+        "decode_column": {
+          "calls": 4,
+          "ms": 1.537579,
+          "bytes": 0
+        },
+        "sorted_directory": {
+          "calls": 5,
+          "ms": 0.9929990000000001,
+          "bytes": 0
+        },
+        "sorted_starts": {
+          "calls": 5,
+          "ms": 0.942919,
+          "bytes": 0
+        },
+        "memset": {
+          "calls": 32,
+          "ms": 0.797734,
+          "bytes": 746967816
+        },
+        "sorted_check": {
+          "calls": 5,
+          "ms": 0.78023,
+          "bytes": 0
+        },
+        "cq_gpu_stream_1_r7": {
+          "calls": 2,
+          "ms": 0.525828,
+          "bytes": 0
+        },
+        "scatter": {
+          "calls": 5,
+          "ms": 0.28733,
+          "bytes": 0
+        },
+        "histogram": {
+          "calls": 5,
+          "ms": 0.217121,
+          "bytes": 0
+        },
+        "word_offsets": {
+          "calls": 5,
+          "ms": 0.107649,
+          "bytes": 0
+        },
+        "encode": {
+          "calls": 3,
+          "ms": 0.07020799999999999,
+          "bytes": 0
+        },
+        "scan_blocks": {
+          "calls": 22,
+          "ms": 0.035104,
+          "bytes": 0
+        },
+        "headers": {
+          "calls": 3,
+          "ms": 0.020097,
+          "bytes": 0
+        },
+        "fences": {
+          "calls": 5,
+          "ms": 0.018112000000000003,
+          "bytes": 0
+        },
+        "initialize_pointer": {
+          "calls": 15,
+          "ms": 0.016479999999999998,
+          "bytes": 0
+        },
+        "initialize_view": {
+          "calls": 16,
+          "ms": 0.015519999999999999,
+          "bytes": 0
+        },
+        "add_prefix": {
+          "calls": 9,
+          "ms": 0.014336,
+          "bytes": 0
+        },
+        "clear_histogram": {
+          "calls": 5,
+          "ms": 0.009888000000000001,
+          "bytes": 0
+        },
+        "offsets": {
+          "calls": 3,
+          "ms": 0.008416,
+          "bytes": 0
+        },
+        "initialize_count": {
+          "calls": 9,
+          "ms": 0.007904000000000001,
+          "bytes": 0
+        },
+        "complete_stats": {
+          "calls": 5,
+          "ms": 0.006432,
+          "bytes": 0
+        },
+        "cq_gpu_stream_1_r3": {
+          "calls": 2,
+          "ms": 0.005632,
+          "bytes": 0
+        },
+        "initialize": {
+          "calls": 5,
+          "ms": 0.005472,
+          "bytes": 0
+        },
+        "count_u32": {
+          "calls": 5,
+          "ms": 0.00544,
+          "bytes": 0
+        },
+        "cq_gpu_stream_1_r2": {
+          "calls": 2,
+          "ms": 0.004992,
+          "bytes": 0
+        },
+        "run_status": {
+          "calls": 5,
+          "ms": 0.00496,
+          "bytes": 0
+        },
+        "validate_output": {
+          "calls": 3,
+          "ms": 0.0038399999999999997,
+          "bytes": 0
+        },
+        "membership_insert": {
+          "calls": 1,
+          "ms": 0.0016,
+          "bytes": 0
+        },
+        "membership_bounds": {
+          "calls": 1,
+          "ms": 0.001472,
+          "bytes": 0
+        }
+      }
+    },
+    "kernel": {
+      "event_ms": 0.5025920271873474,
+      "gpu_work_ms": 0.482756,
+      "event_residual_ms": 0.019836027187347394,
+      "kernels": {
+        "cq_gpu_stream_1_r19": {
+          "calls": 1,
+          "ms": 0.474532,
+          "bytes": 0
+        },
+        "initialize_view": {
+          "calls": 3,
+          "ms": 0.0030080000000000003,
+          "bytes": 0
+        },
+        "initialize_pointer": {
+          "calls": 3,
+          "ms": 0.0025599999999999998,
+          "bytes": 0
+        },
+        "validate_output": {
+          "calls": 1,
+          "ms": 0.001376,
+          "bytes": 0
+        },
+        "initialize_count": {
+          "calls": 1,
+          "ms": 0.000864,
+          "bytes": 0
+        },
+        "memset": {
+          "calls": 1,
+          "ms": 0.000416,
+          "bytes": 16
+        }
+      }
+    },
+    "dedup": {
+      "event_ms": 0.05167999863624573,
+      "gpu_work_ms": 0.026496,
+      "event_residual_ms": 0.02518399863624573,
+      "kernels": {
+        "set_insert": {
+          "calls": 1,
+          "ms": 0.012768,
+          "bytes": 0
+        },
+        "pack": {
+          "calls": 1,
+          "ms": 0.003968,
+          "bytes": 0
+        },
+        "initialize_view": {
+          "calls": 3,
+          "ms": 0.002752,
+          "bytes": 0
+        },
+        "initialize_pointer": {
+          "calls": 3,
+          "ms": 0.002624,
+          "bytes": 0
+        },
+        "clear_set": {
+          "calls": 1,
+          "ms": 0.002592,
+          "bytes": 0
+        },
+        "validate_output": {
+          "calls": 1,
+          "ms": 0.00096,
+          "bytes": 0
+        },
+        "initialize_count": {
+          "calls": 1,
+          "ms": 0.000832,
+          "bytes": 0
+        }
+      }
+    },
+    "chain_dedup": {
+      "event_ms": 0.058079998940229416,
+      "gpu_work_ms": 0.029728,
+      "event_residual_ms": 0.028351998940229415,
+      "kernels": {
+        "set_insert": {
+          "calls": 1,
+          "ms": 0.01568,
+          "bytes": 0
+        },
+        "pack": {
+          "calls": 1,
+          "ms": 0.00432,
+          "bytes": 0
+        },
+        "initialize_view": {
+          "calls": 3,
+          "ms": 0.00272,
+          "bytes": 0
+        },
+        "initialize_pointer": {
+          "calls": 3,
+          "ms": 0.0025919999999999997,
+          "bytes": 0
+        },
+        "clear_set": {
+          "calls": 1,
+          "ms": 0.00256,
+          "bytes": 0
+        },
+        "validate_output": {
+          "calls": 1,
+          "ms": 0.000992,
+          "bytes": 0
+        },
+        "initialize_count": {
+          "calls": 1,
+          "ms": 0.000864,
+          "bytes": 0
+        }
+      }
+    }
+  },
+  "timeline": [
+    {
+      "index": 0,
+      "start_ms": 0.0,
+      "duration_ms": 0.000672,
+      "operation": "memset:16"
+    },
+    {
+      "index": 1,
+      "start_ms": 0.054944,
+      "duration_ms": 0.001152,
+      "operation": "initialize_pointer"
+    },
+    {
+      "index": 2,
+      "start_ms": 0.071008,
+      "duration_ms": 0.000992,
+      "operation": "initialize_count"
+    },
+    {
+      "index": 3,
+      "start_ms": 0.080032,
+      "duration_ms": 0.000384,
+      "operation": "memset:4"
+    },
+    {
+      "index": 4,
+      "start_ms": 0.086816,
+      "duration_ms": 0.00272,
+      "operation": "cq_gpu_stream_1_r2"
+    },
+    {
+      "index": 5,
+      "start_ms": 0.101216,
+      "duration_ms": 0.001344,
+      "operation": "scan_blocks"
+    },
+    {
+      "index": 6,
+      "start_ms": 0.111392,
+      "duration_ms": 0.002272,
+      "operation": "cq_gpu_stream_1_r2"
+    },
+    {
+      "index": 7,
+      "start_ms": 0.122144,
+      "duration_ms": 0.00112,
+      "operation": "validate_output"
+    },
+    {
+      "index": 8,
+      "start_ms": 0.133345,
+      "duration_ms": 0.000896,
+      "operation": "initialize_view"
+    },
+    {
+      "index": 9,
+      "start_ms": 0.180449,
+      "duration_ms": 0.000864,
+      "operation": "initialize_count"
+    },
+    {
+      "index": 10,
+      "start_ms": 0.191169,
+      "duration_ms": 0.001472,
+      "operation": "membership_bounds"
+    },
+    {
+      "index": 11,
+      "start_ms": 0.198369,
+      "duration_ms": 0.000384,
+      "operation": "memset:8"
+    },
+    {
+      "index": 12,
+      "start_ms": 0.207393,
+      "duration_ms": 0.0016,
+      "operation": "membership_insert"
+    },
+    {
+      "index": 13,
+      "start_ms": 0.227841,
+      "duration_ms": 0.000384,
+      "operation": "memset:16"
+    },
+    {
+      "index": 14,
+      "start_ms": 0.248833,
+      "duration_ms": 0.000864,
+      "operation": "initialize_pointer"
+    },
+    {
+      "index": 15,
+      "start_ms": 0.254465,
+      "duration_ms": 0.000864,
+      "operation": "initialize_pointer"
+    },
+    {
+      "index": 16,
+      "start_ms": 0.263713,
+      "duration_ms": 0.000864,
+      "operation": "initialize_count"
+    },
+    {
+      "index": 17,
+      "start_ms": 0.26989,
+      "duration_ms": 0.000384,
+      "operation": "memset:4"
+    },
+    {
+      "index": 18,
+      "start_ms": 0.275682,
+      "duration_ms": 0.00304,
+      "operation": "cq_gpu_stream_1_r3"
+    },
+    {
+      "index": 19,
+      "start_ms": 0.28669,
+      "duration_ms": 0.001248,
+      "operation": "scan_blocks"
+    },
+    {
+      "index": 20,
+      "start_ms": 0.293058,
+      "duration_ms": 0.002592,
+      "operation": "cq_gpu_stream_1_r3"
+    },
+    {
+      "index": 21,
+      "start_ms": 0.30141,
+      "duration_ms": 0.00112,
+      "operation": "validate_output"
+    },
+    {
+      "index": 22,
+      "start_ms": 0.310754,
+      "duration_ms": 0.000928,
+      "operation": "initialize_view"
+    },
+    {
+      "index": 23,
+      "start_ms": 0.315938,
+      "duration_ms": 0.000928,
+      "operation": "initialize_view"
+    },
+    {
+      "index": 24,
+      "start_ms": 0.34829,
+      "duration_ms": 0.000416,
+      "operation": "memset:4"
+    },
+    {
+      "index": 25,
+      "start_ms": 0.358338,
+      "duration_ms": 0.001088,
+      "operation": "count_u32"
+    },
+    {
+      "index": 26,
+      "start_ms": 0.365826,
+      "duration_ms": 0.000384,
+      "operation": "memset:20"
+    },
+    {
+      "index": 27,
+      "start_ms": 0.375106,
+      "duration_ms": 0.00112,
+      "operation": "initialize"
+    },
+    {
+      "index": 28,
+      "start_ms": 0.385058,
+      "duration_ms": 0.001344,
+      "operation": "sorted_check"
+    },
+    {
+      "index": 29,
+      "start_ms": 0.396706,
+      "duration_ms": 0.00096,
+      "operation": "clear_histogram"
+    },
+    {
+      "index": 30,
+      "start_ms": 0.402498,
+      "duration_ms": 0.000384,
+      "operation": "memset:8"
+    },
+    {
+      "index": 31,
+      "start_ms": 0.415651,
+      "duration_ms": 0.001248,
+      "operation": "sorted_starts"
+    },
+    {
+      "index": 32,
+      "start_ms": 0.425891,
+      "duration_ms": 0.000928,
+      "operation": "histogram"
+    },
+    {
+      "index": 33,
+      "start_ms": 0.440259,
+      "duration_ms": 0.001152,
+      "operation": "word_offsets"
+    },
+    {
+      "index": 34,
+      "start_ms": 0.450979,
+      "duration_ms": 0.001344,
+      "operation": "scan_blocks"
+    },
+    {
+      "index": 35,
+      "start_ms": 0.460675,
+      "duration_ms": 0.001312,
+      "operation": "scan_blocks"
+    },
+    {
+      "index": 36,
+      "start_ms": 0.466467,
+      "duration_ms": 0.000384,
+      "operation": "memset:104"
+    },
+    {
+      "index": 37,
+      "start_ms": 0.470307,
+      "duration_ms": 0.000384,
+      "operation": "memset:200"
+    },
+    {
+      "index": 38,
+      "start_ms": 0.478787,
+      "duration_ms": 0.00112,
+      "operation": "complete_stats"
+    },
+    {
+      "index": 39,
+      "start_ms": 0.489187,
+      "duration_ms": 0.00096,
+      "operation": "scatter"
+    },
+    {
+      "index": 40,
+      "start_ms": 0.498531,
+      "duration_ms": 0.00096,
+      "operation": "order_bins"
+    },
+    {
+      "index": 41,
+      "start_ms": 0.508611,
+      "duration_ms": 0.001888,
+      "operation": "sorted_directory"
+    },
+    {
+      "index": 42,
+      "start_ms": 0.519107,
+      "duration_ms": 0.00112,
+      "operation": "gather"
+    },
+    {
+      "index": 43,
+      "start_ms": 0.528899,
+      "duration_ms": 0.001088,
+      "operation": "fences"
+    },
+    {
+      "index": 44,
+      "start_ms": 0.535043,
+      "duration_ms": 0.001248,
+      "operation": "gather"
+    },
+    {
+      "index": 45,
+      "start_ms": 0.555108,
+      "duration_ms": 0.000864,
+      "operation": "initialize_pointer"
+    },
+    {
+      "index": 46,
+      "start_ms": 0.57066,
+      "duration_ms": 0.000832,
+      "operation": "initialize_pointer"
+    },
+    {
+      "index": 47,
+      "start_ms": 0.584036,
+      "duration_ms": 0.000864,
+      "operation": "initialize_count"
+    },
+    {
+      "index": 48,
+      "start_ms": 0.589636,
+      "duration_ms": 0.00096,
+      "operation": "run_status"
+    },
+    {
+      "index": 49,
+      "start_ms": 0.613092,
+      "duration_ms": 0.000384,
+      "operation": "memset:16"
+    },
+    {
+      "index": 50,
+      "start_ms": 0.632932,
+      "duration_ms": 0.000864,
+      "operation": "initialize_pointer"
+    },
+    {
+      "index": 51,
+      "start_ms": 0.639044,
+      "duration_ms": 0.000864,
+      "operation": "initialize_pointer"
+    },
+    {
+      "index": 52,
+      "start_ms": 0.650212,
+      "duration_ms": 0.000896,
+      "operation": "initialize_count"
+    },
+    {
+      "index": 53,
+      "start_ms": 0.659876,
+      "duration_ms": 0.001184,
+      "operation": "memset:234376"
+    },
+    {
+      "index": 54,
+      "start_ms": 0.664036,
+      "duration_ms": 0.274882,
+      "operation": "cq_gpu_stream_1_r7"
+    },
+    {
+      "index": 55,
+      "start_ms": 0.939558,
+      "duration_ms": 0.001376,
+      "operation": "scan_blocks"
+    },
+    {
+      "index": 56,
+      "start_ms": 0.941638,
+      "duration_ms": 0.00128,
+      "operation": "scan_blocks"
+    },
+    {
+      "index": 57,
+      "start_ms": 0.943718,
+      "duration_ms": 0.001152,
+      "operation": "add_prefix"
+    },
+    {
+      "index": 58,
+      "start_ms": 0.945638,
+      "duration_ms": 0.250946,
+      "operation": "cq_gpu_stream_1_r7"
+    },
+    {
+      "index": 59,
+      "start_ms": 1.197256,
+      "duration_ms": 0.0016,
+      "operation": "validate_output"
+    },
+    {
+      "index": 60,
+      "start_ms": 1.199656,
+      "duration_ms": 0.00112,
+      "operation": "initialize_view"
+    },
+    {
+      "index": 61,
+      "start_ms": 1.201576,
+      "duration_ms": 0.000896,
+      "operation": "initialize_view"
+    },
+    {
+      "index": 62,
+      "start_ms": 1.217096,
+      "duration_ms": 0.000384,
+      "operation": "memset:4"
+    },
+    {
+      "index": 63,
+      "start_ms": 1.22148,
+      "duration_ms": 0.001056,
+      "operation": "count_u32"
+    },
+    {
+      "index": 64,
+      "start_ms": 1.225928,
+      "duration_ms": 0.000384,
+      "operation": "memset:20"
+    },
+    {
+      "index": 65,
+      "start_ms": 1.229288,
+      "duration_ms": 0.00112,
+      "operation": "initialize"
+    },
+    {
+      "index": 66,
+      "start_ms": 1.23412,
+      "duration_ms": 0.17581,
+      "operation": "sorted_check"
+    },
+    {
+      "index": 67,
+      "start_ms": 1.410698,
+      "duration_ms": 0.00512,
+      "operation": "clear_histogram"
+    },
+    {
+      "index": 68,
+      "start_ms": 1.416586,
+      "duration_ms": 0.001056,
+      "operation": "memset:187504"
+    },
+    {
+      "index": 69,
+      "start_ms": 1.418346,
+      "duration_ms": 0.001248,
+      "operation": "sorted_starts"
+    },
+    {
+      "index": 70,
+      "start_ms": 1.420394,
+      "duration_ms": 0.069216,
+      "operation": "histogram"
+    },
+    {
+      "index": 71,
+      "start_ms": 1.49025,
+      "duration_ms": 0.018624,
+      "operation": "word_offsets"
+    },
+    {
+      "index": 72,
+      "start_ms": 1.50961,
+      "duration_ms": 0.001344,
+      "operation": "scan_blocks"
+    },
+    {
+      "index": 73,
+      "start_ms": 1.51169,
+      "duration_ms": 0.001248,
+      "operation": "scan_blocks"
+    },
+    {
+      "index": 74,
+      "start_ms": 1.51361,
+      "duration_ms": 0.001088,
+      "operation": "add_prefix"
+    },
+    {
+      "index": 75,
+      "start_ms": 1.51537,
+      "duration_ms": 0.001312,
+      "operation": "scan_blocks"
+    },
+    {
+      "index": 76,
+      "start_ms": 1.517418,
+      "duration_ms": 0.00128,
+      "operation": "scan_blocks"
+    },
+    {
+      "index": 77,
+      "start_ms": 1.519498,
+      "duration_ms": 0.001088,
+      "operation": "add_prefix"
+    },
+    {
+      "index": 78,
+      "start_ms": 1.521258,
+      "duration_ms": 0.003328,
+      "operation": "memset:6000000"
+    },
+    {
+      "index": 79,
+      "start_ms": 1.525738,
+      "duration_ms": 0.005313,
+      "operation": "memset:11999992"
+    },
+    {
+      "index": 80,
+      "start_ms": 1.531723,
+      "duration_ms": 0.001632,
+      "operation": "complete_stats"
+    },
+    {
+      "index": 81,
+      "start_ms": 1.534091,
+      "duration_ms": 0.137953,
+      "operation": "scatter"
+    },
+    {
+      "index": 82,
+      "start_ms": 1.672844,
+      "duration_ms": 0.06864,
+      "operation": "order_bins"
+    },
+    {
+      "index": 83,
+      "start_ms": 1.742156,
+      "duration_ms": 0.001312,
+      "operation": "sorted_directory"
+    },
+    {
+      "index": 84,
+      "start_ms": 1.744236,
+      "duration_ms": 0.110465,
+      "operation": "gather"
+    },
+    {
+      "index": 85,
+      "start_ms": 1.855341,
+      "duration_ms": 0.00544,
+      "operation": "fences"
+    },
+    {
+      "index": 86,
+      "start_ms": 1.861517,
+      "duration_ms": 0.195585,
+      "operation": "gather"
+    },
+    {
+      "index": 87,
+      "start_ms": 2.057806,
+      "duration_ms": 0.002848,
+      "operation": "initialize_pointer"
+    },
+    {
+      "index": 88,
+      "start_ms": 2.061294,
+      "duration_ms": 0.001536,
+      "operation": "initialize_pointer"
+    },
+    {
+      "index": 89,
+      "start_ms": 2.063534,
+      "duration_ms": 0.000864,
+      "operation": "initialize_count"
+    },
+    {
+      "index": 90,
+      "start_ms": 2.065134,
+      "duration_ms": 0.00112,
+      "operation": "run_status"
+    },
+    {
+      "index": 91,
+      "start_ms": 2.080334,
+      "duration_ms": 0.000928,
+      "operation": "initialize_view"
+    },
+    {
+      "index": 92,
+      "start_ms": 2.08331,
+      "duration_ms": 0.000928,
+      "operation": "initialize_view"
+    },
+    {
+      "index": 93,
+      "start_ms": 2.091311,
+      "duration_ms": 0.0032,
+      "operation": "decode_column"
+    },
+    {
+      "index": 94,
+      "start_ms": 2.097455,
+      "duration_ms": 0.002368,
+      "operation": "decode_column"
+    },
+    {
+      "index": 95,
+      "start_ms": 2.101615,
+      "duration_ms": 0.000896,
+      "operation": "initialize_view"
+    },
+    {
+      "index": 96,
+      "start_ms": 2.104015,
+      "duration_ms": 0.000928,
+      "operation": "initialize_view"
+    },
+    {
+      "index": 97,
+      "start_ms": 2.120015,
+      "duration_ms": 0.000352,
+      "operation": "memset:4"
+    },
+    {
+      "index": 98,
+      "start_ms": 2.124335,
+      "duration_ms": 0.001024,
+      "operation": "count_u32"
+    },
+    {
+      "index": 99,
+      "start_ms": 2.127759,
+      "duration_ms": 0.000384,
+      "operation": "memset:20"
+    },
+    {
+      "index": 100,
+      "start_ms": 2.131535,
+      "duration_ms": 0.00112,
+      "operation": "initialize"
+    },
+    {
+      "index": 101,
+      "start_ms": 2.135919,
+      "duration_ms": 0.001728,
+      "operation": "sorted_check"
+    },
+    {
+      "index": 102,
+      "start_ms": 2.141423,
+      "duration_ms": 0.001184,
+      "operation": "clear_histogram"
+    },
+    {
+      "index": 103,
+      "start_ms": 2.145071,
+      "duration_ms": 0.001056,
+      "operation": "memset:12504"
+    },
+    {
+      "index": 104,
+      "start_ms": 2.149423,
+      "duration_ms": 0.005824,
+      "operation": "sorted_starts"
+    },
+    {
+      "index": 105,
+      "start_ms": 2.155919,
+      "duration_ms": 0.001152,
+      "operation": "histogram"
+    },
+    {
+      "index": 106,
+      "start_ms": 2.158991,
+      "duration_ms": 0.00128,
+      "operation": "word_offsets"
+    },
+    {
+      "index": 107,
+      "start_ms": 2.163919,
+      "duration_ms": 0.00128,
+      "operation": "scan_blocks"
+    },
+    {
+      "index": 108,
+      "start_ms": 2.169455,
+      "duration_ms": 0.00128,
+      "operation": "scan_blocks"
+    },
+    {
+      "index": 109,
+      "start_ms": 2.172815,
+      "duration_ms": 0.001056,
+      "operation": "add_prefix"
+    },
+    {
+      "index": 110,
+      "start_ms": 2.177807,
+      "duration_ms": 0.00128,
+      "operation": "scan_blocks"
+    },
+    {
+      "index": 111,
+      "start_ms": 2.182383,
+      "duration_ms": 0.001312,
+      "operation": "scan_blocks"
+    },
+    {
+      "index": 112,
+      "start_ms": 2.186351,
+      "duration_ms": 0.001056,
+      "operation": "add_prefix"
+    },
+    {
+      "index": 113,
+      "start_ms": 2.190735,
+      "duration_ms": 0.001088,
+      "operation": "memset:400004"
+    },
+    {
+      "index": 114,
+      "start_ms": 2.193647,
+      "duration_ms": 0.00112,
+      "operation": "memset:800000"
+    },
+    {
+      "index": 115,
+      "start_ms": 2.197839,
+      "duration_ms": 0.00112,
+      "operation": "complete_stats"
+    },
+    {
+      "index": 116,
+      "start_ms": 2.202671,
+      "duration_ms": 0.001184,
+      "operation": "scatter"
+    },
+    {
+      "index": 117,
+      "start_ms": 2.206959,
+      "duration_ms": 0.001152,
+      "operation": "order_bins"
+    },
+    {
+      "index": 118,
+      "start_ms": 2.211535,
+      "duration_ms": 0.003424,
+      "operation": "sorted_directory"
+    },
+    {
+      "index": 119,
+      "start_ms": 2.215727,
+      "duration_ms": 0.001472,
+      "operation": "gather"
+    },
+    {
+      "index": 120,
+      "start_ms": 2.220303,
+      "duration_ms": 0.001184,
+      "operation": "fences"
+    },
+    {
+      "index": 121,
+      "start_ms": 2.223727,
+      "duration_ms": 0.00144,
+      "operation": "gather"
+    },
+    {
+      "index": 122,
+      "start_ms": 2.234192,
+      "duration_ms": 0.000864,
+      "operation": "initialize_pointer"
+    },
+    {
+      "index": 123,
+      "start_ms": 2.236624,
+      "duration_ms": 0.000864,
+      "operation": "initialize_pointer"
+    },
+    {
+      "index": 124,
+      "start_ms": 2.242864,
+      "duration_ms": 0.000864,
+      "operation": "initialize_count"
+    },
+    {
+      "index": 125,
+      "start_ms": 2.245328,
+      "duration_ms": 0.00096,
+      "operation": "run_status"
+    },
+    {
+      "index": 126,
+      "start_ms": 2.25976,
+      "duration_ms": 0.000352,
+      "operation": "memset:4"
+    },
+    {
+      "index": 127,
+      "start_ms": 2.264176,
+      "duration_ms": 0.001056,
+      "operation": "count_u32"
+    },
+    {
+      "index": 128,
+      "start_ms": 2.267664,
+      "duration_ms": 0.000384,
+      "operation": "memset:20"
+    },
+    {
+      "index": 129,
+      "start_ms": 2.271216,
+      "duration_ms": 0.00096,
+      "operation": "initialize"
+    },
+    {
+      "index": 130,
+      "start_ms": 2.275472,
+      "duration_ms": 0.002688,
+      "operation": "sorted_check"
+    },
+    {
+      "index": 131,
+      "start_ms": 2.280432,
+      "duration_ms": 0.000992,
+      "operation": "clear_histogram"
+    },
+    {
+      "index": 132,
+      "start_ms": 2.283088,
+      "duration_ms": 0.000384,
+      "operation": "memset:8"
+    },
+    {
+      "index": 133,
+      "start_ms": 2.287024,
+      "duration_ms": 0.001184,
+      "operation": "sorted_starts"
+    },
+    {
+      "index": 134,
+      "start_ms": 2.291344,
+      "duration_ms": 0.022944,
+      "operation": "histogram"
+    },
+    {
+      "index": 135,
+      "start_ms": 2.315088,
+      "duration_ms": 0.001312,
+      "operation": "word_offsets"
+    },
+    {
+      "index": 136,
+      "start_ms": 2.317168,
+      "duration_ms": 0.001312,
+      "operation": "scan_blocks"
+    },
+    {
+      "index": 137,
+      "start_ms": 2.31928,
+      "duration_ms": 0.001312,
+      "operation": "scan_blocks"
+    },
+    {
+      "index": 138,
+      "start_ms": 2.321584,
+      "duration_ms": 0.001152,
+      "operation": "memset:104"
+    },
+    {
+      "index": 139,
+      "start_ms": 2.323696,
+      "duration_ms": 0.000416,
+      "operation": "memset:200"
+    },
+    {
+      "index": 140,
+      "start_ms": 2.324944,
+      "duration_ms": 0.00096,
+      "operation": "complete_stats"
+    },
+    {
+      "index": 141,
+      "start_ms": 2.32664,
+      "duration_ms": 0.024576,
+      "operation": "scatter"
+    },
+    {
+      "index": 142,
+      "start_ms": 2.352016,
+      "duration_ms": 5.772554,
+      "operation": "order_bins"
+    },
+    {
+      "index": 143,
+      "start_ms": 8.12521,
+      "duration_ms": 0.001184,
+      "operation": "sorted_directory"
+    },
+    {
+      "index": 144,
+      "start_ms": 8.12713,
+      "duration_ms": 0.002304,
+      "operation": "gather"
+    },
+    {
+      "index": 145,
+      "start_ms": 8.130138,
+      "duration_ms": 0.001184,
+      "operation": "fences"
+    },
+    {
+      "index": 146,
+      "start_ms": 8.132058,
+      "duration_ms": 0.002336,
+      "operation": "gather"
+    },
+    {
+      "index": 147,
+      "start_ms": 8.135194,
+      "duration_ms": 0.000864,
+      "operation": "initialize_pointer"
+    },
+    {
+      "index": 148,
+      "start_ms": 8.136794,
+      "duration_ms": 0.000832,
+      "operation": "initialize_pointer"
+    },
+    {
+      "index": 149,
+      "start_ms": 8.138362,
+      "duration_ms": 0.000864,
+      "operation": "initialize_count"
+    },
+    {
+      "index": 150,
+      "start_ms": 8.139962,
+      "duration_ms": 0.00096,
+      "operation": "run_status"
+    },
+    {
+      "index": 151,
+      "start_ms": 8.155194,
+      "duration_ms": 0.000896,
+      "operation": "initialize_view"
+    },
+    {
+      "index": 152,
+      "start_ms": 8.157882,
+      "duration_ms": 0.000896,
+      "operation": "initialize_view"
+    },
+    {
+      "index": 153,
+      "start_ms": 8.165946,
+      "duration_ms": 0.769925,
+      "operation": "decode_column"
+    },
+    {
+      "index": 154,
+      "start_ms": 8.936607,
+      "duration_ms": 0.762086,
+      "operation": "decode_column"
+    },
+    {
+      "index": 155,
+      "start_ms": 9.699461,
+      "duration_ms": 0.001376,
+      "operation": "initialize_view"
+    },
+    {
+      "index": 156,
+      "start_ms": 9.701509,
+      "duration_ms": 0.001152,
+      "operation": "initialize_view"
+    },
+    {
+      "index": 157,
+      "start_ms": 9.714981,
+      "duration_ms": 0.000416,
+      "operation": "memset:4"
+    },
+    {
+      "index": 158,
+      "start_ms": 9.719493,
+      "duration_ms": 0.001216,
+      "operation": "count_u32"
+    },
+    {
+      "index": 159,
+      "start_ms": 9.723525,
+      "duration_ms": 0.000352,
+      "operation": "memset:20"
+    },
+    {
+      "index": 160,
+      "start_ms": 9.727045,
+      "duration_ms": 0.001152,
+      "operation": "initialize"
+    },
+    {
+      "index": 161,
+      "start_ms": 9.731461,
+      "duration_ms": 0.59866,
+      "operation": "sorted_check"
+    },
+    {
+      "index": 162,
+      "start_ms": 10.330825,
+      "duration_ms": 0.001632,
+      "operation": "clear_histogram"
+    },
+    {
+      "index": 163,
+      "start_ms": 10.333193,
+      "duration_ms": 0.003712,
+      "operation": "memset:7500000"
+    },
+    {
+      "index": 164,
+      "start_ms": 10.337577,
+      "duration_ms": 0.933415,
+      "operation": "sorted_starts"
+    },
+    {
+      "index": 165,
+      "start_ms": 11.271664,
+      "duration_ms": 0.122881,
+      "operation": "histogram"
+    },
+    {
+      "index": 166,
+      "start_ms": 11.395345,
+      "duration_ms": 0.085281,
+      "operation": "word_offsets"
+    },
+    {
+      "index": 167,
+      "start_ms": 11.48133,
+      "duration_ms": 0.004544,
+      "operation": "scan_blocks"
+    },
+    {
+      "index": 168,
+      "start_ms": 11.48661,
+      "duration_ms": 0.001312,
+      "operation": "scan_blocks"
+    },
+    {
+      "index": 169,
+      "start_ms": 11.488658,
+      "duration_ms": 0.00128,
+      "operation": "scan_blocks"
+    },
+    {
+      "index": 170,
+      "start_ms": 11.490738,
+      "duration_ms": 0.001024,
+      "operation": "add_prefix"
+    },
+    {
+      "index": 171,
+      "start_ms": 11.492498,
+      "duration_ms": 0.003392,
+      "operation": "add_prefix"
+    },
+    {
+      "index": 172,
+      "start_ms": 11.49653,
+      "duration_ms": 0.004512,
+      "operation": "scan_blocks"
+    },
+    {
+      "index": 173,
+      "start_ms": 11.50181,
+      "duration_ms": 0.001312,
+      "operation": "scan_blocks"
+    },
+    {
+      "index": 174,
+      "start_ms": 11.50389,
+      "duration_ms": 0.00128,
+      "operation": "scan_blocks"
+    },
+    {
+      "index": 175,
+      "start_ms": 11.505938,
+      "duration_ms": 0.001056,
+      "operation": "add_prefix"
+    },
+    {
+      "index": 176,
+      "start_ms": 11.50773,
+      "duration_ms": 0.003424,
+      "operation": "add_prefix"
+    },
+    {
+      "index": 177,
+      "start_ms": 11.511954,
+      "duration_ms": 0.229473,
+      "operation": "memset:239944212"
+    },
+    {
+      "index": 178,
+      "start_ms": 11.742227,
+      "duration_ms": 0.5409,
+      "operation": "memset:479888416"
+    },
+    {
+      "index": 179,
+      "start_ms": 12.283863,
+      "duration_ms": 0.0016,
+      "operation": "complete_stats"
+    },
+    {
+      "index": 180,
+      "start_ms": 12.286231,
+      "duration_ms": 0.122657,
+      "operation": "scatter"
+    },
+    {
+      "index": 181,
+      "start_ms": 12.409592,
+      "duration_ms": 0.001248,
+      "operation": "order_bins"
+    },
+    {
+      "index": 182,
+      "start_ms": 12.41164,
+      "duration_ms": 0.985191,
+      "operation": "sorted_directory"
+    },
+    {
+      "index": 183,
+      "start_ms": 13.397599,
+      "duration_ms": 1.134728,
+      "operation": "gather"
+    },
+    {
+      "index": 184,
+      "start_ms": 14.532967,
+      "duration_ms": 0.009216,
+      "operation": "fences"
+    },
+    {
+      "index": 185,
+      "start_ms": 14.542887,
+      "duration_ms": 1.196361,
+      "operation": "gather"
+    },
+    {
+      "index": 186,
+      "start_ms": 15.739952,
+      "duration_ms": 0.001248,
+      "operation": "initialize_pointer"
+    },
+    {
+      "index": 187,
+      "start_ms": 15.741872,
+      "duration_ms": 0.00112,
+      "operation": "initialize_pointer"
+    },
+    {
+      "index": 188,
+      "start_ms": 15.743664,
+      "duration_ms": 0.000832,
+      "operation": "initialize_count"
+    },
+    {
+      "index": 189,
+      "start_ms": 15.74584,
+      "duration_ms": 0.00096,
+      "operation": "run_status"
+    },
+    {
+      "index": 190,
+      "start_ms": 15.759568,
+      "duration_ms": 0.000416,
+      "operation": "memset:16"
+    },
+    {
+      "index": 191,
+      "start_ms": 15.770448,
+      "duration_ms": 0.000832,
+      "operation": "initialize_pointer"
+    },
+    {
+      "index": 192,
+      "start_ms": 15.77352,
+      "duration_ms": 0.000896,
+      "operation": "initialize_pointer"
+    },
+    {
+      "index": 193,
+      "start_ms": 15.775888,
+      "duration_ms": 0.000832,
+      "operation": "initialize_pointer"
+    },
+    {
+      "index": 194,
+      "start_ms": 15.780752,
+      "duration_ms": 0.000864,
+      "operation": "initialize_count"
+    },
+    {
+      "index": 195,
+      "start_ms": 15.784336,
+      "duration_ms": 0.474532,
+      "operation": "cq_gpu_stream_1_r19"
+    },
+    {
+      "index": 196,
+      "start_ms": 16.259572,
+      "duration_ms": 0.001376,
+      "operation": "validate_output"
+    },
+    {
+      "index": 197,
+      "start_ms": 16.26162,
+      "duration_ms": 0.001184,
+      "operation": "initialize_view"
+    },
+    {
+      "index": 198,
+      "start_ms": 16.263572,
+      "duration_ms": 0.000928,
+      "operation": "initialize_view"
+    },
+    {
+      "index": 199,
+      "start_ms": 16.265172,
+      "duration_ms": 0.000896,
+      "operation": "initialize_view"
+    },
+    {
+      "index": 200,
+      "start_ms": 16.2813,
+      "duration_ms": 0.000864,
+      "operation": "initialize_pointer"
+    },
+    {
+      "index": 201,
+      "start_ms": 16.283764,
+      "duration_ms": 0.000864,
+      "operation": "initialize_pointer"
+    },
+    {
+      "index": 202,
+      "start_ms": 16.286964,
+      "duration_ms": 0.000896,
+      "operation": "initialize_pointer"
+    },
+    {
+      "index": 203,
+      "start_ms": 16.291508,
+      "duration_ms": 0.000832,
+      "operation": "initialize_count"
+    },
+    {
+      "index": 204,
+      "start_ms": 16.299284,
+      "duration_ms": 0.002592,
+      "operation": "clear_set"
+    },
+    {
+      "index": 205,
+      "start_ms": 16.302548,
+      "duration_ms": 0.003968,
+      "operation": "pack"
+    },
+    {
+      "index": 206,
+      "start_ms": 16.307316,
+      "duration_ms": 0.012768,
+      "operation": "set_insert"
+    },
+    {
+      "index": 207,
+      "start_ms": 16.320852,
+      "duration_ms": 0.00096,
+      "operation": "validate_output"
+    },
+    {
+      "index": 208,
+      "start_ms": 16.32258,
+      "duration_ms": 0.000928,
+      "operation": "initialize_view"
+    },
+    {
+      "index": 209,
+      "start_ms": 16.324244,
+      "duration_ms": 0.000896,
+      "operation": "initialize_view"
+    },
+    {
+      "index": 210,
+      "start_ms": 16.325844,
+      "duration_ms": 0.000928,
+      "operation": "initialize_view"
+    },
+    {
+      "index": 211,
+      "start_ms": 16.343924,
+      "duration_ms": 0.00672,
+      "operation": "headers"
+    },
+    {
+      "index": 212,
+      "start_ms": 16.35138,
+      "duration_ms": 0.002816,
+      "operation": "offsets"
+    },
+    {
+      "index": 213,
+      "start_ms": 16.35522,
+      "duration_ms": 0.022368,
+      "operation": "encode"
+    },
+    {
+      "index": 214,
+      "start_ms": 16.378356,
+      "duration_ms": 0.006721,
+      "operation": "headers"
+    },
+    {
+      "index": 215,
+      "start_ms": 16.385717,
+      "duration_ms": 0.002784,
+      "operation": "offsets"
+    },
+    {
+      "index": 216,
+      "start_ms": 16.389141,
+      "duration_ms": 0.02448,
+      "operation": "encode"
+    },
+    {
+      "index": 217,
+      "start_ms": 16.414325,
+      "duration_ms": 0.006656,
+      "operation": "headers"
+    },
+    {
+      "index": 218,
+      "start_ms": 16.421749,
+      "duration_ms": 0.002816,
+      "operation": "offsets"
+    },
+    {
+      "index": 219,
+      "start_ms": 16.425237,
+      "duration_ms": 0.02336,
+      "operation": "encode"
+    },
+    {
+      "index": 220,
+      "start_ms": 16.449365,
+      "duration_ms": 0.000928,
+      "operation": "initialize_view"
+    },
+    {
+      "index": 221,
+      "start_ms": 16.450965,
+      "duration_ms": 0.000896,
+      "operation": "initialize_view"
+    },
+    {
+      "index": 222,
+      "start_ms": 16.452565,
+      "duration_ms": 0.000928,
+      "operation": "initialize_view"
+    },
+    {
+      "index": 223,
+      "start_ms": 16.463957,
+      "duration_ms": 0.000928,
+      "operation": "initialize_view"
+    },
+    {
+      "index": 224,
+      "start_ms": 16.466933,
+      "duration_ms": 0.000928,
+      "operation": "initialize_view"
+    },
+    {
+      "index": 225,
+      "start_ms": 16.469397,
+      "duration_ms": 0.000928,
+      "operation": "initialize_view"
+    },
+    {
+      "index": 226,
+      "start_ms": 16.53119,
+      "duration_ms": 0.000928,
+      "operation": "initialize_view"
+    },
+    {
+      "index": 227,
+      "start_ms": 16.533622,
+      "duration_ms": 0.000896,
+      "operation": "initialize_view"
+    },
+    {
+      "index": 228,
+      "start_ms": 16.536758,
+      "duration_ms": 0.000928,
+      "operation": "initialize_view"
+    },
+    {
+      "index": 229,
+      "start_ms": 16.54735,
+      "duration_ms": 0.000864,
+      "operation": "initialize_pointer"
+    },
+    {
+      "index": 230,
+      "start_ms": 16.549846,
+      "duration_ms": 0.000864,
+      "operation": "initialize_pointer"
+    },
+    {
+      "index": 231,
+      "start_ms": 16.552822,
+      "duration_ms": 0.000864,
+      "operation": "initialize_pointer"
+    },
+    {
+      "index": 232,
+      "start_ms": 16.557398,
+      "duration_ms": 0.000864,
+      "operation": "initialize_count"
+    },
+    {
+      "index": 233,
+      "start_ms": 16.568022,
+      "duration_ms": 0.00256,
+      "operation": "clear_set"
+    },
+    {
+      "index": 234,
+      "start_ms": 16.571382,
+      "duration_ms": 0.00432,
+      "operation": "pack"
+    },
+    {
+      "index": 235,
+      "start_ms": 16.57647,
+      "duration_ms": 0.01568,
+      "operation": "set_insert"
+    },
+    {
+      "index": 236,
+      "start_ms": 16.592918,
+      "duration_ms": 0.000992,
+      "operation": "validate_output"
+    },
+    {
+      "index": 237,
+      "start_ms": 16.594678,
+      "duration_ms": 0.000896,
+      "operation": "initialize_view"
+    },
+    {
+      "index": 238,
+      "start_ms": 16.596278,
+      "duration_ms": 0.000928,
+      "operation": "initialize_view"
+    },
+    {
+      "index": 239,
+      "start_ms": 16.597878,
+      "duration_ms": 0.000896,
+      "operation": "initialize_view"
+    },
+    {
+      "index": 240,
+      "start_ms": 16.609686,
+      "duration_ms": 0.000928,
+      "operation": "initialize_view"
+    },
+    {
+      "index": 241,
+      "start_ms": 16.612246,
+      "duration_ms": 0.000928,
+      "operation": "initialize_view"
+    },
+    {
+      "index": 242,
+      "start_ms": 16.615286,
+      "duration_ms": 0.000928,
+      "operation": "initialize_view"
+    }
+  ],
+  "bookkeeping_outside_phases": {
+    "indices": [
+      223,
+      224,
+      225,
+      226,
+      227,
+      228,
+      240,
+      241,
+      242
+    ],
+    "gpu_ms": 0.008320000000000001
+  },
+  "transfer_evidence": {
+    "htod_calls": 0,
+    "dtoh_calls": 0,
+    "memcpy_activity_rows": 0,
+    "memset_activity_rows": 33,
+    "query_module_loads": 0
+  },
+  "cuda_api": [
+    {
+      "name": "cuEventSynchronize",
+      "calls": 45,
+      "ms": 15.003962
+    },
+    {
+      "name": "cuLaunchKernel",
+      "calls": 210,
+      "ms": 0.710336
+    },
+    {
+      "name": "cuMemsetD8Async",
+      "calls": 33,
+      "ms": 0.125433
+    },
+    {
+      "name": "cuEventRecord",
+      "calls": 164,
+      "ms": 0.110833
+    },
+    {
+      "name": "cuEventCreate",
+      "calls": 30,
+      "ms": 0.017895
+    },
+    {
+      "name": "cuProfilerStart",
+      "calls": 1,
+      "ms": 0.014217
+    },
+    {
+      "name": "cuCtxSynchronize",
+      "calls": 1,
+      "ms": 0.008166
+    },
+    {
+      "name": "cuEventDestroy_v2",
+      "calls": 30,
+      "ms": 0.007806
+    },
+    {
+      "name": "cuStreamSynchronize",
+      "calls": 2,
+      "ms": 0.00521
+    },
+    {
+      "name": "cuProfilerStop",
+      "calls": 1,
+      "ms": 0.000171
+    }
+  ]
+}

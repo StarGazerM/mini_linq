@@ -15,9 +15,9 @@ pub use device::*;
 pub use gpu_blocked_run as blocked_run;
 use gpu_blocked_run::{Buffer as Scratch, Run};
 pub use gpu_device_columns::{
-    decode_value, detect_integer_codec, encode_value, Buffer, Codec, ColumnView, DecodeValue,
-    Delta, DeviceColumns, Dictionary, DictionaryCodec, EncodeValue, EncodedColumn, For,
-    OwnedRowCodec, Plain, Pool, Representation, RowCodec,
+    decode_stripe, decode_tile_pair, decode_value, detect_integer_codec, encode_value, Buffer,
+    Codec, ColumnView, DecodeValue, Delta, DeviceColumns, Dictionary, DictionaryCodec, EncodeValue,
+    EncodedColumn, For, OwnedRowCodec, Plain, Pool, Representation, RowCodec,
 };
 use gpu_device_columns::{OutputCount, Table};
 pub use gpu_tiles as tiles;
@@ -183,6 +183,7 @@ impl<'data, H: HostColumns<'data>> HostColumns<'data> for &H {
 pub struct Runtime {
     kernels: kernels::runtime_kernels::LoadedModule,
     pool: Arc<Pool>,
+    dedup_scratch: RefCell<DedupScratch>,
 }
 impl Runtime {
     pub fn new() -> Result<Self> {
@@ -194,7 +195,11 @@ impl Runtime {
     pub fn from_pool(pool: Arc<Pool>) -> Result<Self> {
         let kernels = unsafe { kernels::runtime_kernels::load(pool.context())? };
         gpu_blocked_run::prepare_kernels(pool.context())?;
-        Ok(Self { kernels, pool })
+        Ok(Self {
+            kernels,
+            pool,
+            dedup_scratch: RefCell::new(DedupScratch::default()),
+        })
     }
     pub fn context(&self) -> &Arc<CudaContext> {
         self.pool.context()
@@ -295,7 +300,7 @@ impl Runtime {
         })
     }
     fn metadata(&self, rows: usize) -> Result<Arc<Buffer<OutputCount>>> {
-        let metadata = Arc::new(Buffer::zeroed(self.pool.clone(), 1)?);
+        let metadata = Arc::new(unsafe { Buffer::uninitialized(self.pool.clone(), 1)? });
         let launch = self.kernels.prepare_initialize_count(config(1, 0))?;
         unsafe {
             self.kernels
@@ -304,7 +309,7 @@ impl Runtime {
         Ok(metadata)
     }
     fn column_views(&self, columns: &[Arc<EncodedColumn>]) -> Result<Arc<Buffer<ColumnView>>> {
-        let views = Arc::new(Buffer::zeroed(self.pool.clone(), columns.len())?);
+        let views = Arc::new(unsafe { Buffer::uninitialized(self.pool.clone(), columns.len())? });
         let launch = self.kernels.prepare_initialize_view(config(1, 0))?;
         for (index, column) in columns.iter().enumerate() {
             unsafe {
@@ -321,6 +326,7 @@ impl Runtime {
     }
 }
 thread_local! { static SHARED_RUNTIME: RefCell<Option<Runtime>> = const { RefCell::new(None) }; }
+thread_local! { static RESIDENT_RUNTIME: RefCell<Option<Runtime>> = const { RefCell::new(None) }; }
 pub fn with_runtime<T>(execute: impl FnOnce(&Runtime) -> Result<T>) -> Result<T> {
     SHARED_RUNTIME.with(|runtime| {
         if runtime.borrow().is_none() {
@@ -334,7 +340,16 @@ pub fn with_runtime_for<T>(
     execute: impl FnOnce(&Runtime) -> Result<T>,
 ) -> Result<T> {
     if let Some(pool) = pool {
-        execute(&Runtime::from_pool(pool)?)
+        RESIDENT_RUNTIME.with(|cached| {
+            if cached
+                .borrow()
+                .as_ref()
+                .is_none_or(|runtime| !Arc::ptr_eq(&runtime.pool, &pool))
+            {
+                *cached.borrow_mut() = Some(Runtime::from_pool(pool)?);
+            }
+            execute(cached.borrow().as_ref().unwrap())
+        })
     } else {
         with_runtime(execute)
     }
@@ -361,6 +376,22 @@ struct BuiltRun<'runtime> {
 struct Membership {
     bits: Buffer<u64>,
     bounds: Buffer<u64>,
+}
+#[derive(Default)]
+struct DedupScratch {
+    packed: Option<Buffer<u64>>,
+    slots: Option<Buffer<u64>>,
+}
+impl DedupScratch {
+    fn reserve(&mut self, pool: &Arc<Pool>, packed: usize, slots: usize) -> Result<()> {
+        for (buffer, required) in [(&mut self.packed, packed), (&mut self.slots, slots)] {
+            if buffer.as_ref().is_none_or(|buffer| buffer.len() < required) {
+                // Kernels initialize the live prefix before it is consumed.
+                *buffer = Some(unsafe { Buffer::uninitialized(pool.clone(), required)? });
+            }
+        }
+        Ok(())
+    }
 }
 struct Output {
     columns: Vec<Buffer<i64>>,
@@ -500,6 +531,19 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
     pub fn table_view(&self, id: TableId) -> Result<TableView> {
         Ok(self.table(id)?.view())
     }
+    /// Immutable descriptor facts are already host-owned; the live count stays on device.
+    pub fn column_view(&self, id: TableId, index: usize) -> Result<ColumnView> {
+        self.table(id)?
+            .columns
+            .get(index)
+            .map(|column| column.view())
+            .ok_or_else(|| {
+                failure(
+                    "CQ_GPU_KEY_COLUMN",
+                    "column descriptor outside source schema",
+                )
+            })
+    }
     pub fn table_width(&self, id: TableId) -> Result<usize> {
         Ok(self.table(id)?.columns.len())
     }
@@ -543,7 +587,10 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
             ));
         }
         let start = self.runtime.stream().record_event(timing_flags())?;
-        let bounds = Buffer::zeroed(self.runtime.pool.clone(), 2)?;
+        let bounds = unsafe { Buffer::uninitialized(self.runtime.pool.clone(), 2)? };
+        let domain = source.bounds[key_column];
+        let domain_words = ((domain.1 as i128 - domain.0 as i128 + 1).max(0) as u128).div_ceil(64);
+        let words = domain_words.min((budget_bytes / 8) as u128) as usize;
         let status = self.runtime.metadata(0)?;
         let launch = self
             .runtime
@@ -556,11 +603,11 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
                 source.view(),
                 key_column,
                 bounds.ptr(),
-                (budget_bytes / 8) as u64 * 64,
+                words as u64 * 64,
                 status.ptr(),
             )?;
         }
-        let bits = Buffer::zeroed(self.runtime.pool.clone(), budget_bytes / 8)?;
+        let bits = Buffer::zeroed(self.runtime.pool.clone(), words)?;
         let launch = self
             .runtime
             .kernels
@@ -601,7 +648,29 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         }
         let runtime = self.runtime;
         let start = runtime.stream().record_event(timing_flags())?;
-        let columns = decode_columns(runtime, source)?;
+        let decoded = source
+            .columns
+            .iter()
+            .enumerate()
+            .map(|(index, column)| {
+                if unsafe { column.plain_buffer() }.is_some() {
+                    Ok(None)
+                } else {
+                    decode_column(runtime, source, index).map(Some)
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+        // Run::build gates all input reads with the device count supplied below.
+        let columns: Vec<&Buffer<i64>> = source
+            .columns
+            .iter()
+            .zip(&decoded)
+            .map(|(column, decoded)| {
+                unsafe { column.plain_buffer() }
+                    .or(decoded.as_ref())
+                    .unwrap()
+            })
+            .collect();
         let count = Scratch::<u32>::zeroed_in(runtime.pool.resource(), runtime.stream(), 1)?;
         let launch = runtime.kernels.prepare_count_u32(config(1, 0))?;
         unsafe {
@@ -616,20 +685,20 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
             .iter()
             .enumerate()
             .filter_map(|(index, column)| {
-                (index != key_column).then_some(column as &dyn ContiguousDeviceRange<i64>)
+                (index != key_column).then_some(*column as &dyn ContiguousDeviceRange<i64>)
             })
             .collect();
         let run = Run::build(
             runtime.context(),
             runtime.stream(),
             runtime.pool.resource(),
-            &columns[key_column],
+            columns[key_column],
             &payloads,
             domain,
             Some(&count),
         )
         .map_err(|e| failure("CQ_GPU_RUN_BUILD", e.to_string()))?;
-        let pointers = Buffer::zeroed(runtime.pool.clone(), columns.len())?;
+        let pointers = unsafe { Buffer::uninitialized(runtime.pool.clone(), columns.len())? };
         let launch = runtime.kernels.prepare_initialize_pointer(config(1, 0))?;
         let mut payload = 0;
         for index in 0..columns.len() {
@@ -819,17 +888,23 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         }
         let columns = output
             .columns
-            .iter()
+            .into_iter()
             .zip(&bounds)
-            .map(|(column, &bound)| unsafe {
-                EncodedColumn::from_device(
-                    runtime.pool.clone(),
-                    column.ptr(),
-                    output.capacity,
-                    output.metadata.ptr().cast(),
-                    codec,
-                    bound,
-                )
+            .map(|(column, &bound)| {
+                if codec == Codec::Plain {
+                    EncodedColumn::from_plain_buffer(column, output.metadata.clone(), 0, bound)
+                } else {
+                    unsafe {
+                        EncodedColumn::from_device(
+                            runtime.pool.clone(),
+                            column.ptr(),
+                            output.capacity,
+                            output.metadata.ptr().cast(),
+                            codec,
+                            bound,
+                        )
+                    }
+                }
                 .map(Arc::new)
             })
             .collect::<Result<Vec<_>>>()?;
@@ -873,14 +948,24 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
             .checked_mul(2)
             .and_then(usize::checked_next_power_of_two)
             .ok_or_else(|| failure("CQ_GPU_SET_CAPACITY", "set capacity overflow"))?;
-        let packed = Buffer::zeroed(runtime.pool.clone(), packed_len)?;
-        let slots = Buffer::zeroed(runtime.pool.clone(), capacity)?;
+        let mut scratch = runtime.dedup_scratch.borrow_mut();
+        scratch.reserve(&runtime.pool, packed_len, capacity)?;
+        let packed = scratch.packed.as_ref().unwrap();
+        let slots = scratch.slots.as_ref().unwrap();
         let output = allocate_output(runtime, width, source.capacity)?;
         let pack = runtime.kernels.prepare_pack(config(source.capacity, 0))?;
         let insert = runtime
             .kernels
             .prepare_set_insert(config(source.capacity, 0))?;
+        let clear = runtime.kernels.prepare_clear_set(config(capacity, 0))?;
         unsafe {
+            runtime.kernels.clear_set(
+                runtime.stream(),
+                &clear,
+                source.view(),
+                slots.ptr(),
+                capacity,
+            )?;
             runtime.kernels.pack(
                 runtime.stream(),
                 &pack,
@@ -913,19 +998,42 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
             return Ok(source);
         }
         let start = self.runtime.stream().record_event(timing_flags())?;
-        let decoded = decode_columns(self.runtime, table)?;
-        let columns = decoded
+        let columns = table
+            .columns
             .iter()
+            .enumerate()
             .zip(&table.bounds)
-            .map(|(column, &bound)| unsafe {
-                EncodedColumn::from_device(
-                    self.runtime.pool.clone(),
-                    column.ptr(),
-                    table.capacity,
-                    table.metadata.ptr().cast(),
-                    codec,
-                    bound,
-                )
+            .map(|((index, column), &bound)| {
+                if column.codec() == codec {
+                    return Ok(column.clone());
+                }
+                let decoded;
+                let input = match unsafe { column.plain_buffer() } {
+                    Some(buffer) => buffer,
+                    None => {
+                        decoded = decode_column(self.runtime, table, index)?;
+                        if codec == Codec::Plain {
+                            return EncodedColumn::from_plain_buffer(
+                                decoded,
+                                table.metadata.clone(),
+                                0,
+                                bound,
+                            )
+                            .map(Arc::new);
+                        }
+                        &decoded
+                    }
+                };
+                unsafe {
+                    EncodedColumn::from_device(
+                        self.runtime.pool.clone(),
+                        input.ptr(),
+                        table.capacity,
+                        table.metadata.ptr().cast(),
+                        codec,
+                        bound,
+                    )
+                }
                 .map(Arc::new)
             })
             .collect::<Result<Vec<_>>>()?;
@@ -1058,9 +1166,9 @@ fn elapsed(runtime: &Runtime, start: cuda_core::CudaEvent) -> Result<f64> {
 }
 fn allocate_output(runtime: &Runtime, width: usize, capacity: usize) -> Result<Output> {
     let columns = (0..width)
-        .map(|_| Buffer::zeroed(runtime.pool.clone(), capacity))
+        .map(|_| unsafe { Buffer::uninitialized(runtime.pool.clone(), capacity) })
         .collect::<Result<Vec<_>>>()?;
-    let pointers = Buffer::zeroed(runtime.pool.clone(), width)?;
+    let pointers = unsafe { Buffer::uninitialized(runtime.pool.clone(), width)? };
     let launch = runtime.kernels.prepare_initialize_pointer(config(1, 0))?;
     for (index, column) in columns.iter().enumerate() {
         unsafe {
@@ -1080,26 +1188,20 @@ fn allocate_output(runtime: &Runtime, width: usize, capacity: usize) -> Result<O
         capacity,
     })
 }
-fn decode_columns(runtime: &Runtime, table: &Table) -> Result<Vec<Buffer<i64>>> {
+fn decode_column(runtime: &Runtime, table: &Table, index: usize) -> Result<Buffer<i64>> {
     let launch = runtime
         .kernels
         .prepare_decode_column(config(table.capacity, 0))?;
-    table
-        .columns
-        .iter()
-        .enumerate()
-        .map(|(index, _)| {
-            let output = Buffer::zeroed(runtime.pool.clone(), table.capacity)?;
-            unsafe {
-                runtime.kernels.decode_column(
-                    runtime.stream(),
-                    &launch,
-                    table.view(),
-                    index,
-                    output.ptr(),
-                )?;
-            }
-            Ok(output)
-        })
-        .collect()
+    // decode_column writes every live row; consumers use table.metadata.
+    let output = unsafe { Buffer::uninitialized(runtime.pool.clone(), table.capacity)? };
+    unsafe {
+        runtime.kernels.decode_column(
+            runtime.stream(),
+            &launch,
+            table.view(),
+            index,
+            output.ptr(),
+        )?;
+    }
+    Ok(output)
 }
