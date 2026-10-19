@@ -38,8 +38,14 @@ pub(super) fn check(normal: &cq::Program, target: &vo::Program) -> syn::Result<(
                     );
                     written.extend(columns);
                 }
-                cq::BodyItem::Let(binding) => {
-                    written.extend(cq::rust::bindings(&binding.pattern).iter().map(symbol_name))
+                cq::BodyItem::Let(_) | cq::BodyItem::For(_) => {
+                    written.extend(
+                        item.rust_step()
+                            .expect("Rust binding")
+                            .bindings
+                            .iter()
+                            .map(symbol_name),
+                    )
                 }
                 cq::BodyItem::Block(block) => {
                     written.extend(block.analyze(&written).interface.into_keys())
@@ -289,7 +295,7 @@ pub(super) fn compile(source: &vo::Program) -> syn::Result<vo::Program> {
                 vo::Step::Constraint(c, _) => {
                     state.demand(&c.variables().map(symbol_name).collect())
                 }
-                vo::Step::Guard(_, _) | vo::Step::Let(_, _) => {
+                vo::Step::Guard(_, _) | vo::Step::Let(_, _) | vo::Step::For(_, _) => {
                     let (clause, rust) = body
                         .iter()
                         .enumerate()

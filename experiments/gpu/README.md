@@ -1181,8 +1181,9 @@ cargo oxide build --arch sm_89 -- --release -p gpu-h05-compiled --bin printer-or
 ```
 
 The compiler tests check exact keyed-read coverage and witness no-reprobe;
-four public-macro compile-fail fixtures name `CQ_GPU_MERGE`,
-`CQ_GPU_UNION`, `CQ_GPU_NON_INTEGRAL_KEY` and `CQ_GPU_OPAQUE_GUARD`.
+five public-macro compile-fail fixtures name `CQ_GPU_MERGE`,
+`CQ_GPU_UNION`, `CQ_GPU_NON_INTEGRAL_KEY`, `CQ_GPU_OPAQUE_GUARD` and
+`CQ_GPU_GENERATOR`.
 The GPU oracle exercises full-width signed multiword dedup with strings,
 and a 20,000-answer fanout using a recorded scan join filter, retained witness,
 batch-32 expansion, frontier publication and output grow/relaunch.
@@ -1196,9 +1197,11 @@ above for current resident-code verification.
 ### Supported domain and explicit rejections
 
 - No computed head expressions, union/fallback blocks, anti, merge, smallest traversal, opaque Rust
-  binds/guards, or host keyed fallback execution. Total comparisons and
-  Boolean connectives are lowered; `#[total]` is not permission to emit an
-  arbitrary Rust function on device.
+  binds/guards, iterator generators, or host keyed fallback execution. The
+  upstream `bind ... with for ...` form is rejected as `CQ_GPU_GENERATOR`,
+  including on unused results; it is never interpreted as a scalar bind.
+  Total comparisons and Boolean connectives are lowered; `#[total]` is not
+  permission to emit an arbitrary Rust function on device.
 - Keys must be integral. Strings support dictionary equality, not lexical
   ordering or arbitrary string methods. Integer encoding is checked to fit
   signed 64 bits. A blocked rank domain cannot exceed 2^32 positions.

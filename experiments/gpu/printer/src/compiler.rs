@@ -217,6 +217,9 @@ pub(crate) fn validate(program: &ir::Program, facts: &ir::Analysis) -> syn::Resu
                     "opaque guard is unsupported; use a supported relational predicate",
                 );
             }
+            Operator::Bind(bind) if bind.for_token.is_some() => {
+                return fail(n, "CQ_GPU_GENERATOR", "iterator generators are unsupported");
+            }
             Operator::Bind(..) => {
                 return fail(n, "CQ_GPU_OPAQUE_BIND", "opaque bind is unsupported");
             }

@@ -156,6 +156,10 @@ fn backend_rejection_codes_name_every_unsupported_operator() {
             quote!(bad = pipe bind l with z:i64 = (1);),
             "CQ_GPU_OPAQUE_BIND",
         ),
+        (
+            quote!(bad = pipe bind l with for z:i64 = ([x, x + 1]);),
+            "CQ_GPU_GENERATOR",
+        ),
     ] {
         let mut target = source.clone();
         target
@@ -169,6 +173,32 @@ fn backend_rejection_codes_name_every_unsupported_operator() {
                 .to_string()
                 .contains(code),
             "{code}"
+        );
+    }
+}
+
+#[test]
+fn generators_are_rejected_before_device_lowering() {
+    for binding in [
+        quote!(for y:i64 = ([x, x + 1])),
+        quote!(for y = ([x, x + 1])),
+        quote!(for (y, z) = ([(x, x + 1)])),
+    ] {
+        let source: ir::Program = syn::parse2(quote! { physical {
+            relation L(a:i64);
+            l = pipe rename L@0 {a -> x};
+            g = pipe bind l with #binding;
+            p = pipe canon project g keep {y};
+            return p as answer(y);
+        } structures {
+            l host scan = ::core::iter::Map<_,_> [];
+            p canon = ::cq_gpu_runtime::DeviceSet<_>;
+        } }).unwrap();
+        assert!(
+            compile(&source, Options::default())
+                .unwrap_err()
+                .to_string()
+                .contains("CQ_GPU_GENERATOR")
         );
     }
 }

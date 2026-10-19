@@ -90,8 +90,10 @@
 //!
 //! The meaning is the Kleisli composition for `bottom + Set`: when the written
 //! reference returns, a target must return the same set without panic. A panicking
-//! reference admits either target outcome. Rust steps stay opaque and retain their
-//! relative order, free-variable binders and written relational predecessors.
+//! reference admits either target outcome. Rust lets, generators and guards stay
+//! opaque and retain their relative order, free-variable binders and written
+//! relational predecessors. LE completes prior expansions before each Rust step
+//! and leaves generated columns owned by their pattern bindings.
 //! Equality assumes Leibniz identity. Effects and evaluation counts lie outside
 //! this denotation.
 //!

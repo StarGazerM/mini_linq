@@ -538,6 +538,76 @@ fn le_checks_lookup_expansion_and_rust_before_independently() {
 }
 
 #[test]
+fn le_generators_keep_written_ownership_in_outer_and_recursive_scopes() {
+    for body in [
+        quote!(for (x, y) in pairs(), R(x), S(x,y)),
+        quote!(R(x), for y in values(x), S(x,y)),
+        quote!(R(x), { for y in left(x), S(x,y) } | { for y in right(x), S(x,y) }),
+        quote!(R(x), { for y in left(x), S(x,y) } else { for y in right(x), S(x,y) }),
+    ] {
+        let source = syn::parse2(quote! {
+            struct Q;
+            relation R(x:i32); relation S(x:i32,y:i32);
+            relation answer(x:i32,y:i32);
+            answer(x,y) :- #body;
+        })
+        .unwrap();
+        let target = compile_valuation(&source, Planner::Le).unwrap();
+        check_valuation(&source, &target, Planner::Le).unwrap();
+        check(&source, &compile(&source, Planner::Le).unwrap()).unwrap();
+    }
+}
+
+#[test]
+fn le_generator_before_and_binder_mutations_are_rejected() {
+    let source: cq::Program = syn::parse_quote! {
+        struct Q;
+        relation R(x:i32); relation S(x:i32,y:i32); relation T(z:i32);
+        relation answer(x:i32,y:i32,z:i32);
+        answer(x,y,z) :- R(x), S(x,y), for z in values(x), T(z);
+    };
+    let target = compile_valuation(&source, Planner::Le).unwrap();
+    check_valuation(&source, &target, Planner::Le).unwrap();
+    let generator = target
+        .valuation
+        .steps
+        .iter()
+        .position(|step| matches!(step, vo::Step::For(..)))
+        .unwrap();
+    let expansion = target
+        .valuation
+        .steps
+        .iter()
+        .rposition(|step| matches!(step, vo::Step::Atom(a, _) if a.clause() == 1))
+        .unwrap();
+    assert!(expansion < generator);
+
+    // y is not a generator dependency: Before must still require S's full row.
+    let mut late = target.clone();
+    late.valuation.steps.swap(expansion, generator);
+    let error = check_valuation(&source, &late, Planner::Le).unwrap_err();
+    assert!(error.to_string().contains("Before condition"), "{error}");
+
+    // A relational occurrence cannot take ownership of the generator's z.
+    let mut stolen = target.clone();
+    let generated_atom = stolen
+        .valuation
+        .steps
+        .iter()
+        .rposition(|step| matches!(step, vo::Step::Atom(a, _) if a.clause() == 3))
+        .unwrap();
+    stolen.valuation.steps.swap(generator, generated_atom);
+    assert!(check_valuation(&source, &stolen, Planner::Le).is_err());
+
+    let mut changed = target.clone();
+    let vo::Step::For(binding, _) = &mut changed.valuation.steps[generator] else {
+        unreachable!()
+    };
+    binding.expression = syn::parse_quote!(different_values(x));
+    assert!(check_valuation(&source, &changed, Planner::Le).is_err());
+}
+
+#[test]
 fn argument_grammar_is_small_and_strict() {
     assert_eq!(
         syn::parse_str::<Planner>("").unwrap(),
