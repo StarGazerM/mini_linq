@@ -42,7 +42,9 @@ pub fn evaluate_case(case: &Case, sql: &str) -> Result<Vec<Vec<i32>>> {
 /// Evaluate a total abstract fuzz query using its independent SQL printer.
 pub fn evaluate_fuzz(case: &fuzz::Case) -> Result<Vec<Vec<i32>>> {
     if case.has_partial_terms() {
-        return Err("partial terms require the compiled written-order reference".into());
+        return Err(
+            "partial terms and generators require the compiled written-order reference".into(),
+        );
     }
     if case.query.schema.len() != case.data.len() {
         return Err("fuzz schema/data table counts differ".into());

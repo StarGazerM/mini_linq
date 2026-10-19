@@ -701,6 +701,25 @@ impl Schedule {
         )
     }
 
+    pub fn for_bind(&mut self, input: usize, binding: &crate::syntax::For) -> usize {
+        self.for_in(input, binding, None)
+    }
+
+    pub fn for_in(
+        &mut self,
+        input: usize,
+        binding: &crate::syntax::For,
+        environment: Option<&crate::Environment>,
+    ) -> usize {
+        self.rust(
+            input,
+            binding.to_token_stream().to_string(),
+            &binding.expression,
+            &crate::syntax::rust::bindings(&binding.pattern),
+            environment,
+        )
+    }
+
     pub fn finish(&mut self, input: usize, head: &crate::syntax::Atom) {
         self.output = Some(input);
         self.head = head.to_token_stream().to_string();
@@ -777,11 +796,23 @@ impl Schedule {
                     },
                     g.environment.as_ref(),
                 ),
-                Operator::Bind(b) => schedule.bind_in(
-                    results[&symbol_name(&b.input)],
-                    &b.binding(),
-                    b.environment.as_ref(),
-                ),
+                Operator::Bind(b) => {
+                    let input = results[&symbol_name(&b.input)];
+                    if let Some(for_token) = b.for_token {
+                        schedule.for_in(
+                            input,
+                            &crate::syntax::For {
+                                for_token,
+                                pattern: b.pattern.clone(),
+                                in_token: Default::default(),
+                                expression: b.expression.clone(),
+                            },
+                            b.environment.as_ref(),
+                        )
+                    } else {
+                        schedule.bind_in(input, &b.binding(), b.environment.as_ref())
+                    }
+                }
             };
             results.insert(symbol_name(&definition.result), node);
         }

@@ -38,11 +38,27 @@ $f:X\to TY$
 $\bot$ is one undistinguished panic that aborts the whole evaluation. An atom,
 relational identity or recognized comparison returns its matching extensions
 of the incoming valuation. A Rust guard returns $\{\rho\}$, $\emptyset$ or
-$\bot$; a Rust bind returns the extended valuation or $\bot$. Starting at
-$\{\langle\rangle\}$, compose the desugared body in written order, then the
+$\bot$; a scalar Rust bind returns one extended valuation or $\bot$.
+Starting at $\{\langle\rangle\}$, compose the desugared body in written order, then the
 head. This is the reference meaning. The executable reference is Written/Coarse
 VO elaborated by \code{cq_elaborate::compile_written}, which forbids
 reductions, splitting, reordering, relational hoisting and alias solving.
+
+For a generator, evaluate $e$ in the incoming environment $\rho$, convert it
+with \code{IntoIterator::into_iter}, and exhaust it. Write $G_{p,e}(\rho)=\bot$
+if expression evaluation, iterator conversion or any iteration step panics;
+otherwise, for the finite yielded sequence $v_1,\ldots,v_n$,
+\[
+ G_{p,e}(\rho)=\{\rho[p\mapsto v_i]\mid 1\le i\le n\},\qquad
+ \sem{\mathsf{for}\ p\ \mathsf{in}\ e}(A)=A\bind G_{p,e}.
+\]
+The pattern is irrefutable and its names are fresh. Empty iteration removes
+the incoming row; yielded order and duplicate witnesses are unobservable.
+A panic after some yielded items still denotes $\bot$, not a partial answer.
+Scalar \code{let} remains the singleton special case: its successful
+extension is $\eta(\rho[p\mapsto v])$, not iteration over $v$.
+This is correlated unnest (the nested relational calculus's collection bind),
+not aggregate nest: it neither groups rows nor collects an aggregate value.
 
 \begin{definition}[Refinement]
 $\bot\sqsubseteq A$ for every $A$, and successful sets are related only when
@@ -67,7 +83,14 @@ decides a total order consistent with identity. Rust checks the bound, not the l
 \item \textbf{Functional extensionality.} Embedded Rust receives query values as
 \code{\&T}; its partial-function meaning depends only on the values of its free
 variables and fixed host captures. Shared borrowing does not prove this.
-\item \textbf{Pinned Rust.} Rust guards and binds are opaque. They keep their
+\item \textbf{Finite pure generators.} Each reached generator expression and
+its iterator conversion and polling terminate normally or panic; successful
+iteration is finite. Their partial set-valued meaning depends only on free
+query values and fixed host captures, with no observable mutation or I/O.
+Purity covers the iterator implementation, not just its construction.
+Rust's \code{IntoIterator} bound proves none of these semantic premises.
+\item \textbf{Pinned Rust.} Rust guards, scalar binds and generators are opaque.
+They keep their
 written relative order (a tree under blocks, Section~\ref{sec:blocks}), their
 free-variable binders and every relational fact written before them
 (their \emph{Before} set). Relational steps commute among themselves and may

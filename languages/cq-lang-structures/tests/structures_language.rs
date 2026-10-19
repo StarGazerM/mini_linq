@@ -376,6 +376,31 @@ fn stages_accept_total_constraints_multiple_boundaries_and_retained_producers() 
     structures::contract::check(&program).unwrap();
 }
 
+#[test]
+fn generator_bind_round_trip_drops_inherited_uniqueness() {
+    let source: structures::Program = syn::parse_quote! { physical {
+        u = pipe unit;
+        g = pipe bind u with for x = ([1, 1, 2]);
+        return canon g as answer(x);
+    } structures {
+        g head = ::std::collections::HashSet<_>;
+    } };
+    let facts = structures::contract::check(&source).unwrap();
+    assert!(!facts.unique.contains_key("g"));
+    assert!(facts.physical.rows["g"].computed.contains("x"));
+    assert_eq!(
+        syn::parse2::<structures::Program>(source.to_token_stream()).unwrap(),
+        source
+    );
+    let mut invalid = source.clone();
+    invalid.physical.program.return_canon = None;
+    assert!(structures::contract::check(&invalid).is_err());
+    let mut invalid = source;
+    invalid.physical.program.definitions[1].operator =
+        syn::parse_quote!(bind u with for x = ([*x]));
+    assert!(structures::contract::check(&invalid).is_err());
+}
+
 fn shared_program() -> structures::Program {
     syn::parse_quote! { physical {
         relation L(a:i32); relation R(a:i32,b:i32);

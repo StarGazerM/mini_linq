@@ -184,10 +184,49 @@ impl Relational {
     }
 }
 
+/// Finite Rust iterables, routed through the compiled partial-term lane even
+/// when their scalar expression is total. Range endpoints are bounded before
+/// iteration; the iterator-panic variant fails after yielding its first item.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Generator {
+    Range,
+    InclusiveRange,
+    Duplicates,
+    Empty,
+    IteratorPanic,
+}
+
+impl Generator {
+    fn feature(self) -> &'static str {
+        match self {
+            Self::Range => "for-range",
+            Self::InclusiveRange => "for-inclusive-range",
+            Self::Duplicates => "for-duplicates",
+            Self::Empty => "for-empty",
+            Self::IteratorPanic => "for-iterator-panic",
+        }
+    }
+
+    fn rust(self, expression: &Expr) -> String {
+        let value = rust_expression(expression);
+        match self {
+            Self::Range => format!("(0i32..(({value}) % 4))"),
+            Self::InclusiveRange => format!("(0i32..=(({value}) % 4))"),
+            Self::Duplicates => format!("{{ let value: i32 = {value}; vec![value, value, 0i32] }}"),
+            Self::Empty => format!("{{ let _: i32 = {value}; std::iter::empty::<i32>() }}"),
+            Self::IteratorPanic => format!(
+                "{{ let value: i32 = {value}; (0..2).map(move |i| {{ assert!(i == 0, \"generator next\"); value }}) }}"
+            ),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Binding {
     pub variable: usize,
     pub expression: Expr,
+    /// `None` is a scalar let; `Some` enumerates the finite iterable.
+    pub generator: Option<Generator>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -212,7 +251,17 @@ pub struct Case {
 }
 
 impl Case {
+    /// Select the executable Rust oracle, including all generators: SQL does
+    /// not model arbitrary IntoIterator values or partial iterator advancement.
     pub fn has_partial_terms(&self) -> bool {
+        if self
+            .query
+            .bindings
+            .iter()
+            .any(|binding| binding.generator.is_some())
+        {
+            return true;
+        }
         let mut features = BTreeSet::new();
         for atom in &self.query.atoms {
             for term in &atom.terms {
@@ -307,7 +356,7 @@ impl Case {
     /// set semantics, including self-joins and existential wildcard columns.
     pub fn sql(&self) -> String {
         if self.has_partial_terms() {
-            return "-- Opaque partial terms: oracle is the compiled written-order Rust program.\n"
+            return "-- Opaque Rust terms/generators: oracle is the compiled written-order Rust program.\n"
                 .into();
         }
         if !self.query.blocks.is_empty() {
@@ -844,11 +893,19 @@ impl Query {
                 }
                 Step::Binding(index) => {
                     let binding = &self.bindings[index];
-                    clauses.push(format!(
-                        "let v{}: i32 = {}",
-                        binding.variable,
-                        rust_expression(&binding.expression)
-                    ));
+                    clauses.push(if let Some(generator) = binding.generator {
+                        format!(
+                            "for v{} in {}",
+                            binding.variable,
+                            generator.rust(&binding.expression)
+                        )
+                    } else {
+                        format!(
+                            "let v{}: i32 = {}",
+                            binding.variable,
+                            rust_expression(&binding.expression)
+                        )
+                    });
                 }
                 Step::Constraint(index) => {
                     clauses.push(guard_clause(rust_constraint(&self.constraints[index])))
@@ -1187,6 +1244,7 @@ pub fn generate(seed: u64) -> Case {
         bindings.push(Binding {
             variable: variables,
             expression,
+            generator: None,
         });
         variables += 1;
     }
@@ -1354,6 +1412,7 @@ fn generate_block(seed: u64) -> Case {
         query.blocks.clear();
         query.bindings.push(Binding {
             variable: 1,
+            generator: None,
             expression: if partial {
                 Expr::Partial(PartialOp::Divide, Box::new(Expr::Var(0)))
             } else {
@@ -1406,7 +1465,7 @@ fn generate_partial(seed: u64) -> Case {
         PartialOp::Multiply,
         PartialOp::Unwrap,
     ][(ordinal % 6) as usize];
-    let position = ((ordinal / 6) % 5) as usize;
+    let position = ((ordinal / 6) % 7) as usize;
     let partial = |variable| Expr::Partial(operator, Box::new(Expr::Var(variable)));
     let safe = match operator {
         PartialOp::Divide | PartialOp::Remainder | PartialOp::Unwrap => {
@@ -1458,7 +1517,7 @@ fn generate_partial(seed: u64) -> Case {
     };
     let protected = random.pick(3) != 0;
     let relation_before_rust = random.pick(2) == 0;
-    if relation_before_rust && position < 2 {
+    if relation_before_rust && !(2..5).contains(&position) {
         query.order.push(Step::Atom(1));
     }
     if protected {
@@ -1477,6 +1536,7 @@ fn generate_partial(seed: u64) -> Case {
             query.bindings.push(Binding {
                 variable: 3,
                 expression: partial(0),
+                generator: None,
             });
             query.order.push(Step::Binding(0));
             query.head[0] = Expr::Var(3);
@@ -1493,12 +1553,45 @@ fn generate_partial(seed: u64) -> Case {
                 query.atoms[1].terms.push(Term::Constant(5));
             }
         }
+        5 | 6 => {
+            let generator = [
+                Generator::Range,
+                Generator::InclusiveRange,
+                Generator::Duplicates,
+                Generator::Empty,
+                Generator::IteratorPanic,
+            ][((ordinal / 42) % 5) as usize];
+            query.bindings.push(Binding {
+                variable: 3,
+                expression: if position == 5 {
+                    partial(0)
+                } else {
+                    Expr::Var(0)
+                },
+                generator: Some(generator),
+            });
+            query.order.push(Step::Binding(0));
+            query.head[0] = Expr::Var(3);
+            if (ordinal / 210) % 2 == 1 {
+                query.bindings.push(Binding {
+                    variable: 4,
+                    expression: Expr::Var(3),
+                    generator: Some(Generator::Duplicates),
+                });
+                query.order.push(Step::Binding(1));
+                query.head.push(Expr::Var(4));
+            }
+            if !relation_before_rust {
+                // A later relational occurrence joins against the generator.
+                query.atoms[1].terms[0] = Term::Var(3);
+            }
+        }
         _ => {
             query.head[0] = partial(0);
             query.order.push(Step::Atom(1));
         }
     }
-    if position < 2 && !relation_before_rust {
+    if !(2..5).contains(&position) && !relation_before_rust {
         query.order.push(Step::Atom(1));
     }
     if !protected {
@@ -1574,6 +1667,7 @@ fn generate_partial(seed: u64) -> Case {
         let duplicate = data[0][0].clone();
         data[0].push(duplicate);
     }
+    assert!(query.well_bound());
     Case { seed, query, data }
 }
 
@@ -1700,7 +1794,23 @@ impl Coverage {
         for binding in &query.bindings {
             let mut own = BTreeSet::new();
             binding.expression.features(&mut own);
-            if own.contains("partial-term") {
+            if let Some(generator) = binding.generator {
+                features.insert("for".into());
+                features.insert(generator.feature().into());
+                features.insert("partial-term".into());
+                let mut variables = BTreeSet::new();
+                binding.expression.variables(&mut variables);
+                if variables.iter().any(|variable| {
+                    query.bindings.iter().any(|previous| {
+                        previous.generator.is_some() && previous.variable == *variable
+                    })
+                }) {
+                    features.insert("nested-for".into());
+                }
+                if own.contains("partial-term") {
+                    features.insert("partial-for".into());
+                }
+            } else if own.contains("partial-term") {
                 features.insert("partial-let".into());
             }
         }
@@ -1728,7 +1838,11 @@ impl Coverage {
         {
             features.insert("boolean-guard".into());
         }
-        if !query.bindings.is_empty() {
+        if query
+            .bindings
+            .iter()
+            .any(|binding| binding.generator.is_none())
+        {
             features.insert("arithmetic-let".into());
         }
         if query.head.iter().any(|expr| !matches!(expr, Expr::Var(_))) {
@@ -1844,6 +1958,7 @@ mod tests {
                 ],
                 bindings: vec![Binding {
                     variable: 2,
+                    generator: None,
                     expression: Expr::Binary(
                         Arithmetic::Add,
                         Box::new(Expr::Var(0)),
@@ -1895,6 +2010,7 @@ mod tests {
                 ],
                 bindings: vec![Binding {
                     variable: 2,
+                    generator: None,
                     expression: Expr::Binary(
                         Arithmetic::Add,
                         Box::new(Expr::Var(0)),

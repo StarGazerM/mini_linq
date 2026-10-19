@@ -569,3 +569,209 @@ fn literal_point_selection_narrows_the_scan_carrier() {
     .collect();
     assert_eq!(rows, vec![-1]);
 }
+
+#[test]
+fn both_printers_execute_nested_generators_with_owned_tuple_prefixes() {
+    let rows = [(2_i32,)];
+    macro_rules! run {
+        ($printer:path) => {
+            mini_linq::compile! {
+                pipeline { print = $printer; }
+                struct Q; relation rows(n:i32);
+                relation answer(prefix:String,label:String,index:i32,other:i32);
+                answer(prefix,label,index,other) :- rows(n),
+                    let prefix:String = String::from("prefix"),
+                    for (label,index) in (0..*n).map(|i| (i.to_string(), i)),
+                    for other in 0..(*index + 1);
+            }
+            .collect::<BTreeSet<_>>()
+        };
+    }
+    let expected = BTreeSet::from([
+        (String::from("prefix"), String::from("0"), 0, 0),
+        (String::from("prefix"), String::from("1"), 1, 0),
+        (String::from("prefix"), String::from("1"), 1, 1),
+    ]);
+    assert_eq!(run!(own_push::push), expected);
+    assert_eq!(run!(mini_linq::passes::print_pull), expected);
+}
+
+#[test]
+fn both_printers_borrow_collections_and_canonicalize_generator_duplicates() {
+    let rows = [(1_i32, vec![1_i32, 2, 1]), (2, vec![])];
+    let captured = vec![String::from("b"), String::from("a"), String::from("b")];
+    macro_rules! run {
+        ($printer:path) => {
+            mini_linq::compile! {
+                pipeline { print = $printer; }
+                struct Q; relation rows(key:i32,values:Vec<i32>);
+                relation answer(key:i32,value:i32,label:&String);
+                answer(key,value,label) :- rows(key,values),
+                    for value in values.iter().copied(), for label in &captured;
+            }
+            .collect::<Vec<_>>()
+        };
+    }
+    let push = run!(own_push::push);
+    let pull = run!(mini_linq::passes::print_pull);
+    assert_eq!(push.len(), 4);
+    assert_eq!(pull.len(), 4);
+    let expected = BTreeSet::from([
+        (&rows[0].0, 1, &captured[0]),
+        (&rows[0].0, 1, &captured[1]),
+        (&rows[0].0, 2, &captured[0]),
+        (&rows[0].0, 2, &captured[1]),
+    ]);
+    assert_eq!(push.into_iter().collect::<BTreeSet<_>>(), expected);
+    assert_eq!(pull.into_iter().collect::<BTreeSet<_>>(), expected);
+    assert_eq!(captured.len(), 3);
+}
+
+#[test]
+fn both_printers_join_generated_values_and_preserve_guard_before_chain() {
+    let rows = [(0_i32,), (2,)];
+    let labels = [(4_i32, String::from("four")), (5, String::from("five"))];
+    macro_rules! run {
+        ($printer:path) => {
+            mini_linq::compile! {
+                pipeline { print = $printer; }
+                struct Q; relation rows(n:i32); relation labels(key:i32,label:String);
+                relation answer(value:i32,label:String,next:i32);
+                answer(value,label,next) :- rows(n), if std::convert::identity(*n) != 0,
+                    for value in 0..(10 / *n), labels(value,label),
+                    let next:i32 = *value + 1;
+            }
+            .collect::<BTreeSet<_>>()
+        };
+    }
+    let expected = BTreeSet::from([(4, &labels[0].1, 5)]);
+    assert_eq!(run!(own_push::push), expected);
+    assert_eq!(run!(mini_linq::passes::print_pull), expected);
+}
+
+#[test]
+fn both_printers_keep_dead_generators_empty_or_nonempty() {
+    let seed = [(0_i32,)];
+    macro_rules! run {
+        ($printer:path, $end:expr) => {
+            mini_linq::compile! {
+                pipeline { print = $printer; }
+                struct Q; relation seed(x:i32); relation answer(x:i32);
+                answer(x) :- seed(x), for _value in 0..$end;
+            }
+            .collect::<Vec<_>>()
+        };
+    }
+    assert!(run!(own_push::push, 0_i32).is_empty());
+    assert!(run!(mini_linq::passes::print_pull, 0_i32).is_empty());
+    assert_eq!(run!(own_push::push, 3_i32), [(&seed[0].0,)]);
+    assert_eq!(run!(mini_linq::passes::print_pull, 3_i32), [(&seed[0].0,)]);
+}
+
+#[test]
+fn both_printers_propagate_generator_expression_and_iteration_panics() {
+    let seed = [(0_i32,)];
+    fn partial_expression() -> std::ops::Range<i32> {
+        panic!("generator expression");
+    }
+    fn partial_iteration() -> impl Iterator<Item = i32> {
+        (0..2).map(|value| {
+            assert_eq!(value, 0, "generator iteration");
+            value
+        })
+    }
+    macro_rules! run {
+        ($printer:path, $generator:ident) => {
+            std::panic::catch_unwind(|| {
+                mini_linq::compile! {
+                    pipeline { print = $printer; }
+                    struct Q; relation seed(x:i32); relation answer(value:i32);
+                    answer(value) :- seed(_), for value in $generator();
+                }
+                .collect::<Vec<_>>()
+            })
+        };
+    }
+    assert!(run!(own_push::push, partial_expression).is_err());
+    assert!(run!(mini_linq::passes::print_pull, partial_expression).is_err());
+    assert!(run!(own_push::push, partial_iteration).is_err());
+    assert!(run!(mini_linq::passes::print_pull, partial_iteration).is_err());
+}
+
+#[test]
+fn both_printers_apply_ir_generator_annotations_to_items() {
+    let rows = [(2_i32,)];
+    macro_rules! run {
+        ($printer:path) => {
+            mini_linq::passes::select! {
+                pipeline { $printer };
+                physical {
+                    relation rows(n:i32);
+                    relation answer(value:i32,label:String);
+                    r = pipe rename rows@0 {n -> n};
+                    g = pipe bind r with for (value,label):(i32,String) =
+                        ((0..*n).map(|i| (i, i.to_string())));
+                    out = pipe canon project g keep {value,label};
+                    return out as answer(value,label);
+                }
+            }
+            .collect::<BTreeSet<_>>()
+        };
+    }
+    let expected = BTreeSet::from([(0, String::from("0")), (1, String::from("1"))]);
+    assert_eq!(run!(own_push::push), expected);
+    assert_eq!(run!(mini_linq::passes::print_pull), expected);
+}
+
+#[test]
+fn both_printers_borrow_generator_captures_inside_union_and_fallback() {
+    let rows = [(0_i32,), (1,), (2,)];
+    let captured = vec![String::from("first"), String::from("second")];
+    let alternate = vec![String::from("alternate")];
+    macro_rules! union {
+        ($printer:path) => {
+            mini_linq::compile! {
+                pipeline { print = $printer; }
+                struct Q; relation rows(x:i32);
+                relation answer(x:i32,y:&String);
+                answer(x,y) :- rows(x),
+                    { for y in captured.iter().take(*x as usize) } |
+                    { for y in alternate.iter() };
+            }
+            .collect::<BTreeSet<_>>()
+        };
+    }
+    macro_rules! fallback {
+        ($printer:path) => {
+            mini_linq::compile! {
+                pipeline { print = $printer; }
+                struct Q; relation rows(x:i32);
+                relation answer(x:i32,y:&String);
+                answer(x,y) :- rows(x),
+                    { for y in captured.iter().take(*x as usize) } else
+                    { for y in alternate.iter() };
+            }
+            .collect::<BTreeSet<_>>()
+        };
+    }
+    let expected_union = BTreeSet::from([
+        (&rows[0].0, &alternate[0]),
+        (&rows[1].0, &captured[0]),
+        (&rows[1].0, &alternate[0]),
+        (&rows[2].0, &captured[0]),
+        (&rows[2].0, &captured[1]),
+        (&rows[2].0, &alternate[0]),
+    ]);
+    let expected_fallback = BTreeSet::from([
+        (&rows[0].0, &alternate[0]),
+        (&rows[1].0, &captured[0]),
+        (&rows[2].0, &captured[0]),
+        (&rows[2].0, &captured[1]),
+    ]);
+    assert_eq!(union!(own_push::push), expected_union);
+    assert_eq!(union!(mini_linq::passes::print_pull), expected_union);
+    assert_eq!(fallback!(own_push::push), expected_fallback);
+    assert_eq!(fallback!(mini_linq::passes::print_pull), expected_fallback);
+    assert_eq!(captured.len(), 2);
+    assert_eq!(alternate.len(), 1);
+}

@@ -9,7 +9,8 @@ token trees~\cite{host-synmacro}.
 Program ::= struct Name; Decl* Rule+
 Decl    ::= relation R(c: Type, ...) [= (Expr)];
 Rule    ::= h(Expr, ...) :- Clause, ... ;
-Clause  ::= R(Arg, ...) | Guard | let Pat [: Type] = Expr | Block
+Clause  ::= R(Arg, ...) | Guard | let Pat [: Type] = Expr
+          | for Pat in Expr | Block
 Guard   ::= ["#[total]"] "if" Expr
 Arg     ::= x | _ | Expr
 Block   ::= { Body } ( | { Body } )+  |  { Body } ( else { Body } )+
@@ -78,10 +79,21 @@ arguments fold left to right.
 \Rule{CQ-Bind}{e\checkmark_B\quad N=\set(\binds(p))\quad N\cap B=\emptyset}
  {\Sigma;B\vdash\mathsf{let}\ p[:\tau]=e\Rightarrow B\cup N}
 
+\Rule{CQ-For}{e\checkmark_B\quad N=\set(\binds(p))\quad N\cap B=\emptyset}
+ {\Sigma;B\vdash\mathsf{for}\ p\ \mathsf{in}\ e\Rightarrow B\cup N}
+
 \Rule{CQ-Block}{n\ge2\quad\forall j,\ \Sigma;B\vdash B_j\Rightarrow B_j'\\
  I=(\bigcap_j B_j')\setminus B\quad \forall x\in I,\ \tau_j(x)=\tau_k(x)}
  {\Sigma;B\vdash\mathsf{block}(B_1,\ldots,B_n)\Rightarrow B\cup I}
 \end{mathpar}
+The generator RHS is checked in the old scope: its own pattern names are not
+in scope until subsequent clauses (and the head). As for scalar binds, rustc
+checks an irrefutable pattern and concrete binding types; for generators the
+pattern destructures \code{IntoIterator::Item}, not the collection.
+There is no surface generator type annotation. Finiteness and purity are
+semantic premises, not properties established by the structural scope check.
+An atom using a generator-supplied name requires that name already bound.
+
 
 \paragraph{Recognized comparisons.}
 Let $Q$ be the query binders, $B$ the written bound names and $P$ the closing
@@ -168,7 +180,7 @@ positioned binds plus identities; computed heads become final binds.
 $\mathsf{CQScope}(s)$ is the scope rules plus:
 (1)~relation and column names unique, declared arity positive, no attributes;
 (2)~body atoms name declared inputs at their arity;
-(3)~lets do not shadow bound names; the body has an atom; the head has positive arity;
+(3)~lets and generators do not shadow bound names; the body has an atom; the head has positive arity;
 (4)~a declaration named by the head is the result: matching arity, no host value;
 without it, head arguments are bound bare variables of known type;
 (5)~blocks have equal interface types and no escaped local names;

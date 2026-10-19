@@ -314,6 +314,7 @@ pub fn bound(item: &BodyItem) -> Vec<Ident> {
             .collect(),
         BodyItem::Positive { atom } => atom.variables().cloned().collect(),
         BodyItem::Let(binding) => rust::bindings(&binding.pattern),
+        BodyItem::For(generator) => rust::bindings(&generator.pattern),
         _ => Vec::new(),
     }
 }

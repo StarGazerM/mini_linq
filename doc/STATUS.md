@@ -413,9 +413,13 @@ Raw data: `features/workloads/target/bench/tpch-1-reduction-comparison.{tsv,json
 Tooling notes: `tools/check_public_api.py` reads `ROOT/target/doc` regardless
 of `CARGO_TARGET_DIR`; the external gate needs `TMPDIR=/private/tmp` on macOS.
 
-Remaining Datalog work: rule-local aggregates; Ascent lattices and custom
-providers as explicit contracts; FlowLog comparison; partial-Rust multi-round
-refinement.
+Remaining Datalog work: rule-local aggregates; FlowLog comparison;
+partial-Rust multi-round refinement.
+
+On hold until the GPU-side storage work settles, so storage is designed once
+for both: lattices and custom providers; DOOP probe efficiency (flat value
+storage, batched/prefetched probes on Datalog hosts; probes are 43–46% of DOOP
+compute at `8dc918a`); geometric run merging.
 
 Pending core fix (approved to record, not yet designed): let lowering know a
 host is duplicate-free, or let a consumer own a query's deduplication, so

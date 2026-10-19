@@ -12,6 +12,8 @@ pub struct HostAccess {
     pub owned_key: bool,
     /// Key columns in declaration order for an eligible prefix.
     pub key: Vec<String>,
+    /// Declared host key types, used when a generator's item type is inferred.
+    pub key_types: Vec<syn::Type>,
     /// Remaining columns in the host's declared order.
     pub payload: Vec<String>,
 }
@@ -60,10 +62,15 @@ impl<'a> Context<'a> {
             .filter(|c| !columns.contains(c))
             .collect();
         let owned_key = self.owned_key(result, columns);
+        let key_types = key
+            .iter()
+            .map(|column| self.infos[result].types[column].clone())
+            .collect();
         HostAccess {
             value: host.value.clone(),
             prefix,
             key,
+            key_types,
             payload,
             fallback: format_ident!("__cq_{}_fallback_{}", result, columns.join("_")),
             owned_key,
@@ -281,11 +288,35 @@ impl<'a> Context<'a> {
         quote!(&(#(#key,)*))
     }
 
+    fn host_key_types<'b>(
+        &'b self,
+        left: &str,
+        access: &'b HostAccess,
+    ) -> impl Iterator<Item = &'b syn::Type> {
+        let types = &self.infos[left].types;
+        let generated = !self.generator_expressions.is_empty();
+        access
+            .key
+            .iter()
+            .zip(&access.key_types)
+            .map(move |(column, host)| {
+                let ty = &types[column];
+                // Autoref dispatch must know its key type before selecting Seek.
+                // A generator has no surface annotation; its joined host supplies
+                // the same logical key type without constraining iterator items.
+                if generated && matches!(ty, syn::Type::Infer(_)) {
+                    host
+                } else {
+                    ty
+                }
+            })
+    }
+
     pub fn host_lookup(&self, left: &str, access: &HostAccess, contains: bool) -> TokenStream {
         let value = &access.value;
         let fallback = &access.fallback;
         let key = self.host_key(left, access);
-        let types = access.key.iter().map(|c| &self.infos[left].types[c]);
+        let types = self.host_key_types(left, access);
         let types: Vec<_> = types.collect();
         let receiver = if access.prefix && !access.owned_key {
             quote!(&&::cq_storage::dispatch::Host::<_, (#(#types,)*), _, _>::new(#value, &#fallback))
@@ -303,7 +334,7 @@ impl<'a> Context<'a> {
         let value = &access.value;
         let fallback = &access.fallback;
         let key = self.host_key(left, access);
-        let types = access.key.iter().map(|c| &self.infos[left].types[c]);
+        let types = self.host_key_types(left, access);
         let types: Vec<_> = types.collect();
         let receiver = if access.prefix && !access.owned_key {
             quote!(&&::cq_storage::dispatch::Host::<_, (#(#types,)*), _, _>::new(#value, &#fallback))

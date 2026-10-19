@@ -224,3 +224,35 @@ fn edb_outputs_preserve_empty_and_mixed_schedules() {
         );
     }
 }
+
+#[test]
+fn if_let_is_lowered_before_seminaive_variants_and_keeps_written_positions() {
+    let source: Program = syn::parse_quote! {
+        struct Matched;
+        relation Seed(o:Option<i32>) = (seeds);
+        relation Link(x:i32,y:i32) = (links);
+        relation Reach(x:i32);
+        output Reach;
+        Reach(x) :- Seed(o), if let Some(x) = *o;
+        Reach(*z) :- Reach(x), if let Some(y) = x.checked_add(1), Link(y,z);
+    };
+    let strata = stratify::compile(&source).unwrap();
+    let variants = seminaive::compile(&strata).unwrap();
+    stratify::check(&source, &strata).unwrap();
+    seminaive::check(&strata, &variants).unwrap();
+    for program in [&strata, &variants] {
+        for rule in &program.rules {
+            assert!(matches!(rule.body[1], BodyItem::For(_)));
+        }
+        assert_eq!(*program, syn::parse2(program.to_token_stream()).unwrap());
+    }
+    let variants = variants.variants.unwrap();
+    assert_eq!(variants.len(), 2);
+    assert_eq!(variants[0].delta, None);
+    assert_eq!(variants[1].delta, Some(0));
+    assert!(matches!(variants[1].query.body[1], BodyItem::For(_)));
+    assert!(
+        matches!(&variants[1].query.body[2], BodyItem::Positive { atom }
+        if atom.relation == "Link")
+    );
+}

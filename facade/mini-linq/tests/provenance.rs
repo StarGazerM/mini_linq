@@ -431,6 +431,65 @@ fn seed_997_equality_class_reductions_can_suppress_a_written_panic() {
     })]);
 }
 
+#[test]
+fn partial_generators_refine_written_expression_and_iteration_panics() {
+    let mut cases = Vec::new();
+    for source in [
+        "struct Q; relation R(x:i32); relation S(x:i32); relation answer(value:i32); \
+         answer(value) :- R(x), S(x), for value in 0..(12 / *x);",
+        "struct Q; relation R(x:i32); relation S(x:i32); relation answer(value:i32); \
+         answer(value) :- R(x), S(x), for value in partial_items(x);",
+        "struct Q; relation R(x:i32); relation S(x:i32); relation answer(value:i32); \
+         answer(value) :- R(x), if std::convert::identity(*x) != 0, \
+         for value in partial_items(x), S(x);",
+    ] {
+        let written = written_expression(source, "decisions {}");
+        for heuristic in [
+            cq_order::Heuristic::Written,
+            cq_order::Heuristic::Prefix(cq_order::Ranking::Connected),
+            cq_order::Heuristic::Prefix(cq_order::Ranking::GreedyWidth),
+            cq_order::Heuristic::Elimination,
+        ] {
+            for split in [cq_order::Split::Coarse, cq_order::Split::Fine] {
+                let optimized = expression(
+                    source,
+                    cq_order::Options { heuristic, split },
+                    "decisions {}",
+                );
+                cases.push(quote!({
+                    fn partial_items(x: &i32) -> impl Iterator<Item = i32> {
+                        let denominator = *x;
+                        (0..2).map(move |value| {
+                            if value == 0 { 0 } else { 12 / denominator }
+                        })
+                    }
+                    for (rows_r, rows_s) in [
+                        (vec![(0,), (2,)], vec![(2,)]),
+                        (vec![(0,)], vec![]),
+                        (vec![(0,)], vec![(0,)]),
+                        (vec![(2,), (2,)], vec![(2,), (2,)]),
+                    ] {
+                        let R = rows_r.as_slice();
+                        let S = rows_s.as_slice();
+                        let expected = ::std::panic::catch_unwind(|| {
+                            (#written).collect::<::std::collections::BTreeSet<_>>()
+                        });
+                        let actual = ::std::panic::catch_unwind(|| {
+                            (#optimized).collect::<::std::collections::BTreeSet<_>>()
+                        });
+                        // Defined written answers must remain defined and identical;
+                        // written bottom may refine to either bottom or a set.
+                        if let Ok(expected) = expected {
+                            assert_eq!(actual.unwrap(), expected);
+                        }
+                    }
+                }));
+            }
+        }
+    }
+    run_cases(&cases);
+}
+
 fn run_cases(cases: &[TokenStream]) {
     let program = quote! {
         #![allow(non_snake_case, unused_variables, unused_macros)]

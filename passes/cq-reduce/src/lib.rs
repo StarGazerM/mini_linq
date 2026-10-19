@@ -3,8 +3,9 @@
 //! of opaque partial functions. Relational reductions may move earlier across
 //! it, but Rust steps retain their relative order and written relational
 //! predecessors. I/O, mutation and evaluation counts are outside the meaning.
-//! Erasure must preserve every non-reduction step exactly. Rust guards are
-//! never pushed onto atom inputs.
+//! Erasure must preserve every non-reduction step exactly. Rust guards and
+//! finite set-valued generators are never pushed onto atom inputs; generators
+//! are neither reduction targets nor supports.
 
 //! Reduction recursively retains block paths.
 //! Positive semijoins may distribute into union arms and fallback positive arms.

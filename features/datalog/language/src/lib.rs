@@ -4,10 +4,17 @@
 //! `output R, S;` returns owned iterators in the written output order.
 //! Schedule passes record dependency-ordered SCCs and one semi-naive variant
 //! per changing positive position. All stages parse, print and check alone.
-//! Recursive heads accept arbitrary Rust expressions and body `let` bindings.
-//! Copying positive columns preserves a finite domain; value-generating heads
-//! may diverge, so termination is the caller's responsibility. Opaque Rust
-//! clauses retain their written order. Native `!R(x,_)` negation reads completed
+//! Recursive heads accept arbitrary Rust expressions, body `let` bindings, and
+//! `for pattern in expression` generators with irrefutable Rust patterns.
+//! Generators must be pure finite `IntoIterator` values; duplicate generated
+//! facts are collapsed by Boolean insertion. Finiteness of each generator does
+//! not guarantee recursive convergence: as with computed heads, termination is
+//! the caller's responsibility. Opaque Rust clauses retain their written order.
+//! `if let pattern = expression` filters refutable matches and binds their
+//! variables. Source printing retains this syntax; scheduling lowers it to a
+//! `for` over a zero-or-one `Option` of the pattern's bindings. Scheduled text
+//! is parsed into that same generator form, with no additional decisions.
+//! Native `!R(x,_)` negation reads completed
 //! lower strata and requires every named argument to be bound before the clause.
 //! Negative constants (including closed Rust expressions) filter a projected
 //! borrowed key set once per stratum; they cannot depend on rule-local bindings.
@@ -254,7 +261,7 @@ impl Parse for Program {
             } else {
                 (None, None, None, Vec::new(), Vec::new(), Vec::new())
             };
-        Ok(Self {
+        let mut program = Self {
             name,
             declarations,
             outputs,
@@ -267,8 +274,54 @@ impl Parse for Program {
             delta_layouts,
             insertion,
             negation_keys,
-        })
+        };
+        if program.strata.is_some() || program.variants.is_some() {
+            program.desugar_if_let()?;
+        }
+        Ok(program)
     }
+}
+
+impl Program {
+    /// Lower refutable Datalog bindings to ordinary zero-or-one CQ generators.
+    /// Unscheduled source printing remains faithful until this is called.
+    pub fn desugar_if_let(&mut self) -> syn::Result<()> {
+        for query in &mut self.rules {
+            desugar_if_let(query)?;
+        }
+        for variant in self.variants.iter_mut().flatten() {
+            desugar_if_let(&mut variant.query)?;
+        }
+        Ok(())
+    }
+}
+
+fn desugar_if_let(query: &mut Query) -> syn::Result<()> {
+    let mut changed = false;
+    for item in &mut query.body {
+        let BodyItem::Filter(filter) = item else {
+            continue;
+        };
+        let Expr::Let(binding) = rust::unparen(&filter.condition) else {
+            continue;
+        };
+        let pattern = &binding.pat;
+        let expression = &binding.expr;
+        let bindings = rust::bindings(pattern);
+        *item = syn::parse2(quote! {
+            for (#(#bindings,)*) in match #expression {
+                #pattern => ::core::option::Option::Some((#(#bindings,)*)),
+                _ => ::core::option::Option::None,
+            }
+        })?;
+        changed = true;
+    }
+    if changed {
+        // CQ's initial parse did not know the refutable pattern's bindings.
+        // Reclassify guards with the complete logical-variable environment.
+        *query = syn::parse2(query.to_token_stream())?;
+    }
+    Ok(())
 }
 impl ToTokens for Program {
     fn to_tokens(&self, tokens: &mut TokenStream) {
@@ -391,6 +444,7 @@ impl Graph {
                     BodyItem::Positive { atom } => Some((atom, false)),
                     BodyItem::Filter(_)
                     | BodyItem::Let(_)
+                    | BodyItem::For(_)
                     | BodyItem::Equality(_)
                     | BodyItem::Constraint(_) => None,
                     BodyItem::Negation(negation) => Some((&negation.atom, true)),
@@ -554,6 +608,7 @@ fn check_variants(p: &Program, analysis: &Analysis) -> syn::Result<()> {
         // Check complete declared schemas and CQ scope independently of erasure.
         check_query(p, &v.query, &declarations)?;
         let mut erased = v.query.clone();
+        desugar_if_let(&mut erased)?;
         if let Some(i) = v.delta {
             let original = &p.rules[v.rule].body[i];
             let BodyItem::Positive { atom: original } = original else {
@@ -569,8 +624,10 @@ fn check_variants(p: &Program, analysis: &Analysis) -> syn::Result<()> {
             )?;
             atom.relation = original.relation.clone();
         }
+        let mut expected = p.rules[v.rule].clone();
+        desugar_if_let(&mut expected)?;
         ensure(
-            erased == p.rules[v.rule],
+            erased == expected,
             &v.query,
             "variant erasure differs from the rule",
         )?;
@@ -726,8 +783,12 @@ pub mod contract {
 pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
     contract::check(source)?;
     contract::check(target)?;
+    let mut source_rules = source_only(source);
+    let mut target_rules = source_only(target);
+    source_rules.desugar_if_let()?;
+    target_rules.desugar_if_let()?;
     ensure(
-        source_only(source) == source_only(target),
+        source_rules == target_rules,
         target,
         "Datalog pass changed source rules or declarations",
     )?;
@@ -771,7 +832,9 @@ fn check_query(p: &Program, q: &Query, declarations: &[RelationDecl]) -> syn::Re
         &q.head,
         "head arity mismatch",
     )?;
-    let bound = cq_lang_cq::blocks::bound(&q.body);
+    let mut query = q.clone();
+    desugar_if_let(&mut query)?;
+    let bound = cq_lang_cq::blocks::bound(&query.body);
     for arg in &q.head.args {
         if let Some(id) = active_column(arg).or_else(|| rust::variable(arg)) {
             ensure(
@@ -783,7 +846,6 @@ fn check_query(p: &Program, q: &Query, declarations: &[RelationDecl]) -> syn::Re
     }
     let mut fresh = Fresh::new(p);
     let name = fresh.id("checked_head");
-    let mut query = q.clone();
     query.head.relation = name.clone();
     let mut declarations = declarations.to_vec();
     let mut output = head.clone();

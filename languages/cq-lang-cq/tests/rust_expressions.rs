@@ -12,6 +12,10 @@ fn rust_expressions_and_patterns_survive_source_round_trip() {
         "R(x), if predicate!(x)",
         "R(x), let f = |a, b| a + b, if f(*x, 1) > 0",
         "R(x), let y: Vec<(i32, i32)> = make::<i32, i32>(x), if y.is_empty()",
+        "R(x), for y in values(x), if accept(y)",
+        "R(x), for (ref y, mut z) in pairs(x), if accept(y)",
+        "R(x), for y in values!(x), let z = y",
+        "R(x), for y in { let x = 1; values(x) }, if accept(y)",
         "R(x), R(f(x))",
         "R(x), R({ let y = f(x); y })",
         "R(x), R(42)",
@@ -23,6 +27,84 @@ fn rust_expressions_and_patterns_survive_source_round_trip() {
         let second: cq::Program = syn::parse2(first.to_token_stream()).unwrap();
         assert_eq!(first, second, "{body}");
     }
+}
+
+#[test]
+fn generators_preserve_normal_form_and_opaque_scope() {
+    let source: cq::Program = syn::parse_quote! {
+        struct P;
+        relation R(value:i32);
+        relation answer(value:i32);
+        answer(y) :- R(x), for y in values!(x), if accept(y);
+    };
+    cq::contract::check(&source).unwrap();
+    let normal = cq::normal::normalize(&source).unwrap();
+    cq::normal::check(&normal).unwrap();
+    assert_eq!(normal, source);
+    let cq::BodyItem::For(generator) = &source.query.body[1] else {
+        panic!("generator must remain structurally distinct");
+    };
+    assert!(generator.binding().annotation.is_none());
+    let step = source.query.body[1].rust_step().unwrap();
+    assert_eq!(step.bindings[0], "y");
+    let environment = BTreeSet::from(["x".to_owned()]);
+    assert_eq!(step.free_variables.dependencies(&environment), environment);
+}
+
+#[test]
+fn generators_require_fresh_patterns_and_written_scope() {
+    for body in [
+        "R(x), for x in values(x)",
+        "R(x), for y in values(z), let z = 1",
+        "R(x), if accept(y), for y in values(x)",
+    ] {
+        let source: cq::Program = syn::parse_str(&format!(
+            "struct P; relation R(value:i32); answer(x) :- {body};"
+        ))
+        .unwrap();
+        assert!(cq::contract::check(&source).is_err(), "{body}");
+    }
+}
+
+#[test]
+fn generator_blocks_and_multiple_rules_preserve_scope() {
+    for body in [
+        "R(x), { for y in left(x) } | { for y in right(x) }",
+        "R(x), { for y in left(x) } else { for y in right(x) }",
+    ] {
+        let source: cq::Program = syn::parse_str(&format!(
+            "struct P; relation R(value:i32); relation answer(value:i32); answer(y) :- {body};"
+        ))
+        .unwrap();
+        cq::contract::check(&source).unwrap();
+        cq::normal::check(&cq::normal::normalize(&source).unwrap()).unwrap();
+        assert_eq!(
+            syn::parse2::<cq::Program>(source.to_token_stream()).unwrap(),
+            source
+        );
+    }
+    let source: cq::Program = syn::parse_quote! {
+        struct P;
+        relation R(value:i32);
+        relation answer(value:i32);
+        answer(y) :- R(x), for y in left(x);
+        answer(y) :- R(x), for y in right(x);
+    };
+    cq::contract::check(&source).unwrap();
+    assert_eq!(
+        cq::blocks::walk(&source.query.body)
+            .iter()
+            .filter(|item| matches!(item, cq::BodyItem::For(_)))
+            .count(),
+        2
+    );
+    let escaped: cq::Program = syn::parse_quote! {
+        struct P;
+        relation R(value:i32);
+        relation answer(value:i32);
+        answer(z) :- R(x), { for y in left(x), let z = y } | { let z = x }, if accept(y);
+    };
+    assert!(cq::contract::check(&escaped).is_err());
 }
 
 #[test]

@@ -90,6 +90,8 @@ pub struct Context<'a> {
     pub physical: BTreeMap<String, &'a physical::Definition>,
     pub hosts: BTreeMap<String, Host>,
     pub parameters: BTreeMap<String, Ident>,
+    /// Generator Rust with external captures borrowed outside fused closures.
+    pub generator_expressions: BTreeMap<String, Expr>,
     /// The identifier every result binds each of its columns to.
     pub idents: BTreeMap<String, BTreeMap<String, Ident>>,
     /// Consumer-demanded adapter layouts, computed once from the Physical DAG.
@@ -256,6 +258,8 @@ impl<'a> Context<'a> {
                 parameters.insert(name, id);
             }
         }
+        let generator_expressions =
+            ownership::generator_captures(module, analysis, &mut statements, &mut used);
         let mut candidate_reads: BTreeMap<String, Vec<Vec<String>>> = BTreeMap::new();
         for candidate in physical::candidate_prefixes(&module.physical, &analysis.physical) {
             for (name, prefix) in candidate.sides {
@@ -276,6 +280,7 @@ impl<'a> Context<'a> {
                 .collect(),
             hosts,
             parameters,
+            generator_expressions,
             idents: BTreeMap::new(),
             carried_columns: columns::carried_columns(module, analysis),
             carried_witnesses: columns::carried_witnesses(module, analysis),

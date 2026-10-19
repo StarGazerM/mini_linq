@@ -107,6 +107,7 @@ pub fn compile_written(source: &valuation::Program) -> syn::Result<ra::Program> 
                         (BodyItem::Constraint(a), valuation::Step::Constraint(b, _)) => a == b,
                         (BodyItem::Filter(a), valuation::Step::Guard(b, _)) => a == b,
                         (BodyItem::Let(a), valuation::Step::Let(b, _)) => a == b,
+                        (BodyItem::For(a), valuation::Step::For(b, _)) => a == b,
                         _ => false,
                     }
                 })
@@ -277,6 +278,7 @@ impl<'a> State<'a> {
             .iter()
             .filter_map(|item| match item {
                 valuation::cq::BodyItem::Let(binding) => Some(cq::rust::bindings(&binding.pattern)),
+                valuation::cq::BodyItem::For(binding) => Some(cq::rust::bindings(&binding.pattern)),
                 _ => None,
             })
             .flatten()
@@ -292,6 +294,9 @@ impl<'a> State<'a> {
                     prefix.extend(atom.variables().map(symbol_name));
                 }
                 valuation::cq::BodyItem::Let(binding) => {
+                    prefix.extend(cq::rust::bindings(&binding.pattern).iter().map(symbol_name));
+                }
+                valuation::cq::BodyItem::For(binding) => {
                     prefix.extend(cq::rust::bindings(&binding.pattern).iter().map(symbol_name));
                 }
                 valuation::cq::BodyItem::Block(block) => {
@@ -397,6 +402,7 @@ impl<'a> State<'a> {
                     self.prefix = Some(self.guard(input, filter));
                 }
                 valuation::Step::Let(binding, _) => self.bind(binding),
+                valuation::Step::For(binding, _) => self.for_bind(binding),
                 valuation::Step::Equality(equality, _) => {
                     let local = self.branch_local(equality.variables().map(symbol_name).collect());
                     if !local {
@@ -907,6 +913,7 @@ impl<'a> State<'a> {
         &mut self,
         filter: Option<&cq::Filter>,
         binding: Option<&cq::Let>,
+        generator: Option<&cq::For>,
     ) -> Option<ra::Environment> {
         if !self.scoped {
             return None;
@@ -920,6 +927,7 @@ impl<'a> State<'a> {
                     && match item {
                         valuation::cq::BodyItem::Filter(value) => filter == Some(value),
                         valuation::cq::BodyItem::Let(value) => binding == Some(&**value),
+                        valuation::cq::BodyItem::For(value) => generator == Some(&**value),
                         _ => false,
                     }
             })
@@ -962,7 +970,7 @@ impl<'a> State<'a> {
     }
 
     fn guard(&mut self, input: Ident, filter: &cq::Filter) -> Ident {
-        let environment = self.environment(Some(filter), None);
+        let environment = self.environment(Some(filter), None, None);
         self.emit(ra::Operator::Guard(Box::new(ra::Guard {
             guard_token: Default::default(),
             input,
@@ -975,15 +983,34 @@ impl<'a> State<'a> {
 
     /// Formal rule C-Bind: Append an opaque pattern binding to the prefix.
     fn bind(&mut self, binding: &cq::Let) {
-        let environment = self.environment(None, Some(binding));
+        let environment = self.environment(None, Some(binding), None);
         let input = self.prefix_or_unit();
         self.prefix = Some(self.emit(ra::Operator::Bind(Box::new(ra::Bind {
             bind_token: Default::default(),
             input,
             with_token: Default::default(),
+            for_token: None,
             pattern: binding.pattern.clone(),
             annotation: binding.annotation.clone(),
             eq_token: binding.eq_token,
+            expression_paren: Default::default(),
+            expression: binding.expression.clone(),
+            environment,
+        }))));
+    }
+
+    /// Formal rule C-For: Append an opaque finite set-valued generator to the prefix.
+    fn for_bind(&mut self, binding: &cq::For) {
+        let environment = self.environment(None, None, Some(binding));
+        let input = self.prefix_or_unit();
+        self.prefix = Some(self.emit(ra::Operator::Bind(Box::new(ra::Bind {
+            bind_token: Default::default(),
+            input,
+            with_token: Default::default(),
+            for_token: Some(binding.for_token),
+            pattern: binding.pattern.clone(),
+            annotation: None,
+            eq_token: Default::default(),
             expression_paren: Default::default(),
             expression: binding.expression.clone(),
             environment,
@@ -1098,6 +1125,7 @@ fn aliases(source: &valuation::cq::Program) -> BTreeMap<String, Ident> {
         .iter()
         .filter_map(|item| match item {
             BodyItem::Let(b) => Some(cq::rust::bindings(&b.pattern)),
+            BodyItem::For(b) => Some(cq::rust::bindings(&b.pattern)),
             _ => None,
         })
         .flatten()
@@ -1113,6 +1141,10 @@ fn aliases(source: &valuation::cq::Program) -> BTreeMap<String, Ident> {
         let expression = match item {
             BodyItem::Filter(filter) => &filter.condition,
             BodyItem::Let(binding) => {
+                protected.extend(cq::rust::bindings(&binding.pattern).iter().map(symbol_name));
+                &binding.expression
+            }
+            BodyItem::For(binding) => {
                 protected.extend(cq::rust::bindings(&binding.pattern).iter().map(symbol_name));
                 &binding.expression
             }

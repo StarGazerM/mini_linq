@@ -3,6 +3,65 @@ use cq_testkit::{PassCase, SCENARIOS, cq_semantics, databases, semantics, valuat
 use quote::{ToTokens, quote};
 
 #[test]
+fn every_planner_preserves_generator_mode_and_written_chain() {
+    let source: cq::Program = syn::parse_quote! {
+        struct Q;
+        relation R(x:i32);
+        relation S(y:i32);
+        relation answer(x:i32,y:i32,z:i32);
+        answer(x,y,z) :- R(x), if opaque(x), for y in 0..*x,
+            S(y), for z in [*y, *y], if opaque(z);
+    };
+    for planner in Planner::ALL {
+        let target =
+            compile(&source, planner).unwrap_or_else(|error| panic!("{planner:?}: {error}"));
+        check(&source, &target).unwrap();
+        let generators: Vec<_> = target
+            .plan
+            .definitions
+            .iter()
+            .filter_map(|definition| match &definition.operator {
+                ra::Operator::Bind(binding) if binding.for_token.is_some() => Some(binding),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(generators.len(), 2, "{planner:?}");
+
+        let mut changed = target.clone();
+        let generator = changed
+            .plan
+            .definitions
+            .iter_mut()
+            .find_map(|definition| match &mut definition.operator {
+                ra::Operator::Bind(binding) if binding.for_token.is_some() => Some(binding),
+                _ => None,
+            })
+            .unwrap();
+        generator.for_token = None;
+        assert!(check(&source, &changed).is_err(), "{planner:?}");
+
+        let mut changed = compile_valuation(&source, planner).unwrap();
+        let generator = changed
+            .valuation
+            .steps
+            .iter()
+            .position(|step| matches!(step, vo::Step::For(..)))
+            .unwrap();
+        let guard = changed
+            .valuation
+            .steps
+            .iter()
+            .position(|step| matches!(step, vo::Step::Guard(..)))
+            .unwrap();
+        changed.valuation.steps.swap(generator, guard);
+        assert!(
+            check_valuation(&source, &changed, planner).is_err(),
+            "{planner:?}"
+        );
+    }
+}
+
+#[test]
 fn prefix_let_domain_keeps_hoisting_and_waits_before_full_reduction() {
     let source: cq::Program = syn::parse_quote! { struct Q; relation R(x:i32);
         answer(x) :- R(x), let k:i32 = std::convert::identity(*x), {if *k == 1} | {if *k == 2};
