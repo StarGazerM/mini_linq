@@ -281,6 +281,9 @@ pub fn retain_lookups(input: TokenStream) -> TokenStream {
 
 /// Record `stage = batch N expand` at probes whose builds expose length-known
 /// ranges, accepted only by the Structures stage contract. Opt-in.
+/// `expand_lookups(N, depth D)` bounds nested frames per stream; omitted depth
+/// defaults to two. Deeper probes stay lane-local without changing providers.
+/// This is a depth bound, not a byte-budget proof for arbitrary carried payloads.
 #[proc_macro]
 pub fn expand_lookups(input: TokenStream) -> TokenStream {
     cq_stage::rewrite::<cq_lang_structures::Program>(

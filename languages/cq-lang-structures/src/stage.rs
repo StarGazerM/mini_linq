@@ -66,14 +66,25 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
         .values()
         .flat_map(|group| group.members.iter())
         .collect();
-    // ST-Expand: SortedRun lookups and recorded binary Smallest intersections
-    // over two PrefixRun candidate tries expose total length-known ranges.
+    // ST-Expand: SortedRun builds, lexicographic PrefixRun prefixes, recorded
+    // resident sorted hosts, and binary Smallest intersections expose an exact
+    // contiguous range per key whose length is known before expansion. A
+    // HashedRun bucket is only a candidate superset, so it cannot prove this
+    // obligation even though its bucket length is available.
     let candidates = physical::candidate_prefixes(&program.physical, &facts.physical);
+    let smallest_forces: BTreeSet<_> = program.physical.program.definitions.windows(2)
+        .filter(|pair| candidates.iter().any(|candidate| candidate.reader == &pair[0].name))
+        .map(|pair| symbol_name(&pair[1].name))
+        .collect();
     for name in &expands {
         let definition = definitions[name];
         let Operator::Probe(_, probe) = &definition.operator else {
             return error(definition, "expand requires a probe");
         };
+        if smallest_forces.contains(name) {
+            return error(definition,
+                "expand boundary must be on the introducing Smallest probe, not its forcing read");
+        }
         if matches!(probe.choice, Some(physical::Choice::Smallest(_))) {
             let range = candidates.iter().find(|candidate| candidate.reader == &definition.name)
                 .is_some_and(|candidate| candidate.sides.iter().all(|(side, prefix)| {
@@ -91,11 +102,30 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
             }
         } else {
             let keys = names(&probe.columns);
-            let range = facts.built.get(&symbol_name(&probe.right)).into_iter().flatten()
-                .any(|(levels, ty)| levels.len() == 1 && levels[0] == keys
-                    && matches!(ty, syn::Type::Path(path) if path.path.segments.last().is_some_and(|segment| segment.ident == "SortedRun")));
-            if !range {
-                return error(definition, "expand requires a SortedRun range-cursor build");
+            let built_range = facts.built.get(&symbol_name(&probe.right)).into_iter().flatten()
+                .any(|(levels, ty)| matches!(ty, syn::Type::Path(path)
+                    if path.path.segments.last().is_some_and(|segment|
+                        (segment.ident == "SortedRun" && levels.len() == 1 && levels[0] == keys)
+                            || (segment.ident == "PrefixRun" && prefix_depth(levels, &keys).is_some()))));
+            let resident_range = program.structures.entries.iter().any(|entry| {
+                let Structure::Host { reader, keyed, .. } = &entry.structure else {
+                    return false;
+                };
+                if entry.name != probe.right || *reader != definition.name {
+                    return false;
+                }
+                let resident = matches!(&keyed.ty, syn::Type::Path(path)
+                    if path.path.segments.last().is_some_and(|segment| segment.ident == "FrozenDeviceIndex")
+                        && path.path.segments.iter().rev().nth(1).is_some_and(|segment| segment.ident == "cq_gpu_runtime"));
+                let levels = keyed.level_names();
+                let mut columns = levels.concat();
+                columns.sort();
+                resident && columns == keys && !columns.is_empty()
+                    && levels.iter().all(|level| !level.is_empty())
+            });
+            if !built_range && !resident_range {
+                return error(definition,
+                    "expand requires a SortedRun or PrefixRun range-cursor build or an exact resident sorted host range");
             }
         }
     }
@@ -104,6 +134,8 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
     // Certified full-key membership probes are zero-or-one lane-local steps:
     // their only non-key observations are recorded, proven constants. They
     // need no range cursor and assert nothing about source-key uniqueness.
+    // A Smallest force belongs to its introducing probe's exact intersection,
+    // not a second cursor. Later stages may cross it, but cannot expand it alone.
     for boundary in stages.keys() {
         let mut current = boundary.clone();
         loop {
@@ -135,6 +167,7 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
                 Operator::Probe(_, _) | Operator::Merge(_, _)
             ) && !expands.contains(&current)
                 && !membership_step(&definition.operator, facts)
+                && !smallest_forces.contains(&current)
             {
                 return error(
                     definition,

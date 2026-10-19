@@ -705,3 +705,31 @@ fn device_keys_have_owned_schema_and_checked_membership_intrinsic() {
     target.context.representation = cq_datalog_fork::KeyRepresentation::HashSetBorrowed;
     assert!(check(&source, &target).is_err());
 }
+
+#[test]
+fn frozen_device_layout_lifetime_is_an_exact_checked_certificate() {
+    let mut source = authored();
+    source.insertion = Some(syn::parse_quote!(device_set_all_columns));
+    source.negation_keys = Some(syn::parse_quote!(device_set_owned));
+    let target = compile(&source).unwrap();
+    assert_eq!(
+        target.context.layout_realization,
+        cq_datalog_fork::LayoutRealization::MaintainedFrozenDeviceIndex
+    );
+    assert_eq!(target.context.strata[0].frozen_layouts, vec![1]);
+    for layouts in [vec![], vec![0], vec![1, 1], vec![2]] {
+        let mut wrong = target.clone();
+        wrong.context.strata[0].frozen_layouts = layouts;
+        assert!(
+            check(&source, &wrong)
+                .unwrap_err()
+                .to_string()
+                .contains("frozen device indexes")
+        );
+    }
+    let mut wrong = target.clone();
+    wrong.context.layout_realization = cq_datalog_fork::LayoutRealization::MaintainedGroupedHost;
+    assert!(check(&source, &wrong).is_err());
+    let cpu = compile(&authored()).unwrap();
+    assert!(cpu.context.strata[0].frozen_layouts.is_empty());
+}

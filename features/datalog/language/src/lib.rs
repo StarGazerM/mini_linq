@@ -51,10 +51,11 @@
 //! base IDB, after full layouts and before variants. Every keyed delta read and
 //! every later key-zero probe has a layout; an initial unkeyed delta stays a
 //! scan (a CPU Vec or resident device relation according to policy).
-//! Every variant retains written body order: a delta adds bindings only
-//! at its actual position. Wildcards and variables first introduced in the atom
-//! are not keys. Decisions are deduplicated in rule/changing-position order,
-//! independently of variant order; negation uses its separate policy.
+//! Every variant records `driver N`, the source-body occurrence streamed first,
+//! or `driver none` for a rule without positive atoms. Written order is the
+//! default. A selected driver may move only across positive atoms: guards,
+//! negation and binding clauses retain their Before constraints. Layout demands
+//! follow this recorded order, independently checked against the source rule.
 //! Optional `observe = (|round, delta_rows| ...);` before `struct` observes
 //! nonempty rounds; round numbering restarts for each component. Observation
 //! effects, like all evaluation counts, are outside the query denotation.
@@ -86,6 +87,8 @@ pub mod kw {
     syn::custom_keyword!(variant);
     syn::custom_keyword!(seed);
     syn::custom_keyword!(delta);
+    syn::custom_keyword!(driver);
+    syn::custom_keyword!(none);
     syn::custom_keyword!(insert_new);
     syn::custom_keyword!(negation_keys);
     syn::custom_keyword!(layout);
@@ -123,6 +126,8 @@ pub struct Invariant {
 pub struct Variant {
     pub rule: usize,
     pub delta: Option<usize>,
+    /// Source-body occurrence selected as the outer positive stream.
+    pub driver: Option<usize>,
     pub query: Query,
 }
 /// A fresh delta relation inheriting the named IDB's ordered columns.
@@ -283,11 +288,28 @@ impl Parse for Program {
                         body.parse::<kw::delta>()?;
                         Some(number(&body)?)
                     };
+                    let driver = if body.peek(kw::driver) {
+                        body.parse::<kw::driver>()?;
+                        if body.peek(kw::none) {
+                            body.parse::<kw::none>()?;
+                            None
+                        } else {
+                            Some(number(&body)?)
+                        }
+                    } else {
+                        rules.get(rule).and_then(|query: &Query| {
+                            query
+                                .body
+                                .iter()
+                                .position(|item| matches!(item, BodyItem::Positive { .. }))
+                        })
+                    };
                     let query;
                     syn::braced!(query in body);
                     variants.push(Variant {
                         rule,
                         delta,
+                        driver,
                         query: query.parse()?,
                     });
                     if !query.is_empty() {
@@ -415,7 +437,14 @@ impl ToTokens for Program {
                         quote!(delta #p)
                     })
                     .unwrap_or(quote!(seed));
-                quote!(variant #rule #kind { #query })
+                let driver = v
+                    .driver
+                    .map(|p| {
+                        let p = syn::Index::from(p);
+                        quote!(#p)
+                    })
+                    .unwrap_or(quote!(none));
+                quote!(variant #rule #kind driver #driver { #query })
             });
             let deltas = deltas.iter().map(|d| {
                 let Delta { relation, name } = d;
@@ -659,6 +688,7 @@ fn check_variants(p: &Program, analysis: &Analysis) -> syn::Result<()> {
             p,
             "incorrect seed/delta classification",
         )?;
+        let order = variant_order(&p.rules[v.rule], v.driver)?;
         // Check complete declared schemas and CQ scope independently of erasure.
         check_query(p, &v.query, &declarations)?;
         let mut erased = v.query.clone();
@@ -668,7 +698,8 @@ fn check_variants(p: &Program, analysis: &Analysis) -> syn::Result<()> {
             let BodyItem::Positive { atom: original } = original else {
                 unreachable!()
             };
-            let Some(BodyItem::Positive { atom }) = erased.body.iter_mut().nth(i) else {
+            let position = order.iter().position(|&source| source == i).unwrap();
+            let Some(BodyItem::Positive { atom }) = erased.body.get_mut(position) else {
                 return Err(syn::Error::new_spanned(p, "missing delta atom"));
             };
             ensure(
@@ -680,6 +711,7 @@ fn check_variants(p: &Program, analysis: &Analysis) -> syn::Result<()> {
         }
         let mut expected = p.rules[v.rule].clone();
         desugar_if_let(&mut expected)?;
+        expected.body = order.iter().map(|&i| expected.body[i].clone()).collect();
         ensure(
             erased == expected,
             &v.query,
@@ -700,6 +732,39 @@ fn check_variants(p: &Program, analysis: &Analysis) -> syn::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Independently validate a recorded outer occurrence and derive its body order.
+/// No non-positive item may be crossed, even when its variables happen to bind.
+pub fn variant_order(query: &Query, driver: Option<usize>) -> syn::Result<Vec<usize>> {
+    let first = query
+        .body
+        .iter()
+        .position(|item| matches!(item, BodyItem::Positive { .. }));
+    let mut order: Vec<_> = (0..query.body.len()).collect();
+    match (first, driver) {
+        (None, None) => {}
+        (Some(first), Some(driver))
+            if driver >= first
+                && driver < query.body.len()
+                && query
+                    .body
+                    .iter()
+                    .skip(first)
+                    .take(driver - first + 1)
+                    .all(|item| matches!(item, BodyItem::Positive { .. })) =>
+        {
+            order.remove(driver);
+            order.insert(first, driver);
+        }
+        _ => {
+            return Err(syn::Error::new_spanned(
+                query,
+                "variant driver must select a positive occurrence without crossing a guard, negation or binding Before constraint",
+            ));
+        }
+    }
+    Ok(order)
 }
 fn source_only(p: &Program) -> Program {
     let mut p = p.clone();

@@ -6,22 +6,27 @@ edition.workspace = true
 [lib]
 proc-macro = true
 
-[features]
-dedup-staged = []
-dedup-fused = []
-
 [dependencies]
 cq-lang-datalog = { path = "../../../features/datalog/language" }
 cq-datalog-schedule = { path = "../../../features/datalog/schedule" }
 cq-datalog-fork = { path = "../../../features/datalog/fork" }
+cq-stage = { path = "../../../facade/cq-stage" }
+cq-lang-physical = { path = "../../../languages/cq-lang-physical" }
+cq-rewrite-passes = { path = "../../../features/rewrites/passes" }
+cq-lang-structures = { path = "../../../languages/cq-lang-structures" }
 proc-macro2 = "1"
 quote = "1"
 syn = { version = "2", features = ["full"] }
 
 [dev-dependencies]
+cq-planners-plan = { path = "../../../features/planners/plan" }
+cq-index-policy = { path = "../../../passes/cq-index-policy" }
+cq-physical-lowering = { path = "../../../passes/cq-physical-lowering" }
+cq-structure-selection = { path = "../../../passes/cq-structure-selection" }
 trybuild = "1"
 mini-linq = { path = "../../../facade/mini-linq" }
 cq-rewrites = { path = "../../../features/rewrites" }
+cq-planners = { path = "../../../features/planners" }
 cq-storage = { path = "../../../runtime/cq-storage" }
 cq-gpu = { path = "../printer" }
 cq-gpu-runtime = { path = "../printer-runtime" }

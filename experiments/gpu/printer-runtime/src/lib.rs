@@ -3,22 +3,26 @@
 //! Rust values retain pooled allocations, dictionaries and device status. Fixed
 //! capacity execution transfers no rows, counts, bounds or pointer arrays.
 //! General growth reads one four-byte suspension control word per attempt and
-//! resumes saved work without replay. Explicit retry instead reads one checked
-//! 16-byte count/status summary per bounded attempt and replays at most once,
-//! at the exact candidate total. Retry requires immutable inputs and a pure
-//! query; canonicalization follows successful materialization, never an attempt.
+//! resumes saved work without replay. Explicit retry reads one checked summary
+//! per bounded attempt. Staged retry replays at most once at the candidate total;
+//! fused retry retains per-hole distinct estimates and grows geometrically, with
+//! a VRAM/pool cap and at most twelve attempts. Both require immutable inputs
+//! and a pure query. Fused retry admits exact keys before output compaction and
+//! never performs a second deduplication pass.
 //! Explicit `to_host` validates all retained ancestor statuses before decoding;
 //! capacities are never logical row counts.
 //! Dense runs consume conservative loader/projection bounds and reject domains
 //! outside their recorded representation rather than downloading extrema.
 pub mod datalog;
 mod device;
+mod fused_retry;
 mod kernels;
 pub mod nvtx;
 mod sets;
 
-use cuda_core::{CudaContext, CudaStream, LaunchConfig1D};
+use cuda_core::{CudaContext, CudaStream, IntoResult, LaunchConfig1D};
 pub use device::*;
+pub use fused_retry::{FusedRetryReport, FusedRetryScope, fused_retry_scope};
 pub use gpu_blocked_run as blocked_run;
 use gpu_blocked_run::{Buffer as Scratch, Run};
 pub use gpu_device_columns::{
@@ -44,7 +48,7 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 pub struct Staged;
 /// Exact prefix compaction at resumable suspension boundaries.
 pub struct Compacting;
-/// Exact head-tuple insertion before materialization, with resumable growth.
+/// Exact head-tuple admission before materialization, including bounded retry.
 pub struct Fused;
 pub struct DeviceSet<T, C = Plain, P = Staged>(PhantomData<(T, C, P)>);
 /// A stable lexicographic run over the recorded key levels, flattened in order.
@@ -98,6 +102,7 @@ thread_local! {
     static CONTROL_READBACKS: Cell<usize> = const { Cell::new(0) };
     static RESUME_READBACKS: Cell<usize> = const { Cell::new(0) };
     static COMPACTION_READBACKS: Cell<usize> = const { Cell::new(0) };
+    static FUSED_RETRY_READBACKS: Cell<usize> = const { Cell::new(0) };
 }
 /// Explicit runtime stream waits, including checked control readbacks.
 /// Excludes uploads, user downloads, and allocator-internal synchronization.
@@ -115,11 +120,17 @@ pub fn resume_readback_count() -> usize {
 pub fn compaction_readback_count() -> usize {
     COMPACTION_READBACKS.with(Cell::get)
 }
+/// Checked metadata readbacks for Fused bounded attempts, including replays.
+/// These are also included in host_wait_count and control_readback_count.
+pub fn fused_retry_readback_count() -> usize {
+    FUSED_RETRY_READBACKS.with(Cell::get)
+}
 pub fn reset_host_wait_count() {
     HOST_WAITS.with(|count| count.set(0));
     CONTROL_READBACKS.with(|count| count.set(0));
     RESUME_READBACKS.with(|count| count.set(0));
     COMPACTION_READBACKS.with(|count| count.set(0));
+    FUSED_RETRY_READBACKS.with(|count| count.set(0));
 }
 fn record_host_wait(readback: bool) {
     HOST_WAITS.with(|count| count.set(count.get().saturating_add(1)));
@@ -237,11 +248,238 @@ impl<'data, H: HostColumns<'data>> HostColumns<'data> for &H {
     }
 }
 
+/// A schema-slot marker in a recorded frozen run's nested tuple Layout.
+/// Structures uses these markers to retain the complete run certificate even
+/// when a particular host read consumes only an earlier key prefix.
+pub struct FrozenKey<const SLOT: usize>;
+
+/// Immutable indexes retained across query holes on one runtime's pool stream.
+///
+/// Layouts use original column slots and preserve key-level boundaries. All
+/// keys are sorted lexicographically (columns within each level use ascending
+/// schema slots), with input-row order breaking complete-key ties. Every key prefix
+/// exposes an exact contiguous, length-known range. Construction enqueues the
+/// existing blocked-run builders without reading device rows or counts.
+/// Keep this handle alive until all consumers on the pool stream are enqueued.
+pub struct FrozenDeviceIndex<'runtime, 'data, Row, C = Plain, Layout = ()> {
+    execution: Execution<'runtime, 'data>,
+    table: TableId,
+    layouts: Vec<Vec<Vec<usize>>>,
+    runs: Vec<RunId>,
+    marker: PhantomData<(Row, C, Layout)>,
+}
+
+fn validate_frozen_layout(levels: &[&[usize]], width: usize) -> Result<()> {
+    if levels.is_empty()
+        || levels.iter().any(|level| level.is_empty())
+        || levels
+            .iter()
+            .flat_map(|level| level.iter())
+            .any(|&slot| slot >= width)
+    {
+        return Err(failure(
+            "CQ_GPU_FROZEN_LEVELS",
+            "expected nonempty in-schema key levels",
+        ));
+    }
+    let mut seen = Vec::new();
+    for &slot in levels.iter().flat_map(|level| level.iter()) {
+        if seen.contains(&slot) {
+            return Err(failure("CQ_GPU_FROZEN_LEVELS", "duplicate key column"));
+        }
+        seen.push(slot);
+    }
+    Ok(())
+}
+
+fn frozen_layout_position(layouts: &[Vec<Vec<usize>>], levels: &[&[usize]]) -> Result<usize> {
+    layouts
+        .iter()
+        .position(|existing| {
+            existing.len() == levels.len()
+                && existing.iter().zip(levels).all(|(a, b)| a.as_slice() == *b)
+        })
+        .ok_or_else(|| {
+            failure(
+                "CQ_GPU_FROZEN_LAYOUT_MISSING",
+                format!("resident index has no exact key-level layout {levels:?}"),
+            )
+        })
+}
+
+impl<'runtime, 'data, Row: RowCodec<'data>, C> FrozenDeviceIndex<'runtime, 'data, Row, C> {
+    pub fn new(
+        runtime: &'runtime Runtime,
+        columns: &DeviceColumns<'data, Row, C>,
+        layouts: &[&[&[usize]]],
+    ) -> Result<Self> {
+        // Reject malformed certificates before enqueuing any builders.
+        for levels in layouts {
+            validate_frozen_layout(levels, Row::WIDTH)?;
+        }
+        let mut execution = runtime.execution();
+        let table = execution.bind_columns(columns)?;
+        let mut recorded = Vec::<Vec<Vec<usize>>>::new();
+        let mut runs = Vec::new();
+        for &levels in layouts {
+            if recorded.iter().any(|existing| {
+                existing.len() == levels.len()
+                    && existing.iter().zip(levels).all(|(a, b)| a.as_slice() == *b)
+            }) {
+                continue;
+            }
+            let run = if levels.len() == 1 && levels[0].len() == 1 {
+                execution.prepare_run(table, levels[0][0])?
+            } else {
+                let keys = levels
+                    .iter()
+                    .flat_map(|level| level.iter().copied())
+                    .collect::<Vec<_>>();
+                execution.prepare_prefix_run(table, &keys)?
+            };
+            recorded.push(levels.iter().map(|level| level.to_vec()).collect());
+            runs.push(run);
+        }
+        Ok(Self {
+            execution,
+            table,
+            layouts: recorded,
+            runs,
+            marker: PhantomData,
+        })
+    }
+}
+
+impl<Row, C, Layout> FrozenDeviceIndex<'_, '_, Row, C, Layout> {
+    /// Borrow exactly the recorded layout; never rebuild or substitute a prefix.
+    /// The returned pointers are valid only while this index remains alive.
+    pub fn resident_run(&self, levels: &[&[usize]]) -> Result<RunView> {
+        let position = frozen_layout_position(&self.layouts, levels)?;
+        self.execution.run_view(self.runs[position])
+    }
+}
+
+impl<'data, 'source: 'data, Row: RowCodec<'data>, C, Layout> HostColumns<'data>
+    for &FrozenDeviceIndex<'_, 'source, Row, C, Layout>
+{
+    type Row = Row;
+    fn pool(self) -> Option<Arc<Pool>> {
+        Some(self.execution.runtime.pool.clone())
+    }
+    fn seed_dictionary(self, dictionary: &mut Dictionary<'data>) -> Result<()> {
+        dictionary.merge(self.execution.dictionary())
+    }
+    fn bind(
+        self,
+        execution: &mut Execution<'_, 'data>,
+        _: &'static str,
+        width: usize,
+    ) -> Result<TableId> {
+        if !Arc::ptr_eq(&execution.runtime.pool, &self.execution.runtime.pool) {
+            return Err(failure(
+                "CQ_GPU_CONTEXT",
+                "resident index must share the query pool and stream",
+            ));
+        }
+        let table = self.execution.table(self.table)?;
+        if table.columns.len() != width {
+            return Err(failure(
+                "CQ_GPU_SCHEMA",
+                "resident index width differs from recorded schema",
+            ));
+        }
+        self.seed_dictionary(execution.dictionary_mut())?;
+        Ok(execution.add_table(table.clone()))
+    }
+}
+
+/// Exact projected-key membership built once and retained for a stratum.
+///
+/// The carrier owns the source table, dictionary, dependency statuses and the
+/// exact membership allocation through its resident execution. Query holes
+/// borrow views on the same pool stream; construction performs no readback.
+pub struct FrozenDeviceMembership<'runtime, 'data, Row, C = Plain> {
+    index: FrozenDeviceIndex<'runtime, 'data, Row, C>,
+    membership: ExactMembershipId,
+}
+
+impl<'runtime, 'data, Row: RowCodec<'data>, C> FrozenDeviceMembership<'runtime, 'data, Row, C> {
+    /// Index every column of an already projected key relation.
+    pub fn new(runtime: &'runtime Runtime, columns: &DeviceColumns<'data, Row, C>) -> Result<Self> {
+        let keys = (0..Row::WIDTH).collect::<Vec<_>>();
+        Self::build(runtime, columns, &keys)
+    }
+
+    fn build(
+        runtime: &'runtime Runtime,
+        columns: &DeviceColumns<'data, Row, C>,
+        keys: &[usize],
+    ) -> Result<Self> {
+        let mut index = FrozenDeviceIndex::new(runtime, columns, &[])?;
+        let membership = index
+            .execution
+            .prepare_exact_membership(index.table, keys)?;
+        Ok(Self { index, membership })
+    }
+}
+
+impl<'runtime, 'data, C> FrozenDeviceMembership<'runtime, 'data, (u8,), C> {
+    /// Build nullary membership from the bridge's canonical witness rows.
+    pub fn new_exists(
+        runtime: &'runtime Runtime,
+        columns: &DeviceColumns<'data, (u8,), C>,
+    ) -> Result<Self> {
+        Self::build(runtime, columns, &[])
+    }
+}
+
+impl<Row, C> FrozenDeviceMembership<'_, '_, Row, C> {
+    /// Borrow an exact membership view with the recorded logical key width.
+    /// Unlike witness-row width, the logical width of nullary membership is zero.
+    pub fn resident_membership(&self, expected_width: usize) -> Result<ExactMembershipView> {
+        let view = self
+            .index
+            .execution
+            .exact_membership_view(self.membership)?;
+        if view.width != expected_width {
+            return Err(failure(
+                "CQ_GPU_FROZEN_MEMBERSHIP_SCHEMA",
+                format!(
+                    "recorded key width {expected_width} differs from resident width {}",
+                    view.width
+                ),
+            ));
+        }
+        Ok(view)
+    }
+}
+
+impl<'data, 'source: 'data, Row: RowCodec<'data>, C> HostColumns<'data>
+    for &FrozenDeviceMembership<'_, 'source, Row, C>
+{
+    type Row = Row;
+    fn pool(self) -> Option<Arc<Pool>> {
+        HostColumns::pool(&self.index)
+    }
+    fn seed_dictionary(self, dictionary: &mut Dictionary<'data>) -> Result<()> {
+        HostColumns::seed_dictionary(&self.index, dictionary)
+    }
+    fn bind(
+        self,
+        execution: &mut Execution<'_, 'data>,
+        schema: &'static str,
+        width: usize,
+    ) -> Result<TableId> {
+        HostColumns::bind(&self.index, execution, schema, width)
+    }
+}
+
 pub struct Runtime {
     kernels: kernels::runtime_kernels::LoadedModule,
     pool: Arc<Pool>,
     dedup_scratch: RefCell<DedupScratch>,
     pending_timings: RefCell<Vec<PendingTiming>>,
+    fused_retries: RefCell<fused_retry::Records>,
     hashed_run_bucket_limit: usize,
 }
 impl Runtime {
@@ -260,6 +498,7 @@ impl Runtime {
             pool,
             dedup_scratch: RefCell::new(DedupScratch::default()),
             pending_timings: RefCell::new(Vec::new()),
+            fused_retries: RefCell::new(fused_retry::Records::default()),
             hashed_run_bucket_limit: 1 << 24,
         })
     }
@@ -284,6 +523,32 @@ impl Runtime {
     }
     pub fn pool(&self) -> &Arc<Pool> {
         &self.pool
+    }
+    /// Snapshot cumulative fused reports, sorted by `(hole, site, tuple width)`.
+    /// Does not synchronize the device; completed attempts are accounted at
+    /// their mandatory metadata readback. Estimates survive Execution drops.
+    pub fn fused_retry_reports(&self) -> Vec<FusedRetryReport> {
+        self.fused_retries.borrow().reports()
+    }
+    fn fused_retry_budget(&self) -> Result<fused_retry::Budget> {
+        self.context().bind_to_thread()?;
+        let mut free = 0usize;
+        let mut total = 0usize;
+        unsafe {
+            cuda_core::sys::cuMemGetInfo_v2(&mut free, &mut total).result()?;
+        }
+        let pool = self.pool.resource().upstream();
+        let stats = pool.stats();
+        // Same-stream frees are immediately reusable by this custom pool.
+        // Do not flush its cache or synchronize merely to inspect a budget.
+        Ok(fused_retry::Budget::new(
+            free,
+            total,
+            stats.pool_size,
+            stats.allocated_bytes,
+            stats.free_bytes,
+            pool.maximum_size(),
+        ))
     }
     pub fn execution<'runtime, 'data>(&'runtime self) -> Execution<'runtime, 'data> {
         LAST_TIMINGS.with(|last| last.set(None));
@@ -516,6 +781,72 @@ impl Output {
             capacity: self.capacity as u64,
             count: self.metadata.ptr().cast(),
             error: unsafe { self.metadata.ptr().cast::<u8>().add(8).cast() },
+        }
+    }
+}
+
+/// All storage is attempt-owned; dropping a failed attempt precedes budgeting
+/// its replacement. The immutable source status owners remain in Execution.
+struct FusedRetryAttempt {
+    output: Output,
+    keys: Output,
+    slots: Buffer<u64>,
+    candidates: Buffer<u64>,
+    overflow: Buffer<u32>,
+    metadata: Buffer<FusedRetryMetadata>,
+    dependencies: Buffer<u64>,
+    #[cfg(feature = "dedup-diagnostics")]
+    counters: Buffer<u64>,
+}
+impl FusedRetryAttempt {
+    fn new(
+        runtime: &Runtime,
+        width: usize,
+        capacity: usize,
+        statuses: &[Arc<Buffer<OutputCount>>],
+    ) -> Result<Self> {
+        let output = allocate_output(runtime, width, capacity)?;
+        let keys = allocate_output(runtime, width, capacity)?;
+        let slots = Buffer::zeroed(runtime.pool.clone(), fused_slot_capacity(capacity)?)?;
+        let candidates = Buffer::zeroed(runtime.pool.clone(), 1)?;
+        let overflow = Buffer::zeroed(runtime.pool.clone(), 1)?;
+        let metadata = unsafe { Buffer::uninitialized(runtime.pool.clone(), 1)? };
+        let dependencies = unsafe { Buffer::uninitialized(runtime.pool.clone(), statuses.len())? };
+        let initialize = runtime.kernels.prepare_initialize_pointer(config(1, 0))?;
+        for (index, status) in statuses.iter().enumerate() {
+            unsafe {
+                runtime.kernels.initialize_pointer(
+                    runtime.stream(),
+                    &initialize,
+                    dependencies.ptr(),
+                    index,
+                    status.ptr() as u64,
+                )?;
+            }
+        }
+        Ok(Self {
+            output,
+            keys,
+            slots,
+            candidates,
+            overflow,
+            metadata,
+            dependencies,
+            #[cfg(feature = "dedup-diagnostics")]
+            counters: Buffer::zeroed(runtime.pool.clone(), 568 * 6)?,
+        })
+    }
+    fn view(&self) -> FusedRetryView {
+        FusedRetryView {
+            set: FusedSetView {
+                slots: self.slots.ptr(),
+                capacity: self.slots.len(),
+                #[cfg(feature = "dedup-diagnostics")]
+                counters: self.counters.ptr(),
+            },
+            keys: self.keys.view(),
+            candidates: self.candidates.ptr(),
+            overflow: self.overflow.ptr(),
         }
     }
 }
@@ -1154,6 +1485,162 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         self.record_timing(TimingStage::Kernel, start)?;
         Ok(self.add_table(table))
     }
+    /// Run pure bounded exact admission with at most twelve fresh attempts.
+    ///
+    /// Estimates persist in Runtime per `(fused_retry_scope label, site, width)`.
+    /// Initial capacity is `max(1024, 2 * last_successful_distinct + hint)` (just
+    /// `max(1024, hint)` before the first success), capped by u32 and the budget.
+    /// Overflow proposes four times completed arena occupancy, bounded by the
+    /// immutable candidate total, u32, available VRAM and the pool allowance.
+    /// Candidate totals may exceed u32; distinct output may not.
+    ///
+    /// Every attempt has fresh output, ticketed arena, rounded slots, counters
+    /// and metadata. The callback must reset its frontier on every invocation,
+    /// read immutable input snapshots, count all candidates even after overflow,
+    /// and compact only new admissions. Failed partial storage is dropped before
+    /// measuring the next budget. Allocation/fatal errors never authorize replay.
+    /// The 40-byte checked summary (88 with diagnostics) must preserve candidate
+    /// count across attempts; failure to grow or exhausting the bound is terminal.
+    /// Successful output is retained without another deduplication pass.
+    ///
+    /// Report CUDA events bracket the callback, including its frontier reset
+    /// and output compaction, excluding allocation and metadata/control work.
+    pub fn execute_retry_fused<F>(
+        &mut self,
+        site: &'static str,
+        bounds: &[Bounds],
+        capacity_hint: Option<usize>,
+        mut launch: F,
+    ) -> Result<TableId>
+    where
+        F: FnMut(&CudaStream, OutputView, FusedRetryView) -> Result<()>,
+    {
+        let runtime = self.runtime;
+        let key = fused_retry::Key::current(site, bounds.len());
+        let (call, mut target) = runtime.fused_retries.borrow_mut().begin(key, capacity_hint);
+        let start = runtime.stream().record_event(timing_flags())?;
+        let statuses = self.output_statuses();
+        let check = runtime.kernels.prepare_fused_retry_metadata(config(1, 0))?;
+        let mut previous_capacity = None;
+        let mut expected_candidates = None;
+        for attempt_number in 1..=fused_retry::MAX_ATTEMPTS {
+            let budget = runtime.fused_retry_budget()?;
+            let capacity =
+                budget.capacity(bounds.len(), statuses.len(), target, previous_capacity)?;
+            let bytes = fused_retry::attempt_bytes(bounds.len(), capacity, statuses.len())?;
+            let attempt = FusedRetryAttempt::new(runtime, bounds.len(), capacity, &statuses)
+                .map_err(|error| failure("CQ_GPU_FUSED_RETRY_ALLOCATION", format!(
+                    "{key:?}, attempt={attempt_number}, capacity={capacity}, requested_bytes={}, pooled_bytes={}, budget_bytes={}: {error}",
+                    bytes.requested, bytes.pooled, budget.bytes,
+                )))?;
+            let launch_start = runtime.stream().record_event(timing_flags())?;
+            runtime
+                .fused_retries
+                .borrow_mut()
+                .launch(key, call, capacity, bytes.requested);
+            let launch_result = launch(runtime.stream(), attempt.output.view(), attempt.view());
+            let launch_end = runtime.stream().record_event(timing_flags())
+                .map_err(|error| -> Error {
+                    match &launch_result {
+                        Ok(()) => Box::new(error),
+                        Err(callback_error) => failure("CQ_GPU_FUSED_RETRY_TIMING", format!(
+                            "callback failed: {callback_error}; recording its end event also failed: {error}",
+                        )),
+                    }
+                })?;
+            if let Err(error) = launch_result {
+                record_host_wait(false);
+                let kernel_ms = launch_start.elapsed_ms(&launch_end)
+                    .map_err(|timing_error| failure("CQ_GPU_FUSED_RETRY_TIMING", format!(
+                        "callback failed: {error}; timing its discarded work also failed: {timing_error}",
+                    )))? as f64;
+                runtime
+                    .fused_retries
+                    .borrow_mut()
+                    .timed(key, kernel_ms, true);
+                return Err(error);
+            }
+            unsafe {
+                runtime.kernels.fused_retry_metadata(
+                    runtime.stream(),
+                    &check,
+                    attempt.output.view(),
+                    attempt.view(),
+                    attempt.dependencies.ptr(),
+                    attempt.dependencies.len(),
+                    attempt.metadata.ptr(),
+                )?;
+            }
+            record_host_wait(true);
+            FUSED_RETRY_READBACKS.with(|count| count.set(count.get().saturating_add(1)));
+            let summary = attempt.metadata.to_host()?[0];
+            let kernel_ms = launch_start.elapsed_ms(&launch_end)? as f64;
+            #[cfg(feature = "dedup-diagnostics")]
+            eprintln!(
+                "CQ_GPU_FUSED_RETRY_DIAGNOSTIC site={site} width={} attempt={attempt_number} capacity={capacity} slots={} rows={} distinct={} candidates={} overflow={} inserted={} duplicates={} busy={} full={} probes={} max_probes={}",
+                bounds.len(),
+                attempt.slots.len(),
+                summary.rows,
+                summary.distinct,
+                summary.candidates,
+                summary.overflow,
+                summary.diagnostics[0],
+                summary.diagnostics[1],
+                summary.diagnostics[2],
+                summary.diagnostics[3],
+                summary.diagnostics[4],
+                summary.diagnostics[5],
+            );
+            let next =
+                fused_retry::next_capacity(summary, capacity, expected_candidates, attempt_number);
+            match next {
+                Ok(Some(grown)) => {
+                    runtime
+                        .fused_retries
+                        .borrow_mut()
+                        .timed(key, kernel_ms, true);
+                    // Drop arena/output/slots/all counters before the next CUDA
+                    // free-memory query and custom-pool statistics snapshot.
+                    drop(attempt);
+                    target = grown;
+                    previous_capacity = Some(capacity);
+                    expected_candidates = Some(summary.candidates);
+                }
+                Ok(None) => {
+                    let table = match self.retain_output(attempt.output, bounds.to_vec(), statuses)
+                    {
+                        Ok(table) => table,
+                        Err(error) => {
+                            runtime
+                                .fused_retries
+                                .borrow_mut()
+                                .timed(key, kernel_ms, true);
+                            return Err(error);
+                        }
+                    };
+                    if let Err(error) = self.record_timing(TimingStage::Kernel, start) {
+                        runtime
+                            .fused_retries
+                            .borrow_mut()
+                            .timed(key, kernel_ms, true);
+                        return Err(error);
+                    }
+                    let mut reports = runtime.fused_retries.borrow_mut();
+                    reports.timed(key, kernel_ms, false);
+                    reports.success(key, summary.distinct);
+                    return Ok(self.add_table(table));
+                }
+                Err(error) => {
+                    runtime
+                        .fused_retries
+                        .borrow_mut()
+                        .timed(key, kernel_ms, true);
+                    return Err(error);
+                }
+            }
+        }
+        unreachable!("the final failed attempt returns the bounded-attempt error")
+    }
     /// Resume unfinished work; only one u32 control word crosses per attempt.
     pub fn execute_resumable<F>(
         &mut self,
@@ -1169,16 +1656,20 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
             bounds,
             initial_capacity,
             state_words,
-            false,
+            None,
             false,
             |stream, output, resume, _| launch(stream, output, resume),
         )
     }
+    /// Compact completed output while preserving pending kernel reservations.
+    /// `max_reservation` bounds one append (one row for serial emission, or
+    /// threads times items for cooperative emission), not merely block size.
     pub fn execute_resumable_compacting<F>(
         &mut self,
         bounds: &[Bounds],
         initial_capacity: usize,
         state_words: usize,
+        max_reservation: usize,
         mut launch: F,
     ) -> Result<TableId>
     where
@@ -1188,7 +1679,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
             bounds,
             initial_capacity,
             state_words,
-            true,
+            Some(max_reservation),
             false,
             |stream, output, resume, _| launch(stream, output, resume),
         )
@@ -1207,7 +1698,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
             bounds,
             initial_capacity,
             state_words,
-            false,
+            None,
             true,
             launch,
         )
@@ -1217,7 +1708,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         bounds: &[Bounds],
         initial_capacity: usize,
         state_words: usize,
-        compacting: bool,
+        compacting_reservation: Option<usize>,
         fused: bool,
         mut launch: F,
     ) -> Result<TableId>
@@ -1236,10 +1727,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         };
         let mut output = allocate_output(runtime, width, initial_capacity.max(1))?;
         let allocate_set = |capacity: usize| -> Result<Buffer<u64>> {
-            let slots = capacity
-                .checked_mul(2)
-                .and_then(usize::checked_next_power_of_two)
-                .ok_or_else(|| failure("CQ_GPU_SET_CAPACITY", "fused set capacity overflow"))?;
+            let slots = fused_slot_capacity(capacity)?;
             Ok(Buffer::<u64>::zeroed(runtime.pool.clone(), slots)?)
         };
         let mut set = if fused {
@@ -1295,7 +1783,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
                         .fused_clamp(runtime.stream(), &clamp, output.view())?;
                 }
             }
-            if compacting {
+            if let Some(max_reservation) = compacting_reservation {
                 let _nvtx = nvtx::range(c"resumable/compact");
                 let old_capacity = output.capacity;
                 // Checkpoints contain only query cursors/registers, never
@@ -1307,20 +1795,10 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
                 let distinct = work.dedup(source)?;
                 COMPACTION_READBACKS.with(|count| count.set(count.get().saturating_add(1)));
                 let rows = work.checked_rows(distinct)?;
-                // A pending cooperative reservation can contain a whole
-                // 256-lane block, even when the completed prefix is tiny.
-                // Always leave room for it, or compaction could livelock.
-                let capacity = rows
-                    .saturating_mul(2)
-                    .max(rows.saturating_add(256))
-                    .min(u32::MAX as usize)
-                    .max(old_capacity);
-                if capacity <= rows {
-                    return Err(failure(
-                        "CQ_GPU_OUTPUT_ROWS",
-                        "canonical output exceeds u32::MAX",
-                    ));
-                }
+                // A pending append can contain every item of every lane. Leave
+                // room for the printer's complete reservation, not just a warp
+                // or block of scalar rows, so exact compaction makes progress.
+                let capacity = compacting_capacity(rows, old_capacity, max_reservation)?;
                 output = allocate_output(runtime, width, capacity)?;
                 let source = work.table(distinct)?;
                 let append = runtime.kernels.prepare_append(config(rows, 0))?;
@@ -1733,6 +2211,37 @@ fn retry_capacity(
     Ok(None)
 }
 
+fn compacting_capacity(rows: usize, old_capacity: usize, max_reservation: usize) -> Result<usize> {
+    if max_reservation == 0 {
+        return Err(failure(
+            "CQ_GPU_RESERVATION_BOUND",
+            "compacting execution requires a nonzero reservation bound",
+        ));
+    }
+    let required = rows
+        .checked_add(max_reservation)
+        .filter(|&capacity| capacity <= u32::MAX as usize)
+        .ok_or_else(|| {
+            failure(
+                "CQ_GPU_OUTPUT_ROWS",
+                "canonical output plus a pending reservation exceeds u32::MAX",
+            )
+        })?;
+    Ok(rows
+        .saturating_mul(2)
+        .min(u32::MAX as usize)
+        .max(required)
+        .max(old_capacity))
+}
+
+fn fused_slot_capacity(capacity: usize) -> Result<usize> {
+    capacity
+        .max(1)
+        .checked_mul(2)
+        .and_then(usize::checked_next_power_of_two)
+        .ok_or_else(|| failure("CQ_GPU_SET_CAPACITY", "fused set capacity overflow"))
+}
+
 fn device_status_failure(error: u32) -> Error {
     // Keep these diagnostics identical to device-columns' checked_count.
     let (code, detail) = match error {
@@ -1822,8 +2331,83 @@ fn decode_column(runtime: &Runtime, table: &Table, index: usize) -> Result<Buffe
 }
 
 #[cfg(test)]
+mod frozen_tests {
+    use super::{RuntimeError, frozen_layout_position, validate_frozen_layout};
+
+    #[test]
+    fn frozen_layouts_preserve_composite_and_prefix_certificates() {
+        assert!(validate_frozen_layout(&[&[1]], 3).is_ok());
+        assert!(validate_frozen_layout(&[&[0, 1]], 3).is_ok());
+        assert!(validate_frozen_layout(&[&[1], &[0]], 3).is_ok());
+        assert!(validate_frozen_layout(&[&[1, 2], &[0]], 3).is_ok());
+        assert!(validate_frozen_layout(&[&[1, 2], &[0, 3]], 4).is_ok());
+        let layouts = vec![vec![vec![0, 1]], vec![vec![1], vec![0]]];
+        assert_eq!(frozen_layout_position(&layouts, &[&[0, 1]]).unwrap(), 0);
+        assert_eq!(frozen_layout_position(&layouts, &[&[1], &[0]]).unwrap(), 1);
+        for levels in [&[&[0][..]][..], &[&[0][..], &[1][..]][..], &[][..]] {
+            let error = frozen_layout_position(&layouts, levels).unwrap_err();
+            assert_eq!(
+                error.downcast::<RuntimeError>().unwrap().code,
+                "CQ_GPU_FROZEN_LAYOUT_MISSING"
+            );
+        }
+    }
+
+    #[test]
+    fn frozen_layouts_reject_invalid_keys_before_building() {
+        for levels in [
+            &[][..],
+            &[&[][..]][..],
+            &[&[3][..]][..],
+            &[&[0, 0][..]][..],
+            &[&[0, 1][..], &[1][..]][..],
+        ] {
+            let error = validate_frozen_layout(levels, 3).unwrap_err();
+            assert_eq!(
+                error.downcast::<RuntimeError>().unwrap().code,
+                "CQ_GPU_FROZEN_LEVELS"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 mod retry_tests {
-    use super::{Result, RetryMetadata, RuntimeError, retry_capacity};
+    use super::{Result, RetryMetadata, RuntimeError, compacting_capacity, retry_capacity};
+
+    #[test]
+    fn compaction_reserves_every_item_of_a_pending_append() {
+        for reservation in [1, 256, 1024] {
+            for rows in [0, 1, 127, 512, 1024] {
+                let capacity = compacting_capacity(rows, 1024, reservation).unwrap();
+                assert!(capacity >= rows + reservation);
+                assert!(capacity >= rows * 2);
+                assert!(capacity >= 1024);
+            }
+        }
+        assert_eq!(compacting_capacity(0, 256, 1024).unwrap(), 1024);
+        assert_eq!(compacting_capacity(64, 1024, 1024).unwrap(), 1088);
+        assert_eq!(compacting_capacity(1000, 1024, 1024).unwrap(), 2024);
+        assert_eq!(compacting_capacity(0, 64, 256).unwrap(), 256);
+    }
+
+    #[test]
+    fn compaction_rejects_reservations_that_cannot_make_progress() {
+        assert_eq!(
+            error_code(compacting_capacity(0, 1024, 0).map(Some)),
+            "CQ_GPU_RESERVATION_BOUND"
+        );
+        assert_eq!(
+            compacting_capacity(u32::MAX as usize - 1024, 1024, 1024).unwrap(),
+            u32::MAX as usize
+        );
+        for rows in [u32::MAX as usize - 1023, usize::MAX] {
+            assert_eq!(
+                error_code(compacting_capacity(rows, 1024, 1024).map(Some)),
+                "CQ_GPU_OUTPUT_ROWS"
+            );
+        }
+    }
 
     fn error_code(result: Result<Option<usize>>) -> &'static str {
         result.unwrap_err().downcast::<RuntimeError>().unwrap().code

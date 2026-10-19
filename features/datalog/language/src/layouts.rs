@@ -2,8 +2,8 @@ use crate::{Analysis, BodyItem, Layout, Program, ensure};
 use cq_syntax::{rust, symbol_name};
 use std::collections::BTreeSet;
 
-/// Check physical grouping decisions against source rules, not emitted variants
-/// or the scheduling compiler. Variant order and delta spelling are irrelevant.
+/// Check grouping against source rules in stable rule/changing-position order.
+/// Only the independently validated driver certificate affects body order.
 pub(crate) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
     if program.variants.is_none() {
         return Ok(());
@@ -48,8 +48,17 @@ pub(crate) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
             changing.iter().copied().map(Some).collect()
         };
         for driver in drivers {
+            let variant = program
+                .variants
+                .as_ref()
+                .unwrap()
+                .iter()
+                .find(|variant| variant.rule == rule && variant.delta == driver)
+                .expect("variant coverage was checked");
+            let order = crate::variant_order(query, variant.driver)?;
             let mut bound = BTreeSet::new();
-            for (position, item) in query.body.iter().enumerate() {
+            for (position, &source_position) in order.iter().enumerate() {
+                let item = &query.body[source_position];
                 let BodyItem::Positive { atom } = item else {
                     continue;
                 };
@@ -71,7 +80,7 @@ pub(crate) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
                     columns,
                     key,
                 };
-                let expected = if Some(position) == driver {
+                let expected = if Some(source_position) == driver {
                     if key == 0 && position == 0 {
                         bound.extend(atom.variables().map(symbol_name));
                         continue;
@@ -90,11 +99,11 @@ pub(crate) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
     ensure(
         program.layouts == expected,
         program,
-        "layouts must exactly match written-order positive join choices in stable rule order",
+        "layouts must exactly match recorded-driver positive join choices in stable rule order",
     )?;
     ensure(
         program.delta_layouts == expected_delta,
         program,
-        "delta layouts must exactly match written-order delta probes in stable rule order",
+        "delta layouts must exactly match recorded-driver delta probes in stable rule order",
     )
 }

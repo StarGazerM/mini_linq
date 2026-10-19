@@ -19,12 +19,56 @@ The scheduler explicitly selects `insert_new device_set_all_columns` and
 `negation_keys device_set_owned`; authored CPU HashSet schedules are rejected
 by the GPU bridge rather than silently reinterpreted. The CPU default remains
 `hash_set_all_columns` / `hash_set_borrowed`.
-This entry currently accepts a Datalog program, not a caller-supplied pipeline.
-Every CQ hole uses the fixed ordinary MiniLinq pipeline with host-read recording,
-sorted/hashed/prefix runs, retained lookups, device-set dedup representation, and
-`cq_gpu::print(completion(round))`; negative-key schemas and the completion
-boundary are explicit printer inputs. Standalone queries retain the default
-`completion(query)` boundary.
+The entry accepts a default named `pipeline { ... }` with the same phase syntax
+as `mini_linq::compile!`, followed by optional
+`hole(rule N, delta K) pipeline { ... }` or `hole(rule N, seed)` overrides.
+Missing phases inherit the default; an explicitly empty pass list does not.
+Selectors resolve only against recorded schedule identities. Unknown/non-delta
+occurrences, duplicate overrides and removal of required device passes fail.
+`__CQ_DATALOG_HOLE_SELECTORS` prints copyable selectors beside variant numbers.
+
+The default pipeline uses `order(le)`, sorted/hashed/prefix providers,
+`retain_lookups`, `expand_lookups(256)`, and the ordinary
+`retype(dedup => DeviceSet<_, Plain, Compacting>)` pass argument. Its printer
+uses `tile(256,4), frontier(8), directory(rank)` with resumable Compacting.
+An override can select `Fused` through that same `retype` argument and
+`output(retry)` through its own printer invocation. The bridge never parses
+either argument. It appends only `completion(round)`, dictionary, pool and
+negative-key schemas; the consuming printer rejects duplicates rather than
+silently overriding caller advice.
+
+Scheduling advice is routed separately, for example
+`schedule = ::cq_gpu_datalog::schedule(delta_first, hoist_invariants);`.
+Only that pass interprets these arguments. Without advice it retains written
+drivers; GPU consumers explicitly request delta-first. Each variant records
+`driver N` and its source `rule`/`delta` identity. Moving a delta never crosses
+negation, a guard or a binding clause. Independent checks validate driver and
+delta occurrence, complete body erasure and layout demands.
+`__CQ_DATALOG_SCHEDULE_IR` retains the checked schedule.
+
+Caller plan/IX/lower/select macros execute once through ordinary continuations.
+The bridge gathers their checked Structures for frozen-index demands, then
+splices each hole's remaining opaque Structures/represent/stage/print queue.
+
+The fork records `MaintainedFrozenDeviceIndex` plus an exact `frozen_layouts`
+list for each GPU stratum. Keyed full layouts of EDBs and completed lower strata
+are projected and indexed once before the seed/round loop, then passed as
+`FrozenDeviceIndex` host reads. Changing SCC relations and deltas retain
+per-round projections/builds. The emitted `__CQ_DATALOG_FROZEN_LAYOUT_IR`
+certificates record relation, permutation, key width, stratum lifetime and full
+run level lists. Actual checked Structures demand sets are partitioned into a
+minimum subset-chain cover, independently checked for exact prefix coverage.
+For example, `{varr,varp} ⊂ {nxtBlk,varr,varp}` becomes one sorted run with levels
+`[varr,varp] → [nxtBlk]`, serving the early semi and later full probe. Incomparable
+demands use separate runs. Each Host provider type records its complete run
+levels, including levels after a shorter read's requested prefix; printers read
+those certificates without selecting layouts or rebuilding frozen providers.
+For frozen positive factors with locally bound negation filters, advise the
+schedule pass with `hoist_invariants` (the ddisasm consumer's `hoist-invariants`
+feature supplies precisely that pass argument). The existing checked invariant
+rewrite materializes these factors before their consumer stratum, allowing
+derived indexes to use the same frozen-layout path. Without that advice, LE may
+retain a filtered right-side provider inside a round despite an immutable EDB.
 
 ### ddisasm scale baseline
 
@@ -60,10 +104,40 @@ uv run --project /home/stargazermiao/workspace/srdatalog-python \
 The GPU consumer preserves the same program and uploads all EDBs before its
 fixed-point timer. The checked `hashed_runs` rewrite realizes composite equality
 indexes, and closed typed scalar captures lower `meta.*` values once on the host.
-The fixed Datalog pipeline records `DeviceSet<_, Plain, Compacting>` so exact
-canonicalization can run at resumable suspension boundaries instead of retaining
-hundreds of millions of duplicate candidates. No dataset-specific constants,
-helper relations, or Datalog rule changes are substituted.
+All Datalog holes default to `DeviceSet<_, Plain, Compacting>`. The ddisasm
+consumer overrides only `hole(rule 19, delta 1)` (variant 22), using ordinary
+`retype(dedup => DeviceSet<_, Plain, Fused>)` and `print(..., output(retry))`
+arguments. Other holes keep resumable Compacting. A default pipeline can select
+Fused for all holes through the same pass argument; there is no dedup macro
+prefix or Cargo feature channel. These choices never change the Datalog rules.
+
+After stopping the fixed-point timer and popping its allocator counters, the
+consumer reads `fused_retry_reports()` from the same pool-keyed cached runtime
+used by the CQ holes. It does not initialize or reset that cache before the timed
+run. The existing `fixedpoint_ms`, allocator peaks and `exact_cpu_check` outputs
+are preserved. Additional JSON keys are:
+
+- `fused_retry_attempts` and `fused_retry_relaunches`: totals across reported sites.
+- `fused_retry_wasted_kernel_ms`: total GPU event time for failed launch attempts.
+- `fused_retry_peak_attempt_bytes`: maximum attempt-owned requested allocation
+  size across reported sites, not a sum of their individual peaks.
+- `fused_retry_reports`: stably sorted per-hole/site reports containing `hole`,
+  `site`, `calls`, `attempts`, `relaunches`, `max_attempts`, `attempts_per_call`,
+  `wasted_kernel_ms`, `kernel_ms`, `peak_capacity`, `peak_attempt_bytes`, and
+  `last_distinct` (the last successful distinct cardinality).
+
+The report's GPU events surround the launch callback, including its frontier
+reset and in-kernel unique-output compaction, rather than just the query kernel.
+They exclude attempt allocation, summary/control readback and later operators.
+`kernel_ms` includes
+all attempts; `wasted_kernel_ms` includes only failed attempts. Neither is the
+wall-clock fixed-point duration. Attempt bytes cover output and ticket-arena
+columns, rounded hash slots, metadata/counters, dependency-pointer buffers and
+device-pointer arrays.
+They exclude resident inputs, frontier storage, other live allocations, pool
+reservation and CUDA driver overhead. The fixed-point allocator peak instead
+includes resident EDBs and the measured region's requested live bytes; it is not
+driver-reserved VRAM. These are reporting scopes, not new measurement results.
 
 **cvc5 GPU equals CPU on all full tuples in all 11 outputs.** The single measured
 run took **11.444806 s** for synchronized resident computation, plus **13.844 ms**
@@ -139,9 +213,12 @@ The initial device fragment consists of positive relational joins/projections,
 typed copied/literal heads and closed typed integral/bool captures supported
 by the GPU printer, supported total
 device comparisons, and stratified exact negative membership. Negative keys
-are owned projected device values, built once from frozen lower-stratum
-snapshots; the checked fork's dedicated membership intrinsic is not arbitrary
-Rust method execution. Query-dependent arbitrary Rust heads and body bindings,
+are owned projected device values held by `FrozenDeviceMembership`; their exact
+membership index is built once per stratum and borrowed by every round's holes.
+Nullary negation retains a witness row but indexes the zero-column existence key.
+`__CQ_DATALOG_FROZEN_KEY_IR` records this lifetime. The checked fork's dedicated
+membership intrinsic is not arbitrary Rust method execution. Query-dependent
+arbitrary Rust heads and body bindings,
 generators, and observers are not supported. Printer restrictions on scalar types,
 integral run keys, and representable key domains still apply.
 
@@ -193,11 +270,17 @@ naive closure/parity oracles for empty inputs, self-loops, chains with alternati
 member deltas, cycles, disconnected graphs, duplicates, empty seeds, linear and
 nonlinear closure, mutual recursion, lower-stratum negation, multiple outputs,
 empty IDBs, EDB outputs, literal heads, and a resident result consumed by a
-second compiled GPU query. `--bench` additionally selects a 192-node chain and
-six connected branching 32-node cycles, with duplicate EDBs and integer values
-above three billion. Printed execution time includes EDB canonicalization,
-all recursive CQ/index builds, admission, and publication, separately from input
-upload; there is no excluded compaction phase. These are reproduction commands:
+second compiled GPU query. A separate per-hole Fused `output(retry)` case first
+turns 131,072 candidates into 2,048 distinct rows, checking growth from 1,024 to
+4,096 slots rather than candidate-sized allocation. The next invocation emits
+another 2,048 distinct rows without retry, checking its warm estimate. The test
+asserts all 4,096 final answers and accounts for retry metadata readbacks
+separately from SCC-round, resume, and compaction feedback.
+`--bench` additionally selects a 192-node chain and six connected branching
+32-node cycles, with duplicate EDBs and integer values above three billion.
+Printed execution time includes EDB canonicalization, all recursive CQ/index
+builds, admission, and publication, separately from input upload; there is no
+excluded compaction phase. These are reproduction commands:
 
 ```sh
 cargo oxide build --arch sm_89 -- --release -p gpu-datalog-oracle
@@ -959,6 +1042,21 @@ pipeline {
     print = ::cq_gpu::print(tile(256,4), frontier(8), directory(rank));
 }
 ```
+`prefix_runs` also replaces integral composite-key `HashedRun` payload builds
+consumed by probes with recorded lexicographic `PrefixRun` levels. Membership-only
+and nonintegral hashed builds keep their representation. `retain_lookups` carries
+the exact full-prefix range from an eager semi to its matching probe, and
+`expand_lookups(256)` can then balance that range across the tile instead of
+serially scanning hash-collision buckets per driver row. These are checked
+Structures decisions; neither the printer nor the runtime chooses the plan.
+`expand_lookups(N, depth D)` explicitly bounds nested expansion frames per stream;
+the default depth is two. Eligible probes are staged in stream order up to that
+limit; deeper probes keep their recorded provider and traverse it lane-locally.
+The bound is not a byte-budget proof: carried payloads and frontier claim space
+also occupy shared memory, and the printer/device launch contract remains final.
+The ddisasm consumer opts into `output(retry)` for its default hole pipeline,
+using direct bounded kernels and exact post-kernel dedup for Compacting outputs.
+
 
 The displayed printer arguments are optional; these are their defaults.
 `frontier(0)` disables descriptor publication. The supported tile shape is
@@ -971,29 +1069,74 @@ These are allocation contracts, not inferred functional dependencies, uniqueness
 or sortedness.
 
 `output(retry)` explicitly selects a bounded, no-resume kernel instead of the
-default resumable execution policy. Its initial output capacity is **1024 rows**
-unless `capacity(Relation)` supplies the named input's allocation size as an
-initial allocation hint, not a hard output bound. Generated output records
-`__CQ_GPU_OUTPUT_POLICY = "retry"` and `__CQ_GPU_RETRY_DEFAULT_CAPACITY = 1024`.
-Only `output(retry)` is accepted; other values and duplicate output options are
-rejected. Omitting the option preserves the existing execution policy.
+default resumable execution policy. `capacity(Relation)` supplies the named
+input's allocation size as an initial hint, not a hard output bound. Generated
+output records `__CQ_GPU_OUTPUT_POLICY = "retry"` and
+`__CQ_GPU_RETRY_DEFAULT_CAPACITY = 1024`. Only `output(retry)` is accepted;
+other values and duplicate output options are rejected. Omitting the option
+preserves the existing execution policy.
 
-Retry requires immutable inputs and a deterministic exact candidate total
-across both launches. The first attempt traverses the entire stream and keeps
-counting candidates past capacity while skipping excess writes. Only output
-capacity overflow permits a retry: the runtime discards that partial result,
-allocates exactly the observed candidate total, resets the frontier, and
-relaunches the entire kernel **once**, without saved lane or shared-memory
-checkpoints. A non-overflow failure, including a CUDA or allocation failure,
-never triggers a retry; any second-attempt failure is returned. Both launches
-use the same input tables, bounds and query captures. Exact counting concerns
-pre-canon candidates, not distinct result rows. Canonicalization runs only after
-successful materialization, including when a recorded `DeviceSet` uses `Fused`
-or `Compacting`: explicit retry uses staged canon rather than fused insertion or
-suspension-time compaction. This changes scheduling, not exact set semantics.
-Compared with direct bounded execution, retry adds a checked host control/count
-readback for each attempt, even when the initial allocation fits; it does not
-download tuples.
+Retry requires immutable input snapshots and a deterministic exact candidate
+total across every attempt. Each attempt traverses the entire stream and keeps
+counting every valid pre-admission candidate past capacity while skipping
+excess writes or insertions. Only capacity overflow permits a retry: the runtime
+discards the partial output and any partial set, resets the frontier inside the
+launch callback, and relaunches the entire kernel without saved lane or
+shared-memory checkpoints. The candidate count is a safe upper bound on distinct
+rows, not an allocation target for fused execution. A changed candidate count,
+counter wrap, CUDA error, allocation failure or other non-overflow error is
+terminal. Failed attempts never publish partial results.
+
+For fused retry, `execute_retry_fused(site, bounds, capacity_hint, launch)` uses
+the generated `concat!(module_path!(), "::", stringify!(kernel))` site and an
+optional capacity hint. A thread-local `fused_retry_scope(label)` guard labels
+Datalog rule/key holes, restores the previous label on drop, and cannot move
+between threads. The runtime retains estimates per `(hole, site, row width)`.
+The initial capacity is `max(1024, hint.unwrap_or(0))` on the first call and
+`max(1024, 2 * previous_successful_distinct + hint.unwrap_or(0))` thereafter.
+Only successful distinct cardinalities update the estimate, never candidate
+counts or failed partial rows.
+
+Overflow growth targets **4 times the observed distinct occupancy**, capped by
+the immutable candidate upper bound, the u32 row-index domain and the available
+VRAM/pool budget. It never allocates the candidate count merely because that
+count was observed; that cap applies only when below the geometric target.
+Budgeting includes reusable cached pool bytes as well as CUDA free memory,
+reserves safety headroom, and accounts for allocator growth requests rather
+than assuming allocation can fall back to an exact-sized request. Capacity must
+strictly increase; exhausted budget or lack of progress is terminal. There are
+at most **12 total attempts** (the 1024 floor with 4x growth spans the u32 domain).
+
+A recorded `DeviceSet<_, _, Fused>` stays genuinely fused under `output(retry)`:
+`execute_retry_fused` supplies a `FusedRetryView`, and `fused_retry_insert`
+performs exact admission while candidates stream through the direct bounded
+kernel. A separate ticketed exact-key arena lets the set publish complete keys
+with the CAS/BUSY/publish-row protocol independently of final output compaction.
+Only new admissions become output hits; duplicate and capacity-overflow results
+emit nothing. BUSY collisions use warp-only reconvergence/ballot retries, never
+a pending block scan or a BUSY lock held while waiting. The overflow flag is
+checked once per candidate chunk, not once per resumable program counter.
+Even after that flag is set, all original valid candidates contribute to the
+count needed for a safe retry allocation.
+
+For a 256-thread, four-item chunk (at most 1024 candidates), one packed u32
+block scan combines new-admission count with candidate count:
+`__tile_count | (__tile_candidates << 11)`. The low 11 bits give unique-output
+offsets/count and the high bits give the full valid-candidate count. Thread zero
+updates the checked u64 candidate counter before at most one output reservation;
+only new keys are scattered. Staged Smallest and nested expansions retain their
+bounded descriptor footprint, with no resumable PCs, register checkpoints or
+extra pending-work block scan. Successful fused retry output needs no
+post-execution dedup for that canon.
+
+Other recorded policies (`Staged` and `Compacting`) use `execute_retry` and
+staged canonicalization only after successful materialization, rather than
+suspension-time compaction. Their existing non-fused policy starts at 1024 rows
+or the explicit hint, then permits one overflow relaunch allocated at the exact
+candidate count; a second failure is terminal. Without `output(retry)`, recorded
+`Fused` continues to use resumable fused execution. Compared with direct bounded
+execution, retry adds a checked host control/count readback for each attempt,
+even when the initial allocation fits; it does not download tuples.
 
 The extra recorded passes are necessary. The shorter
 `order(le)` + `sorted_runs` + `retain_lookups` pipeline still records host
@@ -1143,13 +1286,20 @@ and dedup scheduling. `Staged` retains standalone behavior: materialize all
 candidates, then canonicalize. `Compacting` exact-deduplicates a completed prefix
 when a resumable kernel suspends, preserves its query checkpoints, and resumes
 into the compacted output; growth uses the checked distinct cardinality instead
-of raw candidate multiplicity. This policy adds a checked count transfer at
-compaction boundaries, but never transfers tuples. The Datalog fixed pipeline
-explicitly records `DeviceSet<_, Plain, Compacting>` through `retype`; the printer
-never infers the policy from a query or dataset. `Fused` records insertion during
-resumable execution; unknown policies are rejected. Explicit `output(retry)`
-overrides these canon schedules with post-kernel staged canonicalization so
-both attempts count the same candidates without fused or resumable state.
+of raw candidate multiplicity. The printer also supplies the maximum pending
+reservation: one row for serial output or `256 * items` for cooperative output.
+After compaction, capacity is at least the distinct prefix plus that bound, so
+a four-item, 1,024-row append cannot livelock behind a scalar-block allowance.
+An append that cannot fit within the u32 row domain is rejected. This policy
+adds a checked count transfer at compaction boundaries, but never transfers
+tuples. The Datalog pipeline records
+`DeviceSet<_, Plain, Compacting>` by default through `retype`; default or per-hole
+pipelines select `Fused` with the same ordinary consuming-pass argument.
+The printer reads the recorded representation, never query or dataset names.
+`Fused` records exact insertion during
+execution; unknown policies are rejected. Explicit `output(retry)`
+preserves fused admission with distinct-based growth for `Fused`, while
+`Staged` and `Compacting` canonicalize after successful materialization.
 
 Each generated kernel records its Structures keyed-read provenance. In addition
 to one-level payload providers, the existing `share` / `repr witness` contract
@@ -1729,10 +1879,12 @@ above for current resident-code verification.
   It does not count then replay the stream or recompute completed rows.
   Explicit `capacity(Relation)` without retry uses the direct bounded kernel
   without this per-attempt control readback. `output(retry)` instead performs an
-  exact full candidate count, may relaunch once at that count only for capacity
-  overflow, and treats `capacity(Relation)` as an initial allocation hint.
-  Immutable inputs are required; other errors do not retry. Its checked
-  control/count readbacks remain required even with `completion(round)`.
+  exact full candidate count and treats `capacity(Relation)` as an initial
+  allocation hint. Fused overflow retries use distinct-based geometric growth
+  for at most 12 attempts; non-fused retry may relaunch once at the candidate
+  count. Immutable inputs and matching candidate counts are required; other
+  errors do not retry. Its checked control/count readbacks remain required even
+  with `completion(round)`.
   Tuple transfer remains explicit for every policy.
 
 ## Adaptive blocked-run ordering

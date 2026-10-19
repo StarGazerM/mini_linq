@@ -379,12 +379,14 @@ made.
 
 ## Exact admission and fused-emission investigation (2026-10-19)
 
-The Datalog macro accepts `dedup(Staged);`, `dedup(Compacting);`, or
-`dedup(Fused);` before the program. These are recorded as the third
-`DeviceSet<Row, Codec, Policy>` parameter in each checked Structures hole.
-Compacting remains the default. Cargo features
-`cq-gpu-datalog/dedup-staged` and `cq-gpu-datalog/dedup-fused` select global
-defaults; an explicit macro prefix takes precedence.
+Dedup scheduling is now selected only by ordinary pipeline advice:
+`retype(dedup => DeviceSet<_, Plain, Policy>)`, where the consuming pass records
+the third `DeviceSet<Row, Codec, Policy>` parameter in checked Structures.
+Compacting is the default; the ddisasm consumer's `hole(rule 19, delta 1)`
+override selects Fused and printer `output(retry)`. A default pipeline can
+select Fused globally for reproducing an all-Fused experiment. The former
+macro-prefix and Cargo-feature policy channels are removed; archived measurements
+below retain their original policy scope and are not measurements of this cutover.
 
 Fused compares every emitted head word, publishes its output row with
 acquire/release synchronization, and writes only the first occurrence.
@@ -563,3 +565,53 @@ The 0.609 s prepared SRDatalog target is **not reached**. Re-time isolated
 after integration before claiming a stable end-to-end factor. All raw traces,
 exact-check logs, feature configuration, diagnostic records and kernel summaries
 remain in the evidence directory above.
+
+## LE variant-25 regression isolation (2026-10-19)
+
+Evidence: `/tmp/variant25-baseline-evidence.json`,
+`/tmp/variant25-cpu-workload.json`, `/tmp/variant25-old-evidence/`, and
+`/tmp/variant25-comparison.json`. Each comparison has an exact result
+`/tmp/variant25-{a,b,c}-exact.json` and nsys capture/analysis under
+`/tmp/variant25-{a,b,c}-profile.*`. All three checked all eleven cvc5 outputs.
+
+The old default planner and LE both drive LVABE and build filtered UsedInBlock.
+The old scan/select spine received a batch-128 stage and cooperative bucket
+flattening. LE inserts an eager semi before the probe, losing that automatic
+stage; HashedRun cannot certify an exact expansion range. The baseline therefore
+performs two bucket reads and lane-local output reservation.
+
+NCU measured 95.005% long-scoreboard stalls, 0.6135% SM throughput and 48.04%
+active lanes/warp. SourceCounters attributed 80.72% of samples to the resumable
+reservation CAS and its dependent branch: 84,378,877,080 lane CAS executions for
+4,289,196 emitted rows in that instrumented pass. This is reservation contention,
+not huge hash buckets: 15,152 filtered rows occupy 12,099 of 32,768 buckets,
+maximum bucket length five. Of 14,986 distinct keys, 14,820 have degree one and
+166 degree two. The probe examines 6,272,739 bucket candidates and emits
+4,289,196 rows from 21,236,205 driver rows.
+
+| Configuration | Exact-run fixedpoint ms | Nsys fixed-point window ms | Variant-25 output kernel attempts ms | Allocator peak bytes | Traced CUDA peak bytes |
+|---|---:|---:|---|---:|---:|
+| a: PrefixRun, resumable Compacting | 6283.576 | 3712.732 | 5.513 | 14390000048 | 17178820608 |
+| b: PrefixRun, direct `output(retry)` | 7685.973 | 3600.475 | 2.704 + 2.771 | 6699175392 | 8588886016 |
+| c: HashedRun, direct `output(retry)` | 6734.895 | 3421.746 | 5.160 + 5.199 | 6699175392 | 8588886016 |
+
+These are single runs, not interchangeable timing boundaries or a stable
+end-to-end speedup claim. Baseline variant-25 took 15,887.454 ms in nsys.
+The PrefixRun direct successful attempt is about twice as fast as HashedRun,
+but generic PrefixRun construction increases sorting work elsewhere. Direct
+retry removes the resumable state machine; its discarded first attempt largely
+cancels the per-attempt gain over staged resumable execution for this hole.
+The consumer intentionally selects configuration b; this is not the fastest
+whole-program measurement in the table.
+
+Both b and c make 4,751 bounded attempts for 4,632 query-kernel calls (119
+relaunches). Nsys discarded-kernel time is 23.426 ms and 30.928 ms respectively.
+The unchanged Fused override separately makes 48 attempts for 42 calls.
+The complete per-SCC, top-kernel and Fused-retry tables are in the comparison JSON.
+
+`expand_lookups(N, depth D)` records at most D nested expansions (default two).
+The printer honors omitted deeper boundaries with collective-safe lane-local
+cursors, rather than implicitly adding another descriptor. Module-34 payload
+frames are 12,304, 36,880 and 45,072 bytes; retaining only the first two reduces
+its full shared-memory requirement, including frontier claim space, from
+139,400 to 86,136 bytes. Variant-25 keeps its one 12,368-byte staged kernel.

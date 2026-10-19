@@ -2,6 +2,9 @@
 //! Ordinary host reads keep their recorded native/lazy fallback path. Explicit
 //! positional decisions name a base, total column lineage, marker and summary;
 //! generated Rust checks the asserted host and provider capabilities.
+//! Host key levels retain their recorded order; their flattened, sorted key set
+//! must exactly match the named read. A scan has one empty level. Printers may
+//! impose stricter representation-specific level requirements.
 //! Smallest intersections require two candidate levels on every retained side,
 //! alongside any structures needed by other reads of the same result.
 //! The denotation is `bottom + Set`; opaque Rust binds and guards stay in their
@@ -473,9 +476,13 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 }
                 concrete_type(&keyed.ty)?;
                 let columns = keyed.level_names();
-                if columns.len() != 1 {
-                    return error(keyed, "host fallback has one key level");
+                if columns.is_empty()
+                    || (columns.len() > 1 && columns.iter().any(Vec::is_empty))
+                {
+                    return error(keyed, "host fallback requires nonempty key levels");
                 }
+                let mut read_columns = columns.concat();
+                read_columns.sort();
                 let reader_name = symbol_name(reader);
                 if let Some(read) = program
                     .physical
@@ -495,11 +502,11 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 }
 
                 let valid = if reader_name == "scan" {
-                    columns[0].is_empty()
+                    columns.len() == 1 && read_columns.is_empty()
                 } else if reader_name == "candidates" || reader_name == "membership" {
                     candidates.iter().flat_map(|c| &c.sides).any(|(n, p)| {
                         *n == name
-                            && columns[0]
+                            && read_columns
                                 == if reader_name == "candidates" {
                                     p.clone()
                                 } else {
@@ -513,7 +520,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                         .get(&name)
                         .into_iter()
                         .flatten()
-                        .any(|(r, c, _)| *r == reader_name && *c == columns[0])
+                        .any(|(r, c, _)| *r == reader_name && *c == read_columns)
                 };
                 if !valid {
                     return error(reader, "fallback does not match a host read");
@@ -521,7 +528,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 if analysis
                     .fallbacks
                     .insert(
-                        (name.clone(), reader_name, columns[0].clone()),
+                        (name.clone(), reader_name, read_columns),
                         keyed.ty.clone(),
                     )
                     .is_some()

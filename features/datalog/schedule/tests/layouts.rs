@@ -202,3 +202,82 @@ fn delta_demands_cover_constants_later_scans_and_shared_mixed_keys_exactly() {
     assert_eq!(target, replay);
     seminaive::check(&strata, &replay).unwrap();
 }
+
+#[test]
+fn gpu_delta_driver_is_recorded_and_independently_checked() {
+    let source: Program = syn::parse_quote! {
+        struct Drivers;
+        relation E(x:i32,y:i32) = (e);
+        relation R(x:i32,y:i32);
+        output R;
+        R(*x,*y) :- E(x,y);
+        R(*x,*z) :- E(x,y), R(y,z);
+    };
+    let strata = stratify::compile(&source).unwrap();
+    let target = seminaive::compile_with_driver(
+        &strata,
+        seminaive::Representation::DeviceSet,
+        seminaive::DriverPolicy::DeltaFirst,
+    )
+    .unwrap();
+    let variant = &target.variants.as_ref().unwrap()[1];
+    assert_eq!(variant.delta, Some(1));
+    assert_eq!(variant.driver, Some(1));
+    assert!(matches!(&variant.query.body[0], BodyItem::Positive { atom }
+        if atom.relation == target.deltas[0].name));
+    assert!(target.delta_layouts.is_empty());
+    assert!(
+        target
+            .to_token_stream()
+            .to_string()
+            .contains("delta 1 driver 1")
+    );
+    let replay = syn::parse2(target.to_token_stream()).unwrap();
+    seminaive::check(&strata, &replay).unwrap();
+    let mut wrong = target.clone();
+    wrong.variants.as_mut().unwrap()[1].driver = Some(0);
+    assert!(contract::check(&wrong).is_err());
+    let mut wrong = target.clone();
+    let body = &mut wrong.variants.as_mut().unwrap()[1].query.body;
+    let first = body[0].clone();
+    body[0] = body[1].clone();
+    body[1] = first;
+    assert!(contract::check(&wrong).is_err());
+    let mut wrong = target.clone();
+    wrong.variants.as_mut().unwrap()[1].delta = Some(0);
+    assert!(contract::check(&wrong).is_err());
+    let cpu = seminaive::compile(&strata).unwrap();
+    assert_eq!(cpu.variants.as_ref().unwrap()[1].driver, Some(0));
+}
+
+#[test]
+fn delta_driver_never_crosses_before_constraints() {
+    for clause in ["if *x > 0", "!Blocked(x)", "let copied = *x"] {
+        let source: Program = syn::parse_str(&format!(
+            "struct Barriers;
+             relation E(x:i32) = (e);
+             relation Blocked(x:i32) = (blocked);
+             relation R(x:i32);
+             output R;
+             R(*x) :- E(x);
+             R(*x) :- E(x), {clause}, R(x);"
+        ))
+        .unwrap();
+        let strata = stratify::compile(&source).unwrap();
+        let target = seminaive::compile_with_driver(
+            &strata,
+            seminaive::Representation::DeviceSet,
+            seminaive::DriverPolicy::DeltaFirst,
+        )
+        .unwrap();
+        assert_eq!(target.variants.as_ref().unwrap()[1].driver, Some(0));
+        let mut wrong = target.clone();
+        wrong.variants.as_mut().unwrap()[1].driver = Some(2);
+        assert!(
+            contract::check(&wrong)
+                .unwrap_err()
+                .to_string()
+                .contains("Before")
+        );
+    }
+}

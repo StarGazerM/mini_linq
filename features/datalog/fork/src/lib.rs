@@ -7,7 +7,8 @@
 //! CQ's schema-aware guard recognition, rather than raw isolated predicates.
 //! Full hosts use keys bound by earlier positive atoms plus constant arguments.
 //! Delta probes use separately recorded layouts; an initial unkeyed delta scans
-//! its ordinary host. No atom or partial Rust guard is moved to enable a layout.
+//! its ordinary host. The checked variant driver determines positive body order;
+//! layout realization never moves an atom or a Rust guard.
 
 use cq_lang_cq::{BodyItem, Program as CqProgram};
 use cq_lang_datalog::{Program, contract};
@@ -50,14 +51,16 @@ pub enum KeyRepresentation {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LayoutRealization {
     MaintainedGroupedHost,
-    ResidentProjectionPerHoleBuild,
+    /// Frozen full layouts are indexed before each stratum; changing layouts
+    /// retain their per-round resident projection/build realization.
+    MaintainedFrozenDeviceIndex,
 }
 
 impl KeyRepresentation {
     fn layouts(self) -> LayoutRealization {
         match self {
             Self::HashSetBorrowed => LayoutRealization::MaintainedGroupedHost,
-            Self::DeviceSetOwned => LayoutRealization::ResidentProjectionPerHoleBuild,
+            Self::DeviceSetOwned => LayoutRealization::MaintainedFrozenDeviceIndex,
         }
     }
 }
@@ -87,6 +90,9 @@ pub struct RuleHole {
 pub struct Stratum {
     pub members: Vec<usize>,
     pub keys: Vec<KeySet>,
+    /// Indices into `RoundContext::layouts`, built once before this stratum.
+    /// Each names a keyed full read of an EDB or a completed lower stratum.
+    pub frozen_layouts: Vec<usize>,
     pub seeds: Vec<RuleHole>,
     pub steps: Vec<RuleHole>,
 }
@@ -382,6 +388,7 @@ pub fn compile(source: &Program) -> syn::Result<Fork> {
         let mut stratum = Stratum {
             members: members.clone(),
             keys: Vec::new(),
+            frozen_layouts: Vec::new(),
             seeds: Vec::new(),
             steps: Vec::new(),
         };
@@ -492,6 +499,19 @@ pub fn compile(source: &Program) -> syn::Result<Fork> {
                 stratum.seeds.push(rule);
             }
         }
+        if representation == KeyRepresentation::DeviceSetOwned {
+            for (index, layout) in context.layouts.iter().enumerate() {
+                if layout.key != 0 && !members.contains(&layout.relation)
+                    && stratum.seeds.iter().chain(&stratum.steps).any(|rule| {
+                        holes[rule.hole].query.body.iter().any(|item| {
+                            matches!(item, BodyItem::Positive { atom } if atom.relation == layout.name)
+                        })
+                    })
+                {
+                    stratum.frozen_layouts.push(index);
+                }
+            }
+        }
         context.strata.push(stratum);
     }
     let target = Fork { context, holes };
@@ -595,6 +615,7 @@ pub fn check(source: &Program, target: &Fork) -> syn::Result<()> {
         )?;
         let mut projections = Vec::new();
         let mut used_keys = BTreeSet::new();
+        let mut frozen_layouts = BTreeSet::new();
         for key in &stratum.keys {
             add_name(&key.name)?;
             ensure(
@@ -745,6 +766,22 @@ pub fn check(source: &Program, target: &Fork) -> syn::Result<()> {
                 let mut query = variant.query.clone();
                 query.head.relation = hole.name.clone();
                 use_layouts(&mut query, context)?;
+                if representation == KeyRepresentation::DeviceSetOwned {
+                    for item in &query.body {
+                        if let BodyItem::Positive { atom } = item {
+                            if let Some((index, layout)) = context
+                                .layouts
+                                .iter()
+                                .enumerate()
+                                .find(|(_, layout)| layout.name == atom.relation)
+                            {
+                                if layout.key != 0 && !members.contains(&layout.relation) {
+                                    frozen_layouts.insert(index);
+                                }
+                            }
+                        }
+                    }
+                }
                 for item in &mut query.body {
                     if let BodyItem::Negation(negative) = item {
                         let relation = analysis.positions[&symbol_name(&negative.atom.relation)];
@@ -781,6 +818,11 @@ pub fn check(source: &Program, target: &Fork) -> syn::Result<()> {
                 )?;
             }
         }
+        ensure(
+            stratum.frozen_layouts.iter().copied().eq(frozen_layouts),
+            source,
+            "fork frozen device indexes must exactly cover keyed EDB/lower-stratum layouts in layout order",
+        )?;
         ensure(
             used_keys.len() == stratum.keys.len(),
             source,

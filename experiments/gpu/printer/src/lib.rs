@@ -7,6 +7,24 @@
 //! explicitly. A bound `DeviceColumns` supplies its own immutable columns,
 //! dictionary and codec facts; a bound Vec or slice retains the upload path.
 //! Neither host codecs nor capacity advice establish canonicality.
+//! Frozen hosts instead bind `FrozenDeviceIndex` run views. Record their keyed
+//! Host types with `frozen_hosts(Relation => [[1,2],[0]], ...)`, leaving those
+//! renames as hosts. Each entry records a full run; repeated relation entries
+//! supply incomparable chains. Reads must match a cumulative level prefix.
+//! Construction is explicit and outside the holes:
+//! `FrozenDeviceIndex::new(runtime, &columns, &[&[&[1,2], &[0]]])`.
+//! Original schema slots identify keys. Columns within each level are sorted
+//! by schema slot; levels retain their recorded lexicographic order. The
+//! complete chain is stored as nested `FrozenKey<SLOT>` tuples in the recorded
+//! host type's Layout argument, even for an earlier prefix read. Every hole
+//! binds that exact full layout and searches only its requested prefix.
+//! Missing layouts fail rather than
+//! rebuilding. These exact, length-known resident ranges support recorded
+//! cooperative expansion; HashedRun buckets do not, because collisions still
+//! require residual filtering.
+//! The index and its runtime must outlive all holes in the consuming stratum.
+//! Expanded holes expose the unchanged Physical text in
+//! `__CQ_GPU_RECORDED_PHYSICAL` beside their recorded Structures entries.
 //! Fixed full-tile scans decode each 1024-value vector into four register
 //! values per lane once, then consume those values across the four stripes.
 //! Short recorded batches and resumable scans use scalar device decode without
@@ -45,7 +63,10 @@
 //! narrow `::cq_gpu_runtime::datalog::contains(&host, &(columns,))` total
 //! predicate. This is a device membership intrinsic, not arbitrary captured
 //! Rust `.contains`; missing schemas and mismatched key types are rejected.
-//! Each execution rebuilds these exact indexes from its immutable key input.
+//! These certified hosts must be `FrozenDeviceMembership` carriers, constructed
+//! once outside the stratum's rounds. Each hole borrows `resident_membership`
+//! with the recorded logical width, retaining source and build statuses through
+//! HostColumns. Nullary keysets use `new_exists` over canonical u8 witness rows.
 //! `datalog_dictionary(shared)` seeds every rule execution from the bridge's
 //! shared `Arc<Dictionary>` before binding inputs or encoding literals. This
 //! also applies to input-free literal rules, so all rule holes share one ID
@@ -88,6 +109,17 @@ pub fn print(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn prefix_runs(input: TokenStream) -> TokenStream {
     cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), prefix::compile).into()
+}
+
+/// Bind keyed reads of the named input relations to exact, prebuilt resident
+/// layouts. Inputs must be `FrozenDeviceIndex` handles, and their Physical
+/// renames must remain hosts rather than per-hole retained builds.
+/// `Relation => [[1,2],[0]]` records the full sorted run serving both the [1,2]
+/// and [0,1,2] reads. Repeated relations supply separate incomparable chains.
+/// A bare relation records one exact layout per existing read instead.
+#[proc_macro]
+pub fn frozen_hosts(input: TokenStream) -> TokenStream {
+    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), compiler::frozen_hosts).into()
 }
 
 #[cfg(test)]

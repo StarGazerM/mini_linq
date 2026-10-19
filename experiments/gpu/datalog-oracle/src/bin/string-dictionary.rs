@@ -10,6 +10,7 @@ fn main() {
         .upload_rows(&ROWS, &mut dictionary, &[Codec::Plain])
         .unwrap();
     let result = cq_gpu_datalog::datalog! {
+        schedule = ::cq_gpu_datalog::schedule(delta_first);
         struct DistinctLiteralHeads;
         relation E(x:i64) = (&input);
         relation T(x:i64,tag:&'static str);
@@ -42,6 +43,7 @@ fn main() {
         .upload_rows(&PAIRS, &mut dictionary, &[Codec::Plain, Codec::Plain])
         .unwrap();
     let (joined, missing, guarded, constants, owned_output) = cq_gpu_datalog::datalog! {
+        schedule = ::cq_gpu_datalog::schedule(delta_first);
         struct SharedLiteralDomain;
         relation E(x:i64) = (&input);
         relation M(x:i64,tag:&'static str) = (&pairs);

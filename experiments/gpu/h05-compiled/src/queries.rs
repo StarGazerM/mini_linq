@@ -36,7 +36,7 @@ pub fn plan_b(data: &Rows) -> DeviceColumns<'_, Answer, For> {
             // Supplier's directory is explicit; nation is searched exactly within
             // that prefix. A separate nation run preserves the earlier semijoin.
             structures = [::cq_rewrites::sorted_runs, ::cq_gpu::prefix_runs(Supplier => supplier_key), ::cq_rewrites::retain_lookups,
-                ::cq_rewrites::expand_lookups(256),
+                ::cq_rewrites::expand_lookups(256, depth 3),
                 ::cq_rewrites::retype(dedup => ::cq_gpu_runtime::DeviceSet<_, ::cq_gpu_runtime::For>)];
             print = ::cq_gpu::print(capacity(Lineitem), tile(256,4), frontier(8), directory(rank));
         }

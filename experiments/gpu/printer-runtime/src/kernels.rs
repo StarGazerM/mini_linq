@@ -1,8 +1,8 @@
 #[cuda_device::cuda_module]
 pub(crate) mod runtime_kernels {
     use crate::{
-        FrontierView, OutputCount, OutputView, RetryMetadata, TableView, column, column_stripe,
-        flag_error, reserve, table_len, write_output,
+        FrontierView, FusedRetryMetadata, FusedRetryView, OutputCount, OutputView, RetryMetadata,
+        TableView, column, column_stripe, flag_error, reserve, table_len, write_output,
     };
     use cuda_device::atomic::{AtomicOrdering, DeviceAtomicU64};
     use cuda_device::{kernel, launch_bounds, launch_contract, thread};
@@ -66,6 +66,19 @@ pub(crate) mod runtime_kernels {
             }
         }
     }
+    #[inline(always)]
+    unsafe fn dependency_error(dependencies: *const u64, count: usize) -> u32 {
+        let mut error = 0;
+        let mut index = 0;
+        while index < count {
+            let status = unsafe { dependencies.add(index).read() } as *const OutputCount;
+            if error == 0 {
+                error = unsafe { (*status).error };
+            }
+            index += 1;
+        }
+        error
+    }
     /// Check the current output and every retained table/run status together.
     #[kernel]
     #[launch_bounds(256)]
@@ -78,21 +91,73 @@ pub(crate) mod runtime_kernels {
     ) {
         if thread::index_1d().get() == 0 {
             let rows = unsafe { validated_output_rows(output) };
-            let mut dependency_error = 0;
-            let mut index = 0;
-            while index < dependency_count {
-                let status = unsafe { dependencies.add(index).read() } as *const OutputCount;
-                let error = unsafe { (*status).error };
-                if dependency_error == 0 {
-                    dependency_error = error;
-                }
-                index += 1;
-            }
+            let dependency_error = unsafe { dependency_error(dependencies, dependency_count) };
             unsafe {
                 metadata.write(RetryMetadata {
                     rows,
                     error: output.error.read(),
                     dependency_error,
+                });
+            }
+        }
+    }
+    /// Capacity is a separate growth flag; fatal arena/output/dependency errors
+    /// cannot be hidden by an earlier exhausted ticket or full probe table.
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub unsafe fn fused_retry_metadata(
+        output: OutputView,
+        retry: FusedRetryView,
+        dependencies: *const u64,
+        dependency_count: usize,
+        metadata: *mut FusedRetryMetadata,
+    ) {
+        if thread::index_1d().get() == 0 {
+            let rows = unsafe { output.count.read() };
+            let key_rows = unsafe { retry.keys.count.read() };
+            let key_error = unsafe { retry.keys.error.read() };
+            if rows > u32::MAX as u64 {
+                unsafe {
+                    flag_error(output, 5);
+                }
+            }
+            if rows > output.capacity || key_rows > retry.keys.capacity {
+                unsafe {
+                    retry.overflow.write(1);
+                }
+            }
+            #[cfg(feature = "dedup-diagnostics")]
+            let mut diagnostics = [0u64; 6];
+            #[cfg(feature = "dedup-diagnostics")]
+            {
+                let mut block = 0;
+                while block < 568 {
+                    let counters = unsafe { retry.set.counters.add(block * 6) };
+                    let mut index = 0;
+                    while index < 5 {
+                        diagnostics[index] += unsafe { counters.add(index).read() };
+                        index += 1;
+                    }
+                    diagnostics[5] = diagnostics[5].max(unsafe { counters.add(5).read() });
+                    block += 1;
+                }
+            }
+            unsafe {
+                metadata.write(FusedRetryMetadata {
+                    rows,
+                    candidates: retry.candidates.read(),
+                    distinct: key_rows.min(retry.keys.capacity),
+                    error: output.error.read(),
+                    key_error: if key_error == 4 && key_rows > retry.keys.capacity {
+                        0
+                    } else {
+                        key_error
+                    },
+                    dependency_error: dependency_error(dependencies, dependency_count),
+                    overflow: retry.overflow.read(),
+                    #[cfg(feature = "dedup-diagnostics")]
+                    diagnostics,
                 });
             }
         }

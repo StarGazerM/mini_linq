@@ -7,6 +7,7 @@ edition.workspace = true
 cq-gpu-datalog = { path = "../datalog" }
 mini-linq = { path = "../../../facade/mini-linq" }
 cq-rewrites = { path = "../../../features/rewrites" }
+cq-planners = { path = "../../../features/planners" }
 cq-storage = { path = "../../../runtime/cq-storage" }
 cq-gpu = { path = "../printer" }
 cq-gpu-runtime = { path = "../printer-runtime" }

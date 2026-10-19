@@ -7,21 +7,37 @@
 #![recursion_limit = "4096"]
 #![allow(non_snake_case, unused_variables)]
 use cq_gpu_runtime::{Codec, Dictionary, Runtime};
-use datalog_ddisasm::{loader, mini_engine, Facts, Results};
+use datalog_ddisasm::{Facts, Results, loader, mini_engine};
 use std::{error::Error, path::PathBuf, time::Instant};
 
-#[cfg(feature = "hoist-invariants")]
-macro_rules! resident_datalog {
-    ($($program:tt)*) => {
+// These are ordinary consuming-pass arguments, not bridge policy channels.
+macro_rules! configured_datalog {
+    (($($schedule:ident),*); $($program:tt)*) => {
         cq_gpu_datalog::datalog! {
-            arguments { hoist_invariants; };
+            schedule = ::cq_gpu_datalog::schedule($($schedule),*);
+            pipeline {
+                print = ::cq_gpu::print(tile(256,4), frontier(8), directory(rank), output(retry));
+            }
+            hole(rule 19, delta 1) pipeline {
+                structures = [
+                    ::cq_rewrites::sorted_runs, ::cq_rewrites::hashed_runs,
+                    ::cq_gpu::prefix_runs, ::cq_rewrites::retain_lookups,
+                    ::cq_rewrites::expand_lookups(256),
+                    ::cq_rewrites::retype(dedup => ::cq_gpu_runtime::DeviceSet<_, ::cq_gpu_runtime::Plain, ::cq_gpu_runtime::Fused>)
+                ];
+                print = ::cq_gpu::print(tile(256,4), frontier(8), directory(rank), output(retry));
+            }
             $($program)*
         }
     };
 }
+#[cfg(feature = "hoist-invariants")]
+macro_rules! resident_datalog {
+    ($($program:tt)*) => { configured_datalog!((delta_first, hoist_invariants); $($program)*) };
+}
 #[cfg(not(feature = "hoist-invariants"))]
 macro_rules! resident_datalog {
-    ($($program:tt)*) => { cq_gpu_datalog::datalog! { $($program)* } };
+    ($($program:tt)*) => { configured_datalog!((delta_first); $($program)*) };
 }
 
 fn run(
@@ -219,6 +235,47 @@ fn run(
     runtime.pool().stream().synchronize()?;
     let fixedpoint_ms = started.elapsed().as_secs_f64() * 1000.0;
     let fixedpoint = runtime.pool().resource().pop_counters()?;
+    // Query the holes' cached runtime only after closing the measured region.
+    let fused_retry_reports =
+        cq_gpu_runtime::with_runtime_for(Some(runtime.pool().clone()), |runtime| {
+            Ok(runtime.fused_retry_reports())
+        })?;
+    let fused_retry_attempts: u64 = fused_retry_reports
+        .iter()
+        .map(|report| report.attempts)
+        .sum();
+    let fused_retry_relaunches: u64 = fused_retry_reports
+        .iter()
+        .map(|report| report.relaunches)
+        .sum();
+    let fused_retry_wasted_kernel_ms: f64 = fused_retry_reports
+        .iter()
+        .map(|report| report.wasted_kernel_ms)
+        .sum();
+    let fused_retry_peak_attempt_bytes = fused_retry_reports
+        .iter()
+        .map(|report| report.peak_attempt_bytes)
+        .max()
+        .unwrap_or(0);
+    let fused_retry_reports: Vec<_> = fused_retry_reports
+        .iter()
+        .map(|report| {
+            serde_json::json!({
+                "hole": report.hole,
+                "site": report.site,
+                "calls": report.calls,
+                "attempts": report.attempts,
+                "relaunches": report.relaunches,
+                "max_attempts": report.max_attempts,
+                "attempts_per_call": report.attempts_per_call,
+                "wasted_kernel_ms": report.wasted_kernel_ms,
+                "kernel_ms": report.kernel_ms,
+                "peak_capacity": report.peak_capacity,
+                "peak_attempt_bytes": report.peak_attempt_bytes,
+                "last_distinct": report.last_distinct,
+            })
+        })
+        .collect();
     let metrics = serde_json::json!({
         "upload_ms": upload_ms,
         "upload_allocator_peak_bytes": upload.bytes.peak,
@@ -232,6 +289,11 @@ fn run(
         "control_readbacks": cq_gpu_runtime::control_readback_count(),
         "resume_readbacks": cq_gpu_runtime::resume_readback_count(),
         "compaction_readbacks": cq_gpu_runtime::compaction_readback_count(),
+        "fused_retry_attempts": fused_retry_attempts,
+        "fused_retry_relaunches": fused_retry_relaunches,
+        "fused_retry_wasted_kernel_ms": fused_retry_wasted_kernel_ms,
+        "fused_retry_peak_attempt_bytes": fused_retry_peak_attempt_bytes,
+        "fused_retry_reports": fused_retry_reports,
     });
     // DeviceColumns has no public logical-length accessor. Without an exactness
     // check, keep tuples resident and report unavailable counts rather than capacity.

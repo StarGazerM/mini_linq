@@ -252,8 +252,8 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         Ok(self.add_table(table))
     }
 
-    /// Build a frozen exact membership set usable inside fused rule kernels.
-    /// The index is execution-local, not a persistent/publication-spanning cache.
+    /// Build an exact membership set owned by this execution. A
+    /// FrozenDeviceMembership retains that execution across the stratum's holes.
     pub fn prepare_exact_membership(
         &mut self,
         table: TableId,
@@ -314,6 +314,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         }
         // Register the build status so every later output retains failures.
         let status = self.complete_output(output, Vec::new())?;
+        self.tables[table.0].statuses.push(status.metadata.clone());
         self.add_table(status);
         let id = ExactMembershipId(self.exact_memberships.len());
         self.exact_memberships.push(ExactMembership {

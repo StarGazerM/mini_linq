@@ -41,7 +41,7 @@ pub fn retain_lookups(source: &ir::Program, arguments: TokenStream) -> syn::Resu
                                     (segment.ident == "SortedRun"
                                         && keyed.level_names().as_slice() == std::slice::from_ref(&keys))
                                         || (segment.ident == "PrefixRun"
-                                            && keyed.level_names().first() == Some(&keys))
+                                            && ir::prefix_depth(&keyed.level_names(), &keys).is_some())
                                 })))
         });
         if !eligible_build {

@@ -52,6 +52,23 @@ pub(crate) struct RetryMetadata {
 }
 unsafe impl DeviceCopy for RetryMetadata {}
 
+/// One fused attempt's checked counts, fatal statuses and independent growth flag.
+#[derive(Clone, Copy, Debug, Default)]
+#[repr(C)]
+pub(crate) struct FusedRetryMetadata {
+    pub rows: u64,
+    pub candidates: u64,
+    /// Completed arena occupancy, clamped before over-capacity tickets count.
+    pub distinct: u64,
+    pub error: u32,
+    pub key_error: u32,
+    pub dependency_error: u32,
+    pub overflow: u32,
+    #[cfg(feature = "dedup-diagnostics")]
+    pub diagnostics: [u64; 6],
+}
+unsafe impl DeviceCopy for FusedRetryMetadata {}
+
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct MembershipView {
@@ -469,7 +486,7 @@ pub unsafe fn frontier_done(view: FrontierView) {
     unsafe { DeviceAtomicU64::from_ptr(view.remaining) }.fetch_sub(1, AtomicOrdering::Release);
 }
 
-/// Exact emitted-row set. Slots publish output row IDs after all columns exist.
+/// Exact row set. Slots release-publish immutable key-arena row IDs.
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct FusedSetView {
@@ -479,6 +496,78 @@ pub struct FusedSetView {
     pub counters: *mut u64,
 }
 unsafe impl DeviceCopy for FusedSetView {}
+
+/// Exact admission for one pure bounded attempt. `keys` is a ticketed immutable
+/// arena, separate from the output compacted by the caller. All pointers belong
+/// to this attempt; none may survive a retry or be reused for another launch.
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct FusedRetryView {
+    pub set: FusedSetView,
+    pub keys: OutputView,
+    pub candidates: *mut u64,
+    pub overflow: *mut u32,
+}
+unsafe impl DeviceCopy for FusedRetryView {}
+
+/// Read once per bounded chunk. Full attempts still count every valid candidate,
+/// but may skip further admissions; their partial output is always discarded.
+#[device]
+#[inline(always)]
+pub unsafe fn fused_retry_full(view: FusedRetryView) -> bool {
+    unsafe { DeviceAtomicU32::from_ptr(view.overflow) }.load(AtomicOrdering::Relaxed) != 0
+}
+
+/// Add the chunk's valid pre-admission candidates, even after capacity overflow.
+/// The caller performs this once per chunk, independently of its unique count.
+/// A wrapped candidate total is fatal, not a reason to retry.
+#[device]
+#[inline(always)]
+pub unsafe fn fused_retry_count(output: OutputView, view: FusedRetryView, rows: u64) {
+    let base = unsafe { DeviceAtomicU64::from_ptr(view.candidates) }
+        .fetch_add(rows, AtomicOrdering::Relaxed);
+    if rows > u64::MAX - base {
+        unsafe {
+            flag_error(output, 1);
+        }
+    }
+}
+
+/// Return 0 for an exact duplicate, 1 for a new admission, or 2 for exhaustion.
+/// Hash once, then resolve transient BUSY slots only after participating lanes
+/// reconverge. An attempt never waits while owning BUSY and never scans a block.
+/// Newly admitted values must be compacted into final output by the caller.
+///
+/// # Safety
+/// The attempt's arena and slot allocations must remain live and unmodified
+/// except through this admission protocol until the kernel completes.
+/// `participants` must come from a converged warp ballot before the admission
+/// branch, and every named lane must call with that mask. This prevents an
+/// independently scheduled subset from spinning ahead of a same-warp owner.
+#[device]
+#[inline(always)]
+pub unsafe fn fused_retry_insert<const N: usize>(
+    view: FusedRetryView,
+    values: [i64; N],
+    participants: u32,
+) -> u32 {
+    let hash = fused_hash(&values);
+    let mut result = 1;
+    loop {
+        if result == 1 {
+            result = unsafe { fused_try_insert(view.keys, view.set, &values, hash) };
+            if result == 2 {
+                unsafe { DeviceAtomicU32::from_ptr(view.overflow) }
+                    .store(1, AtomicOrdering::Relaxed);
+            }
+        }
+        // ballot_sync is the reconvergence point before any BUSY lane retries.
+        if cuda_device::warp::ballot_sync(participants, result == 1) == 0 {
+            break;
+        }
+    }
+    if result == 3 { 1 } else { result }
+}
 
 /// Diagnostic-only striped counters: inserted, duplicate, busy, full,
 /// total probes, maximum probes. These atomics never exist in normal builds.
@@ -508,24 +597,32 @@ pub unsafe fn fused_emit<const N: usize>(
     // Reconverge before any busy lane can retry: serial query cursors need
     // this even though cooperative emitters also have a later block scan.
     let participants = cuda_device::warp::active_mask();
-    let result = unsafe { fused_try_emit(output, set, values) };
+    let result = unsafe { fused_try_insert(output, set, &values, fused_hash(&values)) };
     cuda_device::warp::sync_mask(participants);
-    result
+    if result == 3 { 0 } else { result }
 }
 
 #[device]
 #[inline(always)]
-unsafe fn fused_try_emit<const N: usize>(
-    output: OutputView,
-    set: FusedSetView,
-    values: [i64; N],
-) -> u32 {
+fn fused_hash<const N: usize>(values: &[i64; N]) -> u64 {
     let mut hash = HASHED_RUN_SEED;
     let mut column = 0;
     while column < N {
         hash = hashed_run_step(hash, values[column]);
         column += 1;
     }
+    hash
+}
+
+// 0 = duplicate, 1 = BUSY, 2 = capacity, 3 = newly admitted.
+#[device]
+#[inline(always)]
+unsafe fn fused_try_insert<const N: usize>(
+    output: OutputView,
+    set: FusedSetView,
+    values: &[i64; N],
+    hash: u64,
+) -> u32 {
     let mut slot = hash as usize & (set.capacity - 1);
     let mut probes = 0;
     while probes < set.capacity {
@@ -539,10 +636,9 @@ unsafe fn fused_try_emit<const N: usize>(
                 AtomicOrdering::Acquire,
             ) {
                 Ok(_) => {
-                    // A ticket is one atomic operation, not a global CAS
-                    // retry loop while holding this slot's publication lock.
-                    // Out-of-range tickets publish nothing; suspension clamps
-                    // the counter to the completed dense prefix before growth.
+                    // Never wait while owning BUSY. Reserve an immutable key
+                    // ticket, write every column, then release-publish it.
+                    // Out-of-range tickets release the slot without publication.
                     let row = unsafe { reserve(output, 1) };
                     if row >= output.capacity {
                         entry.store(0, AtomicOrdering::Release);
@@ -564,7 +660,7 @@ unsafe fn fused_try_emit<const N: usize>(
                     unsafe {
                         fused_observe(set, 0, probes + 1);
                     }
-                    return 0;
+                    return 3;
                 }
                 Err(value) => existing = value,
             }

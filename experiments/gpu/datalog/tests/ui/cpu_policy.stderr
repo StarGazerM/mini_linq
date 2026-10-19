@@ -9,4 +9,4 @@ error: CQ_GPU_DATALOG_POLICY: requires device_set_all_columns/device_set_owned; 
 16 | |     };
    | |_____^
    |
-   = note: this error originates in the macro `cq_gpu_datalog::datalog` (in Nightly builds, run with -Z macro-backtrace for more info)
+   = note: this error originates in the macro `::cq_gpu_datalog::__scheduled` (in Nightly builds, run with -Z macro-backtrace for more info)

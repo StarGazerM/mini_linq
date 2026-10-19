@@ -119,7 +119,7 @@ fn membership_bridge_source() -> ir::Program {
 #[test]
 fn expand_lookups_crosses_certified_bitmap_membership_bridges() {
     let source = membership_bridge_source();
-    let target = cq_rewrite_passes::expand_lookups(&source, quote!(256)).unwrap();
+    let target = cq_rewrite_passes::expand_lookups(&source, quote!(256, depth 3)).unwrap();
     let mut expected = source.clone();
     expected.structures.entries.extend([
         syn::parse_quote!(first stage = batch 256 expand;),
@@ -130,12 +130,32 @@ fn expand_lookups_crosses_certified_bitmap_membership_bridges() {
     ir::check_rewrite(&source, &target).unwrap();
     assert_eq!(target.physical, source.physical);
     assert_eq!(
-        cq_rewrite_passes::expand_lookups(&target, quote!(256)).unwrap(),
+        cq_rewrite_passes::expand_lookups(&target, quote!(256, depth 3)).unwrap(),
         target
     );
     let facts = ir::contract::check(&target).unwrap();
     assert!(!facts.expands.contains("member"));
     assert_eq!(facts.filtered["selected"].constants.len(), 1);
+}
+
+#[test]
+fn expand_lookups_limits_nested_frames_without_retyping_deeper_probes() {
+    let source = membership_bridge_source();
+    for (arguments, expected) in [
+        (quote!(256), vec!["after", "first"]),
+        (quote!(256, depth 1), vec!["first"]),
+        (quote!(256, depth 3), vec!["after", "first", "last"]),
+    ] {
+        let target = cq_rewrite_passes::expand_lookups(&source, arguments.clone()).unwrap();
+        let facts = ir::contract::check(&target).unwrap();
+        assert_eq!(facts.expands.iter().map(String::as_str).collect::<Vec<_>>(), expected);
+        assert_eq!(target.physical, source.physical);
+        assert_eq!(facts.built, ir::contract::check(&source).unwrap().built);
+        assert_eq!(cq_rewrite_passes::expand_lookups(&target, arguments).unwrap(), target);
+    }
+    for arguments in [quote!(256, depth 0), quote!(256, frames 2), quote!(256, depth 2,)] {
+        assert!(cq_rewrite_passes::expand_lookups(&source, arguments).is_err());
+    }
 }
 
 #[test]

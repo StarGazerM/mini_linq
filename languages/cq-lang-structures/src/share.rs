@@ -85,19 +85,14 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
             {
                 return true;
             }
-            candidate.is_some_and(|candidate| {
-                segment.ident == "PrefixRun"
-                    && levels.len() == 2
-                    && levels[0] == share.keys
-                    && levels[1] == [candidate.column.clone()]
-                    && share.keys.len() == 1
-                    && matches!(
-                        ungroup_type(&facts.physical.rows[&share.build].types[&share.keys[0]]),
-                        syn::Type::Path(path) if path.qself.is_none()
-                            && ["i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize"]
-                                .iter().any(|name| path.path.is_ident(name))
-                    )
-            })
+            segment.ident == "PrefixRun"
+                && prefix_depth(levels, &share.keys).is_some()
+                && share.keys.iter().all(|key| matches!(
+                    ungroup_type(&facts.physical.rows[&share.build].types[key]),
+                    syn::Type::Path(path) if path.qself.is_none()
+                        && ["i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize"]
+                            .iter().any(|name| path.path.is_ident(name))
+                ))
         });
         if !payload
             || facts

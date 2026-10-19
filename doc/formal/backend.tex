@@ -125,8 +125,8 @@ spine feeding a built probe. Unannotated authored Structures remain scalar;
 the default pipeline preserves its earlier decisions by recording them.
 
 \paragraph{By-need lookup sharing.}
-\code{r share = lookup b [K] first s force p;} names an earlier retained,
-one-level payload build, an eager semi with result $r=s$, and a later probe.
+\code{r share = lookup b [K] first s force p;} names an earlier retained
+payload build, an eager semi with result $r=s$, and a later probe.
 \begin{mathpar}
 \Rule{ST-Share}{
  b<s<p\quad \mathsf{letPayload}(b,K)\quad
@@ -135,7 +135,8 @@ one-level payload build, an eager semi with result $r=s$, and a later probe.
 }{\mathsf{share}(s)=(b,K,s,p)}
 \end{mathpar}
 Each $(b,K,s)$ has one sharing decision. Without a witness it retains
-ordinary re-evaluation. Neither curried nor membership-only builds qualify.
+ordinary re-evaluation. One-level HashIndex/SortedRun payloads and integral,
+complete leading PrefixRun levels qualify; membership-only builds do not.
 \begin{lemma}[Lookup coupling]
 The retained memo satisfies $\mathsf{memo}=\mathsf{lookup}_b(k)$ at both demands.
 \end{lemma}
@@ -152,7 +153,15 @@ therefore identifies both total reads; no partial evaluation moves.
  \quad N>0\quad\mathsf{boundaryBeforePartial}(r)
 }{r\;\mathsf{stage}=\mathsf{batch}\ N\ \mathsf{expand}\text{ is admissible}}
 \end{mathpar}
-Here rangeCursor is declared by a one-level SortedRun build, not HashIndex.
+Here rangeCursor is declared by a one-level SortedRun build, a complete
+leading prefix of a lexicographic PrefixRun, or an exact resident sorted host.
+HashedRun bucket ranges contain collisions and do not qualify. The GPU
+\code{prefix\_runs} rewrite records integral composite payload builds consumed
+by probes as singleton-level PrefixRuns before witness retention and expansion;
+the printer only consumes these checked decisions.
+A Smallest intersection records expansion only at its introducing probe.
+Its forcing read is part of that same total intersection, not an independent
+cursor; subsequent staged probes may cross it without adding a force-stage.
 \begin{lemma}[Segmented flatten]
 Flattening $N$ finite ranges is total and length-known: with exclusive
 offsets $o_i=\sum_{j<i}|R_j|$, its length is $M=\sum_i|R_i|$.

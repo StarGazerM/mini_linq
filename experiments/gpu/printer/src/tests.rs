@@ -7,6 +7,29 @@ use cq_lang_structures as ir;
 use quote::{ToTokens, quote};
 use std::collections::BTreeMap;
 
+#[test]
+fn packed_fused_counts_preserve_both_block_prefixes() {
+    for seed in 0..16u32 {
+        let (mut packed, mut candidates, mut unique) = (0u32, 0u32, 0u32);
+        for lane in 0..256u32 {
+            assert_eq!(packed & 2047, unique);
+            assert_eq!(packed >> 11, candidates);
+            let count = if seed == 0 { 4 } else { (lane + seed) % 5 };
+            let admitted = if seed == 0 {
+                4
+            } else {
+                (lane * 3 + seed) % (count + 1)
+            };
+            packed += admitted | (count << 11);
+            candidates += count;
+            unique += admitted;
+        }
+        assert_eq!(packed & 2047, unique);
+        assert_eq!(packed >> 11, candidates);
+        assert!(unique <= candidates && candidates <= 1024);
+    }
+}
+
 fn shared() -> ir::Program {
     syn::parse_quote! { physical {
         relation L(a:i64); relation R(a:i64,b:i64);
@@ -26,9 +49,256 @@ fn shared() -> ir::Program {
     } }
 }
 
+fn frozen_host(levels: proc_macro2::TokenStream, keys: proc_macro2::TokenStream) -> ir::Program {
+    let composite = keys.to_string().contains(',');
+    let left_column = composite.then(|| quote!(,b:i64));
+    let left_mapping = composite.then(|| quote!(,b -> y));
+    syn::parse2(quote! { physical {
+        relation L(a:i64 #left_column); relation R(b:i64,a:i64,v:i64);
+        l = pipe rename L@0 {a -> x #left_mapping};
+        r = pipe rename R@1 {b -> y,a -> x,v -> z};
+        p = pipe canon probe first [#keys] l,r;
+        return p as answer(x,y,z);
+    } structures {
+        l host scan = ::core::iter::Map<_,_> [];
+        r host scan = ::core::iter::Map<_,_> [];
+        r host p = ::cq_gpu_runtime::FrozenDeviceIndex<_> #levels;
+        p canon = ::cq_gpu_runtime::DeviceSet<_>;
+    }})
+    .unwrap()
+}
+
+#[test]
+fn frozen_host_reads_bind_resident_runs_without_building() {
+    for (levels, keys, expected) in [
+        (
+            quote!([x]),
+            quote!(x),
+            "resident_run(&[&[1usize]as&[usize]])",
+        ),
+        (
+            quote!([x, y]),
+            quote!(x, y),
+            "resident_run(&[&[0usize,1usize]as&[usize]])",
+        ),
+        (
+            quote!([x][y]),
+            quote!(x, y),
+            "resident_run(&[&[1usize]as&[usize],&[0usize]as&[usize]])",
+        ),
+    ] {
+        let program = frozen_host(levels, keys);
+        for options in [quote!(), quote!(output(retry)), quote!(completion(round))] {
+            let generated = compile(&program, syn::parse2(options).unwrap())
+                .unwrap()
+                .to_token_stream()
+                .to_string();
+            let physical = program.physical.to_token_stream().to_string();
+            assert!(
+                generated.contains(
+                    &quote!(
+                        const __CQ_GPU_RECORDED_PHYSICAL: &str = #physical;
+                    )
+                    .to_string()
+                ),
+                "{generated}"
+            );
+            let compact = generated.split_whitespace().collect::<String>();
+            assert!(compact.contains(expected), "{generated}");
+            assert!(!compact.contains("prepare_run("), "{generated}");
+            assert!(!compact.contains("prepare_hashed_run("), "{generated}");
+            assert!(!compact.contains("prepare_prefix_run("), "{generated}");
+            assert!(
+                !compact.contains("reencode_table(__cq_gpu_table_r"),
+                "{generated}"
+            );
+            // The resident payload keeps R's original schema index.
+            assert!(
+                compact.contains("run_column(__cq_gpu_run_view_r,2usize,")
+                    || compact.contains("__cq_gpu_run_view_r.columns.add(2usize).read()"),
+                "{generated}"
+            );
+        }
+    }
+}
+
+fn frozen_prefix_chain() -> ir::Program {
+    syn::parse_quote! { physical {
+        relation L(a:i64,b:i64); relation R(c:i64,a:i64,b:i64,v:i64);
+        l = pipe rename L@0 {a -> x,b -> y};
+        r = pipe rename R@1 {c -> z,a -> x,b -> y,v -> payload};
+        pre = pipe semi eager [x,y] l,r;
+        seeded = pipe bind pre with z:i64 = (1i64);
+        out = pipe canon probe first [x,y,z] seeded,r;
+        return out as answer(x,y,z,payload);
+    } structures {
+        l host scan = ::core::iter::Map<_,_> [];
+        r host scan = ::core::iter::Map<_,_> [];
+        r host pre = ::cq_gpu_runtime::FrozenDeviceIndex<_> [x,y];
+        r host out = ::cq_gpu_runtime::FrozenDeviceIndex<_> [x,y,z];
+        out canon = ::cq_gpu_runtime::DeviceSet<_>;
+    }}
+}
+
+#[test]
+fn frozen_chain_records_full_layout_and_shares_one_run_between_prefix_reads() {
+    let source = frozen_prefix_chain();
+    let recorded = crate::compiler::frozen_hosts(&source, quote!(R => [[1,2],[0]])).unwrap();
+    let physical = recorded.physical.to_token_stream().to_string();
+    assert_eq!(physical, source.physical.to_token_stream().to_string());
+    let structures = recorded.structures.to_token_stream().to_string();
+    assert!(structures.contains("FrozenKey < 1usize >"));
+    assert!(structures.contains("FrozenKey < 2usize >"));
+    assert!(structures.contains("FrozenKey < 0usize >"));
+    for options in [quote!(), quote!(capacity(R))] {
+        let generated = compile(&recorded, syn::parse2(options).unwrap())
+            .unwrap()
+            .to_token_stream()
+            .to_string();
+        let compact = generated.split_whitespace().collect::<String>();
+        assert_eq!(
+            compact
+                .matches("resident_run(&[&[1usize,2usize]as&[usize],&[0usize]as&[usize]])")
+                .count(),
+            1,
+            "{generated}"
+        );
+        assert!(!compact.contains("prepare_prefix_run"), "{generated}");
+        assert!(!compact.contains("prepare_hashed_run"), "{generated}");
+        // The early semijoin searches only x,y. The final probe also narrows z.
+        assert!(
+            compact
+                .matches("run_column(__cq_gpu_run_view_r,2usize,__mid)")
+                .count()
+                >= 3,
+            "{generated}"
+        );
+        assert_eq!(
+            compact
+                .matches("run_column(__cq_gpu_run_view_r,0usize,__mid)")
+                .count(),
+            2,
+            "{generated}"
+        );
+    }
+}
+
+#[test]
+fn frozen_chain_rejects_missing_prefixes_and_malformed_full_layouts() {
+    for arguments in [
+        quote!(R => [[0],[1,2]]),
+        quote!(R => [[1,2],[2]]),
+        quote!(R => [[1,2],[4]]),
+        quote!(R => [[]]),
+    ] {
+        let error = crate::compiler::frozen_hosts(&frozen_prefix_chain(), arguments)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("CQ_GPU_FROZEN_"), "{error}");
+    }
+    let separate =
+        crate::compiler::frozen_hosts(&frozen_prefix_chain(), quote!(R => [[1,2]], R => [[0,1,2]]))
+            .unwrap();
+    let generated = compile(&separate, Options::default())
+        .unwrap()
+        .to_token_stream()
+        .to_string();
+    assert_eq!(generated.matches("resident_run").count(), 2);
+}
+
+#[test]
+fn frozen_sorted_ranges_narrow_before_cooperative_expansion() {
+    for (levels, slot) in [(quote!([x, y]), 1usize), (quote!([x][y]), 0usize)] {
+        let mut program = frozen_host(levels, quote!(x, y));
+        program
+            .structures
+            .entries
+            .push(syn::parse_quote!(p stage = batch 256 expand;));
+        for options in [quote!(), quote!(capacity(R)), quote!(output(retry))] {
+            let frontier = options.to_string().starts_with("capacity");
+            let generated = compile(&program, syn::parse2(options).unwrap())
+                .unwrap()
+                .to_token_stream()
+                .to_string();
+            let compact = generated.split_whitespace().collect::<String>();
+            assert!(compact.contains("resident_run("), "{generated}");
+            assert!(
+                compact.contains("blocked_run::point(__cq_gpu_run_view_r.rank,"),
+                "{generated}"
+            );
+            for comparison in ["<", "<="] {
+                assert!(
+                    compact.contains(&format!(
+                        "run_column(__cq_gpu_run_view_r,{slot}usize,__mid){comparison}__prefix_key"
+                    )),
+                    "{generated}"
+                );
+            }
+            assert!(
+                compact.contains("(__prefix_begin,__prefix_end)"),
+                "{generated}"
+            );
+            assert!(compact.contains("tiles::scan("), "{generated}");
+            assert!(!compact.contains("hashed_run_step"), "{generated}");
+            assert!(!compact.contains("prepare_prefix_run"), "{generated}");
+            assert!(!compact.contains("prepare_hashed_run"), "{generated}");
+            if frontier {
+                assert!(compact.contains("frontier_claim"), "{generated}");
+            }
+        }
+    }
+}
+
+#[test]
+fn frozen_hosts_rewrite_records_only_selected_existing_host_reads() {
+    let mut program = frozen_host(quote!([x]), quote!(x));
+    for entry in &mut program.structures.entries {
+        if let ir::Structure::Host { keyed, reader, .. } = &mut entry.structure {
+            if reader == "p" {
+                keyed.ty = syn::parse_quote!(::cq_storage::SortedRun<_,_,_>);
+            }
+        }
+    }
+    let frozen = crate::compiler::frozen_hosts(&program, quote!(R)).unwrap();
+    assert!(compile(&frozen, Options::default()).is_ok());
+    assert!(crate::compiler::frozen_hosts(&program, quote!()).is_ok());
+    assert!(
+        crate::compiler::frozen_hosts(&program, quote!(Missing))
+            .unwrap_err()
+            .to_string()
+            .contains("CQ_GPU_FROZEN_HOST")
+    );
+    assert!(
+        compile(&program, Options::default())
+            .unwrap_err()
+            .to_string()
+            .contains("CQ_GPU_HOST_KEYED_FALLBACK")
+    );
+}
+
+#[test]
+fn frozen_hosts_reject_missing_or_mismatched_recorded_levels() {
+    let wrong = frozen_host(quote!([y]), quote!(x));
+    assert!(
+        compile(&wrong, Options::default())
+            .unwrap_err()
+            .to_string()
+            .contains("fallback does not match a host read")
+    );
+    let missing = frozen_host(quote!([]), quote!(x));
+    assert!(
+        compile(&missing, Options::default())
+            .unwrap_err()
+            .to_string()
+            .contains("fallback does not match a host read")
+    );
+    let invalid = frozen_host(quote!([x,y][]), quote!(x, y));
+    assert!(compile(&invalid, Options::default()).is_err());
+}
+
 #[test]
 fn ordinary_nested_expansions_use_four_item_tiles_and_compact_carriers() {
-    let source: ir::Program = syn::parse_quote! { physical {
+    let mut source: ir::Program = syn::parse_quote! { physical {
         relation Customer(customer:i64,nation:i64);
         relation Nation(nation:i64,region:i64);
         relation Orders(customer:i64,order:i64);
@@ -60,7 +330,23 @@ fn ordinary_nested_expansions_use_four_item_tiles_and_compact_carriers() {
         l stage = batch 256 expand;
         out canon = ::cq_gpu_runtime::DeviceSet<_>;
     }};
-    for options in [quote!(), quote!(capacity(Lines)), quote!(output(retry))] {
+    for (options, fused) in [
+        (quote!(), false),
+        (quote!(capacity(Lines)), false),
+        (quote!(output(retry)), false),
+        (quote!(output(retry)), true),
+        (quote!(output(retry), capacity(Lines)), true),
+    ] {
+        let ir::Structure::Dedup { ty, .. } =
+            &mut source.structures.entries.last_mut().unwrap().structure
+        else {
+            unreachable!()
+        };
+        *ty = if fused {
+            syn::parse_quote!(::cq_gpu_runtime::DeviceSet<_,::cq_gpu_runtime::For,::cq_gpu_runtime::Fused>)
+        } else {
+            syn::parse_quote!(::cq_gpu_runtime::DeviceSet<_>)
+        };
         let generated = compile(&source, syn::parse2(options).unwrap())
             .unwrap()
             .to_token_stream()
@@ -71,7 +357,12 @@ fn ordinary_nested_expansions_use_four_item_tiles_and_compact_carriers() {
             "{generated}"
         );
         assert_eq!(compact.matches("tiles::scan(__count,").count(), 3);
-        assert_eq!(compact.matches("tiles::scan(__tile_count,").count(), 1);
+        assert_output_chunk_scan(&generated);
+        if fused {
+            assert_fused_retry_kernel(&generated);
+            assert!(!compact.contains("__execution.dedup("), "{generated}");
+            assert_eq!(compact.matches("cq_gpu_runtime::reserve(").count(), 1);
+        }
         assert_eq!(
             compact.matches("while__contains_lo<__contains_hi").count(),
             1
@@ -112,6 +403,7 @@ fn nested_claim_reuse_keeps_room_for_maximum_descriptor_publication() {
         s = ::cq_gpu_runtime::PrefixRun<_,_,::cq_storage::BorrowedI64TupleCodec,0> [a][v];
         t = ::cq_storage::SortedRun<_,_,::cq_storage::BorrowedI64TupleCodec> [v];
         candidate stage = batch 256 expand;
+        out stage = batch 256 expand;
         out canon = ::cq_gpu_runtime::DeviceSet<_>;
     }};
     for options in [quote!(), quote!(capacity(L))] {
@@ -260,11 +552,50 @@ fn dedup_execution_policy_is_read_only_from_the_recorded_type() {
 }
 
 #[test]
-fn retry_canonicalizes_recorded_policies_only_after_successful_execution() {
-    for policy in [
-        quote!(::cq_gpu_runtime::Staged),
-        quote!(::cq_gpu_runtime::Compacting),
-        quote!(::cq_gpu_runtime::Fused),
+fn compacting_resumption_records_the_full_pending_reservation_bound() {
+    for (stage, options, maximum) in [
+        (quote!(), quote!(tile(256, 4)), 1),
+        (
+            quote!(p stage = batch 32 expand;),
+            quote!(tile(256, 4)),
+            256,
+        ),
+        (quote!(p stage = batch 256 expand;), quote!(), 1024),
+        (
+            quote!(p stage = batch 256 expand;),
+            quote!(tile(256, 4)),
+            1024,
+        ),
+    ] {
+        let mut source = shared();
+        let ir::Structure::Dedup { ty, .. } = &mut source.structures.entries[4].structure else {
+            unreachable!()
+        };
+        *ty = syn::parse_quote!(
+            ::cq_gpu_runtime::DeviceSet<_, ::cq_gpu_runtime::Plain, ::cq_gpu_runtime::Compacting>
+        );
+        if !stage.is_empty() {
+            source.structures.entries.push(syn::parse2(stage).unwrap());
+        }
+        let generated = compile(&source, syn::parse2(options).unwrap())
+            .unwrap()
+            .to_token_stream()
+            .to_string();
+        let compact = generated.split_whitespace().collect::<String>();
+        let (_, call) = compact.split_once("execute_resumable_compacting(").unwrap();
+        assert!(
+            call.contains(&format!(",{maximum}usize,|__stream,__output,__resume,|")),
+            "{generated}"
+        );
+    }
+}
+
+#[test]
+fn retry_preserves_fused_canon_and_stages_other_recorded_policies() {
+    for (policy, fused) in [
+        (quote!(::cq_gpu_runtime::Staged), false),
+        (quote!(::cq_gpu_runtime::Compacting), false),
+        (quote!(::cq_gpu_runtime::Fused), true),
     ] {
         let mut source = shared();
         let ir::Structure::Dedup { ty, .. } = &mut source.structures.entries[4].structure else {
@@ -278,15 +609,21 @@ fn retry_canonicalizes_recorded_policies_only_after_successful_execution() {
                 .to_string();
             assert_retry_kernel(&generated);
             let compact = generated.split_whitespace().collect::<String>();
-            assert!(!compact.contains("fused_emit"), "{generated}");
-            assert!(!compact.contains("FusedView"), "{generated}");
-            assert!(!compact.contains("__fused"), "{generated}");
-            assert!(
-                compact.find("execute_retry(").unwrap()
-                    < compact.find("__execution.dedup(").unwrap(),
-                "canon must consume only the successful retry result: {generated}"
-            );
-            assert_eq!(compact.matches("__execution.dedup(").count(), 1);
+            if fused {
+                assert_fused_retry_kernel(&generated);
+                assert!(!compact.contains("__execution.dedup("), "{generated}");
+            } else {
+                assert!(compact.contains("execute_retry("), "{generated}");
+                assert!(!compact.contains("fused_retry_insert"), "{generated}");
+                assert!(!compact.contains("FusedRetryView"), "{generated}");
+                assert!(!compact.contains("__fused"), "{generated}");
+                assert!(
+                    compact.find("execute_retry(").unwrap()
+                        < compact.find("__execution.dedup(").unwrap(),
+                    "canon must consume only the successful retry result: {generated}"
+                );
+                assert_eq!(compact.matches("__execution.dedup(").count(), 1);
+            }
         }
     }
 }
@@ -658,11 +995,7 @@ fn assert_smallest_cooperative_chunks(generated: &str) {
         compact.contains("while__contains_lo<__contains_hi"),
         "{generated}"
     );
-    assert_eq!(
-        compact.matches("tiles::scan(__tile_count,").count(),
-        1,
-        "each generated candidate-chunk output path needs one count scan: {generated}"
-    );
+    assert_output_chunk_scan(generated);
 }
 
 fn assert_single_smallest_descriptor(generated: &str, carried_values: usize) {
@@ -729,6 +1062,69 @@ fn staged_smallest_capacity_uses_four_item_cooperative_chunks() {
     }
 }
 
+fn assert_output_chunk_scan(generated: &str) {
+    let compact = generated.split_whitespace().collect::<String>();
+    let count = if compact.contains("execute_retry_fused(") {
+        "__tile_count|(__tile_candidates<<11)"
+    } else {
+        "__tile_count"
+    };
+    assert_eq!(
+        compact.matches(&format!("tiles::scan({count},")).count(),
+        1,
+        "each generated candidate-chunk output path needs one count scan: {generated}"
+    );
+}
+
+fn assert_fused_retry_kernel(generated: &str) {
+    assert_retry_kernel(generated);
+    let compact = generated.split_whitespace().collect::<String>();
+    for required in [
+        "execute_retry_fused(concat!(module_path!(),\"::\",stringify!(",
+        "FusedRetryView",
+        "fused_retry_insert(",
+        "fused_retry_full(",
+        "fused_retry_count(",
+        "|__stream,__output,__fused|{",
+        "__tile_candidates+=__validasu32;",
+        "if__valid&&!__fused_full{",
+        "ballot_sync(u32::MAX,__valid&&!__fused_full)",
+        "__fused_full=__admission==2;",
+        "__valid=__admission==1;",
+        "}else{__valid=false;}",
+    ] {
+        assert!(compact.contains(required), "{required}: {generated}");
+    }
+    let (_, call) = compact
+        .split_once("execute_retry_fused(concat!(module_path!(),\"::\",stringify!(")
+        .expect("fused retry site identifies the generated kernel");
+    assert!(
+        call.contains(")),&[") || call.contains(")),&__head_bounds,"),
+        "the site must precede the output bounds: {generated}"
+    );
+    for forbidden in ["execute_retry(", "FusedView", "fused_emit", "__pending"] {
+        assert!(!compact.contains(forbidden), "{forbidden}: {generated}");
+    }
+    assert_output_chunk_scan(generated);
+    assert_eq!(compact.matches("fused_retry_full(").count(), 1);
+    assert_eq!(compact.matches("fused_retry_count(").count(), 1);
+    assert!(
+        compact.find("__tile_candidates+=__validasu32;").unwrap()
+            < compact.find("if__valid&&!__fused_full{").unwrap(),
+        "duplicates and candidates after overflow must still be counted: {generated}"
+    );
+    assert!(
+        compact.find("let__fused_participants=").unwrap()
+            < compact.find("if__valid&&!__fused_full{").unwrap(),
+        "the admission mask must be recorded before branching: {generated}"
+    );
+    assert!(
+        compact.find("fused_retry_count(").unwrap()
+            < compact.find("cq_gpu_runtime::reserve(").unwrap(),
+        "count every valid candidate before reserving unique output: {generated}"
+    );
+}
+
 fn assert_retry_kernel(generated: &str) {
     let compact = generated.split_whitespace().collect::<String>();
     assert!(
@@ -739,7 +1135,10 @@ fn assert_retry_kernel(generated: &str) {
         compact.contains("const__CQ_GPU_RETRY_DEFAULT_CAPACITY:usize=1024usize;"),
         "{generated}"
     );
-    assert!(compact.contains("execute_retry("), "{generated}");
+    assert!(
+        compact.contains("execute_retry(") || compact.contains("execute_retry_fused("),
+        "{generated}"
+    );
     for forbidden in [
         "execute_resumable",
         "execute_bounded",
@@ -749,14 +1148,75 @@ fn assert_retry_kernel(generated: &str) {
         "__lane_checkpoint",
         "__saved_shared",
         "resume_reserve",
+        "resume_requested",
     ] {
         assert!(!compact.contains(forbidden), "{forbidden}: {generated}");
     }
-    assert!(
-        compact.contains("|__stream,__output|{__pool.reset("),
-        "each launch must reset the frontier inside the callback: {generated}"
-    );
-    assert_eq!(compact.matches("__pool.reset(").count(), 1);
+    let callback = compact
+        .split("|__stream,__output")
+        .nth(1)
+        .and_then(|arguments| arguments.split_once('|'))
+        .map(|(_, body)| body)
+        .expect("retry launch callback");
+    if compact.contains("__execution.frontier(") {
+        assert!(
+            callback.starts_with("{__pool.reset("),
+            "each launch must reset its frontier inside the callback: {generated}"
+        );
+        assert_eq!(compact.matches("__pool.reset(").count(), 1);
+    } else {
+        // A projected-head kernel has no root/steal state to reset. Its set,
+        // ticket arena and output are freshly allocated by execute_retry_fused.
+        assert_eq!(compact.matches("__pool.reset(").count(), 0);
+    }
+}
+
+#[test]
+fn retry_fused_smallest_keeps_four_item_descriptors_and_one_packed_output_scan() {
+    for second in [quote!(probe first), quote!(semi eager)] {
+        let mut source = smallest_intersection(second);
+        let ir::Structure::Dedup { ty, .. } =
+            &mut source.structures.entries.last_mut().unwrap().structure
+        else {
+            unreachable!()
+        };
+        *ty = syn::parse_quote!(::cq_gpu_runtime::DeviceSet<_,::cq_gpu_runtime::For,::cq_gpu_runtime::Fused>);
+        source.structures.entries.push(syn::parse_quote! {
+            candidate stage = batch 256 expand;
+        });
+        for (options, capacity_hint) in [
+            (quote!(output(retry)), "None"),
+            (
+                quote!(output(retry), capacity(L)),
+                "Some(__execution.table_view(__cq_gpu_host_L)?.lenasusize)",
+            ),
+        ] {
+            let generated = compile(&source, syn::parse2(options).unwrap())
+                .unwrap()
+                .to_token_stream()
+                .to_string();
+            assert_fused_retry_kernel(&generated);
+            assert_smallest_cooperative_chunks(&generated);
+            assert_single_smallest_descriptor(&generated, 0);
+            let compact = generated.split_whitespace().collect::<String>();
+            assert!(
+                compact.contains(&format!("],{capacity_hint},|__stream,__output,")),
+                "{generated}"
+            );
+            for token in [
+                "__tile_hits",
+                "__tile_values",
+                "__tile_candidates",
+                "frontier_publish",
+                "frontier_claim",
+            ] {
+                assert!(compact.contains(token), "{generated}");
+            }
+            assert_eq!(compact.matches("cq_gpu_runtime::reserve(").count(), 1);
+            assert!(!compact.contains("__execution.dedup("), "{generated}");
+            assert!(!compact.contains("download"), "{generated}");
+        }
+    }
 }
 
 #[test]
@@ -1544,6 +2004,38 @@ fn resumable_expansion_preserves_recorded_batch_and_frontier() {
 }
 
 #[test]
+fn unstaged_probe_after_expansion_uses_a_uniform_lane_cursor_without_another_frame() {
+    let source: ir::Program = syn::parse_quote! {
+        physical {
+            relation L(a:i64); relation R(a:i64,b:i64); relation S(b:i64,c:i64);
+            l = pipe rename L@0 {a -> x};
+            r = let rename R@1 {a -> x,b -> y};
+            s = let rename S@2 {b -> y,c -> z};
+            p = pipe probe first [x] l,r;
+            q = pipe canon probe first [y] p,s;
+            return q as answer(x,y,z);
+        }
+        structures {
+            l host scan = ::core::iter::Map<_,_> [];
+            r host scan = ::core::iter::Map<_,_> [];
+            s host scan = ::core::iter::Map<_,_> [];
+            r = ::cq_storage::SortedRun<_,_> [x];
+            s = ::cq_storage::SortedRun<_,_> [y];
+            q canon = ::cq_gpu_runtime::DeviceSet<_>;
+            p stage = batch 256 expand;
+        }
+    };
+    for options in [quote!(), quote!(output(retry))] {
+        let generated = compile(&source, syn::parse2(options).unwrap())
+            .unwrap().to_token_stream().to_string();
+        assert!(generated.contains("__remaining"));
+        assert!(generated.contains("frontier_claim"));
+        assert!(generated.contains("12368u32"), "{generated}");
+        assert!(!generated.contains("24672u32"), "{generated}");
+    }
+}
+
+#[test]
 fn fixed_full_tile_scan_keeps_only_two_decoded_registers_live_per_column() {
     let generated = compile(&shared(), syn::parse2(quote!(capacity(R))).unwrap())
         .unwrap()
@@ -1930,11 +2422,23 @@ fn certified_exact_membership_is_device_only_and_schema_checked() {
         output canon = ::cq_gpu_runtime::DeviceSet<_>;
     }};
     let options = syn::parse2(quote!(datalog_keys(keys: (i32, bool)))).unwrap();
-    let generated = compile(&source, options)
-        .unwrap()
-        .to_token_stream()
-        .to_string();
-    assert!(generated.contains("prepare_exact_membership"));
+    let mut expression = compile(&source, options).unwrap();
+    // The evidence snapshot intentionally retains the source predicate as text;
+    // the executable expression must contain only the device intrinsic.
+    let syn::Expr::Block(block) = &mut expression else {
+        panic!("query block")
+    };
+    block.block.stmts.retain(|statement| {
+        !matches!(statement,
+        syn::Stmt::Item(syn::Item::Const(item)) if item.ident == "__CQ_GPU_RECORDED_PHYSICAL")
+    });
+    let generated = expression.to_token_stream().to_string();
+    assert!(!generated.contains("prepare_exact_membership"));
+    assert!(
+        generated.contains("resident_membership (2usize)"),
+        "{generated}"
+    );
+    assert!(generated.contains("bind_host (& keys"), "{generated}");
     assert!(generated.contains("ExactMembershipView"));
     assert!(generated.contains("exact_contains"));
     assert!(!generated.contains("datalog :: contains"));
@@ -1946,6 +2450,39 @@ fn certified_exact_membership_is_device_only_and_schema_checked() {
     let options = syn::parse2(quote!(datalog_keys(keys: (i64, bool)))).unwrap();
     let error = compile(&source, options).unwrap_err().to_string();
     assert!(error.contains("CQ_GPU_DATALOG_KEY_TYPE"), "{error}");
+}
+
+#[test]
+fn nullary_frozen_membership_borrows_an_existence_view_without_building() {
+    let source: ir::Program = syn::parse_quote! { physical {
+        relation R(a:i32);
+        scan = pipe rename R@0 {a -> x};
+        selected = pipe select scan if (
+            #[total] { x = x } (!::cq_gpu_runtime::datalog::contains(&keys, &()))
+        );
+        output = pipe canon project selected keep {x};
+        return output as answer(x);
+    } structures {
+        scan host scan = ::core::iter::Map<_,_> [];
+        output canon = ::cq_gpu_runtime::DeviceSet<_>;
+    }};
+    let generated = compile(
+        &source,
+        syn::parse2(quote!(datalog_keys(keys: ()))).unwrap(),
+    )
+    .unwrap()
+    .to_token_stream()
+    .to_string();
+    assert!(
+        generated.contains("resident_membership (0usize)"),
+        "{generated}"
+    );
+    assert!(generated.contains("Row = (u8 ,)"), "{generated}");
+    assert!(
+        !generated.contains("prepare_exact_membership"),
+        "{generated}"
+    );
+    assert!(generated.contains("exact_contains"), "{generated}");
 }
 
 #[test]
@@ -1978,6 +2515,34 @@ fn lossy_and_repeated_heads_canon_after_projection() {
     assert!(generated.contains("execute_resumable_fused"));
     assert_eq!(generated.matches("__execution . dedup").count(), 1);
     assert!(generated.contains("project_table (__cq_gpu_table_scan , & [0usize , 0usize])"));
+    for (options, capacity_hint) in [
+        (quote!(output(retry)), "None"),
+        (
+            quote!(output(retry), capacity(R)),
+            "Some(__execution.table_view(__cq_gpu_host_R)?.lenasusize)",
+        ),
+    ] {
+        let retry = compile(&source, syn::parse2(options).unwrap())
+            .unwrap()
+            .to_token_stream()
+            .to_string();
+        assert_fused_retry_kernel(&retry);
+        let compact = retry.split_whitespace().collect::<String>();
+        assert!(
+            compact.contains(&format!(
+                "&__head_bounds,{capacity_hint},|__stream,__output,"
+            )),
+            "{retry}"
+        );
+        assert!(retry.contains("cq_gpu_head_"), "{retry}");
+        assert!(retry.contains("project_table (__cq_gpu_table_scan , & [0usize , 0usize])"));
+        assert!(retry.contains("into_columns :: < (i32 , i32 ,) , :: cq_gpu_runtime :: Delta >"));
+        assert_eq!(retry.matches("__execution . dedup").count(), 1);
+        assert!(
+            retry.find("__execution . dedup").unwrap() < retry.find("execute_retry_fused").unwrap(),
+            "only the upstream non-fused canon needs staged dedup: {retry}"
+        );
+    }
 }
 
 #[test]

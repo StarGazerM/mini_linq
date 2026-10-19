@@ -9,12 +9,20 @@ use std::collections::{BTreeMap, BTreeSet};
 use syn::Ident;
 
 /// Concrete admission/key representation selected before scheduling.
-/// Layout demands remain logical permutations; device consumers rebuild indexes per hole.
+/// Layout demands remain logical permutations; the fork records their lifecycle.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Representation {
     #[default]
     CpuHashSet,
     DeviceSet,
+}
+
+/// Explicit per-variant outer-stream policy. CPU callers retain written order.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DriverPolicy {
+    #[default]
+    WrittenOrder,
+    DeltaFirst,
 }
 
 pub fn compile(source: &Program) -> syn::Result<Program> {
@@ -25,6 +33,14 @@ pub fn compile(source: &Program) -> syn::Result<Program> {
 pub fn compile_with_representation(
     source: &Program,
     representation: Representation,
+) -> syn::Result<Program> {
+    compile_with_driver(source, representation, DriverPolicy::WrittenOrder)
+}
+
+pub fn compile_with_driver(
+    source: &Program,
+    representation: Representation,
+    driver_policy: DriverPolicy,
 ) -> syn::Result<Program> {
     let analysis = contract::check(source)?;
     ensure(
@@ -56,10 +72,15 @@ pub fn compile_with_representation(
     target.desugar_if_let()?;
     for (rule, query) in target.rules.iter().enumerate() {
         let positions = &analysis.changing_positions[rule];
+        let first = query
+            .body
+            .iter()
+            .position(|item| matches!(item, BodyItem::Positive { .. }));
         if positions.is_empty() {
             variants.push(Variant {
                 rule,
                 delta: None,
+                driver: first,
                 query: query.clone(),
             });
         }
@@ -69,9 +90,29 @@ pub fn compile_with_representation(
                 unreachable!("contract changing positions are positive atoms")
             };
             atom.relation = names[&symbol_name(&atom.relation)].clone();
+            let driver = if driver_policy == DriverPolicy::DeltaFirst
+                && first.is_some_and(|first| {
+                    query
+                        .body
+                        .iter()
+                        .skip(first)
+                        .take(position - first + 1)
+                        .all(|item| matches!(item, BodyItem::Positive { .. }))
+                }) {
+                Some(position)
+            } else {
+                first
+            };
+            if let (Some(first), Some(driver)) = (first, driver) {
+                let mut body: Vec<_> = query.body.into_iter().collect();
+                let item = body.remove(driver);
+                body.insert(first, item);
+                query.body = body.into_iter().collect();
+            }
             variants.push(Variant {
                 rule,
                 delta: Some(position),
+                driver,
                 query,
             });
         }
@@ -123,6 +164,8 @@ fn choose_layouts(
     let mut seen = BTreeSet::new();
     for variant in variants {
         let mut bound = BTreeSet::new();
+        let order = cq_lang_datalog::variant_order(&rules[variant.rule], variant.driver)
+            .expect("new driver preserves positive-prefix Before constraints");
         for (position, item) in variant.query.body.iter().enumerate() {
             let BodyItem::Positive { atom } = item else {
                 continue;
@@ -142,9 +185,11 @@ fn choose_layouts(
             }
             let key = keys.len();
             keys.extend(payload);
-            let is_delta = Some(position) == variant.delta;
+            let source_position = order[position];
+            let is_delta = Some(source_position) == variant.delta;
             let relation = if is_delta {
-                let BodyItem::Positive { atom: base } = &rules[variant.rule].body[position] else {
+                let BodyItem::Positive { atom: base } = &rules[variant.rule].body[source_position]
+                else {
                     unreachable!("changing source position is a positive atom")
                 };
                 &base.relation

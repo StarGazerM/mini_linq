@@ -1,10 +1,12 @@
-//! Explicit device representation for an existing multi-level keyed build.
+//! Explicit device representation for lexicographic keyed payload builds.
 //!
 //! Physical's complete join key and reads are unchanged. A PrefixRun records
 //! its directory column as an index into the checked Structures row layout.
 //! Explicit choices may reorder singleton key levels; any displaced singleton
 //! prefix read receives its own recorded SortedRun. All recorded levels form a
 //! stable lexicographic trie; deeper reads binary-search within the prefix.
+//! Composite HashedRun payloads consumed by probes become singleton-level
+//! PrefixRuns, so checked expansion and range witnesses can balance their work.
 use cq_lang_structures::{self as structures, Structure, symbol_name};
 use proc_macro2::TokenStream;
 use syn::parse::{Parse, ParseStream};
@@ -85,7 +87,23 @@ pub fn compile(
                     .get(&name)
                     .is_some_and(|origin| origin.base == build)
         });
-        if keyed.levels.len() < 2 || keyed.membership.is_some() {
+        let composite_payload = keyed.levels.len() == 1
+            && keyed.levels[0].columns.len() > 1
+            && keyed.membership.is_none()
+            && keyed.filtered.is_none()
+            && matches!(&keyed.ty, syn::Type::Path(path)
+                if path.qself.is_none()
+                    && path.path.segments.iter().map(|s| s.ident.to_string())
+                        .eq(["cq_gpu_runtime", "HashedRun"]))
+            && source.physical.program.definitions.iter().any(|definition| {
+                matches!(&definition.operator, structures::physical::Operator::Probe(_, read)
+                    if symbol_name(&read.right) == name
+                        && structures::prefix_depth(&keyed.level_names(),
+                            &read.columns.iter().map(symbol_name).collect::<Vec<_>>()).is_some()
+                        && facts.physical.headings[&name].iter().any(|column|
+                            !read.columns.iter().any(|key| symbol_name(key) == *column)))
+            });
+        if (!composite_payload && keyed.levels.len() < 2) || keyed.membership.is_some() {
             if selected {
                 return Err(syn::Error::new_spanned(
                     &entry.name,
@@ -103,11 +121,12 @@ pub fn compile(
             }
             continue;
         };
-        if !path
-            .path
-            .segments
-            .last()
-            .is_some_and(|segment| segment.ident == "Trie")
+        if !composite_payload
+            && !path
+                .path
+                .segments
+                .last()
+                .is_some_and(|segment| segment.ident == "Trie")
         {
             if selected {
                 return Err(syn::Error::new_spanned(
@@ -128,6 +147,11 @@ pub fn compile(
                 ));
             }
             continue;
+        }
+        if composite_payload {
+            keyed.levels = keyed.levels[0].columns.iter()
+                .map(|column| syn::parse_quote!([#column]))
+                .collect();
         }
         if selected {
             let choice = choice.as_ref().expect("selected explicit choice");
@@ -208,6 +232,70 @@ pub fn compile(
 mod tests {
     use super::*;
     use quote::{ToTokens, quote};
+
+    #[test]
+    fn composite_payload_records_exact_expansion_and_retains_full_key_witness() {
+        let source: structures::Program = syn::parse_quote! {
+            physical {
+                relation L(a:i64,b:i64); relation R(a:i64,b:i64,c:i64);
+                l = pipe rename L@0 {a -> x,b -> y};
+                r = let rename R@1 {a -> x,b -> y,c -> z};
+                s = pipe semi eager [x,y] l,r;
+                p = pipe canon probe first [x,y] s,r;
+                return p as answer(x,y,z);
+            }
+            structures {
+                l host scan = ::core::iter::Map<_,_> [];
+                r host scan = ::core::iter::Map<_,_> [];
+                r = ::cq_gpu_runtime::HashedRun<_,_> [x,y];
+                p canon = ::cq_gpu_runtime::DeviceSet<_>;
+            }
+        };
+        let target = compile(&source, quote!()).unwrap();
+        assert_eq!(target.physical, source.physical);
+        assert_eq!(compile(&target, quote!()).unwrap(), target);
+        let target = cq_rewrite_passes::retain_lookups(&target, quote!()).unwrap();
+        let target = cq_rewrite_passes::expand_lookups(&target, quote!(256)).unwrap();
+        let facts = structures::contract::check(&target).unwrap();
+        assert_eq!(facts.built["r"][0].0, [vec!["x".to_owned()], vec!["y".to_owned()]]);
+        assert_eq!(recorded_column(&facts.built["r"][0].1, &facts.layouts["r"]).unwrap(), "x");
+        assert!(facts.witnesses.contains_key("s"));
+        assert!(facts.expands.contains("p"));
+        let reads = crate::compiler::validate(&target, &facts).unwrap();
+        assert_eq!(reads.iter().find(|read| read.reader == "p").unwrap().source, "witness:s");
+        let generated = crate::compiler::compile(&target, crate::options::Options::default())
+            .unwrap().to_token_stream().to_string();
+        assert!(generated.contains("prepare_prefix_run"));
+        assert!(generated.contains("__prefix_begin"));
+        assert!(!generated.contains("hash_key"));
+    }
+
+    #[test]
+    fn composite_membership_and_nonintegral_keys_keep_hashed_provider() {
+        for (ty, operator) in [
+            (quote!(i64), quote!(semi eager)),
+            (quote!(String), quote!(probe first)),
+        ] {
+            let source: structures::Program = syn::parse_quote! {
+                physical {
+                    relation L(a:#ty,b:i64); relation R(a:#ty,b:i64,c:i64);
+                    l = pipe rename L@0 {a -> x,b -> y};
+                    r = let rename R@1 {a -> x,b -> y,c -> z};
+                    p = pipe canon #operator [x,y] l,r;
+                    out = pipe canon project p keep {x,y};
+                    return out as answer(x,y);
+                }
+                structures {
+                    l host scan = ::core::iter::Map<_,_> [];
+                    r host scan = ::core::iter::Map<_,_> [];
+                    r = ::cq_gpu_runtime::HashedRun<_,_> [x,y];
+                    p canon = ::cq_gpu_runtime::DeviceSet<_>;
+                    out canon = ::cq_gpu_runtime::DeviceSet<_>;
+                }
+            };
+            assert_eq!(compile(&source, quote!()).unwrap(), source);
+        }
+    }
 
     fn source() -> structures::Program {
         syn::parse_quote! {

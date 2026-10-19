@@ -10,4 +10,4 @@ error[E0308]: mismatched types
   |
   = note: expected reference `&DeviceColumns<'_, (i64, i64), _>`
              found reference `&&HashMap<i64, Vec<i64>>`
-  = note: this error originates in the macro `cq_gpu_datalog::datalog` (in Nightly builds, run with -Z macro-backtrace for more info)
+  = note: this error originates in the macro `::cq_gpu_datalog::__scheduled` (in Nightly builds, run with -Z macro-backtrace for more info)

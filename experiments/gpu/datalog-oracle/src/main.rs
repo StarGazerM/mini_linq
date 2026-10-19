@@ -55,6 +55,7 @@ fn run(runtime: &Runtime, name: &str, edges: &[(i64, i64)], seeds: &[(i64,)], no
         composite,
         copied,
     ) = cq_gpu_datalog::datalog! {
+        schedule = ::cq_gpu_datalog::schedule(delta_first);
         struct Oracle;
         relation Edge(x:i64,y:i64) = (&edge);
         relation Seed(x:i64) = (&seed);
@@ -273,6 +274,96 @@ fn run(runtime: &Runtime, name: &str, edges: &[(i64, i64)], seeds: &[(i64,)], no
     );
 }
 
+fn fused_retry_growth(runtime: &Runtime) {
+    let mut dictionary = Dictionary::default();
+    let seeds: Vec<_> = (0..64).map(|x| (x,)).collect();
+    let mut links: Vec<_> = (0..64)
+        .flat_map(|x| (0..2048).map(move |y| (x, y)))
+        .collect();
+    links.extend((2048..4096).map(|y| (64, y)));
+    let seed = runtime
+        .upload_rows(&seeds, &mut dictionary, &[Codec::Plain])
+        .unwrap();
+    let link = runtime
+        .upload_rows(&links, &mut dictionary, &[Codec::Plain, Codec::Plain])
+        .unwrap();
+    cq_gpu_runtime::datalog::reset_round_count();
+    cq_gpu_runtime::reset_host_wait_count();
+    let reached = cq_gpu_datalog::datalog! {
+        schedule = ::cq_gpu_datalog::schedule(delta_first);
+        hole(rule 1, delta 0) pipeline {
+            structures = [
+                ::cq_rewrites::sorted_runs,
+                ::cq_rewrites::hashed_runs,
+                ::cq_gpu::prefix_runs,
+                ::cq_rewrites::retain_lookups,
+                ::cq_rewrites::expand_lookups(256),
+                ::cq_rewrites::retype(
+                    dedup => ::cq_gpu_runtime::DeviceSet<
+                        _, ::cq_gpu_runtime::Plain, ::cq_gpu_runtime::Fused
+                    >
+                )
+            ];
+            print = ::cq_gpu::print(
+                tile(256, 4), frontier(8), directory(rank), output(retry)
+            );
+        }
+        struct RetryGrowth;
+        relation Seed(x:i64) = (&seed);
+        relation Link(x:i64,y:i64) = (&link);
+        relation RetryReach(x:i64);
+        output RetryReach;
+        RetryReach(*x) :- Seed(x);
+        RetryReach(*y) :- RetryReach(x), Link(x,y);
+    };
+    let retry_readbacks = cq_gpu_runtime::fused_retry_readback_count();
+    let reports = cq_gpu_runtime::with_runtime_for(Some(runtime.pool().clone()), |runtime| {
+        Ok(runtime.fused_retry_reports())
+    })
+    .unwrap();
+    let report = reports
+        .iter()
+        .find(|report| report.hole == "hole/RetryReach/variant-1")
+        .expect("the per-hole override must execute the Fused retry policy");
+    // The first call's 131072 candidates produce only 2048 distinct rows.
+    // Exhaustion grows 1024 to 4096, not to the candidate count. The next call
+    // produces another 2048 distinct rows: its warm estimate avoids the extra
+    // retry that restarting at 1024 would require. The final call is empty.
+    assert_eq!(report.attempts_per_call, [2, 1, 1]);
+    assert_eq!(report.relaunches, 1);
+    assert_eq!(report.peak_capacity, 4096);
+    assert_eq!(retry_readbacks, report.attempts as usize);
+    let checked_rounds = cq_gpu_runtime::datalog::checked_round_count();
+    assert_eq!(
+        cq_gpu_runtime::host_wait_count()
+            - cq_gpu_runtime::resume_readback_count()
+            - cq_gpu_runtime::compaction_readback_count()
+            - retry_readbacks,
+        checked_rounds + 3
+    );
+    assert_eq!(
+        cq_gpu_runtime::control_readback_count()
+            - cq_gpu_runtime::resume_readback_count()
+            - cq_gpu_runtime::compaction_readback_count()
+            - retry_readbacks,
+        checked_rounds + 2
+    );
+    let rows = reached.to_host().unwrap();
+    assert_eq!(rows.len(), 4096);
+    assert_eq!(
+        rows.into_iter().collect::<Nodes>(),
+        (0..4096).map(|x| (x,)).collect()
+    );
+    println!(
+        "scenario=fused-distinct-retry exact=true first_call_candidates=131072 first_call_distinct=2048 final_distinct=4096 attempts_per_call={:?} relaunches={} peak_capacity={} peak_attempt_bytes={} wasted_kernel_ms={:.3}",
+        report.attempts_per_call,
+        report.relaunches,
+        report.peak_capacity,
+        report.peak_attempt_bytes,
+        report.wasted_kernel_ms
+    );
+}
+
 fn main() {
     let runtime = Runtime::new().unwrap();
     // One lifetime-wide counter scope: cached runtime scratch may outlive a
@@ -302,6 +393,7 @@ fn main() {
     ] {
         run(&runtime, name, &edges, &seeds, &nodes);
     }
+    fused_retry_growth(&runtime);
     if std::env::args().any(|arg| arg == "--bench") {
         let nodes: Vec<_> = (0..192).map(|x| (x,)).collect();
         let edges: Vec<_> = (0..191).map(|x| (x, x + 1)).collect();

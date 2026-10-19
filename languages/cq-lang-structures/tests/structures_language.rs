@@ -24,6 +24,100 @@ fn smallest_expand_program() -> structures::Program {
     } }
 }
 
+fn resident_expand_program() -> structures::Program {
+    syn::parse_quote! { physical {
+        relation L(a:i64,b:i64); relation R(a:i64,b:i64,c:i64);
+        l = pipe rename L@0 {a -> x,b -> y};
+        r = pipe rename R@1 {a -> x,b -> y,c -> z};
+        p = pipe canon probe first [x,y] l,r;
+        return p as answer(x,y,z);
+    } structures {
+        l host scan = ::core::iter::Map<_,_> [];
+        r host scan = ::core::iter::Map<_,_> [];
+        r host p = ::cq_gpu_runtime::FrozenDeviceIndex<_> [x,y];
+        p canon = ::std::collections::HashSet<_>;
+        p stage = batch 256 expand;
+    }}
+}
+
+#[test]
+fn expansion_accepts_exact_resident_sorted_host_ranges() {
+    for provider in [
+        syn::parse_quote!(r host p = ::cq_gpu_runtime::FrozenDeviceIndex<_> [x,y];),
+        syn::parse_quote!(r host p = ::cq_gpu_runtime::FrozenDeviceIndex<_> [x][y];),
+    ] {
+        let mut program = resident_expand_program();
+        program.structures.entries[2] = provider;
+        let facts = structures::contract::check(&program).unwrap();
+        assert_eq!(facts.stages["p"], 256);
+        assert!(facts.expands.contains("p"));
+        assert!(!facts.built.contains_key("r"));
+    }
+}
+#[test]
+fn composite_prefix_ranges_support_expansion_and_shared_witnesses() {
+    let source: structures::Program = syn::parse_quote! {
+        physical {
+            relation L(a:i64,b:i64); relation R(a:i64,b:i64,c:i64);
+            l = pipe rename L@0 {a -> x,b -> y};
+            r = let rename R@1 {a -> x,b -> y,c -> z};
+            s = pipe semi eager [x,y] l,r;
+            p = pipe canon probe first [x,y] s,r;
+            return p as answer(x,y,z);
+        }
+        structures {
+            l host scan = ::core::iter::Map<_,_> [];
+            r = ::cq_gpu_runtime::PrefixRun<_,_,Codec,0> [x][y];
+            r host scan = ::core::iter::Map<_,_> [];
+            p canon = ::std::collections::HashSet<_>;
+            s share = lookup r [x,y] first s force p;
+            s repr = tuples witness { r [x,y] at s as ::cq_storage::RunCursor<'_,_> };
+            p stage = batch 256 expand;
+        }
+    };
+    let facts = structures::contract::check(&source).unwrap();
+    assert!(facts.expands.contains("p"));
+    assert!(facts.witnesses.contains_key("s"));
+    for provider in [
+        syn::parse_quote!(r = ::cq_gpu_runtime::HashedRun<_,_> [x,y];),
+        syn::parse_quote!(r = ::cq_storage::HashIndex<'_,_,_> [x,y];),
+        syn::parse_quote!(r = ::cq_gpu_runtime::PrefixRun<_,_,Codec,0> [x][z][y];),
+    ] {
+        let mut invalid = source.clone();
+        invalid.structures.entries[1] = provider;
+        assert!(structures::contract::check(&invalid).is_err());
+    }
+}
+
+
+#[test]
+fn expansion_rejects_unproven_hosts_and_hashed_bucket_ranges() {
+    for provider in [
+        syn::parse_quote!(r host p = ::cq_gpu_runtime::HashedRun<_,_> [x,y];),
+        syn::parse_quote!(r host p = ::other::FrozenDeviceIndex<_> [x,y];),
+    ] {
+        let mut program = resident_expand_program();
+        program.structures.entries[2] = provider;
+        let error = structures::contract::check(&program).unwrap_err().to_string();
+        assert!(error.contains("exact resident sorted host range"), "{error}");
+    }
+    let mut hashed = resident_expand_program();
+    hashed.physical.program.definitions[1] =
+        syn::parse_quote!(r = let rename R@1 {a -> x,b -> y,c -> z};);
+    hashed.structures.entries[2] =
+        syn::parse_quote!(r = ::cq_gpu_runtime::HashedRun<_,_> [x,y];);
+    hashed.structures.entries.push(syn::parse_quote!(r rows = ::std::vec::Vec<_>;));
+    let error = structures::contract::check(&hashed).unwrap_err().to_string();
+    assert!(error.contains("exact resident sorted host range"), "{error}");
+    hashed.structures.entries.retain(|entry| !matches!(entry.structure, structures::Structure::Stage { .. }));
+    structures::contract::check(&hashed).unwrap();
+
+    let mut mismatch = resident_expand_program();
+    mismatch.structures.entries[2] =
+        syn::parse_quote!(r host p = ::cq_gpu_runtime::FrozenDeviceIndex<_> [x];);
+    assert!(structures::contract::check(&mismatch).is_err());
+}
+
 fn membership_bridge_program() -> structures::Program {
     syn::parse_quote! { physical {
         relation L(a:i64); relation R(a:i64,b:i64);
@@ -229,10 +323,18 @@ fn smallest_expansion_rejects_missing_or_misshaped_candidate_facts() {
     let mut missing = smallest_expand_program();
     missing.structures.entries.remove(1);
     assert!(structures::contract::check(&missing).is_err());
-    let mut unrecorded = smallest_expand_program();
-    unrecorded.physical.program.definitions[3] =
+    // Without Smallest, the prefix is not a payload cursor over all built levels.
+    let mut ordinary = smallest_expand_program();
+    ordinary.physical.program.definitions[3] =
         syn::parse_quote!(candidate = pipe probe first [b] l,r;);
-    assert!(structures::contract::check(&unrecorded).is_err());
+    assert!(structures::contract::check(&ordinary).unwrap_err().to_string()
+        .contains("a payload probe must read all built levels"));
+    let mut force = smallest_expand_program();
+    force.physical.program.definitions[4] =
+        syn::parse_quote!(checked = pipe canon probe first [a,c] candidate,s;);
+    force.structures.entries.push(syn::parse_quote!(checked stage = batch 256 expand;));
+    assert!(structures::contract::check(&force).unwrap_err().to_string()
+        .contains("introducing Smallest probe, not its forcing read"));
     let mut second = smallest_expand_program();
     second.structures.entries.pop();
     second
