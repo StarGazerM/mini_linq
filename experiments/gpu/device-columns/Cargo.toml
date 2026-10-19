@@ -7,4 +7,4 @@ edition.workspace = true
 cuda-core.workspace = true
 cuda-device.workspace = true
 cuda-host.workspace = true
-rccl-memory = { path = "/data/rccl/rccl-memory" }
+rccl-memory.workspace = true

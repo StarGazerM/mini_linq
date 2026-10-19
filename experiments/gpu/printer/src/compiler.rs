@@ -204,6 +204,12 @@ pub(crate) struct Read {
 /// Reject unsupported *written* choices, including choices on unused results.
 /// The output is a bijective ledger of all physical keyed reads, not just probes.
 pub(crate) fn validate(program: &ir::Program, facts: &ir::Analysis) -> syn::Result<Vec<Read>> {
+    for (name, &size) in &facts.stages {
+        if size == 0 || size > 1024 {
+            return fail(&program.structures, "CQ_GPU_STAGE_SIZE",
+                format!("stage {name} records batch {size}; supported scan batches are 1..=1024"));
+        }
+    }
     for d in &program.physical.program.definitions {
         let n = &d.name;
         match &d.operator {
@@ -395,7 +401,7 @@ pub(crate) fn validate(program: &ir::Program, facts: &ir::Analysis) -> syn::Resu
     let mut reads = Vec::new();
     for (build, items) in &facts.physical.keyed_reads {
         for (reader, keys, supply) in items {
-            let source = if *supply == syntax::SupplyKind::Const {
+            let source = if matches!(supply, syntax::SupplyKind::Const | syntax::SupplyKind::Range) {
                 "scan-filter".to_owned()
             } else {
                 let Some(builds) = facts.built.get(build) else {
@@ -536,6 +542,69 @@ fn decode_root(
     Ok((loads, decode.columns.into_keys().collect()))
 }
 
+// Track host-side metadata separately from device registers: every supported
+// output is a copied input/run column or a certified membership constant.
+fn output_bounds(
+    context: &Context<'_>,
+    facts: &ir::Analysis,
+    chain: &[String],
+    endpoint: &str,
+    constants: &mut Constants,
+) -> syn::Result<Vec<Tokens>> {
+    let mut bounds = BTreeMap::new();
+    let first = context.physical[&chain[0]];
+    match &first.operator {
+        Operator::Rename(rename) => {
+            let name = symbol_name(&rename.relation);
+            let table = id("host", &name);
+            for mapping in &rename.mapping {
+                let slot = context.hosts[&name].layout.iter()
+                    .position(|column| *column == symbol_name(&mapping.source)).unwrap();
+                bounds.insert(symbol_name(&mapping.target),
+                    quote!(__execution.column_bounds(#table,#slot)?));
+            }
+        }
+        Operator::Unit(_) => {}
+        _ => {
+            let input = symbol_name(first.operator.input().expect("checked stream root"));
+            let table = id("table", &input);
+            for (slot, column) in context.carried_columns[&input].iter().enumerate() {
+                bounds.insert(column.clone(), quote!(__execution.column_bounds(#table,#slot)?));
+            }
+        }
+    }
+    for name in chain {
+        if let Operator::Probe(_, keyed) = &context.physical[name].operator {
+            let right = symbol_name(&keyed.right);
+            let table = id("table", &right);
+            for column in &facts.physical.headings[&right] {
+                if bounds.contains_key(column) || !context.carried_columns[name].contains(column) {
+                    continue;
+                }
+                let bound = if !membership(facts, &right)
+                    && let Some(slot) = context.carried_columns[&right].iter().position(|c| c == column)
+                {
+                    quote!(__execution.column_bounds(#table,#slot)?)
+                } else {
+                    let binding = facts.filtered.get(&right)
+                        .and_then(|f| f.constants.iter().find(|b| symbol_name(&b.column) == *column))
+                        .ok_or_else(|| syn::Error::new_spanned(keyed,
+                            "CQ_GPU_PAYLOAD_COLUMN: output has no source column or certified constant"))?;
+                    let value = constants.term(&binding.value, &BTreeMap::new(),
+                        facts.physical.rows[&right].types.get(column))?;
+                    quote!(::cq_gpu_runtime::Bounds::singleton(#value))
+                };
+                bounds.insert(column.clone(), bound);
+            }
+        }
+        bounds.retain(|column, _| context.carried_columns[name].contains(column));
+    }
+    context.carried_columns[endpoint].iter().map(|column| {
+        bounds.get(column).cloned().ok_or_else(|| syn::Error::new_spanned(first,
+            format!("CQ_GPU_COLUMN_BOUNDS: missing source for {column}")))
+    }).collect()
+}
+
 pub(crate) fn compile(
     program: &ir::Program,
     options: crate::options::Options,
@@ -598,6 +667,13 @@ pub(crate) fn compile(
         let table = id("host", &name);
         let width = input.columns.len();
         let schema = input.to_token_stream().to_string();
+        let row_types = input.columns.iter().map(|column| &column.ty);
+        host.push(quote! {
+            {
+                fn __cq_gpu_check_schema<'data, Row, H: ::cq_gpu_runtime::HostColumns<'data, Row=Row>>(_: H) {}
+                __cq_gpu_check_schema::<(#(#row_types,)*),_>(#value);
+            }
+        });
         host_pools.push(quote!(::cq_gpu_runtime::HostColumns::pool(#value)));
         host_dictionaries.push(quote!(
             ::cq_gpu_runtime::HostColumns::seed_dictionary(
@@ -818,13 +894,22 @@ pub(crate) fn compile(
                 ));
             }
         }
-        let batch = chain
-            .iter()
-            .filter_map(|n| facts.stages.get(n))
-            .copied()
-            .min()
-            .unwrap_or(1024)
-            .min(1024);
+        let recorded_batches: BTreeSet<_> = chain.iter()
+            .filter_map(|n| facts.stages.get(n)).copied().collect();
+        let expanding = chain.iter().any(|n| matches!(
+            context.physical[n].operator, Operator::Probe(..)
+        ));
+        let maximum = if expanding { 256 } else { 1024 };
+        if recorded_batches.len() > 1
+            || recorded_batches.iter().any(|&size| size == 0 || size > maximum)
+        {
+            return fail(definition, "CQ_GPU_STAGE_SIZE", format!(
+                "fused streams require one exact batch size in 1..={maximum}; split incompatible stages into materialized streams"
+            ));
+        }
+        let batch = recorded_batches.first().copied().unwrap_or(1024);
+        let expansion_batch = recorded_batches.first().copied().unwrap_or(256);
+        let bounds = output_bounds(&context, &facts, &chain, &endpoint, &mut all_constants)?;
         let frontier = options.frontier != 0 && chain.iter().any(|n| facts.expands.contains(n));
         let mut emitter = Emitter {
             context: &context,
@@ -840,7 +925,7 @@ pub(crate) fn compile(
                 .iter()
                 .any(|n| facts.stages.contains_key(n) || facts.expands.contains(n)),
             selection: selection.is_some(),
-            batch: batch.min(256),
+            batch: expansion_batch,
             frontier_threshold: options.frontier,
             descriptors: Vec::new(),
         };
@@ -867,7 +952,7 @@ pub(crate) fn compile(
                 let table = driver_table
                     .as_ref()
                     .expect("column reads have a table root");
-                quote!(let #view=__execution.column_view(#table,#index)?;)
+                quote!(let #view=unsafe {__execution.column_view(#table,#index)?};)
             })
             .collect();
         let body = if resume.is_some() {
@@ -916,6 +1001,7 @@ pub(crate) fn compile(
             frontier,
             batch,
             selection,
+            bounds,
             endpoint,
         });
     }
@@ -1217,7 +1303,7 @@ impl ResumeEmitter<'_, '_, '_> {
                         }).ok_or_else(|| syn::Error::new_spanned(
                             k, "CQ_GPU_MEMBERSHIP_PAYLOAD: membership probe cannot expose unrecorded payload",
                         ))?;
-                        let value = self.source.constants.term(&binding.value, &state.columns)?;
+                        let value = self.source.constants.term(&binding.value, &state.columns, facts.physical.rows[&right].types.get(column))?;
                         state.columns.insert(column.clone(), value);
                     }
                 }
@@ -1360,7 +1446,7 @@ impl ResumeEmitter<'_, '_, '_> {
             }) {
                 self.source
                     .constants
-                    .term(&constant.value, &child.columns)?
+                    .term(&constant.value, &child.columns, facts.physical.rows[&right].types.get(column))?
             } else {
                 return fail(
                     k,
@@ -1502,8 +1588,7 @@ impl Emitter<'_, '_> {
             .filter_map(|n| self.facts.stages.get(n))
             .copied()
             .min()
-            .unwrap_or(1024)
-            .min(1024);
+            .unwrap_or(1024);
         let serial = self.serial;
         let frontier = self.frontier;
         let mut emitter = ResumeEmitter {
@@ -1730,7 +1815,7 @@ impl Emitter<'_, '_> {
                         "membership probe cannot expose unrecorded payload",
                     );
                 };
-                let value = self.constants.term(&binding.value, &state.columns)?;
+                let value = self.constants.term(&binding.value, &state.columns, self.facts.physical.rows[&right].types.get(column))?;
                 state.columns.insert(column.clone(), value);
             }
         }
@@ -1793,7 +1878,7 @@ impl Emitter<'_, '_> {
                     .iter()
                     .find(|b| symbol_name(&b.column) == *column)
             }) {
-                self.constants.term(&constant.value, &state.columns)?
+                self.constants.term(&constant.value, &state.columns, self.facts.physical.rows[&right].types.get(column))?
             } else {
                 return fail(
                     k,
@@ -1941,7 +2026,7 @@ impl Emitter<'_, '_> {
                     .iter()
                     .find(|b| symbol_name(&b.column) == *column)
             }) {
-                self.constants.term(&constant.value, &child.columns)?
+                self.constants.term(&constant.value, &child.columns, self.facts.physical.rows[&right].types.get(column))?
             } else {
                 return fail(
                     k,
@@ -2035,6 +2120,7 @@ struct Kernel {
     batch: usize,
     endpoint: String,
     selection: Option<(Tokens, Vec<usize>, bool)>,
+    bounds: Vec<Tokens>,
 }
 impl Kernel {
     fn emit(
@@ -2064,10 +2150,10 @@ impl Kernel {
             batch,
             endpoint,
             selection,
+            bounds,
         } = self;
         let prepare = format_ident!("prepare_{}", kernel);
         let table = id("table", &endpoint);
-        let width = context.carried_columns[&endpoint].len();
         let (shared_words, descriptor_words) = resume
             .as_ref()
             .map(|program| (program.shared_words, program.descriptor_words))
@@ -2358,7 +2444,7 @@ impl Kernel {
         let execute = if resume.is_some() {
             quote! {
                 __execution.execute_resumable(
-                    #width,__driver.len as usize,__grid as usize * #checkpoint_words,
+                    &[#(#bounds),*],__driver.len as usize,__grid as usize * #checkpoint_words,
                     |__stream,__output,__resume| {
                         unsafe {__module.#kernel(__stream,&__launch,#common,__resume)?;}
                         Ok(())
@@ -2370,7 +2456,7 @@ impl Kernel {
                 .cloned()
                 .unwrap_or_else(|| quote!(__driver.len as usize));
             quote! {
-                __execution.execute_bounded(#width,#capacity,|__stream,__output| {
+                __execution.execute_bounded(&[#(#bounds),*],#capacity,|__stream,__output| {
                     unsafe {__module.#kernel(__stream,&__launch,#common)?;}
                     Ok(())
                 })?

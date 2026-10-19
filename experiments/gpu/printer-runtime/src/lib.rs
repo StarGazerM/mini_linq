@@ -15,7 +15,7 @@ pub use device::*;
 pub use gpu_blocked_run as blocked_run;
 use gpu_blocked_run::{Buffer as Scratch, Run};
 pub use gpu_device_columns::{
-    decode_stripe, decode_tile_pair, decode_value, detect_integer_codec, encode_value, Buffer,
+    decode_stripe, decode_tile_pair, decode_value, detect_integer_codec, encode_value, Bounds, Buffer,
     Codec, ColumnView, DecodeValue, Delta, DeviceColumns, Dictionary, DictionaryCodec, EncodeValue,
     EncodedColumn, For, OwnedRowCodec, Plain, Pool, Representation, RowCodec,
 };
@@ -222,6 +222,7 @@ impl Runtime {
             memberships: Vec::new(),
             membership_cache: HashMap::new(),
             timings: Timings::default(),
+            pending_timings: Vec::new(),
             started: Instant::now(),
         }
     }
@@ -270,15 +271,7 @@ impl Runtime {
                 EncodedColumn::from_host(self.pool.clone(), values, codec).map(Arc::new)
             })
             .collect::<Result<Vec<_>>>()?;
-        let bounds = host
-            .iter()
-            .map(|values| {
-                (
-                    *values.iter().min().unwrap_or(&0),
-                    *values.iter().max().unwrap_or(&-1),
-                )
-            })
-            .collect();
+        let bounds = columns.iter().map(|column| column.bounds()).collect();
         let metadata = self.metadata(rows)?;
         let views = self.column_views(&columns)?;
         self.stream().synchronize()?;
@@ -393,6 +386,18 @@ impl DedupScratch {
         Ok(())
     }
 }
+enum TimingStage {
+    Upload,
+    Build,
+    Kernel,
+    Dedup,
+}
+struct PendingTiming {
+    stage: TimingStage,
+    start: cuda_core::CudaEvent,
+    end: cuda_core::CudaEvent,
+}
+
 struct Output {
     columns: Vec<Buffer<i64>>,
     pointers: Buffer<u64>,
@@ -419,6 +424,7 @@ pub struct Execution<'runtime, 'data> {
     memberships: Vec<Membership>,
     membership_cache: HashMap<(TableId, usize, usize), MembershipId>,
     timings: Timings,
+    pending_timings: Vec<PendingTiming>,
     started: Instant,
 }
 impl<'runtime, 'data> Execution<'runtime, 'data> {
@@ -483,18 +489,10 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
                     .map(Arc::new)
             })
             .collect::<Result<Vec<_>>>()?;
-        let bounds = host
-            .iter()
-            .map(|values| {
-                (
-                    *values.iter().min().unwrap_or(&0),
-                    *values.iter().max().unwrap_or(&-1),
-                )
-            })
-            .collect();
+        let bounds = columns.iter().map(|column| column.bounds()).collect();
         let metadata = self.runtime.metadata(rows.len())?;
         let views = self.runtime.column_views(&columns)?;
-        self.timings.upload_ms += elapsed(self.runtime, start)?;
+        self.record_timing(TimingStage::Upload, start)?;
         let id = self.add_table(Table {
             columns,
             views,
@@ -532,17 +530,26 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         Ok(self.table(id)?.view())
     }
     /// Immutable descriptor facts are already host-owned; the live count stays on device.
-    pub fn column_view(&self, id: TableId, index: usize) -> Result<ColumnView> {
+    ///
+    /// # Safety
+    /// The descriptor may only be used on this runtime's stream while the
+    /// execution retains its source column. It owns no device allocations.
+    pub unsafe fn column_view(&self, id: TableId, index: usize) -> Result<ColumnView> {
         self.table(id)?
             .columns
             .get(index)
-            .map(|column| column.view())
+            .map(|column| unsafe { column.view() })
             .ok_or_else(|| {
                 failure(
                     "CQ_GPU_KEY_COLUMN",
                     "column descriptor outside source schema",
                 )
             })
+    }
+    pub fn column_bounds(&self, id: TableId, index: usize) -> Result<Bounds> {
+        self.table(id)?.bounds.get(index).copied().ok_or_else(|| {
+            failure("CQ_GPU_KEY_COLUMN", "column bounds outside source schema")
+        })
     }
     pub fn table_width(&self, id: TableId) -> Result<usize> {
         Ok(self.table(id)?.columns.len())
@@ -589,9 +596,26 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         let start = self.runtime.stream().record_event(timing_flags())?;
         let bounds = unsafe { Buffer::uninitialized(self.runtime.pool.clone(), 2)? };
         let domain = source.bounds[key_column];
-        let domain_words = ((domain.1 as i128 - domain.0 as i128 + 1).max(0) as u128).div_ceil(64);
+        let domain_words = domain.cardinality().div_ceil(64);
         let words = domain_words.min((budget_bytes / 8) as u128) as usize;
+        let reduce = domain_words > words as u128;
         let status = self.runtime.metadata(0)?;
+        if reduce {
+            let initialize = self.runtime.kernels.prepare_membership_extrema_initialize(config(1, 0))?;
+            let reduce = self.runtime.kernels.prepare_membership_extrema(config(source.capacity, 0))?;
+            unsafe {
+                self.runtime.kernels.membership_extrema_initialize(
+                    self.runtime.stream(), &initialize, bounds.ptr(),
+                )?;
+                self.runtime.kernels.membership_extrema(
+                    self.runtime.stream(), &reduce, source.view(), key_column, bounds.ptr(),
+                )?;
+            }
+        }
+        let (min, max) = match domain {
+            Bounds::Empty => (0, -1),
+            Bounds::Inclusive { min, max } => (min, max),
+        };
         let launch = self
             .runtime
             .kernels
@@ -601,10 +625,12 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
                 self.runtime.stream(),
                 &launch,
                 source.view(),
-                key_column,
                 bounds.ptr(),
                 words as u64 * 64,
                 status.ptr(),
+                min,
+                max,
+                reduce,
             )?;
         }
         let bits = Buffer::zeroed(self.runtime.pool.clone(), words)?;
@@ -622,7 +648,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
                 bits.ptr(),
             )?;
         }
-        self.timings.build_ms += elapsed(self.runtime, start)?;
+        self.record_timing(TimingStage::Build, start)?;
         self.tables[table.0].statuses.push(status);
         let id = MembershipId(self.memberships.len());
         self.memberships.push(Membership { bits, bounds });
@@ -638,9 +664,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
             .bounds
             .get(key_column)
             .ok_or_else(|| failure("CQ_GPU_KEY_COLUMN", "run key outside schema"))?;
-        if (domain.1 as i128 - domain.0 as i128 + 1).max(0)
-            > gpu_blocked_run::MAX_DOMAIN_KEYS as i128
-        {
+        if domain.cardinality() > gpu_blocked_run::MAX_DOMAIN_KEYS as u128 {
             return Err(failure(
                 "CQ_GPU_RUN_DOMAIN",
                 "dense rank domain exceeds 2^32 key positions",
@@ -694,7 +718,10 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
             runtime.pool.resource(),
             columns[key_column],
             &payloads,
-            domain,
+            match domain {
+                Bounds::Empty => (0, -1),
+                Bounds::Inclusive { min, max } => (min, max),
+            },
             Some(&count),
         )
         .map_err(|e| failure("CQ_GPU_RUN_BUILD", e.to_string()))?;
@@ -730,7 +757,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
             )?;
         }
         let len = source.capacity as u64;
-        self.timings.build_ms += elapsed(runtime, start)?;
+        self.record_timing(TimingStage::Build, start)?;
         self.tables[table.0].statuses.push(status);
         let id = RunId(self.runs.len());
         self.runs.push(BuiltRun { run, pointers, len });
@@ -787,13 +814,13 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         } else {
             Vec::new()
         };
-        let table = self.complete_output(output, bounds, Codec::Plain)?;
-        self.timings.build_ms += elapsed(runtime, start)?;
+        let table = self.complete_output(output, bounds)?;
+        self.record_timing(TimingStage::Build, start)?;
         Ok(self.add_table(table))
     }
     pub fn execute_bounded<F>(
         &mut self,
-        width: usize,
+        bounds: &[Bounds],
         capacity: usize,
         mut launch: F,
     ) -> Result<TableId>
@@ -802,17 +829,16 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
     {
         check_rows(capacity)?;
         let start = self.runtime.stream().record_event(timing_flags())?;
-        let output = allocate_output(self.runtime, width, capacity)?;
+        let output = allocate_output(self.runtime, bounds.len(), capacity)?;
         launch(self.runtime.stream(), output.view())?;
-        let table =
-            self.complete_output(output, vec![(i64::MIN, i64::MAX); width], Codec::Plain)?;
-        self.timings.kernel_ms += elapsed(self.runtime, start)?;
+        let table = self.complete_output(output, bounds.to_vec())?;
+        self.record_timing(TimingStage::Kernel, start)?;
         Ok(self.add_table(table))
     }
     /// Resume unfinished work; only one u32 control word crosses per attempt.
     pub fn execute_resumable<F>(
         &mut self,
-        width: usize,
+        bounds: &[Bounds],
         initial_capacity: usize,
         state_words: usize,
         mut launch: F,
@@ -821,6 +847,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         F: FnMut(&CudaStream, OutputView, ResumeView) -> Result<()>,
     {
         check_rows(initial_capacity)?;
+        let width = bounds.len();
         let runtime = self.runtime;
         let start = runtime.stream().record_event(timing_flags())?;
         let state = Buffer::<u64>::zeroed(runtime.pool.clone(), state_words)?;
@@ -868,16 +895,14 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
             grown.metadata = output.metadata.clone();
             output = grown;
         }
-        let table =
-            self.complete_output(output, vec![(i64::MIN, i64::MAX); width], Codec::Plain)?;
-        self.timings.kernel_ms += elapsed(runtime, start)?;
+        let table = self.complete_output(output, bounds.to_vec())?;
+        self.record_timing(TimingStage::Kernel, start)?;
         Ok(self.add_table(table))
     }
     fn complete_output(
         &self,
         output: Output,
-        bounds: Vec<(i64, i64)>,
-        codec: Codec,
+        bounds: Vec<Bounds>,
     ) -> Result<Table> {
         let runtime = self.runtime;
         let check = runtime.kernels.prepare_validate_output(config(1, 0))?;
@@ -891,21 +916,8 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
             .into_iter()
             .zip(&bounds)
             .map(|(column, &bound)| {
-                if codec == Codec::Plain {
-                    EncodedColumn::from_plain_buffer(column, output.metadata.clone(), 0, bound)
-                } else {
-                    unsafe {
-                        EncodedColumn::from_device(
-                            runtime.pool.clone(),
-                            column.ptr(),
-                            output.capacity,
-                            output.metadata.ptr().cast(),
-                            codec,
-                            bound,
-                        )
-                    }
-                }
-                .map(Arc::new)
+                EncodedColumn::from_plain_buffer(column, output.metadata.clone(), 0, bound)
+                    .map(Arc::new)
             })
             .collect::<Result<Vec<_>>>()?;
         let views = runtime.column_views(&columns)?;
@@ -987,8 +999,8 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
             )?;
         }
         let bounds = source.bounds.clone();
-        let result = self.complete_output(output, bounds, Codec::Plain)?;
-        self.timings.dedup_ms += elapsed(runtime, start)?;
+        let result = self.complete_output(output, bounds)?;
+        self.record_timing(TimingStage::Dedup, start)?;
         Ok(self.add_table(result))
     }
     /// Only a recorded derived provider selects this codec.
@@ -1029,7 +1041,8 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
                         self.runtime.pool.clone(),
                         input.ptr(),
                         table.capacity,
-                        table.metadata.ptr().cast(),
+                        table.metadata.clone(),
+                        0,
                         codec,
                         bound,
                     )
@@ -1042,7 +1055,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
             columns,
             ..table.clone()
         };
-        self.timings.build_ms += elapsed(self.runtime, start)?;
+        self.record_timing(TimingStage::Build, start)?;
         Ok(self.add_table(table))
     }
     pub fn into_columns<Row, C: Representation>(
@@ -1066,8 +1079,24 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
     pub fn frontier(&self, slots: u32, descriptor_words: u32) -> Result<Frontier<'runtime>> {
         Frontier::new(self.runtime, slots, descriptor_words)
     }
+    fn record_timing(&mut self, stage: TimingStage, start: cuda_core::CudaEvent) -> Result<()> {
+        let end = self.runtime.stream().record_event(timing_flags())?;
+        self.pending_timings.push(PendingTiming { stage, start, end });
+        Ok(())
+    }
+    /// Explicit timing-collection boundary. One synchronization covers every
+    /// preceding operation, including asynchronous errors and ordered frees.
     pub fn finish(&mut self) -> Result<Timings> {
         self.runtime.stream().synchronize()?;
+        for timing in self.pending_timings.drain(..) {
+            let elapsed = timing.start.elapsed_ms(&timing.end)? as f64;
+            match timing.stage {
+                TimingStage::Upload => self.timings.upload_ms += elapsed,
+                TimingStage::Build => self.timings.build_ms += elapsed,
+                TimingStage::Kernel => self.timings.kernel_ms += elapsed,
+                TimingStage::Dedup => self.timings.dedup_ms += elapsed,
+            }
+        }
         self.timings.total_ms =
             self.timings.build_ms + self.timings.kernel_ms + self.timings.dedup_ms;
         self.timings.wall_ms = self.started.elapsed().as_secs_f64() * 1000.0;
@@ -1158,11 +1187,6 @@ fn timing_flags() -> Option<cuda_core::sys::CUevent_flags> {
 }
 fn config(rows: usize, shared: u32) -> LaunchConfig1D {
     LaunchConfig1D::new(rows.div_ceil(256).clamp(1, 568) as u32, 256, shared)
-}
-fn elapsed(runtime: &Runtime, start: cuda_core::CudaEvent) -> Result<f64> {
-    let end = runtime.stream().record_event(timing_flags())?;
-    end.synchronize()?;
-    Ok(start.elapsed_ms(&end)? as f64)
 }
 fn allocate_output(runtime: &Runtime, width: usize, capacity: usize) -> Result<Output> {
     let columns = (0..width)

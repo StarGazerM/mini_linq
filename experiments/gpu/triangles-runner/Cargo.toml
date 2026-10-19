@@ -7,7 +7,7 @@ edition.workspace = true
 cuda-core.workspace = true
 gpu-triangles = { path = "../triangles" }
 gpu-blocked-run = { path = "../blocked-run" }
-rccl-memory = { path = "/data/rccl/rccl-memory" }
+rccl-memory.workspace = true
 serde_json.workspace = true
 
 [[bin]]

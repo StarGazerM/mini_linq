@@ -27,16 +27,26 @@ impl Constants {
         &mut self,
         term: &Term,
         vars: &BTreeMap<String, TokenStream>,
+        ty: Option<&syn::Type>,
     ) -> syn::Result<TokenStream> {
         match term {
             Term::Variable(id) => vars.get(&symbol_name(id)).cloned().ok_or_else(|| {
                 syn::Error::new_spanned(id, "CQ_GPU_COLUMN: missing carried predicate column")
             }),
             Term::Parameter(id) => Ok(self.add(quote!(#id))),
-            Term::Literal(expr) => self.literal(expr),
+            Term::Literal(expr) => self.literal(expr, ty),
         }
     }
-    pub fn literal(&mut self, expression: &Expr) -> syn::Result<TokenStream> {
+    pub fn literal(&mut self, expression: &Expr, ty: Option<&syn::Type>) -> syn::Result<TokenStream> {
+        let integral = matches!(expression, Expr::Lit(lit) if matches!(lit.lit, syn::Lit::Int(_)))
+            || matches!(expression, Expr::Unary(unary) if matches!(unary.op, syn::UnOp::Neg(_)));
+        let value = if integral {
+            let default = syn::parse_quote!(i64);
+            let ty = ty.unwrap_or(&default);
+            quote!({ let __cq_gpu_literal: #ty = #expression; __cq_gpu_literal })
+        } else {
+            quote!(#expression)
+        };
         match expression {
             Expr::Lit(lit)
                 if matches!(
@@ -44,13 +54,13 @@ impl Constants {
                     syn::Lit::Int(_) | syn::Lit::Str(_) | syn::Lit::Bool(_)
                 ) =>
             {
-                Ok(self.add(quote!(#expression)))
+                Ok(self.add(value))
             }
             Expr::Unary(unary)
                 if matches!(unary.op, syn::UnOp::Neg(_))
                     && matches!(&*unary.expr, Expr::Lit(lit) if matches!(lit.lit, syn::Lit::Int(_))) =>
             {
-                Ok(self.add(quote!(#expression)))
+                Ok(self.add(value))
             }
             _ => Err(syn::Error::new_spanned(
                 expression,
@@ -66,10 +76,11 @@ impl Constants {
     ) -> syn::Result<TokenStream> {
         let mut conditions = Vec::new();
         for equality in &theta.equalities {
-            let left = self.term(&Term::Variable(equality.left.clone()), vars)?;
+            let ty = types.get(&symbol_name(&equality.left));
+            let left = self.term(&Term::Variable(equality.left.clone()), vars, ty)?;
             let right = match &equality.right {
-                EqualityValue::Variable(id) => self.term(&Term::Variable(id.clone()), vars)?,
-                EqualityValue::Literal(expr) => self.literal(expr)?,
+                EqualityValue::Variable(id) => self.term(&Term::Variable(id.clone()), vars, ty)?,
+                EqualityValue::Literal(expr) => self.literal(expr, ty)?,
             };
             conditions.push(quote!((#left) == (#right)));
         }
@@ -96,8 +107,9 @@ impl Constants {
                         "CQ_GPU_STRING_ORDER: dictionary IDs support equality, not string ordering",
                     ));
                 }
-                let left = self.term(left, vars)?;
-                let right = self.term(right, vars)?;
+                let ty = term_type(left, types).or_else(|| term_type(right, types));
+                let left = self.term(left, vars, ty)?;
+                let right = self.term(right, vars, ty)?;
                 let op = match comparison {
                     Comparison::Eq(_) => quote!(==),
                     _ => comparison.to_token_stream(),
@@ -114,16 +126,18 @@ impl Constants {
                         "CQ_GPU_STRING_ORDER: dictionary IDs support equality, not string ordering",
                     ));
                 }
-                let term = self.term(term, vars)?;
-                let low = self.term(low, vars)?;
-                let high = self.term(high, vars)?;
+                let ty = term_type(term, types);
+                let term = self.term(term, vars, ty)?;
+                let low = self.term(low, vars, ty)?;
+                let high = self.term(high, vars, ty)?;
                 quote!((#low) <= (#term) && (#term) <= (#high))
             }
             Constraint::In { term, literals } => {
-                let term = self.term(term, vars)?;
+                let ty = term_type(term, types);
+                let term = self.term(term, vars, ty)?;
                 let values = literals
                     .iter()
-                    .map(|literal| self.literal(literal))
+                    .map(|literal| self.literal(literal, ty))
                     .collect::<syn::Result<Vec<_>>>()?;
                 quote!(false #(|| (#term) == (#values))*)
             }
@@ -151,7 +165,7 @@ impl Constants {
                     .collect();
                 check_total_order(expression, &strings)?;
                 let aliases = bindings.iter().map(|(id, term)| {
-                    let value=self.term(term,vars)?;
+                    let value=self.term(term,vars,term_type(term,types))?;
                     let boolean=match term {
                         Term::Variable(column)=>types.get(&symbol_name(column)).is_some_and(|ty|matches!(ty,syn::Type::Path(path) if path.path.is_ident("bool"))),
                         Term::Literal(expr)=>matches!(&**expr,Expr::Lit(lit) if matches!(lit.lit,syn::Lit::Bool(_))),
@@ -159,7 +173,10 @@ impl Constants {
                     };
                     Ok((symbol_name(id),if boolean {quote!((#value)!=0)}else{value}))
                 }).collect::<syn::Result<BTreeMap<_, _>>>()?;
-                self.total(expression, &aliases)?
+                let alias_types = bindings.iter().filter_map(|(id, term)|
+                    term_type(term, types).map(|ty| (symbol_name(id), ty.clone()))
+                ).collect();
+                self.total(expression, &aliases, &alias_types, None)?
             }
         })
     }
@@ -167,22 +184,24 @@ impl Constants {
         &mut self,
         expr: &Expr,
         vars: &BTreeMap<String, TokenStream>,
+        types: &BTreeMap<String, syn::Type>,
+        expected: Option<&syn::Type>,
     ) -> syn::Result<TokenStream> {
         match expr {
             Expr::Path(path) if path.path.get_ident().is_some() => {
                 let id = path.path.get_ident().unwrap();
                 vars.get(&symbol_name(id)).cloned().ok_or_else(|| syn::Error::new_spanned(expr, "CQ_GPU_TOTAL_CAPTURE: total predicates require explicit relational bindings"))
             }
-            Expr::Paren(p) => self.total(&p.expr, vars).map(|e| quote!((#e))),
-            Expr::Group(p) => self.total(&p.expr, vars),
-            Expr::Reference(r) => self.total(&r.expr, vars),
-            Expr::Unary(u) if matches!(u.op, syn::UnOp::Deref(_)) => self.total(&u.expr, vars),
+            Expr::Paren(p) => self.total(&p.expr, vars, types, expected).map(|e| quote!((#e))),
+            Expr::Group(p) => self.total(&p.expr, vars, types, expected),
+            Expr::Reference(r) => self.total(&r.expr, vars, types, expected),
+            Expr::Unary(u) if matches!(u.op, syn::UnOp::Deref(_)) => self.total(&u.expr, vars, types, expected),
             Expr::Unary(u) if matches!(u.op, syn::UnOp::Not(_)) => {
-                let e = self.total(&u.expr, vars)?;
+                let e = self.total(&u.expr, vars, types, expected)?;
                 Ok(quote!(!(#e)))
             }
             Expr::Lit(lit) if matches!(lit.lit, syn::Lit::Bool(_)) => Ok(quote!(#expr)),
-            Expr::Lit(_) | Expr::Unary(_) => self.literal(expr),
+            Expr::Lit(_) | Expr::Unary(_) => self.literal(expr, expected),
             Expr::Binary(b)
                 if matches!(
                     b.op,
@@ -196,8 +215,9 @@ impl Constants {
                         | syn::BinOp::Or(_)
                 ) =>
             {
-                let left = self.total(&b.left, vars)?;
-                let right = self.total(&b.right, vars)?;
+                let ty = expression_type(&b.left, types).or_else(|| expression_type(&b.right, types));
+                let left = self.total(&b.left, vars, types, ty)?;
+                let right = self.total(&b.right, vars, types, ty)?;
                 let op = &b.op;
                 Ok(quote!((#left) #op (#right)))
             }
@@ -206,6 +226,24 @@ impl Constants {
                 "CQ_GPU_TOTAL_EXPR: only bound comparisons and boolean connectives are supported on device",
             )),
         }
+    }
+}
+
+fn term_type<'a>(term: &Term, types: &'a BTreeMap<String, syn::Type>) -> Option<&'a syn::Type> {
+    match term {
+        Term::Variable(id) => types.get(&symbol_name(id)),
+        _ => None,
+    }
+}
+
+fn expression_type<'a>(expr: &Expr, types: &'a BTreeMap<String, syn::Type>) -> Option<&'a syn::Type> {
+    match expr {
+        Expr::Path(path) => path.path.get_ident().and_then(|id| types.get(&symbol_name(id))),
+        Expr::Paren(p) => expression_type(&p.expr, types),
+        Expr::Group(p) => expression_type(&p.expr, types),
+        Expr::Reference(r) => expression_type(&r.expr, types),
+        Expr::Unary(u) if matches!(u.op, syn::UnOp::Deref(_)) => expression_type(&u.expr, types),
+        _ => None,
     }
 }
 

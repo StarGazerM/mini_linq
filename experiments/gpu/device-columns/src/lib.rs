@@ -65,6 +65,46 @@ impl ColumnData {
     }
 }
 
+/// Conservative value domain. Empty has no extrema; a nonempty domain may
+/// still describe a filtered result whose live device count is zero.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Bounds {
+    Empty,
+    Inclusive { min: i64, max: i64 },
+}
+impl Bounds {
+    pub const fn singleton(value: i64) -> Self {
+        Self::Inclusive { min: value, max: value }
+    }
+    pub fn from_values(values: &[i64]) -> Self {
+        let Some((&first, rest)) = values.split_first() else {
+            return Self::Empty;
+        };
+        let (min, max) = rest.iter().fold((first, first), |(lo, hi), &value| {
+            (lo.min(value), hi.max(value))
+        });
+        Self::Inclusive { min, max }
+    }
+    pub fn cardinality(self) -> u128 {
+        match self {
+            Self::Empty => 0,
+            Self::Inclusive { min, max } => (max as i128 - min as i128 + 1).max(0) as u128,
+        }
+    }
+}
+
+fn count_pointer<T: DeviceCopy>(pool: &Arc<Pool>, count: &Buffer<T>, offset: usize) -> Result<*const u64> {
+    if !Arc::ptr_eq(pool, count.pool()) {
+        return Err("column and count must share a pool".into());
+    }
+    if offset.checked_add(8).is_none_or(|end| end > count.bytes())
+        || (count.cu_deviceptr() as usize).wrapping_add(offset) % 8 != 0
+    {
+        return Err("column count must be an aligned in-bounds u64".into());
+    }
+    Ok((count.cu_deviceptr() + offset as u64) as *const u64)
+}
+
 /// Immutable encoded data plus per-vector codec facts. Bounds enclose logical
 /// values; they are not a relational ordering or uniqueness guarantee.
 pub struct EncodedColumn {
@@ -75,17 +115,14 @@ pub struct EncodedColumn {
     capacity: usize,
     count: *const u64,
     codec: Codec,
-    bounds: (i64, i64),
+    bounds: Bounds,
 }
 impl EncodedColumn {
     /// Loader-only path: raw values cross once, then the GPU encodes. Reading
     /// the compact extent is allowed here, outside the query compute path.
     pub fn from_host(pool: Arc<Pool>, values: &[i64], codec: Codec) -> Result<Self> {
         let input = Buffer::from_host(pool.clone(), values)?;
-        let bounds = values
-            .iter()
-            .fold((i64::MAX, i64::MIN), |(lo, hi), &v| (lo.min(v), hi.max(v)));
-        let bounds = if values.is_empty() { (0, -1) } else { bounds };
+        let bounds = Bounds::from_values(values);
         let (headers, extent) = Self::make_headers(
             pool.clone(),
             input.ptr(),
@@ -116,19 +153,9 @@ impl EncodedColumn {
         input: Buffer<i64>,
         count: Arc<Buffer<T>>,
         count_offset: usize,
-        bounds: (i64, i64),
+        bounds: Bounds,
     ) -> Result<Self> {
-        if !Arc::ptr_eq(input.pool(), count.pool()) {
-            return Err("plain column and count must share a pool".into());
-        }
-        if count_offset
-            .checked_add(8)
-            .is_none_or(|end| end > count.bytes())
-            || (count.cu_deviceptr() as usize).wrapping_add(count_offset) % 8 != 0
-        {
-            return Err("plain column count must be an aligned in-bounds u64".into());
-        }
-        let count_ptr = (count.cu_deviceptr() + count_offset as u64) as *const u64;
+        let count_ptr = count_pointer(input.pool(), &count, count_offset)?;
         Ok(Self {
             headers: None,
             capacity: input.len(),
@@ -157,26 +184,29 @@ impl EncodedColumn {
     ///
     /// # Safety
     /// Input and count must be ready on pool.stream. The live input prefix must
-    /// be initialized; unused capacity need not be. Count must remain unchanged
-    /// and outlive this column (the typed relation owns that metadata).
+    /// be initialized; unused capacity need not be. Count must remain unchanged.
+    /// Its allocation owner is retained independently of any parent relation.
     /// Bounds must enclose all logical values; no sampled bound is sufficient.
-    pub unsafe fn from_device(
+    pub unsafe fn from_device<T: DeviceCopy + 'static>(
         pool: Arc<Pool>,
         input: *const i64,
         capacity: usize,
-        count: *const u64,
+        count_owner: Arc<Buffer<T>>,
+        count_offset: usize,
         codec: Codec,
-        bounds: (i64, i64),
+        bounds: Bounds,
     ) -> Result<Self> {
+        let count = count_pointer(&pool, &count_owner, count_offset)?;
         let (headers, extent) = Self::make_headers(pool.clone(), input, capacity, count, codec)?;
         let width = if codec == Codec::Plain || codec == Codec::Delta {
             64
-        } else if bounds.0 > bounds.1 {
-            0
         } else {
-            64 - (bounds.1 as u64)
-                .wrapping_sub(bounds.0 as u64)
-                .leading_zeros() as usize
+            match bounds {
+                Bounds::Empty => 0,
+                Bounds::Inclusive { min, max } => {
+                    64 - (max as u64).wrapping_sub(min as u64).leading_zeros() as usize
+                }
+            }
         };
         let per_vector = width * 16 + if codec == Codec::Delta { 16 } else { 0 };
         let words = capacity
@@ -189,7 +219,7 @@ impl EncodedColumn {
             headers: Some(headers),
             data: ColumnData::Packed(data),
             extent: Some(extent),
-            _count_owner: None,
+            _count_owner: Some(count_owner),
             capacity,
             count,
             codec,
@@ -207,10 +237,12 @@ impl EncodedColumn {
         let vectors = capacity.div_ceil(1024);
         // Only the live prefix is written and all kernel readers are count-gated.
         let headers = unsafe { Buffer::uninitialized(pool.clone(), vectors)? };
-        let extent = unsafe { Buffer::uninitialized(pool.clone(), 1)? };
+        let totals = unsafe { Buffer::uninitialized(pool.clone(), vectors.div_ceil(256).max(1))? };
         let module = module(&pool)?;
         let header_launch = module.prepare_headers(config(vectors * 32))?;
-        let offset_launch = module.prepare_offsets(config(1))?;
+        let offset_launch = module.prepare_offsets(LaunchConfig1D::new(
+            totals.len().min(568) as u32, 256, 2048,
+        ))?;
         unsafe {
             module.headers(
                 pool.stream(),
@@ -227,9 +259,40 @@ impl EncodedColumn {
                 headers.ptr(),
                 capacity as u64,
                 count,
-                extent.ptr(),
+                totals.ptr(),
             )?;
         }
+        let mut levels = vec![totals];
+        while levels.last().unwrap().len() > 1 {
+            let current = levels.last().unwrap();
+            let next = unsafe { Buffer::uninitialized(pool.clone(), current.len().div_ceil(256))? };
+            let launch = module.prepare_scan_offsets(LaunchConfig1D::new(
+                next.len().min(568) as u32, 256, 2048,
+            ))?;
+            unsafe {
+                module.scan_offsets(pool.stream(), &launch, current.ptr(), current.len(), next.ptr())?;
+            }
+            levels.push(next);
+        }
+        // The final level is the total, not an exclusive prefix.
+        for level in (0..levels.len().saturating_sub(2)).rev() {
+            let current = &levels[level];
+            let launch = module.prepare_add_offsets(config(current.len()))?;
+            unsafe {
+                module.add_offsets(
+                    pool.stream(), &launch, current.ptr(), current.len(), levels[level + 1].ptr(),
+                )?;
+            }
+        }
+        if levels.len() > 1 {
+            let launch = module.prepare_finish_offsets(config(vectors))?;
+            unsafe {
+                module.finish_offsets(
+                    pool.stream(), &launch, headers.ptr(), capacity as u64, count, levels[0].ptr(),
+                )?;
+            }
+        }
+        let extent = levels.pop().unwrap();
         Ok((headers, extent))
     }
     fn pack(
@@ -258,7 +321,12 @@ impl EncodedColumn {
         }
         Ok(())
     }
-    pub fn view(&self) -> ColumnView {
+    /// Borrow a raw device ABI descriptor.
+    ///
+    /// # Safety
+    /// Do not use the descriptor after this column is dropped. All submitted
+    /// accesses must use the retained pool's stream, where frees are ordered.
+    pub unsafe fn view(&self) -> ColumnView {
         ColumnView {
             headers: self.headers.as_ref().map_or(std::ptr::null(), |h| h.ptr()),
             data: self.data.ptr(),
@@ -275,7 +343,7 @@ impl EncodedColumn {
             + self.data.bytes()
             + self.extent.as_ref().map_or(0, Buffer::bytes)
     }
-    pub fn bounds(&self) -> (i64, i64) {
+    pub fn bounds(&self) -> Bounds {
         self.bounds
     }
     pub fn codec(&self) -> Codec {
@@ -283,12 +351,6 @@ impl EncodedColumn {
     }
     pub fn pool(&self) -> &Arc<Pool> {
         self.data.pool()
-    }
-    /// Device packed-word extent, or the retained row count for native Plain.
-    pub fn extent_ptr(&self) -> *const u64 {
-        self.extent
-            .as_ref()
-            .map_or(self.count, |extent| extent.ptr())
     }
     /// Device-only decoded scratch for builds which consume native integers.
     pub fn decoded(&self) -> Result<Buffer<i64>> {

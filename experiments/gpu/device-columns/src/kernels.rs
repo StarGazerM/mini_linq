@@ -1,7 +1,7 @@
 #[cuda_device::cuda_module]
 pub(crate) mod codecs {
     use crate::{original_position, Codec, ColumnView, VectorHeader};
-    use cuda_device::{kernel, launch_bounds, launch_contract, thread};
+    use cuda_device::{device, kernel, launch_bounds, launch_contract, thread, DynamicSharedArray};
 
     #[kernel]
     #[launch_bounds(256)]
@@ -77,43 +77,112 @@ pub(crate) mod codecs {
         }
     }
 
-    // Only the loader reads total back; device-result encoders reserve their
-    // conservative capacity and leave the actual packed extent on the device.
+    // Hierarchical exclusive scan. Each block scans at most 256 vector sizes;
+    // all levels remain device-resident, including the final packed extent.
+    #[device]
+    fn scan_words(value: u64) -> (u64, u64) {
+        let lane = thread::threadIdx_x() as usize;
+        let shared = DynamicSharedArray::<u8>::get_raw() as *mut u64;
+        unsafe { shared.add(lane).write(value); }
+        thread::sync_threads();
+        let mut sum = value;
+        let mut distance = 1;
+        while distance < 256 {
+            let before = if lane >= distance {
+                unsafe { shared.add(lane - distance).read() }
+            } else {
+                0
+            };
+            thread::sync_threads();
+            sum += before;
+            unsafe { shared.add(lane).write(sum); }
+            thread::sync_threads();
+            distance *= 2;
+        }
+        let total = unsafe { shared.add(255).read() };
+        thread::sync_threads();
+        (sum - value, total)
+    }
+
     #[kernel]
     #[launch_bounds(256)]
-    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    #[launch_contract(domain = 1, block = (256, 1, 1), dynamic_shared_range = (2048, 2048))]
     pub unsafe fn offsets(
         headers: *mut VectorHeader,
         capacity: u64,
         count: *const u64,
-        total: *mut u64,
+        totals: *mut u64,
     ) {
-        if thread::index_1d().get() == 0 {
-            let len = if count.is_null() {
-                capacity
+        let len = if count.is_null() { capacity } else { unsafe { count.read() }.min(capacity) };
+        let live_vectors = len.div_ceil(1024) as usize;
+        let blocks = (capacity.div_ceil(1024) as usize).div_ceil(256).max(1);
+        let mut block = thread::blockIdx_x() as usize;
+        let lane = thread::threadIdx_x() as usize;
+        while block < blocks {
+            let i = block * 256 + lane;
+            let words = if i < live_vectors {
+                let h = unsafe { headers.add(i).read() };
+                h.width as u64 * 16 + if h.codec == Codec::Delta as u32 { 16 } else { 0 }
             } else {
-                unsafe { count.read() }.min(capacity)
+                0
             };
-            let vectors = len.div_ceil(1024) as usize;
-            let mut offset = 0;
-            let mut i = 0;
-            while i < vectors {
-                let mut h = unsafe { headers.add(i).read() };
-                h.offset = offset;
-                offset += h.width as u64 * 16
-                    + if h.codec == Codec::Delta as u32 {
-                        16
-                    } else {
-                        0
-                    };
-                unsafe {
-                    headers.add(i).write(h);
-                }
-                i += 1;
+            let (prefix, total) = scan_words(words);
+            if i < live_vectors {
+                unsafe { (*headers.add(i)).offset = prefix; }
             }
-            unsafe {
-                total.write(offset);
+            if lane == 0 {
+                unsafe { totals.add(block).write(total); }
             }
+            block += thread::gridDim_x() as usize;
+        }
+    }
+
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1), dynamic_shared_range = (2048, 2048))]
+    pub unsafe fn scan_offsets(values: *mut u64, len: usize, totals: *mut u64) {
+        let mut block = thread::blockIdx_x() as usize;
+        let lane = thread::threadIdx_x() as usize;
+        while block < len.div_ceil(256) {
+            let i = block * 256 + lane;
+            let value = if i < len { unsafe { values.add(i).read() } } else { 0 };
+            let (prefix, total) = scan_words(value);
+            if i < len {
+                unsafe { values.add(i).write(prefix); }
+            }
+            if lane == 0 {
+                unsafe { totals.add(block).write(total); }
+            }
+            block += thread::gridDim_x() as usize;
+        }
+    }
+
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub unsafe fn add_offsets(values: *mut u64, len: usize, prefixes: *const u64) {
+        let mut i = thread::index_1d().get();
+        while i < len {
+            unsafe { *values.add(i) += prefixes.add(i / 256).read(); }
+            i += thread::gridDim_x() as usize * 256;
+        }
+    }
+
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub unsafe fn finish_offsets(
+        headers: *mut VectorHeader,
+        capacity: u64,
+        count: *const u64,
+        prefixes: *const u64,
+    ) {
+        let len = if count.is_null() { capacity } else { unsafe { count.read() }.min(capacity) };
+        let vectors = len.div_ceil(1024) as usize;
+        let mut i = thread::index_1d().get();
+        while i < vectors {
+            unsafe { (*headers.add(i)).offset += prefixes.add(i / 256).read(); }
+            i += thread::gridDim_x() as usize * 256;
         }
     }
 

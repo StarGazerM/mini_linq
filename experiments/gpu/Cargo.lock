@@ -560,6 +560,10 @@ dependencies = [
 name = "gpu-device-columns-oracle"
 version = "0.1.0"
 dependencies = [
+ "cq-gpu-runtime",
+ "cuda-core",
+ "cuda-device",
+ "cuda-host",
  "gpu-device-columns",
 ]
 
@@ -593,6 +597,7 @@ dependencies = [
  "gpu-tiles",
  "mini-linq",
  "serde_json",
+ "trybuild",
 ]
 
 [[package]]
@@ -680,9 +685,9 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "libc"
-version = "0.2.190"
+version = "0.2.191"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce5d3ddc6d3fa000eb1536d85e147bfe31aacaba692ed6a876f95cb7c855be78"
+checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
 
 [[package]]
 name = "libloading"
@@ -841,6 +846,7 @@ checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
 [[package]]
 name = "rccl-memory"
 version = "0.1.0"
+source = "git+https://github.com/StarGazerM/rccl.git?rev=745f53cc8d447ec58033d97f4d13f2d7e2f7463a#745f53cc8d447ec58033d97f4d13f2d7e2f7463a"
 dependencies = [
  "cuda-core",
  "cuda-device",

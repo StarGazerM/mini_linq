@@ -1,19 +1,37 @@
-# Hand-written retail_h05 GPU experiment
+# Experimental GPU compiler and runtime
 
-This standalone workspace implements the de-risk experiment in
-`../../doc/GPU-DESIGN.md`. It does not change MiniLinq's compiler pipeline.
+This standalone workspace contains the checked Structures-to-Rust GPU printer,
+resident compressed columns, and hand-written comparison kernels described in
+`../../doc/GPU-DESIGN.md`. GPU execution is an explicit terminal-printer choice;
+the core default pipeline is unchanged.
 All kernels are Rust compiled by cuda-oxide. The approved de-risk workaround
 uses dense counting-sort builds and exact atomic-CAS dedup instead of RCCL's
 device algorithms, whose merged PTX hit the compiler bug documented below.
 RCCL's host-only `rccl-memory` allocator is used without a device bundle.
 No CUDA C, NVRTC, OptiX or CPU join is in the measured path.
 
+## Evidence retention
+
+CSV/JSON summaries and historical commands under `compare/` retain their
+original measurement scope and paths. Binary profiler captures and regenerated
+answer exports are ignored. `compare/srdatalog_sf1_fact.answer.tsv` is the
+canonical SF1 answer retained from eleven byte-identical exports (SHA-256
+`868d84a39c966787f4b42868a02cc3a7ac6ef8dfbbe75b58a3e57b193ee6cf7b`).
+The integration cleanup archived the removed copies locally under
+`/data/artifacts/mini-linq-gpu-cleanup`; scripts regenerate them for new runs.
+Historical timings are not measurements of the current tree.
+
 ## Reproduce
 
-Run from `experiments/gpu` in the `gpu` fork:
+Run from `experiments/gpu` in this checkout. Use an installed `cargo oxide`
+matching cuda-oxide revision `5f7c34fddadcf250f2e45d0cffe83a3d27f2bea3`
+(install if needed with `cargo install --git https://github.com/StarGazerM/cuda-oxide.git --rev 5f7c34fddadcf250f2e45d0cffe83a3d27f2bea3 cargo-oxide --locked`).
+No RCCL checkout or setup script is required.
 
 ```sh
-source /data/rccl/scripts/oxide-env.sh
+export CUDA_HOME="${CUDA_HOME:-/usr/local/cuda}"
+export PATH="$CUDA_HOME/bin:$PATH"
+export TPCH_DATA_ROOT="${TPCH_DATA_ROOT:-$PWD/data/tpch-gpu}"
 cargo oxide build --arch sm_89 -- --release -p gpu-h05 --bin smoke
 ./target/release/smoke
 cargo oxide build --arch sm_89 -- --release -p gpu-tiles --bin tiles-oracle
@@ -23,12 +41,41 @@ cargo oxide build --arch sm_89 -- --release -p gpu-h05 --bin blocked-run-oracle
 cargo oxide build --arch sm_89 -- --release -p gpu-h05 --bin dedup-oracle
 ./target/release/dedup-oracle
 cargo oxide build --arch sm_89 -- --release -p gpu-h05 --bin gpu-h05
-./target/release/gpu-h05 --synthetic /data/tpch-gpu/synthetic
-./target/release/gpu-h05 /data/tpch-gpu/synthetic both
-./target/release/gpu-h05 /data/tpch-gpu/sf1 both
-./target/release/gpu-h05 /data/tpch-gpu/sf10 both
+./target/release/gpu-h05 --synthetic "$TPCH_DATA_ROOT/synthetic"
+./target/release/gpu-h05 "$TPCH_DATA_ROOT/synthetic" both
+./target/release/gpu-h05 "$TPCH_DATA_ROOT/sf1" both
+./target/release/gpu-h05 "$TPCH_DATA_ROOT/sf10" both
 python3 audit.py
 ```
+
+Set `CUDA_HOME` to your toolkit (including an HPC SDK CUDA directory) before
+running setup. Nonstandard installations may also export `CUDA_TOOLKIT_PATH`,
+`LIBNVVM_PATH`, `CUDA_OXIDE_LIBDEVICE`, or `LIBCLANG_PATH`; none is forced by
+workspace configuration. `sm_89` is the measured GPU architecture; change build
+`--arch` and audit `--arch` for your GPU. `audit.py` finds `ptxas` via
+`--ptxas`, `PTXAS`, `CUDA_HOME/bin`, or PATH, in that order.
+If sharing a Cargo build cache with `CARGO_TARGET_DIR`, invoke binaries under
+that directory and set a distinct absolute `CUDA_OXIDE_PTX_DIR` per checkout/build.
+
+Export benchmark inputs with `python3 compare/export_tpch.py --sf 1 10`.
+`--duckdb` / `DUCKDB` selects the CLI (default `duckdb` on PATH);
+`--source-sf1` / `TPCH_SOURCE_SF1` selects an optional existing SF1 database
+(default this checkout's `features/workloads/target/bench/data/tpch-1/dbgen.duckdb`).
+Absent that database, the DuckDB `tpch` extension generates it.
+Exporter `--root` and H05 reference `--data-root` use `TPCH_DATA_ROOT`, default
+`data/tpch-gpu` relative to the current directory, and refer to the parent of
+`sf1/` and `sf10/`, not an individual scale-factor directory.
+
+For triangle references, `--dblp` / `DBLP_DATASET` and `--livejournal` /
+`LIVEJOURNAL_DATASET` select source files (defaults `data/graph/com-dblp.ungraph.txt`
+and `data/graph/soc-LiveJournal/edge.facts`). Triangle `--data-root` /
+`TRIANGLES_DATA_ROOT` instead selects the **generated deduplicated edge output**
+directory (default `data/triangles-reference`), not a source directory.
+`--srdatalog` / `SRDATALOG` selects the external SRDatalog checkout (default
+`../srdatalog-python`); use the same checkout with `uv run --project "$SRDATALOG"`.
+All relative CLI paths are relative to the invocation directory.
+Archived JSON/log/SQL and historical profiling commands below retain the original
+machine paths as provenance; they are not setup requirements or new measurements.
 
 The blocked-run oracle source stays under `blocked-run/src/bin`, but its Cargo
 target belongs to the consuming `gpu-h05` package. This avoids the pinned
@@ -91,9 +138,10 @@ from actual `ptxas -v -arch=sm_89` output and saves that output verbatim.
 ## Contracts and measurement caveats
 
 The toolchain is pinned to nightly-2026-08-28 and cuda-oxide commit
-`5f7c34fddadcf250f2e45d0cffe83a3d27f2bea3`. CUDA defaults come from RCCL's
-configuration. `rccl-memory` is a path dependency at `/data/rccl/rccl-memory`;
-it uses the same pinned cuda-oxide revision and does not introduce device PTX.
+`5f7c34fddadcf250f2e45d0cffe83a3d27f2bea3`. `rccl-memory` is a workspace git
+dependency pinned to `https://github.com/StarGazerM/rccl.git` revision
+`745f53cc8d447ec58033d97f4d13f2d7e2f7463a`; it uses the same cuda-oxide
+revision and does not introduce device PTX.
 Device artifacts are workspace-local under `target/oxide-ir`.
 The release profile disables LTO.
 
@@ -474,7 +522,7 @@ Program(rules=[
 Reproduce the winner from this fork's root:
 
 ```sh
-uv run --project /home/stargazermiao/workspace/srdatalog-python python -u \
+uv run --project "$SRDATALOG" python -u \
   experiments/gpu/compare/srdatalog_h05.py --sf 1 10 \
   --var-order c,n,r,o,d,s --dimension-filters --clause-order 3,4,1,2,0,5 \
   --output experiments/gpu/compare/srdatalog_h05.winner-rerun.json
@@ -544,12 +592,12 @@ as `oom_preflight`, not as an executed BFS timing.
 Reproduce from `experiments/gpu`:
 
 ```sh
-source /data/rccl/scripts/oxide-env.sh
+# Use the CUDA_HOME/PATH setup in Reproduce above.
 cargo oxide build --arch sm_89 -- --release -p gpu-triangles-runner --bins
 ./target/release/triangles-oracle
 # Supply the independently obtained DuckDB count:
 ./target/release/gpu-triangles EDGE_FILE DUCKDB_COUNT RESULT_JSON
-/opt/nvidia/hpc_sdk/Linux_x86_64/25.5/cuda/12.9/bin/ptxas \
+"$CUDA_HOME/bin/ptxas" \
   -v -arch=sm_89 target/oxide-ir/gpu_triangles.ptx -o /dev/null
 ```
 
@@ -635,12 +683,12 @@ matched DuckDB on the warmup and every measured run:
 | explicit `b,a,c` | **5.857** | **1,760.952** |
 
 ```sh
-uv run --project /home/stargazermiao/workspace/srdatalog-python python \
+uv run --project "$SRDATALOG" python \
   compare/srdatalog_triangles.py --dataset dblp livejournal \
   --order default abc bac
-./target/release/gpu-triangles /data/dataset/graph/com-dblp.ungraph.txt \
+./target/release/gpu-triangles "${DBLP_DATASET:-data/graph/com-dblp.ungraph.txt}" \
   2224385 compare/triangles_dblp.gpu.json
-./target/release/gpu-triangles /data/dataset/graph/soc-LiveJournal/edge.facts \
+./target/release/gpu-triangles "${LIVEJOURNAL_DATASET:-data/graph/soc-LiveJournal/edge.facts}" \
   946400853 compare/triangles_livejournal.gpu.json
 ```
 
@@ -774,6 +822,23 @@ Sorted-run starts/directory construction and per-bin ordering use bounded grids
 with device-count/domain grid strides, avoiding capacity-sized grids whose
 threads immediately exit on sparse filtered relations.
 
+Derived columns carry conservative source-variable bounds through joins,
+projection, deduplication and re-encoding. `Bounds::Empty` represents a known
+empty input without invented extrema; a filtered result may retain nonempty
+source bounds while its live count is zero. Both bounded and grow/resume
+outputs retain this metadata, allowing the next resident query to build a
+sorted run over the answer. Dense runs still reject domains beyond 2^32 keys.
+Membership builds use the known domain directly when it fits the recorded
+budget; otherwise a bounded parallel signed-extrema reduction checks the
+actual live domain on-device. Codec word offsets use hierarchical 256-thread
+u64 prefix scans, not a single-thread walk over every vector.
+
+Timing events are recorded during submission and collected by `finish`, the
+explicit timing boundary. Stages no longer synchronize merely to accumulate
+their elapsed time. `finish` propagates asynchronous CUDA errors; explicit
+downloads and the grow/resume control-word read retain their required waits.
+The timing intervals still include GPU idle gaps within each recorded stage.
+
 Derived storage is different: its codec is an explicit Structures provider
 fact, selected by a rewrite rather than guessed from a query or Rust host
 value. The default recorded device canon is plain:
@@ -834,16 +899,44 @@ outlive the runtime that produced it and feed another query. Explicit capacity
 overflow is `CQ_GPU_OUTPUT_CAPACITY`, retained as device status and surfaced
 at the explicit download boundary; it is not a truncated successful answer.
 No tuple readback is required between the two compiled H05 calls.
+Every packed or native column retains its own logical-count allocation owner,
+including a column cloned out of a relation before the relation is dropped.
+Raw column descriptors require unsafe access with an explicit owner/stream
+lifetime contract; safe `to_host` keeps the metadata alive itself.
+
+The current runtime regressions and targeted membership measurement are
+independent of the historical H05 baselines:
+
+```sh
+cargo oxide build --arch sm_89 -- --release -p gpu-device-columns-oracle --bins
+./target/release/gpu-device-columns-oracle
+./target/release/runtime-oracle
+./target/release/runtime-oracle --membership
+```
+
+The codec oracle passed 599 cases, including multi-block offsets and retained
+packed-count owners. The runtime oracle covers escaped-column lifetime,
+resident outputs indexed by the next execution, empty/negative domains,
+conservative-domain membership reduction and retained capacity errors.
+On RTX 6000 Ada, five unprofiled four-million-row membership builds measured
+403.801–403.816 ms before versus 0.103–0.134 ms after using lawful loader
+bounds. This is the membership build only, not an H05 speedup. Exact inputs,
+samples, original bug reproductions and a separate Nsight trace summary are
+retained in `compare/gpu_runtime_membership.audit.results.json`; its six
+profiled query-build intervals contained no HtoD/DtoH copies.
+The six-relation synthetic resident H05 smoke also passed both plans and their
+chained query on all six calls per plan (579 exact rows each); its separate
+record is `compare/gpu_h05_compiled.runtime-audit.smoke.results.json`.
 
 ### Running the compiled pipeline
 
 ```sh
-source /data/rccl/scripts/oxide-env.sh
+# Use the CUDA_HOME/PATH setup in Reproduce above.
 cargo oxide build --arch sm_89 -- --release -p gpu-h05-compiled --bin printer-smoke
 ./target/release/printer-smoke
 cargo oxide build --arch sm_89 -- --release -p gpu-h05-compiled --bin gpu-h05-compiled
-./target/release/gpu-h05-compiled /data/tpch-gpu/sf1 both compare/gpu_h05_compiled.resident.optimized.results.json
-./target/release/gpu-h05-compiled /data/tpch-gpu/sf10 both compare/gpu_h05_compiled.resident.optimized.results.json
+./target/release/gpu-h05-compiled "$TPCH_DATA_ROOT/sf1" both compare/gpu_h05_compiled.resident.optimized.results.json
+./target/release/gpu-h05-compiled "$TPCH_DATA_ROOT/sf10" both compare/gpu_h05_compiled.resident.optimized.results.json
 ```
 
 The standalone smoke compares GPU answers with the pull printer, including

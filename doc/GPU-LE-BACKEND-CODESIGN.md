@@ -1,74 +1,58 @@
-# Co-design note: Lookup&Expand / GPU on the R/E/C back-end model
+# Lookup&Expand on the R/E/C back-end model
 
-From the GPU session (branch `gpu` in /data/mini_linq-gpu, 13 commits over df91695, not pushed).
-For the codegen session that landed backend.tex / repr / stage / column-level printers (ad9727b).
+The co-design is implemented through existing Structures contracts, not a
+separate GPU language. `cq_gpu::print` consumes checked Structures and emits
+`syn::Expr`. The old `p via cursor s;` hidden-field implementation and proposed
+`cq-lang-device` layer have been removed from the design.
 
-## Classification of what LE needs (checked against the semantics)
+## Current responsibilities
 
-1. Written-order denotation (bottom + Set, relational steps may move across Rust): covers all of
-   L&E. A lookup state `R -> S` (Birler et al. VLDB'24) denotes `R ⋉ S` with a witness;
-   `e(R -> S) = R ⋈ S`. Evaluation counts are explicitly outside the meaning. No IR semantic change.
-2. Plan: VO already expresses lookup-first/expand-late (partial non-introducing subatom = semijoin of
-   the prefix; later full subatom = join; relational steps may move later). What was missing was a
-   planner: `cq_planners::order(le)` (external, Plan-Le/CK-Le). Done on `gpu`.
-3. Keeping the lookup's handle so the expansion does not probe again: this is **R**, data refinement.
-   The semi's result representation carries, for the build occurrence `b`, an *unexpanded* witness:
-   a RowId range into `b`'s representation (for a clustered run `(begin,count)`; for a hash index a
-   bucket cursor). α of that representation fetches `b`'s columns only after expansion. This is the
-   factorized state of L&E and the join-index framing backend.tex already cites.
-   On `gpu` I recorded it as a separate Structures entry `p via cursor s;` with hidden row fields and
-   per-operator threading in the realization — the wrong encoding: it duplicates the carrier
-   environment you just built. Proposal: drop it after rebase and express it as a `repr` extension:
+1. **Plan:** `cq_planners::order(le)` records non-introducing partial subatoms
+   for early lookup and coarse full subatoms for later expansion. Plan-Le and
+   CK-Le preserve written column ownership and Rust Before obligations.
+   A lookup can be understood relationally as a semijoin with a witness, and
+   expansion as the corresponding join. That intuition is not permission to
+   reorder arbitrary partial Rust: bottom + Set does not make partial
+   computations freely commutative. Totality, dependency, scope and Before
+   premises remain necessary; evaluation counts alone are not the denotation.
+2. **E — sharing:** `r share = lookup b [K] first s force p;` (ST-Share)
+   records one immutable keyed read evaluated at the eager semi and reused at
+   the forcing probe. The coupling invariant is `memo = lookup b k`.
+3. **R — witness:** `repr … witness { b [K] at s as Type }` (STR-Witness)
+   carries that lookup result as a non-column carrier. It cannot escape into
+   the head, canon, retained builds or unrelated control paths, and is pruned
+   at the forcing probe. `cq_rewrites::retain_lookups` records eligible pairs;
+   `SortedRun` supplies a Copy range cursor. Provider capability is an explicit
+   obligation, not a promise that every index cursor can be retained.
+4. **E — expansion:** `r stage = batch N expand;` (ST-Expand) permits the
+   checked segment-represented expansion. N input rows hold N ranges with
+   lengths and an exclusive scan; their total M is traversed by segmented
+   flatten. Finite N does not bound M by N, guarantee that M fits an index,
+   bound total output memory, or eliminate synchronization. The CPU pull
+   printer uses `cq_storage::stage::segmented`; the GPU uses its recorded
+   cooperative stage and bounded frontier. The push printer rejects sharing
+   and expand staging rather than silently ignoring them.
+5. **C — control:** pull, push and GPU execution are realizations of the same
+   recorded stream obligations, not new relational meanings. The GPU printer
+   accepts explicit tile/frontier/directory arguments and rejects unsupported
+   programs. `probe first` selects traversal, not uniqueness or PK evidence;
+   a run lookup may contain multiple matching payloads.
 
-       s repr = positions { … } owned [ … ] ranges { b at s };   // or a `witness` keyword
-       -- STR-Repr: coverage unchanged (b's columns are NOT in L_s until expanded);
-       -- the consumer probe reads the range: op_ρ commutes with α by IndexRead's lookup law.
+The witness exposes payload columns only when the probe expands them. It is
+not an extra relational column or a host-domain density assumption. GPU
+output capacity and integer-domain limits are independent checked runtime
+contracts. The host inputs remain immutable during a query.
 
-   Capability premise (Copy/'host-lifetime cursor) is a rustc obligation, as for other carriers.
-   `SortedRun` (runtime/cq-storage on `gpu`) provides a Copy range cursor; HashIndex's does not.
-4. Expansion with batches: **E**. ST-Stage currently forbids spanning a probe because fan-out makes the
-   chunk size variable. With ranges as the probe's output representation the chunk stays fixed:
-   a batch of N input rows yields N ranges plus their exclusive scan (total M); the expansion is a
-   virtual array addressed by position (owner = upper_bound(offsets, o) − 1, row = begin + o − offset),
-   consumed in chunks of N. This is the "lookup-expand descriptor" the GPU kernels use; it is also a
-   valid CPU staging rule (ST-Stage relaxation: a probe may be spanned iff its output repr is ranges).
-5. Tile kernels, dynamic tile cursor, descriptor pool/stealing: **C**. Block-cooperative unfold of the
-   same stream algebra; BK-Dual-style obligation (same R/E, preserve Before, exhaustive = same bag).
-   Consequence: the planned `cq-lang-device` shrinks to recording R (device layouts/directories),
-   E (tile = batch N, frontier K) and C choices per kernel; no own row model.
+## Sources of truth
 
-## Asks for the codegen side
+- [Back-end rules](formal/backend.tex): ST-Share, STR-Witness, ST-Expand and
+  the R/E/C refinement obligations.
+- [Lookup-expand status and CPU measurements](STATUS.md#lookup-expand-route-cq_plannersorderle).
+- [GPU design and evidence boundaries](GPU-DESIGN.md).
+- [Implemented GPU pipeline, restrictions and measurements](../experiments/gpu/README.md#structures-gpu-terminal-printer).
 
-- Can the column environment carry a range/witness carrier for a build occurrence (not a base
-  occurrence) and prune it at the consuming probe? If yes, `via cursor` disappears entirely.
-- Is a `stage = batch N` spanning a probe acceptable under rule 4 (ranges repr), or should the
-  expansion be its own evaluation-unit kind?
-- Rebase of `gpu` onto ad9727b will conflict in cq-print/lib.rs, cq-physical-realization/operators.rs
-  and cq-lang-structures (realization of `via cursor`). I intend to drop that realization and redo it
-  as above; `order(le)`, `SortedRun`, `sorted_runs`, the formal rules and the GPU workspace carry over.
-
-Evidence on `gpu`: doc/GPU-DESIGN.md (H05 SF10: hand-written GPU 14.6 ms vs srdatalog 583 ms vs DuckDB
-24T 154 ms; dimension-first expansion 23.6 ms vs srdatalog 58 s), doc/STATUS.md `order(le)` (SF1:
-le_runs 0.78–0.84× default where a cursor is retained on an integral-key build).
-
-## PL framing (what "range-carrying" is)
-
-1. Semantics. In the Kleisli category of `T X = ⊥ + Set X`, a probe is `bind` fused with `μ`.
-   The L&E state `R -> S` is the unflattened value of type `T(Row × T B)`; Expand is `μ ∘ st`.
-   Lookup/Expand reordering is associativity and commutativity of `bind` for the commutative
-   strong monad Set. Every L&E plan is a re-bracketing of the existing Kleisli composition;
-   Physical merely writes only the fused bracketing (flat headings). No semantic change.
-2. Evaluation. Retaining the lookup is call-by-need for the pure computation `lookup b k`
-   (hosts immutable for a run): one evaluation shared by the semi (whnf test) and the probe
-   (force), versus call-by-name re-evaluation. Same meaning, different evaluation count — an
-   **E** decision. The shared value is the seed of an unfold producer (data when the
-   structure is immutable), so its memo slot is an **R** decision with coupling invariant
-   `memo = lookup b k`, discharged by the IndexRead law and immutability.
-3. Vectorization. A chunk of N rows each holding a `T B` is a nested sequence; `(begin,count)`
-   per row plus their exclusive scan is a segment descriptor (Blelloch flattening). Expand on
-   the chunk is segmented flatten, total and length-known, so ST-Stage may span a probe whose
-   output is segment-represented. The tile kernel is **C**: cooperative segmented flatten.
-
-Reduced asks: (E) a sharing entry for keyed reads; (R) a seed/segment-descriptor
-representation for the shared value, the memo as a derived carrier column pruned at its
-forcing read; (E′) ST-Stage extension for segment-represented probe outputs.
+Historical timing anecdotes from the pre-integration proposal are superseded
+by those linked records; they are not evidence that sharing alone caused a
+speedup or that the hand-written and generated kernels have equal performance.
+This note summarizes the implementation and does not change the mathematical
+core specification.

@@ -1,6 +1,6 @@
 use crate::{
     decode_value, encode_value, failure, Buffer, Codec, ColumnView, DecodeValue, Dictionary,
-    EncodeValue, EncodedColumn, Pool, Result,
+    Bounds, EncodeValue, EncodedColumn, Pool, Result,
 };
 use cuda_core::DeviceCopy;
 use std::{marker::PhantomData, sync::Arc};
@@ -131,7 +131,7 @@ pub struct Table {
     pub views: Arc<Buffer<ColumnView>>,
     pub metadata: Arc<Buffer<OutputCount>>,
     pub capacity: usize,
-    pub bounds: Vec<(i64, i64)>,
+    pub bounds: Vec<Bounds>,
     pub statuses: Vec<Arc<Buffer<OutputCount>>>,
 }
 
@@ -190,7 +190,7 @@ impl<Row: OwnedRowCodec> DeviceColumns<'static, Row> {
             })
             .collect::<Result<Vec<_>>>()?;
         let bounds = columns.iter().map(|column| column.bounds()).collect();
-        let host_views: Vec<_> = columns.iter().map(|column| column.view()).collect();
+        let host_views: Vec<_> = columns.iter().map(|column| unsafe { column.view() }).collect();
         let views = Arc::new(Buffer::from_host(pool.clone(), &host_views)?);
         let metadata = Arc::new(Buffer::from_host(
             pool.clone(),

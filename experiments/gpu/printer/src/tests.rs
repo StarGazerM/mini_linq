@@ -715,3 +715,92 @@ fn generated_module_cache_is_thread_local_and_context_owned() {
     );
     assert!(generated.contains("__cache . borrow_mut ()"));
 }
+
+#[test]
+fn range_reads_are_truthfully_scan_filters() {
+    let source: ir::Program = syn::parse_quote! { physical {
+        relation L(a:i64);
+        l = pipe rename L@0 {a -> x};
+        r = pipe range select l if (x >= -7);
+        p = pipe canon project r keep {x};
+        return p as answer(x);
+    } structures {
+        l host scan = ::core::iter::Map<_,_> [];
+        l host r = ::core::iter::Map<_,_> [x];
+        p canon = ::cq_gpu_runtime::DeviceSet<_>;
+    } };
+    let facts = ir::contract::check(&source).unwrap();
+    let reads = validate(&source, &facts).unwrap();
+    assert_eq!(reads.len(), 1);
+    assert_eq!(reads[0].source, "scan-filter");
+}
+
+#[test]
+fn recorded_stage_sizes_are_not_silently_changed() {
+    for size in [257usize, 1024, 2048] {
+        let mut source = shared();
+        source.structures.entries.push(syn::parse2(
+            quote!(p stage = batch #size expand;)
+        ).unwrap());
+        assert!(compile(&source, Options::default())
+            .unwrap_err().to_string().contains("CQ_GPU_STAGE_SIZE"));
+    }
+}
+
+#[test]
+fn typed_literals_follow_declared_types_in_relational_predicates() {
+    let vars = BTreeMap::from([("x".to_owned(), quote!(x)), ("y".to_owned(), quote!(y))]);
+    let types = BTreeMap::from([("x".to_owned(), syn::parse_quote!(i64)), ("y".to_owned(), syn::parse_quote!(u32))]);
+    for theta in [
+        syn::parse_quote!(x >= -3000000000, y >= 4000000000),
+        syn::parse_quote!(x = 3000000000),
+    ] {
+        let mut constants = Constants::default();
+        constants.theta(&theta, &vars, &types).unwrap();
+        let values = constants.values.iter().map(|(_, value)| value.to_string()).collect::<Vec<_>>().join(" ");
+        assert!(values.contains("let __cq_gpu_literal : i64"));
+        if values.contains("4000000000") {
+            assert!(values.contains("let __cq_gpu_literal : u32"));
+        }
+    }
+}
+
+#[test]
+fn output_bounds_follow_driver_and_run_payload_without_full_domain_fallback() {
+    for options in [Options::default(), syn::parse2(quote!(capacity(R))).unwrap()] {
+        let generated = compile(&shared(), options).unwrap().to_token_stream().to_string();
+        assert!(generated.contains("column_bounds (__cq_gpu_host_L , 0usize)"));
+        assert!(generated.contains("column_bounds (__cq_gpu_table_b , 1usize)"));
+        assert!(!generated.contains("i64 :: MIN"));
+        assert!(!generated.contains("i64 :: MAX"));
+        assert!(generated.contains("__cq_gpu_check_schema :: < (i64 , i64 ,) , _ >"));
+    }
+}
+
+#[test]
+fn integer_literal_encoding_compiles_large_values_but_rejects_declared_type_overflow() {
+    let directory = std::env::temp_dir().join(format!("cq-gpu-literals-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    for (literal, ty, valid) in [
+        (quote!(3000000000), quote!(i64), true),
+        (quote!(-9223372036854775808), quote!(i64), true),
+        (quote!(4000000000), quote!(u32), true),
+        (quote!(256), quote!(u8), false),
+        (quote!(-1), quote!(u32), false),
+    ] {
+        let mut constants = Constants::default();
+        constants.literal(&syn::parse2(literal).unwrap(), Some(&syn::parse2(ty).unwrap())).unwrap();
+        let value = &constants.values[0].1;
+        let source = directory.join("literal.rs");
+        std::fs::write(&source, quote!(fn main() { let _ = #value; }).to_string()).unwrap();
+        let output = std::process::Command::new("rustc")
+            .arg("--emit=metadata").arg("--out-dir").arg(&directory).arg(&source)
+            .output().unwrap();
+        assert_eq!(output.status.success(), valid, "{}", String::from_utf8_lossy(&output.stderr));
+        if !valid {
+            let diagnostic = String::from_utf8_lossy(&output.stderr);
+            assert!(diagnostic.contains("out of range") || diagnostic.contains("cannot apply unary operator"));
+        }
+    }
+    std::fs::remove_dir_all(directory).unwrap();
+}

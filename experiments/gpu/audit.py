@@ -10,14 +10,16 @@ import subprocess
 parser = argparse.ArgumentParser()
 parser.add_argument('--results', default='compare/gpu_h05.results.json')
 parser.add_argument('--ptx-dir', default='target/oxide-ir')
+parser.add_argument('--ptxas', default=os.environ.get('PTXAS') or
+                    (str(Path(os.environ['CUDA_HOME']) / 'bin/ptxas') if os.environ.get('CUDA_HOME') else 'ptxas'))
+parser.add_argument('--arch', default=os.environ.get('CUDA_ARCH', 'sm_89'))
 args = parser.parse_args()
-cuda = Path(os.environ.get('CUDA_HOME', '/opt/nvidia/hpc_sdk/Linux_x86_64/25.5/cuda/12.9'))
 reports = []
 resources = {}
 for ptx in sorted(Path(args.ptx_dir).glob('*.ptx')):
     if ptx.stem not in {'smoke', 'tiles_oracle', 'gpu_blocked_run', 'gpu_h05', 'blocked_run_oracle', 'dedup_oracle'}:
         continue
-    proc = subprocess.run([str(cuda / 'bin/ptxas'), '-v', '-arch=sm_89', str(ptx), '-o', '/dev/null'], text=True, capture_output=True, check=True)
+    proc = subprocess.run([args.ptxas, '-v', f'-arch={args.arch}', str(ptx), '-o', '/dev/null'], text=True, capture_output=True, check=True)
     report = proc.stdout + proc.stderr
     reports.append(f'FILE {ptx}\n{report}')
     current = None

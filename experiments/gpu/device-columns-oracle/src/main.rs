@@ -1,4 +1,4 @@
-use gpu_device_columns::{Buffer, Codec, EncodedColumn, Pool, Result};
+use gpu_device_columns::{Bounds, Buffer, Codec, EncodedColumn, Pool, Result};
 use std::sync::Arc;
 
 // Afroozeh & Boncz, FastLanes Figure 6: enumerate the UTL tuple order
@@ -135,7 +135,7 @@ fn device_output(pool: &Arc<Pool>, codec: Codec, len: usize, order: &[usize]) ->
     let mut input: Vec<i64> = (0..capacity).map(|i| (i as i64 * 17 % 97) - 48).collect();
     input[len..].fill(i64::MAX); // Poison inactive rows; tight bounds exclude poison.
     let raw = Buffer::from_host(pool.clone(), &input)?;
-    let count = Buffer::from_host(pool.clone(), &[len as u64])?;
+    let count = Arc::new(Buffer::from_host(pool.clone(), &[len as u64])?);
     // From here until assertions, only device encoders/decoders are used:
     // no host upload, host-derived replacement column, or count download.
     let encoded = unsafe {
@@ -143,9 +143,10 @@ fn device_output(pool: &Arc<Pool>, codec: Codec, len: usize, order: &[usize]) ->
             pool.clone(),
             raw.ptr(),
             capacity,
-            count.ptr(),
+            count.clone(),
+            0,
             codec,
-            (-48, 48),
+            if len == 0 { Bounds::Empty } else { Bounds::Inclusive { min: -48, max: 48 } },
         )?
     };
     let decoded = encoded.decoded()?;
@@ -154,11 +155,15 @@ fn device_output(pool: &Arc<Pool>, codec: Codec, len: usize, order: &[usize]) ->
             pool.clone(),
             decoded.ptr(),
             capacity,
-            count.ptr(),
+            count.clone(),
+            0,
             codec,
-            (-48, 48),
+            if len == 0 { Bounds::Empty } else { Bounds::Inclusive { min: -48, max: 48 } },
         )?
     };
+    let owner = Arc::downgrade(&count);
+    drop(count);
+    assert!(owner.upgrade().is_some(), "packed columns must retain count ownership");
     inspect(
         "device-output",
         &encoded,
@@ -193,14 +198,18 @@ fn owned_plain(pool: &Arc<Pool>, len: usize) -> Result<()> {
     // Exercise an aligned count field that is not the first metadata word.
     let count = Arc::new(Buffer::from_host(pool.clone(), &[u64::MAX, len as u64])?);
     let owner = Arc::downgrade(&count);
-    let column = EncodedColumn::from_plain_buffer(raw, count.clone(), 8, (-1700, 1372))?;
+    let column = EncodedColumn::from_plain_buffer(
+        raw, count.clone(), 8,
+        if len == 0 { Bounds::Empty } else { Bounds::Inclusive { min: -1700, max: 1372 } },
+    )?;
     drop(count);
     assert!(
         owner.upgrade().is_some(),
         "Plain must retain count ownership"
     );
-    assert!(column.view().headers.is_null());
-    assert_eq!(column.view().data, pointer.cast_const().cast::<u64>());
+    let view = unsafe { column.view() };
+    assert!(view.headers.is_null());
+    assert_eq!(view.data, pointer.cast_const().cast::<u64>());
     assert_eq!(
         column.bytes(),
         capacity * 8,
@@ -220,7 +229,7 @@ fn invalid_plain_count(pool: &Arc<Pool>) -> Result<()> {
     for offset in [1, 8, usize::MAX] {
         let raw = Buffer::from_host(pool.clone(), &[1i64])?;
         let count = Arc::new(Buffer::from_host(pool.clone(), &[1u64])?);
-        assert!(EncodedColumn::from_plain_buffer(raw, count, offset, (1, 1)).is_err());
+        assert!(EncodedColumn::from_plain_buffer(raw, count, offset, Bounds::singleton(1)).is_err());
     }
     Ok(())
 }
@@ -294,6 +303,11 @@ fn main() -> Result<()> {
             device_output(&pool, codec, len, &order)?;
             cases += 1;
         }
+        let many_vectors: Vec<_> = (0..(1024 * 513 + 7))
+            .map(|i| if i / 1024 % 3 == 0 { -71 } else { (i as i64 * 17 % 1237) - 600 })
+            .collect();
+        check(&pool, "hierarchical-offsets", &many_vectors, codec, &order)?;
+        cases += 1;
     }
     for len in [
         0, 1, 31, 32, 33, 63, 64, 65, 255, 256, 257, 1023, 1024, 1025, 2049, 3073,

@@ -11,6 +11,14 @@
 //! values per lane once, then consume those values across the four stripes.
 //! Short recorded batches and resumable scans use scalar device decode without
 //! materializing a decompressed global column.
+//! Host row tuples must exactly match declared relation types, not merely their
+//! encoded widths. Integral predicate literals use the compared column's type.
+//! Range reads are scan filters, never claimed as indexed reads. Output bounds
+//! follow copied input/run columns and certified constants through resident
+//! answer chaining; `probe first` never establishes primary-key uniqueness.
+//! A fused stream supports one exact recorded batch size: 1..=1024 for scans,
+//! 1..=256 when it contains expansion. Incompatible or larger recorded batches
+//! fail with `CQ_GPU_STAGE_SIZE` rather than being silently clamped.
 //!
 //! Derived columns use the codec recorded by their Structures provider.
 //! `DeviceSet<_>` and retained `Vec<_>` record Plain; an explicit

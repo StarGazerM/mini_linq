@@ -130,13 +130,12 @@ computed/owned keys stay hashed; the rewrite never selects NoDense
 binary-search runs. An integral key with an over-budget span can still fall
 back to binary search at runtime.
 
-Cursor retention is now upstream's `share` / `repr … witness` / `stage …
-expand` (ST-Share, STR-Witness, ST-Expand; `cq_rewrites::retain_lookups`),
-the R/E encoding agreed in `doc/GPU-LE-BACKEND-CODESIGN.md`; the earlier
-`p via cursor s;` hidden-field implementation was dropped. `le_runs` =
-`order(le)` + `sorted_runs` + `retain_lookups`. SF1 uninstrumented medians
-(`cargo xtask bench --tpch --sf 1 --runs 5 --config le_runs`, 2026-10-18,
-all 13 exact vs DuckDB):
+Cursor retention uses `share` / `repr … witness` / `stage … expand`
+(ST-Share, STR-Witness, ST-Expand; `cq_rewrites::retain_lookups`), the R/E
+encoding in [the co-design note](GPU-LE-BACKEND-CODESIGN.md). `le_runs` =
+`order(le)` + `sorted_runs` + `retain_lookups`. Historical SF1 uninstrumented
+medians (`cargo xtask bench --tpch --sf 1 --runs 5 --config le_runs`,
+2026-10-18, all 13 exact vs DuckDB):
 
 | Query | default | le_runs | ratio |
 |---|---:|---:|---:|
@@ -150,11 +149,11 @@ all 13 exact vs DuckDB):
 | retail_h21_positive | 89.6 | 105.6 | 1.18 |
 | retail_h05 | 32.6 | 41.0 | 1.26 |
 
-Same gains as the dropped encoding where a witness is retained on an
-integral-key build; the regressions are the cases without a Copy cursor
-(Supplier host fallback in H05, composite `HashIndex` keys in H09/D85) or
-with lookups that retain every row (H21). The earlier table below is kept as
-the record of the dropped implementation.
+These measurements combine planning, representation and sharing changes;
+they do not isolate the causal contribution of cursor retention. Eligibility
+and non-filtering lookups help describe the different plans, but do not prove
+the cause of each timing difference. The following historical table measures
+the superseded hidden-cursor implementation, not the current encoding.
 
 Re-measured 2026-10-16 from `features/workloads`, sequentially with
 `cargo xtask profile --tpch --sf 1 --config default` then
@@ -240,6 +239,21 @@ matching `.validation.json`:
 Operator stream spans are inclusive and overlap; they are not additive
 exclusive costs. LE plus sorted runs remains an explicit CPU experiment,
 not a universal speedup or a saved-descriptor GPU implementation.
+
+### GPU integration
+
+The external `cq_gpu::print` terminal consumes checked Structures directly.
+There is no Device IR; sharing and expansion use the same recorded R/E
+contracts as the CPU pull printer. `probe first` is not a uniqueness fact,
+and integral host keys need not be dense or hole-free. Finite input batches
+do not bound total expansion or eliminate host synchronization.
+
+See [the current design](GPU-DESIGN.md) and
+[the workspace evidence](../experiments/gpu/README.md#structures-gpu-terminal-printer)
+for supported constructs, exactness checks, resident/load/transfer boundaries
+and historical tuning results. Counts-only measurements are not full-tuple
+measurements. The triangle GPU baseline excludes host edge sort/dedup and
+upload, so it cannot establish a like-for-like end-to-end speedup.
 
 ## Index building vs join processing (SF 1, one thread, planning excluded)
 

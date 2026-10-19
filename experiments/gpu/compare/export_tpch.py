@@ -10,6 +10,7 @@ thread count with one warmup followed by five samples (DuckDB .timer wall time).
 import argparse
 import itertools
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -18,8 +19,9 @@ import subprocess
 
 import numpy as np
 
-CLI = '/home/stargazermiao/.duckdb/cli/latest/duckdb'
-SOURCE_SF1 = Path('/data/mini_linq/features/workloads/target/bench/data/tpch-1/dbgen.duckdb')
+CLI = os.environ.get('DUCKDB', 'duckdb')
+SOURCE_SF1 = Path(os.environ.get('TPCH_SOURCE_SF1',
+    str(Path(__file__).resolve().parents[3] / 'features/workloads/target/bench/data/tpch-1/dbgen.duckdb')))
 RELATIONS = {
     'customer': [('c_custkey', 'i64'), ('c_nationkey', 'i32')],
     'orders': [('o_orderkey', 'i64'), ('o_custkey', 'i64'), ('o_orderdate', 'i32')],
@@ -134,10 +136,16 @@ def export(sf, base):
 
 
 def main():
+    global CLI, SOURCE_SF1
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--sf', nargs='+', type=int, choices=[1, 10], default=[1, 10])
-    parser.add_argument('--root', type=Path, default=Path('/data/tpch-gpu'))
+    parser.add_argument('--root', type=Path, default=Path(os.environ.get('TPCH_DATA_ROOT', 'data/tpch-gpu')),
+                        help='export parent directory; writes sf1/ and sf10/ beneath it')
+    parser.add_argument('--duckdb', default=CLI, help='DuckDB executable (default: DUCKDB or duckdb on PATH)')
+    parser.add_argument('--source-sf1', type=Path, default=SOURCE_SF1,
+                        help='optional existing SF1 database to copy; otherwise generate via DuckDB tpch')
     arguments = parser.parse_args()
+    CLI, SOURCE_SF1 = arguments.duckdb, arguments.source_sf1
     for sf in sorted(set(arguments.sf)):
         export(sf, arguments.root)
 

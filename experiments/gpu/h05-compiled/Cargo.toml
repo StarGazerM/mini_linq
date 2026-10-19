@@ -16,3 +16,6 @@ cuda-host.workspace = true
 gpu-tiles = { path = "../tiles" }
 gpu-blocked-run = { path = "../blocked-run" }
 serde_json.workspace = true
+
+[dev-dependencies]
+trybuild = "1"

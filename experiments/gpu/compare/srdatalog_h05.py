@@ -239,7 +239,8 @@ def main():
                         help='derive static unary AsiaRegion/AsiaNation filters inside the timed query')
     parser.add_argument('--output', type=Path, default=HERE / 'srdatalog_h05.results.json')
     parser.add_argument('--append', action='store_true', help='append variants to an existing output')
-    parser.add_argument('--data-root', default='/data/tpch-gpu')
+    parser.add_argument('--data-root', default=os.environ.get('TPCH_DATA_ROOT', 'data/tpch-gpu'),
+                        help='export parent containing sf1/ and sf10/, not an individual scale-factor directory')
     parser.add_argument('--jobs', type=int, default=8)
     parser.add_argument('--child-result')
     args = parser.parse_args()

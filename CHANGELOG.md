@@ -7,23 +7,38 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Integrate upstream CQ generators with LE scheduling; reject unsupported GPU
+  generators explicitly. GPU cleanup pins RCCL to a published revision,
+  removes mandatory local checkout paths, and archives duplicate generated
+  evidence. Fix range-read classification, declared host-schema/literal typing,
+  stage-size validation, resident answer bounds and packed-column metadata
+  ownership. Parallelize membership/codec metadata work and collect timing at
+  the completion boundary rather than synchronizing after every operation.
+
+- Refresh GPU design/co-design documentation around the implemented
+  Structures→Expr printer and share/witness contracts; remove the superseded
+  Device grammar and duplicate proposal prose. Separate historical tuning
+  evidence from current status, counts from tuples, and resident execution
+  from load/setup. Clarify traversal, expansion and recursion boundaries.
+
 - Add the external `cq_gpu::print` Structures terminal printer and its pooled
   host runtime in `experiments/gpu`: generic CUDA tile streams, exact recorded
-  keyed-read provenance, retained lookup witnesses, bounded segmented expansion
-  with an explicit frontier, budgeted membership bitmaps and exact multiword
-  device dedup. The CPU-neutral `cq_rewrites::build_host_reads` records retained
+  keyed-read provenance, retained lookup witnesses, segmented expansion
+  with a bounded explicit frontier, budgeted membership bitmaps and exact multiword
+  device dedup. Input batch size does not bound expanded output cardinality.
+  The CPU-neutral `cq_rewrites::build_host_reads` records retained
   host modes; explicit `cq_gpu::prefix_runs` and `retype(dedup => DeviceSet<_>)`
   record device representations rather than silently replacing CPU providers.
-  Nested macro expansion runs on CUDA; smoke agrees with pull, a 20,000-answer
-  fanout exercises frontier/grow/relaunch, and four compile-fail fixtures name
-  unsupported merge, union, non-integral build keys and opaque guards.
-  Compiled retail_h05 A/B match all 7,242 SF1 and 72,983 SF10 answers after one
-  warmup and five runs. SF10 median GPU totals are 19.039/117.689 ms versus
-  hand-written 6.2/10.1 ms: correctness is reproduced, performance is not.
-  Both final kernels use 40 registers with 44/36-byte spill stores/loads;
-  all measurements and the differing recorded Supplier prefix are documented.
-- Lookup&Expand sharing on the R/E/C back end (contract of record
-  `/data/codex/gpu-le-reply.md`, confirmed by the GPU session). Structures gains
+  Initial integration evidence: nested macro expansion ran on CUDA; smoke
+  agreed with pull, and a 20,000-answer fanout exercised frontier/grow/relaunch.
+  Compiled retail_h05 A/B matched all 7,242 SF1 and 72,983 SF10 answers after one
+  warmup and five runs. Historical SF10 median GPU totals were 19.039/117.689 ms
+  versus hand-written 6.2/10.1 ms; these are not current resident measurements
+  or like-for-like end-to-end speedups. Both generated kernels then used
+  40 registers with 44/36-byte spill stores/loads. Current restrictions,
+  measurements and tuple-transfer boundaries are in `experiments/gpu/README.md`.
+- Lookup&Expand sharing on the R/E/C back end (see
+  `doc/GPU-LE-BACKEND-CODESIGN.md`). Structures gains
   `r share = lookup b [K] first s force p;` (ST-Share: the keyed read is
   evaluated once at the eager semi and reused by the forcing probe; coupling
   invariant `memo = lookup b k`), a `witness { b [K] at s as Type }` clause on
@@ -33,7 +48,8 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   an exists before its forcing probe), and `r stage = batch N expand;`
   (ST-Expand: a stage may span a probe whose build exposes a Copy range cursor
   because the chunk's expansion is a segmented flatten, total and
-  length-known). `SortedRun` (Copy range cursor, O(1) `nth`) and the
+  length-known; this does not bound its total length by N or remove runtime
+  capacity/index-domain obligations). `SortedRun` (Copy range cursor, O(1) `nth`) and the
   `sorted_runs` retype are cherry-picked from `gpu`; `cq_rewrites::retain_lookups`
   records share+witness for eligible eager-semi/later-probe pairs on such
   builds. Pull printer carries the witness as a non-column item pruned at the

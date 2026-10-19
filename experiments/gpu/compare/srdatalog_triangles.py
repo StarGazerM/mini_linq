@@ -2,7 +2,7 @@
 """Directed set-edge triangle references; never symmetrize the input.
 
 Run with:
-  uv run --project /home/stargazermiao/workspace/srdatalog-python python \
+  uv run --project "$SRDATALOG" python \
       experiments/gpu/compare/srdatalog_triangles.py
 
 DuckDB CLI uses 24 threads, deduplicates edges, records graph statistics, and
@@ -24,6 +24,7 @@ import ctypes as C
 import hashlib
 import importlib.util
 import json
+import os
 import re
 import signal
 import statistics
@@ -36,10 +37,7 @@ from pathlib import Path
 from srdatalog_h05 import MemorySampler, save
 
 HERE = Path(__file__).resolve().parent
-DATASETS = {
-    'dblp': Path('/data/dataset/graph/com-dblp.ungraph.txt'),
-    'livejournal': Path('/data/dataset/graph/soc-LiveJournal/edge.facts'),
-}
+DATASETS = ('dblp', 'livejournal')
 ORDERS = {'default': None, 'abc': ['a', 'b', 'c'], 'bac': ['b', 'a', 'c']}
 QUERY = ('SELECT count(*) AS triangle_count FROM E ab '
          'JOIN E bc ON ab.dst = bc.src '
@@ -51,7 +49,7 @@ def sql_string(value):
 
 
 def duckdb_reference(args, dataset):
-    source = DATASETS[dataset]
+    source = getattr(args, dataset)
     edges = args.data_root / f'{dataset}.set.tsv'
     sql_path = args.output.parent / f'triangles_{dataset}.duckdb.sql'
     log_path = args.output.parent / f'triangles_{dataset}.duckdb.log'
@@ -232,11 +230,17 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--dataset', nargs='+', choices=list(DATASETS), default=list(DATASETS))
     parser.add_argument('--order', nargs='+', choices=list(ORDERS), default=list(ORDERS))
-    parser.add_argument('--duckdb', type=Path,
-                        default=Path('/home/stargazermiao/.duckdb/cli/latest/duckdb'))
+    parser.add_argument('--duckdb', default=os.environ.get('DUCKDB', 'duckdb'),
+                        help='DuckDB executable (default: DUCKDB or duckdb on PATH)')
     parser.add_argument('--srdatalog', type=Path,
-                        default=Path('/home/stargazermiao/workspace/srdatalog-python'))
-    parser.add_argument('--data-root', type=Path, default=Path('/tmp/triangles-reference-data'))
+                        default=Path(os.environ.get('SRDATALOG', '../srdatalog-python')))
+    parser.add_argument('--dblp', type=Path,
+                        default=Path(os.environ.get('DBLP_DATASET', 'data/graph/com-dblp.ungraph.txt')))
+    parser.add_argument('--livejournal', type=Path,
+                        default=Path(os.environ.get('LIVEJOURNAL_DATASET', 'data/graph/soc-LiveJournal/edge.facts')))
+    parser.add_argument('--data-root', type=Path,
+                        default=Path(os.environ.get('TRIANGLES_DATA_ROOT', 'data/triangles-reference')),
+                        help='generated deduplicated edge output directory, NOT the source dataset directory')
     parser.add_argument('--output', type=Path, default=HERE / 'triangles_references.results.json')
     parser.add_argument('--jobs', type=int, default=8)
     parser.add_argument('--child-result', type=Path)

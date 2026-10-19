@@ -115,6 +115,45 @@ pub(crate) mod runtime_kernels {
             }
         }
     }
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub unsafe fn membership_extrema_initialize(bounds: *mut u64) {
+        if thread::index_1d().get() == 0 {
+            unsafe {
+                bounds.write(u64::MAX);
+                bounds.add(1).write(0);
+            }
+        }
+    }
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub unsafe fn membership_extrema(table: TableView, column_index: usize, bounds: *mut u64) {
+        let mut row = thread::index_1d().get() as u64;
+        let stride = thread::gridDim_x() as u64 * 256;
+        let count = unsafe { table_len(table) };
+        let mut low = u64::MAX;
+        let mut high = 0u64;
+        while row < count {
+            // Flipping the sign bit preserves signed order under unsigned atomics.
+            let key = (unsafe { column(table, column_index, row) } as u64) ^ (1u64 << 63);
+            low = low.min(key);
+            high = high.max(key);
+            row += stride;
+        }
+        let mut distance = 16;
+        while distance != 0 {
+            low = low.min(cuda_device::warp::shuffle_xor_u64(low, distance));
+            high = high.max(cuda_device::warp::shuffle_xor_u64(high, distance));
+            distance /= 2;
+        }
+        if thread::threadIdx_x() % 32 == 0 {
+            unsafe { DeviceAtomicU64::from_ptr(bounds) }.fetch_min(low, AtomicOrdering::Relaxed);
+            unsafe { DeviceAtomicU64::from_ptr(bounds.add(1)) }.fetch_max(high, AtomicOrdering::Relaxed);
+        }
+    }
+
     // The bitmap allocation is a recorded budget. Bounds remain on device;
     // an unsupported domain marks the relation and yields an empty safe view.
     #[kernel]
@@ -122,21 +161,18 @@ pub(crate) mod runtime_kernels {
     #[launch_contract(domain = 1, block = (256, 1, 1))]
     pub unsafe fn membership_bounds(
         table: TableView,
-        column_index: usize,
         bounds: *mut u64,
         budget: u64,
         status: *mut OutputCount,
+        mut min: i64,
+        mut max: i64,
+        reduced: bool,
     ) {
         if thread::index_1d().get() == 0 {
             let count = unsafe { table_len(table) };
-            let mut min = i64::MAX;
-            let mut max = i64::MIN;
-            let mut row = 0;
-            while row < count {
-                let key = unsafe { column(table, column_index, row) };
-                min = min.min(key);
-                max = max.max(key);
-                row += 1;
+            if reduced {
+                min = ((unsafe { bounds.read() }) ^ (1u64 << 63)) as i64;
+                max = ((unsafe { bounds.add(1).read() }) ^ (1u64 << 63)) as i64;
             }
             if count == 0 {
                 min = 0;

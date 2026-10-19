@@ -9,6 +9,7 @@ edition = "2021"
 cuda-core = { git = "https://github.com/StarGazerM/cuda-oxide.git", rev = "5f7c34fddadcf250f2e45d0cffe83a3d27f2bea3" }
 cuda-device = { git = "https://github.com/StarGazerM/cuda-oxide.git", rev = "5f7c34fddadcf250f2e45d0cffe83a3d27f2bea3" }
 cuda-host = { git = "https://github.com/StarGazerM/cuda-oxide.git", rev = "5f7c34fddadcf250f2e45d0cffe83a3d27f2bea3" }
+rccl-memory = { git = "https://github.com/StarGazerM/rccl.git", rev = "745f53cc8d447ec58033d97f4d13f2d7e2f7463a" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
