@@ -40,7 +40,8 @@ def check_feature_locks():
         root_versions.setdefault(package["name"], set()).add(
             (package["version"], package["source"]))
     # Ascent 0.8 requires hashbrown ^0.14; no root dependency can provide it.
-    feature_only = {("datalog", "hashbrown", "0.14.5")}
+    feature_only = {("datalog", "hashbrown", "0.14.5"),
+                    ("datalog-parallel", "hashbrown", "0.14.5")}
     errors = []
     locks = sorted((ROOT / "features").glob("*/Cargo.lock"))
     for lock in locks:

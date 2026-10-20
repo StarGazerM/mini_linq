@@ -1,0 +1,24 @@
+[package]
+name = "cq-datalog-partition"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+
+[package.metadata.cq]
+source = "cq-lang-datalog-round"
+target = "cq-lang-datalog-round"
+
+[dependencies]
+cq-datalog-support = { path = "../../datalog/support" }
+cq-lang-datalog-round = { path = "../../datalog/languages/dl-round" }
+proc-macro2 = "1"
+syn = { version = "2", features = ["full", "extra-traits"] }
+
+[dev-dependencies]
+quote = "1"
+cq-datalog-stratify = { path = "../../datalog/passes/stratify" }
+cq-datalog-incremental = { path = "../../datalog/passes/incremental" }
+cq-datalog-storage = { path = "../../datalog/passes/storage" }
+cq-datalog-fork = { path = "../../datalog/passes/fork" }
+cq-stage = { version = "0.1.0", path = "../../../facade/cq-stage" }

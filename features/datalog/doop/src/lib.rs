@@ -1,28 +1,29 @@
-//! DOOP context-insensitive points-to analysis, sequential and parallel engines.
+//! DOOP context-insensitive points-to analysis with reusable engine generators.
 //!
 //! Both engines preserve all 103 relations, 135 rules and body atom order from
 //! `flowlog-rs/flowlog-bench/programs/oracle/flowlog/doop/default.dl`.
-//! Both `ascent!` and `ascent_par!` expand the same upstream translation.
+//! Engine generators share the same upstream translation and accept caller configuration.
 //! Strings share one process-wide u32 interner; loading is identical for both.
 //!
 //! From `features/datalog`, build with `cargo build --release -p datalog-doop`.
 //! Fetch with `python3 doop/fetch.py cassandra`, then invoke the built binary:
-//! `doop /tmp/doop-data/cassandra --threads 5 --check`.
-//! `--check` compares all 26 full tuple sets across all four engines against
-//! sequential Ascent. Uninstrumented output order is unspecified.
-//! `--engine mini|mini-par|ascent|ascent-par` isolates timing and peak RSS.
-//! `python3 doop/sweep.py --binary /tmp/target-Par/release/doop --baseline /path/to/baseline/doop`
-//! checks all six applications at 1,2,4,5,8,15 threads before isolated timings.
-//! The sweep retains `/usr/bin/time -l` stderr, including phase-timing output
-//! when built with `--features phase-timing`, outside the external facts cache.
+//! `doop /tmp/doop-data/cassandra --check`.
+//! `--check` compares all 26 full tuple sets against sequential Ascent.
+//! Uninstrumented output order is unspecified.
+//! `--engine mini|ascent` isolates timing and peak RSS.
+//! Enable `phase-timing` for per-round instrumentation separately from timing runs.
 //! Compute timing includes derived indexes and materializing the 26 outputs;
 //! load timing includes parsing and interning, not engine initialization.
 //! No counters are enabled. Do not compile concurrently with measured runs.
+//! The public [`harness`] accepts arbitrary named engine descriptors and owns
+//! CLI parsing, full-set checks, loading, timing and process high-water RSS.
+//! Callers install their execution context outside that shared harness.
 
 #![recursion_limit = "1024"]
 
 pub mod ascent_engine;
-mod interner;
+pub mod harness;
+pub mod interner;
 mod loader;
 pub mod mini_engine;
 

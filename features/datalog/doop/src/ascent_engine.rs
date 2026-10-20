@@ -1,25 +1,21 @@
 // Translated from flowlog-rs/flowlog-bench programs/oracle/ascent/doop/src/main.rs.
 // All 135 rules and body atom order match the upstream DOOP default.dl.
-use crate::{
-    Facts, Results,
-    interner::{IStr, res, sym},
-};
-// Sequential relations transfer ownership unchanged; Ascent parallel relations
-// use boxcar storage and must be converted at the shared evaluator boundary.
-macro_rules! relation_storage {
-    (sequential, $rows:expr) => {
+/// Adapt owned relation storage without changing the source program.
+#[macro_export]
+macro_rules! doop_relation_storage {
+    ($rows:expr) => {
         $rows
     };
-    (parallel, $rows:expr) => {
-        $rows.into_iter().collect()
-    };
 }
-macro_rules! engine {
-    ($module:ident, $ascent:ident) => {
-mod $module {
-use super::*;
-use ascent::$ascent;
-$ascent! {
+/// Instantiate the unchanged oracle with caller-selected macros.
+#[macro_export]
+macro_rules! doop_ascent_engine {
+    ($module:ident, $ascent:path, $storage:path) => {
+pub mod $module {
+use $crate::{Facts, Results, interner::{IStr, res, sym}};
+use $ascent as ascent_program;
+use $storage as relation_storage;
+ascent_program! {
     struct Doop;
     relation directsuperclass(IStr, IStr);
     relation directsuperinterface(IStr, IStr);
@@ -563,74 +559,72 @@ $ascent! {
 
 pub fn run(facts: Facts) -> Results {
     let mut program = Doop {
-        directsuperclass: relation_storage!($module, facts.directsuperclass),
-        directsuperinterface: relation_storage!($module, facts.directsuperinterface),
-        mainclass: relation_storage!($module, facts.mainclass),
-        formalparam: relation_storage!($module, facts.formalparam),
-        componenttype: relation_storage!($module, facts.componenttype),
-        assignreturnvalue: relation_storage!($module, facts.assignreturnvalue),
-        actualparam: relation_storage!($module, facts.actualparam),
-        method_modifier: relation_storage!($module, facts.method_modifier),
-        var_type: relation_storage!($module, facts.var_type),
-        _classtype: relation_storage!($module, facts._classtype),
-        _arraytype: relation_storage!($module, facts._arraytype),
-        _interfacetype: relation_storage!($module, facts._interfacetype),
-        _var_declaringmethod: relation_storage!($module, facts._var_declaringmethod),
-        _applicationclass: relation_storage!($module, facts._applicationclass),
-        _thisvar: relation_storage!($module, facts._thisvar),
-        _normalheap: relation_storage!($module, facts._normalheap),
-        _stringconstant: relation_storage!($module, facts._stringconstant),
-        _assignheapallocation: relation_storage!($module, facts._assignheapallocation),
-        _assignlocal: relation_storage!($module, facts._assignlocal),
-        _assigncast: relation_storage!($module, facts._assigncast),
-        _field: relation_storage!($module, facts._field),
-        _staticmethodinvocation: relation_storage!($module, facts._staticmethodinvocation),
-        _specialmethodinvocation: relation_storage!($module, facts._specialmethodinvocation),
-        _virtualmethodinvocation: relation_storage!($module, facts._virtualmethodinvocation),
-        _method: relation_storage!($module, facts._method),
-        _storeinstancefield: relation_storage!($module, facts._storeinstancefield),
-        _loadinstancefield: relation_storage!($module, facts._loadinstancefield),
-        _storestaticfield: relation_storage!($module, facts._storestaticfield),
-        _loadstaticfield: relation_storage!($module, facts._loadstaticfield),
-        _storearrayindex: relation_storage!($module, facts._storearrayindex),
-        _loadarrayindex: relation_storage!($module, facts._loadarrayindex),
-        _return: relation_storage!($module, facts._return),
+        directsuperclass: relation_storage!(facts.directsuperclass),
+        directsuperinterface: relation_storage!(facts.directsuperinterface),
+        mainclass: relation_storage!(facts.mainclass),
+        formalparam: relation_storage!(facts.formalparam),
+        componenttype: relation_storage!(facts.componenttype),
+        assignreturnvalue: relation_storage!(facts.assignreturnvalue),
+        actualparam: relation_storage!(facts.actualparam),
+        method_modifier: relation_storage!(facts.method_modifier),
+        var_type: relation_storage!(facts.var_type),
+        _classtype: relation_storage!(facts._classtype),
+        _arraytype: relation_storage!(facts._arraytype),
+        _interfacetype: relation_storage!(facts._interfacetype),
+        _var_declaringmethod: relation_storage!(facts._var_declaringmethod),
+        _applicationclass: relation_storage!(facts._applicationclass),
+        _thisvar: relation_storage!(facts._thisvar),
+        _normalheap: relation_storage!(facts._normalheap),
+        _stringconstant: relation_storage!(facts._stringconstant),
+        _assignheapallocation: relation_storage!(facts._assignheapallocation),
+        _assignlocal: relation_storage!(facts._assignlocal),
+        _assigncast: relation_storage!(facts._assigncast),
+        _field: relation_storage!(facts._field),
+        _staticmethodinvocation: relation_storage!(facts._staticmethodinvocation),
+        _specialmethodinvocation: relation_storage!(facts._specialmethodinvocation),
+        _virtualmethodinvocation: relation_storage!(facts._virtualmethodinvocation),
+        _method: relation_storage!(facts._method),
+        _storeinstancefield: relation_storage!(facts._storeinstancefield),
+        _loadinstancefield: relation_storage!(facts._loadinstancefield),
+        _storestaticfield: relation_storage!(facts._storestaticfield),
+        _loadstaticfield: relation_storage!(facts._loadstaticfield),
+        _storearrayindex: relation_storage!(facts._storearrayindex),
+        _loadarrayindex: relation_storage!(facts._loadarrayindex),
+        _return: relation_storage!(facts._return),
         ..Doop::default()
     };
     program.run();
     Results {
-        mainclass: relation_storage!($module, program.mainclass),
-        method_simplename: relation_storage!($module, program.method_simplename),
-        method_declaringtype: relation_storage!($module, program.method_declaringtype),
-        method_modifier: relation_storage!($module, program.method_modifier),
-        method_paramtypes: relation_storage!($module, program.method_paramtypes),
-        method_returntype: relation_storage!($module, program.method_returntype),
-        method_descriptor: relation_storage!($module, program.method_descriptor),
-        methodlookup: relation_storage!($module, program.methodlookup),
-        methodimplemented: relation_storage!($module, program.methodimplemented),
-        directsubclass: relation_storage!($module, program.directsubclass),
-        subclass: relation_storage!($module, program.subclass),
-        superclass: relation_storage!($module, program.superclass),
-        superinterface: relation_storage!($module, program.superinterface),
-        subtypeof: relation_storage!($module, program.subtypeof),
-        supertypeof: relation_storage!($module, program.supertypeof),
-        subtypeofdifferent: relation_storage!($module, program.subtypeofdifferent),
-        mainmethoddeclaration: relation_storage!($module, program.mainmethoddeclaration),
-        classinitializer: relation_storage!($module, program.classinitializer),
-        initializedclass: relation_storage!($module, program.initializedclass),
-        assign: relation_storage!($module, program.assign),
-        varpointsto: relation_storage!($module, program.varpointsto),
-        instancefieldpointsto: relation_storage!($module, program.instancefieldpointsto),
-        staticfieldpointsto: relation_storage!($module, program.staticfieldpointsto),
-        callgraphedge: relation_storage!($module, program.callgraphedge),
-        arrayindexpointsto: relation_storage!($module, program.arrayindexpointsto),
-        reachable: relation_storage!($module, program.reachable),
+        mainclass: relation_storage!(program.mainclass),
+        method_simplename: relation_storage!(program.method_simplename),
+        method_declaringtype: relation_storage!(program.method_declaringtype),
+        method_modifier: relation_storage!(program.method_modifier),
+        method_paramtypes: relation_storage!(program.method_paramtypes),
+        method_returntype: relation_storage!(program.method_returntype),
+        method_descriptor: relation_storage!(program.method_descriptor),
+        methodlookup: relation_storage!(program.methodlookup),
+        methodimplemented: relation_storage!(program.methodimplemented),
+        directsubclass: relation_storage!(program.directsubclass),
+        subclass: relation_storage!(program.subclass),
+        superclass: relation_storage!(program.superclass),
+        superinterface: relation_storage!(program.superinterface),
+        subtypeof: relation_storage!(program.subtypeof),
+        supertypeof: relation_storage!(program.supertypeof),
+        subtypeofdifferent: relation_storage!(program.subtypeofdifferent),
+        mainmethoddeclaration: relation_storage!(program.mainmethoddeclaration),
+        classinitializer: relation_storage!(program.classinitializer),
+        initializedclass: relation_storage!(program.initializedclass),
+        assign: relation_storage!(program.assign),
+        varpointsto: relation_storage!(program.varpointsto),
+        instancefieldpointsto: relation_storage!(program.instancefieldpointsto),
+        staticfieldpointsto: relation_storage!(program.staticfieldpointsto),
+        callgraphedge: relation_storage!(program.callgraphedge),
+        arrayindexpointsto: relation_storage!(program.arrayindexpointsto),
+        reachable: relation_storage!(program.reachable),
     }
 }
 }
     };
 }
-engine!(sequential, ascent);
-engine!(parallel, ascent_par);
-pub use parallel::run as run_parallel;
+doop_ascent_engine!(sequential, ascent::ascent, crate::doop_relation_storage);
 pub use sequential::run;

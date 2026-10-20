@@ -1,0 +1,24 @@
+[package]
+name = "datalog-parallel-doop"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[[bin]]
+name = "doop-parallel"
+path = "src/main.rs"
+
+[features]
+default = []
+phase-timing = ["cq-datalog/phase-timing", "datalog-doop/phase-timing"]
+
+[dependencies]
+datalog-doop = { path = "../../datalog/doop" }
+cq-datalog-parallel = { path = ".." }
+cq-datalog = { path = "../../datalog/facade/cq-datalog" }
+mini-linq = { version = "0.1.0", path = "../../../facade/mini-linq" }
+cq-storage = { version = "0.1.0", path = "../../../runtime/cq-storage" }
+ascent = { version = "0.8", default-features = false, features = ["par"] }
+rayon = "1"

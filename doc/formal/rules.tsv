@@ -156,9 +156,9 @@ INC-Adequacy	abstract	-	-	Planned; exhaustive operational observation refines bo
 INC-Supp	abstract	-	-	Planned; support commutes with total positive contexts; partial code and consumer boundaries need separate obligations.
 STR-Maintain	abstract	-	-	Planned; exact-once ordered insertion and merges that never cross protected cuts preserve Runs abstraction.
 CQ-Diff	abstract	-	-	Planned; multilinear expansion uses supplied increments, not subtraction on Boolean or Natural streams.
-DL-InsertNew	implementation	features/datalog/bridge/src/render.rs	/// Formal rule DL-InsertNew:	Datalog-owned canonical all-column insertion produces fresh deltas and updates each selected host layout.
-DL-Strata	implementation	features/datalog/language/src/lib.rs	/// Formal rule DL-Strata:	Checked signed dependencies and exact ordered SCCs freeze lower-stratum negative inputs.
-DL-Delta	implementation	features/datalog/language/src/lib.rs	/// Formal rule DL-Delta:	Checked variants erase to source rules and cover every changing positive position exactly once.
+DL-InsertNew	implementation	features/datalog/print/src/lib.rs	/// Formal rule DL-InsertNew:	Datalog-owned canonical all-column insertion produces fresh deltas and updates each selected host layout.
+DL-Strata	implementation	features/datalog/languages/dl-strata/src/lib.rs	/// Formal rule DL-Strata:	Checked signed dependencies and exact ordered SCCs freeze lower-stratum negative inputs.
+DL-Delta	implementation	features/datalog/languages/dl-incremental/src/lib.rs	/// Formal rule DL-Delta:	Checked variants erase to source rules and cover every changing positive position exactly once.
 STR-Repr	implementation	languages/cq-lang-structures/src/repr.rs	// STR-Repr:	Check per-result representation lineage and owned-column coverage; storage forward simulation remains a semantic premise.
 ST-Total	implementation	languages/cq-lang-structures/src/stage.rs	// ST-Total:	Derive total stage steps without crossing opaque Rust or cursor-producing probe and merge operators.
 ST-Stage	implementation	languages/cq-lang-structures/src/stage.rs	// ST-Stage:	Require an indexable for producer, positive batch size and a boundary before partial evaluation.
@@ -168,3 +168,15 @@ STR-Witness	implementation	languages/cq-lang-structures/src/repr.rs	// STR-Witne
 ST-Expand	implementation	languages/cq-lang-structures/src/stage.rs	// ST-Expand:	Admit total segmented flattening of SortedRun ranges from a for producer without crossing partial steps.
 STR-SortedRun	implementation	runtime/cq-storage/src/sorted_run.rs	/// Formal rule STR-SortedRun:	Stable clustered runs preserve the occurrence bag and within-key order; exact directory lookup selects the matching range.
 EXT-SortedRuns	implementation	features/rewrites/passes/src/structures.rs	/// Formal rule EXT-SortedRuns:	Retype eligible one-level stream-keyed HashIndex payload providers while preserving Physical and coverage.
+WF-DL-Source	implementation	features/datalog/languages/dl-source/src/lib.rs	/// Formal rule WF-DL-Source:	Source safety, exact set-model declarations and stratifiability.
+WF-DL-Strata	implementation	features/datalog/languages/dl-strata/src/lib.rs	pub fn check(	Source contract and exact ordered SCC schedule.
+WF-DL-Incremental	implementation	features/datalog/languages/dl-incremental/src/lib.rs	pub fn check(	Strata contract, exact covering variants and delta declarations; partial Rust remains conditional.
+DL-FrozenNegation	abstract	-	-	Total pure covering theorem with completed lower-component negative inputs frozen; not a partial-Rust proof.
+WF-DL-Storage	implementation	features/datalog/languages/dl-storage/src/lib.rs	/// Formal rule WF-DL-Storage:	Exact deterministic storage, binding and maintenance decisions.
+WF-DL-Round	implementation	features/datalog/languages/dl-round/src/lib.rs	/// Formal rule WF-DL-Round:	Hole correspondence, pull interfaces and evaluate/admit/publish schedule.
+CK-DL-IfLet	implementation	features/datalog/passes/surface-if-let/src/lib.rs	pub fn check(	Independent surface expansion correspondence preserving binders and written position.
+CK-DL-Stratify	implementation	features/datalog/passes/stratify/src/lib.rs	pub fn check(	Exact source preservation and target Strata contract.
+CK-DL-Incremental	implementation	features/datalog/passes/incremental/src/lib.rs	pub fn check(	Exact Strata preservation and target covering expansion.
+CK-DL-Storage	implementation	features/datalog/passes/storage/src/lib.rs	/// Formal rule CK-DL-Storage:	Exact Incremental preservation and target storage contract.
+CK-DL-Fork	implementation	features/datalog/passes/fork/src/lib.rs	/// Formal rule CK-DL-Fork:	Exact Storage preservation and target Round correspondence.
+CK-DL-Partition	implementation	features/datalog-parallel/partition/src/lib.rs	/// Formal rule CK-DL-Partition:	Exact reversible first-occurrence scan annotations; parallel evaluation retains sequential admission and publication.

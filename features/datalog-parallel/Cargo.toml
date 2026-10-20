@@ -1,0 +1,37 @@
+[workspace]
+members = ["partition", "print", "oracle", "doop"]
+resolver = "3"
+
+[package]
+name = "cq-datalog-parallel"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+description = "Checked slice-one Datalog execution extension"
+
+[lib]
+proc-macro = true
+
+[features]
+default = []
+counters = ["cq-datalog/counters", "cq-storage/counters"]
+phase-timing = ["cq-datalog/phase-timing"]
+
+[dependencies]
+cq-stage = { version = "0.1.0", path = "../../facade/cq-stage" }
+cq-lang-datalog-round = { path = "../datalog/languages/dl-round" }
+cq-datalog-partition = { path = "partition" }
+cq-datalog-rayon-print = { path = "print" }
+syn = { version = "2", features = ["full"] }
+
+[dev-dependencies]
+cq-datalog = { path = "../datalog/facade/cq-datalog" }
+mini-linq = { version = "0.1.0", path = "../../facade/mini-linq" }
+cq-storage = { version = "0.1.0", path = "../../runtime/cq-storage" }
+ascent = { version = "0.8", default-features = false, features = ["par"] }
+rayon = "1"
+
+[[test]]
+name = "counters"
+required-features = ["counters"]

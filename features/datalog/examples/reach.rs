@@ -12,7 +12,10 @@ fn main() {
         output reach;
         reach(*x) :- seed(x);
         reach(*y) :- reach(x), edge(x, y);
-    }.collect();
+    }
+    .collect();
     assert_eq!(reachable, BTreeSet::from([(1,), (2,), (3,), (4,)]));
-    for (node,) in reachable { println!("{node}"); }
+    for (node,) in reachable {
+        println!("{node}");
+    }
 }

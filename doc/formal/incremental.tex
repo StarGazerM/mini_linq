@@ -172,12 +172,12 @@ $O(|\delta R_t|)$ round bound follows from these equations.
 
 \subsection{Datalog and the fixpoint boundary}
 The external \texttt{features/datalog} workspace implements this boundary above
-the unmodified compiler. Its language and schedule passes record and check
-source rules, dependency SCCs, declared delta relations, semi-naive variants,
-the all-column \texttt{insert\_new} policy, negation-key representation, and
-per-relation index layouts. Its fork emits ordinary CQ holes plus a round
-context; a separate bridge prints the round loop. Source, stratified, and
-semi-naive texts are independently checked and resumable.
+the unmodified compiler. Its five language crates record and check source
+rules, dependency SCCs, delta relations, semi-naive variants, storage choices
+and explicit round programs. Separate stratify, incremental, storage and fork
+passes connect these languages through the stage protocol; a terminal printer
+uses the shared Datalog printing library. Each language is independently checked
+and can enter the pipeline at its consuming pass (Section~\ref{sec:datalog-languages}).
 
 A program distinguishes fixed extensional hosts from intensional relations.
 The dependency graph includes every rule-visible reference. Safety requires

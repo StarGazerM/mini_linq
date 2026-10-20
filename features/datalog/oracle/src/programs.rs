@@ -1,8 +1,15 @@
 // Programs intentionally use only the public surface; no Datalog IR is consumed.
 // Andersen/CSPA equations adapted from flowlog-rs/flowlog-bench:
 // https://github.com/flowlog-rs/flowlog-bench/tree/main/programs/oracle/ascent
-// Sequential and parallel modules expand this same source with different macros.
-use crate::{Data, Rows};
+/// Instantiate the unchanged corpus with caller-selected compiler and oracle macros.
+#[macro_export]
+macro_rules! oracle_programs {
+    ($module:ident, $ascent:path, $input:path, pipeline { $($pipeline:tt)* }) => {
+    pub mod $module {
+    use $ascent as ascent_program;
+    use $input as supplied_oracle_input;
+    macro_rules! oracle_input { ($rows:expr) => { supplied_oracle_input!($rows) }; }
+use $crate::{Data, Rows};
 use std::time::{Duration, Instant};
 
 pub mod reach {
@@ -25,7 +32,7 @@ pub mod reach {
         p.run();
         let elapsed = start.elapsed();
         (
-            crate::canonical(p.answer.into_iter().map(|(x0,)| vec![x0]).collect()),
+            $crate::canonical(p.answer.into_iter().map(|(x0,)| vec![x0]).collect()),
             elapsed,
         )
     }
@@ -33,7 +40,8 @@ pub mod reach {
         let edge = data.edge.clone();
         let seed = data.seed.clone();
         let start = Instant::now();
-        let result = datalog_program! {
+        let result = cq_datalog::datalog! {
+                pipeline { $($pipeline)* }
                 struct Program;
                 relation edge(c0:i32, c1:i32) = (edge);
                 relation seed(c0:i32) = (seed);
@@ -45,7 +53,7 @@ pub mod reach {
         .collect::<Vec<_>>();
         let elapsed = start.elapsed();
         (
-            crate::canonical(result.into_iter().map(|(x0,)| vec![x0]).collect()),
+            $crate::canonical(result.into_iter().map(|(x0,)| vec![x0]).collect()),
             elapsed,
         )
     }
@@ -69,14 +77,15 @@ pub mod tc_left {
         p.run();
         let elapsed = start.elapsed();
         (
-            crate::canonical(p.answer.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            $crate::canonical(p.answer.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
             elapsed,
         )
     }
     pub fn mini(data: &Data) -> (Rows, Duration) {
         let edge = data.edge.clone();
         let start = Instant::now();
-        let result = datalog_program! {
+        let result = cq_datalog::datalog! {
+                pipeline { $($pipeline)* }
                 struct Program;
                 relation edge(c0:i32, c1:i32) = (edge);
                 relation answer(c0:i32, c1:i32);
@@ -87,7 +96,7 @@ pub mod tc_left {
         .collect::<Vec<_>>();
         let elapsed = start.elapsed();
         (
-            crate::canonical(result.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            $crate::canonical(result.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
             elapsed,
         )
     }
@@ -111,14 +120,15 @@ pub mod tc_right {
         p.run();
         let elapsed = start.elapsed();
         (
-            crate::canonical(p.answer.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            $crate::canonical(p.answer.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
             elapsed,
         )
     }
     pub fn mini(data: &Data) -> (Rows, Duration) {
         let edge = data.edge.clone();
         let start = Instant::now();
-        let result = datalog_program! {
+        let result = cq_datalog::datalog! {
+                pipeline { $($pipeline)* }
                 struct Program;
                 relation edge(c0:i32, c1:i32) = (edge);
                 relation answer(c0:i32, c1:i32);
@@ -129,7 +139,7 @@ pub mod tc_right {
         .collect::<Vec<_>>();
         let elapsed = start.elapsed();
         (
-            crate::canonical(result.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            $crate::canonical(result.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
             elapsed,
         )
     }
@@ -153,14 +163,15 @@ pub mod tc_nonlinear {
         p.run();
         let elapsed = start.elapsed();
         (
-            crate::canonical(p.answer.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            $crate::canonical(p.answer.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
             elapsed,
         )
     }
     pub fn mini(data: &Data) -> (Rows, Duration) {
         let edge = data.edge.clone();
         let start = Instant::now();
-        let result = datalog_program! {
+        let result = cq_datalog::datalog! {
+                pipeline { $($pipeline)* }
                 struct Program;
                 relation edge(c0:i32, c1:i32) = (edge);
                 relation answer(c0:i32, c1:i32);
@@ -171,7 +182,7 @@ pub mod tc_nonlinear {
         .collect::<Vec<_>>();
         let elapsed = start.elapsed();
         (
-            crate::canonical(result.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            $crate::canonical(result.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
             elapsed,
         )
     }
@@ -195,14 +206,15 @@ pub mod same_generation {
         p.run();
         let elapsed = start.elapsed();
         (
-            crate::canonical(p.answer.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            $crate::canonical(p.answer.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
             elapsed,
         )
     }
     pub fn mini(data: &Data) -> (Rows, Duration) {
         let edge = data.edge.clone();
         let start = Instant::now();
-        let result = datalog_program! {
+        let result = cq_datalog::datalog! {
+                pipeline { $($pipeline)* }
                 struct Program;
                 relation edge(c0:i32, c1:i32) = (edge);
                 relation answer(c0:i32, c1:i32);
@@ -213,7 +225,7 @@ pub mod same_generation {
         .collect::<Vec<_>>();
         let elapsed = start.elapsed();
         (
-            crate::canonical(result.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            $crate::canonical(result.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
             elapsed,
         )
     }
@@ -244,7 +256,7 @@ pub mod mutual {
         p.run();
         let elapsed = start.elapsed();
         (
-            crate::canonical(
+            $crate::canonical(
                 p.answer
                     .into_iter()
                     .map(|(x0, x1, x2)| vec![x0, x1, x2])
@@ -257,7 +269,8 @@ pub mod mutual {
         let edge = data.edge.clone();
         let nodes = data.nodes.clone();
         let start = Instant::now();
-        let result = datalog_program! {
+        let result = cq_datalog::datalog! {
+                pipeline { $($pipeline)* }
                 struct Program;
                 relation edge(c0:i32, c1:i32) = (edge);
                 relation nodes(c0:i32) = (nodes);
@@ -274,7 +287,7 @@ pub mod mutual {
         .collect::<Vec<_>>();
         let elapsed = start.elapsed();
         (
-            crate::canonical(
+            $crate::canonical(
                 result
                     .into_iter()
                     .map(|(x0, x1, x2)| vec![x0, x1, x2])
@@ -308,7 +321,7 @@ pub mod multiple_seeds {
         p.run();
         let elapsed = start.elapsed();
         (
-            crate::canonical(p.answer.into_iter().map(|(x0,)| vec![x0]).collect()),
+            $crate::canonical(p.answer.into_iter().map(|(x0,)| vec![x0]).collect()),
             elapsed,
         )
     }
@@ -317,7 +330,8 @@ pub mod multiple_seeds {
         let seed = data.seed.clone();
         let extra = data.extra.clone();
         let start = Instant::now();
-        let result = datalog_program! {
+        let result = cq_datalog::datalog! {
+                pipeline { $($pipeline)* }
                 struct Program;
                 relation edge(c0:i32, c1:i32) = (edge);
                 relation seed(c0:i32) = (seed);
@@ -331,7 +345,7 @@ pub mod multiple_seeds {
         .collect::<Vec<_>>();
         let elapsed = start.elapsed();
         (
-            crate::canonical(result.into_iter().map(|(x0,)| vec![x0]).collect()),
+            $crate::canonical(result.into_iter().map(|(x0,)| vec![x0]).collect()),
             elapsed,
         )
     }
@@ -357,7 +371,7 @@ pub mod guard {
         p.run();
         let elapsed = start.elapsed();
         (
-            crate::canonical(p.answer.into_iter().map(|(x0,)| vec![x0]).collect()),
+            $crate::canonical(p.answer.into_iter().map(|(x0,)| vec![x0]).collect()),
             elapsed,
         )
     }
@@ -365,7 +379,8 @@ pub mod guard {
         let edge = data.edge.clone();
         let seed = data.seed.clone();
         let start = Instant::now();
-        let result = datalog_program! {
+        let result = cq_datalog::datalog! {
+                pipeline { $($pipeline)* }
                 struct Program;
                 relation edge(c0:i32, c1:i32) = (edge);
                 relation seed(c0:i32) = (seed);
@@ -377,7 +392,7 @@ pub mod guard {
         .collect::<Vec<_>>();
         let elapsed = start.elapsed();
         (
-            crate::canonical(result.into_iter().map(|(x0,)| vec![x0]).collect()),
+            $crate::canonical(result.into_iter().map(|(x0,)| vec![x0]).collect()),
             elapsed,
         )
     }
@@ -407,7 +422,7 @@ pub mod unreachable {
         p.run();
         let elapsed = start.elapsed();
         (
-            crate::canonical(p.answer.into_iter().map(|(x0,)| vec![x0]).collect()),
+            $crate::canonical(p.answer.into_iter().map(|(x0,)| vec![x0]).collect()),
             elapsed,
         )
     }
@@ -416,7 +431,8 @@ pub mod unreachable {
         let seed = data.seed.clone();
         let nodes = data.nodes.clone();
         let start = Instant::now();
-        let result = datalog_program! {
+        let result = cq_datalog::datalog! {
+                pipeline { $($pipeline)* }
                 struct Program;
                 relation edge(c0:i32, c1:i32) = (edge);
                 relation seed(c0:i32) = (seed);
@@ -431,7 +447,7 @@ pub mod unreachable {
         .collect::<Vec<_>>();
         let elapsed = start.elapsed();
         (
-            crate::canonical(result.into_iter().map(|(x0,)| vec![x0]).collect()),
+            $crate::canonical(result.into_iter().map(|(x0,)| vec![x0]).collect()),
             elapsed,
         )
     }
@@ -457,14 +473,15 @@ pub mod nonedges {
         p.run();
         let elapsed = start.elapsed();
         (
-            crate::canonical(p.answer.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            $crate::canonical(p.answer.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
             elapsed,
         )
     }
     pub fn mini(data: &Data) -> (Rows, Duration) {
         let edge = data.edge.clone();
         let start = Instant::now();
-        let result = datalog_program! {
+        let result = cq_datalog::datalog! {
+                pipeline { $($pipeline)* }
                 struct Program;
                 relation edge(c0:i32, c1:i32) = (edge);
                 relation path(c0:i32, c1:i32);
@@ -477,7 +494,7 @@ pub mod nonedges {
         .collect::<Vec<_>>();
         let elapsed = start.elapsed();
         (
-            crate::canonical(result.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            $crate::canonical(result.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
             elapsed,
         )
     }
@@ -508,7 +525,7 @@ pub mod recursive_upper {
         p.run();
         let elapsed = start.elapsed();
         (
-            crate::canonical(p.answer.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            $crate::canonical(p.answer.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
             elapsed,
         )
     }
@@ -517,7 +534,8 @@ pub mod recursive_upper {
         let seed = data.seed.clone();
         let nodes = data.nodes.clone();
         let start = Instant::now();
-        let result = datalog_program! {
+        let result = cq_datalog::datalog! {
+                pipeline { $($pipeline)* }
                 struct Program;
                 relation edge(c0:i32, c1:i32) = (edge);
                 relation seed(c0:i32) = (seed);
@@ -533,7 +551,7 @@ pub mod recursive_upper {
         .collect::<Vec<_>>();
         let elapsed = start.elapsed();
         (
-            crate::canonical(result.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            $crate::canonical(result.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
             elapsed,
         )
     }
@@ -565,7 +583,7 @@ pub mod andersen {
         p.run();
         let elapsed = start.elapsed();
         (
-            crate::canonical(p.answer.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            $crate::canonical(p.answer.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
             elapsed,
         )
     }
@@ -575,7 +593,8 @@ pub mod andersen {
         let load = data.load.clone();
         let store = data.store.clone();
         let start = Instant::now();
-        let result = datalog_program! {
+        let result = cq_datalog::datalog! {
+                pipeline { $($pipeline)* }
                 struct Program;
                 relation address_of(c0:i32, c1:i32) = (address_of);
                 relation assign(c0:i32, c1:i32) = (assign);
@@ -591,7 +610,7 @@ pub mod andersen {
         .collect::<Vec<_>>();
         let elapsed = start.elapsed();
         (
-            crate::canonical(result.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            $crate::canonical(result.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
             elapsed,
         )
     }
@@ -631,7 +650,7 @@ pub mod cspa {
         p.run();
         let elapsed = start.elapsed();
         (
-            crate::canonical(
+            $crate::canonical(
                 p.answer
                     .into_iter()
                     .map(|(x0, x1, x2)| vec![x0, x1, x2])
@@ -644,7 +663,8 @@ pub mod cspa {
         let assign = data.assign.clone();
         let dereference = data.dereference.clone();
         let start = Instant::now();
-        let result = datalog_program! {
+        let result = cq_datalog::datalog! {
+                pipeline { $($pipeline)* }
                 struct Program;
                 relation assign(c0:i32, c1:i32) = (assign);
                 relation dereference(c0:i32, c1:i32) = (dereference);
@@ -670,7 +690,7 @@ pub mod cspa {
         .collect::<Vec<_>>();
         let elapsed = start.elapsed();
         (
-            crate::canonical(
+            $crate::canonical(
                 result
                     .into_iter()
                     .map(|(x0, x1, x2)| vec![x0, x1, x2])
@@ -679,4 +699,8 @@ pub mod cspa {
             elapsed,
         )
     }
+}
+
+    }
+    };
 }

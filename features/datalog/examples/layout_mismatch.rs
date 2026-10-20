@@ -19,7 +19,8 @@ fn main() {
             relation Edge(y:i32,x:i32) = (&by_target);
             relation answer(x:i32,y:i32);
             answer(*x,*y) :- Seed(y), Edge(y,x);
-        }.collect();
+        }
+        .collect();
         let matched_cost = cq_storage::counters::snapshot();
         cq_storage::counters::reset();
         let mismatched: BTreeSet<_> = mini_linq::mini_linq! {
@@ -28,14 +29,17 @@ fn main() {
             relation Edge(x:i32,y:i32) = (&by_source);
             relation answer(x:i32,y:i32);
             answer(*x,*y) :- Seed(y), Edge(x,y);
-        }.collect();
+        }
+        .collect();
         let mismatched_cost = cq_storage::counters::snapshot();
         let expected = BTreeSet::from([(n / 2 - 1, n / 2), (n / 2, n / 2 + 1)]);
         assert_eq!(matched, expected);
         assert_eq!(mismatched, expected);
         for (name, cost) in [("matched", matched_cost), ("mismatched", mismatched_cost)] {
-            println!("{name}\t{n}\t{}\t{}\t{}", cost.index_builds,
-                cost.rows_enumerated, cost.lookups);
+            println!(
+                "{name}\t{n}\t{}\t{}\t{}",
+                cost.index_builds, cost.rows_enumerated, cost.lookups
+            );
         }
     }
 }

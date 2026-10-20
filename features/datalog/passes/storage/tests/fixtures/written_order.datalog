@@ -1,0 +1,27 @@
+struct PointsTo;
+relation Alloc(heap:i32,var:i32) = (alloc);
+relation Assign(to:i32,from:i32) = (assign);
+relation VarPointsTo(heap:i32,var:i32);
+output VarPointsTo;
+VarPointsTo(*heap,*var) :- Alloc(heap,var);
+VarPointsTo(*heap,*to) :- VarPointsTo(other,from), VarPointsTo(heap,from), Assign(to,from);
+VarPointsTo(*heap,*to) :- Assign(to,from), if *to != 0, if 10 / *to > 0, VarPointsTo(heap,from), VarPointsTo(heap,to);
+strata { component [VarPointsTo]; }
+incremental { scheme seminaive_covering;
+
+
+    delta VarPointsTo = RecentPointsTo;
+
+
+
+
+
+
+
+
+    variant 0 seed { VarPointsTo(*heap,*var) :- Alloc(heap,var); }
+    variant 1 delta 0 { VarPointsTo(*heap,*to) :- RecentPointsTo(other,from), VarPointsTo(heap,from), Assign(to,from); }
+    variant 1 delta 1 { VarPointsTo(*heap,*to) :- VarPointsTo(other,from), RecentPointsTo(heap,from), Assign(to,from); }
+    variant 2 delta 3 { VarPointsTo(*heap,*to) :- Assign(to,from), if *to != 0, if 10 / *to > 0, RecentPointsTo(heap,from), VarPointsTo(heap,to); }
+    variant 2 delta 4 { VarPointsTo(*heap,*to) :- Assign(to,from), if *to != 0, if 10 / *to > 0, VarPointsTo(heap,from), RecentPointsTo(heap,to); }
+}
