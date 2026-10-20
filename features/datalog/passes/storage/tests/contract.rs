@@ -299,6 +299,18 @@ fn provider_coverage_and_every_layout_maintenance_are_required() {
         |p| p.layouts[0].maintenance = syn::parse_quote!(replace_each_run),
         |p| p.delta_layouts[0].maintenance = syn::parse_quote!(append),
         |p| p.delta_layouts[0].maintenance = syn::parse_quote!(admitted_rows),
+        |p| p.providers[2].next = syn::parse_quote!(custom::DifferentRows),
+        |p| p.providers[0].all = syn::parse_quote!(custom::UnusedRows),
+        |p| p.providers[0].seen = syn::parse_quote!(custom::UnusedSeen),
+        |p| {
+            p.providers[0].delta = syn::parse_quote!(custom::UnusedRows);
+            p.providers[0].next = syn::parse_quote!(custom::UnusedRows);
+        },
+        |p| p.providers[0].all_init = syn::parse_quote!(custom::empty()),
+        |p| p.providers[0].delta_init = syn::parse_quote!(custom::empty()),
+        |p| p.providers[0].next_init = syn::parse_quote!(custom::empty()),
+        |p| p.providers[2].canonical_name = syn::parse_quote!(UnusedCanonical),
+        |p| p.providers[2].canonical_set = syn::parse_quote!(custom::UnusedSet<R>),
         |p| {
             let mut extra = p.layouts[0].clone();
             extra.maintenance = syn::parse_quote!(omit);
@@ -329,13 +341,14 @@ fn opaque_providers_and_initializers_are_not_whitelisted() {
     let provider = &mut alternate.providers[0];
     provider.canonical_name = syn::parse_quote!(OrderedCanonical);
     provider.canonical_set = syn::parse_quote!(::std::collections::BTreeSet<R>);
+    let provider = &mut alternate.providers[2];
     provider.all = syn::parse_quote!(custom::Rows<(i32, i32,)>);
     provider.seen = syn::parse_quote!(::std::collections::BTreeSet<(i32, i32,)>);
     provider.delta = syn::parse_quote!(custom::Delta<(i32, i32,)>);
-    provider.next = syn::parse_quote!(custom::Next<(i32, i32,)>);
+    provider.next = syn::parse_quote!(custom::Delta<(i32, i32,)>);
     provider.all_init = syn::parse_quote!(custom::Rows::empty());
     provider.delta_init = syn::parse_quote!(custom::Delta::empty());
-    provider.next_init = syn::parse_quote!(custom::Next::empty());
+    provider.next_init = syn::parse_quote!(custom::Delta::empty());
     alternate.layouts[0].provider =
         syn::parse_quote!(::std::collections::BTreeMap<(), ::std::vec::Vec<(i32, i32,)>>);
     alternate.delta_layouts[0].provider =

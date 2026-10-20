@@ -1,7 +1,8 @@
 //! Checked storage refinement of Boolean incremental Datalog.
 //! Records concrete Rust providers, canonicalization wrappers, per-layout maintenance,
-//! occurrence bindings, and negation-key projections. Provider types and initializers
-//! are opaque Rust syntax: their collection laws are premises, not a type whitelist.
+//! occurrence bindings, and negation-key projections. Applicable provider types and
+//! initializers are opaque Rust syntax whose collection laws are premises. Unused
+//! relation-kind fields retain checked defaults; delta and next share a move type.
 //! See doc/formal/datalog.tex for the storage refinement obligations.
 use cq_datalog_support::{columns, ensure, filters, key_columns};
 pub use cq_lang_datalog_incremental as incremental;
@@ -176,6 +177,45 @@ pub mod contract {
             program,
             "storage providers must cover every declaration in declaration order",
         )?;
+        for (provider, declaration) in program
+            .providers
+            .iter()
+            .zip(&program.incremental.strata.source.declarations)
+        {
+            ensure(
+                provider.delta == provider.next,
+                provider,
+                "delta and next providers must have the same type for move publication",
+            )?;
+            if declaration.value.is_some() {
+                let types: Vec<_> = declaration
+                    .columns
+                    .iter()
+                    .map(|column| &column.ty)
+                    .collect();
+                let rows: Type = syn::parse_quote!(::std::vec::Vec<(#(#types,)*)>);
+                let seen: Type = syn::parse_quote!(::cq_storage::HashSet<(#(#types,)*)>);
+                let empty: Expr = syn::parse_quote!(::std::vec::Vec::new());
+                ensure(
+                    provider.all == rows
+                        && provider.seen == seen
+                        && provider.delta == rows
+                        && provider.next == rows
+                        && provider.all_init == empty
+                        && provider.delta_init == empty
+                        && provider.next_init == empty,
+                    provider,
+                    "EDB providers must retain defaults for unused IDB storage fields",
+                )?;
+            } else {
+                ensure(
+                    provider.canonical_name == "Canonical"
+                        && provider.canonical_set == syn::parse_quote!(::cq_storage::HashSet<R>),
+                    provider,
+                    "IDB providers must retain defaults for unused EDB canonicalization fields",
+                )?;
+            }
+        }
         layouts::check(program, &analysis)?;
         let p = &program.policy;
         ensure(

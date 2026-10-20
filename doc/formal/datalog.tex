@@ -182,8 +182,15 @@ bindings, together with the prescribed frozen negative projection/filter,
 including wildcard treatment. A \code{direct} binding reads the selected
 delta relation in declaration column order; it need not be the first body
 occurrence. Full and delta layouts must serve their respective versions.
-The checker does not whitelist Rust provider types or interpret initializer
-expressions; their typing and operation availability are checked by Rust.
+The checker does not whitelist applicable Rust provider types or interpret their
+initializer expressions; typing and operation availability are checked by Rust.
+It does require syntactically identical \code{delta} and \code{next} types,
+because \code{delta\_swap} moves the entire next container into delta.
+The uniform provider record reserves fields for both relation kinds. For an
+EDB, the unused \code{all}, \code{seen}, \code{delta}, \code{next} and their
+initializers must retain the default row-container records. For an IDB,
+the unused \code{canonical\_name} and \code{canonical\_set} must retain their
+defaults. Changes to these inapplicable fields are rejected, not silently ignored.
 \begin{mathpar}
 \Rule{WF-DL-Storage}{\mathrm{WF}_{\mathrm{Incremental}}(I)\quad
  D\text{ records complete providers, usable reads and maintained layouts}}
@@ -194,6 +201,11 @@ the EDB canonical provider and each published full layout to represent the
 same relation, delta layouts to represent precisely the current fresh delta,
 and negative keys to represent the prescribed projection/filter of frozen
 inputs. Initializers and default construction must denote empty containers.
+In particular, membership sets, initial full/delta layout hosts, and every
+delta-layout reset use \code{::core::default::Default::default()}.
+Default construction is part of these operations' meaning, not an independent
+initializer choice: each selected provider must implement \code{Default} as
+the empty represented collection, including every empty delta-run rebuild.
 Canonical collection removes duplicates without changing row values; canonical
 iteration and cloning preserve those values. The membership provider's
 \code{insert} returns true exactly for a previously absent complete row,
@@ -221,8 +233,9 @@ of a delta layout, retaining its written position and declaration-order columns.
 \paragraph{Recorded decisions.} Concrete provider types, wrapper name,
 container initializers, layout shape and maintenance, occurrence bindings,
 negative projections and the supported insertion/negation operations.
-Opaque provider syntax is retained through Fork and consumed by the printer,
-rather than replaced with the default types.
+Applicable opaque provider syntax is retained through Fork and consumed by the
+printer, rather than replaced with default types; inapplicable fields are
+checked reserved defaults.
 \paragraph{Rewrite check.} Check both contracts and preserve Incremental exactly;
 allow changed provider records, layouts and occurrence bindings when the target
 satisfies coverage, key availability, version and maintenance obligations.
@@ -478,9 +491,16 @@ eligible rule scan, in component seed/step order, selecting occurrence zero
 and strategy \code{rayon\_slice1}. The Round certificate checks a fresh direct
 scan binding and one renamed leading positive occurrence; negative key sets
 are not partitioned.
+The slice-one checker additionally requires each partitioned delta provider,
+or the payload type (second generic argument) of a partitioned layout map,
+to be explicitly \code{::std::vec::Vec<T>}. Opaque aliases and non-vector
+containers remain admissible in base Storage but are rejected by this extension
+when selected for partitioning. Ordered maps with vector buckets remain
+eligible. This checked representation premise supplies the contiguous
+\code{as\_slice()} view consumed by the Rayon printer.
 \begin{mathpar}
 \Rule{CK-DL-Partition}{\mathrm{erase}(t)=s\quad
- s\text{ is unannotated}\quad
+ s\text{ is unannotated, with vector-backed partitioned inputs}\quad
  t\text{ has the exact ordered scan certificates}}
  {\mathrm{check}_{\mathrm{partition}}(s,t)}
 \end{mathpar}

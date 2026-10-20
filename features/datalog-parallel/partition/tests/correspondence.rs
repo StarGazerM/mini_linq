@@ -210,3 +210,50 @@ fn empty_output_only_program_is_an_identity_rewrite() {
     });
     assert_eq!(compile(&source).unwrap(), source);
 }
+
+#[test]
+fn partition_requires_slice_backed_delta_and_layout_buckets() {
+    let mutations: &[fn(&mut Program)] = &[
+        |program| {
+            let provider = &mut program.storage.providers[2];
+            provider.delta = syn::parse_quote!(::std::collections::VecDeque<(i32, i32,)>);
+            provider.next = provider.delta.clone();
+            provider.delta_init = syn::parse_quote!(::std::collections::VecDeque::new());
+            provider.next_init = provider.delta_init.clone();
+            program.context.relations[2].providers = provider.clone();
+        },
+        |program| {
+            let provider = syn::parse_quote!(
+                ::std::collections::BTreeMap<(), ::std::collections::VecDeque<(i32, i32,)>>
+            );
+            program.storage.layouts[0].provider = provider;
+            program.context.layouts[0].provider = program.storage.layouts[0].provider.clone();
+        },
+        |program| {
+            program.storage.layouts[0].provider = syn::parse_quote!(custom::GroupedRows);
+            program.context.layouts[0].provider = program.storage.layouts[0].provider.clone();
+        },
+    ];
+    for mutate in mutations {
+        let mut source = authored();
+        let mut target = compile(&source).unwrap();
+        mutate(&mut source);
+        mutate(&mut target);
+        round::contract::check(&source).unwrap();
+        round::contract::check(&target).unwrap();
+        let error = check(&source, &target).unwrap_err();
+        assert!(error.to_string().contains("slice partition requires"));
+        assert!(compile(&source).is_err());
+    }
+}
+
+#[test]
+fn ordered_maps_with_vector_buckets_remain_partitionable() {
+    let mut source = authored();
+    source.storage.layouts[0].provider = syn::parse_quote!(
+        ::std::collections::BTreeMap<(), ::std::vec::Vec<(i32, i32,)>>
+    );
+    source.context.layouts[0].provider = source.storage.layouts[0].provider.clone();
+    let target = compile(&source).unwrap();
+    check(&source, &target).unwrap();
+}
