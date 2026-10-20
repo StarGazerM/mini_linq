@@ -15,6 +15,16 @@ pub const ENGINES: &[Engine] = &[
         threads: rayon::current_num_threads,
     },
     Engine {
+        name: "mini-fx",
+        evaluate: mini_engine::run_fx,
+        threads: || 1,
+    },
+    Engine {
+        name: "mini-par-fx",
+        evaluate: mini_engine::run_parallel_fx,
+        threads: rayon::current_num_threads,
+    },
+    Engine {
         name: "ascent",
         evaluate: ascent_engine::run,
         threads: || 1,
@@ -31,15 +41,19 @@ pub fn main(args: impl IntoIterator<Item = String>) -> Result<()> {
         engines: ENGINES,
         defaults: &["mini", "ascent"],
         reference: "ascent",
-        checked: &["mini", "mini-par", "ascent-par"],
+        checked: &["mini", "mini-fx", "mini-par", "mini-par-fx", "ascent-par"],
         options: &["--threads"],
-        usage: "usage: doop-parallel <facts_dir> [--engine mini|mini-par|ascent|ascent-par|both] [--threads N] [--check]",
+        usage: "usage: doop-parallel <facts_dir> [--engine mini|mini-fx|mini-par|mini-par-fx|ascent|ascent-par|both] [--threads N] [--check]",
     };
     let options = harness.parse(args)?;
     let execute = || harness.execute(&options);
     // Baselines stay on the caller thread: dormant worker stacks must not
     // contaminate their peak RSS, even if --threads was supplied.
-    let result = if options.check || matches!(options.engine.as_str(), "mini-par" | "ascent-par") {
+    let result = if options.check
+        || matches!(
+            options.engine.as_str(),
+            "mini-par" | "mini-par-fx" | "ascent-par"
+        ) {
         let mut builder = rayon::ThreadPoolBuilder::new();
         if let Some(count) = options.threads {
             builder = builder.num_threads(count);
@@ -63,11 +77,12 @@ mod tests {
             .unwrap()
             .install(|| {
                 for engine in ENGINES {
-                    let expected = if matches!(engine.name, "mini-par" | "ascent-par") {
-                        3
-                    } else {
-                        1
-                    };
+                    let expected =
+                        if matches!(engine.name, "mini-par" | "mini-par-fx" | "ascent-par") {
+                            3
+                        } else {
+                            1
+                        };
                     assert_eq!((engine.threads)(), expected, "{}", engine.name);
                 }
             });

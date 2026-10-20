@@ -156,6 +156,11 @@ pub const ENGINES: &[Engine] = &[
         threads: || 1,
     },
     Engine {
+        name: "mini-fx",
+        evaluate: mini_engine::run_fx,
+        threads: || 1,
+    },
+    Engine {
         name: "ascent",
         evaluate: ascent_engine::run,
         threads: || 1,
@@ -167,9 +172,9 @@ pub fn main(args: impl IntoIterator<Item = String>) -> Result<()> {
         engines: ENGINES,
         defaults: &["mini", "ascent"],
         reference: "ascent",
-        checked: &["mini"],
+        checked: &["mini", "mini-fx"],
         options: &[],
-        usage: "usage: doop <facts_dir> [--engine mini|ascent|both] [--check]",
+        usage: "usage: doop <facts_dir> [--engine mini|mini-fx|ascent|both] [--check]",
     };
     let options = harness.parse(args)?;
     harness.execute(&options).map_err(Into::into)

@@ -14,6 +14,9 @@ phase-timing = ["cq-datalog/phase-timing"]
 [dependencies]
 ascent = { version = "0.8", default-features = false }
 cq-datalog = { path = "../facade/cq-datalog" }
+cq-datalog-hasher = { path = "../passes/hasher" }
+cq-rewrites = { path = "../../rewrites" }
+rustc-hash = "2.1.3"
 mini-linq = { path = "../../../facade/mini-linq" }
 cq-storage = { path = "../../../runtime/cq-storage" }
 cq-testkit = { version = "0.1.0", path = "../../../testkit/cq-testkit", features = ["golden"] }

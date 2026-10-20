@@ -10,7 +10,10 @@
 //! `doop /tmp/doop-data/cassandra --check`.
 //! `--check` compares all 26 full tuple sets against sequential Ascent.
 //! Uninstrumented output order is unspecified.
-//! `--engine mini|ascent` isolates timing and peak RSS.
+//! `--engine mini|mini-fx|ascent` isolates timing and peak RSS.
+//! `mini-fx` opts into Fx storage and hole deduplication; `mini` remains aHash.
+//! `doop /tmp/doop-data/cassandra --check` checks both MiniLinq engines against
+//! Ascent across all 26 outputs; defaults still run only `mini` and `ascent`.
 //! Enable `phase-timing` for per-round instrumentation separately from timing runs.
 //! Compute timing includes derived indexes and materializing the 26 outputs;
 //! load timing includes parsing and interning, not engine initialization.

@@ -9,3 +9,7 @@ description = "Shard-owned full-tuple admission for parallel Datalog"
 [dependencies]
 cq-storage = { version = "0.1.0", path = "../../../runtime/cq-storage" }
 rayon = "1"
+hashbrown = { version = "0.15.5", default-features = false }
+
+[dev-dependencies]
+rustc-hash = "2.1.3"

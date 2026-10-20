@@ -130,6 +130,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-datalog-hasher"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-support",
+ "cq-lang-datalog-round",
+ "cq-lang-datalog-storage",
+ "cq-stage",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "cq-datalog-incremental"
 version = "0.0.0"
 dependencies = [
@@ -186,7 +199,9 @@ name = "cq-datalog-parallel-runtime"
 version = "0.1.0"
 dependencies = [
  "cq-storage",
+ "hashbrown 0.15.5",
  "rayon",
+ "rustc-hash",
 ]
 
 [[package]]
@@ -511,6 +526,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-rewrite-passes"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-physical",
+ "cq-lang-structures",
+ "proc-macro2",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-rewrites"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-physical",
+ "cq-lang-structures",
+ "cq-rewrite-passes",
+ "cq-stage",
+]
+
+[[package]]
 name = "cq-stage"
 version = "0.1.0"
 dependencies = [
@@ -620,9 +655,12 @@ dependencies = [
  "ahash",
  "ascent",
  "cq-datalog",
+ "cq-datalog-hasher",
+ "cq-rewrites",
  "cq-storage",
  "libc",
  "mini-linq",
+ "rustc-hash",
 ]
 
 [[package]]
@@ -631,9 +669,12 @@ version = "0.1.0"
 dependencies = [
  "ascent",
  "cq-datalog",
+ "cq-datalog-hasher",
+ "cq-rewrites",
  "cq-storage",
  "cq-testkit",
  "mini-linq",
+ "rustc-hash",
 ]
 
 [[package]]
@@ -642,12 +683,15 @@ version = "0.1.0"
 dependencies = [
  "ascent",
  "cq-datalog",
+ "cq-datalog-hasher",
  "cq-datalog-parallel",
  "cq-datalog-parallel-runtime",
+ "cq-rewrites",
  "cq-storage",
  "datalog-doop",
  "mini-linq",
  "rayon",
+ "rustc-hash",
 ]
 
 [[package]]

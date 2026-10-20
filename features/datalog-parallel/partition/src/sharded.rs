@@ -147,13 +147,7 @@ pub fn compile_storage(source: &storage::Program) -> syn::Result<storage::Progra
         .zip(&source.incremental.strata.source.declarations)
     {
         if declaration.value.is_none() {
-            let tuple = hash_set_element(&provider.seen).ok_or_else(|| {
-                syn::Error::new_spanned(
-                    &provider.seen,
-                    "sharded admission requires a HashSet<Tuple> provider",
-                )
-            })?;
-            provider.seen = syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedSeen<#tuple>);
+            provider.seen = sharded_seen(&provider.seen)?;
         }
     }
     check_storage(source, &target)?;
@@ -196,14 +190,7 @@ pub fn check_storage(source: &storage::Program, target: &storage::Program) -> sy
     {
         if declaration.value.is_none() {
             let original = &source.providers[index].seen;
-            let tuple = hash_set_element(original).ok_or_else(|| {
-                syn::Error::new_spanned(
-                    original,
-                    "sharded admission requires a HashSet<Tuple> provider",
-                )
-            })?;
-            let expected: Type =
-                syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedSeen<#tuple>);
+            let expected = sharded_seen(original)?;
             ensure(
                 target.providers[index].seen == expected,
                 target,
@@ -499,12 +486,21 @@ fn check_providers(program: &Program) -> syn::Result<()> {
         if relation.declaration.value.is_none() {
             let types = relation.declaration.columns.iter().map(|column| &column.ty);
             let tuple: Type = syn::parse_quote!((#(#types,)*));
-            let seen: Type = syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedSeen<#tuple>);
+            let seen_arguments = type_arguments(
+                &relation.providers.seen,
+                &["cq_datalog_parallel_runtime", "ShardedSeen"],
+            );
             let rows: Type = syn::parse_quote!(::std::vec::Vec<#tuple>);
             ensure(
-                relation.providers.seen == seen,
+                seen_arguments.is_some_and(|arguments| {
+                    (1..=2).contains(&arguments.len())
+                        && argument_type(&arguments[0]) == Some(&tuple)
+                        && arguments
+                            .iter()
+                            .all(|argument| argument_type(argument).is_some())
+                }),
                 program,
-                "sharded Round requires ShardedSeen<Tuple> for each IDB",
+                "sharded Round requires ShardedSeen<Tuple, Hasher> for each IDB",
             )?;
             ensure(
                 relation.providers.delta == rows && relation.providers.next == rows,
@@ -526,17 +522,18 @@ fn check_providers(program: &Program) -> syn::Result<()> {
             .map(|&i| &declaration.columns[i].ty)
             .collect();
         let (keys, values) = types.split_at(layout.key);
-        let expected: Type = syn::parse_quote!(
-            ::std::collections::HashMap<
-                (#(#keys,)*),
-                ::std::vec::Vec<(#(#values,)*)>,
-                ::cq_storage::HashState
-            >
-        );
+        let arguments = type_arguments(&layout.provider, &["std", "collections", "HashMap"]);
+        let key: Type = syn::parse_quote!((#(#keys,)*));
+        let value: Type = syn::parse_quote!(::std::vec::Vec<(#(#values,)*)>);
         ensure(
-            layout.provider == expected,
+            arguments.is_some_and(|arguments| {
+                arguments.len() == 3
+                    && argument_type(&arguments[0]) == Some(&key)
+                    && argument_type(&arguments[1]) == Some(&value)
+                    && argument_type(&arguments[2]).is_some()
+            }),
             program,
-            "sharded Round requires native HashMap<K, Vec<V>, HashState> for every layout",
+            "sharded Round requires native HashMap<K, Vec<V>, Hasher> for every layout",
         )?;
     }
     Ok(())
@@ -575,13 +572,30 @@ fn argument_type(argument: &syn::GenericArgument) -> Option<&Type> {
     }
 }
 
-fn hash_set_element(ty: &Type) -> Option<&Type> {
-    let arguments = type_arguments(ty, &["cq_storage", "HashSet"])
-        .or_else(|| type_arguments(ty, &["std", "collections", "HashSet"]))?;
-    if !(1..=2).contains(&arguments.len()) {
-        return None;
+fn sharded_seen(ty: &Type) -> syn::Result<Type> {
+    let invalid = || {
+        syn::Error::new_spanned(
+            ty,
+            "sharded admission requires a HashSet<Tuple, Hasher> provider",
+        )
+    };
+    let alias = type_arguments(ty, &["cq_storage", "HashSet"]);
+    let arguments = alias
+        .or_else(|| type_arguments(ty, &["std", "collections", "HashSet"]))
+        .ok_or_else(invalid)?;
+    let tuple = arguments
+        .first()
+        .and_then(argument_type)
+        .ok_or_else(invalid)?;
+    if alias.is_some() && arguments.len() == 1 {
+        return Ok(syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedSeen<#tuple>));
     }
-    argument_type(arguments.first()?)
+    let hasher: Type = match arguments.len() {
+        1 => syn::parse_quote!(::std::collections::hash_map::RandomState),
+        2 if alias.is_none() => argument_type(&arguments[1]).ok_or_else(invalid)?.clone(),
+        _ => return Err(invalid()),
+    };
+    Ok(syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedSeen<#tuple, #hasher>))
 }
 
 impl cq_stage::Language for ShardedProgram {

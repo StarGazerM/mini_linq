@@ -1,7 +1,11 @@
 //! DOOP's unchanged 103-relation, 135-rule source instantiated as an extension.
 //! `doop-parallel FACTS --check --threads N` compares all 26 full tuple sets.
-//! `--engine mini|mini-par|ascent|ascent-par` isolates timing and RSS; the sweep
-//! script checks six applications and six worker counts before measuring.
+//! `--engine mini|mini-fx|mini-par|mini-par-fx|ascent|ascent-par` isolates timing
+//! and RSS. Fx engines opt into Fx storage and hole deduplication; defaults stay
+//! `mini` and `ascent`. For 15 workers, use
+//! `doop-parallel /tmp/doop-data/cassandra --engine mini-par-fx --threads 15`;
+//! `doop-parallel /tmp/doop-data/cassandra --check --threads 15` compares every
+//! engine with sequential Ascent. Run each timing engine in a separate process.
 //! [`harness`] supplies engine descriptors and installs local Rayon pools;
 //! CLI parsing, loading, full-tuple checks, timing and RSS use the base harness.
 #![recursion_limit = "1024"]
@@ -16,7 +20,7 @@ macro_rules! relation_storage {
 }
 
 pub mod mini_engine {
-    pub use datalog_doop::mini_engine::run;
+    pub use datalog_doop::mini_engine::{run, run_fx};
     #[cfg(not(feature = "phase-timing"))]
     datalog_doop::doop_engine!(run_parallel, pipeline {
         storage_rewrites = [cq_datalog_parallel::shard_storage];
@@ -29,6 +33,25 @@ pub mod mini_engine {
         fork = cq_datalog::passes::fork(timing = phases;);
         round = [cq_datalog_parallel::partition(threshold = 64)];
         print = cq_datalog_parallel::print_rounds;
+    });
+    #[cfg(not(feature = "phase-timing"))]
+    datalog_doop::doop_engine!(run_parallel_fx, pipeline {
+        storage_rewrites = [cq_datalog_hasher::hasher(fx), cq_datalog_parallel::shard_storage];
+        round = [cq_datalog_hasher::hasher_round(fx), cq_datalog_parallel::partition(threshold = 64)];
+        print = cq_datalog_parallel::print_rounds;
+        cq = pipeline {
+            structures = [cq_rewrites::retype(dedup => ::std::collections::HashSet<_, ::std::hash::BuildHasherDefault<::rustc_hash::FxHasher>>)];
+        };
+    });
+    #[cfg(feature = "phase-timing")]
+    datalog_doop::doop_engine!(run_parallel_fx, pipeline {
+        storage_rewrites = [cq_datalog_hasher::hasher(fx), cq_datalog_parallel::shard_storage];
+        fork = cq_datalog::passes::fork(timing = phases;);
+        round = [cq_datalog_hasher::hasher_round(fx), cq_datalog_parallel::partition(threshold = 64)];
+        print = cq_datalog_parallel::print_rounds;
+        cq = pipeline {
+            structures = [cq_rewrites::retype(dedup => ::std::collections::HashSet<_, ::std::hash::BuildHasherDefault<::rustc_hash::FxHasher>>)];
+        };
     });
 }
 
@@ -94,7 +117,7 @@ mod tests {
         std::thread::Builder::new()
             .stack_size(16 * 1024 * 1024)
             .spawn(|| {
-                for threads in [1, 2, 4] {
+                for threads in [1, 2, 4, 15] {
                     rayon::ThreadPoolBuilder::new()
                         .num_threads(threads)
                         .stack_size(16 * 1024 * 1024)
@@ -108,6 +131,12 @@ mod tests {
                             sequential.compare(&mut expected).unwrap();
                             actual.compare(&mut expected).unwrap();
                             ascent.compare(&mut expected).unwrap();
+                            super::mini_engine::run_fx(facts())
+                                .compare(&mut expected)
+                                .unwrap();
+                            super::mini_engine::run_parallel_fx(facts())
+                                .compare(&mut expected)
+                                .unwrap();
                             assert_eq!(actual.varpointsto, vec![(sym("heap"), sym("local"))]);
                             assert_eq!(actual.mainmethoddeclaration.len(), 1);
                             assert_eq!(actual.methodimplemented.len(), 1);
