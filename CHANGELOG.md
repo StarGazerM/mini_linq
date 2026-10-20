@@ -7,6 +7,11 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Datalog contracts admit any correct choice instead of the default pass's
+  exact output; per-IR `check_rewrite` obligations replace identity checks,
+  making Source / Strata / Storage rewrite plugins possible. New
+  `cq-datalog-testkit` reference evaluator and test-only plugins.
+
 - Datalog compiler restructured like the CQ compiler: languages
   `cq-lang-datalog-{source,strata,incremental,storage,round}`, passes
   (`stratify`, `incremental`, `storage`, `fork`, `print_rounds`, surface

@@ -277,12 +277,16 @@ Datalog-owned named configuration; shared printer library
 `cq-datalog-print`; resume by entering any pass macro. Default expansion
 byte-identical to `076bb40`.
 
-Next Datalog step (open, design step 3): admissibility checks. Contracts still
-require the default pass's exact choices (strata = SCCs, layouts, reads,
-policies), and below Round `check_rewrite` is identity, so Source / Storage
-rewrite slots cannot yet change anything. Hole interfaces accept only `pull`
-printers on the configured allowlist. Printer-level decisions still implicit
-in `cq-datalog-print` are listed in the spec.
+Admissibility (design step 3, `95acd2d`): contracts admit any correct
+choice (coarser strata without internal negation, at-least-once variant
+coverage, any layout set whose recorded reads have bound or constant keys);
+`check_rewrite` checks real per-IR preservation, so Source / Strata / Storage
+rewrite plugins are live (test plugins in `features/datalog/test-passes`).
+`cq-datalog-testkit` adds a typed naive reference evaluator with ⊥ as panic.
+Open: hole interfaces accept only `pull` printers on the configured
+allowlist; printer-level decisions still implicit in `cq-datalog-print` are
+listed in the spec; some admitted Storage choices (direct read at a later
+position) are contract-tested but not compiled end to end.
 
 Remaining Datalog work: rule-local aggregates; FlowLog comparison;
 partial-Rust multi-round refinement.
