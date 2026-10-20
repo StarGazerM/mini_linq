@@ -24,7 +24,9 @@ as `mini_linq::compile!`, followed by optional
 `hole(rule N, delta K) pipeline { ... }` or `hole(rule N, seed)` overrides.
 Missing phases inherit the default; an explicitly empty pass list does not.
 Selectors resolve only against recorded schedule identities. Unknown/non-delta
-occurrences, duplicate overrides and removal of required device passes fail.
+occurrences and duplicate overrides fail. Structures queues may omit default
+optimizers; the selected checked passes and GPU printer validate device providers,
+not the bridge's membership test against a preferred optimization pipeline.
 `__CQ_DATALOG_HOLE_SELECTORS` prints copyable selectors beside variant numbers.
 
 The default pipeline uses `order(le)`, sorted/hashed/prefix providers,
@@ -47,22 +49,47 @@ delta occurrence, complete body erasure and layout demands.
 `__CQ_DATALOG_SCHEDULE_IR` retains the checked schedule.
 
 Caller plan/IX/lower/select macros execute once through ordinary continuations.
-The bridge gathers their checked Structures for frozen-index demands, then
+The bridge gathers their checked Structures for maintained-index demands, then
 splices each hole's remaining opaque Structures/represent/stage/print queue.
 
 The fork records `MaintainedFrozenDeviceIndex` plus an exact `frozen_layouts`
 list for each GPU stratum. Keyed full layouts of EDBs and completed lower strata
 are projected and indexed once before the seed/round loop, then passed as
-`FrozenDeviceIndex` host reads. Changing SCC relations and deltas retain
-per-round projections/builds. The emitted `__CQ_DATALOG_FROZEN_LAYOUT_IR`
-certificates record relation, permutation, key width, stratum lifetime and full
-run level lists. Actual checked Structures demand sets are partitioned into a
-minimum subset-chain cover, independently checked for exact prefix coverage.
+`FrozenDeviceIndex` host reads. Changing keyed full layouts instead record
+`MaintainedLeveledDeviceIndex` and an exact `leveled_layouts` list. They are
+constructed once per SCC and receive each round's admitted delta after all
+readers and admission checks. `leveled_ratio(4);` is explicit bridge/fork advice
+(default four, minimum two), recorded with SCC lifetime and layout in the
+emitted `__CQ_DATALOG_LEVELED_LAYOUT_IR` certificate. Unkeyed full scans and delta
+layouts keep contiguous resident projections. Frozen certificates retain
+`__CQ_DATALOG_FROZEN_LAYOUT_IR`.
+Actual checked Structures demand sets are partitioned into a minimum
+subset-chain cover, independently checked for exact prefix coverage.
 For example, `{varr,varp} ⊂ {nxtBlk,varr,varp}` becomes one sorted run with levels
 `[varr,varp] → [nxtBlk]`, serving the early semi and later full probe. Incomparable
 demands use separate runs. Each Host provider type records its complete run
 levels, including levels after a shorter read's requested prefix; printers read
 those certificates without selecting layouts or rebuilding frozen providers.
+`leveled_hosts(Relation => [[1,2],[0]], ...)` records the corresponding exact
+`LeveledDeviceIndex` host type. Lookup, membership, and cooperative expansion
+iterate its immutable snapshot runs using the existing per-run prefix search.
+Kernel arguments carry `*const LeveledRunsView` from `snapshot_ptr(levels)`;
+`leveled_count` and `leveled_run` load the device-resident descriptor on demand.
+The fixed-capacity run array is not copied by value into each kernel/helper call.
+Membership succeeds if any run matches. Cooperative expansion streams one run
+at a time through a bounded 256-lane descriptor: its header retains the uniform
+run id and the existing per-input frame retains that run's exact range. An
+in-device run loop skips empty runs with `leveled_any`; it does not launch a
+kernel per run or multiply shared descriptor storage by the maximum run count.
+The root `tile(256,4)` decode remains unchanged; each root item streams its runs
+through the stage, including run-id and row restoration on resume.
+`retain_lookups` retains packed range sets (17 u64 words per lane) between an
+eager semi and same-key force over the identical snapshot layout; the force
+does not search again. Unwitnessed staged reads do not allocate range arrays.
+These snapshot-only hosts bind index
+metadata, not a fabricated contiguous table. Leveled `Smallest` intersections
+and actual scan roots (including constant Point/Range roots) are rejected;
+ordinary unkeyed scans must bind admission columns instead.
 For frozen positive factors with locally bound negation filters, advise the
 schedule pass with `hoist_invariants` (the ddisasm consumer's `hoist-invariants`
 feature supplies precisely that pass argument). The existing checked invariant
@@ -94,20 +121,38 @@ cargo run --release --manifest-path ../../features/datalog/Cargo.toml \
 export CUDA_HOME=/opt/nvidia/hpc_sdk/Linux_x86_64/25.5/cuda/12.9
 cargo oxide build --arch sm_89 -- --release \
   -p gpu-datalog-ddisasm --bin gpu-datalog-ddisasm --features cq-gpu-runtime/nvtx
-target/release/gpu-datalog-ddisasm "$DATA/cvc5" --check --meta "$META/cvc5_consts.json"
+target/release/gpu-datalog-ddisasm "$DATA/cvc5" --check --meta "$META/cvc5_consts.json" --repeat 3
 uv run --project /home/stargazermiao/workspace/srdatalog-python \
   python datalog-ddisasm/measure_srdatalog.py cvc5
 uv run --project /home/stargazermiao/workspace/srdatalog-python \
   python datalog-ddisasm/measure_srdatalog.py z3
 ```
 
+`--repeat N` requires at least three timed repetitions. It first runs one
+discarded warmup, then reuses the same process, CUDA runtime and pool for all
+timed runs. JSON retains the cold report as `warmup`, individual timed reports
+as `runs`, and median/minimum values under `summary`; top-level `fixedpoint_ms`
+is the timed median and `fixedpoint_min_ms` the minimum. With `--check`, every
+execution is fully tuple-compared against one shared CPU reference outside the
+GPU timer. Retry capacity history survives repetitions and retry diagnostics are
+explicitly marked process-cumulative. NVTX `cold-run` and `timed-run` ranges
+enclose individual executions; their nested `fixed-point` ranges isolate kernel
+work from uploads and comparison. Without `--repeat`, one execution is reported.
+
 The GPU consumer preserves the same program and uploads all EDBs before its
 fixed-point timer. The checked `hashed_runs` rewrite realizes composite equality
 indexes, and closed typed scalar captures lower `meta.*` values once on the host.
 All Datalog holes default to `DeviceSet<_, Plain, Compacting>`. The ddisasm
-consumer overrides only `hole(rule 19, delta 1)` (variant 22), using ordinary
-`retype(dedup => DeviceSet<_, Plain, Fused>)` and `print(..., output(retry))`
-arguments. Other holes keep resumable Compacting. A default pipeline can select
+consumer selects the written default planner, hashed providers and resumable
+Fused output for `hole(rule 3, delta 0|1|2)` (variants 4–6) and
+`hole(rule 19, delta 1)` (variant 22), through separate per-hole pipelines.
+The frozen providers in variant 22 use explicitly recorded
+`expand_lookups(128)` stages; dynamic hashed providers use ordinary automatic
+batch-128 staging. Maintained frozen indexes remain available to either planner.
+These use ordinary `plan`, `structures` and `print` pass arguments, not bridge
+policy. The checked schedule retains its independent delta-first advice.
+Other holes use Compacting with the default pipeline's `output(retry)`.
+A default pipeline can select
 Fused for all holes through the same pass argument; there is no dedup macro
 prefix or Cargo feature channel. These choices never change the Datalog rules.
 
@@ -118,7 +163,7 @@ run. The existing `fixedpoint_ms`, allocator peaks and `exact_cpu_check` outputs
 are preserved. Additional JSON keys are:
 
 - `fused_retry_attempts` and `fused_retry_relaunches`: totals across reported sites.
-- `fused_retry_wasted_kernel_ms`: total GPU event time for failed launch attempts.
+- `fused_retry_wasted_kernel_ms`: failed-attempt GPU event time (`timings` feature; otherwise zero).
 - `fused_retry_peak_attempt_bytes`: maximum attempt-owned requested allocation
   size across reported sites, not a sum of their individual peaks.
 - `fused_retry_reports`: stably sorted per-hole/site reports containing `hole`,
@@ -126,7 +171,7 @@ are preserved. Additional JSON keys are:
   `wasted_kernel_ms`, `kernel_ms`, `peak_capacity`, `peak_attempt_bytes`, and
   `last_distinct` (the last successful distinct cardinality).
 
-The report's GPU events surround the launch callback, including its frontier
+With `--features cq-gpu-runtime/timings`, the report's GPU events surround the launch callback, including its frontier
 reset and in-kernel unique-output compaction, rather than just the query kernel.
 They exclude attempt allocation, summary/control readback and later operators.
 `kernel_ms` includes
@@ -244,10 +289,13 @@ All successors finish before any publication, including empty deltas; convergenc
 requires every delta to be empty, and ancestor errors remain checked rather than
 being interpreted as emptiness. Normal admission work is candidate insertion
 plus delta copying, not a full scan; geometric growth is amortized.
-Demanded column permutations remain resident projections. Join indexes are
-rebuilt per CQ invocation: maintaining the admission set is not maintained join
-indexes, an LSM/spine, timestamp compaction, or cross-hole index reuse.
-Timing events are retained until a round readback, with one final program
+Admission and join maintenance remain separate: full keyed changing layouts
+receive only disjoint admitted deltas, while their leveled compactions preserve
+the complete row multiset. Snapshot publication and buffer retirement are
+stream-ordered after prior readers; no historical timestamp compaction is
+promised. Unkeyed full scans still use contiguous admission columns, and
+non-maintained derived/delta layouts retain ordinary per-hole construction.
+When `timings` is enabled, timing events are retained until a round readback, with one final program
 completion covering trailing metadata work. There is no per-hole completion
 wait or per-member cardinality wait.
 
@@ -384,6 +432,84 @@ Absent that database, the DuckDB `tpch` extension generates it.
 Exporter `--root` and H05 reference `--data-root` use `TPCH_DATA_ROOT`, default
 `data/tpch-gpu` relative to the current directory, and refer to the parent of
 `sf1/` and `sf10/`, not an individual scale-factor directory.
+
+### General H05 reference (`h05-reference`)
+
+`gpu-h05` above relies on unchecked shortcuts (first-match probes, a
+direct-address nation array, value-range packed dedup, an unchecked
+`|Lineitem|` output bound) and builds its indexes inside every query. The
+`h05-reference` binary is the general reference instead:
+
+- **Compression (load, untimed):** columns read at their declared types; every
+  join key dictionary-encoded to a dense u32 ID per domain (orderkey, custkey,
+  suppkey, nationkey, regionkey; order-preserving); every base column FOR
+  bit-packed per 1024-row vector and made resident.
+- **Index build (GPU, timed):** CSR indexes over those IDs for Nation by
+  region, Customer by nation, Orders by customer (with date), Lineitem by order
+  and Supplier by supplier. Each decodes the packed key column, then uses RCCL:
+  `sequence` for row IDs, stable radix `sort` of (key, row) pairs, and batched
+  `lower_bound` of every key ID for the offsets; payload columns are gathered
+  by sorted row and FOR-packed from device buffers.
+- **Plan R N C O L S**, chosen by counted prefix cardinalities over all 164
+  connected left-deep orders. No key is assumed unique: every lookup is a range
+  and every range is expanded. Counts and offsets are u32; any sum that would
+  exceed u32 fails the run through a device flag. Block scans in `expand` are
+  RCCL's `block_scan_sum_256`.
+- **Query and dedup (GPU, timed):** `segments`, `expand` (emits the answer as
+  one packed key per row, widths from the dictionary sizes), one metadata
+  readback (emitted count; overflow reruns with the exact count), then RCCL
+  radix `sort_unstable` and `unique_copy_by` into the resident distinct answer.
+- **Reported figure:** host wall clock from compressed resident base columns to
+  the resident distinct answer (index build + query + dedup); GPU events give
+  the breakdown. Stream-ordered temporaries come from the device's default
+  memory pool, whose release threshold is raised once at setup.
+
+```sh
+cargo oxide build --arch sm_89 -- --release -p gpu-h05-reference --bin h05-reference
+./target/release/h05-reference "$TPCH_DATA_ROOT/sf10" compare/gpu_h05_reference.sf10.results.json
+python3 compare/duckdb_h05_exact.py
+python3 compare/srdatalog_h05_orders.py "$TPCH_DATA_ROOT/sf1/dbgen.duckdb" /tmp/srdatalog-orders-sf1.json
+uv run --project "$SRDATALOG" python compare/srdatalog_h05.py --sf 1 10 \
+  --var-order c,n,r,d,o,s --dimension-filters --output compare/srdatalog_h05.exact.results.json
+```
+
+It checks the decoded result against `answer.tsv`. Resident at SF10: 280.2 MB
+compressed base plus 255.8 MB indexes, for 1,279 MB of declared source columns.
+
+**Same-scope comparison** (2026-10-20, RTX 6000 Ada; DuckDB on the host CPU;
+median of five after one warmup; every result checked against `answer.tsv`).
+Each system starts from its own resident representation and ends with the
+resident distinct answer; load/compression/interning is excluded, index or hash
+construction is included.
+
+| System, scope | SF1 ms | SF10 ms |
+|---|---:|---:|
+| `h05-reference`: GPU index build + query + dedup, wall clock | **2.38** | **15.25** |
+| srdatalog-python, `run` (device index build + query), cardinality-chosen order | 10.90 | 165.26 |
+| srdatalog-python, `run`, its default plan | 68.15 | 843.41 |
+| DuckDB 1.5.6 in-process, 24 threads, `CREATE TEMP TABLE AS SELECT DISTINCT` | 15.25 | 65.83 |
+| DuckDB 1.5.6 in-process, 1 thread | 46.43 | 516.05 |
+
+SF10 breakdown for `h05-reference`: index build 14.36 ms (lineitem_by_order
+9.58, orders_by_customer 4.08), expand 0.653 ms, dedup with its control
+readback 0.214 ms. The radix sort makes every pass even over Lineitem, which
+arrives ordered by orderkey.
+
+srdatalog's scope was checked on an Nsight timeline: `prepare` ends with the
+host-to-device copies and a device synchronize; the index sorts
+(`DeviceMergeSort*`) and the derived ASIA rules run inside `run`.
+
+srdatalog evaluates variable-at-a-time: the root variable's distinct values are
+a `ParallelFor`, deeper variables are nested loops. `srdatalog_h05_orders.py`
+counts, for every variable order, the distinct prefix bindings per level (a
+filter prunes only once its variable is bound) and the work under the heaviest
+root value. The cheapest orders start from dimensions but have 1–25 root values
+(serial on a GPU). With the derived ASIA filter, `c,n,d,o,s` is the cheapest
+order with real root parallelism at SF1: 219,145 bindings, 99,996 roots, at most
+29 under one root; the earlier `c,n,o,d,s` costs 475,010 because `o` is bound
+before the date filter. Without the derived filter the cheapest such order,
+`c,n,r,d,o,s`, makes srdatalog return a wrong answer (0 rows at SF1, 4 at SF10;
+`compare/srdatalog_sf{1,10}_cnrdos.json`), so it is excluded.
 
 For triangle references, `--dblp` / `DBLP_DATASET` and `--livejournal` /
 `LIVEJOURNAL_DATASET` select source files (defaults `data/graph/com-dblp.ungraph.txt`
@@ -1019,6 +1145,43 @@ dynamic shared memory**, a **104-byte stack frame**, and **zero spill stores
 or loads**. The BFS filter uses 18 registers, 32 bytes dynamic shared memory,
 and zero stack/spills. No CUDA C, NVRTC, or upstream checkout changes were used.
 
+### Compiled triangle with checked host sets (2026-10-19)
+
+`triangle-compiled` records `cq_rewrites::host_sets(E)` after the loader sorts
+and deduplicates directed edges. The emitted triangle has no canon/dedup:
+the full-heading host keys prove the returned `(a,b,c)` heading unique.
+It still certifies the actual resident input on every invocation. The expanded
+triangle and both certificate kernels were reviewed before GPU execution.
+`printer-oracle --host-sets` passed sorted/unsorted inputs, duplicate rejection
+with the named error, exact hash collisions, projected duplicates, resident
+inputs, and nullary runtime tables.
+
+Measured on RTX 6000 Ada (49,140 MiB), sm_89, driver 580.178.04:
+
+| Dataset | Answer rows | Cold query ms | Warm median query ms | Certificate median ms | Output column bytes |
+|---|---:|---:|---:|---:|---:|
+| DBLP | 2,224,385 | 3.553 | 0.881 | 0.041 | 53,385,240 |
+| LiveJournal | 946,400,853 | 267.781 | 160.690 | 1.653 | 22,713,620,472 |
+
+The cold query needed two direct-output attempts; each of five warm runs needed
+one. Query wall time includes the input certificate, index builds, allocation,
+and kernels; input parsing/sorting/upload and result download are excluded.
+Separate certificate-only samples run afterward on the resident input (one
+discarded sample, then median of five), including count/status readbacks.
+DBLP compares every output tuple with the independent CPU reference using
+`--check`. LiveJournal matches the requested count; it is not claimed to have
+undergone a full-tuple comparison. Its output uses 21.154 GiB of column storage,
+not counting the input, indexes, or allocator reserve.
+
+The initial full-download LiveJournal benchmark returned a VRAM error. The
+runner now uses checked metadata counts except for the first `--check` sample,
+and drops each answer before the next query. Direct retry history retains the
+previous exact count rather than doubling a materialization; oversized estimates
+use a zero-capacity counting attempt before exact allocation. All six final
+LiveJournal runs completed without dedup or allocation OOM. Raw samples, the
+initial failed run, and validation scope are retained in
+[`compare/host_sets.results.json`](compare/host_sets.results.json) and its logs.
+
 ## Structures GPU terminal printer
 
 `printer` is the external proc-macro crate `cq-gpu`; `printer-runtime` owns
@@ -1093,9 +1256,12 @@ optional capacity hint. A thread-local `fused_retry_scope(label)` guard labels
 Datalog rule/key holes, restores the previous label on drop, and cannot move
 between threads. The runtime retains estimates per `(hole, site, row width)`.
 The initial capacity is `max(1024, hint.unwrap_or(0))` on the first call and
-`max(1024, 2 * previous_successful_distinct + hint.unwrap_or(0))` thereafter.
-Only successful distinct cardinalities update the estimate, never candidate
-counts or failed partial rows.
+`max(1024, 2 * previous_nonempty_distinct + hint.unwrap_or(0))` thereafter.
+Only successful nonempty distinct cardinalities update the estimate, never
+candidate counts or failed partial rows. Empty successful rounds still report
+`last_distinct = 0`, but do not erase the size estimate for the next nonempty wave.
+Bounded retry likewise retains the last **nonempty** successful candidate count:
+an intervening empty round cannot force the next wave to rediscover its size.
 
 Overflow growth targets **4 times the observed distinct occupancy**, capped by
 the immutable candidate upper bound, the u32 row-index domain and the available
@@ -1131,12 +1297,44 @@ post-execution dedup for that canon.
 
 Other recorded policies (`Staged` and `Compacting`) use `execute_retry` and
 staged canonicalization only after successful materialization, rather than
-suspension-time compaction. Their existing non-fused policy starts at 1024 rows
-or the explicit hint, then permits one overflow relaunch allocated at the exact
-candidate count; a second failure is terminal. Without `output(retry)`, recorded
+suspension-time compaction. Their first call starts at 1024 rows or the explicit
+hint; subsequent calls use `max(1024, previous_successful_candidates, hint)`
+clamped to the supported row limit, isolated by hole, kernel site and tuple width.
+Unlike fused distinct estimates, candidate history has no multiplicative slack.
+The initial output must fit reusable pool bytes plus free VRAM minus the greater
+of 64 MiB or 5% VRAM, respecting the pool maximum. An oversized estimate selects
+a zero-capacity count-only attempt, then allocates the exact checked count if it
+fits the refreshed budget; an exact count that cannot fit is a resource error.
+Only successful checked counts update this history. One overflow relaunch is
+allocated at the exact candidate count; a second failure is terminal. Both bounded
+policies retain the already-checked successful row count as the table's capacity
+bound, without copying or reallocating its buffers, so downstream operators do not
+launch over unused output slack. A successful synchronized summary also discharges
+all checked immutable ancestor statuses: retained output keeps its own status,
+not an already-validated ancestor list. Dependency failures still terminate before
+publication or history updates. Without `output(retry)`, recorded
 `Fused` continues to use resumable fused execution. Compared with direct bounded
 execution, retry adds a checked host control/count readback for each attempt,
 even when the initial allocation fits; it does not download tuples.
+
+Runtime bookkeeping initializes each column-view/pointer/count table with one
+asynchronous copy from a reusable pinned arena, rather than one CUDA launch per
+element. The arena is rewound only after an existing checked readback or explicit
+finish has completed the stream, and is retained through error-path teardown.
+Immutable column descriptor tables are cached by their column owners across
+executions; expired owners retire the cache entry at the next checked boundary.
+The per-round check gathers all member counts and distinct ancestor errors in
+one kernel and one readback, without a summary memset. Private admission deltas
+defer capacity validation to that check; other bounded/resumable outputs retain
+their validation before dependent operators consume them. `CheckedRound::rows`
+returns a checked count only for the exact immutable metadata owner (including
+projections), without a new readback.
+
+CUDA stage and fused-attempt event timings require the runtime `timings` feature.
+Without it, timing fields are zero and no timing events are created or recorded.
+Allocator completion events remain enabled and pooled per stream; their ordering
+is required for safe cross-stream reuse. Frontier reset copies both counters in
+one upload and skips the duplicate pool memset on the first reset.
 
 The extra recorded passes are necessary. The shorter
 `order(le)` + `sorted_runs` + `retain_lookups` pipeline still records host
@@ -1155,12 +1353,11 @@ as the final tie-break. A device-only blocked counting sort bins the first key,
 then heapsorts each bin lexicographically by the remaining recorded keys and
 original row ID; payloads are gathered once. Two-level prefixes pass their sole
 secondary-key descriptor inline as a copyable kernel argument, with no metadata
-allocation, copy or event. Prefixes with three or more levels upload the remaining
-secondary-key descriptors once with a stream-ordered asynchronous copy from pinned
-host memory. The returned run retains that pinned source and its upload-completion event;
-successful construction never waits. Dropping the upload owner waits only for
-its copy event (or the stream if event recording failed), keeping the source
-alive until the copy is complete. One all-level sortedness/domain check
+allocation, copy or event. For three or more levels, the runtime selects
+`build_prefix_stream_ordered`: descriptor initialization is stream-ordered on
+device, so retiring the run needs no pinned-copy completion event or host wait.
+The standalone `Run::build_prefix` API retains its pinned-upload behavior.
+One all-level sortedness/domain check
 supplies the final build status, without host readbacks.
 Fully lexicographically sorted inputs take the ordinary
 adjacent-difference directory path: histogram clearing, histogram, scatter and
@@ -1340,6 +1537,23 @@ source tuples. The separate `upload_rows` path preserves existing borrowed
 string hosts. The `'data` parameter tracks host string/binding compatibility,
 never an execution runtime lifetime.
 
+Physical `host_set Edges;` is an opt-in, checked fact about the complete
+declared heading, never a projected key. The GPU printer certifies the bound
+host before any query consumer runs: a device pass checks every adjacent
+full-row pair for both sortedness and duplicates. Sorted distinct inputs need
+no hash allocation; unsorted inputs use an exact device hash table of immutable
+row IDs, resolving every collision by comparing all columns. Only count/status
+metadata is read back, not tuples, including for resident and frozen hosts.
+Duplicate rows fail with `CQ_GPU_HOST_SET_DUPLICATE` naming the host relation.
+No fact means no certificate work; projecting away columns still requires its
+own set proof or canonicalization.
+The Physical rewrite is selected as `physical = [cq_rewrites::host_sets(Edges)]`;
+its relation-name advice is consumed there, not by the printer.
+`DeviceColumns::checked_len()` validates all retained statuses and reads only
+the logical count. The compiled triangle runner uses it for count/timing runs
+and calls `to_host()` only for the first `--check` full-tuple comparison, avoiding
+unnecessary decoded-device scratch and host tuple allocation for large outputs.
+
 The 64-bit FastLanes layout has sixteen lanes and the `04261537` unified
 transposed ordering. A packed vector of width W consumes W × 128 data bytes.
 Each vector has a 32-byte `VectorHeader` recording its word offset, base,
@@ -1375,7 +1589,7 @@ budget; otherwise a bounded parallel signed-extrema reduction checks the
 actual live domain on-device. Codec word offsets use hierarchical 256-thread
 u64 prefix scans, not a single-thread walk over every vector.
 
-Timing events are recorded during submission. Standalone `finish` completes
+With `cq-gpu-runtime/timings`, events are recorded during submission. Standalone `finish` completes
 and collects them once; Datalog holes retain them for the shared checked round
 readback and final program completion. Stages do not synchronize to accumulate
 elapsed time. Both boundaries propagate asynchronous CUDA errors; explicit
@@ -1500,7 +1714,7 @@ The resident JSON records, separately:
   PCIe counters or the size of host string allocations. Codec selection and
   tuple preparation are in the all-relations load interval, not the narrower
   per-relation `upload_owned_rows` interval.
-- `build_ms`, `kernel_ms`, `dedup_ms`, `total_ms`: runtime GPU timings for
+- `build_ms`, `kernel_ms`, `dedup_ms`, `total_ms`: runtime GPU timings (zero unless `cq-gpu-runtime/timings` is enabled) for
   the first compiled query; `wall_ms` is that resident call's host elapsed
   time, excluding initial loading, the chained call and final download.
 - `calls`: individual warmup and measured call facts, including separate
@@ -2129,3 +2343,22 @@ The local device-gated radix remains the production implementation: it is
 exact, stream-ordered without selector readback, and its skewed scatter
 already reaches 77.6% of the minimum-traffic bandwidth bound. No CUDA-oxide
 source was changed, and no compiled-query binary was run.
+
+**Resolution (2026-10-20).** Both collisions are fixed by two local patches,
+applied through `[patch]` in this workspace's `Cargo.toml`:
+
+- RCCL `6e30ca6` (`/data/rccl`, branch `mini-linq/dynamic-lookback-scan`):
+  the u32 lookback scan uses dynamic shared memory, removing the static
+  `__shared_mem_0`.
+- cuda-oxide `4f29edb0` (`/data/cuda-oxide`, branch `mini-linq/merge-dedupe`
+  on `5f7c34f`): `load_all_ptx_bundles_merged` drops a later bundle's
+  definition when its code matches the first (trivia removed, body-local
+  labels renumbered) and rejects same-named definitions that differ. A
+  cross-crate `#[device]` function is emitted into every bundle whose kernels
+  reach it; `h05-reference` reproduced this with device-columns `unpack` and
+  `transposed_position` (CUDA error 218, ptxas "Duplicate definition of
+  function").
+
+With both, `h05-reference` loads RCCL's merged program and runs its index
+build and dedup on RCCL (see the general H05 reference above). Neither patch is
+pushed upstream.

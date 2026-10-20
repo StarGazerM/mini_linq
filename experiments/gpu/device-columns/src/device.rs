@@ -3,6 +3,25 @@ use cuda_device::device;
 
 pub const VECTOR_ROWS: usize = 1024;
 
+/// Input element types accepted by the packing kernels. Values widen exactly.
+pub const ELEMENT_I64: u32 = 0;
+pub const ELEMENT_U32: u32 = 1;
+pub const ELEMENT_I32: u32 = 2;
+
+#[device]
+#[inline(always)]
+pub unsafe fn load_element(input: *const u8, element: u32, row: usize) -> i64 {
+    unsafe {
+        if element == ELEMENT_U32 {
+            (input as *const u32).add(row).read() as i64
+        } else if element == ELEMENT_I32 {
+            (input as *const i32).add(row).read() as i64
+        } else {
+            (input as *const i64).add(row).read()
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum Codec {
@@ -126,6 +145,23 @@ pub unsafe fn decode(view: ColumnView, row: u64) -> i64 {
     } else {
         (header.base as u64).wrapping_add(unsafe { unpack(data, header.width, local) }) as i64
     }
+}
+
+/// Decode one row of a column whose values all lie in u32. FOR arithmetic is
+/// done modulo 2^32, which is exact for in-range values; Delta and native
+/// Plain storage use the general path.
+#[device]
+#[inline(always)]
+pub unsafe fn decode_u32(view: ColumnView, row: u64) -> u32 {
+    if view.headers.is_null() {
+        return unsafe { decode(view, row) } as u32;
+    }
+    let header = unsafe { view.headers.add((row / 1024) as usize).read() };
+    if header.codec == Codec::Delta as u32 {
+        return unsafe { decode(view, row) } as u32;
+    }
+    let data = unsafe { view.data.add(header.offset as usize) };
+    (header.base as u32).wrapping_add(unsafe { unpack(data, header.width, (row % 1024) as usize) } as u32)
 }
 
 #[device]

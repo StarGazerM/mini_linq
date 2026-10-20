@@ -1,5 +1,5 @@
 [workspace]
-members = ["tiles", "blocked-run", "h05", "triangles", "triangles-runner", "printer", "printer-runtime", "h05-compiled", "device-columns", "device-columns-oracle", "datalog", "datalog-oracle", "datalog-ddisasm"]
+members = ["tiles", "blocked-run", "h05", "h05-reference", "triangles", "triangles-runner", "printer", "printer-runtime", "h05-compiled", "device-columns", "device-columns-oracle", "datalog", "datalog-oracle", "datalog-ddisasm"]
 resolver = "2"
 
 [workspace.package]
@@ -10,9 +10,36 @@ cuda-core = { git = "https://github.com/StarGazerM/cuda-oxide.git", rev = "5f7c3
 cuda-device = { git = "https://github.com/StarGazerM/cuda-oxide.git", rev = "5f7c34fddadcf250f2e45d0cffe83a3d27f2bea3" }
 cuda-host = { git = "https://github.com/StarGazerM/cuda-oxide.git", rev = "5f7c34fddadcf250f2e45d0cffe83a3d27f2bea3" }
 rccl-memory = { git = "https://github.com/StarGazerM/rccl.git", rev = "745f53cc8d447ec58033d97f4d13f2d7e2f7463a" }
+rccl-cub = { git = "https://github.com/StarGazerM/rccl.git", rev = "745f53cc8d447ec58033d97f4d13f2d7e2f7463a" }
+rccl-thrust = { git = "https://github.com/StarGazerM/rccl.git", rev = "745f53cc8d447ec58033d97f4d13f2d7e2f7463a" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [profile.release]
 lto = false
 codegen-units = 1
+
+# RCCL 6e30ca6 (local branch mini-linq/dynamic-lookback-scan) removes the u32
+# lookback scan's static `__shared_mem_0`, which collided in merged PTX.
+[patch."https://github.com/StarGazerM/rccl.git"]
+rccl-memory = { path = "/data/rccl/rccl-memory" }
+rccl-cub = { path = "/data/rccl/rccl-cub" }
+rccl-thrust = { path = "/data/rccl/rccl-thrust" }
+
+# cuda-oxide 4f29edb0 (local branch mini-linq/merge-dedupe on 5f7c34f): RCCL's
+# generic modules load every embedded PTX bundle merged; cross-crate device
+# functions (e.g. device-columns `unpack`) appeared in two bundles and failed
+# ptxas with "Duplicate definition of function". Identical copies are dropped.
+[patch."https://github.com/StarGazerM/cuda-oxide.git"]
+cuda-artifact-finalizer = { path = "/data/cuda-oxide/crates/cuda-artifact-finalizer" }
+cuda-bindings = { path = "/data/cuda-oxide/crates/cuda-bindings" }
+cuda-core = { path = "/data/cuda-oxide/crates/cuda-core" }
+cuda-device = { path = "/data/cuda-oxide/crates/cuda-device" }
+cuda-host = { path = "/data/cuda-oxide/crates/cuda-host" }
+cuda-macros = { path = "/data/cuda-oxide/crates/cuda-macros" }
+cuda-target-spec = { path = "/data/cuda-oxide/crates/cuda-target-spec" }
+libnvvm-sys = { path = "/data/cuda-oxide/crates/libnvvm-sys" }
+nvjitlink-sys = { path = "/data/cuda-oxide/crates/nvjitlink-sys" }
+oxide-artifacts = { path = "/data/cuda-oxide/crates/oxide-artifacts" }
+ptx-parse = { path = "/data/cuda-oxide/crates/ptx-parse" }
+reserved-oxide-symbols = { path = "/data/cuda-oxide/crates/reserved-oxide-symbols" }

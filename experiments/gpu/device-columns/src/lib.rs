@@ -105,6 +105,30 @@ fn count_pointer<T: DeviceCopy>(pool: &Arc<Pool>, count: &Buffer<T>, offset: usi
     Ok((count.cu_deviceptr() + offset as u64) as *const u64)
 }
 
+/// Element types the packing kernels read. Each widens exactly to i64.
+pub trait Lane: DeviceCopy + Copy + 'static {
+    const ELEMENT: u32;
+    fn widen(self) -> i64;
+}
+impl Lane for i64 {
+    const ELEMENT: u32 = ELEMENT_I64;
+    fn widen(self) -> i64 {
+        self
+    }
+}
+impl Lane for u32 {
+    const ELEMENT: u32 = ELEMENT_U32;
+    fn widen(self) -> i64 {
+        self as i64
+    }
+}
+impl Lane for i32 {
+    const ELEMENT: u32 = ELEMENT_I32;
+    fn widen(self) -> i64 {
+        self as i64
+    }
+}
+
 /// Immutable encoded data plus per-vector codec facts. Bounds enclose logical
 /// values; they are not a relational ordering or uniqueness guarantee.
 pub struct EncodedColumn {
@@ -120,19 +144,23 @@ pub struct EncodedColumn {
 impl EncodedColumn {
     /// Loader-only path: raw values cross once, then the GPU encodes. Reading
     /// the compact extent is allowed here, outside the query compute path.
-    pub fn from_host(pool: Arc<Pool>, values: &[i64], codec: Codec) -> Result<Self> {
+    pub fn from_host<L: Lane>(pool: Arc<Pool>, values: &[L], codec: Codec) -> Result<Self> {
         let input = Buffer::from_host(pool.clone(), values)?;
-        let bounds = Bounds::from_values(values);
+        let bounds = values.iter().map(|v| v.widen()).fold(Bounds::Empty, |bounds, v| match bounds {
+            Bounds::Empty => Bounds::singleton(v),
+            Bounds::Inclusive { min, max } => Bounds::Inclusive { min: min.min(v), max: max.max(v) },
+        });
         let (headers, extent) = Self::make_headers(
             pool.clone(),
-            input.ptr(),
+            input.ptr() as *const u8,
+            L::ELEMENT,
             values.len(),
             std::ptr::null(),
             codec,
         )?;
         let words = usize::try_from(extent.to_host()?[0])?;
         let data = unsafe { Buffer::uninitialized(pool, words)? };
-        Self::pack(&headers, &data, input.ptr(), values.len(), std::ptr::null())?;
+        Self::pack(&headers, &data, input.ptr() as *const u8, L::ELEMENT, values.len(), std::ptr::null())?;
         Ok(Self {
             headers: Some(headers),
             data: ColumnData::Packed(data),
@@ -187,9 +215,9 @@ impl EncodedColumn {
     /// be initialized; unused capacity need not be. Count must remain unchanged.
     /// Its allocation owner is retained independently of any parent relation.
     /// Bounds must enclose all logical values; no sampled bound is sufficient.
-    pub unsafe fn from_device<T: DeviceCopy + 'static>(
+    pub unsafe fn from_device<T: DeviceCopy + 'static, L: Lane>(
         pool: Arc<Pool>,
-        input: *const i64,
+        input: *const L,
         capacity: usize,
         count_owner: Arc<Buffer<T>>,
         count_offset: usize,
@@ -197,7 +225,8 @@ impl EncodedColumn {
         bounds: Bounds,
     ) -> Result<Self> {
         let count = count_pointer(&pool, &count_owner, count_offset)?;
-        let (headers, extent) = Self::make_headers(pool.clone(), input, capacity, count, codec)?;
+        let input = input as *const u8;
+        let (headers, extent) = Self::make_headers(pool.clone(), input, L::ELEMENT, capacity, count, codec)?;
         let width = if codec == Codec::Plain || codec == Codec::Delta {
             64
         } else {
@@ -214,7 +243,7 @@ impl EncodedColumn {
             .checked_mul(per_vector)
             .ok_or("device encoded capacity overflow")?;
         let data = unsafe { Buffer::uninitialized(pool, words)? };
-        Self::pack(&headers, &data, input, capacity, count)?;
+        Self::pack(&headers, &data, input, L::ELEMENT, capacity, count)?;
         Ok(Self {
             headers: Some(headers),
             data: ColumnData::Packed(data),
@@ -229,7 +258,8 @@ impl EncodedColumn {
 
     fn make_headers(
         pool: Arc<Pool>,
-        input: *const i64,
+        input: *const u8,
+        element: u32,
         capacity: usize,
         count: *const u64,
         codec: Codec,
@@ -248,6 +278,7 @@ impl EncodedColumn {
                 pool.stream(),
                 &header_launch,
                 input,
+                element,
                 capacity as u64,
                 count,
                 codec as u32,
@@ -298,7 +329,8 @@ impl EncodedColumn {
     fn pack(
         headers: &Buffer<VectorHeader>,
         data: &Buffer<u64>,
-        input: *const i64,
+        input: *const u8,
+        element: u32,
         capacity: usize,
         count: *const u64,
     ) -> Result<()> {
@@ -313,6 +345,7 @@ impl EncodedColumn {
                 pool.stream(),
                 &launch,
                 input,
+                element,
                 headers.ptr(),
                 capacity as u64,
                 count,

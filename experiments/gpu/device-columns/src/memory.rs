@@ -49,7 +49,7 @@ impl Pool {
     pub fn context(&self) -> &Arc<CudaContext> {
         &self.context
     }
-    pub fn stream(&self) -> &CudaStream {
+    pub fn stream(&self) -> &Arc<CudaStream> {
         &self.stream
     }
 }

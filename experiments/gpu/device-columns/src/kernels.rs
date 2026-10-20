@@ -1,13 +1,14 @@
 #[cuda_device::cuda_module]
 pub(crate) mod codecs {
-    use crate::{original_position, Codec, ColumnView, VectorHeader};
+    use crate::{load_element, original_position, Codec, ColumnView, VectorHeader};
     use cuda_device::{device, kernel, launch_bounds, launch_contract, thread, DynamicSharedArray};
 
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
     pub unsafe fn headers(
-        input: *const i64,
+        input: *const u8,
+        element: u32,
         capacity: u64,
         count: *const u64,
         codec: u32,
@@ -33,9 +34,9 @@ pub(crate) mod codecs {
                 let mut i = lane;
                 while i < rows {
                     if codec != Codec::Delta as u32 || i % 64 != 0 {
-                        let value = unsafe { input.add(begin as usize + i).read() };
+                        let value = unsafe { load_element(input, element, begin as usize + i) };
                         let value = if codec == Codec::Delta as u32 {
-                            value.wrapping_sub(unsafe { input.add(begin as usize + i - 1).read() })
+                            value.wrapping_sub(unsafe { load_element(input, element, begin as usize + i - 1) })
                         } else {
                             value
                         };
@@ -190,7 +191,8 @@ pub(crate) mod codecs {
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
     pub unsafe fn encode(
-        input: *const i64,
+        input: *const u8,
+        element: u32,
         headers: *const VectorHeader,
         capacity: u64,
         count: *const u64,
@@ -214,7 +216,7 @@ pub(crate) mod codecs {
             if is_delta {
                 let row = lane * 64;
                 let base = if row < h.rows as usize {
-                    unsafe { input.add(vector * 1024 + row).read() }
+                    unsafe { load_element(input, element, vector * 1024 + row) }
                 } else {
                     0
                 };
@@ -233,9 +235,9 @@ pub(crate) mod codecs {
                     let row = original_position(slot * 16 + lane);
                     let mut residual = 0u64;
                     if row < h.rows as usize && (!is_delta || row % 64 != 0) {
-                        let value = unsafe { input.add(vector * 1024 + row).read() };
+                        let value = unsafe { load_element(input, element, vector * 1024 + row) };
                         let value = if is_delta {
-                            value.wrapping_sub(unsafe { input.add(vector * 1024 + row - 1).read() })
+                            value.wrapping_sub(unsafe { load_element(input, element, vector * 1024 + row - 1) })
                         } else {
                             value
                         };
