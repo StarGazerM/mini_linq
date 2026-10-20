@@ -4,35 +4,30 @@
 //! at their declared types, interns every join domain into one order-preserving
 //! dictionary of dense u32 IDs, FOR bit-packs every column per 1024-row vector
 //! and keeps the inverse maps for decoding answers. Queries declare relations
-//! over the stored types: domain ID newtypes (`domain_id!`) and `i32`.
+//! over the stored types (`u32` domain IDs, `i32`) and pass query constants as
+//! Rust expressions that map source values to stored ones (`Domain::id`,
+//! `Catalog::text_id`), so the constant has the column's stored type.
 //!
 //! Contract consumed by query code, per column: logical kind (domain ID or
 //! i32), value bounds, row count and the resident `EncodedColumn` whose device
 //! row access (`decode_u32` / `decode`) the generated kernels call. Per domain:
 //! its size, ID width and inverse map.
-
 use gpu_device_columns::{
     Bounds, Buffer, Codec, ColumnView, DeviceColumns, Dictionary, EncodedColumn, OutputCount, Pool, Table,
 };
 use serde_json::Value;
 use std::{collections::BTreeMap, error::Error, fs, path::Path, sync::Arc};
 
+pub mod tpch;
+
 pub type Result<T, E = Box<dyn Error>> = std::result::Result<T, E>;
 
-/// Declare a domain ID newtype: a dense u32 dictionary ID of one join domain.
-#[macro_export]
-macro_rules! domain_id {
-    ($(#[$meta:meta])* $vis:vis $name:ident) => {
-        $(#[$meta])*
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-        #[repr(transparent)]
-        $vis struct $name(pub u32);
-    };
-}
-
 /// Source columns read at their declared types (`i64` or `i32`), host-only.
+/// A text column is exported already interned (`i32` IDs) with its strings
+/// in `<table>.<column>.dict.txt`, one per line, line number = ID.
 pub struct Source {
     columns: BTreeMap<String, Vec<i64>>,
+    texts: BTreeMap<String, Vec<String>>,
     declared_bytes: usize,
     manifest: Value,
 }
@@ -42,6 +37,7 @@ impl Source {
     pub fn load_manifest(dir: &Path) -> Result<Self> {
         let manifest: Value = serde_json::from_slice(&fs::read(dir.join("manifest.json"))?)?;
         let mut columns = BTreeMap::new();
+        let mut texts_by_column = BTreeMap::new();
         let mut declared_bytes = 0;
         for (relation, meta) in manifest["relations"].as_object().ok_or("relations missing")? {
             let rows = meta["rows"].as_u64().ok_or("row count missing")? as usize;
@@ -59,7 +55,7 @@ impl Source {
                 if bytes.len() != rows * width {
                     return Err(format!("{relation}.{name}: byte length does not match its declared type").into());
                 }
-                let values = bytes
+                let values: Vec<i64> = bytes
                     .chunks_exact(width)
                     .map(|b| {
                         if width == 8 {
@@ -70,10 +66,19 @@ impl Source {
                     })
                     .collect();
                 declared_bytes += bytes.len();
-                columns.insert(format!("{relation}.{name}"), values);
+                let qualified = format!("{relation}.{name}");
+                let dictionary = dir.join(format!("{qualified}.dict.txt"));
+                if dictionary.is_file() {
+                    let texts: Vec<String> = fs::read_to_string(dictionary)?.lines().map(str::to_owned).collect();
+                    if values.iter().any(|&id| id < 0 || id as usize >= texts.len()) {
+                        return Err(format!("{qualified}: text ID outside its dictionary").into());
+                    }
+                    texts_by_column.insert(qualified.clone(), texts);
+                }
+                columns.insert(qualified, values);
             }
         }
-        Ok(Self { columns, declared_bytes, manifest })
+        Ok(Self { columns, texts: texts_by_column, declared_bytes, manifest })
     }
     pub fn col(&self, name: &str) -> Result<&[i64]> {
         self.columns.get(name).map(Vec::as_slice).ok_or_else(|| format!("missing column {name}").into())
@@ -165,6 +170,8 @@ pub struct Catalog {
     pool: Arc<Pool>,
     domains: BTreeMap<String, Domain>,
     tables: BTreeMap<String, CompressedTable>,
+    /// String dictionaries of stored text columns (`table.column`).
+    texts: BTreeMap<String, Vec<String>>,
 }
 
 impl Catalog {
@@ -176,6 +183,7 @@ impl Catalog {
             domains.insert(name.clone(), Domain::new(name, &columns)?);
         }
         let mut tables = BTreeMap::new();
+        let mut stored_texts = BTreeMap::new();
         for (table, columns) in &schema.tables {
             let mut rows = None;
             let mut stored = Vec::new();
@@ -199,10 +207,20 @@ impl Catalog {
                     }
                 };
                 stored.push(CompressedColumn { name: column.clone(), kind: kind.clone(), column: Arc::new(encoded) });
+                if let Some(texts) = source.texts.get(&qualified) {
+                    stored_texts.insert(qualified, texts.clone());
+                }
             }
             tables.insert(table.clone(), CompressedTable { rows: rows.unwrap_or(0), columns: stored });
         }
-        Ok(Self { pool: pool.clone(), domains, tables })
+        Ok(Self { pool: pool.clone(), domains, tables, texts: stored_texts })
+    }
+    /// Stored `i32` ID of `text` in the interned text column `table.column`:
+    /// the value a query constant must have to compare with that column.
+    pub fn text_id(&self, column: &str, text: &str) -> Result<i32> {
+        let texts = self.texts.get(column).ok_or_else(|| format!("{column} is not a stored text column"))?;
+        let id = texts.iter().position(|t| t == text).ok_or_else(|| format!("{column}: {text:?} is not in its dictionary"))?;
+        Ok(i32::try_from(id)?)
     }
     pub fn domain(&self, name: &str) -> Result<&Domain> {
         self.domains.get(name).ok_or_else(|| format!("unknown domain {name}").into())

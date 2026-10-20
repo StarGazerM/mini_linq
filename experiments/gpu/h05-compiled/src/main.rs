@@ -1,16 +1,11 @@
 #![recursion_limit = "1024"]
-
-#[path = "../../h05/src/data.rs"]
-mod data;
 mod queries;
-
-use cq_gpu_runtime::{
-    detect_integer_codec, Codec, DeviceColumns, Dictionary, OwnedRowCodec, Runtime,
-};
-use data::{Data, Error};
+use gpu_compress::{tpch::schema, Catalog, Source};
+use cq_gpu_runtime::{DeviceColumns, For, Pool};
 use serde_json::{json, Value};
-use std::{collections::BTreeMap, fs, path::Path, time::Instant};
+use std::{fs, path::Path, sync::Arc, time::Instant};
 
+type Error = Box<dyn std::error::Error>;
 #[link(name = "cuda")]
 unsafe extern "C" {
     fn cuProfilerStart() -> u32;
@@ -32,153 +27,40 @@ fn profiler_boundary(start: bool) -> Result<(), Error> {
     }
 }
 
-struct Rows {
-    customer: DeviceColumns<'static, (i64, i64)>,
-    orders: DeviceColumns<'static, (i64, i64, i64)>,
-    lineitem: DeviceColumns<'static, (i64, i64)>,
-    supplier: DeviceColumns<'static, (i64, i64)>,
-    nation: DeviceColumns<'static, (i64, i64)>,
-    region: DeviceColumns<'static, (i64, String)>,
+/// Stored tables bound as resident relations (domain IDs, declared i32).
+pub struct Rows {
+    customer: DeviceColumns<'static, (u32, u32), For>,
+    orders: DeviceColumns<'static, (u32, u32, i32), For>,
+    lineitem: DeviceColumns<'static, (u32, u32), For>,
+    supplier: DeviceColumns<'static, (u32, u32), For>,
+    nation: DeviceColumns<'static, (u32, u32), For>,
+    region: DeviceColumns<'static, (u32, i32), For>,
 }
 
 impl Rows {
-    fn load(data: &Data, dir: &Path) -> Result<(Self, Value), Error> {
-        if (data.start, data.end) != (8766, 9131) {
-            return Err("H05 query constants disagree with manifest date window".into());
-        }
-        let runtime = Runtime::new()?;
-        let mut strings = Dictionary::default();
-        let mut relations = Vec::new();
-        let pairs = |left: &str, right: &str| -> Vec<(i64, i64)> {
-            data.col(left)
-                .iter()
-                .copied()
-                .zip(data.col(right).iter().copied())
-                .collect()
-        };
-        let mut dictionary = BTreeMap::new();
-        for (position, line) in fs::read_to_string(dir.join("region.r_name.dict.txt"))?
-            .lines()
-            .enumerate()
-        {
-            let (id, text) = match line.split_once('\t') {
-                Some((id, text)) => (id.parse::<i64>()?, text),
-                None => (i64::try_from(position)?, line),
-            };
-            dictionary.insert(id, text.to_owned());
-        }
-        if dictionary.get(&data.asia).map(String::as_str) != Some("ASIA") {
-            return Err("ASIA dictionary constant disagrees with manifest".into());
-        }
-        let region = data
-            .col("region.r_regionkey")
-            .iter()
-            .zip(data.col("region.r_name"))
-            .map(|(&key, id)| {
-                Ok((
-                    key,
-                    dictionary
-                        .get(id)
-                        .ok_or("unknown region dictionary id")?
-                        .clone(),
-                ))
-            })
-            .collect::<Result<Vec<_>, Error>>()?;
-        let orders: Vec<_> = data
-            .col("orders.o_orderkey")
-            .iter()
-            .zip(data.col("orders.o_custkey"))
-            .zip(data.col("orders.o_orderdate"))
-            .map(|((&order, &customer), &date)| (order, customer, date))
-            .collect();
-        let codec = |name: &str| detect_integer_codec(data.col(name));
-        let customer = upload(
-            &runtime,
-            &mut strings,
-            "customer",
-            &pairs("customer.c_custkey", "customer.c_nationkey"),
-            &[codec("customer.c_custkey"), codec("customer.c_nationkey")],
-            &mut relations,
-        )?;
-        let orders = upload(
-            &runtime,
-            &mut strings,
-            "orders",
-            &orders,
-            &[
-                codec("orders.o_orderkey"),
-                codec("orders.o_custkey"),
-                codec("orders.o_orderdate"),
-            ],
-            &mut relations,
-        )?;
-        let lineitem = upload(
-            &runtime,
-            &mut strings,
-            "lineitem",
-            &pairs("lineitem.l_orderkey", "lineitem.l_suppkey"),
-            &[codec("lineitem.l_orderkey"), codec("lineitem.l_suppkey")],
-            &mut relations,
-        )?;
-        let supplier = upload(
-            &runtime,
-            &mut strings,
-            "supplier",
-            &pairs("supplier.s_suppkey", "supplier.s_nationkey"),
-            &[codec("supplier.s_suppkey"), codec("supplier.s_nationkey")],
-            &mut relations,
-        )?;
-        let nation = upload(
-            &runtime,
-            &mut strings,
-            "nation",
-            &pairs("nation.n_nationkey", "nation.n_regionkey"),
-            &[codec("nation.n_nationkey"), codec("nation.n_regionkey")],
-            &mut relations,
-        )?;
-        let region = upload(
-            &runtime,
-            &mut strings,
-            "region",
-            &region,
-            &[codec("region.r_regionkey"), Codec::Dictionary],
-            &mut relations,
-        )?;
-        // Each relation retains its pool/stream/context and dictionary domain.
-        // Dropping this construction Runtime does not invalidate resident inputs.
-        Ok((
-            Self {
-                customer,
-                orders,
-                lineitem,
-                supplier,
-                nation,
-                region,
-            },
-            json!(relations),
-        ))
+    fn bind(catalog: &Catalog) -> Result<Self, Error> {
+        Ok(Self {
+            customer: catalog.device_columns("customer")?,
+            orders: catalog.device_columns("orders")?,
+            lineitem: catalog.device_columns("lineitem")?,
+            supplier: catalog.device_columns("supplier")?,
+            nation: catalog.device_columns("nation")?,
+            region: catalog.device_columns("region")?,
+        })
     }
 }
 
-fn upload<Row: OwnedRowCodec>(
-    runtime: &Runtime,
-    dictionary: &mut Dictionary<'static>,
-    relation: &str,
-    rows: &[Row],
-    codecs: &[Codec],
-    measurements: &mut Vec<Value>,
-) -> Result<DeviceColumns<'static, Row>, Error> {
-    let started = Instant::now();
-    let resident = runtime.upload_owned_rows(rows, dictionary, codecs)?;
-    let load_encode_ms = started.elapsed().as_secs_f64() * 1000.0;
-    measurements.push(json!({
-        "relation": relation, "rows": rows.len(),
-        "raw_bytes": resident.raw_bytes(),
-        "fastlanes_bytes": resident.encoded_bytes(),
-        "codecs": codecs.iter().map(|codec| format!("{codec:?}")).collect::<Vec<_>>(),
-        "load_encode_ms": load_encode_ms
-    }));
-    Ok(resident)
+/// Independent oracle: DuckDB's distinct answer over source keys.
+fn load_answer(dir: &Path) -> Result<Vec<(i64, i64, i64)>, Error> {
+    let mut answer = Vec::new();
+    for line in fs::read_to_string(dir.join("answer.tsv"))?.lines() {
+        let fields = line.split('\t').map(str::parse::<i64>).collect::<Result<Vec<_>, _>>()?;
+        let [o, s, n] = fields[..] else { return Err("answer must have three columns".into()) };
+        answer.push((o, s, n));
+    }
+    answer.sort_unstable();
+    answer.dedup();
+    Ok(answer)
 }
 
 fn metric(samples: &[f64]) -> Value {
@@ -208,25 +90,43 @@ fn main() -> Result<(), Error> {
     }
     let profile = std::env::var_os("CQ_GPU_PROFILE").is_some();
     let host_started = Instant::now();
-    let data = Data::load(dir)?;
+    let source = Source::load_manifest(dir)?;
+    let answer = load_answer(dir)?;
     let host_load_ms = host_started.elapsed().as_secs_f64() * 1000.0;
+    let manifest = source.manifest();
+    let sf = manifest["sf"].clone();
+    let constant = |name: &str| -> Result<i32, Error> {
+        Ok(i32::try_from(manifest["constants"][name].as_i64().ok_or_else(|| format!("missing constant {name}"))?)?)
+    };
+    if (constant("date_start_days")?, constant("date_end_days")?) != (8766, 9131) {
+        return Err("H05 query constants disagree with manifest date window".into());
+    }
+    
     let load_started = Instant::now();
-    let (rows, relations) = Rows::load(&data, dir)?;
+    let pool: Arc<Pool> = Pool::new(0, 0, 0)?;
+    let catalog = Catalog::compress(&pool, &source, &schema())?;
+    let rows = Rows::bind(&catalog)?;
+    // The query's ASIA literal must be the stored text ID.
+    let asia = catalog.text_id("region.r_name", "ASIA")?;
+    if asia != queries::ASIA || asia != constant("asia_id")? {
+        return Err(format!("ASIA stored ID {asia} disagrees with the query literal or manifest").into());
+    }
     let load_encode_ms = load_started.elapsed().as_secs_f64() * 1000.0;
-    println!("sf={} host_load_ms={host_load_ms:.6} load_encode_ms={load_encode_ms:.6} relations={relations}", data.sf);
+    let declared_bytes = source.declared_bytes();
+    drop(source);
+    let relations: Vec<Value> = catalog
+        .tables()
+        .map(|(table, stored)| {
+            json!({"relation": table, "rows": stored.rows,
+                "encoded_bytes": stored.columns.iter().map(|c| c.column.bytes()).sum::<usize>()})
+        })
+        .collect();
+    let (orders, suppliers, nations) =
+        (catalog.domain("orderkey")?, catalog.domain("suppkey")?, catalog.domain("nationkey")?);
+    println!("sf={sf} host_load_ms={host_load_ms:.6} load_encode_ms={load_encode_ms:.6} declared_bytes={declared_bytes} compressed_bytes={}", catalog.bytes());
     let mut results = Vec::new();
-    for (plan, query) in [
-        (
-            "A",
-            queries::plan_a
-                as for<'a> fn(&'a Rows) -> DeviceColumns<'a, queries::Answer, cq_gpu_runtime::For>,
-        ),
-        (
-            "B",
-            queries::plan_b
-                as for<'a> fn(&'a Rows) -> DeviceColumns<'a, queries::Answer, cq_gpu_runtime::For>,
-        ),
-    ] {
+    type Query = for<'a> fn(&'a Rows) -> DeviceColumns<'a, queries::Answer, For>;
+    for (plan, query) in [("A", queries::plan_a as Query), ("B", queries::plan_b as Query)] {
         if selected != "both" && selected != plan {
             continue;
         }
@@ -256,16 +156,19 @@ fn main() -> Result<(), Error> {
                 profiler_boundary(false)?;
             }
             let download_started = Instant::now();
-            let mut actual = chained.to_host()?;
+            let mut actual: Vec<(i64, i64, i64)> = chained
+                .to_host()?
+                .into_iter()
+                .map(|(o, s, n)| (orders.value(o), suppliers.value(s), nations.value(n)))
+                .collect();
             let download_ms = download_started.elapsed().as_secs_f64() * 1000.0;
             actual.sort_unstable();
-            if actual != data.answer {
+            if actual != answer {
                 return Err(format!("compiled Plan {plan} differs from answer.tsv: actual={}, expected={}, first mismatch={:?}",
-                    actual.len(), data.answer.len(), actual.iter().zip(&data.answer).find(|(a,b)| a != b)).into());
+                    actual.len(), answer.len(), actual.iter().zip(&answer).find(|(a,b)| a != b)).into());
             }
             println!(
-                "sf={} plan={plan} iteration={iteration} exact=true rows={} build_ms={:.6} kernel_ms={:.6} dedup_ms={:.6} total_ms={:.6} wall_ms={wall_ms:.6} chain_wall_ms={chain_wall_ms:.6} download_ms={download_ms:.6}",
-                data.sf,
+                "sf={sf} plan={plan} iteration={iteration} exact=true rows={} build_ms={:.6} kernel_ms={:.6} dedup_ms={:.6} total_ms={:.6} wall_ms={wall_ms:.6} chain_wall_ms={chain_wall_ms:.6} download_ms={download_ms:.6}",
                 actual.len(),
                 timing.build_ms,
                 timing.kernel_ms,
@@ -298,16 +201,16 @@ fn main() -> Result<(), Error> {
             }
         }
         results.push(json!({
-            "implementation": "cq_gpu::print/resident", "sf": data.sf, "plan": plan,
-            "exact": true, "answer_count": data.answer.len(), "warmups": 1, "runs": 5,
+            "implementation": "cq_gpu::print/resident", "sf": sf, "plan": plan,
+            "exact": true, "answer_count": answer.len(), "warmups": 1, "runs": 5,
             "build_ms": metric(&build), "kernel_ms": metric(&kernel),
             "dedup_ms": metric(&dedup), "total_ms": metric(&total), "wall_ms": metric(&wall),
             "download_ms": metric(&downloads),
             "one_time": {
                 "host_load_ms": host_load_ms, "load_encode_ms": load_encode_ms,
-                "relations": relations,
-                "scope": "host_load_ms reads projected files and oracle; load_encode_ms includes Runtime creation, host row preparation, one-time upload and completed device encoding; relation load_encode_ms measures upload_owned_rows only",
-                "bytes_scope": "raw_bytes is logical i64/dictionary-ID column bytes; fastlanes_bytes includes encoded column data, vector headers and extent metadata, not allocator capacity or host dictionary strings"
+                "relations": relations, "declared_bytes": declared_bytes, "compressed_bytes": catalog.bytes(),
+                "scope": "host_load_ms reads manifest columns and the oracle; load_encode_ms is gpu-compress (dictionary IDs per domain, FOR per column) and resident binding",
+                "bytes_scope": "declared_bytes is source columns at manifest types; compressed_bytes is resident FOR-encoded stored columns (domain IDs, i32)"
             },
             "timing_scope": "build/kernel/dedup/total are runtime GPU timings; wall_ms is the first resident compiled call, excluding one-time input load, the separately recorded second compiled call, and explicit final download; calls includes warmup and measured calls",
             "chain": "H05 packed DeviceColumns -> compiled identity query -> explicit download; no tuple download between queries",

@@ -554,6 +554,48 @@ transfers and CPU comparison are outside timing. The runner updates matching
 SF/plan entries in `compare/gpu_h05.results.json`; `audit.py` fills resource fields
 from actual `ptxas -v -arch=sm_89` output and saves that output verbatim.
 
+### Stored representation (`gpu-compress`)
+
+Compression is pre-query storage code in its own crate, `compress`
+(`gpu-compress`), never a compiler decision. `Source` reads manifest columns at
+their declared types (plus `<table>.<column>.dict.txt` for exported interned
+text). `Catalog::compress(pool, source, schema)` builds one order-preserving
+dictionary per join domain (`Domain`: size, ID bits, bounds, `value`/`id`)
+and FOR-packs every stored column. `tpch::schema()` is H05's schema: five
+domains, join keys stored as `u32` IDs, and `r_name`/`o_orderdate` as `i32`.
+`Catalog::device_columns::<Row>(table)` binds a stored table as a resident
+`DeviceColumns` for compiled queries. Both `h05-reference` and
+`gpu-h05-compiled` use it.
+
+Compiled H05 declares relations at the stored types
+(`Orders(o_orderkey:u32,o_custkey:u32,o_orderdate:i32)`, ...) and decodes its
+answer IDs through the domains before comparing them with `answer.tsv`. Query
+constants must have the stored type. `"ASIA"` is the literal `2`; before any run
+the host checks it against `catalog.text_id("region.r_name", "ASIA")` and the
+manifest. A captured host value (`Region(region_key, meta.asia)`) is exact, but
+the planner lowers a non-literal atom argument to a late `bind` + `natural_join`
+with Region, not the early `select` a literal gets (relational equality admits
+only literals, `cq-syntax/src/equality.rs`). It therefore loses the early
+ASIA reduction. The sorted-run rewrite gates (`sorted_runs`, the physical
+stream retention gate, `prefix_runs`) and `BorrowedI64TupleCodec`/`I64Codec`
+now admit `u32` keys alongside `i32`/`i64`.
+
+Results (`--features cq-gpu-runtime/timings`, median of 5,
+`compare/gpu_h05_compiled.resident.results.json`, all exact):
+
+| Plan | SF1 total ms | SF10 total ms | SF10 build ms | before (i64 rows) SF10 total ms |
+|---|---:|---:|---:|---:|
+| A | 1.18 | 4.89 | 3.01 | 36.64 |
+| B | 1.97 | 11.64 | 11.07 | 71.22 |
+
+The device path is still i64: the runtime's column access, run views,
+registers and outputs widen every value. These are not same-program numbers as
+the reference: the build uses blocked runs, and the Nsight trace shows
+`sorted_check`, the blocked-run sorted-input skip. Order-preserving IDs make
+`o_orderkey` arrive sorted, so that check skips the sort. The PTX
+profile is unchanged from the i64 version: `cq_gpu_stream_1_r19` uses 104 B of
+stack, and `cq_gpu_stream_0_r21` has a 16 B frame with 24 B of spills.
+
 ## Implementation
 
 - `tiles`: cross-crate `#[device]` helpers for 256-thread exclusive scan, stable

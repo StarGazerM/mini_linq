@@ -13,7 +13,7 @@
 mod kernels;
 
 use cuda_core::{CudaStream, DeviceBuffer, DeviceCopy, LaunchConfig1D};
-use gpu_compress::{Catalog, Domain, Kind, Schema, Source};
+use gpu_compress::{tpch::schema, Catalog, Domain, Source};
 use gpu_device_columns::{Bounds, Buffer, Codec, ColumnView, EncodedColumn, MemoryResource, Pool};
 use kernels::*;
 use rccl_cub::{cuda::Launch, DeviceRadixSortBufferWorkspace, DoubleBuffer};
@@ -27,34 +27,6 @@ type Exec<'a> = rccl_thrust::cuda::Execution<'a, 'a, &'a MemoryResource>;
 
 const EXPAND_GRID: u32 = 568;
 const STRIDED_GRID: usize = 568 * 4;
-
-/// H05's stored schema: five join domains; every join key stored as a domain
-/// ID, Region.name and the order date at their declared i32 type.
-fn schema() -> Schema {
-    let id = |domain: &str| Kind::Id(domain.to_string());
-    let columns = |list: &[(&str, Kind)]| list.iter().map(|(c, k)| (c.to_string(), k.clone())).collect();
-    let members = |list: &[&str]| list.iter().map(|m| m.to_string()).collect();
-    Schema {
-        domains: vec![
-            ("orderkey".into(), members(&["orders.o_orderkey", "lineitem.l_orderkey"])),
-            ("custkey".into(), members(&["customer.c_custkey", "orders.o_custkey"])),
-            ("suppkey".into(), members(&["supplier.s_suppkey", "lineitem.l_suppkey"])),
-            ("nationkey".into(), members(&["nation.n_nationkey", "customer.c_nationkey", "supplier.s_nationkey"])),
-            ("regionkey".into(), members(&["region.r_regionkey", "nation.n_regionkey"])),
-        ],
-        tables: vec![
-            ("region".into(), columns(&[("r_regionkey", id("regionkey")), ("r_name", Kind::I32)])),
-            ("nation".into(), columns(&[("n_nationkey", id("nationkey")), ("n_regionkey", id("regionkey"))])),
-            ("customer".into(), columns(&[("c_custkey", id("custkey")), ("c_nationkey", id("nationkey"))])),
-            (
-                "orders".into(),
-                columns(&[("o_orderkey", id("orderkey")), ("o_custkey", id("custkey")), ("o_orderdate", Kind::I32)]),
-            ),
-            ("lineitem".into(), columns(&[("l_orderkey", id("orderkey")), ("l_suppkey", id("suppkey"))])),
-            ("supplier".into(), columns(&[("s_suppkey", id("suppkey")), ("s_nationkey", id("nationkey"))])),
-        ],
-    }
-}
 
 /// Stored columns addressed by their source names (`table.column`).
 struct Base {

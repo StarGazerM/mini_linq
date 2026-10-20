@@ -138,7 +138,7 @@ pub fn compile(
         }
         if keyed.columns().any(|column| {
             !matches!(&facts.physical.rows[&name].types[&symbol_name(column)], syn::Type::Path(path)
-                if path.path.is_ident("i32") || path.path.is_ident("i64"))
+                if path.path.is_ident("i32") || path.path.is_ident("i64") || path.path.is_ident("u32"))
         }) {
             if selected {
                 return Err(syn::Error::new_spanned(

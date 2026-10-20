@@ -252,7 +252,7 @@ pub fn build_host_reads(source: &ir::Program, arguments: TokenStream) -> syn::Re
                 !keys.is_empty()
                     && keys.iter().all(|key| {
                         matches!(&facts.rows[&name].types[key], syn::Type::Path(path)
-                    if path.path.is_ident("i32") || path.path.is_ident("i64"))
+                    if path.path.is_ident("i32") || path.path.is_ident("i64") || path.path.is_ident("u32"))
                     })
             })
         {

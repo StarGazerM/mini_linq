@@ -11,6 +11,7 @@ cq-storage = { path = "../../../runtime/cq-storage" }
 cq-gpu = { path = "../printer" }
 cq-gpu-runtime = { path = "../printer-runtime" }
 cuda-core.workspace = true
+gpu-compress = { path = "../compress" }
 cuda-device.workspace = true
 cuda-host.workspace = true
 gpu-tiles = { path = "../tiles" }

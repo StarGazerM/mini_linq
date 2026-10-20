@@ -838,6 +838,7 @@ dependencies = [
  "cuda-device",
  "cuda-host",
  "gpu-blocked-run",
+ "gpu-compress",
  "gpu-tiles",
  "mini-linq",
  "serde_json",
