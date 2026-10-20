@@ -30,5 +30,5 @@ pub use physical::{
     smallest_intersections,
 };
 pub use structures::{
-    expand_lookups, hashed_runs, join_filter, retain_lookups, retype, sorted_runs,
+    dump, expand_lookups, hashed_runs, join_filter, retain_lookups, retype, sorted_runs,
 };
