@@ -42,18 +42,22 @@ fn delta_declarations_are_fresh_complete_unique_and_idb_only() {
         let mut program = original.clone();
         mutate(&mut program);
         assert!(contract::check(&program).is_err(), "mutation {index}");
+        assert!(
+            check_rewrite(&original, &program).is_err(),
+            "mutation {index}"
+        );
+        assert!(
+            check_rewrite(&program, &original).is_err(),
+            "mutation {index}"
+        );
     }
 }
 #[test]
-fn variants_require_exact_coverage_and_erasure() {
+fn variants_require_complete_coverage_and_erasure() {
     let original = scheduled();
     let mutations: Vec<Mutation> = vec![
         Box::new(|p| {
             p.variants.pop();
-        }),
-        Box::new(|p| {
-            let v = p.variants[0].clone();
-            p.variants.push(v);
         }),
         Box::new(|p| {
             p.variants[0].rule = 100;
@@ -85,6 +89,14 @@ fn variants_require_exact_coverage_and_erasure() {
         let mut program = original.clone();
         mutate(&mut program);
         assert!(contract::check(&program).is_err(), "mutation {index}");
+        assert!(
+            check_rewrite(&original, &program).is_err(),
+            "mutation {index}"
+        );
+        assert!(
+            check_rewrite(&program, &original).is_err(),
+            "mutation {index}"
+        );
     }
 }
 
@@ -129,7 +141,7 @@ fn malformed_variants_fail_standalone_cq_validation_before_erasure() {
 }
 
 #[test]
-fn rewrites_preserve_every_recorded_decision() {
+fn rewrites_admit_fresh_delta_names_and_decision_order() {
     let original = scheduled();
     let mut renamed = scheduled();
     renamed.deltas[0].name = syn::parse_quote!(Alternative);
@@ -142,11 +154,12 @@ fn rewrites_preserve_every_recorded_decision() {
         }
     }
     contract::check(&renamed).unwrap();
-    assert!(check_rewrite(&original, &renamed).is_err());
+    check_rewrite(&original, &renamed).unwrap();
     let mut reordered = original.clone();
     reordered.variants.reverse();
     contract::check(&reordered).unwrap();
-    assert!(check_rewrite(&original, &reordered).is_err());
+    reordered.deltas.reverse();
+    check_rewrite(&original, &reordered).unwrap();
     let mut changed = original.clone();
     changed.strata.source.observer = Some(syn::parse_quote!(observer));
     assert!(check_rewrite(&original, &changed).is_err());
@@ -193,4 +206,115 @@ fn authored_incremental_fixtures_roundtrip() {
         assert_eq!(p, syn::parse2::<Program>(p.to_token_stream()).unwrap());
         check_rewrite(&p, &p).unwrap();
     }
+}
+
+#[test]
+fn covering_variants_may_repeat_but_every_copy_must_erase() {
+    let original = scheduled();
+    let mut redundant = original.clone();
+    redundant.variants.extend(original.variants.iter().cloned());
+    redundant.variants.reverse();
+    contract::check(&redundant).unwrap();
+    check_rewrite(&original, &redundant).unwrap();
+    check_rewrite(&redundant, &original).unwrap();
+
+    redundant.variants.last_mut().unwrap().query.head.args[0] = syn::parse_quote!(*y);
+    assert!(contract::check(&redundant).is_err());
+    assert!(check_rewrite(&original, &redundant).is_err());
+}
+
+#[test]
+fn coverage_is_per_changing_position_not_just_per_rule() {
+    let original = scheduled();
+    for missing in [0, 1] {
+        let mut incomplete = original.clone();
+        incomplete
+            .variants
+            .retain(|v| v.rule != 1 || v.delta != Some(missing));
+        // Duplicating the other position cannot fill the missing position.
+        let other = incomplete
+            .variants
+            .iter()
+            .find(|v| v.rule == 1)
+            .unwrap()
+            .clone();
+        incomplete.variants.push(other);
+        let error = contract::check(&incomplete).unwrap_err().to_string();
+        assert!(
+            error.contains("missing changing-position variant"),
+            "{error}"
+        );
+    }
+    let mut missing_seed = original.clone();
+    missing_seed.variants.retain(|v| v.rule != 0);
+    let error = contract::check(&missing_seed).unwrap_err().to_string();
+    assert!(error.contains("missing seed variant"), "{error}");
+}
+
+#[test]
+fn coarser_strata_require_delta_coverage_for_newly_changing_reads() {
+    let original = scheduled();
+    let mut coarser = original.clone();
+    coarser.strata.components = vec![vec![syn::parse_quote!(Reach), syn::parse_quote!(Result)]];
+    assert!(contract::check(&coarser).is_err());
+    coarser.variants[3].delta = Some(0);
+    coarser.variants[3].query =
+        syn::parse_quote!(Result(*x,*y) :- ReachChanges(x,y), !Blocked(x,_););
+    let analysis = contract::check(&coarser).unwrap();
+    assert_eq!(
+        analysis.changing_positions,
+        vec![vec![], vec![0, 1], vec![0]]
+    );
+    // Admissible incremental programs over different strata are not L→L rewrites.
+    assert!(check_rewrite(&original, &coarser).is_err());
+
+    let mut changed_rule = original.clone();
+    changed_rule.strata.source.rules[0].head.args[0] = syn::parse_quote!(*y);
+    changed_rule.variants[0].query.head.args[0] = syn::parse_quote!(*y);
+    contract::check(&changed_rule).unwrap();
+    assert!(check_rewrite(&original, &changed_rule).is_err());
+}
+
+#[test]
+fn only_seminaive_covering_is_a_supported_scheme() {
+    for scheme in ["naive", "seminaive_exact", "unknown"] {
+        assert!(
+            syn::parse_str::<Program>(
+                &SEMINAIVE.replace("scheme seminaive_covering;", &format!("scheme {scheme};"))
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn negative_idb_reads_are_frozen_below_delta_rounds() {
+    let original: Program = syn::parse_quote! {
+        struct Frozen;
+        relation E(x:i32) = (e);
+        relation A(x:i32); relation B(x:i32);
+        output B;
+        A(*x) :- E(x);
+        B(*x) :- E(x), !A(x);
+        B(*x) :- B(x), !A(x);
+        strata { component [A]; component [B]; }
+        incremental {
+            scheme seminaive_covering;
+            delta A = AChanges;
+            delta B = BChanges;
+            variant 0 seed { A(*x) :- E(x); }
+            variant 1 seed { B(*x) :- E(x), !A(x); }
+            variant 2 delta 0 { B(*x) :- BChanges(x), !A(x); }
+        }
+    };
+    contract::check(&original).unwrap();
+    let mut changed = original.clone();
+    changed.variants[2].query = syn::parse_quote!(B(*x) :- BChanges(x), !AChanges(x););
+    assert!(contract::check(&changed).is_err());
+    changed = original.clone();
+    changed.variants[2].delta = Some(1);
+    assert!(contract::check(&changed).is_err());
+    changed = original.clone();
+    changed.strata.components = vec![vec![syn::parse_quote!(A), syn::parse_quote!(B)]];
+    assert!(contract::check(&changed).is_err());
 }

@@ -1,5 +1,8 @@
-//! DL-Incremental records the exact semi-naive changing-position cover.
+//! DL-Incremental records a semi-naive changing-position cover.
 //! Delta rounds read frozen lower components and preserve written Rust clauses.
+//! Each variant selects one changing positive occurrence; every such occurrence
+//! is covered at least once. Repeated variants are admissible for set relations.
+//! Only `seminaive_covering` is supported; no naive or exact scheme is implied.
 use cq_datalog_support::{Fresh, ensure};
 pub use cq_lang_datalog_strata as strata;
 use cq_syntax::symbol_name;
@@ -114,7 +117,7 @@ impl ToTokens for Program {
         );
     }
 }
-/// Formal rule DL-Delta: Check variant erasure and exactly one delta read per changing position.
+/// Formal rule DL-Delta: check variant erasure and coverage of changing positions.
 fn check_variants(program: &Program, analysis: &Analysis) -> syn::Result<()> {
     let p = &program.strata.source;
     let variants = &program.variants;
@@ -127,11 +130,8 @@ fn check_variants(program: &Program, analysis: &Analysis) -> syn::Result<()> {
         declarations.push(declaration);
     }
     for v in variants {
-        ensure(
-            v.rule < p.rules.len() && seen.insert((v.rule, v.delta)),
-            p,
-            "duplicate or invalid variant",
-        )?;
+        ensure(v.rule < p.rules.len(), p, "invalid variant rule index")?;
+        seen.insert((v.rule, v.delta));
         let positions = &analysis.changing_positions[v.rule];
         ensure(
             match v.delta {
@@ -245,13 +245,14 @@ pub mod contract {
         Ok(analysis)
     }
 }
+/// Preserve the immediate Strata program while independently admitting decisions.
 pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
     contract::check(source)?;
     contract::check(target)?;
     ensure(
-        source == target,
+        source.strata == target.strata,
         target,
-        "rewrite changed recorded incremental decisions",
+        "incremental rewrite changed the strata program",
     )
 }
 impl cq_stage::Language for Program {

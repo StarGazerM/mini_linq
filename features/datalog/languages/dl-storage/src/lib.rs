@@ -76,7 +76,7 @@ record!(Policy {
 });
 
 pub use incremental::Analysis;
-/// Infer occurrence obligations from checked variants, without choosing layouts.
+/// Choose the default written-order occurrence bindings; contracts do not call this.
 pub fn read_plan(
     program: &Program,
     analysis: &Analysis,
@@ -159,7 +159,7 @@ pub fn read_plan(
 }
 pub mod contract {
     use super::*;
-    /// Formal rule WF-DL-Storage: exact layouts, reads, providers and maintenance.
+    /// Formal rule WF-DL-Storage: admissible bindings, layouts and total maintenance.
     pub fn check(program: &Program) -> syn::Result<Analysis> {
         let analysis = incremental::contract::check(&program.incremental)?;
         layouts::check(program, &analysis)?;
@@ -178,12 +178,6 @@ pub mod contract {
             program,
             "unsupported storage provider or maintenance policy",
         )?;
-        let (reads, negations) = read_plan(program, &analysis)?;
-        ensure(
-            program.reads == reads && program.negations == negations,
-            program,
-            "storage read or negative projection coverage changed",
-        )?;
         Ok(analysis)
     }
 }
@@ -191,9 +185,9 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
     contract::check(source)?;
     contract::check(target)?;
     ensure(
-        source == target,
+        source.incremental == target.incremental,
         target,
-        "storage rewrites must preserve all recorded choices",
+        "storage rewrite changed its incremental base program",
     )
 }
 impl cq_stage::Language for Program {

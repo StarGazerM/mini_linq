@@ -1,10 +1,10 @@
-use crate::{Analysis, BodyItem, Layout, Program};
-use cq_datalog_support::{ensure, key_columns};
-use cq_syntax::symbol_name;
-use std::collections::BTreeSet;
+use crate::{Analysis, BodyItem, Negative, Program};
+use cq_datalog_support::{columns, ensure, filters};
+use cq_syntax::{rust, symbol_name};
+use std::collections::{BTreeMap, BTreeSet};
 
-/// Check physical grouping decisions against source rules, not emitted variants
-/// or the scheduling compiler. Variant order and delta spelling are irrelevant.
+/// Check declared representations and each recorded occurrence binding.
+/// Fixed whole-layout maintenance policies cover even unused extra layouts.
 pub(crate) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
     for layout in program.layouts.iter().chain(&program.delta_layouts) {
         let index = analysis
@@ -38,51 +38,103 @@ pub(crate) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
             "delta layout must name a base IDB relation",
         )?;
     }
-    let mut expected = Vec::new();
-    let mut expected_delta = Vec::new();
-    for (rule, query) in program.incremental.strata.source.rules.iter().enumerate() {
-        let changing = &analysis.changing_positions[rule];
-        let drivers: Vec<_> = if changing.is_empty() {
-            vec![None]
-        } else {
-            changing.iter().copied().map(Some).collect()
-        };
-        for driver in drivers {
-            let mut bound = BTreeSet::new();
-            for (position, item) in query.body.iter().enumerate() {
-                let BodyItem::Positive { atom } = item else {
-                    continue;
-                };
-                let (columns, key) = key_columns(atom, &bound);
-                let layout = Layout {
-                    relation: atom.relation.clone(),
-                    columns,
-                    key,
-                };
-                let expected = if Some(position) == driver {
-                    if key == 0 && position == 0 {
-                        bound.extend(atom.variables().map(symbol_name));
-                        continue;
+    let mut reads = BTreeMap::new();
+    for read in &program.reads {
+        ensure(
+            reads.insert((read.variant, read.position), read).is_none(),
+            program,
+            "duplicate storage read binding",
+        )?;
+    }
+    let mut negations = Vec::new();
+    for (variant_index, variant) in program.incremental.variants.iter().enumerate() {
+        let query = &program.incremental.strata.source.rules[variant.rule];
+        let head = analysis.positions[&symbol_name(&query.head.relation)];
+        let component = analysis.component[head].expect("checked IDB component");
+        let mut bound = BTreeSet::new();
+        for (position, item) in query.body.iter().enumerate() {
+            match item {
+                BodyItem::Positive { atom } => {
+                    let read = reads.remove(&(variant_index, position)).ok_or_else(|| {
+                        syn::Error::new_spanned(atom, "storage omitted a read binding")
+                    })?;
+                    let is_delta = variant.delta == Some(position);
+                    if read.kind == "direct" {
+                        ensure(
+                            is_delta
+                                && read.index == analysis.positions[&symbol_name(&atom.relation)]
+                                && read.columns.iter().copied().eq(0..atom.args.len()),
+                            atom,
+                            "direct read must scan its delta relation in declaration order",
+                        )?;
+                    } else {
+                        ensure(
+                            if is_delta {
+                                read.kind == "delta"
+                            } else {
+                                read.kind == "full"
+                            },
+                            atom,
+                            "read kind differs from its recorded variant occurrence",
+                        )?;
+                        let layouts = if is_delta {
+                            &program.delta_layouts
+                        } else {
+                            &program.layouts
+                        };
+                        let layout = layouts.get(read.index).ok_or_else(|| {
+                            syn::Error::new_spanned(atom, "read names an undeclared layout")
+                        })?;
+                        ensure(
+                            layout.relation == atom.relation && read.columns == layout.columns,
+                            atom,
+                            "read relation or column permutation differs from its layout",
+                        )?;
+                        for &column in &layout.columns[..layout.key] {
+                            let arg = &atom.args[column];
+                            let available = match rust::variable(arg) {
+                                Some(id) => bound.contains(&symbol_name(id)),
+                                None => !matches!(rust::unparen(arg), syn::Expr::Infer(_)),
+                            };
+                            ensure(
+                                available,
+                                arg,
+                                "layout key column must be bound before this occurrence or constant",
+                            )?;
+                        }
                     }
-                    &mut expected_delta
-                } else {
-                    &mut expected
-                };
-                if !expected.contains(&layout) {
-                    expected.push(layout);
+                    bound.extend(atom.variables().map(symbol_name));
                 }
-                bound.extend(atom.variables().map(symbol_name));
+                BodyItem::Let(binding) => {
+                    bound.extend(rust::bindings(&binding.pattern).iter().map(symbol_name));
+                }
+                BodyItem::For(binding) => {
+                    bound.extend(rust::bindings(&binding.pattern).iter().map(symbol_name));
+                }
+                BodyItem::Negation(negative) => {
+                    let atom = &negative.atom;
+                    let entry = Negative {
+                        component,
+                        relation: analysis.positions[&symbol_name(&atom.relation)],
+                        columns: columns(atom),
+                        filters: filters(atom),
+                    };
+                    if !negations.contains(&entry) {
+                        negations.push(entry);
+                    }
+                }
+                _ => {}
             }
         }
     }
     ensure(
-        program.layouts == expected,
+        reads.is_empty(),
         program,
-        "layouts must exactly match written-order positive join choices in stable rule order",
+        "storage read binding does not name a positive occurrence",
     )?;
     ensure(
-        program.delta_layouts == expected_delta,
+        program.negations == negations,
         program,
-        "delta layouts must exactly match written-order delta probes in stable rule order",
+        "storage negative projection coverage changed",
     )
 }
