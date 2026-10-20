@@ -7,6 +7,16 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Datalog compiler restructured like the CQ compiler: languages
+  `cq-lang-datalog-{source,strata,incremental,storage,round}`, passes
+  (`stratify`, `incremental`, `storage`, `fork`, `print_rounds`, surface
+  `if let`), Datalog-owned named pipeline configuration, shared printer
+  library and support crate. `stratified!`/`seminaive!` replaced by entering
+  pass macros; per-hole CQ sub-pipeline and typed hole interface recorded in
+  the Round IR. Parallel moved out to the `features/datalog-parallel`
+  workspace (pipeline plug-in; the `parallel;` keyword is removed). Default
+  expansion byte-identical; DOOP exact; core unchanged.
+
 - Datalog `parallel;` (opt-in, Rayon, `features/datalog` only, core unchanged):
   rule holes run concurrently; a body-position-0 key-0 scan (delta `Vec` or
   key-0 full layout bucket) is split into contiguous chunks, recorded and
