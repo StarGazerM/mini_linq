@@ -303,9 +303,16 @@ rejected: per-probe shard routing slowed evaluation); adaptive grain
 a small, expensive driver); recorded inline threshold. 15 threads, seconds
 (slice 1 → slice 2): cassandra 1.33 → 0.84, avrora 2.66 → 1.63, lusearch
 1.63 → 1.10, xalan 3.74 → 2.57, tomcat 1.74 → 1.14, zxing 2.80 → 1.99.
-Residual: reach chain 4096 still 0.74× sequential at 15 threads. Next,
-adopted from Ascent after measurement: Fx hasher plugin, hash-once admission,
-delta layouts built during admission, heavy-bucket splitting.
+Residual: reach chain 4096 still 0.74× sequential at 15 threads.
+
+Fx hashing (`dadaed6`, opt-in plug-in `cq_datalog_hasher::hasher(fx)` +
+`hasher_round(fx)` + hole `retype(dedup => Fx)`): DOOP 3-run interleaved
+medians, geometric mean 1.277× sequential, 1.123× at 15 threads; all 26
+relations exact vs Ascent for every app. Short reach chains mixed (−5.5% at
+1024 nodes). Core aHash remains only in 2 eager HashIndex sites and lazy
+fallbacks. Defaults unchanged pending a decision (Fx for trusted analytical
+inputs; keyed aHash resists adversarial keys). Next from Ascent: delta
+layouts built during admission, heavy-bucket splitting.
 
 On hold until the GPU-side storage work settles, so storage is designed once
 for both: lattices and custom providers; DOOP probe efficiency (flat value

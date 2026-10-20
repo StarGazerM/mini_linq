@@ -7,6 +7,10 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Opt-in Datalog Fx hashing plug-in (Storage + Round rewrites; hole dedup via
+  `retype`); parallel admission reuses the routing hash. DOOP 1.28× faster
+  sequential and 1.12× at 15 threads (geometric means), exact vs Ascent.
+
 - Parallel Datalog slice 2 (extension): sharded parallel admission and
   per-layout exclusive parallel publication; adaptive chunk grain; recorded
   inline threshold. DOOP at 15 threads 1.41–1.63× faster than slice 1, exact
