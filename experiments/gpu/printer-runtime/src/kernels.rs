@@ -1,45 +1,99 @@
 #[cuda_device::cuda_module]
 pub(crate) mod runtime_kernels {
     use crate::{
-        FrontierView, FusedRetryMetadata, FusedRetryView, OutputCount, OutputView, RetryMetadata,
-        TableView, column, column_stripe, flag_error, reserve, table_len, write_output,
+        FusedRetryMetadata, FusedRetryView, OutputCount, OutputView, RetryMetadata, TableView,
+        column, column_stripe, flag_error, reserve, table_len, write_output,
     };
     use cuda_device::atomic::{AtomicOrdering, DeviceAtomicU64};
     use cuda_device::{kernel, launch_bounds, launch_contract, thread};
-    use gpu_device_columns::ColumnView;
+
+    // Immutable source rows are published by index, so hash insertion needs no
+    // busy-slot protocol or inter-lane waiting for a key writer.
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub unsafe fn host_set_adjacent(table: TableView, width: usize, flags: *mut u32) {
+        let mut row = thread::index_1d().get() as u64 + 1;
+        let stride = thread::gridDim_x() as u64 * 256;
+        let count = unsafe { table_len(table) };
+        while row < count {
+            let mut col = 0;
+            let mut order = 0i32;
+            while col < width {
+                let left = unsafe { column(table, col, row - 1) };
+                let right = unsafe { column(table, col, row) };
+                if left != right {
+                    order = if left < right { -1 } else { 1 };
+                    break;
+                }
+                col += 1;
+            }
+            if order >= 0 {
+                let flag = if order == 0 { 1 } else { 0 };
+                unsafe { cuda_device::atomic::DeviceAtomicU32::from_ptr(flags.add(flag)) }
+                    .store(1, AtomicOrdering::Relaxed);
+            }
+            row += stride;
+        }
+    }
 
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub unsafe fn initialize_count(metadata: *mut OutputCount, rows: u64) {
-        if thread::index_1d().get() == 0 {
-            unsafe {
-                (*metadata).rows = rows;
-                (*metadata).error = 0;
-                (*metadata).padding = 0;
+    pub unsafe fn host_set_hash(
+        table: TableView,
+        width: usize,
+        slots: *mut u64,
+        capacity: usize,
+        flags: *mut u32,
+    ) {
+        let mut row = thread::index_1d().get() as u64;
+        let stride = thread::gridDim_x() as u64 * 256;
+        let count = unsafe { table_len(table) };
+        while row < count {
+            let mut hash = 0xcbf29ce484222325u64;
+            let mut col = 0;
+            while col < width {
+                hash = crate::hashed_run_step(hash, unsafe { column(table, col, row) });
+                col += 1;
             }
+            let mut slot = hash as usize & (capacity - 1);
+            // Capacity is at least twice the validated logical input count.
+            // Every occupied slot contains an immutable full source row.
+            loop {
+                let entry = unsafe { DeviceAtomicU64::from_ptr(slots.add(slot)) };
+                match entry.compare_exchange(
+                    0,
+                    row + 1,
+                    AtomicOrdering::Relaxed,
+                    AtomicOrdering::Relaxed,
+                ) {
+                    Ok(_) => break,
+                    Err(existing) => {
+                        let mut equal = true;
+                        let mut col = 0;
+                        while col < width {
+                            if unsafe { column(table, col, row) }
+                                != unsafe { column(table, col, existing - 1) }
+                            {
+                                equal = false;
+                                break;
+                            }
+                            col += 1;
+                        }
+                        if equal {
+                            unsafe { cuda_device::atomic::DeviceAtomicU32::from_ptr(flags.add(1)) }
+                                .store(1, AtomicOrdering::Relaxed);
+                            break;
+                        }
+                    }
+                }
+                slot = (slot + 1) & (capacity - 1);
+            }
+            row += stride;
         }
     }
-    #[kernel]
-    #[launch_bounds(256)]
-    #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub unsafe fn initialize_view(views: *mut ColumnView, index: usize, view: ColumnView) {
-        if thread::index_1d().get() == 0 {
-            unsafe {
-                views.add(index).write(view);
-            }
-        }
-    }
-    #[kernel]
-    #[launch_bounds(256)]
-    #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub unsafe fn initialize_pointer(pointers: *mut u64, index: usize, pointer: u64) {
-        if thread::index_1d().get() == 0 {
-            unsafe {
-                pointers.add(index).write(pointer);
-            }
-        }
-    }
+
     #[inline(always)]
     unsafe fn validated_output_rows(output: OutputView) -> u64 {
         let count = unsafe { output.count.read() };
@@ -234,17 +288,6 @@ pub(crate) mod runtime_kernels {
                 }
             }
             base += stride;
-        }
-    }
-    #[kernel]
-    #[launch_bounds(256)]
-    #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub unsafe fn frontier_initialize(frontier: FrontierView, roots: u64) {
-        if thread::index_1d().get() == 0 {
-            unsafe {
-                frontier.cursor.write(0);
-                frontier.remaining.write(roots);
-            }
         }
     }
     #[kernel]
@@ -753,31 +796,42 @@ pub(crate) mod runtime_kernels {
         }
     }
 
-    /// Fold checked metadata on device; ancestors contribute errors, not rows.
+    /// Gather a whole checked publication batch in one launch. Ancestors only
+    /// contribute errors; each member retains its own capacity-checked count.
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub unsafe fn fold_status(
-        input: *const OutputCount,
-        capacity: u64,
-        include_rows: bool,
+    pub unsafe fn gather_status(
+        inputs: *const crate::sets::StatusInput,
+        members: usize,
+        total: usize,
         output: *mut OutputCount,
     ) {
         if thread::index_1d().get() == 0 {
-            unsafe {
-                let status = input.read();
-                if status.error != 0 {
-                    (*output).error = status.error;
-                }
-                if status.rows > capacity {
-                    (*output).error = 4;
-                }
-                if include_rows {
-                    match (*output).rows.checked_add(status.rows) {
-                        Some(rows) => (*output).rows = rows,
-                        None => (*output).error = 1,
+            let mut ancestor_error = 0;
+            let mut index = 0;
+            while index < total {
+                let input = unsafe { inputs.add(index).read() };
+                let mut status = unsafe { input.status.read() };
+                if index < members {
+                    if status.rows > u32::MAX as u64 && status.error == 0 {
+                        status.error = 5;
                     }
+                    if status.rows > input.capacity {
+                        status.error = 4;
+                    }
+                    unsafe { output.add(index + 1).write(status) };
+                } else if status.error != 0 {
+                    ancestor_error = status.error;
                 }
+                index += 1;
+            }
+            unsafe {
+                output.write(OutputCount {
+                    rows: 0,
+                    error: ancestor_error,
+                    padding: 0,
+                });
             }
         }
     }

@@ -165,6 +165,198 @@ impl Lineage<'_> {
     }
 }
 
+// RA denotes sets. A join whose added columns have no observer can therefore
+// become a semijoin: canon(project_H(L join R)) = canon(L semi R), H ⊆ cols(L).
+// Do not apply this identity across Rust, negative, or block boundaries.
+pub(super) fn eliminate_expansions(mut source: ra::Program) -> syn::Result<ra::Program> {
+    ra::contract::check(&source)?;
+    if source.plan.definitions.iter().any(|definition| {
+        matches!(
+            definition.operator,
+            Operator::Bind(_) | Operator::Guard(_) | Operator::Anti(_) | Operator::Union(_)
+        )
+    }) {
+        return Ok(source);
+    }
+    loop {
+        let analysis = ra::contract::check(&source)?;
+        let definitions = &source.plan.definitions;
+        let indices: BTreeMap<_, _> = definitions
+            .iter()
+            .enumerate()
+            .map(|(index, definition)| (symbol_name(&definition.result), index))
+            .collect();
+        let headings: Vec<_> = definitions
+            .iter()
+            .map(|definition| &analysis[&symbol_name(&definition.result)].heading)
+            .collect();
+        let mut demand = vec![BTreeSet::new(); definitions.len()];
+        let output = indices[&symbol_name(&source.plan.output.input)];
+        demand[output].extend(headings[output].iter().cloned());
+        let dependencies: Vec<Vec<usize>> = definitions
+            .iter()
+            .map(|definition| {
+                let mut inputs = Vec::new();
+                operands(&definition.operator, |input| {
+                    inputs.push(indices[&symbol_name(input)])
+                });
+                inputs
+            })
+            .collect();
+        for (index, definition) in definitions.iter().enumerate().rev() {
+            let mut needed = demand[index].clone();
+            match &definition.operator {
+                Operator::NaturalJoin(_) | Operator::Semijoin(_) => {
+                    let left = dependencies[index][0];
+                    let right = dependencies[index][1];
+                    let shared: BTreeSet<_> = headings[left]
+                        .intersection(headings[right])
+                        .cloned()
+                        .collect();
+                    needed.extend(shared.iter().cloned());
+                    demand[left].extend(needed.intersection(headings[left]).cloned());
+                    if matches!(definition.operator, Operator::NaturalJoin(_)) {
+                        demand[right].extend(needed.intersection(headings[right]).cloned());
+                    } else {
+                        demand[right].extend(shared);
+                    }
+                }
+                Operator::Project(project) => {
+                    demand[dependencies[index][0]]
+                        .extend(project.attributes.iter().map(symbol_name));
+                }
+                Operator::Select(select) => {
+                    for equality in &select.condition.equalities {
+                        needed.extend(equality.variables().map(symbol_name));
+                    }
+                    for constraint in &select.condition.constraints {
+                        needed.extend(constraint.variables().map(symbol_name));
+                    }
+                    demand[dependencies[index][0]].extend(needed);
+                }
+                Operator::Unit(_) | Operator::Rename(_) => {}
+                _ => unreachable!("opaque and block operators excluded"),
+            }
+        }
+        let mut replacement = None;
+        for (index, definition) in definitions.iter().enumerate().rev() {
+            if !matches!(
+                definition.operator,
+                Operator::NaturalJoin(_) | Operator::Semijoin(_)
+            ) {
+                continue;
+            }
+            let left = dependencies[index][0];
+            let right = dependencies[index][1];
+            let shared: Vec<_> = headings[left].intersection(headings[right]).collect();
+            let mut pending = vec![left];
+            let mut seen = BTreeSet::new();
+            let mut implied = false;
+            while let Some(current) = pending.pop() {
+                if !seen.insert(current)
+                    || shared
+                        .iter()
+                        .any(|column| !headings[current].contains(*column))
+                {
+                    continue;
+                }
+                if current == right {
+                    implied = true;
+                    break;
+                }
+                match &definitions[current].operator {
+                    Operator::NaturalJoin(_) | Operator::Semijoin(_) => {
+                        pending.extend(&dependencies[current]);
+                    }
+                    Operator::Project(_) | Operator::Select(_) => {
+                        pending.push(dependencies[current][0]);
+                    }
+                    _ => {}
+                }
+            }
+            if !implied {
+                continue;
+            }
+            match &definition.operator {
+                Operator::NaturalJoin(join)
+                    if headings[dependencies[index][1]]
+                        .difference(headings[dependencies[index][0]])
+                        .all(|column| !demand[index].contains(column)) =>
+                {
+                    let mut target = source.clone();
+                    target.plan.definitions[index].operator =
+                        Operator::Semijoin(Box::new(ra::Semijoin {
+                            semijoin_token: Default::default(),
+                            left: join.left.clone(),
+                            with_token: Default::default(),
+                            right: join.right.clone(),
+                        }));
+                    replacement = Some(target);
+                    break;
+                }
+                Operator::Semijoin(join) => {
+                    let mut target = source.clone();
+                    for definition in &mut target.plan.definitions {
+                        replace_operand(
+                            &mut definition.operator,
+                            &definitions[index].result,
+                            &join.left,
+                        );
+                    }
+                    if target.plan.output.input == definitions[index].result {
+                        target.plan.output.input = join.left.clone();
+                    }
+                    let mut reachable = vec![false; definitions.len()];
+                    reachable[indices[&symbol_name(&target.plan.output.input)]] = true;
+                    for (index, definition) in target.plan.definitions.iter().enumerate().rev() {
+                        if reachable[index] {
+                            operands(&definition.operator, |input| {
+                                reachable[indices[&symbol_name(input)]] = true;
+                            });
+                        }
+                    }
+                    let mut index = 0;
+                    target.plan.definitions.retain(|_| {
+                        let keep = reachable[index];
+                        index += 1;
+                        keep
+                    });
+                    replacement = Some(target);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let Some(target) = replacement else {
+            return Ok(source);
+        };
+        ra::check_rewrite(&source, &target)?;
+        source = target;
+    }
+}
+
+fn replace_operand(operator: &mut Operator, old: &Ident, new: &Ident) {
+    let replace = |input: &mut Ident| {
+        if input == old {
+            *input = new.clone();
+        }
+    };
+    match operator {
+        Operator::NaturalJoin(join) => {
+            replace(&mut join.left);
+            replace(&mut join.right);
+        }
+        Operator::Semijoin(join) => {
+            replace(&mut join.left);
+            replace(&mut join.right);
+        }
+        Operator::Project(project) => replace(&mut project.input),
+        Operator::Select(select) => replace(&mut select.input),
+        Operator::Unit(_) | Operator::Rename(_) => {}
+        _ => unreachable!("opaque and block operators excluded"),
+    }
+}
+
 // Metadata references participate in liveness just like ordinary operands.
 // In particular, a block's finite domain and opaque prefix are not disposable.
 fn operands(operator: &Operator, mut visit: impl FnMut(&Ident)) {

@@ -23,6 +23,14 @@
 //! cooperative expansion; HashedRun buckets do not, because collisions still
 //! require residual filtering.
 //! The index and its runtime must outlive all holes in the consuming stratum.
+//! Changing SCC relations use `leveled_hosts(Relation => [[1,2],[0]], ...)`
+//! and `LeveledDeviceIndex` with the identical layout certificate. Each probe
+//! reads the published disjoint-run snapshot; admission inserts only fresh
+//! deltas after all prior-round readers have been enqueued. Compaction preserves
+//! the full multiset and retires old buffers in stream order.
+//! Kernels bind `snapshot_ptr(levels)` as `*const LeveledRunsView` and use
+//! `leveled_count`/`leveled_run` to load the immutable device descriptor rather
+//! than copying the full run array through kernel and continuation arguments.
 //! Expanded holes expose the unchanged Physical text in
 //! `__CQ_GPU_RECORDED_PHYSICAL` beside their recorded Structures entries.
 //! Fixed full-tile scans decode each 1024-value vector into four register
@@ -120,6 +128,14 @@ pub fn prefix_runs(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn frozen_hosts(input: TokenStream) -> TokenStream {
     cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), compiler::frozen_hosts).into()
+}
+
+/// Bind changing keyed hosts to maintained disjoint runs. Exact layout and
+/// cumulative-prefix checks are identical to `frozen_hosts`; the caller owns
+/// admission and stream-ordered snapshot publication.
+#[proc_macro]
+pub fn leveled_hosts(input: TokenStream) -> TokenStream {
+    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), compiler::leveled_hosts).into()
 }
 
 #[cfg(test)]

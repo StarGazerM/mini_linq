@@ -129,7 +129,8 @@ impl<'data, Row: RowCodec<'data>> Relation<'data, Row> {
         with_runtime_for(Some(self.full.pool().clone()), |runtime| {
             let mut execution = runtime.execution();
             let full = execution.bind_columns(&self.full)?;
-            let candidates = candidates.iter()
+            let candidates = candidates
+                .iter()
                 .map(|input| execution.bind_columns(input))
                 .collect::<Result<Vec<_>>>()?;
             let capacity = candidates.iter().try_fold(0usize, |sum, &id| {
@@ -137,7 +138,9 @@ impl<'data, Row: RowCodec<'data>> Relation<'data, Row> {
                     .ok_or_else(|| failure("CQ_GPU_OUTPUT_ROWS", "candidate capacity overflow"))
             })?;
             check_rows(capacity)?;
-            let upper = self.rows.checked_add(capacity)
+            let upper = self
+                .rows
+                .checked_add(capacity)
                 .ok_or_else(|| failure("CQ_GPU_OUTPUT_ROWS", "admission capacity overflow"))?;
             let _nvtx = nvtx::range(c"admission/insert-new");
             let mut maintained = match self.maintained.borrow_mut().take() {
@@ -146,7 +149,10 @@ impl<'data, Row: RowCodec<'data>> Relation<'data, Row> {
                     let state = crate::sets::MaintainedSet::new(runtime, Row::WIDTH, upper)?;
                     let status = allocate_output(runtime, 0, 0)?;
                     state.insert(runtime, execution.table(full)?, status.view(), false)?;
-                    let status = execution.complete_output(status, Vec::new())?;
+                    // This internal seed never emits rows. Its sticky error is
+                    // checked with the delta at the round's shared readback.
+                    let status =
+                        execution.retain_output(status, Vec::new(), execution.output_statuses())?;
                     execution.add_table(status);
                     state
                 }
@@ -161,7 +167,9 @@ impl<'data, Row: RowCodec<'data>> Relation<'data, Row> {
                 }
                 maintained.insert(runtime, table, output.view(), true)?;
             }
-            let delta = execution.complete_output(output, bounds)?;
+            // The delta is private until finish accepts the shared checked
+            // batch. Validate its count/capacity there, not in a separate kernel.
+            let delta = execution.retain_output(output, bounds, execution.output_statuses())?;
             let delta = execution.add_table(delta);
             let delta = execution.into_columns(delta, &(0..Row::WIDTH).collect::<Vec<_>>())?;
             let slot = round.tables.len();
@@ -204,15 +212,29 @@ impl<'data, Row: RowCodec<'data>> PreparedRelation<'data, Row> {
         check_rows(rows)?;
         with_runtime_for(Some(self.delta.pool().clone()), |runtime| {
             self.maintained.append(
-                runtime, self.previous.full.storage(), self.delta.storage(), rows, *added,
+                runtime,
+                self.previous.full.storage(),
+                self.delta.storage(),
+                rows,
+                *added,
             )?;
-            let bounds = self.previous.full.storage().bounds.iter()
+            let bounds = self
+                .previous
+                .full
+                .storage()
+                .bounds
+                .iter()
                 .zip(&self.delta.storage().bounds)
                 .map(|(&old, &new)| merge_bound(old, new))
                 .collect();
-            let full = self.maintained.snapshot(runtime, 0, rows, runtime.metadata(rows)?, bounds)?;
+            let full =
+                self.maintained
+                    .snapshot(runtime, 0, rows, runtime.metadata(rows)?, bounds)?;
             let delta = self.maintained.snapshot(
-                runtime, self.previous.rows, *added, self.delta.storage().metadata.clone(),
+                runtime,
+                self.previous.rows,
+                *added,
+                self.delta.storage().metadata.clone(),
                 self.delta.storage().bounds.clone(),
             )?;
             let dictionary = Arc::new(self.delta.dictionary().clone());
@@ -223,11 +245,12 @@ impl<'data, Row: RowCodec<'data>> PreparedRelation<'data, Row> {
             let full = unsafe {
                 DeviceColumns::from_parts(full, dictionary.clone(), self.delta.pool().clone())
             };
-            let delta = unsafe {
-                DeviceColumns::from_parts(delta, dictionary, self.delta.pool().clone())
-            };
+            let delta =
+                unsafe { DeviceColumns::from_parts(delta, dictionary, self.delta.pool().clone()) };
             Ok(Relation {
-                full, delta, rows,
+                full,
+                delta,
+                rows,
                 maintained: RefCell::new(Some(self.maintained)),
             })
         })
@@ -237,8 +260,12 @@ impl<'data, Row: RowCodec<'data>> PreparedRelation<'data, Row> {
 fn merge_bound(left: Bounds, right: Bounds) -> Bounds {
     match (left, right) {
         (Bounds::Empty, bound) | (bound, Bounds::Empty) => bound,
-        (Bounds::Inclusive { min: a, max: b }, Bounds::Inclusive { min: c, max: d }) =>
-            Bounds::Inclusive { min: a.min(c), max: b.max(d) },
+        (Bounds::Inclusive { min: a, max: b }, Bounds::Inclusive { min: c, max: d }) => {
+            Bounds::Inclusive {
+                min: a.min(c),
+                max: b.max(d),
+            }
+        }
     }
 }
 
@@ -247,6 +274,20 @@ pub struct CheckedRound {
     members: Vec<(Arc<Buffer<OutputCount>>, usize)>,
 }
 impl CheckedRound {
+    /// Return an already checked count for this precise immutable version.
+    /// Projection preserves the metadata owner; unrelated versions are rejected.
+    pub fn rows<Row, C>(&self, input: &DeviceColumns<'_, Row, C>) -> Result<usize> {
+        self.members
+            .iter()
+            .find(|(metadata, _)| Arc::ptr_eq(metadata, &input.storage().metadata))
+            .map(|(_, rows)| *rows)
+            .ok_or_else(|| {
+                failure(
+                    "CQ_GPU_ROUND",
+                    "columns do not belong to this checked batch",
+                )
+            })
+    }
     pub fn any(&self) -> bool {
         self.members.iter().any(|(_, rows)| *rows != 0)
     }

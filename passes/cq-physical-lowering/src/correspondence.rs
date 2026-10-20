@@ -35,7 +35,10 @@ pub fn check(source: &ix::Program, target: &physical::Program) -> syn::Result<()
             Operator::Union(_) => None,
             Operator::Anti(_, k) => keys.get(&symbol_name(&k.left)).cloned(),
             Operator::Unit(_) => Some(BTreeSet::new()),
-            Operator::Rename(_) => None,
+            Operator::Rename(rename) => target
+                .program
+                .host_is_set(&rename.relation)
+                .then(|| heading.clone()),
             Operator::Probe(_, k) | Operator::Merge(_, k) => keys
                 .get(&symbol_name(&k.left))
                 .zip(keys.get(&symbol_name(&k.right)))

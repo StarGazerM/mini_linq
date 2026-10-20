@@ -786,6 +786,34 @@ fn lookup_sharing_witness_and_expansion_are_additive() {
 }
 
 #[test]
+fn leveled_snapshot_witness_requires_identical_host_layout_and_key() {
+    let mut program: structures::Program = syn::parse_quote! { physical {
+        relation L(a:i32); relation R(a:i32,b:i32);
+        l = pipe rename L@0 {a -> x};
+        b = pipe rename R@1 {a -> x,b -> y};
+        s = pipe semi eager [x] l,b;
+        p = pipe canon probe first [x] s,b;
+        return p as answer(x,y);
+    } structures {
+        l host scan = ::core::iter::Map<_,_> [];
+        b host scan = ::core::iter::Map<_,_> [];
+        b host s = ::cq_gpu_runtime::LeveledDeviceIndex<_,_,((::cq_gpu_runtime::FrozenKey<0>,),)> [x];
+        b host p = ::cq_gpu_runtime::LeveledDeviceIndex<_,_,((::cq_gpu_runtime::FrozenKey<0>,),)> [x];
+        p canon = ::std::collections::HashSet<_>;
+        s share = lookup b [x] first s force p;
+        s repr = tuples witness { b [x] at s as ::cq_storage::RunCursor<'_,_> };
+        p stage = batch 256 expand;
+    } };
+    let facts = structures::contract::check(&program).unwrap();
+    assert!(facts.witnesses.contains_key("s"));
+    assert!(facts.expands.contains("p"));
+    program.structures.entries[3] = syn::parse_quote! {
+        b host p = ::cq_gpu_runtime::LeveledDeviceIndex<_,_,((::cq_gpu_runtime::FrozenKey<1>,),)> [x];
+    };
+    assert!(structures::contract::check(&program).is_err());
+}
+
+#[test]
 fn sharing_rejects_probe_before_semi() {
     let mut p = shared_program();
     p.physical.program.definitions.swap(2, 3);

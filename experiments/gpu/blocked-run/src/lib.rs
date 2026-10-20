@@ -781,6 +781,45 @@ impl<'a> Run<'a> {
         Ok(run)
     }
 
+    /// Build the same adaptive prefix run without a pinned host upload owner.
+    ///
+    /// Secondary-key descriptors are initialized on `stream` and released in
+    /// stream order. Retiring the returned run never waits for a metadata-copy
+    /// event. This is useful for frequently compacted maintained runs.
+    pub fn build_prefix_stream_ordered(
+        ctx: &CudaContext,
+        stream: &'a CudaStream,
+        memory: &'a MemoryResource,
+        keys: &[&dyn ContiguousDeviceRange<i64>],
+        payloads: &[&dyn ContiguousDeviceRange<i64>],
+        domains: &[(i64, i64)],
+        row_count: Option<&Buffer<'_, u32>>,
+    ) -> BuildResult<Self> {
+        if keys.is_empty() || keys.len() != domains.len() {
+            return Err(invalid("prefix runs require nonempty keys with matching domains"));
+        }
+        if keys.len() <= 2 {
+            return Self::build_prefix(ctx, stream, memory, keys, payloads, domains, row_count);
+        }
+        validate_payloads(stream, keys[0].len(), &keys[1..])?;
+        let first = prefix_column(keys[1], domains[1])?;
+        let metadata = allocate::<PrefixColumn>(memory, stream, keys.len() - 2)?;
+        let module = cached_kernels(stream.context())?;
+        let initialize = module.prepare_initialize_prefix_column(config(1))?;
+        for (index, (&key, &domain)) in keys[2..].iter().zip(&domains[2..]).enumerate() {
+            let column = prefix_column(key, domain)?;
+            unsafe {
+                module.initialize_prefix_column(
+                    stream, &initialize, ptr(&metadata), index, column,
+                )?;
+            }
+        }
+        Self::build_inner(
+            ctx, stream, memory, keys[0], payloads, domains[0], row_count,
+            Some(PrefixKeys { first, more: ptr(&metadata), len: keys.len() - 1 }),
+        )
+    }
+
     /// Borrow the run's rank directory as a copyable device ABI value.
     /// The caller must keep this run and its buffers alive and unchanged while
     /// any kernel uses the returned view; no ownership is transferred.
@@ -889,6 +928,19 @@ mod kernels {
     use cuda_device::{
         device, kernel, launch_bounds, launch_contract, thread, warp, DynamicSharedArray,
     };
+
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub unsafe fn initialize_prefix_column(
+        columns: *mut PrefixColumn,
+        index: usize,
+        column: PrefixColumn,
+    ) {
+        if thread::index_1d().get() == 0 {
+            unsafe { columns.add(index).write(column) };
+        }
+    }
 
     #[kernel]
     #[launch_bounds(256)]

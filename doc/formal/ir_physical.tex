@@ -3,7 +3,8 @@
 
 \paragraph{Grammar.} A complete standalone program.
 \begin{lstlisting}
-Physical ::= physical { Decl* Def* return [canon] r as Head; }
+Physical ::= physical { Decl* HostSet* Def* return [canon] r as Head; }
+HostSet ::= host_set R;
 Def ::= r = (pipe | let | exists) [canon] Op;
 Op  ::= unit | rename R@path {..} | select ... | point select ... | range select ...
       | bind ... | guard ... | project r keep {..} | merge [K] l, r
@@ -53,9 +54,31 @@ union (\code{any}) has an empty interface; a fused union names its prefix and
 every arm depends on it; cross-arm canon on a statically disjoint union is
 rejected. Physical checks neither IX demands nor canonical return evidence.
 
+\paragraph{Checked host sets.}
+The opt-in Physical rewrite \code{cq_rewrites::host_sets(R,...)} consumes
+relation-name advice and records \code{host_set R;} in the program text.
+Each fact names a used declared host, occurs once, and requires admissible
+Leibniz equality on every declared column. It is not a host-type inference or
+an unchecked assertion: every printer must discharge the exact runtime
+certificate obligation \textsc{IF-HostSet} before executing the query.
+\begin{mathpar}
+\Rule{PH-HostSet}{\code{host\_set R}\in t\quad r=\mathsf{rename}(R)\quad
+ H=\mathsf{heading}(r)}
+ {\mathsf{key}(r)=H}
+\end{mathpar}
+Join combines operand keys; projection preserves a key only when it retains
+every key column. A returned heading containing the inherited key needs no
+\code{canon}; a projection dropping that key still does. The rewrite removes
+only boundaries implied by this transfer, leaving all other decisions intact.
+The current \code{smallest} intersection law denotes Set. In bag/K-relation
+semantics, replacing candidate enumeration by membership also requires this
+checked set fact or a derived uniqueness key on the candidate source;
+multiplicity gating belongs to the future K-relation contract.
+
 \paragraph{Meaning.} Erasure to RA prime: probe and merge are joins, semi is a
 semijoin, point/range are selections, modes and canon flags are dropped, union
-and anti keep their origins. Modes and choices change evaluation, not meaning.
+and anti keep their origins. Host-set facts erase after their runtime
+certificate obligation; modes and choices change evaluation, not meaning.
 Erasure retains the scalar/generator distinction, including in IX demand and
 Physical rewrite certificates. Item multiplicity cannot justify scalar
 uniqueness or literal inference.

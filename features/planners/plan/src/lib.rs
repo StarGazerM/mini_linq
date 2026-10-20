@@ -317,10 +317,10 @@ pub fn compile(source: &cq::Program, planner: Planner) -> syn::Result<ra::Progra
     let valuation = compile_valuation(source, planner)?;
     let target = cq_elaborate::compile(&valuation)?;
     cq_elaborate::check(&valuation, &target)?;
-    let target = if planner == Planner::Hypergraph {
-        cq_elaborate::simplify_reductions(&target)?
-    } else {
-        target
+    let target = match planner {
+        Planner::Hypergraph => cq_elaborate::simplify_reductions(&target)?,
+        Planner::Le => cq_elaborate::simplify_expansions(&target)?,
+        _ => target,
     };
     check(source, &target)?;
     Ok(target)

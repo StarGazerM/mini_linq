@@ -38,11 +38,11 @@ impl Drop for FusedRetryScope {
 /// `attempts_per_call` records zero for those calls. Attempts count invocations
 /// of the launch callback, and relaunches count invocations after the first.
 ///
-/// CUDA events bracket only the launch callback, including its frontier reset
-/// and output compaction, not allocation, metadata checks/readback, or later
-/// operators. `kernel_ms` includes all timed attempts; `wasted_kernel_ms` is the
-/// portion whose output was discarded. Failed CUDA operations may prevent a
-/// timing sample; their errors remain terminal, never fabricated as timings.
+/// With the `timings` feature, CUDA events bracket only the launch callback,
+/// including its frontier reset and output compaction, not allocation, metadata
+/// checks/readback, or later operators. Otherwise both timing fields are zero.
+/// `kernel_ms` includes all timed attempts; `wasted_kernel_ms` is the portion
+/// whose output was discarded. Failed CUDA operations remain terminal.
 /// `peak_attempt_bytes` is the requested device storage for both output/arena
 /// columns and pointer arrays, rounded slot table, count/status metadata,
 /// dependency pointers and optional diagnostic counters. It excludes allocator
@@ -79,12 +79,34 @@ impl Key {
     }
 }
 
+/// Bounded materialization estimates track candidates, not distinct admissions.
+/// The checked successful count also lets callers bound downstream work exactly.
+#[derive(Default)]
+pub(crate) struct MaterializationHistory(BTreeMap<Key, u64>);
+impl MaterializationHistory {
+    pub(crate) fn capacity(&self, key: Key, hint: usize) -> usize {
+        self.0
+            .get(&key)
+            .copied()
+            .unwrap_or(0)
+            .max(hint as u64)
+            .max(MIN_CAPACITY as u64)
+            .min(u32::MAX as u64) as usize
+    }
+
+    pub(crate) fn success(&mut self, key: Key, rows: u64) {
+        if rows != 0 {
+            self.0.insert(key, rows);
+        }
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct Records(BTreeMap<Key, Record>);
 #[derive(Default)]
 struct Record {
     report: FusedRetryReport,
-    successful_distinct: Option<u64>,
+    nonempty_distinct: Option<u64>,
 }
 impl Records {
     pub(crate) fn begin(&mut self, key: Key, hint: Option<usize>) -> (usize, usize) {
@@ -94,9 +116,9 @@ impl Records {
                 site: key.site,
                 ..Default::default()
             },
-            successful_distinct: None,
+            nonempty_distinct: None,
         });
-        let capacity = initial_capacity(record.successful_distinct, hint);
+        let capacity = initial_capacity(record.nonempty_distinct, hint);
         let call = record.report.attempts_per_call.len();
         record.report.calls += 1;
         record.report.attempts_per_call.push(0);
@@ -124,7 +146,11 @@ impl Records {
 
     pub(crate) fn success(&mut self, key: Key, distinct: u64) {
         let record = self.0.get_mut(&key).expect("registered fused retry");
-        record.successful_distinct = Some(distinct);
+        // Empty rounds provide no useful size prediction for the next nonempty
+        // invocation; do not make every subsequent wave rediscover its capacity.
+        if distinct != 0 {
+            record.nonempty_distinct = Some(distinct);
+        }
         record.report.last_distinct = distinct;
     }
 
@@ -279,9 +305,27 @@ pub(crate) fn attempt_bytes(
     )))
 }
 
+/// Bounded materialization owns output only, not a fused key arena or hash slots.
+pub(crate) fn materialization_bytes(width: usize, capacity: usize) -> Result<AttemptBytes> {
+    let calculate = || -> Option<AttemptBytes> {
+        let mut bytes = AttemptBytes::default();
+        bytes.add(width, capacity.checked_mul(size_of::<i64>())?)?;
+        bytes.add(1, width.checked_mul(size_of::<u64>())?)?;
+        bytes.add(1, size_of::<OutputCount>())?;
+        Some(bytes)
+    };
+    calculate().ok_or_else(|| {
+        failure(
+            "CQ_GPU_RETRY_SIZE",
+            format!("bounded output allocation size overflow: width={width}, capacity={capacity}"),
+        )
+    })
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Budget {
     pub(crate) bytes: usize,
+    pub(crate) materialization_bytes: usize,
     pub(crate) cached: usize,
     pub(crate) upstream: usize,
     pub(crate) headroom: usize,
@@ -289,7 +333,8 @@ pub(crate) struct Budget {
 impl Budget {
     /// CUDA free excludes custom-pool cached storage. Count that storage once,
     /// respect the pool maximum, reserve 5% of total VRAM (at least 64 MiB),
-    /// and use only half the remaining upstream space for geometric pool slack.
+    /// and reserve half the remaining upstream space for fused geometric slack.
+    /// Exact bounded materialization needs no such growth allowance.
     /// Aggregate stats cannot reveal fragmentation or private next_growth; an
     /// actual allocator failure is terminal, not permission to replay at OOM.
     pub(crate) fn new(
@@ -304,12 +349,27 @@ impl Budget {
         let cached = cached.min(pool_size.saturating_sub(allocated));
         let upstream = (cuda_free.saturating_sub(headroom) / 2)
             .min(maximum.unwrap_or(usize::MAX).saturating_sub(pool_size));
+        let materialization_upstream = cuda_free
+            .saturating_sub(headroom)
+            .min(maximum.unwrap_or(usize::MAX).saturating_sub(pool_size));
         Self {
             bytes: cached.saturating_add(upstream),
+            materialization_bytes: cached.saturating_add(materialization_upstream),
             cached,
             upstream,
             headroom,
         }
+    }
+
+    /// Oversized hints count first with no output storage instead of risking OOM.
+    pub(crate) fn materialization_capacity(self, width: usize, target: usize) -> Result<usize> {
+        Ok(
+            if materialization_bytes(width, target)?.pooled <= self.materialization_bytes {
+                target
+            } else {
+                0
+            },
+        )
     }
 
     pub(crate) fn capacity(
@@ -350,6 +410,74 @@ mod tests {
     use super::*;
     use crate::RuntimeError;
 
+    #[test]
+    fn materialization_history_tracks_successful_candidates_per_site() {
+        let mut history = MaterializationHistory::default();
+        let key = Key::current("bounded", 3);
+        assert_eq!(history.capacity(key, 1024), 1024);
+        history.success(key, 4096);
+        assert_eq!(history.capacity(key, 1024), 4096);
+        assert_eq!(history.capacity(Key::current("other", 3), 1024), 1024);
+        assert_eq!(history.capacity(Key::current("bounded", 4), 1024), 1024);
+        {
+            let _scope = fused_retry_scope("other-hole");
+            assert_eq!(history.capacity(Key::current("bounded", 3), 1024), 1024);
+        }
+        history.success(key, 0);
+        assert_eq!(history.capacity(key, 1024), 4096);
+        history.success(key, u32::MAX as u64);
+        assert_eq!(history.capacity(key, 1024), u32::MAX as usize);
+    }
+
+    #[test]
+    fn bounded_history_never_doubles_large_materializations() {
+        let mut history = MaterializationHistory::default();
+        let key = Key::current("large", 3);
+        let rows = 1_000_000_000;
+        history.success(key, rows);
+        assert_eq!(history.capacity(key, 1024), rows as usize);
+    }
+
+    #[test]
+    fn oversized_bounded_estimates_use_a_count_only_attempt() {
+        let bytes = materialization_bytes(3, 4096).unwrap().pooled;
+        let budget = Budget {
+            materialization_bytes: bytes,
+            ..unlimited()
+        };
+        assert_eq!(budget.materialization_capacity(3, 4096).unwrap(), 4096);
+        assert_eq!(budget.materialization_capacity(3, 8192).unwrap(), 0);
+        assert_eq!(budget.materialization_capacity(3, 0).unwrap(), 0);
+        let smaller = Budget {
+            materialization_bytes: bytes - 1,
+            ..budget
+        };
+        assert_eq!(smaller.materialization_capacity(3, 4096).unwrap(), 0);
+    }
+
+    #[test]
+    fn bounded_budget_reserves_headroom_and_respects_pool_maximum() {
+        let mib = 1usize << 20;
+        let budget = Budget::new(
+            1024 * mib,
+            2048 * mib,
+            512 * mib,
+            256 * mib,
+            256 * mib,
+            Some(768 * mib),
+        );
+        assert_eq!(budget.materialization_bytes, 512 * mib);
+        let uncapped = Budget::new(
+            1024 * mib,
+            2048 * mib,
+            512 * mib,
+            256 * mib,
+            256 * mib,
+            None,
+        );
+        assert_eq!(uncapped.materialization_bytes, 1280 * mib - 2048 * mib / 20);
+    }
+
     fn code<T: std::fmt::Debug>(result: Result<T>) -> &'static str {
         result.unwrap_err().downcast::<RuntimeError>().unwrap().code
     }
@@ -365,6 +493,7 @@ mod tests {
     fn unlimited() -> Budget {
         Budget {
             bytes: usize::MAX,
+            materialization_bytes: usize::MAX,
             cached: 0,
             upstream: usize::MAX,
             headroom: 0,
@@ -720,7 +849,26 @@ mod tests {
         assert_eq!(reports[2].last_distinct, 0);
         assert_eq!(reports[3].site, "other");
         records.success(key, 0);
-        assert_eq!(records.begin(key, None).1, 1024);
+        assert_eq!(records.begin(key, None).1, 6000);
+        assert_eq!(records.reports()[1].last_distinct, 0);
+    }
+
+    #[test]
+    fn alternating_empty_calls_preserve_both_retry_estimates() {
+        let mut fused = Records::default();
+        let mut bounded = MaterializationHistory::default();
+        let key = Key::current("alternating", 3);
+        fused.begin(key, None);
+        let mut previous = 0;
+        for rows in [8192, 0, 0, 4096, 0, 0] {
+            fused.success(key, rows);
+            bounded.success(key, rows);
+            if rows != 0 {
+                previous = rows as usize;
+            }
+            assert_eq!(fused.begin(key, None).1, previous * 2);
+            assert_eq!(bounded.capacity(key, 0), previous);
+        }
     }
 
     #[test]

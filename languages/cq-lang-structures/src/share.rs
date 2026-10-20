@@ -22,6 +22,32 @@ pub(crate) fn forwarding(operator: &Operator) -> bool {
     )
 }
 
+/// An explicitly recorded immutable leveled snapshot read. The provider type
+/// carries its exact layout; consumers may share only identical types and keys.
+pub fn leveled_host_read<'a>(
+    program: &'a Program,
+    build: &str,
+    reader: &str,
+    keys: &[String],
+) -> Option<&'a syn::Type> {
+    program.structures.entries.iter().find_map(|entry| {
+        let Structure::Host { keyed, reader: demand, .. } = &entry.structure else {
+            return None;
+        };
+        let syn::Type::Path(path) = &keyed.ty else { return None; };
+        let mut recorded = keyed.columns().map(symbol_name).collect::<Vec<_>>();
+        recorded.sort();
+        (symbol_name(&entry.name) == build
+            && symbol_name(demand) == reader
+            && recorded == keys
+            && path.qself.is_none()
+            && path.path.segments.len() == 2
+            && path.path.segments[0].ident == "cq_gpu_runtime"
+            && path.path.segments[1].ident == "LeveledDeviceIndex")
+            .then_some(&keyed.ty)
+    })
+}
+
 pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap<String, Share>> {
     let definitions = &program.physical.program.definitions;
     let candidates = physical::candidate_prefixes(&program.physical, &facts.physical);
@@ -49,7 +75,7 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
         let fail = || {
             syn::Error::new_spanned(
                 entry,
-                "share requires an earlier let payload build, eager semi and later same-key probe on its preserving chain",
+                "share requires an earlier immutable payload build or matching leveled snapshot hosts, eager semi and later same-key probe on its preserving chain",
             )
         };
         let position = |name: &str| {
@@ -64,9 +90,13 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
         ) else {
             return Err(fail());
         };
+        let leveled = leveled_host_read(program, &share.build, &share.first, &share.keys)
+            .zip(leveled_host_read(program, &share.build, &share.force, &share.keys))
+            .is_some_and(|(first, force)| first == force)
+            && matches!(definitions[b].operator, Operator::Rename(_));
         if name != share.first
             || !(b < s && s < p)
-            || facts.physical.modes[&share.build] != ModeKind::Let
+            || (facts.physical.modes[&share.build] != ModeKind::Let && !leveled)
         {
             return Err(fail());
         }
@@ -94,7 +124,7 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
                             .iter().any(|name| path.path.is_ident(name))
                 ))
         });
-        if !payload
+        if !(payload || leveled)
             || facts
                 .membership
                 .contains(&(share.build.clone(), share.keys.clone()))

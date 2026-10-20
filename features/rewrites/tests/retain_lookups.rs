@@ -51,6 +51,34 @@ fn triangle_records_both_prefix_witnesses_at_first_probe() {
 }
 
 #[test]
+fn leveled_host_lookup_retains_exact_snapshot_ranges() {
+    let mut source: ir::Program = syn::parse_quote! { physical {
+        relation L(a:i64); relation R(a:i64,b:i64);
+        l = pipe rename L@0 {a -> x};
+        r = pipe rename R@1 {a -> x,b -> y};
+        s = pipe semi eager [x] l,r;
+        p = pipe canon probe first [x] s,r;
+        return p as answer(x,y);
+    } structures {
+        l host scan = ::core::iter::Map<_,_> [];
+        r host scan = ::core::iter::Map<_,_> [];
+        r host s = ::cq_gpu_runtime::LeveledDeviceIndex<_,_,((::cq_gpu_runtime::FrozenKey<0>,),)> [x];
+        r host p = ::cq_gpu_runtime::LeveledDeviceIndex<_,_,((::cq_gpu_runtime::FrozenKey<0>,),)> [x];
+        p canon = ::std::collections::HashSet<_>;
+    } };
+    let target = retain_lookups(&source, quote!()).unwrap();
+    let facts = ir::contract::check(&target).unwrap();
+    assert_eq!(facts.shares["s"].force, "p");
+    assert!(facts.witnesses.contains_key("s"));
+    assert_eq!(target.physical, source.physical);
+    assert_eq!(retain_lookups(&target, quote!()).unwrap(), target);
+    source.structures.entries[3] = syn::parse_quote! {
+        r host p = ::cq_gpu_runtime::LeveledDeviceIndex<_,_,((::cq_gpu_runtime::FrozenKey<1>,),)> [x];
+    };
+    assert!(retain_lookups(&source, quote!()).is_err());
+}
+
+#[test]
 fn triangle_prefix_shares_reject_wrong_build_key_and_force() {
     let target = retain_lookups(&triangle_source(), quote!()).unwrap();
     for replacement in [

@@ -808,6 +808,67 @@ fn semijoin_wiring_cannot_restore_a_hidden_shared_support_column() {
 }
 
 #[test]
+fn dead_expansion_cannot_erase_a_downstream_implicit_join_key() {
+    let source: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32); relation S(a:i32,b:i32); relation T(b:i32);
+        r = rename R@0 {a -> x};
+        s = rename S@1 {a -> x,b -> y};
+        t = rename T@2 {b -> y};
+        expansion = natural_join r with s;
+        later = natural_join expansion with t;
+        answer_rows = project later keep {x};
+        output answer_rows as answer(x);
+    }};
+    for later in [
+        syn::parse_quote!(natural_join expansion with t),
+        syn::parse_quote!(semijoin expansion with t),
+    ] {
+        let mut source = source.clone();
+        source.plan.definitions[4].operator = later;
+        let mut target = source.clone();
+        target.plan.definitions[3].operator = syn::parse_quote!(semijoin r with s);
+        // Both target operators remain locally well headed, but replacing
+        // the expansion removes the later implicit equality on y. Witnesses
+        // S(x, y1) and T(y2) must not become independently existential.
+        ra::contract::check(&source).unwrap();
+        ra::contract::check(&target).unwrap();
+        assert!(ra::check_rewrite(&source, &target).is_err());
+        let schedule = ra::contract::Schedule::from_program(&source).unwrap();
+        assert!(schedule.check_dead_expansions(&target, &[]).is_err());
+    }
+}
+
+#[test]
+fn inverse_dead_expansion_restores_only_a_checked_primary_witness() {
+    let source: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32); relation S(a:i32,b:i32); relation T(b:i32);
+        r = rename R@0 {a -> x};
+        s = rename S@1 {a -> x,b -> y};
+        t = rename T@2 {b -> y};
+        support = semijoin s with t;
+        lookup = semijoin r with support;
+        expansion = natural_join lookup with support;
+        answer_rows = project expansion keep {x};
+        output answer_rows as answer(x);
+    }};
+    let target: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32); relation S(a:i32,b:i32); relation T(b:i32);
+        r = rename R@0 {a -> x};
+        s = rename S@1 {a -> x,b -> y};
+        t = rename T@2 {b -> y};
+        support = semijoin s with t;
+        lookup = semijoin r with support;
+        answer_rows = project lookup keep {x};
+        output answer_rows as answer(x);
+    }};
+    let schedule = ra::contract::Schedule::from_program(&source).unwrap();
+    // The original s-with-t reduction remains required even though its
+    // equalities need a certified primary expansion to become visible.
+    schedule.check_dead_expansions(&target, &[(1, 2)]).unwrap();
+    ra::check_rewrite(&source, &target).unwrap();
+}
+
+#[test]
 fn final_equality_does_not_deduplicate_distinct_before_constraints() {
     let source: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32,b:i32); r = rename R@0 {a -> x,b -> y};

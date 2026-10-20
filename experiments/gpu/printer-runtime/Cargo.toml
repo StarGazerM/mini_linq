@@ -6,6 +6,7 @@ edition.workspace = true
 [features]
 default = []
 nvtx = []
+timings = []
 dedup-diagnostics = []
 
 [dependencies]

@@ -3,8 +3,9 @@ use proc_macro2::TokenStream;
 
 /// Record Copy range witnesses for eager semijoins with a later matching probe.
 ///
-/// Candidate generation selects SortedRun payloads and PrefixRun directories;
-/// the language independently proves integral prefixes, key preservation and escape.
+/// Candidate generation selects SortedRun payloads, PrefixRun directories, and
+/// identical leveled snapshot host layouts at both demands; the language
+/// independently proves provider identity, key preservation and non-escape.
 /// Existing representation choices are preserved, including positions carriers.
 pub fn retain_lookups(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
     if !arguments.is_empty() {
@@ -44,13 +45,21 @@ pub fn retain_lookups(source: &ir::Program, arguments: TokenStream) -> syn::Resu
                                             && ir::prefix_depth(&keyed.level_names(), &keys).is_some())
                                 })))
         });
-        if !eligible_build {
+        let leveled = ir::leveled_host_read(source, &build, &name, &keys);
+        if !eligible_build && leveled.is_none() {
             continue;
         }
         for force in &definitions[index + 1..] {
             let Operator::Probe(_, probe) = &force.operator else {
                 continue;
             };
+            if let Some(provider) = leveled {
+                if ir::leveled_host_read(source, &build, &symbol_name(&force.name), &keys)
+                    != Some(provider)
+                {
+                    continue;
+                }
+            }
             let candidate = candidates.iter().any(|candidate| {
                 symbol_name(candidate.reader) == symbol_name(&force.name)
                     && candidate

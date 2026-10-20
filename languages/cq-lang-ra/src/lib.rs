@@ -782,6 +782,11 @@ pub use constants::disjoint_unions;
 /// support operand when exact named-result lineage supplies all shared columns.
 /// It preserves the remaining definitions, Rust payloads and negative ancestry;
 /// independent projected witnesses are never merged to establish containment.
+/// For entirely Rust-free, block-free positive programs, a separate certificate
+/// replays dead expansion to a semijoin and bypass of a support
+/// already witnessed by exact named lineage. Source-side demand preserves
+/// downstream implicit join keys as well as projections, selections and output.
+/// These are set (under-canonicalization) laws, not bag or Rust execution laws.
 pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
     let source_schedule = contract::Schedule::from_program(source)?;
     let target_schedule = contract::Schedule::from_program(target)?;

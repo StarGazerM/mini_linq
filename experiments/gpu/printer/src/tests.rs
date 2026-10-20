@@ -8,6 +8,42 @@ use quote::{ToTokens, quote};
 use std::collections::BTreeMap;
 
 #[test]
+fn host_set_checks_full_host_before_consumers_and_remains_opt_in() {
+    let mut program: ir::Program = syn::parse_quote! { physical {
+        relation R(a:i64,b:i64);
+        host_set R;
+        scan = pipe rename R@0 {a -> x,b -> y};
+        output = pipe canon project scan keep {x};
+        return output as answer(x);
+    } structures {
+        scan host scan = ::core::iter::Map<_,_> [];
+        output canon = ::cq_gpu_runtime::DeviceSet<_>;
+    } };
+    let generated = compile(&program, Options::default())
+        .unwrap()
+        .to_token_stream()
+        .to_string();
+    let check = generated
+        .find("certify_host_set")
+        .expect("checked host-set fact");
+    let binding = generated.find("bind_host").unwrap();
+    assert!(binding < check, "{generated}");
+    assert!(generated[check..].contains("\"R\""), "{generated}");
+    assert_eq!(generated.matches("certify_host_set").count(), 1);
+    // Losing a heading column still requires exact output canonicalization.
+    assert!(
+        generated.contains("DeviceSet") || generated.contains("dedup"),
+        "{generated}"
+    );
+    program.physical.program.host_sets.clear();
+    let ordinary = compile(&program, Options::default())
+        .unwrap()
+        .to_token_stream()
+        .to_string();
+    assert!(!ordinary.contains("certify_host_set"), "{ordinary}");
+}
+
+#[test]
 fn packed_fused_counts_preserve_both_block_prefixes() {
     for seed in 0..16u32 {
         let (mut packed, mut candidates, mut unique) = (0u32, 0u32, 0u32);
@@ -204,6 +240,334 @@ fn frozen_chain_rejects_missing_prefixes_and_malformed_full_layouts() {
         .to_token_stream()
         .to_string();
     assert_eq!(generated.matches("resident_run").count(), 2);
+}
+
+#[test]
+fn leveled_hosts_record_exact_layout_without_changing_physical_reads() {
+    let source = frozen_prefix_chain();
+    let recorded = crate::compiler::leveled_hosts(&source, quote!(R => [[1,2],[0]])).unwrap();
+    assert_eq!(source.physical, recorded.physical);
+    let text = recorded.structures.to_token_stream().to_string();
+    assert!(text.contains("LeveledDeviceIndex"));
+    assert!(text.contains("FrozenKey < 1usize >"));
+    assert!(text.contains("FrozenKey < 2usize >"));
+    assert!(text.contains("FrozenKey < 0usize >"));
+    assert!(!text.contains("FrozenDeviceIndex"));
+    ir::contract::check(&recorded).unwrap();
+}
+
+#[test]
+fn leveled_hosts_reject_wrong_layout_nonprefix_and_missing_host() {
+    for (arguments, code) in [
+        (quote!(R => [[1,2],[2]]), "CQ_GPU_FROZEN_LAYOUT"),
+        (quote!(R => [[1,2],[4]]), "CQ_GPU_FROZEN_LAYOUT"),
+        (quote!(R => [[0],[1,2]]), "CQ_GPU_FROZEN_READ_PREFIX"),
+        (quote!(Missing => [[0]]), "CQ_GPU_FROZEN_HOST"),
+        (quote!(L => [[0]]), "CQ_GPU_LEVELED_HOST"),
+    ] {
+        let error = crate::compiler::leveled_hosts(&frozen_prefix_chain(), arguments)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(code), "{error}");
+    }
+}
+
+#[test]
+fn leveled_prefix_reads_use_one_snapshot_and_any_run_membership() {
+    let source =
+        crate::compiler::leveled_hosts(&frozen_prefix_chain(), quote!(R => [[1,2],[0]])).unwrap();
+    for options in [quote!(), quote!(capacity(R)), quote!(output(retry))] {
+        let text = compile(&source, syn::parse2(options).unwrap())
+            .unwrap()
+            .to_token_stream()
+            .to_string();
+        let compact = text.split_whitespace().collect::<String>();
+        assert_eq!(compact.matches(".snapshot_ptr(").count(), 1, "{text}");
+        assert!(
+            compact.contains("*const::cq_gpu_runtime::LeveledRunsView"),
+            "{text}"
+        );
+        assert!(
+            compact
+                .contains("__leveled_run_id<::cq_gpu_runtime::leveled_count(__cq_gpu_runs_view_r)asusize&&!__leveled_found"),
+            "{text}"
+        );
+        assert!(
+            compact.contains("blocked_run::point(__cq_gpu_run_view_r.rank,"),
+            "{text}"
+        );
+        assert!(
+            compact.contains("run_column(__cq_gpu_run_view_r,0usize,__mid)"),
+            "{text}"
+        );
+        assert_eq!(
+            compact.matches("bind_host(").count(),
+            1,
+            "leveled inputs must not bind a contiguous table: {text}"
+        );
+        assert!(!compact.contains("prepare_prefix_run"), "{text}");
+        assert!(!compact.contains("resident_run("), "{text}");
+        assert!(
+            !compact.contains("__cq_gpu_runs_view_r:::cq_gpu_runtime::LeveledRunsView"),
+            "{text}"
+        );
+        assert!(!compact.contains("__cq_gpu_runs_view_r.runs"), "{text}");
+    }
+}
+
+#[test]
+fn leveled_expansion_counts_all_ranges_and_restores_run_and_position() {
+    for staged in [false, true] {
+        let mut source = frozen_host(quote!([x][y]), quote!(x, y));
+        if staged {
+            source
+                .structures
+                .entries
+                .push(syn::parse_quote!(p stage = batch 256 expand;));
+        }
+        let source = crate::compiler::leveled_hosts(&source, quote!(R => [[1],[0]])).unwrap();
+        for options in [
+            quote!(),
+            quote!(capacity(R)),
+            quote!(output(retry)),
+            quote!(tile(256, 4), output(retry)),
+        ] {
+            let resume = options.is_empty();
+            let mut generated = compile(&source, syn::parse2(options).unwrap()).unwrap();
+            if resume && staged {
+                struct CheckedParentIdentity(usize);
+                impl syn::visit_mut::VisitMut for CheckedParentIdentity {
+                    fn visit_arm_mut(&mut self, arm: &mut syn::Arm) {
+                        let body = arm.body.to_token_stream().to_string();
+                        if body.contains("__driver_row_id as u32") {
+                            assert!(
+                                body.contains("let __driver_row_id ="),
+                                "descriptor save must bind its parent identity in the same resume PC: {body}"
+                            );
+                            self.0 += 1;
+                        }
+                        syn::visit_mut::visit_arm_mut(self, arm);
+                    }
+                }
+                let mut check = CheckedParentIdentity(0);
+                syn::visit_mut::VisitMut::visit_expr_mut(&mut check, &mut generated);
+                assert!(check.0 > 0);
+            }
+            let text = generated.to_token_stream().to_string();
+            let compact = text.split_whitespace().collect::<String>();
+            assert!(
+                compact.contains("leveled_run(__cq_gpu_runs_view_r,__leveled_run_id)"),
+                "{text}"
+            );
+            if resume && !staged {
+                assert!(
+                    compact.contains("__leveled_total+=(__run_end-__run_begin)asu64"),
+                    "{text}"
+                );
+                assert!(
+                    compact.contains("__leveled_position-=__run_end-__run_begin"),
+                    "{text}"
+                );
+                assert!(
+                    compact.contains("let__build_row=__leveled_build_row"),
+                    "{text}"
+                );
+            }
+            if staged {
+                assert!(compact.contains("__descriptor.add("), "{text}");
+                assert!(
+                    compact.contains("__leveled_run_id=*__descriptor.add(1)asusize"),
+                    "{text}"
+                );
+                assert!(compact.contains("::cq_gpu_runtime::leveled_any("), "{text}");
+                assert!(!compact.contains("2*__leveled_run_id*"), "{text}");
+                assert!(compact.contains("tiles::scan("), "{text}");
+            }
+            if resume {
+                assert!(compact.contains("__resume_registers"), "{text}");
+                assert!(compact.contains("let__resume_shared_words="), "{text}");
+            }
+        }
+    }
+}
+
+#[test]
+fn leveled_full_row_probe_and_anti_are_any_run() {
+    for operator in [quote!(probe first), quote!(semi eager), quote!(anti eager)] {
+        let source: ir::Program = syn::parse2(quote! { physical {
+            relation L(a:i64,b:i64); relation R(a:i64,b:i64);
+            l = pipe rename L@0 {a -> x,b -> y};
+            r = pipe rename R@1 {a -> x,b -> y};
+            p = pipe canon #operator [x,y] l,r;
+            return p as answer(x,y);
+        } structures {
+            l host scan = ::core::iter::Map<_,_> [];
+            r host scan = ::core::iter::Map<_,_> [];
+            r host p = ::cq_gpu_runtime::FrozenDeviceIndex<_> [x][y];
+            p canon = ::cq_gpu_runtime::DeviceSet<_>;
+        }})
+        .unwrap();
+        let source = crate::compiler::leveled_hosts(&source, quote!(R => [[0],[1]])).unwrap();
+        for options in [quote!(), quote!(capacity(L)), quote!(output(retry))] {
+            let text = compile(&source, syn::parse2(options).unwrap())
+                .unwrap()
+                .to_token_stream()
+                .to_string();
+            assert!(text.contains("__leveled_found"), "{text}");
+            assert!(text.contains("__contains_lo"), "{text}");
+        }
+    }
+}
+
+#[test]
+fn leveled_hosts_reject_actual_scans() {
+    let scan: ir::Program = syn::parse_quote! { physical {
+        relation R(a:i64,b:i64);
+        l = pipe rename R@0 {a -> x,b -> w};
+        r = pipe rename R@1 {a -> x,b -> y};
+        p = pipe canon probe first [x] l,r;
+        return p as answer(x,w,y);
+    } structures {
+        l host scan = ::core::iter::Map<_,_> [];
+        r host scan = ::core::iter::Map<_,_> [];
+        r host p = ::cq_gpu_runtime::FrozenDeviceIndex<_> [x];
+        p canon = ::cq_gpu_runtime::DeviceSet<_>;
+    }};
+    let error = crate::compiler::leveled_hosts(&scan, quote!(R => [[0]]))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("CQ_GPU_LEVELED_SCAN"), "{error}");
+}
+
+#[test]
+fn leveled_witness_searches_once_and_preserves_range_sets() {
+    for staged in [false, true] {
+        let mut source: ir::Program = syn::parse_quote! { physical {
+            relation L(a:i64,b:i64); relation R(a:i64,b:i64,v:i64);
+            l = pipe rename L@0 {a -> x,b -> y};
+            r = pipe rename R@1 {a -> x,b -> y,v -> z};
+            s = pipe semi eager [x,y] l,r;
+            p = pipe canon probe first [x,y] s,r;
+            return p as answer(x,y,z);
+        } structures {
+            l host scan = ::core::iter::Map<_,_> [];
+            r host scan = ::core::iter::Map<_,_> [];
+            r host s = ::cq_gpu_runtime::LeveledDeviceIndex<_> [x][y];
+            r host p = ::cq_gpu_runtime::LeveledDeviceIndex<_> [x][y];
+            s share = lookup r [x,y] first s force p;
+            s repr = tuples witness {r [x,y] at s as ::cq_storage::RunCursor<'_,_>};
+            p canon = ::cq_gpu_runtime::DeviceSet<_>;
+        }};
+        if staged {
+            source
+                .structures
+                .entries
+                .push(syn::parse_quote!(p stage = batch 256 expand;));
+        }
+        let source = crate::compiler::leveled_hosts(&source, quote!(R => [[0],[1]])).unwrap();
+        for options in [
+            quote!(),
+            quote!(capacity(L)),
+            quote!(output(retry)),
+            quote!(tile(256, 4), output(retry)),
+        ] {
+            let text = compile(&source, syn::parse2(options).unwrap())
+                .unwrap()
+                .to_token_stream()
+                .to_string();
+            assert_eq!(
+                text.matches("blocked_run :: point").count(),
+                1,
+                "forcing a witness must not search again: {text}"
+            );
+            assert!(text.contains("witness:s"), "{text}");
+            assert!(text.contains("32"), "{text}");
+            assert!(text.contains("__leveled_run_id"), "{text}");
+            if staged {
+                assert!(text.contains("leveled_any"), "{text}");
+                assert!(text.contains("__descriptor"), "{text}");
+            }
+        }
+    }
+}
+
+#[test]
+fn frozen_host_output_is_byte_identical_when_leveled_pass_has_no_binding() {
+    fn stable(tokens: proc_macro2::TokenStream) -> String {
+        tokens
+            .into_iter()
+            .map(|token| match token {
+                proc_macro2::TokenTree::Group(group) => {
+                    format!("{:?}[{}]", group.delimiter(), stable(group.stream()))
+                }
+                proc_macro2::TokenTree::Ident(ident) => {
+                    let text = ident.to_string();
+                    if text.contains("__cq_gpu_module_")
+                        || text.contains("cq_gpu_stream_")
+                        || text.contains("cq_gpu_expand_")
+                    {
+                        text.split('_')
+                            .map(|part| {
+                                if !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()) {
+                                    "MODULE"
+                                } else {
+                                    part
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .join("_")
+                    } else {
+                        text
+                    }
+                }
+                proc_macro2::TokenTree::Literal(literal) => {
+                    if let Ok(text) = syn::parse2::<syn::LitStr>(quote!(#literal))
+                        && text.value().starts_with("cq_gpu_stream_")
+                    {
+                        format!(
+                            "{:?}",
+                            text.value()
+                                .split('_')
+                                .map(|part| {
+                                    if !part.is_empty() && part.chars().all(|c| c.is_ascii_digit())
+                                    {
+                                        "MODULE"
+                                    } else {
+                                        part
+                                    }
+                                })
+                                .collect::<Vec<_>>()
+                                .join("_")
+                        )
+                    } else {
+                        literal.to_string()
+                    }
+                }
+                other => other.to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+    for staged in [false, true] {
+        let mut source = frozen_host(quote!([x][y]), quote!(x, y));
+        if staged {
+            source
+                .structures
+                .entries
+                .push(syn::parse_quote!(p stage = batch 256 expand;));
+        }
+        let untouched = crate::compiler::leveled_hosts(&source, quote!()).unwrap();
+        for options in [quote!(), quote!(capacity(R)), quote!(output(retry))] {
+            let before = compile(&source, syn::parse2(options.clone()).unwrap())
+                .unwrap()
+                .to_token_stream();
+            let after = compile(&untouched, syn::parse2(options).unwrap())
+                .unwrap()
+                .to_token_stream();
+            assert!(!after.to_string().contains("__leveled"));
+            assert_eq!(stable(before), stable(after));
+        }
+    }
 }
 
 #[test]
@@ -614,6 +978,10 @@ fn retry_preserves_fused_canon_and_stages_other_recorded_policies() {
                 assert!(!compact.contains("__execution.dedup("), "{generated}");
             } else {
                 assert!(compact.contains("execute_retry("), "{generated}");
+                assert!(
+                    compact.contains("execute_retry(concat!(module_path!(),\"::\",stringify!("),
+                    "bounded history must be isolated by generated kernel site: {generated}"
+                );
                 assert!(!compact.contains("fused_retry_insert"), "{generated}");
                 assert!(!compact.contains("FusedRetryView"), "{generated}");
                 assert!(!compact.contains("__fused"), "{generated}");
@@ -2027,7 +2395,9 @@ fn unstaged_probe_after_expansion_uses_a_uniform_lane_cursor_without_another_fra
     };
     for options in [quote!(), quote!(output(retry))] {
         let generated = compile(&source, syn::parse2(options).unwrap())
-            .unwrap().to_token_stream().to_string();
+            .unwrap()
+            .to_token_stream()
+            .to_string();
         assert!(generated.contains("__remaining"));
         assert!(generated.contains("frontier_claim"));
         assert!(generated.contains("12368u32"), "{generated}");

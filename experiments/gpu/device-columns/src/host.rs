@@ -291,6 +291,11 @@ impl<'data, Row, C> DeviceColumns<'data, Row, C> {
     pub fn column_bytes(&self) -> Vec<usize> {
         self.table.columns.iter().map(|c| c.bytes()).collect()
     }
+    /// Read the logical row count after checking all retained device statuses.
+    /// Transfers only metadata; unlike `to_host`, allocates no decoded columns.
+    pub fn checked_len(&self) -> Result<usize> {
+        checked_count(&self.table)
+    }
     /// Download on explicit demand, checking this result and all ancestor
     /// statuses first. No query binding or chaining operation calls this.
     pub fn to_host(&self) -> Result<Vec<Row>>

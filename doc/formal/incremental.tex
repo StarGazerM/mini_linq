@@ -170,6 +170,33 @@ candidate bag, not only the accepted delta. A lawful maintained index needs
 work proportional to its update/merge algorithm; no universal
 $O(|\delta R_t|)$ round bound follows from these equations.
 
+\paragraph{Maintained device runs.}
+Let $V_L$ retain the complete row in the recorded permutation $L$.
+Admission, rather than key uniqueness, supplies disjointness:
+\begin{mathpar}
+\Rule{DL-RunPartition}{\textsc{DL-InsertNew}\text{ at every round}\\
+ \text{each admitted delta inserted exactly once}}
+ {V_L(R^t)=\mathop{\dot\bigcup}_{j}\alpha(L_j)}
+
+\Rule{STR-RunRead}{V_L(R)=\mathop{\dot\bigcup}_{j}\alpha(L_j)}
+ {\mathsf{lookup}(R,k)=\biguplus_j\mathsf{lookup}(L_j,k)\\
+  \mathsf{member}(R,k)=\bigvee_j\mathsf{member}(L_j,k)}
+
+\Rule{STR-RunCompact}{L'\text{ is the sorted merge of adjacent runs }L_a,\ldots,L_b}
+ {\alpha(L')=\biguplus_{j=a}^{b}\alpha(L_j)}
+
+\Rule{STR-RunSnapshot}{\text{publish all indexes of round }t\text{ before its readers}\\
+ \text{enqueue all readers before insertion, compaction and retirement}}
+ {\text{every round-}t\text{ read observes exactly }V_L(R^t)}
+\end{mathpar}
+The union in \textsc{STR-RunRead} is a bag union: equal key prefixes
+may occur in several runs but complete rows remain disjoint. Compaction
+preserves multiplicity, not merely support. A snapshot protects the exclusive
+cut $t+1$; stream ordering retains its buffers until all enqueued readers
+finish. No historical cut is promised after retirement. A leveled capacity
+ratio is explicit maintenance advice (default four), not a semantic premise;
+it cannot change admission, the multiset, or snapshot publication.
+
 \subsection{Datalog and the fixpoint boundary}
 The external \texttt{features/datalog} workspace implements this boundary above
 the unmodified compiler. Its language and schedule passes record and check
@@ -257,8 +284,9 @@ claim that every possible caller pipeline reuses every index.
 The device backend reuses these SCC and Boolean-cover decisions with the
 explicit policy pair \texttt{device\_set\_all\_columns} and
 \texttt{device\_set\_owned}. Mixed CPU/device policy pairs are rejected.
-The fork records resident column projections with per-hole index rebuilding,
-not maintained grouped hosts. Its bridge realizes each supported CQ hole with
+The fork records frozen keyed layouts for completed inputs and maintained
+leveled keyed full layouts for changing SCC relations. Delta and unkeyed
+layouts retain resident projections. Its bridge realizes each supported CQ hole with
 the GPU printer; an unsupported device expression is rejected rather than
 executed on the CPU. Admission realizes \texttt{insert\_new} with a persistent
 exact all-column device hash set: full-word equality admits each new tuple once
@@ -275,9 +303,13 @@ member deltas. One batched checked cardinality/status readback governs reserve
 and convergence and retains ancestor failures; it transfers no relation tuples.
 Normal admission touches candidates and new delta rows, with full copying and
 rehashing amortized over geometric growth. Frozen negative keys are unchanged.
-This maintained admission structure is not a \code{Runs} spine, does not
-implement logical timestamp compaction, and makes no incremental join-index
-reuse claim. Output device relations remain owned and resident until explicitly read.
+The admission set is distinct from the join-index \code{Runs} spine.
+Each selected changing keyed layout is constructed once per SCC and receives
+only admitted deltas, after the round's readers. Immutable run snapshots
+implement \textsc{STR-RunRead}; sorted compaction implements
+\textsc{STR-RunCompact}, with publication and retirement ordered by
+\textsc{STR-RunSnapshot}. No logical timestamp compaction is claimed.
+Output device relations remain owned and resident until explicitly read.
 
 Core negation is lowered to a total membership guard over a key set built
 once at the consuming stratum boundary, after its negative inputs are complete.

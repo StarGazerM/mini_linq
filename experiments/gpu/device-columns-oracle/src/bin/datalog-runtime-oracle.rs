@@ -122,6 +122,13 @@ fn batched_rounds(runtime: &Runtime, dictionary: &mut Dictionary<'static>) -> Re
                     .into_iter()
                     .map(|member| member.finish(&checked))
                     .collect::<Result<Vec<_>>>()?;
+                for relation in &next {
+                    assert_eq!(
+                        checked.rows(relation.delta())?,
+                        usize::from(round_index == 0)
+                    );
+                    assert!(checked.rows(relation.full()).is_err());
+                }
                 assert_eq!(
                     host_wait_count(),
                     round_index + 1,
@@ -142,9 +149,8 @@ fn batched_rounds(runtime: &Runtime, dictionary: &mut Dictionary<'static>) -> Re
 }
 
 fn persistent_growth(runtime: &Runtime, dictionary: &mut Dictionary<'static>) -> Result<()> {
-    let mut relation = Relation::<(i64, i64)>::empty(
-        runtime.pool().clone(), Arc::new(dictionary.clone()), 2,
-    )?;
+    let mut relation =
+        Relation::<(i64, i64)>::empty(runtime.pool().clone(), Arc::new(dictionary.clone()), 2)?;
     let mut expected = BTreeSet::new();
     let mut snapshots = Vec::new();
     for round in 0..10 {
@@ -153,17 +159,19 @@ fn persistent_growth(runtime: &Runtime, dictionary: &mut Dictionary<'static>) ->
         let candidates = runtime.upload_owned_rows(&rows, dictionary, &[Codec::Plain; 2])?;
         snapshots.push((relation.full().clone(), expected.clone()));
         let next = prepare(&relation, &[candidates.clone(), candidates])?;
-        let delta: BTreeSet<_> = rows.iter().copied()
-            .filter(|row| !expected.contains(row)).collect();
+        let delta: BTreeSet<_> = rows
+            .iter()
+            .copied()
+            .filter(|row| !expected.contains(row))
+            .collect();
         exact(next.delta().to_host()?, delta);
         expected.extend(rows);
         exact(next.full().to_host()?, expected.iter().copied());
         if round == 5 {
             // Branch from an old Relation after its successor appended. Its
             // lazy state must detach rather than overwrite the successor tail.
-            let branch_rows = runtime.upload_owned_rows(
-                &[(-1, 7), (-1, 7)], dictionary, &[Codec::Plain; 2],
-            )?;
+            let branch_rows =
+                runtime.upload_owned_rows(&[(-1, 7), (-1, 7)], dictionary, &[Codec::Plain; 2])?;
             let branch = prepare(&relation, &[branch_rows])?;
             let mut branch_expected = snapshots.last().unwrap().1.clone();
             branch_expected.insert((-1, 7));
@@ -175,7 +183,9 @@ fn persistent_growth(runtime: &Runtime, dictionary: &mut Dictionary<'static>) ->
     for (snapshot, expected) in snapshots {
         exact(snapshot.to_host()?, expected);
     }
-    println!("persistent admission exact=true: geometric full/set growth, duplicate holes, existing candidates, immutable prefixes and detached old branches");
+    println!(
+        "persistent admission exact=true: geometric full/set growth, duplicate holes, existing candidates, immutable prefixes and detached old branches"
+    );
     Ok(())
 }
 
@@ -244,7 +254,11 @@ fn main() -> Result<()> {
         let next = prepare(&state, &[candidate.clone(), candidate])?;
         exact(old.to_host()?, expected.iter().copied());
         exact(next.delta().to_host()?, [(5000 + cycle, -cycle)]);
-        assert_eq!(next.delta().capacity(), 1, "checked deltas must not retain candidate capacity");
+        assert_eq!(
+            next.delta().capacity(),
+            1,
+            "checked deltas must not retain candidate capacity"
+        );
         assert!(status(next.delta())?);
         expected.insert((5000 + cycle, -cycle));
         exact(next.full().to_host()?, expected.iter().copied());

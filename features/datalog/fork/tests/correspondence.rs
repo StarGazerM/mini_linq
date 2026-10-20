@@ -733,3 +733,47 @@ fn frozen_device_layout_lifetime_is_an_exact_checked_certificate() {
     let cpu = compile(&authored()).unwrap();
     assert!(cpu.context.strata[0].frozen_layouts.is_empty());
 }
+
+#[test]
+fn leveled_device_layouts_cover_only_changing_keyed_full_reads() {
+    let source: Program = syn::parse_quote! {
+        struct Closure;
+        relation Edge(x:i32,y:i32) = (edges);
+        relation Reach(x:i32,y:i32);
+        output Reach;
+        Reach(*x,*y) :- Edge(x,y);
+        Reach(*x,*z) :- Reach(x,y), Reach(y,z);
+        strata { component [Reach]; }
+        seminaive {
+            insert_new device_set_all_columns;
+            negation_keys device_set_owned;
+            delta Reach = Recent;
+            layout Edge [0,1] key 0;
+            layout Reach [0,1] key 1;
+            layout Reach [0,1] key 0;
+            delta_layout Reach [0,1] key 1;
+            variant 0 seed { Reach(*x,*y) :- Edge(x,y); }
+            variant 1 delta 0 { Reach(*x,*z) :- Recent(x,y), Reach(y,z); }
+            variant 1 delta 1 { Reach(*x,*z) :- Reach(x,y), Recent(y,z); }
+        }
+    };
+    let target = cq_datalog_fork::compile_with_ratio(&source, 8).unwrap();
+    check(&source, &target).unwrap();
+    assert_eq!(target.context.leveled_ratio, 8);
+    assert_eq!(target.context.changing_layout_realization,
+        cq_datalog_fork::LayoutRealization::MaintainedLeveledDeviceIndex);
+    assert_eq!(target.context.strata[0].leveled_layouts, [1]);
+    assert!(target.context.strata[0].frozen_layouts.is_empty());
+    for layouts in [vec![], vec![2], vec![1,1], vec![3]] {
+        let mut wrong = target.clone();
+        wrong.context.strata[0].leveled_layouts = layouts;
+        assert!(check(&source, &wrong).is_err());
+    }
+    let mut wrong = target.clone();
+    wrong.context.changing_layout_realization =
+        cq_datalog_fork::LayoutRealization::MaintainedFrozenDeviceIndex;
+    assert!(check(&source, &wrong).is_err());
+    assert!(cq_datalog_fork::compile_with_ratio(&source, 1).is_err());
+    assert_eq!(compile(&source).unwrap().context.leveled_ratio, 4);
+    assert!(compile(&authored()).unwrap().context.strata[0].leveled_layouts.is_empty());
+}

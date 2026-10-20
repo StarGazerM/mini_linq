@@ -67,8 +67,9 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
         .flat_map(|group| group.members.iter())
         .collect();
     // ST-Expand: SortedRun builds, lexicographic PrefixRun prefixes, recorded
-    // resident sorted hosts, and binary Smallest intersections expose an exact
-    // contiguous range per key whose length is known before expansion. A
+    // resident sorted hosts, and binary Smallest intersections expose exact
+    // ranges whose total length is known before expansion. Leveled hosts
+    // enumerate (run, range) pairs from one immutable snapshot.
     // HashedRun bucket is only a candidate superset, so it cannot prove this
     // obligation even though its bucket length is available.
     let candidates = physical::candidate_prefixes(&program.physical, &facts.physical);
@@ -115,7 +116,7 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
                     return false;
                 }
                 let resident = matches!(&keyed.ty, syn::Type::Path(path)
-                    if path.path.segments.last().is_some_and(|segment| segment.ident == "FrozenDeviceIndex")
+                    if path.path.segments.last().is_some_and(|segment| segment.ident == "FrozenDeviceIndex" || segment.ident == "LeveledDeviceIndex")
                         && path.path.segments.iter().rev().nth(1).is_some_and(|segment| segment.ident == "cq_gpu_runtime"));
                 let levels = keyed.level_names();
                 let mut columns = levels.concat();

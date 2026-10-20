@@ -21,6 +21,7 @@ mod kw {
     syn::custom_keyword!(collected);
     syn::custom_keyword!(pending);
     syn::custom_keyword!(task);
+    syn::custom_keyword!(leveled_ratio);
 }
 
 #[derive(Clone)]
@@ -112,22 +113,8 @@ fn path(invocation: &Invocation) -> String {
         .join("::")
 }
 pub fn validate(config: &Configuration) -> syn::Result<()> {
-    let required = [
-        "cq_rewrites::sorted_runs",
-        "cq_rewrites::hashed_runs",
-        "cq_gpu::prefix_runs",
-        "cq_rewrites::retain_lookups",
-        "cq_rewrites::expand_lookups",
-        "cq_rewrites::retype",
-    ];
-    for required in required {
-        if !config.structures.iter().any(|pass| path(pass) == required) {
-            return Err(syn::Error::new(
-                proc_macro2::Span::call_site(),
-                format!("CQ_GPU_DATALOG_PIPELINE: missing required device pass {required}"),
-            ));
-        }
-    }
+    // Structures pipelines are opaque policy choices. Their consuming passes
+    // and the GPU printer check supported providers; do not require optimizers.
     if config
         .print
         .as_ref()
@@ -178,9 +165,23 @@ impl ToTokens for Selector {
 pub struct Advice {
     pub default: Configuration,
     pub overrides: Vec<(Selector, Named)>,
+    pub leveled_ratio: u32,
 }
 impl Parse for Advice {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let leveled_ratio = if input.peek(kw::leveled_ratio) {
+            input.parse::<kw::leveled_ratio>()?;
+            let value;
+            parenthesized!(value in input);
+            let ratio = value.parse::<syn::LitInt>()?.base10_parse()?;
+            if !value.is_empty() || ratio < 2 {
+                return Err(value.error("leveled_ratio requires one integer at least two"));
+            }
+            input.parse::<Token![;]>()?;
+            ratio
+        } else {
+            4
+        };
         let default = if input.peek(kw::pipeline) {
             input.parse::<Named>()?.merge(&defaults())
         } else {
@@ -203,7 +204,7 @@ impl Parse for Advice {
                 input.parse::<Token![;]>()?;
             }
         }
-        Ok(Self { default, overrides })
+        Ok(Self { default, overrides, leveled_ratio })
     }
 }
 pub struct Input {
@@ -255,6 +256,8 @@ pub fn config_tokens(config: &Configuration) -> TokenStream {
 }
 impl ToTokens for Advice {
     fn to_tokens(&self, tokens: &mut TokenStream) {
+        let ratio = self.leveled_ratio;
+        tokens.extend(quote!(leveled_ratio(#ratio);));
         config_tokens(&self.default).to_tokens(tokens);
         for (selector, named) in &self.overrides {
             // Materializing inheritance changes no invocation or argument tokens.
@@ -310,6 +313,7 @@ pub struct Pending {
 }
 pub struct State {
     pub source: cq_lang_datalog::Program,
+    pub leveled_ratio: u32,
     pub names: Vec<Ident>,
     pub pipelines: Vec<Configuration>,
     pub collected: Vec<cq_lang_structures::Program>,
@@ -321,6 +325,8 @@ impl Parse for State {
         let body;
         braced!(body in input);
         let source = body.parse()?;
+        input.parse::<kw::leveled_ratio>()?;
+        let leveled_ratio = input.parse::<syn::LitInt>()?.base10_parse()?;
         input.parse::<kw::names>()?;
         let body;
         braced!(body in input);
@@ -366,6 +372,7 @@ impl Parse for State {
         }
         Ok(Self {
             source,
+            leveled_ratio,
             names,
             pipelines,
             collected,
@@ -376,6 +383,7 @@ impl Parse for State {
 impl ToTokens for State {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let source = &self.source;
+        let ratio = self.leveled_ratio;
         let names = &self.names;
         let pipelines = self.pipelines.iter().map(config_tokens);
         let collected = self.collected.iter().map(|hole| quote!({ #hole }));
@@ -384,7 +392,7 @@ impl ToTokens for State {
             let source = &task.source;
             quote!(task { #prefix source { #source } })
         });
-        tokens.extend(quote!(source { #source } names { #(#names),* }
+        tokens.extend(quote!(source { #source } leveled_ratio #ratio names { #(#names),* }
             pipelines { #(#pipelines)* } collected { #(#collected)* } pending { #(#pending)* }));
     }
 }

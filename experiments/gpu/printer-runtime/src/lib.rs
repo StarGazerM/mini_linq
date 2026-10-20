@@ -1,7 +1,7 @@
 //! Resident execution for the Structures GPU printer.
 //!
-//! Rust values retain pooled allocations, dictionaries and device status. Fixed
-//! capacity execution transfers no rows, counts, bounds or pointer arrays.
+//! Rust values retain pooled allocations, dictionaries and device status.
+//! Descriptor tables use batched asynchronous copies from reusable pinned storage.
 //! General growth reads one four-byte suspension control word per attempt and
 //! resumes saved work without replay. Explicit retry reads one checked summary
 //! per bounded attempt. Staged retry replays at most once at the candidate total;
@@ -9,6 +9,8 @@
 //! a VRAM/pool cap and at most twelve attempts. Both require immutable inputs
 //! and a pure query. Fused retry admits exact keys before output compaction and
 //! never performs a second deduplication pass.
+//! CUDA event timings are opt-in via the `timings` feature; allocator ordering
+//! events remain pooled and enabled independently.
 //! Explicit `to_host` validates all retained ancestor statuses before decoding;
 //! capacities are never logical row counts.
 //! Dense runs consume conservative loader/projection bounds and reject domains
@@ -16,11 +18,15 @@
 pub mod datalog;
 mod device;
 mod fused_retry;
+mod host_set;
 mod kernels;
+mod leveled;
 pub mod nvtx;
 mod sets;
 
-use cuda_core::{CudaContext, CudaStream, IntoResult, LaunchConfig1D};
+use cuda_core::{
+    CudaContext, CudaStream, DeviceCopy, IntoResult, LaunchConfig1D, PinnedHostBuffer,
+};
 pub use device::*;
 pub use fused_retry::{FusedRetryReport, FusedRetryScope, fused_retry_scope};
 pub use gpu_blocked_run as blocked_run;
@@ -32,13 +38,14 @@ pub use gpu_device_columns::{
 };
 use gpu_device_columns::{OutputCount, Table};
 pub use gpu_tiles as tiles;
+pub use leveled::*;
 use rccl_memory::ContiguousDeviceRange;
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
     fmt,
     marker::PhantomData,
-    sync::Arc,
+    sync::{Arc, Weak},
     time::Instant,
 };
 
@@ -103,6 +110,7 @@ thread_local! {
     static RESUME_READBACKS: Cell<usize> = const { Cell::new(0) };
     static COMPACTION_READBACKS: Cell<usize> = const { Cell::new(0) };
     static FUSED_RETRY_READBACKS: Cell<usize> = const { Cell::new(0) };
+    static RETRY_READBACKS: Cell<usize> = const { Cell::new(0) };
 }
 /// Explicit runtime stream waits, including checked control readbacks.
 /// Excludes uploads, user downloads, and allocator-internal synchronization.
@@ -125,12 +133,17 @@ pub fn compaction_readback_count() -> usize {
 pub fn fused_retry_readback_count() -> usize {
     FUSED_RETRY_READBACKS.with(Cell::get)
 }
+/// Checked summaries from direct bounded retry attempts, including replays.
+pub fn retry_readback_count() -> usize {
+    RETRY_READBACKS.with(Cell::get)
+}
 pub fn reset_host_wait_count() {
     HOST_WAITS.with(|count| count.set(0));
     CONTROL_READBACKS.with(|count| count.set(0));
     RESUME_READBACKS.with(|count| count.set(0));
     COMPACTION_READBACKS.with(|count| count.set(0));
     FUSED_RETRY_READBACKS.with(|count| count.set(0));
+    RETRY_READBACKS.with(|count| count.set(0));
 }
 fn record_host_wait(readback: bool) {
     HOST_WAITS.with(|count| count.set(count.get().saturating_add(1)));
@@ -478,8 +491,11 @@ pub struct Runtime {
     kernels: kernels::runtime_kernels::LoadedModule,
     pool: Arc<Pool>,
     dedup_scratch: RefCell<DedupScratch>,
+    descriptor_staging: RefCell<DescriptorStaging>,
+    descriptor_cache: RefCell<HashMap<Vec<usize>, CachedViews>>,
     pending_timings: RefCell<Vec<PendingTiming>>,
     fused_retries: RefCell<fused_retry::Records>,
+    materialization_history: RefCell<fused_retry::MaterializationHistory>,
     hashed_run_bucket_limit: usize,
 }
 impl Runtime {
@@ -497,8 +513,11 @@ impl Runtime {
             kernels,
             pool,
             dedup_scratch: RefCell::new(DedupScratch::default()),
+            descriptor_staging: RefCell::new(DescriptorStaging::default()),
+            descriptor_cache: RefCell::new(HashMap::new()),
             pending_timings: RefCell::new(Vec::new()),
             fused_retries: RefCell::new(fused_retry::Records::default()),
+            materialization_history: RefCell::new(fused_retry::MaterializationHistory::default()),
             hashed_run_bucket_limit: 1 << 24,
         })
     }
@@ -530,7 +549,7 @@ impl Runtime {
     pub fn fused_retry_reports(&self) -> Vec<FusedRetryReport> {
         self.fused_retries.borrow().reports()
     }
-    fn fused_retry_budget(&self) -> Result<fused_retry::Budget> {
+    fn retry_budget(&self) -> Result<fused_retry::Budget> {
         self.context().bind_to_thread()?;
         let mut free = 0usize;
         let mut total = 0usize;
@@ -616,6 +635,7 @@ impl Runtime {
         let metadata = self.metadata(rows)?;
         let views = self.column_views(&columns)?;
         self.stream().synchronize()?;
+        self.reclaim_descriptors();
         // The loader has initialized every column and its matching metadata on
         // this pool's stream; the table retains every allocation owner.
         Ok(unsafe {
@@ -634,29 +654,144 @@ impl Runtime {
         })
     }
     fn metadata(&self, rows: usize) -> Result<Arc<Buffer<OutputCount>>> {
-        let metadata = Arc::new(unsafe { Buffer::uninitialized(self.pool.clone(), 1)? });
-        let launch = self.kernels.prepare_initialize_count(config(1, 0))?;
-        unsafe {
-            self.kernels
-                .initialize_count(self.stream(), &launch, metadata.ptr(), rows as u64)?;
-        }
-        Ok(metadata)
+        Ok(Arc::new(self.upload_descriptors(std::iter::once(
+            OutputCount {
+                rows: rows as u64,
+                error: 0,
+                padding: 0,
+            },
+        ))?))
     }
     fn column_views(&self, columns: &[Arc<EncodedColumn>]) -> Result<Arc<Buffer<ColumnView>>> {
-        let views = Arc::new(unsafe { Buffer::uninitialized(self.pool.clone(), columns.len())? });
-        let launch = self.kernels.prepare_initialize_view(config(1, 0))?;
-        for (index, column) in columns.iter().enumerate() {
-            unsafe {
-                self.kernels.initialize_view(
-                    self.stream(),
-                    &launch,
-                    views.ptr(),
-                    index,
-                    column.view(),
-                )?;
+        let key: Vec<_> = columns
+            .iter()
+            .map(|column| Arc::as_ptr(column) as usize)
+            .collect();
+        let mut cache = self.descriptor_cache.borrow_mut();
+        if let Some(entry) = cache.get(&key) {
+            if entry
+                .columns
+                .iter()
+                .all(|column| column.strong_count() != 0)
+            {
+                return Ok(entry.views.clone());
             }
         }
+        let views = Arc::new(
+            self.upload_descriptors(columns.iter().map(|column| unsafe { column.view() }))?,
+        );
+        cache.insert(
+            key,
+            CachedViews {
+                columns: columns.iter().map(Arc::downgrade).collect(),
+                views: views.clone(),
+            },
+        );
         Ok(views)
+    }
+    /// Copy the complete host-known table once. Pinned source storage stays
+    /// immutable until an existing checked readback completes this stream.
+    fn upload_descriptors<T: DeviceCopy>(
+        &self,
+        values: impl ExactSizeIterator<Item = T>,
+    ) -> Result<Buffer<T>> {
+        let buffer = unsafe { Buffer::uninitialized(self.pool.clone(), values.len())? };
+        if buffer.is_empty() {
+            return Ok(buffer);
+        }
+        self.descriptor_staging
+            .borrow_mut()
+            .upload(self, &buffer, values)?;
+        Ok(buffer)
+    }
+    /// Call only after a successful synchronization of this runtime's stream.
+    fn reclaim_descriptors(&self) {
+        self.descriptor_staging.borrow_mut().rewind();
+        self.descriptor_cache.borrow_mut().retain(|_, entry| {
+            entry
+                .columns
+                .iter()
+                .all(|column| column.strong_count() != 0)
+        });
+    }
+}
+
+struct CachedViews {
+    columns: Vec<Weak<EncodedColumn>>,
+    views: Arc<Buffer<ColumnView>>,
+}
+
+#[derive(Default)]
+struct DescriptorStaging {
+    chunks: Vec<PinnedHostBuffer<u64>>,
+    chunk: usize,
+    used: usize,
+}
+impl DescriptorStaging {
+    fn upload<T: DeviceCopy>(
+        &mut self,
+        runtime: &Runtime,
+        destination: &Buffer<T>,
+        values: impl ExactSizeIterator<Item = T>,
+    ) -> Result<()> {
+        assert!(std::mem::align_of::<T>() <= std::mem::align_of::<u64>());
+        let words = destination.bytes().div_ceil(std::mem::size_of::<u64>());
+        if self
+            .chunks
+            .get(self.chunk)
+            .is_some_and(|chunk| self.used + words > chunk.len())
+        {
+            self.chunk += 1;
+            self.used = 0;
+        }
+        if self.chunk == self.chunks.len() {
+            self.chunks.push(PinnedHostBuffer::zeroed(
+                runtime.context(),
+                words.max(8192),
+            )?);
+        } else if self.chunks[self.chunk].len() < words {
+            // This chunk has not been used since the last completed readback.
+            self.chunks[self.chunk] = PinnedHostBuffer::zeroed(runtime.context(), words.max(8192))?;
+        }
+        let source = unsafe {
+            self.chunks[self.chunk]
+                .as_mut_slice()
+                .as_mut_ptr()
+                .add(self.used)
+        };
+        for (index, value) in values.enumerate() {
+            unsafe { source.cast::<T>().add(index).write(value) };
+        }
+        // Reserve before submission, including failure paths: a failed copy
+        // must never let a subsequent call overwrite a possibly live source.
+        self.used += words;
+        unsafe {
+            cuda_core::memory::memcpy_htod_async(
+                destination.cu_deviceptr(),
+                source.cast::<T>(),
+                destination.bytes(),
+                runtime.stream().cu_stream(),
+            )?;
+        }
+        Ok(())
+    }
+    fn pending(&self) -> bool {
+        // Advancing to another chunk can fail before its first upload. Earlier
+        // chunks still contain live DMA sources even when `used` is now zero.
+        self.chunk != 0 || self.used != 0
+    }
+    fn rewind(&mut self) {
+        self.chunk = 0;
+        self.used = 0;
+    }
+}
+impl Drop for Runtime {
+    fn drop(&mut self) {
+        // Error/early-exit paths may not reach another checked readback.
+        // Keep pinned upload sources alive until all outstanding DMA completes.
+        if self.descriptor_staging.get_mut().pending() {
+            self.context().record_err(self.stream().synchronize());
+        }
     }
 }
 
@@ -764,8 +899,28 @@ enum TimingStage {
 }
 struct PendingTiming {
     stage: TimingStage,
-    start: cuda_core::CudaEvent,
-    end: cuda_core::CudaEvent,
+    start: TimingEvent,
+    end: TimingEvent,
+}
+struct TimingEvent(Option<cuda_core::CudaEvent>);
+impl TimingEvent {
+    fn record(stream: &CudaStream) -> std::result::Result<Self, cuda_core::DriverError> {
+        #[cfg(feature = "timings")]
+        return stream
+            .record_event(Some(cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))
+            .map(|event| Self(Some(event)));
+        #[cfg(not(feature = "timings"))]
+        {
+            let _ = stream;
+            Ok(Self(None))
+        }
+    }
+    fn elapsed_ms(&self, end: &Self) -> std::result::Result<f32, cuda_core::DriverError> {
+        match (&self.0, &end.0) {
+            (Some(start), Some(end)) => start.elapsed_ms(end),
+            _ => Ok(0.0),
+        }
+    }
 }
 
 struct Output {
@@ -811,19 +966,8 @@ impl FusedRetryAttempt {
         let candidates = Buffer::zeroed(runtime.pool.clone(), 1)?;
         let overflow = Buffer::zeroed(runtime.pool.clone(), 1)?;
         let metadata = unsafe { Buffer::uninitialized(runtime.pool.clone(), 1)? };
-        let dependencies = unsafe { Buffer::uninitialized(runtime.pool.clone(), statuses.len())? };
-        let initialize = runtime.kernels.prepare_initialize_pointer(config(1, 0))?;
-        for (index, status) in statuses.iter().enumerate() {
-            unsafe {
-                runtime.kernels.initialize_pointer(
-                    runtime.stream(),
-                    &initialize,
-                    dependencies.ptr(),
-                    index,
-                    status.ptr() as u64,
-                )?;
-            }
-        }
+        let dependencies =
+            runtime.upload_descriptors(statuses.iter().map(|status| status.ptr() as u64))?;
         Ok(Self {
             output,
             keys,
@@ -927,7 +1071,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
                 column.push(value);
             }
         }
-        let start = self.runtime.stream().record_event(timing_flags())?;
+        let start = TimingEvent::record(self.runtime.stream())?;
         let columns = host
             .iter()
             .map(|values| {
@@ -1043,7 +1187,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
                 "membership key outside schema",
             ));
         }
-        let start = self.runtime.stream().record_event(timing_flags())?;
+        let start = TimingEvent::record(self.runtime.stream())?;
         let bounds = unsafe { Buffer::uninitialized(self.runtime.pool.clone(), 2)? };
         let domain = source.bounds[key_column];
         let domain_words = domain.cardinality().div_ceil(64);
@@ -1190,7 +1334,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
             ));
         }
         let runtime = self.runtime;
-        let start = runtime.stream().record_event(timing_flags())?;
+        let start = TimingEvent::record(runtime.stream())?;
         let decoded = source
             .columns
             .iter()
@@ -1214,7 +1358,14 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
                     .unwrap()
             })
             .collect();
-        let count = Scratch::<u32>::zeroed_in(runtime.pool.resource(), runtime.stream(), 1)?;
+        let count = unsafe {
+            rccl_memory::DeviceUninitBuffer::<u32, _>::new_in(
+                runtime.pool.resource(),
+                runtime.stream(),
+                1,
+            )?
+            .assume_init()
+        };
         let launch = runtime.kernels.prepare_count_u32(config(1, 0))?;
         unsafe {
             runtime.kernels.count_u32(
@@ -1225,19 +1376,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
             )?;
         }
         let hashed_keys = if key_column.is_none() {
-            let slots = unsafe { Buffer::<u64>::uninitialized(runtime.pool.clone(), keys.len())? };
-            let launch = runtime.kernels.prepare_initialize_pointer(config(1, 0))?;
-            for (index, &key) in keys.iter().enumerate() {
-                unsafe {
-                    runtime.kernels.initialize_pointer(
-                        runtime.stream(),
-                        &launch,
-                        slots.ptr(),
-                        index,
-                        key as u64,
-                    )?;
-                }
-            }
+            let slots = runtime.upload_descriptors(keys.iter().map(|&key| key as u64))?;
             let hashes =
                 unsafe { Buffer::<i64>::uninitialized(runtime.pool.clone(), source.capacity)? };
             let launch = runtime
@@ -1277,7 +1416,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
                     Bounds::Inclusive { min, max } => (min, max),
                 })
                 .collect();
-            Run::build_prefix(
+            Run::build_prefix_stream_ordered(
                 runtime.context(),
                 runtime.stream(),
                 runtime.pool.resource(),
@@ -1304,27 +1443,16 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
             )
         }
         .map_err(|e| failure("CQ_GPU_RUN_BUILD", e.to_string()))?;
-        let pointers = unsafe { Buffer::uninitialized(runtime.pool.clone(), columns.len())? };
-        let launch = runtime.kernels.prepare_initialize_pointer(config(1, 0))?;
         let mut payload = 0;
-        for index in 0..columns.len() {
-            let pointer = if Some(index) == key_column {
+        let pointers = runtime.upload_descriptors((0..columns.len()).map(|index| {
+            if Some(index) == key_column {
                 run.keys.cu_deviceptr()
             } else {
                 let value = run.payloads[payload].cu_deviceptr();
                 payload += 1;
                 value
-            };
-            unsafe {
-                runtime.kernels.initialize_pointer(
-                    runtime.stream(),
-                    &launch,
-                    pointers.ptr(),
-                    index,
-                    pointer,
-                )?;
             }
-        }
+        }))?;
         let launch = runtime.kernels.prepare_run_status(config(1, 0))?;
         let status = runtime.metadata(0)?;
         unsafe {
@@ -1368,7 +1496,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
                 })
                 .collect::<Result<Vec<_>>>()?;
         let runtime = self.runtime;
-        let start = runtime.stream().record_event(timing_flags())?;
+        let start = TimingEvent::record(runtime.stream())?;
         let output = allocate_output(runtime, columns.len(), rows)?;
         let counts = Scratch::<u32>::zeroed_in(
             runtime.pool.resource(),
@@ -1411,7 +1539,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         F: FnMut(&CudaStream, OutputView) -> Result<()>,
     {
         check_rows(capacity)?;
-        let start = self.runtime.stream().record_event(timing_flags())?;
+        let start = TimingEvent::record(self.runtime.stream())?;
         let output = allocate_output(self.runtime, bounds.len(), capacity)?;
         launch(self.runtime.stream(), output.view())?;
         let table = self.complete_output(output, bounds.to_vec())?;
@@ -1425,12 +1553,15 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
     /// candidate must be counted even after writes exceed capacity. The second
     /// attempt allocates exactly that total with fresh count/error metadata;
     /// no partial rows are copied. Canonicalization belongs after this policy.
+    /// Successful candidate counts seed the next call at this hole/site/width.
+    /// The validated count bounds retained table work without shrinking buffers.
     ///
     /// Each attempt downloads one 16-byte summary of its count/error and all
     /// retained dependency statuses, never rows. Dependency errors, other
     /// output errors, and any second-attempt error/count change are terminal.
     pub fn execute_retry<F>(
         &mut self,
+        site: &'static str,
         bounds: &[Bounds],
         initial_capacity: usize,
         mut launch: F,
@@ -1440,22 +1571,15 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
     {
         check_rows(initial_capacity)?;
         let runtime = self.runtime;
-        let start = runtime.stream().record_event(timing_flags())?;
+        let key = fused_retry::Key::current(site, bounds.len());
+        let initial_capacity = runtime
+            .materialization_history
+            .borrow()
+            .capacity(key, initial_capacity);
+        let start = TimingEvent::record(runtime.stream())?;
         let statuses = self.output_statuses();
         let dependencies =
-            unsafe { Buffer::<u64>::uninitialized(runtime.pool.clone(), statuses.len())? };
-        let initialize = runtime.kernels.prepare_initialize_pointer(config(1, 0))?;
-        for (index, status) in statuses.iter().enumerate() {
-            unsafe {
-                runtime.kernels.initialize_pointer(
-                    runtime.stream(),
-                    &initialize,
-                    dependencies.ptr(),
-                    index,
-                    status.ptr() as u64,
-                )?;
-            }
-        }
+            runtime.upload_descriptors(statuses.iter().map(|status| status.ptr() as u64))?;
         let metadata = unsafe { Buffer::<RetryMetadata>::uninitialized(runtime.pool.clone(), 1)? };
         let check = runtime.kernels.prepare_retry_metadata(config(1, 0))?;
         let read_metadata = |output: &Output| -> Result<RetryMetadata> {
@@ -1470,26 +1594,56 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
                 )?;
             }
             record_host_wait(true);
-            Ok(metadata.to_host()?[0])
+            RETRY_READBACKS.with(|count| count.set(count.get().saturating_add(1)));
+            let summary = metadata.to_host()?[0];
+            runtime.reclaim_descriptors();
+            Ok(summary)
         };
 
+        let initial_capacity = runtime
+            .retry_budget()?
+            .materialization_capacity(bounds.len(), initial_capacity)?;
         let mut output = allocate_output(runtime, bounds.len(), initial_capacity)?;
         launch(runtime.stream(), output.view())?;
-        if let Some(capacity) = retry_capacity(read_metadata(&output)?, initial_capacity, None)? {
+        let mut summary = read_metadata(&output)?;
+        if let Some(capacity) = retry_capacity(summary, initial_capacity, None)? {
             drop(output);
+            let budget = runtime.retry_budget()?;
+            if budget.materialization_capacity(bounds.len(), capacity)? != capacity {
+                return Err(failure(
+                    "CQ_GPU_RETRY_RESOURCE",
+                    format!(
+                        "exact bounded output cannot fit: width={}, rows={capacity}, budget_bytes={}, reserved_headroom={}",
+                        bounds.len(),
+                        budget.materialization_bytes,
+                        budget.headroom,
+                    ),
+                ));
+            }
             output = allocate_output(runtime, bounds.len(), capacity)?;
             launch(runtime.stream(), output.view())?;
-            retry_capacity(read_metadata(&output)?, capacity, Some(capacity as u64))?;
+            summary = read_metadata(&output)?;
+            retry_capacity(summary, capacity, Some(capacity as u64))?;
         }
-        let table = self.retain_output(output, bounds.to_vec(), statuses)?;
+        // The successful readback has already proved this count fits storage.
+        // Keep owning the allocation, but never launch downstream work over slack.
+        output.capacity = summary.rows as usize;
+        // The synchronized summary checked every immutable ancestor status.
+        // They cannot fail later; retaining them would only recheck old work.
+        let table = self.retain_output(output, bounds.to_vec(), Vec::new())?;
         self.record_timing(TimingStage::Kernel, start)?;
+        runtime
+            .materialization_history
+            .borrow_mut()
+            .success(key, summary.rows);
         Ok(self.add_table(table))
     }
     /// Run pure bounded exact admission with at most twelve fresh attempts.
     ///
     /// Estimates persist in Runtime per `(fused_retry_scope label, site, width)`.
-    /// Initial capacity is `max(1024, 2 * last_successful_distinct + hint)` (just
-    /// `max(1024, hint)` before the first success), capped by u32 and the budget.
+    /// Initial capacity is `max(1024, 2 * last_nonempty_distinct + hint)` (just
+    /// `max(1024, hint)` before a nonempty success), capped by u32 and the budget.
+    /// Empty successful calls retain the estimate but report their actual zero.
     /// Overflow proposes four times completed arena occupancy, bounded by the
     /// immutable candidate total, u32, available VRAM and the pool allowance.
     /// Candidate totals may exceed u32; distinct output may not.
@@ -1503,8 +1657,8 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
     /// count across attempts; failure to grow or exhausting the bound is terminal.
     /// Successful output is retained without another deduplication pass.
     ///
-    /// Report CUDA events bracket the callback, including its frontier reset
-    /// and output compaction, excluding allocation and metadata/control work.
+    /// With `timings`, report CUDA events bracket the callback, including its
+    /// frontier reset and compaction, excluding allocation and metadata work.
     pub fn execute_retry_fused<F>(
         &mut self,
         site: &'static str,
@@ -1518,13 +1672,13 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         let runtime = self.runtime;
         let key = fused_retry::Key::current(site, bounds.len());
         let (call, mut target) = runtime.fused_retries.borrow_mut().begin(key, capacity_hint);
-        let start = runtime.stream().record_event(timing_flags())?;
+        let start = TimingEvent::record(runtime.stream())?;
         let statuses = self.output_statuses();
         let check = runtime.kernels.prepare_fused_retry_metadata(config(1, 0))?;
         let mut previous_capacity = None;
         let mut expected_candidates = None;
         for attempt_number in 1..=fused_retry::MAX_ATTEMPTS {
-            let budget = runtime.fused_retry_budget()?;
+            let budget = runtime.retry_budget()?;
             let capacity =
                 budget.capacity(bounds.len(), statuses.len(), target, previous_capacity)?;
             let bytes = fused_retry::attempt_bytes(bounds.len(), capacity, statuses.len())?;
@@ -1533,13 +1687,13 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
                     "{key:?}, attempt={attempt_number}, capacity={capacity}, requested_bytes={}, pooled_bytes={}, budget_bytes={}: {error}",
                     bytes.requested, bytes.pooled, budget.bytes,
                 )))?;
-            let launch_start = runtime.stream().record_event(timing_flags())?;
+            let launch_start = TimingEvent::record(runtime.stream())?;
             runtime
                 .fused_retries
                 .borrow_mut()
                 .launch(key, call, capacity, bytes.requested);
             let launch_result = launch(runtime.stream(), attempt.output.view(), attempt.view());
-            let launch_end = runtime.stream().record_event(timing_flags())
+            let launch_end = TimingEvent::record(runtime.stream())
                 .map_err(|error| -> Error {
                     match &launch_result {
                         Ok(()) => Box::new(error),
@@ -1549,7 +1703,9 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
                     }
                 })?;
             if let Err(error) = launch_result {
-                record_host_wait(false);
+                if launch_start.0.is_some() {
+                    record_host_wait(false);
+                }
                 let kernel_ms = launch_start.elapsed_ms(&launch_end)
                     .map_err(|timing_error| failure("CQ_GPU_FUSED_RETRY_TIMING", format!(
                         "callback failed: {error}; timing its discarded work also failed: {timing_error}",
@@ -1574,6 +1730,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
             record_host_wait(true);
             FUSED_RETRY_READBACKS.with(|count| count.set(count.get().saturating_add(1)));
             let summary = attempt.metadata.to_host()?[0];
+            runtime.reclaim_descriptors();
             let kernel_ms = launch_start.elapsed_ms(&launch_end)? as f64;
             #[cfg(feature = "dedup-diagnostics")]
             eprintln!(
@@ -1607,8 +1764,10 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
                     expected_candidates = Some(summary.candidates);
                 }
                 Ok(None) => {
-                    let table = match self.retain_output(attempt.output, bounds.to_vec(), statuses)
-                    {
+                    let mut output = attempt.output;
+                    output.capacity = summary.rows as usize;
+                    // This successful synchronized summary discharged ancestors.
+                    let table = match self.retain_output(output, bounds.to_vec(), Vec::new()) {
                         Ok(table) => table,
                         Err(error) => {
                             runtime
@@ -1718,7 +1877,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         check_rows(initial_capacity)?;
         let width = bounds.len();
         let runtime = self.runtime;
-        let start = runtime.stream().record_event(timing_flags())?;
+        let start = TimingEvent::record(runtime.stream())?;
         let state = Buffer::<u64>::zeroed(runtime.pool.clone(), state_words)?;
         let control = Buffer::<u32>::zeroed(runtime.pool.clone(), 1)?;
         let resume = ResumeView {
@@ -1772,7 +1931,9 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
             launch(runtime.stream(), output.view(), resume, fused_view)?;
             record_host_wait(true);
             RESUME_READBACKS.with(|count| count.set(count.get().saturating_add(1)));
-            if control.to_host()?[0] == 0 {
+            let suspended = control.to_host()?[0] != 0;
+            runtime.reclaim_descriptors();
+            if !suspended {
                 break;
             }
             if fused {
@@ -1917,7 +2078,8 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         }
         statuses
     }
-    /// Retain an already validated output and its complete dependency history.
+    /// Retain output and its dependencies. Callers must validate before any
+    /// dependent read, or keep this table private until the round check succeeds.
     fn retain_output(
         &self,
         output: Output,
@@ -1951,7 +2113,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
             return Ok(table);
         }
         let runtime = self.runtime;
-        let start = runtime.stream().record_event(timing_flags())?;
+        let start = TimingEvent::record(runtime.stream())?;
         let width = source.columns.len();
         let words = width.max(1);
         let packed_len = words
@@ -2012,7 +2174,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         if table.columns.iter().all(|column| column.codec() == codec) {
             return Ok(source);
         }
-        let start = self.runtime.stream().record_event(timing_flags())?;
+        let start = TimingEvent::record(self.runtime.stream())?;
         let columns = table
             .columns
             .iter()
@@ -2082,8 +2244,11 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
     pub fn frontier(&self, slots: u32, descriptor_words: u32) -> Result<Frontier<'runtime>> {
         Frontier::new(self.runtime, slots, descriptor_words)
     }
-    fn record_timing(&mut self, stage: TimingStage, start: cuda_core::CudaEvent) -> Result<()> {
-        let end = self.runtime.stream().record_event(timing_flags())?;
+    fn record_timing(&mut self, stage: TimingStage, start: TimingEvent) -> Result<()> {
+        if start.0.is_none() {
+            return Ok(());
+        }
+        let end = TimingEvent::record(self.runtime.stream())?;
         self.pending_timings
             .push(PendingTiming { stage, start, end });
         Ok(())
@@ -2093,6 +2258,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
     pub fn finish(&mut self) -> Result<Timings> {
         record_host_wait(false);
         self.runtime.stream().synchronize()?;
+        self.runtime.reclaim_descriptors();
         self.runtime
             .pending_timings
             .borrow_mut()
@@ -2120,6 +2286,7 @@ pub struct Frontier<'runtime> {
     runtime: &'runtime Runtime,
     pool: Buffer<u32>,
     counters: Buffer<u64>,
+    reset_once: Cell<bool>,
     slots: u32,
     descriptor_words: u32,
 }
@@ -2132,7 +2299,8 @@ impl<'runtime> Frontier<'runtime> {
         Ok(Self {
             runtime,
             pool: Buffer::zeroed(runtime.pool.clone(), words)?,
-            counters: Buffer::zeroed(runtime.pool.clone(), 2)?,
+            counters: runtime.upload_descriptors([0u64; 2].into_iter())?,
+            reset_once: Cell::new(false),
             slots,
             descriptor_words,
         })
@@ -2150,26 +2318,21 @@ impl<'runtime> Frontier<'runtime> {
         if self.slots == 0 {
             return Ok(());
         }
-        unsafe {
-            cuda_core::memory::memset_d8_async(
-                self.pool.ptr() as u64,
-                0,
-                self.pool.len() * 4,
-                self.runtime.stream().cu_stream(),
-            )?;
+        if self.reset_once.replace(true) {
+            unsafe {
+                cuda_core::memory::memset_d8_async(
+                    self.pool.ptr() as u64,
+                    0,
+                    self.pool.bytes(),
+                    self.runtime.stream().cu_stream(),
+                )?;
+            }
         }
-        let launch = self
-            .runtime
-            .kernels
-            .prepare_frontier_initialize(config(1, 0))?;
-        unsafe {
-            self.runtime.kernels.frontier_initialize(
-                self.runtime.stream(),
-                &launch,
-                self.view(),
-                root_tiles,
-            )?;
-        }
+        self.runtime.descriptor_staging.borrow_mut().upload(
+            self.runtime,
+            &self.counters,
+            [0, root_tiles].into_iter(),
+        )?;
         Ok(())
     }
 }
@@ -2282,9 +2445,6 @@ fn check_rows(rows: usize) -> Result<()> {
         Ok(())
     }
 }
-fn timing_flags() -> Option<cuda_core::sys::CUevent_flags> {
-    Some(cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT)
-}
 fn config(rows: usize, shared: u32) -> LaunchConfig1D {
     LaunchConfig1D::new(rows.div_ceil(256).clamp(1, 568) as u32, 256, shared)
 }
@@ -2292,19 +2452,7 @@ fn allocate_output(runtime: &Runtime, width: usize, capacity: usize) -> Result<O
     let columns = (0..width)
         .map(|_| unsafe { Buffer::uninitialized(runtime.pool.clone(), capacity) })
         .collect::<Result<Vec<_>>>()?;
-    let pointers = unsafe { Buffer::uninitialized(runtime.pool.clone(), width)? };
-    let launch = runtime.kernels.prepare_initialize_pointer(config(1, 0))?;
-    for (index, column) in columns.iter().enumerate() {
-        unsafe {
-            runtime.kernels.initialize_pointer(
-                runtime.stream(),
-                &launch,
-                pointers.ptr(),
-                index,
-                column.ptr() as u64,
-            )?;
-        }
-    }
+    let pointers = runtime.upload_descriptors(columns.iter().map(|column| column.ptr() as u64))?;
     Ok(Output {
         columns,
         pointers,
@@ -2374,6 +2522,19 @@ mod frozen_tests {
 #[cfg(test)]
 mod retry_tests {
     use super::{Result, RetryMetadata, RuntimeError, compacting_capacity, retry_capacity};
+
+    #[test]
+    fn failed_staging_growth_keeps_previous_uploads_pending() {
+        let mut staging = super::DescriptorStaging::default();
+        assert!(!staging.pending());
+        staging.used = 1;
+        assert!(staging.pending());
+        staging.chunk = 1;
+        staging.used = 0;
+        assert!(staging.pending());
+        staging.rewind();
+        assert!(!staging.pending());
+    }
 
     #[test]
     fn compaction_reserves_every_item_of_a_pending_append() {

@@ -107,6 +107,8 @@ fn compile_with_profile(module: &structures::Program, profile: bool) -> syn::Res
 /// Prepare row sources and recorded storage for a checked Structures program.
 /// Alternative emitters can share index construction without staging rows in
 /// a second buffer. `analysis` must be the contract result for `module`.
+/// Opted-in host-set facts are certified eagerly over complete declared rows
+/// before any prepared operator can rely on their uniqueness.
 pub fn sources<'a>(
     module: &'a structures::Program,
     analysis: &'a structures::Analysis,
@@ -180,6 +182,7 @@ fn sources_profile<'a>(
         active_prefixes: BTreeMap::new(),
         consumer: None,
     };
+    printer.certify_host_sets(module);
     if profile {
         printer.enable_profile(module);
     }

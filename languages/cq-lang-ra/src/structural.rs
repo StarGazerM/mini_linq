@@ -923,6 +923,15 @@ impl Schedule {
         target: &Self,
         required_reductions: &[(usize, usize)],
     ) -> Result<(), String> {
+        self.check_reductions(target, required_reductions)?;
+        compare(self, target)
+    }
+
+    fn check_reductions(
+        &self,
+        target: &Self,
+        required_reductions: &[(usize, usize)],
+    ) -> Result<(), String> {
         let required: HashSet<_> = required_reductions.iter().copied().collect();
         let (source_regions, target_regions) = (self.regions(), target.regions());
         let mut edges = HashMap::new();
@@ -970,7 +979,36 @@ impl Schedule {
                 ));
             }
         }
-        compare(self, target)
+        Ok(())
+    }
+
+    /// Check a pure target through inverse dead-expansion set identities.
+    ///
+    /// This focused fallback expands supplied semijoins only when independent
+    /// demand on the expanded program proves every added column unobservable.
+    /// It then uses the unchanged structural comparison. It never elaborates
+    /// or chooses a source plan, and required reductions must already hold on
+    /// the original target, not merely on the expanded proof witness.
+    /// Independently projected witness wiring in either original schedule
+    /// remains outside this fallback, even if expansion would hide the split.
+    pub fn check_dead_expansions(
+        &self,
+        target: &Program,
+        required_reductions: &[(usize, usize)],
+    ) -> Result<(), String> {
+        let schedule = Self::from_program(target).map_err(|error| error.to_string())?;
+        self.check_reductions(&schedule, required_reductions)?;
+        // A newly exposed full read must not retroactively identify distinct
+        // projected witnesses from the supplied source or target. Their
+        // original wiring remains an obligation, not an optimization detail.
+        if self.split_views() || schedule.split_views() {
+            return Err("projection correlations require the original witness wiring".into());
+        }
+        if reductions::check_expanded(self, target) {
+            Ok(())
+        } else {
+            Err("target has no checked dead-expansion witness for the source schedule".into())
+        }
     }
 }
 

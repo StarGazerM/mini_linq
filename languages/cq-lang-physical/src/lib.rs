@@ -64,6 +64,7 @@ pub mod kw {
     syn::custom_keyword!(any);
     syn::custom_keyword!(all);
     syn::custom_keyword!(fused);
+    syn::custom_keyword!(host_set);
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -80,6 +81,9 @@ pub struct Body {
     #[parse(cq_syntax::parse_declarations)]
     #[to_tokens(|tokens, declarations| quote::TokenStreamExt::append_all(tokens, declarations))]
     pub declarations: Vec<cq_syntax::RelationDecl>,
+    #[parse(parse_host_sets)]
+    #[to_tokens(|tokens, facts| quote::TokenStreamExt::append_all(tokens, facts))]
+    pub host_sets: Vec<HostSet>,
     #[syn(repeat, until = Token![return])]
     pub definitions: Vec<Definition>,
     pub return_token: Token![return],
@@ -90,6 +94,30 @@ pub struct Body {
     pub return_semi: Token![;],
 }
 
+/// A checked full-heading host uniqueness fact. Printers must certify the
+/// actual input before executing any plan that relies on this fact.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct HostSet {
+    pub host_set_token: kw::host_set,
+    pub relation: Ident,
+    pub semi_token: Token![;],
+}
+
+impl Body {
+    pub fn host_is_set(&self, relation: &Ident) -> bool {
+        self.host_sets
+            .iter()
+            .any(|fact| symbol_name(&fact.relation) == symbol_name(relation))
+    }
+}
+
+fn parse_host_sets(input: syn::parse::ParseStream<'_>) -> syn::Result<Vec<HostSet>> {
+    let mut facts = Vec::new();
+    while input.peek(kw::host_set) {
+        facts.push(input.parse()?);
+    }
+    Ok(facts)
+}
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Definition {
     pub name: Ident,
@@ -349,6 +377,26 @@ fn error<T>(spanned: &impl quote::ToTokens, message: impl std::fmt::Display) -> 
 fn analyze(module: &Program) -> syn::Result<Analysis> {
     let program = &module.program;
     let declarations = cq_syntax::check_input_declarations(&program.declarations)?;
+    let mut certified = BTreeSet::new();
+    for fact in &program.host_sets {
+        let name = symbol_name(&fact.relation);
+        if !certified.insert(name.clone()) {
+            return error(fact, format!("duplicate host_set fact for `{name}`"));
+        }
+        if !declarations.contains_key(&name)
+            || !program.definitions.iter().any(
+                |d| matches!(&d.operator, Operator::Rename(r) if symbol_name(&r.relation) == name),
+            )
+        {
+            return error(
+                fact,
+                format!("host_set `{name}` must name a used host relation"),
+            );
+        }
+        for column in &declarations[&name].columns {
+            cq_syntax::algebra::check_leibniz_type(&column.ty, &column.name)?;
+        }
+    }
     if let Some(output) = declarations.get(&symbol_name(&program.head.relation)) {
         output.check_result()?;
     }
@@ -1051,14 +1099,20 @@ fn check_leibniz(ty: &syn::Type, column: &str, at: &impl quote::ToTokens) -> syn
 }
 
 /// Inherit an already established uniqueness key through one operator.
+/// Formal rule PH-HostSet: A rename of a certified host set has its full heading as uniqueness key.
 /// Canonical boundaries are applied by the caller after this transfer.
 pub fn inherited_key(
     operator: &Operator,
     heading: &[String],
+    host_sets: &[HostSet],
     mut key: impl FnMut(&Ident) -> Option<Vec<String>>,
 ) -> Option<Vec<String>> {
     match operator {
-        Operator::Union(_) | Operator::Rename(_) => None,
+        Operator::Union(_) => None,
+        Operator::Rename(rename) => host_sets
+            .iter()
+            .any(|fact| symbol_name(&fact.relation) == symbol_name(&rename.relation))
+            .then(|| heading.to_vec()),
         Operator::Unit(_) => Some(Vec::new()),
         Operator::Probe(_, k) | Operator::Merge(_, k) => {
             key(&k.left).zip(key(&k.right)).map(|(mut left, right)| {

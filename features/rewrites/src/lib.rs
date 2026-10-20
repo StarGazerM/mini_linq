@@ -58,6 +58,7 @@
 //! |---|---|---|
 //! | `merge_joins` | `probe` becomes `merge` | Nonempty Ord key; each side is retained, a reusable host, or a merge stream ordered on that same key. Native ordered host reads still require `OrderedRead` from rustc. |
 //! | `canon_prefixes` | Adds `canon` on a projection | Drops columns without retaining an inferred uniqueness key; retained columns satisfy the language's Leibniz checks. Existing canonical boundaries remain. |
+//! | `host_sets(E, ...)` | Records `host_set E;` and removes canon implied by full-heading keys | Names used host relations. Every printer checks exact input distinctness before execution and fails on duplicates; this is not an unchecked promise. Dropping a key still needs canon. |
 //! | `smallest_intersections` | Hoists independent relational definitions and records `probe smallest` | The public Physical `binary_intersection` predicate accepts the probe/check pair, and every interposed definition can move before the probe without moving Rust or breaking dependencies. |
 //! | `lazy_semijoins` | `semi eager` becomes `semi lazy` | The right input is a reusable host and all readers sharing its key are lazy membership reads after the rewrite. Named selections must include every eager peer. |
 //! | `build_host_reads` | Reusable host rename becomes retained `let` | Has nonempty integral (`i32`/`i64`) keyed stream reads and no lazy membership reader. Keys and relational predicates are unchanged; selection records providers afterwards. Const-only point/range scans remain host scans. |
@@ -71,6 +72,9 @@
 //! positions with the same payloads. An interposed Rust node or a consumer of the
 //! candidate blocks the rewrite; an explicit named selection then reports an
 //! inadmissible result. Other passes preserve definition order.
+//! `smallest_intersections` currently has Set semantics. For future bag/K-relation
+//! semantics, discarding candidate multiplicity additionally requires the checked
+//! `host_set` fact (or a derived uniqueness key); bag gating is not implicit here.
 //!
 //! The generated generic-fine triangle and the corpus `fine_triangle` both get
 //! an active smallest choice. For example:
@@ -236,6 +240,7 @@ physical_rewrite!(canon_prefixes);
 physical_rewrite!(smallest_intersections);
 physical_rewrite!(lazy_semijoins);
 physical_rewrite!(build_host_reads);
+physical_rewrite!(host_sets);
 
 /// Change only the representation types matched by `selector => RustType`.
 #[proc_macro]

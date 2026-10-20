@@ -4,7 +4,7 @@
 //! Meaning is bottom + Set. Opaque partial Rust bind/guard nodes retain their
 //! ancestry chain; relational steps may move earlier, never later across them.
 //! I/O, mutation and evaluation counts are outside the denotation.
-//! Canonicality follows only from plan operators and explicit canon boundaries.
+//! Canonicality follows from plan operators, checked host_set facts, and canon boundaries.
 //!
 //! Relational equality is Leibniz identity, decided by admissible column `==`.
 //! Functional extensionality of shared-reference Rust inputs permits canonical
@@ -56,7 +56,7 @@ pub fn compile(source: &ix::Program) -> syn::Result<physical::Program> {
     let mut modes = modes(&operations, &reads);
     fuse_modes(&operations, &operators, &reads, &mut modes);
     let disjoint = ix::ra::disjoint_unions(&source.ra)?;
-    let unique = canonical(&info, &operations, &returned, &disjoint);
+    let unique = canonical(&info, &operations, &returned, &disjoint, &[]);
     let definitions = operations
         .iter()
         .zip(modes)
@@ -83,6 +83,7 @@ pub fn compile(source: &ix::Program) -> syn::Result<physical::Program> {
         brace: Default::default(),
         program: physical::Body {
             declarations: source.ra.plan.declarations.clone(),
+            host_sets: Vec::new(),
             definitions,
             return_token: Default::default(),
             return_canon: (!unique.contains(&symbol_name(&returned))
@@ -291,6 +292,7 @@ fn canonical(
     operations: &[(Ident, Op)],
     returned: &Ident,
     disjoint: &BTreeSet<String>,
+    host_sets: &[physical::HostSet],
 ) -> BTreeSet<String> {
     let mut unique: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut inherited = BTreeSet::new();
@@ -312,7 +314,10 @@ fn canonical(
             }
             Op::Anti(anti) => unique.get(&symbol_name(&anti.left)).cloned(),
             Op::Unit(_) => Some(Vec::new()),
-            Op::Rename(_) => None,
+            Op::Rename(rename) => host_sets
+                .iter()
+                .any(|fact| symbol_name(&fact.relation) == symbol_name(&rename.relation))
+                .then(|| heading.clone()),
             Op::NaturalJoin(j) => match (
                 unique.get(&symbol_name(&j.left)),
                 unique.get(&symbol_name(&j.right)),

@@ -1,4 +1,4 @@
-error: CQ_GPU_DATALOG_PIPELINE: missing required device pass cq_rewrites::sorted_runs
+error: CQ_GPU_NON_DEVICE_CANON: canon must explicitly record ::cq_gpu_runtime::DeviceSet<_>
   --> tests/ui/missing_device_pass.rs:3:5
    |
  3 | /     cq_gpu_datalog::datalog! {
@@ -10,4 +10,4 @@ error: CQ_GPU_DATALOG_PIPELINE: missing required device pass cq_rewrites::sorted
 10 | |     };
    | |_____^
    |
-   = note: this error originates in the macro `::cq_gpu_datalog::__scheduled` (in Nightly builds, run with -Z macro-backtrace for more info)
+   = note: this error originates in the macro `::cq_planners::order` (in Nightly builds, run with -Z macro-backtrace for more info)

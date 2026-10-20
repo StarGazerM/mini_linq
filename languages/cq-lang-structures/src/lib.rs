@@ -476,9 +476,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 }
                 concrete_type(&keyed.ty)?;
                 let columns = keyed.level_names();
-                if columns.is_empty()
-                    || (columns.len() > 1 && columns.iter().any(Vec::is_empty))
-                {
+                if columns.is_empty() || (columns.len() > 1 && columns.iter().any(Vec::is_empty)) {
                     return error(keyed, "host fallback requires nonempty key levels");
                 }
                 let mut read_columns = columns.concat();
@@ -527,10 +525,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 }
                 if analysis
                     .fallbacks
-                    .insert(
-                        (name.clone(), reader_name, read_columns),
-                        keyed.ty.clone(),
-                    )
+                    .insert((name.clone(), reader_name, read_columns), keyed.ty.clone())
                     .is_some()
                 {
                     return error(entry, "duplicate host fallback");
@@ -882,9 +877,10 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 format!("result `{name}` has no heading"),
             );
         };
-        let key = physical::inherited_key(op, &heading, |id| {
-            analysis.unique.get(&symbol_name(id)).cloned()
-        });
+        let key =
+            physical::inherited_key(op, &heading, &program.physical.program.host_sets, |id| {
+                analysis.unique.get(&symbol_name(id)).cloned()
+            });
         let key = match key {
             Some(key) => Some(key),
             None if analysis.physical.canon.contains(&name) => Some(heading.clone()),
@@ -977,7 +973,7 @@ mod repr;
 pub use repr::Witness;
 pub use repr::{Repr, ReprBase, representation_bases};
 mod share;
-pub use share::Share;
+pub use share::{Share, leveled_host_read};
 mod stage;
 
 mod filtered;

@@ -463,6 +463,301 @@ fn reduction_absorption_does_not_confuse_projected_aliases_with_full_key_support
     }
 }
 
+fn dead_nation_expansion(region_consumer: TokenStream, tail: TokenStream) -> ra::Program {
+    syn::parse2(quote! { relational {
+        relation Left(nation_key:i32); relation Nation(nation_key:i32,region_key:i32);
+        relation Region(region_key:i32);
+        left = rename Left@0 {nation_key -> nation_key};
+        nation = rename Nation@1 {nation_key -> nation_key,region_key -> region_key};
+        region = rename Region@2 {region_key -> region_key};
+        reduced_nation = semijoin nation with region;
+        witnessed = semijoin left with reduced_nation;
+        expanded = natural_join witnessed with reduced_nation;
+        supported = #region_consumer;
+        #tail
+    } })
+    .unwrap()
+}
+
+#[test]
+fn dead_expansion_eliminates_the_canonical_nation_region_chain() {
+    for consumer in [
+        quote!(semijoin expanded with region),
+        quote!(natural_join expanded with region),
+    ] {
+        let source = dead_nation_expansion(
+            consumer,
+            quote! {
+                result = project supported keep {nation_key};
+                output result as answer(nation_key);
+            },
+        );
+        // Default/Hypergraph reduction absorption is deliberately unchanged.
+        assert_eq!(cq_elaborate::simplify_reductions(&source).unwrap(), source);
+        let target = cq_elaborate::simplify_expansions(&source).unwrap();
+        ra::contract::check(&target).unwrap();
+        ra::check_rewrite(&source, &target).unwrap();
+        assert!(
+            !target
+                .plan
+                .definitions
+                .iter()
+                .any(|d| matches!(d.operator, ra::Operator::NaturalJoin(_))),
+            "unobservable Nation/Region expansion survives: {}",
+            target.to_token_stream()
+        );
+        assert_eq!(
+            target
+                .plan
+                .definitions
+                .iter()
+                .filter(|d| matches!(d.operator, ra::Operator::Semijoin(_)))
+                .count(),
+            2,
+            "only Nation's Region restriction and Left's Nation witness are needed"
+        );
+        assert_eq!(cq_elaborate::simplify_expansions(&target).unwrap(), target);
+        let query = cq(quote! {
+            struct Q; relation Left(nation_key:i32);
+            relation Nation(nation_key:i32,region_key:i32); relation Region(region_key:i32);
+            answer(nation_key) :- Left(nation_key), Nation(nation_key,region_key), Region(region_key);
+        });
+        for seed in 0..64 {
+            let database = databases::binary_database(&query, seed);
+            assert_eq!(
+                oracle::evaluate_ra(&target, &database).output,
+                oracle::evaluate_ra(&source, &database).output,
+                "seed {seed}"
+            );
+        }
+    }
+}
+
+#[test]
+fn dead_expansion_retains_observable_region_columns() {
+    let source = dead_nation_expansion(
+        quote!(semijoin expanded with region),
+        quote! {
+            result = project supported keep {nation_key,region_key};
+            output result as answer(nation_key,region_key);
+        },
+    );
+    let target = cq_elaborate::simplify_expansions(&source).unwrap();
+    ra::check_rewrite(&source, &target).unwrap();
+    assert!(
+        target
+            .plan
+            .definitions
+            .iter()
+            .any(|d| d.result == "expanded" && matches!(d.operator, ra::Operator::NaturalJoin(_)))
+    );
+    let mut forged = source.clone();
+    forged
+        .plan
+        .definitions
+        .iter_mut()
+        .find(|d| d.result == "expanded")
+        .unwrap()
+        .operator = syn::parse_quote!(semijoin witnessed with reduced_nation);
+    assert!(ra::contract::check(&forged).is_err());
+    assert!(ra::check_rewrite(&source, &forged).is_err());
+}
+
+#[test]
+fn dead_expansion_does_not_erase_an_opaque_region_observation() {
+    let source = dead_nation_expansion(
+        quote!(semijoin expanded with region),
+        quote! {
+            observed = guard supported if (10 / *region_key > 0);
+            result = project observed keep {nation_key};
+            output result as answer(nation_key);
+        },
+    );
+    let target = cq_elaborate::simplify_expansions(&source).unwrap();
+    ra::check_rewrite(&source, &target).unwrap();
+    assert!(
+        target
+            .plan
+            .definitions
+            .iter()
+            .any(|d| d.result == "expanded" && matches!(d.operator, ra::Operator::NaturalJoin(_)))
+    );
+    assert!(
+        target
+            .plan
+            .definitions
+            .iter()
+            .any(|d| matches!(d.operator, ra::Operator::Guard(_)))
+    );
+}
+
+#[test]
+fn dead_expansion_does_not_confuse_distinct_named_region_support() {
+    let source: ra::Program = syn::parse_quote! { relational {
+        relation Left(nation_key:i32); relation Nation(nation_key:i32,region_key:i32);
+        relation Region(region_key:i32);
+        left = rename Left@0 {nation_key -> nation_key};
+        nation = rename Nation@1 {nation_key -> nation_key,region_key -> region_key};
+        region = rename Region@2 {region_key -> region_key};
+        restricted_region = select region if (region_key > 0);
+        reduced_nation = semijoin nation with region;
+        witnessed = semijoin left with reduced_nation;
+        expanded = natural_join witnessed with reduced_nation;
+        supported = semijoin expanded with restricted_region;
+        result = project supported keep {nation_key};
+        output result as answer(nation_key);
+    }};
+    let target = cq_elaborate::simplify_expansions(&source).unwrap();
+    ra::check_rewrite(&source, &target).unwrap();
+    let database: oracle::Database = [
+        ("Left".into(), [vec![0]].into()),
+        ("Nation".into(), [vec![0, 0]].into()),
+        ("Region".into(), [vec![0], vec![1]].into()),
+    ]
+    .into();
+    assert!(oracle::evaluate_ra(&target, &database).output.is_empty());
+    let mut forged = source.clone();
+    forged
+        .plan
+        .definitions
+        .iter_mut()
+        .find(|d| d.result == "supported")
+        .unwrap()
+        .operator = syn::parse_quote!(project expanded keep {nation_key,region_key});
+    forged
+        .plan
+        .definitions
+        .retain(|d| d.result != "restricted_region");
+    ra::contract::check(&forged).unwrap();
+    assert!(ra::check_rewrite(&source, &forged).is_err());
+    assert!(!oracle::evaluate_ra(&forged, &database).output.is_empty());
+}
+
+#[test]
+fn dead_expansion_duplicate_rich_bags_agree_only_after_canon() {
+    use std::collections::{BTreeMap, BTreeSet};
+    type Row = BTreeMap<String, i32>;
+    // Deliberately retain duplicates at every operator: the shared set oracle
+    // cannot expose the multiplicity change which this optimization permits.
+    fn bag(program: &ra::Program, database: &BTreeMap<String, Vec<Vec<i32>>>) -> Vec<Vec<i32>> {
+        let mut values = BTreeMap::<String, Vec<Row>>::new();
+        for definition in &program.plan.definitions {
+            let rows = match &definition.operator {
+                ra::Operator::Rename(rename) => {
+                    let declaration = program
+                        .plan
+                        .declarations
+                        .iter()
+                        .find(|d| d.name == rename.relation)
+                        .unwrap();
+                    database[&rename.relation.to_string()]
+                        .iter()
+                        .map(|tuple| {
+                            rename
+                                .mapping
+                                .iter()
+                                .map(|m| {
+                                    let column = declaration
+                                        .columns
+                                        .iter()
+                                        .position(|c| c.name == m.source)
+                                        .unwrap();
+                                    (m.target.to_string(), tuple[column])
+                                })
+                                .collect()
+                        })
+                        .collect()
+                }
+                ra::Operator::NaturalJoin(join) => {
+                    let mut rows = Vec::new();
+                    for left in &values[&join.left.to_string()] {
+                        for right in &values[&join.right.to_string()] {
+                            if right
+                                .iter()
+                                .all(|(k, v)| left.get(k).is_none_or(|w| w == v))
+                            {
+                                let mut row = left.clone();
+                                row.extend(right.clone());
+                                rows.push(row);
+                            }
+                        }
+                    }
+                    rows
+                }
+                ra::Operator::Semijoin(join) => values[&join.left.to_string()]
+                    .iter()
+                    .filter(|left| {
+                        values[&join.right.to_string()].iter().any(|right| {
+                            right
+                                .iter()
+                                .all(|(k, v)| left.get(k).is_none_or(|w| w == v))
+                        })
+                    })
+                    .cloned()
+                    .collect(),
+                ra::Operator::Project(project) => values[&project.input.to_string()]
+                    .iter()
+                    .map(|row| {
+                        project
+                            .attributes
+                            .iter()
+                            .map(|k| (k.to_string(), row[&k.to_string()]))
+                            .collect()
+                    })
+                    .collect(),
+                _ => panic!("unexpected operator in dead-expansion bag fixture"),
+            };
+            values.insert(definition.result.to_string(), rows);
+        }
+        values[&program.plan.output.input.to_string()]
+            .iter()
+            .map(|row| {
+                program
+                    .plan
+                    .output
+                    .head
+                    .variables()
+                    .map(|k| row[&k.to_string()])
+                    .collect()
+            })
+            .collect()
+    }
+    let database = [
+        ("Left".into(), vec![vec![0], vec![0], vec![1], vec![2]]),
+        (
+            "Nation".into(),
+            vec![vec![0, 7], vec![0, 7], vec![0, 8], vec![1, 9]],
+        ),
+        ("Region".into(), vec![vec![7], vec![7], vec![8], vec![8]]),
+    ]
+    .into();
+    for consumer in [
+        quote!(semijoin expanded with region),
+        quote!(natural_join expanded with region),
+    ] {
+        let source = dead_nation_expansion(
+            consumer,
+            quote! {
+                result = project supported keep {nation_key};
+                output result as answer(nation_key);
+            },
+        );
+        let target = cq_elaborate::simplify_expansions(&source).unwrap();
+        ra::check_rewrite(&source, &target).unwrap();
+        let before = bag(&source, &database);
+        let after = bag(&target, &database);
+        assert!(
+            before.len() > after.len(),
+            "dead expansion must stop multiplying witnesses"
+        );
+        assert_eq!(after, vec![vec![0], vec![0]]);
+        assert_eq!(
+            before.into_iter().collect::<BTreeSet<_>>(),
+            after.into_iter().collect::<BTreeSet<_>>()
+        );
+    }
+}
+
 #[test]
 fn reduced_prefix_guards_keep_independent_support_witnesses() {
     let source = cq(quote! {

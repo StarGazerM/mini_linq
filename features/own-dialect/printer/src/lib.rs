@@ -5,6 +5,8 @@
 //! types are preserved. Nested loops push rows into a Vec endpoint; retained
 //! construction shares the recorded Build, FromIterator and Selection providers
 //! with pull. Positional pipes fetch survivors directly into their push sink.
+//! Opted-in host-set facts use pull's shared eager, exact full-row certificate;
+//! push never treats a declaration or a projected heading as a certificate.
 //!
 //! Queries denote `bottom + Set`, refining desugared written order. Opaque Rust
 //! binds and guards keep their chain and receive shared references. Host columns

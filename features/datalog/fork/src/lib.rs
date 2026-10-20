@@ -51,9 +51,10 @@ pub enum KeyRepresentation {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LayoutRealization {
     MaintainedGroupedHost,
-    /// Frozen full layouts are indexed before each stratum; changing layouts
-    /// retain their per-round resident projection/build realization.
+    /// Completed inputs are frozen for the consuming stratum.
     MaintainedFrozenDeviceIndex,
+    /// Changing keyed full layouts receive admitted deltas once per SCC round.
+    MaintainedLeveledDeviceIndex,
 }
 
 impl KeyRepresentation {
@@ -61,6 +62,12 @@ impl KeyRepresentation {
         match self {
             Self::HashSetBorrowed => LayoutRealization::MaintainedGroupedHost,
             Self::DeviceSetOwned => LayoutRealization::MaintainedFrozenDeviceIndex,
+        }
+    }
+    fn changing_layouts(self) -> LayoutRealization {
+        match self {
+            Self::HashSetBorrowed => LayoutRealization::MaintainedGroupedHost,
+            Self::DeviceSetOwned => LayoutRealization::MaintainedLeveledDeviceIndex,
         }
     }
 }
@@ -93,6 +100,8 @@ pub struct Stratum {
     /// Indices into `RoundContext::layouts`, built once before this stratum.
     /// Each names a keyed full read of an EDB or a completed lower stratum.
     pub frozen_layouts: Vec<usize>,
+    /// Keyed full reads of changing members, maintained for this SCC.
+    pub leveled_layouts: Vec<usize>,
     pub seeds: Vec<RuleHole>,
     pub steps: Vec<RuleHole>,
 }
@@ -103,6 +112,9 @@ pub struct RoundContext {
     /// Admission and negative-key policy selected by the checked schedule.
     pub representation: KeyRepresentation,
     pub layout_realization: LayoutRealization,
+    pub changing_layout_realization: LayoutRealization,
+    /// Explicit advice consumed by the device fork, never inferred by printers.
+    pub leveled_ratio: u32,
     pub relations: Vec<Relation>,
     pub layouts: Vec<Layout>,
     pub delta_layouts: Vec<Layout>,
@@ -322,6 +334,12 @@ fn parse_hole(tokens: TokenStream, representation: KeyRepresentation) -> syn::Re
 
 /// Lower variants and key projections, retaining the recorded schedule.
 pub fn compile(source: &Program) -> syn::Result<Fork> {
+    compile_with_ratio(source, 4)
+}
+
+/// Consume leveled capacity advice while preserving ordinary CPU lowering.
+pub fn compile_with_ratio(source: &Program, ratio: u32) -> syn::Result<Fork> {
+    ensure(ratio >= 2, source, "leveled device index ratio must be at least two")?;
     let analysis = contract::check(source)?;
     let variants = source
         .variants
@@ -332,6 +350,8 @@ pub fn compile(source: &Program) -> syn::Result<Fork> {
     let mut context = RoundContext {
         representation,
         layout_realization: representation.layouts(),
+        changing_layout_realization: representation.changing_layouts(),
+        leveled_ratio: ratio,
         relations: source
             .declarations
             .iter()
@@ -389,6 +409,7 @@ pub fn compile(source: &Program) -> syn::Result<Fork> {
             members: members.clone(),
             keys: Vec::new(),
             frozen_layouts: Vec::new(),
+            leveled_layouts: Vec::new(),
             seeds: Vec::new(),
             steps: Vec::new(),
         };
@@ -501,14 +522,18 @@ pub fn compile(source: &Program) -> syn::Result<Fork> {
         }
         if representation == KeyRepresentation::DeviceSetOwned {
             for (index, layout) in context.layouts.iter().enumerate() {
-                if layout.key != 0 && !members.contains(&layout.relation)
+                if layout.key != 0
                     && stratum.seeds.iter().chain(&stratum.steps).any(|rule| {
                         holes[rule.hole].query.body.iter().any(|item| {
                             matches!(item, BodyItem::Positive { atom } if atom.relation == layout.name)
                         })
                     })
                 {
-                    stratum.frozen_layouts.push(index);
+                    if members.contains(&layout.relation) {
+                        stratum.leveled_layouts.push(index);
+                    } else {
+                        stratum.frozen_layouts.push(index);
+                    }
                 }
             }
         }
@@ -532,10 +557,12 @@ pub fn check(source: &Program, target: &Fork) -> syn::Result<()> {
     let context = &target.context;
     ensure(
         context.representation == representation
-            && context.layout_realization == representation.layouts(),
+            && context.layout_realization == representation.layouts()
+            && context.changing_layout_realization == representation.changing_layouts(),
         source,
         "fork changed the recorded representation policy",
     )?;
+    ensure(context.leveled_ratio >= 2, source, "invalid leveled device index ratio")?;
     ensure(
         context.relations.len() == source.declarations.len()
             && context.strata.len() == analysis.components.len(),
@@ -616,6 +643,7 @@ pub fn check(source: &Program, target: &Fork) -> syn::Result<()> {
         let mut projections = Vec::new();
         let mut used_keys = BTreeSet::new();
         let mut frozen_layouts = BTreeSet::new();
+        let mut leveled_layouts = BTreeSet::new();
         for key in &stratum.keys {
             add_name(&key.name)?;
             ensure(
@@ -775,8 +803,12 @@ pub fn check(source: &Program, target: &Fork) -> syn::Result<()> {
                                 .enumerate()
                                 .find(|(_, layout)| layout.name == atom.relation)
                             {
-                                if layout.key != 0 && !members.contains(&layout.relation) {
-                                    frozen_layouts.insert(index);
+                                if layout.key != 0 {
+                                    if members.contains(&layout.relation) {
+                                        leveled_layouts.insert(index);
+                                    } else {
+                                        frozen_layouts.insert(index);
+                                    }
                                 }
                             }
                         }
@@ -822,6 +854,11 @@ pub fn check(source: &Program, target: &Fork) -> syn::Result<()> {
             stratum.frozen_layouts.iter().copied().eq(frozen_layouts),
             source,
             "fork frozen device indexes must exactly cover keyed EDB/lower-stratum layouts in layout order",
+        )?;
+        ensure(
+            stratum.leveled_layouts.iter().copied().eq(leveled_layouts),
+            source,
+            "fork leveled device indexes must exactly cover changing keyed full layouts in layout order",
         )?;
         ensure(
             used_keys.len() == stratum.keys.len(),

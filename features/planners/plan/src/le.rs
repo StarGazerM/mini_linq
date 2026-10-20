@@ -1,5 +1,7 @@
 //! Lookup/expand is an authored VO schedule, not a new algebra operator.
 //! Expansions are coarse: exactly one full correlated row after each lookup.
+//! CK-Le checks this authored schedule before checked RA simplification may
+//! erase an expansion's unobservable columns under canonical answer semantics.
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{cq, vo};
@@ -38,15 +40,13 @@ pub(super) fn check(normal: &cq::Program, target: &vo::Program) -> syn::Result<(
                     );
                     written.extend(columns);
                 }
-                cq::BodyItem::Let(_) | cq::BodyItem::For(_) => {
-                    written.extend(
-                        item.rust_step()
-                            .expect("Rust binding")
-                            .bindings
-                            .iter()
-                            .map(symbol_name),
-                    )
-                }
+                cq::BodyItem::Let(_) | cq::BodyItem::For(_) => written.extend(
+                    item.rust_step()
+                        .expect("Rust binding")
+                        .bindings
+                        .iter()
+                        .map(symbol_name),
+                ),
                 cq::BodyItem::Block(block) => {
                     written.extend(block.analyze(&written).interface.into_keys())
                 }

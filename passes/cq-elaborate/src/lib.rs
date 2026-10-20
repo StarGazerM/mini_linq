@@ -206,8 +206,25 @@ pub fn simplify_reductions(source: &ra::Program) -> syn::Result<ra::Program> {
     reductions::simplify(source)
 }
 
+/// Eliminate expansions already witnessed by an earlier named-result lookup.
+///
+/// In positive relational scopes, an expansion whose introduced columns have
+/// no observer is replaced by a semijoin. Under canon this preserves answers,
+/// not intermediate bag multiplicities. Exact named-result lineage can then
+/// remove a semijoin whose support is already witnessed by its left input.
+/// This explicit pass is used by LE, not by the default or Hypergraph pipeline.
+///
+/// The identity does not cross Rust, negative, or block boundaries. Only
+/// definitions made unreachable by checked identities are pruned. Each local
+/// rewrite is checked with [`ra::check_rewrite`].
+pub fn simplify_expansions(source: &ra::Program) -> syn::Result<ra::Program> {
+    reductions::eliminate_expansions(source.clone())
+}
+
 /// The RA definitions refine the supplied VO schedule, retaining its Rust
 /// chain and preceding relational constraints.
+/// Pure targets may use checked inverse dead expansions under canonicalization
+/// to establish a primary witness, without recompiling or selecting a plan.
 /// Formal rule CK-Elaborate: Check contracts, clause occurrences, named reductions, constraints, Rust chain and Before.
 pub fn check(source: &valuation::Program, target: &ra::Program) -> syn::Result<()> {
     let analysis = valuation::contract::check(source)?;
@@ -230,7 +247,7 @@ pub fn check(source: &valuation::Program, target: &ra::Program) -> syn::Result<(
             ),
         ));
     }
-    structural::check(source, &analysis, &target_schedule).map_err(|message| {
+    structural::check(source, &analysis, &target_schedule, target).map_err(|message| {
         syn::Error::new_spanned(
             &target.plan.output,
             format!("result `{}`: {message}", target.plan.output.input),

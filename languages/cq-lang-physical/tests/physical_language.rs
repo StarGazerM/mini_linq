@@ -215,7 +215,7 @@ fn generator_bind_round_trip_checks_and_key_transfer() {
         source
     );
     let op = &source.program.definitions[1].operator;
-    assert!(physical::inherited_key(op, &facts.headings["g"], |_| Some(Vec::new())).is_none());
+    assert!(physical::inherited_key(op, &facts.headings["g"], &[], |_| Some(Vec::new())).is_none());
     for replacement in [
         "bind u with for x = ([*x])",
         "bind absent with for x = ([1])",
@@ -233,6 +233,7 @@ fn generator_bind_round_trip_checks_and_key_transfer() {
         physical::inherited_key(
             &scalar.program.definitions[1].operator,
             &["x".into()],
+            &[],
             |_| Some(Vec::new())
         ),
         Some(Vec::new())

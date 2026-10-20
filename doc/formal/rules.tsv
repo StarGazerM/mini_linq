@@ -35,6 +35,8 @@ WF-IX	implementation	languages/cq-lang-ix/src/lib.rs	/// Formal rule WF-IX:	Chec
 WF-Physical	implementation	languages/cq-lang-physical/src/lib.rs	/// Formal rule WF-Physical:	Derive local headings and reads, then check output, reachability and modes.
 PH-Pipe	implementation	languages/cq-lang-physical/src/lib.rs	/// Formal rule PH-Pipe:	Require one stream read for a derived pipe; noncanonical host renames are reusable.
 PH-Let	implementation	languages/cq-lang-physical/src/lib.rs	/// Formal rule PH-Let:	Require every let to be read.
+PH-HostSet	implementation	languages/cq-lang-physical/src/lib.rs	/// Formal rule PH-HostSet:	A rename of a certified host set has its full heading as uniqueness key.
+IF-HostSet	implementation	passes/cq-print/src/lib.rs	    /// Formal rule IF-HostSet:	Certify exact full-row host distinctness before query execution; duplicate inputs fail with a named error.
 STR-Key	implementation	languages/cq-lang-structures/src/lib.rs	/// Formal rule STR-Key:	Answer reads by reusable host dispatch or a built level prefix.
 STR-Range	implementation	languages/cq-lang-structures/src/lib.rs	// Formal rule STR-Range:	Const/range reads have direct or scan/filter implementations and never justify a build.
 STR-Merge	implementation	languages/cq-lang-structures/src/lib.rs	/// Formal rule STR-Merge:	Require a direct ordered host read, built entry, or same-key merge pipe.
@@ -159,13 +161,17 @@ INC-Supp	abstract	-	-	Planned; support commutes with total positive contexts; pa
 STR-Maintain	abstract	-	-	Planned; exact-once ordered insertion and merges that never cross protected cuts preserve Runs abstraction.
 CQ-Diff	abstract	-	-	Planned; multilinear expansion uses supplied increments, not subtraction on Boolean or Natural streams.
 DL-InsertNew	implementation	features/datalog/bridge/src/render.rs	/// Formal rule DL-InsertNew:	Datalog-owned canonical all-column insertion produces fresh deltas and updates each selected host layout.
+DL-RunPartition	abstract	-	-	Exact-once admission deltas partition complete permuted rows into disjoint immutable runs.
+STR-RunRead	abstract	-	-	Keyed lookup distributes as bag union over disjoint runs; membership distributes as disjunction.
+STR-RunCompact	abstract	-	-	Sorted compaction of adjacent runs preserves the full multiset, including multiplicity.
+STR-RunSnapshot	abstract	-	-	Publish before readers; enqueue insertion, compaction and buffer retirement after all prior readers.
 DL-Strata	implementation	features/datalog/language/src/lib.rs	/// Formal rule DL-Strata:	Checked signed dependencies and exact ordered SCCs freeze lower-stratum negative inputs.
 DL-Delta	implementation	features/datalog/language/src/lib.rs	/// Formal rule DL-Delta:	Checked variants erase to source rules and cover every changing positive position exactly once.
 STR-Repr	implementation	languages/cq-lang-structures/src/repr.rs	// STR-Repr:	Check per-result representation lineage and owned-column coverage; storage forward simulation remains a semantic premise.
 ST-Total	implementation	languages/cq-lang-structures/src/stage.rs	// ST-Total:	Derive total stage steps without crossing opaque Rust or cursor-producing probe and merge operators.
 ST-Stage	implementation	languages/cq-lang-structures/src/stage.rs	// ST-Stage:	Require an indexable for producer, positive batch size and a boundary before partial evaluation.
 BK-Dual	abstract	-	-	Fold and unfold realize one stream algebra; lawful early stop preserves answers and may only remove panics.
-ST-Share	implementation	languages/cq-lang-structures/src/share.rs	// ST-Share:	Couple an eager semi and later same-key probe over an earlier immutable payload build or integral PrefixRun prefix.
+ST-Share	implementation	languages/cq-lang-structures/src/share.rs	// ST-Share:	Couple an eager semi and later same-key probe over an earlier immutable payload build, integral PrefixRun prefix, or identical immutable leveled snapshot layout.
 STR-Witness	implementation	languages/cq-lang-structures/src/repr.rs	// STR-Witness:	Check the non-column cursor carrier and reject every path escaping before its force probe.
 ST-Expand	implementation	languages/cq-lang-structures/src/stage.rs	// ST-Expand:	Admit total segmented flattening of exact SortedRun, PrefixRun, and resident sorted ranges from a for producer without crossing partial steps.
 STR-SortedRun	implementation	runtime/cq-storage/src/sorted_run.rs	/// Formal rule STR-SortedRun:	Stable clustered runs preserve the occurrence bag and within-key order; exact directory lookup selects the matching range.

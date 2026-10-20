@@ -508,6 +508,47 @@ fn le_retail_and_block_schedule_fixtures() {
 }
 
 #[test]
+fn le_h05_plan_b_keeps_nation_as_an_existential_lookup() {
+    let source: cq::Program = syn::parse_quote! {
+        struct H05B;
+        relation Customer(c_custkey:i64,c_nationkey:i64);
+        relation Orders(o_orderkey:i64,o_custkey:i64,o_orderdate:i64);
+        relation Lineitem(l_orderkey:i64,l_suppkey:i64);
+        relation Supplier(s_suppkey:i64,s_nationkey:i64);
+        relation Nation(n_nationkey:i64,n_regionkey:i64);
+        relation Region(r_regionkey:i64,r_name:String);
+        answer(order_key,supplier_key,nation_key) :-
+            Customer(customer_key,nation_key), Nation(nation_key,region_key),
+            Region(region_key,"ASIA"), Orders(order_key,customer_key,order_date),
+            #[total] if *order_date >= 8766 && *order_date < 9131,
+            Lineitem(order_key,supplier_key), Supplier(supplier_key,nation_key);
+    };
+    let valuation = compile_valuation(&source, Planner::Le).unwrap();
+    let target = compile(&source, Planner::Le).unwrap();
+    check_valuation(&source, &valuation, Planner::Le).unwrap();
+    cq_elaborate::check(&valuation, &target).unwrap();
+    check(&source, &target).unwrap();
+    let analysis = ra::contract::check(&target).unwrap();
+    assert!(!target.plan.definitions.iter().any(|definition| {
+        matches!(&definition.operator, ra::Operator::NaturalJoin(join)
+            if analysis[&join.right.to_string()].heading.contains("region_key"))
+    }));
+    assert_eq!(
+        target
+            .plan
+            .definitions
+            .iter()
+            .filter(|definition| {
+                matches!(&definition.operator, ra::Operator::Semijoin(join)
+                if analysis[&join.right.to_string()].heading.contains("__cq_2_1"))
+            })
+            .count(),
+        1,
+        "Region is checked only while reducing Nation, not in the Customer stream",
+    );
+}
+
+#[test]
 fn le_checks_lookup_expansion_and_rust_before_independently() {
     let source: cq::Program = syn::parse_quote! {
         struct Q; relation R(a:i32); relation S(a:i32,b:i32); relation T(a:i32,c:i32);

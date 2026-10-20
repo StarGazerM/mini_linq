@@ -73,9 +73,12 @@ pub fn canon_prefixes(source: &ir::Program, arguments: TokenStream) -> syn::Resu
     for definition in &mut target.program.definitions {
         let name = symbol_name(&definition.name);
         let heading = facts.headings[&name].clone();
-        let inherited = ir::inherited_key(&definition.operator, &heading, |id| {
-            unique.get(&symbol_name(id)).cloned()
-        });
+        let inherited = ir::inherited_key(
+            &definition.operator,
+            &heading,
+            &target.program.host_sets,
+            |id| unique.get(&symbol_name(id)).cloned(),
+        );
         if selected.includes(&definition.name) {
             if let Operator::Project(p) = &definition.operator {
                 if heading.len() < facts.headings[&symbol_name(&p.input)].len() {
@@ -108,6 +111,9 @@ pub fn canon_prefixes(source: &ir::Program, arguments: TokenStream) -> syn::Resu
 /// Expose binary intersections by hoisting independent relational definitions
 /// before their candidate probe, then record smallest. Rust nodes stay pinned.
 /// Admissibility and correspondence belong to the public language checks.
+/// In bag semantics, choosing a membership intersection also requires checked
+/// host_set facts (or derived keys) on candidate sources: multiplicities cannot
+/// be discarded. This language currently denotes Set; K-relation gating is separate.
 pub fn smallest_intersections(
     source: &ir::Program,
     arguments: TokenStream,
@@ -264,6 +270,55 @@ pub fn build_host_reads(source: &ir::Program, arguments: TokenStream) -> syn::Re
         matched.insert(name);
     }
     selected.require_matches(&matched)?;
+    ir::check_rewrite(source, &target)?;
+    Ok(target)
+}
+
+/// Record checked full-heading host sets, then remove only canon boundaries
+/// already implied by the resulting keys. Arguments name host relations.
+pub fn host_sets(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
+    use syn::parse::Parser;
+    let relations = syn::punctuated::Punctuated::<syn::Ident, syn::Token![,]>::parse_terminated
+        .parse2(arguments)?;
+    if relations.is_empty() {
+        return Err(syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "host_sets requires host relation names",
+        ));
+    }
+    let facts = ir::contract::check(source)?;
+    let mut target = source.clone();
+    for relation in relations {
+        if !target.program.host_is_set(&relation) {
+            target.program.host_sets.push(ir::HostSet {
+                host_set_token: Default::default(),
+                relation,
+                semi_token: Default::default(),
+            });
+        }
+    }
+    ir::contract::check(&target)?;
+    let mut keys = BTreeMap::<String, Vec<String>>::new();
+    for definition in &mut target.program.definitions {
+        let name = symbol_name(&definition.name);
+        let heading = &facts.headings[&name];
+        let inherited = ir::inherited_key(
+            &definition.operator,
+            heading,
+            &target.program.host_sets,
+            |id| keys.get(&symbol_name(id)).cloned(),
+        );
+        if inherited.is_some() {
+            definition.canon = None;
+        }
+        if let Some(key) = inherited.or_else(|| definition.canon.is_some().then(|| heading.clone()))
+        {
+            keys.insert(name, key);
+        }
+    }
+    if keys.contains_key(&symbol_name(&target.program.returned)) {
+        target.program.return_canon = None;
+    }
     ir::check_rewrite(source, &target)?;
     Ok(target)
 }

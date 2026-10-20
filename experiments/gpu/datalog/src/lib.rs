@@ -64,7 +64,7 @@ pub fn __collect_hole(input: TokenStream) -> TokenStream {
     .into()
 }
 
-/// Keep explicitly certified frozen inputs as host reads; build all other
+/// Keep explicitly certified frozen/leveled inputs as host reads; build all other
 /// eligible keyed inputs using the ordinary checked physical rewrite.
 fn build_reads_excluding(
     source: &cq_lang_physical::Program,
@@ -193,7 +193,7 @@ fn checked_holes(fork: &Fork) -> syn::Result<Vec<cq_lang_structures::Program>> {
                         .chain(&stratum.steps)
                         .any(|rule| rule.hole == hole_index)
                 })
-                .flat_map(|stratum| &stratum.frozen_layouts)
+                .flat_map(|stratum| stratum.frozen_layouts.iter().chain(&stratum.leveled_layouts))
                 .map(|&index| fork.context.layouts[index].name.clone())
                 .collect();
             let planned = cq_planners_plan::compile(hole, cq_planners_plan::Planner::Le)?;
@@ -216,6 +216,7 @@ fn frozen_runs(
             let mut demands: BTreeMap<usize, BTreeSet<Vec<usize>>> = stratum
                 .frozen_layouts
                 .iter()
+                .chain(&stratum.leveled_layouts)
                 .map(|&index| (index, BTreeSet::new()))
                 .collect();
             for rule in stratum.seeds.iter().chain(&stratum.steps) {
@@ -301,7 +302,8 @@ fn start_holes(source: &cq_lang_datalog::Program, advice: routing::Advice) -> sy
             "CQ_GPU_DATALOG_POLICY: requires device_set_all_columns/device_set_owned; CPU HashSet schedules cannot be reinterpreted",
         ));
     }
-    let mut fork = cq_datalog_fork::compile(source)?;
+    let leveled_ratio = advice.leveled_ratio;
+    let mut fork = cq_datalog_fork::compile_with_ratio(source, leveled_ratio)?;
     let pipelines = routing::resolve(source, &fork, advice)?;
     let names = routing::context_names(&mut fork.context, None);
     let mut pending = Vec::new();
@@ -318,7 +320,7 @@ fn start_holes(source: &cq_lang_datalog::Program, advice: routing::Advice) -> sy
                     .chain(&stratum.steps)
                     .any(|rule| rule.hole == hole_index)
             })
-            .flat_map(|stratum| &stratum.frozen_layouts)
+            .flat_map(|stratum| stratum.frozen_layouts.iter().chain(&stratum.leveled_layouts))
             .map(|&index| &fork.context.layouts[index].name)
             .collect::<Vec<_>>();
         let mut passes = config.surface.clone();
@@ -340,6 +342,7 @@ fn start_holes(source: &cq_lang_datalog::Program, advice: routing::Advice) -> sy
     pending.reverse();
     advance(routing::State {
         source: source.clone(),
+        leveled_ratio,
         names,
         pipelines,
         collected: Vec::new(),
@@ -354,7 +357,7 @@ fn advance(mut state: routing::State) -> syn::Result<Tokens> {
         )?);
         return pending.prefix.start(pending.source);
     }
-    let mut fork = cq_datalog_fork::compile(&state.source)?;
+    let mut fork = cq_datalog_fork::compile_with_ratio(&state.source, state.leveled_ratio)?;
     if state.collected.len() != fork.holes.len() || state.pipelines.len() != fork.holes.len() {
         return Err(syn::Error::new_spanned(
             &state.source,
@@ -509,6 +512,7 @@ fn render(
         .enumerate()
         .map(|(hole_index, hole)| -> syn::Result<Tokens> {
             let mut frozen = Vec::new();
+            let mut leveled = Vec::new();
             for (scc, stratum) in context.strata.iter().enumerate() {
                 if !stratum
                     .seeds
@@ -525,7 +529,11 @@ fn render(
                     }
                     for run in runs {
                         let levels = run.iter().map(|level| quote!([#(#level),*]));
-                        frozen.push(quote!(#name => [#(#levels),*]));
+                        if stratum.leveled_layouts.contains(&index) {
+                            leveled.push(quote!(#name => [#(#levels),*]));
+                        } else {
+                            frozen.push(quote!(#name => [#(#levels),*]));
+                        }
                     }
                 }
             }
@@ -551,7 +559,10 @@ fn render(
             print.arguments = quote!(completion(round),
                 datalog_dictionary(#dictionary), datalog_pool(#pool), datalog_keys(#(#keys),*),
                 #supplied);
-            let mut passes = vec![syn::parse2(quote!(::cq_gpu::frozen_hosts(#(#frozen),*)))?];
+            let mut passes = vec![
+                syn::parse2(quote!(::cq_gpu::frozen_hosts(#(#frozen),*)))?,
+                syn::parse2(quote!(::cq_gpu::leveled_hosts(#(#leveled),*)))?,
+            ];
             passes.extend(config.structures.clone());
             passes.push(
                 config
@@ -599,6 +610,31 @@ fn render(
                 };
             }
         });
+        let leveled = stratum.leveled_layouts.iter().map(|&index| {
+            let layout = &context.layouts[index];
+            let relation = &context.relations[layout.relation];
+            let host = &layout.host;
+            let columns = &layout.columns;
+            let types = columns.iter().map(|&i| &relation.declaration.columns[i].ty);
+            let runs = &index_runs[scc][&index];
+            let ratio = context.leveled_ratio;
+            let run_tokens = runs.iter().map(|run| {
+                let levels = run.iter().map(|level| quote!(&[#(#level),*] as &[usize]));
+                quote!(&[#(#levels),*] as &[&[usize]])
+            });
+            let certificate = syn::LitStr::new(&format!(
+                "layout {} relation {} columns {:?} key {} realization {:?} lifetime scc {} ratio {} levels {:?}",
+                layout.name, relation.declaration.name, columns, layout.key,
+                context.changing_layout_realization, scc, ratio, runs,
+            ), proc_macro2::Span::call_site());
+            quote! {
+                let mut #host: ::cq_gpu_runtime::LeveledDeviceIndex<'_, '_, (#(#types,)*), ::cq_gpu_runtime::Plain> = {
+                    const __CQ_DATALOG_LEVELED_LAYOUT_IR: &str = #certificate;
+                    ::cq_gpu_runtime::LeveledDeviceIndex::new(
+                        __cq_datalog_runtime, &[#(#run_tokens),*], #ratio)?
+                };
+            }
+        });
         let keys = stratum.keys.iter().map(|key| {
             let name = &key.name;
             let hole = &holes[key.hole];
@@ -633,7 +669,9 @@ fn render(
             );
             let queries: Tokens = rules.iter()
                 .map(|rule| fork.holes[rule.hole].query.to_token_stream()).collect();
-            let snapshots = snapshots(context, queries, &stratum.frozen_layouts);
+            let maintained = stratum.frozen_layouts.iter().chain(&stratum.leveled_layouts)
+                .copied().collect::<Vec<_>>();
+            let snapshots = snapshots(context, queries, &maintained);
             let candidates = stratum.members.iter().map(|&index| {
                 let relation = &context.relations[index];
                 let next = &relation.next;
@@ -672,6 +710,24 @@ fn render(
                 let next = &relation.next;
                 quote!(#state = #next;)
             });
+            let insert = stratum.leveled_layouts.iter().map(|&index| {
+                let layout = &context.layouts[index];
+                let relation = &context.relations[layout.relation];
+                let state = &relation.seen;
+                let host = &layout.host;
+                let columns = &layout.columns;
+                let types = columns.iter().map(|&i| &relation.declaration.columns[i].ty);
+                quote! {
+                    {
+                        let delta = #state.delta();
+                        let mut execution = __cq_datalog_runtime.execution();
+                        let input = execution.bind_columns(delta)?;
+                        let projected: ::cq_gpu_runtime::DeviceColumns<'_, (#(#types,)*), ::cq_gpu_runtime::Plain> =
+                            execution.into_columns(input, &[#(#columns),*])?;
+                        #host.insert(&projected, __cq_checked.rows(delta)? as u64)?;
+                    }
+                }
+            });
             quote! {{
                 let _cq_round = ::cq_gpu_runtime::nvtx::range(#round_label);
                 let mut __cq_status = ::cq_gpu_runtime::datalog::RoundStatus::new(#anchor_state.full().pool().clone());
@@ -681,6 +737,7 @@ fn render(
                 let __cq_checked = __cq_status.check().expect("GPU Datalog convergence failed");
                 #(#finish)*
                 #(#publish)*
+                #(#insert)*
                 __cq_checked.any()
             }}
         };
@@ -693,6 +750,7 @@ fn render(
                 #key_snapshots
                 #(#keys)*
                 #(#frozen)*
+                #(#leveled)*
                 let mut __cq_continue = #seed;
                 while __cq_continue {
                     __cq_continue = #step;
@@ -775,7 +833,7 @@ mod tests {
     fn expand(input: Tokens) -> syn::Result<Tokens> {
         let input: routing::Input = syn::parse2(input)?;
         let source = schedule_pass::compile(&input.source, input.schedule.arguments)?;
-        let fork = cq_datalog_fork::compile(&source)?;
+        let fork = cq_datalog_fork::compile_with_ratio(&source, input.advice.leveled_ratio)?;
         let pipelines = routing::resolve(&source, &fork, input.advice)?;
         let checked = checked_holes(&fork)?;
         render(&source, fork, checked, pipelines)
@@ -855,9 +913,16 @@ mod tests {
         ))
         .unwrap_err();
         assert!(error.to_string().contains("ambiguous duplicate"));
-        let error = expand(quote!(hole(rule 1, delta 0) pipeline { structures = []; } #source))
-            .unwrap_err();
-        assert!(error.to_string().contains("missing required device pass"));
+        // An explicitly empty Structures queue is routed as written. Whether
+        // its IR is device-realizable belongs to the selected consuming printer.
+        let emitted = expand(quote!(
+            hole(rule 1, delta 0) pipeline { structures = []; }
+            #source
+        ))
+        .unwrap()
+        .to_string();
+        assert_eq!(emitted.matches("cq_gpu :: prefix_runs").count(), 1);
+        assert_eq!(emitted.matches("cq_rewrites :: expand_lookups").count(), 1);
     }
 
     #[test]
@@ -956,6 +1021,31 @@ mod tests {
         assert!(emitted.contains("RoundStatus"));
         assert!(!emitted.contains("to_host"));
         assert_eq!(emitted.matches("retype (dedup =>").count(), 2);
+    }
+
+    #[test]
+    fn changing_keyed_layouts_are_maintained_once_after_admission() {
+        let emitted = expand(quote! {
+            leveled_ratio(8);
+            struct Closure;
+            relation Edge(x:i64,y:i64) = (edges);
+            relation Reach(x:i64,y:i64);
+            output Reach;
+            Reach(*x,*y) :- Edge(x,y);
+            Reach(*x,*z) :- Reach(x,y), Reach(y,z);
+        }).unwrap().to_string();
+        assert!(emitted.contains("MaintainedLeveledDeviceIndex lifetime scc 0 ratio 8"));
+        assert_eq!(emitted.matches("LeveledDeviceIndex :: new").count(), 1);
+        assert!(emitted.contains("cq_gpu :: leveled_hosts"));
+        assert!(emitted.find("LeveledDeviceIndex :: new").unwrap()
+            < emitted.find("while __cq_continue").unwrap());
+        assert!(emitted.find(". check").unwrap() < emitted.find(". insert").unwrap());
+        assert!(emitted.contains("__cq_checked . rows (delta)"));
+        assert!(!emitted.contains("checked_len"));
+        for ratio in [quote!(leveled_ratio(0);), quote!(leveled_ratio(1);)] {
+            let source = program();
+            assert!(expand(quote!(#ratio #source)).is_err());
+        }
     }
 
     #[test]

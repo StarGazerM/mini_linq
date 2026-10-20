@@ -15,7 +15,8 @@ pub(crate) struct MaintainedSet {
 impl MaintainedSet {
     pub(crate) fn new(runtime: &Runtime, width: usize, rows: usize) -> Result<Self> {
         let capacity = Self::set_capacity(rows)?;
-        let words = capacity.checked_mul(width)
+        let words = capacity
+            .checked_mul(width)
             .ok_or_else(|| failure("CQ_GPU_SET_CAPACITY", "persistent key size overflow"))?;
         Ok(Self {
             keys: unsafe { Buffer::uninitialized(runtime.pool.clone(), words)? },
@@ -28,7 +29,9 @@ impl MaintainedSet {
     }
 
     fn set_capacity(rows: usize) -> Result<usize> {
-        rows.max(1).checked_mul(2).and_then(usize::checked_next_power_of_two)
+        rows.max(1)
+            .checked_mul(2)
+            .and_then(usize::checked_next_power_of_two)
             .ok_or_else(|| failure("CQ_GPU_SET_CAPACITY", "persistent set capacity overflow"))
     }
 
@@ -38,15 +41,25 @@ impl MaintainedSet {
             return Ok(());
         }
         let _nvtx = nvtx::range(c"admission/rehash");
-        let words = capacity.checked_mul(self.width)
+        let words = capacity
+            .checked_mul(self.width)
             .ok_or_else(|| failure("CQ_GPU_SET_CAPACITY", "persistent key size overflow"))?;
         let keys = unsafe { Buffer::uninitialized(runtime.pool.clone(), words)? };
         let slots = Buffer::zeroed(runtime.pool.clone(), capacity)?;
-        let launch = runtime.kernels.prepare_persistent_rehash(config(self.slots.len(), 0))?;
+        let launch = runtime
+            .kernels
+            .prepare_persistent_rehash(config(self.slots.len(), 0))?;
         unsafe {
             runtime.kernels.persistent_rehash(
-                runtime.stream(), &launch, self.keys.ptr(), self.slots.ptr(), self.slots.len(),
-                keys.ptr(), slots.ptr(), capacity, self.width,
+                runtime.stream(),
+                &launch,
+                self.keys.ptr(),
+                self.slots.ptr(),
+                self.slots.len(),
+                keys.ptr(),
+                slots.ptr(),
+                capacity,
+                self.width,
             )?;
         }
         self.keys = keys;
@@ -55,13 +68,26 @@ impl MaintainedSet {
     }
 
     pub(crate) fn insert(
-        &self, runtime: &Runtime, input: &Table, output: OutputView, emit: bool,
+        &self,
+        runtime: &Runtime,
+        input: &Table,
+        output: OutputView,
+        emit: bool,
     ) -> Result<()> {
-        let launch = runtime.kernels.prepare_persistent_admit(config(input.capacity, 0))?;
+        let launch = runtime
+            .kernels
+            .prepare_persistent_admit(config(input.capacity, 0))?;
         unsafe {
             runtime.kernels.persistent_admit(
-                runtime.stream(), &launch, input.view(), self.width,
-                self.keys.ptr(), self.slots.ptr(), self.slots.len(), output, emit,
+                runtime.stream(),
+                &launch,
+                input.view(),
+                self.width,
+                self.keys.ptr(),
+                self.slots.ptr(),
+                self.slots.len(),
+                output,
+                emit,
             )?;
         }
         Ok(())
@@ -70,18 +96,31 @@ impl MaintainedSet {
     /// Reserve from the checked distinct count, not the candidate upper bound.
     /// Existing prefixes are copied only when doubling or detaching a branch.
     pub(crate) fn append(
-        &mut self, runtime: &Runtime, previous: &Table, delta: &Table, rows: usize, added: usize,
+        &mut self,
+        runtime: &Runtime,
+        previous: &Table,
+        delta: &Table,
+        rows: usize,
+        added: usize,
     ) -> Result<()> {
         let _nvtx = nvtx::range(c"admission/append-tail");
         if self.pointers.is_none() || rows > self.capacity {
             let _growth = nvtx::range(c"admission/full-grow");
-            let capacity = rows.max(1).checked_next_power_of_two()
-                .ok_or_else(|| failure("CQ_GPU_OUTPUT_ROWS", "persistent full capacity overflow"))?;
+            let capacity = rows.max(1).checked_next_power_of_two().ok_or_else(|| {
+                failure("CQ_GPU_OUTPUT_ROWS", "persistent full capacity overflow")
+            })?;
             let output = allocate_output(runtime, self.width, capacity)?;
-            let launch = runtime.kernels.prepare_persistent_copy(config(previous.capacity, 0))?;
+            let launch = runtime
+                .kernels
+                .prepare_persistent_copy(config(previous.capacity, 0))?;
             unsafe {
                 runtime.kernels.persistent_copy(
-                    runtime.stream(), &launch, previous.view(), self.width, output.view(), 0,
+                    runtime.stream(),
+                    &launch,
+                    previous.view(),
+                    self.width,
+                    output.view(),
+                    0,
                 )?;
             }
             self.columns = output.columns.into_iter().map(Arc::new).collect();
@@ -98,7 +137,12 @@ impl MaintainedSet {
             };
             unsafe {
                 runtime.kernels.persistent_copy(
-                    runtime.stream(), &launch, delta.view(), self.width, output, (rows - added) as u64,
+                    runtime.stream(),
+                    &launch,
+                    delta.view(),
+                    self.width,
+                    output,
+                    (rows - added) as u64,
                 )?;
             }
         }
@@ -106,15 +150,24 @@ impl MaintainedSet {
     }
 
     pub(crate) fn snapshot(
-        &self, runtime: &Runtime, offset: usize, rows: usize,
-        metadata: Arc<Buffer<OutputCount>>, bounds: Vec<Bounds>,
+        &self,
+        runtime: &Runtime,
+        offset: usize,
+        rows: usize,
+        metadata: Arc<Buffer<OutputCount>>,
+        bounds: Vec<Bounds>,
     ) -> Result<Table> {
-        let columns = self.columns.iter().zip(&bounds).map(|(column, &bound)| {
-            // The writer only appends beyond all published prefixes. Range
-            // metadata is version-local and is never advanced by later appends.
-            let range = unsafe { Buffer::shared_slice(column.clone(), offset, rows)? };
-            EncodedColumn::from_plain_buffer(range, metadata.clone(), 0, bound).map(Arc::new)
-        }).collect::<Result<Vec<_>>>()?;
+        let columns = self
+            .columns
+            .iter()
+            .zip(&bounds)
+            .map(|(column, &bound)| {
+                // The writer only appends beyond all published prefixes. Range
+                // metadata is version-local and is never advanced by later appends.
+                let range = unsafe { Buffer::shared_slice(column.clone(), offset, rows)? };
+                EncodedColumn::from_plain_buffer(range, metadata.clone(), 0, bound).map(Arc::new)
+            })
+            .collect::<Result<Vec<_>>>()?;
         Ok(Table {
             views: runtime.column_views(&columns)?,
             columns,
@@ -171,7 +224,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         }
         check_rows(capacity)?;
         let runtime = self.runtime;
-        let start = runtime.stream().record_event(timing_flags())?;
+        let start = TimingEvent::record(runtime.stream())?;
         let output = allocate_output(runtime, width, capacity)?;
         for &input in inputs {
             let table = self.table(input)?;
@@ -226,7 +279,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         let projected = self.table(projected)?;
         let width = source.columns.len();
         let runtime = self.runtime;
-        let start = runtime.stream().record_event(timing_flags())?;
+        let start = TimingEvent::record(runtime.stream())?;
         let output = allocate_output(runtime, width, source.capacity)?;
         let exclude = runtime
             .kernels
@@ -274,7 +327,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
             .and_then(usize::checked_next_power_of_two)
             .ok_or_else(|| failure("CQ_GPU_SET_CAPACITY", "exact set capacity overflow"))?;
         let runtime = self.runtime;
-        let start = runtime.stream().record_event(timing_flags())?;
+        let start = TimingEvent::record(runtime.stream())?;
         let packed = unsafe { Buffer::uninitialized(runtime.pool.clone(), packed_len)? };
         let slots = unsafe { Buffer::uninitialized(runtime.pool.clone(), capacity)? };
         let output = allocate_output(runtime, 0, 0)?;
@@ -362,39 +415,52 @@ pub(crate) fn checked_tables(runtime: &Runtime, tables: &[Table]) -> Result<usiz
         })
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(crate) struct StatusInput {
+    pub(crate) status: *const OutputCount,
+    pub(crate) capacity: u64,
+}
+unsafe impl DeviceCopy for StatusInput {}
+
 /// One error slot and one count/status slot per member, downloaded together.
 pub(crate) fn checked_table_rows(runtime: &Runtime, tables: &[Table]) -> Result<Vec<usize>> {
-    let summary = Buffer::<OutputCount>::zeroed(runtime.pool.clone(), tables.len() + 1)?;
-    let launch = runtime.kernels.prepare_fold_status(config(1, 0))?;
+    let summary =
+        unsafe { Buffer::<OutputCount>::uninitialized(runtime.pool.clone(), tables.len() + 1)? };
+    let mut inputs = Vec::with_capacity(tables.len());
     let mut seen = std::collections::HashSet::new();
-    for (index, table) in tables.iter().enumerate() {
+    for table in tables {
+        inputs.push(StatusInput {
+            status: table.metadata.ptr(),
+            capacity: table.capacity as u64,
+        });
+        seen.insert(Arc::as_ptr(&table.metadata));
+    }
+    for table in tables {
         for status in &table.statuses {
             if seen.insert(Arc::as_ptr(status)) {
-                unsafe {
-                    runtime.kernels.fold_status(
-                        runtime.stream(),
-                        &launch,
-                        status.ptr(),
-                        u64::MAX,
-                        false,
-                        summary.ptr(),
-                    )?;
-                }
+                inputs.push(StatusInput {
+                    status: status.ptr(),
+                    capacity: u64::MAX,
+                });
             }
         }
-        unsafe {
-            runtime.kernels.fold_status(
-                runtime.stream(),
-                &launch,
-                table.metadata.ptr(),
-                table.capacity as u64,
-                true,
-                summary.ptr().add(index + 1),
-            )?;
-        }
+    }
+    let inputs = runtime.upload_descriptors(inputs.into_iter())?;
+    let launch = runtime.kernels.prepare_gather_status(config(1, 0))?;
+    unsafe {
+        runtime.kernels.gather_status(
+            runtime.stream(),
+            &launch,
+            inputs.ptr(),
+            tables.len(),
+            inputs.len(),
+            summary.ptr(),
+        )?;
     }
     record_host_wait(true);
     let statuses = summary.to_host()?;
+    runtime.reclaim_descriptors();
     runtime.collect_timings()?;
     statuses
         .into_iter()

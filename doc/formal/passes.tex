@@ -373,6 +373,20 @@ match by occurrence footprint, fallback siblings in order, negated references by
 original branch. \emph{Refinement:} occurrences, constraints and Rust chain are
 those of the source with relational facts no later, so by the premises the
 target refines the source.
+For pure positive targets produced by \code{simplify_expansions},
+CK-Elaborate also permits an inverse dead-expansion certificate. Starting
+only from the supplied RA target, it tentatively replaces a semijoin by a
+natural join. Independent demand analysis of that \emph{expanded source}
+must prove all added columns unobservable, including newly created implicit
+downstream join keys. The ordinary structural comparison then checks the
+resulting equivalent witness against the supplied VO schedule. Required
+named reductions are still checked on the \emph{original target}; inverse
+expansion cannot invent their edges or column matches. This certificate
+does not recompile the VO, select a planner, or merge equality facts from
+independent existential supports. A split projected-witness view in either
+original schedule excludes this fallback: exposing a full read cannot erase
+its original correlation obligations. Rust, negative and block programs
+retain their existing checker.
 
 \paragraph{Independent dimension branches.}
 \textsc{S-JoinBranch} chooses the atom with the most shared equality-class
@@ -622,6 +636,22 @@ scan and filter without building; merge requires \code{OrderedRead}. Rows borrow
 host and built fields; computed columns and lookup keys are owned; canonicality
 never follows from a host type.
 
+\paragraph{Host-set certificates.}
+\begin{mathpar}
+\Rule{IF-HostSet}{\code{host\_set R}\in t\quad
+ \mathsf{exactDistinct}(\mathsf{fullRows}(R))=true}
+ {\mathsf{certify}(R)\Downarrow\ok}
+\end{mathpar}
+Before any operator relies on \textsc{PH-HostSet}, the printer checks the
+entire input heading, not a query projection. Duplicate rows fail the query
+with an error naming the relation; hash collisions are resolved by exact
+tuple equality, never by fingerprints alone. CPU printers share eager
+full-row certification. The GPU printer emits an exact device certificate:
+adjacent comparison simultaneously checks lexicographic sortedness and
+duplicates; unsorted input uses an exact row-index hash table. Only a
+successful certificate permits query execution. This obligation is absent
+without the opt-in fact and leaves the default CPU path unchanged.
+
 \paragraph{Opaque generator realization.}
 Write $I_r$ for the input row stream and $\mathsf{extend}_p(\rho,v)$ for
 destructuring item $v$ and extending the row with the fresh pattern columns.
@@ -730,7 +760,42 @@ $L'\bowtie(R\ltimes L)=L'\bowtie R$ only when the required shared columns of $L'
 are proven contained in $L$ by reduction lineage. Dead reduced copies are then
 removed; independent consumers that still need a reduction keep it alive.
 The rewrite is checked against the original RA and does not alter the reduction
-algorithm. Set
+algorithm.
+
+For LE's checked RA \code{simplify_expansions} pass, let $H_L,H_R$ be the
+source operand headings, $K=H_L\cap H_R$, and $D_s(r)$ the demanded columns of source result
+$r$. Under set canonicalization the additional local laws are
+\[
+ \pi_D(L\bowtie R)=\pi_D(L\ltimes R)\quad(D\subseteq H_L),
+ \qquad L\ltimes R=L\quad
+   \bigl(\pi_K L\subseteq\pi_K R\bigr).
+\]
+Thus a named expansion $r=L\bowtie R$ may become $L\ltimes R$ only when
+$D_s(r)\subseteq H_L$; with the same demand premise it may be bypassed when
+the support is already witnessed. A redundant semijoin may likewise be
+bypassed. These laws concern canonical results, not bag multiplicities or
+opaque Rust invocation counts.
+
+The certificate independently propagates demand backwards through the
+\emph{source} DAG: seed the output heading, retain projection attributes and
+selection variables, and require every natural-join and semijoin shared key
+even if its column is absent from the final output. Propagate these demands
+to each operand on its source heading. Merely checking that the target is
+well headed is insufficient: dropping a column can silently remove a later
+implicit join equality. Support containment requires the \emph{same named
+result} $R$ in $L$'s positive lineage, with every column of $K$ retained at
+each step. Lineage may follow projection, selection, either natural-join
+operand, or either semijoin operand: a semijoin guarantees an existential
+right witness, but only on keys retained along the complete path.
+
+The certificate replays these local laws, recomputing source demand after
+each proved step, and finally requires the exact proposed target. It
+substitutes proved aliases in every surviving operand and output and permits
+removal only of unreachable pure definitions. The new laws conservatively
+decline programs containing binds, guards, anti or union; opaque execution,
+negative originals and block ancestry are therefore unchanged. The general
+schedule contract is not weakened.
+Set
 \code{pipeline \{ plan = mini_linq::passes::plan(no_reduce); \}}
 to disable optional semijoins while retaining written order. Configuration
 passes this argument through its existing named planning invocation.

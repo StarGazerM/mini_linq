@@ -304,8 +304,82 @@ fn bind_value(
     Ok((symbol_name(&pattern.ident), value))
 }
 
-fn frozen_type(ty: &Type) -> bool {
-    qualified(ty, "cq_gpu_runtime", "FrozenDeviceIndex")
+fn leveled_type(ty: &Type) -> bool {
+    qualified(ty, "cq_gpu_runtime", "LeveledDeviceIndex")
+}
+fn resident_type(ty: &Type) -> bool {
+    qualified(ty, "cq_gpu_runtime", "FrozenDeviceIndex") || leveled_type(ty)
+}
+fn leveled_provider(facts: &ir::Analysis, name: &str, provider: usize) -> bool {
+    leveled_type(&facts.built[name][provider].1)
+}
+fn kernel_run_id(facts: &ir::Analysis, name: &str, provider: usize) -> Ident {
+    provider_id(
+        if leveled_provider(facts, name, provider) {
+            "runs_view"
+        } else {
+            "run_view"
+        },
+        name,
+        provider,
+    )
+}
+
+// Keep the descriptor's static capacity aligned with the runtime ABI. The
+// generated array assertion catches an ABI change before compiling a kernel.
+const LEVELED_MAX_RUNS: usize = 16;
+
+fn leveled_ranges(snapshot: &Ident, run: &Ident, lookup: Tokens) -> Tokens {
+    let search = leveled_ranges_into(snapshot, run, lookup, quote!(__leveled_ranges));
+    quote! {
+        let mut __leveled_ranges = [0u64; ::cq_gpu_runtime::MAX_LEVELS];
+        #search
+    }
+}
+
+fn leveled_ranges_into(snapshot: &Ident, run: &Ident, lookup: Tokens, ranges: Tokens) -> Tokens {
+    quote! {
+        let _: [(); #LEVELED_MAX_RUNS] = [(); ::cq_gpu_runtime::MAX_LEVELS];
+        let mut __leveled_total=0u64;
+        let mut __leveled_run_id=0usize;
+        while __leveled_run_id < ::cq_gpu_runtime::leveled_count(#snapshot) as usize {
+            let #run=::cq_gpu_runtime::leveled_run(#snapshot,__leveled_run_id);
+            let (__run_begin,__run_end)=if __valid {#lookup}else{(0,0)};
+            (#ranges)[__leveled_run_id]=__run_begin as u64 | ((__run_end as u64)<<32);
+            __leveled_total+=(__run_end-__run_begin) as u64;
+            __leveled_run_id+=1;
+        }
+        let __leveled_len=if __leveled_total<=u32::MAX as u64 {
+            __leveled_total as u32
+        } else {
+            ::cq_gpu_runtime::flag_error(__output,2);
+            0
+        };
+    }
+}
+
+// A descriptor contains one (begin,end) range for each run and input row.
+// Its scan is over the sum of those ranges, not over a single run. Restoring
+// a candidate resolves its logical position to the original run and row.
+fn leveled_restore(snapshot: &Ident, run: &Ident, range: Tokens) -> Tokens {
+    quote! {
+        let mut __leveled_position=__build_row;
+        let mut __leveled_run_id=0usize;
+        let mut __leveled_build_row=0u32;
+        if __valid {
+            while __leveled_run_id < ::cq_gpu_runtime::leveled_count(#snapshot) as usize {
+                let (__run_begin,__run_end)=#range;
+                if __leveled_position<__run_end-__run_begin {
+                    __leveled_build_row=__run_begin+__leveled_position;
+                    break;
+                }
+                __leveled_position-=__run_end-__run_begin;
+                __leveled_run_id+=1;
+            }
+        }
+        let #run=::cq_gpu_runtime::leveled_run(#snapshot,__leveled_run_id);
+        let __build_row=__leveled_build_row;
+    }
 }
 
 /// A full resident run certificate stored in the optional Layout type argument.
@@ -455,6 +529,24 @@ fn check_frozen_slots(at: &impl ToTokens, levels: &[Vec<usize>], width: usize) -
 /// `Input => [[1,2],[0]]` records one full run shared by reads of [1,2] and
 /// [0,1,2]. Repeated Input entries record incomparable chains.
 pub(crate) fn frozen_hosts(program: &ir::Program, arguments: Tokens) -> syn::Result<ir::Program> {
+    maintained_hosts(program, arguments, false)
+}
+
+/// Record maintained changing-relation hosts using the same exact chain checks.
+pub(crate) fn leveled_hosts(program: &ir::Program, arguments: Tokens) -> syn::Result<ir::Program> {
+    maintained_hosts(program, arguments, true)
+}
+
+fn maintained_hosts(
+    program: &ir::Program,
+    arguments: Tokens,
+    leveled: bool,
+) -> syn::Result<ir::Program> {
+    let provider = if leveled {
+        quote!(::cq_gpu_runtime::LeveledDeviceIndex)
+    } else {
+        quote!(::cq_gpu_runtime::FrozenDeviceIndex)
+    };
     use syn::parse::Parser;
     let parse = |input: syn::parse::ParseStream<'_>| {
         let mut requests = Vec::new();
@@ -514,6 +606,22 @@ pub(crate) fn frozen_hosts(program: &ir::Program, arguments: Tokens) -> syn::Res
         if let Some(levels) = levels {
             check_frozen_slots(name, levels, input.columns.len())?;
         }
+        if leveled
+            && !program.structures.entries.iter().any(|entry| {
+                matches!(&entry.structure, ir::Structure::Host { reader, .. } if reader != "scan")
+                    && facts
+                        .physical
+                        .hosts
+                        .get(&symbol_name(&entry.name))
+                        .is_some_and(|host| *host == symbol_name(name))
+            })
+        {
+            return fail(
+                name,
+                "CQ_GPU_LEVELED_HOST",
+                "maintained input requires an existing keyed Host read",
+            );
+        }
     }
     let mut target = program.clone();
     for entry in &mut target.structures.entries {
@@ -568,10 +676,9 @@ pub(crate) fn frozen_hosts(program: &ir::Program, arguments: Tokens) -> syn::Res
                     .map(|slot| quote!(::cq_gpu_runtime::FrozenKey<#slot>));
                 quote!((#(#columns,)*))
             });
-            keyed.ty =
-                syn::parse2(quote!(::cq_gpu_runtime::FrozenDeviceIndex<_,_,(#(#levels,)*)>))?;
+            keyed.ty = syn::parse2(quote!(#provider<_,_,(#(#levels,)*)>))?;
         } else if selected.iter().any(|(_, levels)| levels.is_none()) {
-            keyed.ty = syn::parse_quote!(::cq_gpu_runtime::FrozenDeviceIndex<_>);
+            keyed.ty = syn::parse2(quote!(#provider<_>))?;
         } else {
             return fail(
                 keyed,
@@ -582,7 +689,11 @@ pub(crate) fn frozen_hosts(program: &ir::Program, arguments: Tokens) -> syn::Res
             );
         }
     }
-    ir::contract::check(&target)?;
+    let mut checked = ir::contract::check(&target)?;
+    if leveled {
+        record_frozen_providers(&target, &mut checked)?;
+        validate_leveled_reads(&target, &checked)?;
+    }
     Ok(target)
 }
 
@@ -591,7 +702,7 @@ fn record_frozen_providers(program: &ir::Program, facts: &mut ir::Analysis) -> s
         let ir::Structure::Host { keyed, reader, .. } = &entry.structure else {
             continue;
         };
-        if !frozen_type(&keyed.ty) {
+        if !resident_type(&keyed.ty) {
             continue;
         }
         let name = symbol_name(&entry.name);
@@ -648,7 +759,7 @@ fn record_frozen_providers(program: &ir::Program, facts: &mut ir::Analysis) -> s
 }
 
 fn frozen_provider(facts: &ir::Analysis, name: &str, provider: usize) -> bool {
-    frozen_type(&facts.built[name][provider].1)
+    resident_type(&facts.built[name][provider].1)
 }
 fn membership(facts: &ir::Analysis, name: &str) -> bool {
     facts.membership.iter().any(|(build, _)| build == name)
@@ -683,7 +794,7 @@ fn hashed(facts: &ir::Analysis, name: &str, provider: usize) -> bool {
 fn prefix_run(facts: &ir::Analysis, name: &str, provider: usize) -> bool {
     let build = &facts.built[name][provider];
     qualified(&build.1, "cq_gpu_runtime", "PrefixRun")
-        || (frozen_type(&build.1) && build.0.iter().map(Vec::len).sum::<usize>() > 1)
+        || (resident_type(&build.1) && build.0.iter().map(Vec::len).sum::<usize>() > 1)
 }
 fn residual_key(facts: &ir::Analysis, name: &str, provider: usize, key: &str) -> bool {
     if prefix_run(facts, name, provider) {
@@ -830,9 +941,84 @@ pub(crate) struct Read {
     pub source: String,
 }
 
+fn leveled_hosts_by_name(program: &ir::Program, facts: &ir::Analysis) -> BTreeSet<String> {
+    program
+        .physical
+        .program
+        .definitions
+        .iter()
+        .filter_map(|definition| {
+            let name = symbol_name(&definition.name);
+            if facts
+                .built
+                .get(&name)
+                .is_some_and(|providers| providers.iter().any(|p| leveled_type(&p.1)))
+                && let Operator::Rename(rename) = &definition.operator
+            {
+                Some(symbol_name(&rename.relation))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn validate_leveled_reads(program: &ir::Program, facts: &ir::Analysis) -> syn::Result<()> {
+    let hosts = leveled_hosts_by_name(program, facts);
+    let names: BTreeSet<_> = program
+        .physical
+        .program
+        .definitions
+        .iter()
+        .filter_map(|definition| {
+            if let Operator::Rename(rename) = &definition.operator
+                && hosts.contains(&symbol_name(&rename.relation))
+            {
+                Some(symbol_name(&definition.name))
+            } else {
+                None
+            }
+        })
+        .collect();
+    for (position, definition) in program.physical.program.definitions.iter().enumerate() {
+        if matches!(&definition.operator,Operator::Probe(_,key)|Operator::Semi(_,key)
+            if matches!(key.choice,Some(physical::Choice::Smallest(_))))
+        {
+            if let Some(next) = program.physical.program.definitions.get(position + 1)
+                && let Some((a, b, _)) =
+                    physical::binary_intersection(definition, next, &facts.physical)
+                && [a, b]
+                    .iter()
+                    .any(|key| names.contains(&symbol_name(&key.right)))
+            {
+                return fail(
+                    definition,
+                    "CQ_GPU_LEVELED_SMALLEST",
+                    "leveled hosts do not support recorded single-run smallest intersections",
+                );
+            }
+        }
+        if definition
+            .operator
+            .input()
+            .is_some_and(|input| names.contains(&symbol_name(input)))
+            || (definition.name == program.physical.program.returned
+                && names.contains(&symbol_name(&definition.name)))
+        {
+            return fail(
+                definition,
+                "CQ_GPU_LEVELED_SCAN",
+                "leveled hosts supply keyed reads only; bind a contiguous DeviceColumns host for scans",
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Reject unsupported *written* choices, including choices on unused results.
 /// The output is a bijective ledger of all physical keyed reads, not just probes.
 pub(crate) fn validate(program: &ir::Program, facts: &ir::Analysis) -> syn::Result<Vec<Read>> {
+    validate_leveled_reads(program, facts)?;
     for (name, &size) in &facts.stages {
         if size == 0 || size > 1024 {
             return fail(
@@ -851,11 +1037,15 @@ pub(crate) fn validate(program: &ir::Program, facts: &ir::Analysis) -> syn::Resu
             Operator::Anti(_, keyed) => {
                 for operand in [&keyed.right] {
                     let name = symbol_name(operand);
-                    if !facts.retained.contains_key(&name) {
+                    if !facts.retained.contains_key(&name)
+                        && !facts.built.get(&name).is_some_and(|providers| {
+                            providers.iter().any(|provider| resident_type(&provider.1))
+                        })
+                    {
                         return fail(
                             n,
                             "CQ_GPU_ANTI_ROWS",
-                            "anti right operand requires recorded retained rows",
+                            "anti right operand requires recorded retained rows or a resident host index",
                         );
                     }
                 }
@@ -1005,7 +1195,7 @@ pub(crate) fn validate(program: &ir::Program, facts: &ir::Analysis) -> syn::Resu
                 dedup_policy(ty)?;
             }
             ir::Structure::Host { reader, keyed, .. }
-                if reader != "scan" && !frozen_type(&keyed.ty) =>
+                if reader != "scan" && !resident_type(&keyed.ty) =>
             {
                 let name = symbol_name(reader);
                 let constant = program.physical.program.definitions.iter().any(|d| {
@@ -1295,7 +1485,15 @@ fn output_bounds(
                         .iter()
                         .position(|c| c == column)
                 {
-                    quote!(__execution.column_bounds(#table,#slot)?)
+                    if leveled_provider(facts, &right, read_provider(facts, keyed)) {
+                        let Operator::Rename(rename) = &context.physical[&right].operator else {
+                            unreachable!()
+                        };
+                        let value = &context.hosts[&symbol_name(&rename.relation)].value;
+                        quote!((#value).column_bounds(#slot)?)
+                    } else {
+                        quote!(__execution.column_bounds(#table,#slot)?)
+                    }
                 } else {
                     let binding = facts.filtered.get(&right)
                         .and_then(|f| f.constants.iter().find(|b| symbol_name(&b.column) == *column))
@@ -1357,6 +1555,11 @@ pub(crate) fn compile(
     let retry = options.output == crate::options::OutputPolicy::Retry;
     let recorded_output = if retry { "retry" } else { "default" };
     let retry_default_capacity = crate::options::DEFAULT_RETRY_CAPACITY;
+    // GPU join filters read bound device columns, not host PositionalRows handles.
+    // Keep the checked filter facts below; suppress only the CPU source binder.
+    let mut source_facts = facts.clone();
+    source_facts.join_filters.clear();
+    let mut context = Context::new(program, &source_facts);
     let capacity = options
         .capacity
         .as_ref()
@@ -1373,8 +1576,13 @@ pub(crate) fn compile(
                     "capacity must name a declared input relation",
                 );
             }
-            let table = id("host", &name);
-            Ok(quote!(__execution.table_view(#table)?.len as usize))
+            if leveled_hosts_by_name(program, &facts).contains(&name) {
+                let value = &context.hosts[&name].value;
+                Ok(quote!((#value).rows() as usize))
+            } else {
+                let table = id("host", &name);
+                Ok(quote!(__execution.table_view(#table)?.len as usize))
+            }
         })
         .transpose()?;
     let recorded_capacity = match &options.capacity {
@@ -1384,15 +1592,10 @@ pub(crate) fn compile(
         }
         None => quote!(None),
     };
-    // GPU join filters read bound device columns, not host PositionalRows handles.
-    // Keep the checked filter facts below; suppress only the CPU source binder.
-    let mut source_facts = facts.clone();
-    source_facts.join_filters.clear();
-    let mut context = Context::new(program, &source_facts);
     let frozen_names: BTreeSet<_> = facts
         .built
         .iter()
-        .filter(|(_, providers)| providers.iter().any(|provider| frozen_type(&provider.1)))
+        .filter(|(_, providers)| providers.iter().any(|provider| resident_type(&provider.1)))
         .map(|(name, _)| name.clone())
         .collect();
     // Resident run payloads retain original host schema positions, not the
@@ -1440,6 +1643,7 @@ pub(crate) fn compile(
     let mut host = Vec::new();
     let mut host_pools = Vec::new();
     let mut host_dictionaries = Vec::new();
+    let leveled_hosts = leveled_hosts_by_name(program, &facts);
     for input in program.physical.inputs() {
         let name = symbol_name(&input.name);
         let value = &context.hosts[&name].value;
@@ -1459,7 +1663,12 @@ pub(crate) fn compile(
                 #value,__execution.dictionary_mut()
             )?;
         ));
-        host.push(quote!(let #table=__execution.bind_host(#value,#schema,#width)?;));
+        if !leveled_hosts.contains(&name) {
+            host.push(quote!(let #table=__execution.bind_host(#value,#schema,#width)?;));
+            if program.physical.program.host_is_set(&input.name) {
+                host.push(quote!(__execution.certify_host_set(#table, #name)?;));
+            }
+        }
     }
     for name in &frozen_names {
         let Operator::Rename(rename) = &context.physical[name].operator else {
@@ -1469,9 +1678,11 @@ pub(crate) fn compile(
         let value = &context.hosts[&input].value;
         let source = id("host", &input);
         let table = id("table", name);
-        host.push(quote!(let #table = #source;));
+        if !leveled_hosts.contains(&input) {
+            host.push(quote!(let #table = #source;));
+        }
         for (provider, build) in facts.built[name].iter().enumerate() {
-            if !frozen_type(&build.1) {
+            if !resident_type(&build.1) {
                 return fail(
                     context.physical[name],
                     "CQ_GPU_FROZEN_PROVIDER",
@@ -1488,7 +1699,11 @@ pub(crate) fn compile(
                 quote!(&[#(#slots),*] as &[usize])
             });
             let run = provider_id("run", name, provider);
-            host.push(quote!(let #run = (#value).resident_run(&[#(#levels),*])?;));
+            if leveled_type(&build.1) {
+                host.push(quote!(let #run = (#value).snapshot_ptr(&[#(#levels),*])?;));
+            } else {
+                host.push(quote!(let #run = (#value).resident_run(&[#(#levels),*])?;));
+            }
         }
     }
     for (name, types) in &options.datalog_keys {
@@ -1712,12 +1927,14 @@ pub(crate) fn compile(
         }
         let mut run_ids: Vec<_> = runs
             .iter()
-            .map(|(n, p)| provider_id("run_view", n, *p))
+            .map(|(n, p)| kernel_run_id(&facts, n, *p))
             .collect();
         let mut run_types = runs
             .iter()
-            .map(|(name, _)| {
-                if membership(&facts, name) {
+            .map(|(name, provider)| {
+                if leveled_provider(&facts, name, *provider) {
+                    quote!(*const ::cq_gpu_runtime::LeveledRunsView)
+                } else if membership(&facts, name) {
                     quote!(::cq_gpu_runtime::MembershipView)
                 } else {
                     quote!(::cq_gpu_runtime::RunView)
@@ -2291,6 +2508,7 @@ pub(crate) fn compile(
 struct State {
     columns: BTreeMap<String, Tokens>,
     witnesses: BTreeMap<String, (Tokens, Tokens)>,
+    leveled_witnesses: BTreeMap<String, LeveledWitness>,
     item: Option<Tokens>,
     driver_columns: BTreeMap<String, usize>,
     driver_row: Option<Tokens>,
@@ -2304,6 +2522,63 @@ impl State {
         } else {
             self.driver_columns.remove(column);
         }
+    }
+}
+
+#[derive(Clone)]
+struct LeveledWitness {
+    ranges: Tokens,
+    // Low word: total matching rows. High word: snapshot's live run count.
+    meta: Tokens,
+}
+impl LeveledWitness {
+    fn ranges(&self) -> Tokens {
+        let ranges = &self.ranges;
+        let meta = &self.meta;
+        quote! {
+            let __leveled_ranges=&#ranges;
+            let __leveled_len=if __valid {(#meta) as u32}else{0u32};
+        }
+    }
+    fn point(&self) -> Tokens {
+        let ranges = &self.ranges;
+        quote!({
+            let __range=(#ranges)[__leveled_run_id];
+            (__range as u32,(__range>>32) as u32)
+        })
+    }
+    fn stage(&self, target: &Self, rows: usize, words: &mut usize) -> (Tokens, Tokens) {
+        let slot = *words;
+        *words += (2 + 2 * LEVELED_MAX_RUNS) * rows;
+        let ranges = &self.ranges;
+        let meta = &self.meta;
+        let target_ranges = &target.ranges;
+        let target_meta = &target.meta;
+        let save = quote! {
+            *__descriptor.add(#slot+__input_slot)=(#meta) as u32;
+            *__descriptor.add(#slot+#rows+__input_slot)=((#meta)>>32) as u32;
+            let mut __witness_run=0usize;
+            while __witness_run<((#meta)>>32) as usize {
+                let __range=(#ranges)[__witness_run];
+                *__descriptor.add(#slot+(2+2*__witness_run)*#rows+__input_slot)=__range as u32;
+                *__descriptor.add(#slot+(3+2*__witness_run)*#rows+__input_slot)=(__range>>32) as u32;
+                __witness_run+=1;
+            }
+        };
+        let restore = quote! {
+            #target_meta=if __valid {
+                *__descriptor.add(#slot+__parent) as u64 |
+                    ((*__descriptor.add(#slot+#rows+__parent) as u64)<<32)
+            } else {0};
+            let mut __witness_run=0usize;
+            while __witness_run<((#target_meta)>>32) as usize {
+                (#target_ranges)[__witness_run]=
+                    *__descriptor.add(#slot+(2+2*__witness_run)*#rows+__parent) as u64 |
+                    ((*__descriptor.add(#slot+(3+2*__witness_run)*#rows+__parent) as u64)<<32);
+                __witness_run+=1;
+            }
+        };
+        (save, restore)
     }
 }
 
@@ -2331,6 +2606,17 @@ impl ResumeEmitter<'_, '_, '_> {
         let slot = self.program.registers;
         self.program.registers += 1;
         quote!(__resume_registers[#slot])
+    }
+
+    fn witness_registers(&mut self) -> LeveledWitness {
+        let begin = self.program.registers;
+        self.program.registers += LEVELED_MAX_RUNS;
+        let end = self.program.registers;
+        let meta = self.register();
+        LeveledWitness {
+            ranges: quote!(__resume_registers[#begin..#end]),
+            meta,
+        }
     }
 
     fn block(&mut self, body: Tokens) -> u32 {
@@ -2541,7 +2827,13 @@ impl ResumeEmitter<'_, '_, '_> {
                 }))
             }
             Operator::Probe(_, k) if boolean_probe(facts, self.source.endpoint, k) => {
-                let found = self.source.membership_lookup(k, &state)?;
+                let found =
+                    if let Some(witness) = self.source.leveled_witness(index, k, &mut state)? {
+                        let meta = witness.meta;
+                        quote!((#meta) as u32!=0)
+                    } else {
+                        self.source.membership_lookup(k, &state)?
+                    };
                 state
                     .columns
                     .retain(|column, _| context.carried_columns[&name].contains(column));
@@ -2553,6 +2845,41 @@ impl ResumeEmitter<'_, '_, '_> {
             }
             Operator::Semi(_, k) | Operator::Anti(_, k) => {
                 let negative = matches!(definition.operator, Operator::Anti(..));
+                if leveled_provider(facts, &symbol_name(&k.right), read_provider(facts, k)) {
+                    let mut save = Tokens::new();
+                    let found = if facts.witnesses.contains_key(&name) {
+                        let snapshot =
+                            kernel_run_id(facts, &symbol_name(&k.right), read_provider(facts, k));
+                        let run = provider_id(
+                            "run_view",
+                            &symbol_name(&k.right),
+                            read_provider(facts, k),
+                        );
+                        let lookup = self.source.lookup(k, &state)?;
+                        let witness = self.witness_registers();
+                        let ranges = &witness.ranges;
+                        let search = leveled_ranges_into(&snapshot, &run, lookup, ranges.clone());
+                        let meta = &witness.meta;
+                        save = quote! {
+                            #search
+                            #meta=__leveled_len as u64 | ((::cq_gpu_runtime::leveled_count(#snapshot) as u64)<<32);
+                        };
+                        let found = quote!((#meta) as u32!=0);
+                        state.leveled_witnesses.insert(name.clone(), witness);
+                        found
+                    } else {
+                        self.source.membership_lookup(k, &state)?
+                    };
+                    state
+                        .columns
+                        .retain(|column, _| context.carried_columns[&name].contains(column));
+                    let rest = self.steps(index + 1, state, next)?;
+                    return Ok(self.block(quote! {
+                        #save
+                        __valid=__valid && ((#found)!=#negative);
+                        __resume_pc=#rest;
+                    }));
+                }
                 let lookup = self.source.lookup(k, &state)?;
                 let begin = self.register();
                 let end = self.register();
@@ -2601,11 +2928,22 @@ impl ResumeEmitter<'_, '_, '_> {
         let provider = read_provider(facts, k);
         let run = provider_id("run_view", &right, provider);
         let pair = self.source.smallest(index)?;
+        let witness = self.source.leveled_witness(index, k, &mut state)?;
         let first = self
             .source
             .probe_lookup(index, k, pair.as_ref(), &mut state)?;
-        let lookup = if let Some(pair) = &pair {
-            let choose = self.source.smallest_lookup(pair, &mut state, first)?;
+        let leveled = leveled_provider(facts, &right, provider);
+        let snapshot = kernel_run_id(facts, &right, provider);
+        let mut lookup = if leveled {
+            let ranges = witness
+                .as_ref()
+                .map(LeveledWitness::ranges)
+                .unwrap_or_else(|| leveled_ranges(&snapshot, &run, first.clone()));
+            quote! {#ranges let (__begin,__end)=(0u32,__leveled_len);}
+        } else if let Some(pair) = &pair {
+            let choose = self
+                .source
+                .smallest_lookup(pair, &mut state, first.clone())?;
             quote! {
                 let (__begin,__end,__smallest_right,__smallest_other_begin,__smallest_other_end) =
                     if __valid {#choose}else{(0,0,false,0,0)};
@@ -2617,17 +2955,96 @@ impl ResumeEmitter<'_, '_, '_> {
         let mut save = Vec::new();
         let mut restore = Vec::new();
         let offset = (self.program.shared_words + 1) & !1;
-        let items = self.source.items;
+        let items = if leveled && !local {
+            1
+        } else {
+            self.source.items
+        };
         let rows = 256 * items;
         let offsets = 2 + rows;
         let total_slot = 2 + 2 * rows;
         let mut words = total_slot + 2;
-        let item = state.item.clone().unwrap_or(quote!(0usize));
-        let compact = if local { None } else {
+        let caller_next = next;
+        let mut next = next;
+        let mut run_loop = None;
+        if leveled {
+            let (range_save, range_restore) = if local && witness.is_some() {
+                (
+                    Tokens::new(),
+                    leveled_restore(&snapshot, &run, witness.as_ref().unwrap().point()),
+                )
+            } else if local {
+                let slot = self.program.registers;
+                self.program.registers += LEVELED_MAX_RUNS;
+                let search = leveled_ranges_into(
+                    &snapshot,
+                    &run,
+                    first,
+                    quote!(__resume_registers[#slot..#slot+#LEVELED_MAX_RUNS]),
+                );
+                lookup = quote! {#search let (__begin,__end)=(0u32,__leveled_len);};
+                let save = Tokens::new();
+                let restore = leveled_restore(
+                    &snapshot,
+                    &run,
+                    quote!((
+                        __resume_registers[#slot+__leveled_run_id] as u32,
+                        (__resume_registers[#slot+__leveled_run_id]>>32) as u32
+                    )),
+                );
+                (save, restore)
+            } else {
+                let cursor = self.register();
+                let valid = self.register();
+                let run_guard = self.block(Tokens::new());
+                let advance_run = self.block(quote! {#cursor+=1;__resume_pc=#run_guard;});
+                next = advance_run;
+                lookup = if let Some(witness) = &witness {
+                    let ranges = &witness.ranges;
+                    quote! {
+                        let __range=(#ranges)[#cursor as usize];
+                        let (__begin,__end)=if __valid {(__range as u32,(__range>>32) as u32)}else{(0u32,0u32)};
+                    }
+                } else {
+                    quote! {
+                        let #run=::cq_gpu_runtime::leveled_run(#snapshot,#cursor as usize);
+                        let (__begin,__end)=if __valid {#first}else{(0u32,0u32)};
+                    }
+                };
+                run_loop = Some((cursor, valid, run_guard, Tokens::new()));
+                (
+                    Tokens::new(),
+                    quote! {
+                        let __leveled_run_id=*__descriptor.add(1) as usize;
+                        let #run=::cq_gpu_runtime::leveled_run(#snapshot,__leveled_run_id);
+                    },
+                )
+            };
+            save.push(range_save);
+            restore.push(range_restore);
+        }
+        let item = if leveled && !local {
+            quote!(0usize)
+        } else {
+            state.item.clone().unwrap_or(quote!(0usize))
+        };
+        let compact = if local {
+            None
+        } else {
             self.source
                 .compact_root(&name, k, pair.as_ref(), &mut state, rows, &mut words)
         };
         let root_guard = compact.as_ref().map(|(guard, _, _)| guard);
+        // The range loop resumes in a different PC from its checked entry.
+        // Rebind the already-checked parent identity in the descriptor-save PC.
+        let stage_root_identity = if leveled && !local && compact.is_some() {
+            state
+                .driver_row
+                .as_ref()
+                .map(|row| quote!(let __driver_row_id=#row;))
+        } else {
+            None
+        };
         if let Some((_, root_save, root_restore)) = &compact {
             save.push(root_save.clone());
             restore.push(root_restore.clone());
@@ -2706,6 +3123,13 @@ impl ResumeEmitter<'_, '_, '_> {
                 child
                     .witnesses
                     .insert(origin.clone(), (quote!(#begin as u32), quote!(#end as u32)));
+            }
+            for (origin, witness) in &state.leveled_witnesses {
+                let target = self.witness_registers();
+                let (range_save, range_restore) = witness.stage(&target, rows, &mut words);
+                save.push(range_save);
+                restore.push(range_restore);
+                child.leveled_witnesses.insert(origin.clone(), target);
             }
             self.program.shared_words = offset + words;
             self.program.descriptor_words = self.program.descriptor_words.max(words);
@@ -2794,7 +3218,9 @@ impl ResumeEmitter<'_, '_, '_> {
             .columns
             .retain(|column, _| context.carried_columns[after].contains(column));
         let previous_items = self.source.items;
-        if local { self.source.items = 1; }
+        if local || leveled {
+            self.source.items = 1;
+        }
         let rest = self.steps(next_index, child, advance)?;
         self.source.items = previous_items;
         if local {
@@ -2824,6 +3250,8 @@ impl ResumeEmitter<'_, '_, '_> {
         let external = external.expect("cooperative expansion has an external-task flag");
         let batch = if items > 1 {
             256u32
+        } else if leveled {
+            self.source.batch.min(256) as u32
         } else {
             self.source.batch as u32
         };
@@ -2874,14 +3302,19 @@ impl ResumeEmitter<'_, '_, '_> {
             .as_ref()
             .map(|sum| quote!(let mut __expansion_sum:u64=if __item==0 {0u64}else{#sum};));
         let save_sum = sum.as_ref().map(|sum| quote!(#sum=__expansion_sum;));
-        let scan = self.source.fill_expansion(quote!(__end - __begin), rows);
-        Ok(self.block(quote! {
-            #root_guard
-            #lookup
+        let scan = self
+            .source
+            .fill_expansion(quote!(__end - __begin), rows, items);
+        let header_run = run_loop
+            .as_ref()
+            .map(|(cursor, _, _, _)| quote!(#cursor as u32))
+            .unwrap_or_else(|| quote!(0));
+        let body = quote! {
+            #stage_root_identity
             let __item=#item;
             let __input_slot=__item*256+__tid;
             let __descriptor=__scratch.add(#offset);
-            if __tid==0 && __item==0 {*__descriptor=#stage;*__descriptor.add(1)=0;*__descriptor.add(#total_slot+1)=0;}
+            if __tid==0 && __item==0 {*__descriptor=#stage;*__descriptor.add(1)=#header_run;*__descriptor.add(#total_slot+1)=0;}
             *__descriptor.add(2+__input_slot)=__begin;
             #(#save)*
             #prepare_sum
@@ -2904,7 +3337,27 @@ impl ResumeEmitter<'_, '_, '_> {
             #external=0;
             __resume_pc=if __published {#next}else{#guard};
             }
-        }))
+        };
+        if let Some((cursor, valid, run_guard, prepare)) = run_loop {
+            let entry = self.block(quote! {
+                #lookup
+                if ::cq_gpu_runtime::leveled_any(__begin<__end) {#body}
+                else {__resume_pc=#next;}
+            });
+            self.program.blocks[run_guard as usize] = quote! {
+                __valid=#valid!=0;
+                __resume_pc=if #cursor<::cq_gpu_runtime::leveled_count(#snapshot) as u64 {#entry}else{#caller_next};
+            };
+            Ok(self.block(quote! {
+                #root_guard
+                #prepare
+                #valid=__valid as u64;
+                #cursor=0;
+                __resume_pc=#run_guard;
+            }))
+        } else {
+            Ok(self.block(quote! {#root_guard #lookup #body}))
+        }
     }
 }
 struct Continuation {
@@ -3249,7 +3702,12 @@ impl Emitter<'_, '_> {
                 self.member(index, state, k, true)
             }
             Operator::Probe(_, k) if boolean_probe(self.facts, self.endpoint, k) => {
-                let found = self.membership_lookup(k, state)?;
+                let found = if let Some(witness) = self.leveled_witness(index, k, state)? {
+                    let meta = witness.meta;
+                    quote!((#meta) as u32!=0)
+                } else {
+                    self.membership_lookup(k, state)?
+                };
                 state
                     .columns
                     .retain(|column, _| self.context.carried_columns[name].contains(column));
@@ -3258,6 +3716,49 @@ impl Emitter<'_, '_> {
             }
             Operator::Semi(_, k) | Operator::Anti(_, k) => {
                 let negative = matches!(definition.operator, Operator::Anti(..));
+                if leveled_provider(
+                    self.facts,
+                    &symbol_name(&k.right),
+                    read_provider(self.facts, k),
+                ) {
+                    let mut save = Tokens::new();
+                    let found = if self.facts.witnesses.contains_key(name) {
+                        let snapshot = kernel_run_id(
+                            self.facts,
+                            &symbol_name(&k.right),
+                            read_provider(self.facts, k),
+                        );
+                        let run = provider_id(
+                            "run_view",
+                            &symbol_name(&k.right),
+                            read_provider(self.facts, k),
+                        );
+                        let lookup = self.lookup(k, state)?;
+                        let search = leveled_ranges(&snapshot, &run, lookup);
+                        let ranges = id("witness_ranges", name);
+                        let meta = id("witness_meta", name);
+                        save = quote! {
+                            #search
+                            let #ranges=__leveled_ranges;
+                            let #meta=__leveled_len as u64 | ((::cq_gpu_runtime::leveled_count(#snapshot) as u64)<<32);
+                        };
+                        state.leveled_witnesses.insert(
+                            name.clone(),
+                            LeveledWitness {
+                                ranges: quote!(#ranges),
+                                meta: quote!(#meta),
+                            },
+                        );
+                        quote!((#meta) as u32!=0)
+                    } else {
+                        self.membership_lookup(k, state)?
+                    };
+                    state
+                        .columns
+                        .retain(|column, _| self.context.carried_columns[name].contains(column));
+                    let rest = self.steps(index + 1, state)?;
+                    return Ok(quote! {#save __valid=__valid && ((#found)!=#negative);#rest});
+                }
                 let lookup = self.lookup(k, state)?;
                 let begin = id("begin", name);
                 let end = id("end", name);
@@ -3278,7 +3779,9 @@ impl Emitter<'_, '_> {
                     #rest
                 })
             }
-            Operator::Probe(_, k) if self.serial || self.lane_local_probe(name) => self.serial_expand(index, state, k),
+            Operator::Probe(_, k) if self.serial || self.lane_local_probe(name) => {
+                self.serial_expand(index, state, k)
+            }
             Operator::Probe(_, k) => self.expand(index, state, k),
             _ => fail(
                 &definition.name,
@@ -3340,7 +3843,10 @@ impl Emitter<'_, '_> {
     }
     fn lane_local_probe(&self, name: &str) -> bool {
         !self.facts.expands.contains(name)
-            && self.chain.iter().any(|name| self.facts.expands.contains(name))
+            && self
+                .chain
+                .iter()
+                .any(|name| self.facts.expands.contains(name))
     }
     // Exhaustive thread-local traversal needs neither a uniqueness promise nor
     // a shared-memory materialization. Explicit batch/expand stages retain the
@@ -3360,7 +3866,12 @@ impl Emitter<'_, '_> {
         let end = id("end", name);
         let row = id("row", name);
         let pair = self.smallest(index)?;
-        let lookup = self.probe_lookup(index, k, pair.as_ref(), state)?;
+        let witness = self.leveled_witness(index, k, state)?;
+        let lookup = if let Some(witness) = witness {
+            witness.point()
+        } else {
+            self.probe_lookup(index, k, pair.as_ref(), state)?
+        };
         if let Some(pair) = pair {
             let choose = self.smallest_lookup(&pair, state, lookup)?;
             let local = id("value", &pair.column);
@@ -3372,7 +3883,9 @@ impl Emitter<'_, '_> {
                 .columns
                 .retain(|column, _| self.context.carried_columns[&pair.second].contains(column));
             let previous_items = self.items;
-            if cooperative { self.items = 1; }
+            if cooperative {
+                self.items = 1;
+            }
             let rest = self.steps(index + 2, state)?;
             self.items = previous_items;
             return Ok(if cooperative {
@@ -3451,11 +3964,13 @@ impl Emitter<'_, '_> {
             .columns
             .retain(|c, _| self.context.carried_columns[name].contains(c));
         let previous_items = self.items;
-        if cooperative { self.items = 1; }
+        if cooperative {
+            self.items = 1;
+        }
         let rest = self.steps(index + 1, state)?;
         self.items = previous_items;
-        if cooperative {
-            return Ok(quote! {
+        let body = if cooperative {
+            quote! {
                 let (#begin,#end)=if __valid {#lookup}else{(0,0)};
                 let mut #row=#begin;
                 loop {
@@ -3467,9 +3982,9 @@ impl Emitter<'_, '_> {
                     #rest
                     #row=#row.saturating_add(1);
                 }
-            });
-        }
-        Ok(quote! {
+            }
+        } else {
+            quote! {
             if __valid {
                 let (#begin,#end)=#lookup;
                 if #begin<#end {
@@ -3486,7 +4001,21 @@ impl Emitter<'_, '_> {
                     }
                 }
             }
-        })
+            }
+        };
+        if leveled_provider(self.facts, &right, provider) {
+            let snapshot = kernel_run_id(self.facts, &right, provider);
+            Ok(quote! {
+                let mut __leveled_run_id=0usize;
+                while __leveled_run_id<::cq_gpu_runtime::leveled_count(#snapshot) as usize {
+                    let #run=::cq_gpu_runtime::leveled_run(#snapshot,__leveled_run_id);
+                    #body
+                    __leveled_run_id+=1;
+                }
+            })
+        } else {
+            Ok(body)
+        }
     }
     /// Keep root identity rather than duplicate driver values. Exact range keys
     /// are reconstructed from the selected run row; only residual keys retain
@@ -3525,6 +4054,9 @@ impl Emitter<'_, '_> {
         });
         state
             .witnesses
+            .retain(|origin, _| self.context.carried_witnesses[after].contains(origin));
+        state
+            .leveled_witnesses
             .retain(|origin, _| self.context.carried_witnesses[after].contains(origin));
         let row = state.driver_row.clone()?;
         let roots = *words;
@@ -3579,10 +4111,10 @@ impl Emitter<'_, '_> {
         })
     }
 
-    fn fill_expansion(&self, length: Tokens, rows: usize) -> Tokens {
+    fn fill_expansion(&self, length: Tokens, rows: usize, items: usize) -> Tokens {
         let offsets = 2 + rows;
         let total_slot = 2 + 2 * rows;
-        if self.items == 1 {
+        if items == 1 {
             return quote! {
                 let (__offset,mut __total)=::cq_gpu_runtime::tiles::scan(#length,__scratch);
                 let __wrapped=__offset.checked_add(#length).is_none();
@@ -3595,7 +4127,6 @@ impl Emitter<'_, '_> {
                 if __tid==0 {*__descriptor.add(#total_slot)=__total;}
             };
         }
-        let items = self.items;
         quote! {
             let mut __count=#length;
             if __count > u32::MAX / 256 {
@@ -3633,6 +4164,9 @@ impl Emitter<'_, '_> {
         state: &mut State,
     ) -> syn::Result<Tokens> {
         let name = symbol_name(&k.right);
+        if leveled_provider(self.facts, &name, read_provider(self.facts, k)) {
+            return self.lookup(k, state);
+        }
         let mut keys: Vec<_> = k.columns.iter().map(symbol_name).collect();
         keys.sort();
         if let Some(witness) = self.witness_lookup(&self.chain[index], &name, &keys, state)? {
@@ -3644,6 +4178,34 @@ impl Emitter<'_, '_> {
         } else {
             self.lookup(k, state)
         }
+    }
+
+    fn leveled_witness(
+        &self,
+        index: usize,
+        key: &physical::Keyed,
+        state: &mut State,
+    ) -> syn::Result<Option<LeveledWitness>> {
+        let right = symbol_name(&key.right);
+        if !leveled_provider(self.facts, &right, read_provider(self.facts, key)) {
+            return Ok(None);
+        }
+        let mut keys = key.columns.iter().map(symbol_name).collect::<Vec<_>>();
+        keys.sort();
+        let origin = self.facts.witnesses.keys().find(|origin| {
+            let share = &self.facts.shares[*origin];
+            share.force == self.chain[index] && share.build == right && share.keys == keys
+        });
+        origin
+            .map(|origin| {
+                state.leveled_witnesses.remove(origin).ok_or_else(|| {
+                    syn::Error::new_spanned(
+                        key,
+                        "CQ_GPU_WITNESS: forcing read lost its recorded leveled range set",
+                    )
+                })
+            })
+            .transpose()
     }
 
     fn witness_lookup(
@@ -3814,6 +4376,30 @@ impl Emitter<'_, '_> {
     fn membership_lookup(&self, key: &physical::Keyed, state: &State) -> syn::Result<Tokens> {
         let right = symbol_name(&key.right);
         let provider = read_provider(self.facts, key);
+        let found = self.single_membership_lookup(key, state)?;
+        if !leveled_provider(self.facts, &right, provider) {
+            return Ok(found);
+        }
+        let snapshot = kernel_run_id(self.facts, &right, provider);
+        let run = provider_id("run_view", &right, provider);
+        Ok(quote!({
+            let mut __leveled_found=false;
+            let mut __leveled_run_id=0usize;
+            while __leveled_run_id<::cq_gpu_runtime::leveled_count(#snapshot) as usize && !__leveled_found {
+                let #run=::cq_gpu_runtime::leveled_run(#snapshot,__leveled_run_id);
+                __leveled_found=#found;
+                __leveled_run_id+=1;
+            }
+            __leveled_found
+        }))
+    }
+    fn single_membership_lookup(
+        &self,
+        key: &physical::Keyed,
+        state: &State,
+    ) -> syn::Result<Tokens> {
+        let right = symbol_name(&key.right);
+        let provider = read_provider(self.facts, key);
         if prefix_run(self.facts, &right, provider) && key.columns.len() > 1 {
             let mut columns: Vec<_> = self.facts.built[&right][provider]
                 .0
@@ -3910,8 +4496,21 @@ impl Emitter<'_, '_> {
         let begin = id("begin", name);
         let end = id("end", name);
         let pair = self.smallest(index)?;
+        let witness = self.leveled_witness(index, k, state)?;
         let first = self.probe_lookup(index, k, pair.as_ref(), state)?;
-        let lookup = if let Some(pair) = &pair {
+        let leveled = leveled_provider(self.facts, &right, provider);
+        let snapshot = kernel_run_id(self.facts, &right, provider);
+        let lookup = if leveled {
+            if let Some(witness) = &witness {
+                let range = witness.point();
+                quote! {let (#begin,#end)=if __valid {#range}else{(0u32,0u32)};}
+            } else {
+                quote! {
+                    let #run=::cq_gpu_runtime::leveled_run(#snapshot,__leveled_run_id);
+                    let (#begin,#end)=if __valid {#first}else{(0u32,0u32)};
+                }
+            }
+        } else if let Some(pair) = &pair {
             let choose = self.smallest_lookup(pair, state, first)?;
             quote! {
                 let (#begin,#end,__smallest_right,__smallest_other_begin,__smallest_other_end) =
@@ -3921,13 +4520,21 @@ impl Emitter<'_, '_> {
             quote!(let (#begin,#end)=if __valid {#first}else{(0,0)};)
         };
         let offset = (self.shared_words + 1) & !1;
-        let items = self.items;
+        // A leveled range set is streamed one run and input stripe at a time;
+        // the recorded root tile still visits every one of its original items.
+        let items = if leveled { 1 } else { self.items };
         let rows = 256 * items;
         let offsets = 2 + rows;
         let total_slot = 2 + 2 * rows;
         let mut words = total_slot + 2;
         let mut save = Vec::new();
         let mut restore = Vec::new();
+        if leveled {
+            restore.push(quote! {
+                let __leveled_run_id=*__descriptor.add(1) as usize;
+                let #run=::cq_gpu_runtime::leveled_run(#snapshot,__leveled_run_id);
+            });
+        }
         let mut child = State::default();
         let compact = self.compact_root(name, k, pair.as_ref(), state, rows, &mut words);
         let root_guard = compact.as_ref().map(|(guard, _, _)| guard);
@@ -3983,6 +4590,22 @@ impl Emitter<'_, '_> {
             child
                 .witnesses
                 .insert(origin.clone(), (quote!(#begin), quote!(#end)));
+        }
+        for (origin, witness) in &state.leveled_witnesses {
+            let ranges = id("witness_ranges", origin);
+            let meta = id("witness_meta", origin);
+            let target = LeveledWitness {
+                ranges: quote!(#ranges),
+                meta: quote!(#meta),
+            };
+            let (range_save, range_restore) = witness.stage(&target, rows, &mut words);
+            save.push(range_save);
+            restore.push(quote! {
+                let mut #ranges=[0u64;::cq_gpu_runtime::MAX_LEVELS];
+                let mut #meta:u64;
+                #range_restore
+            });
+            child.leveled_witnesses.insert(origin.clone(), target);
         }
         self.shared_words = offset + words;
         let stage = self.continuations.len() as u32 + 1;
@@ -4067,9 +4690,16 @@ impl Emitter<'_, '_> {
             .columns
             .retain(|c, _| self.context.carried_columns[after].contains(c));
         let continuation_count = self.continuations.len();
+        let parent_items = self.items;
+        if leveled {
+            self.items = 1;
+        }
         let rest = self.steps(next, &mut child)?;
+        self.items = parent_items;
         let batch = if items > 1 {
             rows as u32
+        } else if leveled {
+            self.batch.min(256) as u32
         } else {
             self.batch as u32
         };
@@ -4113,17 +4743,27 @@ impl Emitter<'_, '_> {
         let frontier_threshold = self.frontier_threshold as u64 * 1024;
         let call = quote!(__CQ_CALL_CONTINUATION);
         // Call placeholders are replaced structurally when the full constant ABI is known.
-        let scan = self.fill_expansion(quote!(#end-#begin), rows);
+        let scan = self.fill_expansion(quote!(#end-#begin), rows, items);
         // Wide consumers finish with their output barrier; publication also
         // finishes convergently. The scheduler supplies the root-retirement
         // barrier, so another barrier here would duplicate the manual shape.
         let retire_barrier = (items == 1).then(|| quote!(::cuda_device::thread::sync_threads();));
-        Ok(quote! {
+        let header_run = if leveled {
+            quote!(__leveled_run_id as u32)
+        } else {
+            quote!(0)
+        };
+        let stage_lookup = if leveled {
+            Tokens::new()
+        } else {
+            lookup.clone()
+        };
+        let body = quote! {
             #root_guard
-            #lookup
+            #stage_lookup
             let __input_slot=__item*256+__tid;
             let __descriptor=__scratch.add(#offset);
-            if __tid==0 && __item==0 {*__descriptor=#stage;*__descriptor.add(1)=0;*__descriptor.add(#total_slot+1)=0;}
+            if __tid==0 && __item==0 {*__descriptor=#stage;*__descriptor.add(1)=#header_run;*__descriptor.add(#total_slot+1)=0;}
             *__descriptor.add(2+__input_slot)=#begin;
             #(#save)*
             #scan
@@ -4148,7 +4788,22 @@ impl Emitter<'_, '_> {
             }
             #retire_barrier
             }
-        })
+        };
+        if leveled {
+            Ok(quote! {{
+                let __item=0usize;
+                let mut __leveled_run_id=0usize;
+                while __leveled_run_id<::cq_gpu_runtime::leveled_count(#snapshot) as usize {
+                    #lookup
+                    if ::cq_gpu_runtime::leveled_any(#begin<#end) {
+                        #body
+                    }
+                    __leveled_run_id+=1;
+                }
+            }})
+        } else {
+            Ok(body)
+        }
     }
 }
 
@@ -4579,7 +5234,7 @@ impl Kernel {
                     .unwrap_or_else(|| quote!(None));
                 quote!(concat!(module_path!(),"::",stringify!(#kernel)),&[#(#bounds),*],#hint)
             } else {
-                quote!(&[#(#bounds),*],#initial_capacity)
+                quote!(concat!(module_path!(),"::",stringify!(#kernel)),&[#(#bounds),*],#initial_capacity)
             };
             let extra = fused.then(|| quote!(,__fused));
             quote! {

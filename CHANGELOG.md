@@ -7,6 +7,13 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Add explicit `cq_elaborate::simplify_expansions` to LE only, preserving default
+  and Hypergraph plans. Eliminate unobservable expansions by checked RA identities:
+  under canonical answer semantics, dead introduced columns require only a
+  semijoin, and exact named-result lineage discharges already-satisfied support
+  checks. Preserve opaque Rust, negative ancestry and block boundaries; no
+  printer-side inference or data-dependent key assumption is introduced.
+
 - Add experimental `cq_gpu_datalog::datalog!` using the existing checked
   strata, semi-naive variants and fork, with explicit device admission and
   negative-key policies. Exact resident union/difference publishes immutable

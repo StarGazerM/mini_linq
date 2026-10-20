@@ -84,7 +84,8 @@ obligations; a trait implementation must obey the storage abstraction laws.
  \mathsf{unique}(t.returned)\text{ inferred or explicit return canon}}
  {\mathsf{WF}_{Structures}(t)\Downarrow A}
 \end{mathpar}
-Uniqueness: Unit has the empty key; host renames have none; join needs both
+Uniqueness: Unit has the empty key; a rename of a certified \code{host_set}
+has its full heading as key, and other host renames have none; join needs both
 keys and unions them; semi/anti keep the left key; union infers none;
 selections, guards and binds preserve it; projection preserves it only if no key
 column is dropped; a canon flag gives the full heading through its dedup type.

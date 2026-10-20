@@ -10,6 +10,7 @@ pub(super) fn check(
     source: &vo::Program,
     analysis: &vo::Analysis,
     target: &Schedule,
+    target_program: &ra::Program,
 ) -> Result<(), String> {
     if source
         .valuation
@@ -201,5 +202,12 @@ pub(super) fn check(
     let input = prefix.unwrap_or_else(|| schedule.unit());
     let output = schedule.project(input, &attributes);
     schedule.finish(output, &source.cq.query.head);
-    schedule.check(target, &reductions)
+    schedule.check(target, &reductions).or_else(|message| {
+        // An under-canon certificate may recover a primary expansion witness
+        // from the supplied target itself. No source plan is compiled or
+        // selected here, and the original named reductions remain required.
+        schedule
+            .check_dead_expansions(target_program, &reductions)
+            .map_err(|_| message)
+    })
 }

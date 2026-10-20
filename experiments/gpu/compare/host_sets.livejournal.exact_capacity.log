@@ -1,0 +1,15 @@
+distinct_edges=68993773
+iteration=0 rows=946400853 query_ms=267.781 retry_attempts=2 output_capacity=946400853 output_bytes=22713620472
+iteration=1 rows=946400853 query_ms=160.262 retry_attempts=1 output_capacity=946400853 output_bytes=22713620472
+iteration=2 rows=946400853 query_ms=160.690 retry_attempts=1 output_capacity=946400853 output_bytes=22713620472
+iteration=3 rows=946400853 query_ms=161.112 retry_attempts=1 output_capacity=946400853 output_bytes=22713620472
+iteration=4 rows=946400853 query_ms=160.609 retry_attempts=1 output_capacity=946400853 output_bytes=22713620472
+iteration=5 rows=946400853 query_ms=162.564 retry_attempts=1 output_capacity=946400853 output_bytes=22713620472
+answer_rows=946400853 median_query_ms=160.690
+certificate_sample=0 certificate_ms=1.619
+certificate_sample=1 certificate_ms=1.672
+certificate_sample=2 certificate_ms=1.653
+certificate_sample=3 certificate_ms=1.636
+certificate_sample=4 certificate_ms=1.658
+certificate_sample=5 certificate_ms=1.456
+median_certificate_ms=1.653

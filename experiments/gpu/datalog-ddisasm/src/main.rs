@@ -1,5 +1,5 @@
 //! Faithful 23-rule ddisasm GPU consumer; every i64 is an interned identity.
-//! Usage: gpu-datalog-ddisasm DATASET_DIRECTORY [--check] [--meta JSON]
+//! Usage: gpu-datalog-ddisasm DATASET_DIRECTORY [--check] [--meta JSON] [--repeat N]
 //! Upload includes all 28 EDBs, including the unused BlockLastInstr relation.
 //! Dataset constants remain runtime meta expressions, never dataset-specific literals.
 //! Timings synchronize the resident stream. Fixedpoint peak includes resident EDBs;
@@ -15,6 +15,7 @@ macro_rules! configured_datalog {
     (($($schedule:ident),*); $($program:tt)*) => {
         cq_gpu_datalog::datalog! {
             schedule = ::cq_gpu_datalog::schedule($($schedule),*);
+            leveled_ratio(4);
             pipeline {
                 print = ::cq_gpu::print(tile(256,4), frontier(8), directory(rank), output(retry));
             }
@@ -289,6 +290,7 @@ fn run(
         "control_readbacks": cq_gpu_runtime::control_readback_count(),
         "resume_readbacks": cq_gpu_runtime::resume_readback_count(),
         "compaction_readbacks": cq_gpu_runtime::compaction_readback_count(),
+        "bounded_retry_readbacks": cq_gpu_runtime::retry_readback_count(),
         "fused_retry_attempts": fused_retry_attempts,
         "fused_retry_relaunches": fused_retry_relaunches,
         "fused_retry_wasted_kernel_ms": fused_retry_wasted_kernel_ms,
@@ -317,14 +319,47 @@ fn run(
     Ok((result, metrics))
 }
 
+fn checked_run(
+    runtime: &Runtime,
+    facts: &Facts,
+    expected: &mut Option<Results>,
+) -> Result<serde_json::Value, Box<dyn Error>> {
+    let (actual, mut report) = run(runtime, facts, expected.is_some())?;
+    report["counts"] = actual
+        .as_ref()
+        .map(|result| serde_json::json!(result.counts()))
+        .unwrap_or(serde_json::Value::Null);
+    report["exact_cpu_check"] = serde_json::Value::Null;
+    if let Some(mut actual) = actual {
+        actual.check(expected.as_mut().expect("requested CPU reference"));
+        report["exact_cpu_check"] = serde_json::json!(true);
+    }
+    // Capacity history intentionally survives repeats, as do its diagnostic totals.
+    report["fused_retry_reports_scope"] = serde_json::json!("process_runtime_cumulative");
+    Ok(report)
+}
+
+fn timing_summary(runs: &[serde_json::Value], field: &str) -> serde_json::Value {
+    let mut values: Vec<_> = runs.iter().map(|run| run[field].as_f64().unwrap()).collect();
+    values.sort_by(f64::total_cmp);
+    let middle = values.len() / 2;
+    let median = if values.len() % 2 == 0 {
+        (values[middle - 1] + values[middle]) / 2.0
+    } else {
+        values[middle]
+    };
+    serde_json::json!({ "min": values[0], "median": median })
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let mut args = std::env::args_os().skip(1);
     let directory = PathBuf::from(
         args.next()
-            .ok_or("usage: gpu-datalog-ddisasm DATASET_DIRECTORY [--check] [--meta JSON]")?,
+            .ok_or("usage: gpu-datalog-ddisasm DATASET_DIRECTORY [--check] [--meta JSON] [--repeat N]")?,
     );
     let mut check = false;
     let mut metadata = None;
+    let mut repeat = None;
     while let Some(arg) = args.next() {
         if arg == "--check" {
             check = true;
@@ -332,8 +367,19 @@ fn main() -> Result<(), Box<dyn Error>> {
             metadata = Some(PathBuf::from(
                 args.next().ok_or("--meta requires a JSON path")?,
             ));
+        } else if arg == "--repeat" {
+            let count: usize = args
+                .next()
+                .ok_or("--repeat requires a count")?
+                .to_str()
+                .ok_or("--repeat requires an integer")?
+                .parse()?;
+            if count < 3 {
+                return Err("--repeat requires at least 3 timed repetitions after warmup".into());
+            }
+            repeat = Some(count);
         } else {
-            return Err("expected --check or --meta JSON".into());
+            return Err("expected --check, --meta JSON, or --repeat N".into());
         }
     }
     let started = Instant::now();
@@ -342,23 +388,59 @@ fn main() -> Result<(), Box<dyn Error>> {
         None => loader::load(&directory)?,
     };
     let load_ms = started.elapsed().as_secs_f64() * 1000.0;
+    let cpu_started = Instant::now();
+    let mut expected = check.then(|| mini_engine::run(facts.clone()));
+    let cpu_ms = cpu_started.elapsed().as_secs_f64() * 1000.0;
     let runtime = Runtime::new()?;
-    let (actual, mut report) = run(&runtime, &facts, check)?;
+    let mut report = if let Some(count) = repeat {
+        let warmup = {
+            let _phase = cq_gpu_runtime::nvtx::range(c"cold-run");
+            checked_run(&runtime, &facts, &mut expected)?
+        };
+        let mut runs = Vec::with_capacity(count);
+        for _ in 0..count {
+            let _phase = cq_gpu_runtime::nvtx::range(c"timed-run");
+            runs.push(checked_run(&runtime, &facts, &mut expected)?);
+        }
+        let fixedpoint = timing_summary(&runs, "fixedpoint_ms");
+        let upload = timing_summary(&runs, "upload_ms");
+        let mut report = runs.last().unwrap().clone();
+        report["fixedpoint_ms"] = fixedpoint["median"].clone();
+        report["fixedpoint_min_ms"] = fixedpoint["min"].clone();
+        report["repeat"] = serde_json::json!(count);
+        report["summary"] = serde_json::json!({
+            "fixedpoint_ms": fixedpoint,
+            "upload_ms": upload,
+        });
+        report["warmup"] = warmup;
+        report["runs"] = serde_json::json!(runs);
+        report
+    } else {
+        checked_run(&runtime, &facts, &mut expected)?
+    };
     report["dataset"] = serde_json::json!(directory);
     report["metadata"] = serde_json::json!(metadata);
     report["load_ms"] = serde_json::json!(load_ms);
-    report["counts"] = actual
-        .as_ref()
-        .map(|result| serde_json::json!(result.counts()))
-        .unwrap_or(serde_json::Value::Null);
-    report["exact_cpu_check"] = serde_json::Value::Null;
-    if let Some(mut actual) = actual {
-        let started = Instant::now();
-        let mut expected = mini_engine::run(facts);
-        report["cpu_ms"] = serde_json::json!(started.elapsed().as_secs_f64() * 1000.0);
-        actual.check(&mut expected);
-        report["exact_cpu_check"] = serde_json::json!(true);
+    if check {
+        report["cpu_ms"] = serde_json::json!(cpu_ms);
     }
     println!("{}", serde_json::to_string_pretty(&report)?);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn timing_summary_reports_minimum_and_true_median() {
+        let runs = [8.0, 2.0, 4.0, 6.0]
+            .map(|value| serde_json::json!({ "fixedpoint_ms": value }));
+        assert_eq!(
+            super::timing_summary(&runs[..3], "fixedpoint_ms"),
+            serde_json::json!({ "min": 2.0, "median": 4.0 }),
+        );
+        assert_eq!(
+            super::timing_summary(&runs, "fixedpoint_ms"),
+            serde_json::json!({ "min": 2.0, "median": 5.0 }),
+        );
+    }
 }
