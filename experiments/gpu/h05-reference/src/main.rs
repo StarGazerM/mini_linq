@@ -15,8 +15,9 @@ mod kernels;
 use cuda_core::{CudaStream, DeviceBuffer, DeviceCopy, LaunchConfig1D};
 use gpu_device_columns::{Bounds, Buffer, Codec, EncodedColumn, Lane, MemoryResource, Pool};
 use kernels::*;
+use rccl_cub::{cuda::Launch, DeviceRadixSortBufferWorkspace, DoubleBuffer};
 use rccl_thrust::prelude::*;
-use rccl_thrust::{arithmetic_range, lower_bound, sequence, unique_copy_by};
+use rccl_thrust::{arithmetic_range, lower_bound, unique_copy_by};
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, error::Error, fs, path::Path, sync::Arc, time::Instant};
 
@@ -220,13 +221,21 @@ fn pointer<T: DeviceCopy>(buffer: &DeviceBuffer<T>) -> *mut T {
     buffer.cu_deviceptr() as *mut T
 }
 
+/// Bits needed for IDs in [0, domain): the radix sort's key window.
+fn key_bits(domain: usize) -> u32 {
+    if domain <= 1 { 0 } else { usize::BITS - (domain - 1).leading_zeros() }
+}
+
 /// Build one CSR index from compressed base columns:
-/// decode keys; RCCL sequence + stable radix sort of (key, row);
-/// RCCL lower_bound of every key ID for the offsets; gather payload by row;
-/// FOR-pack offsets and payload.
+/// decode (key, row) pairs; RCCL stable radix sort of the pairs over only the
+/// key's ID bits; RCCL lower_bound of every key ID for the offsets; payload
+/// gathered by sorted row and FOR-packed in one pass.
+#[allow(clippy::too_many_arguments)]
 fn build_index(
     module: &reference::LoadedModule,
     exec: &Exec<'_>,
+    launch: &Launch<'_, '_>,
+    sort: &mut DeviceRadixSortBufferWorkspace,
     pool: &Arc<Pool>,
     base: &Base,
     spec: &IndexSpec,
@@ -239,32 +248,35 @@ fn build_index(
 
     let mut keys = temporary::<u32>(stream, rows)?;
     let mut order = temporary::<u32>(stream, rows)?;
-    module.decode_keys(stream, &module.prepare_decode_keys(strided)?, base.view(spec.key), rows as u32, pointer(&keys))?;
-    sequence(exec, &mut order)?;
-    keys.view_mut().with_values(order.view_mut())?.sort(exec)?;
+    let mut alternate_keys = temporary::<u32>(stream, rows)?;
+    let mut alternate_order = temporary::<u32>(stream, rows)?;
     let mut offsets = temporary::<u64>(stream, entries)?;
-    lower_bound(exec, keys.view(), arithmetic_range(0_u32, 1, entries), offsets.view_mut())?;
-
-    let outputs: Vec<DeviceBuffer<u32>> =
-        spec.payload.iter().map(|_| temporary::<u32>(stream, rows.max(1))).collect::<Result<_>>()?;
-    let unused = base.view(spec.key);
-    let payload = Payload {
-        columns: [
-            spec.payload.first().map_or(unused, |p| base.view(p.0)),
-            spec.payload.get(1).map_or(unused, |p| base.view(p.0)),
-        ],
-        outputs: [
-            outputs.first().map_or(std::ptr::null_mut(), pointer),
-            outputs.get(1).map_or(std::ptr::null_mut(), pointer),
-        ],
-        signed: [
-            spec.payload.first().map_or(0, |p| p.1 as u32),
-            spec.payload.get(1).map_or(0, |p| p.1 as u32),
-        ],
-        count: spec.payload.len() as u32,
+    module.keys_and_rows(
+        stream,
+        &module.prepare_keys_and_rows(strided)?,
+        base.view(spec.key),
+        rows as u32,
+        pointer(&keys),
+        pointer(&order),
+    )?;
+    let payload = {
+        let mut pairs = DoubleBuffer::paired((&mut keys, &mut order), (&mut alternate_keys, &mut alternate_order))
+            .ok_or("radix double buffer extents differ")?;
+        rccl_cub::device_radix_sort_pairs_buffer(launch, &mut pairs, 0..key_bits(spec.domain), sort)?;
+        let (sorted_keys, sorted_order) = pairs.current();
+        lower_bound(exec, sorted_keys.view(), arithmetic_range(0_u32, 1, entries), offsets.view_mut())?;
+        let sorted = sorted_order.cu_deviceptr() as *const u32;
+        spec.payload
+            .iter()
+            .map(|(column, signed, bounds)| unsafe {
+                if *signed {
+                    EncodedColumn::from_gather::<_, i32>(pool.clone(), base.view(column), sorted, rows, counts.rows.clone(), 0, *bounds)
+                } else {
+                    EncodedColumn::from_gather::<_, u32>(pool.clone(), base.view(column), sorted, rows, counts.rows.clone(), 0, *bounds)
+                }
+            })
+            .collect::<Result<Vec<_>>>()?
     };
-    module.gather(stream, &module.prepare_gather(strided)?, pointer(&order) as *const u32, rows as u32, payload)?;
-
     let offsets_column = unsafe {
         EncodedColumn::from_device(
             pool.clone(),
@@ -276,24 +288,10 @@ fn build_index(
             Bounds::Inclusive { min: 0, max: rows as i64 },
         )?
     };
-    let payload = spec
-        .payload
-        .iter()
-        .zip(&outputs)
-        .map(|((_, signed, bounds), output)| unsafe {
-            if *signed {
-                EncodedColumn::from_device(pool.clone(), pointer(output) as *const i32, rows, counts.rows.clone(), 0, Codec::For, *bounds)
-            } else {
-                EncodedColumn::from_device(pool.clone(), pointer(output) as *const u32, rows, counts.rows.clone(), 0, Codec::For, *bounds)
-            }
-        })
-        .collect::<Result<Vec<_>>>()?;
-    release(stream, keys)?;
-    release(stream, order)?;
-    release(stream, offsets)?;
-    for output in outputs {
-        release(stream, output)?;
+    for buffer in [keys, order, alternate_keys, alternate_order] {
+        release(stream, buffer)?;
     }
+    release(stream, offsets)?;
     Ok(BuiltIndex { offsets: offsets_column, payload })
 }
 
@@ -305,11 +303,13 @@ struct Workspace {
     segment_offsets: Buffer<u32>,
     segment_capacity: u32,
     answers: Buffer<u64>,
+    /// Reusable RCCL radix controls for the answer keys at this capacity.
+    sort: DeviceRadixSortBufferWorkspace,
     capacity: usize,
 }
 
 impl Workspace {
-    fn new(pool: &Arc<Pool>, segment_capacity: usize, capacity: usize) -> Result<Self> {
+    fn new(pool: &Arc<Pool>, launch: &Launch<'_, '_>, segment_capacity: usize, capacity: usize) -> Result<Self> {
         let capacity = capacity.max(1);
         if capacity > u32::MAX as usize {
             return Err("output capacity exceeds the u32 bound".into());
@@ -322,6 +322,7 @@ impl Workspace {
             segment_offsets: column(segment_capacity + 1)?,
             segment_capacity: segment_capacity as u32,
             answers: Buffer::zeroed(pool.clone(), capacity)?,
+            sort: rccl_cub::device_radix_sort_keys_buffer_workspace::<u64>(launch, capacity)?,
             capacity,
         })
     }
@@ -435,26 +436,34 @@ fn main() -> Result<()> {
 
     let module = unsafe { reference::load(pool.context())? };
     let thrust = rccl_thrust::cuda::Program::load(pool.context())?;
+    let cub = rccl_cub::cuda::Program::load(pool.context())?;
     let stream = pool.stream();
     let exec: Exec<'_> = thrust.par_in(stream, pool.resource())?;
+    let launch = cub.on(stream)?;
+    // Setup: RCCL's reusable radix controls, one per index.
+    let mut sorts = specs
+        .iter()
+        .map(|spec| rccl_cub::device_radix_sort_pairs_buffer_workspace::<u32, u32>(&launch, base.rows[spec.key]))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let answer_bits = order_bits + supplier_bits + nation_bits;
     let segments_launch = module.prepare_segments(LaunchConfig1D::new(1, 256, 0))?;
     let expand_launch = module.prepare_expand(LaunchConfig1D::new(EXPAND_GRID, 256, EXPAND_SHARED_BYTES))?;
     let timing = Some(cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT);
     let segment_capacity = (region_rows * nation_rows).max(1);
 
-    let mut workspace = Workspace::new(&pool, segment_capacity, capacity)?;
+    let mut workspace = Workspace::new(&pool, &launch, segment_capacity, capacity)?;
     let mut retries = 0;
     let mut samples: Vec<Sample> = Vec::new();
     let mut checked = false;
     while samples.len() < repeat + 1 {
-        let w = &workspace;
+        let w = &mut workspace;
         stream.synchronize()?;
         let wall = Instant::now();
         let start = stream.record_event(timing)?;
         let mut built = Vec::new();
         let mut index_events = Vec::new();
-        for (spec, count) in specs.iter().zip(&counts) {
-            built.push(build_index(&module, &exec, &pool, &base, spec, count)?);
+        for ((spec, count), sort) in specs.iter().zip(&counts).zip(&mut sorts) {
+            built.push(build_index(&module, &exec, &launch, sort, &pool, &base, spec, count)?);
             index_events.push(stream.record_event(timing)?);
         }
         let view = |index: usize, column: usize| unsafe {
@@ -504,20 +513,24 @@ fn main() -> Result<()> {
         if emitted as usize > w.capacity {
             capacity = emitted as usize;
             retries += 1;
-            workspace = Workspace::new(&pool, segment_capacity, capacity)?;
+            workspace = Workspace::new(&pool, &launch, segment_capacity, capacity)?;
             continue;
         }
         let rows = emitted as usize;
         let mut keys = temporary::<u64>(stream, rows)?;
+        let mut alternate = temporary::<u64>(stream, rows)?;
         if rows > 0 {
             unsafe {
                 cuda_core::memory::memcpy_dtod_async(keys.cu_deviceptr(), w.answers.cu_deviceptr(), rows * 8, stream.cu_stream())?;
             }
         }
-        keys.sort_unstable(&exec)?;
         let mut unique = temporary::<u64>(stream, rows)?;
         let mut selected = temporary::<u64>(stream, 1)?;
-        unique_copy_by(&exec, keys.view(), unique.view_mut(), &mut selected, |a: u64, b: u64| a == b)?;
+        {
+            let mut buffers = DoubleBuffer::new(&mut keys, &mut alternate).ok_or("radix double buffer extents differ")?;
+            rccl_cub::device_radix_sort_keys_buffer(&launch, &mut buffers, 0..answer_bits, &mut w.sort)?;
+            unique_copy_by(&exec, buffers.current().view(), unique.view_mut(), &mut selected, |a: u64, b: u64| a == b)?;
+        }
         let finished = stream.record_event(timing)?;
         let unique_count = selected.to_host_vec(stream)?[0];
         let wall_ms = wall.elapsed().as_secs_f64() * 1000.0;
@@ -568,6 +581,7 @@ fn main() -> Result<()> {
             checked = true;
         }
         release(stream, keys)?;
+        release(stream, alternate)?;
         release(stream, unique)?;
         release(stream, selected)?;
         println!(

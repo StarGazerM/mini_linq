@@ -1,6 +1,7 @@
 #[cuda_device::cuda_module]
 pub(crate) mod codecs {
-    use crate::{load_element, original_position, Codec, ColumnView, VectorHeader};
+    use crate::{decode, load_element, original_position, Codec, ColumnView, VectorHeader};
+    use cuda_device::warp;
     use cuda_device::{device, kernel, launch_bounds, launch_contract, thread, DynamicSharedArray};
 
     #[kernel]
@@ -262,6 +263,100 @@ pub(crate) mod codecs {
                     slot += 1;
                 }
             }
+            vector += stride;
+        }
+    }
+
+    /// Gather `source[order[i]]` into index order and FOR-pack it in one pass.
+    /// One warp per 1024-row vector stages its 32-bit values in shared memory,
+    /// reduces the vector's extrema, writes its header, and packs it into a
+    /// fixed slot of `slot_width` 1024-bit words at `vector * slot_width * 16`.
+    /// The vector's own width never exceeds the slot because the caller's
+    /// bounds enclose every value. `signed` selects i32 over u32 values.
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1), dynamic_shared_range = (32768, 32768))]
+    pub unsafe fn gather_encode(
+        source: ColumnView,
+        order: *const u32,
+        rows: u64,
+        slot_width: u32,
+        signed: u32,
+        headers: *mut VectorHeader,
+        output: *mut u64,
+    ) {
+        let warp_index = thread::threadIdx_x() as usize / 32;
+        let lane = thread::threadIdx_x() as usize % 32;
+        let staged = unsafe { (DynamicSharedArray::<u8, 16>::get_raw() as *mut u32).add(warp_index * 1024) };
+        let vectors = rows.div_ceil(1024);
+        let mut vector = thread::blockIdx_x() as u64 * 8 + warp_index as u64;
+        let stride = thread::gridDim_x() as u64 * 8;
+        while vector < vectors {
+            let begin = vector * 1024;
+            let count = (rows - begin).min(1024) as usize;
+            let mut low = i64::MAX;
+            let mut high = i64::MIN;
+            let mut i = lane;
+            while i < count {
+                let gathered = unsafe { decode(source, order.add(begin as usize + i).read() as u64) };
+                unsafe { staged.add(i).write(gathered as u32) };
+                let widened = if signed != 0 { gathered as i32 as i64 } else { gathered as u32 as i64 };
+                low = low.min(widened);
+                high = high.max(widened);
+                i += 32;
+            }
+            let mut distance = 16;
+            while distance != 0 {
+                low = low.min(warp::shuffle_xor_u64(low as u64, distance) as i64);
+                high = high.max(warp::shuffle_xor_u64(high as u64, distance) as i64);
+                distance /= 2;
+            }
+            warp::sync_mask(u32::MAX);
+            let width = 64 - (high as u64).wrapping_sub(low as u64).leading_zeros();
+            let offset = vector * slot_width as u64 * 16;
+            if lane == 0 {
+                unsafe {
+                    headers.add(vector as usize).write(VectorHeader {
+                        offset,
+                        base: low,
+                        width,
+                        codec: Codec::For as u32,
+                        rows: count as u32,
+                        padding: 0,
+                    });
+                }
+            }
+            // Sixteen independent T=64 lanes, as in `encode`.
+            if lane < 16 && width != 0 {
+                let data = unsafe { output.add(offset as usize) };
+                let width = width as usize;
+                let mut word = 0u64;
+                let mut occupied = 0usize;
+                let mut word_index = lane;
+                let mut slot = 0;
+                while slot < 64 {
+                    let row = original_position(slot * 16 + lane);
+                    let residual = if row < count {
+                        let bits = unsafe { staged.add(row).read() };
+                        let value = if signed != 0 { bits as i32 as i64 } else { bits as i64 };
+                        (value as u64).wrapping_sub(low as u64)
+                    } else {
+                        0
+                    };
+                    word |= residual << occupied;
+                    if occupied + width >= 64 {
+                        unsafe { data.add(word_index).write(word) };
+                        word_index += 16;
+                        let consumed = 64 - occupied;
+                        word = if consumed < width { residual >> consumed } else { 0 };
+                        occupied = occupied + width - 64;
+                    } else {
+                        occupied += width;
+                    }
+                    slot += 1;
+                }
+            }
+            warp::sync_mask(u32::MAX);
             vector += stride;
         }
     }

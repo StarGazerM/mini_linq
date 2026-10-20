@@ -7,8 +7,9 @@
 //! range is expanded in full. Counts and offsets are u32; any sum that would
 //! exceed u32 sets a device flag and fails the run instead of wrapping.
 //!
-//! These kernels are only representation access (decode, gather) and the query
-//! itself; sorting, searching, scans and deduplication are RCCL's.
+//! These kernels are only representation access (decoding key IDs) and the
+//! query itself; sorting, searching, scans and deduplication are RCCL's, and
+//! gathered packing is device-columns' `EncodedColumn::from_gather`.
 
 use cuda_device::atomic::{AtomicOrdering, DeviceAtomicU32};
 use cuda_device::{device, thread};
@@ -96,17 +97,6 @@ pub struct Answers {
     pub supplier_shift: u32,
 }
 
-/// Up to two payload columns gathered into an index. A signed column holds an
-/// i32 value; the others hold u32 IDs. Outputs are 32-bit.
-#[derive(Clone, Copy)]
-#[repr(C)]
-pub struct Payload {
-    pub columns: [ColumnView; 2],
-    pub outputs: [*mut u32; 2],
-    pub signed: [u32; 2],
-    pub count: u32,
-}
-
 #[device]
 #[inline(always)]
 unsafe fn range(offsets: ColumnView, key: u32) -> (u32, u32) {
@@ -151,47 +141,20 @@ pub mod reference {
 
     // ---------------------------------------------------------------- index build
 
-    /// Materialize a packed key column as u32 IDs for RCCL's sort.
+    /// Materialize a packed key column as u32 IDs and its row numbers, the
+    /// (key, row) pairs RCCL's radix sort orders.
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub fn decode_keys(key: ColumnView, rows: u32, out: *mut u32) {
+    pub fn keys_and_rows(key: ColumnView, rows: u32, keys: *mut u32, order: *mut u32) {
         let mut row = thread::index_1d().get() as u32;
         let stride = thread::gridDim_x() * 256;
         while row < rows {
-            unsafe { *out.add(row as usize) = decode_u32(key, row as u64) };
-            row = match row.checked_add(stride) {
-                Some(next) => next,
-                None => break,
-            };
-        }
-    }
-
-    /// Gather payload columns into index order: output[i] = column[order[i]].
-    #[kernel]
-    #[launch_bounds(256)]
-    #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub fn gather(order: *const u32, rows: u32, payload: Payload) {
-        let mut position = thread::index_1d().get() as u32;
-        let stride = thread::gridDim_x() * 256;
-        while position < rows {
             unsafe {
-                let row = *order.add(position as usize) as u64;
-                let mut c = 0usize;
-                #[unroll]
-                while c < 2 {
-                    if (c as u32) < payload.count {
-                        let value = if payload.signed[c] != 0 {
-                            decode(payload.columns[c], row) as i32 as u32
-                        } else {
-                            decode_u32(payload.columns[c], row)
-                        };
-                        *payload.outputs[c].add(position as usize) = value;
-                    }
-                    c += 1;
-                }
+                *keys.add(row as usize) = decode_u32(key, row as u64);
+                *order.add(row as usize) = row;
             }
-            position = match position.checked_add(stride) {
+            row = match row.checked_add(stride) {
                 Some(next) => next,
                 None => break,
             };

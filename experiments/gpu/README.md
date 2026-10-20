@@ -446,10 +446,13 @@ direct-address nation array, value-range packed dedup, an unchecked
   bit-packed per 1024-row vector and made resident.
 - **Index build (GPU, timed):** CSR indexes over those IDs for Nation by
   region, Customer by nation, Orders by customer (with date), Lineitem by order
-  and Supplier by supplier. Each decodes the packed key column, then uses RCCL:
-  `sequence` for row IDs, stable radix `sort` of (key, row) pairs, and batched
-  `lower_bound` of every key ID for the offsets; payload columns are gathered
-  by sorted row and FOR-packed from device buffers.
+  and Supplier by supplier. One kernel decodes the packed key column into
+  (key ID, row) pairs; RCCL's stable radix pair sort orders them over only the
+  key's ID bits (`device_radix_sort_pairs_buffer`, `0..⌈log₂ domain⌉`, result
+  read from the current double buffer); RCCL `lower_bound` of every key ID gives
+  the offsets; `EncodedColumn::from_gather` gathers each payload column by
+  sorted row and FOR-packs it in the same pass (fixed per-vector slots sized by
+  the column's bounds). RCCL's radix controls are allocated once at setup.
 - **Plan R N C O L S**, chosen by counted prefix cardinalities over all 164
   connected left-deep orders. No key is assumed unique: every lookup is a range
   and every range is expanded. Counts and offsets are u32; any sum that would
@@ -458,7 +461,8 @@ direct-address nation array, value-range packed dedup, an unchecked
 - **Query and dedup (GPU, timed):** `segments`, `expand` (emits the answer as
   one packed key per row, widths from the dictionary sizes), one metadata
   readback (emitted count; overflow reruns with the exact count), then RCCL
-  radix `sort_unstable` and `unique_copy_by` into the resident distinct answer.
+  radix key sort over the answer key's bits and `unique_copy_by` into the
+  resident distinct answer.
 - **Reported figure:** host wall clock from compressed resident base columns to
   the resident distinct answer (index build + query + dedup); GPU events give
   the breakdown. Stream-ordered temporaries come from the device's default
@@ -484,16 +488,17 @@ construction is included.
 
 | System, scope | SF1 ms | SF10 ms |
 |---|---:|---:|
-| `h05-reference`: GPU index build + query + dedup, wall clock | **2.38** | **15.25** |
+| `h05-reference`: GPU index build + query + dedup, wall clock | **1.91** | **11.45** |
 | srdatalog-python, `run` (device index build + query), cardinality-chosen order | 10.90 | 165.26 |
 | srdatalog-python, `run`, its default plan | 68.15 | 843.41 |
 | DuckDB 1.5.6 in-process, 24 threads, `CREATE TEMP TABLE AS SELECT DISTINCT` | 15.25 | 65.83 |
 | DuckDB 1.5.6 in-process, 1 thread | 46.43 | 516.05 |
 
-SF10 breakdown for `h05-reference`: index build 14.36 ms (lineitem_by_order
-9.58, orders_by_customer 4.08), expand 0.653 ms, dedup with its control
-readback 0.214 ms. The radix sort makes every pass even over Lineitem, which
-arrives ordered by orderkey.
+SF10 breakdown for `h05-reference` (Nsight, one iteration, 11.51 ms span,
+11.26 ms kernel time): radix pair passes 4.52 ms (10 passes: 3 each for the
+24-bit orderkey and 21-bit custkey IDs), `gather_encode` 3.02, `keys_and_rows`
+0.91, `lower_bound` 0.88, offsets packing 0.71, `expand` 0.61. Per index:
+lineitem_by_order 7.30 ms, orders_by_customer 2.86 ms; dedup 0.18 ms.
 
 srdatalog's scope was checked on an Nsight timeline: `prepare` ends with the
 host-to-device copies and a device synchronize; the index sorts

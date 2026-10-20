@@ -256,6 +256,72 @@ impl EncodedColumn {
         })
     }
 
+    /// Gather `source[order[i]]` for every `i < rows` and FOR-pack the result
+    /// in one device pass, without materializing the gathered column.
+    ///
+    /// Each 1024-row vector keeps its own base and width but occupies a fixed
+    /// slot sized by `bounds`, so no offset scan or extent readback is needed.
+    /// Only 32-bit lanes are supported (`u32`, `i32`).
+    ///
+    /// # Safety
+    /// `order` must hold `rows` indices into `source`'s live rows, ready on
+    /// pool.stream. `bounds` must enclose every gathered value.
+    pub unsafe fn from_gather<T: DeviceCopy + 'static, L: Lane>(
+        pool: Arc<Pool>,
+        source: ColumnView,
+        order: *const u32,
+        rows: usize,
+        count_owner: Arc<Buffer<T>>,
+        count_offset: usize,
+        bounds: Bounds,
+    ) -> Result<Self> {
+        if L::ELEMENT != ELEMENT_U32 && L::ELEMENT != ELEMENT_I32 {
+            return Err("gathered packing supports 32-bit lanes only".into());
+        }
+        let count = count_pointer(&pool, &count_owner, count_offset)?;
+        let slot_width = match bounds {
+            Bounds::Empty => 0,
+            Bounds::Inclusive { min, max } => 64 - (max as u64).wrapping_sub(min as u64).leading_zeros(),
+        };
+        let vectors = rows.div_ceil(1024);
+        let words = vectors
+            .checked_mul(slot_width as usize * 16)
+            .ok_or("gathered encoded capacity overflow")?;
+        let headers = unsafe { Buffer::<VectorHeader>::uninitialized(pool.clone(), vectors.max(1))? };
+        let data = unsafe { Buffer::<u64>::uninitialized(pool.clone(), words.max(1))? };
+        if vectors > 0 {
+            let module = module(&pool)?;
+            let launch = module.prepare_gather_encode(LaunchConfig1D::new(
+                vectors.div_ceil(8).clamp(1, 568 * 4) as u32,
+                256,
+                32768,
+            ))?;
+            unsafe {
+                module.gather_encode(
+                    pool.stream(),
+                    &launch,
+                    source,
+                    order,
+                    rows as u64,
+                    slot_width,
+                    (L::ELEMENT == ELEMENT_I32) as u32,
+                    headers.ptr(),
+                    data.ptr(),
+                )?;
+            }
+        }
+        Ok(Self {
+            headers: Some(headers),
+            data: ColumnData::Packed(data),
+            extent: None,
+            _count_owner: Some(count_owner),
+            capacity: rows,
+            count,
+            codec: Codec::For,
+            bounds,
+        })
+    }
+
     fn make_headers(
         pool: Arc<Pool>,
         input: *const u8,
@@ -436,8 +502,12 @@ impl EncodedColumn {
     /// called by the compute path. Native Plain returns no headers and raw words.
     pub fn inspect(&self) -> Result<(Vec<VectorHeader>, Vec<u64>)> {
         match (&self.headers, &self.extent, &self.data) {
-            (Some(headers), Some(extent), ColumnData::Packed(data)) => {
-                let words = usize::try_from(extent.to_host()?[0])?;
+            (Some(headers), extent, ColumnData::Packed(data)) => {
+                // Fixed-slot (gathered) columns have no compact extent.
+                let words = match extent {
+                    Some(extent) => usize::try_from(extent.to_host()?[0])?,
+                    None => data.len(),
+                };
                 let rows = self.logical_rows()?;
                 Ok((
                     headers.to_host_prefix(rows.div_ceil(1024))?,
