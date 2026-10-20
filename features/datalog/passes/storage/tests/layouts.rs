@@ -112,7 +112,7 @@ fn disconnected_full_reads_are_scans_and_negative_reads_have_separate_policy() {
             ("F".into(), vec![0], 0),
         ]
     );
-    assert_eq!(&target.policy.negation_keys, "hash_set_borrowed");
+    assert_eq!(&target.policy.negation_keys, "borrowed");
 }
 
 #[test]
@@ -178,21 +178,13 @@ fn delta_demands_cover_constants_later_scans_and_shared_mixed_keys_exactly() {
     check(&source, &replay).unwrap();
 }
 #[test]
-fn every_provider_and_maintenance_choice_is_checked() {
+fn insertion_negation_and_read_semantics_are_checked() {
     let (_, source) = scheduled(
         syn::parse_quote! {struct Q;relation E(x:i32)=(e);relation R(x:i32);output R;R(*x):-E(x);},
     );
     let changes: &[fn(&mut Program)] = &[
-        |p| p.policy.edb = syn::parse_quote!(bag),
-        |p| p.policy.all = syn::parse_quote!(bag),
-        |p| p.policy.seen = syn::parse_quote!(vec),
-        |p| p.policy.delta = syn::parse_quote!(hash_set),
-        |p| p.policy.next = syn::parse_quote!(hash_set),
-        |p| p.policy.layout = syn::parse_quote!(vec),
         |p| p.policy.insertion = syn::parse_quote!(bag),
         |p| p.policy.negation_keys = syn::parse_quote!(owned),
-        |p| p.policy.full_maintenance = syn::parse_quote!(every_candidate),
-        |p| p.policy.delta_maintenance = syn::parse_quote!(append),
         |p| p.reads.clear(),
         |p| p.reads[0].position = usize::MAX,
         |p| p.reads[0].index = usize::MAX,
@@ -202,4 +194,63 @@ fn every_provider_and_maintenance_choice_is_checked() {
         mutate(&mut changed);
         assert!(contract::check(&changed).is_err());
     }
+}
+
+#[test]
+fn default_providers_record_concrete_types_in_declaration_order() {
+    let (_, target) = scheduled(syn::parse_quote! {
+        struct Providers;
+        relation E(x:i32,y:u64) = (e);
+        relation R(y:u64,x:i32);
+        output R;
+        R(*y,*x) :- E(x,y);
+        R(*y,*x) :- R(y,x), E(x,y);
+    });
+    let expected: Vec<cq_lang_datalog_storage::Providers> = vec![
+        syn::parse_quote! {
+            canonical_name { Canonical }
+            canonical_set { ::cq_storage::HashSet<R> }
+            all { ::std::vec::Vec<(i32, u64,)> }
+            seen { ::cq_storage::HashSet<(i32, u64,)> }
+            delta { ::std::vec::Vec<(i32, u64,)> }
+            next { ::std::vec::Vec<(i32, u64,)> }
+            all_init { ::std::vec::Vec::new() }
+            delta_init { ::std::vec::Vec::new() }
+            next_init { ::std::vec::Vec::new() }
+        },
+        syn::parse_quote! {
+            canonical_name { Canonical }
+            canonical_set { ::cq_storage::HashSet<R> }
+            all { ::std::vec::Vec<(u64, i32,)> }
+            seen { ::cq_storage::HashSet<(u64, i32,)> }
+            delta { ::std::vec::Vec<(u64, i32,)> }
+            next { ::std::vec::Vec<(u64, i32,)> }
+            all_init { ::std::vec::Vec::new() }
+            delta_init { ::std::vec::Vec::new() }
+            next_init { ::std::vec::Vec::new() }
+        },
+    ];
+    assert_eq!(target.providers, expected);
+    let scan: syn::Type = syn::parse_quote!(
+        ::std::collections::HashMap<(), ::std::vec::Vec<(i32, u64,)>, ::cq_storage::HashState>
+    );
+    assert_eq!(target.layouts[0].provider, scan);
+    let lookup: syn::Type = syn::parse_quote!(
+        ::std::collections::HashMap<(i32, u64,), ::std::vec::Vec<()>, ::cq_storage::HashState>
+    );
+    assert_eq!(target.layouts[1].provider, lookup);
+    assert!(
+        target
+            .layouts
+            .iter()
+            .all(|layout| layout.maintenance == "admitted_rows")
+    );
+    assert!(
+        target
+            .delta_layouts
+            .iter()
+            .all(|layout| layout.maintenance == "replace_each_run")
+    );
+    let replay: Program = syn::parse2(target.to_token_stream()).unwrap();
+    assert_eq!(target, replay);
 }

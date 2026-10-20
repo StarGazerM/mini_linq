@@ -80,7 +80,7 @@ fn evaluate(
         };
         declarations.push(quote!(let mut #candidates = ::std::vec::Vec::new();));
         evaluations.push(quote!(#scope.spawn(|_| { #candidates = #evaluation; });));
-        let insert = cq_datalog_print::insert_new(&head.seen, &head.next, &quote!(#admitted_chunk));
+        let insert = cq_datalog_print::insert_new(rule, context, &quote!(#admitted_chunk));
         admissions.push(quote!(for #admitted_chunk in #candidates { #insert }));
     }
     let evaluation = if rules.is_empty() {

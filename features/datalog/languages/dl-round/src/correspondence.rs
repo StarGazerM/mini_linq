@@ -124,10 +124,10 @@ fn guard(atom: &cq_syntax::Atom, key: &KeySet) -> BodyItem {
 
 fn key_representation(source: &storage::Program) -> syn::Result<KeyRepresentation> {
     match Some(symbol_name(&source.policy.negation_keys)).as_deref() {
-        Some("hash_set_borrowed") => Ok(KeyRepresentation::HashSetBorrowed),
+        Some("borrowed") => Ok(KeyRepresentation::Borrowed),
         _ => Err(syn::Error::new_spanned(
             source,
-            "fork requires negation_keys hash_set_borrowed",
+            "fork requires borrowed negation keys",
         )),
     }
 }
@@ -147,7 +147,11 @@ pub fn check_storage(source: &storage::Program, target: &Program) -> syn::Result
         "fork changed relation or stratum coverage",
     )?;
     ensure(
-        context.outputs
+        context
+            .outputs
+            .iter()
+            .map(|output| output.relation)
+            .collect::<Vec<_>>()
             == source
                 .incremental
                 .strata
@@ -170,14 +174,16 @@ pub fn check_storage(source: &storage::Program, target: &Program) -> syn::Result
     };
     add_name(&context.observer_name)?;
     add_name(&context.round_name)?;
-    for (relation, declaration) in context
+    for ((relation, declaration), providers) in context
         .relations
         .iter()
         .zip(&source.incremental.strata.source.declarations)
+        .zip(&source.providers)
     {
         ensure(
             relation.declaration == *declaration
-                && relation.delta.as_ref() == analysis.deltas.get(&symbol_name(&declaration.name)),
+                && relation.delta.as_ref() == analysis.deltas.get(&symbol_name(&declaration.name))
+                && relation.providers == *providers,
             source,
             "fork changed relation schema or delta binding",
         )?;
@@ -208,7 +214,9 @@ pub fn check_storage(source: &storage::Program, target: &Program) -> syn::Result
         ensure(
             layout.relation == analysis.positions[&symbol_name(&expected.relation)]
                 && layout.columns == expected.columns
-                && layout.key == expected.key,
+                && layout.key == expected.key
+                && layout.provider == expected.provider
+                && layout.maintenance == expected.maintenance,
             source,
             "fork changed a selected host layout",
         )?;

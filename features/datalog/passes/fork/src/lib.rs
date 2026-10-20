@@ -103,10 +103,10 @@ fn guard(atom: &cq_syntax::Atom, key: &KeySet) -> BodyItem {
 
 fn key_representation(source: &storage::Program) -> syn::Result<KeyRepresentation> {
     match Some(symbol_name(&source.policy.negation_keys)).as_deref() {
-        Some("hash_set_borrowed") => Ok(KeyRepresentation::HashSetBorrowed),
+        Some("borrowed") => Ok(KeyRepresentation::Borrowed),
         _ => Err(syn::Error::new_spanned(
             source,
-            "fork requires negation_keys hash_set_borrowed",
+            "fork requires borrowed negation keys",
         )),
     }
 }
@@ -129,8 +129,10 @@ fn construct(
             .source
             .declarations
             .iter()
-            .map(|declaration| Relation {
+            .zip(&source.providers)
+            .map(|(declaration, providers)| Relation {
                 declaration: declaration.clone(),
+                providers: providers.clone(),
                 all: fresh.id("all"),
                 seen: fresh.id("seen"),
                 next: fresh.id("next"),
@@ -153,6 +155,8 @@ fn construct(
                 key: layout.key,
                 name: fresh.id("layout"),
                 host: fresh.id("host"),
+                provider: layout.provider.clone(),
+                maintenance: layout.maintenance.clone(),
             })
             .collect(),
         delta_layouts: source
@@ -164,6 +168,8 @@ fn construct(
                 key: layout.key,
                 name: fresh.id("delta_layout"),
                 host: fresh.id("delta_host"),
+                provider: layout.provider.clone(),
+                maintenance: layout.maintenance.clone(),
             })
             .collect(),
         strata: Vec::new(),
@@ -173,7 +179,20 @@ fn construct(
             .source
             .outputs
             .iter()
-            .map(|id| analysis.positions[&symbol_name(id)])
+            .map(|id| {
+                let relation = analysis.positions[&symbol_name(id)];
+                Output {
+                    relation,
+                    conversion: if source.incremental.strata.source.declarations[relation]
+                        .value
+                        .is_some()
+                    {
+                        syn::parse_quote!(borrowed_cloned_into_iter)
+                    } else {
+                        syn::parse_quote!(owned_into_iter)
+                    },
+                }
+            })
             .collect(),
         observer: source.incremental.strata.source.observer.clone(),
         observer_name: fresh.id("observer"),
@@ -187,6 +206,60 @@ fn construct(
             keys: Vec::new(),
             seeds: Vec::new(),
             steps: Vec::new(),
+            phases: vec![
+                syn::parse_quote!(evaluate),
+                syn::parse_quote!(admit),
+                syn::parse_quote!(publish),
+            ],
+            publication: members
+                .iter()
+                .map(|&relation| {
+                    let full: Vec<_> = context
+                        .layouts
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, layout)| layout.relation == relation)
+                        .map(|(index, _)| index)
+                        .collect();
+                    let delta: Vec<_> = context
+                        .delta_layouts
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, layout)| layout.relation == relation)
+                        .map(|(index, _)| index)
+                        .collect();
+                    let mut operations = Vec::new();
+                    if !full.is_empty() {
+                        operations.push(PublicationOp {
+                            kind: syn::parse_quote!(full_layouts),
+                            layouts: full,
+                        });
+                    }
+                    operations.push(PublicationOp {
+                        kind: syn::parse_quote!(all_extend),
+                        layouts: Vec::new(),
+                    });
+                    operations.push(PublicationOp {
+                        kind: syn::parse_quote!(delta_swap),
+                        layouts: Vec::new(),
+                    });
+                    if !delta.is_empty() {
+                        operations.push(PublicationOp {
+                            kind: syn::parse_quote!(delta_rebuild),
+                            layouts: delta,
+                        });
+                    }
+                    Publication {
+                        relation,
+                        operations,
+                    }
+                })
+                .collect(),
+            termination: members.clone(),
+            termination_test: syn::parse_quote!(sum_delta_lengths),
+            observer: syn::parse_quote!(before_step),
+            key_scope: syn::parse_quote!(component),
+            loop_form: syn::parse_quote!(while_nonempty),
         };
         for (variant_index, variant) in variants.iter().enumerate() {
             let head = analysis.positions[&symbol_name(&variant.query.head.relation)];
@@ -227,6 +300,7 @@ fn construct(
                         filters: selections,
                         name: fresh.id("keys"),
                         representation,
+                        provider: syn::parse_quote!(::cq_storage::HashSet<_>),
                         hole: holes.len(),
                     };
                     let name = fresh.id("key_hole");
@@ -292,6 +366,7 @@ fn construct(
                 head,
                 hole,
                 scan,
+                insertion: syn::parse_quote!(insert),
             };
             if variant.delta.is_some() {
                 stratum.steps.push(rule);
@@ -315,14 +390,7 @@ fn construct(
         holes,
         pull_printers,
         execution: Vec::new(),
-        policy: RoundPolicy {
-            phases: syn::parse_quote!(evaluate_admit_publish),
-            admission: syn::parse_quote!(written_order),
-            termination: syn::parse_quote!(any_delta),
-            observer: syn::parse_quote!(before_step),
-            outputs: syn::parse_quote!(owned_iterators),
-            timing,
-        },
+        policy: RoundPolicy { timing },
     };
     check(source, &target)?;
     Ok(target)

@@ -45,6 +45,36 @@ pub fn alternate_storage(input: proc_macro::TokenStream) -> proc_macro::TokenStr
     .into()
 }
 
+/// Select ordered-map layout providers without changing their read bindings.
+#[proc_macro]
+pub fn ordered_storage(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    cq_stage::rewrite::<cq_lang_datalog_storage::Program>(input.into(), |source, args| {
+        no_arguments(args)?;
+        rewrites::ordered_storage(source)
+    })
+    .into()
+}
+
+/// Read a later delta occurrence directly instead of through its grouped layout.
+#[proc_macro]
+pub fn direct_later_delta(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    cq_stage::rewrite::<cq_lang_datalog_storage::Program>(input.into(), |source, args| {
+        no_arguments(args)?;
+        rewrites::direct_later_delta(source)
+    })
+    .into()
+}
+
+/// Publish component members in the opposite admissible order.
+#[proc_macro]
+pub fn reverse_publication(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    cq_stage::rewrite::<cq_lang_datalog_round::Program>(input.into(), |source, args| {
+        no_arguments(args)?;
+        rewrites::reverse_publication(source)
+    })
+    .into()
+}
+
 /// Evaluate checked DL-Source using native Rust and a naive set fixpoint.
 /// Returns a HashSet for one output, or a tuple of HashSets for many outputs.
 #[proc_macro]

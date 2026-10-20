@@ -3,10 +3,11 @@
 This specification separates five checked languages above the unchanged CQ
 compiler. Structural checks do not discharge all semantic obligations.
 Contracts admit recorded choices; default producers choose deterministically.
-The base admits dependency-ordered unions of SCCs and alternative usable layouts,
-while retaining only the \code{seminaive\_covering} evaluation scheme and fixed
-provider, insertion, and maintenance policy literals. Structural checks examine
-the supplied IR and never rerun a producer to compare with its chosen output.
+The base admits dependency-ordered unions of SCCs, alternative usable layouts
+and opaque concrete Rust providers, while retaining the
+\code{seminaive\_covering} evaluation scheme and a checked operational vocabulary.
+Structural checks examine the supplied IR and never rerun a producer to compare
+with its chosen output.
 The default generated Rust must remain byte-identical to the captured baseline.
 
 \paragraph{Semantic domain and limits.}
@@ -142,54 +143,111 @@ partial Rust. Executable panic/refinement cases provide evidence, not a proof
 for all opaque expressions.
 
 \subsection{DL-Storage}
-\paragraph{Grammar.} DL-Incremental plus canonical providers, EDB
-canonicalization, full and delta layouts (column permutation and key prefix),
-negative key sets, occurrence-to-read bindings, insertion and maintenance
-policies. Runtime host names are explicit where consumers need them.
-\paragraph{Contract.} Check Incremental and the fixed provider, canonicalization,
-insertion, negation and maintenance policy literals, including
-\code{hash\_set\_all\_columns} insertion and \code{hash\_set\_borrowed}
-negation. Layouts may differ from the default: each declared layout has a
-complete column permutation and a valid key prefix, and every declared structure
-has the prescribed maintenance. For every recorded read binding, locate the
-actual source rule occurrence and derive the variables already bound at that
-written position and its constants. The selected structure must be declared
-for the correct relation and version, and its key must be a subset of those
-available columns; a recorded claim of bound columns is not evidence by itself.
-Require complete occurrence coverage and the prescribed frozen negative
-projection/filter, including wildcard treatment. Delta and full structures
-must serve their respective versions.
+\paragraph{Grammar.} DL-Incremental plus a declaration-ordered
+\code{providers} vector, full and delta layouts, occurrence-to-read bindings,
+frozen negative projections, and insertion/negation policies. Each
+\code{Providers} record contains a local \code{canonical\_name}, the opaque Rust
+type \code{canonical\_set} with generic row parameter \code{R}, and concrete
+row-container types \code{all}, \code{seen}, \code{delta} and \code{next}.
+The opaque expressions \code{all\_init}, \code{delta\_init} and
+\code{next\_init} initialize their respective containers. Each \code{Layout}
+records its relation, complete column permutation, key-prefix length,
+opaque concrete map \code{provider} type and \code{maintenance} operation.
+A \code{Read} records the variant, written body position, read kind, structure
+index and column order. A \code{Negative} records its consuming component,
+source relation, projected columns and constant filters.
+
+\paragraph{Textual records.} Storage and Round use the existing
+\code{record!} grammar, not a second surface language: fields occur in their
+declared order as \code{field \{ payload \}}; a vector is a bracketed sequence
+of braced entries without commas; an option is \code{[]} or
+\code{[payload]}. Thus a two-member index vector is \code{[\{0\}\{1\}]}.
+Rust types and expressions are parsed losslessly as opaque Rust syntax inside
+their field delimiters. Parse/print roundtripping retains these choices;
+resuming a checked IR does not consult a producer to recover them.
+
+\paragraph{Contract.} Check Incremental, require one provider record per source
+declaration, and accept the supported all-column insertion and borrowed
+negation policies \code{all\_columns} and
+\code{borrowed}. Every full layout records
+\code{admitted\_rows} maintenance; every delta layout records
+\code{replace\_each\_run}. Each declared layout has a complete column
+permutation and valid key prefix, including additional unused layouts.
+For every recorded read, locate the actual source-rule occurrence and derive
+the variables already bound at that written position and its constants.
+The selected structure must belong to the correct relation and version, and
+its key must use only available columns; a recorded bound-column claim is not
+evidence. Require exactly one binding per positive occurrence and no extraneous
+bindings, together with the prescribed frozen negative projection/filter,
+including wildcard treatment. A \code{direct} binding reads the selected
+delta relation in declaration column order; it need not be the first body
+occurrence. Full and delta layouts must serve their respective versions.
+The checker does not whitelist Rust provider types or interpret initializer
+expressions; their typing and operation availability are checked by Rust.
 \begin{mathpar}
 \Rule{WF-DL-Storage}{\mathrm{WF}_{\mathrm{Incremental}}(I)\quad
- D\text{ declares complete layouts, usable reads and maintained structures}}
+ D\text{ records complete providers, usable reads and maintained layouts}}
  {\mathrm{WF}_{\mathrm{Storage}}(I,D)}
 \end{mathpar}
-\paragraph{Meaning.} Data refinement by $\alpha$: the canonical provider and
-each published full layout represent the same relation, delta layouts
-represent precisely the current fresh delta, and negative key sets represent
-the prescribed projection/filter of frozen inputs. Provider equality, hashing,
-cloning and membership laws remain premises on Rust implementations.
-\paragraph{Recorded decisions.} Provider and canonicalization policy labels,
-layout/read bindings, membership representation labels, and insertion and
-publication maintenance labels. These are not separate fields for every concrete
-Rust implementation choice. Non-default layouts and read bindings are admitted
-when they satisfy this contract; unsupported policy literals are not.
+\paragraph{Meaning and provider premises.} Data refinement by $\alpha$ requires
+the EDB canonical provider and each published full layout to represent the
+same relation, delta layouts to represent precisely the current fresh delta,
+and negative keys to represent the prescribed projection/filter of frozen
+inputs. Initializers and default construction must denote empty containers.
+Canonical collection removes duplicates without changing row values; canonical
+iteration and cloning preserve those values. The membership provider's
+\code{insert} returns true exactly for a previously absent complete row,
+and retains that row. Sequence push, extension, traversal and owned iteration
+preserve their rows; moving the next container to delta preserves exactly the
+admitted batch. Map entry lookup and bucket insertion implement the recorded
+key/payload split, without losing rows or mixing unequal keys. Equality,
+hashing, ordering (where required), cloning and borrowing obey the relevant
+provider laws, and these operations introduce no new panic on successful
+reference executions. These are semantic premises, not proofs obtained by
+parsing a type name or by checking method availability.
+
+\paragraph{Defaults and checked alternatives.} The default canonical wrapper
+is named \code{Canonical}, with \code{::cq\_storage::HashSet<R>} storage.
+The accumulated, delta and next providers are concrete \code{Vec} row types,
+initialized with \code{::std::vec::Vec::new()}; membership uses
+\code{::cq\_storage::HashSet} of complete rows. Layouts use
+\code{::std::collections::HashMap} from key tuples to \code{Vec} payload
+tuples, with \code{::cq\_storage::HashState}. These are default records, not
+the definition of admissibility. A concrete \code{BTreeMap} layout with the
+same key/payload types is admitted under its lawful ordering premise.
+Likewise a later changing occurrence may select a direct delta scan instead
+of a delta layout, retaining its written position and declaration-order columns.
+
+\paragraph{Recorded decisions.} Concrete provider types, wrapper name,
+container initializers, layout shape and maintenance, occurrence bindings,
+negative projections and the supported insertion/negation operations.
+Opaque provider syntax is retained through Fork and consumed by the printer,
+rather than replaced with the default types.
 \paragraph{Rewrite check.} Check both contracts and preserve Incremental exactly;
-allow changed layouts and occurrence bindings when the target satisfies key
-availability, version, coverage and maintenance obligations.
+allow changed provider records, layouts and occurrence bindings when the target
+satisfies coverage, key availability, version and maintenance obligations.
+Provider refinement remains a semantic premise of such a rewrite.
 
 \subsection{DL-Round}
-\paragraph{Grammar.} DL-Storage plus explicit component seed/step programs,
-complete embedded CQ holes, phase/termination/observer/output policy labels,
-and a CQ sub-pipeline and typed interface for each hole. The program also
-records the complete \code{pull\_printers} allowlist of exact macro paths.
+\paragraph{Grammar.} DL-Storage plus a \code{RoundContext} of runtime
+relations, copied concrete providers and layouts, component \code{Stratum}
+records, outputs and observer bindings; complete embedded CQ holes; and a
+CQ sub-pipeline and typed interface for each hole. A \code{Stratum} records
+members, component-local negative keys, ordered seed/step \code{RuleHole}
+lists, explicit phases, publication operations, termination references and test,
+observer placement, key scope and loop form. Each \code{RuleHole} records the variant, head,
+hole index, optional scan binding and membership \code{insertion} operation.
+An \code{Output} records a relation reference and conversion operation.
+The program also records the complete \code{pull\_printers} allowlist of
+exact macro paths.
 \code{HoleInterface::Pull} denotes an iterator result consumed by Round.
 \code{HoleInterface::Push} is representable in text for a clear unsupported
 interface diagnostic, but no base Round consumer implements it.
-\paragraph{Contract.} Check Storage, exact hole correspondence under its
-admissible recorded read bindings, seed/step ordering, fresh names, phase order, delta termination
-and outputs. Each hole must record the pull interface and an argument-free
-terminal invocation whose exact path is in its program's recorded allowlist.
+\paragraph{Contract.} Check Storage, exact copied provider/layout correspondence,
+hole correspondence under the recorded reads, seed/step ordering, fresh runtime
+names and the operational obligations below. The check does not reconstruct a
+default storage or Round plan. Each hole must record the pull interface and an
+argument-free terminal invocation whose exact path is in its recorded allowlist.
 The default allowlist is exactly
 \code{::mini\_linq::passes::print\_pull} and
 \code{mini\_linq::passes::print\_pull}; leading qualification is significant.
@@ -206,7 +264,7 @@ This check examines terminal invocations, not Rust tokens that do not yet exist.
 \begin{mathpar}
 \Rule{WF-DL-Round}{\mathrm{WF}_{\mathrm{Storage}}(D)\quad
  H\text{ implements the recorded variants and frozen keys}\quad
- E\text{ evaluates, admits, then publishes the recorded structures}}
+ E\text{ has complete ordered maintenance, termination and outputs}}
  {\mathrm{WF}_{\mathrm{Round}}(D,H,E)}
 \end{mathpar}
 \paragraph{Meaning.} A state machine over storage: evaluations see the
@@ -214,31 +272,100 @@ committed snapshot; admission rejects known and duplicate candidate heads;
 publication extends full structures and replaces every delta layout, including
 empty ones, before subsequent evaluation. Under provider and partial-Rust
 premises its $\alpha$-image refines the Incremental transition system.
-\paragraph{Recorded decisions.} Hole boundaries, per-hole CQ invocation queues
-and typed interfaces, declared pull-printer paths, component membership and
-seed/step lists, runtime bindings, and phase, observer and output policy labels.
-The labels do not independently encode every concrete orchestration decision.
-The generic \code{ScanBinding} names one complete immutable delta host or
-key-zero layout bucket as a flat CQ input, preserving its column order and
-one-occurrence correspondence. The default \code{\_\_cq\_datalog\_scan\_*}
-name is an ordinary Round-IR input binding, not a parallel-specific decision:
-the sequential printer binds the whole input and records no execution annotation.
-\paragraph{Decisions still implicit in the shared printer.}
-\code{cq-datalog-print} still chooses the concrete storage types and
-\code{Canonical} EDB wrapper; the order of publication operations and the
-implementation of delta-layout rebuilding; the Rust loop, termination test and
-observer call; and the concrete conversion to owned output iterators.
-Negation-key sets are scoped to the consuming component, and members are
-published in the recorded member-list order, but neither key-set scope nor
-member publication order is a separately configurable policy field.
-Storage and Round labels constrain these implementations without reifying them
-as independently checkable concrete fields. Their correctness therefore remains
-part of the printer's refinement obligation, supported by expansion and
-execution evidence rather than by an independent Rust equivalence checker.
-\paragraph{Rewrite check.} The existing erasure/correspondence obligation is
-unchanged: base rewrites preserve the storage program and checked hole/round
-correspondence under its admissible binding. No canonical storage selection
-is substituted while checking holes. Parallel execution is not a base flag:
+
+\paragraph{Frozen-key providers.} Each \code{KeySet} records its source relation,
+projected columns, filters, runtime name, construction hole, borrowed
+representation (\code{KeyRepresentation::Borrowed}, text \code{borrowed})
+and opaque Rust \code{provider} type. The default is
+\code{::cq\_storage::HashSet<\_>}; this is not a type whitelist.
+Collection and borrowed membership must implement precisely the recorded
+projection/filter set, with lawful equality and any required hashing or ordering.
+Type correctness alone does not establish these laws. A checked Round rewrite
+may change this provider subject to those semantic premises.
+\paragraph{Admission and publication records.} Each component's \code{phases}
+vector is exactly \code{[\{evaluate\}\{admit\}\{publish\}]}.
+A rule's \code{insertion} operation is \code{insert}: all-column membership
+admission pushes only fresh heads into that member's next container.
+Evaluations read only the committed snapshot; admission never publishes an
+accumulated relation or layout early.
+Each \code{Publication} names a component relation and an ordered
+\code{operations} vector. Each \code{PublicationOp} has a \code{kind} and
+\code{layouts} indices in the relevant full or delta layout list:
+\begin{itemize}
+\item \code{full\_layouts}: insert the fresh next rows into the listed full
+layouts, using their recorded column permutations and key prefixes.
+\item \code{all\_extend}: extend the accumulated host with the next rows;
+its layout-index list is empty.
+\item \code{delta\_swap}: replace the current delta host with the next batch;
+its layout-index list is empty.
+\item \code{delta\_rebuild}: reset each listed delta layout and rebuild it
+from the replaced current delta, even when that batch is empty.
+\end{itemize}
+Publication covers every component member once. Full-layout maintenance and
+accumulated extension precede that member's delta replacement; delta rebuilding
+follows it. Every declared full and delta layout of the member, including an
+unused layout, is maintained exactly once. Accumulated extension and delta
+replacement each occur exactly once. Layout indices must reference the correct
+member and version; \code{full\_layouts} and \code{delta\_rebuild} each require
+a nonempty index list. Their lists may be split or reordered within the stated
+dependencies, rather than having to match the default grouping.
+Omitting maintenance, reusing an index, retaining a stale delta layout or
+operating across these dependency boundaries is rejected.
+The publication member list may be any permutation of the component:
+publication is a barrier with no interleaved query evaluation, not a requirement
+to repeat the default member order.
+
+\paragraph{Control and output records.} A component's \code{termination}
+list contains each component member exactly once, in any order, with no foreign
+references. Continuation means that at least one listed current delta is
+nonempty. The \code{termination\_test} operation records either the default
+\code{sum\_delta\_lengths}, testing whether the sum of current delta lengths
+is nonzero, or \code{any\_delta}, testing the disjunction of their nonemptiness.
+Provider length and emptiness operations must reflect their actual rows;
+the summation implementation additionally requires representable length sums
+on successful executions. Either test is admitted independently of loop form.
+\code{loop\_form} records either
+\code{while\_nonempty} (the default) or \code{loop\_until\_empty}
+with an equivalent explicit exit.
+The \code{observer} placement is \code{before\_step}; when an observer is
+declared, it runs before each nonempty-delta step, after seed publication and
+before that step's evaluation. It receives the component-local round count and
+the sum of the listed delta lengths, regardless of the termination test.
+\code{key\_scope} is \code{component}:
+frozen negative keys are built for their consuming component and do not escape
+its lifetime. Output references preserve the exact source output relation list
+and order; an out-of-range or substituted relation is rejected.
+\code{borrowed\_cloned\_into\_iter} converts an EDB's canonical borrowed rows
+to owned output tuples, while \code{owned\_into\_iter} consumes an IDB's
+accumulated provider. Conversion must match the referenced relation kind.
+The remaining \code{RoundPolicy} field is \code{timing}, accepting \code{none}
+or \code{phases}; timing and observer effects remain outside relational meaning.
+Provider, admission, publication, termination, observer, scope, loop and output
+choices are explicit records, not decisions recovered from a bundled policy label.
+
+\paragraph{Recorded scans.} The generic \code{ScanBinding} names one complete
+immutable delta host or key-zero layout bucket as a flat CQ input, preserving
+its column order and one-occurrence correspondence. The default
+\code{\_\_cq\_datalog\_scan\_*} name is an ordinary Round-IR input binding,
+not a parallel-specific decision: the sequential printer binds the whole
+input and records no execution annotation. A later direct delta read remains
+at its original body position; permitting it does not move Rust expressions
+or turn it into a leading parallel scan.
+
+\paragraph{Printer obligation.} The shared printer consumes the recorded
+provider syntax and operations. It must not choose a new storage representation,
+publication order, loop form or output conversion. Default producers record the
+old choices so the default Rust expansion remains byte-identical. The printer
+still has a refinement obligation to implement each operation correctly:
+structural record checks are not an independent Rust equivalence proof.
+\paragraph{Rewrite check.} Check both contracts and preserve Storage exactly.
+The target may change checked execution records, frozen-key provider types,
+timing and per-hole CQ pipelines; it must retain hole interfaces, runtime names
+and query correspondence except for the independently checked scan-certificate
+substitution. In particular, publication and termination permutations, the
+termination test and loop form need not match the source or the default producer.
+No canonical storage selection is
+substituted while checking holes. Parallel execution is not a base flag:
 an extension owns partition, ownership, barriers, and its printer. Any execution
 annotation needs an erasure/refinement check, disjoint covering ownership and
 lawful merges. Round rewrites run before CQ hole expansion.
@@ -308,9 +435,10 @@ The total finite refinement uses DL-Delta and DL-FrozenNegation; partial Rust
 requires the additional prefix-safety obligation, not merely this check.
 
 \subsection{Storage: Incremental to Storage}
-Record the existing deterministic providers, layouts, bindings and policies.
-Independently check exact base preservation and the target's admissible storage
-decisions, without reconstructing the default plan.
+Record the existing deterministic concrete providers, initializers, layouts,
+bindings and maintenance. Independently check exact base preservation and the
+target's admissible storage decisions, without reconstructing the default plan
+or whitelisting concrete Rust types.
 \begin{mathpar}
 \Rule{CK-DL-Storage}{\mathrm{WF}_{\mathrm{Storage}}(t)\quad
  \mathrm{incremental}(t)=s}{\mathrm{check}_{\mathrm{storage}}(s,t)}
@@ -318,10 +446,13 @@ decisions, without reconstructing the default plan.
 Refinement requires the stated $\alpha$ laws for the selected providers.
 
 \subsection{Fork: Storage to Round}
-Construct bound CQ holes and explicit rounds, carrying a sub-pipeline and
+Construct bound CQ holes and explicit operational records, copying provider
+types, initializers and layout maintenance exactly. Carry a sub-pipeline and
 typed interface for each hole and the configuration's complete pull-printer
 allowlist. Independently check variant-to-hole correspondence, frozen-key
-construction, storage preservation, terminal declarations and phase order.
+construction, storage preservation, terminal declarations, publication
+dependencies and coverage, termination and output references. Alternative
+publication permutations or loop forms need not equal Fork's default output.
 \begin{mathpar}
 \Rule{CK-DL-Fork}{\mathrm{WF}_{\mathrm{Round}}(t)\quad
  \mathrm{storage}(t)=s}{\mathrm{check}_{\mathrm{fork}}(s,t)}
@@ -329,9 +460,11 @@ construction, storage preservation, terminal declarations and phase order.
 Refinement is a storage-state simulation with the same partial-Rust premises.
 
 \subsection{Print rounds: Round to Rust}
-The sequential terminal printer emits bindings, rounds, admission, publication
-and outputs, plus one nested CQ macro invocation per hole. It never prints
-joins. CQ's selected terminal printer expands each hole later. Shared Datalog
+The sequential terminal printer interprets recorded bindings, provider types,
+initializers, admission and publication operations, loop and termination
+records, observers and output conversions, plus one nested CQ macro invocation
+per hole. It never prints joins or substitutes a default choice for a supplied
+record. CQ's selected terminal printer expands each hole later. Shared Datalog
 printing operations live in \code{cq-datalog-print}; extension printers reuse
 them. As with core terminal printers, there is no independent Rust equivalence
 checker: contract checks, baseline expansion comparison and executable oracle

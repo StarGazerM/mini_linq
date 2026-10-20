@@ -92,7 +92,7 @@ fn rejected(change: impl FnOnce(&mut Fork)) {
 
 #[test]
 fn checker_rejects_schedule_and_layout_mutations() {
-    rejected(|t| t.context.outputs = vec![0]);
+    rejected(|t| t.context.outputs[0].relation = 0);
     rejected(|t| t.context.observer = Some(syn::parse_quote!(observer)));
     rejected(|t| t.context.relations[2].delta_host = None);
     rejected(|t| t.context.relations[2].delta_host = Some(syn::parse_quote!(Recent)));
@@ -250,7 +250,15 @@ fn filtered_key_sets_are_shared_per_stratum_not_per_probe() {
     let source = constant_schedule();
     let target = compile(&source).unwrap();
     check(&source, &target).unwrap();
-    assert_eq!(target.context.outputs, [3, 2]);
+    assert_eq!(
+        target
+            .context
+            .outputs
+            .iter()
+            .map(|output| output.relation)
+            .collect::<Vec<_>>(),
+        [3, 2]
+    );
     let first = &target.context.strata[0];
     assert_eq!(first.keys.len(), 2);
     assert_eq!(first.keys[0].columns, [1]);
@@ -327,7 +335,15 @@ fn edb_outputs_do_not_need_delta_relations_or_rule_holes() {
     .unwrap();
     let target = compile(&source).unwrap();
     check(&source, &target).unwrap();
-    assert_eq!(target.context.outputs, [1, 0]);
+    assert_eq!(
+        target
+            .context
+            .outputs
+            .iter()
+            .map(|output| output.relation)
+            .collect::<Vec<_>>(),
+        [1, 0]
+    );
     assert!(target.context.strata.is_empty());
     assert!(target.holes.is_empty());
     assert!(target.context.relations.iter().all(|r| r.delta.is_none()));
@@ -719,4 +735,28 @@ fn fork_preserves_generators_and_generated_join_values() {
     let hole = stratum.steps[0].hole;
     changed.holes[hole].cq.query.body[2] = syn::parse_quote!(for y in [*x + 2]);
     assert!(check(&source, &changed).is_err());
+}
+
+#[test]
+fn providers_are_copied_and_key_providers_are_opaque_rewrite_premises() {
+    let mut source = authored();
+    source.providers[2].all = syn::parse_quote!(custom::Rows<(i32, i32)>);
+    source.providers[2].all_init = syn::parse_quote!(custom::Rows::new());
+    source.layouts[0].provider = syn::parse_quote!(custom::Index);
+    let target = compile(&source).unwrap();
+    assert_eq!(target.context.relations[2].providers, source.providers[2]);
+    assert_eq!(
+        target.context.layouts[0].provider,
+        source.layouts[0].provider
+    );
+    assert_eq!(
+        target.context.layouts[0].maintenance,
+        source.layouts[0].maintenance
+    );
+    let mut alternative = target.clone();
+    alternative.context.strata[0].keys[0].provider = syn::parse_quote!(custom::BorrowedKeys<_>);
+    cq_lang_datalog_round::check_rewrite(&target, &alternative).unwrap();
+    let replay: Fork = syn::parse2(alternative.to_token_stream()).unwrap();
+    assert_eq!(alternative, replay);
+    check(&source, &replay).unwrap();
 }

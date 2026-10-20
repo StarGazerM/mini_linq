@@ -9,10 +9,9 @@
 //! `__cq_datalog_scan_*` binding denotes that complete immutable input and
 //! preserves its column order. It does not select an execution strategy;
 //! sequential printing uses it without any execution annotations.
-//! Policy labels are not a concrete Rust execution plan: cq-datalog-print still
-//! chooses storage types and the Canonical wrapper, publication operation order
-//! and delta rebuilding, loop/termination/observer emission, output conversion,
-//! component-local key-set scope, and member publication order.
+//! Execution records specify admission, publication, termination, observer
+//! placement, component-local key scope, loop form, and output conversion.
+//! Opaque Rust providers carry the Storage laws as explicit premises.
 use cq_datalog_support::{collect_names, ensure};
 pub use cq_lang_cq as cq;
 use cq_lang_cq::{BodyItem, Program as CqProgram};
@@ -29,6 +28,7 @@ pub use correspondence::{check_storage, inputs, scan_source, use_layouts, use_sc
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Relation {
     pub declaration: RelationDecl,
+    pub providers: storage::Providers,
     pub all: Ident,
     pub seen: Ident,
     pub next: Ident,
@@ -43,11 +43,13 @@ pub struct Layout {
     pub key: usize,
     pub name: Ident,
     pub host: Ident,
+    pub provider: syn::Type,
+    pub maintenance: Ident,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KeyRepresentation {
-    HashSetBorrowed,
+    Borrowed,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -57,6 +59,7 @@ pub struct KeySet {
     pub filters: Vec<(usize, Expr)>,
     pub name: Ident,
     pub representation: KeyRepresentation,
+    pub provider: syn::Type,
     pub hole: usize,
 }
 
@@ -80,6 +83,7 @@ pub struct RuleHole {
     pub head: usize,
     pub hole: usize,
     pub scan: Option<ScanBinding>,
+    pub insertion: Ident,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -88,6 +92,33 @@ pub struct Stratum {
     pub keys: Vec<KeySet>,
     pub seeds: Vec<RuleHole>,
     pub steps: Vec<RuleHole>,
+    pub phases: Vec<Ident>,
+    pub publication: Vec<Publication>,
+    pub termination: Vec<usize>,
+    pub termination_test: Ident,
+    pub observer: Ident,
+    pub key_scope: Ident,
+    pub loop_form: Ident,
+}
+
+/// An ordered member transaction; maintenance must finish before evaluation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Publication {
+    pub relation: usize,
+    pub operations: Vec<PublicationOp>,
+}
+
+/// Layout indices refer to the full or delta layout vector according to kind.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PublicationOp {
+    pub kind: Ident,
+    pub layouts: Vec<usize>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Output {
+    pub relation: usize,
+    pub conversion: Ident,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -96,7 +127,7 @@ pub struct RoundContext {
     pub layouts: Vec<Layout>,
     pub delta_layouts: Vec<Layout>,
     pub strata: Vec<Stratum>,
-    pub outputs: Vec<usize>,
+    pub outputs: Vec<Output>,
     pub observer: Option<Expr>,
     pub observer_name: Ident,
     pub round_name: Ident,
@@ -213,11 +244,6 @@ pub struct Execution {
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RoundPolicy {
-    pub phases: Ident,
-    pub admission: Ident,
-    pub termination: Ident,
-    pub observer: Ident,
-    pub outputs: Ident,
     pub timing: Ident,
 }
 record!(Program { storage: storage::Program, context: RoundContext, holes: Vec<Hole>, pull_printers: PullPrinters, execution: Vec<Execution>, policy: RoundPolicy });
@@ -232,24 +258,23 @@ record!(Execution {
     binding: Ident,
     strategy: Ident
 });
-record!(RoundPolicy {
-    phases: Ident,
-    admission: Ident,
-    termination: Ident,
-    observer: Ident,
-    outputs: Ident,
-    timing: Ident
-});
-record!(Relation { declaration: RelationDecl, all: Ident, seen: Ident, next: Ident, delta: Option<Ident>, delta_host: Option<Ident> });
-record!(Layout { relation: usize, columns: Vec<usize>, key: usize, name: Ident, host: Ident });
-record!(KeySet { relation: usize, columns: Vec<usize>, filters: Vec<(usize,Expr)>, name: Ident, representation: KeyRepresentation, hole: usize });
+record!(RoundPolicy { timing: Ident });
+record!(Relation { declaration: RelationDecl, providers: storage::Providers, all: Ident, seen: Ident, next: Ident, delta: Option<Ident>, delta_host: Option<Ident> });
+record!(Layout { relation: usize, columns: Vec<usize>, key: usize, name: Ident, host: Ident, provider: syn::Type, maintenance: Ident });
+record!(KeySet { relation: usize, columns: Vec<usize>, filters: Vec<(usize,Expr)>, name: Ident, representation: KeyRepresentation, provider: syn::Type, hole: usize });
 record!(ScanBinding {
     source: InputSource,
     binding: Ident
 });
-record!(RuleHole { variant: usize, head: usize, hole: usize, scan: Option<ScanBinding> });
-record!(Stratum { members: Vec<usize>, keys: Vec<KeySet>, seeds: Vec<RuleHole>, steps: Vec<RuleHole> });
-record!(RoundContext { relations: Vec<Relation>, layouts: Vec<Layout>, delta_layouts: Vec<Layout>, strata: Vec<Stratum>, outputs: Vec<usize>, observer: Option<Expr>, observer_name: Ident, round_name: Ident });
+record!(RuleHole { variant: usize, head: usize, hole: usize, scan: Option<ScanBinding>, insertion: Ident });
+record!(Stratum { members: Vec<usize>, keys: Vec<KeySet>, seeds: Vec<RuleHole>, steps: Vec<RuleHole>, phases: Vec<Ident>, publication: Vec<Publication>, termination: Vec<usize>, termination_test: Ident, observer: Ident, key_scope: Ident, loop_form: Ident });
+record!(Publication { relation: usize, operations: Vec<PublicationOp> });
+record!(PublicationOp { kind: Ident, layouts: Vec<usize> });
+record!(Output {
+    relation: usize,
+    conversion: Ident
+});
+record!(RoundContext { relations: Vec<Relation>, layouts: Vec<Layout>, delta_layouts: Vec<Layout>, strata: Vec<Stratum>, outputs: Vec<Output>, observer: Option<Expr>, observer_name: Ident, round_name: Ident });
 impl Text for InputSource {
     fn parse_text(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
         let kind: Ident = input.parse()?;
@@ -276,8 +301,8 @@ impl Text for InputSource {
 impl Text for KeyRepresentation {
     fn parse_text(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
         let id: Ident = input.parse()?;
-        if id == "hash_set_borrowed" {
-            Ok(Self::HashSetBorrowed)
+        if id == "borrowed" {
+            Ok(Self::Borrowed)
         } else {
             Err(syn::Error::new_spanned(
                 id,
@@ -286,7 +311,7 @@ impl Text for KeyRepresentation {
         }
     }
     fn text(&self) -> TokenStream {
-        quote!(hash_set_borrowed)
+        quote!(borrowed)
     }
 }
 
@@ -438,6 +463,148 @@ fn check_pull_path(path: &syn::Path) -> syn::Result<()> {
         "pull printer declarations require macro paths without generic arguments",
     )
 }
+/// Check execution obligations, not equality with the default fork schedule.
+fn check_execution(program: &Program) -> syn::Result<()> {
+    let context = &program.context;
+    for stratum in &context.strata {
+        ensure(
+            stratum
+                .phases
+                .iter()
+                .map(symbol_name)
+                .eq(["evaluate", "admit", "publish"].map(str::to_owned))
+                && stratum.observer == "before_step"
+                && stratum.key_scope == "component"
+                && (stratum.termination_test == "sum_delta_lengths"
+                    || stratum.termination_test == "any_delta")
+                && (stratum.loop_form == "while_nonempty"
+                    || stratum.loop_form == "loop_until_empty"),
+            program,
+            "round requires evaluate/admit/publish, before-step observation, and component-local keys",
+        )?;
+        for rule in stratum.seeds.iter().chain(&stratum.steps) {
+            ensure(
+                rule.insertion == "insert",
+                program,
+                "admission requires the provider's set insertion operation",
+            )?;
+        }
+        let members: BTreeSet<_> = stratum.members.iter().copied().collect();
+        let termination: BTreeSet<_> = stratum.termination.iter().copied().collect();
+        ensure(
+            termination == members && termination.len() == stratum.termination.len(),
+            program,
+            "termination must cover every component member exactly once",
+        )?;
+        let mut published = BTreeSet::new();
+        for publication in &stratum.publication {
+            let relation = publication.relation;
+            ensure(
+                members.contains(&relation) && published.insert(relation),
+                program,
+                "publication must cover each component member exactly once",
+            )?;
+            let full: BTreeSet<_> = context
+                .layouts
+                .iter()
+                .enumerate()
+                .filter(|(_, layout)| layout.relation == relation)
+                .map(|(index, _)| index)
+                .collect();
+            let delta: BTreeSet<_> = context
+                .delta_layouts
+                .iter()
+                .enumerate()
+                .filter(|(_, layout)| layout.relation == relation)
+                .map(|(index, _)| index)
+                .collect();
+            let mut updated = BTreeSet::new();
+            let mut rebuilt = BTreeSet::new();
+            let mut extended = false;
+            let mut swapped = false;
+            for operation in &publication.operations {
+                match symbol_name(&operation.kind).as_str() {
+                    "full_layouts" => {
+                        ensure(
+                            !swapped && !operation.layouts.is_empty(),
+                            program,
+                            "full-layout maintenance must precede delta replacement",
+                        )?;
+                        for &layout in &operation.layouts {
+                            ensure(
+                                full.contains(&layout) && updated.insert(layout),
+                                program,
+                                "full-layout maintenance must cover each member layout exactly once",
+                            )?;
+                        }
+                    }
+                    "all_extend" => {
+                        ensure(
+                            !extended && !swapped && operation.layouts.is_empty(),
+                            program,
+                            "all extension must occur once before delta replacement",
+                        )?;
+                        extended = true;
+                    }
+                    "delta_swap" => {
+                        ensure(
+                            extended && !swapped && updated == full && operation.layouts.is_empty(),
+                            program,
+                            "delta replacement requires complete full-layout maintenance and all extension",
+                        )?;
+                        swapped = true;
+                    }
+                    "delta_rebuild" => {
+                        ensure(
+                            swapped && !operation.layouts.is_empty(),
+                            program,
+                            "delta layouts must rebuild after unconditional delta replacement",
+                        )?;
+                        for &layout in &operation.layouts {
+                            ensure(
+                                delta.contains(&layout) && rebuilt.insert(layout),
+                                program,
+                                "delta rebuild must cover each member layout exactly once, including empty runs",
+                            )?;
+                        }
+                    }
+                    _ => {
+                        return Err(syn::Error::new_spanned(
+                            operation,
+                            "unknown publication operation",
+                        ));
+                    }
+                }
+            }
+            ensure(
+                extended && swapped && updated == full && rebuilt == delta,
+                program,
+                "publication must extend all, replace delta, and maintain every layout including empty runs",
+            )?;
+        }
+        ensure(
+            published == members,
+            program,
+            "publication omitted a component member",
+        )?;
+    }
+    for output in &context.outputs {
+        let relation = context.relations.get(output.relation).ok_or_else(|| {
+            syn::Error::new_spanned(output, "output must reference a declared relation")
+        })?;
+        ensure(
+            if relation.declaration.value.is_some() {
+                output.conversion == "borrowed_cloned_into_iter"
+            } else {
+                output.conversion == "owned_into_iter"
+            },
+            output,
+            "output conversion must preserve ownership and return owned rows",
+        )?;
+    }
+    Ok(())
+}
+
 pub mod contract {
     use super::*;
     #[derive(Clone, Debug)]
@@ -449,14 +616,9 @@ pub mod contract {
         let analysis = storage::contract::check(&program.storage)?;
         let p = &program.policy;
         ensure(
-            p.phases == "evaluate_admit_publish"
-                && p.admission == "written_order"
-                && p.termination == "any_delta"
-                && p.observer == "before_step"
-                && p.outputs == "owned_iterators"
-                && (p.timing == "none" || p.timing == "phases"),
+            p.timing == "none" || p.timing == "phases",
             program,
-            "unsupported round execution policy",
+            "unsupported round timing policy",
         )?;
         for path in &program.pull_printers.0 {
             check_pull_path(path)?;
@@ -467,6 +629,7 @@ pub mod contract {
         }
         let erased = erase(program)?;
         check_storage(&program.storage, &erased)?;
+        check_execution(program)?;
         Ok(Analysis { storage: analysis })
     }
 }
@@ -476,10 +639,34 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
     let mut source = erase(source)?;
     let erased = erase(target)?;
     ensure(
-        source.storage == erased.storage && source.context == erased.context,
+        source.storage == erased.storage,
         target,
-        "round rewrite changed storage or round correspondence",
+        "round rewrite changed storage",
     )?;
+    // Both contexts independently establish the same Storage correspondence.
+    // Only explicit execution decisions may differ; names and hole interfaces
+    // remain part of the immutable calling convention.
+    for (before, after) in source.context.strata.iter_mut().zip(&erased.context.strata) {
+        before.phases = after.phases.clone();
+        before.publication = after.publication.clone();
+        before.termination = after.termination.clone();
+        before.termination_test = after.termination_test.clone();
+        before.observer = after.observer.clone();
+        before.key_scope = after.key_scope.clone();
+        before.loop_form = after.loop_form.clone();
+        for (before, after) in before
+            .seeds
+            .iter_mut()
+            .chain(&mut before.steps)
+            .zip(after.seeds.iter().chain(&after.steps))
+        {
+            before.insertion = after.insertion.clone();
+        }
+        for (before, after) in before.keys.iter_mut().zip(&after.keys) {
+            before.provider = after.provider.clone();
+        }
+    }
+    source.context.outputs = erased.context.outputs.clone();
     source.policy.timing = erased.policy.timing.clone();
     for (before, after) in source.holes.iter_mut().zip(&erased.holes) {
         before.pipeline = after.pipeline.clone();
