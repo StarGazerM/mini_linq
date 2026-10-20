@@ -1,0 +1,14 @@
+[package]
+name = "cq-datalog-rayon-print"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+cq-lang-datalog-round = { path = "../../datalog/languages/dl-round" }
+cq-datalog-print = { path = "../../datalog/print" }
+cq-datalog-partition = { path = "../partition" }
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }
