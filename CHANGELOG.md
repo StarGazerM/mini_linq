@@ -7,6 +7,11 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Parallel Datalog slice 2 (extension): sharded parallel admission and
+  per-layout exclusive parallel publication; adaptive chunk grain; recorded
+  inline threshold. DOOP at 15 threads 1.41–1.63× faster than slice 1, exact
+  at 1/5/15 threads. Base gains only generic publication generators.
+
 - Datalog Storage/Round IRs record every decision formerly hard-coded in the
   printer (providers, layout maintenance, phases, publication order,
   termination, observer placement, key scope, output conversion); both

@@ -295,12 +295,17 @@ partial-Rust multi-round refinement.
 
 Parallel Datalog is the extension workspace `features/datalog-parallel`
 (partition Round rewrite + Rayon printer, selected by pipeline config; base
-has no parallel code). Slice 1 results: hole evaluation scales ~3–4× to 5
-threads (P cores) and barely beyond; avrora flat 5→15 (undiagnosed).
-Sequential admission + publication (0.3–0.7 s per app) ~15–20% of round time
-at 15 threads. Narrow-delta workloads slow down (reach chain 0.33× at 15).
-zxing RSS 1331 → 2090 MiB at 15 threads. Next: per-hole skew, then slice 2
-(parallel admission + partition-owned maintenance) with the held storage work.
+has no parallel code). Slice 2 (`cfa8201`, `ed3831f`): full-tuple sharded
+`seen` with parallel admission; native layout maps published in parallel,
+one exclusive task per layout (fully sharded layouts were measured and
+rejected: per-probe shard routing slowed evaluation); adaptive grain
+`max(64, n/(4·threads))` fixed the avrora plateau (coarse 1024-row chunks on
+a small, expensive driver); recorded inline threshold. 15 threads, seconds
+(slice 1 → slice 2): cassandra 1.33 → 0.84, avrora 2.66 → 1.63, lusearch
+1.63 → 1.10, xalan 3.74 → 2.57, tomcat 1.74 → 1.14, zxing 2.80 → 1.99.
+Residual: reach chain 4096 still 0.74× sequential at 15 threads. Next,
+adopted from Ascent after measurement: Fx hasher plugin, hash-once admission,
+delta layouts built during admission, heavy-bucket splitting.
 
 On hold until the GPU-side storage work settles, so storage is designed once
 for both: lattices and custom providers; DOOP probe efficiency (flat value
