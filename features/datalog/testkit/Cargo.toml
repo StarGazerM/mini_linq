@@ -1,0 +1,8 @@
+[package]
+name = "cq-datalog-testkit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cq-testkit = { version = "0.1.0", path = "../../../testkit/cq-testkit" }

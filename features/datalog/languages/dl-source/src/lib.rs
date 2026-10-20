@@ -267,14 +267,23 @@ pub mod contract {
         })
     }
 }
-/// Rewrites preserve the complete checked source and its model assignment.
+/// Check source well-formedness and preserve its externally visible interface.
+///
+/// Rules may change. The rewrite author must separately establish denotational
+/// refinement: whenever the source terminates without panic, the target returns
+/// the same output sets without introducing panic (under the pure-Rust premise).
+/// This structural check cannot prove equivalence of opaque Rust computations.
 pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
     contract::check(source)?;
     contract::check(target)?;
     ensure(
-        source == target,
+        source.name == target.name
+            && source.declarations == target.declarations
+            && source.outputs == target.outputs
+            && source.models == target.models
+            && source.observer == target.observer,
         target,
-        "Datalog rewrite changed source rules or declarations",
+        "Datalog rewrite changed name, declarations, EDB bindings, outputs, models or observer",
     )
 }
 impl Language for Program {

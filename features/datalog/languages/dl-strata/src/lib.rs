@@ -1,4 +1,4 @@
-//! DL-Strata records exact dependency-ordered SCCs over DL-Source.
+//! DL-Strata records dependency-ordered unions of SCCs over DL-Source.
 //! Its meaning is sequential composition of the source component fixpoints.
 use cq_datalog_support::ensure;
 pub use cq_lang_datalog_source as source;
@@ -49,19 +49,19 @@ impl ToTokens for Program {
         tokens.extend(quote!(#source strata { #(#components)* }));
     }
 }
-/// Formal rule DL-Strata: Certify the exact SCC cover and dependency order of the visible graph.
+/// Formal rule DL-Strata: certify a complete ordered partition into unions of SCCs.
 fn check_strata(program: &Program, g: &Graph) -> syn::Result<()> {
     let p = &program.source;
     let components = &program.components;
     let mut positions = BTreeMap::new();
     for (c, members) in components.iter().enumerate() {
-        ensure(!members.is_empty(), &p.name, "empty SCC")?;
+        ensure(!members.is_empty(), &p.name, "empty component")?;
         for member in members {
             let i = g.index(member)?;
             ensure(
                 p.declarations[i].value.is_none() && positions.insert(i, c).is_none(),
                 member,
-                "SCCs must cover IDB relations exactly",
+                "components must cover IDB relations exactly",
             )?;
         }
     }
@@ -69,15 +69,15 @@ fn check_strata(program: &Program, g: &Graph) -> syn::Result<()> {
         ensure(
             d.value.is_some() || positions.contains_key(&i),
             d,
-            "missing IDB SCC",
+            "missing IDB component",
         )?;
     }
     for (&i, &ci) in &positions {
         for (&j, &cj) in &positions {
             ensure(
-                (ci == cj) == (i == j || (g.reach[i][j] && g.reach[j][i])),
+                !(g.reach[i][j] && g.reach[j][i]) || ci == cj,
                 &p.name,
-                "recorded component is not an SCC",
+                "an SCC cannot be split across components",
             )?;
         }
     }
@@ -86,7 +86,7 @@ fn check_strata(program: &Program, g: &Graph) -> syn::Result<()> {
             ensure(
                 if strict { b < h } else { b <= h },
                 &p.name,
-                "SCCs are not in dependency order",
+                "components violate dependency order or contain internal negation",
             )?;
         }
     }
@@ -158,10 +158,15 @@ pub mod contract {
         })
     }
 }
+/// Preserve the immediate Source program while independently admitting new strata.
 pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
     contract::check(source)?;
     contract::check(target)?;
-    ensure(source == target, target, "rewrite changed recorded strata")
+    ensure(
+        source.source == target.source,
+        target,
+        "strata rewrite changed the source program",
+    )
 }
 impl cq_stage::Language for Program {
     fn check(&self) -> syn::Result<()> {

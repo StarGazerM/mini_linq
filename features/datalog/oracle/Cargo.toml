@@ -17,3 +17,7 @@ cq-datalog = { path = "../facade/cq-datalog" }
 mini-linq = { path = "../../../facade/mini-linq" }
 cq-storage = { path = "../../../runtime/cq-storage" }
 cq-testkit = { version = "0.1.0", path = "../../../testkit/cq-testkit", features = ["golden"] }
+
+[dev-dependencies]
+cq-datalog-testkit = { path = "../testkit" }
+cq-datalog-test-passes = { path = "../test-passes" }

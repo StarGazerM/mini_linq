@@ -59,3 +59,20 @@ fn independent_authored_component_order_does_not_replay_selection() {
     check(&source, &target).unwrap();
     assert_ne!(compile(&source).unwrap(), target);
 }
+
+#[test]
+fn authored_coarser_partition_is_admitted_without_changing_default_selection() {
+    let source: source::Program = syn::parse_quote! {
+        struct Coarser;
+        relation E(x:i32) = (e);
+        relation A(x:i32); relation B(x:i32);
+        output B;
+        A(*x) :- E(x);
+        B(*x) :- A(x);
+    };
+    let target: strata::Program = syn::parse2(quote!(#source strata { component [B,A]; })).unwrap();
+    check(&source, &target).unwrap();
+    let default: strata::Program =
+        syn::parse2(quote!(#source strata { component [A]; component [B]; })).unwrap();
+    assert_eq!(compile(&source).unwrap(), default);
+}

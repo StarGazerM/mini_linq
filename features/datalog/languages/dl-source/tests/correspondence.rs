@@ -44,15 +44,15 @@ fn negation_rejects_keys_bound_only_by_let() {
 }
 
 #[test]
-fn rewrites_preserve_source_name_schemas_rules_output_and_observer() {
+fn rewrites_preserve_source_name_schemas_bindings_output_and_observer() {
     let original: Program = syn::parse_str(SOURCE).unwrap();
     let mutations: Vec<Mutation> = vec![
         Box::new(|p| p.name = syn::parse_quote!(Renamed)),
         Box::new(|p| p.outputs = vec![syn::parse_quote!(Reach)]),
         Box::new(|p| p.observer = Some(syn::parse_quote!(observe_round))),
         Box::new(|p| p.declarations[0].columns[0].ty = syn::parse_quote!(i64)),
-        Box::new(|p| p.rules.swap(0, 1)),
-        Box::new(|p| p.rules[0].head.args[0] = syn::parse_quote!(*y)),
+        Box::new(|p| p.declarations[0].value = Some(syn::parse_quote!(= (other_edges)))),
+        Box::new(|p| p.declarations.swap(0, 1)),
     ];
     for (index, mutate) in mutations.into_iter().enumerate() {
         let mut changed = original.clone();
@@ -62,6 +62,49 @@ fn rewrites_preserve_source_name_schemas_rules_output_and_observer() {
             check_rewrite(&original, &changed).is_err(),
             "mutation {index}"
         );
+    }
+}
+
+#[test]
+fn rewrites_admit_changed_rules_under_the_semantic_refinement_premise() {
+    let original: Program = syn::parse_str(SOURCE).unwrap();
+    let mut reordered = original.clone();
+    reordered.rules.swap(0, 1);
+    check_rewrite(&original, &reordered).unwrap();
+    let mut redundant = original.clone();
+    redundant.rules.push(redundant.rules[0].clone());
+    check_rewrite(&original, &redundant).unwrap();
+    check_rewrite(&redundant, &original).unwrap();
+
+    // Structural admissibility deliberately does not claim rule equivalence.
+    // A plugin must discharge refinement for any such rule-body change.
+    let mut changed = original.clone();
+    changed.rules[0].head.args[0] = syn::parse_quote!(*y);
+    check_rewrite(&original, &changed).unwrap();
+}
+
+#[test]
+fn rewrites_check_both_programs_and_preserve_models() {
+    let original: Program = syn::parse_str(SOURCE).unwrap();
+    let mutations: Vec<Mutation> = vec![
+        Box::new(|p| p.rules[0].head.args[0] = syn::parse_quote!(*missing)),
+        Box::new(|p| {
+            p.rules[1] = syn::parse_quote!(
+                Reach(*x,*y) :- Edge(x,y), !Reach(x,y);
+            )
+        }),
+        Box::new(|p| {
+            p.models.remove("Reach");
+        }),
+        Box::new(|p| {
+            p.models.insert("Reach".into(), syn::parse_quote!(lattice));
+        }),
+    ];
+    for mutate in mutations {
+        let mut invalid = original.clone();
+        mutate(&mut invalid);
+        assert!(check_rewrite(&original, &invalid).is_err());
+        assert!(check_rewrite(&invalid, &original).is_err());
     }
 }
 

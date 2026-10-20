@@ -243,6 +243,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-datalog-test-passes"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-incremental",
+ "cq-datalog-storage",
+ "cq-datalog-stratify",
+ "cq-datalog-support",
+ "cq-datalog-testkit",
+ "cq-lang-datalog-source",
+ "cq-lang-datalog-storage",
+ "cq-lang-datalog-strata",
+ "cq-stage",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-testkit"
+version = "0.0.0"
+dependencies = [
+ "cq-testkit",
+]
+
+[[package]]
 name = "cq-elaborate"
 version = "0.1.0"
 dependencies = [
@@ -550,6 +576,8 @@ version = "0.1.0"
 dependencies = [
  "ascent",
  "cq-datalog",
+ "cq-datalog-test-passes",
+ "cq-datalog-testkit",
  "cq-storage",
  "cq-testkit",
  "mini-linq",

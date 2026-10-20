@@ -7,14 +7,13 @@ use quote::ToTokens;
 const INCREMENTAL: &str = include_str!("fixtures/incremental.datalog");
 
 #[test]
-fn layouts_are_exact_complete_permutations_with_valid_leading_keys() {
+fn layouts_require_complete_permutations_and_available_leading_keys() {
     let original: Program = authored(INCREMENTAL);
     let mutations: &[fn(&mut Program)] = &[
         |p| p.layouts.clear(),
         |p| {
             p.layouts.pop();
         },
-        |p| p.layouts.push(p.layouts[0].clone()),
         |p| p.layouts.reverse(),
         |p| p.layouts[0].relation = syn::parse_quote!(Unknown),
         |p| p.layouts[0].relation = syn::parse_quote!(ReachChanges),
@@ -27,15 +26,7 @@ fn layouts_are_exact_complete_permutations_with_valid_leading_keys() {
         |p| p.layouts[0].columns = vec![1, 0],
         |p| p.layouts[0].key = 3,
         |p| p.layouts[0].key = 1,
-        |p| p.layouts[1].key = 0,
         |p| p.layouts[2].columns = vec![1, 0],
-        |p| {
-            p.layouts.push(Layout {
-                relation: syn::parse_quote!(Blocked),
-                columns: vec![0, 1],
-                key: 0,
-            })
-        },
     ];
     for (index, mutate) in mutations.iter().enumerate() {
         let mut changed = original.clone();
@@ -115,7 +106,7 @@ fn source_order_not_later_delta_bindings_determines_var_points_to_keys() {
 }
 
 #[test]
-fn authored_constant_keys_do_not_bind_wildcards_or_repeated_new_variables() {
+fn authored_constant_keys_are_optional_but_new_variables_and_wildcards_are_not_keys() {
     let source = cq_datalog_storage::compile(&syn::parse_quote! {
         struct Constants;
         relation E(x:i32,y:i32,z:i32) = (e);
@@ -137,7 +128,7 @@ fn authored_constant_keys_do_not_bind_wildcards_or_repeated_new_variables() {
     for index in 0..2 {
         let mut missing_constant = source.clone();
         missing_constant.layouts[index].key -= 1;
-        assert!(contract::check(&missing_constant).is_err());
+        check_rewrite(&source, &missing_constant).unwrap();
     }
     let mut repeated = source.clone();
     repeated.layouts[0].key = 2;
@@ -148,14 +139,13 @@ fn authored_constant_keys_do_not_bind_wildcards_or_repeated_new_variables() {
 }
 
 #[test]
-fn delta_layout_records_are_exact_ordered_idb_demands() {
+fn delta_layouts_require_idb_relations_and_available_keys() {
     let original: Program = authored(include_str!("fixtures/written_order.datalog"));
     let mutations: &[fn(&mut Program)] = &[
         |p| p.delta_layouts.clear(),
         |p| {
             p.delta_layouts.pop();
         },
-        |p| p.delta_layouts.push(p.delta_layouts[0].clone()),
         |p| p.delta_layouts.reverse(),
         |p| p.delta_layouts[0].relation = syn::parse_quote!(Unknown),
         |p| p.delta_layouts[0].relation = syn::parse_quote!(RecentPointsTo),
@@ -166,16 +156,8 @@ fn delta_layout_records_are_exact_ordered_idb_demands() {
         |p| p.delta_layouts[0].columns = vec![0, 2],
         |p| p.delta_layouts[0].columns = vec![0, 1, 2],
         |p| p.delta_layouts[0].columns = vec![0, 1],
-        |p| p.delta_layouts[0].key = 0,
         |p| p.delta_layouts[0].key = 2,
         |p| p.delta_layouts[0].key = 3,
-        |p| {
-            p.delta_layouts.push(Layout {
-                relation: syn::parse_quote!(VarPointsTo),
-                columns: vec![0, 1],
-                key: 0,
-            })
-        },
     ];
     for (index, mutate) in mutations.iter().enumerate() {
         let mut changed = original.clone();
@@ -186,4 +168,108 @@ fn delta_layout_records_are_exact_ordered_idb_demands() {
             "delta rewrite {index}"
         );
     }
+}
+
+#[test]
+fn alternate_layouts_and_recorded_reads_are_admissible() {
+    let original = authored(INCREMENTAL);
+    let mut alternate = original.clone();
+    let index = alternate.layouts.len();
+    alternate.layouts.push(Layout {
+        relation: syn::parse_quote!(Edge),
+        columns: vec![1, 0],
+        key: 0,
+    });
+    alternate.reads[0].index = index;
+    alternate.reads[0].columns = vec![1, 0];
+    check_rewrite(&original, &alternate).unwrap();
+    cq_datalog_storage::check(&original.incremental, &alternate).unwrap();
+
+    // Layout storage order is not an IR obligation when bindings are updated.
+    let count = alternate.layouts.len();
+    alternate.layouts.reverse();
+    for read in &mut alternate.reads {
+        if read.kind == "full" {
+            read.index = count - 1 - read.index;
+        }
+    }
+    alternate.reads.reverse();
+    check_rewrite(&original, &alternate).unwrap();
+
+    // Every declared extra structure participates in the fixed maintenance policy.
+    alternate.layouts.push(original.layouts[0].clone());
+    alternate.delta_layouts.push(Layout {
+        relation: syn::parse_quote!(Result),
+        columns: vec![1, 0],
+        key: 0,
+    });
+    check_rewrite(&original, &alternate).unwrap();
+}
+
+#[test]
+fn every_read_must_serve_exactly_its_positive_occurrence() {
+    let original = authored(INCREMENTAL);
+    let mutations: &[fn(&mut Program)] = &[
+        |p| p.reads.push(p.reads[0].clone()),
+        |p| p.reads[0].variant = usize::MAX,
+        |p| p.reads[0].position = usize::MAX,
+        |p| p.reads[0].index = usize::MAX,
+        |p| p.reads[0].kind = syn::parse_quote!(other),
+        |p| p.reads[0].kind = syn::parse_quote!(delta),
+        |p| p.reads[0].kind = syn::parse_quote!(direct),
+        |p| p.reads[0].columns = vec![1, 0],
+        |p| p.reads[1].kind = syn::parse_quote!(full),
+        |p| p.reads[1].index = 0,
+        |p| p.reads[1].columns = vec![1, 0],
+        |p| p.negations.clear(),
+        |p| p.negations[0].component = usize::MAX,
+        |p| p.negations[0].relation = 0,
+        |p| p.negations[0].columns.clear(),
+        |p| p.negations[0].filters.push((1, syn::parse_quote!(7))),
+    ];
+    for (index, mutate) in mutations.iter().enumerate() {
+        let mut changed = original.clone();
+        mutate(&mut changed);
+        assert!(contract::check(&changed).is_err(), "read mutation {index}");
+    }
+}
+
+#[test]
+fn rust_bindings_are_available_only_after_their_written_clause() {
+    let original = authored(
+        "struct Q; relation E(x:i32,y:i32)=(e); relation R(x:i32); output R;
+         R(*x) :- E(x,_), let n = x, for y in [x], E(n,y);
+         strata { component [R]; }
+         incremental { scheme seminaive_covering; delta R = D;
+           variant 0 seed { R(*x) :- E(x,_), let n = x, for y in [x], E(n,y); }
+         }",
+    );
+    let mut alternate = original.clone();
+    let index = alternate.layouts.len();
+    alternate.layouts.push(Layout {
+        relation: syn::parse_quote!(E),
+        columns: vec![1, 0],
+        key: 2,
+    });
+    alternate.reads[1].index = index;
+    alternate.reads[1].columns = vec![1, 0];
+    check_rewrite(&original, &alternate).unwrap();
+    alternate.reads[0].index = index;
+    alternate.reads[0].columns = vec![1, 0];
+    assert!(contract::check(&alternate).is_err());
+}
+
+#[test]
+fn direct_delta_scans_may_replace_later_indexed_probes() {
+    let original = authored(INCREMENTAL);
+    let mut alternate = original.clone();
+    let read = alternate
+        .reads
+        .iter_mut()
+        .find(|r| r.kind == "delta")
+        .unwrap();
+    read.kind = syn::parse_quote!(direct);
+    read.index = 2;
+    read.columns = vec![0, 1];
+    check_rewrite(&original, &alternate).unwrap();
 }

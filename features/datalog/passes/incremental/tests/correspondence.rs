@@ -216,3 +216,34 @@ fn if_let_is_lowered_before_seminaive_variants_and_keeps_written_positions() {
         if atom.relation == "Link")
     );
 }
+
+#[test]
+fn authored_coarser_cover_with_redundancy_is_admitted_independently() {
+    let source: strata::Program = syn::parse_quote! {
+        struct Coarser;
+        relation E(x:i32) = (e);
+        relation A(x:i32); relation B(x:i32);
+        output B;
+        A(*x) :- E(x);
+        B(*x) :- A(x);
+        strata { component [B,A]; }
+    };
+    let target: incremental::Program = syn::parse2(quote! {
+        #source
+        incremental {
+            scheme seminaive_covering;
+            delta B = ChangesB;
+            delta A = ChangesA;
+            variant 1 delta 0 { B(*x) :- ChangesA(x); }
+            variant 0 seed { A(*x) :- E(x); }
+            variant 1 delta 0 { B(*x) :- ChangesA(x); }
+            variant 0 seed { A(*x) :- E(x); }
+        }
+    })
+    .unwrap();
+    seminaive::check(&source, &target).unwrap();
+    let default = seminaive::compile(&source).unwrap();
+    assert_eq!(default.variants.len(), 2);
+    assert_eq!(default.variants[0].delta, None);
+    assert_eq!(default.variants[1].delta, Some(0));
+}

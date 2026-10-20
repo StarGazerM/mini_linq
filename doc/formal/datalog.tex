@@ -2,10 +2,11 @@
 \label{sec:datalog-languages}
 This specification separates five checked languages above the unchanged CQ
 compiler. Structural checks do not discharge all semantic obligations.
-The base contracts require exact choices: ordered SCCs, one covering
-variant per changing positive occurrence, deterministic layouts, and fixed
-insertion and negation-key policies. Admitting alternative strata, layouts,
-or evaluation schemes is a later change, not a consequence of this split.
+Contracts admit recorded choices; default producers choose deterministically.
+The base admits dependency-ordered unions of SCCs and alternative usable layouts,
+while retaining only the \code{seminaive\_covering} evaluation scheme and fixed
+provider, insertion, and maintenance policy literals. Structural checks examine
+the supplied IR and never rerun a producer to compare with its chosen output.
 The default generated Rust must remain byte-identical to the captured baseline.
 
 \paragraph{Semantic domain and limits.}
@@ -52,35 +53,50 @@ components fixed. The total finite theorem in the incremental section applies
 under its premises; partial execution additionally has the obligations below.
 \paragraph{Recorded decisions.} Relation model, EDB bindings, written rule and
 Rust-step order, outputs and observer. No schedule or physical choices.
-\paragraph{Rewrite check.} This round uses exact source preservation, including
-Rust payloads and outputs; it does not provide a semantic equivalence solver.
+\paragraph{Rewrite check.} Check both Source contracts and preserve the declared
+interface: program name, relation declarations and models, EDB bindings, outputs
+and observer.
+Rules may change, including opaque Rust payloads. Preservation of relational
+meaning and partial-execution refinement is a semantic premise of such a rewrite,
+validated by executable refinement cases, not decided by the structural gate.
 
 \subsection{DL-Strata}
 \paragraph{Grammar.} DL-Source plus an ordered list of components.
-\paragraph{Contract.} Check Source, then require exactly the deterministic
-ordered SCC decomposition of the signed dependency graph. Negative edges
-must point to already completed components. Coarser valid partitions are
-not admitted by the base contract.
+\paragraph{Contract.} Check Source, then require a complete, nonoverlapping
+partition of the IDBs into nonempty components, each a union of whole dependency
+SCCs. A positive IDB dependency is in the same or an earlier component; a negative
+IDB dependency is strictly earlier. Thus no component contains internal negation.
+EDBs remain fixed inputs. Independent components may be reordered and positive
+SCCs may be merged when these conditions hold.
 \begin{mathpar}
 \Rule{WF-DL-Strata}{\mathrm{WF}_{\mathrm{Source}}(P)\quad
- C=\mathrm{orderedSCC}(P)}{\mathrm{WF}_{\mathrm{Strata}}(P,C)}
+ C\text{ completely partitions SCCs and respects signed dependency order}}
+ {\mathrm{WF}_{\mathrm{Strata}}(P,C)}
 \end{mathpar}
 \paragraph{Meaning.} Sequential composition of component fixpoints, equal to
 the source meaning under the stratification premises.
 \paragraph{Recorded decisions.} Component membership and order.
-\paragraph{Rewrite check.} Preserve the source exactly and validate the exact
-component schedule; no alternative stratifier is authorized by this contract.
+\paragraph{Rewrite check.} Check both contracts and preserve Source exactly;
+the target may choose a different admissible component partition or order.
+The SCC theorem in the incremental section extends to each such union: its internal dependencies
+are positive, and all negative inputs are frozen.
 
 \subsection{DL-Incremental}
 \paragraph{Grammar.} DL-Strata plus fresh delta declarations and ordered
 seed/step variants, each identifying its source rule and delta occurrence.
-\paragraph{Contract.} Check Strata, delta names and types, exact variant
-coverage, and erasure to the original rule. Every changing positive occurrence
-has exactly one variant; other changing occurrences read the accumulated
-relation. Seeds have no positive occurrence in the current component.
+\paragraph{Contract.} Check Strata and accept only the recorded scheme
+\code{seminaive\_covering}. Check fresh delta names and matching types, rule
+identity, variant erasure and changing-position coverage directly. Each rule
+with no positive occurrence in its current component has at least one seed;
+otherwise each changing positive occurrence is selected by at least one step
+variant reading its delta, while other changing occurrences read the accumulated
+relation. Preserve head, written body order, Rust steps and fixed inputs under
+erasure. Repeated seed and step variants are allowed: covering is not a disjoint
+or exactly-once derivation partition. Variant order and fresh names need not equal
+the default producer's choices.
 \begin{mathpar}
 \Rule{WF-DL-Incremental}{\mathrm{WF}_{\mathrm{Strata}}(S)\quad
- V\text{ is the exact checked covering expansion of }S}
+ V\text{ has valid deltas, erasure and seminaive covering coverage}}
  {\mathrm{WF}_{\mathrm{Incremental}}(S,V)}
 \end{mathpar}
 \paragraph{Meaning.} Starting from the deduplicated seeds, each round reads
@@ -95,8 +111,9 @@ slot does not authorize lattice subtraction or semiring differences.
 \paragraph{Recorded decisions.} Covering semi-naive scheme, delta names,
 variant identities and occurrence substitutions. Naive and disjoint exact
 schemes are not accepted merely because they are conceivable alternatives.
-\paragraph{Rewrite check.} Preserve the underlying Strata program and the
-exact checked variant schedule and declarations in this round.
+\paragraph{Rewrite check.} Check both contracts and preserve the underlying
+Strata program exactly; delta declarations and variant schedules may change
+provided the target independently satisfies erasure and coverage.
 
 \paragraph{Frozen negation.}
 Let $B$ contain completed lower-component relations. Within the consuming
@@ -129,13 +146,22 @@ for all opaque expressions.
 canonicalization, full and delta layouts (column permutation and key prefix),
 negative key sets, occurrence-to-read bindings, insertion and maintenance
 policies. Runtime host names are explicit where consumers need them.
-\paragraph{Contract.} Check Incremental and the deterministic layout choice;
-require fixed \code{hash\_set\_all\_columns} insertion and
-\code{hash\_set\_borrowed} negation policies. Every read binds to its expected
-structure and every structure has its recorded maintenance operation.
+\paragraph{Contract.} Check Incremental and the fixed provider, canonicalization,
+insertion, negation and maintenance policy literals, including
+\code{hash\_set\_all\_columns} insertion and \code{hash\_set\_borrowed}
+negation. Layouts may differ from the default: each declared layout has a
+complete column permutation and a valid key prefix, and every declared structure
+has the prescribed maintenance. For every recorded read binding, locate the
+actual source rule occurrence and derive the variables already bound at that
+written position and its constants. The selected structure must be declared
+for the correct relation and version, and its key must be a subset of those
+available columns; a recorded claim of bound columns is not evidence by itself.
+Require complete occurrence coverage and the prescribed frozen negative
+projection/filter, including wildcard treatment. Delta and full structures
+must serve their respective versions.
 \begin{mathpar}
 \Rule{WF-DL-Storage}{\mathrm{WF}_{\mathrm{Incremental}}(I)\quad
- D\text{ equals the base contract's fixed storage decisions for }I}
+ D\text{ declares complete layouts, usable reads and maintained structures}}
  {\mathrm{WF}_{\mathrm{Storage}}(I,D)}
 \end{mathpar}
 \paragraph{Meaning.} Data refinement by $\alpha$: the canonical provider and
@@ -146,10 +172,11 @@ cloning and membership laws remain premises on Rust implementations.
 \paragraph{Recorded decisions.} Provider and canonicalization policy labels,
 layout/read bindings, membership representation labels, and insertion and
 publication maintenance labels. These are not separate fields for every concrete
-Rust implementation choice. A structurally admissible but non-default layout
-is still rejected.
-\paragraph{Rewrite check.} Preserve Incremental and the exact storage plan;
-validate bindings and maintenance rather than silently reselecting them.
+Rust implementation choice. Non-default layouts and read bindings are admitted
+when they satisfy this contract; unsupported policy literals are not.
+\paragraph{Rewrite check.} Check both contracts and preserve Incremental exactly;
+allow changed layouts and occurrence bindings when the target satisfies key
+availability, version, coverage and maintenance obligations.
 
 \subsection{DL-Round}
 \paragraph{Grammar.} DL-Storage plus explicit component seed/step programs,
@@ -159,8 +186,8 @@ records the complete \code{pull\_printers} allowlist of exact macro paths.
 \code{HoleInterface::Pull} denotes an iterator result consumed by Round.
 \code{HoleInterface::Push} is representable in text for a clear unsupported
 interface diagnostic, but no base Round consumer implements it.
-\paragraph{Contract.} Check Storage, exact hole correspondence under recorded
-read bindings, seed/step ordering, fresh names, phase order, delta termination
+\paragraph{Contract.} Check Storage, exact hole correspondence under its
+admissible recorded read bindings, seed/step ordering, fresh names, phase order, delta termination
 and outputs. Each hole must record the pull interface and an argument-free
 terminal invocation whose exact path is in its program's recorded allowlist.
 The default allowlist is exactly
@@ -208,11 +235,34 @@ Storage and Round labels constrain these implementations without reifying them
 as independently checkable concrete fields. Their correctness therefore remains
 part of the printer's refinement obligation, supported by expansion and
 execution evidence rather than by an independent Rust equivalence checker.
-\paragraph{Rewrite check.} Base rewrites preserve the storage program and
-checked hole/round correspondence. Parallel execution is not a base flag:
+\paragraph{Rewrite check.} The existing erasure/correspondence obligation is
+unchanged: base rewrites preserve the storage program and checked hole/round
+correspondence under its admissible binding. No canonical storage selection
+is substituted while checking holes. Parallel execution is not a base flag:
 an extension owns partition, ownership, barriers, and its printer. Any execution
 annotation needs an erasure/refinement check, disjoint covering ownership and
 lawful merges. Round rewrites run before CQ hole expansion.
+
+\paragraph{Executable reference semantics.}
+The feature-local Datalog testkit uses a synchronous, per-component set fixpoint
+driver. Its \code{eval\_source} takes an initializer, a component count and a typed
+step callback returning whether publication changed the state. The driver returns
+the final state and propagates panics; the re-exported \code{check\_refinement}
+harness evaluates each side once and catches panic as the bottom outcome.
+The test-pass \code{eval\_source!} translates checked Source rules into
+written-order native Rust loops over typed set stores, publishing candidate sets
+synchronously. Signed dependency rank relaxation derives reference strata
+independently of production passes. This executes opaque guards, bindings, generators and
+computed heads as Rust rather than pretending to interpret them in a restricted
+scalar evaluator. It does not rerun stratify, incremental, storage or fork to
+obtain the reference answer.
+Executable refinement compares successful reference output sets with the target
+and rejects a new target panic; a reference panic imposes no successful-result
+obligation. This is instance-level evidence for rewrite and pass premises, not
+a decision procedure for arbitrary Rust equivalence. Purity, lawful equality,
+hashing and cloning, finite generators and termination remain assumptions;
+observers are excluded from relational denotation. Divergence has no timeout-based denotation. This reference
+does not claim a general interpreter for Incremental or Round.
 
 \section{Datalog passes and crate organization}
 Each language crate owns \code{Program: Parse + ToTokens + Language}, its
@@ -237,7 +287,8 @@ Refinement is conditional on the ordinary opaque-Rust premises.
 
 \subsection{Stratify: Source to Strata}
 Construct the deterministic dependency SCC order. Independently check both
-contracts, exact source preservation and the required ordered components.
+contracts and exact source preservation; the target need only satisfy the
+admissible component contract, not reproduce that deterministic order.
 \begin{mathpar}
 \Rule{CK-DL-Stratify}{\mathrm{WF}_{\mathrm{Strata}}(t)\quad
  \mathrm{source}(t)=s}{\mathrm{check}_{\mathrm{stratify}}(s,t)}
@@ -246,8 +297,9 @@ Refinement follows from freezing lower components, subject to the common
 termination and Rust premises.
 
 \subsection{Incremental: Strata to Incremental}
-Construct fresh delta declarations and the fixed covering expansion.
-Independently check exact base preservation, erasure, coverage and substitutions.
+Construct fresh delta declarations and the default covering expansion.
+Independently check exact base preservation, erasure, coverage and substitutions;
+do not compare target names or variant order with a regenerated expansion.
 \begin{mathpar}
 \Rule{CK-DL-Incremental}{\mathrm{WF}_{\mathrm{Incremental}}(t)\quad
  \mathrm{strata}(t)=s}{\mathrm{check}_{\mathrm{incremental}}(s,t)}
@@ -257,7 +309,8 @@ requires the additional prefix-safety obligation, not merely this check.
 
 \subsection{Storage: Incremental to Storage}
 Record the existing deterministic providers, layouts, bindings and policies.
-Independently check the exact base and storage decisions.
+Independently check exact base preservation and the target's admissible storage
+decisions, without reconstructing the default plan.
 \begin{mathpar}
 \Rule{CK-DL-Storage}{\mathrm{WF}_{\mathrm{Storage}}(t)\quad
  \mathrm{incremental}(t)=s}{\mathrm{check}_{\mathrm{storage}}(s,t)}
