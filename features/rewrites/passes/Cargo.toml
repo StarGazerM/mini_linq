@@ -10,5 +10,4 @@ description = "Public checked transformations underlying cq-rewrites"
 cq-lang-physical = { version = "0.1.0", path = "../../../languages/cq-lang-physical" }
 cq-lang-structures = { version = "0.1.0", path = "../../../languages/cq-lang-structures" }
 proc-macro2 = "1"
-quote = "1"
 syn = { version = "2", features = ["full", "extra-traits"] }

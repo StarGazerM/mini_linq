@@ -242,12 +242,6 @@ physical_rewrite!(lazy_semijoins);
 physical_rewrite!(build_host_reads);
 physical_rewrite!(host_sets);
 
-/// Write the recorded Structures program to a file; pass-through.
-#[proc_macro]
-pub fn dump(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), cq_rewrite_passes::dump).into()
-}
-
 /// Change only the representation types matched by `selector => RustType`.
 #[proc_macro]
 pub fn retype(input: TokenStream) -> TokenStream {

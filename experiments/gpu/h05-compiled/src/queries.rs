@@ -81,32 +81,3 @@ pub fn chain<'a>(input: &'a DeviceColumns<'_, Answer, For>) -> DeviceColumns<'a,
             Input(order_key,supplier_key,nation_key);
     }
 }
-
-/// The reference traversal R N C O L S, written order.
-pub fn plan_r(data: &Rows) -> DeviceColumns<'_, Answer, For> {
-    mini_linq::compile! {
-        pipeline {
-            plan = ::cq_planners::order(written, coarse);
-            physical = [::cq_rewrites::build_host_reads];
-            // Five builds, the reference's index set: Nation by region, Customer
-            // by nation, Orders by customer, Lineitem by order, and a Supplier
-            // directory by supplier with nation searched within its range.
-            structures = [::cq_rewrites::sorted_runs, ::cq_gpu::prefix_runs(Supplier => supplier_key),
-                ::cq_rewrites::retype(dedup => ::cq_gpu_runtime::DeviceSet<_, ::cq_gpu_runtime::For>)];
-            print = ::cq_gpu::print;
-        }
-        struct H05R;
-        relation Customer(c_custkey:u32,c_nationkey:u32) = (&data.customer);
-        relation Orders(o_orderkey:u32,o_custkey:u32,o_orderdate:i32) = (&data.orders);
-        relation Lineitem(l_orderkey:u32,l_suppkey:u32) = (&data.lineitem);
-        relation Supplier(s_suppkey:u32,s_nationkey:u32) = (&data.supplier);
-        relation Nation(n_nationkey:u32,n_regionkey:u32) = (&data.nation);
-        relation Region(r_regionkey:u32,r_name:i32) = (&data.region);
-        answer(order_key,supplier_key,nation_key) :-
-            Region(region_key,2), Nation(nation_key,region_key),
-            Customer(customer_key,nation_key),
-            Orders(order_key,customer_key,order_date),
-            #[total] if *order_date >= 8766 && *order_date < 9131,
-            Lineitem(order_key,supplier_key), Supplier(supplier_key,nation_key);
-    }
-}

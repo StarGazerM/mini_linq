@@ -404,14 +404,3 @@ pub fn hashed_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<
     ir::check_rewrite(source, &target)?;
     Ok(target)
 }
-
-/// Inspection stage: write the recorded Structures program (with its Physical
-/// program) to the file named by the string literal argument; the program
-/// passes through unchanged. For reading what a pipeline recorded.
-pub fn dump(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
-    let path: syn::LitStr = syn::parse2(arguments)?;
-    let text = quote::ToTokens::to_token_stream(source).to_string().replace(" ; ", " ;\n");
-    std::fs::write(path.value(), text + "\n")
-        .map_err(|error| syn::Error::new_spanned(&path, format!("dump: {error}")))?;
-    Ok(source.clone())
-}

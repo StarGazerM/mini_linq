@@ -87,28 +87,22 @@ pub fn compile(
                     .get(&name)
                     .is_some_and(|origin| origin.base == build)
         });
-        // One composite level splits into singleton levels when it is a
-        // payload-carrying HashedRun, or when this build is explicitly chosen
-        // (also a payload-free full-key existence read: the chosen column
-        // becomes the directory, the rest are searched within its range).
-        let composite = keyed.levels.len() == 1
+        let composite_payload = keyed.levels.len() == 1
             && keyed.levels[0].columns.len() > 1
             && keyed.membership.is_none()
-            && keyed.filtered.is_none();
-        let composite_payload = composite
-            && (selected
-                || matches!(&keyed.ty, syn::Type::Path(path)
-                    if path.qself.is_none()
-                        && path.path.segments.iter().map(|s| s.ident.to_string())
-                            .eq(["cq_gpu_runtime", "HashedRun"]))
-                    && source.physical.program.definitions.iter().any(|definition| {
-                        matches!(&definition.operator, structures::physical::Operator::Probe(_, read)
-                            if symbol_name(&read.right) == name
-                                && structures::prefix_depth(&keyed.level_names(),
-                                    &read.columns.iter().map(symbol_name).collect::<Vec<_>>()).is_some()
-                                && facts.physical.headings[&name].iter().any(|column|
-                                    !read.columns.iter().any(|key| symbol_name(key) == *column)))
-                    }));
+            && keyed.filtered.is_none()
+            && matches!(&keyed.ty, syn::Type::Path(path)
+                if path.qself.is_none()
+                    && path.path.segments.iter().map(|s| s.ident.to_string())
+                        .eq(["cq_gpu_runtime", "HashedRun"]))
+            && source.physical.program.definitions.iter().any(|definition| {
+                matches!(&definition.operator, structures::physical::Operator::Probe(_, read)
+                    if symbol_name(&read.right) == name
+                        && structures::prefix_depth(&keyed.level_names(),
+                            &read.columns.iter().map(symbol_name).collect::<Vec<_>>()).is_some()
+                        && facts.physical.headings[&name].iter().any(|column|
+                            !read.columns.iter().any(|key| symbol_name(key) == *column)))
+            });
         if (!composite_payload && keyed.levels.len() < 2) || keyed.membership.is_some() {
             if selected {
                 return Err(syn::Error::new_spanned(

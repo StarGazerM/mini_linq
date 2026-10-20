@@ -458,7 +458,6 @@ dependencies = [
  "cq-lang-physical",
  "cq-lang-structures",
  "proc-macro2",
- "quote",
  "syn 2.0.119",
 ]
 
