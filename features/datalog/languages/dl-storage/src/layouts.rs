@@ -4,9 +4,24 @@ use cq_syntax::{rust, symbol_name};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Check declared representations and each recorded occurrence binding.
-/// Fixed whole-layout maintenance policies cover even unused extra layouts.
+/// Per-layout maintenance covers even unused extra layouts.
 pub(crate) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
-    for layout in program.layouts.iter().chain(&program.delta_layouts) {
+    for (layout, maintenance) in program
+        .layouts
+        .iter()
+        .map(|layout| (layout, "admitted_rows"))
+        .chain(
+            program
+                .delta_layouts
+                .iter()
+                .map(|layout| (layout, "replace_each_run")),
+        )
+    {
+        ensure(
+            layout.maintenance == maintenance,
+            &layout.maintenance,
+            "layout maintenance differs from its full or delta lifetime",
+        )?;
         let index = analysis
             .positions
             .get(&symbol_name(&layout.relation))

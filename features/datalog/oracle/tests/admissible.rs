@@ -231,3 +231,52 @@ fn normalized_guards_compare_borrowed_columns_and_owned_bindings() {
     assert_eq!(guarded!(sequential), expected);
     check_refinement(|| guarded!(reference), || guarded!(alternate)).unwrap();
 }
+
+macro_rules! recorded_choices {
+    ($($source:tt)*) => {
+        cq_datalog::datalog! {
+            pipeline {
+                storage_rewrites = [cq_datalog_test_passes::ordered_storage,
+                    cq_datalog_test_passes::direct_later_delta];
+                round = [cq_datalog_test_passes::reverse_publication];
+            };
+            $($source)*
+        }.collect::<HashSet<_>>()
+    };
+}
+
+#[test]
+fn ordered_providers_reversed_publication_and_later_direct_delta_match_ascent() {
+    ascent::ascent! {
+        struct Oracle;
+        relation edge(i32, i32);
+        relation path(i32, i32);
+        relation mirror(i32, i32);
+        path(*x, *y) <-- edge(x, y);
+        path(*x, *z) <-- edge(x, y), mirror(y, z);
+        mirror(*x, *y) <-- path(x, y);
+    }
+    for edges in [
+        vec![],
+        vec![(0, 1)],
+        vec![(0, 1), (1, 2), (2, 3), (0, 1)],
+        vec![(0, 1), (1, 0), (2, 3)],
+    ] {
+        let mut oracle = Oracle {
+            edge: edges.clone(),
+            ..Default::default()
+        };
+        oracle.run();
+        let actual = recorded_choices! {
+            struct Choices;
+            relation Edge(x:i32,y:i32) = (&edges);
+            relation Path(x:i32,y:i32);
+            relation Mirror(x:i32,y:i32);
+            output Path;
+            Path(*x,*y) :- Edge(x,y);
+            Path(*x,*z) :- Edge(x,y), Mirror(y,z);
+            Mirror(*x,*y) :- Path(x,y);
+        };
+        assert_eq!(actual, oracle.path.into_iter().collect());
+    }
+}

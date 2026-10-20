@@ -71,6 +71,22 @@ pub fn check(source: &Program, target: &Program) -> syn::Result<()> {
         .filter(|rule| rule.scan.is_some());
     let mut annotations = target.execution.iter();
     for rule in expected {
+        let scan = rule.scan.as_ref().expect("filtered scan");
+        let slice_backed = match scan.source {
+            round::InputSource::Delta(index) => {
+                vector_element(&source.context.relations[index].providers.delta).is_some()
+            }
+            round::InputSource::Layout(index) => {
+                let provider = &source.context.layouts[index].provider;
+                map_payload(provider).and_then(vector_element).is_some()
+            }
+        };
+        if !slice_backed {
+            return Err(syn::Error::new_spanned(
+                target,
+                "slice partition requires a ::std::vec::Vec delta or layout bucket provider",
+            ));
+        }
         let Some(annotation) = annotations.next() else {
             return Err(syn::Error::new_spanned(
                 target,
@@ -94,4 +110,51 @@ pub fn check(source: &Program, target: &Program) -> syn::Result<()> {
         ));
     }
     Ok(())
+}
+
+fn vector_element(ty: &syn::Type) -> Option<&syn::Type> {
+    let syn::Type::Path(path) = ty else {
+        return None;
+    };
+    if path.qself.is_some() || path.path.leading_colon.is_none() || path.path.segments.len() != 3 {
+        return None;
+    }
+    let mut segments = path.path.segments.iter();
+    for name in ["std", "vec"] {
+        let segment = segments.next()?;
+        if segment.ident != name || !matches!(segment.arguments, syn::PathArguments::None) {
+            return None;
+        }
+    }
+    let segment = segments.next()?;
+    if segment.ident != "Vec" {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+        return None;
+    };
+    if arguments.args.len() != 1 {
+        return None;
+    }
+    match arguments.args.first()? {
+        syn::GenericArgument::Type(element) => Some(element),
+        _ => None,
+    }
+}
+
+fn map_payload(ty: &syn::Type) -> Option<&syn::Type> {
+    let syn::Type::Path(path) = ty else {
+        return None;
+    };
+    if path.qself.is_some() {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(arguments) = &path.path.segments.last()?.arguments
+    else {
+        return None;
+    };
+    match arguments.args.iter().nth(1)? {
+        syn::GenericArgument::Type(payload) => Some(payload),
+        _ => None,
+    }
 }

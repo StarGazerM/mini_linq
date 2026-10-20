@@ -179,6 +179,10 @@ fn alternate_layouts_and_recorded_reads_are_admissible() {
         relation: syn::parse_quote!(Edge),
         columns: vec![1, 0],
         key: 0,
+        provider: syn::parse_quote!(
+            ::std::collections::HashMap<(), ::std::vec::Vec<(i32, i32,)>, ::cq_storage::HashState>
+        ),
+        maintenance: syn::parse_quote!(admitted_rows),
     });
     alternate.reads[0].index = index;
     alternate.reads[0].columns = vec![1, 0];
@@ -196,12 +200,16 @@ fn alternate_layouts_and_recorded_reads_are_admissible() {
     alternate.reads.reverse();
     check_rewrite(&original, &alternate).unwrap();
 
-    // Every declared extra structure participates in the fixed maintenance policy.
+    // Every declared extra structure has its own checked maintenance record.
     alternate.layouts.push(original.layouts[0].clone());
     alternate.delta_layouts.push(Layout {
         relation: syn::parse_quote!(Result),
         columns: vec![1, 0],
         key: 0,
+        provider: syn::parse_quote!(
+            ::std::collections::HashMap<(), ::std::vec::Vec<(i32, i32,)>, ::cq_storage::HashState>
+        ),
+        maintenance: syn::parse_quote!(replace_each_run),
     });
     check_rewrite(&original, &alternate).unwrap();
 }
@@ -250,6 +258,10 @@ fn rust_bindings_are_available_only_after_their_written_clause() {
         relation: syn::parse_quote!(E),
         columns: vec![1, 0],
         key: 2,
+        provider: syn::parse_quote!(
+            ::std::collections::HashMap<(i32, i32,), ::std::vec::Vec<()>, ::cq_storage::HashState>
+        ),
+        maintenance: syn::parse_quote!(admitted_rows),
     });
     alternate.reads[1].index = index;
     alternate.reads[1].columns = vec![1, 0];
@@ -272,4 +284,102 @@ fn direct_delta_scans_may_replace_later_indexed_probes() {
     read.index = 2;
     read.columns = vec![0, 1];
     check_rewrite(&original, &alternate).unwrap();
+}
+
+#[test]
+fn provider_coverage_and_every_layout_maintenance_are_required() {
+    let original = authored(INCREMENTAL);
+    let mutations: &[fn(&mut Program)] = &[
+        |p| p.providers.clear(),
+        |p| {
+            p.providers.pop();
+        },
+        |p| p.providers.push(p.providers[0].clone()),
+        |p| p.layouts[0].maintenance = syn::parse_quote!(every_candidate),
+        |p| p.layouts[0].maintenance = syn::parse_quote!(replace_each_run),
+        |p| p.delta_layouts[0].maintenance = syn::parse_quote!(append),
+        |p| p.delta_layouts[0].maintenance = syn::parse_quote!(admitted_rows),
+        |p| p.providers[2].next = syn::parse_quote!(custom::DifferentRows),
+        |p| p.providers[0].all = syn::parse_quote!(custom::UnusedRows),
+        |p| p.providers[0].seen = syn::parse_quote!(custom::UnusedSeen),
+        |p| {
+            p.providers[0].delta = syn::parse_quote!(custom::UnusedRows);
+            p.providers[0].next = syn::parse_quote!(custom::UnusedRows);
+        },
+        |p| p.providers[0].all_init = syn::parse_quote!(custom::empty()),
+        |p| p.providers[0].delta_init = syn::parse_quote!(custom::empty()),
+        |p| p.providers[0].next_init = syn::parse_quote!(custom::empty()),
+        |p| p.providers[2].canonical_name = syn::parse_quote!(UnusedCanonical),
+        |p| p.providers[2].canonical_set = syn::parse_quote!(custom::UnusedSet<R>),
+        |p| {
+            let mut extra = p.layouts[0].clone();
+            extra.maintenance = syn::parse_quote!(omit);
+            p.layouts.push(extra);
+        },
+        |p| {
+            let mut extra = p.delta_layouts[0].clone();
+            extra.maintenance = syn::parse_quote!(omit);
+            p.delta_layouts.push(extra);
+        },
+    ];
+    for (index, mutate) in mutations.iter().enumerate() {
+        let mut changed = original.clone();
+        mutate(&mut changed);
+        assert!(
+            contract::check(&changed).is_err(),
+            "provider mutation {index}"
+        );
+        assert!(check_rewrite(&original, &changed).is_err());
+        assert!(cq_datalog_storage::check(&original.incremental, &changed).is_err());
+    }
+}
+
+#[test]
+fn opaque_providers_and_initializers_are_not_whitelisted() {
+    let original = authored(INCREMENTAL);
+    let mut alternate = original.clone();
+    let provider = &mut alternate.providers[0];
+    provider.canonical_name = syn::parse_quote!(OrderedCanonical);
+    provider.canonical_set = syn::parse_quote!(::std::collections::BTreeSet<R>);
+    let provider = &mut alternate.providers[2];
+    provider.all = syn::parse_quote!(custom::Rows<(i32, i32,)>);
+    provider.seen = syn::parse_quote!(::std::collections::BTreeSet<(i32, i32,)>);
+    provider.delta = syn::parse_quote!(custom::Delta<(i32, i32,)>);
+    provider.next = syn::parse_quote!(custom::Delta<(i32, i32,)>);
+    provider.all_init = syn::parse_quote!(custom::Rows::empty());
+    provider.delta_init = syn::parse_quote!(custom::Delta::empty());
+    provider.next_init = syn::parse_quote!(custom::Delta::empty());
+    alternate.layouts[0].provider =
+        syn::parse_quote!(::std::collections::BTreeMap<(), ::std::vec::Vec<(i32, i32,)>>);
+    alternate.delta_layouts[0].provider =
+        syn::parse_quote!(::std::collections::BTreeMap<(i32,), ::std::vec::Vec<(i32,)>>);
+    check_rewrite(&original, &alternate).unwrap();
+    cq_datalog_storage::check(&original.incremental, &alternate).unwrap();
+    let replay: Program = syn::parse2(alternate.to_token_stream()).unwrap();
+    assert_eq!(replay, alternate);
+    contract::check(&replay).unwrap();
+}
+
+#[test]
+fn provider_records_reject_missing_or_malformed_fields() {
+    let source = authored(INCREMENTAL);
+    let provider = source.providers[0].to_token_stream().to_string();
+    for malformed in [
+        provider.replacen("canonical_name", "unknown", 1),
+        provider.replacen("canonical_set", "unknown", 1),
+        provider.replacen("all_init", "unknown", 1),
+        provider.replacen("delta_init", "unknown", 1),
+        provider.replacen("next_init", "unknown", 1),
+        provider.replacen("canonical_set {", "canonical_set { 123", 1),
+    ] {
+        assert!(syn::parse_str::<cq_lang_datalog_storage::Providers>(&malformed).is_err());
+    }
+    let layout = source.layouts[0].to_token_stream().to_string();
+    for malformed in [
+        layout.replacen("provider", "unknown", 1),
+        layout.replacen("maintenance", "unknown", 1),
+        layout.replacen("provider {", "provider { 123", 1),
+    ] {
+        assert!(syn::parse_str::<Layout>(&malformed).is_err());
+    }
 }

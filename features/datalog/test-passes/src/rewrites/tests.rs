@@ -109,6 +109,8 @@ fn storage_alternative_fixture_and_binding_mutations() {
         relation: syn::parse_quote!(E),
         columns: vec![1, 0],
         key: 0,
+        provider: syn::parse_quote!(::std::collections::HashMap<(), ::std::vec::Vec<(i32, i32,)>, ::cq_storage::HashState>),
+        maintenance: syn::parse_quote!(admitted_rows),
     });
     expected.reads[0].index = 1;
     expected.reads[0].columns = vec![1, 0];
@@ -156,4 +158,41 @@ fn storage_alternative_fixture_and_binding_mutations() {
     );
     assert!(tokens.to_string().contains("downstream :: consume"));
     assert!(!tokens.to_string().contains("compile_error"));
+}
+
+#[test]
+fn concrete_choices_are_nontrivial_checked_rewrites() {
+    let source: source::Program = syn::parse_quote! {
+        struct Choices; relation E(x:i32,y:i32) = (rows);
+        relation A(x:i32,y:i32); relation B(x:i32,y:i32); output A;
+        A(x,y) :- E(x,y);
+        A(x,z) :- E(x,y), B(y,z);
+        B(x,y) :- A(x,y);
+    };
+    let strata = cq_datalog_stratify::compile(&source).unwrap();
+    let incremental = cq_datalog_incremental::compile(&strata).unwrap();
+    let storage = cq_datalog_storage::compile(&incremental).unwrap();
+    let ordered = ordered_storage(&storage).unwrap();
+    assert_ne!(storage.layouts[0].provider, ordered.layouts[0].provider);
+    storage::check_rewrite(&storage, &ordered).unwrap();
+    let direct = direct_later_delta(&ordered).unwrap();
+    assert!(
+        direct
+            .reads
+            .iter()
+            .any(|read| read.kind == "direct" && read.position > 0)
+    );
+    assert_ne!(direct.reads, ordered.reads);
+    storage::check_rewrite(&ordered, &direct).unwrap();
+    let round = cq_datalog_fork::compile(&direct).unwrap();
+    let reversed = reverse_publication(&round).unwrap();
+    assert!(
+        round
+            .context
+            .strata
+            .iter()
+            .zip(&reversed.context.strata)
+            .any(|(a, b)| a.publication != b.publication)
+    );
+    cq_lang_datalog_round::check_rewrite(&round, &reversed).unwrap();
 }

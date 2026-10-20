@@ -246,11 +246,13 @@ dependencies = [
 name = "cq-datalog-test-passes"
 version = "0.0.0"
 dependencies = [
+ "cq-datalog-fork",
  "cq-datalog-incremental",
  "cq-datalog-storage",
  "cq-datalog-stratify",
  "cq-datalog-support",
  "cq-datalog-testkit",
+ "cq-lang-datalog-round",
  "cq-lang-datalog-source",
  "cq-lang-datalog-storage",
  "cq-lang-datalog-strata",

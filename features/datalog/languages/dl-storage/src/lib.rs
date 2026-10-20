@@ -1,34 +1,49 @@
 //! Checked storage refinement of Boolean incremental Datalog.
-//! Records provider/canonicalization and maintenance policy labels, layout/read bindings,
-//! and negation-key projections. These are not independent fields for every concrete
-//! Rust choice: cq-datalog-print still chooses storage types and the Canonical EDB
-//! wrapper, publication operation order and delta-layout rebuilding. Round similarly
-//! leaves loop/termination/observer emission, output conversion, component-local
-//! key-set scope, and member publication order in the shared printer.
-//! See doc/formal/datalog.tex for the recorded/implicit boundary.
+//! Records concrete Rust providers, canonicalization wrappers, per-layout maintenance,
+//! occurrence bindings, and negation-key projections. Applicable provider types and
+//! initializers are opaque Rust syntax whose collection laws are premises. Unused
+//! relation-kind fields retain checked defaults; delta and next share a move type.
+//! See doc/formal/datalog.tex for the storage refinement obligations.
 use cq_datalog_support::{columns, ensure, filters, key_columns};
 pub use cq_lang_datalog_incremental as incremental;
 use cq_syntax::symbol_name;
 pub use incremental::strata::source::{BodyItem, Query};
 use std::collections::BTreeSet;
-use syn::{Expr, Ident};
+use syn::{Expr, Ident, Type};
 mod layouts;
 pub mod text;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Program {
     pub incremental: incremental::Program,
+    pub providers: Vec<Providers>,
     pub layouts: Vec<Layout>,
     pub delta_layouts: Vec<Layout>,
     pub reads: Vec<Read>,
     pub negations: Vec<Negative>,
     pub policy: Policy,
 }
+/// Concrete providers for one relation, indexed by source declaration order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Providers {
+    pub canonical_name: Ident,
+    /// Generic inner collection type, with `R` denoting the canonical row.
+    pub canonical_set: Type,
+    pub all: Type,
+    pub seen: Type,
+    pub delta: Type,
+    pub next: Type,
+    pub all_init: Expr,
+    pub delta_init: Expr,
+    pub next_init: Expr,
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Layout {
     pub relation: Ident,
     pub columns: Vec<usize>,
     pub key: usize,
+    pub provider: Type,
+    pub maintenance: Ident,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Read {
@@ -47,32 +62,27 @@ pub struct Negative {
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Policy {
-    pub edb: Ident,
-    pub all: Ident,
-    pub seen: Ident,
-    pub delta: Ident,
-    pub next: Ident,
-    pub layout: Ident,
     pub insertion: Ident,
     pub negation_keys: Ident,
-    pub full_maintenance: Ident,
-    pub delta_maintenance: Ident,
 }
-record!(Program { incremental: incremental::Program, layouts: Vec<Layout>, delta_layouts: Vec<Layout>, reads: Vec<Read>, negations: Vec<Negative>, policy: Policy });
-record!(Layout { relation: Ident, columns: Vec<usize>, key: usize });
+record!(Program { incremental: incremental::Program, providers: Vec<Providers>, layouts: Vec<Layout>, delta_layouts: Vec<Layout>, reads: Vec<Read>, negations: Vec<Negative>, policy: Policy });
+record!(Providers {
+    canonical_name: Ident,
+    canonical_set: Type,
+    all: Type,
+    seen: Type,
+    delta: Type,
+    next: Type,
+    all_init: Expr,
+    delta_init: Expr,
+    next_init: Expr
+});
+record!(Layout { relation: Ident, columns: Vec<usize>, key: usize, provider: Type, maintenance: Ident });
 record!(Read { variant: usize, position: usize, kind: Ident, index: usize, columns: Vec<usize> });
 record!(Negative { component: usize, relation: usize, columns: Vec<usize>, filters: Vec<(usize, Expr)> });
 record!(Policy {
-    edb: Ident,
-    all: Ident,
-    seen: Ident,
-    delta: Ident,
-    next: Ident,
-    layout: Ident,
     insertion: Ident,
-    negation_keys: Ident,
-    full_maintenance: Ident,
-    delta_maintenance: Ident
+    negation_keys: Ident
 });
 
 pub use incremental::Analysis;
@@ -162,21 +172,56 @@ pub mod contract {
     /// Formal rule WF-DL-Storage: admissible bindings, layouts and total maintenance.
     pub fn check(program: &Program) -> syn::Result<Analysis> {
         let analysis = incremental::contract::check(&program.incremental)?;
+        ensure(
+            program.providers.len() == program.incremental.strata.source.declarations.len(),
+            program,
+            "storage providers must cover every declaration in declaration order",
+        )?;
+        for (provider, declaration) in program
+            .providers
+            .iter()
+            .zip(&program.incremental.strata.source.declarations)
+        {
+            ensure(
+                provider.delta == provider.next,
+                provider,
+                "delta and next providers must have the same type for move publication",
+            )?;
+            if declaration.value.is_some() {
+                let types: Vec<_> = declaration
+                    .columns
+                    .iter()
+                    .map(|column| &column.ty)
+                    .collect();
+                let rows: Type = syn::parse_quote!(::std::vec::Vec<(#(#types,)*)>);
+                let seen: Type = syn::parse_quote!(::cq_storage::HashSet<(#(#types,)*)>);
+                let empty: Expr = syn::parse_quote!(::std::vec::Vec::new());
+                ensure(
+                    provider.all == rows
+                        && provider.seen == seen
+                        && provider.delta == rows
+                        && provider.next == rows
+                        && provider.all_init == empty
+                        && provider.delta_init == empty
+                        && provider.next_init == empty,
+                    provider,
+                    "EDB providers must retain defaults for unused IDB storage fields",
+                )?;
+            } else {
+                ensure(
+                    provider.canonical_name == "Canonical"
+                        && provider.canonical_set == syn::parse_quote!(::cq_storage::HashSet<R>),
+                    provider,
+                    "IDB providers must retain defaults for unused EDB canonicalization fields",
+                )?;
+            }
+        }
         layouts::check(program, &analysis)?;
         let p = &program.policy;
         ensure(
-            p.edb == "canonical_borrowed_hash_set"
-                && p.all == "vec"
-                && p.seen == "hash_set"
-                && p.delta == "vec"
-                && p.next == "vec"
-                && p.layout == "hash_map_vec_hash_state"
-                && p.insertion == "hash_set_all_columns"
-                && p.negation_keys == "hash_set_borrowed"
-                && p.full_maintenance == "admitted_rows"
-                && p.delta_maintenance == "replace_each_run",
+            p.insertion == "all_columns" && p.negation_keys == "borrowed",
             program,
-            "unsupported storage provider or maintenance policy",
+            "unsupported storage insertion or negation semantics",
         )?;
         Ok(analysis)
     }

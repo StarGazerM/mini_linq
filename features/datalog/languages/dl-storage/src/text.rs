@@ -92,6 +92,7 @@ macro_rules! syntax_text { ($($ty:ty),* $(,)?) => {$ (
 syntax_text!(
     syn::Ident,
     syn::Expr,
+    syn::Type,
     cq_syntax::RelationDecl,
     cq_lang_cq::Program,
     cq_stage::Pipeline,

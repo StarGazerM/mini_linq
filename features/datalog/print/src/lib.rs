@@ -1,6 +1,10 @@
 //! Reusable realization of checked storage, rounds, admission and outputs.
 //! Alternative terminals supply only the phase evaluator, never a copy of the
 //! storage or publication printer. CQ joins remain inside the recorded queues.
+//! Concrete provider types and initializers come from Storage; Round supplies
+//! admission, ordered publication operations, phase/loop control, termination,
+//! observer/key-set scope and output conversions. This terminal realizes those
+//! checked records rather than selecting a second execution plan.
 use cq_datalog_support::ensure;
 pub use cq_lang_datalog_round as round;
 use cq_syntax::rust;
@@ -78,9 +82,10 @@ pub fn render_with(
         let keys = stratum.keys.iter().map(|key| {
             let name = &key.name;
             let invocation = &holes[key.hole];
+            let provider = &key.provider;
             match key.representation {
-                KeyRepresentation::HashSetBorrowed => {
-                    quote!(let #name = &(#invocation).collect::<::cq_storage::HashSet<_>>();)
+                KeyRepresentation::Borrowed => {
+                    quote!(let #name = &(#invocation).collect::<#provider>();)
                 }
             }
         });
@@ -92,12 +97,13 @@ pub fn render_with(
             .map(|&i| {
                 let relation = &context.relations[i];
                 let next = &relation.next;
-                let types = relation.declaration.columns.iter().map(|column| &column.ty);
-                quote!(let mut #next: ::std::vec::Vec<(#(#types,)*)> = ::std::vec::Vec::new();)
+                let provider = &relation.providers.next;
+                let init = &relation.providers.next_init;
+                quote!(let mut #next: #provider = #init;)
             })
             .collect();
         let publish = publication(context, stratum);
-        let lengths = stratum.members.iter().map(|&i| {
+        let lengths = stratum.termination.iter().map(|&i| {
             let delta = context.relations[i]
                 .delta_host
                 .as_ref()
@@ -105,34 +111,68 @@ pub fn render_with(
             quote!(#delta.len())
         });
         let nonempty = quote!(0usize #(+ #lengths)*);
-        let observe = context
-            .observer
-            .as_ref()
-            .map(|_| quote!((#observer)(#round, #nonempty);));
+        let condition = match stratum.termination_test.to_string().as_str() {
+            "sum_delta_lengths" => quote!(#nonempty != 0),
+            "any_delta" => {
+                let tests = stratum.termination.iter().map(|&index| {
+                    let delta = context.relations[index]
+                        .delta_host
+                        .as_ref()
+                        .expect("checked IDB delta host");
+                    quote!(!#delta.is_empty())
+                });
+                quote!(false #(|| #tests)*)
+            }
+            _ => unreachable!("checked termination test"),
+        };
+        let observe = match stratum.observer.to_string().as_str() {
+            "before_step" => context
+                .observer
+                .as_ref()
+                .map(|_| quote!((#observer)(#round, #nonempty);)),
+            _ => unreachable!("checked observer placement"),
+        };
         let seed_round = round_body(
             &allocate,
             seeds,
             &publish,
+            &stratum.phases,
             program.policy.timing == "phases",
         );
         let step_round = round_body(
             &allocate,
             steps,
             &publish,
+            &stratum.phases,
             program.policy.timing == "phases",
         );
-        // Keep borrowed lower-stratum key sets local: they cannot outlive this
-        // component or delay moving the final output relation into its iterator.
-        strata.push(quote!({
-            #(#keys)*
-            #seed_round
-            let mut #round = 0usize;
-            while #nonempty != 0 {
-                #observe
-                #step_round
-                #round += 1;
-            }
-        }));
+        let loop_body = match stratum.loop_form.to_string().as_str() {
+            "while_nonempty" => quote!(
+                while #condition {
+                    #observe
+                    #step_round
+                    #round += 1;
+                }
+            ),
+            "loop_until_empty" => quote!(
+                loop {
+                    if !(#condition) { break; }
+                    #observe
+                    #step_round
+                    #round += 1;
+                }
+            ),
+            _ => unreachable!("checked loop form"),
+        };
+        match stratum.key_scope.to_string().as_str() {
+            "component" => strata.push(quote!({
+                #(#keys)*
+                #seed_round
+                let mut #round = 0usize;
+                #loop_body
+            })),
+            _ => unreachable!("checked key-set scope"),
+        }
     }
     let result = outputs(context);
     syn::parse2(quote!({ #(#bindings)* #bind_observer #(#strata)* #result }))
@@ -143,53 +183,49 @@ pub fn bindings(context: &RoundContext) -> Vec<TokenStream> {
         let declaration = &relation.declaration;
         let all = &relation.all;
         let delta = &relation.delta_host;
-        let types: Vec<_> = declaration
-            .columns
-            .iter()
-            .map(|column| &column.ty)
-            .collect();
+        let providers = &relation.providers;
         if let Some(value) = &declaration.value {
             let expression = &value.expression;
+            let canonical = &providers.canonical_name;
+            let set = &providers.canonical_set;
             // Keep the original host alive, including temporary and grouped hosts.
             // Rows already supplies Copy tuples of borrowed columns: hash those
             // tuples once, without cloning values or adding another reference layer.
             bindings.push(quote!(
                 let #all = &(#expression);
                 let #all = &{
-                    struct Canonical<R>(::cq_storage::HashSet<R>);
-                    impl<R: ::core::marker::Copy> ::cq_storage::rows::Rows for &Canonical<R> {
+                    struct #canonical<R>(#set);
+                    impl<R: ::core::marker::Copy> ::cq_storage::rows::Rows for &#canonical<R> {
                         type Row = R;
                         fn rows(self) -> impl ::core::iter::Iterator<Item = R> {
                             self.0.iter().copied()
                         }
                     }
-                    Canonical(::cq_storage::rows::Rows::rows(#all).collect())
+                    #canonical(::cq_storage::rows::Rows::rows(#all).collect())
                 };
             ));
         } else {
             let seen = &relation.seen;
+            let all_provider = &providers.all;
+            let all_init = &providers.all_init;
+            let seen_provider = &providers.seen;
             bindings.push(quote!(
-                let mut #all: ::std::vec::Vec<(#(#types,)*)> = ::std::vec::Vec::new();
-                let mut #seen: ::cq_storage::HashSet<(#(#types,)*)> = ::core::default::Default::default();
+                let mut #all: #all_provider = #all_init;
+                let mut #seen: #seen_provider = ::core::default::Default::default();
             ));
         }
         if let Some(delta) = delta {
-            bindings.push(
-                quote!(let mut #delta: ::std::vec::Vec<(#(#types,)*)> = ::std::vec::Vec::new();),
-            );
+            let provider = &providers.delta;
+            let init = &providers.delta_init;
+            bindings.push(quote!(let mut #delta: #provider = #init;));
         }
     }
     for layout in context.layouts.iter().chain(&context.delta_layouts) {
         let relation = &context.relations[layout.relation];
         let host = &layout.host;
-        let types: Vec<_> = layout
-            .columns
-            .iter()
-            .map(|&i| &relation.declaration.columns[i].ty)
-            .collect();
-        let (keys, values) = types.split_at(layout.key);
+        let provider = &layout.provider;
         bindings.push(quote!(
-            let mut #host: ::std::collections::HashMap<(#(#keys,)*), ::std::vec::Vec<(#(#values,)*)>, ::cq_storage::HashState>
+            let mut #host: #provider
                 = ::core::default::Default::default();
         ));
         // Delta layouts name IDBs, so both IDB host kinds start empty.
@@ -202,70 +238,67 @@ pub fn bindings(context: &RoundContext) -> Vec<TokenStream> {
     bindings
 }
 pub fn publication(context: &RoundContext, stratum: &Stratum) -> Vec<TokenStream> {
-    let publish: Vec<_> = stratum
-        .members
+    stratum
+        .publication
         .iter()
-        .map(|&i| {
-            let relation = &context.relations[i];
+        .map(|publication| {
+            let relation = &context.relations[publication.relation];
             let all = &relation.all;
             let next = &relation.next;
             let delta = relation
                 .delta_host
                 .as_ref()
                 .expect("checked IDB delta host");
-            let updates: Vec<_> = context
-                .layouts
-                .iter()
-                .filter(|layout| layout.relation == i)
-                .map(|layout| insert_layout(layout, false))
-                .collect();
-            // Keep admitted-row maintenance separate from delta-run builds.
-            let updates =
-                (!updates.is_empty()).then(|| quote!({ for row in &#next { #(#updates)* } }));
-            let delta_runs = context
-                .delta_layouts
-                .iter()
-                .filter(|layout| layout.relation == i)
-                .map(|layout| {
-                    let host = &layout.host;
-                    let insert = insert_layout(layout, false);
-                    // Replace even an empty run: another SCC member may
-                    // continue, but must never see this relation's old delta.
-                    quote!({
-                        #host = ::core::default::Default::default();
-                        for row in &#delta { #insert }
-                    })
-                });
-            quote!(
-                #updates
-                #all.extend(#next.iter().cloned());
-                #delta = #next;
-                #(#delta_runs)*
-            )
+            let operations = publication.operations.iter().map(|operation| {
+                match operation.kind.to_string().as_str() {
+                    "full_layouts" => {
+                        let updates = operation
+                            .layouts
+                            .iter()
+                            .map(|&index| insert_layout(&context.layouts[index], false));
+                        quote!({ for row in &#next { #(#updates)* } })
+                    }
+                    "all_extend" => quote!(#all.extend(#next.iter().cloned());),
+                    "delta_swap" => quote!(#delta = #next;),
+                    "delta_rebuild" => {
+                        let rebuilds = operation.layouts.iter().map(|&index| {
+                            let layout = &context.delta_layouts[index];
+                            let host = &layout.host;
+                            let insert = insert_layout(layout, false);
+                            quote!({
+                                #host = ::core::default::Default::default();
+                                for row in &#delta { #insert }
+                            })
+                        });
+                        quote!(#(#rebuilds)*)
+                    }
+                    _ => unreachable!("checked publication operation"),
+                }
+            });
+            quote!(#(#operations)*)
         })
-        .collect();
-    publish
+        .collect()
 }
 pub fn outputs(context: &RoundContext) -> TokenStream {
     let outputs: Vec<_> = context
         .outputs
         .iter()
-        .map(|&index| {
-            let relation = &context.relations[index];
+        .map(|conversion| {
+            let relation = &context.relations[conversion.relation];
             let output = &relation.all;
-            if relation.declaration.value.is_some() {
-                // Layouts, negative projections, and outputs share the same
-                // canonical borrowed source. Clone only distinct output values.
-                let columns = (0..relation.declaration.arity()).map(|column| {
-                    let column = syn::Index::from(column);
-                    quote!(::core::clone::Clone::clone(row.#column))
-                });
-                quote!(::cq_storage::rows::Rows::rows(#output)
+            match conversion.conversion.to_string().as_str() {
+                "borrowed_cloned_into_iter" => {
+                    let columns = (0..relation.declaration.arity()).map(|column| {
+                        let column = syn::Index::from(column);
+                        quote!(::core::clone::Clone::clone(row.#column))
+                    });
+                    quote!(::cq_storage::rows::Rows::rows(#output)
                 .map(|row| (#(#columns,)*))
                 .collect::<::std::vec::Vec<_>>()
                 .into_iter())
-            } else {
-                quote!(#output.into_iter())
+                }
+                "owned_into_iter" => quote!(#output.into_iter()),
+                _ => unreachable!("checked output conversion"),
             }
         })
         .collect();
@@ -293,7 +326,7 @@ pub fn evaluate(
         let consume = if materialize {
             quote!((#invocation).collect::<::std::vec::Vec<(#(#types,)*)>>())
         } else {
-            insert_new(&head.seen, &head.next, invocation)
+            insert_new(rule, context, invocation)
         };
         let evaluation = if let Some(scan) = &rule.scan {
             let binding = &scan.binding;
@@ -317,7 +350,7 @@ pub fn evaluate(
         };
         if materialize {
             evaluations.push(quote!(let #candidates=#evaluation;));
-            let insert = insert_new(&head.seen, &head.next, &quote!(#admitted));
+            let insert = insert_new(rule, context, &quote!(#admitted));
             admissions.push(quote!(for #admitted in #candidates {#insert}));
         } else {
             evaluations.push(evaluation);
@@ -329,28 +362,29 @@ pub fn round_body(
     allocate: &[TokenStream],
     (evaluate, admit): (TokenStream, TokenStream),
     publish: &[TokenStream],
+    phases: &[Ident],
     timing: bool,
 ) -> TokenStream {
-    if timing {
-        let phase_start = Ident::new("__cq_phase_start", Span::mixed_site());
-        let evaluation_time = Ident::new("__cq_evaluation_time", Span::mixed_site());
-        let admission_time = Ident::new("__cq_admission_time", Span::mixed_site());
-        quote! {
-            #(#allocate)*
-            let #phase_start = ::std::time::Instant::now();
-            #evaluate
-            let #evaluation_time = #phase_start.elapsed();
-            let #phase_start = ::std::time::Instant::now();
-            #admit
-            let #admission_time = #phase_start.elapsed();
-            let #phase_start = ::std::time::Instant::now();
-            #(#publish)*
-            ::std::eprintln!("datalog-phase evaluation_ns={} admission_ns={} publication_ns={}",
-                #evaluation_time.as_nanos(), #admission_time.as_nanos(), #phase_start.elapsed().as_nanos());
+    let phase_start = Ident::new("__cq_phase_start", Span::mixed_site());
+    let evaluation_time = Ident::new("__cq_evaluation_time", Span::mixed_site());
+    let admission_time = Ident::new("__cq_admission_time", Span::mixed_site());
+    let bodies = phases.iter().map(|phase| {
+        let (body, elapsed) = match phase.to_string().as_str() {
+            "evaluate" => (evaluate.clone(), quote!(let #evaluation_time = #phase_start.elapsed();)),
+            "admit" => (admit.clone(), quote!(let #admission_time = #phase_start.elapsed();)),
+            "publish" => (quote!(#(#publish)*), quote!(
+                ::std::eprintln!("datalog-phase evaluation_ns={} admission_ns={} publication_ns={}",
+                    #evaluation_time.as_nanos(), #admission_time.as_nanos(), #phase_start.elapsed().as_nanos());
+            )),
+            _ => unreachable!("checked round phase"),
+        };
+        if timing {
+            quote!(let #phase_start = ::std::time::Instant::now(); #body #elapsed)
+        } else {
+            body
         }
-    } else {
-        quote!(#(#allocate)* #evaluate #admit #(#publish)*)
-    }
+    });
+    quote!(#(#allocate)* #(#bodies)*)
 }
 // Every full layout is immutable while the round's holes run. Only admitted
 // rows reach publication, so no repeated whole-IDB scans or rebuilds occur.
@@ -373,9 +407,17 @@ pub fn insert_layout(layout: &Layout, borrowed_columns: bool) -> TokenStream {
 }
 
 /// Formal rule DL-InsertNew: Canonical all-column membership admits each row with one insertion lookup.
-pub fn insert_new(seen: &Ident, next: &Ident, invocation: &TokenStream) -> TokenStream {
+pub fn insert_new(
+    rule: &RuleHole,
+    context: &RoundContext,
+    invocation: &TokenStream,
+) -> TokenStream {
+    let head = &context.relations[rule.head];
+    let seen = &head.seen;
+    let next = &head.next;
+    let insertion = &rule.insertion;
     quote!(for row in #invocation {
-        if #seen.insert(::core::clone::Clone::clone(&row)) {
+        if #seen.#insertion(::core::clone::Clone::clone(&row)) {
             #next.push(row);
         }
     })
