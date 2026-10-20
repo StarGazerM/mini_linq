@@ -25,6 +25,7 @@ cq-datalog-surface-if-let = { version = "0.0.0", path = "passes/surface-if-let" 
 cq-datalog-stratify = { version = "0.0.0", path = "passes/stratify" }
 cq-datalog-incremental = { version = "0.0.0", path = "passes/incremental" }
 cq-datalog-storage = { version = "0.0.0", path = "passes/storage" }
+cq-datalog-hasher = { version = "0.0.0", path = "passes/hasher" }
 cq-datalog-fork = { version = "0.0.0", path = "passes/fork" }
 cq-datalog-print-rounds = { version = "0.0.0", path = "passes/print-rounds" }
 cq-datalog-print = { version = "0.0.0", path = "print" }

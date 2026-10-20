@@ -337,6 +337,40 @@ fn storage_preserves_layout_shapes_but_rejects_unsupported_seen_providers() {
 }
 
 #[test]
+fn sharding_preserves_explicit_hashers_and_checks_their_correspondence() {
+    let mut source = authored_storage();
+    source.providers[2].seen = syn::parse_quote!(
+        ::std::collections::HashSet<(i32, i32,), ::std::hash::BuildHasherDefault<::rustc_hash::FxHasher>>
+    );
+    for layout in source.layouts.iter_mut().chain(&mut source.delta_layouts) {
+        let syn::Type::Path(path) = &mut layout.provider else {
+            unreachable!()
+        };
+        let syn::PathArguments::AngleBracketed(arguments) =
+            &mut path.path.segments.last_mut().unwrap().arguments
+        else {
+            unreachable!()
+        };
+        arguments.args[2] =
+            syn::parse_quote!(::std::hash::BuildHasherDefault<::rustc_hash::FxHasher>);
+    }
+    let target = compile_storage(&source).unwrap();
+    assert_eq!(
+        target.providers[2].seen,
+        syn::parse_quote!(
+            ::cq_datalog_parallel_runtime::ShardedSeen<(i32, i32,), ::std::hash::BuildHasherDefault<::rustc_hash::FxHasher>>
+        )
+    );
+    check_storage(&source, &target).unwrap();
+    compile_sharded(&cq_datalog_fork::compile(&target).unwrap()).unwrap();
+    let mut changed = target;
+    changed.providers[2].seen = syn::parse_quote!(
+        ::cq_datalog_parallel_runtime::ShardedSeen<(i32, i32,), ::cq_storage::HashState>
+    );
+    assert!(check_storage(&source, &changed).is_err());
+}
+
+#[test]
 fn sharded_round_records_threshold_grain_and_lossless_certificate() {
     let source = authored_round();
     let target = compile_sharded(&source).unwrap();

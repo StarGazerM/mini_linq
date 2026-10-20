@@ -1,0 +1,115 @@
+{
+  "date": "2026-10-20",
+  "baseline": "7a041ec",
+  "hardware": {
+    "cpu": "Apple M5 Pro",
+    "performance_cores": 5,
+    "efficiency_cores": 10,
+    "memory_bytes": 25769803776,
+    "affinity": "OS scheduled, no pinning"
+  },
+  "rust": "1.97.1",
+  "profile": "release",
+  "features": "default only; no counters, phase-timing or hole-timing",
+  "doop_protocol": "3 isolated processes per configuration; AB/BA/AB interleaving for each app and thread count; compute excludes facts loading; both parallel hashers use hash-once admission",
+  "oracle_protocol": "bench --engine both; one warmup per engine then 3 AB/BA/AB interleaved checked evaluations per fixture; input cloning and output canonicalization excluded",
+  "isolation": "No concurrent build or benchmark workload. Ordinary desktop/system services remained active.",
+  "binary_sha256": {
+    "doop-parallel": "f9271945bc442c93de65c2b005ef4b1cd95709f9fe896716b3a0d54788b39966",
+    "datalog-oracle": "8f0059ac4ba4814cf6a5bcc066f8ebb76b453ac50fa93adabe1419aad2679b50"
+  },
+  "doop_exactness": [
+    {
+      "app": "cassandra",
+      "marker": "check=ok engine=mini-fx threads=1 relations=26 comparison=full_tuple_sets"
+    },
+    {
+      "app": "cassandra",
+      "marker": "check=ok engine=mini-par-fx threads=15 relations=26 comparison=full_tuple_sets"
+    },
+    {
+      "app": "avrora",
+      "marker": "check=ok engine=mini-fx threads=1 relations=26 comparison=full_tuple_sets"
+    },
+    {
+      "app": "avrora",
+      "marker": "check=ok engine=mini-par-fx threads=15 relations=26 comparison=full_tuple_sets"
+    },
+    {
+      "app": "lusearch",
+      "marker": "check=ok engine=mini-fx threads=1 relations=26 comparison=full_tuple_sets"
+    },
+    {
+      "app": "lusearch",
+      "marker": "check=ok engine=mini-par-fx threads=15 relations=26 comparison=full_tuple_sets"
+    },
+    {
+      "app": "xalan",
+      "marker": "check=ok engine=mini-fx threads=1 relations=26 comparison=full_tuple_sets"
+    },
+    {
+      "app": "xalan",
+      "marker": "check=ok engine=mini-par-fx threads=15 relations=26 comparison=full_tuple_sets"
+    },
+    {
+      "app": "tomcat",
+      "marker": "check=ok engine=mini-fx threads=1 relations=26 comparison=full_tuple_sets"
+    },
+    {
+      "app": "tomcat",
+      "marker": "check=ok engine=mini-par-fx threads=15 relations=26 comparison=full_tuple_sets"
+    },
+    {
+      "app": "zxing",
+      "marker": "check=ok engine=mini-fx threads=1 relations=26 comparison=full_tuple_sets"
+    },
+    {
+      "app": "zxing",
+      "marker": "check=ok engine=mini-par-fx threads=15 relations=26 comparison=full_tuple_sets"
+    }
+  ],
+  "static_provider_counts_per_doop_fx_engine": {
+    "fx_layout_maps": 124,
+    "fx_edb_canonical_sets": 32,
+    "fx_idb_seen_sets": 71,
+    "fx_negation_sets": 2,
+    "fx_hole_dedup_sets": 156,
+    "ahash_eager_hashindex_sites": 2,
+    "ahash_lazy_fallback_sites": 231,
+    "other_core_internal_set_sites": 0
+  },
+  "share_caveat": "Static source construction sites, not CPU time or dynamic hashing frequency. 2/387 non-lazy sites (0.52%) and 233/618 potential sites including lazy fallbacks (37.70%) remain aHash.",
+  "default_expansions": {
+    "reach": {
+      "bytes": 13364,
+      "sha256": "b2a60fde1651048e292d786e4022b40f1e3638417070335020873c68e6bb31af",
+      "byte_identical_to_baseline": true
+    },
+    "execution": {
+      "bytes": 835398,
+      "sha256": "97065469708bde908f39c58f6c68513bc2ea191fa1ff0bc35aeb4885d5309c27",
+      "byte_identical_to_baseline": true
+    },
+    "doop": {
+      "bytes": 5128081,
+      "sha256": "9a715335ab7a5f8f4e10be63c416c493ecf0951b568645f2d19404ccd92fad94",
+      "byte_identical_to_baseline": true
+    }
+  },
+  "checks": {
+    "datalog_default_tests": 198,
+    "datalog_all_features_tests": 202,
+    "parallel_default_tests": 50,
+    "parallel_all_features_tests": 52,
+    "clippy": "both workspaces, all targets, default and all features, -D warnings; oracle harness rechecked after paired benchmark addition",
+    "fmt": "both workspaces",
+    "dependency_gate": "tools/check_dependencies.py; 12 lock alignments, 236 forbidden dependency and 4 feature mutations rejected",
+    "formal_rules": 185,
+    "core_diff_empty": true,
+    "paired_oracle_default_tests": 27,
+    "paired_oracle_all_features_tests": 28,
+    "paired_oracle_runtime": "All 14 fixtures completed with three interleaved checked samples per hasher after sample-loop lint correction"
+  },
+  "raw_evidence_directory": "/tmp/datalog-Fx-evidence",
+  "recommendation": "Future opt-in-to-default cutover to Fx for trusted analytical Datalog workloads; keep keyed aHash available for adversarial inputs. Base default remains unchanged here."
+}

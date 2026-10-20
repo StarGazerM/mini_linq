@@ -18,6 +18,9 @@ phase-timing = ["cq-datalog/phase-timing"]
 ascent = { version = "0.8", default-features = false }
 ahash = "0.8"
 cq-datalog.workspace = true
+cq-datalog-hasher = { path = "../passes/hasher" }
+cq-rewrites = { path = "../../rewrites" }
+rustc-hash = "2.1.3"
 mini-linq.workspace = true
 cq-storage.workspace = true
 libc = "0.2"

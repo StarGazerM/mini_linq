@@ -10,6 +10,13 @@
 //! Run from `features/datalog`:
 //! - Exactness (no counters): `cargo test -p datalog-oracle`.
 //! - Uninstrumented sweep: `cargo run --release -p datalog-oracle -- bench`.
+//! - Fx sweep: `cargo run --release -p datalog-oracle -- bench --engine mini-fx`.
+//!   This uses the same fixtures, five-sample medians and full-set Ascent checks
+//!   as `bench` (or `bench --engine mini`), including reach and TC workloads.
+//!   Fx changes storage and Structures-stage hole deduplication, not the programs.
+//! - Paired hasher sweep: `cargo run --release -p datalog-oracle -- bench --engine both`.
+//!   Warm both engines, then compare three checked samples per hasher in AB/BA/AB
+//!   order on every fixture. This is the interleaved hasher-comparison protocol.
 //! - Counter assertions: `cargo run --release -p datalog-oracle --features counters -- counters`.
 //!
 //! Exported program generators accept arbitrary named pipeline configuration.
@@ -34,6 +41,13 @@ macro_rules! oracle_input {
     };
 }
 oracle_programs!(programs, ascent::ascent, crate::oracle_input, pipeline {});
+oracle_programs!(programs_fx, ascent::ascent, crate::oracle_input, pipeline {
+    storage_rewrites = [cq_datalog_hasher::hasher(fx)];
+    round = [cq_datalog_hasher::hasher_round(fx)];
+    cq = pipeline {
+        structures = [cq_rewrites::retype(dedup => ::std::collections::HashSet<_, ::std::hash::BuildHasherDefault<::rustc_hash::FxHasher>>)];
+    };
+});
 pub mod harness;
 pub mod strings;
 use std::collections::BTreeSet;
@@ -178,6 +192,8 @@ macro_rules! cases {
     ($($name:ident : $arity:literal),* $(,)?) => {
         pub const CASES: &[Case] = &[$(Case {name: stringify!($name), arity: $arity,
             mini: programs::$name::mini, oracle: programs::$name::oracle}),*];
+        pub const FX_CASES: &[Case] = &[$(Case {name: stringify!($name), arity: $arity,
+            mini: programs_fx::$name::mini, oracle: programs::$name::oracle}),*];
     }
 }
 cases! { reach:1, tc_left:2, tc_right:2, tc_nonlinear:2, same_generation:2,
@@ -293,6 +309,14 @@ mod tests {
                 check(c, "random", seed);
             }
         }
+        for c in FX_CASES {
+            for scenario in SCENARIOS {
+                check(c, scenario, 0x5eed);
+            }
+            for seed in 0..RANDOM_SEEDS {
+                check(c, "random", seed);
+            }
+        }
     }
     fn check(c: &Case, scenario: &str, seed: u64) {
         let d = generate(scenario, 6, seed);
@@ -307,7 +331,7 @@ mod tests {
     }
     #[test]
     fn larger_differential_matrix() {
-        for c in CASES {
+        for c in CASES.iter().chain(FX_CASES) {
             for n in [20, 50] {
                 for scenario in SCENARIOS {
                     let d = generate(scenario, n, 0x5eed);
