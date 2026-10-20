@@ -1,15 +1,18 @@
 //! General hand-written H05 reference over a compressed, resident representation.
 //!
 //! Base tables are dictionary-encoded (dense u32 IDs per join domain) and FOR
-//! bit-packed at load. Each run builds CSR indexes over those IDs with RCCL
-//! (stable radix sort by key, batched lower_bound for offsets), then runs plan
-//! R N C O L S. No key is assumed unique: every lookup returns a range and every
-//! range is expanded in full. Counts and offsets are u32; any sum that would
-//! exceed u32 sets a device flag and fails the run instead of wrapping.
+//! bit-packed at load. Each run builds sorted indexes with RCCL (stable radix
+//! sort by key, lower_bound for directory offsets), then runs the compiler's
+//! recorded R N C O L S program. No key is assumed unique: every lookup
+//! returns a range and every range is expanded in full; the closing
+//! Supplier probe binds no new column and is an existence test. Counts and
+//! offsets are u32; any sum that would exceed u32 sets a device flag and
+//! fails the run instead of wrapping.
 //!
-//! These kernels are only representation access (decoding key IDs) and the
-//! query itself; sorting, searching, scans and deduplication are RCCL's, and
-//! gathered packing is device-columns' `EncodedColumn::from_gather`.
+//! These kernels are representation access (decoding key IDs), the query's
+//! Orders selection flags, and the query itself; sorting, compaction, scans
+//! and deduplication are RCCL's, and gathered packing is device-columns'
+//! `EncodedColumn::from_gather`.
 
 use cuda_device::atomic::{AtomicOrdering, DeviceAtomicU32};
 use cuda_device::{device, thread};
@@ -45,8 +48,9 @@ const P2_OFFSET: usize = 15440;
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub struct Indexes {
-    pub region_id: ColumnView,
+    /// Region by name: names in sorted order (searched) and their region IDs.
     pub region_name: ColumnView,
+    pub region_id: ColumnView,
     pub region_rows: u32,
     /// Nation by region ID.
     pub nation_offsets: ColumnView,
@@ -54,24 +58,22 @@ pub struct Indexes {
     /// Customer by nation ID.
     pub customer_offsets: ColumnView,
     pub customer_id: ColumnView,
-    /// Orders by customer ID.
+    /// Date-selected Orders by customer ID.
     pub order_offsets: ColumnView,
     pub order_id: ColumnView,
-    pub order_date: ColumnView,
     /// Lineitem by order ID.
     pub line_offsets: ColumnView,
     pub line_supplier: ColumnView,
-    /// Supplier by supplier ID.
+    /// Supplier by (nation ID, supplier ID): offsets by nation; supplier IDs
+    /// ascending within each nation's range.
     pub supplier_offsets: ColumnView,
-    pub supplier_nation: ColumnView,
+    pub supplier_id: ColumnView,
 }
 
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub struct Constants {
     pub asia: i32,
-    pub date_start: i32,
-    pub date_end: i32,
 }
 
 /// Customer ranges of qualifying nations, the virtual driver of the expansion.
@@ -101,6 +103,39 @@ pub struct Answers {
 #[inline(always)]
 unsafe fn range(offsets: ColumnView, key: u32) -> (u32, u32) {
     unsafe { (decode_u32(offsets, key as u64), decode_u32(offsets, key as u64 + 1)) }
+}
+
+/// First position in [begin, end) of sorted `column` whose value is not below
+/// `value` (`strict`: above `value`).
+#[device]
+#[inline(always)]
+unsafe fn search_i32(column: ColumnView, mut begin: u32, mut end: u32, value: i32, strict: bool) -> u32 {
+    while begin < end {
+        let middle = begin + (end - begin) / 2;
+        let probe = unsafe { decode(column, middle as u64) } as i32;
+        if probe < value || (strict && probe == value) {
+            begin = middle + 1;
+        } else {
+            end = middle;
+        }
+    }
+    begin
+}
+
+/// Exact membership of `value` in ascending u32 `column` over [begin, end).
+#[device]
+#[inline(always)]
+unsafe fn contains_u32(column: ColumnView, begin: u32, end: u32, value: u32) -> bool {
+    let (mut low, mut high) = (begin, end);
+    while low < high {
+        let middle = low + (high - low) / 2;
+        if unsafe { decode_u32(column, middle as u64) } < value {
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+    low < end && unsafe { decode_u32(column, low as u64) } == value
 }
 
 #[device]
@@ -161,11 +196,91 @@ pub mod reference {
         }
     }
 
+    /// (key, row) pairs for the selected rows `selected[0..rows)` only.
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub fn selected_keys_and_rows(key: ColumnView, selected: *const u32, rows: u32, keys: *mut u32, order: *mut u32) {
+        let mut i = thread::index_1d().get() as u32;
+        let stride = thread::gridDim_x() * 256;
+        while i < rows {
+            unsafe {
+                let row = *selected.add(i as usize);
+                *keys.add(i as usize) = decode_u32(key, row as u64);
+                *order.add(i as usize) = row;
+            }
+            i = match i.checked_add(stride) {
+                Some(next) => next,
+                None => break,
+            };
+        }
+    }
+
+    /// (outer << inner_bits | inner, row) pairs of a two-column ID key; the
+    /// host checks that the composite fits below 2^31.
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub fn pair_keys_and_rows(outer: ColumnView, inner: ColumnView, inner_bits: u32, rows: u32, keys: *mut u32, order: *mut u32) {
+        let mut row = thread::index_1d().get() as u32;
+        let stride = thread::gridDim_x() * 256;
+        while row < rows {
+            unsafe {
+                *keys.add(row as usize) = (decode_u32(outer, row as u64) << inner_bits) | decode_u32(inner, row as u64);
+                *order.add(row as usize) = row;
+            }
+            row = match row.checked_add(stride) {
+                Some(next) => next,
+                None => break,
+            };
+        }
+    }
+
+    /// (value - min as u32, row) pairs of an i32 key: order-preserving.
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub fn signed_keys_and_rows(key: ColumnView, min: i32, rows: u32, keys: *mut u32, order: *mut u32) {
+        let mut row = thread::index_1d().get() as u32;
+        let stride = thread::gridDim_x() * 256;
+        while row < rows {
+            unsafe {
+                *keys.add(row as usize) = (decode(key, row as u64) as i32).wrapping_sub(min) as u32;
+                *order.add(row as usize) = row;
+            }
+            row = match row.checked_add(stride) {
+                Some(next) => next,
+                None => break,
+            };
+        }
+    }
+
+    /// The query's Orders selection `date_start <= o_orderdate < date_end`,
+    /// as one u32 flag per row for RCCL's flagged select.
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub fn date_flags(date: ColumnView, rows: u32, start: i32, end: i32, flags: *mut u32) {
+        let mut row = thread::index_1d().get() as u32;
+        let stride = thread::gridDim_x() * 256;
+        while row < rows {
+            unsafe {
+                let value = decode(date, row as u64) as i32;
+                *flags.add(row as usize) = (value >= start && value < end) as u32;
+            }
+            row = match row.checked_add(stride) {
+                Some(next) => next,
+                None => break,
+            };
+        }
+    }
+
     // ---------------------------------------------------------------- query
 
-    /// Region (r_name = ASIA) -> Nation by region -> Customer range by nation.
-    /// One block. Each (region row, nation row) pair with customers is a segment;
-    /// the exclusive prefix of segment lengths is the driver domain.
+    /// Region by name (probe with the bound ASIA ID) -> Nation by region ->
+    /// Customer range by nation. One block. Each (region row, nation row)
+    /// pair with customers is a segment; the exclusive prefix of segment
+    /// lengths is the driver domain.
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
@@ -173,27 +288,27 @@ pub mod reference {
         let tid = thread::threadIdx_x();
         unsafe {
             let count = DeviceAtomicU32::from_ptr(meta.add(META_SEGMENTS));
-            let mut row = tid;
-            while row < ix.region_rows {
-                if decode(ix.region_name, row as u64) as i32 == constants.asia {
-                    let region = decode_u32(ix.region_id, row as u64);
-                    let (first, last) = range(ix.nation_offsets, region);
-                    let mut nation_row = first;
-                    while nation_row < last {
-                        let nation = decode_u32(ix.nation_id, nation_row as u64);
-                        let (begin, end) = range(ix.customer_offsets, nation);
-                        if end > begin {
-                            let slot = count.fetch_add(1, AtomicOrdering::Relaxed);
-                            if slot < segments.capacity {
-                                *segments.begin.add(slot as usize) = begin;
-                                *segments.nation.add(slot as usize) = nation;
-                                *segments.offsets.add(slot as usize) = end - begin;
-                            } else {
-                                flag(meta, META_OVERFLOW);
-                            }
+            let first_region = search_i32(ix.region_name, 0, ix.region_rows, constants.asia, false);
+            let last_region = search_i32(ix.region_name, first_region, ix.region_rows, constants.asia, true);
+            let mut row = first_region + tid;
+            while row < last_region {
+                let region = decode_u32(ix.region_id, row as u64);
+                let (first, last) = range(ix.nation_offsets, region);
+                let mut nation_row = first;
+                while nation_row < last {
+                    let nation = decode_u32(ix.nation_id, nation_row as u64);
+                    let (begin, end) = range(ix.customer_offsets, nation);
+                    if end > begin {
+                        let slot = count.fetch_add(1, AtomicOrdering::Relaxed);
+                        if slot < segments.capacity {
+                            *segments.begin.add(slot as usize) = begin;
+                            *segments.nation.add(slot as usize) = nation;
+                            *segments.offsets.add(slot as usize) = end - begin;
+                        } else {
+                            flag(meta, META_OVERFLOW);
                         }
-                        nation_row += 1;
                     }
+                    nation_row += 1;
                 }
                 row += 256;
             }
@@ -218,13 +333,14 @@ pub mod reference {
         }
     }
 
-    /// Customer positions -> Orders by customer (date filter) -> Lineitem by
-    /// order -> Supplier by supplier (nation check). Blocks pull 256-position
-    /// driver tiles; nested ranges are expanded in 1024-position sub-tiles.
+    /// Customer positions -> date-selected Orders by customer -> Lineitem by
+    /// order -> Supplier existence by (nation, supplier). Blocks pull
+    /// 256-position driver tiles; nested ranges are expanded in 1024-position
+    /// sub-tiles.
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1), dynamic_shared_range = (19552, 19552))]
-    pub fn expand(ix: Indexes, constants: Constants, segments: Segments, out: Answers, meta: *mut u32) {
+    pub fn expand(ix: Indexes, segments: Segments, out: Answers, meta: *mut u32) {
         let tid = thread::threadIdx_x() as usize;
         unsafe {
             let shared = DynamicSharedArray::<u8, 16>::get_raw();
@@ -273,7 +389,7 @@ pub mod reference {
                     *p1_offset.add(256) = orders;
                 }
                 thread::sync_threads();
-                // Level O: Orders rows, date filter -> Lineitem range.
+                // Level O: date-selected Orders rows -> Lineitem range.
                 let mut order_base = 0u32;
                 while order_base < orders {
                     let mut lines = 0u32;
@@ -288,14 +404,11 @@ pub mod reference {
                         if q < orders && q >= order_base {
                             let parent = owner(p1_offset, 256, q) as usize;
                             let order_row = *p1_begin.add(parent) + (q - *p1_offset.add(parent));
-                            let date = decode(ix.order_date, order_row as u64) as i32;
-                            if date >= constants.date_start && date < constants.date_end {
-                                order = decode_u32(ix.order_id, order_row as u64);
-                                let (line_begin, line_end) = range(ix.line_offsets, order);
-                                begin = line_begin;
-                                count = line_end - line_begin;
-                                nation = *p1_nation.add(parent);
-                            }
+                            order = decode_u32(ix.order_id, order_row as u64);
+                            let (line_begin, line_end) = range(ix.line_offsets, order);
+                            begin = line_begin;
+                            count = line_end - line_begin;
+                            nation = *p1_nation.add(parent);
                         }
                         *p2_begin.add(slot) = begin;
                         *p2_nation.add(slot) = nation;
@@ -313,9 +426,9 @@ pub mod reference {
                         *p2_offset.add(1024) = lines;
                     }
                     thread::sync_threads();
-                    // Level L: Lineitem rows -> Supplier existence. Supplier binds no
-                    // new answer variable, so under set semantics one matching row
-                    // (supplier, nation) suffices; the scan stops at the first.
+                    // Level L: Lineitem rows -> Supplier(supplier, nation). Both
+                    // are bound, so the full-key probe is an existence check:
+                    // binary search of the supplier within its nation's range.
                     let mut line_base = 0u32;
                     while line_base < lines {
                         let mut order = [0u32; 4];
@@ -330,15 +443,11 @@ pub mod reference {
                                 let parent = owner(p2_offset, 1024, q) as usize;
                                 let line_row = *p2_begin.add(parent) + (q - *p2_offset.add(parent));
                                 let s = decode_u32(ix.line_supplier, line_row as u64);
-                                let (supplier_begin, supplier_end) = range(ix.supplier_offsets, s);
                                 order[item] = *p2_order.add(parent);
                                 supplier[item] = s;
                                 nation[item] = *p2_nation.add(parent);
-                                let mut row = supplier_begin;
-                                while row < supplier_end && !found[item] {
-                                    found[item] = decode_u32(ix.supplier_nation, row as u64) == nation[item];
-                                    row += 1;
-                                }
+                                let (supplier_begin, supplier_end) = range(ix.supplier_offsets, nation[item]);
+                                found[item] = contains_u32(ix.supplier_id, supplier_begin, supplier_end, s);
                             }
                             item += 1;
                         }

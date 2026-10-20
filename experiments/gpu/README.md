@@ -444,23 +444,34 @@ direct-address nation array, value-range packed dedup, an unchecked
   join key dictionary-encoded to a dense u32 ID per domain (orderkey, custkey,
   suppkey, nationkey, regionkey; order-preserving); every base column FOR
   bit-packed per 1024-row vector and made resident.
-- **Index build (GPU, timed):** CSR indexes over those IDs for Nation by
-  region, Customer by nation, Orders by customer (with date), Lineitem by order
-  and Supplier by supplier. One kernel decodes the packed key column into
-  (key ID, row) pairs; RCCL's stable radix pair sort orders them over only the
-  key's ID bits (`device_radix_sort_pairs_buffer`, `0..⌈log₂ domain⌉`, result
-  read from the current double buffer); RCCL `lower_bound` of every key ID gives
-  the offsets; `EncodedColumn::from_gather` gathers each payload column by
-  sorted row and FOR-packs it in the same pass (fixed per-vector slots sized by
-  the column's bounds). RCCL's radix controls are allocated once at setup.
+- **Program:** the one the compiler records for R N C O L S in written order
+  (`order(written, coarse)` with default lowering), not hand-picked choices.
+  The ASIA constant is bound at `r_name`'s stored type
+  (`Catalog::text_id("region.r_name", "ASIA")`) and probes a Region index by
+  name. The query's date `if` is a selection on Orders before its build. The
+  closing `Supplier(supplier_key, nation_key)` probe is full-key: both
+  columns are bound, so it is an existence test.
+- **Index build (GPU, timed):** six sorted indexes: Region by name, Nation by
+  region, Customer by nation, date-selected Orders by customer, Lineitem by
+  order, Supplier by (nation, supplier). One kernel decodes the packed key
+  column(s) into (key, row) pairs. A two-column ID key is packed as
+  `outer << inner_bits | inner` (rejected above 31 bits), and an `i32` key as
+  `value - min`. RCCL's stable radix pair sort orders the pairs over only the
+  key's bits (`device_radix_sort_pairs_buffer`, result read from the current
+  double buffer). RCCL `lower_bound` of every outer ID gives dense offsets:
+  over `0..D+1`, or `arithmetic_range(0, 1 << inner_bits, D+1)` for a pair
+  key. The `i32` name key keeps its sorted column and is binary-searched.
+  `EncodedColumn::from_gather` gathers each payload column by sorted row and
+  FOR-packs it in one pass. The Orders selection is a flag kernel, then RCCL
+  `select_flagged` over row numbers; its count, read back once, sizes that
+  build. RCCL's radix controls are allocated once at setup, sized for each
+  relation's full row count.
 - **Plan R N C O L S**, chosen by counted prefix cardinalities over all 164
   connected left-deep orders. No key is assumed unique: every lookup is a range
-  and every range is expanded, except the closing Supplier atom: it binds no new
-  answer variable, so under set semantics it is an existence test (any Supplier
-  row of that supplier with the bound nation), stopping at the first match.
-  Counts and offsets are u32; any sum that would
-  exceed u32 fails the run through a device flag. Block scans in `expand` are
-  RCCL's `block_scan_sum_256`.
+  and every range is expanded; Supplier is the existence test above (binary
+  search of the supplier within its nation's range). Counts and offsets are
+  u32; any sum that would exceed u32 fails the run through a device flag.
+  Block scans in `expand` are RCCL's `block_scan_sum_256`.
 - **Query and dedup (GPU, timed):** `segments`, `expand` (emits the answer as
   one packed key per row, widths from the dictionary sizes), one metadata
   readback (emitted count; overflow reruns with the exact count), then RCCL
@@ -481,7 +492,7 @@ uv run --project "$SRDATALOG" python compare/srdatalog_h05.py --sf 1 10 \
 ```
 
 It checks the decoded result against `answer.tsv`. Resident at SF10: 280.2 MB
-compressed base plus 255.8 MB indexes, for 1,279 MB of declared source columns.
+compressed base plus 193.8 MB indexes, for 1,279 MB of declared source columns.
 
 **Same-scope comparison** (2026-10-20, RTX 6000 Ada; DuckDB on the host CPU;
 median of five after one warmup; every result checked against `answer.tsv`).
@@ -491,17 +502,20 @@ construction is included.
 
 | System, scope | SF1 ms | SF10 ms |
 |---|---:|---:|
-| `h05-reference`: GPU index build + query + dedup, wall clock | **1.91** | **11.45** |
+| `h05-reference`: GPU index build + query + dedup, wall clock | **1.80** | **9.60** |
 | srdatalog-python, `run` (device index build + query), cardinality-chosen order | 10.90 | 165.26 |
 | srdatalog-python, `run`, its default plan | 68.15 | 843.41 |
 | DuckDB 1.5.6 in-process, 24 threads, `CREATE TEMP TABLE AS SELECT DISTINCT` | 15.25 | 65.83 |
 | DuckDB 1.5.6 in-process, 1 thread | 46.43 | 516.05 |
 
-SF10 breakdown for `h05-reference` (Nsight, one iteration, 11.51 ms span,
-11.26 ms kernel time): radix pair passes 4.52 ms (10 passes: 3 each for the
-24-bit orderkey and 21-bit custkey IDs), `gather_encode` 3.02, `keys_and_rows`
-0.91, `lower_bound` 0.88, offsets packing 0.71, `expand` 0.61. Per index:
-lineitem_by_order 7.30 ms, orders_by_customer 2.86 ms; dedup 0.18 ms.
+SF10 breakdown for `h05-reference` (Nsight, one iteration, 9.69 ms span,
+9.40 ms kernel time): radix onesweep passes 3.90 ms, `gather_encode` 1.69,
+`lower_bound` 0.85, `keys_and_rows` 0.72, `expand` 0.48, offsets packing 0.45,
+flagged select 0.17, `date_flags` 0.15. Per index: lineitem_by_order 7.32 ms,
+orders_by_customer 1.11 ms (was 2.86 ms before the date selection moved before
+the build); dedup 0.18 ms. The previous program (all Orders indexed, date
+checked during expansion; Region scanned; Supplier by supplier with nation
+scanned) measured 1.91 / 11.45 ms.
 
 srdatalog's scope was checked on an Nsight timeline: `prepare` ends with the
 host-to-device copies and a device synchronize; the index sorts

@@ -1,13 +1,16 @@
 //! General hand-written H05 (TPC-H Q5 projection, SELECT DISTINCT) reference.
 //!
-//! Compression (load, untimed): columns read at their declared types; every
-//! join key dictionary-encoded to a dense u32 ID per domain (order-preserving);
-//! every base column FOR bit-packed per 1024-row vector and made resident.
+//! It implements the program the compiler records for R N C O L S in written
+//! order (`order(written, coarse)`, default lowering), not hand-picked choices.
+//! Compression (`gpu-compress`, load, untimed): join keys as dense u32 IDs per
+//! domain (order-preserving), every stored column FOR bit-packed and resident.
 //! Timed, per iteration, from compressed resident base columns to the resident
-//! distinct answer: build the five CSR indexes of plan R N C O L S on the GPU
-//! with RCCL (stable radix sort by key, batched lower_bound for offsets), run
-//! the query, deduplicate with RCCL (radix sort, unique). The reported figure is
-//! host wall clock over that span; GPU events give the breakdown.
+//! distinct answer: build the six sorted indexes with RCCL (Region by name;
+//! Nation by region; Customer by nation; date-selected Orders by customer,
+//! the selection compacted by flagged select before the build; Lineitem by
+//! order; Supplier by (nation, supplier)), probe ASIA, run the query, and
+//! deduplicate with RCCL (radix sort, unique). The reported figure is host
+//! wall clock over that span; GPU events give the breakdown.
 //!
 //! Usage: h05-reference DATA_DIR [RESULTS_JSON] [--capacity N] [--repeat N]
 mod kernels;
@@ -18,7 +21,7 @@ use gpu_device_columns::{Bounds, Buffer, Codec, ColumnView, EncodedColumn, Memor
 use kernels::*;
 use rccl_cub::{cuda::Launch, DeviceRadixSortBufferWorkspace, DoubleBuffer};
 use rccl_thrust::prelude::*;
-use rccl_thrust::{arithmetic_range, lower_bound, unique_copy_by};
+use rccl_thrust::{arithmetic_range, lower_bound, select_flagged, unique_copy_by};
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, error::Error, fs, path::Path, sync::Arc, time::Instant};
 
@@ -53,23 +56,67 @@ impl Base {
     }
 }
 
-/// One CSR index to build: key column over a dense domain, payload columns.
+/// Key of one sorted index (rows stably sorted by key, payload gathered).
+enum Key {
+    /// Dense ID key over [0, domain): offsets for every ID.
+    Id { column: &'static str, domain: usize },
+    /// (outer, inner) ID pair, sorted by both; offsets by outer ID.
+    Pair { outer: &'static str, outer_domain: usize, inner: &'static str, inner_domain: usize },
+    /// i32 key: rows sorted by value; the sorted key is kept (a payload
+    /// column) and searched, no dense directory.
+    Sorted { column: &'static str, bounds: Bounds },
+}
+
+impl Key {
+    fn column(&self) -> &'static str {
+        match self {
+            Key::Id { column, .. } | Key::Sorted { column, .. } => column,
+            Key::Pair { outer, .. } => outer,
+        }
+    }
+    /// Directory entries: one per outer ID plus the end.
+    fn entries(&self) -> Option<usize> {
+        match self {
+            Key::Id { domain, .. } => Some(domain + 1),
+            Key::Pair { outer_domain, .. } => Some(outer_domain + 1),
+            Key::Sorted { .. } => None,
+        }
+    }
+}
+
+/// The query's selection on a built relation, applied before the build
+/// (`start <= column < end`).
+struct Selection {
+    column: &'static str,
+    start: i32,
+    end: i32,
+}
+
+/// One index to build: its key, an optional selection, payload columns
+/// (column, signed, bounds).
 struct IndexSpec {
     name: &'static str,
-    key: &'static str,
-    domain: usize,
+    key: Key,
+    selection: Option<Selection>,
     payload: Vec<(&'static str, bool, Bounds)>,
 }
 
-/// Row-count owners for device packing, allocated once outside timing.
+/// Count owners for device packing, allocated once outside timing. A
+/// selected index's row count is known per build, so it owns its own.
 struct Counts {
-    rows: Arc<Buffer<u64>>,
-    offsets: Arc<Buffer<u64>>,
+    rows: Option<Arc<Buffer<u64>>>,
+    offsets: Option<Arc<Buffer<u64>>>,
 }
 
 struct BuiltIndex {
-    offsets: EncodedColumn,
+    offsets: Option<EncodedColumn>,
     payload: Vec<EncodedColumn>,
+}
+
+impl BuiltIndex {
+    fn bytes(&self) -> usize {
+        self.offsets.as_ref().map_or(0, EncodedColumn::bytes) + self.payload.iter().map(EncodedColumn::bytes).sum::<usize>()
+    }
 }
 
 /// Stream-ordered temporary; released with `release`, never by implicit drop
@@ -92,9 +139,11 @@ fn key_bits(domain: usize) -> u32 {
     if domain <= 1 { 0 } else { usize::BITS - (domain - 1).leading_zeros() }
 }
 
-/// Build one CSR index from compressed base columns:
-/// decode (key, row) pairs; RCCL stable radix sort of the pairs over only the
-/// key's ID bits; RCCL lower_bound of every key ID for the offsets; payload
+/// Build one sorted index from compressed base columns. A selection first
+/// compacts the qualifying row numbers (RCCL flagged select; its count is the
+/// index's row count, read back once). Then: decode (key, row) pairs; RCCL
+/// stable radix sort over only the key's bits; RCCL lower_bound of every
+/// outer ID for the offsets (none for a searched `Sorted` key); payload
 /// gathered by sorted row and FOR-packed in one pass.
 #[allow(clippy::too_many_arguments)]
 fn build_index(
@@ -108,56 +157,127 @@ fn build_index(
     counts: &Counts,
 ) -> Result<BuiltIndex> {
     let stream = pool.stream();
-    let rows = base.rows(spec.key);
-    let entries = spec.domain + 1;
-    let strided = LaunchConfig1D::new(rows.div_ceil(256).clamp(1, STRIDED_GRID) as u32, 256, 0);
+    let strided = |n: usize| LaunchConfig1D::new(n.div_ceil(256).clamp(1, STRIDED_GRID) as u32, 256, 0);
+    let base_rows = base.rows(spec.key.column());
+
+    let (rows, selected) = match &spec.selection {
+        None => (base_rows, None),
+        Some(selection) => {
+            let flags = temporary::<u32>(stream, base_rows)?;
+            module.date_flags(
+                stream,
+                &module.prepare_date_flags(strided(base_rows))?,
+                base.view(selection.column),
+                base_rows as u32,
+                selection.start,
+                selection.end,
+                pointer(&flags),
+            )?;
+            let mut selected = temporary::<u32>(stream, base_rows)?;
+            let mut count = temporary::<u64>(stream, 1)?;
+            select_flagged(exec, arithmetic_range(0_u32, 1, base_rows), flags.view(), selected.view_mut(), &mut count)?;
+            let rows = count.to_host_vec(stream)?[0] as usize;
+            release(stream, flags)?;
+            release(stream, count)?;
+            (rows, Some(selected))
+        }
+    };
+    let row_count = match (&counts.rows, &selected) {
+        (Some(owner), None) => owner.clone(),
+        _ => Arc::new(Buffer::from_host(pool.clone(), &[rows as u64])?),
+    };
 
     let mut keys = temporary::<u32>(stream, rows)?;
     let mut order = temporary::<u32>(stream, rows)?;
     let mut alternate_keys = temporary::<u32>(stream, rows)?;
     let mut alternate_order = temporary::<u32>(stream, rows)?;
-    let mut offsets = temporary::<u64>(stream, entries)?;
-    module.keys_and_rows(
-        stream,
-        &module.prepare_keys_and_rows(strided)?,
-        base.view(spec.key),
-        rows as u32,
-        pointer(&keys),
-        pointer(&order),
-    )?;
+    let launch_keys = strided(rows);
+    let (bits, step) = match (&spec.key, &selected) {
+        (Key::Id { column, domain }, None) => {
+            module.keys_and_rows(stream, &module.prepare_keys_and_rows(launch_keys)?, base.view(column), rows as u32, pointer(&keys), pointer(&order))?;
+            (key_bits(*domain), 1)
+        }
+        (Key::Id { column, domain }, Some(selected)) => {
+            module.selected_keys_and_rows(
+                stream,
+                &module.prepare_selected_keys_and_rows(launch_keys)?,
+                base.view(column),
+                pointer(selected) as *const u32,
+                rows as u32,
+                pointer(&keys),
+                pointer(&order),
+            )?;
+            (key_bits(*domain), 1)
+        }
+        (Key::Pair { outer, outer_domain, inner, inner_domain }, None) => {
+            let inner_bits = key_bits(*inner_domain);
+            let bits = key_bits(*outer_domain) + inner_bits;
+            if bits > 31 {
+                return Err(format!("{}: composite key needs {bits} bits, above 31", spec.name).into());
+            }
+            module.pair_keys_and_rows(
+                stream,
+                &module.prepare_pair_keys_and_rows(launch_keys)?,
+                base.view(outer),
+                base.view(inner),
+                inner_bits,
+                rows as u32,
+                pointer(&keys),
+                pointer(&order),
+            )?;
+            (bits, 1_u32 << inner_bits)
+        }
+        (Key::Sorted { column, bounds }, None) => {
+            let (min, bits) = match *bounds {
+                Bounds::Empty => (0, 0),
+                Bounds::Inclusive { min, max } => (min as i32, 64 - ((max - min) as u64).leading_zeros()),
+            };
+            module.signed_keys_and_rows(stream, &module.prepare_signed_keys_and_rows(launch_keys)?, base.view(column), min, rows as u32, pointer(&keys), pointer(&order))?;
+            (bits, 0)
+        }
+        (_, Some(_)) => return Err(format!("{}: selections are supported on ID keys only", spec.name).into()),
+    };
+    let mut offsets = spec.key.entries().map(|entries| temporary::<u64>(stream, entries)).transpose()?;
     let payload = {
         let mut pairs = DoubleBuffer::paired((&mut keys, &mut order), (&mut alternate_keys, &mut alternate_order))
             .ok_or("radix double buffer extents differ")?;
-        rccl_cub::device_radix_sort_pairs_buffer(launch, &mut pairs, 0..key_bits(spec.domain), sort)?;
+        rccl_cub::device_radix_sort_pairs_buffer(launch, &mut pairs, 0..bits, sort)?;
         let (sorted_keys, sorted_order) = pairs.current();
-        lower_bound(exec, sorted_keys.view(), arithmetic_range(0_u32, 1, entries), offsets.view_mut())?;
+        if let (Some(offsets), Some(entries)) = (offsets.as_mut(), spec.key.entries()) {
+            lower_bound(exec, sorted_keys.view(), arithmetic_range(0_u32, step, entries), offsets.view_mut())?;
+        }
         let sorted = sorted_order.cu_deviceptr() as *const u32;
         spec.payload
             .iter()
             .map(|(column, signed, bounds)| unsafe {
                 if *signed {
-                    EncodedColumn::from_gather::<_, i32>(pool.clone(), base.view(column), sorted, rows, counts.rows.clone(), 0, *bounds)
+                    EncodedColumn::from_gather::<_, i32>(pool.clone(), base.view(column), sorted, rows, row_count.clone(), 0, *bounds)
                 } else {
-                    EncodedColumn::from_gather::<_, u32>(pool.clone(), base.view(column), sorted, rows, counts.rows.clone(), 0, *bounds)
+                    EncodedColumn::from_gather::<_, u32>(pool.clone(), base.view(column), sorted, rows, row_count.clone(), 0, *bounds)
                 }
             })
             .collect::<Result<Vec<_>>>()?
     };
-    let offsets_column = unsafe {
-        EncodedColumn::from_device(
-            pool.clone(),
-            pointer(&offsets) as *const i64,
-            entries,
-            counts.offsets.clone(),
-            0,
-            Codec::For,
-            Bounds::Inclusive { min: 0, max: rows as i64 },
-        )?
+    let offsets_column = match (&offsets, &counts.offsets, spec.key.entries()) {
+        (Some(offsets), Some(owner), Some(entries)) => Some(unsafe {
+            EncodedColumn::from_device(
+                pool.clone(),
+                pointer(offsets) as *const i64,
+                entries,
+                owner.clone(),
+                0,
+                Codec::For,
+                Bounds::Inclusive { min: 0, max: rows as i64 },
+            )?
+        }),
+        _ => None,
     };
-    for buffer in [keys, order, alternate_keys, alternate_order] {
+    for buffer in [keys, order, alternate_keys, alternate_order].into_iter().chain(selected) {
         release(stream, buffer)?;
     }
-    release(stream, offsets)?;
+    if let Some(offsets) = offsets {
+        release(stream, offsets)?;
+    }
     Ok(BuiltIndex { offsets: offsets_column, payload })
 }
 
@@ -230,11 +350,8 @@ fn main() -> Result<()> {
         let value = source.manifest()["constants"][name].as_i64().ok_or_else(|| format!("missing constant {name}"))?;
         Ok(i32::try_from(value)?)
     };
-    let constants = Constants {
-        asia: constant("asia_id")?,
-        date_start: constant("date_start_days")?,
-        date_end: constant("date_end_days")?,
-    };
+    let date_start = constant("date_start_days")?;
+    let date_end = constant("date_end_days")?;
     let pool = Pool::new(0, 2 << 30, 16 << 30)?;
     // Setup: keep the stream-ordered allocator's memory across synchronizations.
     unsafe {
@@ -256,6 +373,8 @@ fn main() -> Result<()> {
     let compress_started = Instant::now();
     let base = Base { catalog: Catalog::compress(&pool, &source, &schema())? };
     let compress_ms = compress_started.elapsed().as_secs_f64() * 1000.0;
+    // The query's bound constant at r_name's stored type (interned text ID).
+    let constants = Constants { asia: base.catalog.text_id("region.r_name", "ASIA")? };
     let declared_bytes = source.declared_bytes();
     let sf = source.manifest()["sf"].clone();
     let nation_rows = base.rows("nation.n_nationkey");
@@ -284,44 +403,62 @@ fn main() -> Result<()> {
     if order_bits + supplier_bits + nation_bits > 64 {
         return Err("packed answer key exceeds 64 bits for these dictionary sizes".into());
     }
+    // The compiler's recorded program for R N C O L S (written order): Region
+    // by name probed with the bound ASIA ID; Nation by region; Customer by
+    // nation; date-selected Orders by customer; Lineitem by order; Supplier
+    // by (nation, supplier) for the closing full-key probe.
     let specs = [
         IndexSpec {
+            name: "region_by_name",
+            key: Key::Sorted { column: "region.r_name", bounds: base.bounds("region.r_name") },
+            selection: None,
+            payload: vec![("region.r_name", true, base.bounds("region.r_name")), ("region.r_regionkey", false, regions.bounds())],
+        },
+        IndexSpec {
             name: "nation_by_region",
-            key: "nation.n_regionkey",
-            domain: regions.len(),
+            key: Key::Id { column: "nation.n_regionkey", domain: regions.len() },
+            selection: None,
             payload: vec![("nation.n_nationkey", false, nations.bounds())],
         },
         IndexSpec {
             name: "customer_by_nation",
-            key: "customer.c_nationkey",
-            domain: nations.len(),
+            key: Key::Id { column: "customer.c_nationkey", domain: nations.len() },
+            selection: None,
             payload: vec![("customer.c_custkey", false, customers.bounds())],
         },
         IndexSpec {
             name: "orders_by_customer",
-            key: "orders.o_custkey",
-            domain: customers.len(),
-            payload: vec![("orders.o_orderkey", false, orders.bounds()), ("orders.o_orderdate", true, base.bounds("orders.o_orderdate"))],
+            key: Key::Id { column: "orders.o_custkey", domain: customers.len() },
+            selection: Some(Selection { column: "orders.o_orderdate", start: date_start, end: date_end }),
+            payload: vec![("orders.o_orderkey", false, orders.bounds())],
         },
         IndexSpec {
             name: "lineitem_by_order",
-            key: "lineitem.l_orderkey",
-            domain: orders.len(),
+            key: Key::Id { column: "lineitem.l_orderkey", domain: orders.len() },
+            selection: None,
             payload: vec![("lineitem.l_suppkey", false, suppliers.bounds())],
         },
         IndexSpec {
-            name: "supplier_by_supplier",
-            key: "supplier.s_suppkey",
-            domain: suppliers.len(),
-            payload: vec![("supplier.s_nationkey", false, nations.bounds())],
+            name: "supplier_by_nation_supplier",
+            key: Key::Pair {
+                outer: "supplier.s_nationkey",
+                outer_domain: nations.len(),
+                inner: "supplier.s_suppkey",
+                inner_domain: suppliers.len(),
+            },
+            selection: None,
+            payload: vec![("supplier.s_suppkey", false, suppliers.bounds())],
         },
     ];
     let counts: Vec<Counts> = specs
         .iter()
         .map(|spec| {
             Ok(Counts {
-                rows: Arc::new(Buffer::from_host(pool.clone(), &[base.rows(spec.key) as u64])?),
-                offsets: Arc::new(Buffer::from_host(pool.clone(), &[(spec.domain + 1) as u64])?),
+                rows: match spec.selection {
+                    None => Some(Arc::new(Buffer::from_host(pool.clone(), &[base.rows(spec.key.column()) as u64])?)),
+                    Some(_) => None,
+                },
+                offsets: spec.key.entries().map(|entries| Buffer::from_host(pool.clone(), &[entries as u64]).map(Arc::new)).transpose()?,
             })
         })
         .collect::<Result<_>>()?;
@@ -335,7 +472,7 @@ fn main() -> Result<()> {
     // Setup: RCCL's reusable radix controls, one per index.
     let mut sorts = specs
         .iter()
-        .map(|spec| rccl_cub::device_radix_sort_pairs_buffer_workspace::<u32, u32>(&launch, base.rows(spec.key)))
+        .map(|spec| rccl_cub::device_radix_sort_pairs_buffer_workspace::<u32, u32>(&launch, base.rows(spec.key.column())))
         .collect::<std::result::Result<Vec<_>, _>>()?;
     let answer_bits = order_bits + supplier_bits + nation_bits;
     let segments_launch = module.prepare_segments(LaunchConfig1D::new(1, 256, 0))?;
@@ -358,24 +495,22 @@ fn main() -> Result<()> {
             built.push(build_index(&module, &exec, &launch, sort, &pool, &base, spec, count)?);
             index_events.push(stream.record_event(timing)?);
         }
-        let view = |index: usize, column: usize| unsafe {
-            if column == 0 { built[index].offsets.view() } else { built[index].payload[column - 1].view() }
-        };
+        let offsets = |index: usize| unsafe { built[index].offsets.as_ref().expect("directory index").view() };
+        let payload = |index: usize, column: usize| unsafe { built[index].payload[column].view() };
         let ix = Indexes {
-            region_id: base.view("region.r_regionkey"),
-            region_name: base.view("region.r_name"),
+            region_name: payload(0, 0),
+            region_id: payload(0, 1),
             region_rows: region_rows as u32,
-            nation_offsets: view(0, 0),
-            nation_id: view(0, 1),
-            customer_offsets: view(1, 0),
-            customer_id: view(1, 1),
-            order_offsets: view(2, 0),
-            order_id: view(2, 1),
-            order_date: view(2, 2),
-            line_offsets: view(3, 0),
-            line_supplier: view(3, 1),
-            supplier_offsets: view(4, 0),
-            supplier_nation: view(4, 1),
+            nation_offsets: offsets(1),
+            nation_id: payload(1, 0),
+            customer_offsets: offsets(2),
+            customer_id: payload(2, 0),
+            order_offsets: offsets(3),
+            order_id: payload(3, 0),
+            line_offsets: offsets(4),
+            line_supplier: payload(4, 0),
+            supplier_offsets: offsets(5),
+            supplier_id: payload(5, 0),
         };
         let segments = Segments {
             begin: w.segment_begin.ptr(),
@@ -394,7 +529,7 @@ fn main() -> Result<()> {
             cuda_core::memory::memset_d8_async(w.meta.cu_deviceptr(), 0, w.meta.bytes(), stream.cu_stream())?;
         }
         module.segments(stream, &segments_launch, ix, constants, segments, meta)?;
-        module.expand(stream, &expand_launch, ix, constants, segments, out, meta)?;
+        module.expand(stream, &expand_launch, ix, segments, out, meta)?;
         let expanded = stream.record_event(timing)?;
         // The emitted count sizes the dedup; it is the query's control readback.
         let words = w.meta.to_host()?;
@@ -443,7 +578,7 @@ fn main() -> Result<()> {
             dedup_ms: expanded.elapsed_ms(&finished)?,
             emitted,
             unique: unique_count,
-            index_bytes: built.iter().map(|b| b.offsets.bytes() + b.payload.iter().map(EncodedColumn::bytes).sum::<usize>()).sum(),
+            index_bytes: built.iter().map(BuiltIndex::bytes).sum(),
         };
         if !checked {
             let words = unique.to_host_vec(stream)?;
