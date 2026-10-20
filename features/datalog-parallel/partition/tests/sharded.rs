@@ -43,6 +43,212 @@ fn rejected(change: impl FnOnce(&mut ShardedProgram)) {
     assert!(Language::check(&target).is_err());
 }
 
+fn rejected_with(diagnostic: &str, change: impl FnOnce(&mut ShardedProgram)) {
+    let source = authored_round();
+    let mut target = compile_sharded(&source).unwrap();
+    change(&mut target);
+    for error in [
+        check_sharded(&source, &target).unwrap_err(),
+        Language::check(&target).unwrap_err(),
+    ] {
+        assert!(error.to_string().contains(diagnostic), "{error}");
+    }
+}
+
+#[test]
+fn missing_admission_has_specific_diagnostic() {
+    rejected_with("missing admission relation", |p| {
+        p.certificate.admission.pop();
+    });
+}
+
+#[test]
+fn duplicate_admission_has_specific_diagnostic() {
+    rejected_with("duplicate admission relation", |p| {
+        p.certificate
+            .admission
+            .push(p.certificate.admission[0].clone());
+    });
+}
+
+#[test]
+fn missing_layout_coverage_has_specific_diagnostic() {
+    for delta in [false, true] {
+        rejected_with("missing layout coverage", |p| {
+            let owners = if delta {
+                &mut p.certificate.delta_layouts
+            } else {
+                &mut p.certificate.layouts
+            };
+            owners.pop();
+        });
+    }
+}
+
+#[test]
+fn duplicate_layout_coverage_has_specific_diagnostic() {
+    for delta in [false, true] {
+        rejected_with("duplicate layout coverage", |p| {
+            let owners = if delta {
+                &mut p.certificate.delta_layouts
+            } else {
+                &mut p.certificate.layouts
+            };
+            owners[1].index = owners[0].index;
+        });
+    }
+}
+
+#[test]
+fn layout_owner_collision_has_specific_diagnostic() {
+    for delta in [false, true] {
+        rejected_with("layout owner collision", |p| {
+            let owners = if delta {
+                &mut p.certificate.delta_layouts
+            } else {
+                &mut p.certificate.layouts
+            };
+            owners[1].owner = owners[0].owner;
+        });
+    }
+}
+
+#[test]
+fn layout_owner_out_of_range_has_specific_diagnostic() {
+    for delta in [false, true] {
+        rejected_with("layout owner out of range", |p| {
+            let owners = if delta {
+                &mut p.certificate.delta_layouts
+            } else {
+                &mut p.certificate.layouts
+            };
+            owners[0].owner = owners.len();
+        });
+    }
+}
+
+#[test]
+fn layout_index_out_of_range_has_specific_diagnostic() {
+    for delta in [false, true] {
+        rejected_with("layout index out of range", |p| {
+            let owners = if delta {
+                &mut p.certificate.delta_layouts
+            } else {
+                &mut p.certificate.layouts
+            };
+            owners[0].index = owners.len();
+        });
+    }
+}
+
+#[test]
+fn missing_barrier_layout_has_specific_diagnostic() {
+    for delta in [false, true] {
+        rejected_with("missing publication layout", |p| {
+            let barrier = p
+                .certificate
+                .publication
+                .iter_mut()
+                .find(|barrier| {
+                    if delta {
+                        !barrier.delta_layouts.is_empty()
+                    } else {
+                        !barrier.layouts.is_empty()
+                    }
+                })
+                .unwrap();
+            if delta {
+                barrier.delta_layouts.pop();
+            } else {
+                barrier.layouts.pop();
+            }
+        });
+    }
+}
+
+#[test]
+fn wrong_member_barrier_layout_has_specific_diagnostic() {
+    for delta in [false, true] {
+        rejected_with("publication layout is not a stratum member", |p| {
+            let layouts = if delta {
+                &p.round.context.delta_layouts
+            } else {
+                &p.round.context.layouts
+            };
+            let (barrier, index) = p
+                .certificate
+                .publication
+                .iter_mut()
+                .find_map(|barrier| {
+                    let members = &p.round.context.strata[barrier.stratum].members;
+                    layouts
+                        .iter()
+                        .position(|layout| !members.contains(&layout.relation))
+                        .map(|index| (barrier, index))
+                })
+                .unwrap();
+            if delta {
+                barrier.delta_layouts.push(index);
+            } else {
+                barrier.layouts.push(index);
+            }
+        });
+    }
+}
+
+#[test]
+fn duplicate_barrier_has_specific_diagnostic() {
+    rejected_with("duplicate publication barrier", |p| {
+        p.certificate
+            .publication
+            .push(p.certificate.publication[0].clone());
+    });
+}
+
+#[test]
+fn missing_barrier_has_specific_diagnostic() {
+    rejected_with("missing publication barrier", |p| {
+        p.certificate.publication.pop();
+    });
+}
+
+#[test]
+fn accepts_nonidentity_owner_permutations_in_each_domain() {
+    let source = authored_round();
+    for delta in [false, true] {
+        let mut target = compile_sharded(&source).unwrap();
+        let owners = if delta {
+            &mut target.certificate.delta_layouts
+        } else {
+            &mut target.certificate.layouts
+        };
+        assert!(owners.len() > 1);
+        let count = owners.len();
+        for ownership in owners {
+            ownership.owner = (ownership.index + 1) % count;
+        }
+        check_sharded(&source, &target).unwrap();
+        Language::check(&target).unwrap();
+    }
+}
+
+#[test]
+fn accepts_reordered_certificate_sets() {
+    let source = authored_round();
+    let mut target = compile_sharded(&source).unwrap();
+    target.certificate.admission.reverse();
+    target.certificate.layouts.reverse();
+    target.certificate.delta_layouts.reverse();
+    target.certificate.publication.reverse();
+    for barrier in &mut target.certificate.publication {
+        barrier.relations.reverse();
+        barrier.layouts.reverse();
+        barrier.delta_layouts.reverse();
+    }
+    check_sharded(&source, &target).unwrap();
+    Language::check(&target).unwrap();
+}
+
 #[test]
 fn storage_rewrites_only_idb_seen_and_preserves_all_native_layouts() {
     let mut source = authored_storage();

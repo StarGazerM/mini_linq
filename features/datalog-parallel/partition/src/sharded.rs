@@ -2,7 +2,7 @@
 //! Admission ownership quantifies over runtime shard IDs: `[start, end)` is the
 //! complete domain and `owner = shard_id` is injective. Seen providers choose a
 //! power-of-two shard count at least the Rayon worker count and hash full tuples.
-//! Each native full/delta layout instead has one exclusive identity owner.
+//! Each native full/delta layout instead has one exclusive owner.
 //! Publication joins every layout owner before the next evaluation, including
 //! owners publishing an empty delta.
 use cq_datalog_support::ensure;
@@ -48,7 +48,7 @@ pub struct Admission {
 }
 
 /// One exclusive owner for a whole native layout; full and delta domains are
-/// separate. In each domain, `owner = index` is total and injective.
+/// separate. Each domain's owner map is a total permutation of its layout IDs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LayoutOwnership {
     pub index: usize,
@@ -291,17 +291,145 @@ pub fn check_sharded(source: &Program, target: &ShardedProgram) -> syn::Result<(
         target,
         "grain must be positive",
     )?;
-    let expected = certificate(
-        source,
-        Arguments {
-            threshold: target.certificate.threshold,
-            grain: target.certificate.grain,
-        },
-    );
+    let certificate = &target.certificate;
     ensure(
-        target.certificate == expected,
+        certificate.shard_count == "power_of_two_at_least_threads",
         target,
-        "shard certificate must cover disjoint admission and layout owners and publish every layout before evaluation",
+        "invalid shard count policy",
+    )?;
+    let mut admitted = vec![false; source.context.relations.len()];
+    for admission in &certificate.admission {
+        ensure(
+            source
+                .context
+                .relations
+                .get(admission.relation)
+                .is_some_and(|relation| relation.declaration.value.is_none()),
+            target,
+            "admission relation must be an IDB",
+        )?;
+        ensure(
+            !admitted[admission.relation],
+            target,
+            "duplicate admission relation",
+        )?;
+        admitted[admission.relation] = true;
+        ensure(
+            admission.hash == "full_tuple",
+            target,
+            "admission must hash the full tuple",
+        )?;
+        ensure(
+            admission.ownership.start == 0
+                && admission.ownership.end == "shard_count"
+                && admission.ownership.owner == "shard_id",
+            target,
+            "admission ownership must cover all shards with owner shard_id",
+        )?;
+    }
+    ensure(
+        source
+            .context
+            .relations
+            .iter()
+            .enumerate()
+            .all(|(index, relation)| relation.declaration.value.is_some() || admitted[index]),
+        target,
+        "missing admission relation",
+    )?;
+    for (owners, count) in [
+        (&certificate.layouts, source.context.layouts.len()),
+        (
+            &certificate.delta_layouts,
+            source.context.delta_layouts.len(),
+        ),
+    ] {
+        let mut covered = vec![false; count];
+        let mut occupied = vec![false; count];
+        for ownership in owners {
+            ensure(ownership.index < count, target, "layout index out of range")?;
+            ensure(
+                !covered[ownership.index],
+                target,
+                "duplicate layout coverage",
+            )?;
+            covered[ownership.index] = true;
+            ensure(ownership.owner < count, target, "layout owner out of range")?;
+            ensure(!occupied[ownership.owner], target, "layout owner collision")?;
+            occupied[ownership.owner] = true;
+        }
+        ensure(
+            covered.iter().all(|covered| *covered),
+            target,
+            "missing layout coverage",
+        )?;
+    }
+    let mut published = vec![false; source.context.strata.len()];
+    for publication in &certificate.publication {
+        let stratum = source
+            .context
+            .strata
+            .get(publication.stratum)
+            .ok_or_else(|| syn::Error::new_spanned(target, "publication stratum out of range"))?;
+        ensure(
+            !published[publication.stratum],
+            target,
+            "duplicate publication barrier",
+        )?;
+        published[publication.stratum] = true;
+        ensure(
+            publication.barrier == "before_evaluate",
+            target,
+            "publication barrier must precede evaluation",
+        )?;
+        let mut relations = vec![false; source.context.relations.len()];
+        for &relation in &publication.relations {
+            ensure(
+                stratum.members.contains(&relation),
+                target,
+                "publication relation is not a stratum member",
+            )?;
+            ensure(
+                !relations[relation],
+                target,
+                "duplicate publication relation",
+            )?;
+            relations[relation] = true;
+        }
+        ensure(
+            stratum.members.iter().all(|&relation| relations[relation]),
+            target,
+            "missing publication relation",
+        )?;
+        for (indexes, layouts) in [
+            (&publication.layouts, &source.context.layouts),
+            (&publication.delta_layouts, &source.context.delta_layouts),
+        ] {
+            let mut covered = vec![false; layouts.len()];
+            for &index in indexes {
+                ensure(
+                    layouts
+                        .get(index)
+                        .is_some_and(|layout| stratum.members.contains(&layout.relation)),
+                    target,
+                    "publication layout is not a stratum member",
+                )?;
+                ensure(!covered[index], target, "duplicate publication layout")?;
+                covered[index] = true;
+            }
+            ensure(
+                layouts.iter().enumerate().all(|(index, layout)| {
+                    !stratum.members.contains(&layout.relation) || covered[index]
+                }),
+                target,
+                "missing publication layout",
+            )?;
+        }
+    }
+    ensure(
+        published.iter().all(|published| *published),
+        target,
+        "missing publication barrier",
     )
 }
 

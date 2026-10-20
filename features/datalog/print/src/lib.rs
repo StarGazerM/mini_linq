@@ -257,33 +257,26 @@ pub fn publication(context: &RoundContext, stratum: &Stratum) -> Vec<TokenStream
         .iter()
         .map(|publication| {
             let relation = &context.relations[publication.relation];
-            let all = &relation.all;
-            let next = &relation.next;
             let delta = relation
                 .delta_host
                 .as_ref()
                 .expect("checked IDB delta host");
             let operations = publication.operations.iter().map(|operation| {
                 match operation.kind.to_string().as_str() {
-                    "full_layouts" => {
-                        let updates = operation
+                    "full_layouts" => full_insert(
+                        operation
                             .layouts
                             .iter()
-                            .map(|&index| insert_layout(&context.layouts[index], false));
-                        quote!({ for row in &#next { #(#updates)* } })
-                    }
-                    "all_extend" => quote!(#all.extend(#next.iter().cloned());),
-                    "delta_swap" => quote!(#delta = #next;),
+                            .map(|&index| &context.layouts[index]),
+                        &relation.next,
+                    ),
+                    "all_extend" => all_extend(relation),
+                    "delta_swap" => delta_swap(relation),
                     "delta_rebuild" => {
-                        let rebuilds = operation.layouts.iter().map(|&index| {
-                            let layout = &context.delta_layouts[index];
-                            let host = &layout.host;
-                            let insert = insert_layout(layout, false);
-                            quote!({
-                                #host = ::core::default::Default::default();
-                                for row in &#delta { #insert }
-                            })
-                        });
+                        let rebuilds = operation
+                            .layouts
+                            .iter()
+                            .map(|&index| delta_rebuild(&context.delta_layouts[index], delta));
                         quote!(#(#rebuilds)*)
                     }
                     _ => unreachable!("checked publication operation"),
@@ -292,6 +285,37 @@ pub fn publication(context: &RoundContext, stratum: &Stratum) -> Vec<TokenStream
             quote!(#(#operations)*)
         })
         .collect()
+}
+/// Insert admitted rows into the supplied full layouts in one shared row loop.
+pub fn full_insert<'a>(layouts: impl IntoIterator<Item = &'a Layout>, next: &Ident) -> TokenStream {
+    let updates = layouts
+        .into_iter()
+        .map(|layout| insert_layout(layout, false));
+    quote!({ for row in &#next { #(#updates)* } })
+}
+/// Extend a relation's accumulated rows with its admitted rows.
+pub fn all_extend(relation: &round::Relation) -> TokenStream {
+    let all = &relation.all;
+    let next = &relation.next;
+    quote!(#all.extend(#next.iter().cloned());)
+}
+/// Publish admitted rows as the relation's next delta.
+pub fn delta_swap(relation: &round::Relation) -> TokenStream {
+    let delta = relation
+        .delta_host
+        .as_ref()
+        .expect("checked IDB delta host");
+    let next = &relation.next;
+    quote!(#delta = #next;)
+}
+/// Replace a delta layout with its default host, then populate the new delta.
+pub fn delta_rebuild(layout: &Layout, delta: &Ident) -> TokenStream {
+    let host = &layout.host;
+    let insert = insert_layout(layout, false);
+    quote!({
+        #host = ::core::default::Default::default();
+        for row in &#delta { #insert }
+    })
 }
 pub fn outputs(context: &RoundContext) -> TokenStream {
     let outputs: Vec<_> = context

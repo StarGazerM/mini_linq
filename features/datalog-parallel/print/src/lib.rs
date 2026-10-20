@@ -15,6 +15,7 @@ pub fn compile(program: &cq_datalog_partition::ShardedProgram) -> syn::Result<sy
     cq_datalog_partition::check_sharded(&source, program)?;
     let holes = cq_datalog_print::splice(&program.round)?;
     let threshold = program.certificate.threshold;
+    let mut stratum_index = 0usize;
     cq_datalog_print::render_with_publication(
         &program.round,
         &holes,
@@ -30,7 +31,16 @@ pub fn compile(program: &cq_datalog_partition::ShardedProgram) -> syn::Result<sy
                 &source,
             )
         },
-        |context, stratum| publication::publication(context, stratum, threshold),
+        |context, _| {
+            let barrier = program
+                .certificate
+                .publication
+                .iter()
+                .find(|barrier| barrier.stratum == stratum_index)
+                .expect("checked complete publication barriers");
+            stratum_index += 1;
+            publication::publication(context, barrier, &program.certificate)
+        },
     )
 }
 

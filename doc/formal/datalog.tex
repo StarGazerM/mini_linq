@@ -538,29 +538,37 @@ output order is unspecified. The termination condition is any admitted row.
 \end{mathpar}
 Each native layout has exactly one owner task during publication. Full layouts
 extend their previous state; after all full-layout tasks join, relation
-containers extend and deltas swap. A second scope clears and rebuilds each
-delta layout exclusively, including empty deltas. It joins before evaluation.
+containers extend and deltas swap. A second scope replaces each delta map with
+its recorded default provider and rebuilds it, including empty deltas, then joins before evaluation.
 The original \code{IndexRead}/\code{Rows} implementations serve CQ holes
 without fallback index construction or a shard-routing hash on every probe.
 \begin{mathpar}
-\Rule{DL-LayoutPublication}{\mathrm{owner}(\ell)=\ell\quad
+\Rule{DL-LayoutPublication}{\mathrm{owner}\text{ is a bijection on layouts}\quad
  L'_\ell=L_\ell\cup\mathrm{layout}_\ell(N)\quad
  \text{all full owners join before delta replacement}}
  {\forall\ell.\ \alpha(L'_\ell)=\alpha(L_\ell)\cup\mathrm{layout}_\ell(N)}
 \Rule{CK-DL-ShardOwnership}{
  \{[i,i+1)\mid 0\leq i<S\}\text{ disjointly covers admission shards}\quad
- \mathrm{owner}(\ell)=\ell\text{ covers each full/delta layout exactly once}\quad
+ \mathrm{owner}\text{ is total and injective on each full/delta layout domain}\quad
  \text{every required layout completes before evaluation}}
  {\mathrm{check}_{\mathrm{shardedRound}}(s,t)}
 \end{mathpar}
 The checker validates admission's symbolic shard ownership and whole-layout
-identity ownership, complete coverage and publication barriers. Scoped tasks
+owner bijections directly, without invoking the certificate producer. It checks
+complete membership/coverage and each stratum's publication barriers. The printer
+uses certified layout lists and owner labels to generate and order its tasks.
+Reordered certificates and valid owner permutations are accepted. Scoped tasks
 receive exclusive mutable seen shards or native maps, never locks. Below
 the recorded candidate threshold, admission runs inline while preserving shard
 concatenation order; publication similarly avoids tasks for small next sets.
 Purity, lawful hashing/equality/cloning and the partial-Rust prefix premises
 remain required. Neither ownership checking nor the counters regression is a
 general Rust equivalence proof.
+The base printing library exports generic \code{full\_insert},
+\code{all\_extend}, \code{delta\_swap} and \code{delta\_rebuild} generators.
+Both terminals reuse those operations; the extension changes only their
+grouping into checked phases. Delta rebuilds use default replacement in both
+terminals, preserving the base expansion rather than silently using \code{clear}.
 The extension printer's default-off \code{hole-timing} feature emits per-hole
 and per-chunk evaluation times, input/candidate counts, partition status and
 the erased CQ rule text. No timers, atomics or logging are emitted without
