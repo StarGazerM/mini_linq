@@ -43,6 +43,33 @@ fn named_datalog_phases_and_nested_cq_configuration_execute() {
     assert_eq!(answers, BTreeSet::from([(1, 2), (1, 3), (2, 3)]));
 }
 
+mod pull_alias {
+    pub use mini_linq::passes::print_pull as emit;
+}
+
+#[test]
+fn configured_pull_printer_alias_executes_recursive_and_key_holes() {
+    let edges = [(1_i32, 2_i32), (2, 3), (3, 4)];
+    let blocked = [(4_i32,)];
+    let answers: BTreeSet<_> = cq_datalog::datalog! {
+        pipeline {
+            pull_printers = [crate::pull_alias::emit];
+            cq = pipeline { print = crate::pull_alias::emit; };
+        }
+        struct Closure;
+        relation Edge(x:i32,y:i32) = (edges);
+        relation Blocked(x:i32) = (blocked);
+        relation Reach(x:i32,y:i32);
+        relation Allowed(x:i32,y:i32);
+        output Allowed;
+        Reach(*x,*y) :- Edge(x,y);
+        Reach(*x,*z) :- Reach(x,y), Reach(y,z);
+        Allowed(*x,*y) :- Reach(x,y), !Blocked(y);
+    }
+    .collect();
+    assert_eq!(answers, BTreeSet::from([(1, 2), (1, 3), (2, 3)]));
+}
+
 #[test]
 #[deny(non_snake_case)]
 fn source_stratified_and_seminaive_text_have_the_same_answer() {

@@ -1,6 +1,7 @@
 //! Reusable realization of checked storage, rounds, admission and outputs.
 //! Alternative terminals supply only the phase evaluator, never a copy of the
 //! storage or publication printer. CQ joins remain inside the recorded queues.
+use cq_datalog_support::ensure;
 pub use cq_lang_datalog_round as round;
 use cq_syntax::rust;
 use proc_macro2::{Span, TokenStream};
@@ -25,7 +26,7 @@ pub fn splice_with(
     program.holes.iter().map(&mut expand).collect()
 }
 pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
-    round::ensure(
+    ensure(
         program.execution.is_empty(),
         program,
         "base printer does not interpret execution certificates",
@@ -59,7 +60,7 @@ pub fn render_with(
     ) -> syn::Result<(TokenStream, TokenStream)>,
 ) -> syn::Result<syn::Expr> {
     round::contract::check(program)?;
-    round::ensure(
+    ensure(
         holes.len() == program.holes.len(),
         program,
         "hole splice coverage changed",

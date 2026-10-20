@@ -92,3 +92,47 @@ fn fork_rejects_an_incompatible_cq_terminal_printer() {
         .unwrap();
     assert!(cq_datalog_fork::compile_with(&storage, fork.arguments.clone()).is_err());
 }
+
+#[test]
+fn configuration_records_the_alias_declaration_for_independent_round_checks() {
+    let source: cq_lang_datalog_source::Program = syn::parse2(source()).unwrap();
+    let strata = cq_datalog_stratify::compile(&source).unwrap();
+    let incremental = cq_datalog_incremental::compile(&strata).unwrap();
+    let storage = cq_datalog_storage::compile(&incremental).unwrap();
+    let config: DatalogConfiguration = syn::parse_quote! { pipeline {
+        pull_printers = [crate::alias::pull, ::other::pull];
+        cq = pipeline { print = crate::alias::pull; };
+    } };
+    let queue = config.resolve(DatalogConfiguration::defaults()).unwrap();
+    let fork = queue
+        .passes
+        .iter()
+        .find(|pass| pass.path.segments.last().unwrap().ident == "fork")
+        .unwrap();
+    let target = cq_datalog_fork::compile_with(&storage, fork.arguments.clone()).unwrap();
+    let replay: cq_lang_datalog_round::Program = syn::parse2(quote!(#target)).unwrap();
+    assert_eq!(replay, target);
+    cq_lang_datalog_round::contract::check(&replay).unwrap();
+    let mut unlisted = replay.clone();
+    unlisted.holes[0].pipeline.passes.last_mut().unwrap().path =
+        syn::parse_quote!(crate::unlisted::pull);
+    assert!(cq_lang_datalog_round::contract::check(&unlisted).is_err());
+    let mut push = replay;
+    push.holes[0].interface = cq_lang_datalog_round::HoleInterface::Push;
+    assert!(
+        cq_lang_datalog_round::contract::check(&push)
+            .unwrap_err()
+            .to_string()
+            .contains("push hole interface is unsupported")
+    );
+    let unlisted: DatalogConfiguration = syn::parse_quote! { pipeline {
+        cq = pipeline { print = crate::alias::pull; };
+    } };
+    let queue = unlisted.resolve(DatalogConfiguration::defaults()).unwrap();
+    let fork = queue
+        .passes
+        .iter()
+        .find(|pass| pass.path.segments.last().unwrap().ident == "fork")
+        .unwrap();
+    assert!(cq_datalog_fork::compile_with(&storage, fork.arguments.clone()).is_err());
+}

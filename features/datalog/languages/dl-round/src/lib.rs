@@ -1,6 +1,7 @@
 //! Checked operational rounds over a storage refinement.
-//! Every hole carries its CQ invocation queue and pull interface. Execution
-//! certificates may rename one immutable scan input; erasure checks that exact
+//! Every hole carries its CQ invocation queue and typed interface; the program
+//! records the exact macro paths declared to implement the pull interface.
+//! Execution certificates may rename one immutable scan input; erasure checks that exact
 //! substitution before the ordinary round correspondence is checked.
 //!
 //! `ScanBinding` is a generic CQ scan input recorded by Round: its source is
@@ -8,11 +9,16 @@
 //! `__cq_datalog_scan_*` binding denotes that complete immutable input and
 //! preserves its column order. It does not select an execution strategy;
 //! sequential printing uses it without any execution annotations.
+//! Policy labels are not a concrete Rust execution plan: cq-datalog-print still
+//! chooses storage types and the Canonical wrapper, publication operation order
+//! and delta rebuilding, loop/termination/observer emission, output conversion,
+//! component-local key-set scope, and member publication order.
+use cq_datalog_support::{collect_names, ensure};
 pub use cq_lang_cq as cq;
 use cq_lang_cq::{BodyItem, Program as CqProgram};
 pub use cq_lang_datalog_storage as storage;
 use cq_syntax::{RelationDecl, rust, symbol_name};
-use proc_macro2::{TokenStream, TokenTree};
+use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 use std::collections::BTreeSet;
 pub use storage::incremental;
@@ -101,6 +107,7 @@ pub struct Program {
     pub storage: storage::Program,
     pub context: RoundContext,
     pub holes: Vec<Hole>,
+    pub pull_printers: PullPrinters,
     pub execution: Vec<Execution>,
     pub policy: RoundPolicy,
 }
@@ -108,7 +115,7 @@ pub struct Program {
 pub struct Hole {
     pub cq: CqProgram,
     pub pipeline: cq_stage::Pipeline,
-    pub interface: Ident,
+    pub interface: HoleInterface,
 }
 impl PartialEq for Hole {
     fn eq(&self, other: &Self) -> bool {
@@ -119,6 +126,84 @@ impl PartialEq for Hole {
     }
 }
 impl Eq for Hole {}
+
+/// The calling convention of an embedded CQ result.
+/// Push is represented for diagnostics, but no Round consumer supports it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HoleInterface {
+    Pull,
+    Push,
+}
+
+impl syn::parse::Parse for HoleInterface {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let name: Ident = input.parse()?;
+        match name.to_string().as_str() {
+            "pull" => Ok(Self::Pull),
+            "push" => Ok(Self::Push),
+            _ => Err(syn::Error::new_spanned(
+                name,
+                "expected pull or push interface",
+            )),
+        }
+    }
+}
+impl ToTokens for HoleInterface {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        tokens.extend(match self {
+            Self::Pull => quote!(pull),
+            Self::Push => quote!(push),
+        });
+    }
+}
+impl Text for HoleInterface {
+    fn parse_text(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        input.parse()
+    }
+    fn text(&self) -> TokenStream {
+        self.to_token_stream()
+    }
+}
+
+/// Exact paths explicitly declared to return pull iterators.
+/// Declarations are trusted interface assertions, not Rust alias resolution.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PullPrinters(pub Vec<syn::Path>);
+
+impl Default for PullPrinters {
+    fn default() -> Self {
+        Self(vec![
+            syn::parse_quote!(::mini_linq::passes::print_pull),
+            syn::parse_quote!(mini_linq::passes::print_pull),
+        ])
+    }
+}
+impl syn::parse::Parse for PullPrinters {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let paths;
+        syn::bracketed!(paths in input);
+        Ok(Self(
+            paths
+                .parse_terminated(syn::Path::parse_mod_style, syn::Token![,])?
+                .into_iter()
+                .collect(),
+        ))
+    }
+}
+impl ToTokens for PullPrinters {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        let paths = &self.0;
+        tokens.extend(quote!([#(#paths),*]));
+    }
+}
+impl Text for PullPrinters {
+    fn parse_text(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        input.parse()
+    }
+    fn text(&self) -> TokenStream {
+        self.to_token_stream()
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Execution {
     pub hole: usize,
@@ -135,11 +220,11 @@ pub struct RoundPolicy {
     pub outputs: Ident,
     pub timing: Ident,
 }
-record!(Program { storage: storage::Program, context: RoundContext, holes: Vec<Hole>, execution: Vec<Execution>, policy: RoundPolicy });
+record!(Program { storage: storage::Program, context: RoundContext, holes: Vec<Hole>, pull_printers: PullPrinters, execution: Vec<Execution>, policy: RoundPolicy });
 record!(Hole {
     cq: CqProgram,
     pipeline: cq_stage::Pipeline,
-    interface: Ident
+    interface: HoleInterface
 });
 record!(Execution {
     hole: usize,
@@ -203,9 +288,6 @@ impl Text for KeyRepresentation {
     fn text(&self) -> TokenStream {
         quote!(hash_set_borrowed)
     }
-}
-pub fn ensure(ok: bool, at: impl ToTokens, message: &str) -> syn::Result<()> {
-    storage::ensure(ok, at, message)
 }
 
 /// Erase only certified input substitutions. This never erases arbitrary CQ edits.
@@ -329,39 +411,31 @@ pub fn erase(program: &Program) -> syn::Result<Program> {
     erased.execution.clear();
     Ok(erased)
 }
-fn collect_names(tokens: TokenStream, names: &mut BTreeSet<String>) {
-    for token in tokens {
-        match token {
-            TokenTree::Ident(id) => {
-                names.insert(symbol_name(&id));
-            }
-            TokenTree::Group(g) => collect_names(g.stream(), names),
-            _ => {}
-        }
-    }
-}
-pub fn check_pipeline(hole: &Hole) -> syn::Result<()> {
+pub fn check_pipeline(hole: &Hole, printers: &PullPrinters) -> syn::Result<()> {
+    ensure(
+        hole.interface == HoleInterface::Pull,
+        hole,
+        "push hole interface is unsupported; Round requires pull iterators",
+    )?;
     let terminal =
         hole.pipeline.passes.last().ok_or_else(|| {
             syn::Error::new_spanned(hole, "hole pipeline needs a terminal printer")
         })?;
-    let names: Vec<_> = terminal
-        .path
-        .segments
-        .iter()
-        .map(|s| s.ident.to_string())
-        .collect();
+    check_pull_path(&terminal.path)?;
     ensure(
-        hole.interface == "pull"
-            && names == ["mini_linq", "passes", "print_pull"]
-            && terminal
-                .path
-                .segments
-                .iter()
-                .all(|s| matches!(s.arguments, syn::PathArguments::None))
-            && terminal.arguments.is_empty(),
+        printers.0.contains(&terminal.path) && terminal.arguments.is_empty(),
         hole,
-        "pull hole requires terminal mini_linq::passes::print_pull",
+        "pull hole requires an argument-free terminal in the recorded pull_printers allowlist",
+    )
+}
+
+fn check_pull_path(path: &syn::Path) -> syn::Result<()> {
+    ensure(
+        path.segments
+            .iter()
+            .all(|s| matches!(s.arguments, syn::PathArguments::None)),
+        path,
+        "pull printer declarations require macro paths without generic arguments",
     )
 }
 pub mod contract {
@@ -384,8 +458,11 @@ pub mod contract {
             program,
             "unsupported round execution policy",
         )?;
+        for path in &program.pull_printers.0 {
+            check_pull_path(path)?;
+        }
         for hole in &program.holes {
-            check_pipeline(hole)?;
+            check_pipeline(hole, &program.pull_printers)?;
             cq_lang_cq::contract::check(&hole.cq)?;
         }
         let erased = erase(program)?;

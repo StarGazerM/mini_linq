@@ -7,6 +7,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
+cq-datalog-support.workspace = true
 cq-lang-datalog-incremental.workspace = true
 cq-lang-cq.workspace = true
 cq-stage.workspace = true

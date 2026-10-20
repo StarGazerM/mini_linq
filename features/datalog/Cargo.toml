@@ -1,5 +1,5 @@
 [workspace]
-members = ["languages/*", "passes/*", "print", "facade/*", "oracle", "doop"]
+members = ["languages/*", "passes/*", "support", "print", "facade/*", "oracle", "doop"]
 default-members = ["facade/cq-datalog"]
 resolver = "3"
 
@@ -15,6 +15,7 @@ cq-syntax = { version = "0.1.0", path = "../../languages/cq-syntax" }
 cq-lang-cq = { version = "0.1.0", path = "../../languages/cq-lang-cq" }
 mini-linq = { version = "0.1.0", path = "../../facade/mini-linq" }
 cq-storage = { version = "0.1.0", path = "../../runtime/cq-storage" }
+cq-datalog-support = { version = "0.0.0", path = "support" }
 cq-lang-datalog-source = { version = "0.0.0", path = "languages/dl-source" }
 cq-lang-datalog-strata = { version = "0.0.0", path = "languages/dl-strata" }
 cq-lang-datalog-incremental = { version = "0.0.0", path = "languages/dl-incremental" }

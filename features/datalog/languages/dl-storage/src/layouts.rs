@@ -1,5 +1,6 @@
-use crate::{Analysis, BodyItem, Layout, Program, ensure};
-use cq_syntax::{rust, symbol_name};
+use crate::{Analysis, BodyItem, Layout, Program};
+use cq_datalog_support::{ensure, key_columns};
+use cq_syntax::symbol_name;
 use std::collections::BTreeSet;
 
 /// Check physical grouping decisions against source rules, not emitted variants
@@ -52,19 +53,7 @@ pub(crate) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
                 let BodyItem::Positive { atom } = item else {
                     continue;
                 };
-                let is_bound: Vec<_> = atom
-                    .args
-                    .iter()
-                    .map(|arg| match rust::variable(arg) {
-                        Some(name) => bound.contains(&symbol_name(name)),
-                        None => !matches!(rust::unparen(arg), syn::Expr::Infer(_)),
-                    })
-                    .collect();
-                let mut columns: Vec<_> = (0..atom.args.len())
-                    .filter(|&column| is_bound[column])
-                    .collect();
-                let key = columns.len();
-                columns.extend((0..atom.args.len()).filter(|&column| !is_bound[column]));
+                let (columns, key) = key_columns(atom, &bound);
                 let layout = Layout {
                     relation: atom.relation.clone(),
                     columns,

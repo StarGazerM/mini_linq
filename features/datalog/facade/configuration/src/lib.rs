@@ -1,4 +1,5 @@
 //! Datalog-owned named phases, resolved into the ordinary checked pass queue.
+use cq_lang_datalog_round::PullPrinters;
 use cq_stage::{Configuration, Invocation, Pipeline};
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
@@ -21,6 +22,9 @@ pub struct DatalogConfiguration {
     pub round: Option<Vec<Invocation>>,
     pub print: Option<Invocation>,
     pub cq: Option<Configuration>,
+    /// Exact macro paths asserted to return pull iterators; an explicit list
+    /// replaces the default absolute and relative mini_linq print_pull paths.
+    pub pull_printers: Option<PullPrinters>,
 }
 
 impl Parse for DatalogConfiguration {
@@ -46,6 +50,7 @@ impl Parse for DatalogConfiguration {
                 "fork" => config.fork = Some(body.parse()?),
                 "print" => config.print = Some(body.parse()?),
                 "cq" => config.cq = Some(body.parse()?),
+                "pull_printers" => config.pull_printers = Some(body.parse()?),
                 "surface" | "storage_rewrites" | "round" => {
                     let list;
                     bracketed!(list in body);
@@ -84,15 +89,16 @@ impl DatalogConfiguration {
             fork = ::cq_datalog::passes::fork;
             print = ::cq_datalog::passes::print_rounds;
         } };
+        defaults.pull_printers = Some(PullPrinters::default());
         if cfg!(feature = "phase-timing") {
             defaults.fork.as_mut().unwrap().arguments = quote!(timing = phases;);
         }
         defaults
     }
 
-    /// Resolve all phases and record the resolved CQ continuation in fork args.
-    /// Replacement fork passes receive the same opaque `cq = pipeline { ... };`
-    /// argument, after any arguments authored on their invocation.
+    /// Resolve all phases and record the resolved CQ continuation and exact
+    /// pull-printer declarations in fork args. Replacement fork passes receive
+    /// `cq = pipeline { ... }; pull_printers = [...];` after authored arguments.
     pub fn resolve(self, defaults: Self) -> syn::Result<Pipeline> {
         let missing = || {
             syn::Error::new(
@@ -107,6 +113,12 @@ impl DatalogConfiguration {
             .resolve(cq_datalog_fork::cq_defaults())?;
         let mut fork = self.fork.or(defaults.fork).ok_or_else(missing)?;
         fork.arguments.extend(quote!(cq = #cq;));
+        let pull_printers = self
+            .pull_printers
+            .or(defaults.pull_printers)
+            .unwrap_or_default();
+        fork.arguments
+            .extend(quote!(pull_printers = #pull_printers;));
         let mut passes = self.surface.or(defaults.surface).unwrap_or_default();
         passes.push(self.stratify.or(defaults.stratify).ok_or_else(missing)?);
         passes.push(

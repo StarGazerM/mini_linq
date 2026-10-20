@@ -64,6 +64,7 @@ mini-linq-inspection-examples	scenario	free-variables	features/inspection/free-v
 stacked-ir	manifest-test	conformance	features/stacked-ir/Cargo.toml
 stacked-ir	scenario	expansions	features/stacked-ir/check_expansions.py
 cq-datalog	manifest-test	datalog	features/datalog/facade/cq-datalog/Cargo.toml
+cq-datalog-support	manifest-test	syntax-support	features/datalog/support/Cargo.toml
 cq-lang-datalog-source	manifest-test	contracts	features/datalog/languages/dl-source/Cargo.toml
 cq-lang-datalog-strata	manifest-test	contracts	features/datalog/languages/dl-strata/Cargo.toml
 cq-lang-datalog-incremental	manifest-test	contracts	features/datalog/languages/dl-incremental/Cargo.toml

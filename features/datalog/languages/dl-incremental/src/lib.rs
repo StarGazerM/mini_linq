@@ -1,10 +1,11 @@
 //! DL-Incremental records the exact semi-naive changing-position cover.
 //! Delta rounds read frozen lower components and preserve written Rust clauses.
+use cq_datalog_support::{Fresh, ensure};
 pub use cq_lang_datalog_strata as strata;
 use cq_syntax::symbol_name;
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
-use source::{BodyItem, Fresh, Graph, Query, check_query, ensure};
+use source::{BodyItem, Graph, Query, check_query};
 use std::collections::{BTreeMap, BTreeSet};
 pub use strata::source;
 use syn::{

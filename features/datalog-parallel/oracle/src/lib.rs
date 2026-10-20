@@ -1,6 +1,11 @@
 //! Shared source corpus instantiated with the slice-one pipeline and Ascent.
 //! Run `cargo run --release -p datalog-parallel-oracle -- bench [--threads N]`.
 //! Every timed answer is compared as a canonical set; golden bytes stay in base.
+//! CLI parsing, fixtures, timing and counter measurement delegate to the base
+//! [`datalog_oracle::harness`]; this crate supplies evaluators and local pools.
+//! `counters` measures this configured extension on one local worker, with
+//! reset/evaluation/snapshot on that worker. Counts are not multiworker totals.
+pub mod harness;
 pub use datalog_oracle::{Data, Result, Rows, generate, random_data};
 use std::time::Duration;
 

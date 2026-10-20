@@ -1,12 +1,12 @@
 //! Record complete CQ holes, immutable round contexts, and their invocation queues.
+use cq_datalog_support::{Fresh, columns, ensure, filters};
 use cq_lang_datalog_round::cq::BodyItem;
 use cq_lang_datalog_round::{self as round, *};
 use cq_lang_datalog_storage as storage;
-use cq_syntax::{rust, symbol_name};
-use proc_macro2::{Span, TokenStream, TokenTree};
+use cq_syntax::symbol_name;
+use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
-use std::collections::BTreeSet;
-use syn::{Expr, Ident};
+use syn::Ident;
 
 pub fn cq_defaults() -> cq_stage::Configuration {
     syn::parse_quote!(pipeline {
@@ -25,15 +25,22 @@ pub fn default_pipeline() -> cq_stage::Pipeline {
         .expect("complete CQ defaults")
 }
 pub fn compile(source: &storage::Program) -> syn::Result<Program> {
-    construct(source, default_pipeline(), syn::parse_quote!(none))
+    construct(
+        source,
+        default_pipeline(),
+        PullPrinters::default(),
+        syn::parse_quote!(none),
+    )
 }
 struct Arguments {
     pipeline: cq_stage::Pipeline,
+    pull_printers: PullPrinters,
     timing: Ident,
 }
 impl syn::parse::Parse for Arguments {
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
         let mut pipeline = None;
+        let mut pull_printers = None;
         let mut timing = None;
         while !input.is_empty() {
             let name: Ident = input.parse()?;
@@ -42,6 +49,8 @@ impl syn::parse::Parse for Arguments {
                 pipeline = Some(input.parse()?);
             } else if name == "timing" && timing.is_none() {
                 timing = Some(input.parse()?);
+            } else if name == "pull_printers" && pull_printers.is_none() {
+                pull_printers = Some(input.parse()?);
             } else {
                 return Err(syn::Error::new_spanned(
                     name,
@@ -52,13 +61,18 @@ impl syn::parse::Parse for Arguments {
         }
         Ok(Self {
             pipeline: pipeline.unwrap_or_else(default_pipeline),
+            pull_printers: pull_printers.unwrap_or_default(),
             timing: timing.unwrap_or_else(|| syn::parse_quote!(none)),
         })
     }
 }
 pub fn compile_with(source: &storage::Program, args: TokenStream) -> syn::Result<Program> {
-    let Arguments { pipeline, timing } = syn::parse2(args)?;
-    construct(source, pipeline, timing)
+    let Arguments {
+        pipeline,
+        pull_printers,
+        timing,
+    } = syn::parse2(args)?;
+    construct(source, pipeline, pull_printers, timing)
 }
 /// Formal rule CK-DL-Fork: independently check storage embedding and every hole.
 pub fn check(source: &storage::Program, target: &Program) -> syn::Result<()> {
@@ -75,54 +89,6 @@ pub fn check(source: &storage::Program, target: &Program) -> syn::Result<()> {
         "fork must not introduce execution certificates",
     )?;
     round::check_storage(source, target)
-}
-fn identifiers(tokens: TokenStream, names: &mut BTreeSet<String>) {
-    for token in tokens {
-        match token {
-            TokenTree::Ident(id) => {
-                names.insert(symbol_name(&id));
-            }
-            TokenTree::Group(group) => identifiers(group.stream(), names),
-            _ => {}
-        }
-    }
-}
-
-struct Fresh(BTreeSet<String>);
-impl Fresh {
-    fn new(source: &storage::Program) -> Self {
-        let mut names = BTreeSet::new();
-        identifiers(source.to_token_stream(), &mut names);
-        Self(names)
-    }
-    fn id(&mut self, role: &str) -> Ident {
-        for n in 0.. {
-            let name = format!("__cq_datalog_{role}_{n}");
-            if self.0.insert(name.clone()) {
-                return Ident::new(&name, Span::mixed_site());
-            }
-        }
-        unreachable!()
-    }
-}
-
-fn columns(atom: &cq_syntax::Atom) -> Vec<usize> {
-    atom.args
-        .iter()
-        .enumerate()
-        .filter_map(|(i, arg)| rust::variable(arg).map(|_| i))
-        .collect()
-}
-
-fn filters(atom: &cq_syntax::Atom) -> Vec<(usize, Expr)> {
-    atom.args
-        .iter()
-        .enumerate()
-        .filter(|(_, arg)| {
-            rust::variable(arg).is_none() && !matches!(rust::unparen(arg), Expr::Infer(_))
-        })
-        .map(|(i, arg)| (i, arg.clone()))
-        .collect()
 }
 
 fn guard(atom: &cq_syntax::Atom, key: &KeySet) -> BodyItem {
@@ -149,6 +115,7 @@ fn key_representation(source: &storage::Program) -> syn::Result<KeyRepresentatio
 fn construct(
     source: &storage::Program,
     pipeline: cq_stage::Pipeline,
+    pull_printers: PullPrinters,
     timing: Ident,
 ) -> syn::Result<Program> {
     let analysis = storage::contract::check(source)?;
@@ -339,13 +306,14 @@ fn construct(
         .map(|cq| Hole {
             cq,
             pipeline: pipeline.clone(),
-            interface: syn::parse_quote!(pull),
+            interface: HoleInterface::Pull,
         })
         .collect();
     let target = Program {
         storage: source.clone(),
         context,
         holes,
+        pull_printers,
         execution: Vec::new(),
         policy: RoundPolicy {
             phases: syn::parse_quote!(evaluate_admit_publish),

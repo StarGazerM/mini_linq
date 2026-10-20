@@ -15,10 +15,14 @@
 //! Compute timing includes derived indexes and materializing the 26 outputs;
 //! load timing includes parsing and interning, not engine initialization.
 //! No counters are enabled. Do not compile concurrently with measured runs.
+//! The public [`harness`] accepts arbitrary named engine descriptors and owns
+//! CLI parsing, full-set checks, loading, timing and process high-water RSS.
+//! Callers install their execution context outside that shared harness.
 
 #![recursion_limit = "1024"]
 
 pub mod ascent_engine;
+pub mod harness;
 pub mod interner;
 mod loader;
 pub mod mini_engine;

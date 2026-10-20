@@ -1,10 +1,15 @@
 //! Checked storage refinement of Boolean incremental Datalog.
-//! Text records layouts, every positive read, frozen negative projections, and
-//! provider/admission/maintenance choices. Erasure retains the incremental program.
+//! Records provider/canonicalization and maintenance policy labels, layout/read bindings,
+//! and negation-key projections. These are not independent fields for every concrete
+//! Rust choice: cq-datalog-print still chooses storage types and the Canonical EDB
+//! wrapper, publication operation order and delta-layout rebuilding. Round similarly
+//! leaves loop/termination/observer emission, output conversion, component-local
+//! key-set scope, and member publication order in the shared printer.
+//! See doc/formal/datalog.tex for the recorded/implicit boundary.
+use cq_datalog_support::{columns, ensure, filters, key_columns};
 pub use cq_lang_datalog_incremental as incremental;
-use cq_syntax::{rust, symbol_name};
+use cq_syntax::symbol_name;
 pub use incremental::strata::source::{BodyItem, Query};
-use quote::ToTokens;
 use std::collections::BTreeSet;
 use syn::{Expr, Ident};
 mod layouts;
@@ -71,13 +76,6 @@ record!(Policy {
 });
 
 pub use incremental::Analysis;
-pub fn ensure(ok: bool, at: impl ToTokens, message: &str) -> syn::Result<()> {
-    if ok {
-        Ok(())
-    } else {
-        Err(syn::Error::new_spanned(at, message))
-    }
-}
 /// Infer occurrence obligations from checked variants, without choosing layouts.
 pub fn read_plan(
     program: &Program,
@@ -103,23 +101,7 @@ pub fn read_plan(
                     } else {
                         &atom.relation
                     };
-                    let mut columns: Vec<_> = atom
-                        .args
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(i, arg)| {
-                            match rust::variable(arg) {
-                                Some(id) => bound.contains(&symbol_name(id)),
-                                None => !matches!(rust::unparen(arg), Expr::Infer(_)),
-                            }
-                            .then_some(i)
-                        })
-                        .collect();
-                    let key = columns.len();
-                    let payload: Vec<_> = (0..atom.args.len())
-                        .filter(|i| !columns.contains(i))
-                        .collect();
-                    columns.extend(payload);
+                    let (columns, key) = key_columns(atom, &bound);
                     let (kind, index) = if is_delta && position == 0 && key == 0 {
                         (
                             syn::parse_quote!(direct),
@@ -162,22 +144,8 @@ pub fn read_plan(
                     let entry = Negative {
                         component,
                         relation: analysis.positions[&symbol_name(&atom.relation)],
-                        columns: atom
-                            .args
-                            .iter()
-                            .enumerate()
-                            .filter_map(|(i, arg)| rust::variable(arg).map(|_| i))
-                            .collect(),
-                        filters: atom
-                            .args
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, arg)| {
-                                rust::variable(arg).is_none()
-                                    && !matches!(rust::unparen(arg), Expr::Infer(_))
-                            })
-                            .map(|(i, arg)| (i, arg.clone()))
-                            .collect(),
+                        columns: columns(atom),
+                        filters: filters(atom),
                     };
                     if !negations.contains(&entry) {
                         negations.push(entry);

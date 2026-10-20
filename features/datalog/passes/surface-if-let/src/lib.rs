@@ -1,5 +1,6 @@
 //! Raw-token if-let expansion. Its meaning is the checked generator translation.
-use cq_lang_datalog_source::{self as source, BodyItem, Query, ensure};
+use cq_datalog_support::ensure;
+use cq_lang_datalog_source::{self as source, BodyItem, Query};
 use cq_syntax::rust;
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};

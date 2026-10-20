@@ -22,4 +22,3 @@ mini-linq = { version = "0.1.0", path = "../../../facade/mini-linq" }
 cq-storage = { version = "0.1.0", path = "../../../runtime/cq-storage" }
 ascent = { version = "0.8", default-features = false, features = ["par"] }
 rayon = "1"
-libc = "0.2"

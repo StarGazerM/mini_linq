@@ -12,6 +12,7 @@ phase-timing = []
 [dependencies]
 cq-stage.workspace = true
 cq-datalog-fork.workspace = true
+cq-lang-datalog-round.workspace = true
 proc-macro2.workspace = true
 quote.workspace = true
 syn.workspace = true

@@ -1,32 +1,5 @@
 use super::*;
-fn ensure(ok: bool, source: &storage::Program, message: &str) -> syn::Result<()> {
-    if ok {
-        Ok(())
-    } else {
-        Err(syn::Error::new_spanned(source, message))
-    }
-}
-
-fn identifiers(tokens: TokenStream, names: &mut BTreeSet<String>) {
-    for token in tokens {
-        match token {
-            TokenTree::Ident(id) => {
-                names.insert(symbol_name(&id));
-            }
-            TokenTree::Group(group) => identifiers(group.stream(), names),
-            _ => {}
-        }
-    }
-}
-
-struct Fresh(BTreeSet<String>);
-impl Fresh {
-    fn new(source: &storage::Program) -> Self {
-        let mut names = BTreeSet::new();
-        identifiers(source.to_token_stream(), &mut names);
-        Self(names)
-    }
-}
+use cq_datalog_support::{Fresh, columns, filters};
 
 pub fn inputs(context: &RoundContext) -> Vec<RelationDecl> {
     let mut declarations = Vec::new();
@@ -139,25 +112,6 @@ pub fn use_scan(
     declaration
 }
 
-fn columns(atom: &cq_syntax::Atom) -> Vec<usize> {
-    atom.args
-        .iter()
-        .enumerate()
-        .filter_map(|(i, arg)| rust::variable(arg).map(|_| i))
-        .collect()
-}
-
-fn filters(atom: &cq_syntax::Atom) -> Vec<(usize, Expr)> {
-    atom.args
-        .iter()
-        .enumerate()
-        .filter(|(_, arg)| {
-            rust::variable(arg).is_none() && !matches!(rust::unparen(arg), Expr::Infer(_))
-        })
-        .map(|(i, arg)| (i, arg.clone()))
-        .collect()
-}
-
 fn guard(atom: &cq_syntax::Atom, key: &KeySet) -> BodyItem {
     let name = &key.name;
     if key.columns.is_empty() {
@@ -206,10 +160,10 @@ pub fn check_storage(source: &storage::Program, target: &Program) -> syn::Result
         source,
         "fork changed output or observer",
     )?;
-    let mut names = Fresh::new(source).0;
+    let mut names = Fresh::new(source);
     let mut add_name = |id: &Ident| {
         ensure(
-            names.insert(symbol_name(id)),
+            names.reserve(id),
             source,
             "fork runtime names must be fresh and distinct",
         )

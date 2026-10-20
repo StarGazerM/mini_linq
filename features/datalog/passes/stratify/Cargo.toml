@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+cq-datalog-support.workspace = true
 cq-lang-datalog-source.workspace = true
 cq-lang-datalog-strata.workspace = true
 proc-macro2.workspace = true

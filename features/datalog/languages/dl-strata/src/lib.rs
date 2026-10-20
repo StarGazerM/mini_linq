@@ -1,10 +1,11 @@
 //! DL-Strata records exact dependency-ordered SCCs over DL-Source.
 //! Its meaning is sequential composition of the source component fixpoints.
+use cq_datalog_support::ensure;
 pub use cq_lang_datalog_source as source;
 use cq_syntax::symbol_name;
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
-use source::{BodyItem, Graph, ensure};
+use source::{BodyItem, Graph};
 use std::collections::BTreeMap;
 use syn::{
     Ident, Token,

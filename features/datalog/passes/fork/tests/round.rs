@@ -29,8 +29,13 @@ fn per_hole_queues_check_terminal_path_not_incidental_tokens() {
         syn::parse_quote!(pipeline { custom::transform, ::mini_linq::passes::print_pull });
     round::contract::check(&changed).unwrap();
     round::check_rewrite(&target, &changed).unwrap();
-    changed.holes[0].interface = syn::parse_quote!(push);
-    assert!(round::contract::check(&changed).is_err());
+    changed.holes[0].interface = round::HoleInterface::Push;
+    assert!(
+        round::contract::check(&changed)
+            .unwrap_err()
+            .to_string()
+            .contains("push hole interface is unsupported")
+    );
     changed = target.clone();
     changed.holes[0].pipeline.passes.clear();
     assert!(round::contract::check(&changed).is_err());
@@ -58,6 +63,8 @@ fn fork_arguments_record_queue_and_timing_and_reject_unknown_options() {
         quote!(timing=none;timing=phases;),
         quote!(timing=invalid;),
         quote!(cq=pipeline{};),
+        quote!(pull_printers=[];),
+        quote!(pull_printers=[];pull_printers=[];),
     ] {
         assert!(compile_with(&source, args).is_err());
     }
@@ -154,4 +161,78 @@ fn reusable_printer_splices_and_delegates_only_phase_evaluation() {
     assert!(text.contains("while"));
     assert!(text.contains("into_iter"));
     assert!(cq_datalog_print::render_with(&program, &[], |_, _, _, _| unreachable!()).is_err());
+}
+
+#[test]
+fn declared_pull_paths_and_typed_interfaces_survive_round_text() {
+    let source = source();
+    let defaults = compile(&source).unwrap();
+    assert_eq!(
+        defaults.pull_printers.0,
+        vec![
+            syn::parse_quote!(::mini_linq::passes::print_pull),
+            syn::parse_quote!(mini_linq::passes::print_pull),
+        ]
+    );
+    let target = compile_with(
+        &source,
+        quote! {
+            cq = pipeline { crate::alias::pull };
+            pull_printers = [crate::alias::pull, ::declared::unused_pull];
+        },
+    )
+    .unwrap();
+    assert!(
+        target
+            .holes
+            .iter()
+            .all(|hole| hole.interface == round::HoleInterface::Pull)
+    );
+    let replay: round::Program = syn::parse2(target.to_token_stream()).unwrap();
+    assert_eq!(replay, target);
+    round::contract::check(&replay).unwrap();
+    check(&source, &replay).unwrap();
+    assert_eq!(replay.pull_printers.0.len(), 2);
+    for terminal in [
+        quote!(unlisted::pull),
+        quote!(::crate::alias::pull),
+        quote!(crate::alias::pull(unchecked)),
+    ] {
+        let mut changed = replay.clone();
+        changed.holes[0].pipeline = syn::parse2(quote!(pipeline { #terminal })).unwrap();
+        assert!(round::contract::check(&changed).is_err());
+    }
+    let mut changed = replay.clone();
+    changed.pull_printers.0.clear();
+    assert!(round::contract::check(&changed).is_err());
+    let mut changed = replay;
+    changed.holes[0].interface = round::HoleInterface::Push;
+    let text = changed.to_token_stream();
+    let changed: round::Program = syn::parse2(text).unwrap();
+    assert_eq!(changed.holes[0].interface, round::HoleInterface::Push);
+    assert!(round::contract::check(&changed).is_err());
+}
+
+#[test]
+fn default_allowlist_rejects_push_terminals() {
+    let source = source();
+    for path in [
+        quote!(mini_linq::passes::print_push),
+        quote!(::mini_linq::passes::print_push),
+    ] {
+        let error = compile_with(&source, quote!(cq = pipeline { #path };)).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("recorded pull_printers allowlist")
+        );
+        let mut changed = compile(&source).unwrap();
+        changed.holes[0].pipeline = syn::parse2(quote!(pipeline { #path })).unwrap();
+        assert!(
+            round::contract::check(&changed)
+                .unwrap_err()
+                .to_string()
+                .contains("recorded pull_printers allowlist")
+        );
+    }
 }

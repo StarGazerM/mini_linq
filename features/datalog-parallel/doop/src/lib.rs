@@ -2,7 +2,11 @@
 //! `doop-parallel FACTS --check --threads N` compares all 26 full tuple sets.
 //! `--engine mini|mini-par|ascent|ascent-par` isolates timing and RSS; the sweep
 //! script checks six applications and six worker counts before measuring.
+//! [`harness`] supplies engine descriptors and installs local Rayon pools;
+//! CLI parsing, loading, full-tuple checks, timing and RSS use the base harness.
 #![recursion_limit = "1024"]
+
+pub mod harness;
 
 #[macro_export]
 macro_rules! relation_storage {

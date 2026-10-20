@@ -1,7 +1,8 @@
 //! Choose the existing stable written-order storage refinement.
+use cq_datalog_support::{ensure, key_columns};
 use cq_lang_datalog_incremental as incremental;
-use cq_lang_datalog_storage::{BodyItem, Layout, Policy, Program, ensure};
-use cq_syntax::{rust, symbol_name};
+use cq_lang_datalog_storage::{BodyItem, Layout, Policy, Program};
+use cq_syntax::symbol_name;
 use incremental::Variant;
 use std::collections::BTreeSet;
 
@@ -56,21 +57,7 @@ fn choose_layouts(
             let BodyItem::Positive { atom } = item else {
                 continue;
             };
-            let mut keys = Vec::new();
-            let mut payload = Vec::new();
-            for (column, argument) in atom.args.iter().enumerate() {
-                let is_key = match rust::variable(argument) {
-                    Some(id) => bound.contains(&symbol_name(id)),
-                    None => !matches!(rust::unparen(argument), syn::Expr::Infer(_)),
-                };
-                if is_key {
-                    keys.push(column);
-                } else {
-                    payload.push(column);
-                }
-            }
-            let key = keys.len();
-            keys.extend(payload);
+            let (keys, key) = key_columns(atom, &bound);
             let is_delta = Some(position) == variant.delta;
             let relation = if is_delta {
                 let BodyItem::Positive { atom: base } = &rules[variant.rule].body[position] else {

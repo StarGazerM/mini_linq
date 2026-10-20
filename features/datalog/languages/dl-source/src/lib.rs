@@ -1,10 +1,11 @@
 //! DL-Source denotes the stratified least fixpoint of set-valued relations.
 //! Rust clauses are pure partial computations; panic is bottom and termination
 //! remains a caller premise. Surface sugar is not part of this language.
+use cq_datalog_support::{Fresh, ensure};
 pub use cq_lang_cq::{BodyItem, Query};
 use cq_stage::Language;
 use cq_syntax::{RelationDecl, rust, symbol_name};
-use proc_macro2::{Span, TokenStream, TokenTree};
+use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 use std::collections::{BTreeMap, BTreeSet};
 use syn::{
@@ -107,13 +108,6 @@ impl ToTokens for Program {
             }
         }
         tokens.extend(quote!(output #(#outputs),*; #(#rules)*));
-    }
-}
-pub fn ensure(ok: bool, at: impl ToTokens, message: &str) -> syn::Result<()> {
-    if ok {
-        Ok(())
-    } else {
-        Err(syn::Error::new_spanned(at, message))
     }
 }
 fn active_column(e: &Expr) -> Option<&Ident> {
@@ -366,37 +360,4 @@ pub fn check_query(p: &Program, q: &Query, declarations: &[RelationDecl]) -> syn
     let name = &p.name;
     let cq: cq_lang_cq::Program = syn::parse2(quote!(struct #name; #(#declarations)* #query))?;
     cq_lang_cq::contract::check(&cq)
-}
-pub struct Fresh {
-    used: BTreeSet<String>,
-}
-impl Fresh {
-    pub fn reserve(&mut self, id: &Ident) -> bool {
-        self.used.insert(symbol_name(id))
-    }
-    pub fn new(source: impl ToTokens) -> Self {
-        fn collect(t: TokenStream, used: &mut BTreeSet<String>) {
-            for t in t {
-                match t {
-                    TokenTree::Ident(id) => {
-                        used.insert(symbol_name(&id));
-                    }
-                    TokenTree::Group(g) => collect(g.stream(), used),
-                    _ => {}
-                }
-            }
-        }
-        let mut used = BTreeSet::new();
-        collect(source.into_token_stream(), &mut used);
-        Self { used }
-    }
-    pub fn id(&mut self, role: &str) -> Ident {
-        for n in 0.. {
-            let name = format!("__cq_datalog_{role}_{n}");
-            if self.used.insert(name.clone()) {
-                return Ident::new(&name, Span::mixed_site());
-            }
-        }
-        unreachable!()
-    }
 }

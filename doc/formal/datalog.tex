@@ -143,23 +143,39 @@ each published full layout represent the same relation, delta layouts
 represent precisely the current fresh delta, and negative key sets represent
 the prescribed projection/filter of frozen inputs. Provider equality, hashing,
 cloning and membership laws remain premises on Rust implementations.
-\paragraph{Recorded decisions.} Providers, layout/read bindings,
-canonicalization, membership representation, insertion and publication
-maintenance. A structurally admissible but non-default layout is still rejected.
+\paragraph{Recorded decisions.} Provider and canonicalization policy labels,
+layout/read bindings, membership representation labels, and insertion and
+publication maintenance labels. These are not separate fields for every concrete
+Rust implementation choice. A structurally admissible but non-default layout
+is still rejected.
 \paragraph{Rewrite check.} Preserve Incremental and the exact storage plan;
 validate bindings and maintenance rather than silently reselecting them.
 
 \subsection{DL-Round}
 \paragraph{Grammar.} DL-Storage plus explicit component seed/step programs,
-complete embedded CQ holes, evaluation/admission/publication phases,
-termination test, observer placement, output conversion, and a CQ sub-pipeline
-and interface for each hole. This round accepts only the pull interface.
-A push-consumer interface is a possible extension, not an accepted base mode.
+complete embedded CQ holes, phase/termination/observer/output policy labels,
+and a CQ sub-pipeline and typed interface for each hole. The program also
+records the complete \code{pull\_printers} allowlist of exact macro paths.
+\code{HoleInterface::Pull} denotes an iterator result consumed by Round.
+\code{HoleInterface::Push} is representable in text for a clear unsupported
+interface diagnostic, but no base Round consumer implements it.
 \paragraph{Contract.} Check Storage, exact hole correspondence under recorded
 read bindings, seed/step ordering, fresh names, phase order, delta termination
-and outputs. Each hole must record a pull interface and a sub-pipeline ending
-in \code{mini\_linq::passes::print\_pull}. This checks the terminal invocation,
-not Rust tokens that do not yet exist; it does not certify arbitrary printers.
+and outputs. Each hole must record the pull interface and an argument-free
+terminal invocation whose exact path is in its program's recorded allowlist.
+The default allowlist is exactly
+\code{::mini\_linq::passes::print\_pull} and
+\code{mini\_linq::passes::print\_pull}; leading qualification is significant.
+For example, \code{pull\_printers = [crate::alias::pull];} in
+\code{DatalogConfiguration}, together with
+\code{cq = pipeline \{ print = crate::alias::pull; \};}, explicitly replaces
+that list. Fork serializes every declaration, including unused ones, into
+Round text, so the contract checks a resumed Round without consulting the
+configuration or invoking compilation. Unlisted terminals (including the
+default push printer) and typed push holes are rejected.
+Declaring an alternate path is the caller's assertion of its pull calling
+convention, not Rust alias resolution or a proof of printer equivalence.
+This check examines terminal invocations, not Rust tokens that do not yet exist.
 \begin{mathpar}
 \Rule{WF-DL-Round}{\mathrm{WF}_{\mathrm{Storage}}(D)\quad
  H\text{ implements the recorded variants and frozen keys}\quad
@@ -171,13 +187,27 @@ committed snapshot; admission rejects known and duplicate candidate heads;
 publication extends full structures and replaces every delta layout, including
 empty ones, before subsequent evaluation. Under provider and partial-Rust
 premises its $\alpha$-image refines the Incremental transition system.
-\paragraph{Recorded decisions.} All round orchestration and hole boundaries,
-including per-hole CQ invocation, observer position and output conversion.
+\paragraph{Recorded decisions.} Hole boundaries, per-hole CQ invocation queues
+and typed interfaces, declared pull-printer paths, component membership and
+seed/step lists, runtime bindings, and phase, observer and output policy labels.
+The labels do not independently encode every concrete orchestration decision.
 The generic \code{ScanBinding} names one complete immutable delta host or
 key-zero layout bucket as a flat CQ input, preserving its column order and
 one-occurrence correspondence. The default \code{\_\_cq\_datalog\_scan\_*}
 name is an ordinary Round-IR input binding, not a parallel-specific decision:
 the sequential printer binds the whole input and records no execution annotation.
+\paragraph{Decisions still implicit in the shared printer.}
+\code{cq-datalog-print} still chooses the concrete storage types and
+\code{Canonical} EDB wrapper; the order of publication operations and the
+implementation of delta-layout rebuilding; the Rust loop, termination test and
+observer call; and the concrete conversion to owned output iterators.
+Negation-key sets are scoped to the consuming component, and members are
+published in the recorded member-list order, but neither key-set scope nor
+member publication order is a separately configurable policy field.
+Storage and Round labels constrain these implementations without reifying them
+as independently checkable concrete fields. Their correctness therefore remains
+part of the printer's refinement obligation, supported by expansion and
+execution evidence rather than by an independent Rust equivalence checker.
 \paragraph{Rewrite check.} Base rewrites preserve the storage program and
 checked hole/round correspondence. Parallel execution is not a base flag:
 an extension owns partition, ownership, barriers, and its printer. Any execution
@@ -236,8 +266,9 @@ Refinement requires the stated $\alpha$ laws for the selected providers.
 
 \subsection{Fork: Storage to Round}
 Construct bound CQ holes and explicit rounds, carrying a sub-pipeline and
-interface for each hole. Independently check variant-to-hole correspondence,
-frozen-key construction, storage preservation and phase order.
+typed interface for each hole and the configuration's complete pull-printer
+allowlist. Independently check variant-to-hole correspondence, frozen-key
+construction, storage preservation, terminal declarations and phase order.
 \begin{mathpar}
 \Rule{CK-DL-Fork}{\mathrm{WF}_{\mathrm{Round}}(t)\quad
  \mathrm{storage}(t)=s}{\mathrm{check}_{\mathrm{fork}}(s,t)}
@@ -294,6 +325,7 @@ Directory & Package\\
 \code{passes/surface-if-let} & \code{cq-datalog-surface-if-let}\\
 \code{passes/print-rounds} & \code{cq-datalog-print-rounds}\\
 \code{print/} & \code{cq-datalog-print}\\
+\code{support/} & \code{cq-datalog-support}\\
 \code{facade/macros} & \code{cq-datalog-macros}\\
 \code{facade/configuration} & \code{cq-datalog-configuration}\\
 \code{facade/cq-datalog} & \code{cq-datalog}\\
@@ -301,8 +333,11 @@ Directory & Package\\
 \end{tabular}
 \end{center}
 Language dependencies follow the base-language chain and public CQ/stage/syntax
-interfaces; pass libraries depend on their endpoint languages and required
-public support. The facade owns defaults, configuration and macro re-exports.
+interfaces, with shared syntax-only obligations in \code{cq-datalog-support}.
+That library owns diagnostics, identifier collection and freshness, column and
+filter extraction, and bound-key calculation; it depends on no IR or pass.
+Pass libraries depend on their endpoint languages and required public support.
+The facade owns defaults, configuration and macro re-exports.
 The configuration library imports the CQ default-queue helper from the fork
 producer; the generic CQ configuration and stage protocol remain unchanged.
 The separate \code{features/datalog-parallel} workspace owns all

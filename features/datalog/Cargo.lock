@@ -105,6 +105,7 @@ name = "cq-datalog-configuration"
 version = "0.0.0"
 dependencies = [
  "cq-datalog-fork",
+ "cq-lang-datalog-round",
  "cq-stage",
  "proc-macro2",
  "quote",
@@ -119,6 +120,7 @@ dependencies = [
  "cq-datalog-print",
  "cq-datalog-storage",
  "cq-datalog-stratify",
+ "cq-datalog-support",
  "cq-lang-datalog-round",
  "cq-lang-datalog-storage",
  "cq-stage",
@@ -133,6 +135,7 @@ name = "cq-datalog-incremental"
 version = "0.0.0"
 dependencies = [
  "cq-datalog-stratify",
+ "cq-datalog-support",
  "cq-datalog-surface-if-let",
  "cq-lang-datalog-incremental",
  "cq-lang-datalog-strata",
@@ -173,6 +176,7 @@ dependencies = [
  "cq-datalog-incremental",
  "cq-datalog-storage",
  "cq-datalog-stratify",
+ "cq-datalog-support",
  "cq-lang-datalog-round",
  "cq-syntax",
  "proc-macro2",
@@ -195,6 +199,7 @@ version = "0.0.0"
 dependencies = [
  "cq-datalog-incremental",
  "cq-datalog-stratify",
+ "cq-datalog-support",
  "cq-lang-datalog-incremental",
  "cq-lang-datalog-storage",
  "cq-syntax",
@@ -207,8 +212,19 @@ dependencies = [
 name = "cq-datalog-stratify"
 version = "0.0.0"
 dependencies = [
+ "cq-datalog-support",
  "cq-lang-datalog-source",
  "cq-lang-datalog-strata",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-support"
+version = "0.0.0"
+dependencies = [
+ "cq-syntax",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -218,6 +234,7 @@ dependencies = [
 name = "cq-datalog-surface-if-let"
 version = "0.0.0"
 dependencies = [
+ "cq-datalog-support",
  "cq-lang-datalog-source",
  "cq-syntax",
  "proc-macro2",
@@ -262,6 +279,7 @@ dependencies = [
 name = "cq-lang-datalog-incremental"
 version = "0.0.0"
 dependencies = [
+ "cq-datalog-support",
  "cq-lang-cq",
  "cq-lang-datalog-strata",
  "cq-stage",
@@ -275,6 +293,7 @@ dependencies = [
 name = "cq-lang-datalog-round"
 version = "0.0.0"
 dependencies = [
+ "cq-datalog-support",
  "cq-lang-cq",
  "cq-lang-datalog-storage",
  "cq-stage",
@@ -288,6 +307,7 @@ dependencies = [
 name = "cq-lang-datalog-source"
 version = "0.0.0"
 dependencies = [
+ "cq-datalog-support",
  "cq-lang-cq",
  "cq-stage",
  "cq-syntax",
@@ -300,6 +320,7 @@ dependencies = [
 name = "cq-lang-datalog-storage"
 version = "0.0.0"
 dependencies = [
+ "cq-datalog-support",
  "cq-lang-cq",
  "cq-lang-datalog-incremental",
  "cq-stage",
@@ -313,6 +334,7 @@ dependencies = [
 name = "cq-lang-datalog-strata"
 version = "0.0.0"
 dependencies = [
+ "cq-datalog-support",
  "cq-lang-datalog-source",
  "cq-stage",
  "cq-syntax",

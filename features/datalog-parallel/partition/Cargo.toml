@@ -10,12 +10,13 @@ source = "cq-lang-datalog-round"
 target = "cq-lang-datalog-round"
 
 [dependencies]
+cq-datalog-support = { path = "../../datalog/support" }
 cq-lang-datalog-round = { path = "../../datalog/languages/dl-round" }
 proc-macro2 = "1"
-quote = "1"
 syn = { version = "2", features = ["full", "extra-traits"] }
 
 [dev-dependencies]
+quote = "1"
 cq-datalog-stratify = { path = "../../datalog/passes/stratify" }
 cq-datalog-incremental = { path = "../../datalog/passes/incremental" }
 cq-datalog-storage = { path = "../../datalog/passes/storage" }

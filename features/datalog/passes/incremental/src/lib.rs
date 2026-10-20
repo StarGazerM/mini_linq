@@ -1,9 +1,10 @@
 //! Record the exact Boolean semi-naive cover without storage decisions.
+use cq_datalog_support::{Fresh, ensure};
 use cq_lang_datalog_incremental::{Delta, Program, Variant, contract};
 use cq_lang_datalog_strata as strata;
 use cq_syntax::symbol_name;
 use std::collections::BTreeMap;
-use strata::source::{BodyItem, Fresh, ensure};
+use strata::source::BodyItem;
 pub fn compile(source: &strata::Program) -> syn::Result<Program> {
     let analysis = strata::contract::check(source)?;
     let mut fresh = Fresh::new(source);

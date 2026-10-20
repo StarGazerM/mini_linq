@@ -18,6 +18,9 @@
 //!
 //! `counters` requires the explicit feature. `bench` refuses storage counters,
 //! including when another selected package enables them through feature unification.
+//! The public [`harness`] shares CLI parsing, benchmark fixtures, checked median
+//! timing and callback-based counter obligations with independently configured
+//! evaluators. No engine configuration is selected by the shared measurement code.
 pub use cq_testkit::Result;
 use cq_testkit::golden;
 #[macro_use]
@@ -31,6 +34,7 @@ macro_rules! oracle_input {
     };
 }
 oracle_programs!(programs, ascent::ascent, crate::oracle_input, pipeline {});
+pub mod harness;
 pub mod strings;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};

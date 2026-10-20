@@ -1,22 +1,9 @@
 //! Slice-one execution is an erasure-preserving Round rewrite. Exactly one
 //! leading immutable scan per eligible rule is replaced by a fresh flat input.
 //! All other occurrences, opaque Rust steps, queues and publication stay fixed.
+use cq_datalog_support::Fresh;
 use cq_lang_datalog_round::{self as round, Execution, Program};
-use proc_macro2::{Span, TokenStream, TokenTree};
-use quote::{ToTokens, format_ident};
-use std::collections::BTreeSet;
-
-fn identifiers(tokens: TokenStream, names: &mut BTreeSet<String>) {
-    for token in tokens {
-        match token {
-            TokenTree::Ident(id) => {
-                names.insert(id.to_string());
-            }
-            TokenTree::Group(group) => identifiers(group.stream(), names),
-            _ => {}
-        }
-    }
-}
+use proc_macro2::TokenStream;
 
 pub fn compile(source: &Program) -> syn::Result<Program> {
     compile_with(source, TokenStream::new())
@@ -37,23 +24,11 @@ pub fn compile_with(source: &Program, arguments: TokenStream) -> syn::Result<Pro
         ));
     }
     let mut target = source.clone();
-    let mut names = BTreeSet::new();
-    identifiers(source.to_token_stream(), &mut names);
-    let mut next = 0usize;
+    let mut fresh = Fresh::new(source);
     for stratum in &source.context.strata {
         for rule in stratum.seeds.iter().chain(&stratum.steps) {
             let Some(scan) = &rule.scan else { continue };
-            let binding = loop {
-                let id = format_ident!(
-                    "__cq_datalog_parallel_chunk_{}",
-                    next,
-                    span = Span::mixed_site()
-                );
-                next += 1;
-                if names.insert(id.to_string()) {
-                    break id;
-                }
-            };
+            let binding = fresh.id("parallel_chunk");
             let hole = &mut target.holes[rule.hole].cq;
             let declaration = hole
                 .declarations
