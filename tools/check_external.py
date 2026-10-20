@@ -171,7 +171,7 @@ def package_core(directory, log):
     # version; our directory source preserves the actual locked implementation.
     vendor = directory/"vendor"
     # Feature-only oracle dependencies are part of the packaged-consumer inventory.
-    run(["cargo","vendor","--locked","--offline","--sync","features/datalog/Cargo.toml",str(vendor)], ROOT, log)
+    run(["cargo","vendor","--locked","--offline","--sync","features/datalog/Cargo.toml","--sync","features/datalog-parallel/Cargo.toml",str(vendor)], ROOT, log)
     original = tomllib.loads((ROOT/"Cargo.toml").read_text())["workspace"]
     root = {"workspace":{"members":[],"resolver":"3","package":original["package"],"dependencies":original["dependencies"]}, "patch":{"crates-io":{}}}
     for p in packages:
