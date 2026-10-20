@@ -1,25 +1,41 @@
 //! DL-Strata records exact dependency-ordered SCCs over DL-Source.
 //! Its meaning is sequential composition of the source component fixpoints.
 pub use cq_lang_datalog_source as source;
-use source::{BodyItem, Graph, ensure};
 use cq_syntax::symbol_name;
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
+use source::{BodyItem, Graph, ensure};
 use std::collections::BTreeMap;
-use syn::{Ident, Token, parse::{Parse, ParseStream}};
-pub mod kw { syn::custom_keyword!(strata); syn::custom_keyword!(component); }
+use syn::{
+    Ident, Token,
+    parse::{Parse, ParseStream},
+};
+pub mod kw {
+    syn::custom_keyword!(strata);
+    syn::custom_keyword!(component);
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Program { pub source: source::Program, pub components: Vec<Vec<Ident>> }
+pub struct Program {
+    pub source: source::Program,
+    pub components: Vec<Vec<Ident>>,
+}
 impl Parse for Program {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let source = input.parse()?;
         input.parse::<kw::strata>()?;
-        let body; syn::braced!(body in input);
+        let body;
+        syn::braced!(body in input);
         let mut components = Vec::new();
         while !body.is_empty() {
             body.parse::<kw::component>()?;
-            let members; syn::bracketed!(members in body);
-            components.push(members.parse_terminated(Ident::parse, Token![,])?.into_iter().collect());
+            let members;
+            syn::bracketed!(members in body);
+            components.push(
+                members
+                    .parse_terminated(Ident::parse, Token![,])?
+                    .into_iter()
+                    .collect(),
+            );
             body.parse::<Token![;]>()?;
         }
         Ok(Self { source, components })
@@ -87,7 +103,11 @@ pub struct Analysis {
 pub mod contract {
     use super::*;
     pub fn check(program: &Program) -> syn::Result<Analysis> {
-        let source::Analysis {graph, positions, dependencies} = source::contract::check(&program.source)?;
+        let source::Analysis {
+            graph,
+            positions,
+            dependencies,
+        } = source::contract::check(&program.source)?;
         check_strata(program, &graph)?;
         let components: Vec<Vec<usize>> = program
             .components
@@ -105,7 +125,8 @@ pub mod contract {
                 component[member] = Some(index);
             }
         }
-        let changing_positions = program.source
+        let changing_positions = program
+            .source
             .rules
             .iter()
             .map(|query| {
@@ -126,11 +147,19 @@ pub mod contract {
                     .collect()
             })
             .collect();
-        Ok(Analysis { graph, positions, dependencies, components, component, changing_positions })
+        Ok(Analysis {
+            graph,
+            positions,
+            dependencies,
+            components,
+            component,
+            changing_positions,
+        })
     }
 }
 pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
-    contract::check(source)?; contract::check(target)?;
+    contract::check(source)?;
+    contract::check(target)?;
     ensure(source == target, target, "rewrite changed recorded strata")
 }
 impl cq_stage::Language for Program {

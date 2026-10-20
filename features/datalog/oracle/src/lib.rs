@@ -26,7 +26,9 @@ mod generators {
 }
 #[macro_export]
 macro_rules! oracle_input {
-    ($rows:expr) => { $rows.clone() };
+    ($rows:expr) => {
+        $rows.clone()
+    };
 }
 oracle_programs!(programs, ascent::ascent, crate::oracle_input, pipeline {});
 pub mod strings;

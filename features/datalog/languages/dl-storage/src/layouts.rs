@@ -30,7 +30,9 @@ pub(crate) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
     for layout in &program.delta_layouts {
         let index = analysis.positions[&symbol_name(&layout.relation)];
         ensure(
-            program.incremental.strata.source.declarations[index].value.is_none(),
+            program.incremental.strata.source.declarations[index]
+                .value
+                .is_none(),
             &layout.relation,
             "delta layout must name a base IDB relation",
         )?;

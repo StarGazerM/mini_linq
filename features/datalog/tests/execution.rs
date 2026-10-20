@@ -38,7 +38,8 @@ fn named_datalog_phases_and_nested_cq_configuration_execute() {
         output Reach;
         Reach(*x,*y) :- Edge(x,y);
         Reach(*x,*z) :- Reach(x,y), Reach(y,z);
-    }.collect();
+    }
+    .collect();
     assert_eq!(answers, BTreeSet::from([(1, 2), (1, 3), (2, 3)]));
 }
 

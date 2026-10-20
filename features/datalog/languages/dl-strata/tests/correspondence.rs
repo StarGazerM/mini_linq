@@ -1,8 +1,9 @@
-use cq_lang_datalog_strata::{Program, contract, check_rewrite};
-use quote::ToTokens;
+use cq_lang_datalog_strata::{Program, check_rewrite, contract};
 type Mutation = Box<dyn Fn(&mut Program)>;
 const STRATIFIED: &str = include_str!("fixtures/stratified.datalog");
-fn scheduled() -> Program { syn::parse_str(STRATIFIED).unwrap() }
+fn scheduled() -> Program {
+    syn::parse_str(STRATIFIED).unwrap()
+}
 #[test]
 fn schedule_cover_and_order_mutations_are_rejected() {
     let original = scheduled();
@@ -29,10 +30,7 @@ fn schedule_cover_and_order_mutations_are_rejected() {
             p.components[0].push(syn::parse_quote!(Unknown));
         }),
         Box::new(|p| {
-            p.components = vec![vec![
-                syn::parse_quote!(Reach),
-                syn::parse_quote!(Result),
-            ]];
+            p.components = vec![vec![syn::parse_quote!(Reach), syn::parse_quote!(Result)]];
         }),
     ];
     for (index, mutate) in mutations.into_iter().enumerate() {

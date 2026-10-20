@@ -9,34 +9,79 @@ pub trait Text: Sized {
 }
 pub fn field<T: Text>(input: ParseStream<'_>, expected: &str) -> syn::Result<T> {
     let name: syn::Ident = input.parse()?;
-    if name != expected { return Err(syn::Error::new_spanned(name, format!("expected {expected}"))); }
-    let body; syn::braced!(body in input);
+    if name != expected {
+        return Err(syn::Error::new_spanned(
+            name,
+            format!("expected {expected}"),
+        ));
+    }
+    let body;
+    syn::braced!(body in input);
     let value = T::parse_text(&body)?;
-    if !body.is_empty() { return Err(body.error("unexpected record contents")); }
+    if !body.is_empty() {
+        return Err(body.error("unexpected record contents"));
+    }
     Ok(value)
 }
 impl Text for usize {
-    fn parse_text(input: ParseStream<'_>) -> syn::Result<Self> { input.parse::<syn::LitInt>()?.base10_parse() }
-    fn text(&self) -> TokenStream { let n = syn::LitInt::new(&self.to_string(), proc_macro2::Span::call_site()); quote!(#n) }
+    fn parse_text(input: ParseStream<'_>) -> syn::Result<Self> {
+        input.parse::<syn::LitInt>()?.base10_parse()
+    }
+    fn text(&self) -> TokenStream {
+        let n = syn::LitInt::new(&self.to_string(), proc_macro2::Span::call_site());
+        quote!(#n)
+    }
 }
 impl<T: Text> Text for Vec<T> {
     fn parse_text(input: ParseStream<'_>) -> syn::Result<Self> {
-        let list; syn::bracketed!(list in input); let mut values = Vec::new();
-        while !list.is_empty() { let item; syn::braced!(item in list); values.push(T::parse_text(&item)?); if !item.is_empty() { return Err(item.error("unexpected item contents")); } }
+        let list;
+        syn::bracketed!(list in input);
+        let mut values = Vec::new();
+        while !list.is_empty() {
+            let item;
+            syn::braced!(item in list);
+            values.push(T::parse_text(&item)?);
+            if !item.is_empty() {
+                return Err(item.error("unexpected item contents"));
+            }
+        }
         Ok(values)
     }
-    fn text(&self) -> TokenStream { let values = self.iter().map(Text::text); quote!([#({#values})*]) }
+    fn text(&self) -> TokenStream {
+        let values = self.iter().map(Text::text);
+        quote!([#({#values})*])
+    }
 }
 impl<T: Text> Text for Option<T> {
     fn parse_text(input: ParseStream<'_>) -> syn::Result<Self> {
-        let value; syn::bracketed!(value in input);
-        if value.is_empty() { Ok(None) } else { let result = T::parse_text(&value)?; if !value.is_empty() { return Err(value.error("unexpected optional contents")); } Ok(Some(result)) }
+        let value;
+        syn::bracketed!(value in input);
+        if value.is_empty() {
+            Ok(None)
+        } else {
+            let result = T::parse_text(&value)?;
+            if !value.is_empty() {
+                return Err(value.error("unexpected optional contents"));
+            }
+            Ok(Some(result))
+        }
     }
-    fn text(&self) -> TokenStream { let value = self.as_ref().map(Text::text); quote!([#value]) }
+    fn text(&self) -> TokenStream {
+        let value = self.as_ref().map(Text::text);
+        quote!([#value])
+    }
 }
 impl Text for (usize, syn::Expr) {
-    fn parse_text(input: ParseStream<'_>) -> syn::Result<Self> { let column = <usize as Text>::parse_text(input)?; input.parse::<syn::Token![=>]>()?; Ok((column, input.parse()?)) }
-    fn text(&self) -> TokenStream { let column = self.0.text(); let value = &self.1; quote!(#column => #value) }
+    fn parse_text(input: ParseStream<'_>) -> syn::Result<Self> {
+        let column = <usize as Text>::parse_text(input)?;
+        input.parse::<syn::Token![=>]>()?;
+        Ok((column, input.parse()?))
+    }
+    fn text(&self) -> TokenStream {
+        let column = self.0.text();
+        let value = &self.1;
+        quote!(#column => #value)
+    }
 }
 macro_rules! syntax_text { ($($ty:ty),* $(,)?) => {$ (
     impl Text for $ty {
@@ -44,7 +89,14 @@ macro_rules! syntax_text { ($($ty:ty),* $(,)?) => {$ (
         fn text(&self) -> TokenStream { self.to_token_stream() }
     }
 )*}; }
-syntax_text!(syn::Ident, syn::Expr, cq_syntax::RelationDecl, cq_lang_cq::Program, cq_stage::Pipeline, crate::incremental::Program);
+syntax_text!(
+    syn::Ident,
+    syn::Expr,
+    cq_syntax::RelationDecl,
+    cq_lang_cq::Program,
+    cq_stage::Pipeline,
+    crate::incremental::Program
+);
 
 #[macro_export]
 macro_rules! record {

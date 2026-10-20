@@ -3,7 +3,9 @@
 /// Adapt owned relation storage without changing the source program.
 #[macro_export]
 macro_rules! doop_relation_storage {
-    ($rows:expr) => { $rows };
+    ($rows:expr) => {
+        $rows
+    };
 }
 /// Instantiate the unchanged oracle with caller-selected macros.
 #[macro_export]

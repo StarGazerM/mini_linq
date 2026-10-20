@@ -2,34 +2,70 @@
 //! Alternative terminals supply only the phase evaluator, never a copy of the
 //! storage or publication printer. CQ joins remain inside the recorded queues.
 pub use cq_lang_datalog_round as round;
-pub use round::{Program,RoundContext,RuleHole,Execution,InputSource,KeyRepresentation,Layout,Stratum,Hole};
 use cq_syntax::rust;
-use proc_macro2::{Span,TokenStream};
-use quote::{ToTokens,format_ident,quote};
+use proc_macro2::{Span, TokenStream};
+use quote::{ToTokens, format_ident, quote};
+pub use round::{
+    Execution, Hole, InputSource, KeyRepresentation, Layout, Program, RoundContext, RuleHole,
+    Stratum,
+};
 use syn::Ident;
 
-pub fn splice(program:&Program)->syn::Result<Vec<TokenStream>> {
-    splice_with(program,|hole|hole.pipeline.clone().start(hole.cq.to_token_stream()))
+pub fn splice(program: &Program) -> syn::Result<Vec<TokenStream>> {
+    splice_with(program, |hole| {
+        hole.pipeline.clone().start(hole.cq.to_token_stream())
+    })
 }
 /// Splice one caller-owned expansion per checked hole, in recorded order.
-pub fn splice_with(program:&Program,mut expand:impl FnMut(&Hole)->syn::Result<TokenStream>)->syn::Result<Vec<TokenStream>> {
+pub fn splice_with(
+    program: &Program,
+    mut expand: impl FnMut(&Hole) -> syn::Result<TokenStream>,
+) -> syn::Result<Vec<TokenStream>> {
     round::contract::check(program)?;
     program.holes.iter().map(&mut expand).collect()
 }
-pub fn compile(program:&Program)->syn::Result<syn::Expr> {
-    round::ensure(program.execution.is_empty(),program,"base printer does not interpret execution certificates")?;
-    let timed=program.policy.timing=="phases";
-    compile_with(program,|rules,context,holes,_|Ok(evaluate(rules,context,holes,timed)))
+pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
+    round::ensure(
+        program.execution.is_empty(),
+        program,
+        "base printer does not interpret execution certificates",
+    )?;
+    let timed = program.policy.timing == "phases";
+    compile_with(program, |rules, context, holes, _| {
+        Ok(evaluate(rules, context, holes, timed))
+    })
 }
-pub fn compile_with(program:&Program, evaluator:impl FnMut(&[RuleHole],&RoundContext,&[TokenStream],&[Execution])->syn::Result<(TokenStream,TokenStream)>)->syn::Result<syn::Expr> {
-    let holes=splice(program)?;render_with(program,&holes,evaluator)
+pub fn compile_with(
+    program: &Program,
+    evaluator: impl FnMut(
+        &[RuleHole],
+        &RoundContext,
+        &[TokenStream],
+        &[Execution],
+    ) -> syn::Result<(TokenStream, TokenStream)>,
+) -> syn::Result<syn::Expr> {
+    let holes = splice(program)?;
+    render_with(program, &holes, evaluator)
 }
 /// Realize already-spliced holes. The length and complete Round contract are checked.
-pub fn render_with(program:&Program,holes:&[TokenStream],mut evaluator:impl FnMut(&[RuleHole],&RoundContext,&[TokenStream],&[Execution])->syn::Result<(TokenStream,TokenStream)>)->syn::Result<syn::Expr> {
+pub fn render_with(
+    program: &Program,
+    holes: &[TokenStream],
+    mut evaluator: impl FnMut(
+        &[RuleHole],
+        &RoundContext,
+        &[TokenStream],
+        &[Execution],
+    ) -> syn::Result<(TokenStream, TokenStream)>,
+) -> syn::Result<syn::Expr> {
     round::contract::check(program)?;
-    round::ensure(holes.len()==program.holes.len(),program,"hole splice coverage changed")?;
-    let context=&program.context;
-    let bindings=bindings(context);
+    round::ensure(
+        holes.len() == program.holes.len(),
+        program,
+        "hole splice coverage changed",
+    )?;
+    let context = &program.context;
+    let bindings = bindings(context);
     let observer = &context.observer_name;
     let round = &context.round_name;
     let bind_observer = context.observer.as_ref().map(|expression| {
@@ -59,7 +95,7 @@ pub fn render_with(program:&Program,holes:&[TokenStream],mut evaluator:impl FnMu
                 quote!(let mut #next: ::std::vec::Vec<(#(#types,)*)> = ::std::vec::Vec::new();)
             })
             .collect();
-        let publish = publication(context,stratum);
+        let publish = publication(context, stratum);
         let lengths = stratum.members.iter().map(|&i| {
             let delta = context.relations[i]
                 .delta_host
@@ -72,8 +108,18 @@ pub fn render_with(program:&Program,holes:&[TokenStream],mut evaluator:impl FnMu
             .observer
             .as_ref()
             .map(|_| quote!((#observer)(#round, #nonempty);));
-        let seed_round = round_body(&allocate, seeds, &publish, program.policy.timing == "phases");
-        let step_round = round_body(&allocate, steps, &publish, program.policy.timing == "phases");
+        let seed_round = round_body(
+            &allocate,
+            seeds,
+            &publish,
+            program.policy.timing == "phases",
+        );
+        let step_round = round_body(
+            &allocate,
+            steps,
+            &publish,
+            program.policy.timing == "phases",
+        );
         // Keep borrowed lower-stratum key sets local: they cannot outlive this
         // component or delay moving the final output relation into its iterator.
         strata.push(quote!({
@@ -87,10 +133,10 @@ pub fn render_with(program:&Program,holes:&[TokenStream],mut evaluator:impl FnMu
             }
         }));
     }
-    let result=outputs(context);
+    let result = outputs(context);
     syn::parse2(quote!({ #(#bindings)* #bind_observer #(#strata)* #result }))
 }
-pub fn bindings(context:&RoundContext)->Vec<TokenStream> {
+pub fn bindings(context: &RoundContext) -> Vec<TokenStream> {
     let mut bindings = Vec::new();
     for relation in &context.relations {
         let declaration = &relation.declaration;
@@ -154,52 +200,52 @@ pub fn bindings(context:&RoundContext)->Vec<TokenStream> {
     }
     bindings
 }
-pub fn publication(context:&RoundContext,stratum:&Stratum)->Vec<TokenStream> {
-        let publish: Vec<_> = stratum
-            .members
-            .iter()
-            .map(|&i| {
-                let relation = &context.relations[i];
-                let all = &relation.all;
-                let next = &relation.next;
-                let delta = relation
-                    .delta_host
-                    .as_ref()
-                    .expect("checked IDB delta host");
-                let updates: Vec<_> = context
-                    .layouts
-                    .iter()
-                    .filter(|layout| layout.relation == i)
-                    .map(|layout| insert_layout(layout, false))
-                    .collect();
-                // Keep admitted-row maintenance separate from delta-run builds.
-                let updates =
-                    (!updates.is_empty()).then(|| quote!({ for row in &#next { #(#updates)* } }));
-                let delta_runs = context
-                    .delta_layouts
-                    .iter()
-                    .filter(|layout| layout.relation == i)
-                    .map(|layout| {
-                        let host = &layout.host;
-                        let insert = insert_layout(layout, false);
-                        // Replace even an empty run: another SCC member may
-                        // continue, but must never see this relation's old delta.
-                        quote!({
-                            #host = ::core::default::Default::default();
-                            for row in &#delta { #insert }
-                        })
-                    });
-                quote!(
-                    #updates
-                    #all.extend(#next.iter().cloned());
-                    #delta = #next;
-                    #(#delta_runs)*
-                )
-            })
-            .collect();
+pub fn publication(context: &RoundContext, stratum: &Stratum) -> Vec<TokenStream> {
+    let publish: Vec<_> = stratum
+        .members
+        .iter()
+        .map(|&i| {
+            let relation = &context.relations[i];
+            let all = &relation.all;
+            let next = &relation.next;
+            let delta = relation
+                .delta_host
+                .as_ref()
+                .expect("checked IDB delta host");
+            let updates: Vec<_> = context
+                .layouts
+                .iter()
+                .filter(|layout| layout.relation == i)
+                .map(|layout| insert_layout(layout, false))
+                .collect();
+            // Keep admitted-row maintenance separate from delta-run builds.
+            let updates =
+                (!updates.is_empty()).then(|| quote!({ for row in &#next { #(#updates)* } }));
+            let delta_runs = context
+                .delta_layouts
+                .iter()
+                .filter(|layout| layout.relation == i)
+                .map(|layout| {
+                    let host = &layout.host;
+                    let insert = insert_layout(layout, false);
+                    // Replace even an empty run: another SCC member may
+                    // continue, but must never see this relation's old delta.
+                    quote!({
+                        #host = ::core::default::Default::default();
+                        for row in &#delta { #insert }
+                    })
+                });
+            quote!(
+                #updates
+                #all.extend(#next.iter().cloned());
+                #delta = #next;
+                #(#delta_runs)*
+            )
+        })
+        .collect();
     publish
 }
-pub fn outputs(context:&RoundContext)->TokenStream {
+pub fn outputs(context: &RoundContext) -> TokenStream {
     let outputs: Vec<_> = context
         .outputs
         .iter()
@@ -222,32 +268,61 @@ pub fn outputs(context:&RoundContext)->TokenStream {
             }
         })
         .collect();
-    let result = if outputs.len() == 1 {
+    if outputs.len() == 1 {
         outputs[0].clone()
     } else {
         quote!((#(#outputs,)*))
-    };
-    result
+    }
 }
 /// Sequential evaluator; whole-host aliases retain the original Rows realization.
-pub fn evaluate(rules:&[RuleHole],context:&RoundContext,holes:&[TokenStream],materialize:bool)->(TokenStream,TokenStream) {
-    let mut evaluations=Vec::new(); let mut admissions=Vec::new();
-    let admitted=Ident::new("__cq_admitted_rows",Span::mixed_site());
+pub fn evaluate(
+    rules: &[RuleHole],
+    context: &RoundContext,
+    holes: &[TokenStream],
+    materialize: bool,
+) -> (TokenStream, TokenStream) {
+    let mut evaluations = Vec::new();
+    let mut admissions = Vec::new();
+    let admitted = Ident::new("__cq_admitted_rows", Span::mixed_site());
     for rule in rules {
-        let invocation=&holes[rule.hole]; let head=&context.relations[rule.head];
-        let candidates=format_ident!("__cq_candidates_{}",rule.hole,span=Span::mixed_site());
-        let types=head.declaration.columns.iter().map(|c|&c.ty);
-        let consume=if materialize {quote!((#invocation).collect::<::std::vec::Vec<(#(#types,)*)>>())} else {insert_new(&head.seen,&head.next,invocation)};
-        let evaluation=if let Some(scan)=&rule.scan {
-            let binding=&scan.binding;
-            let host=match scan.source { InputSource::Delta(i)=>context.relations[i].delta_host.as_ref().expect("checked delta host"),InputSource::Layout(i)=>&context.layouts[i].host };
-            let consume=if materialize {quote!(::std::vec![#consume])} else {consume};
+        let invocation = &holes[rule.hole];
+        let head = &context.relations[rule.head];
+        let candidates = format_ident!("__cq_candidates_{}", rule.hole, span = Span::mixed_site());
+        let types = head.declaration.columns.iter().map(|c| &c.ty);
+        let consume = if materialize {
+            quote!((#invocation).collect::<::std::vec::Vec<(#(#types,)*)>>())
+        } else {
+            insert_new(&head.seen, &head.next, invocation)
+        };
+        let evaluation = if let Some(scan) = &rule.scan {
+            let binding = &scan.binding;
+            let host = match scan.source {
+                InputSource::Delta(i) => context.relations[i]
+                    .delta_host
+                    .as_ref()
+                    .expect("checked delta host"),
+                InputSource::Layout(i) => &context.layouts[i].host,
+            };
+            let consume = if materialize {
+                quote!(::std::vec![#consume])
+            } else {
+                consume
+            };
             quote!({let #binding=&#host;#consume})
-        } else if materialize {quote!(::std::vec![#consume])} else {quote!({#consume})};
-        if materialize {evaluations.push(quote!(let #candidates=#evaluation;));let insert=insert_new(&head.seen,&head.next,&quote!(#admitted));admissions.push(quote!(for #admitted in #candidates {#insert}));}
-        else {evaluations.push(evaluation);}
+        } else if materialize {
+            quote!(::std::vec![#consume])
+        } else {
+            quote!({#consume})
+        };
+        if materialize {
+            evaluations.push(quote!(let #candidates=#evaluation;));
+            let insert = insert_new(&head.seen, &head.next, &quote!(#admitted));
+            admissions.push(quote!(for #admitted in #candidates {#insert}));
+        } else {
+            evaluations.push(evaluation);
+        }
     }
-    (quote!(#(#evaluations)*),quote!(#(#admissions)*))
+    (quote!(#(#evaluations)*), quote!(#(#admissions)*))
 }
 pub fn round_body(
     allocate: &[TokenStream],

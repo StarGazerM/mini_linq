@@ -173,6 +173,11 @@ empty ones, before subsequent evaluation. Under provider and partial-Rust
 premises its $\alpha$-image refines the Incremental transition system.
 \paragraph{Recorded decisions.} All round orchestration and hole boundaries,
 including per-hole CQ invocation, observer position and output conversion.
+The generic \code{ScanBinding} names one complete immutable delta host or
+key-zero layout bucket as a flat CQ input, preserving its column order and
+one-occurrence correspondence. The default \code{\_\_cq\_datalog\_scan\_*}
+name is an ordinary Round-IR input binding, not a parallel-specific decision:
+the sequential printer binds the whole input and records no execution annotation.
 \paragraph{Rewrite check.} Base rewrites preserve the storage program and
 checked hole/round correspondence. Parallel execution is not a base flag:
 an extension owns partition, ownership, barriers, and its printer. Any execution

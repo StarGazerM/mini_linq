@@ -33,7 +33,10 @@ impl Parse for DatalogConfiguration {
         while !body.is_empty() {
             let name: syn::Ident = body.parse()?;
             if !seen.insert(name.to_string()) {
-                return Err(syn::Error::new_spanned(name, "duplicate Datalog pipeline phase"));
+                return Err(syn::Error::new_spanned(
+                    name,
+                    "duplicate Datalog pipeline phase",
+                ));
             }
             body.parse::<Token![=]>()?;
             match name.to_string().as_str() {
@@ -46,15 +49,23 @@ impl Parse for DatalogConfiguration {
                 "surface" | "storage_rewrites" | "round" => {
                     let list;
                     bracketed!(list in body);
-                    let entries = Some(list.parse_terminated(Invocation::parse, Token![,])?
-                        .into_iter().collect());
+                    let entries = Some(
+                        list.parse_terminated(Invocation::parse, Token![,])?
+                            .into_iter()
+                            .collect(),
+                    );
                     match name.to_string().as_str() {
                         "surface" => config.surface = entries,
                         "storage_rewrites" => config.storage_rewrites = entries,
                         _ => config.round = entries,
                     }
                 }
-                _ => return Err(syn::Error::new_spanned(name, "unknown Datalog pipeline phase")),
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        name,
+                        "unknown Datalog pipeline phase",
+                    ));
+                }
             }
             body.parse::<Token![;]>()?;
         }
@@ -83,17 +94,32 @@ impl DatalogConfiguration {
     /// Replacement fork passes receive the same opaque `cq = pipeline { ... };`
     /// argument, after any arguments authored on their invocation.
     pub fn resolve(self, defaults: Self) -> syn::Result<Pipeline> {
-        let missing = || syn::Error::new(proc_macro2::Span::call_site(),
-            "missing Datalog pipeline default");
-        let cq = self.cq.or(defaults.cq).unwrap_or_default()
+        let missing = || {
+            syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "missing Datalog pipeline default",
+            )
+        };
+        let cq = self
+            .cq
+            .or(defaults.cq)
+            .unwrap_or_default()
             .resolve(cq_datalog_fork::cq_defaults())?;
         let mut fork = self.fork.or(defaults.fork).ok_or_else(missing)?;
         fork.arguments.extend(quote!(cq = #cq;));
         let mut passes = self.surface.or(defaults.surface).unwrap_or_default();
         passes.push(self.stratify.or(defaults.stratify).ok_or_else(missing)?);
-        passes.push(self.incremental.or(defaults.incremental).ok_or_else(missing)?);
+        passes.push(
+            self.incremental
+                .or(defaults.incremental)
+                .ok_or_else(missing)?,
+        );
         passes.push(self.storage.or(defaults.storage).ok_or_else(missing)?);
-        passes.extend(self.storage_rewrites.or(defaults.storage_rewrites).unwrap_or_default());
+        passes.extend(
+            self.storage_rewrites
+                .or(defaults.storage_rewrites)
+                .unwrap_or_default(),
+        );
         passes.push(fork);
         passes.extend(self.round.or(defaults.round).unwrap_or_default());
         passes.push(self.print.or(defaults.print).ok_or_else(missing)?);

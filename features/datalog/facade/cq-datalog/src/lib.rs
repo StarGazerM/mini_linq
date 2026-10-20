@@ -144,15 +144,15 @@
 
 pub use cq_datalog_configuration::DatalogConfiguration;
 pub use cq_datalog_macros::datalog;
-pub use cq_lang_datalog_source as source;
-pub use cq_lang_datalog_strata as strata;
 pub use cq_lang_datalog_incremental as incremental;
-pub use cq_lang_datalog_storage as storage;
 pub use cq_lang_datalog_round as round;
+pub use cq_lang_datalog_source as source;
+pub use cq_lang_datalog_storage as storage;
+pub use cq_lang_datalog_strata as strata;
 
 /// Direct checked entries, each consuming its source IR and a continuation.
 pub mod passes {
     pub use cq_datalog_macros::{
-        surface_if_let, stratify, incremental, storage, fork, print_rounds,
+        fork, incremental, print_rounds, storage, stratify, surface_if_let,
     };
 }

@@ -62,10 +62,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             _ => return Err(format!("unknown argument: {arg}").into()),
         }
     }
-    if !matches!(
-        engine.as_str(),
-        "mini" | "ascent" | "both"
-    ) {
+    if !matches!(engine.as_str(), "mini" | "ascent" | "both") {
         return Err(format!("unknown engine: {engine}").into());
     }
     let directory = Path::new(&directory);
@@ -75,14 +72,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let execute = || -> Result<(), String> {
         if check {
             let mut expected = run("ascent", directory).map_err(|e| e.to_string())?;
-            for name in ["mini"] {
-                let mut actual = run(name, directory).map_err(|e| e.to_string())?;
-                actual.compare(&mut expected)?;
-                println!(
-                    "check=ok engine={name} threads={} relations=26 comparison=full_tuple_sets",
-                    1
-                );
-            }
+            let mut actual = run("mini", directory).map_err(|e| e.to_string())?;
+            actual.compare(&mut expected)?;
+            println!("check=ok engine=mini threads=1 relations=26 comparison=full_tuple_sets");
         } else if engine == "both" {
             drop(run("mini", directory).map_err(|e| e.to_string())?);
             drop(run("ascent", directory).map_err(|e| e.to_string())?);

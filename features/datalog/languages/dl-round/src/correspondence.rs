@@ -63,14 +63,32 @@ pub fn inputs(context: &RoundContext) -> Vec<RelationDecl> {
 }
 
 // Layouts change only positional host representation, never Rust-step order.
-pub fn use_layouts(query: &mut cq_lang_cq::Query, context: &RoundContext, storage: &storage::Program, variant: usize) -> syn::Result<()> {
-    for read in storage.reads.iter().filter(|read|read.variant==variant) {
-        let Some(BodyItem::Positive{atom})=query.body.iter_mut().nth(read.position) else {return Err(syn::Error::new_spanned(&*query,"recorded read is not a positive occurrence"));};
-        if read.kind=="direct" {continue;}
-        let layouts=if read.kind=="delta" {&context.delta_layouts} else {&context.layouts};
-        let layout=layouts.get(read.index).ok_or_else(||syn::Error::new_spanned(&*atom,"missing recorded layout"))?;
-        atom.args=read.columns.iter().map(|&i|atom.args[i].clone()).collect();
-        atom.relation=layout.name.clone();
+pub fn use_layouts(
+    query: &mut cq_lang_cq::Query,
+    context: &RoundContext,
+    storage: &storage::Program,
+    variant: usize,
+) -> syn::Result<()> {
+    for read in storage.reads.iter().filter(|read| read.variant == variant) {
+        let Some(BodyItem::Positive { atom }) = query.body.iter_mut().nth(read.position) else {
+            return Err(syn::Error::new_spanned(
+                &*query,
+                "recorded read is not a positive occurrence",
+            ));
+        };
+        if read.kind == "direct" {
+            continue;
+        }
+        let layouts = if read.kind == "delta" {
+            &context.delta_layouts
+        } else {
+            &context.layouts
+        };
+        let layout = layouts
+            .get(read.index)
+            .ok_or_else(|| syn::Error::new_spanned(&*atom, "missing recorded layout"))?;
+        atom.args = read.columns.iter().map(|&i| atom.args[i].clone()).collect();
+        atom.relation = layout.name.clone();
     }
     Ok(())
 }
@@ -176,7 +194,10 @@ pub fn check_storage(source: &storage::Program, target: &Program) -> syn::Result
     )?;
     ensure(
         context.outputs
-            == source.incremental.strata.source
+            == source
+                .incremental
+                .strata
+                .source
                 .outputs
                 .iter()
                 .map(|id| analysis.positions[&symbol_name(id)])
@@ -195,7 +216,11 @@ pub fn check_storage(source: &storage::Program, target: &Program) -> syn::Result
     };
     add_name(&context.observer_name)?;
     add_name(&context.round_name)?;
-    for (relation, declaration) in context.relations.iter().zip(&source.incremental.strata.source.declarations) {
+    for (relation, declaration) in context
+        .relations
+        .iter()
+        .zip(&source.incremental.strata.source.declarations)
+    {
         ensure(
             relation.declaration == *declaration
                 && relation.delta.as_ref() == analysis.deltas.get(&symbol_name(&declaration.name)),
@@ -245,9 +270,30 @@ pub fn check_storage(source: &storage::Program, target: &Program) -> syn::Result
             source,
             "fork changed component membership",
         )?;
-        let expected_seeds:Vec<_>=variants.iter().enumerate().filter(|(_,v)|v.delta.is_none() && members.contains(&analysis.positions[&symbol_name(&v.query.head.relation)])).map(|(i,_)|i).collect();
-        let expected_steps:Vec<_>=variants.iter().enumerate().filter(|(_,v)|v.delta.is_some() && members.contains(&analysis.positions[&symbol_name(&v.query.head.relation)])).map(|(i,_)|i).collect();
-        ensure(stratum.seeds.iter().map(|r|r.variant).eq(expected_seeds) && stratum.steps.iter().map(|r|r.variant).eq(expected_steps),source,"fork changed written variant order")?;
+        let expected_seeds: Vec<_> = variants
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| {
+                v.delta.is_none()
+                    && members.contains(&analysis.positions[&symbol_name(&v.query.head.relation)])
+            })
+            .map(|(i, _)| i)
+            .collect();
+        let expected_steps: Vec<_> = variants
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| {
+                v.delta.is_some()
+                    && members.contains(&analysis.positions[&symbol_name(&v.query.head.relation)])
+            })
+            .map(|(i, _)| i)
+            .collect();
+        ensure(
+            stratum.seeds.iter().map(|r| r.variant).eq(expected_seeds)
+                && stratum.steps.iter().map(|r| r.variant).eq(expected_steps),
+            source,
+            "fork changed written variant order",
+        )?;
         let mut projections = Vec::new();
         let mut used_keys = BTreeSet::new();
         for key in &stratum.keys {
@@ -259,7 +305,8 @@ pub fn check_storage(source: &storage::Program, target: &Program) -> syn::Result
             )?;
             let projection = (key.relation, key.columns.clone(), key.filters.clone());
             ensure(
-                key.relation < source.incremental.strata.source.declarations.len() && !projections.contains(&projection),
+                key.relation < source.incremental.strata.source.declarations.len()
+                    && !projections.contains(&projection),
                 source,
                 "fork has invalid or duplicate key projection",
             )?;
@@ -454,4 +501,3 @@ fn checked_hole<'a>(
     cq_lang_cq::contract::check(&hole.cq)?;
     Ok(&hole.cq)
 }
-

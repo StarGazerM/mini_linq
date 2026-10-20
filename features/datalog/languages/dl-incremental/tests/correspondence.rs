@@ -1,9 +1,11 @@
-use cq_lang_datalog_incremental::{Program, contract, check_rewrite};
 use cq_lang_datalog_incremental::source::BodyItem;
+use cq_lang_datalog_incremental::{Program, check_rewrite, contract};
 use quote::{ToTokens, quote};
 type Mutation = Box<dyn Fn(&mut Program)>;
 const SEMINAIVE: &str = include_str!("fixtures/incremental.datalog");
-fn scheduled() -> Program { syn::parse_str(SEMINAIVE).unwrap() }
+fn scheduled() -> Program {
+    syn::parse_str(SEMINAIVE).unwrap()
+}
 #[test]
 fn delta_declarations_are_fresh_complete_unique_and_idb_only() {
     let original = scheduled();
@@ -69,8 +71,7 @@ fn variants_require_exact_coverage_and_erasure() {
             p.variants[0].query.head.args[0] = syn::parse_quote!(*y);
         }),
         Box::new(|p| {
-            p.variants[1].query =
-                syn::parse_quote!(Reach(*x,*z) :- Reach(x,y), Reach(y,z););
+            p.variants[1].query = syn::parse_quote!(Reach(*x,*z) :- Reach(x,y), Reach(y,z););
         }),
         Box::new(|p| {
             p.variants[1].query =
@@ -171,21 +172,25 @@ fn negative_validation_projection_does_not_extend_core_cq() {
 #[test]
 fn analysis_supplies_declared_graph_schedule_and_delta_facts() {
     let a = contract::check(&scheduled()).unwrap();
-    assert_eq!(a.graph.names, ["Edge","Blocked","Reach","Result"]);
-    assert_eq!(a.positions["Reach"],2);
-    assert_eq!(a.components,vec![vec![2],vec![3]]);
-    assert_eq!(a.component,vec![None,None,Some(0),Some(1)]);
-    assert_eq!(a.changing_positions,vec![vec![],vec![0,1],vec![]]);
-    assert_eq!(a.deltas["Reach"],"ReachChanges");
-    assert!(a.dependencies.contains(&(3,1,true)));
+    assert_eq!(a.graph.names, ["Edge", "Blocked", "Reach", "Result"]);
+    assert_eq!(a.positions["Reach"], 2);
+    assert_eq!(a.components, vec![vec![2], vec![3]]);
+    assert_eq!(a.component, vec![None, None, Some(0), Some(1)]);
+    assert_eq!(a.changing_positions, vec![vec![], vec![0, 1], vec![]]);
+    assert_eq!(a.deltas["Reach"], "ReachChanges");
+    assert!(a.dependencies.contains(&(3, 1, true)));
     assert!(a.graph.reach[3][0]);
 }
 #[test]
 fn authored_incremental_fixtures_roundtrip() {
-    for text in [SEMINAIVE,include_str!("fixtures/written_order.datalog"),include_str!("fixtures/delta_probes.datalog")] {
-        let p:Program=syn::parse_str(text).unwrap();
+    for text in [
+        SEMINAIVE,
+        include_str!("fixtures/written_order.datalog"),
+        include_str!("fixtures/delta_probes.datalog"),
+    ] {
+        let p: Program = syn::parse_str(text).unwrap();
         contract::check(&p).unwrap();
-        assert_eq!(p,syn::parse2::<Program>(p.to_token_stream()).unwrap());
-        check_rewrite(&p,&p).unwrap();
+        assert_eq!(p, syn::parse2::<Program>(p.to_token_stream()).unwrap());
+        check_rewrite(&p, &p).unwrap();
     }
 }

@@ -157,4 +157,3 @@ fn edb_outputs_are_declared_and_can_stand_alone() {
         );
     }
 }
-

@@ -3,11 +3,31 @@ use quote::ToTokens;
 
 #[test]
 fn defaults_include_surface_and_every_checked_stage() {
-    let queue = DatalogConfiguration::default().resolve(DatalogConfiguration::defaults()).unwrap();
-    let names: Vec<_> = queue.passes.iter().map(|pass|
-        pass.path.segments.last().unwrap().ident.to_string()).collect();
-    assert_eq!(names, ["surface_if_let", "stratify", "incremental", "storage", "fork", "print_rounds"]);
-    assert!(queue.passes[4].arguments.to_string().contains("cq = pipeline"));
+    let queue = DatalogConfiguration::default()
+        .resolve(DatalogConfiguration::defaults())
+        .unwrap();
+    let names: Vec<_> = queue
+        .passes
+        .iter()
+        .map(|pass| pass.path.segments.last().unwrap().ident.to_string())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "surface_if_let",
+            "stratify",
+            "incremental",
+            "storage",
+            "fork",
+            "print_rounds"
+        ]
+    );
+    assert!(
+        queue.passes[4]
+            .arguments
+            .to_string()
+            .contains("cq = pipeline")
+    );
 }
 
 #[test]
@@ -41,14 +61,20 @@ fn named_phases_preserve_order_and_opaque_arguments() {
         rewrite_a(four), rewrite_b, holes(five; cq = #cq;),
         round_a(six), round_b, terminal(seven)
     } };
-    assert_eq!(queue.to_token_stream().to_string(), expected.to_token_stream().to_string());
+    assert_eq!(
+        queue.to_token_stream().to_string(),
+        expected.to_token_stream().to_string()
+    );
 }
 
 #[test]
 fn explicit_empty_surface_disables_the_default_expander() {
     let config: DatalogConfiguration = syn::parse_quote!(pipeline { surface = []; });
     let queue = config.resolve(DatalogConfiguration::defaults()).unwrap();
-    assert_eq!(queue.passes[0].path.segments.last().unwrap().ident, "stratify");
+    assert_eq!(
+        queue.passes[0].path.segments.last().unwrap().ident,
+        "stratify"
+    );
     assert_eq!(queue.passes.len(), 5);
 }
 
@@ -64,15 +90,30 @@ fn malformed_or_duplicate_phases_are_rejected() {
     ] {
         assert!(syn::parse2::<DatalogConfiguration>(tokens).is_err());
     }
-    assert!(DatalogConfiguration::default().resolve(DatalogConfiguration::default()).is_err());
+    assert!(
+        DatalogConfiguration::default()
+            .resolve(DatalogConfiguration::default())
+            .is_err()
+    );
 }
 
 #[test]
 fn explicit_defaults_and_timing_are_recorded_in_fork_arguments() {
-    let queue = DatalogConfiguration::default().resolve(DatalogConfiguration::defaults()).unwrap();
+    let queue = DatalogConfiguration::default()
+        .resolve(DatalogConfiguration::defaults())
+        .unwrap();
     let args = queue.passes[4].arguments.to_string();
-    assert_eq!(args.contains("timing = phases"), cfg!(feature = "phase-timing"));
-    let custom: DatalogConfiguration = syn::parse_quote!(pipeline { fork = custom(timing = none;); });
+    assert_eq!(
+        args.contains("timing = phases"),
+        cfg!(feature = "phase-timing")
+    );
+    let custom: DatalogConfiguration =
+        syn::parse_quote!(pipeline { fork = custom(timing = none;); });
     let queue = custom.resolve(DatalogConfiguration::defaults()).unwrap();
-    assert!(queue.passes[4].arguments.to_string().starts_with("timing = none ; cq = pipeline"));
+    assert!(
+        queue.passes[4]
+            .arguments
+            .to_string()
+            .starts_with("timing = none ; cq = pipeline")
+    );
 }

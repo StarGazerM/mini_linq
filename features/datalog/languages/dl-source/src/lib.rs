@@ -7,7 +7,10 @@ use cq_syntax::{RelationDecl, rust, symbol_name};
 use proc_macro2::{Span, TokenStream, TokenTree};
 use quote::{ToTokens, quote};
 use std::collections::{BTreeMap, BTreeSet};
-use syn::{Expr, Ident, Token, parse::{Parse, ParseStream}};
+use syn::{
+    Expr, Ident, Token,
+    parse::{Parse, ParseStream},
+};
 pub mod kw {
     syn::custom_keyword!(output);
     syn::custom_keyword!(observe);
@@ -40,16 +43,26 @@ impl Parse for Program {
         while input.peek(cq_syntax::kw::relation) {
             declarations.push(input.parse()?);
         }
-        let mut models: BTreeMap<String, Ident> = declarations.iter()
-            .map(|d: &RelationDecl| (symbol_name(&d.name), syn::parse_quote!(set))).collect();
+        let mut models: BTreeMap<String, Ident> = declarations
+            .iter()
+            .map(|d: &RelationDecl| (symbol_name(&d.name), syn::parse_quote!(set)))
+            .collect();
         let mut explicit = BTreeSet::new();
         while input.peek(kw::model) {
             input.parse::<kw::model>()?;
             let relation: Ident = input.parse()?;
             let model: Ident = input.parse()?;
             input.parse::<Token![;]>()?;
-            ensure(models.contains_key(&symbol_name(&relation)), &relation, "undeclared model relation")?;
-            ensure(explicit.insert(symbol_name(&relation)), &relation, "duplicate relation model")?;
+            ensure(
+                models.contains_key(&symbol_name(&relation)),
+                &relation,
+                "undeclared model relation",
+            )?;
+            ensure(
+                explicit.insert(symbol_name(&relation)),
+                &relation,
+                "duplicate relation model",
+            )?;
             models.insert(symbol_name(&relation), model);
         }
         input.parse::<kw::output>()?;
@@ -63,13 +76,29 @@ impl Parse for Program {
         while input.peek(Ident) && input.peek2(syn::token::Paren) {
             rules.push(input.parse()?);
         }
-        Ok(Self { name, declarations, outputs, rules, observer, models })
+        Ok(Self {
+            name,
+            declarations,
+            outputs,
+            rules,
+            observer,
+            models,
+        })
     }
 }
 impl ToTokens for Program {
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        let Self {name,declarations,outputs,rules,observer,models} = self;
-        if let Some(e) = observer { tokens.extend(quote!(observe = #e;)); }
+        let Self {
+            name,
+            declarations,
+            outputs,
+            rules,
+            observer,
+            models,
+        } = self;
+        if let Some(e) = observer {
+            tokens.extend(quote!(observe = #e;));
+        }
         tokens.extend(quote!(struct #name; #(#declarations)*));
         for declaration in declarations {
             let relation = &declaration.name;
@@ -215,20 +244,44 @@ pub mod contract {
     /// Formal rule WF-DL-Source: check schemas, scope, models and stratifiability.
     pub fn check(program: &Program) -> syn::Result<Analysis> {
         let graph = check_source(program)?;
-        ensure(program.models.len() == program.declarations.len(), program, "models must cover exactly the declared relations")?;
+        ensure(
+            program.models.len() == program.declarations.len(),
+            program,
+            "models must cover exactly the declared relations",
+        )?;
         for declaration in &program.declarations {
-            ensure(program.models.get(&symbol_name(&declaration.name)).is_some_and(|m| m == "set"), declaration,
-                "base Datalog supports only the set relation model")?;
+            ensure(
+                program
+                    .models
+                    .get(&symbol_name(&declaration.name))
+                    .is_some_and(|m| m == "set"),
+                declaration,
+                "base Datalog supports only the set relation model",
+            )?;
         }
-        let positions = graph.names.iter().cloned().enumerate().map(|(i,n)|(n,i)).collect();
-        Ok(Analysis { dependencies: graph.edges.clone(), graph, positions })
+        let positions = graph
+            .names
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(i, n)| (n, i))
+            .collect();
+        Ok(Analysis {
+            dependencies: graph.edges.clone(),
+            graph,
+            positions,
+        })
     }
 }
 /// Rewrites preserve the complete checked source and its model assignment.
 pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
     contract::check(source)?;
     contract::check(target)?;
-    ensure(source == target, target, "Datalog rewrite changed source rules or declarations")
+    ensure(
+        source == target,
+        target,
+        "Datalog rewrite changed source rules or declarations",
+    )
 }
 impl Language for Program {
     fn check(&self) -> syn::Result<()> {
@@ -254,8 +307,11 @@ pub fn check_query(p: &Program, q: &Query, declarations: &[RelationDecl]) -> syn
     let mut query = q.clone();
     for item in &query.body {
         if let BodyItem::Filter(filter) = item {
-            ensure(!matches!(rust::unparen(&filter.condition), Expr::Let(_)), item,
-                "if let requires a surface expansion before DL-Source")?;
+            ensure(
+                !matches!(rust::unparen(&filter.condition), Expr::Let(_)),
+                item,
+                "if let requires a surface expansion before DL-Source",
+            )?;
         }
     }
     let bound = cq_lang_cq::blocks::bound(&query.body);
@@ -315,7 +371,9 @@ pub struct Fresh {
     used: BTreeSet<String>,
 }
 impl Fresh {
-    pub fn reserve(&mut self, id: &Ident) -> bool { self.used.insert(symbol_name(id)) }
+    pub fn reserve(&mut self, id: &Ident) -> bool {
+        self.used.insert(symbol_name(id))
+    }
     pub fn new(source: impl ToTokens) -> Self {
         fn collect(t: TokenStream, used: &mut BTreeSet<String>) {
             for t in t {

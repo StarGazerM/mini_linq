@@ -39,7 +39,10 @@ pub fn compile(source: &source::Program) -> syn::Result<strata::Program> {
         source,
         "cannot schedule dependency graph",
     )?;
-    let target = strata::Program { source: source.clone(), components };
+    let target = strata::Program {
+        source: source.clone(),
+        components,
+    };
     check(source, &target)?;
     Ok(target)
 }

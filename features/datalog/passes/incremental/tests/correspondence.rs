@@ -1,8 +1,8 @@
-use cq_lang_datalog_incremental::{self as incremental, source, strata};
 use cq_datalog_incremental as seminaive;
 use cq_datalog_stratify as stratify;
+use cq_lang_datalog_incremental::{self as incremental, source, strata};
+use quote::{ToTokens, quote};
 use source::BodyItem;
-use quote::{quote, ToTokens};
 fn source() -> source::Program {
     syn::parse_quote! {
         struct Paths;
@@ -14,53 +14,76 @@ fn source() -> source::Program {
         Reach(*x,*z) :- Other(x,y), Reach(y,z);
     }
 }
-fn roundtrip<L: cq_stage::Language + std::fmt::Debug + PartialEq>(p:&L) {
+fn roundtrip<L: cq_stage::Language + std::fmt::Debug + PartialEq>(p: &L) {
     p.check().unwrap();
-    assert_eq!(p,&syn::parse2::<L>(p.to_token_stream()).unwrap());
+    assert_eq!(p, &syn::parse2::<L>(p.to_token_stream()).unwrap());
 }
 #[test]
 fn both_passes_preserve_complete_round_trippable_programs() {
-    let source=source(); let strata=stratify::compile(&source).unwrap();
-    let variants=seminaive::compile(&strata).unwrap();
-    stratify::check(&source,&strata).unwrap(); seminaive::check(&strata,&variants).unwrap();
-    roundtrip(&source); roundtrip(&strata); roundtrip(&variants);
-    assert_eq!(strata.components.len(),1); assert_eq!(variants.variants.len(),4); assert_eq!(variants.deltas.len(),2);
+    let source = source();
+    let strata = stratify::compile(&source).unwrap();
+    let variants = seminaive::compile(&strata).unwrap();
+    stratify::check(&source, &strata).unwrap();
+    seminaive::check(&strata, &variants).unwrap();
+    roundtrip(&source);
+    roundtrip(&strata);
+    roundtrip(&variants);
+    assert_eq!(strata.components.len(), 1);
+    assert_eq!(variants.variants.len(), 4);
+    assert_eq!(variants.deltas.len(), 2);
 }
 #[test]
 fn stages_reject_wrong_input_and_target_shapes() {
-    let s=source(); let t=stratify::compile(&s).unwrap(); let u=seminaive::compile(&t).unwrap();
+    let s = source();
+    let t = stratify::compile(&s).unwrap();
+    let u = seminaive::compile(&t).unwrap();
     assert!(syn::parse2::<source::Program>(t.to_token_stream()).is_err());
     assert!(syn::parse2::<source::Program>(u.to_token_stream()).is_err());
     assert!(syn::parse2::<strata::Program>(s.to_token_stream()).is_err());
     assert!(syn::parse2::<strata::Program>(u.to_token_stream()).is_err());
     assert!(syn::parse2::<incremental::Program>(s.to_token_stream()).is_err());
     assert!(syn::parse2::<incremental::Program>(t.to_token_stream()).is_err());
-    let bad=u.to_token_stream().to_string().replace("seminaive_covering","naive");
+    let bad = u
+        .to_token_stream()
+        .to_string()
+        .replace("seminaive_covering", "naive");
     assert!(syn::parse_str::<incremental::Program>(&bad).is_err());
 }
 #[test]
 fn authored_alternatives_are_checked_without_replaying_compilers() {
-    let s:source::Program=syn::parse_quote! {
+    let s: source::Program = syn::parse_quote! {
         struct Independent; relation E(x:i32) = (e); relation A(x:i32); relation B(x:i32);
         output A; A(*x) :- E(x); B(*x) :- E(x);
     };
-    let t:strata::Program=syn::parse2(quote!(#s strata {component [B]; component [A];})).unwrap();
-    stratify::check(&s,&t).unwrap();
-    let u:incremental::Program=syn::parse2(quote!(#t incremental {
+    let t: strata::Program =
+        syn::parse2(quote!(#s strata {component [B]; component [A];})).unwrap();
+    stratify::check(&s, &t).unwrap();
+    let u: incremental::Program = syn::parse2(quote!(#t incremental {
         scheme seminaive_covering; delta B = FreshB; delta A = FreshA;
         variant 1 seed {B(*x) :- E(x);} variant 0 seed {A(*x) :- E(x);}
-    })).unwrap();
-    seminaive::check(&t,&u).unwrap();
+    }))
+    .unwrap();
+    seminaive::check(&t, &u).unwrap();
 }
 #[test]
 fn checks_reject_source_edits_and_missing_decisions() {
-    let s=source(); let t=stratify::compile(&s).unwrap(); let u=seminaive::compile(&t).unwrap();
-    let mut changed=t.clone(); changed.source.outputs=vec![syn::parse_quote!(Other)];
-    strata::contract::check(&changed).unwrap(); assert!(stratify::check(&s,&changed).is_err());
-    let mut changed=u.clone(); changed.strata.source.outputs=vec![syn::parse_quote!(Other)];
-    incremental::contract::check(&changed).unwrap(); assert!(seminaive::check(&t,&changed).is_err());
-    let mut changed=u.clone(); changed.deltas.pop(); assert!(seminaive::check(&t,&changed).is_err());
-    let mut changed=u; changed.variants.pop(); assert!(seminaive::check(&t,&changed).is_err());
+    let s = source();
+    let t = stratify::compile(&s).unwrap();
+    let u = seminaive::compile(&t).unwrap();
+    let mut changed = t.clone();
+    changed.source.outputs = vec![syn::parse_quote!(Other)];
+    strata::contract::check(&changed).unwrap();
+    assert!(stratify::check(&s, &changed).is_err());
+    let mut changed = u.clone();
+    changed.strata.source.outputs = vec![syn::parse_quote!(Other)];
+    incremental::contract::check(&changed).unwrap();
+    assert!(seminaive::check(&t, &changed).is_err());
+    let mut changed = u.clone();
+    changed.deltas.pop();
+    assert!(seminaive::check(&t, &changed).is_err());
+    let mut changed = u;
+    changed.variants.pop();
+    assert!(seminaive::check(&t, &changed).is_err());
 }
 #[test]
 fn delta_names_avoid_all_source_identifiers_but_are_not_canonical() {
@@ -104,12 +127,7 @@ fn negative_dependencies_force_completed_lower_components() {
     assert!(stratify::check(&source, &reversed).is_err());
     let delta = seminaive::compile(&strata).unwrap();
     seminaive::check(&strata, &delta).unwrap();
-    assert!(
-        delta
-            .variants
-            .iter()
-            .all(|v| v.delta.is_none())
-    );
+    assert!(delta.variants.iter().all(|v| v.delta.is_none()));
 }
 
 #[test]
@@ -125,9 +143,11 @@ fn multioutput_and_constant_negation_survive_both_schedules() {
     };
     let strata = stratify::compile(&source).unwrap();
     let delta = seminaive::compile(&strata).unwrap();
-    roundtrip(&source); roundtrip(&strata); roundtrip(&delta);
-    assert_eq!(strata.source.outputs,source.outputs);
-    assert_eq!(delta.strata.source.outputs,source.outputs);
+    roundtrip(&source);
+    roundtrip(&strata);
+    roundtrip(&delta);
+    assert_eq!(strata.source.outputs, source.outputs);
+    assert_eq!(delta.strata.source.outputs, source.outputs);
     let mut reordered = strata.clone();
     reordered.source.outputs.reverse();
     strata::contract::check(&reordered).unwrap();
@@ -136,8 +156,7 @@ fn multioutput_and_constant_negation_survive_both_schedules() {
     reordered.strata.source.outputs.reverse();
     assert!(seminaive::check(&strata, &reordered).is_err());
     let mut changed = delta.clone();
-    let BodyItem::Negation(negative) = &mut changed.variants[0].query.body[1]
-    else {
+    let BodyItem::Negation(negative) = &mut changed.variants[0].query.body[1] else {
         unreachable!()
     };
     negative.atom.args[0] = syn::parse_quote!("static");
@@ -175,13 +194,18 @@ fn if_let_is_lowered_before_seminaive_variants_and_keeps_written_positions() {
         Reach(x) :- Seed(o), if let Some(x) = *o;
         Reach(*z) :- Reach(x), if let Some(y) = x.checked_add(1), Link(y,z);
     };
-    let source: source::Program = syn::parse2(cq_datalog_surface_if_let::compile(&source.to_token_stream()).unwrap()).unwrap();
+    let source: source::Program =
+        syn::parse2(cq_datalog_surface_if_let::compile(&source.to_token_stream()).unwrap())
+            .unwrap();
     let strata = stratify::compile(&source).unwrap();
     let variants = seminaive::compile(&strata).unwrap();
     stratify::check(&source, &strata).unwrap();
     seminaive::check(&strata, &variants).unwrap();
-    for rule in &strata.source.rules { assert!(matches!(rule.body[1],BodyItem::For(_))); }
-    roundtrip(&strata); roundtrip(&variants);
+    for rule in &strata.source.rules {
+        assert!(matches!(rule.body[1], BodyItem::For(_)));
+    }
+    roundtrip(&strata);
+    roundtrip(&variants);
     let variants = variants.variants;
     assert_eq!(variants.len(), 2);
     assert_eq!(variants[0].delta, None);

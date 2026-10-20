@@ -1,7 +1,7 @@
-use cq_datalog_stratify::{compile, check};
+use cq_datalog_stratify::{check, compile};
 use cq_lang_datalog_source as source;
 use cq_lang_datalog_strata as strata;
-use quote::{quote, ToTokens};
+use quote::{ToTokens, quote};
 
 #[test]
 fn exact_sccs_dependency_order_and_source_preservation() {
@@ -15,13 +15,28 @@ fn exact_sccs_dependency_order_and_source_preservation() {
     };
     let target = compile(&source).unwrap();
     check(&source, &target).unwrap();
-    assert_eq!(target, syn::parse2::<strata::Program>(target.to_token_stream()).unwrap());
-    let expected: strata::Program = syn::parse2(quote!(#source strata { component [A,B]; component [C]; })).unwrap();
+    assert_eq!(
+        target,
+        syn::parse2::<strata::Program>(target.to_token_stream()).unwrap()
+    );
+    let expected: strata::Program =
+        syn::parse2(quote!(#source strata { component [A,B]; component [C]; })).unwrap();
     assert_eq!(target, expected);
     for components in [
-        vec![vec![syn::parse_quote!(A)], vec![syn::parse_quote!(B)], vec![syn::parse_quote!(C)]],
-        vec![vec![syn::parse_quote!(A), syn::parse_quote!(B), syn::parse_quote!(C)]],
-        vec![vec![syn::parse_quote!(C)], vec![syn::parse_quote!(A), syn::parse_quote!(B)]],
+        vec![
+            vec![syn::parse_quote!(A)],
+            vec![syn::parse_quote!(B)],
+            vec![syn::parse_quote!(C)],
+        ],
+        vec![vec![
+            syn::parse_quote!(A),
+            syn::parse_quote!(B),
+            syn::parse_quote!(C),
+        ]],
+        vec![
+            vec![syn::parse_quote!(C)],
+            vec![syn::parse_quote!(A), syn::parse_quote!(B)],
+        ],
         vec![],
     ] {
         let mut changed = target.clone();
@@ -39,7 +54,8 @@ fn independent_authored_component_order_does_not_replay_selection() {
         struct P; relation E(x:i32) = (e); relation A(x:i32); relation B(x:i32);
         output A; A(*x) :- E(x); B(*x) :- E(x);
     };
-    let target: strata::Program = syn::parse2(quote!(#source strata { component [B]; component [A]; })).unwrap();
+    let target: strata::Program =
+        syn::parse2(quote!(#source strata { component [B]; component [A]; })).unwrap();
     check(&source, &target).unwrap();
     assert_ne!(compile(&source).unwrap(), target);
 }

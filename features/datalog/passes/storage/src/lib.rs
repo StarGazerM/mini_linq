@@ -1,24 +1,45 @@
 //! Choose the existing stable written-order storage refinement.
 use cq_lang_datalog_incremental as incremental;
-use cq_lang_datalog_storage::{Program, Layout, Policy, BodyItem, ensure};
-use incremental::Variant;
+use cq_lang_datalog_storage::{BodyItem, Layout, Policy, Program, ensure};
 use cq_syntax::{rust, symbol_name};
+use incremental::Variant;
 use std::collections::BTreeSet;
 
 pub fn compile(source: &incremental::Program) -> syn::Result<Program> {
     let analysis = incremental::contract::check(source)?;
-    let (layouts,delta_layouts) = choose_layouts(&source.variants,&source.strata.source.rules);
-    let mut target = Program { incremental: source.clone(), layouts, delta_layouts, reads: Vec::new(), negations: Vec::new(), policy: Policy {
-        edb: syn::parse_quote!(canonical_borrowed_hash_set), all: syn::parse_quote!(vec), seen: syn::parse_quote!(hash_set), delta: syn::parse_quote!(vec), next: syn::parse_quote!(vec), layout: syn::parse_quote!(hash_map_vec_hash_state), insertion: syn::parse_quote!(hash_set_all_columns), negation_keys: syn::parse_quote!(hash_set_borrowed), full_maintenance: syn::parse_quote!(admitted_rows), delta_maintenance: syn::parse_quote!(replace_each_run),
-    }};
-    (target.reads,target.negations) = cq_lang_datalog_storage::read_plan(&target,&analysis)?;
-    check(source,&target)?; Ok(target)
+    let (layouts, delta_layouts) = choose_layouts(&source.variants, &source.strata.source.rules);
+    let mut target = Program {
+        incremental: source.clone(),
+        layouts,
+        delta_layouts,
+        reads: Vec::new(),
+        negations: Vec::new(),
+        policy: Policy {
+            edb: syn::parse_quote!(canonical_borrowed_hash_set),
+            all: syn::parse_quote!(vec),
+            seen: syn::parse_quote!(hash_set),
+            delta: syn::parse_quote!(vec),
+            next: syn::parse_quote!(vec),
+            layout: syn::parse_quote!(hash_map_vec_hash_state),
+            insertion: syn::parse_quote!(hash_set_all_columns),
+            negation_keys: syn::parse_quote!(hash_set_borrowed),
+            full_maintenance: syn::parse_quote!(admitted_rows),
+            delta_maintenance: syn::parse_quote!(replace_each_run),
+        },
+    };
+    (target.reads, target.negations) = cq_lang_datalog_storage::read_plan(&target, &analysis)?;
+    check(source, &target)?;
+    Ok(target)
 }
 /// Formal rule CK-DL-Storage: independent data-refinement correspondence.
-pub fn check(source: &incremental::Program,target: &Program) -> syn::Result<()> {
+pub fn check(source: &incremental::Program, target: &Program) -> syn::Result<()> {
     incremental::contract::check(source)?;
     cq_lang_datalog_storage::contract::check(target)?;
-    ensure(source == &target.incremental,target,"storage changed its incremental source")
+    ensure(
+        source == &target.incremental,
+        target,
+        "storage changed its incremental source",
+    )
 }
 fn choose_layouts(
     variants: &[Variant],

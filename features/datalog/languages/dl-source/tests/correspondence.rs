@@ -1,4 +1,4 @@
-use cq_lang_datalog_source::{Program, contract, check_rewrite};
+use cq_lang_datalog_source::{Program, check_rewrite, contract};
 use quote::quote;
 type Mutation = Box<dyn Fn(&mut Program)>;
 const SOURCE: &str = include_str!("fixtures/source.datalog");
@@ -78,4 +78,3 @@ fn generated_bindings_follow_let_negation_scope_restrictions() {
     let error = contract::check(&program).unwrap_err().to_string();
     assert!(error.contains("bound by a positive atom"), "{error}");
 }
-

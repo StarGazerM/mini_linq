@@ -34,7 +34,9 @@ fn expand_query(query: &mut Query) -> syn::Result<()> {
 
 pub fn compile(tokens: &TokenStream) -> syn::Result<TokenStream> {
     let mut program: source::Program = syn::parse2(tokens.clone())?;
-    for query in &mut program.rules { expand_query(query)?; }
+    for query in &mut program.rules {
+        expand_query(query)?;
+    }
     source::contract::check(&program)?;
     let target = program.to_token_stream();
     check(tokens, &target)?;
@@ -45,13 +47,22 @@ pub fn check(tokens: &TokenStream, target: &TokenStream) -> syn::Result<()> {
     let original: source::Program = syn::parse2(tokens.clone())?;
     let target: source::Program = syn::parse2(target.clone())?;
     source::contract::check(&target)?;
-    ensure(original.name == target.name && original.declarations == target.declarations
-        && original.outputs == target.outputs && original.observer == target.observer
-        && original.models == target.models && original.rules.len() == target.rules.len(),
-        &target, "surface expansion changed declarations or rule count")?;
+    ensure(
+        original.name == target.name
+            && original.declarations == target.declarations
+            && original.outputs == target.outputs
+            && original.observer == target.observer
+            && original.models == target.models
+            && original.rules.len() == target.rules.len(),
+        &target,
+        "surface expansion changed declarations or rule count",
+    )?;
     for (before, after) in original.rules.iter().zip(&target.rules) {
-        ensure(before.head == after.head && before.body.len() == after.body.len(), after,
-            "surface expansion changed head or clause count")?;
+        ensure(
+            before.head == after.head && before.body.len() == after.body.len(),
+            after,
+            "surface expansion changed head or clause count",
+        )?;
         let mut expected = before.clone();
         for (item, actual) in expected.body.iter_mut().zip(&after.body) {
             if let BodyItem::Filter(filter) = item {
@@ -65,7 +76,11 @@ pub fn check(tokens: &TokenStream, target: &TokenStream) -> syn::Result<()> {
                             _ => ::core::option::Option::None,
                         }
                     ))?;
-                    ensure(&generator == actual, actual, "if-let generator does not match pattern and expression")?;
+                    ensure(
+                        &generator == actual,
+                        actual,
+                        "if-let generator does not match pattern and expression",
+                    )?;
                     *item = generator;
                 }
             }
@@ -73,7 +88,11 @@ pub fn check(tokens: &TokenStream, target: &TokenStream) -> syn::Result<()> {
         // Reclassification is syntax, not expansion: new binders can turn
         // subsequent CQ conditions into equalities or constraints.
         let expected: Query = syn::parse2(expected.to_token_stream())?;
-        ensure(&expected == after, after, "surface expansion changed written clauses")?;
+        ensure(
+            &expected == after,
+            after,
+            "surface expansion changed written clauses",
+        )?;
     }
     Ok(())
 }

@@ -95,4 +95,3 @@ fn alternating_empty_delta_indexes_never_fall_back_to_vec_builds() {
     );
     assert_eq!(cq_storage::counters::snapshot().index_builds, 0);
 }
-

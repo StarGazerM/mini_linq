@@ -1,19 +1,36 @@
 use cq_datalog_print::*;
-use round::storage::incremental;
 use incremental::strata::source;
-use quote::{ToTokens,quote};
 use proc_macro2::TokenStream;
-struct Expanded { program: Program, context: RoundContext, holes: Vec<TokenStream> }
-fn expand(source:&incremental::Program,mut callback:impl FnMut(round::cq::Program)->syn::Result<TokenStream>)->syn::Result<Expanded> {
-    let storage=cq_datalog_storage::compile(source)?;
-    let program=cq_datalog_fork::compile(&storage)?;
-    let holes=splice_with(&program,|hole|callback(hole.cq.clone()))?;
-    Ok(Expanded{context:program.context.clone(),program,holes})
+use quote::{ToTokens, quote};
+use round::storage::incremental;
+struct Expanded {
+    program: Program,
+    context: RoundContext,
+    holes: Vec<TokenStream>,
 }
-fn render(expanded:Expanded)->TokenStream {
-    render_with(&expanded.program,&expanded.holes,|rules,context,holes,_|Ok(evaluate(rules,context,holes,false))).unwrap().to_token_stream()
+fn expand(
+    source: &incremental::Program,
+    mut callback: impl FnMut(round::cq::Program) -> syn::Result<TokenStream>,
+) -> syn::Result<Expanded> {
+    let storage = cq_datalog_storage::compile(source)?;
+    let program = cq_datalog_fork::compile(&storage)?;
+    let holes = splice_with(&program, |hole| callback(hole.cq.clone()))?;
+    Ok(Expanded {
+        context: program.context.clone(),
+        program,
+        holes,
+    })
 }
-fn source()->TokenStream {
+fn render(expanded: Expanded) -> TokenStream {
+    render_with(
+        &expanded.program,
+        &expanded.holes,
+        |rules, context, holes, _| Ok(evaluate(rules, context, holes, false)),
+    )
+    .unwrap()
+    .to_token_stream()
+}
+fn source() -> TokenStream {
     quote! {struct Q;relation E(x:i32)=(input);relation R(x:i32);output R;R(*x):-E(x);}
 }
 #[test]
@@ -260,7 +277,6 @@ fn multioutput_render_moves_each_relation_in_output_order() {
         actual.block.stmts.last(),
         Some(&syn::Stmt::Expr(expected, None))
     );
-
 }
 
 #[test]
@@ -339,4 +355,3 @@ fn edb_canonicalization_precedes_and_is_shared_by_layouts_keys_and_outputs() {
         1
     );
 }
-

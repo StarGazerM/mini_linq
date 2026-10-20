@@ -1,10 +1,10 @@
 //! Authored schedules, independent expected CQ, and boundary mutations.
 use cq_datalog_fork::{check, compile};
-use cq_lang_datalog_round::Program as Fork;
-use cq_lang_datalog_storage::Program;
 use cq_datalog_storage::compile as schedule;
-use cq_lang_datalog_round::cq as cq_lang_cq;
 use cq_lang_cq::BodyItem;
+use cq_lang_datalog_round::Program as Fork;
+use cq_lang_datalog_round::cq as cq_lang_cq;
+use cq_lang_datalog_storage::Program;
 
 use quote::{ToTokens, quote};
 
@@ -27,7 +27,8 @@ fn authored() -> Program {
             variant 0 seed { Reach(*x,*y) :- Edge(x,y), !Blocked(y,_); }
             variant 1 delta 0 { Reach(*x,*z) :- Recent(x,y), Edge(y,z), !Blocked(z,_); }
         }
-    }).unwrap()
+    })
+    .unwrap()
 }
 
 #[test]
@@ -42,7 +43,7 @@ fn authored_holes_preserve_contracts_and_select_borrowed_hosts() {
     assert_eq!(target.holes.len(), 3);
     assert_eq!(context.layouts.len(), 2);
     for entry in &target.holes {
-        let hole=&entry.cq;
+        let hole = &entry.cq;
         cq_lang_cq::contract::check(hole).unwrap();
         let parsed: cq_lang_cq::Program = syn::parse2(hole.to_token_stream()).unwrap();
         assert_eq!(&parsed, hole);
@@ -137,15 +138,33 @@ fn checker_rejects_negation_mutations() {
 
 #[test]
 fn callback_is_checked_once_per_hole_and_errors_propagate() {
-    let source=authored();let target=compile(&source).unwrap();let mut visited=Vec::new();
-    let expanded=cq_datalog_print::splice_with(&target,|hole| {
-        visited.push(hole.cq.clone());let name=&hole.cq.name;Ok(quote!(callback!(#name)))
-    }).unwrap();
-    assert_eq!(visited,target.holes.iter().map(|h|h.cq.clone()).collect::<Vec<_>>());
-    assert_eq!(expanded.len(),3);
-    let mut calls=0;
-    assert!(cq_datalog_print::splice_with(&target,|hole|{calls+=1;Err(syn::Error::new_spanned(hole,"callback rejected hole"))}).is_err());
-    assert_eq!(calls,1);
+    let source = authored();
+    let target = compile(&source).unwrap();
+    let mut visited = Vec::new();
+    let expanded = cq_datalog_print::splice_with(&target, |hole| {
+        visited.push(hole.cq.clone());
+        let name = &hole.cq.name;
+        Ok(quote!(callback!(#name)))
+    })
+    .unwrap();
+    assert_eq!(
+        visited,
+        target
+            .holes
+            .iter()
+            .map(|h| h.cq.clone())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(expanded.len(), 3);
+    let mut calls = 0;
+    assert!(
+        cq_datalog_print::splice_with(&target, |hole| {
+            calls += 1;
+            Err(syn::Error::new_spanned(hole, "callback rejected hole"))
+        })
+        .is_err()
+    );
+    assert_eq!(calls, 1);
 }
 
 #[test]
@@ -167,7 +186,8 @@ fn reverse_layout_permutes_schema_and_arguments_together() {
             variant 0 seed { R(*x,(*y).clone()) :- E(x,y); }
             variant 1 delta 0 { R(*z,(*y).clone()) :- D(x,y), E(z,y); }
         }
-    }).unwrap();
+    })
+    .unwrap();
     let target = compile(&source).unwrap();
     let layout = &target.context.layouts[1];
     let hole = &target.holes[target.context.strata[0].steps[0].hole].cq;
@@ -186,12 +206,16 @@ fn reverse_layout_permutes_schema_and_arguments_together() {
         .chain(&target.context.strata[0].steps)
     {
         let binding = &rule.scan.as_ref().unwrap().binding;
-        let declaration = target.holes[rule.hole].cq
+        let declaration = target.holes[rule.hole]
+            .cq
             .declarations
             .iter()
             .find(|declaration| declaration.name == *binding)
             .unwrap();
-        assert_eq!(declaration.columns, source.incremental.strata.source.declarations[0].columns);
+        assert_eq!(
+            declaration.columns,
+            source.incremental.strata.source.declarations[0].columns
+        );
     }
 }
 
@@ -249,7 +273,7 @@ fn filtered_key_sets_are_shared_per_stratum_not_per_probe() {
         ]
     );
     for entry in &target.holes {
-        let hole=&entry.cq;
+        let hole = &entry.cq;
         cq_lang_cq::contract::check(hole).unwrap();
         assert_eq!(
             hole,
@@ -299,7 +323,8 @@ fn edb_outputs_do_not_need_delta_relations_or_rule_holes() {
 
 
         }
-    }).unwrap();
+    })
+    .unwrap();
     let target = compile(&source).unwrap();
     check(&source, &target).unwrap();
     assert_eq!(target.context.outputs, [1, 0]);
@@ -328,7 +353,8 @@ fn owned_negative_constants_are_post_scan_filters_not_owned_prefixes() {
 
             variant 0 seed { A((*x).clone()) :- D(x), !M(String::from("static"),x); }
         }
-    }).unwrap();
+    })
+    .unwrap();
     let target = compile(&source).unwrap();
     let key = &target.context.strata[0].keys[0];
     assert_eq!(key.columns, [1]);
@@ -396,7 +422,8 @@ fn literal_key_filter_correspondence_uses_complete_cq_recognition() {
 
 #[test]
 fn later_delta_reuses_var_points_to_probe_without_moving_partial_guards() {
-    let source = schedule(&syn::parse_str(include_str!("fixtures/written_order.datalog")).unwrap()).unwrap();
+    let source =
+        schedule(&syn::parse_str(include_str!("fixtures/written_order.datalog")).unwrap()).unwrap();
     let target = compile(&source).unwrap();
     let context = &target.context;
     let probe = &context.layouts[1];
@@ -482,7 +509,8 @@ fn positive_constant_probes_preserve_repeats_wildcards_and_later_delta() {
             variant 0 seed { R(*x) :- E(x,x,7), E(_,x,(1 + 2)); }
             variant 1 delta 2 { R(*y) :- E(y,7,_), if *y != 0, D(x), E(x,x,7); }
         }
-    }).unwrap();
+    })
+    .unwrap();
     let target = compile(&source).unwrap();
     let layouts = &target.context.layouts;
     let first = &layouts[0].name;
@@ -522,7 +550,8 @@ fn positive_constant_probes_preserve_repeats_wildcards_and_later_delta() {
 
 #[test]
 fn delta_hosts_are_shared_only_by_exact_demand_and_keep_written_bodies() {
-    let source = schedule(&syn::parse_str(include_str!("fixtures/delta_probes.datalog")).unwrap()).unwrap();
+    let source =
+        schedule(&syn::parse_str(include_str!("fixtures/delta_probes.datalog")).unwrap()).unwrap();
     let target = compile(&source).unwrap();
     let context = &target.context;
     assert_eq!(context.delta_layouts.len(), 4);
@@ -625,7 +654,8 @@ fn delta_layout_reorders_heterogeneous_declaration_and_arguments_together() {
             variant 0 seed { R(*x,(*y).clone()) :- E(x,y); }
             variant 1 delta 1 { R(*x,(*y).clone()) :- E(_,y), D(x,y); }
         }
-    }).unwrap();
+    })
+    .unwrap();
     let target = compile(&source).unwrap();
     let layout = &target.context.delta_layouts[0];
     let hole = &target.holes[target.context.strata[0].steps[0].hole].cq;
@@ -664,7 +694,8 @@ fn fork_preserves_generators_and_generated_join_values() {
                 Reach(*z) :- Recent(x), if *x < 3, for y in [*x + 1], Link(y,z);
             }
         }
-    }).unwrap();
+    })
+    .unwrap();
     let target = compile(&source).unwrap();
     check(&source, &target).unwrap();
     let stratum = &target.context.strata[0];
@@ -689,4 +720,3 @@ fn fork_preserves_generators_and_generated_join_values() {
     changed.holes[hole].cq.query.body[2] = syn::parse_quote!(for y in [*x + 2]);
     assert!(check(&source, &changed).is_err());
 }
-

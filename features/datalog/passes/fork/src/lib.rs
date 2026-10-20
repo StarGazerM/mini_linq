@@ -1,14 +1,14 @@
 //! Record complete CQ holes, immutable round contexts, and their invocation queues.
-use cq_lang_datalog_storage as storage;
-use cq_lang_datalog_round::{self as round, *};
 use cq_lang_datalog_round::cq::BodyItem;
-use cq_syntax::{rust,symbol_name};
-use proc_macro2::{Span,TokenStream,TokenTree};
-use quote::{ToTokens,quote};
+use cq_lang_datalog_round::{self as round, *};
+use cq_lang_datalog_storage as storage;
+use cq_syntax::{rust, symbol_name};
+use proc_macro2::{Span, TokenStream, TokenTree};
+use quote::{ToTokens, quote};
 use std::collections::BTreeSet;
-use syn::{Expr,Ident};
+use syn::{Expr, Ident};
 
-pub fn cq_defaults()->cq_stage::Configuration {
+pub fn cq_defaults() -> cq_stage::Configuration {
     syn::parse_quote!(pipeline {
         plan = ::mini_linq::passes::plan;
         ix = ::mini_linq::passes::index_demands;
@@ -19,33 +19,62 @@ pub fn cq_defaults()->cq_stage::Configuration {
         print = ::mini_linq::passes::print_pull;
     })
 }
-pub fn default_pipeline()->cq_stage::Pipeline {
-    cq_stage::Configuration::default().resolve(cq_defaults()).expect("complete CQ defaults")
+pub fn default_pipeline() -> cq_stage::Pipeline {
+    cq_stage::Configuration::default()
+        .resolve(cq_defaults())
+        .expect("complete CQ defaults")
 }
-pub fn compile(source:&storage::Program)->syn::Result<Program> { construct(source,default_pipeline(),syn::parse_quote!(none)) }
-struct Arguments { pipeline:cq_stage::Pipeline, timing:Ident }
+pub fn compile(source: &storage::Program) -> syn::Result<Program> {
+    construct(source, default_pipeline(), syn::parse_quote!(none))
+}
+struct Arguments {
+    pipeline: cq_stage::Pipeline,
+    timing: Ident,
+}
 impl syn::parse::Parse for Arguments {
-    fn parse(input:syn::parse::ParseStream<'_>)->syn::Result<Self> {
-        let mut pipeline=None;let mut timing=None;
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let mut pipeline = None;
+        let mut timing = None;
         while !input.is_empty() {
-            let name:Ident=input.parse()?;input.parse::<syn::Token![=]>()?;
-            if name=="cq" && pipeline.is_none() {pipeline=Some(input.parse()?);}
-            else if name=="timing" && timing.is_none() {timing=Some(input.parse()?);}
-            else {return Err(syn::Error::new_spanned(name,"unknown or duplicate fork argument"));}
+            let name: Ident = input.parse()?;
+            input.parse::<syn::Token![=]>()?;
+            if name == "cq" && pipeline.is_none() {
+                pipeline = Some(input.parse()?);
+            } else if name == "timing" && timing.is_none() {
+                timing = Some(input.parse()?);
+            } else {
+                return Err(syn::Error::new_spanned(
+                    name,
+                    "unknown or duplicate fork argument",
+                ));
+            }
             input.parse::<syn::Token![;]>()?;
         }
-        Ok(Self {pipeline:pipeline.unwrap_or_else(default_pipeline),timing:timing.unwrap_or_else(||syn::parse_quote!(none))})
+        Ok(Self {
+            pipeline: pipeline.unwrap_or_else(default_pipeline),
+            timing: timing.unwrap_or_else(|| syn::parse_quote!(none)),
+        })
     }
 }
-pub fn compile_with(source:&storage::Program,args:TokenStream)->syn::Result<Program> {
-    let Arguments{pipeline,timing}=syn::parse2(args)?;construct(source,pipeline,timing)
+pub fn compile_with(source: &storage::Program, args: TokenStream) -> syn::Result<Program> {
+    let Arguments { pipeline, timing } = syn::parse2(args)?;
+    construct(source, pipeline, timing)
 }
 /// Formal rule CK-DL-Fork: independently check storage embedding and every hole.
-pub fn check(source:&storage::Program,target:&Program)->syn::Result<()> {
-    storage::contract::check(source)?;round::contract::check(target)?;
-    ensure(source==&target.storage,target,"fork changed the storage program")?;
-    ensure(target.execution.is_empty(),target,"fork must not introduce execution certificates")?;
-    round::check_storage(source,target)
+pub fn check(source: &storage::Program, target: &Program) -> syn::Result<()> {
+    storage::contract::check(source)?;
+    round::contract::check(target)?;
+    ensure(
+        source == &target.storage,
+        target,
+        "fork changed the storage program",
+    )?;
+    ensure(
+        target.execution.is_empty(),
+        target,
+        "fork must not introduce execution certificates",
+    )?;
+    round::check_storage(source, target)
 }
 fn identifiers(tokens: TokenStream, names: &mut BTreeSet<String>) {
     for token in tokens {
@@ -117,13 +146,20 @@ fn key_representation(source: &storage::Program) -> syn::Result<KeyRepresentatio
 }
 
 /// Lower variants and key projections, retaining the recorded schedule.
-fn construct(source: &storage::Program, pipeline: cq_stage::Pipeline, timing: Ident) -> syn::Result<Program> {
+fn construct(
+    source: &storage::Program,
+    pipeline: cq_stage::Pipeline,
+    timing: Ident,
+) -> syn::Result<Program> {
     let analysis = storage::contract::check(source)?;
     let variants = &source.incremental.variants;
     let representation = key_representation(source)?;
     let mut fresh = Fresh::new(source);
     let mut context = RoundContext {
-        relations: source.incremental.strata.source
+        relations: source
+            .incremental
+            .strata
+            .source
             .declarations
             .iter()
             .map(|declaration| Relation {
@@ -164,7 +200,10 @@ fn construct(source: &storage::Program, pipeline: cq_stage::Pipeline, timing: Id
             })
             .collect(),
         strata: Vec::new(),
-        outputs: source.incremental.strata.source
+        outputs: source
+            .incremental
+            .strata
+            .source
             .outputs
             .iter()
             .map(|id| analysis.positions[&symbol_name(id)])
@@ -196,7 +235,16 @@ fn construct(source: &storage::Program, pipeline: cq_stage::Pipeline, timing: Id
                 let relation = analysis.positions[&symbol_name(&negative.atom.relation)];
                 let projection = columns(&negative.atom);
                 let selections = filters(&negative.atom);
-                let planned = source.negations.iter().find(|entry| entry.component == context.strata.len() && entry.relation == relation && entry.columns == projection && entry.filters == selections).expect("checked negative read plan");
+                let planned = source
+                    .negations
+                    .iter()
+                    .find(|entry| {
+                        entry.component == context.strata.len()
+                            && entry.relation == relation
+                            && entry.columns == projection
+                            && entry.filters == selections
+                    })
+                    .expect("checked negative read plan");
                 let projection = planned.columns.clone();
                 let selections = planned.filters.clone();
                 let key_index = if let Some(index) = stratum.keys.iter().position(|key| {
@@ -234,7 +282,10 @@ fn construct(source: &storage::Program, pipeline: cq_stage::Pipeline, timing: Id
                                 .iter()
                                 .map(|&i| {
                                     let variable = &variables[i];
-                                    let ty = &source.incremental.strata.source.declarations[relation].columns[i].ty;
+                                    let ty = &source.incremental.strata.source.declarations
+                                        [relation]
+                                        .columns[i]
+                                        .ty;
                                     quote!(#variable: &#ty)
                                 })
                                 .collect(),
@@ -283,11 +334,28 @@ fn construct(source: &storage::Program, pipeline: cq_stage::Pipeline, timing: Id
         }
         context.strata.push(stratum);
     }
-    let holes = holes.into_iter().map(|cq|Hole {cq,pipeline:pipeline.clone(),interface:syn::parse_quote!(pull)}).collect();
-    let target = Program { storage:source.clone(), context, holes, execution:Vec::new(), policy:RoundPolicy {
-        phases:syn::parse_quote!(evaluate_admit_publish),admission:syn::parse_quote!(written_order),termination:syn::parse_quote!(any_delta),observer:syn::parse_quote!(before_step),outputs:syn::parse_quote!(owned_iterators),timing,
-    }};
+    let holes = holes
+        .into_iter()
+        .map(|cq| Hole {
+            cq,
+            pipeline: pipeline.clone(),
+            interface: syn::parse_quote!(pull),
+        })
+        .collect();
+    let target = Program {
+        storage: source.clone(),
+        context,
+        holes,
+        execution: Vec::new(),
+        policy: RoundPolicy {
+            phases: syn::parse_quote!(evaluate_admit_publish),
+            admission: syn::parse_quote!(written_order),
+            termination: syn::parse_quote!(any_delta),
+            observer: syn::parse_quote!(before_step),
+            outputs: syn::parse_quote!(owned_iterators),
+            timing,
+        },
+    };
     check(source, &target)?;
     Ok(target)
 }
-

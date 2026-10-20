@@ -23,9 +23,7 @@ fn main() -> datalog_oracle::Result<()> {
             return Err("counters requires --features counters; run cargo run --release -p datalog-oracle --features counters -- counters".into());
         }
         _ => {
-            return Err(
-                "usage: datalog-oracle golden [--write] | counters | bench".into(),
-            );
+            return Err("usage: datalog-oracle golden [--write] | counters | bench".into());
         }
     }
     Ok(())
@@ -67,9 +65,7 @@ fn bench() -> datalog_oracle::Result<()> {
     if cfg!(debug_assertions) {
         return Err("bench requires --release".into());
     }
-    println!(
-        "program\tscenario\tnodes\tedges\trows\tmini_us\tascent_us"
-    );
+    println!("program\tscenario\tnodes\tedges\trows\tmini_us\tascent_us");
     for name in ["reach", "tc_left", "tc_nonlinear", "same_generation"] {
         let c = CASES.iter().find(|c| c.name == name).unwrap();
         let sizes = if name == "tc_nonlinear" {
@@ -109,6 +105,8 @@ fn measure(c: &Case, scenario: &str, n: i32, d: &Data) {
     let ascent = median(c.oracle);
     println!(
         "{}\t{scenario}\t{n}\t{}\t{}\t{mini:.3}\t{ascent:.3}",
-        c.name, d.edge.len(), expected.len(),
+        c.name,
+        d.edge.len(),
+        expected.len(),
     );
 }

@@ -1,5 +1,7 @@
 use cq_lang_datalog_storage::{Layout, Program, check_rewrite, contract, incremental};
-fn authored(text:&str)->Program { cq_datalog_storage::compile(&syn::parse_str(text).unwrap()).unwrap() }
+fn authored(text: &str) -> Program {
+    cq_datalog_storage::compile(&syn::parse_str(text).unwrap()).unwrap()
+}
 use quote::ToTokens;
 
 const INCREMENTAL: &str = include_str!("fixtures/incremental.datalog");
@@ -48,17 +50,20 @@ fn layouts_are_exact_complete_permutations_with_valid_leading_keys() {
 
 #[test]
 fn storage_choices_are_not_accepted_by_logical_languages() {
-    let source=authored(INCREMENTAL);
+    let source = authored(INCREMENTAL);
     assert!(syn::parse2::<incremental::Program>(source.to_token_stream()).is_err());
     assert!(syn::parse2::<incremental::strata::Program>(source.to_token_stream()).is_err());
     assert!(syn::parse2::<incremental::strata::source::Program>(source.to_token_stream()).is_err());
 }
 #[test]
 fn layout_syntax_round_trips_and_rejects_malformed_records() {
-    let source=authored(INCREMENTAL);
-    let tokens=source.to_token_stream();
-    assert_eq!(syn::parse2::<Program>(tokens.clone()).unwrap(),source);
-    for malformed in [tokens.to_string().replacen("key { 0", "key { -1",1),tokens.to_string().replacen("columns", "unknown",1)] {
+    let source = authored(INCREMENTAL);
+    let tokens = source.to_token_stream();
+    assert_eq!(syn::parse2::<Program>(tokens.clone()).unwrap(), source);
+    for malformed in [
+        tokens.to_string().replacen("key { 0", "key { -1", 1),
+        tokens.to_string().replacen("columns", "unknown", 1),
+    ] {
         assert!(syn::parse_str::<Program>(&malformed).is_err());
     }
 }
@@ -68,14 +73,17 @@ fn variant_order_does_not_redefine_layout_order_but_rewrites_preserve_both() {
     let source: Program = authored(INCREMENTAL);
     let mut target = source.clone();
     target.incremental.variants.reverse();
-    let analysis=incremental::contract::check(&target.incremental).unwrap();
-    (target.reads,target.negations)=cq_lang_datalog_storage::read_plan(&target,&analysis).unwrap();
+    let analysis = incremental::contract::check(&target.incremental).unwrap();
+    (target.reads, target.negations) =
+        cq_lang_datalog_storage::read_plan(&target, &analysis).unwrap();
     contract::check(&target).unwrap();
     assert_eq!(source.layouts, target.layouts);
     assert_eq!(source.delta_layouts, target.delta_layouts);
     assert!(check_rewrite(&source, &target).is_err());
-    let mut erased=source.clone();erased.reads.clear();
-    assert!(contract::check(&erased).is_err());assert!(check_rewrite(&source,&erased).is_err());
+    let mut erased = source.clone();
+    erased.reads.clear();
+    assert!(contract::check(&erased).is_err());
+    assert!(check_rewrite(&source, &erased).is_err());
 }
 
 #[test]
@@ -84,8 +92,9 @@ fn source_order_not_later_delta_bindings_determines_var_points_to_keys() {
     contract::check(&source).unwrap();
     let mut reordered = source.clone();
     reordered.incremental.variants.reverse();
-    let analysis=incremental::contract::check(&reordered.incremental).unwrap();
-    (reordered.reads,reordered.negations)=cq_lang_datalog_storage::read_plan(&reordered,&analysis).unwrap();
+    let analysis = incremental::contract::check(&reordered.incremental).unwrap();
+    (reordered.reads, reordered.negations) =
+        cq_lang_datalog_storage::read_plan(&reordered, &analysis).unwrap();
     contract::check(&reordered).unwrap();
     assert!(check_rewrite(&source, &reordered).is_err());
 
@@ -122,7 +131,8 @@ fn authored_constant_keys_do_not_bind_wildcards_or_repeated_new_variables() {
 
             variant 0 seed { R(*x) :- E(x,x,7), E(_,x,(1 + 2)); }
         }
-    }).unwrap();
+    })
+    .unwrap();
     contract::check(&source).unwrap();
     for index in 0..2 {
         let mut missing_constant = source.clone();
