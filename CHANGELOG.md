@@ -7,6 +7,12 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Datalog Storage/Round IRs record every decision formerly hard-coded in the
+  printer (providers, layout maintenance, phases, publication order,
+  termination, observer placement, key scope, output conversion); both
+  printers consume the records. Checked alternatives: BTreeMap layouts,
+  reversed member publication, later-position direct delta reads.
+
 - Datalog contracts admit any correct choice instead of the default pass's
   exact output; per-IR `check_rewrite` obligations replace identity checks,
   making Source / Strata / Storage rewrite plugins possible. New

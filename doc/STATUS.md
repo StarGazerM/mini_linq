@@ -284,9 +284,11 @@ coverage, any layout set whose recorded reads have bound or constant keys);
 rewrite plugins are live (test plugins in `features/datalog/test-passes`).
 `cq-datalog-testkit` adds a typed naive reference evaluator with ⊥ as panic.
 Open: hole interfaces accept only `pull` printers on the configured
-allowlist; printer-level decisions still implicit in `cq-datalog-print` are
-listed in the spec; some admitted Storage choices (direct read at a later
-position) are contract-tested but not compiled end to end.
+allowlist. Storage/Round now record every former printer decision (providers,
+maintenance, phases, publication order, termination, observer placement, key
+scope, output conversion; `7360ce8`, `11f7d59`); remaining printer premises:
+empty `Default` construction for seen sets and layout hosts, slice-backed
+sources for the parallel partition.
 
 Remaining Datalog work: rule-local aggregates; FlowLog comparison;
 partial-Rust multi-round refinement.
