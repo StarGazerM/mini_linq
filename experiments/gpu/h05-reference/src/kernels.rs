@@ -236,6 +236,26 @@ pub mod reference {
         }
     }
 
+    /// One packed ID column as plain u32 values for RCCL's column sort:
+    /// all rows in order, or through a row list (`selected` non-null).
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub fn decode_column(key: ColumnView, selected: *const u32, rows: u32, out: *mut u32) {
+        let mut i = thread::index_1d().get() as u32;
+        let stride = thread::gridDim_x() * 256;
+        while i < rows {
+            unsafe {
+                let row = if selected.is_null() { i } else { *selected.add(i as usize) };
+                *out.add(i as usize) = decode_u32(key, row as u64);
+            }
+            i = match i.checked_add(stride) {
+                Some(next) => next,
+                None => break,
+            };
+        }
+    }
+
     /// The query's Orders selection `date_start <= o_orderdate < date_end`,
     /// as one u32 flag per row for RCCL's flagged select.
     #[kernel]

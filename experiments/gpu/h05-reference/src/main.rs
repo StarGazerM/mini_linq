@@ -21,7 +21,7 @@ use gpu_device_columns::{Bounds, Buffer, Codec, ColumnView, EncodedColumn, Memor
 use kernels::*;
 use rccl_cub::{cuda::Launch, DeviceRadixSortBufferWorkspace, DoubleBuffer};
 use rccl_thrust::prelude::*;
-use rccl_thrust::{arithmetic_range, lower_bound, select_flagged, unique_copy_by};
+use rccl_thrust::{arithmetic_range, gather, lower_bound, select_flagged, sort_columns_lexicographic, unique_copy_by};
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, error::Error, fs, path::Path, sync::Arc, time::Instant};
 
@@ -210,19 +210,51 @@ fn build_index(
         }
         Ok(())
     };
-    let mut source = selected.as_ref().map(|selected| pointer(selected) as *const u32);
+    let source = selected.as_ref().map(|selected| pointer(selected) as *const u32);
+    // A multi-column ID key is ordered by RCCL's dispatching lexicographic
+    // column sort (per-column radix or tuple merge sort, chosen from the
+    // item count and bit widths); the first column is then decoded through
+    // that order, already sorted, for the directory.
+    let mut presorted = false;
     let bits = match &spec.key {
-        Key::Ids(columns) => {
-            // Lexicographic order: stable passes from the last column to the
-            // first; each pass gathers its column through the permutation so far.
-            for (column, domain) in columns[1..].iter().rev() {
-                fill(column, source)?;
-                let mut pairs = DoubleBuffer::paired((&mut keys, &mut order), (&mut alternate_keys, &mut alternate_order))
-                    .ok_or("radix double buffer extents differ")?;
-                rccl_cub::device_radix_sort_pairs_buffer(launch, &mut pairs, 0..key_bits(*domain), sort)?;
-                source = Some(pairs.current().1.cu_deviceptr() as *const u32);
-            }
+        Key::Ids(columns) if columns.len() == 1 => {
             fill(columns[0].0, source)?;
+            key_bits(columns[0].1)
+        }
+        Key::Ids(columns) => {
+            let plain = columns
+                .iter()
+                .map(|(column, _)| {
+                    let out = temporary::<u32>(stream, rows)?;
+                    module.decode_column(
+                        stream,
+                        &module.prepare_decode_column(launch_keys)?,
+                        base.view(column),
+                        source.unwrap_or(std::ptr::null()),
+                        rows as u32,
+                        pointer(&out),
+                    )?;
+                    Ok(out)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let widths: Vec<u32> = columns.iter().map(|(_, domain)| key_bits(*domain)).collect();
+            let mut permutation = temporary::<u32>(stream, rows)?;
+            sort_columns_lexicographic(exec, &plain.iter().collect::<Vec<_>>(), &widths, &mut permutation, None)?;
+            // Sorted positions index the selected rows; map them to base rows.
+            let base_order = match &selected {
+                Some(selected) => {
+                    let mut mapped = temporary::<u32>(stream, rows)?;
+                    gather(exec, selected.view(), permutation.view(), mapped.view_mut())?;
+                    release(stream, permutation)?;
+                    mapped
+                }
+                None => permutation,
+            };
+            fill(columns[0].0, Some(pointer(&base_order) as *const u32))?;
+            for buffer in plain.into_iter().chain([base_order]) {
+                release(stream, buffer)?;
+            }
+            presorted = true;
             key_bits(columns[0].1)
         }
         Key::Sorted { column, bounds } => {
@@ -241,7 +273,9 @@ fn build_index(
     let payload = {
         let mut pairs = DoubleBuffer::paired((&mut keys, &mut order), (&mut alternate_keys, &mut alternate_order))
             .ok_or("radix double buffer extents differ")?;
-        rccl_cub::device_radix_sort_pairs_buffer(launch, &mut pairs, 0..bits, sort)?;
+        if !presorted {
+            rccl_cub::device_radix_sort_pairs_buffer(launch, &mut pairs, 0..bits, sort)?;
+        }
         let (sorted_keys, sorted_order) = pairs.current();
         if let (Some(offsets), Some(entries)) = (offsets.as_mut(), spec.key.entries()) {
             lower_bound(exec, sorted_keys.view(), arithmetic_range(0_u32, 1, entries), offsets.view_mut())?;
