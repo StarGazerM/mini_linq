@@ -313,15 +313,15 @@ pub mod reference {
                         *p2_offset.add(1024) = lines;
                     }
                     thread::sync_threads();
-                    // Level L: Lineitem rows -> Supplier range, nation check.
+                    // Level L: Lineitem rows -> Supplier existence. Supplier binds no
+                    // new answer variable, so under set semantics one matching row
+                    // (supplier, nation) suffices; the scan stops at the first.
                     let mut line_base = 0u32;
                     while line_base < lines {
                         let mut order = [0u32; 4];
                         let mut supplier = [0u32; 4];
                         let mut nation = [0u32; 4];
-                        let mut first_match = [0u32; 4];
-                        let mut range_end = [0u32; 4];
-                        let mut matches = [0u32; 4];
+                        let mut found = [false; 4];
                         let mut item = 0usize;
                         #[unroll]
                         while item < 4 {
@@ -334,22 +334,16 @@ pub mod reference {
                                 order[item] = *p2_order.add(parent);
                                 supplier[item] = s;
                                 nation[item] = *p2_nation.add(parent);
-                                range_end[item] = supplier_end;
                                 let mut row = supplier_begin;
-                                while row < supplier_end {
-                                    if decode_u32(ix.supplier_nation, row as u64) == nation[item] {
-                                        if matches[item] == 0 {
-                                            first_match[item] = row;
-                                        }
-                                        matches[item] += 1;
-                                    }
+                                while row < supplier_end && !found[item] {
+                                    found[item] = decode_u32(ix.supplier_nation, row as u64) == nation[item];
                                     row += 1;
                                 }
                             }
                             item += 1;
                         }
-                        let (offset, block_total) =
-                            checked_scan(matches[0] + matches[1] + matches[2] + matches[3], meta);
+                        let hits = found[0] as u32 + found[1] as u32 + found[2] as u32 + found[3] as u32;
+                        let (offset, block_total) = checked_scan(hits, meta);
                         if tid == 0 {
                             *base_slot = if block_total > 0 {
                                 let base = emitted.fetch_add(block_total, AtomicOrdering::Relaxed);
@@ -366,18 +360,9 @@ pub mod reference {
                         item = 0;
                         #[unroll]
                         while item < 4 {
-                            if matches[item] == 1 {
+                            if found[item] {
                                 emit(out, destination, order[item], supplier[item], nation[item]);
                                 destination = destination.wrapping_add(1);
-                            } else if matches[item] > 1 {
-                                let mut row = first_match[item];
-                                while row < range_end[item] {
-                                    if decode_u32(ix.supplier_nation, row as u64) == nation[item] {
-                                        emit(out, destination, order[item], supplier[item], nation[item]);
-                                        destination = destination.wrapping_add(1);
-                                    }
-                                    row += 1;
-                                }
                             }
                             item += 1;
                         }

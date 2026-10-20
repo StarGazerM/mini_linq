@@ -455,7 +455,10 @@ direct-address nation array, value-range packed dedup, an unchecked
   the column's bounds). RCCL's radix controls are allocated once at setup.
 - **Plan R N C O L S**, chosen by counted prefix cardinalities over all 164
   connected left-deep orders. No key is assumed unique: every lookup is a range
-  and every range is expanded. Counts and offsets are u32; any sum that would
+  and every range is expanded, except the closing Supplier atom: it binds no new
+  answer variable, so under set semantics it is an existence test (any Supplier
+  row of that supplier with the bound nation), stopping at the first match.
+  Counts and offsets are u32; any sum that would
   exceed u32 fails the run through a device flag. Block scans in `expand` are
   RCCL's `block_scan_sum_256`.
 - **Query and dedup (GPU, timed):** `segments`, `expand` (emits the answer as
