@@ -5,6 +5,10 @@ edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
 
+[features]
+default = []
+hole-timing = []
+
 [dependencies]
 cq-lang-datalog-round = { path = "../../datalog/languages/dl-round" }
 cq-datalog-print = { path = "../../datalog/print" }

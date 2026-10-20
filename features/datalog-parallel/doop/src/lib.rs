@@ -17,8 +17,17 @@ macro_rules! relation_storage {
 
 pub mod mini_engine {
     pub use datalog_doop::mini_engine::run;
+    #[cfg(not(feature = "phase-timing"))]
     datalog_doop::doop_engine!(run_parallel, pipeline {
-        round = [cq_datalog_parallel::partition];
+        storage_rewrites = [cq_datalog_parallel::shard_storage];
+        round = [cq_datalog_parallel::partition(threshold = 64)];
+        print = cq_datalog_parallel::print_rounds;
+    });
+    #[cfg(feature = "phase-timing")]
+    datalog_doop::doop_engine!(run_parallel, pipeline {
+        storage_rewrites = [cq_datalog_parallel::shard_storage];
+        fork = cq_datalog::passes::fork(timing = phases;);
+        round = [cq_datalog_parallel::partition(threshold = 64)];
         print = cq_datalog_parallel::print_rounds;
     });
 }

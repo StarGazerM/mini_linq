@@ -170,6 +170,7 @@ version = "0.1.0"
 dependencies = [
  "ascent",
  "cq-datalog",
+ "cq-datalog-parallel-runtime",
  "cq-datalog-partition",
  "cq-datalog-rayon-print",
  "cq-lang-datalog-round",
@@ -178,6 +179,14 @@ dependencies = [
  "mini-linq",
  "rayon",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-parallel-runtime"
+version = "0.1.0"
+dependencies = [
+ "cq-storage",
+ "rayon",
 ]
 
 [[package]]
@@ -634,6 +643,7 @@ dependencies = [
  "ascent",
  "cq-datalog",
  "cq-datalog-parallel",
+ "cq-datalog-parallel-runtime",
  "cq-storage",
  "datalog-doop",
  "mini-linq",
@@ -647,6 +657,7 @@ dependencies = [
  "ascent",
  "cq-datalog",
  "cq-datalog-parallel",
+ "cq-datalog-parallel-runtime",
  "cq-storage",
  "cq-testkit",
  "datalog-oracle",

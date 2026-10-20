@@ -1,0 +1,11 @@
+[package]
+name = "cq-datalog-parallel-runtime"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+description = "Shard-owned full-tuple admission for parallel Datalog"
+
+[dependencies]
+cq-storage = { version = "0.1.0", path = "../../../runtime/cq-storage" }
+rayon = "1"

@@ -1,5 +1,5 @@
 [workspace]
-members = ["partition", "print", "oracle", "doop"]
+members = ["partition", "print", "runtime", "oracle", "doop"]
 resolver = "3"
 
 [package]
@@ -8,7 +8,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
-description = "Checked slice-one Datalog execution extension"
+description = "Checked sharded Datalog execution extension"
 
 [lib]
 proc-macro = true
@@ -17,6 +17,7 @@ proc-macro = true
 default = []
 counters = ["cq-datalog/counters", "cq-storage/counters"]
 phase-timing = ["cq-datalog/phase-timing"]
+hole-timing = ["cq-datalog-rayon-print/hole-timing"]
 
 [dependencies]
 cq-stage = { version = "0.1.0", path = "../../facade/cq-stage" }
@@ -26,6 +27,7 @@ cq-datalog-rayon-print = { path = "print" }
 syn = { version = "2", features = ["full"] }
 
 [dev-dependencies]
+cq-datalog-parallel-runtime = { path = "runtime" }
 cq-datalog = { path = "../datalog/facade/cq-datalog" }
 mini-linq = { version = "0.1.0", path = "../../facade/mini-linq" }
 cq-storage = { version = "0.1.0", path = "../../runtime/cq-storage" }

@@ -1,6 +1,6 @@
 //! Reusable realization of checked storage, rounds, admission and outputs.
-//! Alternative terminals supply only the phase evaluator, never a copy of the
-//! storage or publication printer. CQ joins remain inside the recorded queues.
+//! Alternative terminals supply phase evaluators and alternative publication
+//! realizations. CQ joins remain inside the recorded queues.
 //! Concrete provider types and initializers come from Storage; Round supplies
 //! admission, ordered publication operations, phase/loop control, termination,
 //! observer/key-set scope and output conversions. This terminal realizes those
@@ -56,12 +56,26 @@ pub fn compile_with(
 pub fn render_with(
     program: &Program,
     holes: &[TokenStream],
+    evaluator: impl FnMut(
+        &[RuleHole],
+        &RoundContext,
+        &[TokenStream],
+        &[Execution],
+    ) -> syn::Result<(TokenStream, TokenStream)>,
+) -> syn::Result<syn::Expr> {
+    render_with_publication(program, holes, evaluator, publication)
+}
+/// Realize checked holes with alternative publication realizations.
+pub fn render_with_publication(
+    program: &Program,
+    holes: &[TokenStream],
     mut evaluator: impl FnMut(
         &[RuleHole],
         &RoundContext,
         &[TokenStream],
         &[Execution],
     ) -> syn::Result<(TokenStream, TokenStream)>,
+    mut publish: impl FnMut(&RoundContext, &Stratum) -> Vec<TokenStream>,
 ) -> syn::Result<syn::Expr> {
     round::contract::check(program)?;
     ensure(
@@ -102,7 +116,7 @@ pub fn render_with(
                 quote!(let mut #next: #provider = #init;)
             })
             .collect();
-        let publish = publication(context, stratum);
+        let publish = publish(context, stratum);
         let lengths = stratum.termination.iter().map(|&i| {
             let delta = context.relations[i]
                 .delta_host
