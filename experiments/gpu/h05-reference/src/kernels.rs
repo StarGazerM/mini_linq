@@ -196,7 +196,8 @@ pub mod reference {
         }
     }
 
-    /// (key, row) pairs for the selected rows `selected[0..rows)` only.
+    /// (key, row) pairs through a row list or permutation `selected[0..rows)`:
+    /// a selection's rows, or the order of a previous stable sort pass.
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
@@ -210,26 +211,6 @@ pub mod reference {
                 *order.add(i as usize) = row;
             }
             i = match i.checked_add(stride) {
-                Some(next) => next,
-                None => break,
-            };
-        }
-    }
-
-    /// (outer << inner_bits | inner, row) pairs of a two-column ID key; the
-    /// host checks that the composite fits below 2^31.
-    #[kernel]
-    #[launch_bounds(256)]
-    #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub fn pair_keys_and_rows(outer: ColumnView, inner: ColumnView, inner_bits: u32, rows: u32, keys: *mut u32, order: *mut u32) {
-        let mut row = thread::index_1d().get() as u32;
-        let stride = thread::gridDim_x() * 256;
-        while row < rows {
-            unsafe {
-                *keys.add(row as usize) = (decode_u32(outer, row as u64) << inner_bits) | decode_u32(inner, row as u64);
-                *order.add(row as usize) = row;
-            }
-            row = match row.checked_add(stride) {
                 Some(next) => next,
                 None => break,
             };

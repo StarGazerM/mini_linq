@@ -58,10 +58,11 @@ impl Base {
 
 /// Key of one sorted index (rows stably sorted by key, payload gathered).
 enum Key {
-    /// Dense ID key over [0, domain): offsets for every ID.
-    Id { column: &'static str, domain: usize },
-    /// (outer, inner) ID pair, sorted by both; offsets by outer ID.
-    Pair { outer: &'static str, outer_domain: usize, inner: &'static str, inner_domain: usize },
+    /// Dense ID columns in level order (column, domain), sorted
+    /// lexicographically: one stable radix pass per column, last column
+    /// first, each later pass gathering its column through the permutation
+    /// so far. The directory gives offsets for every ID of the first column.
+    Ids(Vec<(&'static str, usize)>),
     /// i32 key: rows sorted by value; the sorted key is kept (a payload
     /// column) and searched, no dense directory.
     Sorted { column: &'static str, bounds: Bounds },
@@ -70,15 +71,14 @@ enum Key {
 impl Key {
     fn column(&self) -> &'static str {
         match self {
-            Key::Id { column, .. } | Key::Sorted { column, .. } => column,
-            Key::Pair { outer, .. } => outer,
+            Key::Ids(columns) => columns[0].0,
+            Key::Sorted { column, .. } => column,
         }
     }
-    /// Directory entries: one per outer ID plus the end.
+    /// Directory entries: one per first-column ID plus the end.
     fn entries(&self) -> Option<usize> {
         match self {
-            Key::Id { domain, .. } => Some(domain + 1),
-            Key::Pair { outer_domain, .. } => Some(outer_domain + 1),
+            Key::Ids(columns) => Some(columns[0].1 + 1),
             Key::Sorted { .. } => None,
         }
     }
@@ -192,50 +192,50 @@ fn build_index(
     let mut alternate_keys = temporary::<u32>(stream, rows)?;
     let mut alternate_order = temporary::<u32>(stream, rows)?;
     let launch_keys = strided(rows);
-    let (bits, step) = match (&spec.key, &selected) {
-        (Key::Id { column, domain }, None) => {
-            module.keys_and_rows(stream, &module.prepare_keys_and_rows(launch_keys)?, base.view(column), rows as u32, pointer(&keys), pointer(&order))?;
-            (key_bits(*domain), 1)
-        }
-        (Key::Id { column, domain }, Some(selected)) => {
-            module.selected_keys_and_rows(
+    let (key_ptr, order_ptr) = (pointer(&keys), pointer(&order));
+    // (key, row) pairs of one column, for all rows in order or through a
+    // row permutation (`source[i]`), as RCCL's pair sort input.
+    let fill = |column: &str, source: Option<*const u32>| -> Result<()> {
+        match source {
+            None => module.keys_and_rows(stream, &module.prepare_keys_and_rows(launch_keys)?, base.view(column), rows as u32, key_ptr, order_ptr)?,
+            Some(source) => module.selected_keys_and_rows(
                 stream,
                 &module.prepare_selected_keys_and_rows(launch_keys)?,
                 base.view(column),
-                pointer(selected) as *const u32,
+                source,
                 rows as u32,
-                pointer(&keys),
-                pointer(&order),
-            )?;
-            (key_bits(*domain), 1)
+                key_ptr,
+                order_ptr,
+            )?,
         }
-        (Key::Pair { outer, outer_domain, inner, inner_domain }, None) => {
-            let inner_bits = key_bits(*inner_domain);
-            let bits = key_bits(*outer_domain) + inner_bits;
-            if bits > 31 {
-                return Err(format!("{}: composite key needs {bits} bits, above 31", spec.name).into());
+        Ok(())
+    };
+    let mut source = selected.as_ref().map(|selected| pointer(selected) as *const u32);
+    let bits = match &spec.key {
+        Key::Ids(columns) => {
+            // Lexicographic order: stable passes from the last column to the
+            // first; each pass gathers its column through the permutation so far.
+            for (column, domain) in columns[1..].iter().rev() {
+                fill(column, source)?;
+                let mut pairs = DoubleBuffer::paired((&mut keys, &mut order), (&mut alternate_keys, &mut alternate_order))
+                    .ok_or("radix double buffer extents differ")?;
+                rccl_cub::device_radix_sort_pairs_buffer(launch, &mut pairs, 0..key_bits(*domain), sort)?;
+                source = Some(pairs.current().1.cu_deviceptr() as *const u32);
             }
-            module.pair_keys_and_rows(
-                stream,
-                &module.prepare_pair_keys_and_rows(launch_keys)?,
-                base.view(outer),
-                base.view(inner),
-                inner_bits,
-                rows as u32,
-                pointer(&keys),
-                pointer(&order),
-            )?;
-            (bits, 1_u32 << inner_bits)
+            fill(columns[0].0, source)?;
+            key_bits(columns[0].1)
         }
-        (Key::Sorted { column, bounds }, None) => {
+        Key::Sorted { column, bounds } => {
+            if selected.is_some() {
+                return Err(format!("{}: selections are supported on ID keys only", spec.name).into());
+            }
             let (min, bits) = match *bounds {
                 Bounds::Empty => (0, 0),
                 Bounds::Inclusive { min, max } => (min as i32, 64 - ((max - min) as u64).leading_zeros()),
             };
-            module.signed_keys_and_rows(stream, &module.prepare_signed_keys_and_rows(launch_keys)?, base.view(column), min, rows as u32, pointer(&keys), pointer(&order))?;
-            (bits, 0)
+            module.signed_keys_and_rows(stream, &module.prepare_signed_keys_and_rows(launch_keys)?, base.view(column), min, rows as u32, key_ptr, order_ptr)?;
+            bits
         }
-        (_, Some(_)) => return Err(format!("{}: selections are supported on ID keys only", spec.name).into()),
     };
     let mut offsets = spec.key.entries().map(|entries| temporary::<u64>(stream, entries)).transpose()?;
     let payload = {
@@ -244,7 +244,7 @@ fn build_index(
         rccl_cub::device_radix_sort_pairs_buffer(launch, &mut pairs, 0..bits, sort)?;
         let (sorted_keys, sorted_order) = pairs.current();
         if let (Some(offsets), Some(entries)) = (offsets.as_mut(), spec.key.entries()) {
-            lower_bound(exec, sorted_keys.view(), arithmetic_range(0_u32, step, entries), offsets.view_mut())?;
+            lower_bound(exec, sorted_keys.view(), arithmetic_range(0_u32, 1, entries), offsets.view_mut())?;
         }
         let sorted = sorted_order.cu_deviceptr() as *const u32;
         spec.payload
@@ -416,36 +416,31 @@ fn main() -> Result<()> {
         },
         IndexSpec {
             name: "nation_by_region",
-            key: Key::Id { column: "nation.n_regionkey", domain: regions.len() },
+            key: Key::Ids(vec![("nation.n_regionkey", regions.len())]),
             selection: None,
             payload: vec![("nation.n_nationkey", false, nations.bounds())],
         },
         IndexSpec {
             name: "customer_by_nation",
-            key: Key::Id { column: "customer.c_nationkey", domain: nations.len() },
+            key: Key::Ids(vec![("customer.c_nationkey", nations.len())]),
             selection: None,
             payload: vec![("customer.c_custkey", false, customers.bounds())],
         },
         IndexSpec {
             name: "orders_by_customer",
-            key: Key::Id { column: "orders.o_custkey", domain: customers.len() },
+            key: Key::Ids(vec![("orders.o_custkey", customers.len())]),
             selection: Some(Selection { column: "orders.o_orderdate", start: date_start, end: date_end }),
             payload: vec![("orders.o_orderkey", false, orders.bounds())],
         },
         IndexSpec {
             name: "lineitem_by_order",
-            key: Key::Id { column: "lineitem.l_orderkey", domain: orders.len() },
+            key: Key::Ids(vec![("lineitem.l_orderkey", orders.len())]),
             selection: None,
             payload: vec![("lineitem.l_suppkey", false, suppliers.bounds())],
         },
         IndexSpec {
             name: "supplier_by_nation_supplier",
-            key: Key::Pair {
-                outer: "supplier.s_nationkey",
-                outer_domain: nations.len(),
-                inner: "supplier.s_suppkey",
-                inner_domain: suppliers.len(),
-            },
+            key: Key::Ids(vec![("supplier.s_nationkey", nations.len()), ("supplier.s_suppkey", suppliers.len())]),
             selection: None,
             payload: vec![("supplier.s_suppkey", false, suppliers.bounds())],
         },
