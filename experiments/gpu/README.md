@@ -610,6 +610,21 @@ the reference: the build uses blocked runs, and the Nsight trace shows
 profile is unchanged from the i64 version: `cq_gpu_stream_1_r19` uses 104 B of
 stack, and `cq_gpu_stream_0_r21` has a 16 B frame with 24 B of spills.
 
+**Plan R** (`queries::plan_r`, runner argument `R`) is the reference
+traversal in written order (`order(written, coarse)`) with ASIA bound as
+`meta.asia` from `Catalog::text_id`. Structures:
+`[sorted_indexes, sorted_runs, prefix_runs, retype(dedup => DeviceSet<_, For>)]`.
+`sorted_indexes` records the reference's six builds with no hand-picked
+layout: Region by `r_name`, Nation by region, Customer by nation,
+date-selected Orders by customer, Lineitem by order, and Supplier as
+`PrefixRun [nation_key][supplier_key]`. Nation precedes supplier because
+the stream binds it first. Plan R is exact at SF1/SF10, and its query kernel
+has no stack or spills (54 registers). With the bound constant, its stream
+root is one `unit → bind` row and no expansion staging is recorded, so the
+printer traverses all five levels lane-locally from that one row: 882 ms at
+SF1 and 9.28 s at SF10. These are not result timings. Expansion staging is
+the next parity step.
+
 ## Implementation
 
 - `tiles`: cross-crate `#[device]` helpers for 256-thread exclusive scan, stable

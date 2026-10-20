@@ -255,6 +255,14 @@ pub fn join_filter(input: TokenStream) -> TokenStream {
         .into()
 }
 
+/// Record sorted index layouts for built results: a minimum chain cover of
+/// their read keys, columns ordered by binding order; `Rel => [a][b]`
+/// overrides one result's layout. Compose before `sorted_runs`/`prefix_runs`.
+#[proc_macro]
+pub fn sorted_indexes(input: TokenStream) -> TokenStream {
+    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), cq_rewrite_passes::sorted_indexes).into()
+}
+
 /// Retype eligible one-level payload builds to stable sorted runs.
 #[proc_macro]
 pub fn sorted_runs(input: TokenStream) -> TokenStream {

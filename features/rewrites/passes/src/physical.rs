@@ -251,8 +251,7 @@ pub fn build_host_reads(source: &ir::Program, arguments: TokenStream) -> syn::Re
             || !reads.iter().all(|(_, keys, _)| {
                 !keys.is_empty()
                     && keys.iter().all(|key| {
-                        matches!(&facts.rows[&name].types[key], syn::Type::Path(path)
-                    if path.path.is_ident("i32") || path.path.is_ident("i64") || path.path.is_ident("u32"))
+                        crate::indexes::sorted_key(&facts.rows[&name].types[key])
                     })
             })
         {

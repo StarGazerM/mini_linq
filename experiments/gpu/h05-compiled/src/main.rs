@@ -77,8 +77,8 @@ fn main() -> Result<(), Error> {
             .unwrap_or("/data/tpch-gpu/sf1"),
     );
     let selected = args.get(1).map(String::as_str).unwrap_or("both");
-    if !["A", "B", "both"].contains(&selected) {
-        return Err("usage: gpu-h05-compiled [DATA_DIR] [A|B|both] [RESULTS_JSON]".into());
+    if !["A", "B", "R", "both"].contains(&selected) {
+        return Err("usage: gpu-h05-compiled [DATA_DIR] [A|B|R|both] [RESULTS_JSON]".into());
     }
     let result_path = Path::new(
         args.get(2)
@@ -125,8 +125,15 @@ fn main() -> Result<(), Error> {
         (catalog.domain("orderkey")?, catalog.domain("suppkey")?, catalog.domain("nationkey")?);
     println!("sf={sf} host_load_ms={host_load_ms:.6} load_encode_ms={load_encode_ms:.6} declared_bytes={declared_bytes} compressed_bytes={}", catalog.bytes());
     let mut results = Vec::new();
-    type Query = for<'a> fn(&'a Rows) -> DeviceColumns<'a, queries::Answer, For>;
-    for (plan, query) in [("A", queries::plan_a as Query), ("B", queries::plan_b as Query)] {
+    // Plan R's ASIA constant at r_name's stored type, bound by field path.
+    let meta = queries::Meta { asia };
+    type Query<'m> = Box<dyn for<'a> Fn(&'a Rows) -> DeviceColumns<'a, queries::Answer, For> + 'm>;
+    let plans: [(&str, Query); 3] = [
+        ("A", Box::new(queries::plan_a)),
+        ("B", Box::new(queries::plan_b)),
+        ("R", Box::new(|rows| queries::plan_r(rows, &meta))),
+    ];
+    for (plan, query) in plans {
         if selected != "both" && selected != plan {
             continue;
         }

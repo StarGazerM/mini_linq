@@ -9,9 +9,11 @@ encoding are superseded, not pending implementation.
 
 - **Plan:** `cq_planners::order(le)` records early non-introducing lookups and
   demand-delayed coarse expansions, respecting written Rust Before boundaries.
-- **Representation and evaluation:** `sorted_runs`, `prefix_runs`,
-  `build_host_reads`, `retain_lookups` and explicit `DeviceSet` retyping record
-  the providers used by the GPU printer. `share` plus `repr … witness` retains
+- **Representation and evaluation:** `sorted_indexes` records which sorted
+  layouts serve each built result's reads (minimum chain cover of read keys,
+  levels in binding order, `Rel => [a][b]` overrides; EXT-SortedIndexes).
+  `sorted_runs`, `prefix_runs`, `build_host_reads`, `retain_lookups` and
+  explicit `DeviceSet` retyping record the providers used by the GPU printer. `share` plus `repr … witness` retains
   an eligible lookup until its forcing probe; `stage … expand` records
   segmented expansion. See [the co-design contract](GPU-LE-BACKEND-CODESIGN.md).
 - **Control:** CUDA tile streams implement those recorded decisions. The

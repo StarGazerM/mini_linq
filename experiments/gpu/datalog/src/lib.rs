@@ -92,88 +92,18 @@ fn build_reads_excluding(
 
 type FrozenRuns = Vec<Vec<Vec<usize>>>;
 
-/// Minimum chain cover of the actual demand sets. Each chain becomes one run;
-/// each successive difference becomes a recorded lexicographic trie level.
+/// Minimum chain cover of the actual demand sets (shared with
+/// `cq_rewrites::sorted_indexes`). Each chain becomes one run; each
+/// successive difference becomes a recorded lexicographic trie level.
 fn demand_chains(demands: &BTreeSet<Vec<usize>>) -> FrozenRuns {
-    let sets: Vec<_> = demands.iter().collect();
-    fn augment(
-        left: usize,
-        sets: &[&Vec<usize>],
-        seen: &mut [bool],
-        matched: &mut [Option<usize>],
-    ) -> bool {
-        for right in 0..sets.len() {
-            if !seen[right]
-                && sets[left].len() < sets[right].len()
-                && sets[left].iter().all(|key| sets[right].contains(key))
-            {
-                seen[right] = true;
-                if matched[right].is_none() || augment(matched[right].unwrap(), sets, seen, matched)
-                {
-                    matched[right] = Some(left);
-                    return true;
-                }
-            }
-        }
-        false
-    }
-    let mut matched = vec![None; sets.len()];
-    for left in 0..sets.len() {
-        augment(left, &sets, &mut vec![false; sets.len()], &mut matched);
-    }
-    let mut successor = vec![None; sets.len()];
-    for (right, left) in matched.iter().enumerate() {
-        if let Some(left) = left {
-            successor[*left] = Some(right);
-        }
-    }
-    let mut runs = Vec::new();
-    for start in 0..sets.len() {
-        if matched[start].is_some() {
-            continue;
-        }
-        let mut levels = vec![sets[start].clone()];
-        let mut current = start;
-        while let Some(next) = successor[current] {
-            levels.push(
-                sets[next]
-                    .iter()
-                    .copied()
-                    .filter(|key| !sets[current].contains(key))
-                    .collect(),
-            );
-            current = next;
-        }
-        runs.push(levels);
-    }
-    runs
+    // Frozen runs realize every prefix read themselves: any demand extends.
+    cq_rewrite_passes::chain_cover(demands, |_| true)
 }
 
 /// Independently check exact demand coverage by the recorded run prefixes.
 fn check_demand_chains(demands: &BTreeSet<Vec<usize>>, runs: &FrozenRuns) -> syn::Result<()> {
-    let mut prefixes = BTreeSet::new();
-    for run in runs {
-        let mut prefix = BTreeSet::new();
-        for level in run {
-            if level.is_empty()
-                || !level.windows(2).all(|pair| pair[0] < pair[1])
-                || level.iter().any(|key| !prefix.insert(*key))
-                || !prefixes.insert(prefix.iter().copied().collect::<Vec<_>>())
-            {
-                return Err(syn::Error::new(
-                    proc_macro2::Span::call_site(),
-                    "CQ_GPU_FROZEN_LEVELS: run levels must be nonempty, disjoint and cover each demand exactly once",
-                ));
-            }
-        }
-    }
-    if &prefixes != demands {
-        return Err(syn::Error::new(
-            proc_macro2::Span::call_site(),
-            "CQ_GPU_FROZEN_LEVELS: recorded run prefixes differ from checked Structures demands",
-        ));
-    }
-    Ok(())
+    cq_rewrite_passes::check_chain_cover(demands, runs)
+        .map_err(|detail| syn::Error::new(proc_macro2::Span::call_site(), format!("CQ_GPU_FROZEN_LEVELS: {detail}")))
 }
 
 #[cfg(test)]

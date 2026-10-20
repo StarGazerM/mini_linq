@@ -21,10 +21,12 @@
 //!
 #![forbid(unsafe_code)]
 
+mod indexes;
 mod physical;
 mod selection;
 mod structures;
 
+pub use indexes::{chain_cover, check_chain_cover, sorted_indexes};
 pub use physical::{
     build_host_reads, canon_prefixes, host_sets, lazy_semijoins, merge_joins,
     smallest_intersections,

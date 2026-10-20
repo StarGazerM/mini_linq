@@ -114,10 +114,25 @@ range. This is a payload representation, not a uniqueness assertion.
  \mathsf{oneLevelHashPayload}(b,K)\quad
  \mathsf{borrowedIntegralKey}(K)\quad\mathsf{streamReads}(b)
 }{\mathsf{retype}(b,\mathsf{SortedRun})\text{ preserves Structures}}
+
+\Rule{EXT-SortedIndexes}{
+ \mathcal{K}=\{K\mid \mathsf{streamRead}(b,K)\}\quad
+ \mathsf{integralKeys}(\mathcal{K})\quad
+ \mathcal{C}=\mathsf{minChainCover}(\mathcal{K})\ \text{with probed keys maximal}\\
+ \text{each chain's levels ordered by first binding in the reading stream}
+}{\mathsf{layouts}(b,\mathcal{C})\text{ preserves Physical and Structures}}
 \end{mathpar}
 The external sorted-runs rewrite changes only eligible built providers,
 not host fallbacks or smallest-intersection candidate providers. Its
 independent checker preserves Physical and rederives coverage.
+The sorted-indexes rewrite records which lexicographic layouts serve a built
+result's probe and semijoin reads: a fewest set of chains of read keys, each
+recorded as singleton levels. A key read by a payload probe ends its chain,
+since a payload probe reads all built levels. An explicit
+\code{Rel => [a][b]} choice replaces the default layout of one result and
+must serve every read. It decides no canonical (dedup or maintenance) layout
+and no representation type beyond the defaults that \code{sorted\_runs} and
+\code{prefix\_runs} then retype.
 
 \paragraph{Meaning.} That of the embedded Physical. Each Rust type is a
 representation whose abstraction function $\alpha$ satisfies the

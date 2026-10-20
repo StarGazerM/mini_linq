@@ -81,3 +81,35 @@ pub fn chain<'a>(input: &'a DeviceColumns<'_, Answer, For>) -> DeviceColumns<'a,
             Input(order_key,supplier_key,nation_key);
     }
 }
+
+/// Query constants at their stored types, computed on the host.
+pub struct Meta {
+    pub asia: i32,
+}
+
+/// The reference traversal R N C O L S in written order; sorted index
+/// layouts from `sorted_indexes`.
+pub fn plan_r<'a>(data: &'a Rows, meta: &Meta) -> DeviceColumns<'a, Answer, For> {
+    mini_linq::compile! {
+        pipeline {
+            plan = ::cq_planners::order(written, coarse);
+            physical = [::cq_rewrites::build_host_reads];
+            structures = [::cq_rewrites::sorted_indexes, ::cq_rewrites::sorted_runs, ::cq_gpu::prefix_runs,
+                ::cq_rewrites::retype(dedup => ::cq_gpu_runtime::DeviceSet<_, ::cq_gpu_runtime::For>)];
+            print = ::cq_gpu::print;
+        }
+        struct H05R;
+        relation Customer(c_custkey:u32,c_nationkey:u32) = (&data.customer);
+        relation Orders(o_orderkey:u32,o_custkey:u32,o_orderdate:i32) = (&data.orders);
+        relation Lineitem(l_orderkey:u32,l_suppkey:u32) = (&data.lineitem);
+        relation Supplier(s_suppkey:u32,s_nationkey:u32) = (&data.supplier);
+        relation Nation(n_nationkey:u32,n_regionkey:u32) = (&data.nation);
+        relation Region(r_regionkey:u32,r_name:i32) = (&data.region);
+        answer(order_key,supplier_key,nation_key) :-
+            Region(region_key,meta.asia), Nation(nation_key,region_key),
+            Customer(customer_key,nation_key),
+            Orders(order_key,customer_key,order_date),
+            #[total] if *order_date >= 8766 && *order_date < 9131,
+            Lineitem(order_key,supplier_key), Supplier(supplier_key,nation_key);
+    }
+}

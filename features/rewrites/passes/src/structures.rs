@@ -354,8 +354,7 @@ pub fn sorted_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<
                         })
                 });
         if stored.len() == 1
-            && matches!(ir::ungroup_type(&analysis.physical.rows[&name].types[stored[0]]),
-                Type::Path(p) if p.path.is_ident("i32") || p.path.is_ident("i64") || p.path.is_ident("u32"))
+            && crate::indexes::sorted_key(&analysis.physical.rows[&name].types[stored[0]])
         {
             keyed.ty = if owned {
                 syn::parse_quote!(::cq_storage::SortedRun<_, _, ::cq_storage::NoDense>)
