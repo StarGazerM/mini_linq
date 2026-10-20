@@ -748,6 +748,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "gpu-compress"
+version = "0.1.0"
+dependencies = [
+ "gpu-device-columns",
+ "serde_json",
+]
+
+[[package]]
 name = "gpu-datalog-ddisasm"
 version = "0.1.0"
 dependencies = [
@@ -843,6 +851,7 @@ dependencies = [
  "cuda-core",
  "cuda-device",
  "cuda-host",
+ "gpu-compress",
  "gpu-device-columns",
  "gpu-tiles",
  "rccl-cub",

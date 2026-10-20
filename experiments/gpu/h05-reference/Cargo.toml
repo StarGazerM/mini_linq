@@ -7,6 +7,7 @@ edition.workspace = true
 cuda-core.workspace = true
 cuda-device.workspace = true
 cuda-host.workspace = true
+gpu-compress = { path = "../compress" }
 gpu-device-columns = { path = "../device-columns" }
 gpu-tiles = { path = "../tiles" }
 rccl-cub.workspace = true

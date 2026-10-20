@@ -13,7 +13,8 @@
 mod kernels;
 
 use cuda_core::{CudaStream, DeviceBuffer, DeviceCopy, LaunchConfig1D};
-use gpu_device_columns::{Bounds, Buffer, Codec, EncodedColumn, Lane, MemoryResource, Pool};
+use gpu_compress::{Catalog, Domain, Kind, Schema, Source};
+use gpu_device_columns::{Bounds, Buffer, Codec, ColumnView, EncodedColumn, MemoryResource, Pool};
 use kernels::*;
 use rccl_cub::{cuda::Launch, DeviceRadixSortBufferWorkspace, DoubleBuffer};
 use rccl_thrust::prelude::*;
@@ -27,163 +28,56 @@ type Exec<'a> = rccl_thrust::cuda::Execution<'a, 'a, &'a MemoryResource>;
 const EXPAND_GRID: u32 = 568;
 const STRIDED_GRID: usize = 568 * 4;
 
-/// Source columns at their declared manifest types. Host-only, load-time.
-struct Source {
-    columns: BTreeMap<String, Vec<i64>>,
-    declared_bytes: usize,
-    constants: Value,
-    sf: Value,
-}
-
-impl Source {
-    fn load(dir: &Path) -> Result<Self> {
-        let manifest: Value = serde_json::from_slice(&fs::read(dir.join("manifest.json"))?)?;
-        let mut columns = BTreeMap::new();
-        let mut declared_bytes = 0;
-        for (relation, meta) in manifest["relations"].as_object().ok_or("relations missing")? {
-            let rows = meta["rows"].as_u64().ok_or("row count missing")? as usize;
-            if rows >= u32::MAX as usize {
-                return Err(format!("{relation}: row count exceeds the u32 row-ID domain").into());
-            }
-            for column in meta["columns"].as_array().ok_or("columns missing")? {
-                let name = column["name"].as_str().ok_or("column name missing")?;
-                let bytes = fs::read(dir.join(column["file"].as_str().ok_or("column file missing")?))?;
-                let width = match column["type"].as_str().ok_or("column type missing")? {
-                    "i64" => 8,
-                    "i32" => 4,
-                    other => return Err(format!("{relation}.{name}: unsupported declared type {other}").into()),
-                };
-                if bytes.len() != rows * width {
-                    return Err(format!("{relation}.{name}: byte length does not match its declared type").into());
-                }
-                let values = bytes
-                    .chunks_exact(width)
-                    .map(|b| {
-                        if width == 8 {
-                            i64::from_le_bytes(b.try_into().unwrap())
-                        } else {
-                            i32::from_le_bytes(b.try_into().unwrap()) as i64
-                        }
-                    })
-                    .collect();
-                declared_bytes += bytes.len();
-                columns.insert(format!("{relation}.{name}"), values);
-            }
-        }
-        Ok(Self { columns, declared_bytes, constants: manifest["constants"].clone(), sf: manifest["sf"].clone() })
-    }
-    fn col(&self, name: &str) -> Result<&[i64]> {
-        self.columns.get(name).map(Vec::as_slice).ok_or_else(|| format!("missing column {name}").into())
-    }
-    fn constant(&self, name: &str) -> Result<i32> {
-        let value = self.constants[name].as_i64().ok_or_else(|| format!("missing constant {name}"))?;
-        Ok(i32::try_from(value)?)
-    }
-    /// An INTEGER/DATE column at its declared 32-bit type.
-    fn i32_column(&self, name: &str) -> Result<Vec<i32>> {
-        self.col(name)?.iter().map(|&v| Ok(i32::try_from(v)?)).collect()
+/// H05's stored schema: five join domains; every join key stored as a domain
+/// ID, Region.name and the order date at their declared i32 type.
+fn schema() -> Schema {
+    let id = |domain: &str| Kind::Id(domain.to_string());
+    let columns = |list: &[(&str, Kind)]| list.iter().map(|(c, k)| (c.to_string(), k.clone())).collect();
+    let members = |list: &[&str]| list.iter().map(|m| m.to_string()).collect();
+    Schema {
+        domains: vec![
+            ("orderkey".into(), members(&["orders.o_orderkey", "lineitem.l_orderkey"])),
+            ("custkey".into(), members(&["customer.c_custkey", "orders.o_custkey"])),
+            ("suppkey".into(), members(&["supplier.s_suppkey", "lineitem.l_suppkey"])),
+            ("nationkey".into(), members(&["nation.n_nationkey", "customer.c_nationkey", "supplier.s_nationkey"])),
+            ("regionkey".into(), members(&["region.r_regionkey", "nation.n_regionkey"])),
+        ],
+        tables: vec![
+            ("region".into(), columns(&[("r_regionkey", id("regionkey")), ("r_name", Kind::I32)])),
+            ("nation".into(), columns(&[("n_nationkey", id("nationkey")), ("n_regionkey", id("regionkey"))])),
+            ("customer".into(), columns(&[("c_custkey", id("custkey")), ("c_nationkey", id("nationkey"))])),
+            (
+                "orders".into(),
+                columns(&[("o_orderkey", id("orderkey")), ("o_custkey", id("custkey")), ("o_orderdate", Kind::I32)]),
+            ),
+            ("lineitem".into(), columns(&[("l_orderkey", id("orderkey")), ("l_suppkey", id("suppkey"))])),
+            ("supplier".into(), columns(&[("s_suppkey", id("suppkey")), ("s_nationkey", id("nationkey"))])),
+        ],
     }
 }
 
-/// Order-preserving dictionary of one join domain: dense IDs in [0, len).
-struct Dictionary {
-    values: Vec<i64>,
-}
-
-impl Dictionary {
-    fn new(columns: &[&[i64]]) -> Result<Self> {
-        let mut values: Vec<i64> = columns.iter().flat_map(|c| c.iter().copied()).collect();
-        values.sort_unstable();
-        values.dedup();
-        if values.len() >= u32::MAX as usize {
-            return Err("dictionary exceeds the u32 ID domain".into());
-        }
-        Ok(Self { values })
-    }
-    fn ids(&self, column: &[i64]) -> Vec<u32> {
-        column.iter().map(|v| self.values.binary_search(v).expect("value in its domain") as u32).collect()
-    }
-    fn len(&self) -> usize {
-        self.values.len()
-    }
-    /// Bits of an ID: ceil(log2(len)).
-    fn bits(&self) -> u32 {
-        if self.len() <= 1 { 0 } else { 64 - ((self.len() - 1) as u64).leading_zeros() }
-    }
-    fn bounds(&self) -> Bounds {
-        if self.len() == 0 { Bounds::Empty } else { Bounds::Inclusive { min: 0, max: self.len() as i64 - 1 } }
-    }
-    fn value(&self, id: u32) -> i64 {
-        self.values[id as usize]
-    }
-}
-
-/// Compressed resident base tables (join keys as dictionary IDs).
+/// Stored columns addressed by their source names (`table.column`).
 struct Base {
-    columns: BTreeMap<&'static str, EncodedColumn>,
-    rows: BTreeMap<&'static str, usize>,
-    date_bounds: Bounds,
-    orders: Dictionary,
-    customers: Dictionary,
-    suppliers: Dictionary,
-    nations: Dictionary,
-    regions: Dictionary,
+    catalog: Catalog,
 }
 
 impl Base {
-    fn compress(pool: &Arc<Pool>, source: &Source) -> Result<Self> {
-        let orders = Dictionary::new(&[source.col("orders.o_orderkey")?, source.col("lineitem.l_orderkey")?])?;
-        let customers = Dictionary::new(&[source.col("customer.c_custkey")?, source.col("orders.o_custkey")?])?;
-        let suppliers = Dictionary::new(&[source.col("supplier.s_suppkey")?, source.col("lineitem.l_suppkey")?])?;
-        let nations = Dictionary::new(&[
-            source.col("nation.n_nationkey")?,
-            source.col("customer.c_nationkey")?,
-            source.col("supplier.s_nationkey")?,
-        ])?;
-        let regions = Dictionary::new(&[source.col("region.r_regionkey")?, source.col("nation.n_regionkey")?])?;
-        let mut columns = BTreeMap::new();
-        let mut rows = BTreeMap::new();
-        fn pack<L: Lane>(
-            pool: &Arc<Pool>,
-            columns: &mut BTreeMap<&'static str, EncodedColumn>,
-            rows: &mut BTreeMap<&'static str, usize>,
-            name: &'static str,
-            values: &[L],
-        ) -> Result<()> {
-            columns.insert(name, EncodedColumn::from_host(pool.clone(), values, Codec::For)?);
-            rows.insert(name, values.len());
-            Ok(())
-        }
-        let id_columns: [(&'static str, &Dictionary, &str); 11] = [
-            ("region.id", &regions, "region.r_regionkey"),
-            ("nation.id", &nations, "nation.n_nationkey"),
-            ("nation.region", &regions, "nation.n_regionkey"),
-            ("customer.id", &customers, "customer.c_custkey"),
-            ("customer.nation", &nations, "customer.c_nationkey"),
-            ("orders.id", &orders, "orders.o_orderkey"),
-            ("orders.customer", &customers, "orders.o_custkey"),
-            ("lineitem.order", &orders, "lineitem.l_orderkey"),
-            ("lineitem.supplier", &suppliers, "lineitem.l_suppkey"),
-            ("supplier.id", &suppliers, "supplier.s_suppkey"),
-            ("supplier.nation", &nations, "supplier.s_nationkey"),
-        ];
-        for (name, dictionary, column) in &id_columns {
-            pack(pool, &mut columns, &mut rows, name, &dictionary.ids(source.col(column)?))?;
-        }
-        pack(pool, &mut columns, &mut rows, "region.name", &source.i32_column("region.r_name")?)?;
-        let dates = source.i32_column("orders.o_orderdate")?;
-        let date_bounds = match (dates.iter().min(), dates.iter().max()) {
-            (Some(&min), Some(&max)) => Bounds::Inclusive { min: min as i64, max: max as i64 },
-            _ => Bounds::Empty,
-        };
-        pack(pool, &mut columns, &mut rows, "orders.date", &dates)?;
-        Ok(Self { columns, rows, date_bounds, orders, customers, suppliers, nations, regions })
+    fn split(name: &str) -> (&str, &str) {
+        name.split_once('.').expect("qualified column name")
     }
-    fn view(&self, name: &str) -> gpu_device_columns::ColumnView {
-        unsafe { self.columns[name].view() }
+    fn view(&self, name: &str) -> ColumnView {
+        let (table, column) = Self::split(name);
+        self.catalog.view(table, column).expect("stored column")
     }
-    fn bytes(&self) -> usize {
-        self.columns.values().map(EncodedColumn::bytes).sum()
+    fn rows(&self, name: &str) -> usize {
+        self.catalog.rows(Self::split(name).0).expect("stored table")
+    }
+    fn bounds(&self, name: &str) -> Bounds {
+        let (table, column) = Self::split(name);
+        self.catalog.column(table, column).expect("stored column").column.bounds()
+    }
+    fn domain(&self, name: &str) -> &Domain {
+        self.catalog.domain(name).expect("stored domain")
     }
 }
 
@@ -242,7 +136,7 @@ fn build_index(
     counts: &Counts,
 ) -> Result<BuiltIndex> {
     let stream = pool.stream();
-    let rows = base.rows[spec.key];
+    let rows = base.rows(spec.key);
     let entries = spec.domain + 1;
     let strided = LaunchConfig1D::new(rows.div_ceil(256).clamp(1, STRIDED_GRID) as u32, 256, 0);
 
@@ -358,12 +252,16 @@ fn main() -> Result<()> {
     let results_path = args.get(1).cloned();
 
     let read_started = Instant::now();
-    let source = Source::load(dir)?;
+    let source = Source::load_manifest(dir)?;
     let read_ms = read_started.elapsed().as_secs_f64() * 1000.0;
+    let constant = |name: &str| -> Result<i32> {
+        let value = source.manifest()["constants"][name].as_i64().ok_or_else(|| format!("missing constant {name}"))?;
+        Ok(i32::try_from(value)?)
+    };
     let constants = Constants {
-        asia: source.constant("asia_id")?,
-        date_start: source.constant("date_start_days")?,
-        date_end: source.constant("date_end_days")?,
+        asia: constant("asia_id")?,
+        date_start: constant("date_start_days")?,
+        date_end: constant("date_end_days")?,
     };
     let pool = Pool::new(0, 2 << 30, 16 << 30)?;
     // Setup: keep the stream-ordered allocator's memory across synchronizations.
@@ -384,12 +282,12 @@ fn main() -> Result<()> {
         }
     }
     let compress_started = Instant::now();
-    let base = Base::compress(&pool, &source)?;
+    let base = Base { catalog: Catalog::compress(&pool, &source, &schema())? };
     let compress_ms = compress_started.elapsed().as_secs_f64() * 1000.0;
-    let declared_bytes = source.declared_bytes;
-    let sf = source.sf.clone();
-    let nation_rows = base.rows["nation.id"];
-    let region_rows = base.rows["region.id"];
+    let declared_bytes = source.declared_bytes();
+    let sf = source.manifest()["sf"].clone();
+    let nation_rows = base.rows("nation.n_nationkey");
+    let region_rows = base.rows("region.r_regionkey");
     drop(source);
 
     let answer: Vec<(i64, i64, i64)> = {
@@ -408,27 +306,49 @@ fn main() -> Result<()> {
         rows
     };
 
-    let (order_bits, supplier_bits, nation_bits) = (base.orders.bits(), base.suppliers.bits(), base.nations.bits());
+    let (orders, customers, suppliers, nations, regions) =
+        (base.domain("orderkey"), base.domain("custkey"), base.domain("suppkey"), base.domain("nationkey"), base.domain("regionkey"));
+    let (order_bits, supplier_bits, nation_bits) = (orders.bits(), suppliers.bits(), nations.bits());
     if order_bits + supplier_bits + nation_bits > 64 {
         return Err("packed answer key exceeds 64 bits for these dictionary sizes".into());
     }
     let specs = [
-        IndexSpec { name: "nation_by_region", key: "nation.region", domain: base.regions.len(), payload: vec![("nation.id", false, base.nations.bounds())] },
-        IndexSpec { name: "customer_by_nation", key: "customer.nation", domain: base.nations.len(), payload: vec![("customer.id", false, base.customers.bounds())] },
+        IndexSpec {
+            name: "nation_by_region",
+            key: "nation.n_regionkey",
+            domain: regions.len(),
+            payload: vec![("nation.n_nationkey", false, nations.bounds())],
+        },
+        IndexSpec {
+            name: "customer_by_nation",
+            key: "customer.c_nationkey",
+            domain: nations.len(),
+            payload: vec![("customer.c_custkey", false, customers.bounds())],
+        },
         IndexSpec {
             name: "orders_by_customer",
-            key: "orders.customer",
-            domain: base.customers.len(),
-            payload: vec![("orders.id", false, base.orders.bounds()), ("orders.date", true, base.date_bounds)],
+            key: "orders.o_custkey",
+            domain: customers.len(),
+            payload: vec![("orders.o_orderkey", false, orders.bounds()), ("orders.o_orderdate", true, base.bounds("orders.o_orderdate"))],
         },
-        IndexSpec { name: "lineitem_by_order", key: "lineitem.order", domain: base.orders.len(), payload: vec![("lineitem.supplier", false, base.suppliers.bounds())] },
-        IndexSpec { name: "supplier_by_supplier", key: "supplier.id", domain: base.suppliers.len(), payload: vec![("supplier.nation", false, base.nations.bounds())] },
+        IndexSpec {
+            name: "lineitem_by_order",
+            key: "lineitem.l_orderkey",
+            domain: orders.len(),
+            payload: vec![("lineitem.l_suppkey", false, suppliers.bounds())],
+        },
+        IndexSpec {
+            name: "supplier_by_supplier",
+            key: "supplier.s_suppkey",
+            domain: suppliers.len(),
+            payload: vec![("supplier.s_nationkey", false, nations.bounds())],
+        },
     ];
     let counts: Vec<Counts> = specs
         .iter()
         .map(|spec| {
             Ok(Counts {
-                rows: Arc::new(Buffer::from_host(pool.clone(), &[base.rows[spec.key] as u64])?),
+                rows: Arc::new(Buffer::from_host(pool.clone(), &[base.rows(spec.key) as u64])?),
                 offsets: Arc::new(Buffer::from_host(pool.clone(), &[(spec.domain + 1) as u64])?),
             })
         })
@@ -443,7 +363,7 @@ fn main() -> Result<()> {
     // Setup: RCCL's reusable radix controls, one per index.
     let mut sorts = specs
         .iter()
-        .map(|spec| rccl_cub::device_radix_sort_pairs_buffer_workspace::<u32, u32>(&launch, base.rows[spec.key]))
+        .map(|spec| rccl_cub::device_radix_sort_pairs_buffer_workspace::<u32, u32>(&launch, base.rows(spec.key)))
         .collect::<std::result::Result<Vec<_>, _>>()?;
     let answer_bits = order_bits + supplier_bits + nation_bits;
     let segments_launch = module.prepare_segments(LaunchConfig1D::new(1, 256, 0))?;
@@ -470,8 +390,8 @@ fn main() -> Result<()> {
             if column == 0 { built[index].offsets.view() } else { built[index].payload[column - 1].view() }
         };
         let ix = Indexes {
-            region_id: base.view("region.id"),
-            region_name: base.view("region.name"),
+            region_id: base.view("region.r_regionkey"),
+            region_name: base.view("region.r_name"),
             region_rows: region_rows as u32,
             nation_offsets: view(0, 0),
             nation_id: view(0, 1),
@@ -562,9 +482,9 @@ fn main() -> Result<()> {
                 .iter()
                 .map(|&key| {
                     (
-                        base.orders.value((key >> order_shift) as u32),
-                        base.suppliers.value(((key >> nation_bits) & supplier_mask) as u32),
-                        base.nations.value((key & nation_mask) as u32),
+                        orders.value((key >> order_shift) as u32),
+                        suppliers.value(((key >> nation_bits) & supplier_mask) as u32),
+                        nations.value((key & nation_mask) as u32),
                     )
                 })
                 .collect();
@@ -610,9 +530,13 @@ fn main() -> Result<()> {
         .map(|(i, spec)| (spec.name, metric(measured.iter().map(|s| s.index_ms[i] as f64).collect())))
         .collect();
     let base_columns: Vec<Value> = base
-        .columns
-        .iter()
-        .map(|(name, c)| json!({"name": name, "rows": c.capacity(), "encoded_bytes": c.bytes()}))
+        .catalog
+        .tables()
+        .flat_map(|(table, stored)| {
+            stored.columns.iter().map(move |c| {
+                json!({"name": format!("{table}.{}", c.name), "rows": c.column.capacity(), "encoded_bytes": c.column.bytes()})
+            })
+        })
         .collect();
     let report = json!({
         "sf": sf,
@@ -627,11 +551,11 @@ fn main() -> Result<()> {
         "untimed_load": {"read_ms": read_ms, "compress_ms": compress_ms},
         "representation": {
             "declared_source_bytes": declared_bytes,
-            "compressed_base_bytes": base.bytes(),
+            "compressed_base_bytes": base.catalog.bytes(),
             "index_bytes": samples[0].index_bytes,
             "dictionary_ids": {
-                "orderkey": base.orders.len(), "custkey": base.customers.len(), "suppkey": base.suppliers.len(),
-                "nationkey": base.nations.len(), "regionkey": base.regions.len(),
+                "orderkey": orders.len(), "custkey": customers.len(), "suppkey": suppliers.len(),
+                "nationkey": nations.len(), "regionkey": regions.len(),
             },
             "id_bits": {"orderkey": order_bits, "suppkey": supplier_bits, "nationkey": nation_bits},
             "base_columns": base_columns,

@@ -1,0 +1,8 @@
+[package]
+name = "gpu-compress"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+gpu-device-columns = { path = "../device-columns" }
+serde_json.workspace = true
