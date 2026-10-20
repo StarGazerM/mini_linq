@@ -30,7 +30,7 @@ fn owned_columns_recursive_probes_and_frozen_negation_match_ascent() {
             }};
         }
         let expected = run!();
-        let actual = run!(round=[cq_datalog_parallel::partition]; print=cq_datalog_parallel::print_rounds;);
+        let actual = run!(storage_rewrites=[cq_datalog_parallel::shard_storage]; round=[cq_datalog_parallel::partition]; print=cq_datalog_parallel::print_rounds;);
         assert_eq!(actual, expected);
         ascent::ascent! {
             struct Oracle;

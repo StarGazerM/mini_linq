@@ -1,4 +1,4 @@
-//! Shared source corpus instantiated with the slice-one pipeline and Ascent.
+//! Shared source corpus instantiated with hybrid parallel execution and Ascent.
 //! Run `cargo run --release -p datalog-parallel-oracle -- bench [--threads N]`.
 //! Every timed answer is compared as a canonical set; golden bytes stay in base.
 //! CLI parsing, fixtures, timing and counter measurement delegate to the base
@@ -16,6 +16,7 @@ macro_rules! oracle_input {
     };
 }
 datalog_oracle::oracle_programs!(programs, ascent::ascent_par, crate::oracle_input, pipeline {
+    storage_rewrites = [cq_datalog_parallel::shard_storage];
     round = [cq_datalog_parallel::partition];
     print = cq_datalog_parallel::print_rounds;
 });

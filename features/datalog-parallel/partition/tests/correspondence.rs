@@ -1,5 +1,7 @@
 //! Exact erasure, authored expected CQ, and independent mutation rejection.
-use cq_datalog_partition::{check, compile};
+use cq_datalog_partition::{
+    ShardedProgram, check_sharded, compile_sharded, compile_sharded_with, compile_storage,
+};
 use cq_lang_datalog_round::{self as round, InputSource, Program, cq::BodyItem};
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
@@ -9,6 +11,7 @@ fn lower(tokens: TokenStream) -> Program {
     let strata = cq_datalog_stratify::compile(&source).unwrap();
     let incremental = cq_datalog_incremental::compile(&strata).unwrap();
     let storage = cq_datalog_storage::compile(&incremental).unwrap();
+    let storage = compile_storage(&storage).unwrap();
     cq_datalog_fork::compile(&storage).unwrap()
 }
 fn authored() -> Program {
@@ -24,22 +27,22 @@ fn authored() -> Program {
 }
 fn rejected(change: impl FnOnce(&mut Program)) {
     let source = authored();
-    let mut target = compile(&source).unwrap();
-    change(&mut target);
-    assert!(check(&source, &target).is_err());
+    let mut target = compile_sharded(&source).unwrap();
+    change(&mut target.round);
+    assert!(check_sharded(&source, &target).is_err());
 }
 
 #[test]
 fn partition_metadata_selects_flat_slices_and_preserves_schemas() {
     let source = authored();
-    let target = compile(&source).unwrap();
-    check(&source, &target).unwrap();
-    assert_eq!(round::erase(&target).unwrap(), source);
+    let target = compile_sharded(&source).unwrap();
+    check_sharded(&source, &target).unwrap();
+    assert_eq!(round::erase(&target.round).unwrap(), source);
     assert_eq!(
-        syn::parse2::<Program>(target.to_token_stream()).unwrap(),
+        syn::parse2::<ShardedProgram>(target.to_token_stream()).unwrap(),
         target
     );
-    let stratum = &target.context.strata[0];
+    let stratum = &target.round.context.strata[0];
     for (rule, expected_source) in [
         (&stratum.seeds[0], InputSource::Layout(0)),
         (&stratum.steps[0], InputSource::Delta(2)),
@@ -47,11 +50,12 @@ fn partition_metadata_selects_flat_slices_and_preserves_schemas() {
         let scan = rule.scan.as_ref().unwrap();
         assert_eq!(scan.source, expected_source);
         let execution = target
+            .round
             .execution
             .iter()
             .find(|entry| entry.hole == rule.hole)
             .unwrap();
-        let hole = &target.holes[rule.hole].cq;
+        let hole = &target.round.holes[rule.hole].cq;
         let declaration = &hole.declarations[hole.declarations.len() - 2];
         assert_eq!(declaration.name, execution.binding);
         assert_eq!(
@@ -72,8 +76,14 @@ fn partition_metadata_selects_flat_slices_and_preserves_schemas() {
     }
     // Key projections are neither scheduled for workers nor rewritten.
     for key in &stratum.keys {
-        assert_eq!(target.holes[key.hole], source.holes[key.hole]);
-        assert!(!target.execution.iter().any(|entry| entry.hole == key.hole));
+        assert_eq!(target.round.holes[key.hole], source.holes[key.hole]);
+        assert!(
+            !target
+                .round
+                .execution
+                .iter()
+                .any(|entry| entry.hole == key.hole)
+        );
     }
 }
 
@@ -134,14 +144,14 @@ fn partition_rewrites_only_first_occurrence_of_a_self_join() {
         output R;
         R(*x,*z) :- E(x,y), E(a,z);
     });
-    let target = compile(&source).unwrap();
-    let rule = &target.context.strata[0].seeds[0];
-    let chunk = &target.execution[0].binding;
-    let layout = &target.context.layouts[0].name;
+    let target = compile_sharded(&source).unwrap();
+    let rule = &target.round.context.strata[0].seeds[0];
+    let chunk = &target.round.execution[0].binding;
+    let layout = &target.round.context.layouts[0].name;
     let first: BodyItem = syn::parse_quote!(#chunk(x,y));
     let second: BodyItem = syn::parse_quote!(#layout(a,z));
     assert_eq!(
-        target.holes[rule.hole]
+        target.round.holes[rule.hole]
             .cq
             .query
             .body
@@ -151,8 +161,8 @@ fn partition_rewrites_only_first_occurrence_of_a_self_join() {
         vec![first, second]
     );
     let mut changed = target.clone();
-    changed.holes[rule.hole].cq.query.body[1] = syn::parse_quote!(#chunk(a,z));
-    assert!(check(&source, &changed).is_err());
+    changed.round.holes[rule.hole].cq.query.body[1] = syn::parse_quote!(#chunk(a,z));
+    assert!(check_sharded(&source, &changed).is_err());
 }
 
 #[test]
@@ -164,9 +174,9 @@ fn a_leading_guard_is_not_moved_to_enable_partitioning() {
         output R;
         R(*x) :- if enabled, E(x);
     });
-    let target = compile(&source).unwrap();
-    assert!(target.execution.is_empty());
-    assert_eq!(target, source);
+    let target = compile_sharded(&source).unwrap();
+    assert!(target.round.execution.is_empty());
+    assert_eq!(target.round, source);
 }
 
 #[test]
@@ -179,9 +189,9 @@ fn keyed_initial_scans_and_key_holes_are_not_partitioned() {
         output R;
         R(*y) :- E(7,y), !Blocked(y);
     });
-    let target = compile(&source).unwrap();
-    assert!(target.execution.is_empty());
-    assert_eq!(target, source);
+    let target = compile_sharded(&source).unwrap();
+    assert!(target.round.execution.is_empty());
+    assert_eq!(target.round, source);
 }
 
 #[test]
@@ -191,14 +201,17 @@ fn bindings_are_fresh_per_rule_and_avoid_source_identifiers() {
     let mut input = source.storage.incremental.strata.source.clone();
     input.observer = Some(syn::parse_quote!(__cq_datalog_parallel_chunk_0));
     source = lower(input.to_token_stream());
-    let target = compile(&source).unwrap();
-    assert_eq!(target.execution.len(), 2);
-    assert_ne!(target.execution[0].binding, target.execution[1].binding);
-    for entry in &target.execution {
+    let target = compile_sharded(&source).unwrap();
+    assert_eq!(target.round.execution.len(), 2);
+    assert_ne!(
+        target.round.execution[0].binding,
+        target.round.execution[1].binding
+    );
+    for entry in &target.round.execution {
         assert_ne!(entry.binding, "__cq_datalog_parallel_chunk_0");
     }
-    assert!(compile(&target).is_err());
-    assert!(cq_datalog_partition::compile_with(&source, quote!(unexpected)).is_err());
+    assert!(compile_sharded(&target.round).is_err());
+    assert!(compile_sharded_with(&source, quote!(unexpected)).is_err());
 }
 
 #[test]
@@ -208,12 +221,43 @@ fn empty_output_only_program_is_an_identity_rewrite() {
         relation E(x:i32) = (edges);
         output E;
     });
-    assert_eq!(compile(&source).unwrap(), source);
+    assert_eq!(compile_sharded(&source).unwrap().round, source);
 }
 
 #[test]
-fn partition_requires_slice_backed_delta_and_layout_buckets() {
+fn partition_requires_sharded_seen_vector_deltas_and_native_layouts() {
     let mutations: &[fn(&mut Program)] = &[
+        |program| {
+            program.storage.providers[2].seen =
+                syn::parse_quote!(::cq_storage::HashSet<(i32, i32,)>);
+            program.context.relations[2].providers = program.storage.providers[2].clone();
+        },
+        |program| {
+            program.storage.layouts[0].provider = syn::parse_quote!(
+                ::cq_datalog_parallel_runtime::ShardedIndex<(), (i32, i32,)>
+            );
+            program.context.layouts[0].provider = program.storage.layouts[0].provider.clone();
+        },
+        |program| {
+            program.storage.delta_layouts[0].provider = syn::parse_quote!(
+                ::cq_datalog_parallel_runtime::ShardedIndex<(), (i32, i32,)>
+            );
+            program.context.delta_layouts[0].provider =
+                program.storage.delta_layouts[0].provider.clone();
+        },
+        |program| {
+            program.storage.layouts[0].provider = syn::parse_quote!(
+                ::std::collections::HashMap<(), ::std::vec::Vec<(i32, i32,)>>
+            );
+            program.context.layouts[0].provider = program.storage.layouts[0].provider.clone();
+        },
+        |program| {
+            program.storage.delta_layouts[0].provider = syn::parse_quote!(
+                ::std::collections::HashMap<(), ::std::vec::Vec<(i32, i32,)>>
+            );
+            program.context.delta_layouts[0].provider =
+                program.storage.delta_layouts[0].provider.clone();
+        },
         |program| {
             let provider = &mut program.storage.providers[2];
             provider.delta = syn::parse_quote!(::std::collections::VecDeque<(i32, i32,)>);
@@ -235,25 +279,33 @@ fn partition_requires_slice_backed_delta_and_layout_buckets() {
         },
     ];
     for mutate in mutations {
-        let mut source = authored();
-        let mut target = compile(&source).unwrap();
+        let mut source = lower(quote! {
+            struct Closure;
+            relation Edge(x:i32,y:i32) = (edges);
+            relation Blocked(x:i32,y:i32) = (blocked);
+            relation Reach(x:i32,y:i32);
+            output Reach;
+            Reach(*x,*y) :- Edge(x,y), !Blocked(y,_);
+            Reach(*x,*z) :- Reach(x,y), Reach(y,z), !Blocked(z,_);
+        });
+        let mut target = compile_sharded(&source).unwrap();
         mutate(&mut source);
-        mutate(&mut target);
+        mutate(&mut target.round);
         round::contract::check(&source).unwrap();
-        round::contract::check(&target).unwrap();
-        let error = check(&source, &target).unwrap_err();
-        assert!(error.to_string().contains("slice partition requires"));
-        assert!(compile(&source).is_err());
+        round::contract::check(&target.round).unwrap();
+        let error = check_sharded(&source, &target).unwrap_err();
+        assert!(error.to_string().contains("sharded Round requires"));
+        assert!(compile_sharded(&source).is_err());
     }
 }
 
 #[test]
-fn ordered_maps_with_vector_buckets_remain_partitionable() {
+fn ordered_maps_with_vector_buckets_do_not_bypass_native_layout_ownership() {
     let mut source = authored();
     source.storage.layouts[0].provider = syn::parse_quote!(
         ::std::collections::BTreeMap<(), ::std::vec::Vec<(i32, i32,)>>
     );
     source.context.layouts[0].provider = source.storage.layouts[0].provider.clone();
-    let target = compile(&source).unwrap();
-    check(&source, &target).unwrap();
+    round::contract::check(&source).unwrap();
+    assert!(compile_sharded(&source).is_err());
 }

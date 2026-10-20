@@ -14,11 +14,11 @@ cq-datalog-support = { path = "../../datalog/support" }
 cq-lang-datalog-round = { path = "../../datalog/languages/dl-round" }
 proc-macro2 = "1"
 syn = { version = "2", features = ["full", "extra-traits"] }
+quote = "1"
+cq-stage = { version = "0.1.0", path = "../../../facade/cq-stage" }
 
 [dev-dependencies]
-quote = "1"
 cq-datalog-stratify = { path = "../../datalog/passes/stratify" }
 cq-datalog-incremental = { path = "../../datalog/passes/incremental" }
 cq-datalog-storage = { path = "../../datalog/passes/storage" }
 cq-datalog-fork = { path = "../../datalog/passes/fork" }
-cq-stage = { version = "0.1.0", path = "../../../facade/cq-stage" }

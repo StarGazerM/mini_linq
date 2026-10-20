@@ -18,6 +18,7 @@ counters = ["cq-datalog/counters", "cq-storage/counters", "datalog-oracle/counte
 [dependencies]
 datalog-oracle = { path = "../../datalog/oracle" }
 cq-datalog-parallel = { path = ".." }
+cq-datalog-parallel-runtime = { path = "../runtime" }
 cq-datalog = { path = "../../datalog/facade/cq-datalog" }
 mini-linq = { version = "0.1.0", path = "../../../facade/mini-linq" }
 cq-storage = { version = "0.1.0", path = "../../../runtime/cq-storage" }

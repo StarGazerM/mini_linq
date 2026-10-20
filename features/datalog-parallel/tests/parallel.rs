@@ -1,4 +1,4 @@
-//! Parallel answers are sets; deterministic counter builds also check sequence.
+//! Parallel admission order is unspecified; all engines are compared as sets.
 use std::collections::BTreeSet;
 
 fn assert_ascent<T: Ord + std::fmt::Debug + Clone>(actual: &[T], expected: Vec<T>) {
@@ -9,10 +9,6 @@ fn assert_ascent<T: Ord + std::fmt::Debug + Clone>(actual: &[T], expected: Vec<T
 }
 
 fn assert_same<T: Ord + Clone + std::fmt::Debug>(parallel: &[T], sequential: &[T]) {
-    // Production EDB canonicalization deliberately uses randomized hash state.
-    // Counters fix its seeds, isolating chunk/hole order from that randomness.
-    #[cfg(feature = "counters")]
-    assert_eq!(parallel, sequential);
     assert_eq!(
         parallel.iter().cloned().collect::<BTreeSet<_>>(),
         sequential.iter().cloned().collect()
@@ -20,7 +16,7 @@ fn assert_same<T: Ord + Clone + std::fmt::Debug>(parallel: &[T], sequential: &[T
 }
 
 #[test]
-fn self_join_matches_sequential_order_and_ascent_in_local_pools() {
+fn self_join_matches_sequential_sets_and_ascent_in_local_pools() {
     for threads in [2, 4] {
         rayon::ThreadPoolBuilder::new()
             .num_threads(threads)
@@ -52,7 +48,7 @@ fn self_join_matches_sequential_order_and_ascent_in_local_pools() {
                     };
                 }
                     let sequential = run!();
-                    let parallel = run!(round = [cq_datalog_parallel::partition]; print = cq_datalog_parallel::print_rounds;);
+                    let parallel = run!(storage_rewrites = [cq_datalog_parallel::shard_storage]; round = [cq_datalog_parallel::partition]; print = cq_datalog_parallel::print_rounds;);
                     assert_same(&parallel, &sequential);
                     ascent::ascent! {
                         struct Oracle;
@@ -98,7 +94,7 @@ fn later_delta_negation_generators_and_multiple_outputs_match_ascent() {
             }};
         }
         let sequential = run!();
-        let parallel = run!(round = [cq_datalog_parallel::partition]; print = cq_datalog_parallel::print_rounds;);
+        let parallel = run!(storage_rewrites = [cq_datalog_parallel::shard_storage]; round = [cq_datalog_parallel::partition]; print = cq_datalog_parallel::print_rounds;);
         assert_same(&parallel.0, &sequential.0);
         assert_same(&parallel.1, &sequential.1);
         assert_same(&parallel.2, &sequential.2);
@@ -138,7 +134,7 @@ fn resumed_stages_accept_the_extension_pipeline() {
             }
             .collect::<Vec<_>>();
             let stratified = cq_datalog::passes::incremental! {
-                pipeline { cq_datalog::passes::storage, cq_datalog::passes::fork, cq_datalog_parallel::partition, cq_datalog_parallel::print_rounds };
+                pipeline { cq_datalog::passes::storage, cq_datalog_parallel::shard_storage, cq_datalog::passes::fork, cq_datalog_parallel::partition, cq_datalog_parallel::print_rounds };
                 struct Copy;
                 relation Edge(x:i32,y:i32) = (&edges);
                 relation Out(x:i32,y:i32);
@@ -148,7 +144,7 @@ fn resumed_stages_accept_the_extension_pipeline() {
             }
             .collect::<Vec<_>>();
             let seminaive = cq_datalog::passes::storage! {
-                pipeline { cq_datalog::passes::fork, cq_datalog_parallel::partition, cq_datalog_parallel::print_rounds };
+                pipeline { cq_datalog_parallel::shard_storage, cq_datalog::passes::fork, cq_datalog_parallel::partition, cq_datalog_parallel::print_rounds };
                 struct Copy;
                 relation Edge(x:i32,y:i32) = (&edges);
                 relation Out(x:i32,y:i32);
@@ -168,7 +164,7 @@ fn resumed_stages_accept_the_extension_pipeline() {
 }
 
 #[test]
-fn edb_only_outputs_preserve_sets_and_deterministic_sequence() {
+fn edb_only_outputs_preserve_sets() {
     rayon::ThreadPoolBuilder::new()
         .num_threads(2)
         .build()
@@ -186,7 +182,7 @@ fn edb_only_outputs_preserve_sets_and_deterministic_sequence() {
                     }.collect::<Vec<_>>()
                 };
             }
-                let parallel = run!(round = [cq_datalog_parallel::partition]; print = cq_datalog_parallel::print_rounds;);
+                let parallel = run!(storage_rewrites = [cq_datalog_parallel::shard_storage]; round = [cq_datalog_parallel::partition]; print = cq_datalog_parallel::print_rounds;);
                 assert_same(&parallel, &run!());
                 ascent::ascent! {
                     struct Oracle;
@@ -214,7 +210,7 @@ fn observer_stays_on_the_evaluating_thread() {
             let calls = std::rc::Rc::new(std::cell::Cell::new(0));
             let input: Vec<_> = (0..2200).map(|x| (x,)).collect();
             let rows = cq_datalog::datalog! {
-                pipeline { round = [cq_datalog_parallel::partition]; print = cq_datalog_parallel::print_rounds; }
+                pipeline { storage_rewrites = [cq_datalog_parallel::shard_storage]; round = [cq_datalog_parallel::partition]; print = cq_datalog_parallel::print_rounds; }
                 observe = (|_, _| {
                     assert_eq!(std::thread::current().id(), caller);
                     calls.set(calls.get() + 1);
@@ -245,7 +241,7 @@ fn worker_panics_propagate_without_returning_partial_answers() {
         pool.install(|| {
             let input: Vec<_> = (0..2200).map(|x| (x,)).collect();
             cq_datalog::datalog! {
-                pipeline { round = [cq_datalog_parallel::partition]; print = cq_datalog_parallel::print_rounds; }
+                pipeline { storage_rewrites = [cq_datalog_parallel::shard_storage]; round = [cq_datalog_parallel::partition]; print = cq_datalog_parallel::print_rounds; }
                 struct Panics;
                 relation Input(x:i32) = (&input);
                 relation Out(x:i32);
@@ -285,11 +281,41 @@ fn generated_bindings_do_not_shadow_rust_captures() {
         };
     }
     let sequential = run!();
-    let parallel =
-        run!(round = [cq_datalog_parallel::partition]; print = cq_datalog_parallel::print_rounds;);
+    let parallel = run!(storage_rewrites = [cq_datalog_parallel::shard_storage]; round = [cq_datalog_parallel::partition]; print = cq_datalog_parallel::print_rounds;);
     assert_same(&parallel, &sequential);
     assert_eq!(
         parallel.into_iter().collect::<BTreeSet<_>>(),
         (55..2255).map(|x| (x,)).collect()
     );
+}
+
+#[test]
+fn small_work_threshold_evaluates_inline_and_preserves_sets() {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(15)
+        .build()
+        .unwrap()
+        .install(|| {
+            let caller = std::thread::current().id();
+            let inputs: Vec<_> = (0..31_i32).map(|x| (x,)).collect();
+            let checked = |x: i32| {
+                assert_eq!(std::thread::current().id(), caller);
+                x
+            };
+            let actual = cq_datalog::datalog! {
+                pipeline {
+                    storage_rewrites = [cq_datalog_parallel::shard_storage];
+                    round = [cq_datalog_parallel::partition(threshold = 1024, grain = 1)];
+                    print = cq_datalog_parallel::print_rounds;
+                }
+                struct Inline;
+                relation Input(x:i32) = (&inputs);
+                relation Reach(x:i32);
+                output Reach;
+                Reach(checked(*x)) :- Input(x);
+                Reach(checked(*x + 1)) :- Reach(x), if *x < 31;
+            }
+            .collect::<BTreeSet<_>>();
+            assert_eq!(actual, (0..=31).map(|x| (x,)).collect());
+        });
 }

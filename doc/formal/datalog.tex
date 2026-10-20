@@ -479,39 +479,118 @@ records, observers and output conversions, plus one nested CQ macro invocation
 per hole. It never prints joins or substitutes a default choice for a supplied
 record. CQ's selected terminal printer expands each hole later. Shared Datalog
 printing operations live in \code{cq-datalog-print}; extension printers reuse
-them. As with core terminal printers, there is no independent Rust equivalence
+them through phase evaluation and alternative publication realizations.
+The default realization and expansion remain unchanged.
+As with core terminal printers, there is no independent Rust equivalence
 checker: contract checks, baseline expansion comparison and executable oracle
 agreement supply evidence, not a general Rust refinement proof.
 
-\subsection{Parallel partition: Round to annotated Round}
-The separate extension accepts an unannotated source, checks both Round
-contracts, and requires exact erasure of the target to the source, including
-policies and per-hole CQ queues. It records exactly one annotation per
-eligible rule scan, in component seed/step order, selecting occurrence zero
-and strategy \code{rayon\_slice1}. The Round certificate checks a fresh direct
-scan binding and one renamed leading positive occurrence; negative key sets
-are not partitioned.
-The slice-one checker additionally requires each partitioned delta provider,
-or the payload type (second generic argument) of a partitioned layout map,
-to be explicitly \code{::std::vec::Vec<T>}. Opaque aliases and non-vector
-containers remain admissible in base Storage but are rejected by this extension
-when selected for partitioning. Ordered maps with vector buckets remain
-eligible. This checked representation premise supplies the contiguous
-\code{as\_slice()} view consumed by the Rayon printer.
+\subsection{Parallel partition: Round to extension-owned annotated Round}
+The separate extension accepts an unannotated source with sharded admission,
+checks both Round contracts, and requires exact erasure of the embedded target
+Round to the source, including policies and per-hole CQ queues. It records
+exactly one annotation per eligible rule scan, in component seed/step order,
+selecting occurrence zero and strategy \code{rayon\_sharded}. The Round
+certificate checks a fresh direct scan binding and one renamed leading
+positive occurrence; negative key sets are not partitioned.
+The extension requires vector-backed delta inputs and a native layout's
+contiguous vector bucket for a key-zero scan. Opaque aliases and non-vector
+containers remain admissible in base Storage but are not supported by this
+extension.
 \begin{mathpar}
-\Rule{CK-DL-Partition}{\mathrm{erase}(t)=s\quad
- s\text{ is unannotated, with vector-backed partitioned inputs}\quad
+\Rule{CK-DL-Partition}{\mathrm{erase}(t.\mathrm{round})=s\quad
+ s\text{ is unannotated, with certified admission and native layout providers}\quad
  t\text{ has the exact ordered scan certificates}}
  {\mathrm{check}_{\mathrm{partition}}(s,t)}
 \end{mathpar}
-The extension printer checks this correspondence against the erased program.
-It partitions immutable scans into indexed Rayon chunks with grain
-$\max(1024,\lfloor n/(4\,\mathrm{threads})\rfloor)$ and evaluates holes
-concurrently in a scope. Admission remains sequential in hole/chunk order;
-publication, observers, output conversion and timing reuse the base printing
-library. This is not sharded admission or maintenance. Its refinement needs
-the same purity, provider and partial-prefix premises as sequential execution;
-the certificate alone does not prove safe evaluation of arbitrary partial Rust.
+The printer partitions the same immutable leading scan into indexed Rayon
+chunks with grain $\max(g,\lfloor n/(4\,\mathrm{threads})\rfloor)$, where
+$g$ is the recorded minimum grain (default 64). Inline evaluation requires
+both total member delta size and the sum of driving scan lengths over holes
+to be below the recorded threshold (default 1024); DOOP selects 64 explicitly.
+A one-worker pool also evaluates inline. Thus a small delta cannot serialize
+an expensive full-input hole. This avoids narrow-delta task overhead without changing
+the selected occurrence or CQ rule. A different occurrence would require a
+new checked rule; it is not an unchecked performance choice.
+
+\subsection{Sharded admission and exclusive-layout publication (extension)}
+The extension's Storage rewrite replaces only canonical IDB membership;
+full/delta layout maps, all other Storage records and CQ queues are unchanged.
+A Round-to-extension pass records the small-work threshold, partition grain,
+admission shard-count policy and ownership/publication certificate. None of
+these parallel choices belongs to the base language or default expansion.
+\begin{mathpar}
+\Rule{CK-DL-ShardStorage}{\mathrm{WF}_{\mathrm{Storage}}(s)\quad
+ \mathrm{WF}_{\mathrm{Storage}}(t)\quad
+ t\text{ changes only canonical IDB membership providers}}
+ {\mathrm{check}_{\mathrm{shardStorage}}(s,t)}
+\end{mathpar}
+Let $S$ be a power of two at least the worker count and let
+$h_S(x)=h(x)\mathbin{\&}(S-1)$. Canonical admission uses the full tuple:
+$C_i=\{r\in C\mid h_S(r)=i\}$, so equal tuples always share a shard.
+Each shard owns its \code{seen} set exclusively and inserts candidates once;
+its newly admitted rows form $N_i$. Concatenation is in shard order, but
+output order is unspecified. The termination condition is any admitted row.
+\begin{mathpar}
+\Rule{DL-ShardedAdmission}{N_i=C_i\setminus A_i\quad A'_i=A_i\cup C_i
+ \quad 0\leq i<S}
+ {\mathrm{set}(\mathrm{concat}_{i=0}^{S-1}N_i)=C\setminus A}
+\end{mathpar}
+Each native layout has exactly one owner task during publication. Full layouts
+extend their previous state; after all full-layout tasks join, relation
+containers extend and deltas swap. A second scope replaces each delta map with
+its recorded default provider and rebuilds it, including empty deltas, then joins before evaluation.
+The original \code{IndexRead}/\code{Rows} implementations serve CQ holes
+without fallback index construction or a shard-routing hash on every probe.
+\begin{mathpar}
+\Rule{DL-LayoutPublication}{\mathrm{owner}\text{ is a bijection on layouts}\quad
+ L'_\ell=L_\ell\cup\mathrm{layout}_\ell(N)\quad
+ \text{all full owners join before delta replacement}}
+ {\forall\ell.\ \alpha(L'_\ell)=\alpha(L_\ell)\cup\mathrm{layout}_\ell(N)}
+\Rule{CK-DL-ShardOwnership}{
+ \{[i,i+1)\mid 0\leq i<S\}\text{ disjointly covers admission shards}\quad
+ \mathrm{owner}\text{ is total and injective on each full/delta layout domain}\quad
+ \text{every required layout completes before evaluation}}
+ {\mathrm{check}_{\mathrm{shardedRound}}(s,t)}
+\end{mathpar}
+The checker validates admission's symbolic shard ownership and whole-layout
+owner bijections directly, without invoking the certificate producer. It checks
+complete membership/coverage and each stratum's publication barriers. The printer
+uses certified layout lists and owner labels to generate and order its tasks.
+Reordered certificates and valid owner permutations are accepted. Scoped tasks
+receive exclusive mutable seen shards or native maps, never locks. Below
+the recorded candidate threshold, admission runs inline while preserving shard
+concatenation order; publication similarly avoids tasks for small next sets.
+Purity, lawful hashing/equality/cloning and the partial-Rust prefix premises
+remain required. Neither ownership checking nor the counters regression is a
+general Rust equivalence proof.
+The base printing library exports generic \code{full\_insert},
+\code{all\_extend}, \code{delta\_swap} and \code{delta\_rebuild} generators.
+Both terminals reuse those operations; the extension changes only their
+grouping into checked phases. Delta rebuilds use default replacement in both
+terminals, preserving the base expansion rather than silently using \code{clear}.
+The extension printer's default-off \code{hole-timing} feature emits per-hole
+and per-chunk evaluation times, input/candidate counts, partition status and
+the erased CQ rule text. No timers, atomics or logging are emitted without
+that feature. Chunk time excludes record emission; hole wall time includes
+chunk-record output, so diagnostic times are not performance benchmark times.
+
+\paragraph{Measured design choice.}
+The initial 1024-row minimum grain left the dominant cast/points-to hole with
+only about 3.2 chunks per round in avrora and 4.3 in xalan. At 15 workers,
+the maximum chunk accounted for about 50\% and 33\% of its aggregate work,
+respectively. The same leading occurrence can therefore be split more finely;
+these observations do not establish a memory-bandwidth limit.
+The rejected sharded-layout prototype added a routing hash before each native
+map hash. A corrected fast-hash prototype with threshold 64 took 1.052, 1.916,
+2.779 and 1.783 seconds in phase-only runs for cassandra, avrora, xalan and
+tomcat at 15 workers. The selected native-layout hybrid took 0.860, 1.684,
+2.529 and 1.161 seconds respectively, retaining sharded admission while
+removing the extra probe hash. These are diagnostic phase-only observations,
+not the isolated uninstrumented acceptance timings. The hybrid's counters
+regression observes 22000 native probes in both sequential and parallel
+executions and zero fallback builds. The rejected index provider is removed,
+not retained as an unmeasured default or compatibility path.
 
 \paragraph{Crate layout (inside \code{features/datalog}).}
 \begin{center}
