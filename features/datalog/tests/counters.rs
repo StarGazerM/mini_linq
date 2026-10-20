@@ -22,7 +22,7 @@ fn reach_reuses_indexes_across_every_round() {
         let cost = cq_storage::counters::snapshot();
         assert_eq!(rows, (0..n).map(|x| (x,)).collect());
         assert_eq!(cost.index_builds, 0);
-        // Sequential chunks retain the original whole-host Rows realization.
+        // Sequential scans retain the original whole-host Rows realization.
         // Raw inputs: n; grouped seed: 2; deltas: n; edge matches: n - 1.
         assert_eq!(cost.rows_enumerated, 3 * n as u64 + 1);
         println!("{n}\t{}\t{}", cost.index_builds, cost.rows_enumerated);
@@ -96,41 +96,3 @@ fn alternating_empty_delta_indexes_never_fall_back_to_vec_builds() {
     assert_eq!(cq_storage::counters::snapshot().index_builds, 0);
 }
 
-#[test]
-fn parallel_holes_reuse_full_and_delta_layouts_without_fallback_builds() {
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(4)
-        .build()
-        .unwrap();
-    pool.install(|| {
-        let edges: Vec<_> = (0..1100_i32)
-            .flat_map(|x| [(3 * x, 3 * x + 1), (3 * x + 1, 3 * x + 2)])
-            .collect();
-        macro_rules! run {
-                ($($mode:tt)*) => {
-                    cq_datalog::datalog! {
-                        $($mode)*
-                        struct IndexedParallel;
-                        relation Edge(x:i32,y:i32) = (&edges);
-                        relation Reach(x:i32,y:i32);
-                        output Reach;
-                        Reach(*x,*y) :- Edge(x,y);
-                        Reach(*x,*z) :- Reach(x,y), Reach(y,z);
-                        Reach(*x,*z) :- Edge(x,y), Reach(y,z);
-                        Reach(*x,*z) :- Edge(y,z), Reach(x,y);
-                        Reach(*x,*y) :- Edge(x,y), Reach(x,y);
-                    }.collect::<Vec<_>>()
-                };
-            }
-        let sequential = run!();
-        // Core counters are thread-local: reset and sample every worker,
-        // rather than accidentally inspecting only the installing thread.
-        pool.broadcast(|_| cq_storage::counters::reset());
-        let parallel = run!(parallel;);
-        assert_eq!(parallel, sequential);
-        assert_eq!(parallel.len(), 3300);
-        let costs = pool.broadcast(|_| cq_storage::counters::snapshot());
-        assert_eq!(costs.iter().map(|cost| cost.index_builds).sum::<u64>(), 0);
-        assert!(costs.iter().map(|cost| cost.rows_enumerated).sum::<u64>() > 0);
-    });
-}

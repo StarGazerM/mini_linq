@@ -15,8 +15,7 @@ default = []
 phase-timing = ["cq-datalog/phase-timing"]
 
 [dependencies]
-ascent = { version = "0.8", default-features = false, features = ["par"] }
-rayon.workspace = true
+ascent = { version = "0.8", default-features = false }
 ahash = "0.8"
 cq-datalog.workspace = true
 mini-linq.workspace = true

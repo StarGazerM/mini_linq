@@ -18,6 +18,31 @@ fn documented_language_entry_executes_without_a_surface_wrapper() {
 }
 
 #[test]
+fn named_datalog_phases_and_nested_cq_configuration_execute() {
+    let edges = [(1_i32, 2_i32), (2, 3)];
+    let answers: BTreeSet<_> = cq_datalog::datalog! {
+        pipeline {
+            surface = [];
+            stratify = cq_datalog::passes::stratify;
+            incremental = cq_datalog::passes::incremental;
+            storage = cq_datalog::passes::storage;
+            storage_rewrites = [];
+            fork = cq_datalog::passes::fork;
+            round = [];
+            print = cq_datalog::passes::print_rounds;
+            cq = pipeline { plan = mini_linq::passes::plan(no_reduce); };
+        }
+        struct Closure;
+        relation Edge(x:i32,y:i32) = (edges);
+        relation Reach(x:i32,y:i32);
+        output Reach;
+        Reach(*x,*y) :- Edge(x,y);
+        Reach(*x,*z) :- Reach(x,y), Reach(y,z);
+    }.collect();
+    assert_eq!(answers, BTreeSet::from([(1, 2), (1, 3), (2, 3)]));
+}
+
+#[test]
 #[deny(non_snake_case)]
 fn source_stratified_and_seminaive_text_have_the_same_answer() {
     let edges = [(1, 2), (2, 3), (3, 4), (1, 2)];
@@ -30,7 +55,9 @@ fn source_stratified_and_seminaive_text_have_the_same_answer() {
             Reach(*x,*z) :- Reach(x,y), Reach(y,z);
     }
     .collect();
-    let stratified: BTreeSet<_> = cq_datalog::stratified! {
+    let stratified: BTreeSet<_> = cq_datalog::passes::incremental! {
+            pipeline { cq_datalog::passes::storage, cq_datalog::passes::fork,
+                cq_datalog::passes::print_rounds };
             struct Closure;
             relation Edge(x:i32,y:i32) = (edges);
             relation Reach(x:i32,y:i32);
@@ -40,7 +67,8 @@ fn source_stratified_and_seminaive_text_have_the_same_answer() {
             strata { component [Reach]; }
     }
     .collect();
-    let seminaive: BTreeSet<_> = cq_datalog::seminaive! {
+    let seminaive: BTreeSet<_> = cq_datalog::passes::storage! {
+            pipeline { cq_datalog::passes::fork, cq_datalog::passes::print_rounds };
             struct Closure;
             relation Edge(x:i32,y:i32) = (edges);
             relation Reach(x:i32,y:i32);
@@ -48,14 +76,9 @@ fn source_stratified_and_seminaive_text_have_the_same_answer() {
             Reach(*x,*y) :- Edge(x,y);
             Reach(*x,*z) :- Reach(x,y), Reach(y,z);
             strata { component [Reach]; }
-            seminaive {
-                insert_new hash_set_all_columns;
-                negation_keys hash_set_borrowed;
+            incremental {
+                scheme seminaive_covering;
                 delta Reach = Recent;
-                layout Edge [0,1] key 0;
-                layout Reach [0,1] key 1;
-                layout Reach [0,1] key 0;
-                delta_layout Reach [0,1] key 1;
                 variant 0 seed { Reach(*x,*y) :- Edge(x,y); }
                 variant 1 delta 0 { Reach(*x,*z) :- Recent(x,y), Reach(y,z); }
                 variant 1 delta 1 { Reach(*x,*z) :- Reach(x,y), Recent(y,z); }
@@ -327,7 +350,9 @@ fn multioutput_replay_retains_constants_and_result_order() {
         A(*x) :- D(x), !M(7,x);
         B(*x + 10) :- A(x);
     };
-    let stratified = cq_datalog::stratified! {
+    let stratified = cq_datalog::passes::incremental! {
+        pipeline { cq_datalog::passes::storage, cq_datalog::passes::fork,
+            cq_datalog::passes::print_rounds };
         struct Replay;
         relation D(x:i32) = (domain);
         relation M(kind:i32,x:i32) = (blocked);
@@ -337,7 +362,8 @@ fn multioutput_replay_retains_constants_and_result_order() {
         B(*x + 10) :- A(x);
         strata { component [A]; component [B]; }
     };
-    let seminaive = cq_datalog::seminaive! {
+    let seminaive = cq_datalog::passes::storage! {
+        pipeline { cq_datalog::passes::fork, cq_datalog::passes::print_rounds };
         struct Replay;
         relation D(x:i32) = (domain);
         relation M(kind:i32,x:i32) = (blocked);
@@ -346,13 +372,10 @@ fn multioutput_replay_retains_constants_and_result_order() {
         A(*x) :- D(x), !M(7,x);
         B(*x + 10) :- A(x);
         strata { component [A]; component [B]; }
-        seminaive {
-            insert_new hash_set_all_columns;
-            negation_keys hash_set_borrowed;
+        incremental {
+            scheme seminaive_covering;
             delta A = DA;
             delta B = DB;
-            layout D [0] key 0;
-            layout A [0] key 0;
             variant 0 seed { A(*x) :- D(x), !M(7,x); }
             variant 1 seed { B(*x + 10) :- A(x); }
         }
@@ -433,20 +456,22 @@ fn edb_only_replay_preserves_grouped_host_schema() {
         relation E(name:String,value:i32) = (&input);
         output E;
     };
-    let stratified = cq_datalog::stratified! {
+    let stratified = cq_datalog::passes::incremental! {
+        pipeline { cq_datalog::passes::storage, cq_datalog::passes::fork,
+            cq_datalog::passes::print_rounds };
         struct Facts;
         relation E(name:String,value:i32) = (&input);
         output E;
         strata {}
     };
-    let seminaive = cq_datalog::seminaive! {
+    let seminaive = cq_datalog::passes::storage! {
+        pipeline { cq_datalog::passes::fork, cq_datalog::passes::print_rounds };
         struct Facts;
         relation E(name:String,value:i32) = (&input);
         output E;
         strata {}
-        seminaive {
-            insert_new hash_set_all_columns;
-            negation_keys hash_set_borrowed;
+        incremental {
+            scheme seminaive_covering;
         }
     };
     for result in [source, stratified, seminaive] {

@@ -1,0 +1,23 @@
+[package]
+name = "cq-datalog-storage"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+cq-lang-datalog-incremental.workspace = true
+cq-lang-datalog-storage.workspace = true
+cq-syntax.workspace = true
+proc-macro2.workspace = true
+quote.workspace = true
+syn.workspace = true
+
+[dev-dependencies]
+cq-datalog-stratify.workspace = true
+cq-datalog-incremental.workspace = true
+
+[package.metadata.cq]
+source = "cq-lang-datalog-incremental"
+target = "cq-lang-datalog-storage"

@@ -1,67 +1,35 @@
-[package]
-name = "cq-datalog"
-version = "0.0.0"
-edition = "2024"
-rust-version = "1.85.1"
-publish = false
-
 [workspace]
-members = [".", "language", "schedule", "fork", "bridge", "oracle", "doop"]
+members = ["languages/*", "passes/*", "print", "facade/*", "oracle", "doop"]
+default-members = ["facade/cq-datalog"]
 resolver = "3"
-
-# The frozen testkit exposes golden helpers only with bundled DuckDB.
-[profile.dev.package.libduckdb-sys]
-debug = false
-
-[profile.test.package.libduckdb-sys]
-debug = false
 
 [workspace.package]
 version = "0.0.0"
 edition = "2024"
 rust-version = "1.85.1"
 license = "MIT OR Apache-2.0"
+
 [workspace.dependencies]
 cq-stage = { version = "0.1.0", path = "../../facade/cq-stage" }
 cq-syntax = { version = "0.1.0", path = "../../languages/cq-syntax" }
 cq-lang-cq = { version = "0.1.0", path = "../../languages/cq-lang-cq" }
 mini-linq = { version = "0.1.0", path = "../../facade/mini-linq" }
 cq-storage = { version = "0.1.0", path = "../../runtime/cq-storage" }
-cq-lang-datalog = { version = "0.0.0", path = "language" }
-cq-datalog-schedule = { version = "0.0.0", path = "schedule" }
-cq-datalog-fork = { version = "0.0.0", path = "fork" }
-datalog-bridge = { version = "0.0.0", path = "bridge" }
-cq-datalog = { version = "0.0.0", path = "." }
+cq-lang-datalog-source = { version = "0.0.0", path = "languages/dl-source" }
+cq-lang-datalog-strata = { version = "0.0.0", path = "languages/dl-strata" }
+cq-lang-datalog-incremental = { version = "0.0.0", path = "languages/dl-incremental" }
+cq-lang-datalog-storage = { version = "0.0.0", path = "languages/dl-storage" }
+cq-lang-datalog-round = { version = "0.0.0", path = "languages/dl-round" }
+cq-datalog-surface-if-let = { version = "0.0.0", path = "passes/surface-if-let" }
+cq-datalog-stratify = { version = "0.0.0", path = "passes/stratify" }
+cq-datalog-incremental = { version = "0.0.0", path = "passes/incremental" }
+cq-datalog-storage = { version = "0.0.0", path = "passes/storage" }
+cq-datalog-fork = { version = "0.0.0", path = "passes/fork" }
+cq-datalog-print-rounds = { version = "0.0.0", path = "passes/print-rounds" }
+cq-datalog-print = { version = "0.0.0", path = "print" }
+cq-datalog-configuration = { version = "0.0.0", path = "facade/configuration" }
+cq-datalog-macros = { version = "0.0.0", path = "facade/macros" }
+cq-datalog = { version = "0.0.0", path = "facade/cq-datalog" }
 proc-macro2 = "1"
 quote = "1"
 syn = { version = "2", features = ["full", "extra-traits", "visit", "visit-mut"] }
-rayon = "1"
-
-[features]
-default = []
-counters = ["cq-storage/counters"]
-phase-timing = ["datalog-bridge/phase-timing"]
-
-[dependencies]
-cq-lang-datalog.workspace = true
-cq-datalog-schedule.workspace = true
-cq-datalog-fork.workspace = true
-datalog-bridge.workspace = true
-
-[dev-dependencies]
-mini-linq.workspace = true
-cq-storage.workspace = true
-cq-stage.workspace = true
-proc-macro2.workspace = true
-quote.workspace = true
-syn.workspace = true
-rayon.workspace = true
-ascent = { version = "0.8", default-features = false }
-
-[[test]]
-name = "counters"
-required-features = ["counters"]
-
-[[example]]
-name = "layout_mismatch"
-required-features = ["counters"]

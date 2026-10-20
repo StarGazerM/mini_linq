@@ -15,14 +15,7 @@ fn main() -> datalog_oracle::Result<()> {
         ["golden", "--write"] => {
             goldens(true, false)?;
         }
-        ["bench"] => bench(&[1, 2, 4, 5, 8, 15])?,
-        ["bench", "--threads", n] => {
-            let n: usize = n.parse()?;
-            if n == 0 {
-                return Err("--threads must be positive".into());
-            }
-            bench(&[n])?;
-        }
+        ["bench"] => bench()?,
         ["counters"] => {
             #[cfg(feature = "counters")]
             counters();
@@ -31,7 +24,7 @@ fn main() -> datalog_oracle::Result<()> {
         }
         _ => {
             return Err(
-                "usage: datalog-oracle golden [--write] | counters | bench [--threads N]".into(),
+                "usage: datalog-oracle golden [--write] | counters | bench".into(),
             );
         }
     }
@@ -67,19 +60,15 @@ fn counters() {
         );
     }
 }
-fn bench(threads: &[usize]) -> datalog_oracle::Result<()> {
+fn bench() -> datalog_oracle::Result<()> {
     if cq_storage::profile_select!(plain { false } counters { true }) {
         return Err("bench requires counters disabled; run cargo run --release -p datalog-oracle -- bench without enabling counters in any selected package".into());
     }
     if cfg!(debug_assertions) {
         return Err("bench requires --release".into());
     }
-    let pools = threads
-        .iter()
-        .map(|&n| rayon::ThreadPoolBuilder::new().num_threads(n).build())
-        .collect::<std::result::Result<Vec<_>, _>>()?;
     println!(
-        "program\tscenario\tnodes\tedges\trows\tthreads\tmini_us\tascent_us\tmini_par_us\tascent_par_us\tmini_speedup"
+        "program\tscenario\tnodes\tedges\trows\tmini_us\tascent_us"
     );
     for name in ["reach", "tc_left", "tc_nonlinear", "same_generation"] {
         let c = CASES.iter().find(|c| c.name == name).unwrap();
@@ -89,7 +78,7 @@ fn bench(threads: &[usize]) -> datalog_oracle::Result<()> {
             [256, 1024, 4096]
         };
         for n in sizes {
-            measure(c, "chain", n, &generate("chain", n, 0), &pools);
+            measure(c, "chain", n, &generate("chain", n, 0));
         }
     }
     let reach = CASES.iter().find(|c| c.name == "reach").unwrap();
@@ -97,12 +86,12 @@ fn bench(threads: &[usize]) -> datalog_oracle::Result<()> {
         let mut data = random_data(n, 0x5eed, 2, n as u64);
         // A fixed seed set avoids benchmarking a single isolated source.
         data.seed = (0..16).map(|x| (x,)).collect();
-        measure(reach, "random_degree2_seed16", n, &data, &pools);
+        measure(reach, "random_degree2_seed16", n, &data);
     }
     Ok(())
 }
 
-fn measure(c: &Case, scenario: &str, n: i32, d: &Data, pools: &[rayon::ThreadPool]) {
+fn measure(c: &Case, scenario: &str, n: i32, d: &Data) {
     let expected = (c.oracle)(d).0;
     assert_eq!((c.mini)(d).0, expected);
     // Input cloning precedes each evaluator's timer; canonicalization follows it.
@@ -118,15 +107,8 @@ fn measure(c: &Case, scenario: &str, n: i32, d: &Data, pools: &[rayon::ThreadPoo
     };
     let mini = median(c.mini);
     let ascent = median(c.oracle);
-    for pool in pools {
-        pool.install(|| {
-            let mini_par = median(c.mini_parallel);
-            let ascent_par = median(c.oracle_parallel);
-            println!(
-                "{}\t{scenario}\t{n}\t{}\t{}\t{}\t{mini:.3}\t{ascent:.3}\t{mini_par:.3}\t{ascent_par:.3}\t{:.3}",
-                c.name, d.edge.len(), expected.len(), rayon::current_num_threads(),
-                mini / mini_par
-            );
-        });
-    }
+    println!(
+        "{}\t{scenario}\t{n}\t{}\t{}\t{mini:.3}\t{ascent:.3}",
+        c.name, d.edge.len(), expected.len(),
+    );
 }

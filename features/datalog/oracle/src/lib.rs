@@ -9,41 +9,26 @@
 //!
 //! Run from `features/datalog`:
 //! - Exactness (no counters): `cargo test -p datalog-oracle`.
-//! - Uninstrumented thread sweep: `cargo run --release -p datalog-oracle -- bench`.
-//! - Single local pool: `datalog-oracle bench --threads 5`.
+//! - Uninstrumented sweep: `cargo run --release -p datalog-oracle -- bench`.
 //! - Counter assertions: `cargo run --release -p datalog-oracle --features counters -- counters`.
 //!
-//! Both MiniLinq modes and locked Ascent sequential/parallel modes use shared
-//! program source; each timed result is compared as a complete canonical set.
-//! Default pools have 1,2,4,5,8,15 workers (OS scheduling, not P/E affinity).
-//! `phase-timing` enables bridge per-round stderr separately from timing runs.
+//! Exported program generators accept arbitrary named pipeline configuration.
+//! Each timed result is compared as a complete canonical set.
+//! `phase-timing` enables per-round stderr separately from timing runs.
 //!
 //! `counters` requires the explicit feature. `bench` refuses storage counters,
 //! including when another selected package enables them through feature unification.
 pub use cq_testkit::Result;
 use cq_testkit::golden;
-pub mod programs {
-    use ascent::ascent as ascent_program;
-    use cq_datalog::datalog as datalog_program;
-    macro_rules! oracle_input {
-        ($rows:expr) => {
-            $rows.clone()
-        };
-    }
+#[macro_use]
+mod generators {
     include!("programs.rs");
 }
-pub mod parallel_programs {
-    use ascent::ascent_par as ascent_program;
-    macro_rules! oracle_input {
-        ($rows:expr) => {
-            $rows.iter().cloned().collect()
-        };
-    }
-    macro_rules! datalog_program {
-        ($($program:tt)*) => { cq_datalog::datalog! { parallel; $($program)* } };
-    }
-    include!("programs.rs");
+#[macro_export]
+macro_rules! oracle_input {
+    ($rows:expr) => { $rows.clone() };
 }
+oracle_programs!(programs, ascent::ascent, crate::oracle_input, pipeline {});
 pub mod strings;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -182,15 +167,11 @@ pub struct Case {
     pub arity: usize,
     pub mini: fn(&Data) -> (Rows, Duration),
     pub oracle: fn(&Data) -> (Rows, Duration),
-    pub mini_parallel: fn(&Data) -> (Rows, Duration),
-    pub oracle_parallel: fn(&Data) -> (Rows, Duration),
 }
 macro_rules! cases {
     ($($name:ident : $arity:literal),* $(,)?) => {
         pub const CASES: &[Case] = &[$(Case {name: stringify!($name), arity: $arity,
-            mini: programs::$name::mini, oracle: programs::$name::oracle,
-            mini_parallel: parallel_programs::$name::mini,
-            oracle_parallel: parallel_programs::$name::oracle}),*];
+            mini: programs::$name::mini, oracle: programs::$name::oracle}),*];
     }
 }
 cases! { reach:1, tc_left:2, tc_right:2, tc_nonlinear:2, same_generation:2,

@@ -1,14 +1,12 @@
 // Translated from flowlog-rs/flowlog-bench programs/oracle/ascent/doop/src/main.rs.
 // All 135 rules and body atom order match the upstream DOOP default.dl.
 #![allow(unused_variables)]
-use crate::{
-    Facts, Results,
-    interner::{IStr, res, sym},
-};
-
-macro_rules! engine {
-    ($name:ident, $($mode:tt)*) => {
-pub fn $name(facts: Facts) -> Results {
+/// Instantiate the unchanged DOOP program with arbitrary named pipeline tokens.
+#[macro_export]
+macro_rules! doop_engine {
+    ($name:ident, pipeline { $($pipeline:tt)* }) => {
+pub fn $name(facts: $crate::Facts) -> $crate::Results {
+    use $crate::{Results, interner::{IStr, res, sym}};
     let (
         mainclass,
         method_simplename,
@@ -37,7 +35,7 @@ pub fn $name(facts: Facts) -> Results {
         arrayindexpointsto,
         reachable,
     ) = cq_datalog::datalog! {
-        $($mode)*
+        pipeline { $($pipeline)* }
         struct Doop;
         relation directsuperclass(c0: IStr, c1: IStr) = (facts.directsuperclass);
         relation directsuperinterface(c0: IStr, c1: IStr) = (facts.directsuperinterface);
@@ -610,5 +608,4 @@ pub fn $name(facts: Facts) -> Results {
 }
     };
 }
-engine!(run,);
-engine!(run_parallel, parallel;);
+doop_engine!(run, pipeline {});

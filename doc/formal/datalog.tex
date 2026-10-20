@@ -1,8 +1,8 @@
-\section{Datalog language boundaries and migration contract}
+\section{Datalog language boundaries and contracts}
 \label{sec:datalog-languages}
 This specification separates five checked languages above the unchanged CQ
 compiler. Structural checks do not discharge all semantic obligations.
-In this migration round, checks retain the existing exact choices: ordered SCCs, one covering
+The base contracts require exact choices: ordered SCCs, one covering
 variant per changing positive occurrence, deterministic layouts, and fixed
 insertion and negation-key policies. Admitting alternative strata, layouts,
 or evaluation schemes is a later change, not a consequence of this split.
@@ -60,7 +60,7 @@ Rust payloads and outputs; it does not provide a semantic equivalence solver.
 \paragraph{Contract.} Check Source, then require exactly the deterministic
 ordered SCC decomposition of the signed dependency graph. Negative edges
 must point to already completed components. Coarser valid partitions are
-not admitted in this migration.
+not admitted by the base contract.
 \begin{mathpar}
 \Rule{WF-DL-Strata}{\mathrm{WF}_{\mathrm{Source}}(P)\quad
  C=\mathrm{orderedSCC}(P)}{\mathrm{WF}_{\mathrm{Strata}}(P,C)}
@@ -135,7 +135,7 @@ require fixed \code{hash\_set\_all\_columns} insertion and
 structure and every structure has its recorded maintenance operation.
 \begin{mathpar}
 \Rule{WF-DL-Storage}{\mathrm{WF}_{\mathrm{Incremental}}(I)\quad
- D\text{ equals the migration's fixed storage decisions for }I}
+ D\text{ equals the base contract's fixed storage decisions for }I}
  {\mathrm{WF}_{\mathrm{Storage}}(I,D)}
 \end{mathpar}
 \paragraph{Meaning.} Data refinement by $\alpha$: the canonical provider and
@@ -179,7 +179,7 @@ an extension owns partition, ownership, barriers, and its printer. Any execution
 annotation needs an erasure/refinement check, disjoint covering ownership and
 lawful merges. Round rewrites run before CQ hole expansion.
 
-\section{Datalog passes and crate plan}
+\section{Datalog passes and crate organization}
 Each language crate owns \code{Program: Parse + ToTokens + Language}, its
 \code{contract::check} analysis and \code{check\_rewrite}. Each nonterminal
 pass library exports compilation and an independent correspondence check;
@@ -248,7 +248,30 @@ them. As with core terminal printers, there is no independent Rust equivalence
 checker: contract checks, baseline expansion comparison and executable oracle
 agreement supply evidence, not a general Rust refinement proof.
 
-\paragraph{Crate skeleton plan (inside \code{features/datalog}).}
+\subsection{Parallel partition: Round to annotated Round}
+The separate extension accepts an unannotated source, checks both Round
+contracts, and requires exact erasure of the target to the source, including
+policies and per-hole CQ queues. It records exactly one annotation per
+eligible rule scan, in component seed/step order, selecting occurrence zero
+and strategy \code{rayon\_slice1}. The Round certificate checks a fresh direct
+scan binding and one renamed leading positive occurrence; negative key sets
+are not partitioned.
+\begin{mathpar}
+\Rule{CK-DL-Partition}{\mathrm{erase}(t)=s\quad
+ s\text{ is unannotated}\quad
+ t\text{ has the exact ordered scan certificates}}
+ {\mathrm{check}_{\mathrm{partition}}(s,t)}
+\end{mathpar}
+The extension printer checks this correspondence against the erased program.
+It partitions immutable scans into indexed Rayon chunks with grain
+$\max(1024,\lfloor n/(4\,\mathrm{threads})\rfloor)$ and evaluates holes
+concurrently in a scope. Admission remains sequential in hole/chunk order;
+publication, observers, output conversion and timing reuse the base printing
+library. This is not sharded admission or maintenance. Its refinement needs
+the same purity, provider and partial-prefix premises as sequential execution;
+the certificate alone does not prove safe evaluation of arbitrary partial Rust.
+
+\paragraph{Crate layout (inside \code{features/datalog}).}
 \begin{center}
 \begin{tabular}{ll}
 \toprule
@@ -278,7 +301,5 @@ public support. The facade owns defaults, configuration and macro re-exports.
 The configuration library imports the CQ default-queue helper from the fork
 producer; the generic CQ configuration and stage protocol remain unchanged.
 The separate \code{features/datalog-parallel} workspace owns all
-parallel-specific execution and printing code. This plan creates no compatibility
+parallel-specific execution and printing code. There are no compatibility
 aliases for the replaced monolithic language or hard-coded resume macros.
-New rules remain abstract in the traceability registry until real implementation
-markers exist; a marker establishes location, not proof of a semantic theorem.
