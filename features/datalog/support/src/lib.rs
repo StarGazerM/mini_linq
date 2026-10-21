@@ -4,7 +4,7 @@
 use cq_syntax::{Atom, rust, symbol_name};
 use proc_macro2::{Span, TokenStream, TokenTree};
 use quote::ToTokens;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use syn::{Expr, Ident};
 
 /// Report a failed obligation at the supplied syntax.
@@ -30,14 +30,19 @@ pub fn collect_names(tokens: TokenStream, names: &mut BTreeSet<String>) {
 }
 
 /// Deterministic, role-local fresh names reserved against all source tokens.
+/// Each role resumes after its last candidate; occupied names are never retried.
 pub struct Fresh {
     used: BTreeSet<String>,
+    next: BTreeMap<String, usize>,
 }
 impl Fresh {
     pub fn new(source: impl ToTokens) -> Self {
         let mut used = BTreeSet::new();
         collect_names(source.into_token_stream(), &mut used);
-        Self { used }
+        Self {
+            used,
+            next: BTreeMap::new(),
+        }
     }
 
     pub fn reserve(&mut self, id: &Ident) -> bool {
@@ -45,13 +50,17 @@ impl Fresh {
     }
 
     pub fn id(&mut self, role: &str) -> Ident {
-        for n in 0.. {
-            let name = format!("__cq_datalog_{role}_{n}");
+        if !self.next.contains_key(role) {
+            self.next.insert(role.to_owned(), 0);
+        }
+        let next = self.next.get_mut(role).unwrap();
+        loop {
+            let name = format!("__cq_datalog_{role}_{next}");
+            *next += 1;
             if self.used.insert(name.clone()) {
                 return Ident::new(&name, Span::mixed_site());
             }
         }
-        unreachable!()
     }
 }
 
@@ -116,6 +125,22 @@ mod tests {
         assert_eq!(fresh.id("row"), "__cq_datalog_row_3");
         assert_eq!(fresh.id("other"), "__cq_datalog_other_0");
         assert_eq!(fresh.id("row"), "__cq_datalog_row_4");
+    }
+
+    #[test]
+    fn role_counters_skip_late_reservations_without_restarting() {
+        let mut fresh = Fresh::new(quote! {
+            __cq_datalog_row_2;
+            r#__cq_datalog_other_0;
+        });
+        assert_eq!(fresh.id("row"), "__cq_datalog_row_0");
+        assert_eq!(fresh.id("other"), "__cq_datalog_other_1");
+        assert!(fresh.reserve(&syn::parse_quote!(__cq_datalog_row_1)));
+        assert_eq!(fresh.id("row"), "__cq_datalog_row_3");
+        assert!(fresh.reserve(&syn::parse_quote!(__cq_datalog_row_5)));
+        assert_eq!(fresh.id("row"), "__cq_datalog_row_4");
+        assert_eq!(fresh.id("row"), "__cq_datalog_row_6");
+        assert_eq!(fresh.id("other"), "__cq_datalog_other_2");
     }
 
     #[test]
