@@ -7,6 +7,12 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Datalog printer partitions generated code into separately monomorphized
+  component/hole functions (hidden facade dispatch helpers), so LLVM uses
+  more codegen units. Base DOOP crate rebuild 53.9 → 30.3 s (LLVM 38.8 →
+  16.2 s), parallel DOOP 72.9 → 57.4 s; runtime unchanged. Open: nested CQ
+  closures still concentrate in one codegen unit (~48% of IR).
+
 - Datalog compile time: holes declare only what they read (checked
   independently in Round), one check per pass, linear `dl-source` checks (shared
   query context, DFS reachability), optimized proc macros (`build-override
