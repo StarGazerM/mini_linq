@@ -11,3 +11,6 @@ __pycache__/
 /features/workloads/golden/**/medium.csv
 /features/workloads/golden/**/large.csv
 /experiments/gpu/data/
+**/*.nsys-rep
+**/*.ncu-rep
+**/*.sqlite
