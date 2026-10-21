@@ -14,7 +14,9 @@ pub use round::{
     Execution, Hole, InputSource, KeyRepresentation, Layout, Program, RoundContext, RuleHole,
     Stratum,
 };
+use std::collections::BTreeSet;
 use syn::Ident;
+mod codegen;
 
 pub fn splice(program: &Program) -> syn::Result<Vec<TokenStream>> {
     splice_with(program, |hole| {
@@ -122,7 +124,7 @@ fn render_admitted(
         quote!(#[allow(unused_mut)] let mut #observer = #expression;)
     });
     let mut strata = Vec::new();
-    for stratum in &context.strata {
+    for (stratum_index, stratum) in context.strata.iter().enumerate() {
         let keys = stratum.keys.iter().map(|key| {
             let name = &key.name;
             let invocation = &holes[key.hole];
@@ -212,12 +214,45 @@ fn render_admitted(
             _ => unreachable!("checked loop form"),
         };
         match stratum.key_scope.to_string().as_str() {
-            "component" => strata.push(quote!({
-                #(#keys)*
-                #seed_round
-                let mut #round = 0usize;
-                #loop_body
-            })),
+            "component" => {
+                let body = quote!({
+                    #(#keys)*
+                    #seed_round
+                    let mut #round = 0usize;
+                    #loop_body
+                });
+                let mut mutable = BTreeSet::new();
+                let mut locals = BTreeSet::new();
+                for &index in &stratum.members {
+                    let relation = &context.relations[index];
+                    mutable.insert(relation.all.to_string());
+                    mutable.insert(relation.seen.to_string());
+                    mutable.extend(relation.delta_host.iter().map(ToString::to_string));
+                    locals.insert(relation.next.to_string());
+                }
+                for transaction in &stratum.publication {
+                    for operation in &transaction.operations {
+                        let layouts = if operation.kind == "delta_rebuild" {
+                            &context.delta_layouts
+                        } else {
+                            &context.layouts
+                        };
+                        mutable.extend(
+                            operation
+                                .layouts
+                                .iter()
+                                .map(|&i| layouts[i].host.to_string()),
+                        );
+                    }
+                }
+                strata.push(codegen::split(
+                    body,
+                    context,
+                    program.holes.len() + stratum_index,
+                    &mutable,
+                    &locals,
+                ));
+            }
             _ => unreachable!("checked key-set scope"),
         }
     }
@@ -419,6 +454,7 @@ pub fn evaluate(
         } else {
             quote!({#consume})
         };
+        let evaluation = split_evaluation(rule, context, evaluation);
         if materialize {
             evaluations.push(quote!(let #candidates=#evaluation;));
             let insert = insert_new(rule, context, &quote!(#admitted));
@@ -428,6 +464,21 @@ pub fn evaluate(
         }
     }
     (quote!(#(#evaluations)*), quote!(#(#admissions)*))
+}
+
+/// Give a hole's consumed evaluation its own codegen partition without moving
+/// captured Rust expressions out of their lexical scope.
+pub fn split_evaluation(rule: &RuleHole, context: &RoundContext, body: TokenStream) -> TokenStream {
+    let head = &context.relations[rule.head];
+    codegen::split(
+        body,
+        context,
+        rule.hole,
+        &[head.seen.to_string(), head.next.to_string()]
+            .into_iter()
+            .collect(),
+        &BTreeSet::new(),
+    )
 }
 pub fn round_body(
     allocate: &[TokenStream],

@@ -5,6 +5,17 @@ Usage: python3 features/datalog/doop/fetch.py cassandra [--cache /tmp/doop-data]
 The command prints the extracted app directory; completed downloads are reused.
 Source: https://github.com/flowlog-rs/flowlog-bench/blob/main/docs/data/doop-data-prep.md
 Facts are tab-delimited <app>/<RelationName>.facts, including MainClass.facts.
+
+The datalog-doop CLI enables mini, mini-fx, and ascent by default; --check
+requires all three Cargo features. From features/datalog, run the fetched facts:
+  cargo run --release --locked -p datalog-doop -- /tmp/doop-data/cassandra --check
+For a smaller build, use --no-default-features --features mini before Cargo's
+`--`, then --engine mini after the facts path; omit --check in that build.
+Shared loading and facts live in doop/shared (doop-shared); heavy implementations
+live in doop/engines/{mini,mini-fx,ascent} (doop-mini, doop-mini-fx, doop-ascent).
+The parallel CLI reuses this same cache and shared crate. Its default features
+enable all six engines; --check requires mini,mini-fx,ascent,mini-par,mini-par-fx,
+ascent-par. phase-timing instruments enabled engines without enabling others.
 """
 
 import argparse

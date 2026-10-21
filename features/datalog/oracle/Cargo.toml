@@ -7,20 +7,24 @@ license = "MIT OR Apache-2.0"
 description = "Sequential Ascent differential oracle for feature-local Datalog"
 
 [features]
-default = []
-counters = ["cq-datalog/counters", "cq-storage/counters"]
-phase-timing = ["cq-datalog/phase-timing"]
+default = ["mini", "mini-fx", "ascent"]
+mini = ["dep:oracle-mini"]
+mini-fx = ["dep:oracle-mini-fx"]
+ascent = ["dep:oracle-ascent"]
+counters = ["oracle-shared/counters", "oracle-mini?/counters", "oracle-mini-fx?/counters"]
+phase-timing = ["oracle-mini?/phase-timing", "oracle-mini-fx?/phase-timing"]
 
 [dependencies]
-ascent = { version = "0.8", default-features = false }
-cq-datalog = { path = "../facade/cq-datalog" }
-cq-datalog-hasher = { path = "../passes/hasher" }
-cq-rewrites = { path = "../../rewrites" }
-rustc-hash = "2.1.3"
-mini-linq = { path = "../../../facade/mini-linq" }
+oracle-shared = { path = "shared" }
+oracle-mini = { path = "engines/mini", optional = true }
+oracle-mini-fx = { path = "engines/mini-fx", optional = true }
+oracle-ascent = { path = "engines/ascent", optional = true }
 cq-storage = { path = "../../../runtime/cq-storage" }
 cq-testkit = { version = "0.1.0", path = "../../../testkit/cq-testkit", features = ["golden"] }
 
 [dev-dependencies]
+ascent = { version = "0.8", default-features = false }
+cq-datalog = { path = "../facade/cq-datalog" }
+mini-linq = { path = "../../../facade/mini-linq" }
 cq-datalog-testkit = { path = "../testkit" }
 cq-datalog-test-passes = { path = "../test-passes" }

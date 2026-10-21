@@ -620,15 +620,10 @@ dependencies = [
 name = "datalog-doop"
 version = "0.1.0"
 dependencies = [
- "ahash",
- "ascent",
- "cq-datalog",
- "cq-datalog-hasher",
- "cq-rewrites",
- "cq-storage",
- "libc",
- "mini-linq",
- "rustc-hash",
+ "doop-ascent",
+ "doop-mini",
+ "doop-mini-fx",
+ "doop-shared",
 ]
 
 [[package]]
@@ -637,14 +632,15 @@ version = "0.1.0"
 dependencies = [
  "ascent",
  "cq-datalog",
- "cq-datalog-hasher",
  "cq-datalog-test-passes",
  "cq-datalog-testkit",
- "cq-rewrites",
  "cq-storage",
  "cq-testkit",
  "mini-linq",
- "rustc-hash",
+ "oracle-ascent",
+ "oracle-mini",
+ "oracle-mini-fx",
+ "oracle-shared",
 ]
 
 [[package]]
@@ -656,6 +652,45 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "doop-ascent"
+version = "0.1.0"
+dependencies = [
+ "ascent",
+ "doop-shared",
+]
+
+[[package]]
+name = "doop-mini"
+version = "0.1.0"
+dependencies = [
+ "cq-datalog",
+ "cq-storage",
+ "doop-shared",
+ "mini-linq",
+]
+
+[[package]]
+name = "doop-mini-fx"
+version = "0.1.0"
+dependencies = [
+ "cq-datalog",
+ "cq-datalog-hasher",
+ "cq-rewrites",
+ "cq-storage",
+ "doop-shared",
+ "mini-linq",
+ "rustc-hash",
+]
+
+[[package]]
+name = "doop-shared"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "libc",
 ]
 
 [[package]]
@@ -834,6 +869,45 @@ name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
+
+[[package]]
+name = "oracle-ascent"
+version = "0.1.0"
+dependencies = [
+ "ascent",
+ "oracle-shared",
+]
+
+[[package]]
+name = "oracle-mini"
+version = "0.1.0"
+dependencies = [
+ "cq-datalog",
+ "cq-storage",
+ "mini-linq",
+ "oracle-shared",
+]
+
+[[package]]
+name = "oracle-mini-fx"
+version = "0.1.0"
+dependencies = [
+ "cq-datalog",
+ "cq-datalog-hasher",
+ "cq-rewrites",
+ "cq-storage",
+ "mini-linq",
+ "oracle-shared",
+ "rustc-hash",
+]
+
+[[package]]
+name = "oracle-shared"
+version = "0.1.0"
+dependencies = [
+ "cq-storage",
+ "cq-testkit",
+]
 
 [[package]]
 name = "pastey"

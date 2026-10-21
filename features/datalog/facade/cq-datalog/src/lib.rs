@@ -149,6 +149,28 @@
 //! Rule holes retain their projected heads: returning all body variables still
 //! triggers the frozen core's canonical-return deduplication for borrowed hosts,
 //! so widening those rows does not remove the per-call canonical set.
+//!
+//! # DOOP engine features
+//!
+//! The `datalog-doop` package retains the `doop` CLI. Its default Cargo features
+//! enable all three engines: `mini`, `mini-fx`, and `ascent`. For a single-engine
+//! build, disable defaults and explicitly select the matching engine feature:
+//!
+//! ```text
+//! cargo run --release --locked -p datalog-doop --no-default-features --features mini -- /tmp/doop-data/cassandra --engine mini
+//! cargo run --release --locked -p datalog-doop -- /tmp/doop-data/cassandra --check
+//! ```
+//!
+//! `--check` requires all three comparison features (`mini,mini-fx,ascent`);
+//! selecting only one engine cannot provide the full comparison.
+//! `doop/shared` (`doop-shared`) owns facts, interning, loading, the common
+//! harness, and engine-source macros without instantiating a heavy engine.
+//! Separate `doop/engines/{mini,mini-fx,ascent}` crates (`doop-mini`,
+//! `doop-mini-fx`, and `doop-ascent`) instantiate the engines. CLI features
+//! select those optional dependencies; `phase-timing` forwards instrumentation
+//! only to enabled engines rather than enabling additional engines.
+//! Fetch published facts with `python3 doop/fetch.py cassandra` from
+//! `features/datalog`; generated facts remain outside the repository.
 
 pub use cq_datalog_configuration::DatalogConfiguration;
 pub use cq_datalog_macros::datalog;
@@ -157,6 +179,42 @@ pub use cq_lang_datalog_round as round;
 pub use cq_lang_datalog_source as source;
 pub use cq_lang_datalog_storage as storage;
 pub use cq_lang_datalog_strata as strata;
+
+/// Codegen partitioning helpers used by the terminal printer.
+///
+/// Rustc ignores modules nested in functions when assigning codegen units.
+/// These module-level definitions give captured printer bodies distinct homes.
+#[doc(hidden)]
+pub mod __codegen {
+    macro_rules! partitions {
+        ($($name:ident),* $(,)?) => {$(
+            pub mod $name {
+                #[inline(never)]
+                pub fn run<T, R>(storage: T, evaluate: impl FnOnce(T) -> R) -> R {
+                    evaluate(storage)
+                }
+            }
+        )*};
+    }
+    partitions!(
+        partition_0,
+        partition_1,
+        partition_2,
+        partition_3,
+        partition_4,
+        partition_5,
+        partition_6,
+        partition_7,
+        partition_8,
+        partition_9,
+        partition_10,
+        partition_11,
+        partition_12,
+        partition_13,
+        partition_14,
+        partition_15,
+    );
+}
 
 /// Direct checked entries, each consuming its source IR and a continuation.
 pub mod passes {

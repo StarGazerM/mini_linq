@@ -1,0 +1,11 @@
+[package]
+name = "doop-ascent-par"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85.1"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+doop-shared = { path = "../../../../datalog/doop/shared" }
+ascent = { version = "0.8", default-features = false, features = ["par"] }

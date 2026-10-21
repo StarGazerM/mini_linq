@@ -372,8 +372,9 @@ or turn it into a leading parallel scan.
 
 \paragraph{Printer obligation.} The shared printer consumes the recorded
 provider syntax and operations. It must not choose a new storage representation,
-publication order, loop form or output conversion. Default producers record the
-old choices so the default Rust expansion remains byte-identical. The printer
+publication order, loop form or output conversion. Default producers retain
+the same operations; codegen partitioning changes their Rust calling convention,
+not their order. The printer
 still has a refinement obligation to implement each operation correctly:
 structural record checks are not an independent Rust equivalence proof.
 \paragraph{Rewrite check.} Check both contracts and preserve Storage exactly.
@@ -488,10 +489,84 @@ per hole. It never prints joins or substitutes a default choice for a supplied
 record. CQ's selected terminal printer expands each hole later. Shared Datalog
 printing operations live in \code{cq-datalog-print}; extension printers reuse
 them through phase evaluation and alternative publication realizations.
-The default realization remains unchanged apart from unused hole-local bindings.
+The terminal puts each component body and each consumed rule evaluation behind
+a separately monomorphized codegen partitioning helper. Generated arguments are
+shared references to read hosts and exclusive references to written storage;
+round-local next buffers stay local to the component. Host selection intersects
+the recorded storage names with references in the emitted body, and mutation
+comes from component membership/publication or the rule's admission head.
+User Rust expressions remain in lexical closures, so host expressions, local
+types, helper closures, and observers need not be expressible as item captures.
+The closures are \code{inline(always)} inside \code{inline(never)} helpers.
+There is no allocation, dynamic dispatch, row copying, or new parallel runtime
+execution at these boundaries.
+
+Rustc deliberately ignores modules nested inside functions when assigning
+codegen units. Therefore the hidden helpers live in sixteen module-level
+partitions in the Datalog facade, not in modules nested in the macro expansion.
+Hole numbers and subsequent component numbers select these partitions modulo
+sixteen; distinct closure types yield distinct helper monomorphizations.
+This is a fixed terminal realization, not a new Round planning option.
+The parallel terminal uses the same helpers around its existing scheduling and
+publication, with observers still on the evaluating thread.
+Nested CQ iterator/closure monomorphizations can still concentrate in the
+caller's module; these helpers do not claim completely balanced preoptimization
+IR. The core CQ compiler and selected CQ terminal remain unchanged.
+
 As with core terminal printers, there is no independent Rust equivalence
-checker: contract checks, baseline expansion comparison and executable oracle
-agreement supply evidence, not a general Rust refinement proof.
+checker: contract checks, operation-fixture comparison after erasing only the
+borrowed dispatch envelopes, and executable oracle agreement supply evidence,
+not a general Rust refinement proof.
+
+\paragraph{Codegen measurements (2026-10-20).}
+Against \code{1ee553e}, on the same Apple M5 Pro and Rust 1.97.1, an isolated
+release rebuild of \code{datalog-doop} with eight Cargo jobs, unchanged
+dependencies, \code{-Ztime-passes}, and \code{-Csave-temps} measured:
+\begin{center}
+\begin{tabular}{lrrrrr}
+\toprule
+Realization & wall (s) & CPU (s) & CPU/wall & LLVM (s) & largest CGU\\
+\midrule
+Original & 53.87 & 87.40 & 1.62 & 38.845 & 49.30\%\\
+Partitioned & 30.29 & 61.88 & 2.04 & 16.210 & 48.45\%\\
+\bottomrule
+\end{tabular}
+\end{center}
+CPU is user plus system time from \code{/usr/bin/time -l}; LLVM is the sum of
+reported passes and ThinLTO (11.721+27.124 before, 11.614+4.596 after).
+The largest-CGU share uses unoptimized saved bitcode bytes: 28,882,592 of
+58,588,720 before, and 29,042,224 of 59,946,480 after, over sixteen CGUs.
+The parallel DOOP crate's isolated release rebuild decreased from 72.85 to
+57.39 seconds wall, and from 194.27 to 166.68 seconds CPU; reported LLVM
+passes plus ThinLTO decreased from 50.375 to 34.222 seconds.
+Measurements used \code{RUSTC\_BOOTSTRAP=1} for timing diagnostics and distinct
+\code{-Cmetadata} tags to force only the measured library to rebuild.
+Every build ran alone with a fifteen-minute cap.
+Thus the improvement is principally shorter ThinLTO and more independently
+optimized evaluation bodies, not a claim that the remaining nested CQ code
+has become balanced. Improving that residual concentration is an open item;
+no CQ terminal adapter or core change is included.
+
+Three isolated AB/BA/AB-interleaved, uninstrumented runs gave the following
+compute-only medians (seconds); facts loading is excluded:
+\begin{center}
+\begin{tabular}{lrrrr}
+\toprule
+& \multicolumn{2}{c}{Sequential} & \multicolumn{2}{c}{15 workers}\\
+Application & original & partitioned & original & partitioned\\
+\midrule
+cassandra & 3.018963 & 3.021698 & 0.922949 & 0.924377\\
+xalan & 8.820144 & 8.769702 & 2.669591 & 2.676558\\
+\bottomrule
+\end{tabular}
+\end{center}
+These measurements do not establish a runtime speedup; they show no material
+regression on these two workloads. All 26 output relations matched sequential
+Ascent as full tuple sets on cassandra, avrora, lusearch, xalan, tomcat, and
+zxing, for sequential/parallel aHash and Fx and parallel Ascent (30 complete
+application/engine comparisons). Build statistics, all CGU sizes, commands,
+and all 24 raw timing samples are retained in
+\code{features/datalog/doop/codegen-evidence.json}.
 
 \paragraph{Opt-in hash-provider selection.}
 The public \code{cq-datalog-hasher} plug-in expresses one hasher choice at

@@ -1,69 +1,18 @@
-//! DOOP's unchanged 103-relation, 135-rule source instantiated as an extension.
-//! `doop-parallel FACTS --check --threads N` compares all 26 full tuple sets.
-//! `--engine mini|mini-fx|mini-par|mini-par-fx|ascent|ascent-par` isolates timing
-//! and RSS. Fx engines opt into Fx storage and hole deduplication; defaults stay
-//! `mini` and `ascent`. For 15 workers, use
-//! `doop-parallel /tmp/doop-data/cassandra --engine mini-par-fx --threads 15`;
-//! `doop-parallel /tmp/doop-data/cassandra --check --threads 15` compares every
-//! engine with sequential Ascent. Run each timing engine in a separate process.
-//! [`harness`] supplies engine descriptors and installs local Rayon pools;
-//! CLI parsing, loading, full-tuple checks, timing and RSS use the base harness.
-#![recursion_limit = "1024"]
-
+//! Feature-selected DOOP CLI with independently compiled parallel engines.
+//! Defaults enable all six engines; `--check` requires all six features.
 pub mod harness;
 
-#[macro_export]
-macro_rules! relation_storage {
-    ($rows:expr) => {
-        $rows.into_iter().collect()
-    };
-}
-
-pub mod mini_engine {
-    pub use datalog_doop::mini_engine::{run, run_fx};
-    #[cfg(not(feature = "phase-timing"))]
-    datalog_doop::doop_engine!(run_parallel, pipeline {
-        storage_rewrites = [cq_datalog_parallel::shard_storage];
-        round = [cq_datalog_parallel::partition(threshold = 64)];
-        print = cq_datalog_parallel::print_rounds;
-    });
-    #[cfg(feature = "phase-timing")]
-    datalog_doop::doop_engine!(run_parallel, pipeline {
-        storage_rewrites = [cq_datalog_parallel::shard_storage];
-        fork = cq_datalog::passes::fork(timing = phases;);
-        round = [cq_datalog_parallel::partition(threshold = 64)];
-        print = cq_datalog_parallel::print_rounds;
-    });
-    #[cfg(not(feature = "phase-timing"))]
-    datalog_doop::doop_engine!(run_parallel_fx, pipeline {
-        storage_rewrites = [cq_datalog_hasher::hasher(fx), cq_datalog_parallel::shard_storage];
-        round = [cq_datalog_hasher::hasher_round(fx), cq_datalog_parallel::partition(threshold = 64)];
-        print = cq_datalog_parallel::print_rounds;
-        cq = pipeline {
-            structures = [cq_rewrites::retype(dedup => ::std::collections::HashSet<_, ::std::hash::BuildHasherDefault<::rustc_hash::FxHasher>>)];
-        };
-    });
-    #[cfg(feature = "phase-timing")]
-    datalog_doop::doop_engine!(run_parallel_fx, pipeline {
-        storage_rewrites = [cq_datalog_hasher::hasher(fx), cq_datalog_parallel::shard_storage];
-        fork = cq_datalog::passes::fork(timing = phases;);
-        round = [cq_datalog_hasher::hasher_round(fx), cq_datalog_parallel::partition(threshold = 64)];
-        print = cq_datalog_parallel::print_rounds;
-        cq = pipeline {
-            structures = [cq_rewrites::retype(dedup => ::std::collections::HashSet<_, ::std::hash::BuildHasherDefault<::rustc_hash::FxHasher>>)];
-        };
-    });
-}
-
-pub mod ascent_engine {
-    pub use datalog_doop::ascent_engine::run;
-    datalog_doop::doop_ascent_engine!(workers, ascent::ascent_par, crate::relation_storage);
-    pub use workers::run as run_parallel;
-}
-
-#[cfg(test)]
+#[cfg(all(
+    test,
+    feature = "mini",
+    feature = "mini-fx",
+    feature = "ascent",
+    feature = "mini-par",
+    feature = "mini-par-fx",
+    feature = "ascent-par"
+))]
 mod tests {
-    use datalog_doop::{Facts, interner::sym};
+    use doop_shared::{Facts, interner::sym};
 
     fn facts() -> Facts {
         let class = sym("Example");
@@ -124,17 +73,15 @@ mod tests {
                         .build()
                         .unwrap()
                         .install(|| {
-                            let mut expected = datalog_doop::ascent_engine::run(facts());
-                            let mut sequential = datalog_doop::mini_engine::run(facts());
-                            let mut actual = super::mini_engine::run_parallel(facts());
-                            let mut ascent = super::ascent_engine::run_parallel(facts());
+                            let mut expected = doop_ascent::run(facts());
+                            let mut sequential = doop_mini::run(facts());
+                            let mut actual = doop_mini_par::run(facts());
+                            let mut ascent = doop_ascent_par::run(facts());
                             sequential.compare(&mut expected).unwrap();
                             actual.compare(&mut expected).unwrap();
                             ascent.compare(&mut expected).unwrap();
-                            super::mini_engine::run_fx(facts())
-                                .compare(&mut expected)
-                                .unwrap();
-                            super::mini_engine::run_parallel_fx(facts())
+                            doop_mini_fx::run(facts()).compare(&mut expected).unwrap();
+                            doop_mini_par_fx::run(facts())
                                 .compare(&mut expected)
                                 .unwrap();
                             assert_eq!(actual.varpointsto, vec![(sym("heap"), sym("local"))]);

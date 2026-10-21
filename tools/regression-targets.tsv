@@ -84,7 +84,10 @@ cq-datalog-partition	manifest-test	correspondence	features/datalog-parallel/part
 cq-datalog-rayon-print	manifest-test	printing	features/datalog-parallel/print/Cargo.toml
 datalog-parallel-oracle	manifest-test	oracles	features/datalog-parallel/oracle/Cargo.toml
 datalog-parallel-doop	manifest-test	doop	features/datalog-parallel/doop/Cargo.toml
+datalog-doop	manifest-test	doop	features/datalog/doop/Cargo.toml
+doop-shared	manifest-test	doop-shared	features/datalog/doop/shared/Cargo.toml
 datalog-oracle	manifest-test	oracles	features/datalog/oracle/Cargo.toml
+oracle-shared	manifest-test	oracle-shared	features/datalog/oracle/shared/Cargo.toml
 cq-workloads	scenario	growth	features/workloads/check_growth.py
 cq-xtask	manifest-test	restored	features/workloads/xtask/Cargo.toml
 cq-xtask	oracle-test	oracle-unit	features/workloads/xtask/Cargo.toml

@@ -1,0 +1,15 @@
+[package]
+name = "oracle-shared"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[features]
+default = []
+counters = ["cq-storage/counters"]
+
+[dependencies]
+cq-storage = { path = "../../../../runtime/cq-storage" }
+cq-testkit = { version = "0.1.0", path = "../../../../testkit/cq-testkit", features = ["golden"] }

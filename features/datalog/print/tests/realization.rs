@@ -22,13 +22,88 @@ fn expand(
     })
 }
 fn render(expanded: Expanded) -> TokenStream {
-    render_with(
+    let mut expression = render_with(
         &expanded.program,
         &expanded.holes,
         |rules, context, holes, _| Ok(evaluate(rules, context, holes, false)),
     )
-    .unwrap()
-    .to_token_stream()
+    .unwrap();
+    erase_partitions(&mut expression);
+    expression.to_token_stream()
+}
+
+// Compare operation order independently of the codegen calling convention.
+// Only a complete dispatch envelope is erased; all query, admission,
+// publication, and loop syntax remains subject to the original fixture checks.
+fn erase_partitions(expression: &mut syn::Expr) {
+    use syn::visit_mut::{self, VisitMut};
+    struct Substitute(std::collections::BTreeMap<String, syn::Expr>);
+    impl VisitMut for Substitute {
+        fn visit_expr_mut(&mut self, expression: &mut syn::Expr) {
+            if let syn::Expr::Paren(paren) = expression
+                && let syn::Expr::Unary(unary) = &*paren.expr
+                && matches!(unary.op, syn::UnOp::Deref(_))
+                && let syn::Expr::Path(path) = &*unary.expr
+                && let Some(name) = path.path.get_ident()
+                && let Some(value) = self.0.get(&name.to_string())
+            {
+                *expression = value.clone();
+                return;
+            }
+            visit_mut::visit_expr_mut(self, expression);
+        }
+    }
+    struct Erase;
+    impl VisitMut for Erase {
+        fn visit_expr_mut(&mut self, expression: &mut syn::Expr) {
+            if let syn::Expr::Block(block) = expression
+                && let [syn::Stmt::Expr(syn::Expr::Call(call), None)] = &block.block.stmts[..]
+                && let syn::Expr::Path(path) = &*call.func
+                && path
+                    .path
+                    .segments
+                    .iter()
+                    .any(|part| part.ident == "__codegen")
+            {
+                let [syn::Expr::Tuple(arguments), syn::Expr::Closure(closure)] =
+                    &call.args.iter().cloned().collect::<Vec<_>>()[..]
+                else {
+                    panic!("dispatch arguments")
+                };
+                let syn::Pat::Tuple(parameters) = &closure.inputs[0] else {
+                    panic!("dispatch parameters")
+                };
+                assert_eq!(arguments.elems.len(), parameters.elems.len());
+                let substitutions = parameters
+                    .elems
+                    .iter()
+                    .zip(&arguments.elems)
+                    .map(|(parameter, argument)| {
+                        let syn::Pat::Ident(parameter) = parameter else {
+                            panic!("parameter name")
+                        };
+                        let syn::Expr::Reference(argument) = argument else {
+                            panic!("borrowed storage")
+                        };
+                        (parameter.ident.to_string(), *argument.expr.clone())
+                    })
+                    .collect();
+                let mut body = *closure.body.clone();
+                Substitute(substitutions).visit_expr_mut(&mut body);
+                let syn::Expr::Block(body) = body else {
+                    panic!("dispatch body")
+                };
+                let [syn::Stmt::Expr(body, None)] = &body.block.stmts[..] else {
+                    panic!("body expression")
+                };
+                *expression = body.clone();
+                self.visit_expr_mut(expression);
+                return;
+            }
+            visit_mut::visit_expr_mut(self, expression);
+        }
+    }
+    Erase.visit_expr_mut(expression);
 }
 fn source() -> TokenStream {
     quote! {struct Q;relation E(x:i32)=(input);relation R(x:i32);output R;R(*x):-E(x);}
@@ -71,6 +146,18 @@ fn authored_round_expansion_matches_independent_fixture() {
     })
     .unwrap();
     let fork = expand(&program, |_| Ok(quote!(authored_rows()))).unwrap();
+    let partitioned = render_with(&fork.program, &fork.holes, |rules, context, holes, _| {
+        Ok(evaluate(rules, context, holes, false))
+    })
+    .unwrap()
+    .to_token_stream()
+    .to_string();
+    for slot in 0..3 {
+        assert!(partitioned.contains(&format!("partition_{slot} :: run")));
+    }
+    assert_eq!(partitioned.matches("inline (always)").count(), 3);
+    assert!(partitioned.contains("& mut __cq_datalog_seen_1"));
+    assert!(partitioned.contains("& __cq_datalog_host_0"));
     let actual: syn::Expr = syn::parse2(render(fork)).unwrap();
     let expected: syn::Expr = syn::parse_str(include_str!("fixtures/round.rs")).unwrap();
     assert_eq!(actual, expected);
