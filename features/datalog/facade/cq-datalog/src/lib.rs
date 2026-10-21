@@ -240,7 +240,7 @@ pub mod __codegen {
 /// Direct checked entries, each consuming its source IR and a continuation.
 pub mod passes {
     pub use cq_datalog_macros::{
-        fork, incremental, print_rounds, storage, stratify, surface_if_let,
+        fork, incremental, print_hole, print_rounds, storage, stratify, surface_if_let,
     };
     pub use own_push::push_into as print_push;
 }

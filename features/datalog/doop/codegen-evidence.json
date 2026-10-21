@@ -60,5 +60,25 @@
     "comparison": "full tuple sets",
     "result": "all 30 application/engine comparisons passed"
   },
-  "limitation": "Largest preoptimization CGU remains about 48.45%: nested CQ iterator/closure monomorphizations retain caller-module ownership. The accepted outer split primarily reduces ThinLTO; no core compiler or CQ terminal adapter changes are included."
+  "limitation": "Largest preoptimization CGU remains about 48.45%: nested CQ iterator/closure monomorphizations retain caller-module ownership. The accepted outer split primarily reduces ThinLTO; no core compiler or CQ terminal adapter changes are included in that trial.",
+  "nested_hole_adapter_trial": {
+    "date": "2026-10-21",
+    "evidence_directory": "/tmp/dl-hole",
+    "crate": "doop-mini",
+    "protocol": "Release crate-only rebuild after warming dependencies; CARGO_BUILD_JOBS=15; CARGO_TARGET_DIR=/tmp/target-Hole; TMPDIR=/private/tmp; caffeinate; -Ztime-passes -Csave-temps -Cmetadata=UNIQUE_TAG; one cargo command at a time; 900-second build cap.",
+    "cgu_metric": "Largest saved preoptimization .rcgu.no-opt.bc bytes divided by all 16 CGUs.",
+    "base": {"revision": "49d0ebd", "wall_seconds": 13.42, "cpu_seconds": 21.63, "largest_cgu_share": 0.5181011212185318},
+    "adapter": {"wall_seconds": 14.18, "cpu_seconds": 22.51, "largest_cgu_share": 0.5155477379517331},
+    "runtime_protocol": "Three interleaved AB/BA/AB pairs, compute-only seconds, no concurrent build or benchmark.",
+    "runtime_samples": [
+      {"app": "cassandra", "engine": "mini", "threads": 1, "base": [2.313663, 2.457488, 2.437384], "adapter": [2.558216, 2.638585, 2.513428]},
+      {"app": "xalan", "engine": "mini", "threads": 1, "base": [7.698276, 6.676388, 6.866532], "adapter": [6.818187, 6.608615, 6.588111]},
+      {"app": "cassandra", "engine": "mini-par", "threads": 15, "base": [0.801545, 0.822593, 0.828217], "adapter": [0.852191, 0.846764, 0.830176]},
+      {"app": "xalan", "engine": "mini-par", "threads": 15, "base": [2.233779, 2.365657, 2.333561], "adapter": [2.382210, 2.348500, 2.327071]}
+    ],
+    "default_adopted": false,
+    "decision": "Keep print_hole optional: largest CGU remains above 51%, not below 48%; compile wall/CPU increased and Cassandra sequential median increased 4.96%, so unchanged runtime is not established.",
+    "default_expansion": "DOOP doop-mini expansion byte-identical to 49d0ebd (2057532 bytes).",
+    "exact_checks": "All six DOOP applications passed full 26-relation tuple-set comparison against Ascent, sequential and 15-thread parallel."
+  }
 }

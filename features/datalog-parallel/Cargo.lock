@@ -165,6 +165,7 @@ dependencies = [
  "cq-datalog-configuration",
  "cq-datalog-fork",
  "cq-datalog-incremental",
+ "cq-datalog-print-hole",
  "cq-datalog-print-rounds",
  "cq-datalog-storage",
  "cq-datalog-stratify",
@@ -174,6 +175,7 @@ dependencies = [
  "cq-lang-datalog-source",
  "cq-lang-datalog-storage",
  "cq-lang-datalog-strata",
+ "cq-lang-structures",
  "cq-stage",
  "proc-macro2",
  "quote",
@@ -230,6 +232,17 @@ dependencies = [
  "cq-datalog-support",
  "cq-lang-datalog-round",
  "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-print-hole"
+version = "0.0.0"
+dependencies = [
+ "cq-lang-structures",
+ "cq-physical-realization",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
