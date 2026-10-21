@@ -149,13 +149,16 @@ impl Graph {
             names,
             edges: Vec::new(),
         };
-        let positions: BTreeMap<_, _> = g.names
+        let positions: BTreeMap<_, _> = g
+            .names
             .iter()
             .enumerate()
             .map(|(index, name)| (name.as_str(), index))
             .collect();
         let index = |id: &Ident| {
-            positions.get(symbol_name(id).as_str()).copied()
+            positions
+                .get(symbol_name(id).as_str())
+                .copied()
                 .ok_or_else(|| syn::Error::new_spanned(id, "undeclared relation"))
         };
         for q in &p.rules {
@@ -335,7 +338,8 @@ impl<'a> QueryChecker<'a> {
         let declaration_check = cq_syntax::check_input_declarations(declarations).map(|_| ());
         let mut context = BTreeMap::new();
         for (index, declaration) in declarations.iter().enumerate() {
-            context.entry(symbol_name(&declaration.name))
+            context
+                .entry(symbol_name(&declaration.name))
                 .or_insert_with(|| (index, declaration, declaration.to_token_stream()));
         }
         Self {
@@ -348,7 +352,8 @@ impl<'a> QueryChecker<'a> {
 
     /// Check a rule independently of other rules, retaining standalone errors.
     pub fn check(&mut self, q: &Query) -> syn::Result<()> {
-        let head = self.declarations
+        let head = self
+            .declarations
             .get(&symbol_name(&q.head.relation))
             .map(|(_, declaration, _)| *declaration)
             .ok_or_else(|| syn::Error::new_spanned(&q.head, "undeclared rule head"))?;
@@ -424,7 +429,8 @@ impl<'a> QueryChecker<'a> {
                 referenced.insert(symbol_name(&atom.relation));
             }
         }
-        let mut declarations: Vec<_> = referenced.iter()
+        let mut declarations: Vec<_> = referenced
+            .iter()
             .filter_map(|name| self.declarations.get(name))
             .collect();
         declarations.sort_unstable_by_key(|(index, _, _)| *index);

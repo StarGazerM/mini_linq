@@ -78,15 +78,16 @@ fn every_hole_declares_exactly_its_reads_and_output() {
     let target = compile(&source).unwrap();
     for entry in &target.holes {
         let hole = &entry.cq;
-        let mut required = std::collections::BTreeSet::from([
-            cq_syntax::symbol_name(&hole.query.head.relation),
-        ]);
+        let mut required =
+            std::collections::BTreeSet::from([cq_syntax::symbol_name(&hole.query.head.relation)]);
         for item in &hole.query.body {
             if let BodyItem::Positive { atom } = item {
                 required.insert(cq_syntax::symbol_name(&atom.relation));
             }
         }
-        let actual: std::collections::BTreeSet<_> = hole.declarations.iter()
+        let actual: std::collections::BTreeSet<_> = hole
+            .declarations
+            .iter()
             .map(|declaration| cq_syntax::symbol_name(&declaration.name))
             .collect();
         assert_eq!(actual, required);
@@ -107,12 +108,19 @@ fn standalone_round_checks_reject_missing_extra_and_misbound_inputs() {
             let mut changed = target.clone();
             let declarations = &mut changed.holes[hole].cq.declarations;
             match mutation {
-                0 => { declarations.remove(0); }
-                1 => declarations.insert(0, syn::parse_quote! {
-                    relation Unused(x:i32) = (unused);
-                }),
+                0 => {
+                    declarations.remove(0);
+                }
+                1 => declarations.insert(
+                    0,
+                    syn::parse_quote! {
+                        relation Unused(x:i32) = (unused);
+                    },
+                ),
                 2 => declarations[0].value = Some(syn::parse_quote!(= (wrong_host))),
-                _ => { declarations.pop(); }
+                _ => {
+                    declarations.pop();
+                }
             }
             assert!(cq_lang_datalog_round::check_storage(&source, &changed).is_err());
             assert!(cq_lang_datalog_round::contract::check(&changed).is_err());

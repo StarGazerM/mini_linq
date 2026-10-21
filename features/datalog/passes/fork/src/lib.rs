@@ -124,7 +124,8 @@ fn scan_input(
     };
     let mut declaration = context.relations[relation].declaration.clone();
     if let Some(columns) = columns {
-        declaration.columns = columns.iter()
+        declaration.columns = columns
+            .iter()
             .map(|&column| declaration.columns[column].clone())
             .collect();
     }
@@ -428,12 +429,13 @@ fn construct(
             query.head.relation = name.clone();
             let mut output = source.incremental.strata.source.declarations[head].clone();
             output.name = name.clone();
-            let declarations = hole_inputs(&context, query.body.iter().filter_map(|item| {
-                match item {
+            let declarations = hole_inputs(
+                &context,
+                query.body.iter().filter_map(|item| match item {
                     BodyItem::Positive { atom } => Some(&atom.relation),
                     _ => None,
-                }
-            }));
+                }),
+            );
             let hole = holes.len();
             holes.push(syn::parse2(
                 quote!(struct #name; #(#declarations)* #scan_declaration #output #query),

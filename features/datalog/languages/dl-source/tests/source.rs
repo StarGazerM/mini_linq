@@ -167,19 +167,19 @@ fn dfs_reachability_matches_nonempty_path_closure() {
         output A;
     };
     // Every directed graph on three vertices includes disconnected vertices,
-    // self loops, longer cycles, diamonds and duplicate reachability paths.
+    // self loops, longer cycles and duplicate reachability paths.
     for mask in 0..(1usize << 9) {
         let mut program = base.clone();
         let mut expected = vec![vec![false; 3]; 3];
         let mut edges = Vec::new();
-        for head in 0..3 {
-            for input in 0..3 {
+        for (head, row) in expected.iter_mut().enumerate() {
+            for (input, reachable) in row.iter_mut().enumerate() {
                 if mask & (1 << (head * 3 + input)) != 0 {
                     let h = &base.declarations[head].name;
                     let b = &base.declarations[input].name;
                     program.rules.push(syn::parse_quote!(#h(*x) :- #b(x);));
                     edges.push((head, input, false));
-                    expected[head][input] = true;
+                    *reachable = true;
                 }
             }
         }
@@ -209,8 +209,18 @@ fn negative_edges_preserve_stratification_and_edge_order() {
         B(*x) :- E(x);
     };
     let graph = Graph::new(&program).unwrap();
-    assert_eq!(graph.edges, [(1, 0, false), (1, 2, true), (1, 0, false), (2, 0, false)]);
-    assert_eq!(graph.reach, [vec![false, false, false], vec![true, false, true], vec![true, false, false]]);
+    assert_eq!(
+        graph.edges,
+        [(1, 0, false), (1, 2, true), (1, 0, false), (2, 0, false)]
+    );
+    assert_eq!(
+        graph.reach,
+        [
+            vec![false, false, false],
+            vec![true, false, true],
+            vec![true, false, false]
+        ]
+    );
     program.rules.push(syn::parse_quote!(B(*x) :- A(x);));
     assert_eq!(
         Graph::new(&program).unwrap_err().to_string(),
@@ -244,7 +254,8 @@ fn reusable_query_context_preserves_full_schema_projection() {
         let declarations = &program.declarations;
         let full: cq_lang_cq::Program = syn::parse2(quote! {
             struct P; #(#declarations)* #output #query
-        }).unwrap();
+        })
+        .unwrap();
         cq_lang_cq::contract::check(&full).unwrap();
         checker.check(rule).unwrap();
         check_query(&program, rule, declarations).unwrap();
