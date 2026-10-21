@@ -8,7 +8,8 @@ and opaque concrete Rust providers, while retaining the
 \code{seminaive\_covering} evaluation scheme and a checked operational vocabulary.
 Structural checks examine the supplied IR and never rerun a producer to compare
 with its chosen output.
-The default generated Rust must remain byte-identical to the captured baseline.
+The default generated Rust preserves the captured baseline's behavior;
+declaration pruning removes only unused hole-local declarations and bindings.
 
 \paragraph{Semantic domain and limits.}
 Each relation declares a model slot $M$; the base accepts only \code{set}.
@@ -486,7 +487,7 @@ per hole. It never prints joins or substitutes a default choice for a supplied
 record. CQ's selected terminal printer expands each hole later. Shared Datalog
 printing operations live in \code{cq-datalog-print}; extension printers reuse
 them through phase evaluation and alternative publication realizations.
-The default realization and expansion remain unchanged.
+The default realization remains unchanged apart from unused hole-local bindings.
 As with core terminal printers, there is no independent Rust equivalence
 checker: contract checks, baseline expansion comparison and executable oracle
 agreement supply evidence, not a general Rust refinement proof.

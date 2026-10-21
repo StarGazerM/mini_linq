@@ -149,8 +149,17 @@ impl Graph {
             names,
             edges: Vec::new(),
         };
+        let positions: BTreeMap<_, _> = g.names
+            .iter()
+            .enumerate()
+            .map(|(index, name)| (name.as_str(), index))
+            .collect();
+        let index = |id: &Ident| {
+            positions.get(symbol_name(id).as_str()).copied()
+                .ok_or_else(|| syn::Error::new_spanned(id, "undeclared relation"))
+        };
         for q in &p.rules {
-            let head = g.index(&q.head.relation)?;
+            let head = index(&q.head.relation)?;
             ensure(
                 p.declarations[head].value.is_none(),
                 &q.head,
@@ -173,21 +182,29 @@ impl Graph {
                     }
                 };
                 if let Some((atom, strict)) = atom {
-                    let input = g.index(&atom.relation)?;
+                    let input = index(&atom.relation)?;
                     ensure(
                         atom.args.len() == p.declarations[input].arity(),
                         atom,
                         "atom arity mismatch",
                     )?;
                     g.edges.push((head, input, strict));
-                    g.reach[head][input] = true;
                 }
             }
         }
-        for k in 0..g.names.len() {
-            for i in 0..g.names.len() {
-                for j in 0..g.names.len() {
-                    g.reach[i][j] |= g.reach[i][k] && g.reach[k][j];
+        // Nonempty-path reachability: only cycles make the diagonal true.
+        // Reuse a DFS stack rather than scanning every triple of declarations.
+        let mut successors = vec![Vec::new(); g.names.len()];
+        for &(head, input, _) in &g.edges {
+            successors[head].push(input);
+        }
+        let mut stack = Vec::new();
+        for (start, reached) in g.reach.iter_mut().enumerate() {
+            stack.extend(successors[start].iter().copied());
+            while let Some(node) = stack.pop() {
+                if !reached[node] {
+                    reached[node] = true;
+                    stack.extend(successors[node].iter().copied());
                 }
             }
         }
@@ -222,8 +239,9 @@ fn check_source(p: &Program) -> syn::Result<Graph> {
         )?;
         g.index(output)?;
     }
+    let mut queries = QueryChecker::new(p, &p.declarations);
     for q in &p.rules {
-        check_query(p, q, &p.declarations)?;
+        queries.check(q)?;
     }
     Ok(g)
 }
@@ -276,6 +294,11 @@ pub mod contract {
 pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
     contract::check(source)?;
     contract::check(target)?;
+    check_rewrite_admitted(source, target)
+}
+
+// The stage runner has already checked both operands.
+fn check_rewrite_admitted(source: &Program, target: &Program) -> syn::Result<()> {
     ensure(
         source.name == target.name
             && source.declarations == target.declarations
@@ -291,82 +314,131 @@ impl Language for Program {
         contract::check(self).map(|_| ())
     }
     fn check_rewrite(source: &Self, target: &Self) -> syn::Result<()> {
-        check_rewrite(source, target)
+        check_rewrite_admitted(source, target)
     }
 }
+/// Reusable rule checker with one source-wide fresh-name allocator and schema.
+///
+/// All declarations are validated, including unused ones. Each CQ projection
+/// carries only its referenced declarations, so unrelated schemas are not
+/// cloned, printed, parsed or checked again for every rule. CQ still performs
+/// its own scope/type checks and schema-sensitive guard recognition.
+pub struct QueryChecker<'a> {
+    name: &'a Ident,
+    checked_head: Ident,
+    declarations: BTreeMap<String, (usize, &'a RelationDecl, TokenStream)>,
+    declaration_check: syn::Result<()>,
+}
+
+impl<'a> QueryChecker<'a> {
+    pub fn new(p: &'a Program, declarations: &'a [RelationDecl]) -> Self {
+        let declaration_check = cq_syntax::check_input_declarations(declarations).map(|_| ());
+        let mut context = BTreeMap::new();
+        for (index, declaration) in declarations.iter().enumerate() {
+            context.entry(symbol_name(&declaration.name))
+                .or_insert_with(|| (index, declaration, declaration.to_token_stream()));
+        }
+        Self {
+            name: &p.name,
+            checked_head: Fresh::new(p).id("checked_head"),
+            declarations: context,
+            declaration_check,
+        }
+    }
+
+    /// Check a rule independently of other rules, retaining standalone errors.
+    pub fn check(&mut self, q: &Query) -> syn::Result<()> {
+        let head = self.declarations
+            .get(&symbol_name(&q.head.relation))
+            .map(|(_, declaration, _)| *declaration)
+            .ok_or_else(|| syn::Error::new_spanned(&q.head, "undeclared rule head"))?;
+        ensure(
+            q.head.args.len() == head.arity(),
+            &q.head,
+            "head arity mismatch",
+        )?;
+        let mut query = q.clone();
+        for item in &query.body {
+            if let BodyItem::Filter(filter) = item {
+                ensure(
+                    !matches!(rust::unparen(&filter.condition), Expr::Let(_)),
+                    item,
+                    "if let requires a surface expansion before DL-Source",
+                )?;
+            }
+        }
+        let bound = cq_lang_cq::blocks::bound(&query.body);
+        for arg in &q.head.args {
+            if let Some(id) = active_column(arg).or_else(|| rust::variable(arg)) {
+                ensure(
+                    bound.contains_key(&symbol_name(id)),
+                    arg,
+                    "head variable must be range restricted",
+                )?;
+            }
+        }
+        // Each projection is an independent CQ program, so reuse precisely the
+        // name that a standalone check would allocate from the source tokens.
+        query.head.relation = self.checked_head.clone();
+        let mut output = head.clone();
+        output.name = self.checked_head.clone();
+        let locals = bound.keys().cloned().collect();
+        let mut scope = BTreeSet::new();
+        for item in &mut query.body {
+            match item {
+                BodyItem::Negation(negative) => {
+                    for arg in &negative.atom.args {
+                        if matches!(rust::unparen(arg), Expr::Infer(_)) {
+                            continue;
+                        }
+                        if let Some(id) = rust::variable(arg) {
+                            ensure(
+                                scope.contains(&symbol_name(id)),
+                                arg,
+                                "negation variable must be bound by a positive atom before the clause",
+                            )?;
+                        } else {
+                            let free = rust::free_variables(arg);
+                            ensure(
+                                !free.opaque && free.dependencies(&locals).is_empty(),
+                                arg,
+                                "negation constants must not depend on rule-local bindings",
+                            )?;
+                        }
+                    }
+                    *item = BodyItem::Positive {
+                        atom: negative.atom.clone(),
+                    };
+                }
+                BodyItem::Positive { atom } => scope.extend(atom.variables().map(symbol_name)),
+                _ => {}
+            }
+        }
+        self.declaration_check.clone()?;
+        let mut referenced = BTreeSet::new();
+        // Include a colliding synthetic name from a caller-supplied schema, just as
+        // the full-schema standalone projection did (Fresh reserves source tokens).
+        referenced.insert(symbol_name(&output.name));
+        for item in cq_lang_cq::blocks::walk(&query.body) {
+            if let Some(atom) = item.atom() {
+                referenced.insert(symbol_name(&atom.relation));
+            }
+        }
+        let mut declarations: Vec<_> = referenced.iter()
+            .filter_map(|name| self.declarations.get(name))
+            .collect();
+        declarations.sort_unstable_by_key(|(index, _, _)| *index);
+        let declarations = declarations.iter().map(|(_, _, tokens)| tokens);
+        let name = self.name;
+        let cq: cq_lang_cq::Program =
+            syn::parse2(quote!(struct #name; #(#declarations)* #output #query))?;
+        cq_lang_cq::contract::check(&cq)
+    }
+}
+
 // A negative atom contributes no bindings. Once its safety is established,
 // its positive validation projection exercises CQ declaration, arity and scope
 // obligations. Rust types remain checked by rustc on the emitted CQ holes.
 pub fn check_query(p: &Program, q: &Query, declarations: &[RelationDecl]) -> syn::Result<()> {
-    let head = declarations
-        .iter()
-        .find(|d| symbol_name(&d.name) == symbol_name(&q.head.relation))
-        .ok_or_else(|| syn::Error::new_spanned(&q.head, "undeclared rule head"))?;
-    ensure(
-        q.head.args.len() == head.arity(),
-        &q.head,
-        "head arity mismatch",
-    )?;
-    let mut query = q.clone();
-    for item in &query.body {
-        if let BodyItem::Filter(filter) = item {
-            ensure(
-                !matches!(rust::unparen(&filter.condition), Expr::Let(_)),
-                item,
-                "if let requires a surface expansion before DL-Source",
-            )?;
-        }
-    }
-    let bound = cq_lang_cq::blocks::bound(&query.body);
-    for arg in &q.head.args {
-        if let Some(id) = active_column(arg).or_else(|| rust::variable(arg)) {
-            ensure(
-                bound.contains_key(&symbol_name(id)),
-                arg,
-                "head variable must be range restricted",
-            )?;
-        }
-    }
-    let mut fresh = Fresh::new(p);
-    let name = fresh.id("checked_head");
-    query.head.relation = name.clone();
-    let mut declarations = declarations.to_vec();
-    let mut output = head.clone();
-    output.name = name;
-    declarations.push(output);
-    let locals = bound.keys().cloned().collect();
-    let mut scope = BTreeSet::new();
-    for item in &mut query.body {
-        match item {
-            BodyItem::Negation(negative) => {
-                for arg in &negative.atom.args {
-                    if matches!(rust::unparen(arg), Expr::Infer(_)) {
-                        continue;
-                    }
-                    if let Some(id) = rust::variable(arg) {
-                        ensure(
-                            scope.contains(&symbol_name(id)),
-                            arg,
-                            "negation variable must be bound by a positive atom before the clause",
-                        )?;
-                    } else {
-                        let free = rust::free_variables(arg);
-                        ensure(
-                            !free.opaque && free.dependencies(&locals).is_empty(),
-                            arg,
-                            "negation constants must not depend on rule-local bindings",
-                        )?;
-                    }
-                }
-                *item = BodyItem::Positive {
-                    atom: negative.atom.clone(),
-                };
-            }
-            BodyItem::Positive { atom } => scope.extend(atom.variables().map(symbol_name)),
-            _ => {}
-        }
-    }
-    let name = &p.name;
-    let cq: cq_lang_cq::Program = syn::parse2(quote!(struct #name; #(#declarations)* #query))?;
-    cq_lang_cq::contract::check(&cq)
+    QueryChecker::new(p, declarations).check(q)
 }
