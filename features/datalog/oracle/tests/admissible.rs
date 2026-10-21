@@ -1,5 +1,6 @@
-//! Executable alternatives plus an independent typed naive reference.
-//! These macros are dev-only: the ordinary compiler defaults remain untouched.
+//! Executable alternatives plus independent typed Source, Incremental, and Round references.
+//! Rewritten Round executes coarser strata, alternate layouts, and recorded choices;
+//! the ordinary compiler defaults remain untouched.
 use cq_datalog_testkit::{Outcome, check_refinement};
 use std::collections::HashSet;
 
@@ -7,10 +8,26 @@ macro_rules! reference {
     ($($source:tt)*) => { cq_datalog_test_passes::eval_source! { $($source)* } };
 }
 macro_rules! sequential {
-    ($($source:tt)*) => { cq_datalog::datalog! { $($source)* }.collect::<HashSet<_>>() };
+    ($($source:tt)*) => {{
+        let production = cq_datalog::datalog! { $($source)* }.collect::<HashSet<_>>();
+        let incremental = cq_datalog::datalog! {
+            pipeline { print = cq_datalog_test_passes::eval_incremental_from_round; }
+            $($source)*
+        };
+        let round = cq_datalog::datalog! {
+            pipeline { print = cq_datalog_test_passes::eval_round; }
+            $($source)*
+        };
+        let rewritten = alternate_with!(cq_datalog_test_passes::eval_round; $($source)*);
+        assert_eq!(incremental, production, "Incremental versus production");
+        assert_eq!(round, incremental, "Round versus Incremental");
+        assert_eq!(rewritten, round, "coarser strata and alternate layouts");
+        production
+    }};
 }
-macro_rules! alternate {
-    ($($source:tt)*) => {
+// Share precisely the same rewrites between production and independent execution.
+macro_rules! alternate_with {
+    ($terminal:path; $($source:tt)*) => {
         cq_datalog_test_passes::deduplicate_source! {
             pipeline {
                 cq_datalog::passes::stratify,
@@ -19,10 +36,15 @@ macro_rules! alternate {
                 cq_datalog::passes::storage,
                 cq_datalog_test_passes::alternate_storage,
                 cq_datalog::passes::fork,
-                cq_datalog::passes::print_rounds
+                $terminal
             };
             $($source)*
-        }.collect::<HashSet<_>>()
+        }.into_iter().collect::<HashSet<_>>()
+    };
+}
+macro_rules! alternate {
+    ($($source:tt)*) => {
+        alternate_with!(cq_datalog::passes::print_rounds; $($source)*)
     };
 }
 macro_rules! closure {
@@ -233,16 +255,32 @@ fn normalized_guards_compare_borrowed_columns_and_owned_bindings() {
 }
 
 macro_rules! recorded_choices {
-    ($($source:tt)*) => {
-        cq_datalog::datalog! {
+    ($($source:tt)*) => {{
+        let production = cq_datalog::datalog! {
             pipeline {
                 storage_rewrites = [cq_datalog_test_passes::ordered_storage,
                     cq_datalog_test_passes::direct_later_delta];
                 round = [cq_datalog_test_passes::reverse_publication];
             };
             $($source)*
-        }.collect::<HashSet<_>>()
-    };
+        }.collect::<HashSet<_>>();
+        let round = cq_datalog::datalog! {
+            pipeline {
+                storage_rewrites = [cq_datalog_test_passes::ordered_storage,
+                    cq_datalog_test_passes::direct_later_delta];
+                round = [cq_datalog_test_passes::reverse_publication];
+                print = cq_datalog_test_passes::eval_round;
+            }
+            $($source)*
+        };
+        let incremental = cq_datalog::datalog! {
+            pipeline { print = cq_datalog_test_passes::eval_incremental_from_round; }
+            $($source)*
+        };
+        assert_eq!(round, incremental, "recorded choices preserve Incremental answers");
+        assert_eq!(production, round, "recorded choices match production");
+        production
+    }};
 }
 
 #[test]

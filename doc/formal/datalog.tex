@@ -53,8 +53,11 @@ Opaque Rust must not hide reads of evolving IDBs.
 \end{mathpar}
 \paragraph{Meaning.} Evaluate components in dependency order, taking the
 inflationary least fixpoint of their immediate consequences, with lower
-components fixed. The total finite theorem in the incremental section applies
-under its premises; partial execution additionally has the obligations below.
+components fixed. The executable \code{eval\_source} reference implements this
+synchronous transition with written-order native Rust rule evaluation, independently
+of production stratification and incrementalization.
+The total finite theorem in the incremental section applies under its premises;
+partial execution additionally has the obligations below.
 \paragraph{Recorded decisions.} Relation model, EDB bindings, written rule and
 Rust-step order, outputs and observer. No schedule or physical choices.
 \paragraph{Rewrite check.} Check both Source contracts and preserve the declared
@@ -112,6 +115,10 @@ and admits and publishes
 \]
 Stop when all component deltas are empty. These are set operations; the model
 slot does not authorize lattice subtraction or semiring differences.
+The executable \code{eval\_incremental} reference consumes the supplied checked
+variants rather than regenerating a default schedule. It evaluates seeds, then
+the recorded covering steps against immutable accumulated and delta sets,
+deduplicating and admitting candidates at the round boundary.
 \paragraph{Recorded decisions.} Covering semi-naive scheme, delta names,
 variant identities and occurrence substitutions. Naive and disjoint exact
 schemes are not accepted merely because they are conceivable alternatives.
@@ -302,6 +309,11 @@ committed snapshot; admission rejects known and duplicate candidate heads;
 publication extends full structures and replaces every delta layout, including
 empty ones, before subsequent evaluation. Under provider and partial-Rust
 premises its $\alpha$-image refines the Incremental transition system.
+The executable \code{eval\_round} reference consumes the supplied checked round
+program and evaluates its holes with native Rust, interpreting the recorded
+execution over a logical storage state rather than calling the production printer.
+This makes its result an independent comparison point for round rewrites and
+generated execution; it does not establish the laws of opaque concrete providers.
 Pull and push differ only at the CQ boundary: a pull iterator feeds the
 admission loop, while a push terminal receives that same admission operation
 as its consumer. Frozen-key holes similarly feed the recorded key provider.
@@ -448,25 +460,39 @@ check, disjoint covering ownership and lawful merges. Round rewrites run before
 CQ hole expansion.
 
 \paragraph{Executable reference semantics.}
-The feature-local Datalog testkit uses a synchronous, per-component set fixpoint
-driver. Its \code{eval\_source} takes an initializer, a component count and a typed
-step callback returning whether publication changed the state. The driver returns
-the final state and propagates panics; the re-exported \code{check\_refinement}
-harness evaluates each side once and catches panic as the bottom outcome.
-The test-pass \code{eval\_source!} translates checked Source rules into
-written-order native Rust loops over typed set stores, publishing candidate sets
-synchronously. Signed dependency rank relaxation derives reference strata
-independently of production passes. This executes opaque guards, bindings, generators and
-computed heads as Rust rather than pretending to interpret them in a restricted
-scalar evaluator. It does not rerun stratify, incremental, storage or fork to
-obtain the reference answer.
-Executable refinement compares successful reference output sets with the target
-and rejects a new target panic; a reference panic imposes no successful-result
-obligation. This is instance-level evidence for rewrite and pass premises, not
-a decision procedure for arbitrary Rust equivalence. Purity, lawful equality,
-hashing and cloning, finite generators and termination remain assumptions;
-observers are excluded from relational denotation. Divergence has no timeout-based denotation. This reference
-does not claim a general interpreter for Incremental or Round.
+The feature-local \code{cq\_datalog\_testkit} exposes \code{eval\_source},
+\code{eval\_incremental} and \code{eval\_round} as typed runtime drivers.
+The corresponding \code{cq\_datalog\_test\_passes} frontends
+\code{eval\_source!}, \code{eval\_incremental!} and \code{eval\_round!}
+generate native Rust evaluation from their respective checked languages;
+the latter two are terminal passes for explicit Incremental and Round IR.
+Source evaluation uses synchronous, per-component set fixpoints. Signed dependency
+rank relaxation derives its component order independently of production passes.
+Incremental evaluation uses the supplied seeds and covering step variants.
+Round evaluation uses the supplied execution records and embedded holes.
+These references do not rerun stratify, incremental, storage or fork to recover
+the default producer's chosen IR, nor use the production Datalog printer to
+obtain the reference answer. Only \code{seminaive\_covering} is admitted.
+
+Native Rust hole evaluation is deliberate: guards, bindings, finite generators,
+computed heads and user row types are opaque Rust, including partial expressions
+whose panic behavior depends on the reached written-order prefix.
+The separate \code{cq\_testkit::cq\_semantics} evaluator enumerates an integer
+fragment with variable-only positive atoms and supported total comparisons.
+It supplies independent relational evidence for that fragment, not an interpreter
+for arbitrary Rust holes. Replacing native holes with that scalar evaluator would
+either exclude supported programs or erase the partial-execution obligation.
+
+The drivers propagate panics; the re-exported \code{check\_refinement} harness
+evaluates each side once and catches panic as the bottom outcome.
+A successful reference requires equal output sets and no target panic; a reference
+panic imposes no successful-result obligation and does not require a target panic.
+Comparisons of Source, Incremental, Round and generated execution are per-instance
+evidence for pass and rewrite premises, not proofs of equivalence, prefix safety,
+termination, or provider laws. Structural acceptance alone provides none of these
+semantic proofs. Purity, lawful equality, hashing and cloning, finite generators
+and termination remain assumptions; observers are excluded from relational
+denotation. Divergence has no timeout-based denotation.
 
 \section{Datalog passes and crate organization}
 Each language crate owns \code{Program: Parse + ToTokens + Language}, its

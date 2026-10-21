@@ -31,6 +31,7 @@ proc-macro2.workspace = true
 quote.workspace = true
 syn.workspace = true
 cq-datalog-test-passes = { path = "../../test-passes" }
+cq-datalog-testkit = { path = "../../testkit" }
 ascent = { version = "0.8", default-features = false }
 
 [[test]]
@@ -40,6 +41,10 @@ path = "../../tests/execution.rs"
 [[test]]
 name = "per_hole"
 path = "../../tests/per_hole.rs"
+
+[[test]]
+name = "reference_round"
+path = "../../tests/reference_round.rs"
 
 [[test]]
 name = "counters"

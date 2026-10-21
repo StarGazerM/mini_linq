@@ -2,6 +2,10 @@
 //! Every rewrite uses the ordinary checked `cq_stage::rewrite` boundary.
 //! `eval_source!` is an independent typed reference, not a production printer.
 mod reference;
+mod reference_incremental;
+mod reference_round;
+#[cfg(test)]
+mod reference_tests;
 mod rewrites;
 
 fn no_arguments(arguments: proc_macro2::TokenStream) -> syn::Result<()> {
@@ -101,4 +105,61 @@ pub fn eval_source(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         Ok(tokens) => tokens.into(),
         Err(error) => error.into_compile_error().into(),
     }
+}
+
+/// Execute the recorded semi-naive Incremental program as typed set relations.
+#[proc_macro]
+pub fn eval_incremental(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    cq_stage::pass::<cq_lang_datalog_incremental::Program, syn::Expr>(
+        input.into(),
+        |program, args| {
+            no_arguments(args)?;
+            syn::parse2(reference_incremental::emit(program)?)
+        },
+    )
+    .into()
+}
+
+/// Interpret recorded Round phases and embedded CQ holes, without a printer.
+#[proc_macro]
+pub fn eval_round(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    cq_stage::pass::<cq_lang_datalog_round::Program, syn::Expr>(input.into(), |program, args| {
+        no_arguments(args)?;
+        syn::parse2(reference_round::emit(program)?)
+    })
+    .into()
+}
+
+/// Evaluate the Incremental meaning retained inside a checked Round program.
+/// This terminal permits identical corpus inputs at each pipeline boundary.
+#[proc_macro]
+pub fn eval_incremental_from_round(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    cq_stage::pass::<cq_lang_datalog_round::Program, syn::Expr>(input.into(), |program, args| {
+        no_arguments(args)?;
+        cq_lang_datalog_round::contract::check(program)?;
+        syn::parse2(reference_incremental::emit(&program.storage.incremental)?)
+    })
+    .into()
+}
+
+/// Evaluate the Source meaning retained inside a checked Round program.
+#[proc_macro]
+pub fn eval_source_from_round(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    cq_stage::pass::<cq_lang_datalog_round::Program, syn::Expr>(input.into(), |program, args| {
+        no_arguments(args)?;
+        cq_lang_datalog_round::contract::check(program)?;
+        syn::parse2(reference::emit(&program.storage.incremental.strata.source)?)
+    })
+    .into()
+}
+
+/// Evaluate the recorded component order retained inside checked Round.
+#[proc_macro]
+pub fn eval_strata_from_round(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    cq_stage::pass::<cq_lang_datalog_round::Program, syn::Expr>(input.into(), |program, args| {
+        no_arguments(args)?;
+        cq_lang_datalog_round::contract::check(program)?;
+        syn::parse2(reference::emit_strata(&program.storage.incremental.strata)?)
+    })
+    .into()
 }

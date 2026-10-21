@@ -55,6 +55,7 @@ pub mod reach {
                 answer(*x) :- seed(x);
                 answer(*y) :- answer(x), edge(x,y);
         }
+        .into_iter()
         .collect::<Vec<_>>();
         let elapsed = start.elapsed();
         (
@@ -102,6 +103,7 @@ pub mod tc_left {
                 answer(*x,*y) :- edge(x,y);
                 answer(*x,*z) :- answer(x,y), edge(y,z);
         }
+        .into_iter()
         .collect::<Vec<_>>();
         let elapsed = start.elapsed();
         (
@@ -149,6 +151,7 @@ pub mod tc_right {
                 answer(*x,*y) :- edge(x,y);
                 answer(*x,*z) :- edge(x,y), answer(y,z);
         }
+        .into_iter()
         .collect::<Vec<_>>();
         let elapsed = start.elapsed();
         (
@@ -196,6 +199,7 @@ pub mod tc_nonlinear {
                 answer(*x,*y) :- edge(x,y);
                 answer(*x,*z) :- answer(x,y), answer(y,z);
         }
+        .into_iter()
         .collect::<Vec<_>>();
         let elapsed = start.elapsed();
         (
@@ -243,6 +247,7 @@ pub mod same_generation {
                 answer(*x,*y) :- edge(p,x), edge(p,y);
                 answer(*x,*y) :- answer(a,b), edge(a,x), edge(b,y);
         }
+        .into_iter()
         .collect::<Vec<_>>();
         let elapsed = start.elapsed();
         (
@@ -309,6 +314,7 @@ pub mod mutual {
                 answer(0,*x,*y) :- even(x,y);
                 answer(1,*x,*y) :- odd(x,y);
         }
+        .into_iter()
         .collect::<Vec<_>>();
         let elapsed = start.elapsed();
         (
@@ -371,6 +377,7 @@ pub mod multiple_seeds {
                 answer(*x) :- extra(x);
                 answer(*y) :- answer(x), edge(x,y);
         }
+        .into_iter()
         .collect::<Vec<_>>();
         let elapsed = start.elapsed();
         (
@@ -422,6 +429,7 @@ pub mod guard {
                 answer(*x) :- seed(x);
                 answer(*y) :- answer(x), edge(x,y), if *y % 2 == 0;
         }
+        .into_iter()
         .collect::<Vec<_>>();
         let elapsed = start.elapsed();
         (
@@ -481,6 +489,7 @@ pub mod unreachable {
                 reach(*y) :- reach(x), edge(x,y);
                 answer(*x) :- nodes(x), !reach(x);
         }
+        .into_iter()
         .collect::<Vec<_>>();
         let elapsed = start.elapsed();
         (
@@ -532,6 +541,7 @@ pub mod nonedges {
                 path(*x,*z) :- path(x,y), edge(y,z);
                 answer(*x,*y) :- path(x,y), !edge(x,y);
         }
+        .into_iter()
         .collect::<Vec<_>>();
         let elapsed = start.elapsed();
         (
@@ -593,6 +603,7 @@ pub mod recursive_upper {
                 answer(*x,*x) :- nodes(x), !lower(x);
                 answer(*x,*z) :- answer(x,y), edge(y,z), !lower(z);
         }
+        .into_iter()
         .collect::<Vec<_>>();
         let elapsed = start.elapsed();
         (
@@ -656,6 +667,7 @@ pub mod andersen {
                 answer(*y,*w) :- load(y,x), answer(x,z), answer(z,w);
                 answer(*z,*w) :- store(y,x), answer(y,z), answer(x,w);
         }
+        .into_iter()
         .collect::<Vec<_>>();
         let elapsed = start.elapsed();
         (
@@ -740,6 +752,7 @@ pub mod cspa {
                 answer(1,*x,*y) :- memoryalias(x,y);
                 answer(2,*x,*y) :- valuealias(x,y);
         }
+        .into_iter()
         .collect::<Vec<_>>();
         let elapsed = start.elapsed();
         (

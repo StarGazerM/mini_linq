@@ -1,0 +1,14 @@
+[package]
+name = "cq-datalog-parallel-test-passes"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+proc-macro = true
+
+[dependencies]
+cq-stage = { path = "../../../facade/cq-stage" }
+cq-datalog-partition = { path = "../partition" }
+syn = { version = "2", features = ["full"] }
+quote = "1"
