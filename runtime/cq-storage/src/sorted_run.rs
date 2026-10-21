@@ -77,6 +77,20 @@ impl<K: Ord + Copy, V: Copy, C: KeyCodec<K>> SortedRun<K, V, C> {
         self.keys.iter()
     }
 
+    /// Every stored item in key order, bucket by bucket.
+    pub fn items(&self) -> &[V] {
+        &self.items
+    }
+
+    /// Half-open position range of `key`'s bucket in [`Self::items`]; empty
+    /// (at the end) when the key is absent. The same range `lookup` enumerates.
+    pub fn range(&self, key: &K) -> (usize, usize) {
+        match self.slot(key) {
+            Some(slot) => (self.offsets[slot], self.offsets[slot + 1]),
+            None => (self.items.len(), self.items.len()),
+        }
+    }
+
     fn rank_directory(keys: &[K], codec: C) -> Option<RankDirectory> {
         if !codec.total() {
             return None;

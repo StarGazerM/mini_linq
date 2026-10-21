@@ -32,7 +32,7 @@ Complete program: `Structures` + `sequence { Term* }` + optional
 `graded <machine> { Grade* }`. Parses, prints, round-trips, checks alone.
 
 ```text
-Program  ::= Structures "sequence" "{" Def* "}" [ "graded" Ident "{" Grade* "}" ]
+Program  ::= Structures "sequence" "{" Def* [ Output ] "}" [ "graded" Ident "{" Grade* "}" ]
 Def      ::= Ident "=" Term ";"
 Term     ::= "rows" Ident                          // retained Physical result or host
            | "map" Ident Term                       // Physical result name = the total segment applied
@@ -42,7 +42,7 @@ Term     ::= "rows" Ident                          // retained Physical result o
            | "lookup" Ident "[" Ident,* "]" Term    // provider result, key columns
            | "fold" Monoid Term
            | "canon" Term
-           | "store" Term
+           | "store" [ "capacity" LitInt ] Term
            | "choose" "[" (Guard "=>" Term),+ "]"
            | Ident                                  // a Def name
 Monoid   ::= "count" | "or" | "sum" Ident
@@ -50,6 +50,7 @@ Guard    ::= LenExpr ("<" | ">=") LitInt | "else"
 LenExpr  ::= "len" Ident | LenExpr "+" LenExpr | LitInt
 Grade    ::= Ident "at" Level ";"                  // Def name -> level of the machine
 Level    ::= Ident ("." Ident)*                    // path in the machine tree, e.g. device.block.lane
+Output   ::= "output" ("count" | "reserve" | "bounded") ";"
 ```
 
 Public API:
@@ -58,7 +59,8 @@ Public API:
 pub struct Program { pub structures: cq_lang_structures::Program, pub sequence: Sequence, pub graded: Option<Graded> }
 pub enum Term { Rows(Ident), Map(Ident, Box<Term>), Flatten(Box<Term>), Compact(Ident, Box<Term>),
                 Tile{n: usize, items: Option<usize>, inner: Box<Term>}, Lookup{provider: Ident, keys: Vec<Ident>, inner: Box<Term>},
-                Fold(Monoid, Box<Term>), Canon(Box<Term>), Store(Box<Term>), Choose(Vec<(Guard, Term)>), Ref(Ident) }
+                Fold(Monoid, Box<Term>), Canon(Box<Term>), Store{capacity: Option<usize>, inner: Box<Term>},
+                Choose(Vec<(Guard, Term)>), Ref(Ident) }
 
 /// Machine model: a tree of levels with labels. Data, not code; each target exports one.
 pub struct Machine { pub name: Ident, pub root: LevelNode }
@@ -77,6 +79,7 @@ pub struct Analysis {
     pub dispatches: Vec<Dispatch>,                      // derived (BE-Boundary): outer store, members, inner stores
     pub collectives: Vec<(String, Monoid, Vec<String>)>, // fold/scan Defs and their level
     pub output: Option<(String, OutputProtocol)>,       // the final store and how it is filled
+    pub obligations: Vec<Obligation>,                  // provider/codec/canon traits and dispatch failure paths
 }
 pub mod contract { pub fn check(p: &Program) -> syn::Result<Analysis>; }   // BE-Alpha…BE-Choose structurally
 pub fn check_grading(p: &Program, m: &Machine) -> syn::Result<Analysis>;   // BE-Scope…BE-Abort against m
@@ -93,6 +96,40 @@ Checks (each a named `// Formal rule BE-…:` marker):
 - Grading: BE-Scope (reads inside extent, inner level), BE-Collective (fold/scan at collaborative level, whole level), BE-Separate (siblings exchange only via a store at an ancestor), BE-Boundary (derive `dispatches`), BE-Partial (no opaque Rust below host), BE-Abort (every dispatch has a failure channel).
 
 Acceptance: round-trip of every form; one rejection test per rule; `rules.tsv` rows switch to `implementation`; `tools/public-api/cq-lang-sequence.txt`.
+
+Box [1] lives in `languages/cq-lang-sequence`. `Sequence` holds named
+definitions and an optional output protocol; `bounded` uses the final store's
+capacity, and an omitted protocol means `count`. The grammar records capacities
+explicitly rather than hiding allocation policy in a printer. A lookup has
+unknown length; flatten, compact and canon produce symbolic scan lengths.
+Tiles preserve the inner position count. Equal-support choose arms may have
+different lengths; their joined length is unknown and requires a capacity when
+stored. Checks without a machine conservatively require capacities for all
+unknown-length stores.
+
+Providers remain opaque type tokens: analysis records their exact/range/
+membership requirements and codec premises as obligations for target traits.
+No provider type spelling identifies a data structure. Machine paths normalize
+to host-inclusive paths; host is the sequential collective case. Dispatch
+failure channels are paths back to host, with their runtime flag behavior
+recorded as obligations. The structural rewrite checker compares construction
+normal forms under support after checking the unchanged Structures prefix;
+it does not claim to prove arbitrary user Rust or runtime trait laws.
+The flat definition list defines lexical extents: a store is visible from its
+definition onward, at its level and descendants. Cross-level views require
+an explicit ancestor store. A tile descends through the unique child level;
+an ambiguous or absent child is rejected. Nonhost collectives require a
+collaborative grade and uniform guards, and cannot be nested inside a tile
+without a whole-level participation certificate (the present grammar has
+none). Each separated store must be named by a definition so that dispatch
+domains and publications have unambiguous names. Host and collaborative
+stores may remain nested. Opaque Physical dependencies require a host
+Sequence store before their values enter descendant execution.
+
+`BE-Code` stays abstract: there is no static rejection test for a runtime
+trait law. Its analysis-obligation tests replace such a test; all thirteen
+statically checked backend rules have rule-specific rejection coverage.
+
 
 ## [2] `passes/cq-sequence-lowering`
 

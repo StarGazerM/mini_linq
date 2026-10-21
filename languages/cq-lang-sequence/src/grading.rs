@@ -1,0 +1,646 @@
+use std::collections::{BTreeMap, BTreeSet};
+
+use cq_lang_structures::physical::{Operator, symbol_name};
+use syn::Ident;
+
+use crate::{
+    Analysis, Dispatch, Guard, Len, LevelNode, Machine, Monoid, Obligation, Program, Term,
+};
+
+struct Level<'a> {
+    model: &'a LevelNode,
+    path: Vec<String>,
+    children: Vec<usize>,
+}
+
+struct Node<'a> {
+    term: &'a Term,
+    owner: usize,
+    level: usize,
+    inputs: Vec<usize>,
+    separated_store: bool,
+}
+
+struct Checker<'a> {
+    program: &'a Program,
+    levels: Vec<Level<'a>>,
+    grades: Vec<usize>,
+    definitions: BTreeMap<String, usize>,
+    physical: BTreeMap<String, &'a cq_lang_structures::physical::Definition>,
+    roots: Vec<usize>,
+    nodes: Vec<Node<'a>>,
+    collectives: Vec<(String, Monoid, Vec<String>)>,
+}
+
+/// Check placement, then derive dispatch boundaries and runtime failure obligations.
+/// A successful check records a required failure channel; it does not certify an
+/// emitter's implementation of that channel.
+pub fn check_grading(program: &Program, machine: &Machine) -> syn::Result<Analysis> {
+    let mut analysis = crate::contract::check(program)?;
+    // Formal rule BE-Abort: every below-host dispatch records a channel to the
+    // distinguished host root, to be discharged by the target's emitter/runtime.
+    if symbol_name(&machine.root.name) != "host" {
+        return Err(syn::Error::new(
+            machine.root.name.span(),
+            "BE-Abort: the machine root must be host",
+        ));
+    }
+    let graded = program.graded.as_ref().ok_or_else(|| {
+        syn::Error::new(
+            machine.name.span(),
+            "BE-Scope: grading requires a graded machine block",
+        )
+    })?;
+    if symbol_name(&graded.machine) != symbol_name(&machine.name) {
+        return Err(syn::Error::new(
+            graded.machine.span(),
+            "BE-Scope: grading names a different machine",
+        ));
+    }
+    let mut levels = Vec::new();
+    add_level(&machine.root, Vec::new(), &mut levels)?;
+    let paths: BTreeMap<_, _> = levels
+        .iter()
+        .enumerate()
+        .map(|(index, level)| (level.path.clone(), index))
+        .collect();
+    let definitions: BTreeMap<_, _> = program
+        .sequence
+        .definitions
+        .iter()
+        .enumerate()
+        .map(|(index, definition)| (symbol_name(&definition.name), index))
+        .collect();
+    let mut assigned = BTreeMap::new();
+    for grade in &graded.grades {
+        let name = symbol_name(&grade.name);
+        if !definitions.contains_key(&name) {
+            return Err(syn::Error::new(
+                grade.name.span(),
+                "BE-Scope: grade names an unknown Sequence definition",
+            ));
+        }
+        let mut path: Vec<_> = grade.level.iter().map(symbol_name).collect();
+        if path.is_empty() {
+            return Err(syn::Error::new(
+                grade.name.span(),
+                "BE-Scope: a grade needs a machine level",
+            ));
+        }
+        if path[0] != "host" {
+            path.insert(0, "host".into());
+        }
+        let level = *paths.get(&path).ok_or_else(|| {
+            syn::Error::new(
+                grade.name.span(),
+                "BE-Scope: grade is not a path in this machine",
+            )
+        })?;
+        if assigned.insert(name, level).is_some() {
+            return Err(syn::Error::new(
+                grade.name.span(),
+                "BE-Scope: a definition must be graded exactly once",
+            ));
+        }
+    }
+    let mut grades = Vec::with_capacity(definitions.len());
+    for definition in &program.sequence.definitions {
+        let name = symbol_name(&definition.name);
+        let level = *assigned.get(&name).ok_or_else(|| {
+            syn::Error::new(
+                definition.name.span(),
+                "BE-Scope: every Sequence definition needs a grade",
+            )
+        })?;
+        analysis.levels.insert(name, levels[level].path.clone());
+        grades.push(level);
+    }
+    let physical = program
+        .structures
+        .physical
+        .program
+        .definitions
+        .iter()
+        .map(|definition| (symbol_name(&definition.name), definition))
+        .collect();
+    let mut checker = Checker {
+        program,
+        levels,
+        grades,
+        definitions,
+        physical,
+        roots: Vec::with_capacity(program.sequence.definitions.len()),
+        nodes: Vec::new(),
+        collectives: Vec::new(),
+    };
+    for (owner, definition) in program.sequence.definitions.iter().enumerate() {
+        let root = checker.visit(
+            &definition.term,
+            owner,
+            checker.grades[owner],
+            false,
+            true,
+            true,
+        )?;
+        checker.roots.push(root);
+    }
+    analysis.dispatches = checker.dispatches()?;
+    analysis.collectives = checker.collectives;
+    for (dispatch, unit) in analysis.dispatches.iter().enumerate() {
+        analysis.obligations.push(Obligation::Failure {
+            dispatch,
+            channel: unit.failure_channel.clone(),
+        });
+    }
+    Ok(analysis)
+}
+
+fn add_level<'a>(
+    node: &'a LevelNode,
+    mut path: Vec<String>,
+    levels: &mut Vec<Level<'a>>,
+) -> syn::Result<usize> {
+    path.push(symbol_name(&node.name));
+    let index = levels.len();
+    levels.push(Level {
+        model: node,
+        path: path.clone(),
+        children: Vec::new(),
+    });
+    let mut names = BTreeSet::new();
+    for child in &node.children {
+        if !names.insert(symbol_name(&child.name)) {
+            return Err(syn::Error::new(
+                child.name.span(),
+                "machine siblings must have distinct names",
+            ));
+        }
+        let child = add_level(child, path.clone(), levels)?;
+        levels[index].children.push(child);
+    }
+    Ok(index)
+}
+
+impl<'a> Checker<'a> {
+    fn error(&self, owner: usize, message: &str) -> syn::Error {
+        syn::Error::new(
+            self.program.sequence.definitions[owner].name.span(),
+            message,
+        )
+    }
+
+    fn name(&self, owner: usize) -> String {
+        symbol_name(&self.program.sequence.definitions[owner].name)
+    }
+
+    fn reference(&self, name: &Ident, owner: usize, level: usize) -> syn::Result<usize> {
+        let source = *self
+            .definitions
+            .get(&symbol_name(name))
+            .ok_or_else(|| syn::Error::new(name.span(), "BE-Scope: unknown Sequence definition"))?;
+        // Formal rule BE-Scope: the flat definition list gives a store an extent
+        // from its definition to the end; references cannot escape upward or
+        // precede that extent. Only materialized values may cross level grades.
+        if source >= owner {
+            return Err(syn::Error::new(
+                name.span(),
+                "BE-Scope: reads must name an earlier definition",
+            ));
+        }
+        let source_level = self.grades[source];
+        let source_path = &self.levels[source_level].path;
+        let read_path = &self.levels[level].path;
+        if !read_path.starts_with(source_path) {
+            // Formal rule BE-Separate: sibling grades never exchange a local
+            // value directly, even if its producer made a sibling-local store.
+            // Publishing a store at their common ancestor is the only crossing.
+            let message = if !source_path.starts_with(read_path) {
+                "BE-Separate: sibling levels must exchange through an ancestor store"
+            } else {
+                "BE-Scope: a descendant's value is outside this read's extent"
+            };
+            return Err(syn::Error::new(name.span(), message));
+        }
+        if source_level != level && !self.is_stored(self.roots[source]) {
+            return Err(syn::Error::new(
+                name.span(),
+                "BE-Scope: crossing into an inner level requires an ancestor store",
+            ));
+        }
+        Ok(self.roots[source])
+    }
+
+    fn is_stored(&self, mut node: usize) -> bool {
+        loop {
+            match self.nodes[node].term {
+                Term::Store { .. } => return true,
+                Term::Ref(_) => node = self.nodes[node].inputs[0],
+                _ => return false,
+            }
+        }
+    }
+
+    fn visit(
+        &mut self,
+        term: &'a Term,
+        owner: usize,
+        level: usize,
+        tiled: bool,
+        uniform: bool,
+        named: bool,
+    ) -> syn::Result<usize> {
+        let mut inputs = Vec::new();
+        let separated_store = level != 0
+            && matches!(term, Term::Store { .. })
+            && !self.levels[level].model.collaborative;
+        if separated_store && !named {
+            return Err(self.error(
+                owner,
+                "BE-Boundary: name each separated store with its own definition",
+            ));
+        }
+        match term {
+            Term::Ref(name) => {
+                let source = self.reference(name, owner, level)?;
+                if level != 0
+                    && (tiled || !uniform)
+                    && self.requires_collective(source, &mut BTreeSet::new())
+                {
+                    return Err(self.error(
+                        owner,
+                        "BE-Collective: a referenced collective lacks whole-level participation",
+                    ));
+                }
+                inputs.push(source);
+            }
+            Term::Rows(name) => {
+                if level != 0 {
+                    self.total_physical(name, None)?;
+                }
+            }
+            Term::Map(name, inner) | Term::Compact(name, inner) => {
+                if level != 0 {
+                    self.total_physical(name, self.physical_result(inner).as_deref())?;
+                }
+                inputs.push(self.visit(inner, owner, level, tiled, uniform, false)?);
+            }
+            Term::Lookup {
+                provider, inner, ..
+            } => {
+                if level != 0 {
+                    self.total_physical(provider, None)?;
+                }
+                inputs.push(self.visit(inner, owner, level, tiled, uniform, false)?);
+            }
+            Term::Tile { inner, .. } => {
+                let children = &self.levels[level].children;
+                if children.len() != 1 {
+                    return Err(self.error(
+                        owner,
+                        "BE-Scope: tile requires exactly one child level to descend into",
+                    ));
+                }
+                let child = children[0];
+                inputs.push(self.visit(inner, owner, child, true, uniform, false)?);
+            }
+            Term::Fold(monoid, inner) => {
+                self.collective(owner, level, monoid.clone(), tiled, uniform)?;
+                inputs.push(self.visit(inner, owner, level, tiled, uniform, false)?);
+            }
+            Term::Flatten(inner) => {
+                // Stored flatten offsets can be read without executing a new
+                // scan. Otherwise the offsets require a sum-of-lengths scan;
+                // Count denotes its additive counting monoid in Analysis.
+                if !self.stored_offsets(inner) {
+                    self.collective(owner, level, Monoid::Count, tiled, uniform)?;
+                }
+                inputs.push(self.visit(inner, owner, level, tiled, uniform, false)?);
+            }
+            Term::Canon(inner) | Term::Store { inner, .. } => {
+                inputs.push(self.visit(inner, owner, level, tiled, uniform, false)?);
+            }
+            Term::Choose(alternatives) => {
+                // A later else arm also depends on all preceding guards.
+                let mut branch_uniform = uniform;
+                for (guard, alternative) in alternatives {
+                    let guard_uniform = match guard {
+                        Guard::Lt(length, _) | Guard::Ge(length, _) => {
+                            self.uniform_length(length, owner, level)?
+                        }
+                        Guard::Else => true,
+                    };
+                    branch_uniform &= guard_uniform;
+                    inputs.push(self.visit(
+                        alternative,
+                        owner,
+                        level,
+                        tiled,
+                        branch_uniform,
+                        false,
+                    )?);
+                }
+            }
+        }
+        let index = self.nodes.len();
+        self.nodes.push(Node {
+            term,
+            owner,
+            level,
+            inputs,
+            separated_store,
+        });
+        Ok(index)
+    }
+
+    fn requires_collective(&self, index: usize, visited: &mut BTreeSet<usize>) -> bool {
+        if !visited.insert(index) {
+            return false;
+        }
+        let node = &self.nodes[index];
+        match node.term {
+            Term::Store { .. } => false,
+            Term::Fold(_, _) => true,
+            Term::Flatten(inner) if !self.stored_offsets(inner) => true,
+            _ => node
+                .inputs
+                .iter()
+                .any(|&input| self.requires_collective(input, visited)),
+        }
+    }
+
+    fn collective(
+        &mut self,
+        owner: usize,
+        level: usize,
+        monoid: Monoid,
+        tiled: bool,
+        uniform: bool,
+    ) -> syn::Result<()> {
+        // Formal rule BE-Collective: only a collaborative grade (or the single
+        // host executor) supplies a collective. The syntax has no active-mask
+        // or group-width certificate, so a tile-nested collective is not a
+        // proven whole-level invocation. Local conditional lengths also cannot
+        // certify uniform participation. The built-in monoids are associative.
+        if level != 0 && !self.levels[level].model.collaborative {
+            return Err(self.error(
+                owner,
+                "BE-Collective: fold/scan requires a collaborative level",
+            ));
+        }
+        if level != 0 && (tiled || !uniform) {
+            return Err(self.error(
+                owner,
+                "BE-Collective: whole-level participation is not established",
+            ));
+        }
+        self.collectives
+            .push((self.name(owner), monoid, self.levels[level].path.clone()));
+        Ok(())
+    }
+
+    fn uniform_length(&self, length: &Len, owner: usize, level: usize) -> syn::Result<bool> {
+        match length {
+            Len::Lit(_) => Ok(true),
+            Len::Add(left, right) => {
+                let left = self.uniform_length(left, owner, level)?;
+                let right = self.uniform_length(right, owner, level)?;
+                Ok(left && right)
+            }
+            Len::Input(name) | Len::Scan(name) => {
+                let Some(&source) = self.definitions.get(name) else {
+                    // Physical and host input lengths are global size values.
+                    return Ok(true);
+                };
+                self.reference(
+                    &self.program.sequence.definitions[source].name,
+                    owner,
+                    level,
+                )?;
+                Ok(self.grades[source] == 0
+                    || self.levels[self.grades[source]].path.len() < self.levels[level].path.len())
+            }
+            Len::Unknown(_) => Ok(false),
+        }
+    }
+
+    fn stored_offsets(&self, term: &Term) -> bool {
+        match term {
+            Term::Ref(name) => self
+                .definitions
+                .get(&symbol_name(name))
+                .and_then(|&owner| self.roots.get(owner))
+                .is_some_and(|&root| self.stored_offsets(self.nodes[root].term)),
+            Term::Store { inner, .. } => matches!(inner.as_ref(), Term::Flatten(_)),
+            _ => false,
+        }
+    }
+
+    fn physical_result(&self, term: &Term) -> Option<String> {
+        match term {
+            Term::Rows(name) | Term::Map(name, _) | Term::Compact(name, _) => {
+                Some(symbol_name(name))
+            }
+            Term::Ref(name) => self
+                .definitions
+                .get(&symbol_name(name))
+                .and_then(|&owner| self.roots.get(owner))
+                .and_then(|&root| self.physical_result(self.nodes[root].term)),
+            Term::Flatten(inner)
+            | Term::Fold(_, inner)
+            | Term::Canon(inner)
+            | Term::Tile { inner, .. }
+            | Term::Store { inner, .. } => self.physical_result(inner),
+            Term::Lookup { .. } | Term::Choose(_) => None,
+        }
+    }
+
+    fn total_physical(&self, result: &Ident, stop: Option<&str>) -> syn::Result<()> {
+        // Formal rule BE-Partial: opaque Bind/Guard code cannot be evaluated
+        // below host, including through an indirect Physical dependency. A map
+        // stops at its explicit input: a host Sequence store can supply an
+        // already-evaluated opaque result without re-executing that Rust.
+        let mut pending = vec![symbol_name(result)];
+        let mut visited = BTreeSet::new();
+        while let Some(name) = pending.pop() {
+            if Some(name.as_str()) == stop || !visited.insert(name.clone()) {
+                continue;
+            }
+            let Some(definition) = self.physical.get(&name) else {
+                continue;
+            };
+            if matches!(definition.operator, Operator::Bind(_) | Operator::Guard(_)) {
+                return Err(syn::Error::new(
+                    result.span(),
+                    "BE-Partial: opaque Physical Rust must be evaluated at host before dispatch",
+                ));
+            }
+            pending.extend(definition.operator.operands().into_iter().map(symbol_name));
+        }
+        Ok(())
+    }
+
+    fn dispatches(&self) -> syn::Result<Vec<Dispatch>> {
+        // Formal rule BE-Boundary: connected below-host work is maximal until
+        // a separated store cuts a producer/consumer edge. The outer stored
+        // space is traced from the incoming driver edges, never guessed from
+        // a launch width. Provider reads are not driver edges. Collaborative
+        // stores remain local to their enclosing dispatch.
+        // A reconverging edge must not fuse across a store through a second,
+        // unstored path. Nodes are in dependency order, so barrier depths are
+        // available before connected components are formed.
+        let mut depths = vec![0usize; self.nodes.len()];
+        for (index, node) in self.nodes.iter().enumerate() {
+            if node.level != 0 {
+                depths[index] = node
+                    .inputs
+                    .iter()
+                    .filter(|&&input| self.nodes[input].level != 0)
+                    .map(|&input| depths[input] + usize::from(self.nodes[input].separated_store))
+                    .max()
+                    .unwrap_or(0);
+            }
+        }
+        let mut parents: Vec<_> = (0..self.nodes.len()).collect();
+        for (index, node) in self.nodes.iter().enumerate() {
+            if node.level == 0 {
+                continue;
+            }
+            for &input in &node.inputs {
+                let source = &self.nodes[input];
+                if source.level != 0
+                    && !source.separated_store
+                    && self.region(node.level) == self.region(source.level)
+                    && depths[index] == depths[input]
+                {
+                    let left = representative(&mut parents, index);
+                    let right = representative(&mut parents, input);
+                    parents[left] = right;
+                }
+            }
+        }
+        let mut groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+        for (index, node) in self.nodes.iter().enumerate() {
+            if node.level != 0 {
+                let group = representative(&mut parents, index);
+                groups.entry(group).or_default().push(index);
+            }
+        }
+        // Stable program/dependency order, rather than union-find root order.
+        let mut groups: Vec<_> = groups.into_values().collect();
+        groups.sort_by_key(|members| members[0]);
+        let mut result = Vec::with_capacity(groups.len());
+        for members in groups {
+            let member_set: BTreeSet<_> = members.iter().copied().collect();
+            let mut domains = BTreeSet::new();
+            let mut owners = BTreeSet::new();
+            let mut stores = BTreeSet::new();
+            let mut visited = BTreeSet::new();
+            for &index in &members {
+                let node = &self.nodes[index];
+                owners.insert(node.owner);
+                if matches!(node.term, Term::Store { .. }) {
+                    stores.insert(node.owner);
+                }
+                if let Term::Rows(name) = node.term {
+                    domains.insert(symbol_name(name));
+                }
+                for &input in &node.inputs {
+                    if !member_set.contains(&input) {
+                        if self.nodes[input].level != 0 && !self.nodes[input].separated_store {
+                            return Err(self.error(
+                                node.owner,
+                                "BE-Boundary: a value crossing a dispatch boundary must be stored",
+                            ));
+                        }
+                        self.domains(input, &mut domains, &mut visited);
+                    }
+                }
+            }
+            // A host store can enclose a tile whose work is in this dispatch;
+            // publication belongs to that dispatch even though the store's
+            // allocation/extent itself is at host.
+            for (owner, &root) in self.roots.iter().enumerate() {
+                if self.nodes[root].level == 0
+                    && matches!(self.nodes[root].term, Term::Store { .. })
+                    && self.nodes[root]
+                        .inputs
+                        .iter()
+                        .any(|&input| self.reaches(input, &member_set, &mut BTreeSet::new()))
+                {
+                    stores.insert(owner);
+                }
+            }
+            let first = &self.nodes[members[0]];
+            if domains.len() != 1 {
+                return Err(self.error(
+                    first.owner,
+                    "BE-Boundary: a dispatch must have one unambiguous outer stored space",
+                ));
+            }
+            let level = self.levels[first.level].path[..2].to_vec();
+            result.push(Dispatch {
+                outer_store: domains.into_iter().next().expect("one domain was checked"),
+                members: owners.into_iter().map(|owner| self.name(owner)).collect(),
+                inner_stores: stores.into_iter().map(|owner| self.name(owner)).collect(),
+                failure_channel: level.iter().rev().cloned().collect(),
+                level,
+            });
+        }
+        Ok(result)
+    }
+
+    // One entry branch below host owns its collaborative and per-part levels.
+    // A store at any separated descendant still cuts the dataflow above. This
+    // avoids incorrectly turning every lane of a collaborative group into an
+    // independent dispatch just because lanes themselves are not collaborative.
+    fn region(&self, level: usize) -> &str {
+        &self.levels[level].path[1]
+    }
+
+    fn domains(&self, index: usize, domains: &mut BTreeSet<String>, visited: &mut BTreeSet<usize>) {
+        if !visited.insert(index) {
+            return;
+        }
+        let node = &self.nodes[index];
+        match node.term {
+            Term::Store { .. } => {
+                domains.insert(self.name(node.owner));
+            }
+            Term::Rows(name) => {
+                domains.insert(symbol_name(name));
+            }
+            _ => {
+                for &input in &node.inputs {
+                    self.domains(input, domains, visited);
+                }
+            }
+        }
+    }
+
+    fn reaches(
+        &self,
+        index: usize,
+        members: &BTreeSet<usize>,
+        visited: &mut BTreeSet<usize>,
+    ) -> bool {
+        if members.contains(&index) {
+            return true;
+        }
+        let node = &self.nodes[index];
+        if node.level != 0 || matches!(node.term, Term::Store { .. }) || !visited.insert(index) {
+            return false;
+        }
+        node.inputs
+            .iter()
+            .any(|&input| self.reaches(input, members, visited))
+    }
+}
+
+fn representative(parents: &mut [usize], mut index: usize) -> usize {
+    while parents[index] != index {
+        let parent = parents[index];
+        parents[index] = parents[parent];
+        index = parents[index];
+    }
+    index
+}

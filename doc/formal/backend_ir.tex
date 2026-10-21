@@ -1,8 +1,9 @@
 \section{Sequence: the back-end level (design)}
 \label{sec:backend-ir}\label{sec:sequence}
-This section is a design, not a verified implementation; its rules are
-\emph{abstract} in the inventory until a pass and a check implement them. It
-adds one level below Structures, \emph{Sequence}, shared by every back end,
+The structural contracts and machine grading of this section are implemented
+by \code{cq-lang-sequence}; their rules are linked in the inventory. Runtime
+trait premises and emitter correctness remain obligations. Sequence adds
+one level below Structures, shared by every back end,
 and states what below it is not a level: placement is a grading on Sequence
 terms, the machine is a parameter of that grading, and each emitter is a
 translation. The level names no data structure, no algorithm and no machine.

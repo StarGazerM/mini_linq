@@ -446,6 +446,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-lang-sequence"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-structures",
+ "cq-stage",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "cq-lang-structures"
 version = "0.1.0"
 dependencies = [

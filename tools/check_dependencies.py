@@ -174,7 +174,7 @@ def check(data, announce=True):
         package = packages[name]
         internal = {d["name"] for d in production(package) if "path" in d or d["name"] in packages}
         if name in LANGUAGES:
-            base = {"cq-lang-vo": "cq-lang-cq", "cq-lang-ix": "cq-lang-ra", "cq-lang-structures": "cq-lang-physical"}.get(name)
+            base = {"cq-lang-vo": "cq-lang-cq", "cq-lang-ix": "cq-lang-ra", "cq-lang-structures": "cq-lang-physical", "cq-lang-sequence": "cq-lang-structures"}.get(name)
             allowed = ({"cq-syntax", "cq-stage", base} - {None, name})
             if package["features"]:
                 raise ValueError(f"language features are forbidden: {name}")
