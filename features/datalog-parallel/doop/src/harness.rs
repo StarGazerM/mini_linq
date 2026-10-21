@@ -1,37 +1,40 @@
-//! Engine descriptors and local pool setup; all DOOP harness operations use
-//! the base library, including CLI parsing, loading, comparison, timing and RSS.
-use crate::{ascent_engine, mini_engine};
-use datalog_doop::harness::{Engine, Harness, Result};
+use doop_shared::harness::{Engine, Harness, Result};
 
 pub const ENGINES: &[Engine] = &[
+    #[cfg(feature = "mini")]
     Engine {
         name: "mini",
-        evaluate: mini_engine::run,
+        evaluate: doop_mini::run,
         threads: || 1,
     },
-    Engine {
-        name: "mini-par",
-        evaluate: mini_engine::run_parallel,
-        threads: rayon::current_num_threads,
-    },
+    #[cfg(feature = "mini-fx")]
     Engine {
         name: "mini-fx",
-        evaluate: mini_engine::run_fx,
+        evaluate: doop_mini_fx::run,
         threads: || 1,
     },
-    Engine {
-        name: "mini-par-fx",
-        evaluate: mini_engine::run_parallel_fx,
-        threads: rayon::current_num_threads,
-    },
+    #[cfg(feature = "ascent")]
     Engine {
         name: "ascent",
-        evaluate: ascent_engine::run,
+        evaluate: doop_ascent::run,
         threads: || 1,
     },
+    #[cfg(feature = "mini-par")]
+    Engine {
+        name: "mini-par",
+        evaluate: doop_mini_par::run,
+        threads: rayon::current_num_threads,
+    },
+    #[cfg(feature = "mini-par-fx")]
+    Engine {
+        name: "mini-par-fx",
+        evaluate: doop_mini_par_fx::run,
+        threads: rayon::current_num_threads,
+    },
+    #[cfg(feature = "ascent-par")]
     Engine {
         name: "ascent-par",
-        evaluate: ascent_engine::run_parallel,
+        evaluate: doop_ascent_par::run,
         threads: rayon::current_num_threads,
     },
 ];
@@ -39,7 +42,12 @@ pub const ENGINES: &[Engine] = &[
 pub fn main(args: impl IntoIterator<Item = String>) -> Result<()> {
     let harness = Harness {
         engines: ENGINES,
-        defaults: &["mini", "ascent"],
+        defaults: &[
+            #[cfg(feature = "mini")]
+            "mini",
+            #[cfg(feature = "ascent")]
+            "ascent",
+        ],
         reference: "ascent",
         checked: &["mini", "mini-fx", "mini-par", "mini-par-fx", "ascent-par"],
         options: &["--threads"],
@@ -50,6 +58,7 @@ pub fn main(args: impl IntoIterator<Item = String>) -> Result<()> {
     // Baselines stay on the caller thread: dormant worker stacks must not
     // contaminate their peak RSS, even if --threads was supplied.
     let result = if options.check
+        || (options.engine == "both" && harness.defaults.is_empty())
         || matches!(
             options.engine.as_str(),
             "mini-par" | "mini-par-fx" | "ascent-par"

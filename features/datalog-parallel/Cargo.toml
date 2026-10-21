@@ -1,5 +1,5 @@
 [workspace]
-members = ["partition", "print", "runtime", "oracle", "doop"]
+members = ["partition", "print", "runtime", "oracle", "oracle/engines/*", "doop", "doop/engines/*"]
 resolver = "3"
 
 [package]

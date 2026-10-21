@@ -4,16 +4,19 @@
 /// Instantiate the unchanged corpus with caller-selected compiler and oracle macros.
 #[macro_export]
 macro_rules! oracle_programs {
-    ($module:ident, $ascent:path, $input:path, pipeline { $($pipeline:tt)* }) => {
+    ($module:ident, $engine:ident, $ascent:path, $input:path, pipeline { $($pipeline:tt)* }) => {
     pub mod $module {
+    $crate::oracle_engine!(ascent, $engine, {
     use $ascent as ascent_program;
     use $input as supplied_oracle_input;
     macro_rules! oracle_input { ($rows:expr) => { supplied_oracle_input!($rows) }; }
+    });
 use $crate::{Data, Rows};
 use std::time::{Duration, Instant};
 
 pub mod reach {
     use super::*;
+    $crate::oracle_engine!(ascent, $engine, {
     ascent_program! {
         pub struct Oracle;
         relation edge(i32, i32);
@@ -36,6 +39,8 @@ pub mod reach {
             elapsed,
         )
     }
+    });
+    $crate::oracle_engine!(mini, $engine, {
     pub fn mini(data: &Data) -> (Rows, Duration) {
         let edge = data.edge.clone();
         let seed = data.seed.clone();
@@ -57,10 +62,12 @@ pub mod reach {
             elapsed,
         )
     }
+    });
 }
 
 pub mod tc_left {
     use super::*;
+    $crate::oracle_engine!(ascent, $engine, {
     ascent_program! {
         pub struct Oracle;
         relation edge(i32, i32);
@@ -81,6 +88,8 @@ pub mod tc_left {
             elapsed,
         )
     }
+    });
+    $crate::oracle_engine!(mini, $engine, {
     pub fn mini(data: &Data) -> (Rows, Duration) {
         let edge = data.edge.clone();
         let start = Instant::now();
@@ -100,10 +109,12 @@ pub mod tc_left {
             elapsed,
         )
     }
+    });
 }
 
 pub mod tc_right {
     use super::*;
+    $crate::oracle_engine!(ascent, $engine, {
     ascent_program! {
         pub struct Oracle;
         relation edge(i32, i32);
@@ -124,6 +135,8 @@ pub mod tc_right {
             elapsed,
         )
     }
+    });
+    $crate::oracle_engine!(mini, $engine, {
     pub fn mini(data: &Data) -> (Rows, Duration) {
         let edge = data.edge.clone();
         let start = Instant::now();
@@ -143,10 +156,12 @@ pub mod tc_right {
             elapsed,
         )
     }
+    });
 }
 
 pub mod tc_nonlinear {
     use super::*;
+    $crate::oracle_engine!(ascent, $engine, {
     ascent_program! {
         pub struct Oracle;
         relation edge(i32, i32);
@@ -167,6 +182,8 @@ pub mod tc_nonlinear {
             elapsed,
         )
     }
+    });
+    $crate::oracle_engine!(mini, $engine, {
     pub fn mini(data: &Data) -> (Rows, Duration) {
         let edge = data.edge.clone();
         let start = Instant::now();
@@ -186,10 +203,12 @@ pub mod tc_nonlinear {
             elapsed,
         )
     }
+    });
 }
 
 pub mod same_generation {
     use super::*;
+    $crate::oracle_engine!(ascent, $engine, {
     ascent_program! {
         pub struct Oracle;
         relation edge(i32, i32);
@@ -210,6 +229,8 @@ pub mod same_generation {
             elapsed,
         )
     }
+    });
+    $crate::oracle_engine!(mini, $engine, {
     pub fn mini(data: &Data) -> (Rows, Duration) {
         let edge = data.edge.clone();
         let start = Instant::now();
@@ -229,10 +250,12 @@ pub mod same_generation {
             elapsed,
         )
     }
+    });
 }
 
 pub mod mutual {
     use super::*;
+    $crate::oracle_engine!(ascent, $engine, {
     ascent_program! {
         pub struct Oracle;
         relation edge(i32, i32);
@@ -265,6 +288,8 @@ pub mod mutual {
             elapsed,
         )
     }
+    });
+    $crate::oracle_engine!(mini, $engine, {
     pub fn mini(data: &Data) -> (Rows, Duration) {
         let edge = data.edge.clone();
         let nodes = data.nodes.clone();
@@ -296,10 +321,12 @@ pub mod mutual {
             elapsed,
         )
     }
+    });
 }
 
 pub mod multiple_seeds {
     use super::*;
+    $crate::oracle_engine!(ascent, $engine, {
     ascent_program! {
         pub struct Oracle;
         relation edge(i32, i32);
@@ -325,6 +352,8 @@ pub mod multiple_seeds {
             elapsed,
         )
     }
+    });
+    $crate::oracle_engine!(mini, $engine, {
     pub fn mini(data: &Data) -> (Rows, Duration) {
         let edge = data.edge.clone();
         let seed = data.seed.clone();
@@ -349,10 +378,12 @@ pub mod multiple_seeds {
             elapsed,
         )
     }
+    });
 }
 
 pub mod guard {
     use super::*;
+    $crate::oracle_engine!(ascent, $engine, {
     ascent_program! {
         pub struct Oracle;
         relation edge(i32, i32);
@@ -375,6 +406,8 @@ pub mod guard {
             elapsed,
         )
     }
+    });
+    $crate::oracle_engine!(mini, $engine, {
     pub fn mini(data: &Data) -> (Rows, Duration) {
         let edge = data.edge.clone();
         let seed = data.seed.clone();
@@ -396,10 +429,12 @@ pub mod guard {
             elapsed,
         )
     }
+    });
 }
 
 pub mod unreachable {
     use super::*;
+    $crate::oracle_engine!(ascent, $engine, {
     ascent_program! {
         pub struct Oracle;
         relation edge(i32, i32);
@@ -426,6 +461,8 @@ pub mod unreachable {
             elapsed,
         )
     }
+    });
+    $crate::oracle_engine!(mini, $engine, {
     pub fn mini(data: &Data) -> (Rows, Duration) {
         let edge = data.edge.clone();
         let seed = data.seed.clone();
@@ -451,10 +488,12 @@ pub mod unreachable {
             elapsed,
         )
     }
+    });
 }
 
 pub mod nonedges {
     use super::*;
+    $crate::oracle_engine!(ascent, $engine, {
     ascent_program! {
         pub struct Oracle;
         relation edge(i32, i32);
@@ -477,6 +516,8 @@ pub mod nonedges {
             elapsed,
         )
     }
+    });
+    $crate::oracle_engine!(mini, $engine, {
     pub fn mini(data: &Data) -> (Rows, Duration) {
         let edge = data.edge.clone();
         let start = Instant::now();
@@ -498,10 +539,12 @@ pub mod nonedges {
             elapsed,
         )
     }
+    });
 }
 
 pub mod recursive_upper {
     use super::*;
+    $crate::oracle_engine!(ascent, $engine, {
     ascent_program! {
         pub struct Oracle;
         relation edge(i32, i32);
@@ -529,6 +572,8 @@ pub mod recursive_upper {
             elapsed,
         )
     }
+    });
+    $crate::oracle_engine!(mini, $engine, {
     pub fn mini(data: &Data) -> (Rows, Duration) {
         let edge = data.edge.clone();
         let seed = data.seed.clone();
@@ -555,10 +600,12 @@ pub mod recursive_upper {
             elapsed,
         )
     }
+    });
 }
 
 pub mod andersen {
     use super::*;
+    $crate::oracle_engine!(ascent, $engine, {
     ascent_program! {
         pub struct Oracle;
         relation address_of(i32, i32);
@@ -587,6 +634,8 @@ pub mod andersen {
             elapsed,
         )
     }
+    });
+    $crate::oracle_engine!(mini, $engine, {
     pub fn mini(data: &Data) -> (Rows, Duration) {
         let address_of = data.address_of.clone();
         let assign = data.assign.clone();
@@ -614,10 +663,12 @@ pub mod andersen {
             elapsed,
         )
     }
+    });
 }
 
 pub mod cspa {
     use super::*;
+    $crate::oracle_engine!(ascent, $engine, {
     ascent_program! {
         pub struct Oracle;
         relation assign(i32, i32);
@@ -659,6 +710,8 @@ pub mod cspa {
             elapsed,
         )
     }
+    });
+    $crate::oracle_engine!(mini, $engine, {
     pub fn mini(data: &Data) -> (Rows, Duration) {
         let assign = data.assign.clone();
         let dereference = data.dereference.clone();
@@ -699,8 +752,17 @@ pub mod cspa {
             elapsed,
         )
     }
+    });
 }
 
     }
     };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! oracle_engine {
+    (mini, mini, { $($items:tt)* }) => { $($items)* };
+    (ascent, ascent, { $($items:tt)* }) => { $($items)* };
+    ($kind:ident, $selected:ident, { $($items:tt)* }) => {};
 }

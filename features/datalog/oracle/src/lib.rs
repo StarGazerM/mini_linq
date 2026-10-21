@@ -19,169 +19,31 @@
 //!   order on every fixture. This is the interleaved hasher-comparison protocol.
 //! - Counter assertions: `cargo run --release -p datalog-oracle --features counters -- counters`.
 //!
-//! Exported program generators accept arbitrary named pipeline configuration.
+//! `oracle_shared::oracle_programs!` accepts a single engine selector (`mini` or
+//! `ascent`) and arbitrary named pipeline configuration; unselected engines never expand.
 //! Each timed result is compared as a complete canonical set.
 //! `phase-timing` enables per-round stderr separately from timing runs.
 //!
 //! `counters` requires the explicit feature. `bench` refuses storage counters,
 //! including when another selected package enables them through feature unification.
-//! The public [`harness`] shares CLI parsing, benchmark fixtures, checked median
-//! timing and callback-based counter obligations with independently configured
-//! evaluators. No engine configuration is selected by the shared measurement code.
-pub use cq_testkit::Result;
+//! `oracle_shared::harness` owns CLI parsing, benchmark fixtures, checked median
+//! timing and callback-based counter obligations. This crate's [`harness`] only
+//! dispatches sequential comparisons; parallel consumers use shared helpers directly.
+//! Engines compile independently; default features select `mini`, `mini-fx`, and
+//! `ascent`. A focused build uses `--no-default-features --features mini,ascent`
+//! (or `mini-fx,ascent`). Comparisons require Ascent plus the selected engine.
 use cq_testkit::golden;
-#[macro_use]
-mod generators {
-    include!("programs.rs");
-}
-#[macro_export]
-macro_rules! oracle_input {
-    ($rows:expr) => {
-        $rows.clone()
-    };
-}
-oracle_programs!(programs, ascent::ascent, crate::oracle_input, pipeline {});
-oracle_programs!(programs_fx, ascent::ascent, crate::oracle_input, pipeline {
-    storage_rewrites = [cq_datalog_hasher::hasher(fx)];
-    round = [cq_datalog_hasher::hasher_round(fx)];
-    cq = pipeline {
-        structures = [cq_rewrites::retype(dedup => ::std::collections::HashSet<_, ::std::hash::BuildHasherDefault<::rustc_hash::FxHasher>>)];
-    };
-});
-pub mod harness;
-pub mod strings;
+use oracle_shared::{Data, Result, Rows, SCENARIOS, generate, golden_root};
+#[cfg(test)]
+use oracle_shared::{RANDOM_SEEDS, naive, random_data};
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::path::Path;
+use std::path::PathBuf;
 use std::time::Duration;
-
-pub type Rows = Vec<Vec<i32>>;
-pub fn canonical(rows: Rows) -> Rows {
-    rows.into_iter()
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
-#[derive(Clone, Debug, Default)]
-pub struct Data {
-    pub nodes: Vec<(i32,)>,
-    pub edge: Vec<(i32, i32)>,
-    pub seed: Vec<(i32,)>,
-    pub extra: Vec<(i32,)>,
-    pub address_of: Vec<(i32, i32)>,
-    pub assign: Vec<(i32, i32)>,
-    pub load: Vec<(i32, i32)>,
-    pub store: Vec<(i32, i32)>,
-    pub dereference: Vec<(i32, i32)>,
-}
-
-pub const SCENARIOS: &[&str] = &[
-    "empty",
-    "self_loop",
-    "chain",
-    "cycle",
-    "complete",
-    "duplicates",
-    "disconnected",
-    "random",
-];
-pub const RANDOM_SEEDS: u64 = 24;
-
-// Fixed wrapping LCG, not a library RNG whose algorithm could change.
-pub fn generate(scenario: &str, n: i32, mut state: u64) -> Data {
-    assert!(n > 0);
-    let mut d = Data::default();
-    if scenario == "empty" {
-        return d;
-    }
-    let n = if scenario == "self_loop" { 1 } else { n };
-    d.nodes = (0..n).map(|x| (x,)).collect();
-    d.seed = vec![(0,)];
-    d.extra = vec![(n - 1,)];
-    d.edge = match scenario {
-        "self_loop" => vec![(0, 0)],
-        "chain" | "duplicates" => (0..n - 1).map(|x| (x, x + 1)).collect(),
-        "cycle" => (0..n).map(|x| (x, (x + 1) % n)).collect(),
-        "complete" => (0..n).flat_map(|x| (0..n).map(move |y| (x, y))).collect(),
-        "disconnected" => (0..n - 1)
-            .filter(|x| *x != n / 2 - 1)
-            .map(|x| (x, x + 1))
-            .collect(),
-        "random" => {
-            let mut edges = Vec::new();
-            for x in 0..n {
-                for y in 0..n {
-                    state = state
-                        .wrapping_mul(6364136223846793005)
-                        .wrapping_add(1442695040888963407);
-                    if (state >> 32) % 5 == 0 {
-                        edges.push((x, y));
-                    }
-                }
-            }
-            edges
-        }
-        _ => panic!("unknown scenario: {scenario}"),
-    };
-    // Constraint relations preserve graph shape but occupy distinct role domains.
-    // Identity address facts plus graph-shaped assignments exercise propagation;
-    // loads/stores/dereferences include nonidentity facts, not empty placeholders.
-    d.address_of = d.nodes.iter().map(|&(x,)| (x, x)).collect();
-    d.assign = d.edge.clone();
-    d.load = d.edge.iter().map(|&(x, y)| (y, x)).collect();
-    d.store = d.edge.clone();
-    d.dereference = d.load.clone();
-    if scenario == "random" {
-        d.address_of = random_relation(n, &mut state, 1, 5);
-        d.assign = random_relation(n, &mut state, 1, 5);
-        d.load = random_relation(n, &mut state, 1, 5);
-        d.store = random_relation(n, &mut state, 1, 5);
-        d.dereference = random_relation(n, &mut state, 1, 5);
-    }
-    if scenario == "duplicates" {
-        d.edge.extend(d.edge.clone());
-        d.seed.extend(d.seed.clone());
-        d.extra.extend(d.extra.clone());
-        d.nodes.extend(d.nodes.clone());
-        d.address_of.extend(d.address_of.clone());
-        d.assign.extend(d.assign.clone());
-        d.load.extend(d.load.clone());
-        d.store.extend(d.store.clone());
-        d.dereference.extend(d.dereference.clone());
-    }
-    d
-}
-
-fn random_relation(n: i32, state: &mut u64, numerator: u64, denominator: u64) -> Vec<(i32, i32)> {
-    let mut rows = Vec::new();
-    for x in 0..n {
-        for y in 0..n {
-            *state = state
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
-            if (*state >> 32) % denominator < numerator {
-                rows.push((x, y));
-            }
-        }
-    }
-    rows
-}
-
-/// Independent Bernoulli draws for each relation, in a fixed stream order.
-pub fn random_data(n: i32, mut state: u64, numerator: u64, denominator: u64) -> Data {
-    assert!(n > 0 && numerator <= denominator && denominator > 0);
-    Data {
-        nodes: (0..n).map(|x| (x,)).collect(),
-        seed: vec![(0,)],
-        extra: vec![(n - 1,)],
-        edge: random_relation(n, &mut state, numerator, denominator),
-        address_of: random_relation(n, &mut state, numerator, denominator),
-        assign: random_relation(n, &mut state, numerator, denominator),
-        load: random_relation(n, &mut state, numerator, denominator),
-        store: random_relation(n, &mut state, numerator, denominator),
-        dereference: random_relation(n, &mut state, numerator, denominator),
-    }
-}
-
+pub mod harness;
+#[cfg(test)]
+mod strings;
 pub struct Case {
     pub name: &'static str,
     pub arity: usize,
@@ -190,91 +52,34 @@ pub struct Case {
 }
 macro_rules! cases {
     ($($name:ident : $arity:literal),* $(,)?) => {
+        #[cfg(all(feature = "mini", feature = "ascent"))]
         pub const CASES: &[Case] = &[$(Case {name: stringify!($name), arity: $arity,
-            mini: programs::$name::mini, oracle: programs::$name::oracle}),*];
+            mini: oracle_mini::$name::mini, oracle: oracle_ascent::$name::oracle}),*];
+        #[cfg(all(feature = "mini-fx", feature = "ascent"))]
         pub const FX_CASES: &[Case] = &[$(Case {name: stringify!($name), arity: $arity,
-            mini: programs_fx::$name::mini, oracle: programs::$name::oracle}),*];
+            mini: oracle_mini_fx::$name::mini, oracle: oracle_ascent::$name::oracle}),*];
     }
 }
 cases! { reach:1, tc_left:2, tc_right:2, tc_nonlinear:2, same_generation:2,
 mutual:3, multiple_seeds:1, guard:1, unreachable:1, nonedges:2,
 recursive_upper:2, andersen:2, cspa:3 }
 
-// Independent dense Boolean closure, not a join/delta implementation.
-pub fn naive(case: &str, d: &Data) -> Option<Rows> {
-    let n = d
-        .nodes
-        .iter()
-        .map(|&(x,)| x as usize + 1)
-        .max()
-        .unwrap_or(0);
-    let mut tc = vec![vec![false; n]; n];
-    for &(x, y) in &d.edge {
-        tc[x as usize][y as usize] = true;
+#[cfg(not(all(feature = "mini", feature = "ascent")))]
+pub const CASES: &[Case] = &[];
+#[cfg(not(all(feature = "mini-fx", feature = "ascent")))]
+pub const FX_CASES: &[Case] = &[];
+fn selected_cases() -> Result<&'static [Case]> {
+    if !CASES.is_empty() {
+        Ok(CASES)
+    } else if !FX_CASES.is_empty() {
+        Ok(FX_CASES)
+    } else {
+        Err("comparisons require features ascent and mini or mini-fx".into())
     }
-    for k in 0..n {
-        for x in 0..n {
-            for y in 0..n {
-                tc[x][y] |= tc[x][k] && tc[k][y];
-            }
-        }
-    }
-    match case {
-        "reach" => Some(
-            (0..n)
-                .filter(|&y| {
-                    d.seed
-                        .iter()
-                        .any(|&(x,)| x as usize == y || tc[x as usize][y])
-                })
-                .map(|y| vec![y as i32])
-                .collect(),
-        ),
-        "tc_left" | "tc_right" | "tc_nonlinear" => Some(
-            (0..n)
-                .flat_map(|x| {
-                    (0..n).filter_map({
-                        let tc = &tc;
-                        move |y| tc[x][y].then_some(vec![x as i32, y as i32])
-                    })
-                })
-                .collect(),
-        ),
-        "same_generation" => {
-            // Walk the product graph from sibling pairs using a work queue.
-            let mut seen = BTreeSet::new();
-            let mut pending = std::collections::VecDeque::new();
-            for &(p, x) in &d.edge {
-                for &(q, y) in &d.edge {
-                    if p == q && seen.insert((x, y)) {
-                        pending.push_back((x, y));
-                    }
-                }
-            }
-            while let Some((a, b)) = pending.pop_front() {
-                for &(p, x) in &d.edge {
-                    if p != a {
-                        continue;
-                    }
-                    for &(q, y) in &d.edge {
-                        if q == b && seen.insert((x, y)) {
-                            pending.push_back((x, y));
-                        }
-                    }
-                }
-            }
-            Some(seen.into_iter().map(|(x, y)| vec![x, y]).collect())
-        }
-        _ => None,
-    }
-}
-
-pub fn golden_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("golden")
 }
 pub fn goldens(write: bool, mini: bool) -> Result<BTreeSet<PathBuf>> {
     let mut checked = BTreeSet::new();
-    for c in CASES {
+    for c in selected_cases()? {
         for scenario in SCENARIOS {
             let data = generate(scenario, 6, 0x5eed);
             let rows = if mini {
@@ -296,7 +101,7 @@ pub fn goldens(write: bool, mini: bool) -> Result<BTreeSet<PathBuf>> {
     Ok(checked)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "ascent", any(feature = "mini", feature = "mini-fx")))]
 mod tests {
     use super::*;
     #[test]

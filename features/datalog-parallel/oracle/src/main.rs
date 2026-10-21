@@ -1,3 +1,3 @@
-fn main() -> datalog_oracle::Result<()> {
+fn main() -> oracle_shared::Result<()> {
     datalog_parallel_oracle::harness::run(&std::env::args().skip(1).collect::<Vec<_>>())
 }

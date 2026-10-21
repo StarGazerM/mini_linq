@@ -626,5 +626,3 @@ pub fn run(facts: Facts) -> Results {
 }
     };
 }
-doop_ascent_engine!(sequential, ascent::ascent, crate::doop_relation_storage);
-pub use sequential::run;

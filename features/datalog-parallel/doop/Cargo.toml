@@ -2,7 +2,7 @@
 name = "datalog-parallel-doop"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.85.1"
 license = "MIT OR Apache-2.0"
 publish = false
 
@@ -11,19 +11,22 @@ name = "doop-parallel"
 path = "src/main.rs"
 
 [features]
-default = []
-phase-timing = ["cq-datalog/phase-timing", "datalog-doop/phase-timing"]
-hole-timing = ["cq-datalog-parallel/hole-timing"]
+default = ["mini", "mini-fx", "ascent", "mini-par", "mini-par-fx", "ascent-par"]
+mini = ["dep:doop-mini"]
+mini-fx = ["dep:doop-mini-fx"]
+ascent = ["dep:doop-ascent"]
+mini-par = ["dep:doop-mini-par"]
+mini-par-fx = ["dep:doop-mini-par-fx"]
+ascent-par = ["dep:doop-ascent-par"]
+phase-timing = ["doop-mini?/phase-timing", "doop-mini-fx?/phase-timing", "doop-mini-par?/phase-timing", "doop-mini-par-fx?/phase-timing"]
+hole-timing = ["doop-mini-par?/hole-timing", "doop-mini-par-fx?/hole-timing"]
 
 [dependencies]
-datalog-doop = { path = "../../datalog/doop" }
-cq-datalog-parallel = { path = ".." }
-cq-datalog-parallel-runtime = { path = "../runtime" }
-cq-datalog = { path = "../../datalog/facade/cq-datalog" }
-cq-datalog-hasher = { path = "../../datalog/passes/hasher" }
-cq-rewrites = { path = "../../rewrites" }
-rustc-hash = "2.1.3"
-mini-linq = { version = "0.1.0", path = "../../../facade/mini-linq" }
-cq-storage = { version = "0.1.0", path = "../../../runtime/cq-storage" }
-ascent = { version = "0.8", default-features = false, features = ["par"] }
+doop-shared = { path = "../../datalog/doop/shared" }
+doop-mini = { path = "../../datalog/doop/engines/mini", optional = true }
+doop-mini-fx = { path = "../../datalog/doop/engines/mini-fx", optional = true }
+doop-ascent = { path = "../../datalog/doop/engines/ascent", optional = true }
+doop-mini-par = { path = "engines/mini-par", optional = true }
+doop-mini-par-fx = { path = "engines/mini-par-fx", optional = true }
+doop-ascent-par = { path = "engines/ascent-par", optional = true }
 rayon = "1"

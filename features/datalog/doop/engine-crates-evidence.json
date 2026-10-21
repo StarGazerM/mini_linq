@@ -1,0 +1,286 @@
+{
+  "baseline": "e41c905",
+  "hardware": "Apple M5 Pro, 15 physical cores, 24 GiB",
+  "protocol": {
+    "profile": "release",
+    "jobs": 15,
+    "target_dir": "/tmp/target-Engines",
+    "build_cap_seconds": 900,
+    "isolation": "One Cargo command or benchmark at a time; no concurrent agent builds. Ordinary desktop services not disabled.",
+    "scope": "All CLI/shared/engine packages cleaned; other dependencies prebuilt. Parallel baseline cleans both old DOOP/oracle CLI crates. Full defaults retain all CLI engines.",
+    "cpu": "user + system seconds from /usr/bin/time -l",
+    "single_engine": "--no-default-features --features mini (sequential) or mini-par (parallel)"
+  },
+  "builds": {
+    "doop": {
+      "before": {
+        "wall": 30.12,
+        "user": 59.96,
+        "system": 0.85,
+        "cpu": 60.81
+      },
+      "after": {
+        "wall": 15.37,
+        "user": 64.04,
+        "system": 0.92,
+        "cpu": 64.96
+      },
+      "mini_only": {
+        "wall": 13.37,
+        "user": 22.48,
+        "system": 0.45,
+        "cpu": 22.93
+      },
+      "wall_reduction_percent": 48.97
+    },
+    "doop-parallel": {
+      "before": {
+        "wall": 72.18,
+        "user": 230.36,
+        "system": 3.06,
+        "cpu": 233.42
+      },
+      "after": {
+        "wall": 30.23,
+        "user": 277.87,
+        "system": 4.22,
+        "cpu": 282.09
+      },
+      "mini_par_only": {
+        "wall": 21.1,
+        "user": 56.36,
+        "system": 0.85,
+        "cpu": 57.21
+      },
+      "wall_reduction_percent": 58.12
+    },
+    "oracle": {
+      "before": {
+        "wall": 8.22,
+        "user": 25.9,
+        "system": 0.42,
+        "cpu": 26.32
+      },
+      "after": {
+        "wall": 3.16,
+        "user": 15.8,
+        "system": 0.48,
+        "cpu": 16.28
+      },
+      "wall_reduction_percent": 61.56
+    },
+    "oracle-parallel": {
+      "before": {
+        "wall": 16.34,
+        "user": 63.43,
+        "system": 1.06,
+        "cpu": 64.49
+      },
+      "after": {
+        "wall": 7.54,
+        "user": 48.05,
+        "system": 1.01,
+        "cpu": 49.06
+      },
+      "wall_reduction_percent": 53.86
+    }
+  },
+  "runtime": {
+    "app": "cassandra",
+    "engine": "mini",
+    "threads": 1,
+    "protocol": "One interleaved before/after pair, separate uninstrumented processes, compute-only",
+    "samples": [
+      {
+        "variant": "before",
+        "compute_seconds": 3.045137
+      },
+      {
+        "variant": "after",
+        "compute_seconds": 3.040693
+      }
+    ]
+  },
+  "exact_checks": [
+    {
+      "app": "cassandra",
+      "variant": "sequential",
+      "checks": [
+        "check=ok engine=mini threads=1 relations=26 comparison=full_tuple_sets",
+        "check=ok engine=mini-fx threads=1 relations=26 comparison=full_tuple_sets"
+      ]
+    },
+    {
+      "app": "cassandra",
+      "variant": "parallel",
+      "checks": [
+        "check=ok engine=mini threads=1 relations=26 comparison=full_tuple_sets",
+        "check=ok engine=mini-fx threads=1 relations=26 comparison=full_tuple_sets",
+        "check=ok engine=mini-par threads=15 relations=26 comparison=full_tuple_sets",
+        "check=ok engine=mini-par-fx threads=15 relations=26 comparison=full_tuple_sets",
+        "check=ok engine=ascent-par threads=15 relations=26 comparison=full_tuple_sets"
+      ]
+    },
+    {
+      "app": "avrora",
+      "variant": "sequential",
+      "checks": [
+        "check=ok engine=mini threads=1 relations=26 comparison=full_tuple_sets",
+        "check=ok engine=mini-fx threads=1 relations=26 comparison=full_tuple_sets"
+      ]
+    },
+    {
+      "app": "avrora",
+      "variant": "parallel",
+      "checks": [
+        "check=ok engine=mini threads=1 relations=26 comparison=full_tuple_sets",
+        "check=ok engine=mini-fx threads=1 relations=26 comparison=full_tuple_sets",
+        "check=ok engine=mini-par threads=15 relations=26 comparison=full_tuple_sets",
+        "check=ok engine=mini-par-fx threads=15 relations=26 comparison=full_tuple_sets",
+        "check=ok engine=ascent-par threads=15 relations=26 comparison=full_tuple_sets"
+      ]
+    },
+    {
+      "app": "lusearch",
+      "variant": "sequential",
+      "checks": [
+        "check=ok engine=mini threads=1 relations=26 comparison=full_tuple_sets",
+        "check=ok engine=mini-fx threads=1 relations=26 comparison=full_tuple_sets"
+      ]
+    },
+    {
+      "app": "lusearch",
+      "variant": "parallel",
+      "checks": [
+        "check=ok engine=mini threads=1 relations=26 comparison=full_tuple_sets",
+        "check=ok engine=mini-fx threads=1 relations=26 comparison=full_tuple_sets",
+        "check=ok engine=mini-par threads=15 relations=26 comparison=full_tuple_sets",
+        "check=ok engine=mini-par-fx threads=15 relations=26 comparison=full_tuple_sets",
+        "check=ok engine=ascent-par threads=15 relations=26 comparison=full_tuple_sets"
+      ]
+    },
+    {
+      "app": "xalan",
+      "variant": "sequential",
+      "checks": [
+        "check=ok engine=mini threads=1 relations=26 comparison=full_tuple_sets",
+        "check=ok engine=mini-fx threads=1 relations=26 comparison=full_tuple_sets"
+      ]
+    },
+    {
+      "app": "xalan",
+      "variant": "parallel",
+      "checks": [
+        "check=ok engine=mini threads=1 relations=26 comparison=full_tuple_sets",
+        "check=ok engine=mini-fx threads=1 relations=26 comparison=full_tuple_sets",
+        "check=ok engine=mini-par threads=15 relations=26 comparison=full_tuple_sets",
+        "check=ok engine=mini-par-fx threads=15 relations=26 comparison=full_tuple_sets",
+        "check=ok engine=ascent-par threads=15 relations=26 comparison=full_tuple_sets"
+      ]
+    },
+    {
+      "app": "tomcat",
+      "variant": "sequential",
+      "checks": [
+        "check=ok engine=mini threads=1 relations=26 comparison=full_tuple_sets",
+        "check=ok engine=mini-fx threads=1 relations=26 comparison=full_tuple_sets"
+      ]
+    },
+    {
+      "app": "tomcat",
+      "variant": "parallel",
+      "checks": [
+        "check=ok engine=mini threads=1 relations=26 comparison=full_tuple_sets",
+        "check=ok engine=mini-fx threads=1 relations=26 comparison=full_tuple_sets",
+        "check=ok engine=mini-par threads=15 relations=26 comparison=full_tuple_sets",
+        "check=ok engine=mini-par-fx threads=15 relations=26 comparison=full_tuple_sets",
+        "check=ok engine=ascent-par threads=15 relations=26 comparison=full_tuple_sets"
+      ]
+    },
+    {
+      "app": "zxing",
+      "variant": "sequential",
+      "checks": [
+        "check=ok engine=mini threads=1 relations=26 comparison=full_tuple_sets",
+        "check=ok engine=mini-fx threads=1 relations=26 comparison=full_tuple_sets"
+      ]
+    },
+    {
+      "app": "zxing",
+      "variant": "parallel",
+      "checks": [
+        "check=ok engine=mini threads=1 relations=26 comparison=full_tuple_sets",
+        "check=ok engine=mini-fx threads=1 relations=26 comparison=full_tuple_sets",
+        "check=ok engine=mini-par threads=15 relations=26 comparison=full_tuple_sets",
+        "check=ok engine=mini-par-fx threads=15 relations=26 comparison=full_tuple_sets",
+        "check=ok engine=ascent-par threads=15 relations=26 comparison=full_tuple_sets"
+      ]
+    }
+  ],
+  "single_engine_check_errors": [
+    {
+      "engine": "mini",
+      "missing_check_error": "Error: \"engine unavailable: ascent; enable Cargo feature `ascent`\""
+    },
+    {
+      "engine": "mini-par",
+      "missing_check_error": "Error: \"engine unavailable: ascent; enable Cargo feature `ascent`\""
+    }
+  ],
+  "oracle_decision": "Retained split: sequential wall reduction 61.56%, parallel 53.86%, both above 10%. The oracle split also removes unused duplicate Ascent expansions and compiles string matrices only for tests.",
+  "raw_runtime_directory": "/tmp/engine-crates-evidence",
+  "verification": {
+    "sequential_default": {
+      "passed": 209,
+      "ignored": 1,
+      "raw": "artifact://2604"
+    },
+    "sequential_all_features": {
+      "passed": 213,
+      "ignored": 1,
+      "raw": "artifact://2606"
+    },
+    "formal": {
+      "rules": 185,
+      "result": "passed"
+    },
+    "parallel_default": {
+      "passed": 52,
+      "raw": "artifact://2609"
+    },
+    "parallel_all_features": {
+      "passed": 53,
+      "raw": "artifact://2612"
+    },
+    "clippy": {
+      "result": "passed",
+      "scope": "Both workspaces, all targets, default and all features, -D warnings; oracle single-engine configurations mini and mini-par also passed"
+    },
+    "format": {
+      "result": "passed",
+      "scope": "cargo fmt --all --check for both workspaces"
+    },
+    "dependencies": {
+      "result": "passed",
+      "lock_alignments": 12,
+      "forbidden_dependency_mutations_rejected": 236,
+      "feature_mutations_rejected": 4,
+      "gate_unit_tests": 6
+    },
+    "external": {
+      "result": "passed",
+      "selected_workspaces": [
+        "features/datalog",
+        "features/datalog-parallel"
+      ],
+      "core_crates_packaged": 23,
+      "mandatory_positive_fixtures": 2,
+      "in_tree_only_negative_fixture": "rejected",
+      "command": "caffeinate -i env TMPDIR=/private/tmp CARGO_TARGET_DIR=/tmp/target-Engines CARGO_BUILD_JOBS=4 python3 tools/check_external.py --feature features/datalog --feature features/datalog-parallel --out /tmp/target-Engines/external-gate",
+      "note": "First invocation hit a backend timeout; retry with idle sleep prevented passed.",
+      "logs": "/tmp/target-Engines/external-gate/external-logs"
+    }
+  },
+  "date": "2026-10-21",
+  "rustc": "1.97.1 (8bab26f4f 2026-07-14), LLVM 22.1.6"
+}
