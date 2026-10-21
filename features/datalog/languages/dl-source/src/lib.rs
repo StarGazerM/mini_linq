@@ -312,6 +312,8 @@ fn check_rewrite_admitted(source: &Program, target: &Program) -> syn::Result<()>
         "Datalog rewrite changed name, declarations, EDB bindings, outputs, models or observer",
     )
 }
+/// The rewrite callback assumes `cq_stage::run` checked both contracts.
+/// Standalone callers must use the public free [`check_rewrite`] function.
 impl Language for Program {
     fn check(&self) -> syn::Result<()> {
         contract::check(self).map(|_| ())

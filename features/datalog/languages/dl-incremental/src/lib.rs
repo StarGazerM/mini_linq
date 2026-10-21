@@ -260,6 +260,8 @@ fn check_rewrite_admitted(source: &Program, target: &Program) -> syn::Result<()>
         "incremental rewrite changed the strata program",
     )
 }
+/// The rewrite callback assumes `cq_stage::run` checked both contracts.
+/// Standalone callers must use the public free [`check_rewrite`] function.
 impl cq_stage::Language for Program {
     fn check(&self) -> syn::Result<()> {
         contract::check(self).map(|_| ())

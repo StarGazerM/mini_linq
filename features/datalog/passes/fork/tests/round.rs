@@ -143,6 +143,7 @@ fn input_certificates_erase_exactly_and_cannot_hide_other_changes() {
         mutate(&mut changed);
         assert!(round::contract::check(&changed).is_err());
         assert!(round::check_rewrite(&source, &changed).is_err());
+        assert!(round::check_rewrite(&changed, &source).is_err());
     }
 }
 
