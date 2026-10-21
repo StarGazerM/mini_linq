@@ -256,33 +256,41 @@ lists, explicit phases, publication operations, termination references and test,
 observer placement, key scope and loop form. Each \code{RuleHole} records the variant, head,
 hole index, optional scan binding and membership \code{insertion} operation.
 An \code{Output} records a relation reference and conversion operation.
-The program also records the complete \code{pull\_printers} allowlist of
-exact macro paths.
-\code{HoleInterface::Pull} denotes an iterator result consumed by Round.
-\code{HoleInterface::Push} is representable in text for a clear unsupported
-interface diagnostic, but no base Round consumer implements it.
+The program also records a typed \code{terminals} registry mapping exact macro
+paths to \code{pull} or \code{push}; duplicate paths are rejected.
+\code{HoleInterface::Pull} denotes an iterator of result rows.
+\code{HoleInterface::Push} denotes a terminal that invokes a supplied consumer
+once for each result row, without an intermediate result collection.
 \paragraph{Contract.} Check Storage, exact copied provider/layout correspondence,
 hole correspondence under the recorded reads, seed/step ordering, fresh runtime
 names and the operational obligations below. The check does not reconstruct a
-default storage or Round plan. Each hole must record the pull interface and an
-argument-free terminal invocation whose exact path is in its recorded allowlist.
-The default allowlist is exactly
-\code{::mini\_linq::passes::print\_pull} and
-\code{mini\_linq::passes::print\_pull}; leading qualification is significant.
-For example, \code{pull\_printers = [crate::alias::pull];} in
+default storage or Round plan. Each hole's recorded interface must equal the
+interface registered for its sub-pipeline's terminal path. An absent terminal,
+an unregistered path or a mismatched interface is rejected. Terminal arguments
+belong to that terminal's own checked argument grammar, not an argument-free
+allowlist. Leading path qualification is significant.
+For example, \code{terminals = [crate::alias::pull => pull];} in
 \code{DatalogConfiguration}, together with
 \code{cq = pipeline \{ print = crate::alias::pull; \};}, explicitly replaces
-that list. Fork serializes the complete pull-printer allowlist into Round text,
-so a resumed Round needs neither configuration nor compilation to check it.
+the registry. Fork serializes the complete typed registry into Round text and
+records the selected terminal's interface in each hole, so a resumed Round
+needs neither the originating configuration nor CQ compilation to check it.
 Each CQ hole declares only the relations, deltas and layouts it reads
 positively, any scan binding, and its output head; negative key sets remain
 predicate captures. The Round checker derives this required declaration set
 independently from the query and recorded reads.
-Unlisted terminals (including the default push printer) and typed push holes
-are rejected.
-Declaring an alternate path is the caller's assertion of its pull calling
-convention, not Rust alias resolution or a proof of printer equivalence.
+Declaring an alternate path asserts its calling convention and semantic printer
+obligation; it is not Rust alias resolution or a proof of printer equivalence.
+The argument-free \code{own\_push::push!} is not a push-interface terminal:
+although it uses push loops internally, its public result is an iterator.
+Datalog's push adapter uses the public consumer form of that feature printer.
 This check examines terminal invocations, not Rust tokens that do not yet exist.
+With $\Gamma$ the recorded registry and $\mathrm{last}(Q)$ the terminal:
+\begin{mathpar}
+\Rule{WF-DL-Hole}{\mathrm{WF}_{\mathrm{CQ}}(h)\quad
+ \mathrm{last}(Q)=(p,a)\quad \Gamma(p)=\iota}
+ {\Gamma\vdash(h,Q,\iota)\ \mathrm{hole}}
+\end{mathpar}
 \begin{mathpar}
 \Rule{WF-DL-Round}{\mathrm{WF}_{\mathrm{Storage}}(D)\quad
  H\text{ implements the recorded variants and frozen keys}\quad
@@ -294,6 +302,15 @@ committed snapshot; admission rejects known and duplicate candidate heads;
 publication extends full structures and replaces every delta layout, including
 empty ones, before subsequent evaluation. Under provider and partial-Rust
 premises its $\alpha$-image refines the Incremental transition system.
+Pull and push differ only at the CQ boundary: a pull iterator feeds the
+admission loop, while a push terminal receives that same admission operation
+as its consumer. Frozen-key holes similarly feed the recorded key provider.
+Neither interface permits publication during evaluation.
+\begin{mathpar}
+\Rule{P-DL-Push}{\Gamma\vdash(h,Q,\mathrm{push})\ \mathrm{hole}\quad
+ c=\mathrm{admit}_{M}\ \text{or the recorded frozen-key insertion}}
+ {\mathrm{execute}(h,Q,c)=Q(h;\mathrm{consumer}=c)}
+\end{mathpar}
 
 \paragraph{Frozen-key providers.} Each \code{KeySet} records its source relation,
 projected columns, filters, runtime name, construction hole, borrowed
@@ -303,6 +320,9 @@ and opaque Rust \code{provider} type. The default is
 hasher as Storage; this is not a type whitelist.
 Collection and borrowed membership must implement precisely the recorded
 projection/filter set, with lawful equality and any required hashing or ordering.
+The pull realization uses \code{FromIterator}; the push realization initializes
+the provider with \code{Default} and extends it with each singleton row.
+These operations must denote the same set.
 Type correctness alone does not establish these laws. A checked Round rewrite
 may change this provider subject to those semantic premises.
 \paragraph{Admission and publication records.} Each component's \code{phases}
@@ -382,17 +402,50 @@ the same operations; codegen partitioning changes their Rust calling convention,
 not their order. The printer
 still has a refinement obligation to implement each operation correctly:
 structural record checks are not an independent Rust equivalence proof.
+\paragraph{Nested CQ codegen boundary.} The optional Datalog-owned
+\code{print\_hole(partition(N))} terminal delegates Structures realization to
+the same public pull-printing API as \code{print\_pull}, then wraps the resulting
+expression in a separately monomorphized facade dispatch helper. It does not
+alter the CQ, collect the iterator, or clone its rows. Partition numbers select
+codegen homes, not execution threads or query partitions. This is an explicit
+terminal choice; promoting it to the default requires measured crate-only
+compile time, codegen-unit distribution and unchanged sequential/parallel
+runtime, rather than an assumption that an outer wrapper redistributes every
+nested iterator monomorphization.
+The measured trial against \code{49d0ebd} did not meet this gate:
+the largest preoptimization CGU share remained above $51\%$, compile wall/CPU
+time increased, and unchanged runtime was not established. Consequently the
+ordinary pull terminal remains the default; full measurements are recorded in
+\code{features/datalog/doop/codegen-evidence.json}.
 \paragraph{Rewrite check.} Check both contracts and preserve Storage exactly.
 The target may change checked execution records, frozen-key provider types,
-timing and per-hole CQ pipelines; it must retain hole interfaces, runtime names
-and query correspondence except for the independently checked scan-certificate
-substitution. In particular, publication and termination permutations, the
-termination test and loop form need not match the source or the default producer.
-No canonical storage selection is
-substituted while checking holes. Parallel execution is not a base flag:
-an extension owns partition, ownership, barriers, and its printer. Any execution
-annotation needs an erasure/refinement check, disjoint covering ownership and
-lawful merges. Round rewrites run before CQ hole expansion.
+timing and each hole's CQ sub-pipeline independently; it must retain the typed
+terminal registry, hole interfaces, runtime names and query correspondence
+except for the independently checked scan-certificate substitution.
+In particular, a rewrite may choose \code{stage(batch(64))} for one hole,
+\code{represent(positions)} for another, or insert Structures rewrites.
+These are recorded invocation arguments, not changes to the embedded CQ
+meaning. The target's terminal must still implement that hole's fixed interface;
+each selected CQ pass subsequently checks its own language and rewrite
+obligations when the nested pipeline expands.
+Positional representation and batching additionally require positional runtime
+hosts. The example rewrite applies them to two direct-delta scan holes; a
+grouped hash-map layout is not thereby made into a positional host.
+\begin{mathpar}
+\Rule{CK-DL-RoundRewrite}{\mathrm{WF}(R)\quad\mathrm{WF}(R')\quad
+ D'=D\quad\Gamma'=\Gamma\quad
+ \forall i.\ h'_i=h_i\land\iota'_i=\iota_i\quad
+ E'\text{ satisfies the admitted execution obligations}}
+ {R\leadsto R'}
+\end{mathpar}
+Here $h_i$ is compared after checked scan-certificate erasure; the corresponding
+sub-pipelines $Q_i$ need not be equal. Publication and termination permutations,
+the termination test and loop form need not match the source or default producer.
+No canonical storage selection is substituted while checking holes.
+Parallel execution is not a base flag: an extension owns partition, ownership,
+barriers, and its printer. Any execution annotation needs an erasure/refinement
+check, disjoint covering ownership and lawful merges. Round rewrites run before
+CQ hole expansion.
 
 \paragraph{Executable reference semantics.}
 The feature-local Datalog testkit uses a synchronous, per-component set fixpoint
