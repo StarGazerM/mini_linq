@@ -3,7 +3,7 @@
 //! A program appends `sequence { name = term; ... }` and an optional
 //! `graded machine { name at level.path; ... }` to a complete Structures program.
 //! Terms are prefix forms: `rows`, `map`, `flatten`, `compact`, `tile`, `lookup`,
-//! `fold`, `canon`, `store` and `choose`, or references to earlier definitions.
+//! `fold`, `canon`, `store`, `union` and `choose`, or references to earlier definitions.
 //! A store may declare `store capacity N term`; the optional final sequence
 //! statement `output count;`, `output reserve;` or `output bounded;` selects the
 //! final store's output protocol. Bounded output takes its capacity from that
@@ -92,6 +92,7 @@ pub enum Term {
     },
     Choose(Vec<(Guard, Term)>),
     Ref(Ident),
+    Union(Vec<Term>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -197,6 +198,8 @@ pub enum Obligation {
 #[derive(Clone, Debug)]
 pub struct Analysis {
     pub structures: cq_lang_structures::Analysis,
+    /// Physical result denoted by each definition, when it is a row result.
+    pub results: BTreeMap<String, String>,
     pub lengths: BTreeMap<String, Len>,
     pub views: BTreeSet<String>,
     pub stores: BTreeMap<String, Len>,
@@ -289,6 +292,16 @@ impl ToTokens for Definition {
 
 impl Parse for Term {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        if input.peek(Token![union]) {
+            input.parse::<Token![union]>()?;
+            let body;
+            bracketed!(body in input);
+            return Ok(Self::Union(
+                Punctuated::<Term, Token![,]>::parse_terminated(&body)?
+                    .into_iter()
+                    .collect(),
+            ));
+        }
         if input.peek(kw::rows) {
             input.parse::<kw::rows>()?;
             Ok(Self::Rows(input.parse()?))
@@ -370,6 +383,7 @@ impl Parse for Term {
 impl ToTokens for Term {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         tokens.extend(match self {
+            Self::Union(arms) => quote! { union [#(#arms),*] },
             Self::Rows(name) => quote! { rows #name },
             Self::Map(name, inner) => quote! { map #name #inner },
             Self::Flatten(inner) => quote! { flatten #inner },

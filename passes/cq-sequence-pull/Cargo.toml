@@ -1,0 +1,31 @@
+[package]
+name = "cq-sequence-pull"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+cq-lang-sequence.workspace = true
+cq-lang-structures.workspace = true
+cq-print.workspace = true
+cq-physical-realization.workspace = true
+proc-macro2.workspace = true
+quote.workspace = true
+syn.workspace = true
+
+[dev-dependencies]
+cq-testkit.workspace = true
+cq-storage.workspace = true
+cq-structure-selection.workspace = true
+cq-sequence-lowering = { path = "../cq-sequence-lowering" }
+cq-lang-cq.workspace = true
+cq-order.workspace = true
+cq-elaborate.workspace = true
+cq-index-policy.workspace = true
+cq-physical-lowering.workspace = true
+
+[package.metadata.cq]
+source = "cq-lang-sequence"
+target = "rust"
+printer = true

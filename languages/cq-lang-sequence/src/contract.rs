@@ -47,6 +47,7 @@ fn analyze(program: &Program) -> syn::Result<Checker<'_>> {
         program,
         analysis: Analysis {
             structures,
+            results: BTreeMap::new(),
             lengths: BTreeMap::new(),
             views: BTreeSet::new(),
             stores: BTreeMap::new(),
@@ -69,6 +70,12 @@ fn analyze(program: &Program) -> syn::Result<Checker<'_>> {
             );
         }
         let fact = checker.term(&definition.term, &name)?;
+        if let Meaning::Result(result) = &fact.meaning {
+            checker
+                .analysis
+                .results
+                .insert(name.clone(), result.clone());
+        }
         checker
             .analysis
             .lengths
@@ -122,6 +129,52 @@ fn has_capacity(term: &Term) -> bool {
 }
 
 impl Checker<'_> {
+    fn require_store(&self, name: &Ident) -> syn::Result<()> {
+        let result = symbol_name(name);
+        if !self
+            .analysis
+            .structures
+            .physical
+            .hosts
+            .contains_key(&result)
+            && !self.facts.values().any(|fact| {
+                fact.materializes
+                    && matches!(&fact.meaning, Meaning::Result(name) if name == &result)
+            })
+        {
+            return fail(
+                name,
+                "BE-Scope",
+                "non-host read requires an earlier Sequence store",
+            );
+        }
+        Ok(())
+    }
+
+    fn flatten_view(&self, term: &Term) -> bool {
+        match term {
+            Term::Flatten(_) => true,
+            Term::Ref(name) => self
+                .program
+                .sequence
+                .definitions
+                .iter()
+                .find(|definition| definition.name == *name)
+                .is_some_and(|definition| self.flatten_view(&definition.term)),
+            _ => false,
+        }
+    }
+
+    fn range_reads(&mut self, fact: &Fact) -> syn::Result<()> {
+        for (provider, keys) in &fact.reads {
+            self.provider(
+                &Ident::new(provider, proc_macro2::Span::call_site()),
+                keys,
+                Capability::Range,
+            )?;
+        }
+        Ok(())
+    }
     fn physical(&self, name: &Ident) -> syn::Result<&physical::Definition> {
         self.program
             .structures
@@ -161,14 +214,62 @@ impl Checker<'_> {
     // Formal rule BE-Alpha: Validate named total segments and their input provenance.
     fn term(&mut self, term: &Term, owner: &str) -> syn::Result<Fact> {
         match term {
+            Term::Union(arms) => {
+                if arms.is_empty() {
+                    return fail(term, "BE-Alpha", "union requires at least one arm");
+                }
+                let mut facts = arms
+                    .iter()
+                    .map(|arm| self.term(arm, owner))
+                    .collect::<syn::Result<Vec<_>>>()?;
+                if facts.iter().any(|fact| fact.max_depth != 0) {
+                    return fail(term, "BE-Alpha", "union requires flat arms");
+                }
+                let definition = self
+                    .program
+                    .structures
+                    .physical
+                    .program
+                    .definitions
+                    .iter()
+                    .find(|definition| {
+                        matches!(&definition.operator, Operator::Union(union)
+                        if union.operands.len() == facts.len()
+                            && union.operands.iter().zip(&facts).all(|(operand, fact)|
+                                fact.meaning == Meaning::Result(symbol_name(operand))))
+                    })
+                    .ok_or_else(|| {
+                        syn::Error::new_spanned(term, "BE-Alpha: union arms differ from Physical")
+                    })?;
+                let meaning = Meaning::Result(symbol_name(&definition.name));
+                let mut result = facts.remove(0);
+                for fact in facts {
+                    result.len = if matches!(result.len, Len::Unknown(_))
+                        || matches!(fact.len, Len::Unknown(_))
+                    {
+                        Len::Unknown(None)
+                    } else {
+                        Len::Add(Box::new(result.len), Box::new(fact.len))
+                    };
+                    result.reads.extend(fact.reads);
+                }
+                result.meaning = meaning;
+                result.materializes = false;
+                Ok(result)
+            }
             Term::Rows(name) => {
                 let name_string = symbol_name(name);
                 let physical = &self.analysis.structures.physical;
                 let meaning = if physical.headings.contains_key(&name_string) {
                     if !physical.hosts.contains_key(&name_string)
                         && physical.modes[&name_string] != ModeKind::Let
+                        && !self.analysis.structures.retained.contains_key(&name_string)
+                        && !matches!(self.physical(name)?.operator, Operator::Unit(_))
                     {
                         return fail(name, "BE-Alpha", "rows requires a retained result or host");
+                    }
+                    if !matches!(self.physical(name)?.operator, Operator::Unit(_)) {
+                        self.require_store(name)?;
                     }
                     Meaning::Result(name_string.clone())
                 } else if self
@@ -182,7 +283,13 @@ impl Checker<'_> {
                     return fail(name, "BE-Alpha", "rows names no retained result or host");
                 };
                 Ok(Fact {
-                    len: Len::Input(name_string),
+                    len: if matches!(meaning, Meaning::Result(_))
+                        && matches!(self.physical(name)?.operator, Operator::Unit(_))
+                    {
+                        Len::Lit(1)
+                    } else {
+                        Len::Input(name_string)
+                    },
                     meaning,
                     depth: 0,
                     max_depth: 0,
@@ -205,6 +312,61 @@ impl Checker<'_> {
                     )
                 }),
             Term::Map(name, inner) | Term::Compact(name, inner) => {
+                // Membership consumes a bucket's existence, never its payload
+                // or offsets. Its named Physical operator determines polarity.
+                if matches!(term, Term::Compact(_, _))
+                    && let Term::Lookup {
+                        provider,
+                        keys,
+                        inner,
+                    } = inner.as_ref()
+                {
+                    let definition = self.physical(name)?;
+                    let keyed = match &definition.operator {
+                        Operator::Semi(_, keyed) | Operator::Anti(_, keyed) => keyed,
+                        Operator::Probe(_, keyed)
+                            if self.analysis.structures.membership.contains(&(
+                                symbol_name(provider),
+                                {
+                                    let mut keys: Vec<_> = keys.iter().map(symbol_name).collect();
+                                    keys.sort();
+                                    keys
+                                },
+                            )) =>
+                        {
+                            keyed
+                        }
+                        _ => {
+                            return fail(
+                                name,
+                                "BE-Alpha",
+                                "membership compact needs a membership operator",
+                            );
+                        }
+                    };
+                    let left = symbol_name(&keyed.left);
+                    let right = symbol_name(&keyed.right);
+                    let mut expected: Vec<_> = keyed.columns.iter().map(symbol_name).collect();
+                    expected.sort();
+                    let mut columns: Vec<_> = keys.iter().map(symbol_name).collect();
+                    columns.sort();
+                    let mut fact = self.term(inner, owner)?;
+                    if fact.max_depth != 0
+                        || fact.meaning != Meaning::Result(left)
+                        || symbol_name(provider) != right
+                        || columns != expected
+                    {
+                        return fail(
+                            term,
+                            "BE-Alpha",
+                            "membership lookup differs from its Physical read",
+                        );
+                    }
+                    self.provider(provider, &columns, Capability::Membership)?;
+                    fact.meaning = Meaning::Result(symbol_name(name));
+                    fact.len = Len::Scan(owner.into());
+                    return Ok(fact);
+                }
                 let mut fact = self.term(inner, owner)?;
                 if fact.max_depth != 0 {
                     return fail(
@@ -243,15 +405,10 @@ impl Checker<'_> {
                             )
                         })?;
                     let operator = &definition.operator;
-                    if matches!(
-                        operator,
-                        Operator::Bind(_) | Operator::Guard(_) | Operator::Union(_)
-                    ) {
-                        return fail(
-                            name,
-                            "BE-Alpha",
-                            "map segment contains an opaque or non-total operation",
-                        );
+                    // Opaque Rust is legal here; BE-Partial confines its
+                    // evaluation to host when a target grading is checked.
+                    if matches!(operator, Operator::Union(_)) {
+                        return fail(name, "BE-Alpha", "union requires explicit Sequence arms");
                     }
                     changes_length |= !matches!(
                         operator,
@@ -291,13 +448,6 @@ impl Checker<'_> {
                     };
                     current = symbol_name(input);
                 }
-                // Even identity applications must name a total operation.
-                if matches!(
-                    self.physical(name)?.operator,
-                    Operator::Bind(_) | Operator::Guard(_) | Operator::Union(_)
-                ) {
-                    return fail(name, "BE-Alpha", "map must name a total Physical segment");
-                }
                 for (provider, keys, capability) in provider_reads {
                     let enumerated = matches!(capability, Capability::Exact | Capability::Ordered);
                     self.provider(&provider, &keys, capability)?;
@@ -329,6 +479,7 @@ impl Checker<'_> {
                     );
                 }
                 let mut fact = self.term(inner, owner)?;
+                self.range_reads(&fact)?;
                 fact.depth += 1;
                 fact.max_depth += 1;
                 Ok(fact)
@@ -359,6 +510,27 @@ impl Checker<'_> {
                         "lookup keys must be distinct columns of provider and input",
                     );
                 }
+                let ordered_left = self
+                    .program
+                    .structures
+                    .physical
+                    .program
+                    .definitions
+                    .iter()
+                    .find_map(|definition| {
+                        if let Operator::Merge(_, keyed) = &definition.operator {
+                            let mut columns: Vec<_> =
+                                keyed.columns.iter().map(symbol_name).collect();
+                            columns.sort();
+                            if fact.meaning == Meaning::Result(symbol_name(&keyed.left))
+                                && symbol_name(&keyed.right) == provider_name
+                                && columns == names
+                            {
+                                return Some(keyed.left.clone());
+                            }
+                        }
+                        None
+                    });
                 let capability = if self
                     .analysis
                     .structures
@@ -366,10 +538,15 @@ impl Checker<'_> {
                     .contains(&(provider_name.clone(), names.clone()))
                 {
                     Capability::Membership
+                } else if ordered_left.is_some() {
+                    Capability::Ordered
                 } else {
                     Capability::Exact
                 };
                 self.provider(provider, &names, capability)?;
+                if let Some(left) = ordered_left {
+                    self.provider(&left, &names, Capability::Ordered)?;
+                }
                 fact.reads.push((provider_name.clone(), names.clone()));
                 fact.meaning = Meaning::Lookup(provider_name, names, Box::new(fact.meaning));
                 fact.depth = 1;
@@ -385,7 +562,7 @@ impl Checker<'_> {
                 }
                 for (provider, keys) in &fact.reads {
                     let name = Ident::new(provider, proc_macro2::Span::call_site());
-                    self.provider(&name, keys, Capability::Range)?;
+                    self.provider(&name, keys, Capability::Exact)?;
                 }
                 fact.depth -= 1;
                 fact.max_depth -= 1;
@@ -393,7 +570,7 @@ impl Checker<'_> {
                 if let Meaning::Lookup(provider, keys, inner) = &fact.meaning {
                     if let Meaning::Result(left) = inner.as_ref() {
                         if let Some(definition) = self.program.structures.physical.program.definitions.iter().find(|definition| {
-                            matches!(&definition.operator, Operator::Probe(_, keyed)
+                            matches!(&definition.operator, Operator::Probe(_, keyed) | Operator::Merge(_, keyed)
                                 if symbol_name(&keyed.left) == *left && symbol_name(&keyed.right) == *provider
                                     && { let mut columns: Vec<_> = keyed.columns.iter().map(symbol_name).collect(); columns.sort(); columns == *keys })
                         }) {
@@ -443,17 +620,17 @@ impl Checker<'_> {
                 Ok(fact)
             }
             Term::Store { capacity, inner } => {
-                // Formal rule BE-Length: Every materialization has an exact size expression or a capacity.
+                // Formal rule BE-Length: Host stores may grow; separated unknown stores require capacity.
                 let mut fact = self.term(inner, owner)?;
+                if self.flatten_view(inner) {
+                    self.range_reads(&fact)?;
+                }
                 if matches!(fact.len, Len::Unknown(_)) {
                     let carried = match fact.len {
                         Len::Unknown(value) => value,
                         _ => None,
                     };
                     let capacity = capacity.or(carried);
-                    if capacity.is_none() {
-                        return fail(term, "BE-Length", "unknown store length requires capacity");
-                    }
                     fact.len = Len::Unknown(capacity);
                 }
                 fact.materializes = true;
@@ -492,7 +669,7 @@ impl Checker<'_> {
         }
     }
 
-    // Formal rule BE-Bind: Flattened lookups require range cursors, never membership-only providers.
+    // Formal rule BE-Bind: Reads record exactly the provider capability their execution requires.
     fn provider(
         &mut self,
         provider: &Ident,
@@ -500,6 +677,7 @@ impl Checker<'_> {
         required: Capability,
     ) -> syn::Result<()> {
         let name = symbol_name(provider);
+        self.require_store(provider)?;
         let key = (name.clone(), keys.to_vec());
         if required != Capability::Membership && self.analysis.structures.membership.contains(&key)
         {

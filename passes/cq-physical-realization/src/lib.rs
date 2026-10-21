@@ -228,6 +228,53 @@ fn sources_profile<'a>(
     Ok(printer.context)
 }
 
+/// Single-operator adapters shared with the Sequence translation.
+///
+/// The caller supplies checked layouts and operand representations; this API
+/// neither checks nor prepares a complete program.
+pub struct RowEmitter<'a> {
+    printer: Printer<'a>,
+}
+
+impl<'a> RowEmitter<'a> {
+    pub fn new(context: Context<'a>) -> Self {
+        Self {
+            printer: Printer {
+                context,
+                consumer: None,
+                active_prefixes: BTreeMap::new(),
+            },
+        }
+    }
+
+    pub fn context(&self) -> &Context<'a> {
+        &self.printer.context
+    }
+
+    pub fn context_mut(&mut self) -> &mut Context<'a> {
+        &mut self.printer.context
+    }
+
+    /// Emit exactly one operator, reading caller-supplied operand streams.
+    pub fn operator(&mut self, name: &str) -> syn::Result<TokenStream> {
+        let definition = self.printer.physical[name];
+        let previous = self.printer.consumer.replace(name.to_owned());
+        let result = self.printer.produce(name, definition);
+        self.printer.consumer = previous;
+        result
+    }
+
+    /// Read a representation already installed by the caller.
+    pub fn scan(&mut self, name: &Ident) -> syn::Result<TokenStream> {
+        self.printer.scan(name)
+    }
+
+    /// Apply the checked answer projection, including its recorded image canon.
+    pub fn head(&mut self, name: &str, head: &cq::Atom, rows: TokenStream) -> TokenStream {
+        self.printer.head(name, head, rows)
+    }
+}
+
 struct Printer<'a> {
     context: Context<'a>,
     consumer: Option<String>,

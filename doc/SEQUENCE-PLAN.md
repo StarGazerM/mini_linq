@@ -89,8 +89,10 @@ impl cq_stage::Language for Program { … }
 
 Checks (each a named `// Formal rule BE-…:` marker):
 - BE-Alpha: every Term is well-formed over Structures (named results exist, `map` names a total segment, `lookup` key ⊆ heading, `compact` names a select).
-- BE-Bind: `lookup` requires a provider with the `Range` capability when under `flatten`.
-- BE-Offsets / BE-Length: lengths computed for every Def; a `store` whose Len is `Unknown` must carry a capacity.
+- BE-Bind: a `lookup` under a sequential `flatten` needs `Exact`; `Range` is recorded only where the flatten's offsets are materialized (directly under `store`, domain of a `tile`, lengths folded at a level with members); semi/anti need `Membership`; merge needs `Ordered`.
+- BE-Offsets / BE-Length: lengths computed for every Def; a `store` at a separated level whose Len is `Unknown` must carry a capacity; host (and ungraded) stores need none.
+- BE-Collective: applies to `fold`/`scan`/`flatten` graded at a level with members; at a leaf level they are sequential loops.
+- `union [d, ...]` is a view with α = ⊎ and summed Len; opaque Guard/Bind are `map` Defs that must be graded at host (BE-Partial).
 - BE-Code: codec premises are deferred to traits (recorded as obligations in Analysis, like Leibniz).
 - BE-Choose: guards exhaustive; all alternatives have equal `supp∘α` by construction (same Structures result).
 - Grading: BE-Scope (reads inside extent, inner level), BE-Collective (fold/scan at collaborative level, whole level), BE-Separate (siblings exchange only via a store at an ancestor), BE-Boundary (derive `dispatches`), BE-Partial (no opaque Rust below host), BE-Abort (every dispatch has a failure channel).

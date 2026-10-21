@@ -87,7 +87,7 @@ materializes; a stored \code{flatten} is kept as its offsets (BE-Offsets).
   \alpha(\mathsf{flatten}\,t)=\alpha t\quad\alpha(\mathsf{tile}_n t)=\alpha t\quad
   \alpha(\mathsf{compact}\,p\,t)=\alpha t|_p\quad\alpha(\mathsf{store}\,t)=\alpha t}
 
-\Rule{BE-Bind}{\mathsf{rangeCursor}(b,K)}
+\Rule{BE-Bind}{}
  {\sem{\mathsf{probe}[K](l,b)}=\mathrm{supp}\,\alpha\big(\mathsf{flatten}(\mathsf{map}\,(x\mapsto x\bowtie\mathsf{lookup}_b[K]\,x)\,l)\big)}
 
 \Rule{BE-Partition}{\{P_k\}\text{ disjoint}\quad\textstyle\bigcup_kP_k=[0,|t|)\quad
@@ -112,7 +112,13 @@ materializes; a stored \code{flatten} is kept as its offsets (BE-Offsets).
 BE-Bind is the Kleisli bind of Section~\ref{sec:denotation} restated: a
 probe is a flatten of per-row lookups, so a join nest is a nested flatten
 and flattening it (NESL~\cite{paper-nesl,paper-ndp-gpu}) is what removes
-irregular nesting. BE-Partition is the law every schedule relies on; it
+irregular nesting. A sequentially evaluated flatten of lookups needs only
+exact buckets; the contiguous-range capability (rangeCursor) is required
+exactly where the flatten's offsets are materialized: under \code{store}
+(BE-Offsets), as the domain of a \code{tile}, or when its lengths are
+folded at a level with members. A \code{flatten} or \code{fold} graded at a
+leaf level (one sequential executor) is a loop, not a collective; BE-Collective
+constrains only terms graded at a level whose members jointly evaluate them. BE-Partition is the law every schedule relies on; it
 holds for partial $f$ (one undistinguished $\bot$) but licenses no early
 stop and is stated on bags: a lost or duplicated position changes
 $\alpha$. BE-Canon makes per-part canon a sound prefilter that replaces
@@ -160,14 +166,14 @@ GPU instance of the grade.
 \Rule{BE-Scope}{\mathsf{store}\,t\text{ at }\ell\quad\text{a read at }\ell'\le\ell\text{ lexically inside its extent}}
  {\text{the read is admissible}}
 
-\Rule{BE-Collective}{\mathsf{fold}/\mathsf{scan}\text{ at }\ell\quad\ell\text{ collaborative}\quad
+\Rule{BE-Collective}{\mathsf{fold}/\mathsf{scan}/\mathsf{flatten}\text{ at }\ell\quad\ell\text{ has members}\quad\ell\text{ collaborative}\quad
  \text{the whole of }\ell\text{ participates}\quad\oplus\text{ associative}}
  {\text{equals the sequential fold; commutative }\oplus\text{ makes it schedule-independent}}
 
 \Rule{BE-Separate}{\ell_1,\ell_2\text{ separated siblings}}
  {\text{they exchange only through a store at a common ancestor; nothing else is observable across them}}
 
-\Rule{BE-Length}{\mathsf{store}\,t\text{ at a separated level}}
+\Rule{BE-Length}{\mathsf{store}\,t\text{ at a separated level (host stores need no bound)}}
  {|t|\text{ is in its type before the write (a scan), or a capacity with an overflow flag}}
 
 \Rule{BE-Boundary}{\text{a maximal segment of total terms between stores at a separated level}}
@@ -225,7 +231,33 @@ construct without a translation is rejected. Lift derives allocation and
 barriers from its types~\cite{paper-lift}; here they are derived from the
 grading, lengths and views.
 
+\paragraph{Sequential translation.}
+\begin{mathpar}
+\Rule{T-Pull}{t\text{ checked}\quad\text{every grade is }\mathsf{host}}
+ {\mathsf{run}_{\rm seq}(t)=\text{the fold: }\mathsf{rows}\mapsto\text{host rows},\
+  \mathsf{map}/\mathsf{compact}\mapsto\text{the Physical row function},\
+  \mathsf{lookup}\mapsto\text{the recorded capability},\
+  \mathsf{flatten}\mapsto\text{iterator concatenation},\
+  \mathsf{tile}/\mathsf{choose}\mapsto\text{identity (one part, else arm)},\
+  \mathsf{fold}\mapsto\oplus,\ \mathsf{canon}\mapsto\text{the recorded provider},\
+  \mathsf{store}\mapsto\code{Vec}}
+\end{mathpar}
+The sequential interpretation preserves support under the provider laws and
+propagates Rust failure by unwinding; it is today's pull printer restated as
+a fold over terms.
+
 \subsection{Passes}
+\begin{mathpar}
+\Rule{L-Sequence}{s\text{ checked Structures}}
+ {\mathsf{lower}(s):\ \text{host rename}\mapsto\mathsf{rows};\
+  \text{unary step}\mapsto\mathsf{map}/\mathsf{compact};\
+  \text{probe, merge}\mapsto\mathsf{flatten}(\mathsf{lookup});\
+  \text{semi, anti}\mapsto\mathsf{compact}(\mathsf{lookup}_{\rm membership});\
+  \text{union}\mapsto\mathsf{union};\
+  \text{let}\mapsto\mathsf{store};\ \text{canon}\mapsto\mathsf{canon};\
+  \text{return}\mapsto\mathsf{store}\text{ with }\mathsf{output}\ \mathsf{count};\ \text{no tile, no grade}}
+\end{mathpar}
+The checker re-derives this construction and compares it structurally.
 \begin{itemize}
 \item Structures $\to$ Sequence: the default lowering records ``one part,
 nothing stored'': every result is a view or a device/host store as its
@@ -243,6 +275,22 @@ BE-Scope through BE-Abort.
 This mirrors the algorithm/schedule separation of Halide and
 Exo~\cite{paper-exo}: the pipeline's advice is the schedule, each primitive
 is an equivalence-preserving rewrite with a stated law.
+
+The external \code{cq-sequence-rewrites} passes check both programs and
+construction-based support equality:
+\begin{mathpar}
+\Rule{EXT-SeqStore}{d=\mathsf{flatten}\,t}{d:=\mathsf{store}(\mathsf{flatten}\,t)\quad\text{(BE-Offsets)}}
+
+\Rule{EXT-SeqTile}{n>0\quad d\text{ not an unbounded unknown-length store}}{d:=\mathsf{tile}_n\,d\quad\text{(BE-Partition)}}
+
+\Rule{EXT-SeqChoose}{a,b\text{ have one Structures result}\quad\text{guards exhaustive}}{d:=\mathsf{choose}[g\Rightarrow a,\ \mathsf{else}\Rightarrow b]\quad\text{(BE-Choose)}}
+
+\Rule{EXT-SeqOutput}{p\in\{\mathsf{count},\mathsf{reserve},\mathsf{bounded}\}\quad p=\mathsf{bounded}\Rightarrow\text{capacity declared}}{\mathsf{output}:=p}
+
+\Rule{EXT-SeqGrade}{\text{machine }M\text{ named}\quad\text{placements }d_i\ \mathsf{at}\ \ell_i}{\mathsf{graded}\ M\{\ldots\}\text{ extended; the construction is unchanged}}
+\end{mathpar}
+\code{grade} records advice only: the facade's grading phase checks the
+machine and BE-Scope through BE-Abort.
 
 \subsection{The three machines as interpretations}
 \begin{center}
@@ -262,6 +310,20 @@ dynamic part claiming & none & work stealing & atomic cursor (free, BE-Partition
 \bottomrule
 \end{tabular}
 \end{center}
+\paragraph{Task translation.}
+\begin{mathpar}
+\Rule{T-Tasks}{t\text{ checked against }\mathsf{host}>\mathsf{pool}(\text{separated, dynamic})>\mathsf{task}}
+ {\mathsf{run}_{\rm tasks}(t)=\text{T-Pull at }\mathsf{host};\
+  \mathsf{tile}_n\text{ at pool}\mapsto\code{par\_chunks}(n);\
+  \mathsf{store}\text{ at pool}\mapsto\text{task-local vectors joined in chunk order};\
+  \mathsf{flatten}\text{ at task}\mapsto\text{sequential flat map};\
+  \mathsf{canon}\mapsto\text{per-part then global (BE-Canon)}}
+\end{mathpar}
+A collective graded at the separated pool is rejected by BE-Collective; a
+reduction at the join does not make the pool collaborative. Panics
+propagate through the join to the host, and no partially joined result is
+published.
+
 The parallel Datalog extension (Section~\ref{sec:datalog-languages}) is the
 task interpretation at the granularity of rule holes: its partitioned
 leading scan is \code{tile} of \code{rows}, its grain the tile size, its

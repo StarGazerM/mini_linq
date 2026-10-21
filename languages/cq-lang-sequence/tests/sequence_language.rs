@@ -197,11 +197,11 @@ fn canon_rejects_local_support_without_flatten() {
 }
 
 #[test]
-fn length_rejects_unknown_store_without_capacity() {
-    reject(
-        &lookup_program(quote!(a = store lookup r [a] rows l;)),
-        "BE-Length",
-    );
+fn unknown_host_store_grows_but_separated_store_needs_capacity() {
+    let mut p = lookup_program(quote!(a = store lookup r [a] rows l;));
+    check_grading(&p, &sequential()).unwrap();
+    grade(&mut p, quote!(a at device;));
+    reject_grade(&p, &gpu(), "BE-Length");
     let p = lookup_program(quote!(a = store capacity 100 lookup r [a] rows l; output bounded;));
     let a = contract::check(&p).unwrap();
     assert_eq!(a.stores["a"], Len::Unknown(Some(100)));
@@ -251,7 +251,10 @@ fn choose_unknown_lengths_need_capacity_only_when_stored() {
         contract::check(&p).unwrap().lengths["a"],
         Len::Unknown(None)
     );
-    reject(&program(quote!(a = store #body;)), "BE-Length");
+    let mut stored = program(quote!(a = store #body;));
+    check_grading(&stored, &sequential()).unwrap();
+    grade(&mut stored, quote!(a at device;));
+    reject_grade(&stored, &gpu(), "BE-Length");
     contract::check(&program(quote!(a = store capacity 42 #body;))).unwrap();
 }
 
@@ -367,7 +370,7 @@ fn partial_rejects_opaque_evaluation_below_host() {
             r host scan = Reader [];
             b canon = Canon;
             b rows = Rows;
-        } sequence { a = store rows b; }
+        } sequence { a = store map b rows r; }
     };
     grade(&mut p, quote!(a at device;));
     reject_grade(&p, &gpu(), "BE-Partial");
@@ -391,8 +394,16 @@ fn bind_rejects_membership_as_range_cursor() {
             r host selected = Reader [tag];
             selected = Provider [a] membership payload [a] constants {tag = 7};
             j canon = Canon;
-        } sequence { a = flatten lookup selected [a] rows l; }
+        } sequence {
+            s = store map selected rows r;
+            a = flatten lookup selected [a] rows l;
+        }
     };
+    let mut missing = p.clone();
+    missing.sequence.definitions.remove(0);
+    reject(&missing, "BE-Scope");
+    missing.sequence.definitions[0].term = syn::parse_quote!(rows selected);
+    reject(&missing, "BE-Scope");
     reject(&p, "BE-Bind");
 }
 
@@ -435,4 +446,128 @@ fn compact_and_total_map_derive_the_physical_result() {
     let mut mapped = p.clone();
     mapped.sequence.definitions[0].term = syn::parse_quote!(store map s rows r);
     check_rewrite(&p, &mapped).unwrap();
+}
+
+#[test]
+fn ungraded_programs_default_to_host_only() {
+    let p = program(quote!(a = store rows r;));
+    let analysis = check_grading(&p, &sequential()).unwrap();
+    assert_eq!(analysis.levels["a"], ["host"]);
+    reject_grade(&p, &gpu(), "BE-Scope");
+}
+
+#[test]
+fn leaf_flatten_is_sequential_but_parent_fold_needs_collaboration() {
+    let tasks = Machine {
+        name: syn::parse_quote!(target),
+        root: node(
+            "host",
+            false,
+            false,
+            vec![node(
+                "pool",
+                false,
+                false,
+                vec![node("task", false, false, vec![])],
+            )],
+        ),
+    };
+    let mut p = lookup_program(quote!(a = flatten lookup r [a] rows l;));
+    grade(&mut p, quote!(a at pool.task;));
+    assert!(check_grading(&p, &tasks).unwrap().collectives.is_empty());
+    let mut p = program(quote!(a = fold count rows r;));
+    grade(&mut p, quote!(a at pool;));
+    reject_grade(&p, &tasks, "BE-Collective");
+    grade(&mut p, quote!(a at device.block;));
+    check_grading(&p, &gpu()).unwrap();
+}
+
+#[test]
+fn streaming_lookup_needs_exact_and_materialized_offsets_need_range() {
+    let streaming = lookup_program(quote!(a = flatten lookup r [a] rows l;));
+    let key = ("r".into(), vec!["a".into()]);
+    assert_eq!(
+        contract::check(&streaming).unwrap().capabilities[&key],
+        Capability::Exact
+    );
+    let stored = lookup_program(quote!(a = store flatten lookup r [a] rows l;));
+    assert_eq!(
+        contract::check(&stored).unwrap().capabilities[&key],
+        Capability::Range
+    );
+    let tiled = lookup_program(quote!(a = tile 8 flatten lookup r [a] rows l;));
+    assert_eq!(
+        contract::check(&tiled).unwrap().capabilities[&key],
+        Capability::Range
+    );
+    let mut collective = streaming;
+    grade(&mut collective, quote!(a at device.block;));
+    assert_eq!(
+        check_grading(&collective, &gpu()).unwrap().capabilities[&key],
+        Capability::Range
+    );
+}
+
+#[test]
+fn membership_compact_records_polarity_and_never_enumerates() {
+    for operation in ["semi", "anti"] {
+        let text = format!(
+            "physical {{
+            relation L(a:i32); relation R(a:i32);
+            l = pipe rename L@0 {{a -> a}};
+            r = let rename R@1 {{a -> a}};
+            j = pipe canon {operation} eager [a] l,r;
+            return j as answer(a);
+        }} structures {{
+            l host scan = Reader []; r host scan = Reader [];
+            r = Provider [a]; j canon = Canon;
+        }} sequence {{ a = compact j lookup r [a] rows l; }}"
+        );
+        let p: Program = syn::parse_str(&text).unwrap();
+        let analysis = contract::check(&p).unwrap();
+        assert_eq!(
+            analysis.capabilities[&("r".into(), vec!["a".into()])],
+            Capability::Membership
+        );
+        assert_eq!(analysis.results["a"], "j");
+        let mut changed = p.clone();
+        changed.sequence.definitions[0].term = syn::parse_quote!(compact j lookup r [] rows l);
+        reject(&changed, "BE-Alpha");
+    }
+}
+
+#[test]
+fn unit_opaque_maps_and_union_preserve_explicit_arms() {
+    let mut p: Program = syn::parse_quote! {
+        physical {
+            u = pipe unit;
+            v = pipe unit;
+            a = pipe bind u with n:i32 = (1);
+            g = pipe guard a if (*n > 0);
+            b = pipe bind v with n:i32 = (1);
+            out = pipe canon union g,b;
+            return out as answer(n);
+        } structures { out canon = Canon; }
+        sequence {
+            su = rows u;
+            sv = rows v;
+            sa = map a su;
+            sg = map g sa;
+            sb = map b sv;
+            result = canon union [sg,sb];
+        }
+    };
+    let analysis = check_grading(&p, &sequential()).unwrap();
+    assert_eq!(analysis.results["result"], "out");
+    assert_eq!(analysis.lengths["su"], Len::Lit(1));
+    assert_eq!(syn::parse2::<Program>(p.to_token_stream()).unwrap(), p);
+    grade(
+        &mut p,
+        quote!(su at host; sv at host; sa at host; sg at host; sb at host; result at host;),
+    );
+    check_grading(&p, &gpu()).unwrap();
+    p.sequence.definitions[5].term = syn::parse_quote!(union[sg]);
+    reject(&p, "BE-Alpha");
+    p.sequence.definitions[5].term = syn::parse_quote!(map out sg);
+    reject(&p, "BE-Alpha");
 }

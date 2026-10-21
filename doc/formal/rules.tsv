@@ -194,16 +194,24 @@ DL-ShardedAdmission	implementation	features/datalog-parallel/runtime/src/lib.rs	
 DL-LayoutPublication	implementation	features/datalog-parallel/print/src/publication.rs	/// Formal rule DL-LayoutPublication:	Each full or delta native layout has one exclusive task; full publication joins before delta replacement and all delta rebuilds join before evaluation.
 EXT-RetainStream	implementation	features/rewrites/passes/src/physical.rs	(formal rule EXT-RetainStream)	Change only named non-host stream results from pipe to let; erasure and the exhaustive bag are preserved.
 BE-Alpha	implementation	languages/cq-lang-sequence/src/contract.rs	// Formal rule BE-Alpha:	Check named results, total segments, input provenance and lookup headings.
-BE-Bind	implementation	languages/cq-lang-sequence/src/contract.rs	// Formal rule BE-Bind:	Flattened lookups require Range obligations on an opaque provider, not membership-only storage.
+BE-Bind	implementation	languages/cq-lang-sequence/src/contract.rs	// Formal rule BE-Bind:	A probe is a flatten of per-row lookups; a streamed flatten needs an exact bucket, a stored/tiled/non-leaf-folded flatten a contiguous range; semi/anti need membership.
 BE-Partition	implementation	languages/cq-lang-sequence/src/contract.rs	// Formal rule BE-Partition:	Positive contiguous tiles cover their domain; folds use the closed commutative monoid grammar.
 BE-Offsets	implementation	languages/cq-lang-sequence/src/contract.rs	// Formal rule BE-Offsets:	Check nested positions and derive symbolic exclusive-scan lengths for flatten.
 BE-Canon	implementation	languages/cq-lang-sequence/src/contract.rs	// Formal rule BE-Canon:	Global support requires flattened rows; record opaque canon and codec obligations.
 BE-Code	abstract	-	-	Codec injectivity and monotonicity remain runtime trait premises recorded in Sequence Analysis.obligations.
 BE-Choose	implementation	languages/cq-lang-sequence/src/contract.rs	// Formal rule BE-Choose:	Check exhaustive length guards and construction-equal alternatives; join their size types.
 BE-Scope	implementation	languages/cq-lang-sequence/src/grading.rs	// Formal rule BE-Scope:	Check complete grades, lexical definition order and reads inside ancestor store extents.
-BE-Collective	implementation	languages/cq-lang-sequence/src/grading.rs	// Formal rule BE-Collective:	Check collaborative folds and scans with whole-level participation.
+BE-Collective	implementation	languages/cq-lang-sequence/src/grading.rs	// Formal rule BE-Collective:	A fold, scan or flatten at a level with members is admissible only at a collaborative level with whole participation; at a leaf level it is a sequential loop.
 BE-Separate	implementation	languages/cq-lang-sequence/src/grading.rs	// Formal rule BE-Separate:	Reject exchange across separated siblings without an ancestor store.
-BE-Length	implementation	languages/cq-lang-sequence/src/contract.rs	// Formal rule BE-Length:	Derive every definition length; unknown stores require an explicit capacity.
+BE-Length	implementation	languages/cq-lang-sequence/src/contract.rs	// Formal rule BE-Length:	A store at a separated level has a length in its type before the write or a checked capacity; host stores need no bound.
 BE-Boundary	implementation	languages/cq-lang-sequence/src/grading.rs	// Formal rule BE-Boundary:	Derive maximal total dispatch segments and their outer domains and inner stores.
 BE-Partial	implementation	languages/cq-lang-sequence/src/grading.rs	// Formal rule BE-Partial:	Opaque Rust evaluation requires a host boundary before descendant execution.
 BE-Abort	implementation	languages/cq-lang-sequence/src/grading.rs	// Formal rule BE-Abort:	Every dispatch has a path to host; runtime flag propagation remains a recorded failure obligation.
+T-Tasks	implementation	features/sequence-tasks/src/lib.rs	// Formal rule T-Tasks:	Interpret checked Sequence with indexed Rayon chunks, ordered task-local buffer publication, monoidal reductions and local then global canonicalization.
+EXT-SeqStore	implementation	features/sequence-rewrites/passes/src/lib.rs	// Formal rule EXT-SeqStore:	Materialize selected flatten definitions with their exclusive-scan lengths and unchanged support.
+EXT-SeqTile	implementation	features/sequence-rewrites/passes/src/lib.rs	// Formal rule EXT-SeqTile:	Wrap a definition in positive contiguous tiles; unknown-length stores require capacity.
+EXT-SeqChoose	implementation	features/sequence-rewrites/passes/src/lib.rs	// Formal rule EXT-SeqChoose:	Select earlier equal-Structures-result definitions under exhaustive length guards.
+EXT-SeqOutput	implementation	features/sequence-rewrites/passes/src/lib.rs	// Formal rule EXT-SeqOutput:	Set the final store output protocol without changing support; bounded requires capacity.
+EXT-SeqGrade	implementation	features/sequence-rewrites/passes/src/lib.rs	// Formal rule EXT-SeqGrade:	Add or update placements on one named machine without changing construction; machine validation is deferred.
+L-Sequence	implementation	passes/cq-sequence-lowering/src/lib.rs	// Formal rule L-Sequence:	Default one-part lowering preserves Physical retention and records explicit lookup, membership, union and final count-store terms.
+T-Pull	implementation	passes/cq-sequence-pull/src/lib.rs	// Formal rule T-Pull:	Host iterator interpretation of checked Sequence constructors with recorded provider capabilities and explicit Vec stores.

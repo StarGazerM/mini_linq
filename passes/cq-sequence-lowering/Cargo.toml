@@ -1,0 +1,24 @@
+[package]
+name = "cq-sequence-lowering"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+cq-lang-structures.workspace = true
+cq-lang-sequence.workspace = true
+syn.workspace = true
+
+[dev-dependencies]
+cq-testkit.workspace = true
+cq-index-policy.workspace = true
+cq-physical-lowering.workspace = true
+cq-structure-selection.workspace = true
+cq-planners-plan = { path = "../../features/planners/plan" }
+cq-workloads = { path = "../../features/workloads" }
+quote.workspace = true
+
+[package.metadata.cq]
+source = "cq-lang-structures"
+target = "cq-lang-sequence"

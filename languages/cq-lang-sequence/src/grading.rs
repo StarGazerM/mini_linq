@@ -30,6 +30,8 @@ struct Checker<'a> {
     roots: Vec<usize>,
     nodes: Vec<Node<'a>>,
     collectives: Vec<(String, Monoid, Vec<String>)>,
+    lengths: &'a BTreeMap<String, Len>,
+    range_reads: BTreeSet<(String, Vec<String>)>,
 }
 
 /// Check placement, then derive dispatch boundaries and runtime failure obligations.
@@ -45,12 +47,29 @@ pub fn check_grading(program: &Program, machine: &Machine) -> syn::Result<Analys
             "BE-Abort: the machine root must be host",
         ));
     }
-    let graded = program.graded.as_ref().ok_or_else(|| {
-        syn::Error::new(
+    let implicit;
+    let graded = if let Some(graded) = &program.graded {
+        graded
+    } else if machine.root.children.is_empty() {
+        implicit = crate::Graded {
+            machine: machine.name.clone(),
+            grades: program
+                .sequence
+                .definitions
+                .iter()
+                .map(|definition| crate::Grade {
+                    name: definition.name.clone(),
+                    level: vec![machine.root.name.clone()],
+                })
+                .collect(),
+        };
+        &implicit
+    } else {
+        return Err(syn::Error::new(
             machine.name.span(),
             "BE-Scope: grading requires a graded machine block",
-        )
-    })?;
+        ));
+    };
     if symbol_name(&graded.machine) != symbol_name(&machine.name) {
         return Err(syn::Error::new(
             graded.machine.span(),
@@ -132,6 +151,8 @@ pub fn check_grading(program: &Program, machine: &Machine) -> syn::Result<Analys
         roots: Vec::with_capacity(program.sequence.definitions.len()),
         nodes: Vec::new(),
         collectives: Vec::new(),
+        lengths: &analysis.lengths,
+        range_reads: BTreeSet::new(),
     };
     for (owner, definition) in program.sequence.definitions.iter().enumerate() {
         let root = checker.visit(
@@ -146,6 +167,27 @@ pub fn check_grading(program: &Program, machine: &Machine) -> syn::Result<Analys
     }
     analysis.dispatches = checker.dispatches()?;
     analysis.collectives = checker.collectives;
+    for key in checker.range_reads {
+        if let Some(capability) = analysis.capabilities.get_mut(&key) {
+            if *capability != crate::Capability::Ordered {
+                *capability = crate::Capability::Range;
+            }
+        }
+        for obligation in &mut analysis.obligations {
+            if let Obligation::Provider {
+                provider,
+                keys,
+                capability,
+                ..
+            } = obligation
+            {
+                if provider == &key.0 && keys == &key.1 && *capability != crate::Capability::Ordered
+                {
+                    *capability = crate::Capability::Range;
+                }
+            }
+        }
+    }
     for (dispatch, unit) in analysis.dispatches.iter().enumerate() {
         analysis.obligations.push(Obligation::Failure {
             dispatch,
@@ -259,7 +301,24 @@ impl<'a> Checker<'a> {
                 "BE-Boundary: name each separated store with its own definition",
             ));
         }
+        if separated_store
+            && let Term::Store {
+                capacity: None,
+                inner,
+            } = term
+            && self.unknown_length(inner)
+        {
+            return Err(self.error(
+                owner,
+                "BE-Length: separated unknown store length requires capacity",
+            ));
+        }
         match term {
+            Term::Union(arms) => {
+                for arm in arms {
+                    inputs.push(self.visit(arm, owner, level, tiled, uniform, false)?);
+                }
+            }
             Term::Ref(name) => {
                 let source = self.reference(name, owner, level)?;
                 if level != 0
@@ -305,9 +364,15 @@ impl<'a> Checker<'a> {
             }
             Term::Fold(monoid, inner) => {
                 self.collective(owner, level, monoid.clone(), tiled, uniform)?;
+                if !self.levels[level].children.is_empty() {
+                    self.require_ranges(inner);
+                }
                 inputs.push(self.visit(inner, owner, level, tiled, uniform, false)?);
             }
             Term::Flatten(inner) => {
+                if !self.levels[level].children.is_empty() {
+                    self.require_ranges(inner);
+                }
                 // Stored flatten offsets can be read without executing a new
                 // scan. Otherwise the offsets require a sum-of-lengths scan;
                 // Count denotes its additive counting monoid in Analysis.
@@ -357,6 +422,9 @@ impl<'a> Checker<'a> {
             return false;
         }
         let node = &self.nodes[index];
+        if self.levels[node.level].children.is_empty() {
+            return false;
+        }
         match node.term {
             Term::Store { .. } => false,
             Term::Fold(_, _) => true,
@@ -368,6 +436,64 @@ impl<'a> Checker<'a> {
         }
     }
 
+    fn require_ranges(&mut self, term: &'a Term) {
+        match term {
+            Term::Lookup {
+                provider,
+                keys,
+                inner,
+            } => {
+                let mut keys: Vec<_> = keys.iter().map(symbol_name).collect();
+                keys.sort();
+                self.range_reads.insert((symbol_name(provider), keys));
+                self.require_ranges(inner);
+            }
+            Term::Ref(name) => {
+                if let Some(&owner) = self.definitions.get(&symbol_name(name)) {
+                    self.require_ranges(&self.program.sequence.definitions[owner].term);
+                }
+            }
+            Term::Compact(_, inner) if matches!(inner.as_ref(), Term::Lookup { .. }) => {}
+            Term::Map(_, inner)
+            | Term::Compact(_, inner)
+            | Term::Flatten(inner)
+            | Term::Fold(_, inner)
+            | Term::Canon(inner)
+            | Term::Tile { inner, .. } => self.require_ranges(inner),
+            Term::Union(arms) => {
+                for arm in arms {
+                    self.require_ranges(arm);
+                }
+            }
+            Term::Choose(arms) => {
+                for (_, arm) in arms {
+                    self.require_ranges(arm);
+                }
+            }
+            Term::Store { .. } | Term::Rows(_) => {}
+        }
+    }
+    fn unknown_length(&self, term: &Term) -> bool {
+        match term {
+            Term::Ref(name) => matches!(
+                self.lengths.get(&symbol_name(name)),
+                Some(Len::Unknown(None))
+            ),
+            Term::Lookup { .. } => true,
+            Term::Tile { inner, .. }
+            | Term::Store {
+                capacity: None,
+                inner,
+            } => self.unknown_length(inner),
+            Term::Union(arms) => arms.iter().any(|arm| self.unknown_length(arm)),
+            Term::Choose(arms) => {
+                // The contract records joins of unequal branch lengths.
+                arms.iter().any(|(_, arm)| self.unknown_length(arm))
+                    || arms.windows(2).any(|pair| pair[0].1 != pair[1].1)
+            }
+            _ => false,
+        }
+    }
     fn collective(
         &mut self,
         owner: usize,
@@ -376,6 +502,9 @@ impl<'a> Checker<'a> {
         tiled: bool,
         uniform: bool,
     ) -> syn::Result<()> {
+        if self.levels[level].children.is_empty() {
+            return Ok(());
+        }
         // Formal rule BE-Collective: only a collaborative grade (or the single
         // host executor) supplies a collective. The syntax has no active-mask
         // or group-width certificate, so a tile-nested collective is not a
@@ -450,7 +579,7 @@ impl<'a> Checker<'a> {
             | Term::Canon(inner)
             | Term::Tile { inner, .. }
             | Term::Store { inner, .. } => self.physical_result(inner),
-            Term::Lookup { .. } | Term::Choose(_) => None,
+            Term::Lookup { .. } | Term::Choose(_) | Term::Union(_) => None,
         }
     }
 
