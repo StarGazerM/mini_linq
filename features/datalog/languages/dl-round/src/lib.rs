@@ -12,6 +12,10 @@
 //! Execution records specify admission, publication, termination, observer
 //! placement, component-local key scope, loop form, and output conversion.
 //! Opaque Rust providers carry the Storage laws as explicit premises.
+//! CQ holes declare exactly their positive inputs and head output, in context
+//! order, followed by any scan binding and the output. Negative keys are Rust
+//! predicate captures, not CQ inputs. Correspondence derives this schema
+//! independently of the fork producer and rejects unused or misbound inputs.
 use cq_datalog_support::{collect_names, ensure};
 pub use cq_lang_cq as cq;
 use cq_lang_cq::{BodyItem, Program as CqProgram};
@@ -24,7 +28,7 @@ pub use storage::incremental;
 use storage::{record, text::Text};
 use syn::{Expr, Ident};
 mod correspondence;
-pub use correspondence::{check_storage, inputs, scan_source, use_layouts, use_scan};
+pub use correspondence::{check_storage, scan_source, use_layouts, use_scan};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Relation {
     pub declaration: RelationDecl,
@@ -628,7 +632,7 @@ pub mod contract {
             cq_lang_cq::contract::check(&hole.cq)?;
         }
         let erased = erase(program)?;
-        check_storage(&program.storage, &erased)?;
+        correspondence::check_storage_with_analysis(&program.storage, &erased, &analysis)?;
         check_execution(program)?;
         Ok(Analysis { storage: analysis })
     }
@@ -636,6 +640,10 @@ pub mod contract {
 pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
     contract::check(source)?;
     contract::check(target)?;
+    check_rewrite_admitted(source, target)
+}
+// The stage runner has already checked both language contracts.
+fn check_rewrite_admitted(source: &Program, target: &Program) -> syn::Result<()> {
     let mut source = erase(source)?;
     let erased = erase(target)?;
     ensure(
@@ -677,11 +685,13 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
         "round rewrite changed a hole beyond its input certificate",
     )
 }
+/// The rewrite callback assumes `cq_stage::run` checked both contracts.
+/// Standalone callers must use the public free [`check_rewrite`] function.
 impl cq_stage::Language for Program {
     fn check(&self) -> syn::Result<()> {
         contract::check(self).map(|_| ())
     }
     fn check_rewrite(source: &Self, target: &Self) -> syn::Result<()> {
-        check_rewrite(source, target)
+        check_rewrite_admitted(source, target)
     }
 }

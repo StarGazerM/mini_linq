@@ -36,6 +36,10 @@ fn layouts_require_complete_permutations_and_available_leading_keys() {
             check_rewrite(&original, &changed).is_err(),
             "rewrite {index}"
         );
+        assert!(
+            check_rewrite(&changed, &original).is_err(),
+            "invalid rewrite source {index}"
+        );
     }
 }
 

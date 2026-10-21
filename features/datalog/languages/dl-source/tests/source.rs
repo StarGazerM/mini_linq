@@ -157,3 +157,125 @@ fn edb_outputs_are_declared_and_can_stand_alone() {
         );
     }
 }
+
+#[test]
+fn dfs_reachability_matches_nonempty_path_closure() {
+    use cq_lang_datalog_source::Graph;
+    let base: Program = syn::parse_quote! {
+        struct P;
+        relation A(x:i32); relation B(x:i32); relation C(x:i32);
+        output A;
+    };
+    // Every directed graph on three vertices includes disconnected vertices,
+    // self loops, longer cycles and duplicate reachability paths.
+    for mask in 0..(1usize << 9) {
+        let mut program = base.clone();
+        let mut expected = vec![vec![false; 3]; 3];
+        let mut edges = Vec::new();
+        for (head, row) in expected.iter_mut().enumerate() {
+            for (input, reachable) in row.iter_mut().enumerate() {
+                if mask & (1 << (head * 3 + input)) != 0 {
+                    let h = &base.declarations[head].name;
+                    let b = &base.declarations[input].name;
+                    program.rules.push(syn::parse_quote!(#h(*x) :- #b(x);));
+                    edges.push((head, input, false));
+                    *reachable = true;
+                }
+            }
+        }
+        for k in 0..3 {
+            for i in 0..3 {
+                for j in 0..3 {
+                    expected[i][j] |= expected[i][k] && expected[k][j];
+                }
+            }
+        }
+        let graph = Graph::new(&program).unwrap();
+        assert_eq!(graph.names, ["A", "B", "C"]);
+        assert_eq!(graph.edges, edges);
+        assert_eq!(graph.reach, expected, "edge mask {mask}");
+    }
+}
+
+#[test]
+fn negative_edges_preserve_stratification_and_edge_order() {
+    use cq_lang_datalog_source::Graph;
+    let mut program: Program = syn::parse_quote! {
+        struct P;
+        relation E(x:i32) = (e);
+        relation A(x:i32); relation B(x:i32);
+        output A;
+        A(*x) :- E(x), !B(x), E(x);
+        B(*x) :- E(x);
+    };
+    let graph = Graph::new(&program).unwrap();
+    assert_eq!(
+        graph.edges,
+        [(1, 0, false), (1, 2, true), (1, 0, false), (2, 0, false)]
+    );
+    assert_eq!(
+        graph.reach,
+        [
+            vec![false, false, false],
+            vec![true, false, true],
+            vec![true, false, false]
+        ]
+    );
+    program.rules.push(syn::parse_quote!(B(*x) :- A(x);));
+    assert_eq!(
+        Graph::new(&program).unwrap_err().to_string(),
+        "unstratified negative dependency inside an SCC"
+    );
+}
+
+#[test]
+fn reusable_query_context_preserves_full_schema_projection() {
+    use cq_lang_datalog_source::{QueryChecker, check_query};
+    use quote::quote;
+    let program: Program = syn::parse_quote! {
+        struct P;
+        relation E(x:i32) = (e);
+        relation Text(x:String) = (text);
+        relation Unused(x:bool) = (unused);
+        relation A(x:i32);
+        relation __cq_datalog_checked_head_0(x:i32);
+        output A;
+        A(*x) :- E(x), if *x > 0;
+        A(1) :- Text(s), if s.starts_with("a");
+        A(*x) :- A(x), if *x < 10;
+    };
+    let mut checker = QueryChecker::new(&program, &program.declarations);
+    for rule in &program.rules {
+        let mut fresh = cq_datalog_support::Fresh::new(&program);
+        let mut query = rule.clone();
+        query.head.relation = fresh.id("checked_head");
+        let mut output = program.declarations[3].clone();
+        output.name = query.head.relation.clone();
+        let declarations = &program.declarations;
+        let full: cq_lang_cq::Program = syn::parse2(quote! {
+            struct P; #(#declarations)* #output #query
+        })
+        .unwrap();
+        cq_lang_cq::contract::check(&full).unwrap();
+        checker.check(rule).unwrap();
+        check_query(&program, rule, declarations).unwrap();
+    }
+    // Standalone callers can supply declarations not present in the source.
+    // Even unused malformed declarations and synthetic-head collisions matter.
+    let rule = &program.rules[0];
+    let mut declarations = program.declarations.clone();
+    declarations.push(declarations[2].clone());
+    assert!(check_query(&program, rule, &declarations).is_err());
+    declarations.pop();
+    declarations[2] = syn::parse_quote!(relation Unused() = (unused););
+    assert!(check_query(&program, rule, &declarations).is_err());
+    declarations = program.declarations.clone();
+    declarations[2].name = syn::parse_quote!(__cq_datalog_checked_head_1);
+    assert!(check_query(&program, rule, &declarations).is_err());
+    declarations[2].name = syn::parse_quote!(__cq_datalog_checked_head_2);
+    let mut checker = QueryChecker::new(&program, &declarations);
+    for _ in 0..3 {
+        checker.check(rule).unwrap();
+        check_query(&program, rule, &declarations).unwrap();
+    }
+}

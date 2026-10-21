@@ -24,9 +24,15 @@ pub fn splice(program: &Program) -> syn::Result<Vec<TokenStream>> {
 /// Splice one caller-owned expansion per checked hole, in recorded order.
 pub fn splice_with(
     program: &Program,
-    mut expand: impl FnMut(&Hole) -> syn::Result<TokenStream>,
+    expand: impl FnMut(&Hole) -> syn::Result<TokenStream>,
 ) -> syn::Result<Vec<TokenStream>> {
     round::contract::check(program)?;
+    splice_admitted(program, expand)
+}
+fn splice_admitted(
+    program: &Program,
+    mut expand: impl FnMut(&Hole) -> syn::Result<TokenStream>,
+) -> syn::Result<Vec<TokenStream>> {
     program.holes.iter().map(&mut expand).collect()
 }
 pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
@@ -50,7 +56,7 @@ pub fn compile_with(
     ) -> syn::Result<(TokenStream, TokenStream)>,
 ) -> syn::Result<syn::Expr> {
     let holes = splice(program)?;
-    render_with(program, &holes, evaluator)
+    render_admitted(program, &holes, evaluator, publication)
 }
 /// Realize already-spliced holes. The length and complete Round contract are checked.
 pub fn render_with(
@@ -69,6 +75,21 @@ pub fn render_with(
 pub fn render_with_publication(
     program: &Program,
     holes: &[TokenStream],
+    evaluator: impl FnMut(
+        &[RuleHole],
+        &RoundContext,
+        &[TokenStream],
+        &[Execution],
+    ) -> syn::Result<(TokenStream, TokenStream)>,
+    publish: impl FnMut(&RoundContext, &Stratum) -> Vec<TokenStream>,
+) -> syn::Result<syn::Expr> {
+    round::contract::check(program)?;
+    render_admitted(program, holes, evaluator, publish)
+}
+// Internal callers retain the Round admission performed before splicing.
+fn render_admitted(
+    program: &Program,
+    holes: &[TokenStream],
     mut evaluator: impl FnMut(
         &[RuleHole],
         &RoundContext,
@@ -77,7 +98,6 @@ pub fn render_with_publication(
     ) -> syn::Result<(TokenStream, TokenStream)>,
     mut publish: impl FnMut(&RoundContext, &Stratum) -> Vec<TokenStream>,
 ) -> syn::Result<syn::Expr> {
-    round::contract::check(program)?;
     ensure(
         holes.len() == program.holes.len(),
         program,

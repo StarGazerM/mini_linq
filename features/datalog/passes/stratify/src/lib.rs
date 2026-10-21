@@ -47,9 +47,8 @@ pub fn compile(source: &source::Program) -> syn::Result<strata::Program> {
     Ok(target)
 }
 
-/// Check the target contract and exact source preservation independently.
+/// Check the target (including its Source) and exact source preservation independently.
 pub fn check(source: &source::Program, target: &strata::Program) -> syn::Result<()> {
-    source::contract::check(source)?;
     strata::contract::check(target)?;
     ensure(source == &target.source, target, "stratify changed source")
 }

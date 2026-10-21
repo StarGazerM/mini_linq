@@ -8,7 +8,7 @@ pub use cq_lang_datalog_strata as strata;
 use cq_syntax::symbol_name;
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
-use source::{BodyItem, Graph, Query, check_query};
+use source::{BodyItem, Graph, Query, QueryChecker};
 use std::collections::{BTreeMap, BTreeSet};
 pub use strata::source;
 use syn::{
@@ -129,6 +129,7 @@ fn check_variants(program: &Program, analysis: &Analysis) -> syn::Result<()> {
         declaration.name = delta.name.clone();
         declarations.push(declaration);
     }
+    let mut checker = QueryChecker::new(p, &declarations);
     for v in variants {
         ensure(v.rule < p.rules.len(), p, "invalid variant rule index")?;
         seen.insert((v.rule, v.delta));
@@ -142,7 +143,7 @@ fn check_variants(program: &Program, analysis: &Analysis) -> syn::Result<()> {
             "incorrect seed/delta classification",
         )?;
         // Check complete declared schemas and CQ scope independently of erasure.
-        check_query(p, &v.query, &declarations)?;
+        checker.check(&v.query)?;
         let mut erased = v.query.clone();
         if let Some(i) = v.delta {
             let original = &p.rules[v.rule].body[i];
@@ -249,17 +250,23 @@ pub mod contract {
 pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
     contract::check(source)?;
     contract::check(target)?;
+    check_rewrite_admitted(source, target)
+}
+// The stage runner has already checked both language contracts.
+fn check_rewrite_admitted(source: &Program, target: &Program) -> syn::Result<()> {
     ensure(
         source.strata == target.strata,
         target,
         "incremental rewrite changed the strata program",
     )
 }
+/// The rewrite callback assumes `cq_stage::run` checked both contracts.
+/// Standalone callers must use the public free [`check_rewrite`] function.
 impl cq_stage::Language for Program {
     fn check(&self) -> syn::Result<()> {
         contract::check(self).map(|_| ())
     }
     fn check_rewrite(source: &Self, target: &Self) -> syn::Result<()> {
-        check_rewrite(source, target)
+        check_rewrite_admitted(source, target)
     }
 }

@@ -1,4 +1,4 @@
-//! Thin checked Datalog pass wrappers and named pipeline entry.
+//! Thin Datalog wrappers: each pass compile owns its correspondence check.
 use cq_datalog_configuration::DatalogConfiguration;
 use proc_macro::TokenStream;
 use syn::Token;
@@ -64,9 +64,7 @@ pub fn surface_if_let(input: TokenStream) -> TokenStream {
         input.into(),
         |source, args| {
             no_arguments(args)?;
-            let target = cq_datalog_surface_if_let::compile(source)?;
-            cq_datalog_surface_if_let::check(source, &target)?;
-            Ok(target)
+            cq_datalog_surface_if_let::compile(source)
         },
     )
     .into()
@@ -79,9 +77,7 @@ pub fn stratify(input: TokenStream) -> TokenStream {
         input.into(),
         |source, args| {
             no_arguments(args)?;
-            let target = cq_datalog_stratify::compile(source)?;
-            cq_datalog_stratify::check(source, &target)?;
-            Ok(target)
+            cq_datalog_stratify::compile(source)
         },
     )
     .into()
@@ -94,9 +90,7 @@ pub fn incremental(input: TokenStream) -> TokenStream {
         input.into(),
         |source, args| {
             no_arguments(args)?;
-            let target = cq_datalog_incremental::compile(source)?;
-            cq_datalog_incremental::check(source, &target)?;
-            Ok(target)
+            cq_datalog_incremental::compile(source)
         },
     )
     .into()
@@ -109,9 +103,7 @@ pub fn storage(input: TokenStream) -> TokenStream {
         input.into(),
         |source, args| {
             no_arguments(args)?;
-            let target = cq_datalog_storage::compile(source)?;
-            cq_datalog_storage::check(source, &target)?;
-            Ok(target)
+            cq_datalog_storage::compile(source)
         },
     )
     .into()
@@ -122,11 +114,7 @@ pub fn storage(input: TokenStream) -> TokenStream {
 pub fn fork(input: TokenStream) -> TokenStream {
     cq_stage::pass::<cq_lang_datalog_storage::Program, cq_lang_datalog_round::Program>(
         input.into(),
-        |source, args| {
-            let target = cq_datalog_fork::compile_with(source, args)?;
-            cq_datalog_fork::check(source, &target)?;
-            Ok(target)
-        },
+        cq_datalog_fork::compile_with,
     )
     .into()
 }

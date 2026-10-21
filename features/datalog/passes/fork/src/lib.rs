@@ -76,7 +76,6 @@ pub fn compile_with(source: &storage::Program, args: TokenStream) -> syn::Result
 }
 /// Formal rule CK-DL-Fork: independently check storage embedding and every hole.
 pub fn check(source: &storage::Program, target: &Program) -> syn::Result<()> {
-    storage::contract::check(source)?;
     round::contract::check(target)?;
     ensure(
         source == &target.storage,
@@ -88,7 +87,7 @@ pub fn check(source: &storage::Program, target: &Program) -> syn::Result<()> {
         target,
         "fork must not introduce execution certificates",
     )?;
-    round::check_storage(source, target)
+    Ok(())
 }
 
 fn guard(atom: &cq_syntax::Atom, key: &KeySet) -> BodyItem {
@@ -111,6 +110,79 @@ fn key_representation(source: &storage::Program) -> syn::Result<KeyRepresentatio
     }
 }
 
+fn scan_input(
+    query: &mut round::cq::Query,
+    context: &RoundContext,
+    scan: &ScanBinding,
+) -> cq_syntax::RelationDecl {
+    let (relation, columns) = match scan.source {
+        InputSource::Delta(index) => (index, None),
+        InputSource::Layout(index) => {
+            let layout = &context.layouts[index];
+            (layout.relation, Some(&layout.columns))
+        }
+    };
+    let mut declaration = context.relations[relation].declaration.clone();
+    if let Some(columns) = columns {
+        declaration.columns = columns
+            .iter()
+            .map(|&column| declaration.columns[column].clone())
+            .collect();
+    }
+    let binding = &scan.binding;
+    declaration.name = binding.clone();
+    declaration.value = Some(syn::parse_quote!(= (#binding)));
+    let BodyItem::Positive { atom } = &mut query.body[0] else {
+        unreachable!("scan source is a positive read")
+    };
+    atom.relation = binding.clone();
+    declaration
+}
+// Each hole owns only the CQ inputs it reads. Runtime key sets remain captured
+// by predicates rather than becoming CQ relation declarations.
+fn hole_inputs<'a>(
+    context: &RoundContext,
+    names: impl Iterator<Item = &'a Ident>,
+) -> Vec<cq_syntax::RelationDecl> {
+    let names: std::collections::BTreeSet<_> = names.map(symbol_name).collect();
+    let mut inputs = Vec::new();
+    for relation in &context.relations {
+        if names.contains(&symbol_name(&relation.declaration.name)) {
+            let mut declaration = relation.declaration.clone();
+            let host = &relation.all;
+            declaration.value = Some(if declaration.value.is_some() {
+                syn::parse_quote!(= (#host))
+            } else {
+                syn::parse_quote!(= (&#host))
+            });
+            inputs.push(declaration);
+        }
+        if let Some(delta) = &relation.delta {
+            if names.contains(&symbol_name(delta)) {
+                let mut declaration = relation.declaration.clone();
+                declaration.name = delta.clone();
+                let host = relation.delta_host.as_ref().expect("checked delta host");
+                declaration.value = Some(syn::parse_quote!(= (&#host)));
+                inputs.push(declaration);
+            }
+        }
+    }
+    for layout in context.layouts.iter().chain(&context.delta_layouts) {
+        if names.contains(&symbol_name(&layout.name)) {
+            let mut declaration = context.relations[layout.relation].declaration.clone();
+            declaration.name = layout.name.clone();
+            declaration.columns = layout
+                .columns
+                .iter()
+                .map(|&column| declaration.columns[column].clone())
+                .collect();
+            let host = &layout.host;
+            declaration.value = Some(syn::parse_quote!(= (&#host)));
+            inputs.push(declaration);
+        }
+    }
+    inputs
+}
 /// Lower variants and key projections, retaining the recorded schedule.
 fn construct(
     source: &storage::Program,
@@ -198,7 +270,6 @@ fn construct(
         observer_name: fresh.id("observer"),
         round_name: fresh.id("round"),
     };
-    let declarations = inputs(&context);
     let mut holes = Vec::new();
     for members in &analysis.components {
         let mut stratum = Stratum {
@@ -340,6 +411,7 @@ fn construct(
                         let variable = &variables[*column];
                         quote!(if *#variable == (#expression))
                     });
+                    let declarations = hole_inputs(&context, std::iter::once(source_name));
                     holes.push(syn::parse2(quote!(struct #name; #(#declarations)* relation #name(#(#output_columns),*); #name(#(#selected),*) :- #source_name(#(#variables),*) #(, #selections)*;))?);
                     stratum.keys.push(key);
                     stratum.keys.len() - 1
@@ -352,11 +424,18 @@ fn construct(
             });
             let scan_declaration = scan
                 .as_ref()
-                .map(|scan| use_scan(&mut query, &context, scan));
+                .map(|scan| scan_input(&mut query, &context, scan));
             let name = fresh.id("hole");
             query.head.relation = name.clone();
             let mut output = source.incremental.strata.source.declarations[head].clone();
             output.name = name.clone();
+            let declarations = hole_inputs(
+                &context,
+                query.body.iter().filter_map(|item| match item {
+                    BodyItem::Positive { atom } => Some(&atom.relation),
+                    _ => None,
+                }),
+            );
             let hole = holes.len();
             holes.push(syn::parse2(
                 quote!(struct #name; #(#declarations)* #scan_declaration #output #query),
