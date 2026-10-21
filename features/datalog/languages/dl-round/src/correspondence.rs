@@ -1,18 +1,33 @@
 use super::*;
 use cq_datalog_support::{Fresh, columns, filters};
 
-pub fn inputs(context: &RoundContext) -> Vec<RelationDecl> {
+// Independently derive the exact input schema from the hole's positive reads.
+// Do not use the fork producer's declaration builder here.
+fn required_inputs(context: &RoundContext, query: &cq::Query) -> Vec<RelationDecl> {
+    let required: BTreeSet<_> = query
+        .body
+        .iter()
+        .filter_map(|item| match item {
+            BodyItem::Positive { atom } => Some(symbol_name(&atom.relation)),
+            _ => None,
+        })
+        .collect();
     let mut declarations = Vec::new();
     for relation in &context.relations {
-        let mut declaration = relation.declaration.clone();
-        let host = &relation.all;
-        declaration.value = Some(if declaration.value.is_some() {
-            syn::parse_quote!(= (#host))
-        } else {
-            syn::parse_quote!(= (&#host))
-        });
-        declarations.push(declaration);
+        if required.contains(&symbol_name(&relation.declaration.name)) {
+            let mut declaration = relation.declaration.clone();
+            let host = &relation.all;
+            declaration.value = Some(if declaration.value.is_some() {
+                syn::parse_quote!(= (#host))
+            } else {
+                syn::parse_quote!(= (&#host))
+            });
+            declarations.push(declaration);
+        }
         if let Some(delta) = &relation.delta {
+            if !required.contains(&symbol_name(delta)) {
+                continue;
+            }
             let mut declaration = relation.declaration.clone();
             declaration.name = delta.clone();
             let host = relation.delta_host.as_ref().expect("checked delta host");
@@ -21,6 +36,9 @@ pub fn inputs(context: &RoundContext) -> Vec<RelationDecl> {
         }
     }
     for layout in context.layouts.iter().chain(&context.delta_layouts) {
+        if !required.contains(&symbol_name(&layout.name)) {
+            continue;
+        }
         let mut declaration = context.relations[layout.relation].declaration.clone();
         declaration.name = layout.name.clone();
         declaration.columns = layout
@@ -137,6 +155,14 @@ fn key_representation(source: &storage::Program) -> syn::Result<KeyRepresentatio
 /// renamed provided they remain fresh and all recorded references agree.
 pub fn check_storage(source: &storage::Program, target: &Program) -> syn::Result<()> {
     let analysis = storage::contract::check(source)?;
+    check_storage_with_analysis(source, target, &analysis)
+}
+
+pub(crate) fn check_storage_with_analysis(
+    source: &storage::Program,
+    target: &Program,
+    analysis: &storage::Analysis,
+) -> syn::Result<()> {
     let variants = &source.incremental.variants;
     let representation = key_representation(source)?;
     let context = &target.context;
@@ -223,7 +249,6 @@ pub fn check_storage(source: &storage::Program, target: &Program) -> syn::Result
         add_name(&layout.name)?;
         add_name(&layout.host)?;
     }
-    let declarations = inputs(context);
     let mut used_holes = BTreeSet::new();
     let mut used_variants = BTreeSet::new();
     for (stratum, members) in context.strata.iter().zip(&analysis.components) {
@@ -342,7 +367,7 @@ pub fn check_storage(source: &storage::Program, target: &Program) -> syn::Result
                     .collect();
                 key.columns.iter().map(|&i| atom.args[i].clone()).collect()
             };
-            let mut expected_declarations = declarations.clone();
+            let mut expected_declarations = required_inputs(context, &hole.query);
             expected_declarations.push(output);
             let name = &hole.name;
             let selections = key.filters.iter().map(|(column, expression)| {
@@ -382,7 +407,6 @@ pub fn check_storage(source: &storage::Program, target: &Program) -> syn::Result
                 add_name(&hole.name)?;
                 let mut output = source.incremental.strata.source.declarations[rule.head].clone();
                 output.name = hole.name.clone();
-                let mut expected_declarations = declarations.clone();
                 let mut query = variant.query.clone();
                 query.head.relation = hole.name.clone();
                 use_layouts(&mut query, context, source, rule.variant)?;
@@ -392,10 +416,14 @@ pub fn check_storage(source: &storage::Program, target: &Program) -> syn::Result
                     source,
                     "fork changed scan coverage or source",
                 )?;
-                if let Some(scan) = &rule.scan {
+                let scan_declaration = if let Some(scan) = &rule.scan {
                     add_name(&scan.binding)?;
-                    expected_declarations.push(use_scan(&mut query, context, scan));
-                }
+                    Some(use_scan(&mut query, context, scan))
+                } else {
+                    None
+                };
+                let mut expected_declarations = required_inputs(context, &query);
+                expected_declarations.extend(scan_declaration);
                 expected_declarations.push(output);
                 ensure(
                     hole.declarations == expected_declarations,

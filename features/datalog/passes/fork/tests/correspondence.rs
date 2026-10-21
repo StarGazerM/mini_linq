@@ -57,23 +57,12 @@ fn authored_holes_preserve_contracts_and_select_borrowed_hosts() {
     }
     let hole = &target.holes[stratum.steps[0].hole].cq;
     let name = &hole.name;
-    let edge = &context.relations[0].all;
-    let blocked = &context.relations[1].all;
-    let reach = &context.relations[2].all;
-    let delta = context.relations[2].delta_host.as_ref().unwrap();
-    let scan = &context.layouts[0].name;
-    let scan_host = &context.layouts[0].host;
     let lookup = &context.layouts[1].name;
     let lookup_host = &context.layouts[1].host;
     let keys = &stratum.keys[0].name;
     let binding = &stratum.steps[0].scan.as_ref().unwrap().binding;
     let expected: cq_lang_cq::Program = syn::parse2(quote! {
         struct #name;
-        relation Edge(x:i32,y:i32) = (#edge);
-        relation Blocked(x:i32,y:i32) = (#blocked);
-        relation Reach(x:i32,y:i32) = (&#reach);
-        relation Recent(x:i32,y:i32) = (&#delta);
-        relation #scan(x:i32,y:i32) = (&#scan_host);
         relation #lookup(x:i32,y:i32) = (&#lookup_host);
         relation #binding(x:i32,y:i32) = (#binding);
         relation #name(x:i32,y:i32);
@@ -81,6 +70,54 @@ fn authored_holes_preserve_contracts_and_select_borrowed_hosts() {
     })
     .unwrap();
     assert_eq!(hole, &expected);
+}
+
+#[test]
+fn every_hole_declares_exactly_its_reads_and_output() {
+    let source = authored();
+    let target = compile(&source).unwrap();
+    for entry in &target.holes {
+        let hole = &entry.cq;
+        let mut required = std::collections::BTreeSet::from([
+            cq_syntax::symbol_name(&hole.query.head.relation),
+        ]);
+        for item in &hole.query.body {
+            if let BodyItem::Positive { atom } = item {
+                required.insert(cq_syntax::symbol_name(&atom.relation));
+            }
+        }
+        let actual: std::collections::BTreeSet<_> = hole.declarations.iter()
+            .map(|declaration| cq_syntax::symbol_name(&declaration.name))
+            .collect();
+        assert_eq!(actual, required);
+        assert_eq!(hole.declarations.len(), required.len());
+    }
+    let key = target.context.strata[0].keys[0].hole;
+    assert_eq!(target.holes[key].cq.declarations.len(), 2);
+    let step = target.context.strata[0].steps[0].hole;
+    assert_eq!(target.holes[step].cq.declarations.len(), 3);
+}
+
+#[test]
+fn standalone_round_checks_reject_missing_extra_and_misbound_inputs() {
+    let source = authored();
+    let target = compile(&source).unwrap();
+    for hole in 0..target.holes.len() {
+        for mutation in 0..4 {
+            let mut changed = target.clone();
+            let declarations = &mut changed.holes[hole].cq.declarations;
+            match mutation {
+                0 => { declarations.remove(0); }
+                1 => declarations.insert(0, syn::parse_quote! {
+                    relation Unused(x:i32) = (unused);
+                }),
+                2 => declarations[0].value = Some(syn::parse_quote!(= (wrong_host))),
+                _ => { declarations.pop(); }
+            }
+            assert!(cq_lang_datalog_round::check_storage(&source, &changed).is_err());
+            assert!(cq_lang_datalog_round::contract::check(&changed).is_err());
+        }
+    }
 }
 
 fn rejected(change: impl FnOnce(&mut Fork)) {

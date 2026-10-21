@@ -267,10 +267,13 @@ The default allowlist is exactly
 For example, \code{pull\_printers = [crate::alias::pull];} in
 \code{DatalogConfiguration}, together with
 \code{cq = pipeline \{ print = crate::alias::pull; \};}, explicitly replaces
-that list. Fork serializes every declaration, including unused ones, into
-Round text, so the contract checks a resumed Round without consulting the
-configuration or invoking compilation. Unlisted terminals (including the
-default push printer) and typed push holes are rejected.
+that list. Fork serializes the complete pull-printer allowlist into Round text,
+so a resumed Round needs neither configuration nor compilation to check it.
+Each CQ hole declares only its referenced relations, deltas, layouts, frozen
+keys and scan bindings, including its output head. The Round checker derives
+this required declaration set independently from the query and recorded reads.
+Unlisted terminals (including the default push printer) and typed push holes
+are rejected.
 Declaring an alternate path is the caller's assertion of its pull calling
 convention, not Rust alias resolution or a proof of printer equivalence.
 This check examines terminal invocations, not Rust tokens that do not yet exist.
@@ -408,8 +411,11 @@ does not claim a general interpreter for Incremental or Round.
 Each language crate owns \code{Program: Parse + ToTokens + Language}, its
 \code{contract::check} analysis and \code{check\_rewrite}. Each nonterminal
 pass library exports compilation and an independent correspondence check;
-the check must not call compilation. Thin macro wrappers use
-\code{cq\_stage::pass} or \code{cq\_stage::rewrite}. A Datalog-owned
+the check must not call compilation. Compilation owns that check; thin macro
+wrappers do not repeat it. They use \code{cq\_stage::pass} or
+\code{cq\_stage::rewrite}, whose admitted rewrite path reuses the contracts
+already checked by the runner. Standalone \code{check\_rewrite} still checks
+both operands. A Datalog-owned
 \code{DatalogConfiguration} resolves named phases to a generic
 \code{Pipeline}; it does not modify the CQ configuration or core crates.
 Direct pass entry uses the same arguments/remaining-pipeline protocol.
