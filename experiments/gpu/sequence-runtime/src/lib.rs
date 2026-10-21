@@ -206,7 +206,7 @@ pub struct RangeView {
 pub struct RangeProvider {
     offsets: EncodedColumn,
     payload: Vec<EncodedColumn>,
-    payload_views: Buffer<ColumnView>,
+    payload_views: Arc<Buffer<ColumnView>>,
     domain: u32,
     len: u32,
 }
@@ -320,6 +320,52 @@ fn with_range_radix_workspace(
     })
 }
 
+/// Per-provider count owners and descriptor storage. Construct during program
+/// setup; published results retain their owners across later builds.
+pub struct RangeWorkspace {
+    row_count: Arc<Buffer<u64>>,
+    offset_count: Arc<Buffer<u64>>,
+    payload_views: Arc<Buffer<ColumnView>>,
+    host_views: Vec<ColumnView>,
+    row_value: usize,
+    base_rows: usize,
+    entries: usize,
+}
+impl RangeWorkspace {
+    pub fn new(pool: Arc<Pool>, descriptor: &RangeDescriptor) -> Result<Self> {
+        let first = descriptor
+            .key
+            .first()
+            .ok_or("range provider needs at least one key")?;
+        let entries = first
+            .domain_size
+            .checked_add(1)
+            .ok_or("range domain overflow")?;
+        Ok(Self {
+            row_count: Arc::new(Buffer::from_host(
+                pool.clone(),
+                &[first.column.rows as u64],
+            )?),
+            offset_count: Arc::new(Buffer::from_host(pool.clone(), &[entries as u64])?),
+            payload_views: Arc::new(unsafe {
+                Buffer::uninitialized(pool, descriptor.payload.len())?
+            }),
+            host_views: Vec::with_capacity(descriptor.payload.len()),
+            row_value: first.column.rows,
+            base_rows: first.column.rows,
+            entries,
+        })
+    }
+    pub fn matches(&self, pool: &Arc<Pool>, descriptor: &RangeDescriptor) -> bool {
+        Arc::ptr_eq(self.row_count.pool(), pool)
+            && descriptor.key.first().is_some_and(|first| {
+                first.column.rows == self.base_rows
+                    && first.domain_size.checked_add(1) == Some(self.entries)
+            })
+            && descriptor.payload.len() == self.payload_views.len()
+    }
+}
+
 /// Reuse loaded build/RCCL programs across providers on the existing pool.
 /// Fresh builders also share the named module and radix controls on this thread.
 pub struct RangeBuilder<'pool> {
@@ -348,6 +394,18 @@ impl<'pool> RangeBuilder<'pool> {
         self.build(&RangeDescriptor::from_catalog(catalog, descriptor)?)
     }
     pub fn build(&self, descriptor: &RangeDescriptor) -> Result<RangeProvider> {
+        let mut workspace = RangeWorkspace::new(self.pool.clone(), descriptor)?;
+        self.build_with_workspace(descriptor, &mut workspace)
+    }
+    /// Build on the existing stream, reusing setup-time count and view owners.
+    pub fn build_with_workspace(
+        &self,
+        descriptor: &RangeDescriptor,
+        workspace: &mut RangeWorkspace,
+    ) -> Result<RangeProvider> {
+        if !workspace.matches(self.pool, descriptor) {
+            return Err("range workspace does not match the provider descriptor".into());
+        }
         let first = descriptor
             .key
             .first()
@@ -426,8 +484,19 @@ impl<'pool> RangeBuilder<'pool> {
             _ => (base_rows, None),
         };
         let entries = first.domain_size + 1;
-        let row_count = Arc::new(Buffer::from_host(pool.clone(), &[rows as u64])?);
-        let offset_count = Arc::new(Buffer::from_host(pool.clone(), &[entries as u64])?);
+        if rows != workspace.row_value {
+            if Arc::strong_count(&workspace.row_count) != 1 {
+                workspace.row_count =
+                    Arc::new(Buffer::from_host_async(pool.clone(), &[rows as u64])?);
+            } else {
+                // The workspace is the only owner; all prior reads on this
+                // pool stream precede this asynchronous update.
+                unsafe { workspace.row_count.write_async(&[rows as u64])? };
+            }
+            workspace.row_value = rows;
+        }
+        let row_count = workspace.row_count.clone();
+        let offset_count = workspace.offset_count.clone();
         // Empty selections still own a complete all-zero directory.
         if rows == 0 {
             let zeros = Buffer::<i64>::zeroed(pool.clone(), entries)?;
@@ -452,7 +521,7 @@ impl<'pool> RangeBuilder<'pool> {
             if let Some(selected) = selected {
                 release(stream, selected)?;
             }
-            return finish(offsets, payload, first.domain_size, rows);
+            return finish(offsets, payload, first.domain_size, rows, workspace);
         }
         let mut keys = temporary::<u32>(stream, rows)?;
         let mut order = temporary::<u32>(stream, rows)?;
@@ -585,7 +654,7 @@ impl<'pool> RangeBuilder<'pool> {
             release(stream, buffer)?;
         }
         release(stream, offsets)?;
-        finish(packed_offsets, payload, first.domain_size, rows)
+        finish(packed_offsets, payload, first.domain_size, rows, workspace)
     }
 }
 
@@ -594,12 +663,19 @@ fn finish(
     payload: Vec<EncodedColumn>,
     domain: usize,
     len: usize,
+    workspace: &mut RangeWorkspace,
 ) -> Result<RangeProvider> {
-    let views = payload
-        .iter()
-        .map(|column| unsafe { column.view() })
-        .collect::<Vec<_>>();
-    let payload_views = Buffer::from_host(offsets.pool().clone(), &views)?;
+    workspace.host_views.clear();
+    workspace
+        .host_views
+        .extend(payload.iter().map(|column| unsafe { column.view() }));
+    let views = &workspace.host_views;
+    if Arc::strong_count(&workspace.payload_views) != 1 {
+        workspace.payload_views = Arc::new(Buffer::from_host_async(offsets.pool().clone(), views)?);
+    } else {
+        unsafe { workspace.payload_views.write_async(views)? };
+    }
+    let payload_views = workspace.payload_views.clone();
     Ok(RangeProvider {
         offsets,
         payload,
@@ -651,13 +727,71 @@ fn key_bits(domain: usize) -> u32 {
         usize::BITS - (domain - 1).leading_zeros()
     }
 }
-fn temporary<T: DeviceCopy>(stream: &Arc<CudaStream>, len: usize) -> Result<DeviceBuffer<T>> {
-    Ok(unsafe { DeviceBuffer::uninitialized_async(stream, len)? })
+struct TemporaryCache<T: DeviceCopy> {
+    stream: Arc<CudaStream>,
+    buffers: Vec<DeviceBuffer<T>>,
+}
+impl<T: DeviceCopy> Drop for TemporaryCache<T> {
+    fn drop(&mut self) {
+        for buffer in self.buffers.drain(..) {
+            self.stream
+                .context()
+                .record_err(unsafe { buffer.drop_async(&self.stream) });
+        }
+    }
+}
+thread_local! {
+    static TEMP_U32: RefCell<Option<TemporaryCache<u32>>> = const { RefCell::new(None) };
+    static TEMP_U64: RefCell<Option<TemporaryCache<u64>>> = const { RefCell::new(None) };
+}
+trait TemporaryElement: DeviceCopy + 'static {
+    fn cache() -> &'static std::thread::LocalKey<RefCell<Option<TemporaryCache<Self>>>>;
+}
+impl TemporaryElement for u32 {
+    fn cache() -> &'static std::thread::LocalKey<RefCell<Option<TemporaryCache<Self>>>> {
+        &TEMP_U32
+    }
+}
+impl TemporaryElement for u64 {
+    fn cache() -> &'static std::thread::LocalKey<RefCell<Option<TemporaryCache<Self>>>> {
+        &TEMP_U64
+    }
+}
+fn temporary<T: TemporaryElement>(stream: &Arc<CudaStream>, len: usize) -> Result<DeviceBuffer<T>> {
+    T::cache().with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache
+            .as_ref()
+            .is_none_or(|cache| !Arc::ptr_eq(&cache.stream, stream))
+        {
+            *cache = Some(TemporaryCache {
+                stream: stream.clone(),
+                buffers: Vec::new(),
+            });
+            stream.context().bind_to_thread()?;
+        }
+        let buffers = &mut cache.as_mut().unwrap().buffers;
+        if let Some(index) = buffers.iter().position(|buffer| buffer.len() == len) {
+            return Ok(buffers.swap_remove(index));
+        }
+        Ok(unsafe { DeviceBuffer::uninitialized_async(stream, len)? })
+    })
 }
 fn pointer<T: DeviceCopy>(buffer: &DeviceBuffer<T>) -> *mut T {
     buffer.cu_deviceptr() as *mut T
 }
-fn release<T: DeviceCopy>(stream: &CudaStream, buffer: DeviceBuffer<T>) -> Result<()> {
-    unsafe { buffer.drop_async(stream)? };
-    Ok(())
+fn release<T: TemporaryElement>(stream: &CudaStream, buffer: DeviceBuffer<T>) -> Result<()> {
+    T::cache().with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some(cache) = cache.as_mut() {
+            if cache.stream.cu_stream() == stream.cu_stream()
+                && Arc::ptr_eq(cache.stream.context(), stream.context())
+            {
+                cache.buffers.push(buffer);
+                return Ok(());
+            }
+        }
+        unsafe { buffer.drop_async(stream)? };
+        Ok(())
+    })
 }

@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use cq_lang_sequence::{Analysis, Capability, Guard, Len, Monoid, OutputProtocol, Program, Term};
-use cq_lang_structures::physical::{Operator, symbol_name};
+use cq_lang_structures::physical::{symbol_name, Operator};
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote};
 
@@ -1284,11 +1284,11 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                 quote! {
                     let mut __cq_canon=::cq_gpu_sequence_runtime::canon::PackedCanon::new(&__cq_pool,#store_length)?;
                     let __cq_keys=unsafe {__cq_canon.canonicalize(&#output_keys,#store_length,__cq_key_bits)?};
-                    let __cq_result=__cq_keys.into_columns(&__cq_fields,__cq_dictionary,__cq_statuses)?;
+                    let __cq_result=__cq_output_adapter.borrow_mut().unpack_columns(__cq_keys,&__cq_fields,__cq_dictionary,__cq_statuses)?;
                 }
             } else {
                 quote! {
-                    let __cq_result=::cq_gpu_sequence_runtime::canon::packed_columns(
+                    let __cq_result=__cq_output_adapter.borrow_mut().packed_columns(
                         #output_keys,#store_length,&__cq_fields,__cq_dictionary,__cq_statuses)?;
                 }
             });
@@ -1318,6 +1318,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
     let output =
         output.ok_or_else(|| error("checked GPU output is not published by a dispatch"))?;
     let setup = &compiler.rows.setup;
+    let build = &compiler.rows.build;
     syn::parse2(quote!({
         #[::cuda_device::cuda_module]
         mod __cq_sequence_kernels {
@@ -1343,6 +1344,10 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                 *cache=Some((__cq_pool.context().clone(),module.clone()));
                 Ok(module)
             })?;
+            let __cq_timing_wall = ::std::time::Instant::now();
+            let __cq_timing_start = __cq_pool.stream().record_event(
+                Some(::cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
+            #build
             #(#launches)*
             let __cq_timing_expanded=__cq_pool.stream().record_event(
                 Some(::cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;

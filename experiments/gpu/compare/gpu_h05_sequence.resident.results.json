@@ -2,310 +2,465 @@
   {
     "answer_count": 7242,
     "build_ms": {
-      "median": 2.5775680541992188,
-      "min": 2.568959951400757
+      "median": 2.582592010498047,
+      "min": 2.5783040523529053
     },
     "calls": [
       {
-        "build_ms": 141.66415405273438,
-        "dedup_ms": 4.69536018371582,
-        "download_ms": 0.5375500000000001,
+        "build_ms": 140.20162963867188,
+        "dedup_ms": 4.718912124633789,
+        "download_ms": 0.525085,
         "exact": true,
         "fastlanes_bytes": 173832,
         "iteration": 0,
-        "kernel_ms": 4.253376007080078,
+        "kernel_ms": 4.130496025085449,
         "raw_bytes": 173832,
-        "total_ms": 150.61289978027344,
-        "wall_ms": 150.686022,
+        "total_ms": 149.05104064941406,
+        "wall_ms": 149.124696,
         "warmup": true
       },
       {
-        "build_ms": 2.6369919776916504,
-        "dedup_ms": 0.1483519971370697,
-        "download_ms": 0.304924,
+        "build_ms": 2.619424104690552,
+        "dedup_ms": 0.1483840048313141,
+        "download_ms": 0.29648800000000003,
         "exact": true,
         "fastlanes_bytes": 173832,
         "iteration": 1,
-        "kernel_ms": 0.19468800723552704,
+        "kernel_ms": 0.3287679851055145,
         "raw_bytes": 173832,
-        "total_ms": 2.980031967163086,
-        "wall_ms": 3.043672,
+        "total_ms": 3.096575975418091,
+        "wall_ms": 3.160924,
         "warmup": false
       },
       {
-        "build_ms": 2.5800960063934326,
-        "dedup_ms": 0.1480640023946762,
-        "download_ms": 0.294684,
+        "build_ms": 2.5783040523529053,
+        "dedup_ms": 0.14720000326633453,
+        "download_ms": 0.286258,
         "exact": true,
         "fastlanes_bytes": 173832,
         "iteration": 2,
-        "kernel_ms": 0.19599999487400055,
+        "kernel_ms": 0.3320319950580597,
         "raw_bytes": 173832,
-        "total_ms": 2.92416000366211,
-        "wall_ms": 2.988306,
+        "total_ms": 3.0575358867645264,
+        "wall_ms": 3.121169,
         "warmup": false
       },
       {
-        "build_ms": 2.568959951400757,
-        "dedup_ms": 0.14688000082969666,
-        "download_ms": 0.296207,
+        "build_ms": 2.582592010498047,
+        "dedup_ms": 0.15244799852371216,
+        "download_ms": 0.29236,
         "exact": true,
         "fastlanes_bytes": 173832,
         "iteration": 3,
-        "kernel_ms": 0.19616000354290009,
+        "kernel_ms": 0.3296639919281006,
         "raw_bytes": 173832,
-        "total_ms": 2.9119999408721924,
-        "wall_ms": 2.9752110000000003,
+        "total_ms": 3.064703941345215,
+        "wall_ms": 3.1280409999999996,
         "warmup": false
       },
       {
-        "build_ms": 2.574143886566162,
-        "dedup_ms": 0.14633600413799286,
-        "download_ms": 0.29503599999999996,
+        "build_ms": 2.5806078910827637,
+        "dedup_ms": 0.14723199605941772,
+        "download_ms": 0.286419,
         "exact": true,
         "fastlanes_bytes": 173832,
         "iteration": 4,
-        "kernel_ms": 0.19568000733852384,
+        "kernel_ms": 0.3299520015716553,
         "raw_bytes": 173832,
-        "total_ms": 2.9161601066589355,
-        "wall_ms": 2.983496,
+        "total_ms": 3.0577919483184814,
+        "wall_ms": 3.121188,
         "warmup": false
       },
       {
-        "build_ms": 2.5775680541992188,
-        "dedup_ms": 0.14710399508476257,
-        "download_ms": 0.295777,
+        "build_ms": 2.5952000617980957,
+        "dedup_ms": 0.14800000190734863,
+        "download_ms": 0.28722,
         "exact": true,
         "fastlanes_bytes": 173832,
         "iteration": 5,
-        "kernel_ms": 0.19683200120925903,
+        "kernel_ms": 0.32815998792648315,
         "raw_bytes": 173832,
-        "total_ms": 2.921504020690918,
-        "wall_ms": 2.983566,
+        "total_ms": 3.0713601112365723,
+        "wall_ms": 3.134965,
         "warmup": false
       }
     ],
     "dedup_ms": {
-      "median": 0.14710399508476257,
-      "min": 0.14633600413799286
+      "median": 0.14800000190734863,
+      "min": 0.14720000326633453
     },
     "exact": true,
     "implementation": "cq-gpu-sequence/translate",
     "kernel_ms": {
-      "median": 0.19599999487400055,
-      "min": 0.19468800723552704
+      "median": 0.3296639919281006,
+      "min": 0.32815998792648315
+    },
+    "mode": "retry-correctness",
+    "one_time": {
+      "compressed_bytes": 25215816,
+      "declared_bytes": 127939680,
+      "host_load_ms": 140.587744,
+      "load_encode_ms": 711.868044
+    },
+    "output_capacity": 1024,
+    "plan": "R-N-C-O-L-S",
+    "runs": 5,
+    "samples": {
+      "build_ms": [
+        2.619424104690552,
+        2.5783040523529053,
+        2.582592010498047,
+        2.5806078910827637,
+        2.5952000617980957
+      ],
+      "dedup_ms": [
+        0.1483840048313141,
+        0.14720000326633453,
+        0.15244799852371216,
+        0.14723199605941772,
+        0.14800000190734863
+      ],
+      "kernel_ms": [
+        0.3287679851055145,
+        0.3320319950580597,
+        0.3296639919281006,
+        0.3299520015716553,
+        0.32815998792648315
+      ],
+      "total_ms": [
+        3.096575975418091,
+        3.0575358867645264,
+        3.064703941345215,
+        3.0577919483184814,
+        3.0713601112365723
+      ],
+      "wall_ms": [
+        3.160924,
+        3.121169,
+        3.1280409999999996,
+        3.121188,
+        3.134965
+      ]
+    },
+    "sf": 1,
+    "timing_scope": "Runtime GPU build/kernel/dedup/total timings cover resident input through canonical resident output. One-time manifest/oracle loading and compression, and final answer download, are separate. Provider stores are rebuilt on every call.",
+    "total_ms": {
+      "median": 3.064703941345215,
+      "min": 3.0575358867645264
+    },
+    "wall_ms": {
+      "median": 3.1280409999999996,
+      "min": 3.121169
+    },
+    "warmups": 1
+  },
+  {
+    "answer_count": 7242,
+    "build_ms": {
+      "median": 1.5003199577331543,
+      "min": 1.4988479614257812
+    },
+    "calls": [
+      {
+        "build_ms": 4.542304039001465,
+        "dedup_ms": 0.20108799636363983,
+        "download_ms": 0.54803,
+        "exact": true,
+        "fastlanes_bytes": 173832,
+        "iteration": 0,
+        "kernel_ms": 0.19519999623298645,
+        "raw_bytes": 173832,
+        "total_ms": 4.938591957092285,
+        "wall_ms": 148.403638,
+        "warmup": true
+      },
+      {
+        "build_ms": 1.5069119930267334,
+        "dedup_ms": 0.14211200177669525,
+        "download_ms": 0.29772099999999996,
+        "exact": true,
+        "fastlanes_bytes": 173832,
+        "iteration": 1,
+        "kernel_ms": 0.1937599927186966,
+        "raw_bytes": 173832,
+        "total_ms": 1.84278404712677,
+        "wall_ms": 1.908264,
+        "warmup": false
+      },
+      {
+        "build_ms": 1.502943992614746,
+        "dedup_ms": 0.13814400136470795,
+        "download_ms": 0.295737,
+        "exact": true,
+        "fastlanes_bytes": 173832,
+        "iteration": 2,
+        "kernel_ms": 0.1905599981546402,
+        "raw_bytes": 173832,
+        "total_ms": 1.8316479921340945,
+        "wall_ms": 1.894548,
+        "warmup": false
+      },
+      {
+        "build_ms": 1.5003199577331543,
+        "dedup_ms": 0.1390399932861328,
+        "download_ms": 0.310936,
+        "exact": true,
+        "fastlanes_bytes": 173832,
+        "iteration": 3,
+        "kernel_ms": 0.18863999843597412,
+        "raw_bytes": 173832,
+        "total_ms": 1.8279999494552612,
+        "wall_ms": 1.888566,
+        "warmup": false
+      },
+      {
+        "build_ms": 1.5000319480895996,
+        "dedup_ms": 0.13814400136470795,
+        "download_ms": 0.308591,
+        "exact": true,
+        "fastlanes_bytes": 173832,
+        "iteration": 4,
+        "kernel_ms": 0.19260799884796145,
+        "raw_bytes": 173832,
+        "total_ms": 1.8307839632034304,
+        "wall_ms": 1.892945,
+        "warmup": false
+      },
+      {
+        "build_ms": 1.4988479614257812,
+        "dedup_ms": 0.13788799941539764,
+        "download_ms": 0.294554,
+        "exact": true,
+        "fastlanes_bytes": 173832,
+        "iteration": 5,
+        "kernel_ms": 0.19183999300003052,
+        "raw_bytes": 173832,
+        "total_ms": 1.8285759687423704,
+        "wall_ms": 1.889429,
+        "warmup": false
+      }
+    ],
+    "dedup_ms": {
+      "median": 0.13814400136470795,
+      "min": 0.13788799941539764
+    },
+    "exact": true,
+    "implementation": "cq-gpu-sequence/translate",
+    "kernel_ms": {
+      "median": 0.19183999300003052,
+      "min": 0.18863999843597412
     },
     "mode": "benchmark",
     "one_time": {
       "compressed_bytes": 25215816,
       "declared_bytes": 127939680,
-      "host_load_ms": 145.13196,
-      "load_encode_ms": 707.944709
+      "host_load_ms": 147.875747,
+      "load_encode_ms": 707.1049499999999
     },
     "output_capacity": 1048576,
     "plan": "R-N-C-O-L-S",
     "runs": 5,
     "samples": {
       "build_ms": [
-        2.6369919776916504,
-        2.5800960063934326,
-        2.568959951400757,
-        2.574143886566162,
-        2.5775680541992188
+        1.5069119930267334,
+        1.502943992614746,
+        1.5003199577331543,
+        1.5000319480895996,
+        1.4988479614257812
       ],
       "dedup_ms": [
-        0.1483519971370697,
-        0.1480640023946762,
-        0.14688000082969666,
-        0.14633600413799286,
-        0.14710399508476257
+        0.14211200177669525,
+        0.13814400136470795,
+        0.1390399932861328,
+        0.13814400136470795,
+        0.13788799941539764
       ],
       "kernel_ms": [
-        0.19468800723552704,
-        0.19599999487400055,
-        0.19616000354290009,
-        0.19568000733852384,
-        0.19683200120925903
+        0.1937599927186966,
+        0.1905599981546402,
+        0.18863999843597412,
+        0.19260799884796145,
+        0.19183999300003052
       ],
       "total_ms": [
-        2.980031967163086,
-        2.92416000366211,
-        2.9119999408721924,
-        2.9161601066589355,
-        2.921504020690918
+        1.84278404712677,
+        1.8316479921340945,
+        1.8279999494552612,
+        1.8307839632034304,
+        1.8285759687423704
       ],
       "wall_ms": [
-        3.043672,
-        2.988306,
-        2.9752110000000003,
-        2.983496,
-        2.983566
+        1.908264,
+        1.894548,
+        1.888566,
+        1.892945,
+        1.889429
       ]
     },
     "sf": 1,
     "timing_scope": "Runtime GPU build/kernel/dedup/total timings cover resident input through canonical resident output. One-time manifest/oracle loading and compression, and final answer download, are separate. Provider stores are rebuilt on every call.",
     "total_ms": {
-      "median": 2.921504020690918,
-      "min": 2.9119999408721924
+      "median": 1.8307839632034304,
+      "min": 1.8279999494552612
     },
     "wall_ms": {
-      "median": 2.983566,
-      "min": 2.9752110000000003
+      "median": 1.892945,
+      "min": 1.888566
     },
     "warmups": 1
   },
   {
     "answer_count": 72983,
     "build_ms": {
-      "median": 33.98704147338867,
-      "min": 33.92019271850586
+      "median": 8.965696334838867,
+      "min": 8.957887649536133
     },
     "calls": [
       {
-        "build_ms": 201.51600646972656,
-        "dedup_ms": 6.747647762298584,
-        "download_ms": 5.317198,
+        "build_ms": 13.49120044708252,
+        "dedup_ms": 0.32630398869514465,
+        "download_ms": 4.70458,
         "exact": true,
         "fastlanes_bytes": 1751640,
         "iteration": 0,
-        "kernel_ms": 3.9828479290008545,
+        "kernel_ms": 1.174880027770996,
         "raw_bytes": 1751640,
-        "total_ms": 212.24649047851562,
-        "wall_ms": 212.39835200000002,
+        "total_ms": 14.99238395690918,
+        "wall_ms": 178.48978400000001,
         "warmup": true
       },
       {
-        "build_ms": 34.01808166503906,
-        "dedup_ms": 0.20380799472332,
-        "download_ms": 4.395340999999999,
+        "build_ms": 8.973440170288086,
+        "dedup_ms": 0.18783999979496002,
+        "download_ms": 3.241107,
         "exact": true,
         "fastlanes_bytes": 1751640,
         "iteration": 1,
-        "kernel_ms": 1.176543951034546,
+        "kernel_ms": 1.1587200164794922,
         "raw_bytes": 1751640,
-        "total_ms": 35.398433685302734,
-        "wall_ms": 35.474148,
+        "total_ms": 10.319999694824219,
+        "wall_ms": 10.390478,
         "warmup": false
       },
       {
-        "build_ms": 33.98704147338867,
-        "dedup_ms": 0.19843199849128723,
-        "download_ms": 3.781766,
+        "build_ms": 8.963871955871582,
+        "dedup_ms": 0.18531200289726257,
+        "download_ms": 2.523623,
         "exact": true,
         "fastlanes_bytes": 1751640,
         "iteration": 2,
-        "kernel_ms": 1.1718720197677612,
+        "kernel_ms": 1.1561280488967896,
         "raw_bytes": 1751640,
-        "total_ms": 35.35734558105469,
-        "wall_ms": 35.424743,
+        "total_ms": 10.305312156677246,
+        "wall_ms": 10.369527999999999,
         "warmup": false
       },
       {
-        "build_ms": 33.99862289428711,
-        "dedup_ms": 0.20156799256801605,
-        "download_ms": 3.563237,
+        "build_ms": 8.967967987060547,
+        "dedup_ms": 0.18876799941062927,
+        "download_ms": 2.445112,
         "exact": true,
         "fastlanes_bytes": 1751640,
         "iteration": 3,
-        "kernel_ms": 1.1818560361862183,
+        "kernel_ms": 1.1577919721603394,
         "raw_bytes": 1751640,
-        "total_ms": 35.382049560546875,
-        "wall_ms": 35.451044,
+        "total_ms": 10.314528465270996,
+        "wall_ms": 10.379047,
         "warmup": false
       },
       {
-        "build_ms": 33.948062896728516,
-        "dedup_ms": 0.19673599302768707,
-        "download_ms": 3.297298,
+        "build_ms": 8.965696334838867,
+        "dedup_ms": 0.18592000007629395,
+        "download_ms": 2.4034120000000003,
         "exact": true,
         "fastlanes_bytes": 1751640,
         "iteration": 4,
-        "kernel_ms": 1.174399971961975,
+        "kernel_ms": 1.152448058128357,
         "raw_bytes": 1751640,
-        "total_ms": 35.31919860839844,
-        "wall_ms": 35.398533,
+        "total_ms": 10.30406379699707,
+        "wall_ms": 10.369137,
         "warmup": false
       },
       {
-        "build_ms": 33.92019271850586,
-        "dedup_ms": 0.1956160068511963,
-        "download_ms": 3.0735889999999997,
+        "build_ms": 8.957887649536133,
+        "dedup_ms": 0.1847359985113144,
+        "download_ms": 2.4098650000000004,
         "exact": true,
         "fastlanes_bytes": 1751640,
         "iteration": 5,
-        "kernel_ms": 1.1724480390548706,
+        "kernel_ms": 1.1536320447921753,
         "raw_bytes": 1751640,
-        "total_ms": 35.28825759887695,
-        "wall_ms": 35.353817,
+        "total_ms": 10.296256065368652,
+        "wall_ms": 10.36041,
         "warmup": false
       }
     ],
     "dedup_ms": {
-      "median": 0.19843199849128723,
-      "min": 0.1956160068511963
+      "median": 0.18592000007629395,
+      "min": 0.1847359985113144
     },
     "exact": true,
     "implementation": "cq-gpu-sequence/translate",
     "kernel_ms": {
-      "median": 1.174399971961975,
-      "min": 1.1718720197677612
+      "median": 1.1561280488967896,
+      "min": 1.152448058128357
     },
     "mode": "benchmark",
     "one_time": {
       "compressed_bytes": 280161352,
       "declared_bytes": 1278977072,
-      "host_load_ms": 1485.520812,
-      "load_encode_ms": 7778.2400689999995
+      "host_load_ms": 1438.9607099999998,
+      "load_encode_ms": 7869.16855
     },
     "output_capacity": 1048576,
     "plan": "R-N-C-O-L-S",
     "runs": 5,
     "samples": {
       "build_ms": [
-        34.01808166503906,
-        33.98704147338867,
-        33.99862289428711,
-        33.948062896728516,
-        33.92019271850586
+        8.973440170288086,
+        8.963871955871582,
+        8.967967987060547,
+        8.965696334838867,
+        8.957887649536133
       ],
       "dedup_ms": [
-        0.20380799472332,
-        0.19843199849128723,
-        0.20156799256801605,
-        0.19673599302768707,
-        0.1956160068511963
+        0.18783999979496002,
+        0.18531200289726257,
+        0.18876799941062927,
+        0.18592000007629395,
+        0.1847359985113144
       ],
       "kernel_ms": [
-        1.176543951034546,
-        1.1718720197677612,
-        1.1818560361862183,
-        1.174399971961975,
-        1.1724480390548706
+        1.1587200164794922,
+        1.1561280488967896,
+        1.1577919721603394,
+        1.152448058128357,
+        1.1536320447921753
       ],
       "total_ms": [
-        35.398433685302734,
-        35.35734558105469,
-        35.382049560546875,
-        35.31919860839844,
-        35.28825759887695
+        10.319999694824219,
+        10.305312156677246,
+        10.314528465270996,
+        10.30406379699707,
+        10.296256065368652
       ],
       "wall_ms": [
-        35.474148,
-        35.424743,
-        35.451044,
-        35.398533,
-        35.353817
+        10.390478,
+        10.369527999999999,
+        10.379047,
+        10.369137,
+        10.36041
       ]
     },
     "sf": 10,
     "timing_scope": "Runtime GPU build/kernel/dedup/total timings cover resident input through canonical resident output. One-time manifest/oracle loading and compression, and final answer download, are separate. Provider stores are rebuilt on every call.",
     "total_ms": {
-      "median": 35.35734558105469,
-      "min": 35.28825759887695
+      "median": 10.305312156677246,
+      "min": 10.296256065368652
     },
     "wall_ms": {
-      "median": 35.424743,
-      "min": 35.353817
+      "median": 10.369527999999999,
+      "min": 10.36041
     },
     "warmups": 1
   }

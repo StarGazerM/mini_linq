@@ -5,7 +5,7 @@
 use crate::Result;
 use cq_gpu_runtime::{Bounds, Buffer, DeviceColumns, Dictionary, EncodedColumn, Pool, RowCodec};
 use cuda_core::{CudaContext, DeviceBuffer, DeviceCopy, LaunchConfig1D};
-use gpu_device_columns::{OutputCount, Table};
+use gpu_device_columns::{ColumnView, OutputCount, Table};
 use rccl_cub::{DeviceRadixSortBufferWorkspace, DoubleBuffer};
 use rccl_thrust::prelude::*;
 use std::{cell::RefCell, rc::Rc, sync::Arc};
@@ -35,7 +35,26 @@ struct CanonScratch {
     pool: Arc<Pool>,
     sort: DeviceRadixSortBufferWorkspace,
     selected: Option<DeviceBuffer<u64>>,
+    first: Option<DeviceBuffer<u64>>,
+    alternate: Option<DeviceBuffer<u64>>,
     capacity: usize,
+}
+
+impl CanonScratch {
+    fn prepare_keys(&mut self, rows: usize) -> Result<()> {
+        // DoubleBuffer uses each allocation's full length as the live sort
+        // domain. Keep exact extents rather than sorting spare capacity.
+        for buffer in [&mut self.first, &mut self.alternate] {
+            if buffer.as_ref().is_none_or(|buffer| buffer.len() != rows) {
+                let replacement =
+                    unsafe { DeviceBuffer::uninitialized_async(self.pool.stream(), rows)? };
+                if let Some(previous) = buffer.replace(replacement) {
+                    unsafe { previous.drop_async(self.pool.stream())? };
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 impl Drop for CanonScratch {
@@ -55,6 +74,11 @@ impl Drop for CanonScratch {
         release(&self.pool, counters);
         if let Some(selected) = self.selected.take() {
             let _ = unsafe { selected.drop_async(self.pool.stream()) };
+        }
+        for buffer in [&mut self.first, &mut self.alternate] {
+            if let Some(buffer) = buffer.take() {
+                let _ = unsafe { buffer.drop_async(self.pool.stream()) };
+            }
         }
     }
 }
@@ -87,9 +111,9 @@ impl PackedField {
 
 /// Reusable RCCL programs, sort controls and count scratch on one runtime pool.
 /// The fixed capacity is supplied by generated host code, not chosen here.
-/// Sort/count scratch is cached per thread across providers sharing the same
-/// pool, reusing a larger allocation when it fits. Individual results own their
-/// allocations and survive reuse or destruction of this provider.
+/// Sort/count and exact-live-size key scratch are cached per thread across
+/// providers sharing the same pool. Sort controls reuse a larger allocation
+/// when it fits; results own their allocations and survive provider reuse.
 pub struct PackedCanon<'pool> {
     pool: &'pool Arc<Pool>,
     cub: rccl_cub::cuda::Program<'pool>,
@@ -122,6 +146,8 @@ impl<'pool> PackedCanon<'pool> {
                     pool: pool.clone(),
                     sort,
                     selected: None,
+                    first: None,
+                    alternate: None,
                     capacity,
                 };
                 scratch.selected =
@@ -177,13 +203,17 @@ impl<'pool> PackedCanon<'pool> {
         let metadata = Arc::new(Buffer::<OutputCount>::zeroed(self.pool.clone(), 1)?);
         if rows != 0 {
             let scratch = self.scratch.as_mut().expect("live packed canon scratch");
+            scratch.prepare_keys(rows)?;
             let selected = scratch
                 .selected
                 .as_mut()
                 .expect("packed canon count scratch");
             let stream = self.pool.stream();
-            let mut first = unsafe { DeviceBuffer::<u64>::uninitialized_async(stream, rows)? };
-            let mut alternate = unsafe { DeviceBuffer::<u64>::uninitialized_async(stream, rows)? };
+            let first = scratch.first.as_mut().expect("packed canon first scratch");
+            let alternate = scratch
+                .alternate
+                .as_mut()
+                .expect("packed canon alternate scratch");
             unsafe {
                 cuda_core::memory::memcpy_dtod_async(
                     first.cu_deviceptr(),
@@ -194,7 +224,7 @@ impl<'pool> PackedCanon<'pool> {
             }
             let launch = self.cub.on(stream)?;
             let execution = self.thrust.par_in(stream, self.pool.resource())?;
-            let mut buffers = DoubleBuffer::new(&mut first, &mut alternate)
+            let mut buffers = DoubleBuffer::new(first, alternate)
                 .ok_or("packed canon radix buffer extents differ")?;
             if key_bits != 0 {
                 rccl_cub::device_radix_sort_keys_buffer(
@@ -223,8 +253,6 @@ impl<'pool> PackedCanon<'pool> {
                     std::mem::size_of::<u64>(),
                     stream.cu_stream(),
                 )?;
-                first.drop_async(stream)?;
-                alternate.drop_async(stream)?;
             }
         }
         Ok(CanonicalKeys { keys, metadata })
@@ -288,8 +316,8 @@ impl CanonicalKeys {
     /// Unpack the recorded fields into native i64 columns on the same stream.
     /// The output retains its own device count, dictionary and ancestor status
     /// owners, independently of the packed result and provider. No key data or
-    /// logical count is downloaded. Descriptor upload follows DeviceColumns'
-    /// existing synchronous `Buffer::from_host` convention.
+    /// logical count is downloaded. Metadata and descriptor uploads are
+    /// stream ordered and do not synchronize the host.
     ///
     /// Field values must use the supplied dictionary's encoding for any
     /// dictionary-valued columns. `statuses` must include all consumed ancestor
@@ -300,15 +328,8 @@ impl CanonicalKeys {
         dictionary: Arc<Dictionary<'data>>,
         statuses: Vec<Arc<Buffer<OutputCount>>>,
     ) -> Result<DeviceColumns<'data, Row>> {
-        let capacity = self.capacity();
-        unpack_columns(
-            self.keys,
-            self.metadata,
-            capacity,
-            fields,
-            dictionary,
-            statuses,
-        )
+        PackedColumnsAdapter::new(self.keys.pool().clone(), fields.len())?
+            .unpack_columns(self, fields, dictionary, statuses)
     }
 }
 
@@ -324,88 +345,174 @@ pub fn packed_columns<'data, Row: RowCodec<'data>>(
     dictionary: Arc<Dictionary<'data>>,
     statuses: Vec<Arc<Buffer<OutputCount>>>,
 ) -> Result<DeviceColumns<'data, Row>> {
-    if rows > keys.len() {
-        return Err("packed output live length exceeds key capacity".into());
-    }
-    let metadata = Arc::new(Buffer::from_host(
-        keys.pool().clone(),
-        &[OutputCount {
-            rows: rows as u64,
-            error: 0,
-            padding: 0,
-        }],
-    )?);
-    unpack_columns(keys, metadata, rows, fields, dictionary, statuses)
+    PackedColumnsAdapter::new(keys.pool().clone(), fields.len())?
+        .packed_columns(keys, rows, fields, dictionary, statuses)
 }
 
-/// Both output paths use the same count-gated unpacking and ownership rules.
-fn unpack_columns<'data, Row: RowCodec<'data>>(
-    keys: Buffer<u64>,
+/// Setup-time unpacking resources for one output width and runtime pool.
+///
+/// Construction warms the canon module and reserves count/view buffers.
+/// Uploads reuse those buffers only while their Arcs are unique; published
+/// outputs retain immutable storage even across later calls or adapter drop.
+/// Generated programs can retain this adapter outside their timed dispatch.
+pub struct PackedColumnsAdapter {
+    pool: Arc<Pool>,
+    module: Rc<canon_kernels::LoadedModule>,
     metadata: Arc<Buffer<OutputCount>>,
-    capacity: usize,
-    fields: &[PackedField],
-    dictionary: Arc<Dictionary<'data>>,
-    statuses: Vec<Arc<Buffer<OutputCount>>>,
-) -> Result<DeviceColumns<'data, Row>> {
-    if fields.len() != Row::WIDTH {
-        return Err("packed field count differs from output row width".into());
+    views: Arc<Buffer<ColumnView>>,
+    host_views: Vec<ColumnView>,
+}
+
+impl PackedColumnsAdapter {
+    pub fn new(pool: Arc<Pool>, width: usize) -> Result<Self> {
+        let module = module(&pool)?;
+        // These private buffers are initialized by upload before publication.
+        let metadata = Arc::new(unsafe { Buffer::uninitialized(pool.clone(), 1)? });
+        let views = Arc::new(unsafe { Buffer::uninitialized(pool.clone(), width)? });
+        Ok(Self {
+            pool,
+            module,
+            metadata,
+            views,
+            host_views: Vec::with_capacity(width),
+        })
     }
-    let pool = keys.pool().clone();
-    if statuses
-        .iter()
-        .any(|status| !Arc::ptr_eq(status.pool(), &pool))
-    {
-        return Err("packed output ancestor statuses must share the output pool".into());
+
+    pub fn pool(&self) -> &Arc<Pool> {
+        &self.pool
     }
-    let bounds = fields
-        .iter()
-        .map(|field| field.bounds())
-        .collect::<Result<Vec<_>>>()?;
-    let mut columns = Vec::with_capacity(fields.len());
-    let module = if fields.is_empty() || capacity == 0 {
-        None
-    } else {
-        Some(module(&pool)?)
-    };
-    for (field, &bound) in fields.iter().zip(&bounds) {
-        let column = unsafe { Buffer::<i64>::uninitialized(pool.clone(), capacity)? };
-        if let Some(module) = &module {
-            let launch = LaunchConfig1D::new(capacity.div_ceil(256).clamp(1, 2272) as u32, 256, 0);
-            module.unpack_field(
-                pool.stream(),
-                &module.prepare_unpack_field(launch)?,
-                keys.ptr(),
-                metadata.ptr().cast(),
-                capacity as u64,
-                field.shift,
-                field.bits,
-                field.base,
-                column.ptr(),
-            )?;
+
+    /// Adapt a live prefix without changing its order or multiplicity.
+    /// Fields and ancestor statuses follow `CanonicalKeys::into_columns`.
+    pub fn packed_columns<'data, Row: RowCodec<'data>>(
+        &mut self,
+        keys: Buffer<u64>,
+        rows: usize,
+        fields: &[PackedField],
+        dictionary: Arc<Dictionary<'data>>,
+        statuses: Vec<Arc<Buffer<OutputCount>>>,
+    ) -> Result<DeviceColumns<'data, Row>> {
+        if rows > keys.len() {
+            return Err("packed output live length exceeds key capacity".into());
         }
-        columns.push(Arc::new(EncodedColumn::from_plain_buffer(
-            column,
-            metadata.clone(),
-            0,
-            bound,
-        )?));
+        if !Arc::ptr_eq(keys.pool(), &self.pool) {
+            return Err("packed output keys must share the adapter pool and stream".into());
+        }
+        upload_unique(
+            &mut self.metadata,
+            &[OutputCount {
+                rows: rows as u64,
+                error: 0,
+                padding: 0,
+            }],
+        )?;
+        self.decode_columns(
+            keys,
+            self.metadata.clone(),
+            rows,
+            fields,
+            dictionary,
+            statuses,
+        )
     }
-    let host_views: Vec<_> = columns
-        .iter()
-        .map(|column| unsafe { column.view() })
-        .collect();
-    let views = Arc::new(Buffer::from_host(pool.clone(), &host_views)?);
-    let table = Table {
-        columns,
-        views,
-        metadata,
-        capacity,
-        bounds,
-        statuses,
-    };
-    // Every raw view/count pointer is retained by the table, all columns
-    // have the same gated capacity, and decoding is ordered before use.
-    Ok(unsafe { DeviceColumns::from_parts(table, dictionary, pool) })
+
+    /// Unpack canonical keys without downloading their device-resident count.
+    /// The result owns its columns and retains the original count and statuses.
+    pub fn unpack_columns<'data, Row: RowCodec<'data>>(
+        &mut self,
+        keys: CanonicalKeys,
+        fields: &[PackedField],
+        dictionary: Arc<Dictionary<'data>>,
+        statuses: Vec<Arc<Buffer<OutputCount>>>,
+    ) -> Result<DeviceColumns<'data, Row>> {
+        let capacity = keys.capacity();
+        self.decode_columns(
+            keys.keys,
+            keys.metadata,
+            capacity,
+            fields,
+            dictionary,
+            statuses,
+        )
+    }
+
+    fn decode_columns<'data, Row: RowCodec<'data>>(
+        &mut self,
+        keys: Buffer<u64>,
+        metadata: Arc<Buffer<OutputCount>>,
+        capacity: usize,
+        fields: &[PackedField],
+        dictionary: Arc<Dictionary<'data>>,
+        statuses: Vec<Arc<Buffer<OutputCount>>>,
+    ) -> Result<DeviceColumns<'data, Row>> {
+        if fields.len() != Row::WIDTH || fields.len() != self.views.len() {
+            return Err("packed field count differs from output row or adapter width".into());
+        }
+        if !Arc::ptr_eq(keys.pool(), &self.pool) {
+            return Err("packed output keys must share the adapter pool and stream".into());
+        }
+        if statuses
+            .iter()
+            .any(|status| !Arc::ptr_eq(status.pool(), &self.pool))
+        {
+            return Err("packed output ancestor statuses must share the output pool".into());
+        }
+        let bounds = fields
+            .iter()
+            .map(|field| field.bounds())
+            .collect::<Result<Vec<_>>>()?;
+        let mut columns = Vec::with_capacity(fields.len());
+        for (field, &bound) in fields.iter().zip(&bounds) {
+            let column = unsafe { Buffer::<i64>::uninitialized(self.pool.clone(), capacity)? };
+            if capacity != 0 {
+                let launch =
+                    LaunchConfig1D::new(capacity.div_ceil(256).clamp(1, 2272) as u32, 256, 0);
+                self.module.unpack_field(
+                    self.pool.stream(),
+                    &self.module.prepare_unpack_field(launch)?,
+                    keys.ptr(),
+                    metadata.ptr().cast(),
+                    capacity as u64,
+                    field.shift,
+                    field.bits,
+                    field.base,
+                    column.ptr(),
+                )?;
+            }
+            columns.push(Arc::new(EncodedColumn::from_plain_buffer(
+                column,
+                metadata.clone(),
+                0,
+                bound,
+            )?));
+        }
+        self.host_views.clear();
+        self.host_views
+            .extend(columns.iter().map(|column| unsafe { column.view() }));
+        upload_unique(&mut self.views, &self.host_views)?;
+        let table = Table {
+            columns,
+            views: self.views.clone(),
+            metadata,
+            capacity,
+            bounds,
+            statuses,
+        };
+        // Every raw view/count pointer is retained by the table, all columns
+        // have the same gated capacity, and decoding is ordered before use.
+        Ok(unsafe { DeviceColumns::from_parts(table, dictionary, self.pool.clone()) })
+    }
+}
+
+fn upload_unique<T: DeviceCopy>(slot: &mut Arc<Buffer<T>>, values: &[T]) -> Result<()> {
+    if let Some(buffer) = Arc::get_mut(slot) {
+        // No published owner or weak reference can observe this overwrite.
+        // Outstanding device reads precede the upload on the same pool stream.
+        unsafe { buffer.write_async(values)? };
+    } else {
+        *slot = Arc::new(Buffer::from_host_async(slot.pool().clone(), values)?);
+    }
+    Ok(())
 }
 
 #[cuda_device::cuda_module]

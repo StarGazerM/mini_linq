@@ -7,6 +7,13 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Sequence GPU providers reuse setup-time count owners and payload view tables;
+  asynchronous pinned uploads replace stream-synchronizing descriptor copies.
+  Exact-sized native range/canonicalization scratch persists across calls,
+  while retained output publications keep independent metadata. Generated
+  setup warms kernel modules before the measured build/query/dedup region;
+  recorded layouts, capacities and scheduling decisions are unchanged.
+
 - DOOP and oracle engines split into feature-selected crates over shared
   harness crates; the parallel CLIs no longer rebuild sequential engines.
   Warm rebuilds: DOOP 30.1 → 15.4 s (sequential), 72.2 → 30.2 s (parallel);

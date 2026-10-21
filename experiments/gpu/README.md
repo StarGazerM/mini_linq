@@ -519,6 +519,39 @@ the build); dedup 0.18 ms. The previous program (all Orders indexed, date
 checked during expansion; Region scanned; Supplier by supplier with nation
 scanned) measured 1.91 / 11.45 ms.
 
+**Sequence build-resource reuse** (2026-10-21, RTX 6000 Ada, one warmup
+and five measured runs, exact against `answer.tsv` at both scales):
+
+| Scale / implementation | Build ms | Query kernels ms | Dedup ms | Total ms |
+|---|---:|---:|---:|---:|
+| SF1 reference | 1.574 | 0.170 | 0.132 | 1.873 |
+| SF1 Sequence | 1.501 | 0.194 | 0.138 | 1.834 |
+| SF10 reference | 9.001 | 0.502 | 0.178 | 9.679 |
+| SF10 Sequence | 8.996 | 1.170 | 0.197 | 10.365 |
+
+These are CUDA-event phase medians, including device index construction but
+excluding input loading/encoding, setup-time count owners and module loading,
+and answer download/validation. Total is independently medianed. The generated
+program's recorded layouts, capacities, sorts and launch decisions are unchanged.
+`RangeWorkspace` retains immutable count owners and exclusively reusable payload
+view tables; `PackedColumnsAdapter` does the same for output metadata/views.
+Retained results force fresh owners rather than being overwritten. Host uploads
+use pool-owned pinned staging, while native range/canon scratch retains exact
+live extents across calls.
+
+Nsight, warm timed regions only: median GPU kernel sum 1.625 ms at SF1 and
+10.047 ms at SF10. Both scales have 14 `cuStreamSynchronize`,
+13 copies (6 H2D, 5 D2H, 2 D2D), 7
+`cuMemAllocAsync`, 6 `cuMemFreeAsync`, zero synchronous `cuMemFree`, and zero
+module loads per run. All five process-wide module loads finish before the
+first timed region; dividing that startup total by six does not measure
+per-iteration loading. Remaining stream synchronizations are five RCCL
+`lower_bound` completions, two flagged-selection completions, five explicit
+count readbacks, one adjacent-unique completion, and final completion.
+They include waiting for useful GPU work: the SF10 warm API wait sum is 8.443 ms,
+not an additional 8.443 ms beyond the GPU span. Query expansion (1.170 versus
+0.502 ms) is now the main remaining gap, not index build.
+
 srdatalog's scope was checked on an Nsight timeline: `prepare` ends with the
 host-to-device copies and a device synchronize; the index sorts
 (`DeviceMergeSort*`) and the derived ASIA rules run inside `run`.

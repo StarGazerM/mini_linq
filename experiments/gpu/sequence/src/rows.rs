@@ -1,11 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use cq_lang_sequence::{Analysis, Program};
-use cq_lang_structures::physical::{Definition, Operator, symbol_name};
+use cq_lang_structures::physical::{symbol_name, Definition, Operator};
 use cq_lang_structures::syntax::{
-    EqualityValue,
     algebra::Theta,
     constraint::{Comparison, Constraint, Term},
+    EqualityValue,
 };
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
@@ -41,6 +41,7 @@ pub struct Rows {
     pub width: usize,
     pub columns: BTreeMap<String, usize>,
     pub setup: TokenStream,
+    pub build: TokenStream,
     pub parameters: Vec<(Ident, Type, TokenStream)>,
     pub output_columns: Vec<String>,
     sources: BTreeMap<String, Source>,
@@ -93,6 +94,7 @@ impl Rows {
             })
             .collect::<syn::Result<Vec<_>>>()?;
         let mut setup = TokenStream::new();
+        let mut build = TokenStream::new();
         let mut parameters = Vec::new();
         let mut hosts = BTreeMap::new();
         let mut raw = BTreeMap::new();
@@ -153,10 +155,24 @@ impl Rows {
         }
         setup.extend(quote! {
             let __cq_dictionary = ::std::sync::Arc::new(__cq_dictionary);
-            let __cq_timing_wall = ::std::time::Instant::now();
-            let __cq_timing_start = __cq_pool.stream().record_event(
-                Some(::cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
+            ::std::thread_local! {
+                static __CQ_OUTPUT_ADAPTER: ::std::cell::RefCell<Option<
+                    ::std::rc::Rc<::std::cell::RefCell<::cq_gpu_sequence_runtime::canon::PackedColumnsAdapter>>
+                >> = const { ::std::cell::RefCell::new(None) };
+            }
             let __cq_range_builder = ::cq_gpu_sequence_runtime::RangeBuilder::new(&__cq_pool)?;
+        });
+        let output_width = output_columns.len();
+        setup.extend(quote! {
+            let __cq_output_adapter = __CQ_OUTPUT_ADAPTER.with(|cache| -> ::cq_gpu_sequence_runtime::Result<_> {
+                let mut cache = cache.borrow_mut();
+                if cache.as_ref().is_none_or(|adapter|
+                    !::std::sync::Arc::ptr_eq(adapter.borrow().pool(), &__cq_pool)) {
+                    *cache = Some(::std::rc::Rc::new(::std::cell::RefCell::new(
+                        ::cq_gpu_sequence_runtime::canon::PackedColumnsAdapter::new(__cq_pool.clone(), #output_width)?)));
+                }
+                Ok(cache.as_ref().unwrap().clone())
+            })?;
         });
         let mut sources = BTreeMap::new();
         let mut providers = BTreeMap::new();
@@ -270,11 +286,30 @@ impl Rows {
                 }
                 let owner = format_ident!("__cq_sequence_provider_{}", name);
                 let view = format_ident!("__cq_sequence_provider_view_{}", name);
+                let descriptor = format_ident!("__cq_sequence_descriptor_{}", name);
+                let workspace = format_ident!("__cq_sequence_workspace_{}", name);
+                let cache = format_ident!("__CQ_SEQUENCE_WORKSPACE_{}", name.to_uppercase());
                 setup.extend(quote! {
-                    let #owner = __cq_range_builder.build(&::cq_gpu_sequence_runtime::RangeDescriptor {
+                    let #descriptor = ::cq_gpu_sequence_runtime::RangeDescriptor {
                         key: vec![#(#key_descriptors),*], selection: #selection,
                         payload: vec![#(#payload_descriptors),*],
+                    };
+                    ::std::thread_local! {
+                        static #cache: ::std::cell::RefCell<Option<::std::rc::Rc<::std::cell::RefCell<
+                            ::cq_gpu_sequence_runtime::RangeWorkspace
+                        >>>> = const { ::std::cell::RefCell::new(None) };
+                    }
+                    let #workspace = #cache.with(|cache| -> ::cq_gpu_sequence_runtime::Result<_> {
+                        let mut cache = cache.borrow_mut();
+                        if cache.as_ref().is_none_or(|workspace| !workspace.borrow().matches(&__cq_pool, &#descriptor)) {
+                            *cache = Some(::std::rc::Rc::new(::std::cell::RefCell::new(
+                                ::cq_gpu_sequence_runtime::RangeWorkspace::new(__cq_pool.clone(), &#descriptor)?)));
+                        }
+                        Ok(cache.as_ref().unwrap().clone())
                     })?;
+                });
+                build.extend(quote! {
+                    let #owner = __cq_range_builder.build_with_workspace(&#descriptor, &mut #workspace.borrow_mut())?;
                 });
                 parameters.push((
                     view.clone(),
@@ -321,7 +356,7 @@ impl Rows {
                 let (positions, length) = if origin.selection.is_some() {
                     let selected = format_ident!("__cq_sequence_selected_{}", name);
                     let param = format_ident!("__cq_sequence_selected_rows_{}", name);
-                    setup.extend(quote! {
+                    build.extend(quote! {
                         let #selected = ::cq_gpu_sequence_runtime::select(
                             __cq_pool.clone(), &(#selection).expect("recorded selection"))?;
                     });
@@ -358,7 +393,7 @@ impl Rows {
                 })
             });
         }
-        setup.extend(quote! {
+        build.extend(quote! {
             let __cq_timing_built = __cq_pool.stream().record_event(
                 Some(::cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
         });
@@ -373,6 +408,7 @@ impl Rows {
             width: columns.len().max(1),
             columns,
             setup,
+            build,
             parameters,
             output_columns,
             sources,

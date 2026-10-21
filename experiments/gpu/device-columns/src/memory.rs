@@ -1,10 +1,14 @@
 use crate::Result;
-use cuda_core::{CudaContext, CudaStream, DeviceCopy};
+use cuda_core::{CudaContext, CudaEvent, CudaStream, DeviceCopy, PinnedHostBuffer};
 use rccl_memory::{
     ContiguousDeviceRange, CudaMemoryResource, DeviceAllocator, DeviceBlock, PoolMemoryResource,
     StatisticsMemoryResource,
 };
-use std::{alloc::Layout, marker::PhantomData, sync::Arc};
+use std::{
+    alloc::Layout,
+    marker::PhantomData,
+    sync::{Arc, Mutex},
+};
 
 pub type MemoryResource = StatisticsMemoryResource<PoolMemoryResource<CudaMemoryResource>>;
 
@@ -23,11 +27,16 @@ fn allocation_error(error: rccl_memory::MemoryError) -> Box<dyn std::error::Erro
     }
 }
 
-/// Shared resource and stream ownership, not a cache of relation data.
+/// Shared resources and stream ownership, not a cache of relation data.
+///
+/// Asynchronous uploads share a pinned staging arena. Completed chunks are
+/// reused without waiting; staging is released only when the pool is dropped.
+/// Pool teardown waits for outstanding uploads before freeing their sources.
 pub struct Pool {
     memory: MemoryResource,
     stream: Arc<CudaStream>,
     context: Arc<CudaContext>,
+    uploads: Mutex<UploadStaging>,
 }
 impl Pool {
     pub fn new(device: usize, initial: usize, maximum: usize) -> Result<Arc<Self>> {
@@ -41,6 +50,7 @@ impl Pool {
             memory,
             stream,
             context,
+            uploads: Mutex::new(UploadStaging::default()),
         }))
     }
     pub fn resource(&self) -> &MemoryResource {
@@ -51,6 +61,106 @@ impl Pool {
     }
     pub fn stream(&self) -> &Arc<CudaStream> {
         &self.stream
+    }
+}
+impl Drop for Pool {
+    fn drop(&mut self) {
+        let uploads = self
+            .uploads
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for chunk in uploads.chunks.drain(..) {
+            let completed = if chunk.tracked {
+                chunk.ready.synchronize()
+            } else {
+                // Submission failed before a completion event was recorded.
+                // This teardown-only fallback must cover a possibly live DMA.
+                self.stream.synchronize()
+            };
+            if let Err(error) = completed {
+                self.context.record_err::<()>(Err(error));
+                // Completion is unknown: freeing the source could race DMA.
+                // Retain its context too; only a failed CUDA teardown leaks.
+                std::mem::forget(chunk);
+            }
+        }
+    }
+}
+
+// Like the descriptor staging arena, append into disjoint pinned ranges.
+// Re-recording a chunk's event covers all its uploads on this one stream.
+// Events, rather than host callbacks, permit reuse without a callback barrier
+// and keep CUDA frees off the driver's callback thread.
+#[derive(Default)]
+struct UploadStaging {
+    chunks: Vec<UploadChunk>,
+}
+struct UploadChunk {
+    host: PinnedHostBuffer<u8>,
+    ready: CudaEvent,
+    used: usize,
+    // False means a submission may be live but is not covered by `ready`.
+    tracked: bool,
+}
+impl UploadStaging {
+    fn upload<T: DeviceCopy>(
+        &mut self,
+        pool: &Pool,
+        destination: cuda_core::sys::CUdeviceptr,
+        values: &[T],
+    ) -> Result<()> {
+        let bytes = std::mem::size_of_val(values);
+        pool.context().bind_to_thread()?;
+        for chunk in &mut self.chunks {
+            if !chunk.tracked || bytes > chunk.host.len() {
+                continue;
+            }
+            if bytes > chunk.host.len() - chunk.used {
+                if !chunk.ready.query()? {
+                    continue;
+                }
+                chunk.used = 0;
+            }
+            return chunk.upload(pool.stream(), destination, values);
+        }
+        // Keep the same 64-KiB minimum as descriptor staging. Growth happens
+        // only when no existing chunk has enough unused or completed storage.
+        self.chunks.push(UploadChunk {
+            host: PinnedHostBuffer::zeroed(pool.context(), bytes.max(64 * 1024))?,
+            ready: pool.context().new_event(None)?,
+            used: 0,
+            tracked: true,
+        });
+        self.chunks
+            .last_mut()
+            .unwrap()
+            .upload(pool.stream(), destination, values)
+    }
+}
+impl UploadChunk {
+    fn upload<T: DeviceCopy>(
+        &mut self,
+        stream: &CudaStream,
+        destination: cuda_core::sys::CUdeviceptr,
+        values: &[T],
+    ) -> Result<()> {
+        let bytes = std::mem::size_of_val(values);
+        // Byte copies need no T alignment in the staging arena. No slice into
+        // the arena is exposed, including padding copied from DeviceCopy types.
+        let source = unsafe { self.host.as_mut_ptr().add(self.used) };
+        unsafe {
+            std::ptr::copy_nonoverlapping(values.as_ptr().cast::<u8>(), source, bytes);
+        }
+        // Reserve before submission, even on failure. Never overwrite or free
+        // an uncertain DMA source based on an event from an earlier upload.
+        self.used += bytes;
+        self.tracked = false;
+        unsafe {
+            cuda_core::memory::memcpy_htod_async(destination, source, bytes, stream.cu_stream())?;
+        }
+        self.ready.record(stream)?;
+        self.tracked = true;
+        Ok(())
     }
 }
 
@@ -106,6 +216,10 @@ impl<T: DeviceCopy> Buffer<T> {
             marker: PhantomData,
         })
     }
+    /// Upload host values and wait for this pool's stream to complete.
+    ///
+    /// Use [`Self::from_host_async`] when only subsequent stream-ordered work
+    /// needs the values; that method also accepts short-lived host slices.
     pub fn from_host(pool: Arc<Pool>, values: &[T]) -> Result<Self> {
         let buffer = unsafe { Self::uninitialized(pool, values.len())? };
         if !values.is_empty() {
@@ -120,6 +234,47 @@ impl<T: DeviceCopy> Buffer<T> {
             buffer.pool.stream().synchronize()?;
         }
         Ok(buffer)
+    }
+    /// Allocate and enqueue an upload without synchronizing the stream.
+    ///
+    /// Values are copied into pool-owned pinned staging before returning, so
+    /// the host slice may immediately be changed or dropped. Reads must be
+    /// ordered after this upload on the pool's stream. Dropping the buffer
+    /// does not wait for or free its staging; the pool retains and reuses it.
+    /// First use or growth of the staging arena may allocate pinned memory.
+    pub fn from_host_async(pool: Arc<Pool>, values: &[T]) -> Result<Self> {
+        let buffer = unsafe { Self::uninitialized(pool, values.len())? };
+        // This new allocation has no published aliases, and upload initializes
+        // every element before any subsequent operation on the pool's stream.
+        unsafe { buffer.write_async(values)? };
+        Ok(buffer)
+    }
+    /// Enqueue a prefix overwrite, retaining no borrow of the host slice.
+    ///
+    /// The suffix is unchanged. An empty slice is a no-op; a slice longer than
+    /// the buffer is rejected before submission. Reusable pool-owned pinned
+    /// staging keeps the copied bytes alive and immutable through the transfer,
+    /// including when this buffer is dropped immediately afterwards. No stream
+    /// synchronization is performed; arena growth may allocate pinned memory.
+    ///
+    /// # Safety
+    /// The caller must own the right to overwrite this prefix: neither this
+    /// buffer nor an alias may publish it as immutable while it is overwritten.
+    /// All earlier reads/writes and later consumers of the prefix must be
+    /// ordered around this upload on the pool's stream. A shared reference or
+    /// an `Arc` alone does not establish exclusive access to device contents.
+    pub unsafe fn write_async(&self, values: &[T]) -> Result<()> {
+        if values.len() > self.len {
+            return Err("host upload exceeds buffer capacity".into());
+        }
+        if values.is_empty() {
+            return Ok(());
+        }
+        self.pool
+            .uploads
+            .lock()
+            .map_err(|_| "host upload staging lock poisoned")?
+            .upload(&self.pool, self.cu_deviceptr(), values)
     }
     /// Retain a range without copying its initialized elements.
     ///
