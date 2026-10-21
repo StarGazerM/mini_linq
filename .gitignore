@@ -10,3 +10,4 @@ __pycache__/
 /features/workloads/data/**/large/
 /features/workloads/golden/**/medium.csv
 /features/workloads/golden/**/large.csv
+/experiments/gpu/data/
