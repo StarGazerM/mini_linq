@@ -1,273 +1,320 @@
-\section{Back-end IR: recorded representation, decomposition and kernels (design)}
-\label{sec:backend-ir}
-This section specifies the IR of a new back end, not a verified
-implementation. Its rules are \emph{abstract} in the inventory until a pass
-and a check implement them. It refines Section~\ref{sec:backend}: $R$ gains
-value codes and explicit providers, $E$ keeps strictness, and the control $C$
-that an emitter chooses today is split into recorded terms (index spaces,
-output protocols, kernels) and genuinely free choices (worker assignment).
+\section{Sequence: the back-end level (design)}
+\label{sec:backend-ir}\label{sec:sequence}
+This section is a design, not a verified implementation; its rules are
+\emph{abstract} in the inventory until a pass and a check implement them. It
+adds one level below Structures, \emph{Sequence}, shared by every back end,
+and states what below it is not a level: placement is a grading on Sequence
+terms, the machine is a parameter of that grading, and each emitter is a
+translation. The level names no data structure, no algorithm and no machine.
 
-\subsection{Recorded choices}
-\begin{definition}[Recorded choice]
-An operational alternative is admissible at a level $L$ when the alternatives
-are distinct $L$ terms whose images under $L$'s abstraction are equal, or
-related by $\sqsubseteq$. A checked pass chooses one; its \code{check}
-verifies the premises of the law that equates them. A choice that changes no
-term at any level is \emph{free}: no level may depend on it.
-\end{definition}
-\begin{definition}[Emitter]
-An emitter maps each recorded construct to one fixed template and rejects a
-program containing a construct, or an absent decision, it has no template
-for. It performs no analysis whose result changes the emitted program other
-than reading recorded entries and their checked facts.
-\end{definition}
-The current GPU printer does not satisfy the emitter definition. It decides,
-without a recorded term: existence instead of enumeration for fully bound
-probes; the value codec of every built table (default \code{Plain}, i.e.\
-\code{i64}); the index implementation behind \code{SortedRun}; which probe
-keys an index answers exactly and which it re-checks; replacing carried values
-by row identities; kernel boundaries and the resumable state machine; batch
-sizes not written in Structures; and the output reservation protocol. Each of
-these is assigned below to the level whose abstraction equates its
-alternatives. The CPU pull printer is close to an emitter because sequential
-pull control has a single realization and Rust trait dispatch realizes the
-recorded provider types.
+\subsection{Why one level, and why this one}
+A level is justified when its denotation changes: it adds or forgets an
+observable, so that a different class of programs becomes equal. Below
+Structures exactly one such change happens. Every level through Structures
+denotes a function into $T X=\bot+\mathrm{Set}_{\rm fin}(X)$ composed in
+written order (Section~\ref{sec:denotation}); the sequential pull runtime
+makes nothing else observable, so order, multiplicity before \code{canon},
+evaluation counts, sizes and placement are all the emitter's to choose. A
+parallel runtime makes positions and sizes decisions that change the
+program (which positions form the parallel domain; what must be allocated
+before it runs), and makes placement and partiality constraints on whether
+a term can run at all (where a value is visible; that device code cannot
+unwind). Positions and sizes change the objects: that is the Sequence
+level. Placement and partiality constrain terms without changing their
+values: that is a type-and-effect grading, not a level. Kernels, barriers
+and launch shapes are derived from the grading: not a level, not syntax.
 
-\subsection{Values: codes}
-$R$ abstracts a representation to a bag of rows. A \emph{codec} refines the
-values inside rows.
-\begin{definition}[Codec]
-A codec $\kappa$ for a column type $\tau$ has a value domain
-$D_\kappa\subseteq\tau$, a code type $C_\kappa$ and maps
-$\mathsf{enc}_\kappa:D_\kappa\to C_\kappa$,
-$\mathsf{dec}_\kappa:C_\kappa\to\tau$ with
-$\mathsf{dec}_\kappa\circ\mathsf{enc}_\kappa=\mathrm{id}_{D_\kappa}$.
-On rows, $\alpha_r(\rho)=\mathrm{Bag}(\mathsf{dec})(\alpha^C_r(\rho))$.
-\end{definition}
-Examples: the identity; widening to \code{i64}; an order-preserving dictionary
-of one join domain with dense \code{u32} IDs; frame-of-reference bit packing.
-A column's codec is recorded with its representation. An absent entry is the
-identity on $\tau$, never a widening.
-\begin{mathpar}
-\Rule{CODE-Leibniz}{\mathsf{dec}_\kappa\text{ injective}\quad
- \text{every side of key }K\text{ uses }\kappa}
- {\text{equality, hashing and dedup on }K\text{ may read codes}}
+This is deliberately not progressive lowering in the MLIR sense. A pass
+takes a whole program at one level to a whole program at the next; no
+program mixes levels; the composition theorem of
+Section~\ref{sec:composition} depends on that. A back end that needs a
+construct the shared level lacks defines a complete diverged variant with
+its own check, as \code{diverged-ra} does; nothing is mixed into the shared
+level.
 
-\Rule{CODE-Order}{\mathsf{enc}_\kappa\text{ monotone on }D_\kappa}
- {\text{range, sort and merge on }c\text{ may read codes}}
-
-\Rule{CODE-Dense}{C_\kappa=[0,n)\quad \mathsf{enc}_\kappa\text{ bijective onto }[0,n)}
- {\text{a directory on }c\text{ may be an array indexed by code}}
-
-\Rule{CODE-Literal}{c:\kappa\quad \ell\in D_\kappa}
- {\text{an occurrence constant }c=\ell\text{ reads code }\mathsf{enc}_\kappa(\ell)}
-
-\Rule{CODE-Pack}{\kappa_1,\ldots,\kappa_m\text{ codes of widths }w_i\quad
- \textstyle\sum_iw_i\le 64}
- {\mathsf{pack}(x_1,\ldots,x_m)=\textstyle\sum_i x_i\,2^{\sum_{j>i}w_j}
- \text{ is an injective, lexicographic row code}}
-\end{mathpar}
-Join columns share a codec because they share a domain. A value is decoded
-only where it leaves the coded fragment: an answer column, a Rust free
-variable, or a different codec. A literal outside $D_\kappa$ matches no row.
-
-\subsection{Providers: recorded index implementations}
-A provider type names both what an index answers and how. The laws are those
-of Section~\ref{sec:structures}; the new types differ only in realization.
-\begin{mathpar}
-\Rule{PROV-Csr}{\text{rows stably sorted by key code }k\quad
- o[k]=|\{i\mid \mathsf{key}_i<k\}|\quad \text{CODE-Dense on }k}
- {\mathsf{lookup}(k)=[o[k],o[k+1])\text{ is the exact bucket of }k}
-
-\Rule{PROV-Exists}{\mathsf{reads}(b)\subseteq\{\mathsf{probe\ first},\mathsf{semi}\}\quad
- \mathsf{heading}(b)\subseteq K\quad \text{canon downstream}}
- {\text{a membership test realizes every read of }b}
-
-\Rule{PROV-Canon}{\mathsf{canon}\ r\quad
- \text{provider }\in\{\mathsf{hash},\ \mathsf{sort}+\mathsf{unique}\text{ on a CODE-Pack key}\}}
- {\alpha(\mathsf{canon}\ r)=\mathrm{supp}(\alpha(r))}
-\end{mathpar}
-PROV-Exists is STR-Existential recorded by a pass: it replaces the printer's
-silent \code{boolean\_probe}. PROV-Csr is the provider of the hand-written H05
-reference: an RCCL radix sort over the key's code bits, then
-\code{lower\_bound} of every code. A provider may still choose its internal
-algorithm (for example radix or merge sort) when that choice changes no
-recorded term.
-
-\subsection{Index spaces: decomposition of a stream}
-A total segment of a pipe (ST-Total) evaluated over its producer's positions
-is a map over a finite ordered index set. The Space level makes that set a
-term.
-\begin{lstlisting}
-Space ::= rows r                      // positions of a for producer
-        | flatten S by b [K]          // ST-Expand's virtual array
-        | tile S n                    // consecutive groups of n positions
-Entry ::= r space = S [retain]        // the space of r's total segment
-        | r output = Protocol;
-\end{lstlisting}
-$|\mathsf{rows}\ r|=[0,|r|)$. For $\mathsf{flatten}\ S\ \mathsf{by}\ b[K]$, a
-position is $(p,j)$ with $p\in|S|$ and $j<|b[K(p)]|$, ordered
-lexicographically, with the exclusive offsets of the segmented-flatten lemma.
-$\mathsf{tile}\ S\ n$ groups the positions of $S$ into consecutive blocks of
-$n$. A segment $f$ over $S$ denotes
+\subsection{Objects: the sequence monad and its morphisms}
+Let $\mathrm{Seq}$ be the finite-sequence monad: $\eta(x)=\langle x\rangle$,
+$\mathsf{map}$ its functor action, $\mathsf{flatten}:\mathrm{Seq}(\mathrm{Seq}\,X)\to\mathrm{Seq}\,X$
+its join. $\mathrm{Bag}$ and $\mathrm{Set}$ are monads likewise, and the
+forgetful maps are monad morphisms:
 \[
- \sem{f\ \mathsf{over}\ S}=\biguplus_{p\in|S|}f(p),
+ \mathrm{Seq}\xrightarrow{\ \alpha\ }\mathrm{Bag}\xrightarrow{\ \mathrm{supp}\ }\mathrm{Set},
+ \qquad \alpha\circ\mathsf{flatten}=\mathsf{join}_{\rm Bag}\circ\alpha\circ\mathrm{Seq}(\alpha),
+ \quad \alpha\circ\mathsf{map}\,f=\mathrm{Bag}(f)\circ\alpha .
 \]
-and is $\bot$ if some $f(p)=\bot$, exactly as the bind of
-Section~\ref{sec:denotation}.
-\begin{mathpar}
-\Rule{SPACE-Flatten}{\mathsf{rangeCursor}(b,K)\quad l\text{ total over }S}
- {\sem{\mathsf{probe}[K](l,b)}
-  =\sem{(p,j)\mapsto l(p)\bowtie b[K](p)_j\ \mathsf{over}\ \mathsf{flatten}\ S\ \mathsf{by}\ b[K]}}
+The front end computes in $\bot+\mathrm{Set}$; Sequence computes in
+$\bot+\mathrm{Seq}$; the refinement obligation is that the morphism of the
+result equals the front-end value. Parallel admissibility is exactly the
+structure $\mathrm{Bag}$ has and $\mathrm{Seq}$ lacks: its monoid is
+commutative, so a fold over it is schedule-independent, and $\alpha$
+forgets the order a schedule imposes.
 
-\Rule{SPACE-Partition}{\{P_k\}\text{ disjoint}\quad\bigcup_kP_k=|S|\quad
- \text{exhaustive evaluation}}
- {\biguplus_{p\in|S|}f(p)=\biguplus_k\biguplus_{p\in P_k}f(p)}
+A Sequence object is a nested sequence of \emph{coded} rows together with
+its shape. Its type carries its lengths as symbolic expressions over input
+lengths and earlier scans (size-dependent types in the sense of
+Lift and Futhark~\cite{paper-lift,paper-futhark}); a term whose length is
+not expressible is given a declared capacity. A codec
+$\kappa=(\mathsf{enc},\mathsf{dec})$ with $\mathsf{dec}\circ\mathsf{enc}=\mathrm{id}$
+on its domain refines row values; $\alpha$ applies $\mathsf{dec}$ per
+column. A \emph{space} is a shape considered on its own: a finite index set
+with lexicographic order and nesting.
 
-\Rule{SPACE-Retain}{S\text{ total}\quad
- d=\{(p_0,|b[K(p)]|,\bar v_p)\}_{p}\quad o=\mathsf{exclusiveScan}(|\cdot|)}
- {\mathsf{flatten}\ S\ \mathsf{by}\ b[K]\text{ may be stored as }(d,o)
-  \text{ and re-entered by owner search}}
-
-\Rule{SPACE-KeyPartition}{h:\mathit{Row}\to[0,n)\quad
- B_k=\{\!\{t\in B\mid h(t)=k\}\!\}}
- {\mathsf{canon}(B)=\biguplus_k\mathsf{canon}(B_k)}
-\end{mathpar}
-SPACE-Partition holds for partial $f$ as well: $\bot$ is undistinguished and
-aborts the whole evaluation, so which part meets it first is unobservable. It
-does not license early stop, and it is stated on bags: parts are disjoint and
-covering, because before \code{canon} a lost or duplicated position changes
-the bag. Batching across a partial step remains governed by ST-Stage;
-$\mathsf{batch}\ N$ (strictness) and a partition (decomposition) are
-independent decisions. SPACE-Retain stores a level of a flatten as descriptors
-(first row, length, carried values) with exclusive offsets, so a later space
-can span all of its positions at once; the owner of a position is found by
-binary search over the offsets. Per-part \code{canon} is a sound prefilter,
-since $\mathrm{supp}(\biguplus_kB_k)=\bigcup_k\mathrm{supp}(B_k)$, but replaces
-the global boundary only under SPACE-KeyPartition.
-
-\paragraph{Free choices.} The order in which parts run, the assignment of
-parts to workers, and dynamic tile claiming (a shared cursor) are free: by
-SPACE-Partition no term depends on them. The space, its tile sizes per level
-and every retained level are recorded, because they change emitted code.
-
-\subsection{Output protocols}
-Writing $\biguplus_kB_k$ into one buffer has these realizations, equal under
-$\alpha$:
-\begin{mathpar}
-\Rule{OUT-Count}{f\text{ pure}\quad c_k=|B_k|\quad o_k=\textstyle\sum_{j<k}c_j}
- {\text{evaluate }f\text{ twice; part }k\text{ writes at }[o_k,o_k+c_k)}
-
-\Rule{OUT-Reserve}{\mathsf{fetchAdd}\text{ returns disjoint ranges}}
- {\text{part }k\text{ writes }B_k\text{ at its reserved range}}
-
-\Rule{OUT-Block}{\text{tile }T\quad o_i=\mathsf{exclusiveScan}_{i\in T}(c_i)\quad
- \mathit{base}=\mathsf{fetchAdd}(\textstyle\sum_{i\in T}c_i)}
- {\text{lane }i\text{ writes its }c_i\text{ rows at }\mathit{base}+o_i}
-
-\Rule{OUT-Bound}{\text{capacity }m\quad\text{every count, offset and sum is checked}}
- {\text{overflow aborts or retries; it never writes a truncated answer}}
-\end{mathpar}
-Purity (premise~3 of Section~\ref{sec:premises}) licenses evaluating $f$ more
-than once (OUT-Count, a retry after overflow). OUT-Block composes OUT-Count
-inside a tile with OUT-Reserve across tiles. Resource exhaustion is outside
-the meaning, but a wrapped counter would change the answer, so every bounded
-counter is checked.
-
-\subsection{Kernels: the GPU's diverged level}
-Only the GPU refines a Space program into kernels; the CPU consumes the Space
-level directly (one part per task, or one part for the sequential emitter).
+\subsection{Terms}
+$f$ ranges over per-position maps built from the total Physical kernels
+(rename, project, relational select, point and range reads, semi and anti
+tests over admissible keys; ST-Total). $b$ ranges over providers.
 \begin{lstlisting}
-Kernel ::= kernel k over S lanes n [shared m] { Step* } ;
-Step   ::= load r | probe r [K] | test r [K] | scan c | ballot c
-         | reduce c | owner o | emit Protocol
+t ::= rows r                     // the positions of a retained result or host
+    | map f t                    // per-position total map
+    | flatten t                  // join; offsets are the scan of lengths
+    | compact p t                // total filter, order-preserving
+    | tile n t                   // view: regroup into runs of n
+    | lookup b [K] t             // per-position bucket of provider b
+    | fold (o,e) t               // monoid fold
+    | canon t                    // support
+    | store t                    // materialize (the only non-view)
+    | choose [ g => t ]*         // size-guarded equal alternatives
 \end{lstlisting}
+\code{tile}, \code{flatten} over known offsets, \code{lookup} over a range
+cursor and the gathers inside $f$ are \emph{views}: bijections on positions
+that change addressing and materialize nothing (Lift's layout patterns,
+Descend's views~\cite{paper-lift,paper-descend}). Only \code{store}
+materializes; a stored \code{flatten} is kept as its offsets (BE-Offsets).
 \begin{mathpar}
-\Rule{KER-Boundary}{k_1\text{ writes }x\quad k_2\text{ reads }x\\
- x\text{ is a retained Physical result, a retained space or an output}}
- {\text{a kernel boundary at }x\text{ is admissible}}
+\Rule{BE-Alpha}{}
+ {\alpha(\mathsf{map}\,f\,t)=\mathrm{Bag}(f)(\alpha t)\quad
+  \alpha(\mathsf{flatten}\,t)=\alpha t\quad\alpha(\mathsf{tile}_n t)=\alpha t\quad
+  \alpha(\mathsf{compact}\,p\,t)=\alpha t|_p\quad\alpha(\mathsf{store}\,t)=\alpha t}
 
-\Rule{KER-Lane}{\text{lane }l\text{ owns positions }P_l\quad
- \{P_l\}\text{ disjoint and covering}}
- {\text{lane }l\text{ evaluates }P_l\text{ in order with scalar meaning}}
+\Rule{BE-Bind}{\mathsf{rangeCursor}(b,K)}
+ {\sem{\mathsf{probe}[K](l,b)}=\mathrm{supp}\,\alpha\big(\mathsf{flatten}(\mathsf{map}\,(x\mapsto x\bowtie\mathsf{lookup}_b[K]\,x)\,l)\big)}
 
-\Rule{KER-Collective}{\text{an exclusive scan, a monoid reduction, a ballot
- or an owner search over lanes}}
- {\text{its result is the sequential fold over the participating lanes}}
+\Rule{BE-Partition}{\{P_k\}\text{ disjoint}\quad\textstyle\bigcup_kP_k=[0,|t|)\quad
+ (\oplus,e)\text{ commutative}}
+ {\mathsf{fold}_{(\oplus,e)}(\mathsf{map}\,f\,t)=\textstyle\bigoplus_k\mathsf{fold}_{(\oplus,e)}(\mathsf{map}\,f\,t|_{P_k})}
+
+\Rule{BE-Offsets}{o=\mathsf{scan}_{(+,0)}(|t_0|,\ldots,|t_{|t|-1}|)}
+ {(\mathsf{flatten}\,t)_j=(t_i)_{j-o_i}\text{ for the unique }i\text{ with }o_i\le j<o_{i+1}}
+
+\Rule{BE-Canon}{\alpha t=B}
+ {\alpha(\mathsf{canon}\,t)=\iota(\mathrm{supp}\,B)\quad
+  \mathsf{canon}(\textstyle\biguplus_kB_k)=\mathsf{canon}(\textstyle\biguplus_k\mathsf{canon}\,B_k)}
+
+\Rule{BE-Code}{\mathsf{dec}\text{ injective on }K\text{ (both sides)}\quad
+ \mathsf{enc}\text{ monotone on }c}
+ {\text{equality, hashing and canon on }K\text{, and order reads on }c\text{, act on codes}}
+
+\Rule{BE-Choose}{t_1,\ldots,t_n\text{ equal under BE-Partition}\quad
+ \text{guards }g_i\text{ over lengths, exhaustive}}
+ {\mathsf{choose}\,[g_i\Rightarrow t_i]\text{ denotes any }t_i\text{; which runs is free}}
 \end{mathpar}
-A kernel boundary is a materialization, so it sits only where a value is
-already retained; it cannot split a pipe without a recorded retention. Lanes
-communicate only through collectives, and each collective realizes a law
-above: an exclusive scan gives segmented-flatten and OUT-Block offsets, a
-reduction gives counts, a ballot gives the survivors of a total filter, an
-owner search inverts SPACE-Retain offsets. Per-lane state (registers, shared
-memory, spilled continuations) has no meaning, but must respect ST-Stage's
-boundaries before partial steps.
+BE-Bind is the Kleisli bind of Section~\ref{sec:denotation} restated: a
+probe is a flatten of per-row lookups, so a join nest is a nested flatten
+and flattening it (NESL~\cite{paper-nesl,paper-ndp-gpu}) is what removes
+irregular nesting. BE-Partition is the law every schedule relies on; it
+holds for partial $f$ (one undistinguished $\bot$) but licenses no early
+stop and is stated on bags: a lost or duplicated position changes
+$\alpha$. BE-Canon makes per-part canon a sound prefilter that replaces
+the global boundary only when equal rows meet in one part. BE-Choose is
+incremental flattening~\cite{paper-futhark-flatten}: the right
+decomposition depends on lengths known at run time, so several equal
+decompositions may be recorded under thresholds that are tuning
+parameters, not meaning.
 
-\subsection{The H05 reference as recorded terms}
-The hand-written reference is expressible in these terms; nothing it does is
-outside them.
+\paragraph{Providers and codecs are capabilities.} A provider is read
+through \code{lookup} and the term records only what the read requires:
+exact bucket, contiguous range (rangeCursor), membership, order. Its type
+is an opaque token discharged by runtime traits, as Structures does today
+(STR-Key, STR-SortedRun); the same holds for codecs (BE-Code's premises
+are trait obligations, like Leibniz admissibility) and for \code{canon}.
+
+\subsection{Placement: a grading over a machine parameter}
+\begin{definition}[Machine model]
+A finite tree of \emph{levels} $\ell$, each labelled: \emph{collaborative}
+(members share storage and may synchronize; collectives are available) or
+\emph{separated} (members share nothing and exchange only through a store
+at a common ancestor, at a boundary); scheduling static or dynamic; and a
+failure channel to the root. The root is $\mathsf{host}$.
+\end{definition}
 \begin{center}
-\begin{tabular}{@{}p{0.45\linewidth}p{0.48\linewidth}@{}}
+\begin{tabular}{@{}p{0.16\linewidth}p{0.4\linewidth}p{0.2\linewidth}p{0.16\linewidth}@{}}
 \toprule
-Reference & Recorded term\\
+ & GPU (SIMT, cooperative groups) & tasks (Rayon) & sequential\\
 \midrule
-\code{u32} domain IDs, FOR-packed columns & codecs (CODE-Leibniz, CODE-Order, CODE-Dense)\\
-radix sort by key bits, \code{lower\_bound} offsets & PROV-Csr on each build\\
-Supplier check binds no column & PROV-Exists\\
-\code{segments}: Region, Nation, Customer ranges & retained space (SPACE-Retain) over two flattens\\
-\code{expand}: 256-position driver tiles over the retained Customer level & $\mathsf{tile}\ 256$ of that space, dynamic claiming free\\
-Orders and Lineitem in 1024-position sub-tiles & $\mathsf{tile}\ 1024$ of each nested flatten\\
-block scan, one \code{fetch\_add} per block & OUT-Block\\
-overflow flag & OUT-Bound\\
-packed answer key, radix sort, unique & CODE-Pack and PROV-Canon (sort+unique)\\
+levels & host $>$ device $>$ block $>$ warp $>$ lane & host $>$ pool $>$ task & host\\
+collaborative & block (shared memory, barrier), warp (lockstep) & none & —\\
+separated & device/host; block/block (no forward progress) & task/task (join) & —\\
+scheduling & blocks dynamic, order undefined & work stealing & fixed\\
+failure & flag read by host & panic at join & unwind\\
 \bottomrule
 \end{tabular}
 \end{center}
-The compiled plan R records the same plan and builds; it differs only in
-decisions the printer currently makes for itself. With every row above
-recorded by a checked pass, the two programs have the same recorded terms,
-and the remaining difference is emitter templates.
+A Sequence term is \emph{graded}: each subterm carries the level that
+evaluates it, each \code{store} the level that holds it, and \code{tile}
+descends one level. The grading is a type-and-effect discipline, not a
+language: it is checked against the machine parameter and changes no value.
+Execution resources in the sense of Descend~\cite{paper-descend} are the
+GPU instance of the grade.
+\begin{mathpar}
+\Rule{BE-Scope}{\mathsf{store}\,t\text{ at }\ell\quad\text{a read at }\ell'\le\ell\text{ lexically inside its extent}}
+ {\text{the read is admissible}}
 
-\subsection{Composition and divergence}
-\begin{center}
-\begin{tabular}{@{}llll@{}}
-\toprule
-Level & Meaning & Recorded choices & Users\\
-\midrule
-$R$ with codes & $\alpha_r$ with $\mathsf{dec}$ & codecs, providers & all\\
-$E$ & strictness & $\mathsf{batch}\ N$, \code{expand} & all\\
-Space & $\biguplus$ over positions & spaces, tiles, retained levels, protocol & CPU parallel, GPU\\
-Kernels & lanes and collectives & boundaries, lanes, state & GPU\\
-\bottomrule
-\end{tabular}
-\end{center}
-The first three rows extend shared levels with new terms and keep their
-denotation; the kernel level is a refinement that diverges below Space. The
-sequential CPU emitter is the one-part instance of Space.
+\Rule{BE-Collective}{\mathsf{fold}/\mathsf{scan}\text{ at }\ell\quad\ell\text{ collaborative}\quad
+ \text{the whole of }\ell\text{ participates}\quad\oplus\text{ associative}}
+ {\text{equals the sequential fold; commutative }\oplus\text{ makes it schedule-independent}}
 
-\paragraph{The parallel Datalog extension as Space terms.} The extension of
-Section~\ref{sec:datalog-languages} already records parallel decisions, but
-outside CQ and at the granularity of whole rule holes. Its pieces map onto
-this section as follows, so that the Space level reuses them rather than
-restating them:
+\Rule{BE-Separate}{\ell_1,\ell_2\text{ separated siblings}}
+ {\text{they exchange only through a store at a common ancestor; nothing else is observable across them}}
+
+\Rule{BE-Length}{\mathsf{store}\,t\text{ at a separated level}}
+ {|t|\text{ is in its type before the write (a scan), or a capacity with an overflow flag}}
+
+\Rule{BE-Boundary}{\text{a maximal segment of total terms between stores at a separated level}}
+ {\text{is one unit of dispatch (a kernel, a task); its domain is the outer stored space; derived, not written}}
+
+\Rule{BE-Partial}{\text{opaque Rust }e}
+ {e\text{ runs at }\mathsf{host}\text{ only: closed }e\text{ once before dispatch (IF-Parameter); row-dependent }e\text{ never below host}}
+
+\Rule{BE-Abort}{\bot\text{ raised below }\mathsf{host}}
+ {\text{a once-set flag on the failure channel, mapped to }\bot\text{ at the next host boundary; no truncated success}}
+\end{mathpar}
+The laws mention only labels of the machine parameter. A term that uses a
+collective at a level the target marks separated is rejected for that
+target, not reinterpreted. BE-Boundary derives kernels (GPU) and tasks
+(Rayon) from the grading: the domain of a dispatch is the type of its outer
+stored space, which replaces the current printer's
+\code{driver.len.div\_ceil(1024)}; storing the H05 Customer level as
+offsets makes the next dispatch span every customer. Written order has no
+force below host: nothing partial is there (BE-Partial), so inside a
+dispatch the full set algebra applies.
+
+\paragraph{Output.} The final \code{flatten} into one stored sequence of
+unknown length is one term with several interpretations, equal under
+$\alpha$: lengths computed first by a count pass (purity, premise~3,
+licenses running the map twice), reservation by a commutative concatenation
+(schedule-dependent positions, same bag), or a bounded buffer with retry.
+Which is recorded, because it changes the program. Parts write only
+positions they own by a view, or buffers they allocated; nothing reads
+another part's fresh allocation before a boundary. That is
+disentanglement~\cite{paper-disentangle}, the memory property that makes
+these protocols lock-free.
+
+\paragraph{Cost.} The set model has no cost; Sequence has work and
+span~\cite{paper-nesl}: work the number of positions evaluated, span the
+longest dependency chain. Plan R's two schedules have equal work; a
+one-part schedule has span proportional to work, a grid-wide one span
+logarithmic. Cost is not meaning; it is what a decomposition pass argues
+with, and lengths in types are what make it computable.
+
+\subsection{Refinement and the emitter}
+\begin{definition}[Sequence refinement]
+A graded Sequence program $t$ over Structures $s$ refines $s$ for machine
+$M$ when, for every input and every schedule $M$ admits under
+BE-Partition, BE-Scope, BE-Collective, BE-Separate and BE-Abort,
+$\mathrm{supp}\,\alpha(\mathsf{run}_M(t))=\sem s$ whenever $\sem s\ne\bot$,
+and $\mathsf{run}_M(t)$ aborts only if some sequential schedule of $s$ panics.
+\end{definition}
+The obligation splits per construct: BE-Alpha for the shape terms, storage
+laws for provider and codec interpretations, BE-Partition and
+BE-Collective for the schedule. An emitter is a translation from graded
+terms to the target (loops, assignments, barriers, launches), in the sense
+of DPIA's strategy-preserving compilation~\cite{paper-dpia}: correct per
+construct, race-free by construction from the views, deciding nothing. A
+construct without a translation is rejected. Lift derives allocation and
+barriers from its types~\cite{paper-lift}; here they are derived from the
+grading, lengths and views.
+
+\subsection{Passes}
 \begin{itemize}
-\item a Round \code{ScanBinding} is the whole immutable producer, $\mathsf{rows}\ r$;
-the execution substitution of CK-DL-Partition, which exposes that scan as a
-chunk parameter, is a partition of $\mathsf{rows}\ r$ (SPACE-Partition);
-\item its \code{grain} and \code{threshold} are a tiling policy of that space,
-recorded per program; the runtime grain $\max(g,n/4t)$ and Rayon scheduling
-are free choices;
-\item sharded admission (DL-ShardedAdmission) routes candidates by a full-tuple
-hash, which is SPACE-KeyPartition, and CK-DL-ShardOwnership's disjoint
-covering shards are its premise;
-\item exclusive layout publication (DL-LayoutPublication) and its barriers order
-materializations; inside one CQ hole the analogous boundaries are
-KER-Boundary's retained results.
+\item Structures $\to$ Sequence: the default lowering records ``one part,
+nothing stored'': every result is a view or a device/host store as its
+Physical mode says, no tiles. Its sequential interpretation is today's pull
+printer, which is therefore already correct for it.
+\item Sequence $\to$ Sequence rewrites, advice-driven as the existing
+rewrites are (Section~\ref{sec:structures}), each with a law: store a
+flatten level (BE-Offsets), tile a space (BE-Partition), record a
+size-guarded alternative (BE-Choose), choose the output interpretation,
+record codecs and canon.
+\item Grading: assign levels against a named machine model; checked by
+BE-Scope through BE-Abort.
+\item Translation per machine.
 \end{itemize}
-Two differences stay explicit. The extension partitions only a hole's leading
-occurrence and leaves each hole's CQ pipeline unchanged, whereas Space
-decomposes the stream inside one CQ, including nested flattens. And its parts
-produce owned candidate buffers merged before global admission, which is
-OUT-Reserve at hole granularity. A printer of either back end realizes these
-terms and decides none of them.
+This mirrors the algorithm/schedule separation of Halide and
+Exo~\cite{paper-exo}: the pipeline's advice is the schedule, each primitive
+is an equivalence-preserving rewrite with a stated law.
+
+\subsection{The three machines as interpretations}
+\begin{center}
+\begin{tabular}{@{}p{0.2\linewidth}p{0.24\linewidth}p{0.24\linewidth}p{0.24\linewidth}@{}}
+\toprule
+graded term & sequential & tasks & GPU\\
+\midrule
+\code{map} over a space & the pull loop & \code{par\_chunks} with a grain & lanes of a dispatch\\
+\code{tile} $n$ & no-op & chunk of $n$ & a block (or items per lane)\\
+\code{flatten} / offsets & nested iterators & concatenation at join & scan in collaborative storage, owner search\\
+\code{store} at a collaborative level & local variables & task-local & shared memory with barriers\\
+\code{store} at a separated level & \code{Vec} & owned buffers & a device buffer with length or capacity\\
+\code{fold}, \code{scan} & a loop & reduction at join & warp/block collectives\\
+output \code{flatten} & \code{Vec::push} & per-task \code{Vec} merged & count / reserve / bounded retry\\
+$\bot$ & unwind & propagate at join & flag at the boundary\\
+dynamic part claiming & none & work stealing & atomic cursor (free, BE-Partition)\\
+\bottomrule
+\end{tabular}
+\end{center}
+The parallel Datalog extension (Section~\ref{sec:datalog-languages}) is the
+task interpretation at the granularity of rule holes: its partitioned
+leading scan is \code{tile} of \code{rows}, its grain the tile size, its
+sharded admission BE-Canon, its publication barriers host-level
+boundaries.
+
+\subsection{The H05 reference as a term}
+The hand-written kernels (\code{experiments/gpu/h05-reference}) are
+\[
+ \mathsf{canon}\big(\mathsf{flatten}(\mathsf{map}\,g\,(\mathsf{tile}_{256}\,C))\big),\quad
+ C=\mathsf{store}\big(\mathsf{flatten}(\mathsf{map}\,(\mathsf{lookup}_{\rm Nation})\,(\mathsf{rows}\ \mathrm{Region}_{\rm ASIA}))\big)\text{ at the separated level}
+\]
+with $g$, per customer position, two further flattens (Orders by customer,
+Lineitem by order) tiled at 1024 at the collaborative level with 4 items
+per lane, a membership test (Supplier), and the output flatten interpreted
+by a collaborative scan plus one reservation per tile. $C$ is stored as
+offsets, not rows (BE-Offsets). Every provider is read as a range cursor;
+every column is a dense code of one join domain; \code{canon} is a fold on
+a packed code. Compiled plan R records the same Physical program; what it
+lacks is \code{store} of $C$ and the tiles, which the current printer
+decides for itself. Those are the terms a rewrite must record.
+
+\subsection{Differences from the levels above}
+\begin{center}
+\begin{tabular}{@{}p{0.2\linewidth}p{0.36\linewidth}p{0.38\linewidth}@{}}
+\toprule
+ & CQ \ldots\ Structures & Sequence\\
+\midrule
+objects & finite sets, $\bot+\mathrm{Set}$ & nested sequences of codes; $\alpha$ a monad morphism to bags\\
+composition & Kleisli bind in written order & \code{map} / \code{flatten} / \code{compact} / \code{tile} / \code{fold}; bind is a flatten of lookups\\
+order & meaning only through pinned Rust & causal partial order at host; none below\\
+partiality & one $\bot$ anywhere & total fragment below host; a flag at boundaries\\
+sizes & outside meaning & lengths in types; capacity an obligation\\
+positions & none & the parallel index; recorded\\
+placement & the emitter's & a grading over a machine parameter; dispatch derived\\
+evaluation counts & outside meaning & licensed by purity, recorded where they change the program\\
+equality & Leibniz on values & on codes, under BE-Code\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Related work}
+NESL and flattening~\cite{paper-nesl,paper-ndp-gpu} give the objects and
+BE-Offsets. Lift/RISE~\cite{paper-lift} give views, lengths in types and
+derived barriers, but encode the OpenCL hierarchy in the terms; here the
+hierarchy is the machine parameter. DPIA~\cite{paper-dpia} gives the
+emitter as a proved translation. Descend~\cite{paper-descend} gives
+execution resources as terms and collectives only on whole resources; here
+that is the GPU instance of the grading. Futhark~\cite{paper-futhark,paper-futhark-flatten}
+gives size types and BE-Choose. Halide and Exo~\cite{paper-exo} give the
+schedule-as-rewrites discipline the pipeline already follows.
+Disentanglement~\cite{paper-disentangle} names the memory property behind
+the output protocols. What none of them covers: relations under a set
+denotation with a canonical boundary (BE-Alpha, BE-Canon), joins as
+flattens of lookups into indexes built in a prior phase (BE-Bind), and a
+partial host fragment with written-order meaning above a total device
+fragment.

@@ -192,23 +192,18 @@ CK-DL-ShardStorage	implementation	features/datalog-parallel/partition/src/sharde
 CK-DL-ShardOwnership	implementation	features/datalog-parallel/partition/src/sharded.rs	/// Formal rule CK-DL-ShardOwnership:	Direct checks establish admission shard ownership, total injective native-layout owners and exact member-layout publication barriers without invoking the producer; the printer consumes these certificates.
 DL-ShardedAdmission	implementation	features/datalog-parallel/runtime/src/lib.rs	/// Formal rule DL-ShardedAdmission:	Full-tuple hash ownership admits each fresh tuple once and concatenates per-shard next in shard order.
 DL-LayoutPublication	implementation	features/datalog-parallel/print/src/publication.rs	/// Formal rule DL-LayoutPublication:	Each full or delta native layout has one exclusive task; full publication joins before delta replacement and all delta rebuilds join before evaluation.
-CODE-Leibniz	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex); no pass implements it yet.
-CODE-Order	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex); no pass implements it yet.
-CODE-Dense	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex); no pass implements it yet.
-CODE-Literal	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex); no pass implements it yet.
-CODE-Pack	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex); no pass implements it yet.
-PROV-Csr	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex); no pass implements it yet.
-PROV-Exists	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex); no pass implements it yet.
-PROV-Canon	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex); no pass implements it yet.
-SPACE-Flatten	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex); no pass implements it yet.
-SPACE-Partition	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex); no pass implements it yet.
-SPACE-Retain	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex); no pass implements it yet.
-SPACE-KeyPartition	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex); no pass implements it yet.
-OUT-Count	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex); no pass implements it yet.
-OUT-Reserve	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex); no pass implements it yet.
-OUT-Block	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex); no pass implements it yet.
-OUT-Bound	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex); no pass implements it yet.
-KER-Boundary	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex); no pass implements it yet.
-KER-Lane	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex); no pass implements it yet.
-KER-Collective	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex); no pass implements it yet.
 EXT-RetainStream	implementation	features/rewrites/passes/src/physical.rs	(formal rule EXT-RetainStream)	Change only named non-host stream results from pipe to let; erasure and the exhaustive bag are preserved.
+BE-Alpha	abstract	-	-	Design (Sequence level, doc/formal/backend_ir.tex): Shape terms commute with the abstraction to bags.
+BE-Bind	abstract	-	-	Design (Sequence level, doc/formal/backend_ir.tex): A probe over a range-cursor provider is a flatten of per-row lookups.
+BE-Partition	abstract	-	-	Design (Sequence level, doc/formal/backend_ir.tex): A commutative fold over a map is schedule-independent over any disjoint covering partition.
+BE-Offsets	abstract	-	-	Design (Sequence level, doc/formal/backend_ir.tex): Exclusive scan of lengths gives flatten offsets; owner search inverts them.
+BE-Canon	abstract	-	-	Design (Sequence level, doc/formal/backend_ir.tex): Per-part canon is a sound prefilter; global canon remains unless parts route equal rows together.
+BE-Code	abstract	-	-	Design (Sequence level, doc/formal/backend_ir.tex): Injective decoders license equality on codes; monotone encoders license order reads.
+BE-Choose	abstract	-	-	Design (Sequence level, doc/formal/backend_ir.tex): Size-guarded alternatives equal under BE-Partition; which runs is free.
+BE-Scope	abstract	-	-	Design (Sequence level, doc/formal/backend_ir.tex): A store is read only at an inner level within its extent.
+BE-Collective	abstract	-	-	Design (Sequence level, doc/formal/backend_ir.tex): A fold or scan at a collaborative level with whole participation equals the sequential fold.
+BE-Separate	abstract	-	-	Design (Sequence level, doc/formal/backend_ir.tex): Separated siblings exchange only through a store at a common ancestor.
+BE-Length	abstract	-	-	Design (Sequence level, doc/formal/backend_ir.tex): A store at a separated level has a length in its type or a checked capacity.
+BE-Boundary	abstract	-	-	Design (Sequence level, doc/formal/backend_ir.tex): A maximal total segment between separated-level stores is one dispatch; its domain is the outer stored space.
+BE-Partial	abstract	-	-	Design (Sequence level, doc/formal/backend_ir.tex): Opaque Rust runs at host only.
+BE-Abort	abstract	-	-	Design (Sequence level, doc/formal/backend_ir.tex): An abort below host is a once-set flag mapped to bottom at the host boundary.
