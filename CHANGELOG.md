@@ -7,6 +7,12 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- `cq-datalog-testkit` executes each Datalog IR's meaning: `eval_incremental`
+  (semi-naive round system, the only evaluation scheme) and `eval_round`
+  (recorded phases, holes with native partial-Rust bodies). Pass, plug-in and
+  parallel Round rewrites are refinement-tested on all 13 oracle programs plus
+  targeted cases (instance evidence, not proofs).
+
 - Datalog hole↔CQ contract: typed terminal registry (terminal path →
   `pull`/`push`) checked per hole; push holes stream admission through the new
   `own_push::push_into!` consumer entry (own-dialect). Round rewrites may change
