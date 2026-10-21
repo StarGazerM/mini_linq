@@ -1,4 +1,5 @@
 //! Parallel admission order is unspecified; all engines are compared as sets.
+//! Small fixtures also evaluate Round independently before and after each rewrite.
 use std::collections::BTreeSet;
 
 fn assert_ascent<T: Ord + std::fmt::Debug + Clone>(actual: &[T], expected: Vec<T>) {
@@ -44,12 +45,22 @@ fn self_join_matches_sequential_sets_and_ascent_in_local_pools() {
                             output Reach;
                             Reach(*x,*y) :- Edge(x,y);
                             Reach(*x,*z) :- Reach(x,y), Reach(y,z);
-                        }.collect::<Vec<_>>()
+                        }.into_iter().collect::<Vec<_>>()
                     };
                 }
                     let sequential = run!();
                     let parallel = run!(storage_rewrites = [cq_datalog_parallel::shard_storage]; round = [cq_datalog_parallel::partition]; print = cq_datalog_parallel::print_rounds;);
                     assert_same(&parallel, &sequential);
+                    if count <= 7 {
+                        let reference = run!(print = cq_datalog_test_passes::eval_round;);
+                        let incremental = run!(print = cq_datalog_test_passes::eval_incremental_from_round;);
+                        assert_same(&reference, &incremental);
+                        let sharded = run!(storage_rewrites = [cq_datalog_parallel::shard_storage]; print = cq_datalog_test_passes::eval_round;);
+                        let rewritten = run!(storage_rewrites = [cq_datalog_parallel::shard_storage]; round = [cq_datalog_parallel::partition]; print = cq_datalog_parallel_test_passes::eval_round;);
+                        assert_same(&reference, &sequential);
+                        assert_same(&sharded, &reference);
+                        assert_same(&rewritten, &reference);
+                    }
                     ascent::ascent! {
                         struct Oracle;
                         relation edge(i32,i32);
@@ -90,7 +101,7 @@ fn later_delta_negation_generators_and_multiple_outputs_match_ascent() {
                     Reach(*y) :- Edge(x,y), Reach(x), !Blocked(y);
                     Label(*x,next + offset) :- Reach(x), for next in [*x, *x + 1, *x], if let Some(keep) = Some(*next), if *keep % 2 == 0;
                 };
-                (labels.collect::<Vec<_>>(), reach.collect::<Vec<_>>(), input.collect::<Vec<_>>())
+                (labels.into_iter().collect::<Vec<_>>(), reach.into_iter().collect::<Vec<_>>(), input.into_iter().collect::<Vec<_>>())
             }};
         }
         let sequential = run!();
@@ -98,6 +109,18 @@ fn later_delta_negation_generators_and_multiple_outputs_match_ascent() {
         assert_same(&parallel.0, &sequential.0);
         assert_same(&parallel.1, &sequential.1);
         assert_same(&parallel.2, &sequential.2);
+        let reference = run!(print = cq_datalog_test_passes::eval_round;);
+        let incremental = run!(print = cq_datalog_test_passes::eval_incremental_from_round;);
+        assert_same(&reference.0, &incremental.0);
+        assert_same(&reference.1, &incremental.1);
+        assert_same(&reference.2, &incremental.2);
+        let rewritten = run!(storage_rewrites = [cq_datalog_parallel::shard_storage]; round = [cq_datalog_parallel::partition]; print = cq_datalog_parallel_test_passes::eval_round;);
+        assert_same(&reference.0, &sequential.0);
+        assert_same(&reference.1, &sequential.1);
+        assert_same(&reference.2, &sequential.2);
+        assert_same(&rewritten.0, &reference.0);
+        assert_same(&rewritten.1, &reference.1);
+        assert_same(&rewritten.2, &reference.2);
         ascent::ascent! {
             struct Oracle;
             relation edge(i32,i32);
@@ -143,8 +166,10 @@ fn resumed_stages_accept_the_extension_pipeline() {
                 strata { component [Out]; }
             }
             .collect::<Vec<_>>();
-            let seminaive = cq_datalog::passes::storage! {
-                pipeline { cq_datalog_parallel::shard_storage, cq_datalog::passes::fork, cq_datalog_parallel::partition, cq_datalog_parallel::print_rounds };
+            macro_rules! resumed {
+                ($($evaluate:ident)::+; $($pipeline:tt)*) => {
+                    $($evaluate)::+! {
+                pipeline { $($pipeline)* };
                 struct Copy;
                 relation Edge(x:i32,y:i32) = (&edges);
                 relation Out(x:i32,y:i32);
@@ -156,10 +181,23 @@ fn resumed_stages_accept_the_extension_pipeline() {
                     delta Out = Recent;
                     variant 0 seed { Out(*x,*y) :- Edge(x,y); }
                 }
+                    }.into_iter().collect::<Vec<_>>()
+                };
             }
-            .collect::<Vec<_>>();
+            let seminaive = resumed!(cq_datalog::passes::storage;
+                cq_datalog_parallel::shard_storage, cq_datalog::passes::fork,
+                cq_datalog_parallel::partition, cq_datalog_parallel::print_rounds);
+            let incremental = resumed!(cq_datalog_test_passes::eval_incremental;);
+            let round = resumed!(cq_datalog::passes::storage;
+                cq_datalog::passes::fork, cq_datalog_test_passes::eval_round);
+            let rewritten = resumed!(cq_datalog::passes::storage;
+                cq_datalog_parallel::shard_storage, cq_datalog::passes::fork,
+                cq_datalog_parallel::partition, cq_datalog_parallel_test_passes::eval_round);
             assert_same(&stratified, &sequential);
             assert_same(&seminaive, &sequential);
+            assert_same(&incremental, &sequential);
+            assert_same(&round, &incremental);
+            assert_same(&rewritten, &round);
         });
 }
 
@@ -179,11 +217,15 @@ fn edb_only_outputs_preserve_sets() {
                         struct Inputs;
                         relation Input(x:i32) = (&input);
                         output Input;
-                    }.collect::<Vec<_>>()
+                    }.into_iter().collect::<Vec<_>>()
                 };
             }
                 let parallel = run!(storage_rewrites = [cq_datalog_parallel::shard_storage]; round = [cq_datalog_parallel::partition]; print = cq_datalog_parallel::print_rounds;);
                 assert_same(&parallel, &run!());
+                let reference = run!(print = cq_datalog_test_passes::eval_round;);
+                let rewritten = run!(storage_rewrites = [cq_datalog_parallel::shard_storage]; round = [cq_datalog_parallel::partition]; print = cq_datalog_parallel_test_passes::eval_round;);
+                assert_same(&reference, &parallel);
+                assert_same(&rewritten, &reference);
                 ascent::ascent! {
                     struct Oracle;
                     relation input(i32);

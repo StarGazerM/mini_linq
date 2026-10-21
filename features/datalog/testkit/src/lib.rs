@@ -1,13 +1,14 @@
-//! Executable DL-Source reference semantics and pass conformance support.
+//! Executable Datalog reference semantics and pass conformance support.
 //!
 //! `cq_testkit::cq_semantics` is an integer-fragment interpreter: it rejects
 //! computed bindings and generators. It cannot interpret opaque Rust soundly.
-//! Instead, `cq_datalog_test_passes::eval_source!` generates typed, written-order
-//! nested loops, keeping Rust expressions native, and calls this generic driver.
-//! No storage planner, incremental compiler, CQ compiler, or production printer
-//! participates in reference evaluation. Relations use set union; the generated
-//! step reads the old state and publishes candidates only after every rule in
-//! its stratum has run. EDBs are canonicalized once and lower strata are frozen.
+//! The test-pass evaluators instead generate typed, written-order nested loops,
+//! keeping Rust expressions native. [`eval_source`] drives a naive fixpoint;
+//! [`eval_incremental`] executes recorded semi-naive variants; [`eval_round`]
+//! drives recorded CQ holes, admission, publication, and termination.
+//! No production CQ compiler or printer participates in reference evaluation.
+//! Relations use set union, EDBs are canonicalized once, and lower components
+//! remain frozen while an upper component evaluates its immutable snapshot.
 //!
 //! Pure partial Rust, lawful Eq/Hash/Clone, finite generators and termination
 //! are caller premises, just as for the compiler. Panic denotes bottom, observed
@@ -40,6 +41,46 @@ pub fn eval_source<S>(
         while step(&mut state, stratum) {}
     }
     state
+}
+
+/// Execute a recorded semi-naive covering round system in component order.
+///
+/// `round` evaluates seed variants when its last argument is true and delta
+/// variants otherwise. It computes candidates from the old snapshot, then
+/// assigns `delta = candidates \\ accumulated`, unions delta into accumulated,
+/// and returns whether any delta is nonempty. Lower components remain frozen.
+/// Initialization and rule panics propagate unchanged.
+pub fn eval_incremental<S>(
+    initialize: impl FnOnce() -> S,
+    components: usize,
+    mut round: impl FnMut(&mut S, usize, bool) -> bool,
+) -> S {
+    let mut state = initialize();
+    for component in 0..components {
+        let mut changed = round(&mut state, component, true);
+        while changed {
+            changed = round(&mut state, component, false);
+        }
+    }
+    state
+}
+
+/// Execute one recorded Round component, with component-local key borrows.
+///
+/// The callback executes the seed schedule once (`true`), then the recursive
+/// schedule (`false`) while the recorded termination test reports a nonempty
+/// delta. Each invocation evaluates recorded holes, admits candidates, and
+/// publishes in the recorded phase order before returning that test's result.
+/// Both checked loop forms (`while_nonempty` and `loop_until_empty`) have this
+/// control flow. The generated caller owns relation/layout bindings and freezes
+/// lower components for the lifetime of its negation-key sets.
+///
+/// Panics propagate; there is no round cap or panic recovery.
+pub fn eval_round(mut round: impl FnMut(bool) -> bool) {
+    let mut nonempty = round(true);
+    while nonempty {
+        nonempty = round(false);
+    }
 }
 
 #[cfg(test)]

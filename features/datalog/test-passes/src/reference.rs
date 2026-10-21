@@ -7,13 +7,9 @@ use std::collections::BTreeMap;
 
 pub fn emit(program: &source::Program) -> syn::Result<TokenStream> {
     let analysis = source::contract::check(program)?;
-    let mut fresh = Fresh::new(program);
-    let state = fresh.id("reference_state");
-    let changed = fresh.id("reference_changed");
-    let component = fresh.id("reference_component");
+    let mut ranks = vec![0; program.declarations.len()];
     // Least signed dependency ranks, not the production SCC stratifier. All
     // positive recursion at one rank is solved together; negative inputs freeze.
-    let mut ranks = vec![0; program.declarations.len()];
     loop {
         let mut changed = false;
         for &(head, input, negative) in &analysis.dependencies {
@@ -27,6 +23,26 @@ pub fn emit(program: &source::Program) -> syn::Result<TokenStream> {
             break;
         }
     }
+    emit_ranked(program, &ranks)
+}
+
+pub fn emit_strata(program: &cq_lang_datalog_strata::Program) -> syn::Result<TokenStream> {
+    let analysis = cq_lang_datalog_strata::contract::check(program)?;
+    let mut ranks = vec![0; program.source.declarations.len()];
+    for (rank, members) in analysis.components.iter().enumerate() {
+        for &member in members {
+            ranks[member] = rank;
+        }
+    }
+    emit_ranked(&program.source, &ranks)
+}
+
+fn emit_ranked(program: &source::Program, ranks: &[usize]) -> syn::Result<TokenStream> {
+    let analysis = source::contract::check(program)?;
+    let mut fresh = Fresh::new(program);
+    let state = fresh.id("reference_state");
+    let changed = fresh.id("reference_changed");
+    let component = fresh.id("reference_component");
     let count = ranks.iter().copied().max().unwrap_or(0) + 1;
     let initial = program
         .declarations
@@ -116,9 +132,44 @@ pub fn emit(program: &source::Program) -> syn::Result<TokenStream> {
     }))
 }
 
-// Scope values record whether a binding is a borrowed atom column (true) or
-// native Rust let/for value (false). No expression is interpreted as text.
-fn body(
+/// Evaluate a recorded CQ query over borrowed, typed input sets. Reference
+/// outputs (negation-key projections) retain the input column borrow instead
+/// of cloning its referent. The ordinary source/Incremental path stays owned.
+pub(crate) fn emit_query(
+    query: &source::Query,
+    state: &syn::Ident,
+    positions: &BTreeMap<String, usize>,
+    candidates: &syn::Ident,
+    borrowed_heads: &[bool],
+    fresh: &mut Fresh,
+) -> syn::Result<TokenStream> {
+    let heads = query
+        .head
+        .args
+        .iter()
+        .zip(borrowed_heads)
+        .map(|(value, borrowed)| {
+            if *borrowed && rust::variable(value).is_some() {
+                syn::parse_quote!(&*(#value))
+            } else {
+                value.clone()
+            }
+        })
+        .collect::<Vec<syn::Expr>>();
+    body(
+        &query.body.iter().collect::<Vec<_>>(),
+        &heads.iter().collect::<Vec<_>>(),
+        candidates,
+        state,
+        positions,
+        BTreeMap::new(),
+        fresh,
+    )
+}
+
+// Scope values record borrowed atom/generator columns (true) versus native
+// scalar let values (false). No expression is interpreted as text.
+pub(crate) fn body(
     items: &[&BodyItem],
     heads: &[&syn::Expr],
     candidates: &syn::Ident,
@@ -132,7 +183,7 @@ fn body(
             if rust::variable(value).is_some_and(|v| scope.get(&symbol_name(v)) == Some(&true)) {
                 quote!((*(#value)).clone())
             } else {
-                quote!((#value).clone())
+                quote!(::std::clone::Clone::clone(&(#value)))
             }
         });
         return Ok(quote!(#candidates.insert((#(#values,)*));));
@@ -165,7 +216,7 @@ fn body(
                 }
             }
             let next = body(rest, heads, candidates, state, positions, scope, fresh)?;
-            Ok(quote!(for #row in &#state.#field { #(#prefix)* #next }))
+            Ok(quote!(for #row in #state.#field.iter() { #(#prefix)* #next }))
         }
         BodyItem::Negation(negative) => {
             let atom = &negative.atom;
@@ -208,10 +259,16 @@ fn body(
         }
         BodyItem::For(generator) => {
             for name in rust::bindings(&generator.pattern) {
-                scope.insert(symbol_name(&name), false);
+                scope.insert(symbol_name(&name), true);
             }
+            let value = fresh.id("reference_generated");
+            let expression = &generator.expression;
+            let pattern = &generator.pattern;
             let next = body(rest, heads, candidates, state, positions, scope, fresh)?;
-            Ok(quote!(#generator { #next }))
+            Ok(quote!(for #value in #expression {
+                let #pattern = &#value;
+                #next
+            }))
         }
         BodyItem::Equality(equality) => {
             let condition = constraint(&cq_syntax::Constraint::from_equality(equality), &scope);

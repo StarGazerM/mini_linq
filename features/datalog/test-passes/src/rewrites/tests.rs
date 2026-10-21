@@ -12,7 +12,8 @@ fn source_duplicate_fixture_and_interface_mutations() {
         struct Q; relation E(x:i32) = (rows); relation R(x:i32); output R;
         R(x) :- E(x);
     };
-    PassCase {
+    let reference = crate::reference::emit(&source).unwrap();
+    let target = PassCase {
         source,
         expected_next: Some(expected),
         compile: Box::new(deduplicate_source),
@@ -43,6 +44,11 @@ fn source_duplicate_fixture_and_interface_mutations() {
     }
     .run(None)
     .unwrap();
+    crate::reference_tests::check(
+        reference,
+        crate::reference::emit(&target).unwrap(),
+        quote!(let rows: [(i32,); 4] = [(0,), (1,), (1,), (-3,)];),
+    );
 }
 
 #[test]
@@ -59,7 +65,8 @@ fn strata_merge_fixture_and_dependency_mutations() {
         A(x) :- E(x); B(x) :- E(x); C(x) :- E(x), !A(x);
         strata { component [A,B]; component [C]; }
     };
-    PassCase {
+    let reference = crate::reference::emit_strata(&source).unwrap();
+    let target = PassCase {
         source,
         expected_next: Some(expected),
         compile: Box::new(merge_strata),
@@ -91,6 +98,11 @@ fn strata_merge_fixture_and_dependency_mutations() {
     }
     .run(None)
     .unwrap();
+    crate::reference_tests::check(
+        reference,
+        crate::reference::emit_strata(&target).unwrap(),
+        quote!(let rows: [(i32,); 4] = [(0,), (1,), (1,), (-3,)];),
+    );
 }
 
 #[test]
@@ -114,6 +126,8 @@ fn storage_alternative_fixture_and_binding_mutations() {
     });
     expected.reads[0].index = 1;
     expected.reads[0].columns = vec![1, 0];
+    // Storage's alpha map evaluates the embedded Incremental program.
+    let reference = crate::reference_incremental::emit(&source.incremental).unwrap();
     let result = PassCase {
         source,
         expected_next: Some(expected),
@@ -150,6 +164,11 @@ fn storage_alternative_fixture_and_binding_mutations() {
     }
     .run(None)
     .unwrap();
+    crate::reference_tests::check(
+        reference,
+        crate::reference_incremental::emit(&result.incremental).unwrap(),
+        quote!(let rows: [(i32, i32); 4] = [(0, 1), (1, 2), (0, 1), (-3, 4)];),
+    );
     // Independent protocol check: cq_stage invokes the rewrite contract and
     // forwards the changed payload, rather than testing a private shortcut.
     let tokens = cq_stage::rewrite::<storage::Program>(

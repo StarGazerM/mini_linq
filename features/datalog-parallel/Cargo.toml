@@ -1,5 +1,5 @@
 [workspace]
-members = ["partition", "print", "runtime", "oracle", "oracle/engines/*", "doop", "doop/engines/*"]
+members = ["partition", "print", "runtime", "oracle", "oracle/engines/*", "doop", "doop/engines/*", "test-passes"]
 resolver = "3"
 
 [package]
@@ -33,6 +33,9 @@ mini-linq = { version = "0.1.0", path = "../../facade/mini-linq" }
 cq-storage = { version = "0.1.0", path = "../../runtime/cq-storage" }
 ascent = { version = "0.8", default-features = false, features = ["par"] }
 rayon = "1"
+cq-datalog-testkit = { path = "../datalog/testkit" }
+cq-datalog-test-passes = { path = "../datalog/test-passes" }
+cq-datalog-parallel-test-passes = { path = "test-passes" }
 
 [[test]]
 name = "counters"
