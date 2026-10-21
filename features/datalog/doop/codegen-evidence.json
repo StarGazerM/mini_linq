@@ -1,0 +1,64 @@
+{
+  "date": "2026-10-20",
+  "baseline": "1ee553e",
+  "hardware": "Apple M5 Pro, 15 physical cores, 24 GiB",
+  "rustc": "1.97.1 (8bab26f4f 2026-07-14), LLVM 22.1.6",
+  "build_protocol": {
+    "profile": "release",
+    "cargo_build_jobs": 8,
+    "target_dir": "/tmp/target-Split",
+    "rustc_bootstrap": "1 (for -Ztime-passes)",
+    "command": "/usr/bin/time -l cargo rustc --release --locked -p PACKAGE --lib -- -Ztime-passes -Cmetadata=UNIQUE_TAG",
+    "base_crate_extra_flag": "-Csave-temps",
+    "scope": "crate-only rebuild after dependencies are warm; one build at a time; 900 second cap",
+    "cpu_seconds": "user plus system",
+    "llvm_seconds": "LLVM_passes plus LLVM_thinlto",
+    "cgu_sizes": "saved rcgu.no-opt.bc byte sizes in CGU number order"
+  },
+  "builds": {
+    "datalog-doop": {
+      "before": {
+        "wall_seconds": 53.87, "user_seconds": 86.28, "system_seconds": 1.12,
+        "llvm_passes_seconds": 11.721, "llvm_thinlto_seconds": 27.124,
+        "cgu_bytes": [28882592, 14804064, 3627312, 2008672, 1940944, 1497584, 1664704, 753904, 897216, 338016, 464144, 566176, 271488, 272144, 237600, 362160]
+      },
+      "after": {
+        "wall_seconds": 30.29, "user_seconds": 61.00, "system_seconds": 0.88,
+        "llvm_passes_seconds": 11.614, "llvm_thinlto_seconds": 4.596,
+        "cgu_bytes": [29042224, 14947104, 2008672, 1940944, 1531904, 1104096, 1707760, 609984, 951040, 932320, 1117120, 880224, 800704, 603968, 1007536, 760880]
+      }
+    },
+    "datalog-parallel-doop": {
+      "before": {
+        "wall_seconds": 72.85, "user_seconds": 191.83, "system_seconds": 2.44,
+        "llvm_passes_seconds": 14.515, "llvm_thinlto_seconds": 35.860
+      },
+      "after": {
+        "wall_seconds": 57.39, "user_seconds": 164.36, "system_seconds": 2.32,
+        "llvm_passes_seconds": 14.099, "llvm_thinlto_seconds": 20.123
+      }
+    }
+  },
+  "runtime_protocol": {
+    "command": "BINARY /tmp/doop-data/APP --engine ENGINE [--threads 15]",
+    "order": "AB/BA/AB per application and engine; A=before, B=after",
+    "samples": "seconds indexed by the three interleaved pairs",
+    "scope": "compute-only, facts loading excluded, separate uninstrumented processes, no concurrent build or benchmark"
+  },
+  "runtime_samples": [
+    {"app": "cassandra", "engine": "mini", "threads": 1, "before": [3.011135, 3.035060, 3.018963], "after": [3.021698, 2.976550, 3.024050]},
+    {"app": "xalan", "engine": "mini", "threads": 1, "before": [8.832254, 8.820144, 8.781811], "after": [8.769702, 8.805971, 8.736771]},
+    {"app": "cassandra", "engine": "mini-par", "threads": 15, "before": [0.926827, 0.922949, 0.894313], "after": [0.924377, 0.906448, 0.940027]},
+    {"app": "xalan", "engine": "mini-par", "threads": 15, "before": [2.766099, 2.644981, 2.669591], "after": [2.676558, 2.712255, 2.540916]}
+  ],
+  "exact_checks": {
+    "command": "doop-parallel /tmp/doop-data/APP --check --threads 15",
+    "applications": ["cassandra", "avrora", "lusearch", "xalan", "tomcat", "zxing"],
+    "reference": "sequential Ascent",
+    "engines": ["mini", "mini-fx", "mini-par", "mini-par-fx", "ascent-par"],
+    "relations": 26,
+    "comparison": "full tuple sets",
+    "result": "all 30 application/engine comparisons passed"
+  },
+  "limitation": "Largest preoptimization CGU remains about 48.45%: nested CQ iterator/closure monomorphizations retain caller-module ownership. The accepted outer split primarily reduces ThinLTO; no core compiler or CQ terminal adapter changes are included."
+}

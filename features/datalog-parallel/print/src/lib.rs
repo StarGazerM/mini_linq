@@ -116,6 +116,7 @@ fn evaluate(
         } else {
             quote!(::std::vec![#consume])
         };
+        let evaluation = cq_datalog_print::split_evaluation(rule, context, evaluation);
         declarations.push(quote!(let mut #candidates = ::std::vec::Vec::new();));
         #[cfg(not(feature = "hole-timing"))]
         evaluations.push(quote!(#candidates = #evaluation;));

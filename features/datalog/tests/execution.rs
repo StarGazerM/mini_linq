@@ -883,3 +883,39 @@ fn recursive_finite_generators_converge_and_join_generated_values() {
         BTreeSet::from([(1, 10), (2, 20), (3, 30), (4, 40)])
     );
 }
+
+#[test]
+fn split_codegen_preserves_local_types_captures_and_mutable_observers() {
+    struct Facts {
+        seeds: Vec<(i32,)>,
+        limit: i32,
+    }
+    let facts = Facts {
+        seeds: vec![(0,)],
+        limit: 3,
+    };
+    let increment = |value: i32| value + 1;
+    let label = String::from("captured");
+    let mut rounds = Vec::new();
+    let (reach, labels) = cq_datalog::datalog! {
+        observe = (|round, count| rounds.push((round, count)));
+        struct Captured;
+        relation Seed(x:i32) = (facts.seeds);
+        relation Reach(x:i32);
+        relation Label(x:i32,label:String);
+        output Reach, Label;
+        Reach(*x) :- Seed(x);
+        Reach(increment(*x)) :- Reach(x), if *x < facts.limit;
+        Label(*x,label.clone()) :- Reach(x);
+    };
+    assert_eq!(
+        reach.collect::<BTreeSet<_>>(),
+        BTreeSet::from([(0,), (1,), (2,), (3,)])
+    );
+    assert_eq!(
+        labels.collect::<BTreeSet<_>>(),
+        (0..=3).map(|x| (x, String::from("captured"))).collect()
+    );
+    assert!(!rounds.is_empty());
+    assert_eq!(facts.seeds, [(0,)]);
+}
