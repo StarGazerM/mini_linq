@@ -7,6 +7,13 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Datalog hole↔CQ contract: typed terminal registry (terminal path →
+  `pull`/`push`) checked per hole; push holes stream admission through the new
+  `own_push::push_into!` consumer entry (own-dialect). Round rewrites may change
+  one hole's CQ sub-pipeline (e.g. `stage(batch(N))`, `represent(positions)`)
+  under an independent check. Optional nested-CQ partition terminal measured
+  and kept opt-in (no CGU or runtime gain).
+
 - Fx hashing is the Datalog default (Storage and Round providers, hole dedup
   sets). Keyed aHash for adversarial inputs: `hasher(keyed)` +
   `hasher_round(keyed)`; DOOP engines `mini-keyed` / `mini-par-keyed`.
