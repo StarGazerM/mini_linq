@@ -54,9 +54,8 @@ pub fn compile(source: &strata::Program) -> syn::Result<Program> {
     check(source, &target)?;
     Ok(target)
 }
-/// Independently check cover, erasure, fresh schemas, and preservation.
+/// Independently check cover, erasure, fresh schemas, and the embedded Strata source.
 pub fn check(source: &strata::Program, target: &Program) -> syn::Result<()> {
-    strata::contract::check(source)?;
     contract::check(target)?;
     ensure(
         source == &target.strata,

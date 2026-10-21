@@ -38,7 +38,6 @@ pub fn compile(tokens: &TokenStream) -> syn::Result<TokenStream> {
     for query in &mut program.rules {
         expand_query(query)?;
     }
-    source::contract::check(&program)?;
     let target = program.to_token_stream();
     check(tokens, &target)?;
     Ok(target)

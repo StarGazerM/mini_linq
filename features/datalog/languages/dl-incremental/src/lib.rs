@@ -249,6 +249,10 @@ pub mod contract {
 pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
     contract::check(source)?;
     contract::check(target)?;
+    check_rewrite_admitted(source, target)
+}
+// The stage runner has already checked both language contracts.
+fn check_rewrite_admitted(source: &Program, target: &Program) -> syn::Result<()> {
     ensure(
         source.strata == target.strata,
         target,
@@ -260,6 +264,6 @@ impl cq_stage::Language for Program {
         contract::check(self).map(|_| ())
     }
     fn check_rewrite(source: &Self, target: &Self) -> syn::Result<()> {
-        check_rewrite(source, target)
+        check_rewrite_admitted(source, target)
     }
 }

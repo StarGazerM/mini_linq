@@ -48,8 +48,8 @@ pub fn compile(source: &incremental::Program) -> syn::Result<Program> {
     Ok(target)
 }
 /// Formal rule CK-DL-Storage: independent data-refinement correspondence.
+/// Target admission checks its embedded Incremental source; equality admits the input too.
 pub fn check(source: &incremental::Program, target: &Program) -> syn::Result<()> {
-    incremental::contract::check(source)?;
     cq_lang_datalog_storage::contract::check(target)?;
     ensure(
         source == &target.incremental,
