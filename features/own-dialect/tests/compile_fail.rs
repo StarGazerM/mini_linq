@@ -158,6 +158,32 @@ fn unsupported_written_choices_are_refused_after_core_contracts() {
 }
 
 #[test]
+fn consumer_form_rejects_missing_or_mismatched_consumers() {
+    let compiler = Compiler::new();
+    let query = "struct Q; relation R(a:i32,b:i32); answer(a) :- R(a,b);";
+    success(compiler.compile(
+        "consumer_control",
+        &format!("mini_linq::compile! {{ pipeline {{ print = own_push::push_into(consumer {{ |_: (&i32,)| {{}} }};); }} {query} }}"),
+    ));
+    failure(
+        compiler.compile(
+            "missing_consumer",
+            &format!(
+                "mini_linq::compile! {{ pipeline {{ print = own_push::push_into; }} {query} }}"
+            ),
+        ),
+        "consumer",
+    );
+    failure(
+        compiler.compile(
+            "mismatched_consumer",
+            &format!("mini_linq::compile! {{ pipeline {{ print = own_push::push_into(consumer {{ |_: (String,)| {{}} }};); }} {query} }}"),
+        ),
+        "mismatched types",
+    );
+}
+
+#[test]
 fn printer_rejects_arguments_and_a_remaining_queue() {
     let compiler = Compiler::new();
     let query = "struct Q; relation R(a: i32,b: i32); answer(a) :- R(a,b);";
@@ -247,10 +273,19 @@ fn positions_representation_is_explicitly_refused() {
 fn lookup_witness_and_expansion_are_refused_by_name() {
     let compiler = Compiler::new();
     for (name, decision, expected) in [
-        ("lookup_witness", "s share = lookup r [k] first s force p; s repr = tuples witness { r [k] at s as ::cq_storage::RunCursor<'_, _> };", "own_push: `s repr witness` is unsupported"),
-        ("lookup_expand", "p stage = batch 4 expand;", "own_push: `p stage expand` is unsupported"),
+        (
+            "lookup_witness",
+            "s share = lookup r [k] first s force p; s repr = tuples witness { r [k] at s as ::cq_storage::RunCursor<'_, _> };",
+            "own_push: `s repr witness` is unsupported",
+        ),
+        (
+            "lookup_expand",
+            "p stage = batch 4 expand;",
+            "own_push: `p stage expand` is unsupported",
+        ),
     ] {
-        let source = format!(r#"own_push::push! {{
+        let source = format!(
+            r#"own_push::push! {{
             pipeline {{}};
             physical {{
                 relation R(a:i32,b:i32); relation S(a:i32,c:i32);
@@ -268,7 +303,8 @@ fn lookup_witness_and_expansion_are_refused_by_name() {
                 out canon = ::std::collections::HashSet<_>;
                 {decision}
             }}
-        }}"#);
+        }}"#
+        );
         failure(compiler.compile(name, &source), expected);
     }
 }

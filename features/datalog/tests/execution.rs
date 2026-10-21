@@ -3,6 +3,75 @@
 use std::collections::BTreeSet;
 
 #[test]
+fn push_holes_match_pull_for_owned_heads_and_constant_filtered_keys() {
+    let names = [
+        ("alice".to_owned(),),
+        ("bob".to_owned(),),
+        ("alice".to_owned(),),
+    ];
+    let modifiers = [
+        ("blocked".to_owned(), "bob".to_owned()),
+        ("other".to_owned(), "alice".to_owned()),
+    ];
+    macro_rules! run {
+        ($printer:path) => {
+            cq_datalog::datalog! {
+                pipeline { cq = pipeline { print = $printer; }; }
+                struct Names;
+                relation Name(name:String) = (&names);
+                relation Modifier(kind:String,name:String) = (&modifiers);
+                relation Allowed(name:String,n:i32);
+                output Allowed;
+                Allowed(name.clone(), 0) :- Name(name), !Modifier("blocked",name);
+                Allowed(name.clone(), *n + 1) :- Allowed(name,n), if *n < 2;
+            }
+            .collect::<BTreeSet<_>>()
+        };
+    }
+    let pull = run!(::mini_linq::passes::print_pull);
+    let push = run!(::cq_datalog::passes::print_push);
+    assert_eq!(push, pull);
+    assert_eq!(
+        push,
+        BTreeSet::from([
+            ("alice".to_owned(), 0),
+            ("alice".to_owned(), 1),
+            ("alice".to_owned(), 2),
+        ])
+    );
+}
+
+#[test]
+fn push_key_holes_preserve_empty_tuple_and_empty_input_semantics() {
+    let domain = [(1_i32,), (2,), (2,)];
+    macro_rules! run {
+        ($printer:path, $blocked:expr) => {
+            cq_datalog::datalog! {
+                pipeline { cq = pipeline { print = $printer; }; }
+                struct Exists;
+                relation Domain(x:i32) = (domain);
+                relation Blocked(x:i32) = ($blocked);
+                relation Out(x:i32);
+                output Out;
+                Out(*x) :- Domain(x), !Blocked(_);
+            }
+            .collect::<BTreeSet<_>>()
+        };
+    }
+    let absent: [(i32,); 0] = [];
+    for blocked in [absent.as_slice(), &[(9_i32,)]] {
+        assert_eq!(
+            run!(::cq_datalog::passes::print_push, blocked),
+            run!(::mini_linq::passes::print_pull, blocked),
+        );
+    }
+    assert_eq!(
+        run!(::cq_datalog::passes::print_push, absent),
+        BTreeSet::from(domain)
+    );
+}
+
+#[test]
 fn documented_language_entry_executes_without_a_surface_wrapper() {
     let edges = [(1_i32, 2_i32), (2, 3)];
     let answers: BTreeSet<_> = cq_datalog::datalog! {
@@ -53,7 +122,7 @@ fn configured_pull_printer_alias_executes_recursive_and_key_holes() {
     let blocked = [(4_i32,)];
     let answers: BTreeSet<_> = cq_datalog::datalog! {
         pipeline {
-            pull_printers = [crate::pull_alias::emit];
+            terminals = [crate::pull_alias::emit => pull];
             cq = pipeline { print = crate::pull_alias::emit; };
         }
         struct Closure;

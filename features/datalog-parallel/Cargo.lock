@@ -102,6 +102,7 @@ dependencies = [
  "cq-lang-datalog-strata",
  "cq-rewrites",
  "cq-storage",
+ "own-push",
  "rustc-hash",
 ]
 
@@ -974,6 +975,7 @@ dependencies = [
  "cq-datalog-parallel-runtime",
  "cq-storage",
  "mini-linq",
+ "oracle-ascent",
  "oracle-shared",
  "rayon",
 ]
@@ -984,6 +986,19 @@ version = "0.1.0"
 dependencies = [
  "cq-storage",
  "cq-testkit",
+]
+
+[[package]]
+name = "own-push"
+version = "0.0.0"
+dependencies = [
+ "cq-lang-structures",
+ "cq-physical-realization",
+ "cq-print",
+ "cq-stage",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
