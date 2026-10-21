@@ -1,14 +1,33 @@
 //! Feature-selected DOOP CLI with independently compiled parallel engines.
-//! Defaults enable all six engines; `--check` requires all six features.
+//! Defaults enable all six engines; `--check` requires all six features:
+//! `mini,mini-keyed,ascent,mini-par,mini-par-keyed,ascent-par`.
+//! Shared generators preserve DOOP's 103-relation, 135-rule source.
+//! `doop-parallel FACTS --check --threads N` compares all 26 full tuple sets.
+//! `--engine mini|mini-keyed|mini-par|mini-par-keyed|ascent|ascent-par` isolates
+//! timing and RSS. `mini` and `mini-par` use Fx storage and hole deduplication;
+//! the `-keyed` alternatives use keyed aHash. Default CLI execution runs `mini`
+//! and `ascent`; Cargo enables all six engines.
+//! For 15 workers, use
+//! `doop-parallel /tmp/doop-data/cassandra --engine mini-par --threads 15`;
+//! `doop-parallel /tmp/doop-data/cassandra --check --threads 15` compares every
+//! engine with sequential Ascent. Run each timing engine in a separate process.
+//! [`harness`] supplies engine descriptors and installs local Rayon pools;
+//! CLI parsing, loading, full-tuple checks, timing and RSS use `doop-shared`.
+//!
+//! `hasher-samples.csv`, `hasher-summary.csv` and `hasher-evidence.json` preserve
+//! the historical `dadaed6` opt-in measurements unchanged. In those artifacts,
+//! `mini`/`mini-par` mean keyed aHash and `mini-fx`/`mini-par-fx` mean Fx.
+//! They are not measurements of today's Fx-default engines or keyed selectors.
+//! Use `hash_sweep.py` to collect a new, separately labeled comparison.
 pub mod harness;
 
 #[cfg(all(
     test,
     feature = "mini",
-    feature = "mini-fx",
+    feature = "mini-keyed",
     feature = "ascent",
     feature = "mini-par",
-    feature = "mini-par-fx",
+    feature = "mini-par-keyed",
     feature = "ascent-par"
 ))]
 mod tests {
@@ -80,8 +99,10 @@ mod tests {
                             sequential.compare(&mut expected).unwrap();
                             actual.compare(&mut expected).unwrap();
                             ascent.compare(&mut expected).unwrap();
-                            doop_mini_fx::run(facts()).compare(&mut expected).unwrap();
-                            doop_mini_par_fx::run(facts())
+                            doop_mini_keyed::run(facts())
+                                .compare(&mut expected)
+                                .unwrap();
+                            doop_mini_par_keyed::run(facts())
                                 .compare(&mut expected)
                                 .unwrap();
                             assert_eq!(actual.varpointsto, vec![(sym("heap"), sym("local"))]);

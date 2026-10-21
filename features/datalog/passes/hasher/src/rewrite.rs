@@ -6,7 +6,7 @@ use syn::{GenericArgument, PathArguments, Type, ext::IdentExt};
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Choice {
     Fx,
-    Default,
+    Keyed,
 }
 
 impl syn::parse::Parse for Choice {
@@ -14,16 +14,16 @@ impl syn::parse::Parse for Choice {
         let name = input.call(syn::Ident::parse_any)?;
         let choice = match name.to_string().as_str() {
             "fx" => Self::Fx,
-            "default" => Self::Default,
+            "keyed" => Self::Keyed,
             _ => {
                 return Err(syn::Error::new_spanned(
                     name,
-                    "expected hasher choice `fx` or `default`",
+                    "expected hasher choice `fx` or `keyed`",
                 ));
             }
         };
         if !input.is_empty() {
-            return Err(input.error("expected exactly one hasher choice: `fx` or `default`"));
+            return Err(input.error("expected exactly one hasher choice: `fx` or `keyed`"));
         }
         Ok(choice)
     }
@@ -114,21 +114,21 @@ fn select(ty: &mut Type, choice: Choice) -> syn::Result<()> {
     *ty = match (provider(ty)?, choice) {
         (Provider::Map(key, value), Choice::Fx) => syn::parse_quote!(
             ::std::collections::HashMap<#key, #value,
-                ::std::hash::BuildHasherDefault<::rustc_hash::FxHasher>>
+                ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
         ),
-        (Provider::Map(key, value), Choice::Default) => syn::parse_quote!(
+        (Provider::Map(key, value), Choice::Keyed) => syn::parse_quote!(
             ::std::collections::HashMap<#key, #value, ::cq_storage::HashState>
         ),
         (Provider::Set(row), Choice::Fx) => syn::parse_quote!(
             ::std::collections::HashSet<#row,
-                ::std::hash::BuildHasherDefault<::rustc_hash::FxHasher>>
+                ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
         ),
-        (Provider::Set(row), Choice::Default) => syn::parse_quote!(::cq_storage::HashSet<#row>),
+        (Provider::Set(row), Choice::Keyed) => syn::parse_quote!(::cq_storage::HashSet<#row>),
         (Provider::Sharded(row), Choice::Fx) => syn::parse_quote!(
             ::cq_datalog_parallel_runtime::ShardedSeen<#row,
-                ::std::hash::BuildHasherDefault<::rustc_hash::FxHasher>>
+                ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
         ),
-        (Provider::Sharded(row), Choice::Default) => syn::parse_quote!(
+        (Provider::Sharded(row), Choice::Keyed) => syn::parse_quote!(
             ::cq_datalog_parallel_runtime::ShardedSeen<#row>
         ),
         (Provider::Other, _) => return Ok(()),
@@ -186,29 +186,29 @@ fn check_provider(source: &Type, target: &Type, choice: Choice) -> syn::Result<(
                 (*key, Some(*value)),
                 Some(match choice {
                     Choice::Fx => {
-                        syn::parse_quote!(::std::hash::BuildHasherDefault<::rustc_hash::FxHasher>)
+                        syn::parse_quote!(
+                            ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>
+                        )
                     }
-                    Choice::Default => syn::parse_quote!(::cq_storage::HashState),
+                    Choice::Keyed => syn::parse_quote!(::cq_storage::HashState),
                 }),
             ),
             (Provider::Set(row), Choice::Fx) => (
                 &["std", "collections", "HashSet"],
                 (*row, None),
                 Some(syn::parse_quote!(
-                    ::std::hash::BuildHasherDefault<::rustc_hash::FxHasher>
+                    ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>
                 )),
             ),
-            (Provider::Set(row), Choice::Default) => {
-                (&["cq_storage", "HashSet"], (*row, None), None)
-            }
+            (Provider::Set(row), Choice::Keyed) => (&["cq_storage", "HashSet"], (*row, None), None),
             (Provider::Sharded(row), Choice::Fx) => (
                 &["cq_datalog_parallel_runtime", "ShardedSeen"],
                 (*row, None),
                 Some(syn::parse_quote!(
-                    ::std::hash::BuildHasherDefault<::rustc_hash::FxHasher>
+                    ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>
                 )),
             ),
-            (Provider::Sharded(row), Choice::Default) => (
+            (Provider::Sharded(row), Choice::Keyed) => (
                 &["cq_datalog_parallel_runtime", "ShardedSeen"],
                 (*row, None),
                 None,

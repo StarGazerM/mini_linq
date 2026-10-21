@@ -6,8 +6,8 @@
 //! # DOOP engine features
 //!
 //! The `datalog-parallel-doop` package retains the `doop-parallel` CLI. Default
-//! Cargo features enable all six engines: `mini`, `mini-fx`, `ascent`,
-//! `mini-par`, `mini-par-fx`, and `ascent-par`. `--check` requires all six
+//! Cargo features enable all six engines: `mini`, `mini-keyed`, `ascent`,
+//! `mini-par`, `mini-par-keyed`, and `ascent-par`. `--check` requires all six
 //! comparison features and compares full tuple sets against sequential Ascent.
 //! From `features/datalog-parallel`, select an isolated engine or the complete
 //! default comparison:
@@ -17,15 +17,22 @@
 //! cargo run --release --locked -p datalog-parallel-doop -- /tmp/doop-data/cassandra --check --threads 15
 //! ```
 //!
-//! Parallel implementations live in `doop/engines/{mini-par,mini-par-fx,ascent-par}`
-//! as `doop-mini-par`, `doop-mini-par-fx`, and `doop-ascent-par`. Optional
-//! sequential features depend directly on `doop-mini`, `doop-mini-fx`, and
+//! Parallel implementations live in `doop/engines/{mini-par,mini-par-keyed,ascent-par}`
+//! as `doop-mini-par`, `doop-mini-par-keyed`, and `doop-ascent-par`. Optional
+//! sequential features depend directly on `doop-mini`, `doop-mini-keyed`, and
 //! `doop-ascent` from the base Datalog workspace, never on its CLI package.
 //! Both CLIs share facts, interning, loading, engine-source macros, and the
 //! common harness through `doop-shared` in `features/datalog/doop/shared`.
 //! `phase-timing` forwards instrumentation only to enabled engines, without
 //! pulling in otherwise disabled implementations. Build timing binaries
 //! without instrumentation and run each engine in a separate process.
+//!
+//! Sharding preserves the Datalog default Fx hasher for admission and layouts;
+//! the default CQ continuation also uses Fx deduplication. Fx is unkeyed: for
+//! adversarial inputs select `cq_datalog_hasher::hasher(keyed)` before
+//! `shard_storage`, `cq_datalog_hasher::hasher_round(keyed)` before `partition`,
+//! and override CQ deduplication with `cq_rewrites::retype(dedup =>
+//! ::cq_storage::HashSet<_>)`. Hash iteration order is not an output guarantee.
 use proc_macro::TokenStream;
 
 #[proc_macro]

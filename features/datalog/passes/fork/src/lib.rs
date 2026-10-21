@@ -15,14 +15,23 @@ pub fn cq_defaults() -> cq_stage::Configuration {
         lower = ::mini_linq::passes::lower;
         select = ::mini_linq::passes::select;
         represent = ::mini_linq::passes::represent;
+        structures = [::cq_datalog::cq_rewrites::retype(
+            dedup => ::std::collections::HashSet<_, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
+        )];
         stage = ::mini_linq::passes::stage;
         print = ::mini_linq::passes::print_pull;
     })
 }
+/// Install Datalog's dedup choice before any authored Structures rewrites.
+/// A later `retype(dedup => ...)` therefore selects an alternative provider.
+pub fn resolve_cq(mut configuration: cq_stage::Configuration) -> syn::Result<cq_stage::Pipeline> {
+    let mut defaults = cq_defaults();
+    defaults.structures.append(&mut configuration.structures);
+    configuration.structures = std::mem::take(&mut defaults.structures);
+    configuration.resolve(defaults)
+}
 pub fn default_pipeline() -> cq_stage::Pipeline {
-    cq_stage::Configuration::default()
-        .resolve(cq_defaults())
-        .expect("complete CQ defaults")
+    resolve_cq(cq_stage::Configuration::default()).expect("complete CQ defaults")
 }
 pub fn compile(source: &storage::Program) -> syn::Result<Program> {
     compile_with_ratio(source, 4)
@@ -32,21 +41,21 @@ pub fn compile_with_ratio(source: &storage::Program, ratio: u32) -> syn::Result<
     construct(
         source,
         default_pipeline(),
-        PullPrinters::default(),
+        TerminalRegistry::default(),
         syn::parse_quote!(none),
         ratio,
     )
 }
 struct Arguments {
     pipeline: cq_stage::Pipeline,
-    pull_printers: PullPrinters,
+    terminals: TerminalRegistry,
     timing: Ident,
     ratio: u32,
 }
 impl syn::parse::Parse for Arguments {
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
         let mut pipeline = None;
-        let mut pull_printers = None;
+        let mut terminals = None;
         let mut timing = None;
         let mut ratio = None;
         while !input.is_empty() {
@@ -56,8 +65,8 @@ impl syn::parse::Parse for Arguments {
                 pipeline = Some(input.parse()?);
             } else if name == "timing" && timing.is_none() {
                 timing = Some(input.parse()?);
-            } else if name == "pull_printers" && pull_printers.is_none() {
-                pull_printers = Some(input.parse()?);
+            } else if name == "terminals" && terminals.is_none() {
+                terminals = Some(input.parse()?);
             } else if name == "leveled_ratio" && ratio.is_none() {
                 ratio = Some(input.parse::<syn::LitInt>()?.base10_parse()?);
             } else {
@@ -70,7 +79,7 @@ impl syn::parse::Parse for Arguments {
         }
         Ok(Self {
             pipeline: pipeline.unwrap_or_else(default_pipeline),
-            pull_printers: pull_printers.unwrap_or_default(),
+            terminals: terminals.unwrap_or_default(),
             timing: timing.unwrap_or_else(|| syn::parse_quote!(none)),
             ratio: ratio.unwrap_or(4),
         })
@@ -79,11 +88,11 @@ impl syn::parse::Parse for Arguments {
 pub fn compile_with(source: &storage::Program, args: TokenStream) -> syn::Result<Program> {
     let Arguments {
         pipeline,
-        pull_printers,
+        terminals,
         timing,
         ratio,
     } = syn::parse2(args)?;
-    construct(source, pipeline, pull_printers, timing, ratio)
+    construct(source, pipeline, terminals, timing, ratio)
 }
 /// Formal rule CK-DL-Fork: independently check storage embedding and every hole.
 pub fn check(source: &storage::Program, target: &Program) -> syn::Result<()> {
@@ -205,12 +214,14 @@ fn hole_inputs<'a>(
 fn construct(
     source: &storage::Program,
     pipeline: cq_stage::Pipeline,
-    pull_printers: PullPrinters,
+    terminals: TerminalRegistry,
     timing: Ident,
     ratio: u32,
 ) -> syn::Result<Program> {
     ensure(ratio >= 2, source, "leveled device index ratio must be at least two")?;
     let analysis = storage::contract::check(source)?;
+    terminals.check()?;
+    let interface = terminals.interface(&pipeline)?;
     let variants = &source.incremental.variants;
     let representation = key_representation(source)?;
     let mut fresh = Fresh::new(source);
@@ -397,7 +408,7 @@ fn construct(
                         filters: selections,
                         name: fresh.id("keys"),
                         representation,
-                        provider: syn::parse_quote!(::cq_storage::HashSet<_>),
+                        provider: syn::parse_quote!(::std::collections::HashSet<_, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>),
                         hole: holes.len(),
                     };
                     let name = fresh.id("key_hole");
@@ -521,14 +532,14 @@ fn construct(
         .map(|cq| Hole {
             cq,
             pipeline: pipeline.clone(),
-            interface: HoleInterface::Pull,
+            interface,
         })
         .collect();
     let target = Program {
         storage: source.clone(),
         context,
         holes,
-        pull_printers,
+        terminals,
         execution: Vec::new(),
         policy: RoundPolicy { timing },
     };

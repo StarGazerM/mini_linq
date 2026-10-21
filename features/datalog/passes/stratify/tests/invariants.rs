@@ -175,7 +175,7 @@ fn ddisasm_selects_only_the_recursive_register_filter() {
 
 #[test]
 fn doop_invariant_selection_is_checked_without_blanket_join_materialization() {
-    let source = benchmark_program(include_str!("../../../doop/src/mini_engine.rs"));
+    let source = benchmark_program(include_str!("../../../doop/shared/src/mini_engine.rs"));
     let before = stratify::compile(&source).unwrap();
     let after = invariants::compile(&before).unwrap();
     eprintln!(

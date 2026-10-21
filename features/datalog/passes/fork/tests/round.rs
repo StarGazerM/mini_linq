@@ -18,6 +18,49 @@ fn storage_and_round_are_complete_checked_languages() {
     round::contract::check(&round).unwrap();
     assert!(round.execution.is_empty());
 }
+
+#[test]
+fn default_negation_sets_and_hole_dedup_use_fx() {
+    let source = syn::parse_quote! {
+        struct Q;
+        relation E(x:i32) = (e);
+        relation Blocked(x:i32) = (blocked);
+        relation R(x:i32);
+        output R;
+        R(*x) :- E(x), !Blocked(x);
+    };
+    let strata = cq_datalog_stratify::compile(&source).unwrap();
+    let incremental = cq_datalog_incremental::compile(&strata).unwrap();
+    let storage = cq_datalog_storage::compile(&incremental).unwrap();
+    let target = compile(&storage).unwrap();
+    let provider: syn::Type = syn::parse_quote!(
+        ::std::collections::HashSet<_, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
+    );
+    let keys: Vec<_> = target.context.strata.iter().flat_map(|s| &s.keys).collect();
+    assert!(!keys.is_empty());
+    assert!(keys.iter().all(|key| key.provider == provider));
+    let expected: cq_stage::Pipeline = syn::parse_quote!(pipeline {
+        ::mini_linq::passes::plan,
+        ::mini_linq::passes::index_demands,
+        ::mini_linq::passes::lower,
+        ::mini_linq::passes::select,
+        ::cq_datalog::cq_rewrites::retype(
+            dedup => ::std::collections::HashSet<_, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
+        ),
+        ::mini_linq::passes::represent,
+        ::mini_linq::passes::stage,
+        ::mini_linq::passes::print_pull
+    });
+    assert!(!target.holes.is_empty());
+    let expected = expected.to_token_stream().to_string();
+    assert!(
+        target
+            .holes
+            .iter()
+            .all(|hole| { hole.pipeline.to_token_stream().to_string() == expected })
+    );
+    check(&storage, &target).unwrap();
+}
 #[test]
 fn per_hole_queues_check_terminal_path_not_incidental_tokens() {
     let source = source();
@@ -34,7 +77,7 @@ fn per_hole_queues_check_terminal_path_not_incidental_tokens() {
         round::contract::check(&changed)
             .unwrap_err()
             .to_string()
-            .contains("push hole interface is unsupported")
+            .contains("hole interface does not match its registered terminal interface")
     );
     changed = target.clone();
     changed.holes[0].pipeline.passes.clear();
@@ -45,7 +88,7 @@ fn per_hole_queues_check_terminal_path_not_incidental_tokens() {
     changed = target.clone();
     changed.holes[0].pipeline =
         syn::parse_quote!(pipeline{mini_linq::passes::print_pull(unchecked)});
-    assert!(round::contract::check(&changed).is_err());
+    round::check_rewrite(&target, &changed).unwrap();
 }
 #[test]
 fn fork_arguments_record_queue_and_timing_and_reject_unknown_options() {
@@ -63,8 +106,9 @@ fn fork_arguments_record_queue_and_timing_and_reject_unknown_options() {
         quote!(timing=none;timing=phases;),
         quote!(timing=invalid;),
         quote!(cq=pipeline{};),
-        quote!(pull_printers=[];),
-        quote!(pull_printers=[];pull_printers=[];),
+        quote!(terminals=[];),
+        quote!(terminals=[];terminals=[];),
+        quote!(terminals=[printer => pull, printer => push];),
     ] {
         assert!(compile_with(&source, args).is_err());
     }
@@ -156,7 +200,13 @@ fn reusable_printer_splices_and_delegates_only_phase_evaluation() {
         cq_datalog_print::render_with(&program, &holes, |rules, context, holes, execution| {
             assert!(execution.is_empty());
             phases.push(rules.iter().map(|r| r.hole).collect::<Vec<_>>());
-            Ok(cq_datalog_print::evaluate(rules, context, holes, false))
+            Ok(cq_datalog_print::evaluate(
+                rules,
+                context,
+                holes,
+                &program.holes,
+                false,
+            ))
         })
         .unwrap();
     assert_eq!(phases.len(), 2);
@@ -168,21 +218,22 @@ fn reusable_printer_splices_and_delegates_only_phase_evaluation() {
 }
 
 #[test]
-fn declared_pull_paths_and_typed_interfaces_survive_round_text() {
+fn declared_terminal_paths_and_typed_interfaces_survive_round_text() {
     let source = source();
     let defaults = compile(&source).unwrap();
     assert_eq!(
-        defaults.pull_printers.0,
-        vec![
-            syn::parse_quote!(::mini_linq::passes::print_pull),
-            syn::parse_quote!(mini_linq::passes::print_pull),
-        ]
+        defaults.terminals,
+        syn::parse_quote!([
+            ::mini_linq::passes::print_pull => pull,
+            mini_linq::passes::print_pull => pull,
+            ::cq_datalog::passes::print_push => push
+        ])
     );
     let target = compile_with(
         &source,
         quote! {
             cq = pipeline { crate::alias::pull };
-            pull_printers = [crate::alias::pull, ::declared::unused_pull];
+            terminals = [crate::alias::pull => pull, ::declared::unused_push => push];
         },
     )
     .unwrap();
@@ -196,18 +247,14 @@ fn declared_pull_paths_and_typed_interfaces_survive_round_text() {
     assert_eq!(replay, target);
     round::contract::check(&replay).unwrap();
     check(&source, &replay).unwrap();
-    assert_eq!(replay.pull_printers.0.len(), 2);
-    for terminal in [
-        quote!(unlisted::pull),
-        quote!(::crate::alias::pull),
-        quote!(crate::alias::pull(unchecked)),
-    ] {
+    assert_eq!(replay.terminals.0.len(), 2);
+    for terminal in [quote!(unlisted::pull), quote!(::crate::alias::pull)] {
         let mut changed = replay.clone();
         changed.holes[0].pipeline = syn::parse2(quote!(pipeline { #terminal })).unwrap();
         assert!(round::contract::check(&changed).is_err());
     }
     let mut changed = replay.clone();
-    changed.pull_printers.0.clear();
+    changed.terminals.0.clear();
     assert!(round::contract::check(&changed).is_err());
     let mut changed = replay;
     changed.holes[0].interface = round::HoleInterface::Push;
@@ -218,27 +265,106 @@ fn declared_pull_paths_and_typed_interfaces_survive_round_text() {
 }
 
 #[test]
-fn default_allowlist_rejects_push_terminals() {
+fn default_registry_rejects_unregistered_push_terminals() {
     let source = source();
     for path in [
         quote!(mini_linq::passes::print_push),
         quote!(::mini_linq::passes::print_push),
     ] {
         let error = compile_with(&source, quote!(cq = pipeline { #path };)).unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("recorded pull_printers allowlist")
-        );
+        assert!(error.to_string().contains("recorded terminal registry"));
         let mut changed = compile(&source).unwrap();
         changed.holes[0].pipeline = syn::parse2(quote!(pipeline { #path })).unwrap();
         assert!(
             round::contract::check(&changed)
                 .unwrap_err()
                 .to_string()
-                .contains("recorded pull_printers allowlist")
+                .contains("recorded terminal registry")
         );
     }
+}
+
+#[test]
+fn fork_infers_both_interfaces_and_round_rewrites_preserve_the_registry() {
+    let storage = source();
+    for (terminal, interface) in [
+        (
+            quote!(::mini_linq::passes::print_pull),
+            round::HoleInterface::Pull,
+        ),
+        (
+            quote!(::cq_datalog::passes::print_push),
+            round::HoleInterface::Push,
+        ),
+    ] {
+        let source = compile_with(&storage, quote!(cq = pipeline { #terminal };)).unwrap();
+        assert!(source.holes.iter().all(|hole| hole.interface == interface));
+        let replay: round::Program = syn::parse2(source.to_token_stream()).unwrap();
+        assert_eq!(replay, source);
+        round::contract::check(&replay).unwrap();
+        check(&storage, &replay).unwrap();
+
+        let mut changed = source.clone();
+        for hole in &mut changed.holes {
+            hole.pipeline = syn::parse2(quote!(pipeline {
+                custom::plan(any(tokens)), custom::rewrite(changed = arguments),
+                #terminal(terminal = arguments)
+            }))
+            .unwrap();
+        }
+        round::check_rewrite(&source, &changed).unwrap();
+
+        let mut missing = changed.clone();
+        missing.holes[0].pipeline.passes.last_mut().unwrap().path =
+            syn::parse_quote!(unregistered::terminal);
+        assert!(round::check_rewrite(&source, &missing).is_err());
+
+        let mut mismatched = changed.clone();
+        mismatched.holes[0].pipeline.passes.last_mut().unwrap().path = match interface {
+            round::HoleInterface::Pull => syn::parse_quote!(::cq_datalog::passes::print_push),
+            round::HoleInterface::Push => syn::parse_quote!(::mini_linq::passes::print_pull),
+        };
+        assert!(round::check_rewrite(&source, &mismatched).is_err());
+        mismatched.holes[0].interface = match interface {
+            round::HoleInterface::Pull => round::HoleInterface::Push,
+            round::HoleInterface::Push => round::HoleInterface::Pull,
+        };
+        round::contract::check(&mismatched).unwrap();
+        assert!(round::check_rewrite(&source, &mismatched).is_err());
+
+        let mut altered_cq = changed.clone();
+        altered_cq.holes[0].cq.name = syn::parse_quote!(ChangedHole);
+        assert!(round::check_rewrite(&source, &altered_cq).is_err());
+
+        changed
+            .terminals
+            .0
+            .push(syn::parse_quote!(unused::terminal => pull));
+        round::contract::check(&changed).unwrap();
+        assert!(round::check_rewrite(&source, &changed).is_err());
+        let duplicate = changed.terminals.0[0].clone();
+        changed.terminals.0.push(duplicate);
+        assert!(round::contract::check(&changed).is_err());
+        assert!(syn::parse2::<round::Program>(changed.to_token_stream()).is_err());
+    }
+
+    let alias = compile_with(
+        &storage,
+        quote! {
+            terminals = [crate::alias::push => push];
+            cq = pipeline { crate::alias::push };
+        },
+    )
+    .unwrap();
+    assert!(
+        alias
+            .holes
+            .iter()
+            .all(|hole| hole.interface == round::HoleInterface::Push)
+    );
+    let replay: round::Program = syn::parse2(alias.to_token_stream()).unwrap();
+    assert_eq!(alias, replay);
+    round::contract::check(&replay).unwrap();
 }
 
 fn mutual() -> round::Program {

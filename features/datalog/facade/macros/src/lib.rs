@@ -165,5 +165,15 @@ pub fn print_rounds(input: TokenStream) -> TokenStream {
     .into()
 }
 
+/// Structures → pull expression with an independently selected hole partition.
+#[proc_macro]
+pub fn print_hole(input: TokenStream) -> TokenStream {
+    cq_stage::pass::<cq_lang_structures::Program, syn::Expr>(
+        input.into(),
+        cq_datalog_print_hole::compile_with,
+    )
+    .into()
+}
+
 #[cfg(test)]
 mod tests;

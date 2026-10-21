@@ -31,6 +31,46 @@ fn defaults_include_surface_and_every_checked_stage() {
 }
 
 #[test]
+fn cq_structure_overrides_follow_default_fx_dedup() {
+    for (configuration, has_fx, has_keyed) in [
+        (syn::parse_quote!(pipeline {}), true, false),
+        (
+            syn::parse_quote!(pipeline { cq = pipeline { plan = custom::plan; }; }),
+            true,
+            false,
+        ),
+        (
+            syn::parse_quote!(pipeline { cq = pipeline { structures = []; }; }),
+            true,
+            false,
+        ),
+        (
+            syn::parse_quote!(pipeline {
+                cq = pipeline {
+                    structures = [::cq_datalog::cq_rewrites::retype(dedup => ::cq_storage::HashSet<_>)];
+                };
+            }),
+            true,
+            true,
+        ),
+    ] {
+        let configuration: DatalogConfiguration = configuration;
+        let queue = configuration
+            .resolve(DatalogConfiguration::defaults())
+            .unwrap();
+        let args = queue.passes[4].arguments.to_string();
+        assert_eq!(args.contains("FxHasher"), has_fx);
+        assert_eq!(
+            args.contains("dedup => :: cq_storage :: HashSet < _ >"),
+            has_keyed
+        );
+        if has_keyed {
+            assert!(args.find("FxHasher").unwrap() < args.find("cq_storage").unwrap());
+        }
+    }
+}
+
+#[test]
 fn named_phases_preserve_order_and_opaque_arguments() {
     let config: DatalogConfiguration = syn::parse_quote! { pipeline {
         surface = [sugar(opaque(tokens)), sugar_two];
@@ -53,13 +93,17 @@ fn named_phases_preserve_order_and_opaque_arguments() {
         cq_surface(opaque(tokens)), planner(no_reduce),
         ::mini_linq::passes::index_demands, ::mini_linq::passes::lower,
         physical_a(eight), physical_b, ::mini_linq::passes::select,
+        ::cq_datalog::cq_rewrites::retype(
+            dedup => ::std::collections::HashSet<_, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
+        ),
         structures(nine), ::mini_linq::passes::represent,
         ::mini_linq::passes::stage, ::mini_linq::passes::print_pull
     } };
     let expected: Pipeline = syn::parse_quote! { pipeline {
         sugar(opaque(tokens)), sugar_two, components(one), variants(two), stores(three),
-        rewrite_a(four), rewrite_b, holes(five; cq = #cq; pull_printers = [
-            ::mini_linq::passes::print_pull, mini_linq::passes::print_pull
+        rewrite_a(four), rewrite_b, holes(five; cq = #cq; terminals = [
+            ::mini_linq::passes::print_pull => pull, mini_linq::passes::print_pull => pull,
+            ::cq_datalog::passes::print_push => push
         ];),
         round_a(six), round_b, terminal(seven)
     } };
@@ -85,9 +129,13 @@ fn malformed_or_duplicate_phases_are_rejected() {
     for tokens in [
         quote!(pipeline { surface = []; surface = []; }),
         quote!(pipeline { cq = pipeline {}; cq = pipeline {}; }),
-        quote!(pipeline { pull_printers = []; pull_printers = []; }),
-        quote!(pipeline { pull_printers = printer; }),
-        quote!(pipeline { pull_printers = [printer(args)]; }),
+        quote!(pipeline { terminals = []; terminals = []; }),
+        quote!(pipeline { terminals = printer; }),
+        quote!(pipeline { terminals = [printer(args) => pull]; }),
+        quote!(pipeline { terminals = [printer]; }),
+        quote!(pipeline { terminals = [printer => invalid]; }),
+        quote!(pipeline { terminals = [printer => pull, printer => pull]; }),
+        quote!(pipeline { terminals = [printer => pull, printer => push]; }),
         quote!(pipeline { unknown = pass; }),
         quote!(pipeline { plan = pass; }),
         quote!(pipeline { cq = pipeline { plan = p; plan = q; }; }),
@@ -124,29 +172,34 @@ fn explicit_defaults_and_timing_are_recorded_in_fork_arguments() {
 }
 
 #[test]
-fn pull_printer_declarations_replace_defaults_and_preserve_exact_paths() {
+fn terminal_declarations_replace_defaults_and_preserve_exact_paths() {
     let defaults = DatalogConfiguration::defaults();
     assert_eq!(
-        &defaults.pull_printers.as_ref().unwrap().0,
-        &vec![
-            syn::parse_quote!(::mini_linq::passes::print_pull),
-            syn::parse_quote!(mini_linq::passes::print_pull),
-        ]
+        defaults.terminals.as_ref().unwrap(),
+        &syn::parse_quote!([
+            ::mini_linq::passes::print_pull => pull,
+            mini_linq::passes::print_pull => pull,
+            ::cq_datalog::passes::print_push => push
+        ])
     );
     let config: DatalogConfiguration = syn::parse_quote!(pipeline {
-        pull_printers = [crate::alias::pull, ::alternate::pull];
+        terminals = [crate::alias::pull => pull, ::alternate::push => push];
         cq = pipeline { print = crate::alias::pull; };
     });
     let queue = config.resolve(defaults).unwrap();
     let args = queue.passes[4].arguments.to_string();
-    assert!(args.contains("pull_printers = [crate :: alias :: pull , :: alternate :: pull]"));
+    assert!(
+        args.contains(
+            "terminals = [crate :: alias :: pull => pull , :: alternate :: push => push]"
+        )
+    );
     assert!(!args.contains("mini_linq :: passes :: print_pull"));
-    let empty: DatalogConfiguration = syn::parse_quote!(pipeline { pull_printers = []; });
+    let empty: DatalogConfiguration = syn::parse_quote!(pipeline { terminals = []; });
     let queue = empty.resolve(DatalogConfiguration::defaults()).unwrap();
     assert!(
         queue.passes[4]
             .arguments
             .to_string()
-            .contains("pull_printers = []")
+            .contains("terminals = []")
     );
 }

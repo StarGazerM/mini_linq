@@ -1,5 +1,28 @@
 //! Feature-selected sequential DOOP CLI; each engine compiles independently.
-//! Defaults enable all engines; `--check` requires `mini,mini-fx,ascent`.
+//! Defaults enable all engines; `--check` requires `mini,mini-keyed,ascent`.
+//! Shared generators preserve all 103 relations, 135 rules and body atom order
+//! from `flowlog-rs/flowlog-bench/programs/oracle/flowlog/doop/default.dl`.
+//! Loading and the process-wide u32 string interner live in `doop-shared`.
+//!
+//! From `features/datalog`, build with `cargo build --release -p datalog-doop`.
+//! Fetch with `python3 doop/fetch.py cassandra`, then invoke the built binary:
+//! `doop /tmp/doop-data/cassandra --check`.
+//! `--check` compares all 26 full tuple sets against sequential Ascent.
+//! Uninstrumented output order is unspecified.
+//! `--engine mini|mini-keyed|ascent` isolates timing and peak RSS.
+//! `mini` uses Fx storage and hole deduplication by default; `mini-keyed` uses
+//! keyed aHash for both via explicit pipeline configuration.
+//! Default CLI execution runs `mini` and `ascent`; Cargo enables all three.
+//! Enable `phase-timing` for per-round instrumentation separately from timing runs.
+//! Compute timing includes derived indexes and materializing the 26 outputs;
+//! load timing includes parsing and interning, not engine initialization.
+//! No counters are enabled. Do not compile concurrently with measured runs.
+//! [`harness`] supplies engine descriptors to the shared harness, which owns
+//! CLI parsing, full-set checks, loading, timing and process high-water RSS.
+//!
+//! `codegen-evidence.json` and `engine-crates-evidence.json` retain historical
+//! pre-cutover measurements and engine names: `mini` meant keyed aHash and
+//! `mini-fx` meant opt-in Fx. They do not measure today's Fx-default/keyed engines.
 pub mod harness;
 
 #[cfg(all(test, feature = "mini", feature = "ascent"))]

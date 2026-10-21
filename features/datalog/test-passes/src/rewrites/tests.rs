@@ -12,7 +12,8 @@ fn source_duplicate_fixture_and_interface_mutations() {
         struct Q; relation E(x:i32) = (rows); relation R(x:i32); output R;
         R(x) :- E(x);
     };
-    PassCase {
+    let reference = crate::reference::emit(&source).unwrap();
+    let target = PassCase {
         source,
         expected_next: Some(expected),
         compile: Box::new(deduplicate_source),
@@ -43,6 +44,11 @@ fn source_duplicate_fixture_and_interface_mutations() {
     }
     .run(None)
     .unwrap();
+    crate::reference_tests::check(
+        reference,
+        crate::reference::emit(&target).unwrap(),
+        quote!(let rows: [(i32,); 4] = [(0,), (1,), (1,), (-3,)];),
+    );
 }
 
 #[test]
@@ -59,7 +65,8 @@ fn strata_merge_fixture_and_dependency_mutations() {
         A(x) :- E(x); B(x) :- E(x); C(x) :- E(x), !A(x);
         strata { component [A,B]; component [C]; }
     };
-    PassCase {
+    let reference = crate::reference::emit_strata(&source).unwrap();
+    let target = PassCase {
         source,
         expected_next: Some(expected),
         compile: Box::new(merge_strata),
@@ -91,6 +98,11 @@ fn strata_merge_fixture_and_dependency_mutations() {
     }
     .run(None)
     .unwrap();
+    crate::reference_tests::check(
+        reference,
+        crate::reference::emit_strata(&target).unwrap(),
+        quote!(let rows: [(i32,); 4] = [(0,), (1,), (1,), (-3,)];),
+    );
 }
 
 #[test]
@@ -114,6 +126,8 @@ fn storage_alternative_fixture_and_binding_mutations() {
     });
     expected.reads[0].index = 1;
     expected.reads[0].columns = vec![1, 0];
+    // Storage's alpha map evaluates the embedded Incremental program.
+    let reference = crate::reference_incremental::emit(&source.incremental).unwrap();
     let result = PassCase {
         source,
         expected_next: Some(expected),
@@ -150,6 +164,11 @@ fn storage_alternative_fixture_and_binding_mutations() {
     }
     .run(None)
     .unwrap();
+    crate::reference_tests::check(
+        reference,
+        crate::reference_incremental::emit(&result.incremental).unwrap(),
+        quote!(let rows: [(i32, i32); 4] = [(0, 1), (1, 2), (0, 1), (-3, 4)];),
+    );
     // Independent protocol check: cq_stage invokes the rewrite contract and
     // forwards the changed payload, rather than testing a private shortcut.
     let tokens = cq_stage::rewrite::<storage::Program>(
@@ -195,4 +214,103 @@ fn concrete_choices_are_nontrivial_checked_rewrites() {
             .any(|(a, b)| a.publication != b.publication)
     );
     cq_lang_datalog_round::check_rewrite(&round, &reversed).unwrap();
+}
+
+fn pipeline_fixture() -> cq_lang_datalog_round::Program {
+    let source: source::Program = syn::parse_quote! {
+        struct Choices; relation E(x:i32,y:i32) = (rows);
+        relation R(x:i32,y:i32); output R;
+        R(*x,*y) :- E(x,y);
+        R(*x,*z) :- R(x,y), E(y,z);
+    };
+    let strata = cq_datalog_stratify::compile(&source).unwrap();
+    let incremental = cq_datalog_incremental::compile(&strata).unwrap();
+    let storage = cq_datalog_storage::compile(&incremental).unwrap();
+    cq_datalog_fork::compile(&storage).unwrap()
+}
+
+#[test]
+fn independent_hole_arguments_preserve_the_checked_round() {
+    use cq_lang_datalog_round::{HoleInterface, contract};
+    let source = pipeline_fixture();
+    for (batch, positions) in [(0usize, 1usize), (1, 0)] {
+        let target = per_hole_pipeline(&source, quote!(#batch, #positions)).unwrap();
+        assert_ne!(source, target);
+        contract::check(&target).unwrap();
+        cq_lang_datalog_round::check_rewrite(&source, &target).unwrap();
+        for (index, (before, after)) in source.holes.iter().zip(&target.holes).enumerate() {
+            assert_eq!(before.cq, after.cq);
+            assert_eq!(after.interface, HoleInterface::Pull);
+            assert_eq!(before.pipeline.passes.len(), after.pipeline.passes.len());
+            for (old, new) in before.pipeline.passes.iter().zip(&after.pipeline.passes) {
+                assert_eq!(old.path, new.path);
+                let name = new.path.segments.last().unwrap().ident.to_string();
+                let expected = if index == batch && name == "stage" {
+                    quote!(batch(64))
+                } else if index == positions && name == "represent" {
+                    quote!(positions)
+                } else {
+                    old.arguments.clone()
+                };
+                assert_eq!(new.arguments.to_string(), expected.to_string());
+            }
+        }
+        let mut restored = target;
+        for (hole, original) in restored.holes.iter_mut().zip(&source.holes) {
+            hole.pipeline = original.pipeline.clone();
+        }
+        assert_eq!(restored, source);
+        let forwarded = cq_stage::rewrite::<cq_lang_datalog_round::Program>(
+            quote!(arguments { #batch, #positions }; pipeline { downstream::consume }; #source),
+            per_hole_pipeline,
+        );
+        assert!(!forwarded.to_string().contains("compile_error"));
+        assert!(forwarded.to_string().contains("downstream :: consume"));
+    }
+}
+
+#[test]
+fn independent_hole_choices_reject_identical_missing_and_key_holes() {
+    let source = pipeline_fixture();
+    assert!(per_hole_pipeline(&source, quote!(0, 0)).is_err());
+    assert!(per_hole_pipeline(&source, quote!(0, 999)).is_err());
+    assert!(per_hole_pipeline(&source, quote!(0)).is_err());
+    let source: source::Program = syn::parse_quote! {
+        struct Negation; relation E(x:i32) = (rows); relation B(x:i32) = (blocked);
+        relation R(x:i32); output R;
+        R(*x) :- E(x), !B(x);
+    };
+    let strata = cq_datalog_stratify::compile(&source).unwrap();
+    let incremental = cq_datalog_incremental::compile(&strata).unwrap();
+    let storage = cq_datalog_storage::compile(&incremental).unwrap();
+    let round = cq_datalog_fork::compile(&storage).unwrap();
+    let component = &round.context.strata[0];
+    let key = component.keys[0].hole;
+    let rule = component.seeds[0].hole;
+    assert!(per_hole_pipeline(&round, quote!(#key, #rule)).is_err());
+}
+
+#[test]
+fn partitioning_requires_registration_and_retains_pull_interfaces() {
+    use cq_lang_datalog_round::{HoleInterface, Terminal};
+    let mut source = pipeline_fixture();
+    assert!(partition_holes(&source).is_err());
+    source.terminals.0.push(Terminal {
+        path: syn::parse_quote!(::cq_datalog::passes::print_hole),
+        interface: HoleInterface::Pull,
+    });
+    let target = partition_holes(&source).unwrap();
+    assert_eq!(source.terminals, target.terminals);
+    for (index, hole) in target.holes.iter().enumerate() {
+        assert_eq!(hole.interface, HoleInterface::Pull);
+        let terminal = hole.pipeline.passes.last().unwrap();
+        let expected: syn::Path = syn::parse_quote!(::cq_datalog::passes::print_hole);
+        assert_eq!(terminal.path, expected);
+        let partition = index % 16;
+        assert_eq!(
+            terminal.arguments.to_string(),
+            quote!(partition(#partition)).to_string()
+        );
+    }
+    cq_lang_datalog_round::check_rewrite(&source, &target).unwrap();
 }

@@ -7,10 +7,10 @@ pub const ENGINES: &[Engine] = &[
         evaluate: doop_mini::run,
         threads: || 1,
     },
-    #[cfg(feature = "mini-fx")]
+    #[cfg(feature = "mini-keyed")]
     Engine {
-        name: "mini-fx",
-        evaluate: doop_mini_fx::run,
+        name: "mini-keyed",
+        evaluate: doop_mini_keyed::run,
         threads: || 1,
     },
     #[cfg(feature = "ascent")]
@@ -31,9 +31,9 @@ pub fn main(args: impl IntoIterator<Item = String>) -> Result<()> {
             "ascent",
         ],
         reference: "ascent",
-        checked: &["mini", "mini-fx"],
+        checked: &["mini", "mini-keyed"],
         options: &[],
-        usage: "usage: doop <facts_dir> [--engine mini|mini-fx|ascent|both] [--check]",
+        usage: "usage: doop <facts_dir> [--engine mini|mini-keyed|ascent|both] [--check]",
     };
     let options = harness.parse(args)?;
     harness.execute(&options).map_err(Into::into)

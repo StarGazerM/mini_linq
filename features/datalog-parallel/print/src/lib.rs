@@ -1,8 +1,8 @@
 //! Checked sharded admission and exclusive-layout publication around CQ evaluation.
 //! Bindings, round barriers, observers and outputs reuse the base printer.
+use cq_lang_datalog_round::{self as round, InputSource, RoundContext, RuleHole};
 #[cfg(feature = "hole-timing")]
-use cq_lang_datalog_round::Program;
-use cq_lang_datalog_round::{self as round, Execution, InputSource, RoundContext, RuleHole};
+use cq_lang_datalog_round::{Execution, Program};
 use proc_macro2::{Span, TokenStream};
 #[cfg(feature = "hole-timing")]
 use quote::ToTokens;
@@ -19,12 +19,12 @@ pub fn compile(program: &cq_datalog_partition::ShardedProgram) -> syn::Result<sy
     cq_datalog_print::render_with_publication(
         &program.round,
         &holes,
-        |rules, context, holes, execution| {
+        |rules, context, holes, _| {
             evaluate(
                 rules,
                 context,
                 holes,
-                execution,
+                &program.round,
                 threshold,
                 program.certificate.grain,
                 #[cfg(feature = "hole-timing")]
@@ -48,11 +48,13 @@ fn evaluate(
     rules: &[RuleHole],
     context: &RoundContext,
     holes: &[TokenStream],
-    execution: &[Execution],
+    program: &round::Program,
     threshold: usize,
     partition_grain: usize,
     #[cfg(feature = "hole-timing")] original: &Program,
 ) -> syn::Result<(TokenStream, TokenStream)> {
+    let specifications = &program.holes;
+    let execution = &program.execution;
     let mut declarations = Vec::new();
     let mut evaluations = Vec::new();
     let mut candidates_by_head = ::std::collections::BTreeMap::<usize, Vec<Ident>>::new();
@@ -67,7 +69,11 @@ fn evaluate(
         let invocation = &holes[rule.hole];
         let head = &context.relations[rule.head];
         let types = head.declaration.columns.iter().map(|column| &column.ty);
-        let consume = quote!((#invocation).collect::<::std::vec::Vec<(#(#types,)*)>>());
+        let consume = cq_datalog_print::collect_hole(
+            specifications[rule.hole].interface,
+            invocation,
+            quote!(::std::vec::Vec<(#(#types,)*)>),
+        );
         #[cfg(feature = "hole-timing")]
         let consume = timed_chunk(consume, rule, execution);
         let evaluation = if let Some(scan) = &rule.scan {

@@ -6,7 +6,9 @@
 //! Datalog owns its pipeline configuration without changing core CQ planning.
 //!
 //! Consumers declare direct `mini-linq` and `cq-storage` dependencies, just as
-//! ordinary generated CQ programs do.
+//! ordinary generated CQ programs do. Fx and the hole-local retype pass are
+//! supplied through this facade; no direct `rustc-hash` or `cq-rewrites`
+//! dependency is needed for the default pipeline.
 //!
 //! ```
 //! let edges = [(0_i32, 1_i32), (1, 2), (2, 3)];
@@ -39,6 +41,31 @@
 //! semi-naive expansion. Direct `passes::incremental!` entries accept the same
 //! argument. The `hoist-invariants` Cargo feature enables this policy by default;
 //! ordinary CPU builds retain the unmodified scheduling policy.
+//!
+//! Select streaming push holes with
+//! `cq = pipeline { print = ::cq_datalog::passes::print_push; };`.
+//! Rule answers are passed directly to canonical admission, and negation keys
+//! directly to their key-set provider, without a printer-owned result buffer.
+//! The default registry recognizes both pull and push terminals; custom paths
+//! declare their interface with `terminals = [my::printer => push];`.
+//! Parallel and phase-timed execution retain their explicit candidate storage.
+//!
+//! Datalog defaults to unkeyed Fx hashing for layout maps, IDB membership,
+//! EDB canonicalization, negation key sets, and hole-local CQ deduplication.
+//! This assumes trusted inputs: Fx is not collision-attack resistant.
+//! For adversarial input, select keyed hashing at all three boundaries:
+//! ```ignore
+//! pipeline {
+//!     storage_rewrites = [cq_datalog_hasher::hasher(keyed)];
+//!     round = [cq_datalog_hasher::hasher_round(keyed)];
+//!     cq = pipeline {
+//!         structures = [cq_datalog::cq_rewrites::retype(dedup => ::cq_storage::HashSet<_>)];
+//!     };
+//! }
+//! ```
+//! Explicit `hasher(fx)` and `hasher_round(fx)` remain available. Authored CQ
+//! `structures` rewrites run after the default Fx dedup rewrite, so a later
+//! `retype(dedup => ...)` overrides it. MiniLinq core defaults are unchanged.
 //!
 //! Resume authored IR at its next pass, not at a separate front-end macro:
 //! `cq_datalog::passes::incremental! { pipeline {
@@ -153,7 +180,7 @@
 //! # DOOP engine features
 //!
 //! The `datalog-doop` package retains the `doop` CLI. Its default Cargo features
-//! enable all three engines: `mini`, `mini-fx`, and `ascent`. For a single-engine
+//! enable all three engines: `mini`, `mini-keyed`, and `ascent`. For a single-engine
 //! build, disable defaults and explicitly select the matching engine feature:
 //!
 //! ```text
@@ -161,12 +188,12 @@
 //! cargo run --release --locked -p datalog-doop -- /tmp/doop-data/cassandra --check
 //! ```
 //!
-//! `--check` requires all three comparison features (`mini,mini-fx,ascent`);
+//! `--check` requires all three comparison features (`mini,mini-keyed,ascent`);
 //! selecting only one engine cannot provide the full comparison.
 //! `doop/shared` (`doop-shared`) owns facts, interning, loading, the common
 //! harness, and engine-source macros without instantiating a heavy engine.
-//! Separate `doop/engines/{mini,mini-fx,ascent}` crates (`doop-mini`,
-//! `doop-mini-fx`, and `doop-ascent`) instantiate the engines. CLI features
+//! Separate `doop/engines/{mini,mini-keyed,ascent}` crates (`doop-mini`,
+//! `doop-mini-keyed`, and `doop-ascent`) instantiate the engines. CLI features
 //! select those optional dependencies; `phase-timing` forwards instrumentation
 //! only to enabled engines rather than enabling additional engines.
 //! Fetch published facts with `python3 doop/fetch.py cassandra` from
@@ -179,6 +206,8 @@ pub use cq_lang_datalog_round as round;
 pub use cq_lang_datalog_source as source;
 pub use cq_lang_datalog_storage as storage;
 pub use cq_lang_datalog_strata as strata;
+pub use cq_rewrites;
+pub use rustc_hash;
 
 /// Codegen partitioning helpers used by the terminal printer.
 ///
@@ -219,6 +248,7 @@ pub mod __codegen {
 /// Direct checked entries, each consuming its source IR and a continuation.
 pub mod passes {
     pub use cq_datalog_macros::{
-        fork, incremental, print_rounds, storage, stratify, surface_if_let,
+        fork, incremental, print_hole, print_rounds, storage, stratify, surface_if_let,
     };
+    pub use own_push::push_into as print_push;
 }

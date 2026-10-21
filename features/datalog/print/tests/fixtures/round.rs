@@ -1,7 +1,7 @@
 {
     let __cq_datalog_all_0 = &(input);
     let __cq_datalog_all_0 = &{
-        struct Canonical<R>(::cq_storage::HashSet<R>);
+        struct Canonical<R>(::std::collections::HashSet<R, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>);
         impl<R: ::core::marker::Copy> ::cq_storage::rows::Rows for &Canonical<R> {
             type Row = R;
             fn rows(self) -> impl ::core::iter::Iterator<Item = R> {
@@ -11,14 +11,14 @@
         Canonical(::cq_storage::rows::Rows::rows(__cq_datalog_all_0).collect())
     };
     let mut __cq_datalog_all_1: ::std::vec::Vec<(i32,)> = ::std::vec::Vec::new();
-    let mut __cq_datalog_seen_1: ::cq_storage::HashSet<(i32,)> = ::core::default::Default::default();
+    let mut __cq_datalog_seen_1: ::std::collections::HashSet<(i32,), ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>> = ::core::default::Default::default();
     let mut __cq_datalog_delta_0: ::std::vec::Vec<(i32,)> = ::std::vec::Vec::new();
-    let mut __cq_datalog_host_0: ::std::collections::HashMap<(), ::std::vec::Vec<(i32,)>, ::cq_storage::HashState>
+    let mut __cq_datalog_host_0: ::std::collections::HashMap<(), ::std::vec::Vec<(i32,)>, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
         = ::core::default::Default::default();
     for row in ::cq_storage::rows::Rows::rows(__cq_datalog_all_0) {
         __cq_datalog_host_0.entry(()).or_default().push((::core::clone::Clone::clone(row.0),));
     }
-    let mut __cq_datalog_delta_host_0: ::std::collections::HashMap<(i32,), ::std::vec::Vec<()>, ::cq_storage::HashState>
+    let mut __cq_datalog_delta_host_0: ::std::collections::HashMap<(i32,), ::std::vec::Vec<()>, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
         = ::core::default::Default::default();
     {
         let mut __cq_datalog_next_1: ::std::vec::Vec<(i32,)> = ::std::vec::Vec::new();

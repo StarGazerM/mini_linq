@@ -7,6 +7,24 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- `cq-datalog-testkit` executes each Datalog IR's meaning: `eval_incremental`
+  (semi-naive round system, the only evaluation scheme) and `eval_round`
+  (recorded phases, holes with native partial-Rust bodies). Pass, plug-in and
+  parallel Round rewrites are refinement-tested on all 13 oracle programs plus
+  targeted cases (instance evidence, not proofs).
+
+- Datalog hole↔CQ contract: typed terminal registry (terminal path →
+  `pull`/`push`) checked per hole; push holes stream admission through the new
+  `own_push::push_into!` consumer entry (own-dialect). Round rewrites may change
+  one hole's CQ sub-pipeline (e.g. `stage(batch(N))`, `represent(positions)`)
+  under an independent check. Optional nested-CQ partition terminal measured
+  and kept opt-in (no CGU or runtime gain).
+
+- Fx hashing is the Datalog default (Storage and Round providers, hole dedup
+  sets). Keyed aHash for adversarial inputs: `hasher(keyed)` +
+  `hasher_round(keyed)`; DOOP engines `mini-keyed` / `mini-par-keyed`.
+  Exact vs Ascent on all six apps; goldens unchanged.
+
 - Sequence GPU providers reuse setup-time count owners and payload view tables;
   asynchronous pinned uploads replace stream-synchronizing descriptor copies.
   Exact-sized native range/canonicalization scratch persists across calls,

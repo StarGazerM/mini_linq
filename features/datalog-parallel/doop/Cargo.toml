@@ -11,22 +11,22 @@ name = "doop-parallel"
 path = "src/main.rs"
 
 [features]
-default = ["mini", "mini-fx", "ascent", "mini-par", "mini-par-fx", "ascent-par"]
+default = ["mini", "mini-keyed", "ascent", "mini-par", "mini-par-keyed", "ascent-par"]
 mini = ["dep:doop-mini"]
-mini-fx = ["dep:doop-mini-fx"]
+mini-keyed = ["dep:doop-mini-keyed"]
 ascent = ["dep:doop-ascent"]
 mini-par = ["dep:doop-mini-par"]
-mini-par-fx = ["dep:doop-mini-par-fx"]
+mini-par-keyed = ["dep:doop-mini-par-keyed"]
 ascent-par = ["dep:doop-ascent-par"]
-phase-timing = ["doop-mini?/phase-timing", "doop-mini-fx?/phase-timing", "doop-mini-par?/phase-timing", "doop-mini-par-fx?/phase-timing"]
-hole-timing = ["doop-mini-par?/hole-timing", "doop-mini-par-fx?/hole-timing"]
+phase-timing = ["doop-mini?/phase-timing", "doop-mini-keyed?/phase-timing", "doop-mini-par?/phase-timing", "doop-mini-par-keyed?/phase-timing"]
+hole-timing = ["doop-mini-par?/hole-timing", "doop-mini-par-keyed?/hole-timing"]
 
 [dependencies]
 doop-shared = { path = "../../datalog/doop/shared" }
 doop-mini = { path = "../../datalog/doop/engines/mini", optional = true }
-doop-mini-fx = { path = "../../datalog/doop/engines/mini-fx", optional = true }
+doop-mini-keyed = { path = "../../datalog/doop/engines/mini-keyed", optional = true }
 doop-ascent = { path = "../../datalog/doop/engines/ascent", optional = true }
 doop-mini-par = { path = "engines/mini-par", optional = true }
-doop-mini-par-fx = { path = "engines/mini-par-fx", optional = true }
+doop-mini-par-keyed = { path = "engines/mini-par-keyed", optional = true }
 doop-ascent-par = { path = "engines/ascent-par", optional = true }
 rayon = "1"

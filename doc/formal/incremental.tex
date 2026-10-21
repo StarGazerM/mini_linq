@@ -244,8 +244,8 @@ domain (and total, pure rule expressions), not a source-language restriction.
  {q(R\cup\Delta)=q(R)\cup\textstyle\bigcup_i V_i(R\cup\Delta,\Delta)}
 \end{mathpar}
 Delta erasure is necessary but not sufficient: a checker must also validate
-coverage, exact substitutions and dependencies. An exact old/new partition
-needs its corresponding positional version contract, not arbitrary cuts.
+coverage, exact substitutions and dependencies. The executable Datalog boundary
+admits only this semi-naive covering scheme, not an exact old/new partition.
 
 Initialize $R^1=\Delta^1=S$. For $t\ge1$, evaluate the recursive variants
 against immutable $R^t,\Delta^t$, then set
@@ -326,6 +326,13 @@ whenever the reference evaluation succeeds. Neither the total fixpoint proof
 nor a delta-renaming check alone supplies that argument. Interior mutation
 through shared references is also not ruled out by borrowing; the existing
 extensionality premise is still needed.
+The executable Source, Incremental and Round references described in
+Section~\ref{sec:datalog-languages} retain native Rust evaluation of these
+written-order prefixes. The independent CQ integer-fragment evaluator cannot
+interpret arbitrary opaque Rust or substitute for this panic-sensitive reference.
+Successful-reference refinement checks compare output sets and reject new target
+panics on each exercised instance; they do not prove the multi-round obligation
+for all inputs or all partial Rust expressions.
 
 \subsection{Ownership, comparison and remaining obligations}
 \begin{center}
@@ -348,10 +355,12 @@ Concrete type & Lawful build, merge, probe and any specialized capabilities.\\
 Ordinary CQ compilation retains its snapshot denotation. An incremental
 path must introduce an explicit state-transition contract; replacing an
 opaque storage type alone cannot add fixpoint or temporal semantics.
-Choices include exact versus covering variants, eager versus deferred merges,
-dedup-before-membership versus membership-before-dedup, canonical layout, and
-local versus shared indexes. Sharing must coordinate each reader's version
-requirements. Merge policy cannot invalidate an outstanding cut.
+For the Datalog implementation, the variant scheme is fixed to semi-naive
+covering. Recorded choices include dedup-before-membership versus
+membership-before-dedup and canonical layout. Broader incremental storage
+designs may choose eager versus deferred merges and local versus shared indexes;
+these are not additional Datalog evaluation schemes. Sharing must coordinate
+each reader's version requirements. Merge policy cannot invalidate an outstanding cut.
 
 Differential Dataflow provides a relevant implementation comparison at the
 inspected revision~\cite{code-dd}. Its \code{TraceReader} specifies accumulated

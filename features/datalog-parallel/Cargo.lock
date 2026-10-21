@@ -100,7 +100,10 @@ dependencies = [
  "cq-lang-datalog-source",
  "cq-lang-datalog-storage",
  "cq-lang-datalog-strata",
+ "cq-rewrites",
  "cq-storage",
+ "own-push",
+ "rustc-hash",
 ]
 
 [[package]]
@@ -162,6 +165,7 @@ dependencies = [
  "cq-datalog-configuration",
  "cq-datalog-fork",
  "cq-datalog-incremental",
+ "cq-datalog-print-hole",
  "cq-datalog-print-rounds",
  "cq-datalog-storage",
  "cq-datalog-stratify",
@@ -171,6 +175,7 @@ dependencies = [
  "cq-lang-datalog-source",
  "cq-lang-datalog-storage",
  "cq-lang-datalog-strata",
+ "cq-lang-structures",
  "cq-stage",
  "proc-macro2",
  "quote",
@@ -184,8 +189,11 @@ dependencies = [
  "ascent",
  "cq-datalog",
  "cq-datalog-parallel-runtime",
+ "cq-datalog-parallel-test-passes",
  "cq-datalog-partition",
  "cq-datalog-rayon-print",
+ "cq-datalog-test-passes",
+ "cq-datalog-testkit",
  "cq-lang-datalog-round",
  "cq-stage",
  "cq-storage",
@@ -202,6 +210,16 @@ dependencies = [
  "hashbrown 0.15.5",
  "rayon",
  "rustc-hash",
+]
+
+[[package]]
+name = "cq-datalog-parallel-test-passes"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-partition",
+ "cq-stage",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -227,6 +245,17 @@ dependencies = [
  "cq-datalog-support",
  "cq-lang-datalog-round",
  "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-print-hole"
+version = "0.0.0"
+dependencies = [
+ "cq-lang-structures",
+ "cq-physical-realization",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -299,6 +328,30 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-test-passes"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-support",
+ "cq-lang-datalog-incremental",
+ "cq-lang-datalog-round",
+ "cq-lang-datalog-source",
+ "cq-lang-datalog-storage",
+ "cq-lang-datalog-strata",
+ "cq-stage",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-testkit"
+version = "0.0.0"
+dependencies = [
+ "cq-testkit",
 ]
 
 [[package]]
@@ -656,9 +709,9 @@ dependencies = [
  "doop-ascent",
  "doop-ascent-par",
  "doop-mini",
- "doop-mini-fx",
+ "doop-mini-keyed",
  "doop-mini-par",
- "doop-mini-par-fx",
+ "doop-mini-par-keyed",
  "doop-shared",
  "rayon",
 ]
@@ -715,7 +768,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "doop-mini-fx"
+name = "doop-mini-keyed"
 version = "0.1.0"
 dependencies = [
  "cq-datalog",
@@ -724,7 +777,6 @@ dependencies = [
  "cq-storage",
  "doop-shared",
  "mini-linq",
- "rustc-hash",
 ]
 
 [[package]]
@@ -741,7 +793,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "doop-mini-par-fx"
+name = "doop-mini-par-keyed"
 version = "0.1.0"
 dependencies = [
  "cq-datalog",
@@ -753,7 +805,6 @@ dependencies = [
  "doop-shared",
  "mini-linq",
  "rayon",
- "rustc-hash",
 ]
 
 [[package]]
@@ -975,6 +1026,7 @@ dependencies = [
  "cq-datalog-parallel-runtime",
  "cq-storage",
  "mini-linq",
+ "oracle-ascent",
  "oracle-shared",
  "rayon",
 ]
@@ -985,6 +1037,19 @@ version = "0.1.0"
 dependencies = [
  "cq-storage",
  "cq-testkit",
+]
+
+[[package]]
+name = "own-push"
+version = "0.0.0"
+dependencies = [
+ "cq-lang-structures",
+ "cq-physical-realization",
+ "cq-print",
+ "cq-stage",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]

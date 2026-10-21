@@ -172,7 +172,7 @@ pub struct Program {
     pub storage: storage::Program,
     pub context: RoundContext,
     pub holes: Vec<Hole>,
-    pub pull_printers: PullPrinters,
+    pub terminals: TerminalRegistry,
     pub execution: Vec<Execution>,
     pub policy: RoundPolicy,
 }
@@ -193,7 +193,6 @@ impl PartialEq for Hole {
 impl Eq for Hole {}
 
 /// The calling convention of an embedded CQ result.
-/// Push is represented for diagnostics, but no Round consumer supports it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HoleInterface {
     Pull,
@@ -230,38 +229,94 @@ impl Text for HoleInterface {
     }
 }
 
-/// Exact paths explicitly declared to return pull iterators.
-/// Declarations are trusted interface assertions, not Rust alias resolution.
+/// Exact terminal paths and their trusted calling-convention assertions.
+/// Declarations do not perform Rust alias resolution.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PullPrinters(pub Vec<syn::Path>);
+pub struct TerminalRegistry(pub Vec<Terminal>);
 
-impl Default for PullPrinters {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Terminal {
+    pub path: syn::Path,
+    pub interface: HoleInterface,
+}
+impl syn::parse::Parse for Terminal {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let path = syn::Path::parse_mod_style(input)?;
+        input.parse::<syn::Token![=>]>()?;
+        Ok(Self {
+            path,
+            interface: input.parse()?,
+        })
+    }
+}
+impl ToTokens for Terminal {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        let Self { path, interface } = self;
+        tokens.extend(quote!(#path => #interface));
+    }
+}
+impl Default for TerminalRegistry {
     fn default() -> Self {
-        Self(vec![
-            syn::parse_quote!(::mini_linq::passes::print_pull),
-            syn::parse_quote!(mini_linq::passes::print_pull),
+        syn::parse_quote!([
+            ::mini_linq::passes::print_pull => pull,
+            mini_linq::passes::print_pull => pull,
+            ::cq_datalog::passes::print_push => push
         ])
     }
 }
-impl syn::parse::Parse for PullPrinters {
+impl syn::parse::Parse for TerminalRegistry {
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
-        let paths;
-        syn::bracketed!(paths in input);
-        Ok(Self(
-            paths
-                .parse_terminated(syn::Path::parse_mod_style, syn::Token![,])?
+        let entries;
+        syn::bracketed!(entries in input);
+        let registry = Self(
+            entries
+                .parse_terminated(Terminal::parse, syn::Token![,])?
                 .into_iter()
                 .collect(),
-        ))
+        );
+        registry.check()?;
+        Ok(registry)
     }
 }
-impl ToTokens for PullPrinters {
+impl TerminalRegistry {
+    pub fn check(&self) -> syn::Result<()> {
+        for (index, terminal) in self.0.iter().enumerate() {
+            check_terminal_path(&terminal.path)?;
+            ensure(
+                !self.0[..index]
+                    .iter()
+                    .any(|previous| previous.path == terminal.path),
+                &terminal.path,
+                "duplicate terminal path",
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn interface(&self, pipeline: &cq_stage::Pipeline) -> syn::Result<HoleInterface> {
+        let terminal = pipeline.passes.last().ok_or_else(|| {
+            syn::Error::new_spanned(pipeline, "hole pipeline needs a terminal printer")
+        })?;
+        check_terminal_path(&terminal.path)?;
+        self.0
+            .iter()
+            .find(|entry| entry.path == terminal.path)
+            .map(|entry| entry.interface)
+            .ok_or_else(|| {
+                syn::Error::new_spanned(
+                    &terminal.path,
+                    "hole terminal is missing from the recorded terminal registry",
+                )
+            })
+    }
+}
+impl ToTokens for TerminalRegistry {
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        let paths = &self.0;
-        tokens.extend(quote!([#(#paths),*]));
+        let entries = &self.0;
+        tokens.extend(quote!([#(#entries),*]));
     }
 }
-impl Text for PullPrinters {
+impl Text for TerminalRegistry {
     fn parse_text(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
         input.parse()
     }
@@ -280,7 +335,7 @@ pub struct Execution {
 pub struct RoundPolicy {
     pub timing: Ident,
 }
-record!(Program { storage: storage::Program, context: RoundContext, holes: Vec<Hole>, pull_printers: PullPrinters, execution: Vec<Execution>, policy: RoundPolicy });
+record!(Program { storage: storage::Program, context: RoundContext, holes: Vec<Hole>, terminals: TerminalRegistry, execution: Vec<Execution>, policy: RoundPolicy });
 record!(Hole {
     cq: CqProgram,
     pipeline: cq_stage::Pipeline,
@@ -493,31 +548,22 @@ pub fn erase(program: &Program) -> syn::Result<Program> {
     erased.execution.clear();
     Ok(erased)
 }
-pub fn check_pipeline(hole: &Hole, printers: &PullPrinters) -> syn::Result<()> {
+/// Formal rule WF-DL-Hole: the terminal assertion matches the hole interface.
+pub fn check_pipeline(hole: &Hole, terminals: &TerminalRegistry) -> syn::Result<()> {
     ensure(
-        hole.interface == HoleInterface::Pull,
+        terminals.interface(&hole.pipeline)? == hole.interface,
         hole,
-        "push hole interface is unsupported; Round requires pull iterators",
-    )?;
-    let terminal =
-        hole.pipeline.passes.last().ok_or_else(|| {
-            syn::Error::new_spanned(hole, "hole pipeline needs a terminal printer")
-        })?;
-    check_pull_path(&terminal.path)?;
-    ensure(
-        printers.0.contains(&terminal.path) && terminal.arguments.is_empty(),
-        hole,
-        "pull hole requires an argument-free terminal in the recorded pull_printers allowlist",
+        "hole interface does not match its registered terminal interface",
     )
 }
 
-fn check_pull_path(path: &syn::Path) -> syn::Result<()> {
+fn check_terminal_path(path: &syn::Path) -> syn::Result<()> {
     ensure(
         path.segments
             .iter()
             .all(|s| matches!(s.arguments, syn::PathArguments::None)),
         path,
-        "pull printer declarations require macro paths without generic arguments",
+        "terminal declarations require macro paths without generic arguments",
     )
 }
 /// Check execution obligations, not equality with the default fork schedule.
@@ -677,11 +723,9 @@ pub mod contract {
             program,
             "unsupported round timing policy",
         )?;
-        for path in &program.pull_printers.0 {
-            check_pull_path(path)?;
-        }
+        program.terminals.check()?;
         for hole in &program.holes {
-            check_pipeline(hole, &program.pull_printers)?;
+            check_pipeline(hole, &program.terminals)?;
             cq_lang_cq::contract::check(&hole.cq)?;
         }
         let erased = erase(program)?;
@@ -690,6 +734,7 @@ pub mod contract {
         Ok(Analysis { storage: analysis })
     }
 }
+/// Formal rule CK-DL-RoundRewrite: preserve holes and their terminal registry.
 pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
     contract::check(source)?;
     contract::check(target)?;
