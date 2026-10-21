@@ -427,8 +427,50 @@ Raw data: `features/workloads/target/bench/tpch-1-reduction-comparison.{tsv,json
 Tooling notes: `tools/check_public_api.py` reads `ROOT/target/doc` regardless
 of `CARGO_TARGET_DIR`; the external gate needs `TMPDIR=/private/tmp` on macOS.
 
+Datalog compiler structure (`codex/datalog-redesign`, spec
+`doc/formal/datalog.tex`): checked languages Source, Strata, Incremental,
+Storage, Round (each `cq_stage::Language`), passes stratify / incremental /
+storage / fork / print_rounds plus the `if let` surface pass, wired by a
+Datalog-owned named configuration; shared printer library
+`cq-datalog-print`; resume by entering any pass macro. Default expansion
+byte-identical to `076bb40`.
+
+Admissibility (design step 3, `95acd2d`): contracts admit any correct
+choice (coarser strata without internal negation, at-least-once variant
+coverage, any layout set whose recorded reads have bound or constant keys);
+`check_rewrite` checks real per-IR preservation, so Source / Strata / Storage
+rewrite plugins are live (test plugins in `features/datalog/test-passes`).
+`cq-datalog-testkit` adds a typed naive reference evaluator with ⊥ as panic.
+Open: hole interfaces accept only `pull` printers on the configured
+allowlist. Storage/Round now record every former printer decision (providers,
+maintenance, phases, publication order, termination, observer placement, key
+scope, output conversion; `7360ce8`, `11f7d59`); remaining printer premises:
+empty `Default` construction for seen sets and layout hosts, slice-backed
+sources for the parallel partition.
+
 Remaining Datalog work: rule-local aggregates; FlowLog comparison;
 partial-Rust multi-round refinement.
+
+Parallel Datalog is the extension workspace `features/datalog-parallel`
+(partition Round rewrite + Rayon printer, selected by pipeline config; base
+has no parallel code). Slice 2 (`cfa8201`, `ed3831f`): full-tuple sharded
+`seen` with parallel admission; native layout maps published in parallel,
+one exclusive task per layout (fully sharded layouts were measured and
+rejected: per-probe shard routing slowed evaluation); adaptive grain
+`max(64, n/(4·threads))` fixed the avrora plateau (coarse 1024-row chunks on
+a small, expensive driver); recorded inline threshold. 15 threads, seconds
+(slice 1 → slice 2): cassandra 1.33 → 0.84, avrora 2.66 → 1.63, lusearch
+1.63 → 1.10, xalan 3.74 → 2.57, tomcat 1.74 → 1.14, zxing 2.80 → 1.99.
+Residual: reach chain 4096 still 0.74× sequential at 15 threads.
+
+Fx hashing (`dadaed6`, opt-in plug-in `cq_datalog_hasher::hasher(fx)` +
+`hasher_round(fx)` + hole `retype(dedup => Fx)`): DOOP 3-run interleaved
+medians, geometric mean 1.277× sequential, 1.123× at 15 threads; all 26
+relations exact vs Ascent for every app. Short reach chains mixed (−5.5% at
+1024 nodes). Core aHash remains only in 2 eager HashIndex sites and lazy
+fallbacks. Defaults unchanged pending a decision (Fx for trusted analytical
+inputs; keyed aHash resists adversarial keys). Next from Ascent: delta
+layouts built during admission, heavy-bucket splitting.
 
 On hold until the GPU-side storage work settles, so storage is designed once
 for both: lattices and custom providers; DOOP probe efficiency (flat value

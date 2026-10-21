@@ -83,6 +83,11 @@ class FeatureClosureTests(unittest.TestCase):
 
             def run(command, cwd, log, env=None):
                 if command[1] == "vendor":
+                    synced = [command[index + 1] for index, part in enumerate(command) if part == "--sync"]
+                    self.assertEqual(synced, [
+                        "features/datalog/Cargo.toml",
+                        "features/datalog-parallel/Cargo.toml",
+                    ])
                     Path(command[-1]).mkdir()
                 elif command[1] == "package":
                     self.assertIn("--offline", command)

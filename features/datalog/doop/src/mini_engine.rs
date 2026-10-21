@@ -1,12 +1,12 @@
 // Translated from flowlog-rs/flowlog-bench programs/oracle/ascent/doop/src/main.rs.
 // All 135 rules and body atom order match the upstream DOOP default.dl.
 #![allow(unused_variables)]
-use crate::{
-    Facts, Results,
-    interner::{IStr, res, sym},
-};
-
-pub fn run(facts: Facts) -> Results {
+/// Instantiate the unchanged DOOP program with arbitrary named pipeline tokens.
+#[macro_export]
+macro_rules! doop_engine {
+    ($name:ident, pipeline { $($pipeline:tt)* }) => {
+pub fn $name(facts: $crate::Facts) -> $crate::Results {
+    use $crate::{Results, interner::{IStr, res, sym}};
     let (
         mainclass,
         method_simplename,
@@ -35,6 +35,7 @@ pub fn run(facts: Facts) -> Results {
         arrayindexpointsto,
         reachable,
     ) = cq_datalog::datalog! {
+        pipeline { $($pipeline)* }
         struct Doop;
         relation directsuperclass(c0: IStr, c1: IStr) = (facts.directsuperclass);
         relation directsuperinterface(c0: IStr, c1: IStr) = (facts.directsuperinterface);
@@ -605,3 +606,13 @@ pub fn run(facts: Facts) -> Results {
         reachable: reachable.collect(),
     }
 }
+    };
+}
+doop_engine!(run, pipeline {});
+doop_engine!(run_fx, pipeline {
+    storage_rewrites = [cq_datalog_hasher::hasher(fx)];
+    round = [cq_datalog_hasher::hasher_round(fx)];
+    cq = pipeline {
+        structures = [cq_rewrites::retype(dedup => ::std::collections::HashSet<_, ::std::hash::BuildHasherDefault<::rustc_hash::FxHasher>>)];
+    };
+});

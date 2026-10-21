@@ -53,6 +53,50 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   or like-for-like end-to-end speedups. Both generated kernels then used
   40 registers with 44/36-byte spill stores/loads. Current restrictions,
   measurements and tuple-transfer boundaries are in `experiments/gpu/README.md`.
+- Datalog compile time: holes declare only what they read (checked
+  independently in Round), one check per pass, linear `dl-source` checks (shared
+  query context, DFS reachability), optimized proc macros (`build-override
+  opt-level = 3`). Per DOOP engine, proc-macro work 65 s → 3.2 s (debug) /
+  11.7 s → 0.7 s (release); base DOOP crate macro expansion 139 s → 3.4 s.
+
+- Opt-in Datalog Fx hashing plug-in (Storage + Round rewrites; hole dedup via
+  `retype`); parallel admission reuses the routing hash. DOOP 1.28× faster
+  sequential and 1.12× at 15 threads (geometric means), exact vs Ascent.
+
+- Parallel Datalog slice 2 (extension): sharded parallel admission and
+  per-layout exclusive parallel publication; adaptive chunk grain; recorded
+  inline threshold. DOOP at 15 threads 1.41–1.63× faster than slice 1, exact
+  at 1/5/15 threads. Base gains only generic publication generators.
+
+- Datalog Storage/Round IRs record every decision formerly hard-coded in the
+  printer (providers, layout maintenance, phases, publication order,
+  termination, observer placement, key scope, output conversion); both
+  printers consume the records. Checked alternatives: BTreeMap layouts,
+  reversed member publication, later-position direct delta reads.
+
+- Datalog contracts admit any correct choice instead of the default pass's
+  exact output; per-IR `check_rewrite` obligations replace identity checks,
+  making Source / Strata / Storage rewrite plugins possible. New
+  `cq-datalog-testkit` reference evaluator and test-only plugins.
+
+- Datalog compiler restructured like the CQ compiler: languages
+  `cq-lang-datalog-{source,strata,incremental,storage,round}`, passes
+  (`stratify`, `incremental`, `storage`, `fork`, `print_rounds`, surface
+  `if let`), Datalog-owned named pipeline configuration, shared printer
+  library and support crate. `stratified!`/`seminaive!` replaced by entering
+  pass macros; per-hole CQ sub-pipeline and typed hole interface recorded in
+  the Round IR. Parallel moved out to the `features/datalog-parallel`
+  workspace (pipeline plug-in; the `parallel;` keyword is removed). Default
+  expansion byte-identical; DOOP exact; core unchanged.
+
+- Datalog `parallel;` (opt-in, Rayon, `features/datalog` only, core unchanged):
+  rule holes run concurrently; a body-position-0 key-0 scan (delta `Vec` or
+  key-0 full layout bucket) is split into contiguous chunks, recorded and
+  checked as fork partition metadata. Admission and publication stay
+  sequential at the round barrier. Sequential mode binds the original whole
+  host (expansion differs only by the chunk binding). DOOP: all 6 apps exact
+  vs Ascent at 1–15 threads; best speedups 1.86–3.05× on 5P+10E cores.
+
 - Lookup&Expand sharing on the R/E/C back end (see
   `doc/GPU-LE-BACKEND-CODESIGN.md`). Structures gains
   `r share = lookup b [K] first s force p;` (ST-Share: the keyed read is

@@ -1,23 +1,32 @@
-//! DOOP context-insensitive points-to analysis, single-thread MiniLinq vs Ascent.
+//! DOOP context-insensitive points-to analysis with reusable engine generators.
 //!
 //! Both engines preserve all 103 relations, 135 rules and body atom order from
 //! `flowlog-rs/flowlog-bench/programs/oracle/flowlog/doop/default.dl`.
-//! The Ascent source is its upstream translation, using sequential `ascent!`.
+//! Engine generators share the same upstream translation and accept caller configuration.
 //! Strings share one process-wide u32 interner; loading is identical for both.
 //!
 //! From `features/datalog`, build with `cargo build --release -p datalog-doop`.
 //! Fetch with `python3 doop/fetch.py cassandra`, then invoke the built binary:
-//! `doop /tmp/doop-data/cassandra --engine both --check`.
-//! `--check` sorts and compares every complete output relation (outside timing).
-//! Run each engine in its own process for independent peak RSS measurements.
+//! `doop /tmp/doop-data/cassandra --check`.
+//! `--check` compares all 26 full tuple sets against sequential Ascent.
+//! Uninstrumented output order is unspecified.
+//! `--engine mini|mini-fx|ascent` isolates timing and peak RSS.
+//! `mini-fx` opts into Fx storage and hole deduplication; `mini` remains aHash.
+//! `doop /tmp/doop-data/cassandra --check` checks both MiniLinq engines against
+//! Ascent across all 26 outputs; defaults still run only `mini` and `ascent`.
+//! Enable `phase-timing` for per-round instrumentation separately from timing runs.
 //! Compute timing includes derived indexes and materializing the 26 outputs;
 //! load timing includes parsing and interning, not engine initialization.
 //! No counters are enabled. Do not compile concurrently with measured runs.
+//! The public [`harness`] accepts arbitrary named engine descriptors and owns
+//! CLI parsing, full-set checks, loading, timing and process high-water RSS.
+//! Callers install their execution context outside that shared harness.
 
 #![recursion_limit = "1024"]
 
 pub mod ascent_engine;
-mod interner;
+pub mod harness;
+pub mod interner;
 mod loader;
 pub mod mini_engine;
 

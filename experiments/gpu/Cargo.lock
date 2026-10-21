@@ -163,18 +163,36 @@ dependencies = [
 name = "cq-datalog"
 version = "0.0.0"
 dependencies = [
+ "cq-datalog-configuration",
+ "cq-datalog-macros",
+ "cq-lang-datalog-incremental",
+ "cq-lang-datalog-round",
+ "cq-lang-datalog-source",
+ "cq-lang-datalog-storage",
+ "cq-lang-datalog-strata",
+ "cq-storage",
+]
+
+[[package]]
+name = "cq-datalog-configuration"
+version = "0.0.0"
+dependencies = [
  "cq-datalog-fork",
- "cq-datalog-schedule",
- "cq-lang-datalog",
- "datalog-bridge",
+ "cq-lang-datalog-round",
+ "cq-stage",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
 name = "cq-datalog-fork"
 version = "0.0.0"
 dependencies = [
- "cq-lang-cq",
- "cq-lang-datalog",
+ "cq-datalog-support",
+ "cq-lang-datalog-round",
+ "cq-lang-datalog-storage",
+ "cq-stage",
  "cq-syntax",
  "proc-macro2",
  "quote",
@@ -182,10 +200,103 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-datalog-schedule"
+name = "cq-datalog-incremental"
 version = "0.0.0"
 dependencies = [
- "cq-lang-datalog",
+ "cq-datalog-support",
+ "cq-lang-datalog-incremental",
+ "cq-lang-datalog-strata",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-macros"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-configuration",
+ "cq-datalog-fork",
+ "cq-datalog-incremental",
+ "cq-datalog-print-rounds",
+ "cq-datalog-storage",
+ "cq-datalog-stratify",
+ "cq-datalog-surface-if-let",
+ "cq-lang-datalog-incremental",
+ "cq-lang-datalog-round",
+ "cq-lang-datalog-source",
+ "cq-lang-datalog-storage",
+ "cq-lang-datalog-strata",
+ "cq-stage",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-print"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-support",
+ "cq-lang-datalog-round",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-print-rounds"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-print",
+ "cq-lang-datalog-round",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-storage"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-support",
+ "cq-lang-datalog-incremental",
+ "cq-lang-datalog-storage",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-stratify"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-support",
+ "cq-lang-datalog-source",
+ "cq-lang-datalog-strata",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-support"
+version = "0.0.0"
+dependencies = [
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-surface-if-let"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-support",
+ "cq-lang-datalog-source",
  "cq-syntax",
  "proc-macro2",
  "quote",
@@ -221,12 +332,17 @@ dependencies = [
 name = "cq-gpu-datalog"
 version = "0.1.0"
 dependencies = [
+ "cq-datalog",
  "cq-datalog-fork",
- "cq-datalog-schedule",
+ "cq-datalog-incremental",
+ "cq-datalog-storage",
+ "cq-datalog-stratify",
  "cq-gpu",
  "cq-gpu-runtime",
  "cq-index-policy",
- "cq-lang-datalog",
+ "cq-lang-datalog-round",
+ "cq-lang-datalog-source",
+ "cq-lang-datalog-storage",
  "cq-lang-physical",
  "cq-lang-structures",
  "cq-physical-lowering",
@@ -283,10 +399,65 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-lang-datalog"
+name = "cq-lang-datalog-incremental"
 version = "0.0.0"
 dependencies = [
+ "cq-datalog-support",
+ "cq-lang-datalog-strata",
+ "cq-stage",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-lang-datalog-round"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-support",
  "cq-lang-cq",
+ "cq-lang-datalog-storage",
+ "cq-stage",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-lang-datalog-source"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-support",
+ "cq-lang-cq",
+ "cq-stage",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-lang-datalog-storage"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-support",
+ "cq-lang-cq",
+ "cq-lang-datalog-incremental",
+ "cq-stage",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-lang-datalog-strata"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-support",
+ "cq-lang-datalog-source",
  "cq-stage",
  "cq-syntax",
  "proc-macro2",
@@ -606,20 +777,6 @@ dependencies = [
 [[package]]
 name = "cuda-target-spec"
 version = "0.1.0"
-
-[[package]]
-name = "datalog-bridge"
-version = "0.0.0"
-dependencies = [
- "cq-datalog-fork",
- "cq-datalog-schedule",
- "cq-lang-datalog",
- "cq-stage",
- "cq-syntax",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
 
 [[package]]
 name = "datalog-ddisasm"

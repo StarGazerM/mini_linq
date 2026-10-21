@@ -1,10 +1,10 @@
 //! Checked device Datalog with opaque, per-hole MiniLinq pipelines.
-//! Schedule advice belongs to the selected schedule pass. Storage advice belongs
-//! to ordinary Structures passes such as `retype`; the bridge routes arguments
-//! unchanged and records selector identities from the checked schedule.
+//! Schedule advice belongs to the selected source-to-storage pass. Storage advice
+//! belongs to ordinary Structures passes such as `retype`; the bridge routes
+//! arguments unchanged and records selector identities from checked storage.
 //! Every rule/key hole supplies its static NVTX identity to `fused_retry_scope`,
 //! so runtime retry estimates are isolated by hole without changing its kernel.
-use cq_datalog_fork::{Fork, RoundContext};
+use cq_lang_datalog_round::{Program as RoundProgram, RoundContext};
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as Tokens;
 use quote::{ToTokens, quote};
@@ -20,10 +20,10 @@ pub fn datalog(input: TokenStream) -> TokenStream {
         .into()
 }
 
-/// Consume schedule advice and record its decisions in ordinary Datalog IR.
+/// Consume schedule advice and lower source Datalog to checked storage IR.
 #[proc_macro]
 pub fn schedule(input: TokenStream) -> TokenStream {
-    cq_stage::pass::<cq_lang_datalog::Program, cq_lang_datalog::Program>(
+    cq_stage::pass::<cq_lang_datalog_source::Program, cq_lang_datalog_storage::Program>(
         input.into(),
         schedule_pass::compile,
     )
@@ -33,7 +33,7 @@ pub fn schedule(input: TokenStream) -> TokenStream {
 #[doc(hidden)]
 #[proc_macro]
 pub fn __scheduled(input: TokenStream) -> TokenStream {
-    cq_stage::pass::<cq_lang_datalog::Program, syn::Expr>(input.into(), |source, arguments| {
+    cq_stage::pass::<cq_lang_datalog_storage::Program, syn::Expr>(input.into(), |source, arguments| {
         syn::parse2(start_holes(source, syn::parse2(arguments)?)?)
     })
     .into()
@@ -107,7 +107,7 @@ fn check_demand_chains(demands: &BTreeSet<Vec<usize>>, runs: &FrozenRuns) -> syn
 }
 
 #[cfg(test)]
-fn checked_holes(fork: &Fork) -> syn::Result<Vec<cq_lang_structures::Program>> {
+fn checked_holes(fork: &RoundProgram) -> syn::Result<Vec<cq_lang_structures::Program>> {
     fork.holes
         .iter()
         .enumerate()
@@ -126,7 +126,7 @@ fn checked_holes(fork: &Fork) -> syn::Result<Vec<cq_lang_structures::Program>> {
                 .flat_map(|stratum| stratum.frozen_layouts.iter().chain(&stratum.leveled_layouts))
                 .map(|&index| fork.context.layouts[index].name.clone())
                 .collect();
-            let planned = cq_planners_plan::compile(hole, cq_planners_plan::Planner::Le)?;
+            let planned = cq_planners_plan::compile(&hole.cq, cq_planners_plan::Planner::Le)?;
             let indexed = cq_index_policy::compile(&planned)?;
             let physical = cq_physical_lowering::compile(&indexed)?;
             let physical = build_reads_excluding(&physical, &frozen)?;
@@ -136,7 +136,7 @@ fn checked_holes(fork: &Fork) -> syn::Result<Vec<cq_lang_structures::Program>> {
 }
 
 fn frozen_runs(
-    fork: &Fork,
+    fork: &RoundProgram,
     holes: &[cq_lang_structures::Program],
 ) -> syn::Result<Vec<BTreeMap<usize, FrozenRuns>>> {
     fork.context
@@ -214,18 +214,16 @@ fn expand(input: Tokens) -> syn::Result<Tokens> {
     .start(source.to_token_stream())
 }
 
-fn start_holes(source: &cq_lang_datalog::Program, advice: routing::Advice) -> syn::Result<Tokens> {
-    cq_lang_datalog::contract::check(source)?;
-    if source.observer.is_some() {
+fn start_holes(source: &cq_lang_datalog_storage::Program, advice: routing::Advice) -> syn::Result<Tokens> {
+    cq_lang_datalog_storage::contract::check(source)?;
+    if source.incremental.strata.source.observer.is_some() {
         return Err(syn::Error::new_spanned(
             source,
             "CQ_GPU_DATALOG_OBSERVER: device Datalog does not execute Rust observers",
         ));
     }
-    if source
-        .insertion
-        .as_ref()
-        .is_none_or(|policy| policy != "device_set_all_columns")
+    if source.policy.insertion != "device_set_all_columns"
+        || source.policy.negation_keys != "device_set_owned"
     {
         return Err(syn::Error::new_spanned(
             source,
@@ -266,13 +264,13 @@ fn start_holes(source: &cq_lang_datalog::Program, advice: routing::Advice) -> sy
         passes.push(config.select.clone().unwrap());
         pending.push(routing::Pending {
             prefix: cq_stage::Pipeline { passes },
-            source: hole.to_token_stream(),
+            source: hole.cq.to_token_stream(),
         });
     }
     pending.reverse();
     advance(routing::State {
         source: source.clone(),
-        leveled_ratio,
+        round: fork,
         names,
         pipelines,
         collected: Vec::new(),
@@ -287,7 +285,7 @@ fn advance(mut state: routing::State) -> syn::Result<Tokens> {
         )?);
         return pending.prefix.start(pending.source);
     }
-    let mut fork = cq_datalog_fork::compile_with_ratio(&state.source, state.leveled_ratio)?;
+    let mut fork = state.round;
     if state.collected.len() != fork.holes.len() || state.pipelines.len() != fork.holes.len() {
         return Err(syn::Error::new_spanned(
             &state.source,
@@ -332,18 +330,18 @@ fn snapshots(context: &RoundContext, queries: Tokens, frozen: &[usize]) -> Token
 }
 
 fn render(
-    source: &cq_lang_datalog::Program,
-    fork: Fork,
+    source: &cq_lang_datalog_storage::Program,
+    fork: RoundProgram,
     checked: Vec<cq_lang_structures::Program>,
     pipelines: Vec<cq_stage::Configuration>,
 ) -> syn::Result<Tokens> {
     let context = &fork.context;
-    let literals = string_literals(source.rules.iter().map(ToTokens::to_token_stream).collect());
+    let literals = string_literals(source.incremental.strata.source.rules.iter().map(ToTokens::to_token_stream).collect());
     let schedule = syn::LitStr::new(
         &source.to_token_stream().to_string(),
         proc_macro2::Span::call_site(),
     );
-    let variants = source.variants.as_ref().expect("checked schedule");
+    let variants = &source.incremental.variants;
     let selectors = variants
         .iter()
         .enumerate()
@@ -592,13 +590,21 @@ fn render(
                 #constructor(__cq_datalog_runtime, &columns)?
             };)
         });
-        let phase = |rules: &[cq_datalog_fork::RuleHole], phase: &str| {
+        let phase = |rules: &[cq_lang_datalog_round::RuleHole], phase: &str| {
             let round_label = syn::LitCStr::new(
                 &std::ffi::CString::new(format!("round/{phase}")).unwrap(),
                 proc_macro2::Span::call_site(),
             );
             let queries: Tokens = rules.iter()
-                .map(|rule| fork.holes[rule.hole].query.to_token_stream()).collect();
+                .map(|rule| {
+                    let query = &fork.holes[rule.hole].cq.query;
+                    let scan_layout = rule.scan.as_ref().and_then(|scan| match scan.source {
+                        cq_lang_datalog_round::InputSource::Layout(index) => Some(&context.layouts[index].name),
+                        cq_lang_datalog_round::InputSource::Delta(_) => None,
+                    });
+                    quote!(#query #scan_layout)
+                })
+                .collect();
             let maintained = stratum.frozen_layouts.iter().chain(&stratum.leveled_layouts)
                 .copied().collect::<Vec<_>>();
             let snapshots = snapshots(context, queries, &maintained);
@@ -612,6 +618,19 @@ fn render(
                 let next = &context.relations[rule.head].next;
                 let hole = &holes[rule.hole];
                 let name = &context.relations[rule.head].declaration.name;
+                let scan = rule.scan.as_ref().map(|scan| {
+                    let binding = &scan.binding;
+                    match scan.source {
+                        cq_lang_datalog_round::InputSource::Delta(index) => {
+                            let host = context.relations[index].delta_host.as_ref().unwrap();
+                            quote!(let #binding = #host;)
+                        }
+                        cq_lang_datalog_round::InputSource::Layout(index) => {
+                            let host = &context.layouts[index].host;
+                            quote!(let #binding = &#host;)
+                        }
+                    }
+                });
                 let label_text = format!("hole/{name}/variant-{}", rule.variant);
                 let retry_label = syn::LitStr::new(&label_text, proc_macro2::Span::call_site());
                 let label = syn::LitCStr::new(
@@ -621,6 +640,7 @@ fn render(
                 quote!({
                     let _cq_hole = ::cq_gpu_runtime::nvtx::range(#label);
                     let _cq_retry = ::cq_gpu_runtime::fused_retry_scope(#retry_label);
+                    #scan
                     #next.push(#hole);
                 })
             });
@@ -691,8 +711,8 @@ fn render(
     let outputs: Vec<_> = context
         .outputs
         .iter()
-        .map(|&index| {
-            let state = &context.relations[index].seen;
+        .map(|output| {
+            let state = &context.relations[output.relation].seen;
             quote!(#state.full().clone())
         })
         .collect();
@@ -857,7 +877,7 @@ mod tests {
 
     #[test]
     fn only_the_schedule_pass_validates_schedule_arguments() {
-        let source: cq_lang_datalog::Program = syn::parse2(program()).unwrap();
+        let source: cq_lang_datalog_source::Program = syn::parse2(program()).unwrap();
         assert!(
             schedule_pass::compile(&source, quote!(unknown))
                 .unwrap_err()
@@ -866,7 +886,7 @@ mod tests {
         );
         assert!(schedule_pass::compile(&source, quote!(delta_first, delta_first)).is_err());
         let written = schedule_pass::compile(&source, Tokens::new()).unwrap();
-        assert_eq!(written.variants.as_ref().unwrap()[1].driver, Some(0));
+        assert_eq!(written.incremental.variants[1].driver, Some(0));
         let mut config = routing::defaults();
         let opaque = quote!(this is not a dedup argument { but the router must not parse it });
         config.structures.last_mut().unwrap().arguments = opaque.clone();
@@ -1001,7 +1021,7 @@ mod tests {
 
     #[test]
     fn le_frozen_semi_and_probe_share_one_recorded_trie() {
-        let source: cq_lang_datalog::Program = syn::parse_quote! {
+        let source: cq_lang_datalog_source::Program = syn::parse_quote! {
             struct StackShape;
             relation Seed(a:i64,b:i64,c:i64,d:i64,e:i64,f:i64) = (seed);
             relation Prior(ea:i64,block:i64,r:i64,p:i64) = (prior);
@@ -1011,11 +1031,15 @@ mod tests {
             R(*a,*b,*c,*d,*e,*f) :- Seed(a,b,c,d,e,f);
             R(*a,*b,*c,*next,*ur,*up) :- Prior(used,block,r,p), R(a,b,c,used,r,p), Live(block,r,p,ur,up,next);
         };
-        let source = cq_datalog_schedule::stratify::compile(&source).unwrap();
-        let source = cq_datalog_schedule::seminaive::compile_with_driver(
+        let source = cq_datalog_stratify::compile(&source).unwrap();
+        let source = cq_datalog_incremental::compile_with_driver(
             &source,
-            cq_datalog_schedule::seminaive::Representation::DeviceSet,
-            cq_datalog_schedule::seminaive::DriverPolicy::DeltaFirst,
+            cq_datalog_incremental::DriverPolicy::DeltaFirst,
+        )
+        .unwrap();
+        let source = cq_datalog_storage::compile_with_representation(
+            &source,
+            cq_datalog_storage::Representation::DeviceSet,
         )
         .unwrap();
         let fork = cq_datalog_fork::compile(&source).unwrap();
@@ -1086,16 +1110,58 @@ mod tests {
     }
 
     #[test]
+    fn round_scan_bindings_use_resident_layout_and_delta_snapshots() {
+        let source: cq_lang_datalog_source::Program = syn::parse2(program()).unwrap();
+        let storage = schedule_pass::compile(&source, Tokens::new()).unwrap();
+        let round = cq_datalog_fork::compile(&storage).unwrap();
+        let pipelines = routing::resolve(
+            &storage,
+            &round,
+            syn::parse2(Tokens::new()).unwrap(),
+        )
+        .unwrap();
+        let mut bindings = Vec::new();
+        let mut layout_scans = 0;
+        let mut delta_scans = 0;
+        for rule in round.context.strata.iter().flat_map(|stratum| {
+            stratum.seeds.iter().chain(&stratum.steps)
+        }) {
+            let scan = rule.scan.as_ref().unwrap();
+            let binding = &scan.binding;
+            let expected = match scan.source {
+                cq_lang_datalog_round::InputSource::Layout(index) => {
+                    layout_scans += 1;
+                    let host = &round.context.layouts[index].host;
+                    quote!(let #binding = &#host;)
+                }
+                cq_lang_datalog_round::InputSource::Delta(index) => {
+                    delta_scans += 1;
+                    let host = round.context.relations[index].delta_host.as_ref().unwrap();
+                    quote!(let #binding = #host;)
+                }
+            };
+            bindings.push(expected.to_string());
+        }
+        assert_eq!((layout_scans, delta_scans), (1, 1));
+        let checked = checked_holes(&round).unwrap();
+        let emitted = render(&storage, round, checked, pipelines).unwrap().to_string();
+        for binding in bindings {
+            assert!(emitted.contains(&binding), "{binding}");
+        }
+    }
+
+    #[test]
     fn cpu_schedule_is_not_reinterpreted() {
-        let source: cq_lang_datalog::Program = syn::parse_quote! {
+        let source: cq_lang_datalog_source::Program = syn::parse_quote! {
             struct Copy;
             relation E(x:i64) = (input);
             relation R(x:i64);
             output R;
             R(*x) :- E(x);
         };
-        let source = cq_datalog_schedule::stratify::compile(&source).unwrap();
-        let source = cq_datalog_schedule::seminaive::compile(&source).unwrap();
+        let source = cq_datalog_stratify::compile(&source).unwrap();
+        let source = cq_datalog_incremental::compile(&source).unwrap();
+        let source = cq_datalog_storage::compile(&source).unwrap();
         let error = start_holes(&source, syn::parse2(Tokens::new()).unwrap()).unwrap_err();
         assert!(error.to_string().contains("CQ_GPU_DATALOG_POLICY"));
     }

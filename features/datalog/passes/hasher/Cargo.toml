@@ -1,0 +1,34 @@
+[package]
+name = "cq-datalog-hasher"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+proc-macro = true
+
+[dependencies]
+cq-datalog-support.workspace = true
+cq-lang-datalog-storage.workspace = true
+cq-lang-datalog-round.workspace = true
+cq-stage.workspace = true
+proc-macro2.workspace = true
+quote.workspace = true
+syn.workspace = true
+
+[dev-dependencies]
+cq-datalog.workspace = true
+cq-datalog-stratify.workspace = true
+cq-datalog-incremental.workspace = true
+cq-datalog-storage.workspace = true
+cq-datalog-fork.workspace = true
+cq-storage.workspace = true
+mini-linq.workspace = true
+cq-rewrites = { version = "0.1.0", path = "../../../rewrites" }
+rustc-hash = "=2.1.3"
+
+[package.metadata.cq]
+source = "cq-lang-datalog-storage"
+target = "cq-lang-datalog-storage"

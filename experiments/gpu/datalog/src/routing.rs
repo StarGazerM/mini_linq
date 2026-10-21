@@ -16,6 +16,7 @@ mod kw {
     syn::custom_keyword!(delta);
     syn::custom_keyword!(seed);
     syn::custom_keyword!(source);
+    syn::custom_keyword!(round);
     syn::custom_keyword!(names);
     syn::custom_keyword!(pipelines);
     syn::custom_keyword!(collected);
@@ -210,7 +211,7 @@ impl Parse for Advice {
 pub struct Input {
     pub schedule: Invocation,
     pub advice: Advice,
-    pub source: cq_lang_datalog::Program,
+    pub source: cq_lang_datalog_source::Program,
 }
 impl Parse for Input {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
@@ -268,13 +269,13 @@ impl ToTokens for Advice {
 }
 
 pub fn resolve(
-    source: &cq_lang_datalog::Program,
-    fork: &cq_datalog_fork::Fork,
+    source: &cq_lang_datalog_storage::Program,
+    fork: &cq_lang_datalog_round::Program,
     advice: Advice,
 ) -> syn::Result<Vec<Configuration>> {
     validate(&advice.default)?;
     let mut pipelines = vec![advice.default.clone(); fork.holes.len()];
-    let variants = source.variants.as_ref().expect("checked schedule");
+    let variants = &source.incremental.variants;
     let mut selected = BTreeSet::new();
     for (selector, named) in advice.overrides {
         let matches: Vec<_> = fork
@@ -312,8 +313,8 @@ pub struct Pending {
     pub source: TokenStream,
 }
 pub struct State {
-    pub source: cq_lang_datalog::Program,
-    pub leveled_ratio: u32,
+    pub source: cq_lang_datalog_storage::Program,
+    pub round: cq_lang_datalog_round::Program,
     pub names: Vec<Ident>,
     pub pipelines: Vec<Configuration>,
     pub collected: Vec<cq_lang_structures::Program>,
@@ -325,8 +326,10 @@ impl Parse for State {
         let body;
         braced!(body in input);
         let source = body.parse()?;
-        input.parse::<kw::leveled_ratio>()?;
-        let leveled_ratio = input.parse::<syn::LitInt>()?.base10_parse()?;
+        input.parse::<kw::round>()?;
+        let body;
+        braced!(body in input);
+        let round = body.parse()?;
         input.parse::<kw::names>()?;
         let body;
         braced!(body in input);
@@ -372,7 +375,7 @@ impl Parse for State {
         }
         Ok(Self {
             source,
-            leveled_ratio,
+            round,
             names,
             pipelines,
             collected,
@@ -383,7 +386,7 @@ impl Parse for State {
 impl ToTokens for State {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let source = &self.source;
-        let ratio = self.leveled_ratio;
+        let round = &self.round;
         let names = &self.names;
         let pipelines = self.pipelines.iter().map(config_tokens);
         let collected = self.collected.iter().map(|hole| quote!({ #hole }));
@@ -392,15 +395,15 @@ impl ToTokens for State {
             let source = &task.source;
             quote!(task { #prefix source { #source } })
         });
-        tokens.extend(quote!(source { #source } leveled_ratio #ratio names { #(#names),* }
+        tokens.extend(quote!(source { #source } round { #round } names { #(#names),* }
             pipelines { #(#pipelines)* } collected { #(#collected)* } pending { #(#pending)* }));
     }
 }
 
 /// Preserve the fresh identifiers' hygiene across macro continuation boundaries.
-/// The fork is reconstructed only at the two ends; no macro-global state is used.
+/// The checked round travels with the continuation; no macro-global state is used.
 pub fn context_names(
-    context: &mut cq_datalog_fork::RoundContext,
+    context: &mut cq_lang_datalog_round::RoundContext,
     restore: Option<&[Ident]>,
 ) -> Vec<Ident> {
     let restored: BTreeMap<_, _> = restore
@@ -431,8 +434,56 @@ pub fn context_names(
         for key in &mut stratum.keys {
             visit(&mut key.name);
         }
+        for rule in stratum.seeds.iter_mut().chain(&mut stratum.steps) {
+            if let Some(scan) = &mut rule.scan {
+                visit(&mut scan.binding);
+            }
+        }
     }
     visit(&mut context.observer_name);
     visit(&mut context.round_name);
     names
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn continuation_preserves_storage_round_and_scan_names() {
+        let source: cq_lang_datalog_source::Program = syn::parse_quote! {
+            struct Reachability;
+            relation Edge(x:i64,y:i64) = (edges);
+            relation Reach(x:i64,y:i64);
+            output Reach;
+            Reach(*x,*y) :- Edge(x,y);
+            Reach(*x,*z) :- Reach(x,y), Edge(y,z);
+        };
+        let source = crate::schedule_pass::compile(&source, TokenStream::new()).unwrap();
+        let mut round = cq_datalog_fork::compile_with_ratio(&source, 8).unwrap();
+        let names = context_names(&mut round.context, None);
+        let scans: Vec<_> = round.context.strata.iter()
+            .flat_map(|stratum| stratum.seeds.iter().chain(&stratum.steps))
+            .filter_map(|rule| rule.scan.as_ref())
+            .collect();
+        assert!(!scans.is_empty());
+        for scan in scans {
+            assert!(names.contains(&scan.binding));
+        }
+        let state = State {
+            pipelines: vec![defaults(); round.holes.len()],
+            source,
+            round,
+            names,
+            collected: Vec::new(),
+            pending: Vec::new(),
+        };
+        let mut restored: State = syn::parse2(state.to_token_stream()).unwrap();
+        assert_eq!(restored.source, state.source);
+        assert_eq!(restored.round, state.round);
+        assert_eq!(restored.round.context.leveled_ratio, 8);
+        let names = context_names(&mut restored.round.context, Some(&state.names));
+        assert_eq!(names, state.names);
+        cq_datalog_fork::check(&restored.source, &restored.round).unwrap();
+    }
 }

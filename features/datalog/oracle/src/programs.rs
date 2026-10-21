@@ -1,13 +1,20 @@
 // Programs intentionally use only the public surface; no Datalog IR is consumed.
 // Andersen/CSPA equations adapted from flowlog-rs/flowlog-bench:
 // https://github.com/flowlog-rs/flowlog-bench/tree/main/programs/oracle/ascent
-// Upstream uses ascent_par; these oracles use sequential ascent exclusively.
-use crate::{Data, Rows};
+/// Instantiate the unchanged corpus with caller-selected compiler and oracle macros.
+#[macro_export]
+macro_rules! oracle_programs {
+    ($module:ident, $ascent:path, $input:path, pipeline { $($pipeline:tt)* }) => {
+    pub mod $module {
+    use $ascent as ascent_program;
+    use $input as supplied_oracle_input;
+    macro_rules! oracle_input { ($rows:expr) => { supplied_oracle_input!($rows) }; }
+use $crate::{Data, Rows};
 use std::time::{Duration, Instant};
 
 pub mod reach {
     use super::*;
-    ascent::ascent! {
+    ascent_program! {
         pub struct Oracle;
         relation edge(i32, i32);
         relation seed(i32);
@@ -17,15 +24,15 @@ pub mod reach {
     }
     pub fn oracle(data: &Data) -> (Rows, Duration) {
         let mut p = Oracle {
-            edge: data.edge.clone(),
-            seed: data.seed.clone(),
+            edge: oracle_input!(data.edge),
+            seed: oracle_input!(data.seed),
             ..Default::default()
         };
         let start = Instant::now();
         p.run();
         let elapsed = start.elapsed();
         (
-            crate::canonical(p.answer.into_iter().map(|(x0,)| vec![x0]).collect()),
+            $crate::canonical(p.answer.into_iter().map(|(x0,)| vec![x0]).collect()),
             elapsed,
         )
     }
@@ -34,6 +41,7 @@ pub mod reach {
         let seed = data.seed.clone();
         let start = Instant::now();
         let result = cq_datalog::datalog! {
+                pipeline { $($pipeline)* }
                 struct Program;
                 relation edge(c0:i32, c1:i32) = (edge);
                 relation seed(c0:i32) = (seed);
@@ -45,7 +53,7 @@ pub mod reach {
         .collect::<Vec<_>>();
         let elapsed = start.elapsed();
         (
-            crate::canonical(result.into_iter().map(|(x0,)| vec![x0]).collect()),
+            $crate::canonical(result.into_iter().map(|(x0,)| vec![x0]).collect()),
             elapsed,
         )
     }
@@ -53,7 +61,7 @@ pub mod reach {
 
 pub mod tc_left {
     use super::*;
-    ascent::ascent! {
+    ascent_program! {
         pub struct Oracle;
         relation edge(i32, i32);
         relation answer(i32, i32);
@@ -62,14 +70,14 @@ pub mod tc_left {
     }
     pub fn oracle(data: &Data) -> (Rows, Duration) {
         let mut p = Oracle {
-            edge: data.edge.clone(),
+            edge: oracle_input!(data.edge),
             ..Default::default()
         };
         let start = Instant::now();
         p.run();
         let elapsed = start.elapsed();
         (
-            crate::canonical(p.answer.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            $crate::canonical(p.answer.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
             elapsed,
         )
     }
@@ -77,6 +85,7 @@ pub mod tc_left {
         let edge = data.edge.clone();
         let start = Instant::now();
         let result = cq_datalog::datalog! {
+                pipeline { $($pipeline)* }
                 struct Program;
                 relation edge(c0:i32, c1:i32) = (edge);
                 relation answer(c0:i32, c1:i32);
@@ -87,7 +96,7 @@ pub mod tc_left {
         .collect::<Vec<_>>();
         let elapsed = start.elapsed();
         (
-            crate::canonical(result.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            $crate::canonical(result.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
             elapsed,
         )
     }
@@ -95,7 +104,7 @@ pub mod tc_left {
 
 pub mod tc_right {
     use super::*;
-    ascent::ascent! {
+    ascent_program! {
         pub struct Oracle;
         relation edge(i32, i32);
         relation answer(i32, i32);
@@ -104,14 +113,14 @@ pub mod tc_right {
     }
     pub fn oracle(data: &Data) -> (Rows, Duration) {
         let mut p = Oracle {
-            edge: data.edge.clone(),
+            edge: oracle_input!(data.edge),
             ..Default::default()
         };
         let start = Instant::now();
         p.run();
         let elapsed = start.elapsed();
         (
-            crate::canonical(p.answer.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            $crate::canonical(p.answer.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
             elapsed,
         )
     }
@@ -119,6 +128,7 @@ pub mod tc_right {
         let edge = data.edge.clone();
         let start = Instant::now();
         let result = cq_datalog::datalog! {
+                pipeline { $($pipeline)* }
                 struct Program;
                 relation edge(c0:i32, c1:i32) = (edge);
                 relation answer(c0:i32, c1:i32);
@@ -129,7 +139,7 @@ pub mod tc_right {
         .collect::<Vec<_>>();
         let elapsed = start.elapsed();
         (
-            crate::canonical(result.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            $crate::canonical(result.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
             elapsed,
         )
     }
@@ -137,7 +147,7 @@ pub mod tc_right {
 
 pub mod tc_nonlinear {
     use super::*;
-    ascent::ascent! {
+    ascent_program! {
         pub struct Oracle;
         relation edge(i32, i32);
         relation answer(i32, i32);
@@ -146,14 +156,14 @@ pub mod tc_nonlinear {
     }
     pub fn oracle(data: &Data) -> (Rows, Duration) {
         let mut p = Oracle {
-            edge: data.edge.clone(),
+            edge: oracle_input!(data.edge),
             ..Default::default()
         };
         let start = Instant::now();
         p.run();
         let elapsed = start.elapsed();
         (
-            crate::canonical(p.answer.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            $crate::canonical(p.answer.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
             elapsed,
         )
     }
@@ -161,6 +171,7 @@ pub mod tc_nonlinear {
         let edge = data.edge.clone();
         let start = Instant::now();
         let result = cq_datalog::datalog! {
+                pipeline { $($pipeline)* }
                 struct Program;
                 relation edge(c0:i32, c1:i32) = (edge);
                 relation answer(c0:i32, c1:i32);
@@ -171,7 +182,7 @@ pub mod tc_nonlinear {
         .collect::<Vec<_>>();
         let elapsed = start.elapsed();
         (
-            crate::canonical(result.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            $crate::canonical(result.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
             elapsed,
         )
     }
@@ -179,7 +190,7 @@ pub mod tc_nonlinear {
 
 pub mod same_generation {
     use super::*;
-    ascent::ascent! {
+    ascent_program! {
         pub struct Oracle;
         relation edge(i32, i32);
         relation answer(i32, i32);
@@ -188,14 +199,14 @@ pub mod same_generation {
     }
     pub fn oracle(data: &Data) -> (Rows, Duration) {
         let mut p = Oracle {
-            edge: data.edge.clone(),
+            edge: oracle_input!(data.edge),
             ..Default::default()
         };
         let start = Instant::now();
         p.run();
         let elapsed = start.elapsed();
         (
-            crate::canonical(p.answer.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            $crate::canonical(p.answer.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
             elapsed,
         )
     }
@@ -203,6 +214,7 @@ pub mod same_generation {
         let edge = data.edge.clone();
         let start = Instant::now();
         let result = cq_datalog::datalog! {
+                pipeline { $($pipeline)* }
                 struct Program;
                 relation edge(c0:i32, c1:i32) = (edge);
                 relation answer(c0:i32, c1:i32);
@@ -213,7 +225,7 @@ pub mod same_generation {
         .collect::<Vec<_>>();
         let elapsed = start.elapsed();
         (
-            crate::canonical(result.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            $crate::canonical(result.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
             elapsed,
         )
     }
@@ -221,7 +233,7 @@ pub mod same_generation {
 
 pub mod mutual {
     use super::*;
-    ascent::ascent! {
+    ascent_program! {
         pub struct Oracle;
         relation edge(i32, i32);
         relation nodes(i32);
@@ -236,15 +248,15 @@ pub mod mutual {
     }
     pub fn oracle(data: &Data) -> (Rows, Duration) {
         let mut p = Oracle {
-            edge: data.edge.clone(),
-            nodes: data.nodes.clone(),
+            edge: oracle_input!(data.edge),
+            nodes: oracle_input!(data.nodes),
             ..Default::default()
         };
         let start = Instant::now();
         p.run();
         let elapsed = start.elapsed();
         (
-            crate::canonical(
+            $crate::canonical(
                 p.answer
                     .into_iter()
                     .map(|(x0, x1, x2)| vec![x0, x1, x2])
@@ -258,6 +270,7 @@ pub mod mutual {
         let nodes = data.nodes.clone();
         let start = Instant::now();
         let result = cq_datalog::datalog! {
+                pipeline { $($pipeline)* }
                 struct Program;
                 relation edge(c0:i32, c1:i32) = (edge);
                 relation nodes(c0:i32) = (nodes);
@@ -274,7 +287,7 @@ pub mod mutual {
         .collect::<Vec<_>>();
         let elapsed = start.elapsed();
         (
-            crate::canonical(
+            $crate::canonical(
                 result
                     .into_iter()
                     .map(|(x0, x1, x2)| vec![x0, x1, x2])
@@ -287,7 +300,7 @@ pub mod mutual {
 
 pub mod multiple_seeds {
     use super::*;
-    ascent::ascent! {
+    ascent_program! {
         pub struct Oracle;
         relation edge(i32, i32);
         relation seed(i32);
@@ -299,16 +312,16 @@ pub mod multiple_seeds {
     }
     pub fn oracle(data: &Data) -> (Rows, Duration) {
         let mut p = Oracle {
-            edge: data.edge.clone(),
-            seed: data.seed.clone(),
-            extra: data.extra.clone(),
+            edge: oracle_input!(data.edge),
+            seed: oracle_input!(data.seed),
+            extra: oracle_input!(data.extra),
             ..Default::default()
         };
         let start = Instant::now();
         p.run();
         let elapsed = start.elapsed();
         (
-            crate::canonical(p.answer.into_iter().map(|(x0,)| vec![x0]).collect()),
+            $crate::canonical(p.answer.into_iter().map(|(x0,)| vec![x0]).collect()),
             elapsed,
         )
     }
@@ -318,6 +331,7 @@ pub mod multiple_seeds {
         let extra = data.extra.clone();
         let start = Instant::now();
         let result = cq_datalog::datalog! {
+                pipeline { $($pipeline)* }
                 struct Program;
                 relation edge(c0:i32, c1:i32) = (edge);
                 relation seed(c0:i32) = (seed);
@@ -331,7 +345,7 @@ pub mod multiple_seeds {
         .collect::<Vec<_>>();
         let elapsed = start.elapsed();
         (
-            crate::canonical(result.into_iter().map(|(x0,)| vec![x0]).collect()),
+            $crate::canonical(result.into_iter().map(|(x0,)| vec![x0]).collect()),
             elapsed,
         )
     }
@@ -339,7 +353,7 @@ pub mod multiple_seeds {
 
 pub mod guard {
     use super::*;
-    ascent::ascent! {
+    ascent_program! {
         pub struct Oracle;
         relation edge(i32, i32);
         relation seed(i32);
@@ -349,15 +363,15 @@ pub mod guard {
     }
     pub fn oracle(data: &Data) -> (Rows, Duration) {
         let mut p = Oracle {
-            edge: data.edge.clone(),
-            seed: data.seed.clone(),
+            edge: oracle_input!(data.edge),
+            seed: oracle_input!(data.seed),
             ..Default::default()
         };
         let start = Instant::now();
         p.run();
         let elapsed = start.elapsed();
         (
-            crate::canonical(p.answer.into_iter().map(|(x0,)| vec![x0]).collect()),
+            $crate::canonical(p.answer.into_iter().map(|(x0,)| vec![x0]).collect()),
             elapsed,
         )
     }
@@ -366,6 +380,7 @@ pub mod guard {
         let seed = data.seed.clone();
         let start = Instant::now();
         let result = cq_datalog::datalog! {
+                pipeline { $($pipeline)* }
                 struct Program;
                 relation edge(c0:i32, c1:i32) = (edge);
                 relation seed(c0:i32) = (seed);
@@ -377,7 +392,7 @@ pub mod guard {
         .collect::<Vec<_>>();
         let elapsed = start.elapsed();
         (
-            crate::canonical(result.into_iter().map(|(x0,)| vec![x0]).collect()),
+            $crate::canonical(result.into_iter().map(|(x0,)| vec![x0]).collect()),
             elapsed,
         )
     }
@@ -385,7 +400,7 @@ pub mod guard {
 
 pub mod unreachable {
     use super::*;
-    ascent::ascent! {
+    ascent_program! {
         pub struct Oracle;
         relation edge(i32, i32);
         relation seed(i32);
@@ -398,16 +413,16 @@ pub mod unreachable {
     }
     pub fn oracle(data: &Data) -> (Rows, Duration) {
         let mut p = Oracle {
-            edge: data.edge.clone(),
-            seed: data.seed.clone(),
-            nodes: data.nodes.clone(),
+            edge: oracle_input!(data.edge),
+            seed: oracle_input!(data.seed),
+            nodes: oracle_input!(data.nodes),
             ..Default::default()
         };
         let start = Instant::now();
         p.run();
         let elapsed = start.elapsed();
         (
-            crate::canonical(p.answer.into_iter().map(|(x0,)| vec![x0]).collect()),
+            $crate::canonical(p.answer.into_iter().map(|(x0,)| vec![x0]).collect()),
             elapsed,
         )
     }
@@ -417,6 +432,7 @@ pub mod unreachable {
         let nodes = data.nodes.clone();
         let start = Instant::now();
         let result = cq_datalog::datalog! {
+                pipeline { $($pipeline)* }
                 struct Program;
                 relation edge(c0:i32, c1:i32) = (edge);
                 relation seed(c0:i32) = (seed);
@@ -431,7 +447,7 @@ pub mod unreachable {
         .collect::<Vec<_>>();
         let elapsed = start.elapsed();
         (
-            crate::canonical(result.into_iter().map(|(x0,)| vec![x0]).collect()),
+            $crate::canonical(result.into_iter().map(|(x0,)| vec![x0]).collect()),
             elapsed,
         )
     }
@@ -439,7 +455,7 @@ pub mod unreachable {
 
 pub mod nonedges {
     use super::*;
-    ascent::ascent! {
+    ascent_program! {
         pub struct Oracle;
         relation edge(i32, i32);
         relation path(i32, i32);
@@ -450,14 +466,14 @@ pub mod nonedges {
     }
     pub fn oracle(data: &Data) -> (Rows, Duration) {
         let mut p = Oracle {
-            edge: data.edge.clone(),
+            edge: oracle_input!(data.edge),
             ..Default::default()
         };
         let start = Instant::now();
         p.run();
         let elapsed = start.elapsed();
         (
-            crate::canonical(p.answer.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            $crate::canonical(p.answer.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
             elapsed,
         )
     }
@@ -465,6 +481,7 @@ pub mod nonedges {
         let edge = data.edge.clone();
         let start = Instant::now();
         let result = cq_datalog::datalog! {
+                pipeline { $($pipeline)* }
                 struct Program;
                 relation edge(c0:i32, c1:i32) = (edge);
                 relation path(c0:i32, c1:i32);
@@ -477,7 +494,7 @@ pub mod nonedges {
         .collect::<Vec<_>>();
         let elapsed = start.elapsed();
         (
-            crate::canonical(result.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            $crate::canonical(result.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
             elapsed,
         )
     }
@@ -485,7 +502,7 @@ pub mod nonedges {
 
 pub mod recursive_upper {
     use super::*;
-    ascent::ascent! {
+    ascent_program! {
         pub struct Oracle;
         relation edge(i32, i32);
         relation seed(i32);
@@ -499,16 +516,16 @@ pub mod recursive_upper {
     }
     pub fn oracle(data: &Data) -> (Rows, Duration) {
         let mut p = Oracle {
-            edge: data.edge.clone(),
-            seed: data.seed.clone(),
-            nodes: data.nodes.clone(),
+            edge: oracle_input!(data.edge),
+            seed: oracle_input!(data.seed),
+            nodes: oracle_input!(data.nodes),
             ..Default::default()
         };
         let start = Instant::now();
         p.run();
         let elapsed = start.elapsed();
         (
-            crate::canonical(p.answer.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            $crate::canonical(p.answer.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
             elapsed,
         )
     }
@@ -518,6 +535,7 @@ pub mod recursive_upper {
         let nodes = data.nodes.clone();
         let start = Instant::now();
         let result = cq_datalog::datalog! {
+                pipeline { $($pipeline)* }
                 struct Program;
                 relation edge(c0:i32, c1:i32) = (edge);
                 relation seed(c0:i32) = (seed);
@@ -533,7 +551,7 @@ pub mod recursive_upper {
         .collect::<Vec<_>>();
         let elapsed = start.elapsed();
         (
-            crate::canonical(result.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            $crate::canonical(result.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
             elapsed,
         )
     }
@@ -541,7 +559,7 @@ pub mod recursive_upper {
 
 pub mod andersen {
     use super::*;
-    ascent::ascent! {
+    ascent_program! {
         pub struct Oracle;
         relation address_of(i32, i32);
         relation assign(i32, i32);
@@ -555,17 +573,17 @@ pub mod andersen {
     }
     pub fn oracle(data: &Data) -> (Rows, Duration) {
         let mut p = Oracle {
-            address_of: data.address_of.clone(),
-            assign: data.assign.clone(),
-            load: data.load.clone(),
-            store: data.store.clone(),
+            address_of: oracle_input!(data.address_of),
+            assign: oracle_input!(data.assign),
+            load: oracle_input!(data.load),
+            store: oracle_input!(data.store),
             ..Default::default()
         };
         let start = Instant::now();
         p.run();
         let elapsed = start.elapsed();
         (
-            crate::canonical(p.answer.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            $crate::canonical(p.answer.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
             elapsed,
         )
     }
@@ -576,6 +594,7 @@ pub mod andersen {
         let store = data.store.clone();
         let start = Instant::now();
         let result = cq_datalog::datalog! {
+                pipeline { $($pipeline)* }
                 struct Program;
                 relation address_of(c0:i32, c1:i32) = (address_of);
                 relation assign(c0:i32, c1:i32) = (assign);
@@ -591,7 +610,7 @@ pub mod andersen {
         .collect::<Vec<_>>();
         let elapsed = start.elapsed();
         (
-            crate::canonical(result.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            $crate::canonical(result.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
             elapsed,
         )
     }
@@ -599,7 +618,7 @@ pub mod andersen {
 
 pub mod cspa {
     use super::*;
-    ascent::ascent! {
+    ascent_program! {
         pub struct Oracle;
         relation assign(i32, i32);
         relation dereference(i32, i32);
@@ -623,15 +642,15 @@ pub mod cspa {
     }
     pub fn oracle(data: &Data) -> (Rows, Duration) {
         let mut p = Oracle {
-            assign: data.assign.clone(),
-            dereference: data.dereference.clone(),
+            assign: oracle_input!(data.assign),
+            dereference: oracle_input!(data.dereference),
             ..Default::default()
         };
         let start = Instant::now();
         p.run();
         let elapsed = start.elapsed();
         (
-            crate::canonical(
+            $crate::canonical(
                 p.answer
                     .into_iter()
                     .map(|(x0, x1, x2)| vec![x0, x1, x2])
@@ -645,6 +664,7 @@ pub mod cspa {
         let dereference = data.dereference.clone();
         let start = Instant::now();
         let result = cq_datalog::datalog! {
+                pipeline { $($pipeline)* }
                 struct Program;
                 relation assign(c0:i32, c1:i32) = (assign);
                 relation dereference(c0:i32, c1:i32) = (dereference);
@@ -670,7 +690,7 @@ pub mod cspa {
         .collect::<Vec<_>>();
         let elapsed = start.elapsed();
         (
-            crate::canonical(
+            $crate::canonical(
                 result
                     .into_iter()
                     .map(|(x0, x1, x2)| vec![x0, x1, x2])
@@ -679,4 +699,8 @@ pub mod cspa {
             elapsed,
         )
     }
+}
+
+    }
+    };
 }

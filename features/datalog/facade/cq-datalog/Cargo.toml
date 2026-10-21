@@ -1,0 +1,49 @@
+[package]
+name = "cq-datalog"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+default = []
+counters = ["cq-storage/counters"]
+phase-timing = ["cq-datalog-configuration/phase-timing"]
+hoist-invariants = ["cq-datalog-macros/hoist-invariants"]
+
+[dependencies]
+cq-datalog-configuration.workspace = true
+cq-datalog-macros.workspace = true
+cq-lang-datalog-source.workspace = true
+cq-lang-datalog-strata.workspace = true
+cq-lang-datalog-incremental.workspace = true
+cq-lang-datalog-storage.workspace = true
+cq-lang-datalog-round.workspace = true
+cq-storage.workspace = true
+
+[dev-dependencies]
+mini-linq.workspace = true
+cq-stage.workspace = true
+proc-macro2.workspace = true
+quote.workspace = true
+syn.workspace = true
+ascent = { version = "0.8", default-features = false }
+
+[[test]]
+name = "execution"
+path = "../../tests/execution.rs"
+
+[[test]]
+name = "counters"
+path = "../../tests/counters.rs"
+required-features = ["counters"]
+
+[[example]]
+name = "reach"
+path = "../../examples/reach.rs"
+
+[[example]]
+name = "layout_mismatch"
+path = "../../examples/layout_mismatch.rs"
+required-features = ["counters"]

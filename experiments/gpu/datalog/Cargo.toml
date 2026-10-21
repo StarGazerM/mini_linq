@@ -7,9 +7,13 @@ edition.workspace = true
 proc-macro = true
 
 [dependencies]
-cq-lang-datalog = { path = "../../../features/datalog/language" }
-cq-datalog-schedule = { path = "../../../features/datalog/schedule" }
-cq-datalog-fork = { path = "../../../features/datalog/fork" }
+cq-lang-datalog-source = { path = "../../../features/datalog/languages/dl-source" }
+cq-lang-datalog-storage = { path = "../../../features/datalog/languages/dl-storage" }
+cq-lang-datalog-round = { path = "../../../features/datalog/languages/dl-round" }
+cq-datalog-stratify = { path = "../../../features/datalog/passes/stratify" }
+cq-datalog-incremental = { path = "../../../features/datalog/passes/incremental" }
+cq-datalog-storage = { path = "../../../features/datalog/passes/storage" }
+cq-datalog-fork = { path = "../../../features/datalog/passes/fork" }
 cq-stage = { path = "../../../facade/cq-stage" }
 cq-lang-physical = { path = "../../../languages/cq-lang-physical" }
 cq-rewrite-passes = { path = "../../../features/rewrites/passes" }
@@ -19,6 +23,7 @@ quote = "1"
 syn = { version = "2", features = ["full"] }
 
 [dev-dependencies]
+cq-datalog = { path = "../../../features/datalog/facade/cq-datalog" }
 cq-planners-plan = { path = "../../../features/planners/plan" }
 cq-index-policy = { path = "../../../passes/cq-index-policy" }
 cq-physical-lowering = { path = "../../../passes/cq-physical-lowering" }

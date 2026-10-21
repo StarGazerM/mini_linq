@@ -1,0 +1,204 @@
+//! DL-Strata records dependency-ordered unions of SCCs over DL-Source.
+//! Its meaning is sequential composition of the source component fixpoints.
+//! Frozen-filter certificates additionally preserve the erased partition and
+//! require their materialized helpers to complete before recursive consumers.
+use cq_datalog_support::ensure;
+pub use cq_lang_datalog_source as source;
+use cq_syntax::symbol_name;
+use proc_macro2::TokenStream;
+use quote::{ToTokens, quote};
+use source::{BodyItem, Graph};
+use std::collections::BTreeMap;
+use syn::{
+    Ident, Token,
+    parse::{Parse, ParseStream},
+};
+pub mod invariants;
+pub mod kw {
+    syn::custom_keyword!(strata);
+    syn::custom_keyword!(component);
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Program {
+    pub source: source::Program,
+    pub components: Vec<Vec<Ident>>,
+}
+impl Parse for Program {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let source = input.parse()?;
+        input.parse::<kw::strata>()?;
+        let body;
+        syn::braced!(body in input);
+        let mut components = Vec::new();
+        while !body.is_empty() {
+            body.parse::<kw::component>()?;
+            let members;
+            syn::bracketed!(members in body);
+            components.push(
+                members
+                    .parse_terminated(Ident::parse, Token![,])?
+                    .into_iter()
+                    .collect(),
+            );
+            body.parse::<Token![;]>()?;
+        }
+        Ok(Self { source, components })
+    }
+}
+impl ToTokens for Program {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        let source = &self.source;
+        let components = self.components.iter().map(|m| quote!(component [#(#m),*];));
+        tokens.extend(quote!(#source strata { #(#components)* }));
+    }
+}
+/// Formal rule DL-Strata: certify a complete ordered partition into unions of SCCs.
+fn check_strata(program: &Program, g: &Graph) -> syn::Result<()> {
+    let p = &program.source;
+    let components = &program.components;
+    let mut positions = BTreeMap::new();
+    for (c, members) in components.iter().enumerate() {
+        ensure(!members.is_empty(), &p.name, "empty component")?;
+        for member in members {
+            let i = g.index(member)?;
+            ensure(
+                p.declarations[i].value.is_none() && positions.insert(i, c).is_none(),
+                member,
+                "components must cover IDB relations exactly",
+            )?;
+        }
+    }
+    for (i, d) in p.declarations.iter().enumerate() {
+        ensure(
+            d.value.is_some() || positions.contains_key(&i),
+            d,
+            "missing IDB component",
+        )?;
+    }
+    for (&i, &ci) in &positions {
+        for (&j, &cj) in &positions {
+            ensure(
+                !(g.reach[i][j] && g.reach[j][i]) || ci == cj,
+                &p.name,
+                "an SCC cannot be split across components",
+            )?;
+        }
+    }
+    for &(h, b, strict) in &g.edges {
+        if let (Some(&h), Some(&b)) = (positions.get(&h), positions.get(&b)) {
+            ensure(
+                if strict { b < h } else { b <= h },
+                &p.name,
+                "components violate dependency order or contain internal negation",
+            )?;
+        }
+    }
+    Ok(())
+}
+#[derive(Clone, Debug)]
+pub struct Analysis {
+    pub graph: Graph,
+    pub positions: BTreeMap<String, usize>,
+    pub dependencies: Vec<(usize, usize, bool)>,
+    pub components: Vec<Vec<usize>>,
+    pub component: Vec<Option<usize>>,
+    pub changing_positions: Vec<Vec<usize>>,
+}
+pub mod contract {
+    use super::*;
+    pub fn check(program: &Program) -> syn::Result<Analysis> {
+        let source::Analysis {
+            graph,
+            positions,
+            dependencies,
+        } = source::contract::check(&program.source)?;
+        check_strata(program, &graph)?;
+        invariants::check(program, &graph)?;
+        let components: Vec<Vec<usize>> = program
+            .components
+            .iter()
+            .map(|members| {
+                members
+                    .iter()
+                    .map(|id| positions[&symbol_name(id)])
+                    .collect()
+            })
+            .collect();
+        let mut component = vec![None; program.source.declarations.len()];
+        for (index, members) in components.iter().enumerate() {
+            for &member in members {
+                component[member] = Some(index);
+            }
+        }
+        let changing_positions = program
+            .source
+            .rules
+            .iter()
+            .map(|query| {
+                let head = positions[&symbol_name(&query.head.relation)];
+                query
+                    .body
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, item)| {
+                        if let BodyItem::Positive { atom } = item {
+                            let input = positions[&symbol_name(&atom.relation)];
+                            if component[head].is_some() && component[head] == component[input] {
+                                return Some(index);
+                            }
+                        }
+                        None
+                    })
+                    .collect()
+            })
+            .collect();
+        Ok(Analysis {
+            graph,
+            positions,
+            dependencies,
+            components,
+            component,
+            changing_positions,
+        })
+    }
+}
+/// Preserve the immediate Source program while independently admitting new strata.
+pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
+    contract::check(source)?;
+    contract::check(target)?;
+    check_rewrite_admitted(source, target)
+}
+// The stage runner has already checked both language contracts.
+fn check_rewrite_admitted(source: &Program, target: &Program) -> syn::Result<()> {
+    if !source.source.invariants.is_empty() || !target.source.invariants.is_empty() {
+        ensure(
+            source.source.invariants.is_empty()
+                || source.source.invariants == target.source.invariants,
+            target,
+            "strata rewrite changed existing invariant decisions",
+        )?;
+        let source = invariants::erase(source)?;
+        let target_erased = invariants::erase(target)?;
+        ensure(
+            source == target_erased,
+            target,
+            "strata invariant rewrite changed the erased source or partition",
+        )
+    } else {
+        ensure(
+            source.source == target.source,
+            target,
+            "strata rewrite changed the source program",
+        )
+    }
+}
+/// The rewrite callback assumes `cq_stage::run` checked both contracts.
+/// Standalone callers must use the public free [`check_rewrite`] function.
+impl cq_stage::Language for Program {
+    fn check(&self) -> syn::Result<()> {
+        contract::check(self).map(|_| ())
+    }
+    fn check_rewrite(source: &Self, target: &Self) -> syn::Result<()> {
+        check_rewrite_admitted(source, target)
+    }
+}

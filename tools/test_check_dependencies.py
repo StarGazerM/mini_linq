@@ -52,7 +52,11 @@ class FeatureLocks(unittest.TestCase):
     def test_ascent_hashbrown_exception_is_scoped(self):
         root_packages = [("hashbrown", "0.15.5", SOURCE)]
         feature_packages = [("hashbrown", "0.14.5", SOURCE)]
-        self.check(root_packages, feature_packages, "datalog")
+        for feature in ("datalog", "datalog-parallel"):
+            with self.subTest(feature=feature):
+                self.check(root_packages, feature_packages, feature)
+                with self.assertRaisesRegex(SystemExit, "hashbrown 0.14.4"):
+                    self.check(root_packages, [("hashbrown", "0.14.4", SOURCE)], feature)
         with self.assertRaisesRegex(SystemExit, "hashbrown 0.14.5"):
             self.check(root_packages, feature_packages)
 

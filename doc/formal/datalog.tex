@@ -1,0 +1,742 @@
+\section{Datalog language boundaries and contracts}
+\label{sec:datalog-languages}
+This specification separates five checked languages above the unchanged CQ
+compiler. Structural checks do not discharge all semantic obligations.
+Contracts admit recorded choices; default producers choose deterministically.
+The base admits dependency-ordered unions of SCCs, alternative usable layouts
+and opaque concrete Rust providers, while retaining the
+\code{seminaive\_covering} evaluation scheme and a checked operational vocabulary.
+Structural checks examine the supplied IR and never rerun a producer to compare
+with its chosen output.
+The default generated Rust preserves the captured baseline's behavior;
+declaration pruning removes only unused hole-local declarations and bindings.
+
+\paragraph{Semantic domain and limits.}
+Each relation declares a model slot $M$; the base accepts only \code{set}.
+EDB hosts denote sets even when their physical traversal contains duplicates.
+Outputs denote sets, not their iteration order. Rust expressions are opaque,
+pure partial functions, with panic represented by $\bot$; purity and lawful
+provider operations are premises, not syntactic checks. A terminating,
+successful source denotes the stratified least fixpoint. Divergence has no
+completed result. Computed heads and finite generators do not by themselves
+guarantee a finite reachable domain. Refinement requires that a successful
+reference yield the same sets without a new panic; it does not require equal
+panic domains. Observers and their evaluation counts are outside this relational
+meaning. A different model requires a dialect meaning and a checked translation;
+no pass may silently change $M$.
+
+\subsection{DL-Surface}
+\paragraph{Grammar.} Raw tokens containing source syntax and supported sugar.
+\paragraph{Contract.} Surface passes check their own expansion; the generic
+raw-token language has no Datalog well-formedness judgment.
+\paragraph{Meaning.} Meaning is that of the translated DL-Source program.
+\paragraph{Recorded decisions.} None; surface syntax is eliminated before
+source parsing. In particular, parsing a later IR must not conditionally
+expand \code{if let}.
+\paragraph{Rewrite check.} Preserve unowned syntax and validate the owned
+expansion, including its binders and evaluation position.
+
+\subsection{DL-Source}
+\paragraph{Grammar.} Declarations (EDB bindings or IDB declarations, each with
+model \code{set}), ordered rules, outputs, and an optional observer. Bodies
+contain positive atoms, safe negative atoms, and written-order CQ Rust steps
+including \code{let}, \code{for}, and guards; heads may be computed.
+\paragraph{Contract.} Declared names, arities, types and outputs are consistent;
+head and negative variables are safely bound; signed dependencies are
+stratifiable. Aggregates and nested blocks remain outside this base language.
+Opaque Rust must not hide reads of evolving IDBs.
+\begin{mathpar}
+\Rule{WF-DL-Source}{\text{source safety, declarations and signed stratifiability}}
+ {\mathrm{WF}_{\mathrm{Source}}(P)}
+\end{mathpar}
+\paragraph{Meaning.} Evaluate components in dependency order, taking the
+inflationary least fixpoint of their immediate consequences, with lower
+components fixed. The total finite theorem in the incremental section applies
+under its premises; partial execution additionally has the obligations below.
+\paragraph{Recorded decisions.} Relation model, EDB bindings, written rule and
+Rust-step order, outputs and observer. No schedule or physical choices.
+\paragraph{Rewrite check.} Check both Source contracts and preserve the declared
+interface: program name, relation declarations and models, EDB bindings, outputs
+and observer.
+Rules may change, including opaque Rust payloads. Preservation of relational
+meaning and partial-execution refinement is a semantic premise of such a rewrite,
+validated by executable refinement cases, not decided by the structural gate.
+
+\subsection{DL-Strata}
+\paragraph{Grammar.} DL-Source plus an ordered list of components.
+\paragraph{Contract.} Check Source, then require a complete, nonoverlapping
+partition of the IDBs into nonempty components, each a union of whole dependency
+SCCs. A positive IDB dependency is in the same or an earlier component; a negative
+IDB dependency is strictly earlier. Thus no component contains internal negation.
+EDBs remain fixed inputs. Independent components may be reordered and positive
+SCCs may be merged when these conditions hold.
+\begin{mathpar}
+\Rule{WF-DL-Strata}{\mathrm{WF}_{\mathrm{Source}}(P)\quad
+ C\text{ completely partitions SCCs and respects signed dependency order}}
+ {\mathrm{WF}_{\mathrm{Strata}}(P,C)}
+\end{mathpar}
+\paragraph{Meaning.} Sequential composition of component fixpoints, equal to
+the source meaning under the stratification premises.
+\paragraph{Recorded decisions.} Component membership and order.
+\paragraph{Rewrite check.} Check both contracts and preserve Source exactly;
+the target may choose a different admissible component partition or order.
+The SCC theorem in the incremental section extends to each such union: its internal dependencies
+are positive, and all negative inputs are frozen.
+
+\subsection{DL-Incremental}
+\paragraph{Grammar.} DL-Strata plus fresh delta declarations and ordered
+seed/step variants, each identifying its source rule and delta occurrence.
+\paragraph{Contract.} Check Strata and accept only the recorded scheme
+\code{seminaive\_covering}. Check fresh delta names and matching types, rule
+identity, variant erasure and changing-position coverage directly. Each rule
+with no positive occurrence in its current component has at least one seed;
+otherwise each changing positive occurrence is selected by at least one step
+variant reading its delta, while other changing occurrences read the accumulated
+relation. Preserve head, written body order, Rust steps and fixed inputs under
+erasure. Repeated seed and step variants are allowed: covering is not a disjoint
+or exactly-once derivation partition. Variant order and fresh names need not equal
+the default producer's choices.
+\begin{mathpar}
+\Rule{WF-DL-Incremental}{\mathrm{WF}_{\mathrm{Strata}}(S)\quad
+ V\text{ has valid deltas, erasure and seminaive covering coverage}}
+ {\mathrm{WF}_{\mathrm{Incremental}}(S,V)}
+\end{mathpar}
+\paragraph{Meaning.} Starting from the deduplicated seeds, each round reads
+immutable accumulated $A_r$ and delta $\Delta_r$, computes candidates $C_r$,
+and admits and publishes
+\[
+ \Delta_{r+1}=\mathrm{supp}(C_r)\setminus A_r,\qquad
+ A_{r+1}=A_r\cup\Delta_{r+1}.
+\]
+Stop when all component deltas are empty. These are set operations; the model
+slot does not authorize lattice subtraction or semiring differences.
+\paragraph{Recorded decisions.} Covering semi-naive scheme, delta names,
+variant identities and occurrence substitutions. Naive and disjoint exact
+schemes are not accepted merely because they are conceivable alternatives.
+\paragraph{Rewrite check.} Check both contracts and preserve the underlying
+Strata program exactly; delta declarations and variant schedules may change
+provided the target independently satisfies erasure and coverage.
+
+\paragraph{Frozen negation.}
+Let $B$ contain completed lower-component relations. Within the consuming
+component, a negative literal is a fixed predicate of the currently bound
+values, not a changing positive position. It is neither delta-substituted nor
+counted toward coverage. For total pure rules, the usual covering argument
+therefore applies with $B$ held fixed:
+\begin{mathpar}
+\Rule{DL-FrozenNegation}{B\text{ is complete and immutable}\quad
+ q_B\text{ is total and monotone in its positive current-component inputs}}
+ {q_B(R\cup\Delta)=q_B(R)\cup\bigcup_i V_{B,i}(R\cup\Delta,\Delta)}
+\end{mathpar}
+Wildcards are existentially projected out of negative membership keys;
+constant filters remain part of key construction. No rule above permits
+negation of a changing current-component relation.
+
+\paragraph{Partial Rust across rounds.}
+Erasure, body-order preservation and full-valuation coverage do not prove
+prefix safety: a partial expression can run on a prefix whose later atom is
+empty. The additional obligation is that every prefix evaluated by every
+generated variant is safe whenever the written-order reference succeeds,
+including seed execution and cross-round repetition. Per-hole CQ checks and
+Before facts constrain each call but do not discharge this multi-round
+obligation. The total finite fixpoint theorem is not claimed for arbitrary
+partial Rust. Executable panic/refinement cases provide evidence, not a proof
+for all opaque expressions.
+
+\subsection{DL-Storage}
+\paragraph{Grammar.} DL-Incremental plus a declaration-ordered
+\code{providers} vector, full and delta layouts, occurrence-to-read bindings,
+frozen negative projections, and insertion/negation policies. Each
+\code{Providers} record contains a local \code{canonical\_name}, the opaque Rust
+type \code{canonical\_set} with generic row parameter \code{R}, and concrete
+row-container types \code{all}, \code{seen}, \code{delta} and \code{next}.
+The opaque expressions \code{all\_init}, \code{delta\_init} and
+\code{next\_init} initialize their respective containers. Each \code{Layout}
+records its relation, complete column permutation, key-prefix length,
+opaque concrete map \code{provider} type and \code{maintenance} operation.
+A \code{Read} records the variant, written body position, read kind, structure
+index and column order. A \code{Negative} records its consuming component,
+source relation, projected columns and constant filters.
+
+\paragraph{Textual records.} Storage and Round use the existing
+\code{record!} grammar, not a second surface language: fields occur in their
+declared order as \code{field \{ payload \}}; a vector is a bracketed sequence
+of braced entries without commas; an option is \code{[]} or
+\code{[payload]}. Thus a two-member index vector is \code{[\{0\}\{1\}]}.
+Rust types and expressions are parsed losslessly as opaque Rust syntax inside
+their field delimiters. Parse/print roundtripping retains these choices;
+resuming a checked IR does not consult a producer to recover them.
+
+\paragraph{Contract.} Check Incremental, require one provider record per source
+declaration, and accept the supported all-column insertion and borrowed
+negation policies \code{all\_columns} and
+\code{borrowed}. Every full layout records
+\code{admitted\_rows} maintenance; every delta layout records
+\code{replace\_each\_run}. Each declared layout has a complete column
+permutation and valid key prefix, including additional unused layouts.
+For every recorded read, locate the actual source-rule occurrence and derive
+the variables already bound at that written position and its constants.
+The selected structure must belong to the correct relation and version, and
+its key must use only available columns; a recorded bound-column claim is not
+evidence. Require exactly one binding per positive occurrence and no extraneous
+bindings, together with the prescribed frozen negative projection/filter,
+including wildcard treatment. A \code{direct} binding reads the selected
+delta relation in declaration column order; it need not be the first body
+occurrence. Full and delta layouts must serve their respective versions.
+The checker does not whitelist applicable Rust provider types or interpret their
+initializer expressions; typing and operation availability are checked by Rust.
+It does require syntactically identical \code{delta} and \code{next} types,
+because \code{delta\_swap} moves the entire next container into delta.
+The uniform provider record reserves fields for both relation kinds. For an
+EDB, the unused \code{all}, \code{seen}, \code{delta}, \code{next} and their
+initializers must retain the default row-container records. For an IDB,
+the unused \code{canonical\_name} and \code{canonical\_set} must retain their
+defaults. Changes to these inapplicable fields are rejected, not silently ignored.
+\begin{mathpar}
+\Rule{WF-DL-Storage}{\mathrm{WF}_{\mathrm{Incremental}}(I)\quad
+ D\text{ records complete providers, usable reads and maintained layouts}}
+ {\mathrm{WF}_{\mathrm{Storage}}(I,D)}
+\end{mathpar}
+\paragraph{Meaning and provider premises.} Data refinement by $\alpha$ requires
+the EDB canonical provider and each published full layout to represent the
+same relation, delta layouts to represent precisely the current fresh delta,
+and negative keys to represent the prescribed projection/filter of frozen
+inputs. Initializers and default construction must denote empty containers.
+In particular, membership sets, initial full/delta layout hosts, and every
+delta-layout reset use \code{::core::default::Default::default()}.
+Default construction is part of these operations' meaning, not an independent
+initializer choice: each selected provider must implement \code{Default} as
+the empty represented collection, including every empty delta-run rebuild.
+Canonical collection removes duplicates without changing row values; canonical
+iteration and cloning preserve those values. The membership provider's
+\code{insert} returns true exactly for a previously absent complete row,
+and retains that row. Sequence push, extension, traversal and owned iteration
+preserve their rows; moving the next container to delta preserves exactly the
+admitted batch. Map entry lookup and bucket insertion implement the recorded
+key/payload split, without losing rows or mixing unequal keys. Equality,
+hashing, ordering (where required), cloning and borrowing obey the relevant
+provider laws, and these operations introduce no new panic on successful
+reference executions. These are semantic premises, not proofs obtained by
+parsing a type name or by checking method availability.
+
+\paragraph{Defaults and checked alternatives.} The default canonical wrapper
+is named \code{Canonical}, with \code{::cq\_storage::HashSet<R>} storage.
+The accumulated, delta and next providers are concrete \code{Vec} row types,
+initialized with \code{::std::vec::Vec::new()}; membership uses
+\code{::cq\_storage::HashSet} of complete rows. Layouts use
+\code{::std::collections::HashMap} from key tuples to \code{Vec} payload
+tuples, with \code{::cq\_storage::HashState}. These are default records, not
+the definition of admissibility. A concrete \code{BTreeMap} layout with the
+same key/payload types is admitted under its lawful ordering premise.
+Likewise a later changing occurrence may select a direct delta scan instead
+of a delta layout, retaining its written position and declaration-order columns.
+
+\paragraph{Recorded decisions.} Concrete provider types, wrapper name,
+container initializers, layout shape and maintenance, occurrence bindings,
+negative projections and the supported insertion/negation operations.
+Applicable opaque provider syntax is retained through Fork and consumed by the
+printer, rather than replaced with default types; inapplicable fields are
+checked reserved defaults.
+\paragraph{Rewrite check.} Check both contracts and preserve Incremental exactly;
+allow changed provider records, layouts and occurrence bindings when the target
+satisfies coverage, key availability, version and maintenance obligations.
+Provider refinement remains a semantic premise of such a rewrite.
+
+\subsection{DL-Round}
+\paragraph{Grammar.} DL-Storage plus a \code{RoundContext} of runtime
+relations, copied concrete providers and layouts, component \code{Stratum}
+records, outputs and observer bindings; complete embedded CQ holes; and a
+CQ sub-pipeline and typed interface for each hole. A \code{Stratum} records
+members, component-local negative keys, ordered seed/step \code{RuleHole}
+lists, explicit phases, publication operations, termination references and test,
+observer placement, key scope and loop form. Each \code{RuleHole} records the variant, head,
+hole index, optional scan binding and membership \code{insertion} operation.
+An \code{Output} records a relation reference and conversion operation.
+The program also records the complete \code{pull\_printers} allowlist of
+exact macro paths.
+\code{HoleInterface::Pull} denotes an iterator result consumed by Round.
+\code{HoleInterface::Push} is representable in text for a clear unsupported
+interface diagnostic, but no base Round consumer implements it.
+\paragraph{Contract.} Check Storage, exact copied provider/layout correspondence,
+hole correspondence under the recorded reads, seed/step ordering, fresh runtime
+names and the operational obligations below. The check does not reconstruct a
+default storage or Round plan. Each hole must record the pull interface and an
+argument-free terminal invocation whose exact path is in its recorded allowlist.
+The default allowlist is exactly
+\code{::mini\_linq::passes::print\_pull} and
+\code{mini\_linq::passes::print\_pull}; leading qualification is significant.
+For example, \code{pull\_printers = [crate::alias::pull];} in
+\code{DatalogConfiguration}, together with
+\code{cq = pipeline \{ print = crate::alias::pull; \};}, explicitly replaces
+that list. Fork serializes the complete pull-printer allowlist into Round text,
+so a resumed Round needs neither configuration nor compilation to check it.
+Each CQ hole declares only the relations, deltas and layouts it reads
+positively, any scan binding, and its output head; negative key sets remain
+predicate captures. The Round checker derives this required declaration set
+independently from the query and recorded reads.
+Unlisted terminals (including the default push printer) and typed push holes
+are rejected.
+Declaring an alternate path is the caller's assertion of its pull calling
+convention, not Rust alias resolution or a proof of printer equivalence.
+This check examines terminal invocations, not Rust tokens that do not yet exist.
+\begin{mathpar}
+\Rule{WF-DL-Round}{\mathrm{WF}_{\mathrm{Storage}}(D)\quad
+ H\text{ implements the recorded variants and frozen keys}\quad
+ E\text{ has complete ordered maintenance, termination and outputs}}
+ {\mathrm{WF}_{\mathrm{Round}}(D,H,E)}
+\end{mathpar}
+\paragraph{Meaning.} A state machine over storage: evaluations see the
+committed snapshot; admission rejects known and duplicate candidate heads;
+publication extends full structures and replaces every delta layout, including
+empty ones, before subsequent evaluation. Under provider and partial-Rust
+premises its $\alpha$-image refines the Incremental transition system.
+
+\paragraph{Frozen-key providers.} Each \code{KeySet} records its source relation,
+projected columns, filters, runtime name, construction hole, borrowed
+representation (\code{KeyRepresentation::Borrowed}, text \code{borrowed})
+and opaque Rust \code{provider} type. The default is
+\code{::cq\_storage::HashSet<\_>}; this is not a type whitelist.
+Collection and borrowed membership must implement precisely the recorded
+projection/filter set, with lawful equality and any required hashing or ordering.
+Type correctness alone does not establish these laws. A checked Round rewrite
+may change this provider subject to those semantic premises.
+\paragraph{Admission and publication records.} Each component's \code{phases}
+vector is exactly \code{[\{evaluate\}\{admit\}\{publish\}]}.
+A rule's \code{insertion} operation is \code{insert}: all-column membership
+admission pushes only fresh heads into that member's next container.
+Evaluations read only the committed snapshot; admission never publishes an
+accumulated relation or layout early.
+Each \code{Publication} names a component relation and an ordered
+\code{operations} vector. Each \code{PublicationOp} has a \code{kind} and
+\code{layouts} indices in the relevant full or delta layout list:
+\begin{itemize}
+\item \code{full\_layouts}: insert the fresh next rows into the listed full
+layouts, using their recorded column permutations and key prefixes.
+\item \code{all\_extend}: extend the accumulated host with the next rows;
+its layout-index list is empty.
+\item \code{delta\_swap}: replace the current delta host with the next batch;
+its layout-index list is empty.
+\item \code{delta\_rebuild}: reset each listed delta layout and rebuild it
+from the replaced current delta, even when that batch is empty.
+\end{itemize}
+Publication covers every component member once. Full-layout maintenance and
+accumulated extension precede that member's delta replacement; delta rebuilding
+follows it. Every declared full and delta layout of the member, including an
+unused layout, is maintained exactly once. Accumulated extension and delta
+replacement each occur exactly once. Layout indices must reference the correct
+member and version; \code{full\_layouts} and \code{delta\_rebuild} each require
+a nonempty index list. Their lists may be split or reordered within the stated
+dependencies, rather than having to match the default grouping.
+Omitting maintenance, reusing an index, retaining a stale delta layout or
+operating across these dependency boundaries is rejected.
+The publication member list may be any permutation of the component:
+publication is a barrier with no interleaved query evaluation, not a requirement
+to repeat the default member order.
+
+\paragraph{Control and output records.} A component's \code{termination}
+list contains each component member exactly once, in any order, with no foreign
+references. Continuation means that at least one listed current delta is
+nonempty. The \code{termination\_test} operation records either the default
+\code{sum\_delta\_lengths}, testing whether the sum of current delta lengths
+is nonzero, or \code{any\_delta}, testing the disjunction of their nonemptiness.
+Provider length and emptiness operations must reflect their actual rows;
+the summation implementation additionally requires representable length sums
+on successful executions. Either test is admitted independently of loop form.
+\code{loop\_form} records either
+\code{while\_nonempty} (the default) or \code{loop\_until\_empty}
+with an equivalent explicit exit.
+The \code{observer} placement is \code{before\_step}; when an observer is
+declared, it runs before each nonempty-delta step, after seed publication and
+before that step's evaluation. It receives the component-local round count and
+the sum of the listed delta lengths, regardless of the termination test.
+\code{key\_scope} is \code{component}:
+frozen negative keys are built for their consuming component and do not escape
+its lifetime. Output references preserve the exact source output relation list
+and order; an out-of-range or substituted relation is rejected.
+\code{borrowed\_cloned\_into\_iter} converts an EDB's canonical borrowed rows
+to owned output tuples, while \code{owned\_into\_iter} consumes an IDB's
+accumulated provider. Conversion must match the referenced relation kind.
+The remaining \code{RoundPolicy} field is \code{timing}, accepting \code{none}
+or \code{phases}; timing and observer effects remain outside relational meaning.
+Provider, admission, publication, termination, observer, scope, loop and output
+choices are explicit records, not decisions recovered from a bundled policy label.
+
+\paragraph{Recorded scans.} The generic \code{ScanBinding} names one complete
+immutable delta host or key-zero layout bucket as a flat CQ input, preserving
+its column order and one-occurrence correspondence. The default
+\code{\_\_cq\_datalog\_scan\_*} name is an ordinary Round-IR input binding,
+not a parallel-specific decision: the sequential printer binds the whole
+input and records no execution annotation. A later direct delta read remains
+at its original body position; permitting it does not move Rust expressions
+or turn it into a leading parallel scan.
+
+\paragraph{Printer obligation.} The shared printer consumes the recorded
+provider syntax and operations. It must not choose a new storage representation,
+publication order, loop form or output conversion. Default producers record the
+old choices so the default Rust expansion remains byte-identical. The printer
+still has a refinement obligation to implement each operation correctly:
+structural record checks are not an independent Rust equivalence proof.
+\paragraph{Rewrite check.} Check both contracts and preserve Storage exactly.
+The target may change checked execution records, frozen-key provider types,
+timing and per-hole CQ pipelines; it must retain hole interfaces, runtime names
+and query correspondence except for the independently checked scan-certificate
+substitution. In particular, publication and termination permutations, the
+termination test and loop form need not match the source or the default producer.
+No canonical storage selection is
+substituted while checking holes. Parallel execution is not a base flag:
+an extension owns partition, ownership, barriers, and its printer. Any execution
+annotation needs an erasure/refinement check, disjoint covering ownership and
+lawful merges. Round rewrites run before CQ hole expansion.
+
+\paragraph{Executable reference semantics.}
+The feature-local Datalog testkit uses a synchronous, per-component set fixpoint
+driver. Its \code{eval\_source} takes an initializer, a component count and a typed
+step callback returning whether publication changed the state. The driver returns
+the final state and propagates panics; the re-exported \code{check\_refinement}
+harness evaluates each side once and catches panic as the bottom outcome.
+The test-pass \code{eval\_source!} translates checked Source rules into
+written-order native Rust loops over typed set stores, publishing candidate sets
+synchronously. Signed dependency rank relaxation derives reference strata
+independently of production passes. This executes opaque guards, bindings, generators and
+computed heads as Rust rather than pretending to interpret them in a restricted
+scalar evaluator. It does not rerun stratify, incremental, storage or fork to
+obtain the reference answer.
+Executable refinement compares successful reference output sets with the target
+and rejects a new target panic; a reference panic imposes no successful-result
+obligation. This is instance-level evidence for rewrite and pass premises, not
+a decision procedure for arbitrary Rust equivalence. Purity, lawful equality,
+hashing and cloning, finite generators and termination remain assumptions;
+observers are excluded from relational denotation. Divergence has no timeout-based denotation. This reference
+does not claim a general interpreter for Incremental or Round.
+
+\section{Datalog passes and crate organization}
+Each language crate owns \code{Program: Parse + ToTokens + Language}, its
+\code{contract::check} analysis and \code{check\_rewrite}. Each nonterminal
+pass library exports compilation and an independent correspondence check;
+the check must not call compilation. Compilation owns that check; thin macro
+wrappers do not repeat it. They use \code{cq\_stage::pass} or
+\code{cq\_stage::rewrite}, whose admitted rewrite path reuses the contracts
+already checked by the runner. Standalone \code{check\_rewrite} still checks
+both operands. A Datalog-owned
+\code{DatalogConfiguration} resolves named phases to a generic
+\code{Pipeline}; it does not modify the CQ configuration or core crates.
+Direct pass entry uses the same arguments/remaining-pipeline protocol.
+
+\subsection{Surface if-let: tokens to tokens}
+Expand a matched pattern into the existing \code{for}/\code{match} generator
+at the same written position; the scrutinee is evaluated once per reached
+prefix and a mismatch yields no rows. Preserve bound variables and unowned
+syntax. This is an expansion check, not a Source parser side effect.
+\begin{mathpar}
+\Rule{CK-DL-IfLet}{t\text{ preserves the matched binders, scrutinee and position}}
+ {\mathrm{check}_{\mathrm{iflet}}(s,t)}
+\end{mathpar}
+Refinement is conditional on the ordinary opaque-Rust premises.
+
+\subsection{Stratify: Source to Strata}
+Construct the deterministic dependency SCC order. Independently check both
+contracts and exact source preservation; the target need only satisfy the
+admissible component contract, not reproduce that deterministic order.
+\begin{mathpar}
+\Rule{CK-DL-Stratify}{\mathrm{WF}_{\mathrm{Strata}}(t)\quad
+ \mathrm{source}(t)=s}{\mathrm{check}_{\mathrm{stratify}}(s,t)}
+\end{mathpar}
+Refinement follows from freezing lower components, subject to the common
+termination and Rust premises.
+
+\subsection{Incremental: Strata to Incremental}
+Construct fresh delta declarations and the default covering expansion.
+Independently check exact base preservation, erasure, coverage and substitutions;
+do not compare target names or variant order with a regenerated expansion.
+\begin{mathpar}
+\Rule{CK-DL-Incremental}{\mathrm{WF}_{\mathrm{Incremental}}(t)\quad
+ \mathrm{strata}(t)=s}{\mathrm{check}_{\mathrm{incremental}}(s,t)}
+\end{mathpar}
+The total finite refinement uses DL-Delta and DL-FrozenNegation; partial Rust
+requires the additional prefix-safety obligation, not merely this check.
+
+\subsection{Storage: Incremental to Storage}
+Record the existing deterministic concrete providers, initializers, layouts,
+bindings and maintenance. Independently check exact base preservation and the
+target's admissible storage decisions, without reconstructing the default plan
+or whitelisting concrete Rust types.
+\begin{mathpar}
+\Rule{CK-DL-Storage}{\mathrm{WF}_{\mathrm{Storage}}(t)\quad
+ \mathrm{incremental}(t)=s}{\mathrm{check}_{\mathrm{storage}}(s,t)}
+\end{mathpar}
+Refinement requires the stated $\alpha$ laws for the selected providers.
+
+\subsection{Fork: Storage to Round}
+Construct bound CQ holes and explicit operational records, copying provider
+types, initializers and layout maintenance exactly. Carry a sub-pipeline and
+typed interface for each hole and the configuration's complete pull-printer
+allowlist. Independently check variant-to-hole correspondence, frozen-key
+construction, storage preservation, terminal declarations, publication
+dependencies and coverage, termination and output references. Alternative
+publication permutations or loop forms need not equal Fork's default output.
+\begin{mathpar}
+\Rule{CK-DL-Fork}{\mathrm{WF}_{\mathrm{Round}}(t)\quad
+ \mathrm{storage}(t)=s}{\mathrm{check}_{\mathrm{fork}}(s,t)}
+\end{mathpar}
+Refinement is a storage-state simulation with the same partial-Rust premises.
+
+\subsection{Print rounds: Round to Rust}
+The sequential terminal printer interprets recorded bindings, provider types,
+initializers, admission and publication operations, loop and termination
+records, observers and output conversions, plus one nested CQ macro invocation
+per hole. It never prints joins or substitutes a default choice for a supplied
+record. CQ's selected terminal printer expands each hole later. Shared Datalog
+printing operations live in \code{cq-datalog-print}; extension printers reuse
+them through phase evaluation and alternative publication realizations.
+The default realization remains unchanged apart from unused hole-local bindings.
+As with core terminal printers, there is no independent Rust equivalence
+checker: contract checks, baseline expansion comparison and executable oracle
+agreement supply evidence, not a general Rust refinement proof.
+
+\paragraph{Opt-in hash-provider selection.}
+The public \code{cq-datalog-hasher} plug-in expresses one hasher choice at
+two IR levels: \code{hasher(fx)} rewrites Storage's native layout maps,
+IDB membership sets and EDB canonical sets, while \code{hasher\_round(fx)}
+rewrites Round's negation key sets. Both rewrites are parallel-agnostic;
+neither is installed in the default queue. The matching \code{default}
+choice restores the recorded aHash provider. Hole-local CQ deduplication is
+selected independently through the existing Structures
+\code{cq\_rewrites::retype(dedup => ...)} rewrite. Fx uses
+\code{BuildHasherDefault<rustc\_hash::FxHasher>} from the same 2.1.3 dependency
+as the Ascent oracle. These choices assume lawful hashing and equality and
+trusted inputs; unlike random-seeded aHash, Fx is not collision-attack resistant.
+Core fallback index directories and core-internal sets are not rewritten.
+
+\subsection{Parallel partition: Round to extension-owned annotated Round}
+The separate extension accepts an unannotated source with sharded admission,
+checks both Round contracts, and requires exact erasure of the embedded target
+Round to the source, including policies and per-hole CQ queues. It records
+exactly one annotation per eligible rule scan, in component seed/step order,
+selecting occurrence zero and strategy \code{rayon\_sharded}. The Round
+certificate checks a fresh direct scan binding and one renamed leading
+positive occurrence; negative key sets are not partitioned.
+The extension requires vector-backed delta inputs and a native layout's
+contiguous vector bucket for a key-zero scan. Opaque aliases and non-vector
+containers remain admissible in base Storage but are not supported by this
+extension.
+\begin{mathpar}
+\Rule{CK-DL-Partition}{\mathrm{erase}(t.\mathrm{round})=s\quad
+ s\text{ is unannotated, with certified admission and native layout providers}\quad
+ t\text{ has the exact ordered scan certificates}}
+ {\mathrm{check}_{\mathrm{partition}}(s,t)}
+\end{mathpar}
+The printer partitions the same immutable leading scan into indexed Rayon
+chunks with grain $\max(g,\lfloor n/(4\,\mathrm{threads})\rfloor)$, where
+$g$ is the recorded minimum grain (default 64). Inline evaluation requires
+both total member delta size and the sum of driving scan lengths over holes
+to be below the recorded threshold (default 1024); DOOP selects 64 explicitly.
+A one-worker pool also evaluates inline. Thus a small delta cannot serialize
+an expensive full-input hole. This avoids narrow-delta task overhead without changing
+the selected occurrence or CQ rule. A different occurrence would require a
+new checked rule; it is not an unchecked performance choice.
+
+\subsection{Sharded admission and exclusive-layout publication (extension)}
+The extension's Storage rewrite replaces only canonical IDB membership;
+full/delta layout maps, all other Storage records and CQ queues are unchanged.
+A Round-to-extension pass records the small-work threshold, partition grain,
+admission shard-count policy and ownership/publication certificate. None of
+these parallel choices belongs to the base language or default expansion.
+\begin{mathpar}
+\Rule{CK-DL-ShardStorage}{\mathrm{WF}_{\mathrm{Storage}}(s)\quad
+ \mathrm{WF}_{\mathrm{Storage}}(t)\quad
+ t\text{ changes only canonical IDB membership providers}}
+ {\mathrm{check}_{\mathrm{shardStorage}}(s,t)}
+\end{mathpar}
+Let $S$ be a power of two at least the worker count and let
+$h_S(x)=h(x)\mathbin{\&}(S-1)$. Canonical admission uses the full tuple:
+$C_i=\{r\in C\mid h_S(r)=i\}$, so equal tuples always share a shard.
+The recorded membership provider's build hasher supplies $h$ for both routing
+and the shard table. The runtime carries the computed hash with each candidate
+into its shard and reuses it for admission; table growth may rehash stored rows.
+Random-seeded providers need not share routing across distinct instances.
+The Storage correspondence check preserves an explicitly recorded hasher when
+substituting \code{ShardedSeen<Tuple, Hasher>}; native layout maps may record
+any build hasher while retaining their checked key and vector-bucket types.
+Each shard owns its \code{seen} set exclusively and inserts candidates once;
+its newly admitted rows form $N_i$. Concatenation is in shard order, but
+output order is unspecified. The termination condition is any admitted row.
+\begin{mathpar}
+\Rule{DL-ShardedAdmission}{N_i=C_i\setminus A_i\quad A'_i=A_i\cup C_i
+ \quad 0\leq i<S}
+ {\mathrm{set}(\mathrm{concat}_{i=0}^{S-1}N_i)=C\setminus A}
+\end{mathpar}
+Each native layout has exactly one owner task during publication. Full layouts
+extend their previous state; after all full-layout tasks join, relation
+containers extend and deltas swap. A second scope replaces each delta map with
+its recorded default provider and rebuilds it, including empty deltas, then joins before evaluation.
+The original \code{IndexRead}/\code{Rows} implementations serve CQ holes
+without fallback index construction or a shard-routing hash on every probe.
+\begin{mathpar}
+\Rule{DL-LayoutPublication}{\mathrm{owner}\text{ is a bijection on layouts}\quad
+ L'_\ell=L_\ell\cup\mathrm{layout}_\ell(N)\quad
+ \text{all full owners join before delta replacement}}
+ {\forall\ell.\ \alpha(L'_\ell)=\alpha(L_\ell)\cup\mathrm{layout}_\ell(N)}
+\Rule{CK-DL-ShardOwnership}{
+ \{[i,i+1)\mid 0\leq i<S\}\text{ disjointly covers admission shards}\quad
+ \mathrm{owner}\text{ is total and injective on each full/delta layout domain}\quad
+ \text{every required layout completes before evaluation}}
+ {\mathrm{check}_{\mathrm{shardedRound}}(s,t)}
+\end{mathpar}
+The checker validates admission's symbolic shard ownership and whole-layout
+owner bijections directly, without invoking the certificate producer. It checks
+complete membership/coverage and each stratum's publication barriers. The printer
+uses certified layout lists and owner labels to generate and order its tasks.
+Reordered certificates and valid owner permutations are accepted. Scoped tasks
+receive exclusive mutable seen shards or native maps, never locks. Below
+the recorded candidate threshold, admission runs inline while preserving shard
+concatenation order; publication similarly avoids tasks for small next sets.
+Purity, lawful hashing/equality/cloning and the partial-Rust prefix premises
+remain required. Neither ownership checking nor the counters regression is a
+general Rust equivalence proof.
+The base printing library exports generic \code{full\_insert},
+\code{all\_extend}, \code{delta\_swap} and \code{delta\_rebuild} generators.
+Both terminals reuse those operations; the extension changes only their
+grouping into checked phases. Delta rebuilds use default replacement in both
+terminals, preserving the base expansion rather than silently using \code{clear}.
+The extension printer's default-off \code{hole-timing} feature emits per-hole
+and per-chunk evaluation times, input/candidate counts, partition status and
+the erased CQ rule text. No timers, atomics or logging are emitted without
+that feature. Chunk time excludes record emission; hole wall time includes
+chunk-record output, so diagnostic times are not performance benchmark times.
+
+\paragraph{Measured design choice.}
+The initial 1024-row minimum grain left the dominant cast/points-to hole with
+only about 3.2 chunks per round in avrora and 4.3 in xalan. At 15 workers,
+the maximum chunk accounted for about 50\% and 33\% of its aggregate work,
+respectively. The same leading occurrence can therefore be split more finely;
+these observations do not establish a memory-bandwidth limit.
+The rejected sharded-layout prototype added a routing hash before each native
+map hash. A corrected fast-hash prototype with threshold 64 took 1.052, 1.916,
+2.779 and 1.783 seconds in phase-only runs for cassandra, avrora, xalan and
+tomcat at 15 workers. The selected native-layout hybrid took 0.860, 1.684,
+2.529 and 1.161 seconds respectively, retaining sharded admission while
+removing the extra probe hash. These are diagnostic phase-only observations,
+not the isolated uninstrumented acceptance timings. The hybrid's counters
+regression observes 22000 native probes in both sequential and parallel
+executions and zero fallback builds. The rejected index provider is removed,
+not retained as an unmeasured default or compatibility path.
+
+\paragraph{Opt-in Fx comparison (2026-10-20).}
+On an Apple M5 Pro (5 performance plus 10 efficiency cores, 24\,GiB),
+Rust 1.97.1 release binaries without counters or phase/hole timing measured the
+following compute-only seconds. Facts loading is outside the timer.
+Each cell is the median of three separate processes, with aHash/Fx order
+interleaved AB/BA/AB per application and worker count. No other build or
+benchmark ran during measurement; ordinary desktop/system services remained.
+Workers were OS-scheduled, without affinity pinning.
+Both parallel variants use the same hash-once sharded-admission implementation,
+so this compares hashers, not the old double-hashing runtime against the new one.
+\begin{center}
+\begin{tabular}{lrrrrrr}
+\toprule
+& \multicolumn{3}{c}{Sequential} & \multicolumn{3}{c}{15 workers}\\
+Application & aHash & Fx & speedup & aHash & Fx & speedup\\
+\midrule
+cassandra & 3.049 & 2.324 & 1.312 & 0.933 & 0.822 & 1.134\\
+avrora    & 4.742 & 3.666 & 1.294 & 1.782 & 1.624 & 1.097\\
+lusearch  & 4.306 & 3.381 & 1.274 & 1.208 & 1.065 & 1.134\\
+xalan     & 8.880 & 6.865 & 1.294 & 2.620 & 2.398 & 1.093\\
+tomcat    & 5.218 & 4.131 & 1.263 & 1.265 & 1.078 & 1.174\\
+zxing     & 6.867 & 5.580 & 1.231 & 2.165 & 1.956 & 1.107\\
+\bottomrule
+\end{tabular}
+\end{center}
+The geometric-mean speedups are 1.277 sequentially and 1.123 at 15 workers.
+All 26 output relations matched sequential Ascent as full tuple sets for
+both Fx configurations on every application (12 configuration/application
+checks, not cardinality-only comparisons).
+The reproducible runner and all 72 raw samples are
+\code{features/datalog-parallel/doop/hash\_sweep.py} and
+\code{hasher-samples.csv}; \code{hasher-summary.csv} retains full precision.
+
+The sequential oracle's \code{bench --engine both} warms both implementations
+and then measures three AB/BA/AB-interleaved samples per fixture, checking
+every answer against Ascent. Representative chain medians in microseconds are:
+\begin{center}
+\begin{tabular}{lrrrr}
+\toprule
+Program & nodes & aHash & Fx & speedup\\
+\midrule
+reach & 256 & 136.833 & 118.833 & 1.151\\
+reach & 1024 & 289.625 & 305.458 & 0.948\\
+reach & 4096 & 1013.583 & 970.917 & 1.044\\
+left TC & 256 & 1859.125 & 1328.375 & 1.400\\
+left TC & 1024 & 18880.042 & 12371.042 & 1.526\\
+left TC & 4096 & 342164.083 & 280461.375 & 1.220\\
+nonlinear TC & 128 & 2087.125 & 1300.084 & 1.605\\
+nonlinear TC & 256 & 11913.917 & 8158.459 & 1.460\\
+nonlinear TC & 512 & 77263.500 & 51439.500 & 1.502\\
+\bottomrule
+\end{tabular}
+\end{center}
+Short reach-chain results are mixed, including a 5.5\% slowdown at 1024 nodes;
+the result is not a universal microbenchmark improvement. The full 14-fixture
+table, including random reach and same-generation cases, is retained in
+\code{features/datalog/oracle/hasher-summary.tsv}. Machine/protocol details,
+binary hashes, exactness markers and expansion hashes are recorded in
+\code{features/datalog-parallel/doop/hasher-evidence.json}.
+
+The expanded Fx engines each record 385 Fx provider sites: 124 native layout
+maps, 32 EDB canonical sets, 71 IDB seen sets, two negation key sets and
+156 hole-local dedup sets. All 385 are selected by plug-ins; there are no
+remaining explicit aHash set providers. Core \code{HashIndex} directories
+remain aHash: 231 lazy native-read fallback sites and two eager indexes for
+negation-filtered inputs. Thus aHash represents 2 of 387 non-lazy constructor
+sites (0.52\%); including dormant fallback declarations gives 233 of 618
+potential sites (37.70\%). These are static site shares, not CPU-time,
+allocation-frequency or hash-operation shares. Native dispatch bypasses
+matching lazy fallbacks; no counters were enabled to estimate their dynamic
+share. Core-internal \code{Answers}, trie, adaptive-membership and candidate
+dedup sets remain unchanged, but none is selected in these DOOP expansions.
+
+Recommendation: adopt Fx as the Datalog default in a future, separately
+reviewed Storage/default-hole-queue change for trusted analytical inputs,
+retaining an explicit keyed-aHash choice for adversarial inputs. Every DOOP
+configuration improved here; this is not evidence that Fx is appropriate for
+untrusted keys or every machine. This experiment leaves the base default
+unchanged. Against commit \code{7a041ec}, the default reach example,
+execution-test expansion and DOOP engine expansion are byte-identical
+(13\,364, 835\,398 and 5\,128\,081 bytes respectively).
+
+\paragraph{Crate layout (inside \code{features/datalog}).}
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+Directory & Package\\
+\midrule
+\code{languages/dl-source} & \code{cq-lang-datalog-source}\\
+\code{languages/dl-strata} & \code{cq-lang-datalog-strata}\\
+\code{languages/dl-incremental} & \code{cq-lang-datalog-incremental}\\
+\code{languages/dl-storage} & \code{cq-lang-datalog-storage}\\
+\code{languages/dl-round} & \code{cq-lang-datalog-round}\\
+\code{passes/stratify} & \code{cq-datalog-stratify}\\
+\code{passes/incremental} & \code{cq-datalog-incremental}\\
+\code{passes/storage} & \code{cq-datalog-storage}\\
+\code{passes/hasher} & \code{cq-datalog-hasher}\\
+\code{passes/fork} & \code{cq-datalog-fork}\\
+\code{passes/surface-if-let} & \code{cq-datalog-surface-if-let}\\
+\code{passes/print-rounds} & \code{cq-datalog-print-rounds}\\
+\code{print/} & \code{cq-datalog-print}\\
+\code{support/} & \code{cq-datalog-support}\\
+\code{facade/macros} & \code{cq-datalog-macros}\\
+\code{facade/configuration} & \code{cq-datalog-configuration}\\
+\code{facade/cq-datalog} & \code{cq-datalog}\\
+\bottomrule
+\end{tabular}
+\end{center}
+Language dependencies follow the base-language chain and public CQ/stage/syntax
+interfaces, with shared syntax-only obligations in \code{cq-datalog-support}.
+That library owns diagnostics, identifier collection and freshness, column and
+filter extraction, and bound-key calculation; it depends on no IR or pass.
+Pass libraries depend on their endpoint languages and required public support.
+The facade owns defaults, configuration and macro re-exports.
+The configuration library imports the CQ default-queue helper from the fork
+producer; the generic CQ configuration and stage protocol remain unchanged.
+The separate \code{features/datalog-parallel} workspace owns all
+parallel-specific execution and printing code. There are no compatibility
+aliases for the replaced monolithic language or hard-coded resume macros.

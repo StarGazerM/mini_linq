@@ -1,12 +1,21 @@
 // Translated from flowlog-rs/flowlog-bench programs/oracle/ascent/doop/src/main.rs.
 // All 135 rules and body atom order match the upstream DOOP default.dl.
-use crate::{
-    Facts, Results,
-    interner::{IStr, res, sym},
-};
-use ascent::ascent;
-
-ascent! {
+/// Adapt owned relation storage without changing the source program.
+#[macro_export]
+macro_rules! doop_relation_storage {
+    ($rows:expr) => {
+        $rows
+    };
+}
+/// Instantiate the unchanged oracle with caller-selected macros.
+#[macro_export]
+macro_rules! doop_ascent_engine {
+    ($module:ident, $ascent:path, $storage:path) => {
+pub mod $module {
+use $crate::{Facts, Results, interner::{IStr, res, sym}};
+use $ascent as ascent_program;
+use $storage as relation_storage;
+ascent_program! {
     struct Doop;
     relation directsuperclass(IStr, IStr);
     relation directsuperinterface(IStr, IStr);
@@ -550,67 +559,72 @@ ascent! {
 
 pub fn run(facts: Facts) -> Results {
     let mut program = Doop {
-        directsuperclass: facts.directsuperclass,
-        directsuperinterface: facts.directsuperinterface,
-        mainclass: facts.mainclass,
-        formalparam: facts.formalparam,
-        componenttype: facts.componenttype,
-        assignreturnvalue: facts.assignreturnvalue,
-        actualparam: facts.actualparam,
-        method_modifier: facts.method_modifier,
-        var_type: facts.var_type,
-        _classtype: facts._classtype,
-        _arraytype: facts._arraytype,
-        _interfacetype: facts._interfacetype,
-        _var_declaringmethod: facts._var_declaringmethod,
-        _applicationclass: facts._applicationclass,
-        _thisvar: facts._thisvar,
-        _normalheap: facts._normalheap,
-        _stringconstant: facts._stringconstant,
-        _assignheapallocation: facts._assignheapallocation,
-        _assignlocal: facts._assignlocal,
-        _assigncast: facts._assigncast,
-        _field: facts._field,
-        _staticmethodinvocation: facts._staticmethodinvocation,
-        _specialmethodinvocation: facts._specialmethodinvocation,
-        _virtualmethodinvocation: facts._virtualmethodinvocation,
-        _method: facts._method,
-        _storeinstancefield: facts._storeinstancefield,
-        _loadinstancefield: facts._loadinstancefield,
-        _storestaticfield: facts._storestaticfield,
-        _loadstaticfield: facts._loadstaticfield,
-        _storearrayindex: facts._storearrayindex,
-        _loadarrayindex: facts._loadarrayindex,
-        _return: facts._return,
+        directsuperclass: relation_storage!(facts.directsuperclass),
+        directsuperinterface: relation_storage!(facts.directsuperinterface),
+        mainclass: relation_storage!(facts.mainclass),
+        formalparam: relation_storage!(facts.formalparam),
+        componenttype: relation_storage!(facts.componenttype),
+        assignreturnvalue: relation_storage!(facts.assignreturnvalue),
+        actualparam: relation_storage!(facts.actualparam),
+        method_modifier: relation_storage!(facts.method_modifier),
+        var_type: relation_storage!(facts.var_type),
+        _classtype: relation_storage!(facts._classtype),
+        _arraytype: relation_storage!(facts._arraytype),
+        _interfacetype: relation_storage!(facts._interfacetype),
+        _var_declaringmethod: relation_storage!(facts._var_declaringmethod),
+        _applicationclass: relation_storage!(facts._applicationclass),
+        _thisvar: relation_storage!(facts._thisvar),
+        _normalheap: relation_storage!(facts._normalheap),
+        _stringconstant: relation_storage!(facts._stringconstant),
+        _assignheapallocation: relation_storage!(facts._assignheapallocation),
+        _assignlocal: relation_storage!(facts._assignlocal),
+        _assigncast: relation_storage!(facts._assigncast),
+        _field: relation_storage!(facts._field),
+        _staticmethodinvocation: relation_storage!(facts._staticmethodinvocation),
+        _specialmethodinvocation: relation_storage!(facts._specialmethodinvocation),
+        _virtualmethodinvocation: relation_storage!(facts._virtualmethodinvocation),
+        _method: relation_storage!(facts._method),
+        _storeinstancefield: relation_storage!(facts._storeinstancefield),
+        _loadinstancefield: relation_storage!(facts._loadinstancefield),
+        _storestaticfield: relation_storage!(facts._storestaticfield),
+        _loadstaticfield: relation_storage!(facts._loadstaticfield),
+        _storearrayindex: relation_storage!(facts._storearrayindex),
+        _loadarrayindex: relation_storage!(facts._loadarrayindex),
+        _return: relation_storage!(facts._return),
         ..Doop::default()
     };
     program.run();
     Results {
-        mainclass: program.mainclass,
-        method_simplename: program.method_simplename,
-        method_declaringtype: program.method_declaringtype,
-        method_modifier: program.method_modifier,
-        method_paramtypes: program.method_paramtypes,
-        method_returntype: program.method_returntype,
-        method_descriptor: program.method_descriptor,
-        methodlookup: program.methodlookup,
-        methodimplemented: program.methodimplemented,
-        directsubclass: program.directsubclass,
-        subclass: program.subclass,
-        superclass: program.superclass,
-        superinterface: program.superinterface,
-        subtypeof: program.subtypeof,
-        supertypeof: program.supertypeof,
-        subtypeofdifferent: program.subtypeofdifferent,
-        mainmethoddeclaration: program.mainmethoddeclaration,
-        classinitializer: program.classinitializer,
-        initializedclass: program.initializedclass,
-        assign: program.assign,
-        varpointsto: program.varpointsto,
-        instancefieldpointsto: program.instancefieldpointsto,
-        staticfieldpointsto: program.staticfieldpointsto,
-        callgraphedge: program.callgraphedge,
-        arrayindexpointsto: program.arrayindexpointsto,
-        reachable: program.reachable,
+        mainclass: relation_storage!(program.mainclass),
+        method_simplename: relation_storage!(program.method_simplename),
+        method_declaringtype: relation_storage!(program.method_declaringtype),
+        method_modifier: relation_storage!(program.method_modifier),
+        method_paramtypes: relation_storage!(program.method_paramtypes),
+        method_returntype: relation_storage!(program.method_returntype),
+        method_descriptor: relation_storage!(program.method_descriptor),
+        methodlookup: relation_storage!(program.methodlookup),
+        methodimplemented: relation_storage!(program.methodimplemented),
+        directsubclass: relation_storage!(program.directsubclass),
+        subclass: relation_storage!(program.subclass),
+        superclass: relation_storage!(program.superclass),
+        superinterface: relation_storage!(program.superinterface),
+        subtypeof: relation_storage!(program.subtypeof),
+        supertypeof: relation_storage!(program.supertypeof),
+        subtypeofdifferent: relation_storage!(program.subtypeofdifferent),
+        mainmethoddeclaration: relation_storage!(program.mainmethoddeclaration),
+        classinitializer: relation_storage!(program.classinitializer),
+        initializedclass: relation_storage!(program.initializedclass),
+        assign: relation_storage!(program.assign),
+        varpointsto: relation_storage!(program.varpointsto),
+        instancefieldpointsto: relation_storage!(program.instancefieldpointsto),
+        staticfieldpointsto: relation_storage!(program.staticfieldpointsto),
+        callgraphedge: relation_storage!(program.callgraphedge),
+        arrayindexpointsto: relation_storage!(program.arrayindexpointsto),
+        reachable: relation_storage!(program.reachable),
     }
 }
+}
+    };
+}
+doop_ascent_engine!(sequential, ascent::ascent, crate::doop_relation_storage);
+pub use sequential::run;

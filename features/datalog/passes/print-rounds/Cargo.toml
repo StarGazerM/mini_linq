@@ -1,0 +1,16 @@
+[package]
+name = "cq-datalog-print-rounds"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+cq-lang-datalog-round.workspace = true
+cq-datalog-print.workspace = true
+syn.workspace = true
+
+[package.metadata.cq]
+source = "cq-lang-datalog-round"
+target = "rust"
