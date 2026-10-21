@@ -6,9 +6,8 @@
 //! Pool chunks own their buffers and publish in chunk order at the join. Rayon
 //! propagates a task panic to that join rather than publishing partial output.
 
-use cq_lang_sequence::{Analysis, LevelNode, Machine, Monoid, Program, Term};
+use cq_lang_sequence::{Analysis, LevelNode, Machine, Program, Term, Tiling};
 use cq_sequence_pull::{Emitter, Value};
-use proc_macro2::TokenStream;
 use quote::quote;
 
 /// The host owns a separated dynamic pool of sequential tasks.
@@ -38,24 +37,69 @@ pub fn machine() -> Machine {
 // Formal rule T-Tasks: fold the checked term using ordered pool partitions and
 // local buffers; canonicalize parts before the global canonical boundary.
 pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Expr> {
+    let mut tiles = std::collections::BTreeMap::new();
+    let mut publications = std::collections::BTreeSet::new();
+    for definition in &program.sequence.definitions {
+        let name = syn::ext::IdentExt::unraw(&definition.name).to_string();
+        let mut nodes = Vec::new();
+        tile_nodes(&definition.term, &mut nodes);
+        if let Some(kinds) = analysis.tilings.get(&name) {
+            for (node, kind) in nodes.into_iter().zip(kinds) {
+                tiles.insert(node, kind);
+            }
+        }
+        if matches!(definition.term, Term::Store { .. }) {
+            publications.insert(&definition.term as *const Term);
+        }
+    }
     cq_sequence_pull::translate_with(
         program,
         analysis,
-        |term, emitter, child, output, definition, nesting| {
-            let level = analysis
-                .levels
-                .get(definition)
-                .map_or(0, |path| path.len().saturating_sub(1))
-                + nesting;
-            if level != 1 {
+        |term, emitter, child, output, definition, _| {
+            let node = term as *const Term;
+            let level = if publications.contains(&node) {
+                analysis.levels.get(definition)
+            } else {
+                analysis
+                    .dispatches
+                    .iter()
+                    .find(|dispatch| dispatch.inner_stores.iter().any(|name| name == definition))
+                    .map(|dispatch| &dispatch.producer_level)
+                    .or_else(|| analysis.levels.get(definition))
+            };
+            let active = if matches!(term, Term::Tile { .. }) {
+                tiles
+                    .get(&node)
+                    .is_some_and(|kind| **kind == Tiling::Distribute)
+            } else {
+                level.is_some_and(|path| path.last().is_some_and(|name| name == "pool"))
+            };
+            if !active {
                 return Ok(());
             }
-            match (term, child) {
-                (Term::Tile { n, .. }, Some(input)) => tile(*n, input, output),
-                (Term::Store { capacity, .. }, Some(input)) => store(*capacity, input, output),
-                (Term::Fold(monoid, _), Some(input)) => fold(monoid, emitter, input, output)?,
-                (Term::Canon(_), Some(input)) => canon(emitter, input, output)?,
-                _ => {}
+            if let Some(input) = child {
+                let lifted = emitter.lift(input.clone(), input.depth, &mut |emitter, input| {
+                    let mut result = input.clone();
+                    match term {
+                        Term::Tile { n, .. } => {
+                            tile(*n, &input, &mut result);
+                            result.depth += 1;
+                        }
+                        Term::Store { capacity, .. } => {
+                            store(*capacity, &input, &mut result);
+                            result.stored = true;
+                        }
+                        Term::Canon(_) => canon(emitter, &input, &mut result)?,
+                        _ => return Ok(input),
+                    }
+                    Ok(result)
+                })?;
+                if matches!(
+                    term,
+                    Term::Tile { .. } | Term::Store { .. } | Term::Canon(_)
+                ) {
+                    *output = lifted;
+                }
             }
             Ok(())
         },
@@ -92,40 +136,6 @@ fn store(capacity: Option<usize>, input: &Value, output: &mut Value) {
     }};
 }
 
-fn fold(
-    monoid: &Monoid,
-    emitter: &Emitter<'_>,
-    input: &Value,
-    output: &mut Value,
-) -> syn::Result<()> {
-    let rows = &input.rows;
-    let reduction: TokenStream = match monoid {
-        Monoid::Count => quote! {
-            __cq_task_input.into_par_iter().map(|_| 1usize).reduce(|| 0usize, |a, b| a + b)
-        },
-        Monoid::Or => quote! {
-            __cq_task_input.into_par_iter().map(|_| true).reduce(|| false, |a, b| a || b)
-        },
-        Monoid::Sum(column) => {
-            let result = input.result.as_deref().ok_or_else(|| {
-                syn::Error::new(column.span(), "sum requires a checked row heading")
-            })?;
-            let pattern = emitter.context().pattern(result);
-            let column = syn::ext::IdentExt::unraw(column).to_string();
-            let value = emitter.context().access(result, &column);
-            quote! {
-                __cq_task_input.into_par_iter().map(|#pattern| #value).reduce(|| 0, |a, b| a + b)
-            }
-        }
-    };
-    output.rows = quote! {{
-        use ::rayon::prelude::*;
-        let __cq_task_input = (#rows).collect::<::std::vec::Vec<_>>();
-        ::core::iter::once(#reduction)
-    }};
-    Ok(())
-}
-
 fn canon(emitter: &mut Emitter<'_>, input: &Value, output: &mut Value) -> syn::Result<()> {
     let rows = &input.rows;
     let mut part = input.clone();
@@ -144,4 +154,31 @@ fn canon(emitter: &mut Emitter<'_>, input: &Value, output: &mut Value) -> syn::R
     prefiltered.stored = false;
     *output = emitter.canon(prefiltered)?;
     Ok(())
+}
+
+fn tile_nodes(term: &Term, output: &mut Vec<*const Term>) {
+    if matches!(term, Term::Tile { .. }) {
+        output.push(term as *const Term);
+    }
+    match term {
+        Term::Map(_, inner)
+        | Term::Compact(_, inner)
+        | Term::Flatten(inner)
+        | Term::Fold(_, inner)
+        | Term::Canon(inner)
+        | Term::Store { inner, .. }
+        | Term::Tile { inner, .. }
+        | Term::Lookup { inner, .. } => tile_nodes(inner, output),
+        Term::Choose(arms) => {
+            for (_, arm) in arms {
+                tile_nodes(arm, output);
+            }
+        }
+        Term::Union(arms) => {
+            for arm in arms {
+                tile_nodes(arm, output);
+            }
+        }
+        Term::Rows(_) | Term::Ref(_) => {}
+    }
 }

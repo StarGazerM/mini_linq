@@ -1,0 +1,238 @@
+#[allow(dead_code)]
+#[path = "support/h05_program.rs"]
+mod h05_program;
+
+use cq_lang_sequence::{Capability, Len, OutputProtocol, Term, Tiling};
+use quote::ToTokens;
+use syn::visit::{self, Visit};
+
+fn checked() -> (cq_lang_sequence::Program, cq_lang_sequence::Analysis) {
+    let program = h05_program::program();
+    let analysis = cq_lang_sequence::check_grading(&program, &cq_gpu_sequence::machine())
+        .expect("the written H05 program must be graded without planner decisions");
+    (program, analysis)
+}
+
+#[test]
+fn physical_and_sequence_contracts_preserve_the_written_join_chain() {
+    let program = h05_program::program();
+    let analysis = cq_lang_sequence::contract::check(&program).unwrap();
+    assert!(program.structures.physical.program.host_sets.is_empty());
+    assert_eq!(analysis.results["C"], "rnc");
+    assert_eq!(analysis.results["result"], "answer");
+    assert_eq!(
+        analysis.output,
+        Some(("result".into(), OutputProtocol::Bounded))
+    );
+    assert!(matches!(analysis.lengths["C"], Len::Scan(_)));
+    assert!(matches!(analysis.lengths["result"], Len::Scan(_)));
+    assert_eq!(analysis.shapes["result"].len(), 1);
+    for name in [
+        "RegionASIA",
+        "Nation",
+        "Customer",
+        "Orders",
+        "Lineitem",
+        "Supplier",
+        "C",
+        "result",
+    ] {
+        assert!(
+            analysis.stores.contains_key(name),
+            "missing explicit store {name}"
+        );
+    }
+    // Regression: the original formal C accidentally stopped after Nation.
+    let c = &program
+        .sequence
+        .definitions
+        .iter()
+        .find(|d| d.name == "C")
+        .unwrap()
+        .term;
+    let Term::Store { inner, .. } = c else {
+        panic!("C must publish storage")
+    };
+    let Term::Flatten(inner) = inner.as_ref() else {
+        panic!("C must store flatten offsets")
+    };
+    let Term::Lookup {
+        provider,
+        keys,
+        inner,
+    } = inner.as_ref()
+    else {
+        panic!("C must enumerate Customer")
+    };
+    assert_eq!(provider, "customer_index");
+    assert_eq!(
+        keys.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        ["nation"]
+    );
+    let Term::Flatten(inner) = inner.as_ref() else {
+        panic!("Customer must follow flattened Nation")
+    };
+    let Term::Lookup { provider, .. } = inner.as_ref() else {
+        panic!("Nation lookup missing")
+    };
+    assert_eq!(provider, "nation_index");
+}
+
+#[test]
+fn grading_records_two_queries_ranges_membership_and_bounded_publication() {
+    let (_, analysis) = checked();
+    assert_eq!(analysis.dispatches.len(), 2);
+    assert_eq!(analysis.dispatches[0].outer_store, "RegionASIA");
+    assert_eq!(analysis.dispatches[1].outer_store, "C");
+    assert_eq!(analysis.dispatches[0].inner_stores, ["C"]);
+    assert_eq!(analysis.dispatches[1].inner_stores, ["result"]);
+    for dispatch in &analysis.dispatches {
+        assert_eq!(dispatch.level, ["host", "device"]);
+        assert_eq!(dispatch.producer_level, ["host", "device", "block"]);
+        assert_eq!(
+            dispatch.failure_channel.last().map(String::as_str),
+            Some("host")
+        );
+    }
+    assert_eq!(analysis.dispatches[1].parts, Some(256));
+    assert_eq!(
+        analysis.dispatches[1].concatenation,
+        OutputProtocol::Bounded
+    );
+    assert_eq!(
+        analysis.tilings["result"],
+        [Tiling::Strip, Tiling::Strip, Tiling::Distribute]
+    );
+    for (provider, key) in [
+        ("nation_index", "region"),
+        ("customer_index", "nation"),
+        ("orders_index", "customer"),
+        ("lineitem_index", "order"),
+    ] {
+        assert_eq!(
+            analysis.capabilities[&(provider.into(), vec![key.into()])],
+            Capability::Range
+        );
+    }
+    assert_eq!(
+        analysis.capabilities[&(
+            "supplier_index".into(),
+            vec!["nation".into(), "supplier".into()]
+        )],
+        Capability::Membership
+    );
+}
+
+#[derive(Default)]
+struct Functions<'ast> {
+    queries: Vec<&'ast syn::ItemFn>,
+}
+impl<'ast> Visit<'ast> for Functions<'ast> {
+    fn visit_item_fn(&mut self, function: &'ast syn::ItemFn) {
+        if function
+            .sig
+            .ident
+            .to_string()
+            .starts_with("__cq_sequence_dispatch_")
+        {
+            self.queries.push(function);
+        }
+        visit::visit_item_fn(self, function);
+    }
+}
+
+struct NoQueryConstants;
+impl<'ast> Visit<'ast> for NoQueryConstants {
+    fn visit_expr_binary(&mut self, expression: &'ast syn::ExprBinary) {
+        if matches!(
+            expression.op,
+            syn::BinOp::Eq(_)
+                | syn::BinOp::Ne(_)
+                | syn::BinOp::Lt(_)
+                | syn::BinOp::Le(_)
+                | syn::BinOp::Gt(_)
+                | syn::BinOp::Ge(_)
+        ) {
+            for operand in [&*expression.left, &*expression.right] {
+                if let syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Int(literal),
+                    ..
+                }) = operand
+                {
+                    assert!(
+                        !["2", "8766", "9131", "8000", "8200"].contains(&literal.base10_digits()),
+                        "query predicate leaked into expansion kernel: {}",
+                        expression.to_token_stream()
+                    );
+                }
+            }
+        }
+        visit::visit_expr_binary(self, expression);
+    }
+}
+
+fn check_generated(program: &cq_lang_sequence::Program) {
+    let analysis = cq_lang_sequence::check_grading(program, &cq_gpu_sequence::machine()).unwrap();
+    let expression = cq_gpu_sequence::translate(program, &analysis).unwrap();
+    let mut functions = Functions::default();
+    functions.visit_expr(&expression);
+    assert_eq!(
+        functions.queries.len(),
+        2,
+        "one query kernel per recorded dispatch"
+    );
+    for (index, function) in functions.queries.iter().enumerate() {
+        assert_eq!(
+            function.sig.ident,
+            format!("__cq_sequence_dispatch_{index}")
+        );
+        NoQueryConstants.visit_block(&function.block);
+        let attributes = function
+            .attrs
+            .iter()
+            .map(|a| a.to_token_stream().to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(attributes.contains("kernel"));
+        assert!(
+            attributes.contains("256"),
+            "query kernels must record 256 lanes"
+        );
+    }
+    let tokens = expression.to_token_stream().to_string();
+    assert!(
+        tokens.contains("RangeBuilder") || tokens.contains("RangeProvider"),
+        "providers must be built before query execution"
+    );
+    assert!(
+        tokens.contains("PackedCanon"),
+        "canonicalization must use the runtime packed-key protocol"
+    );
+    assert!(!tokens.contains("cq_gpu :: print"));
+    assert!(!tokens.contains("h05_reference"));
+}
+
+#[test]
+fn translation_emits_two_query_kernels_and_builds_without_query_constant_filters() {
+    for capacity in [1024, 1048576] {
+        let program = h05_program::program_with_capacity(capacity);
+        assert!(matches!(
+            &program.sequence.definitions.last().unwrap().term,
+            Term::Store { capacity: Some(recorded), .. } if *recorded == capacity
+        ));
+        check_generated(&program);
+    }
+}
+
+#[test]
+fn translation_is_not_specialized_to_h05_date_literals_or_store_names() {
+    let source = h05_program::program()
+        .to_token_stream()
+        .to_string()
+        .replace("8766", "8000")
+        .replace("9131", "8200")
+        .replace("RegionASIA", "region_driver")
+        .replace(" C ", " customer_positions ");
+    let program = syn::parse_str(&source).unwrap();
+    check_generated(&program);
+}

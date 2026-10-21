@@ -1,0 +1,312 @@
+[
+  {
+    "answer_count": 7242,
+    "build_ms": {
+      "median": 2.5775680541992188,
+      "min": 2.568959951400757
+    },
+    "calls": [
+      {
+        "build_ms": 141.66415405273438,
+        "dedup_ms": 4.69536018371582,
+        "download_ms": 0.5375500000000001,
+        "exact": true,
+        "fastlanes_bytes": 173832,
+        "iteration": 0,
+        "kernel_ms": 4.253376007080078,
+        "raw_bytes": 173832,
+        "total_ms": 150.61289978027344,
+        "wall_ms": 150.686022,
+        "warmup": true
+      },
+      {
+        "build_ms": 2.6369919776916504,
+        "dedup_ms": 0.1483519971370697,
+        "download_ms": 0.304924,
+        "exact": true,
+        "fastlanes_bytes": 173832,
+        "iteration": 1,
+        "kernel_ms": 0.19468800723552704,
+        "raw_bytes": 173832,
+        "total_ms": 2.980031967163086,
+        "wall_ms": 3.043672,
+        "warmup": false
+      },
+      {
+        "build_ms": 2.5800960063934326,
+        "dedup_ms": 0.1480640023946762,
+        "download_ms": 0.294684,
+        "exact": true,
+        "fastlanes_bytes": 173832,
+        "iteration": 2,
+        "kernel_ms": 0.19599999487400055,
+        "raw_bytes": 173832,
+        "total_ms": 2.92416000366211,
+        "wall_ms": 2.988306,
+        "warmup": false
+      },
+      {
+        "build_ms": 2.568959951400757,
+        "dedup_ms": 0.14688000082969666,
+        "download_ms": 0.296207,
+        "exact": true,
+        "fastlanes_bytes": 173832,
+        "iteration": 3,
+        "kernel_ms": 0.19616000354290009,
+        "raw_bytes": 173832,
+        "total_ms": 2.9119999408721924,
+        "wall_ms": 2.9752110000000003,
+        "warmup": false
+      },
+      {
+        "build_ms": 2.574143886566162,
+        "dedup_ms": 0.14633600413799286,
+        "download_ms": 0.29503599999999996,
+        "exact": true,
+        "fastlanes_bytes": 173832,
+        "iteration": 4,
+        "kernel_ms": 0.19568000733852384,
+        "raw_bytes": 173832,
+        "total_ms": 2.9161601066589355,
+        "wall_ms": 2.983496,
+        "warmup": false
+      },
+      {
+        "build_ms": 2.5775680541992188,
+        "dedup_ms": 0.14710399508476257,
+        "download_ms": 0.295777,
+        "exact": true,
+        "fastlanes_bytes": 173832,
+        "iteration": 5,
+        "kernel_ms": 0.19683200120925903,
+        "raw_bytes": 173832,
+        "total_ms": 2.921504020690918,
+        "wall_ms": 2.983566,
+        "warmup": false
+      }
+    ],
+    "dedup_ms": {
+      "median": 0.14710399508476257,
+      "min": 0.14633600413799286
+    },
+    "exact": true,
+    "implementation": "cq-gpu-sequence/translate",
+    "kernel_ms": {
+      "median": 0.19599999487400055,
+      "min": 0.19468800723552704
+    },
+    "mode": "benchmark",
+    "one_time": {
+      "compressed_bytes": 25215816,
+      "declared_bytes": 127939680,
+      "host_load_ms": 145.13196,
+      "load_encode_ms": 707.944709
+    },
+    "output_capacity": 1048576,
+    "plan": "R-N-C-O-L-S",
+    "runs": 5,
+    "samples": {
+      "build_ms": [
+        2.6369919776916504,
+        2.5800960063934326,
+        2.568959951400757,
+        2.574143886566162,
+        2.5775680541992188
+      ],
+      "dedup_ms": [
+        0.1483519971370697,
+        0.1480640023946762,
+        0.14688000082969666,
+        0.14633600413799286,
+        0.14710399508476257
+      ],
+      "kernel_ms": [
+        0.19468800723552704,
+        0.19599999487400055,
+        0.19616000354290009,
+        0.19568000733852384,
+        0.19683200120925903
+      ],
+      "total_ms": [
+        2.980031967163086,
+        2.92416000366211,
+        2.9119999408721924,
+        2.9161601066589355,
+        2.921504020690918
+      ],
+      "wall_ms": [
+        3.043672,
+        2.988306,
+        2.9752110000000003,
+        2.983496,
+        2.983566
+      ]
+    },
+    "sf": 1,
+    "timing_scope": "Runtime GPU build/kernel/dedup/total timings cover resident input through canonical resident output. One-time manifest/oracle loading and compression, and final answer download, are separate. Provider stores are rebuilt on every call.",
+    "total_ms": {
+      "median": 2.921504020690918,
+      "min": 2.9119999408721924
+    },
+    "wall_ms": {
+      "median": 2.983566,
+      "min": 2.9752110000000003
+    },
+    "warmups": 1
+  },
+  {
+    "answer_count": 72983,
+    "build_ms": {
+      "median": 33.98704147338867,
+      "min": 33.92019271850586
+    },
+    "calls": [
+      {
+        "build_ms": 201.51600646972656,
+        "dedup_ms": 6.747647762298584,
+        "download_ms": 5.317198,
+        "exact": true,
+        "fastlanes_bytes": 1751640,
+        "iteration": 0,
+        "kernel_ms": 3.9828479290008545,
+        "raw_bytes": 1751640,
+        "total_ms": 212.24649047851562,
+        "wall_ms": 212.39835200000002,
+        "warmup": true
+      },
+      {
+        "build_ms": 34.01808166503906,
+        "dedup_ms": 0.20380799472332,
+        "download_ms": 4.395340999999999,
+        "exact": true,
+        "fastlanes_bytes": 1751640,
+        "iteration": 1,
+        "kernel_ms": 1.176543951034546,
+        "raw_bytes": 1751640,
+        "total_ms": 35.398433685302734,
+        "wall_ms": 35.474148,
+        "warmup": false
+      },
+      {
+        "build_ms": 33.98704147338867,
+        "dedup_ms": 0.19843199849128723,
+        "download_ms": 3.781766,
+        "exact": true,
+        "fastlanes_bytes": 1751640,
+        "iteration": 2,
+        "kernel_ms": 1.1718720197677612,
+        "raw_bytes": 1751640,
+        "total_ms": 35.35734558105469,
+        "wall_ms": 35.424743,
+        "warmup": false
+      },
+      {
+        "build_ms": 33.99862289428711,
+        "dedup_ms": 0.20156799256801605,
+        "download_ms": 3.563237,
+        "exact": true,
+        "fastlanes_bytes": 1751640,
+        "iteration": 3,
+        "kernel_ms": 1.1818560361862183,
+        "raw_bytes": 1751640,
+        "total_ms": 35.382049560546875,
+        "wall_ms": 35.451044,
+        "warmup": false
+      },
+      {
+        "build_ms": 33.948062896728516,
+        "dedup_ms": 0.19673599302768707,
+        "download_ms": 3.297298,
+        "exact": true,
+        "fastlanes_bytes": 1751640,
+        "iteration": 4,
+        "kernel_ms": 1.174399971961975,
+        "raw_bytes": 1751640,
+        "total_ms": 35.31919860839844,
+        "wall_ms": 35.398533,
+        "warmup": false
+      },
+      {
+        "build_ms": 33.92019271850586,
+        "dedup_ms": 0.1956160068511963,
+        "download_ms": 3.0735889999999997,
+        "exact": true,
+        "fastlanes_bytes": 1751640,
+        "iteration": 5,
+        "kernel_ms": 1.1724480390548706,
+        "raw_bytes": 1751640,
+        "total_ms": 35.28825759887695,
+        "wall_ms": 35.353817,
+        "warmup": false
+      }
+    ],
+    "dedup_ms": {
+      "median": 0.19843199849128723,
+      "min": 0.1956160068511963
+    },
+    "exact": true,
+    "implementation": "cq-gpu-sequence/translate",
+    "kernel_ms": {
+      "median": 1.174399971961975,
+      "min": 1.1718720197677612
+    },
+    "mode": "benchmark",
+    "one_time": {
+      "compressed_bytes": 280161352,
+      "declared_bytes": 1278977072,
+      "host_load_ms": 1485.520812,
+      "load_encode_ms": 7778.2400689999995
+    },
+    "output_capacity": 1048576,
+    "plan": "R-N-C-O-L-S",
+    "runs": 5,
+    "samples": {
+      "build_ms": [
+        34.01808166503906,
+        33.98704147338867,
+        33.99862289428711,
+        33.948062896728516,
+        33.92019271850586
+      ],
+      "dedup_ms": [
+        0.20380799472332,
+        0.19843199849128723,
+        0.20156799256801605,
+        0.19673599302768707,
+        0.1956160068511963
+      ],
+      "kernel_ms": [
+        1.176543951034546,
+        1.1718720197677612,
+        1.1818560361862183,
+        1.174399971961975,
+        1.1724480390548706
+      ],
+      "total_ms": [
+        35.398433685302734,
+        35.35734558105469,
+        35.382049560546875,
+        35.31919860839844,
+        35.28825759887695
+      ],
+      "wall_ms": [
+        35.474148,
+        35.424743,
+        35.451044,
+        35.398533,
+        35.353817
+      ]
+    },
+    "sf": 10,
+    "timing_scope": "Runtime GPU build/kernel/dedup/total timings cover resident input through canonical resident output. One-time manifest/oracle loading and compression, and final answer download, are separate. Provider stores are rebuilt on every call.",
+    "total_ms": {
+      "median": 35.35734558105469,
+      "min": 35.28825759887695
+    },
+    "wall_ms": {
+      "median": 35.424743,
+      "min": 35.353817
+    },
+    "warmups": 1
+  }
+]

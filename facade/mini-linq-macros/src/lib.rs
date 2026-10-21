@@ -275,6 +275,57 @@ pub fn stage(input: TokenStream) -> TokenStream {
     cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), cq_staging::compile_with).into()
 }
 
+/// Structures → Sequence with checked default lowering.
+// Formal rule ST-Sequence: lower Structures, check host grading, then translate Sequence.
+#[proc_macro]
+pub fn sequence(input: TokenStream) -> TokenStream {
+    cq_stage::pass::<cq_lang_structures::Program, cq_lang_sequence::Program>(
+        input.into(),
+        |source, args| {
+            no_arguments(args)?;
+            let target = cq_sequence_lowering::compile(source)?;
+            cq_sequence_lowering::check(source, &target)?;
+            Ok(target)
+        },
+    )
+    .into()
+}
+
+fn sequential_machine() -> cq_lang_sequence::Machine {
+    cq_lang_sequence::Machine {
+        name: syn::parse_quote!(sequential),
+        root: cq_lang_sequence::LevelNode {
+            name: syn::parse_quote!(host),
+            collaborative: false,
+            dynamic: false,
+            children: vec![],
+        },
+    }
+}
+
+/// Validate Sequence placement against the host-only machine without rewriting it.
+#[proc_macro]
+pub fn sequential(input: TokenStream) -> TokenStream {
+    cq_stage::rewrite::<cq_lang_sequence::Program>(input.into(), |source, args| {
+        no_arguments(args)?;
+        cq_lang_sequence::check_grading(source, &sequential_machine())?;
+        Ok(source.clone())
+    })
+    .into()
+}
+
+/// Sequence → final Rust pull iterator (without profile counters).
+#[proc_macro]
+pub fn translate_pull(input: TokenStream) -> TokenStream {
+    cq_stage::pass::<cq_lang_sequence::Program, syn::Expr>(input.into(), |source, args| {
+        no_arguments(args)?;
+        let analysis = cq_lang_sequence::check_grading(source, &sequential_machine())?;
+        let expression = cq_sequence_pull::translate(source, &analysis)?;
+        Ok(syn::parse_quote!((#expression).into_iter()))
+    })
+    .into()
+}
+
 /// Structures → final Rust pull expression.
 /// Formal rule ST-Terminal: Print checked Structures with no remaining continuation.
 #[proc_macro]

@@ -109,6 +109,8 @@ pub enum Len {
     Scan(String),
     Lit(usize),
     Add(Box<Len>, Box<Len>),
+    /// Number of contiguous parts covering a level of the given length.
+    CeilDiv(Box<Len>, usize),
     Unknown(Option<usize>),
 }
 
@@ -161,6 +163,13 @@ pub enum OutputProtocol {
     Bounded,
 }
 
+/// Whether a tile distributes publication parts or loops within one part.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Tiling {
+    Distribute,
+    Strip,
+}
+
 /// A dispatch derived from the grading, including its failure path to host.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Dispatch {
@@ -169,6 +178,12 @@ pub struct Dispatch {
     pub inner_stores: Vec<String>,
     pub level: Vec<String>,
     pub failure_channel: Vec<String>,
+    /// Effective execution level of the producer; publication stays at `level`.
+    pub producer_level: Vec<String>,
+    /// Width of the outer tile whose parts are published by this dispatch.
+    pub parts: Option<usize>,
+    /// Recorded protocol for concatenating published parts.
+    pub concatenation: OutputProtocol,
 }
 
 /// Runtime premises recorded for discharge by target traits and translations.
@@ -201,6 +216,11 @@ pub struct Analysis {
     /// Physical result denoted by each definition, when it is a row result.
     pub results: BTreeMap<String, String>,
     pub lengths: BTreeMap<String, Len>,
+    /// Lengths from outermost partition to innermost rows, including tile bounds.
+    /// `lengths` retains the total flattened cardinality for existing consumers.
+    pub shapes: BTreeMap<String, Vec<Len>>,
+    /// Tile interpretations in constructor preorder, grouped by definition.
+    pub tilings: BTreeMap<String, Vec<Tiling>>,
     pub views: BTreeSet<String>,
     pub stores: BTreeMap<String, Len>,
     pub capabilities: BTreeMap<(String, Vec<String>), Capability>,
@@ -490,7 +510,7 @@ impl ToTokens for Len {
             },
             Self::Lit(n) => integer(*n).to_tokens(tokens),
             Self::Add(left, right) => tokens.extend(quote! { #left + #right }),
-            Self::Scan(_) | Self::Unknown(_) => {
+            Self::Scan(_) | Self::Unknown(_) | Self::CeilDiv(_, _) => {
                 syn::Error::new(
                     Span::call_site(),
                     "analysis-only length cannot appear in a guard",

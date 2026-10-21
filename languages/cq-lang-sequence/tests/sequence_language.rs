@@ -192,8 +192,9 @@ fn offsets_rejects_flat_input() {
 }
 
 #[test]
-fn canon_rejects_local_support_without_flatten() {
-    reject(&program(quote!(a = canon tile 8 rows r;)), "BE-Canon");
+fn canon_preserves_outer_tile_partitions() {
+    let analysis = contract::check(&program(quote!(a = canon tile 8 rows r;))).unwrap();
+    assert_eq!(analysis.shapes["a"].len(), 2);
 }
 
 #[test]
@@ -352,10 +353,15 @@ fn separate_rejects_direct_sibling_exchange() {
 }
 
 #[test]
-fn boundary_rejects_unnamed_nested_separated_store() {
+fn separated_publication_keeps_collaborative_store_in_its_dispatch() {
     let mut p = program(quote!(a = store store rows r;));
     grade(&mut p, quote!(a at device;));
-    reject_grade(&p, &gpu(), "BE-Boundary");
+    let analysis = check_grading(&p, &gpu()).unwrap();
+    assert_eq!(analysis.dispatches.len(), 1);
+    assert_eq!(
+        analysis.dispatches[0].producer_level,
+        ["host", "device", "block"]
+    );
 }
 
 #[test]
@@ -570,4 +576,58 @@ fn unit_opaque_maps_and_union_preserve_explicit_arms() {
     reject(&p, "BE-Alpha");
     p.sequence.definitions[5].term = syn::parse_quote!(map out sg);
     reject(&p, "BE-Alpha");
+}
+
+#[test]
+fn lookup_and_flatten_are_lifted_under_tiles() {
+    let mut p = lookup_program(quote!(a = flatten lookup r [a] tile 256 rows l;));
+    let analysis = contract::check(&p).unwrap();
+    assert_eq!(analysis.results["a"], "j");
+    assert_eq!(analysis.shapes["a"].len(), 2);
+    assert_eq!(
+        analysis.shapes["a"][0],
+        Len::CeilDiv(Box::new(Len::Input("l".into())), 256)
+    );
+    grade(&mut p, quote!(a at device.block;));
+    let analysis = check_grading(&p, &gpu()).unwrap();
+    assert_eq!(analysis.dispatches.len(), 1);
+    assert_eq!(analysis.dispatches[0].outer_store, "l");
+}
+
+#[test]
+fn device_store_publishes_tiled_parts_at_block() {
+    let mut p = lookup_program(quote!(a = store tile 256 flatten lookup r [a] rows l;));
+    grade(&mut p, quote!(a at device;));
+    let analysis = check_grading(&p, &gpu()).unwrap();
+    assert_eq!(
+        analysis.dispatches[0].producer_level,
+        ["host", "device", "block"]
+    );
+    assert_eq!(analysis.dispatches[0].parts, Some(256));
+}
+
+#[test]
+fn device_store_publishes_collaborative_flatten() {
+    let mut p = lookup_program(quote!(a = store flatten lookup r [a] rows l;));
+    grade(&mut p, quote!(a at device;));
+    let analysis = check_grading(&p, &gpu()).unwrap();
+    assert_eq!(
+        analysis.dispatches[0].producer_level,
+        ["host", "device", "block"]
+    );
+    assert_eq!(analysis.collectives[0].2, ["host", "device", "block"]);
+}
+
+#[test]
+fn publication_distributes_once_and_inner_tiles_strip_mine() {
+    let mut p = program(quote!(a = store tile 1024 items 4 tile 256 rows r;));
+    grade(&mut p, quote!(a at device;));
+    let analysis = check_grading(&p, &gpu()).unwrap();
+    assert_eq!(analysis.tilings["a"], [Tiling::Strip, Tiling::Distribute]);
+    assert_eq!(analysis.dispatches[0].parts, Some(256));
+    grade(&mut p, quote!(a at device.block;));
+    let analysis = check_grading(&p, &gpu()).unwrap();
+    assert_eq!(analysis.tilings["a"], [Tiling::Strip, Tiling::Strip]);
+    grade(&mut p, quote!(a at device.block.lane;));
+    reject_grade(&p, &gpu(), "BE-Scope");
 }

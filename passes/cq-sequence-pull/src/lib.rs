@@ -78,6 +78,7 @@ impl<'a> Emitter<'a> {
                 .hosts
                 .contains_key(&result)
             {
+                self.context_mut().reprs.insert(result.clone(), Repr::Host);
                 self.context().host_scan(&result)
             } else {
                 self.adapters.scan(name)?
@@ -109,6 +110,27 @@ impl<'a> Emitter<'a> {
         Ok(value)
     }
 
+    /// Lift an innermost constructor through `levels` outer sequence partitions.
+    pub fn lift(
+        &mut self,
+        mut input: Value,
+        levels: usize,
+        operation: &mut impl FnMut(&mut Self, Value) -> syn::Result<Value>,
+    ) -> syn::Result<Value> {
+        if levels == 0 {
+            return operation(self, input);
+        }
+        let source = input.rows.clone();
+        let part = format_ident!("__cq_sequence_part_{}", levels);
+        input.rows = quote!(::core::iter::IntoIterator::into_iter(#part));
+        input.depth -= 1;
+        let mut output = self.lift(input, levels - 1, operation)?;
+        let rows = output.rows;
+        output.rows = quote!(::core::iter::Iterator::map(#source, move |#part| #rows));
+        output.depth += 1;
+        Ok(output)
+    }
+
     fn map(&mut self, name: &Ident, mut input: Value) -> syn::Result<Value> {
         let result = symbol_name(name);
         if input.result.as_ref() == Some(&result) {
@@ -116,16 +138,55 @@ impl<'a> Emitter<'a> {
             return Ok(input);
         }
         self.register(&result);
+        if let Some(ids) = self.adapters.positions(&result)? {
+            return Ok(Value {
+                rows: self.context().positional_rows(&result, ids),
+                result: Some(result),
+                depth: 0,
+                stored: false,
+            });
+        }
         let definition = self.context().physical[&result];
-        if let Some(parent) = definition.operator.input() {
-            if input.result.as_deref() != Some(&symbol_name(parent)) {
+        let operand = if let Some(parent) = definition.operator.input() {
+            let parent_name = symbol_name(parent);
+            if input.result.as_deref() != Some(&parent_name) {
                 input = self.map(parent, input)?;
             }
-            self.context_mut()
-                .reprs
-                .insert(symbol_name(parent), Repr::Pipe(Some(input.rows)));
+            let positional = self.analysis.structures.reads.contains_key(&result)
+                && matches!(
+                    self.context().reprs.get(&parent_name),
+                    Some(Repr::Host | Repr::Positions(_) | Repr::Selection { .. })
+                );
+            let ordered = matches!(definition.operator, Operator::Merge(..))
+                && matches!(
+                    self.context().reprs.get(&parent_name),
+                    Some(Repr::Let { .. } | Repr::Selection { .. })
+                );
+            if positional || ordered {
+                // Positional and ordered reads consume the recorded source
+                // representation rather than an unstructured row iterator.
+                None
+            } else {
+                let previous = self
+                    .context_mut()
+                    .reprs
+                    .insert(parent_name.clone(), Repr::Pipe(Some(input.rows)));
+                Some((parent_name, previous))
+            }
+        } else {
+            None
+        };
+        let rows = self.adapters.operator(&result);
+        // A local row adapter must not destroy a retained operand's provider:
+        // later definitions may still probe its recorded indexes.
+        if let Some((parent, previous)) = operand {
+            if let Some(previous) = previous {
+                self.context_mut().reprs.insert(parent, previous);
+            } else {
+                self.context_mut().reprs.remove(&parent);
+            }
         }
-        let rows = self.adapters.operator(&result)?;
+        let rows = rows?;
         // Physical fan-out adapters already flatten their row iterator. Rewrap
         // it as one part so the explicit Sequence flatten remains structural.
         let nested = matches!(
@@ -157,9 +218,17 @@ impl<'a> Emitter<'a> {
         input
     }
 
-    fn tile(&self, mut input: Value) -> Value {
+    fn tile(&self, n: usize, mut input: Value) -> Value {
         let rows = input.rows;
-        input.rows = quote!(::core::iter::once(#rows));
+        input.rows = quote!({
+            let mut __cq_tile_rows = #rows;
+            ::core::iter::from_fn(move || {
+                let __cq_part = ::core::iter::Iterator::collect::<::std::vec::Vec<_>>(
+                    ::core::iter::Iterator::take(
+                        ::core::iter::Iterator::by_ref(&mut __cq_tile_rows), #n));
+                if __cq_part.is_empty() { None } else { Some(__cq_part.into_iter()) }
+            })
+        });
         input.depth += 1;
         input.stored = false;
         input
@@ -223,7 +292,13 @@ impl<'a> Emitter<'a> {
             })
     }
 
-    fn lookup(&mut self, provider: &Ident, keys: &[Ident], input: Value) -> syn::Result<Value> {
+    fn lookup(
+        &mut self,
+        provider: &Ident,
+        keys: &[Ident],
+        input: Value,
+        membership: bool,
+    ) -> syn::Result<Value> {
         let right = symbol_name(provider);
         let left = input
             .result
@@ -241,7 +316,7 @@ impl<'a> Emitter<'a> {
         self.register(&right);
         // Membership buckets are consumed by compact; that adapter uses the
         // exact membership provider and never enumerates payloads.
-        if *capability == Capability::Membership {
+        if membership || *capability == Capability::Membership {
             return Ok(input);
         }
         if *capability == Capability::Ordered {
@@ -323,10 +398,7 @@ impl<'a> Emitter<'a> {
                 )
             }
             Access::Prefix(..) => {
-                return Err(syn::Error::new_spanned(
-                    provider,
-                    "Sequence lookup needs a complete recorded payload provider",
-                ));
+                return self.map(&Ident::new(&result, provider.span()), input);
             }
         };
         let pattern = context.pattern(left);
@@ -410,26 +482,7 @@ impl<'a> Emitter<'a> {
             .result
             .as_ref()
             .map_or(1, |result| self.context().carried(result).len());
-        let key = if width > 12 {
-            let fields = (0..width)
-                .map(|position| {
-                    let position = syn::Index::from(position);
-                    quote!(::core::clone::Clone::clone(&__cq_row.#position))
-                })
-                .collect::<Vec<_>>();
-            let grouped = cq_print::group(&fields);
-            quote!(&#grouped)
-        } else {
-            quote!(__cq_row)
-        };
-        let rows = input.rows;
-        input.rows = quote!({
-            let mut __cq_seen = <#ty as ::cq_storage::Build<_>>::build(::core::iter::empty::<(_, ())>());
-            ::core::iter::Iterator::filter(#rows, move |__cq_row| {
-                ::cq_storage::require::leibniz(#key);
-                __cq_seen.insert(::core::clone::Clone::clone(#key))
-            })
-        });
+        input.rows = RowEmitter::canon(ty, input.rows, width);
         input.stored = false;
         Ok(input)
     }
@@ -494,7 +547,12 @@ impl<'a> Emitter<'a> {
                     },
                 );
             }
-        } else if let Some(result) = &value.result {
+        } else if let Some(result) = &value.result
+            && !matches!(
+                self.context().reprs.get(result),
+                Some(Repr::Host | Repr::Positions(_))
+            )
+        {
             self.context_mut()
                 .reprs
                 .insert(result.clone(), Repr::Pipe(Some(value.rows.clone())));
@@ -557,6 +615,7 @@ pub fn translate_with(
         node: &Term,
         owner: &str,
         tiles: usize,
+        membership: bool,
         hook: &mut impl FnMut(
             &Term,
             &mut Emitter<'_>,
@@ -567,38 +626,71 @@ pub fn translate_with(
         ) -> syn::Result<()>,
     ) -> syn::Result<Value> {
         let child = match node {
+            Term::Compact(_, inner) => Some(term(
+                emitter,
+                inner,
+                owner,
+                tiles,
+                matches!(inner.as_ref(), Term::Lookup { .. }),
+                hook,
+            )?),
             Term::Map(_, inner)
-            | Term::Compact(_, inner)
             | Term::Flatten(inner)
             | Term::Fold(_, inner)
             | Term::Canon(inner)
             | Term::Store { inner, .. }
-            | Term::Lookup { inner, .. } => Some(term(emitter, inner, owner, tiles, hook)?),
-            Term::Tile { inner, .. } => Some(term(emitter, inner, owner, tiles + 1, hook)?),
+            | Term::Lookup { inner, .. } => Some(term(emitter, inner, owner, tiles, false, hook)?),
+            Term::Tile { inner, .. } => Some(term(emitter, inner, owner, tiles + 1, false, hook)?),
             _ => None,
         };
         let input = || child.clone().expect("unary constructor");
         let mut value = match node {
             Term::Rows(name) => emitter.rows(name)?,
             Term::Ref(name) => emitter.reference(name)?,
-            Term::Map(name, _) => emitter.map(name, input())?,
-            Term::Compact(name, _) => emitter.compact(name, input())?,
-            Term::Flatten(_) => emitter.flatten(input()),
-            Term::Tile { .. } => emitter.tile(input()),
-            Term::Lookup { provider, keys, .. } => emitter.lookup(provider, keys, input())?,
-            Term::Fold(monoid, _) => emitter.fold(monoid, input())?,
-            Term::Canon(_) => emitter.canon(input())?,
-            Term::Store { .. } => emitter.store(input()),
+            Term::Map(name, _) => emitter.lift(input(), input().depth, &mut |emitter, rows| {
+                emitter.map(name, rows)
+            })?,
+            Term::Compact(name, _) => {
+                emitter.lift(input(), input().depth, &mut |emitter, rows| {
+                    emitter.compact(name, rows)
+                })?
+            }
+            Term::Flatten(_) => emitter.lift(
+                input(),
+                input().depth.saturating_sub(1),
+                &mut |emitter, rows| Ok(emitter.flatten(rows)),
+            )?,
+            Term::Tile { n, .. } => {
+                emitter.lift(input(), input().depth, &mut |emitter, rows| {
+                    Ok(emitter.tile(*n, rows))
+                })?
+            }
+            Term::Lookup { provider, keys, .. } => {
+                emitter.lift(input(), input().depth, &mut |emitter, rows| {
+                    emitter.lookup(provider, keys, rows, membership)
+                })?
+            }
+            Term::Fold(monoid, _) => {
+                emitter.lift(input(), input().depth, &mut |emitter, rows| {
+                    emitter.fold(monoid, rows)
+                })?
+            }
+            Term::Canon(_) => emitter.lift(input(), input().depth, &mut |emitter, rows| {
+                emitter.canon(rows)
+            })?,
+            Term::Store { .. } => emitter.lift(input(), input().depth, &mut |emitter, rows| {
+                Ok(emitter.store(rows))
+            })?,
             Term::Union(arms) => {
                 let values = arms
                     .iter()
-                    .map(|arm| term(emitter, arm, owner, tiles, hook))
+                    .map(|arm| term(emitter, arm, owner, tiles, false, hook))
                     .collect::<syn::Result<Vec<_>>>()?;
                 emitter.union(values)?
             }
             Term::Choose(arms) => {
                 let alternative = emitter.choose(arms)?;
-                term(emitter, alternative, owner, tiles, hook)?
+                term(emitter, alternative, owner, tiles, false, hook)?
             }
         };
         hook(node, emitter, child.as_ref(), &mut value, owner, tiles)?;
@@ -610,7 +702,7 @@ pub fn translate_with(
     for (position, definition) in program.sequence.definitions.iter().enumerate() {
         let owner = symbol_name(&definition.name);
         emitter.owner = owner.clone();
-        let value = term(&mut emitter, &definition.term, &owner, 0, &mut hook)?;
+        let value = term(&mut emitter, &definition.term, &owner, 0, false, &mut hook)?;
         output = Some(if position + 1 == program.sequence.definitions.len() {
             value
         } else {

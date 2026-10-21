@@ -19,6 +19,11 @@ pass paths, each with argument tokens read only by that pass.
 
 \Rule{ST-Context}{\mathsf{pass}_f(args,\pi,\mathsf{quote}(s))\longrightarrow T'}
  {C[\mathsf{pass}_f(args,\pi,\mathsf{quote}(s))]\longrightarrow C[T']}
+
+\Rule{ST-Sequence}{q=\mathsf{sequence}(s)\quad\mathsf{check}(s,q)\\
+ \mathsf{checkGrading}(q,host)\quad e=\mathsf{translatePull}(q)\quad\pi=[]}
+ {\mathsf{sequence};\mathsf{sequential};\mathsf{translatePull}(s)
+  \longrightarrow\mathsf{quote}_{Rust}(e)}
 \end{mathpar}
 \code{cq_stage::pass} checks source and target contracts; \code{cq_stage::rewrite}
 also runs the language's \code{check_rewrite}. Correspondence checks belong to the
@@ -29,16 +34,28 @@ pipeline {
     surface = [Path(tokens), ...];
     plan = Path(tokens); ix = Path(tokens); lower = Path(tokens);
     physical = [Path(tokens), ...]; select = Path(tokens);
-    structures = [Path(tokens), ...]; print = Path(tokens);
+    structures = [Path(tokens), ...];
+    represent = Path(tokens); stage = Path(tokens);
+    sequence = Path(tokens); decompose = [Path(tokens), ...];
+    grade = Path(tokens); print = Path(tokens);
 }
 \end{lstlisting}
 The order is surface, plan, ix, lower, Physical rewrites, select, Structures
-rewrites, print; omitted phases default to the \code{mini_linq::passes} entries
-\code{plan}, \code{index_demands}, \code{lower}, \code{select} and
-\code{print_pull}. An authored program may enter at any compatible macro
-with \code{arguments \{..\}; pipeline \{..\}; <program>}. The protocol registers
-no pass names, and passes receive no configuration beyond their arguments: every
-choice is in the program text.
+rewrites, represent, stage, sequence, decompose, grade, print. The shipped defaults
+remain \code{plan}, \code{index_demands}, \code{lower}, \code{select},
+\code{represent}, \code{stage}, and \code{print_pull}; no Sequence phase is enabled.
+The second target is selected explicitly with \code{sequence},
+\code{sequential}, and \code{translate_pull} in the sequence, grade, and print
+phases together. Decompose is an optional list of Sequence rewrites.
+The resolver rejects incomplete targets and the known Structures terminals
+\code{print_pull} and \code{push} on this path. Custom terminal compatibility
+is checked by the pass protocol, not inferred from its macro path.
+The host-only translator currently has no profile-counter variant.
+The workload corpus and fuzz configuration opt into this target with
+\code{MINI_LINQ_SEQUENCE=1}; their default remains unchanged.
+An authored program may enter at any compatible macro with
+\code{arguments \{..\}; pipeline \{..\}; <program>}. Passes receive no
+configuration beyond their arguments: every choice is in the program text.
 
 Optional features are standalone workspaces under \code{features/} that depend
 on the packaged core only: planners, rewrites, surface extensions (negation,

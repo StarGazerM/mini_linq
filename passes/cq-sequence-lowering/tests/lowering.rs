@@ -137,3 +137,36 @@ fn merge_uses_lookup_with_both_ordered_provider_obligations() {
     }
     assert_eq!(analysis.results["j"], "j");
 }
+
+#[test]
+fn rewritten_claw_preserves_ordered_stream_providers() {
+    use quote::ToTokens;
+    let source = cq_workloads::case("claw").unwrap().module().unwrap();
+    for plan in 0..Planner::ALL.len() {
+        for choices in 0..16 {
+            let pipeline = cq_workloads::pipelines::Pipeline {
+                plan,
+                merge: choices & 1 != 0,
+                canon: choices & 2 != 0,
+                smallest: choices & 4 != 0,
+                lazy: choices & 8 != 0,
+                ..Default::default()
+            };
+            let physical = pipeline.physical(&source).unwrap();
+            let structures = match cq_structure_selection::compile(&physical) {
+                Ok(structures) => structures,
+                Err(error) => {
+                    assert!(
+                        error
+                            .to_string()
+                            .ends_with(cq_workloads::pipelines::SMALLEST_LAYOUT_REJECTION)
+                    );
+                    continue;
+                }
+            };
+            compile(&structures).unwrap_or_else(|error| {
+                panic!("{pipeline:?}: {error}\n{}", structures.to_token_stream())
+            });
+        }
+    }
+}

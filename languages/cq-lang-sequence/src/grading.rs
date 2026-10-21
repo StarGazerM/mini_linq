@@ -31,7 +31,11 @@ struct Checker<'a> {
     nodes: Vec<Node<'a>>,
     collectives: Vec<(String, Monoid, Vec<String>)>,
     lengths: &'a BTreeMap<String, Len>,
+    tilings: BTreeMap<String, Vec<crate::Tiling>>,
+    parts: BTreeMap<String, Option<usize>>,
     range_reads: BTreeSet<(String, Vec<String>)>,
+    publication: Option<usize>,
+    publication_tile: Option<&'a Term>,
 }
 
 /// Check placement, then derive dispatch boundaries and runtime failure obligations.
@@ -152,7 +156,11 @@ pub fn check_grading(program: &Program, machine: &Machine) -> syn::Result<Analys
         nodes: Vec::new(),
         collectives: Vec::new(),
         lengths: &analysis.lengths,
+        tilings: BTreeMap::new(),
+        parts: BTreeMap::new(),
         range_reads: BTreeSet::new(),
+        publication: None,
+        publication_tile: None,
     };
     for (owner, definition) in program.sequence.definitions.iter().enumerate() {
         let root = checker.visit(
@@ -167,6 +175,7 @@ pub fn check_grading(program: &Program, machine: &Machine) -> syn::Result<Analys
     }
     analysis.dispatches = checker.dispatches()?;
     analysis.collectives = checker.collectives;
+    analysis.tilings = checker.tilings;
     for key in checker.range_reads {
         if let Some(capability) = analysis.capabilities.get_mut(&key) {
             if *capability != crate::Capability::Ordered {
@@ -263,7 +272,10 @@ impl<'a> Checker<'a> {
             };
             return Err(syn::Error::new(name.span(), message));
         }
-        if source_level != level && !self.is_stored(self.roots[source]) {
+        if source_level != level
+            && !self.is_stored(self.roots[source])
+            && self.publication != Some(source_level)
+        {
             return Err(syn::Error::new(
                 name.span(),
                 "BE-Scope: crossing into an inner level requires an ancestor store",
@@ -351,16 +363,33 @@ impl<'a> Checker<'a> {
                 }
                 inputs.push(self.visit(inner, owner, level, tiled, uniform, false)?);
             }
-            Term::Tile { inner, .. } => {
-                let children = &self.levels[level].children;
-                if children.len() != 1 {
-                    return Err(self.error(
-                        owner,
-                        "BE-Scope: tile requires exactly one child level to descend into",
-                    ));
-                }
-                let child = children[0];
-                inputs.push(self.visit(inner, owner, child, true, uniform, false)?);
+            Term::Tile { n, inner, .. } => {
+                let kind = if self
+                    .publication_tile
+                    .is_some_and(|outer| std::ptr::eq(outer, term))
+                {
+                    if self
+                        .publication
+                        .is_none_or(|publication| self.levels[publication].children.len() != 1)
+                    {
+                        return Err(self
+                            .error(owner, "BE-Scope: distributed tile requires one child level"));
+                    }
+                    self.publication_tile = None;
+                    self.parts
+                        .entry(self.name(owner))
+                        .and_modify(|width| {
+                            if *width != Some(*n) {
+                                *width = None;
+                            }
+                        })
+                        .or_insert(Some(*n));
+                    crate::Tiling::Distribute
+                } else {
+                    crate::Tiling::Strip
+                };
+                self.tilings.entry(self.name(owner)).or_default().push(kind);
+                inputs.push(self.visit(inner, owner, level, tiled, uniform, false)?);
             }
             Term::Fold(monoid, inner) => {
                 self.collective(owner, level, monoid.clone(), tiled, uniform)?;
@@ -381,13 +410,34 @@ impl<'a> Checker<'a> {
                 }
                 inputs.push(self.visit(inner, owner, level, tiled, uniform, false)?);
             }
-            Term::Canon(inner) | Term::Store { inner, .. } => {
+            Term::Store { inner, .. } => {
+                // A separated store publishes child-produced values, not a
+                // collective spanning its mutually separated execution parts.
+                let producer = if separated_store && self.levels[level].children.len() == 1 {
+                    self.levels[level].children[0]
+                } else {
+                    level
+                };
+                let publication = self.publication;
+                let publication_tile = self.publication_tile;
+                if separated_store {
+                    self.publication = Some(level);
+                    self.publication_tile = outer_tile(inner);
+                }
+                let input = self.visit(inner, owner, producer, tiled, uniform, false);
+                self.publication = publication;
+                self.publication_tile = publication_tile;
+                inputs.push(input?);
+            }
+            Term::Canon(inner) => {
                 inputs.push(self.visit(inner, owner, level, tiled, uniform, false)?);
             }
             Term::Choose(alternatives) => {
                 // A later else arm also depends on all preceding guards.
                 let mut branch_uniform = uniform;
+                let publication_tile = self.publication_tile;
                 for (guard, alternative) in alternatives {
+                    self.publication_tile = publication_tile.and_then(|_| outer_tile(alternative));
                     let guard_uniform = match guard {
                         Guard::Lt(length, _) | Guard::Ge(length, _) => {
                             self.uniform_length(length, owner, level)?
@@ -530,6 +580,7 @@ impl<'a> Checker<'a> {
     fn uniform_length(&self, length: &Len, owner: usize, level: usize) -> syn::Result<bool> {
         match length {
             Len::Lit(_) => Ok(true),
+            Len::CeilDiv(inner, _) => self.uniform_length(inner, owner, level),
             Len::Add(left, right) => {
                 let left = self.uniform_length(left, owner, level)?;
                 let right = self.uniform_length(right, owner, level)?;
@@ -713,6 +764,35 @@ impl<'a> Checker<'a> {
                 inner_stores: stores.into_iter().map(|owner| self.name(owner)).collect(),
                 failure_channel: level.iter().rev().cloned().collect(),
                 level,
+                producer_level: members
+                    .iter()
+                    .filter_map(|&index| {
+                        let node = &self.nodes[index];
+                        node.separated_store
+                            .then(|| node.inputs.first().copied())
+                            .flatten()
+                    })
+                    .map(|input| self.levels[self.nodes[input].level].path.clone())
+                    .next()
+                    .unwrap_or_else(|| self.levels[first.level].path.clone()),
+                parts: members.iter().find_map(|&index| {
+                    let node = &self.nodes[index];
+                    if !node.separated_store {
+                        return None;
+                    }
+                    self.parts.get(&self.name(node.owner)).copied().flatten()
+                }),
+                concatenation: if members.iter().any(|&index| {
+                    self.nodes[index].owner + 1 == self.program.sequence.definitions.len()
+                }) {
+                    self.program
+                        .sequence
+                        .output
+                        .clone()
+                        .unwrap_or(crate::OutputProtocol::Count)
+                } else {
+                    crate::OutputProtocol::Count
+                },
             });
         }
         Ok(result)
@@ -772,4 +852,22 @@ fn representative(parents: &mut [usize], mut index: usize) -> usize {
         index = parents[index];
     }
     index
+}
+
+/// The first tile applied to input data is the outer partition of the shape,
+/// even though it is the innermost tile constructor in the syntax tree.
+fn outer_tile(term: &Term) -> Option<&Term> {
+    match term {
+        Term::Tile { inner, .. } => outer_tile(inner).or(Some(term)),
+        Term::Map(_, inner)
+        | Term::Compact(_, inner)
+        | Term::Flatten(inner)
+        | Term::Fold(_, inner)
+        | Term::Canon(inner)
+        | Term::Store { inner, .. }
+        | Term::Lookup { inner, .. } => outer_tile(inner),
+        Term::Choose(arms) => arms.iter().find_map(|(_, arm)| outer_tile(arm)),
+        Term::Union(arms) => arms.iter().find_map(outer_tile),
+        Term::Rows(_) | Term::Ref(_) => None,
+    }
 }

@@ -19,6 +19,7 @@ enum Meaning {
 #[derive(Clone)]
 struct Fact {
     len: Len,
+    shape: Vec<Len>,
     meaning: Meaning,
     depth: usize,
     max_depth: usize,
@@ -49,6 +50,8 @@ fn analyze(program: &Program) -> syn::Result<Checker<'_>> {
             structures,
             results: BTreeMap::new(),
             lengths: BTreeMap::new(),
+            shapes: BTreeMap::new(),
+            tilings: BTreeMap::new(),
             views: BTreeSet::new(),
             stores: BTreeMap::new(),
             capabilities: BTreeMap::new(),
@@ -80,6 +83,10 @@ fn analyze(program: &Program) -> syn::Result<Checker<'_>> {
             .analysis
             .lengths
             .insert(name.clone(), fact.len.clone());
+        checker
+            .analysis
+            .shapes
+            .insert(name.clone(), fact.shape.clone());
         if !fact.materializes {
             checker.analysis.views.insert(name.clone());
         }
@@ -283,6 +290,13 @@ impl Checker<'_> {
                     return fail(name, "BE-Alpha", "rows names no retained result or host");
                 };
                 Ok(Fact {
+                    shape: vec![if matches!(meaning, Meaning::Result(_))
+                        && matches!(self.physical(name)?.operator, Operator::Unit(_))
+                    {
+                        Len::Lit(1)
+                    } else {
+                        Len::Input(name_string.clone())
+                    }],
                     len: if matches!(meaning, Meaning::Result(_))
                         && matches!(self.physical(name)?.operator, Operator::Unit(_))
                     {
@@ -351,8 +365,7 @@ impl Checker<'_> {
                     let mut columns: Vec<_> = keys.iter().map(symbol_name).collect();
                     columns.sort();
                     let mut fact = self.term(inner, owner)?;
-                    if fact.max_depth != 0
-                        || fact.meaning != Meaning::Result(left)
+                    if fact.meaning != Meaning::Result(left)
                         || symbol_name(provider) != right
                         || columns != expected
                     {
@@ -365,16 +378,10 @@ impl Checker<'_> {
                     self.provider(provider, &columns, Capability::Membership)?;
                     fact.meaning = Meaning::Result(symbol_name(name));
                     fact.len = Len::Scan(owner.into());
+                    *fact.shape.last_mut().expect("row level") = fact.len.clone();
                     return Ok(fact);
                 }
                 let mut fact = self.term(inner, owner)?;
-                if fact.max_depth != 0 {
-                    return fail(
-                        term,
-                        "BE-Alpha",
-                        "map/compact requires rows, not unflattened buckets",
-                    );
-                }
                 if matches!(term, Term::Compact(_, _))
                     && !matches!(self.physical(name)?.operator, Operator::Select(_))
                 {
@@ -461,11 +468,13 @@ impl Checker<'_> {
                     ordered,
                 });
                 if nested {
-                    fact.depth = 1;
-                    fact.max_depth = 1;
+                    fact.depth += 1;
+                    fact.max_depth += 1;
+                    fact.shape.push(Len::Unknown(None));
                     fact.len = Len::Unknown(None);
                 } else if changes_length || matches!(term, Term::Compact(_, _)) {
                     fact.len = Len::Scan(owner.into());
+                    *fact.shape.last_mut().expect("row level") = fact.len.clone();
                 }
                 Ok(fact)
             }
@@ -482,6 +491,9 @@ impl Checker<'_> {
                 self.range_reads(&fact)?;
                 fact.depth += 1;
                 fact.max_depth += 1;
+                let rows = fact.shape.last_mut().expect("row level");
+                *rows = Len::CeilDiv(Box::new(rows.clone()), *n);
+                fact.shape.push(Len::Unknown(Some(*n)));
                 Ok(fact)
             }
             Term::Lookup {
@@ -490,9 +502,6 @@ impl Checker<'_> {
                 inner,
             } => {
                 let mut fact = self.term(inner, owner)?;
-                if fact.max_depth != 0 {
-                    return fail(term, "BE-Alpha", "lookup requires a row domain");
-                }
                 let provider_name = symbol_name(provider);
                 self.physical(provider)?;
                 let mut names: Vec<_> = keys.iter().map(symbol_name).collect();
@@ -545,12 +554,32 @@ impl Checker<'_> {
                 };
                 self.provider(provider, &names, capability)?;
                 if let Some(left) = ordered_left {
-                    self.provider(&left, &names, Capability::Ordered)?;
+                    // The ordered left stream is already carried by this term;
+                    // only the independently probed right needs a prior store.
+                    let left_name = symbol_name(&left);
+                    let ordered_stream = self.analysis.structures.physical.modes[&left_name]
+                        == ModeKind::Pipe
+                        && matches!(&self.physical(&left)?.operator, Operator::Merge(_, keyed)
+                        if {
+                            let mut columns: Vec<_> = keyed.columns.iter().map(symbol_name).collect();
+                            columns.sort();
+                            columns == names
+                        });
+                    if ordered_stream {
+                        // Structures has checked this producing merge's order.
+                        // A carried stream needs no new indexed-provider trait.
+                        self.analysis
+                            .capabilities
+                            .insert((left_name, names.clone()), Capability::Ordered);
+                    } else {
+                        self.provider_capability(&left, &names, Capability::Ordered)?;
+                    }
                 }
                 fact.reads.push((provider_name.clone(), names.clone()));
                 fact.meaning = Meaning::Lookup(provider_name, names, Box::new(fact.meaning));
-                fact.depth = 1;
-                fact.max_depth = 1;
+                fact.depth += 1;
+                fact.max_depth += 1;
+                fact.shape.push(Len::Unknown(None));
                 fact.len = Len::Unknown(None);
                 Ok(fact)
             }
@@ -567,6 +596,8 @@ impl Checker<'_> {
                 fact.depth -= 1;
                 fact.max_depth -= 1;
                 fact.len = Len::Scan(owner.into());
+                fact.shape.pop();
+                *fact.shape.last_mut().expect("flatten leaves a row level") = fact.len.clone();
                 if let Meaning::Lookup(provider, keys, inner) = &fact.meaning {
                     if let Meaning::Result(left) = inner.as_ref() {
                         if let Some(definition) = self.program.structures.physical.program.definitions.iter().find(|definition| {
@@ -582,9 +613,6 @@ impl Checker<'_> {
             }
             Term::Fold(monoid, inner) => {
                 let mut fact = self.term(inner, owner)?;
-                if fact.max_depth != 0 {
-                    return fail(term, "BE-Partition", "fold requires a flat row domain");
-                }
                 if let Monoid::Sum(column) = monoid {
                     if !self.heading(&fact.meaning).contains(&symbol_name(column)) {
                         return fail(
@@ -595,15 +623,17 @@ impl Checker<'_> {
                     }
                 }
                 fact.meaning = Meaning::Fold(monoid.clone(), Box::new(fact.meaning));
-                fact.len = Len::Lit(1);
+                fact.len = match fact.shape.len() {
+                    1 => Len::Lit(1),
+                    2 => fact.shape[0].clone(),
+                    _ => Len::Scan(owner.into()),
+                };
+                *fact.shape.last_mut().expect("row level") = Len::Lit(1);
                 Ok(fact)
             }
             Term::Canon(inner) => {
-                // Formal rule BE-Canon: Support is global over flat rows; providers remain trait obligations.
+                // Formal rule BE-Canon: Canonicalize innermost rows; providers remain trait obligations.
                 let mut fact = self.term(inner, owner)?;
-                if fact.max_depth != 0 {
-                    return fail(term, "BE-Canon", "global canon requires flattened rows");
-                }
                 let ty = match &fact.meaning {
                     Meaning::Result(name) => self.analysis.structures.dedup.get(name).cloned(),
                     _ => None,
@@ -617,6 +647,7 @@ impl Checker<'_> {
                     ordered: false,
                 });
                 fact.len = Len::Scan(owner.into());
+                *fact.shape.last_mut().expect("row level") = fact.len.clone();
                 Ok(fact)
             }
             Term::Store { capacity, inner } => {
@@ -632,6 +663,7 @@ impl Checker<'_> {
                     };
                     let capacity = capacity.or(carried);
                     fact.len = Len::Unknown(capacity);
+                    *fact.shape.last_mut().expect("row level") = fact.len.clone();
                 }
                 fact.materializes = true;
                 self.analysis.stores.insert(owner.into(), fact.len.clone());
@@ -654,6 +686,12 @@ impl Checker<'_> {
                             );
                         }
                         previous.depth = previous.depth.min(next.depth);
+                        previous.shape.truncate(next.shape.len());
+                        for (left, right) in previous.shape.iter_mut().zip(&next.shape) {
+                            if left != right {
+                                *left = Len::Unknown(None);
+                            }
+                        }
                         previous.max_depth = previous.max_depth.max(next.max_depth);
                         if previous.len != next.len {
                             previous.len = Len::Unknown(None);
@@ -676,8 +714,17 @@ impl Checker<'_> {
         keys: &[String],
         required: Capability,
     ) -> syn::Result<()> {
-        let name = symbol_name(provider);
         self.require_store(provider)?;
+        self.provider_capability(provider, keys, required)
+    }
+
+    fn provider_capability(
+        &mut self,
+        provider: &Ident,
+        keys: &[String],
+        required: Capability,
+    ) -> syn::Result<()> {
+        let name = symbol_name(provider);
         let key = (name.clone(), keys.to_vec());
         if required != Capability::Membership && self.analysis.structures.membership.contains(&key)
         {

@@ -269,9 +269,65 @@ impl<'a> RowEmitter<'a> {
         self.printer.scan(name)
     }
 
+    /// Emit one checked positional pipe read or projection. Keep its position
+    /// representation available to subsequent reads; return rows only at the
+    /// consumer's boundary. Non-positional operators return `None`.
+    pub fn positions(&mut self, name: &str) -> syn::Result<Option<TokenStream>> {
+        let definition = self.printer.physical[name];
+        if physical::ModeKind::from(&definition.mode) != physical::ModeKind::Pipe
+            || !self.printer.carried_witnesses[name].is_empty()
+            || (self.printer.analysis.stages.contains_key(name) && !self.printer.probe_stage(name))
+        {
+            return Ok(None);
+        }
+        let projection = matches!(&definition.operator, Operator::Project(p)
+            if definition.canon.is_none()
+                && self.printer.analysis.lineage.contains_key(name)
+                && matches!(self.printer.reprs.get(&symbol_name(&p.input)),
+                    Some(Repr::Positions(_) | Repr::Selection { .. } | Repr::Host))
+                && self.printer.analysis.reads.values().any(|r|
+                    symbol_name(&r.origin.base) == self.printer.analysis.lineage[name].base));
+        if !projection && !self.printer.analysis.reads.contains_key(name) {
+            return Ok(None);
+        }
+        self.printer.define(definition)?;
+        let Repr::Positions(ids) = &self.printer.reprs[name] else {
+            unreachable!("checked positional pipe definition");
+        };
+        Ok(ids.clone())
+    }
+
     /// Apply the checked answer projection, including its recorded image canon.
     pub fn head(&mut self, name: &str, head: &cq::Atom, rows: TokenStream) -> TokenStream {
         self.printer.head(name, head, rows)
+    }
+
+    /// Canonicalize flat rows with the recorded set provider. Wide equality keys
+    /// are grouped without changing the iterator's row layout.
+    pub fn canon(ty: &syn::Type, rows: TokenStream, width: usize) -> TokenStream {
+        // Std implements tuple Eq/Hash/Ord only through arity twelve. Clone
+        // grouped fields because the set retains keys after each row is yielded.
+        let key = if width <= 12 {
+            quote!(__cq_row)
+        } else {
+            let fields = (0..width)
+                .map(|field| {
+                    let field = index(field);
+                    quote!(::core::clone::Clone::clone(&__cq_row.#field))
+                })
+                .collect::<Vec<_>>();
+            let nested = cq_print::group(&fields);
+            quote!(&#nested)
+        };
+        quote! {{
+            #[allow(unused_imports)]
+            use ::cq_storage::HashSetConstructor as _;
+            let mut __cq_seen = <#ty>::new();
+            ::core::iter::Iterator::filter(#rows, move |__cq_row| {
+                ::cq_storage::require::leibniz(#key);
+                __cq_seen.insert(::core::clone::Clone::clone(#key))
+            })
+        }}
     }
 }
 
@@ -432,36 +488,12 @@ impl Printer<'_> {
         rows: TokenStream,
         width: usize,
     ) -> TokenStream {
-        // Std implements tuple Eq/Hash/Ord only through arity twelve. Keep
-        // iterator rows flat, but recursively group wider equality keys. Clone
-        // fields instead of borrowing the filter's temporary row: a provider
-        // may retain this key after that row has been yielded and dropped.
-        let key = if width <= 12 {
-            quote!(__cq_row)
-        } else {
-            let fields = (0..width)
-                .map(|field| {
-                    let field = index(field);
-                    quote!(::core::clone::Clone::clone(&__cq_row.#field))
-                })
-                .collect::<Vec<_>>();
-            let nested = cq_print::group(&fields);
-            quote!(&#nested)
-        };
         let dedup = format!("{name}.dedup");
         let input = name.strip_suffix(".head").unwrap_or(name);
         let key_columns = self.heading(input).join(",");
         self.profile_label(&dedup, "DEDUP", &key_columns, vec![input.into()]);
         let rows = self.profile_inserting(&dedup, rows);
-        let result = quote! {{
-            #[allow(unused_imports)]
-            use ::cq_storage::HashSetConstructor as _;
-            let mut __cq_seen = <#ty>::new();
-            ::core::iter::Iterator::filter(#rows, move |__cq_row| {
-                ::cq_storage::require::leibniz(#key);
-                __cq_seen.insert(::core::clone::Clone::clone(#key))
-            })
-        }};
+        let result = RowEmitter::canon(ty, rows, width);
         self.profile_stream(&dedup, result)
     }
 

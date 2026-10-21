@@ -24,6 +24,7 @@ cq-order.workspace = true
 cq-elaborate.workspace = true
 cq-index-policy.workspace = true
 cq-physical-lowering.workspace = true
+cq-workloads = { path = "../../features/workloads" }
 
 [package.metadata.cq]
 source = "cq-lang-sequence"

@@ -76,7 +76,10 @@ impl Pipeline {
         if self.sorted_payload {
             structures.push(quote!(::cq_workload_passes::sorted_payload));
         }
-        let printer = if self.push {
+        let sequence = std::env::var("MINI_LINQ_SEQUENCE").is_ok_and(|value| value == "1");
+        let printer = if sequence {
+            quote!(::mini_linq::passes::translate_pull)
+        } else if self.push {
             quote!(::own_push::push)
         } else {
             quote!(::mini_linq::passes::print_pull)
@@ -85,8 +88,13 @@ impl Pipeline {
             let hosts = source.inputs().map(|input| &input.name);
             quote!(select = ::mini_linq::passes::select(positional(#(#hosts),*));)
         });
+        let backend = sequence.then(|| quote! {
+            sequence = ::mini_linq::passes::sequence;
+            grade = ::mini_linq::passes::sequential;
+        });
         Ok(quote!(pipeline {
             #selection
+            #backend
             plan = ::cq_planners::order(#arguments);
             physical = [#(#physical),*];
             structures = [#(#structures),*];

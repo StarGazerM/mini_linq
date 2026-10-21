@@ -79,7 +79,7 @@ pub fn compile(source: &cq_lang_structures::Program) -> syn::Result<Program> {
         if definition.canon.is_some() {
             term = Term::Canon(Box::new(term));
         }
-        if ModeKind::from(&definition.mode) == ModeKind::Let {
+        if ModeKind::from(&definition.mode) != ModeKind::Pipe {
             term = Term::Store {
                 capacity: None,
                 inner: Box::new(term),

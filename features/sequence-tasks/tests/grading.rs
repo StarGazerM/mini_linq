@@ -33,7 +33,7 @@ fn machine_has_separated_dynamic_pool_and_sequential_leaf() {
 #[test]
 fn collective_at_separated_pool_is_rejected() {
     let program = program(
-        quote::quote!(input = store rows r; result = store fold count input;),
+        quote::quote!(input = store rows r; result = fold count input;),
         quote::quote!(input at host; result at pool;),
     );
     let error = check_grading(&program, &machine()).unwrap_err();
@@ -58,10 +58,10 @@ fn leaf_task_fold_is_a_sequential_loop() {
 #[test]
 fn flatten_at_pool_is_rejected_even_with_tile() {
     let program = program(
-        quote::quote!(input = store rows r; result = store tile 2 flatten tile 2 input;),
-        quote::quote!(input at host; result at host;),
+        quote::quote!(input = store rows r; result = flatten tile 2 input;),
+        quote::quote!(input at host; result at pool;),
     );
-    // The outer host tile enters pool; pool flatten remains a collective.
+    // Strip-mining does not make the separated pool collaborative.
     let error = check_grading(&program, &machine()).unwrap_err();
     assert!(error.to_string().contains("BE-Collective"), "{error}");
 }

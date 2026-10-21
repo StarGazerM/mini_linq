@@ -377,6 +377,52 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-gpu-sequence"
+version = "0.1.0"
+dependencies = [
+ "cq-gpu-runtime",
+ "cq-gpu-sequence-runtime",
+ "cq-gpu-sequence-test-macros",
+ "cq-lang-sequence",
+ "cq-lang-structures",
+ "cq-print",
+ "cuda-core",
+ "cuda-device",
+ "cuda-host",
+ "gpu-compress",
+ "proc-macro2",
+ "quote",
+ "serde_json",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-gpu-sequence-runtime"
+version = "0.1.0"
+dependencies = [
+ "cq-gpu-runtime",
+ "cuda-core",
+ "cuda-device",
+ "cuda-host",
+ "gpu-compress",
+ "gpu-device-columns",
+ "gpu-tiles",
+ "rccl-cub",
+ "rccl-memory",
+ "rccl-thrust",
+]
+
+[[package]]
+name = "cq-gpu-sequence-test-macros"
+version = "0.1.0"
+dependencies = [
+ "cq-gpu-sequence",
+ "cq-lang-sequence",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "cq-index-policy"
 version = "0.1.0"
 dependencies = [
@@ -500,6 +546,18 @@ dependencies = [
  "quote",
  "syn 2.0.119",
  "syn_derive",
+]
+
+[[package]]
+name = "cq-lang-sequence"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-structures",
+ "cq-stage",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -640,6 +698,28 @@ dependencies = [
  "cq-lang-structures",
  "cq-rewrite-passes",
  "cq-stage",
+]
+
+[[package]]
+name = "cq-sequence-lowering"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-sequence",
+ "cq-lang-structures",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-sequence-pull"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-sequence",
+ "cq-lang-structures",
+ "cq-physical-realization",
+ "cq-print",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -1185,6 +1265,7 @@ dependencies = [
  "cq-lang-ix",
  "cq-lang-physical",
  "cq-lang-ra",
+ "cq-lang-sequence",
  "cq-lang-structures",
  "cq-lang-vo",
  "cq-order",
@@ -1192,6 +1273,8 @@ dependencies = [
  "cq-physical-realization",
  "cq-reduce",
  "cq-represent",
+ "cq-sequence-lowering",
+ "cq-sequence-pull",
  "cq-stage",
  "cq-staging",
  "cq-structure-selection",

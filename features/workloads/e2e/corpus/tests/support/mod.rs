@@ -40,7 +40,7 @@ macro_rules! pipeline_configuration {
                 plan = cq_planners::order($($plan)*);
                 physical = [$($canon)* $($intersection)* $($membership)* $($merge)*];
                 structures = [$($dedup)* $($payload)*];
-                print = $printer;
+                print = cq_workload_passes::terminal($printer);
             }
         }
     };

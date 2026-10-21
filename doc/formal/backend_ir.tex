@@ -81,6 +81,14 @@ cursor and the gathers inside $f$ are \emph{views}: bijections on positions
 that change addressing and materialize nothing (Lift's layout patterns,
 Descend's views~\cite{paper-lift,paper-descend}). Only \code{store}
 materializes; a stored \code{flatten} is kept as its offsets (BE-Offsets).
+Under BE-Alpha, constructors are lifted through outer tile levels:
+\code{map}, \code{compact}, \code{lookup}, \code{fold}, \code{canon} and
+\code{store} operate on innermost rows and preserve those outer partitions;
+\code{flatten} joins the two innermost levels. Thus a lookup followed by
+flatten under a tile preserves that tile. Analysis records lengths at every
+level (a tile has $\lceil L/n\rceil$ parts and at most $n$ rows per part),
+while $\alpha$ forgets all partition levels. A collaborative store can hold
+one part; a separated store publishes the concatenation of its outer parts.
 \begin{mathpar}
 \Rule{BE-Alpha}{}
  {\alpha(\mathsf{map}\,f\,t)=\mathrm{Bag}(f)(\alpha t)\quad
@@ -194,6 +202,15 @@ stored space, which replaces the current printer's
 offsets makes the next dispatch span every customer. Written order has no
 force below host: nothing partial is there (BE-Partial), so inside a
 dispatch the full set algebra applies.
+A store at a separated level is publication: a depth-zero producer is one
+part at its unique child. Its outermost tile in dataflow order distributes parts over that
+child; further tiles in the same definition strip-mine jointly at the
+current effective level, and \code{items} assigns positions per member
+without adding a level. A tile in a non-separated definition also
+strip-mines; distribution to a deeper level requires a separately graded
+definition. Analysis records each tile's interpretation and the dispatch's
+producer level, outer tile width and concatenation protocol (count/scan,
+reserve or bounded); publication concatenates the parts in part order.
 
 \paragraph{Output.} The final \code{flatten} into one stored sequence of
 unknown length is one term with several interpretations, equal under
@@ -330,14 +347,34 @@ leading scan is \code{tile} of \code{rows}, its grain the tile size, its
 sharded admission BE-Canon, its publication barriers host-level
 boundaries.
 
+\paragraph{GPU translation.}
+\begin{mathpar}
+\Rule{T-Gpu}{t\text{ checked against }\mathsf{host}>\mathsf{device}(\text{separated, dynamic})>\mathsf{block}(\text{collaborative})>\mathsf{lane}}
+ {\mathsf{run}_{\rm gpu}(t)=
+  \text{one query kernel per BE-Boundary dispatch};\
+  \mathsf{tile}\mapsto\text{recorded distribution or strip-mining};\
+  \mathsf{flatten}\mapsto\text{block scan and owner search};\
+  \mathsf{store}\mapsto\text{shared storage or device publication};\
+  \mathsf{canon}\mapsto\text{packed radix sort and unique}}
+\end{mathpar}
+Range providers are built before their query dispatches using stable radix
+ordering and lower-bound directories. Membership searches within those
+recorded ranges. The output protocol and sticky failure flags discharge
+BE-Length and BE-Abort; bounded output retries rather than publishing a
+truncated result. No target-side join order, uniqueness or tile choice is
+inferred by the translation.
+
+
 \subsection{The H05 reference as a term}
 The hand-written kernels (\code{experiments/gpu/h05-reference}) are
 \[
  \mathsf{canon}\big(\mathsf{flatten}(\mathsf{map}\,g\,(\mathsf{tile}_{256}\,C))\big),\quad
- C=\mathsf{store}\big(\mathsf{flatten}(\mathsf{map}\,(\mathsf{lookup}_{\rm Nation})\,(\mathsf{rows}\ \mathrm{Region}_{\rm ASIA}))\big)\text{ at the separated level}
+ C=\mathsf{store}\big(\mathsf{flatten}(\mathsf{lookup}_{\rm Customer}[\mathit{nation}]\,
+ \mathsf{flatten}(\mathsf{lookup}_{\rm Nation}[\mathit{region}]\,(\mathsf{rows}\ \mathrm{Region}_{\rm ASIA})))\big)\text{ at the separated level}
 \]
-with $g$, per customer position, two further flattens (Orders by customer,
-Lineitem by order) tiled at 1024 at the collaborative level with 4 items
+with $C$ the Customer positions of ASIA nations, kept as offsets (the
+reference's \code{segments}), and $g$, per customer position, two further
+flattens (Orders by customer, Lineitem by order) tiled at 1024 at the collaborative level with 4 items
 per lane, a membership test (Supplier), and the output flatten interpreted
 by a collaborative scan plus one reservation per tile. $C$ is stored as
 offsets, not rows (BE-Offsets). Every provider is read as a range cursor;

@@ -103,6 +103,10 @@ pub fn last_run_timings() -> Option<Timings> {
 pub fn take_last_timings() -> Option<Timings> {
     LAST_TIMINGS.with(Cell::take)
 }
+/// Publish phase measurements from a checked external target interpreter.
+pub fn publish_timings(timings: Timings) {
+    LAST_TIMINGS.with(|last| last.set(Some(timings)));
+}
 
 thread_local! {
     static HOST_WAITS: Cell<usize> = const { Cell::new(0) };

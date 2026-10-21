@@ -67,11 +67,12 @@ pub struct Machine { pub name: Ident, pub root: LevelNode }
 pub struct LevelNode { pub name: Ident, pub collaborative: bool, pub dynamic: bool, pub children: Vec<LevelNode> }
 
 /// Lengths as symbolic expressions (size types).
-pub enum Len { Input(String), Scan(String), Lit(usize), Add(Box<Len>, Box<Len>), Unknown(/*capacity*/ Option<usize>) }
+pub enum Len { Input(String), Scan(String), Lit(usize), Add(Box<Len>, Box<Len>), CeilDiv(Box<Len>, usize), Unknown(/*capacity*/ Option<usize>) }
 
 pub struct Analysis {
     pub structures: cq_lang_structures::Analysis,
     pub lengths: BTreeMap<String, Len>,                 // every Def
+    pub shapes: BTreeMap<String, Vec<Len>>,             // outer partitions through innermost row lengths
     pub views: BTreeSet<String>,                        // Defs that materialize nothing
     pub stores: BTreeMap<String, Len>,                  // stored Defs and their length/capacity
     pub capabilities: BTreeMap<(String, Vec<String>), Capability>, // provider reads: Exact | Range | Membership | Ordered
@@ -109,6 +110,20 @@ different lengths; their joined length is unknown and requires a capacity when
 stored. Checks without a machine conservatively require capacities for all
 unknown-length stores.
 
+Constructors lift through outer tile partitions: map/compact/lookup/fold/canon/
+store act on innermost rows, and flatten joins the two innermost levels.
+`Analysis.shapes` records per-level lengths, with `CeilDiv(L,n)` tile counts
+and bounded inner lengths; `lengths` retains flattened cardinality.
+A separated store publishes concatenated outer parts produced at its unique
+child level; a depth-zero producer is one part. `Dispatch.producer_level`,
+`parts` and `concatenation` record that execution level, outer tile width and
+output protocol. Collaborative stores retain per-part nesting. Alpha forgets
+all partition levels.
+`Analysis.tilings` records constructors in preorder as `Tiling::Distribute`
+or `Tiling::Strip`: a separated publication's outer tile distributes to its
+child, while subsequent tiles in that definition strip-mine the current
+level. `items` is work per member, not a new execution level.
+
 Providers remain opaque type tokens: analysis records their exact/range/
 membership requirements and codec premises as obligations for target traits.
 No provider type spelling identifies a data structure. Machine paths normalize
@@ -119,11 +134,11 @@ normal forms under support after checking the unchanged Structures prefix;
 it does not claim to prove arbitrary user Rust or runtime trait laws.
 The flat definition list defines lexical extents: a store is visible from its
 definition onward, at its level and descendants. Cross-level views require
-an explicit ancestor store. A tile descends through the unique child level;
-an ambiguous or absent child is rejected. Nonhost collectives require a
-collaborative grade and uniform guards, and cannot be nested inside a tile
-without a whole-level participation certificate (the present grammar has
-none). Each separated store must be named by a definition so that dispatch
+an explicit ancestor store. A distributed publication tile needs a unique
+child; an ambiguous or absent child is rejected. Other tiles strip-mine
+without descending, so block scans inside them retain whole-block
+participation. Nonhost collectives require a collaborative grade and
+uniform guards. Each separated store must be named by a definition so that dispatch
 domains and publications have unambiguous names. Host and collaborative
 stores may remain nested. Opaque Physical dependencies require a host
 Sequence store before their values enter descendant execution.
@@ -169,8 +184,9 @@ rejection case (e.g. `tile` over a `store` at an unknown length).
 ```rust
 pub fn translate(p: &cq_lang_sequence::Program, a: &Analysis) -> syn::Result<syn::Expr>;
 ```
-One function per Term constructor; `tile` and `choose` are no-ops (one
-part); `store` → `Vec`; output flatten → push. Reads only `Analysis`.
+One function per Term constructor; `tile` groups contiguous rows and `choose`
+uses the checked fallback arm; lifted constructors preserve outer groups.
+`store` → `Vec`; output flatten → push. Reads only `Analysis`.
 Acceptance: all workload goldens and `xtask fuzz` equal through
 `sequence → pull` as through today's printer; no function in the crate
 walks the whole program except the fold.
@@ -179,22 +195,24 @@ walks the whole program except the fold.
 
 Same signature. Machine `tasks { host > pool(separated, dynamic) > task }`.
 `tile n` at `pool` → `par_chunks(n)`; `store` at `pool` → per-task `Vec`
-merged at join; `fold` at `pool` → reduction; `canon` → BE-Canon prefilter
-+ global. Acceptance: conformance with [4] on the corpus; the parallel
+merged at join; a directly pool-graded `fold` is rejected, while publication
+evaluates its producer at task; `canon` → BE-Canon prefilter + global.
+Acceptance: conformance with [4] on the corpus; the parallel
 Datalog extension's sharded admission expressible as `tile` + `canon`.
 
 ## [6] `experiments/gpu/sequence` (CUDA translation; replaces `experiments/gpu/printer` at cutover)
 
-Same signature. Machine `gpu { host > device(separated, dynamic) > block(collaborative) > warp(collaborative) > lane }`.
+Same signature. Machine `gpu { host > device(separated, dynamic) > block(collaborative) > lane }` (no warp level).
 Templates: dispatch (one kernel per `Dispatch`, grid = length of its outer
 stored space, dynamic claiming), `tile` at block → block of lanes, `items`
 → per-lane loop, `flatten` at block → scan in shared memory + owner search,
 `store` at device → buffer sized by Len or capacity with overflow flag,
-output protocols, `canon` → runtime provider. Runtime: `cq-gpu-runtime`
-types for providers (range cursor via RCCL sort + lower_bound), codecs
-(dense IDs, FOR), canon (packed sort + unique), scans. Acceptance: the H05
-term in the design section translates to the reference's kernels and RCCL
-calls; exact at SF1/SF10; within a few percent of 9.7 ms at SF10.
+output protocols, `canon` → runtime provider. Reusable execution primitives
+live in `experiments/gpu/sequence-runtime` (`cq-gpu-sequence-runtime`) and
+reuse `cq-gpu-runtime` pools, streams and `DeviceColumns`. Acceptance: the
+H05 term in the design section translates to two query kernels and RCCL
+build/canonicalization calls; exact at SF1/SF10; target within 20% of 9.7 ms
+at SF10, with measured results reported separately.
 
 ## [7] runtime traits (`cq-storage`, `cq-gpu-runtime`)
 
@@ -205,6 +223,14 @@ pub trait Codec<T> { type Code: Copy + Eq; fn enc(&T) -> Option<Self::Code>; fn 
 pub trait Canon<Row> { fn canon(rows) -> Self; }
 ```
 Storage-law tests per implementation (α commutes), as today's `cq-storage`.
+
+The GPU implementations are `RangeBuilder`/`RangeProvider` (stable RCCL
+radix ordering, dense-code lower-bound offsets and gathered packed payload),
+`DenseDictionary` (gpu-compress domain adapter), `SelectedRows` (stable
+flagged selection for scan-only sources), and `canon::PackedCanon` (packed
+keys sorted and uniqued). `canon::packed_columns` preserves duplicates when
+no canon is recorded. Device scan/owner/membership helpers share gpu-tiles
+and device-columns; selected sources do not invent an unused index key.
 
 ## [8] facade
 

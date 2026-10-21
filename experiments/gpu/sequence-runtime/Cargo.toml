@@ -1,0 +1,16 @@
+[package]
+name = "cq-gpu-sequence-runtime"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+cuda-core.workspace = true
+cuda-device.workspace = true
+cuda-host.workspace = true
+cq-gpu-runtime = { path = "../printer-runtime" }
+gpu-compress = { path = "../compress" }
+gpu-device-columns = { path = "../device-columns" }
+gpu-tiles = { path = "../tiles" }
+rccl-cub.workspace = true
+rccl-memory.workspace = true
+rccl-thrust.workspace = true
