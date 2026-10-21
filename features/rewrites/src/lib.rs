@@ -241,6 +241,7 @@ physical_rewrite!(smallest_intersections);
 physical_rewrite!(lazy_semijoins);
 physical_rewrite!(build_host_reads);
 physical_rewrite!(host_sets);
+physical_rewrite!(retain_streams);
 
 /// Change only the representation types matched by `selector => RustType`.
 #[proc_macro]

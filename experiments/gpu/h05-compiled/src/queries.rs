@@ -82,12 +82,14 @@ pub fn chain<'a>(input: &'a DeviceColumns<'_, Answer, For>) -> DeviceColumns<'a,
 }
 
 /// The reference traversal R N C O L S in written order; sorted index
-/// layouts from `sorted_indexes`.
+/// layouts from `sorted_indexes`. `retain_streams(r4)` stores the small
+/// Region ⋈ Nation ⋈ Customer prefix, so the Orders/Lineitem/Supplier stream
+/// starts from every ASIA customer instead of the one ASIA region row.
 pub fn plan_r<'a>(data: &'a Rows) -> DeviceColumns<'a, Answer, For> {
     mini_linq::compile! {
         pipeline {
             plan = ::cq_planners::order(written, coarse);
-            physical = [::cq_rewrites::build_host_reads];
+            physical = [::cq_rewrites::build_host_reads, ::cq_rewrites::retain_streams(r4)];
             structures = [::cq_rewrites::sorted_indexes, ::cq_rewrites::sorted_runs, ::cq_gpu::prefix_runs,
                 ::cq_rewrites::retype(dedup => ::cq_gpu_runtime::DeviceSet<_, ::cq_gpu_runtime::For>)];
             stage = ::cq_rewrites::expand_lookups(256, depth 5);

@@ -43,15 +43,17 @@ const P2_NATION: usize = 7248;
 const P2_ORDER: usize = 11344;
 const P2_OFFSET: usize = 15440;
 
-/// Columns read by the query: the Region base table and the five CSR indexes.
+/// Columns read by the query: the six CSR indexes.
 /// `*_offsets` have domain+1 entries; the other columns are index rows in key order.
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub struct Indexes {
-    /// Region by name: names in sorted order (searched) and their region IDs.
-    pub region_name: ColumnView,
+    /// ASIA Region by region ID: only the rows with `r_name = ASIA`, the
+    /// constant's relation (`Region(region_key, ASIA)`); `region_domain` is the
+    /// directory's last entry, whose offset is the row count.
+    pub region_offsets: ColumnView,
     pub region_id: ColumnView,
-    pub region_rows: u32,
+    pub region_domain: u32,
     /// Nation by region ID.
     pub nation_offsets: ColumnView,
     pub nation_id: ColumnView,
@@ -68,12 +70,6 @@ pub struct Indexes {
     /// ascending within each nation's range.
     pub supplier_offsets: ColumnView,
     pub supplier_id: ColumnView,
-}
-
-#[derive(Clone, Copy)]
-#[repr(C)]
-pub struct Constants {
-    pub asia: i32,
 }
 
 /// Customer ranges of qualifying nations, the virtual driver of the expansion.
@@ -103,23 +99,6 @@ pub struct Answers {
 #[inline(always)]
 unsafe fn range(offsets: ColumnView, key: u32) -> (u32, u32) {
     unsafe { (decode_u32(offsets, key as u64), decode_u32(offsets, key as u64 + 1)) }
-}
-
-/// First position in [begin, end) of sorted `column` whose value is not below
-/// `value` (`strict`: above `value`).
-#[device]
-#[inline(always)]
-unsafe fn search_i32(column: ColumnView, mut begin: u32, mut end: u32, value: i32, strict: bool) -> u32 {
-    while begin < end {
-        let middle = begin + (end - begin) / 2;
-        let probe = unsafe { decode(column, middle as u64) } as i32;
-        if probe < value || (strict && probe == value) {
-            begin = middle + 1;
-        } else {
-            end = middle;
-        }
-    }
-    begin
 }
 
 /// Exact membership of `value` in ascending u32 `column` over [begin, end).
@@ -217,25 +196,6 @@ pub mod reference {
         }
     }
 
-    /// (value - min as u32, row) pairs of an i32 key: order-preserving.
-    #[kernel]
-    #[launch_bounds(256)]
-    #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub fn signed_keys_and_rows(key: ColumnView, min: i32, rows: u32, keys: *mut u32, order: *mut u32) {
-        let mut row = thread::index_1d().get() as u32;
-        let stride = thread::gridDim_x() * 256;
-        while row < rows {
-            unsafe {
-                *keys.add(row as usize) = (decode(key, row as u64) as i32).wrapping_sub(min) as u32;
-                *order.add(row as usize) = row;
-            }
-            row = match row.checked_add(stride) {
-                Some(next) => next,
-                None => break,
-            };
-        }
-    }
-
     /// One packed ID column as plain u32 values for RCCL's column sort:
     /// all rows in order, or through a row list (`selected` non-null).
     #[kernel]
@@ -256,17 +216,18 @@ pub mod reference {
         }
     }
 
-    /// The query's Orders selection `date_start <= o_orderdate < date_end`,
-    /// as one u32 flag per row for RCCL's flagged select.
+    /// A build selection `start <= column < end` on an i32 column, as one u32
+    /// flag per row for RCCL's flagged select: the Orders date range, and the
+    /// ASIA constant of `Region(region_key, ASIA)` as `[asia, asia + 1)`.
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub fn date_flags(date: ColumnView, rows: u32, start: i32, end: i32, flags: *mut u32) {
+    pub fn range_flags(column: ColumnView, rows: u32, start: i32, end: i32, flags: *mut u32) {
         let mut row = thread::index_1d().get() as u32;
         let stride = thread::gridDim_x() * 256;
         while row < rows {
             unsafe {
-                let value = decode(date, row as u64) as i32;
+                let value = decode(column, row as u64) as i32;
                 *flags.add(row as usize) = (value >= start && value < end) as u32;
             }
             row = match row.checked_add(stride) {
@@ -278,21 +239,21 @@ pub mod reference {
 
     // ---------------------------------------------------------------- query
 
-    /// Region by name (probe with the bound ASIA ID) -> Nation by region ->
-    /// Customer range by nation. One block. Each (region row, nation row)
-    /// pair with customers is a segment; the exclusive prefix of segment
+    /// ASIA Region rows -> Nation by region -> Customer range by nation. One
+    /// block. The driver is the ASIA Region index, which holds only the
+    /// constant's rows: no constant is compared here. Each (region row, nation
+    /// row) pair with customers is a segment; the exclusive prefix of segment
     /// lengths is the driver domain.
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub fn segments(ix: Indexes, constants: Constants, segments: Segments, meta: *mut u32) {
+    pub fn segments(ix: Indexes, segments: Segments, meta: *mut u32) {
         let tid = thread::threadIdx_x();
         unsafe {
             let count = DeviceAtomicU32::from_ptr(meta.add(META_SEGMENTS));
-            let first_region = search_i32(ix.region_name, 0, ix.region_rows, constants.asia, false);
-            let last_region = search_i32(ix.region_name, first_region, ix.region_rows, constants.asia, true);
-            let mut row = first_region + tid;
-            while row < last_region {
+            let region_rows = decode_u32(ix.region_offsets, ix.region_domain as u64);
+            let mut row = tid;
+            while row < region_rows {
                 let region = decode_u32(ix.region_id, row as u64);
                 let (first, last) = range(ix.nation_offsets, region);
                 let mut nation_row = first;

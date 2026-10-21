@@ -446,23 +446,25 @@ direct-address nation array, value-range packed dedup, an unchecked
   bit-packed per 1024-row vector and made resident.
 - **Program:** the one the compiler records for R N C O L S in written order
   (`order(written, coarse)` with default lowering), not hand-picked choices.
-  The ASIA constant is bound at `r_name`'s stored type
-  (`Catalog::text_id("region.r_name", "ASIA")`) and probes a Region index by
-  name. The query's date `if` is a selection on Orders before its build. The
+  The constant atom `Region(region_key, ASIA)` reads an index holding only the
+  ASIA rows: a selection `r_name = ASIA` (`Catalog::text_id`) before the build,
+  keyed by region ID, and `segments` starts from its rows with no in-query
+  constant test. The query's date `if` is a selection on Orders before its build. The
   closing `Supplier(supplier_key, nation_key)` probe is full-key: both
   columns are bound, so it is an existence test.
-- **Index build (GPU, timed):** six sorted indexes: Region by name, Nation by
+- **Index build (GPU, timed):** six sorted indexes: ASIA Region by region, Nation by
   region, Customer by nation, date-selected Orders by customer, Lineitem by
   order, Supplier by (nation, supplier). One kernel decodes the packed key
   column(s) into (key, row) pairs. A two-column ID key is packed as
-  `outer << inner_bits | inner` (rejected above 31 bits), and an `i32` key as
-  `value - min`. RCCL's stable radix pair sort orders the pairs over only the
+  `outer << inner_bits | inner` (rejected above 31 bits). RCCL's stable radix
+  pair sort orders the pairs over only the
   key's bits (`device_radix_sort_pairs_buffer`, result read from the current
   double buffer). RCCL `lower_bound` of every outer ID gives dense offsets:
   over `0..D+1`, or `arithmetic_range(0, 1 << inner_bits, D+1)` for a pair
-  key. The `i32` name key keeps its sorted column and is binary-searched.
+  key.
   `EncodedColumn::from_gather` gathers each payload column by sorted row and
-  FOR-packs it in one pass. The Orders selection is a flag kernel, then RCCL
+  FOR-packs it in one pass. The Region (`r_name = ASIA`) and Orders (date)
+  selections are one flag kernel (`range_flags`), then RCCL
   `select_flagged` over row numbers; its count, read back once, sizes that
   build. RCCL's radix controls are allocated once at setup, sized for each
   relation's full row count.
@@ -586,11 +588,9 @@ Compiled H05 declares relations at the stored types
 answer IDs through the domains before comparing them with `answer.tsv`. Query
 constants must have the stored type. `"ASIA"` is the literal `2`; before any run
 the host checks it against `catalog.text_id("region.r_name", "ASIA")` and the
-manifest. A captured host value (`Region(region_key, meta.asia)`) is exact, but
-the planner lowers a non-literal atom argument to a late `bind` + `natural_join`
-with Region, not the early `select` a literal gets (relational equality admits
-only literals, `cq-syntax/src/equality.rs`). It therefore loses the early
-ASIA reduction. The sorted-run rewrite gates (`sorted_runs`, the physical
+manifest. Every plan writes `Region(region_key, 2)`: the constant atom reads a
+relation holding only the ASIA rows, built before the query like any other
+index, and the query has no ASIA test. The sorted-run rewrite gates (`sorted_runs`, the physical
 stream retention gate, `prefix_runs`) and `BorrowedI64TupleCodec`/`I64Codec`
 now admit `u32` keys alongside `i32`/`i64`.
 
@@ -611,19 +611,16 @@ profile is unchanged from the i64 version: `cq_gpu_stream_1_r19` uses 104 B of
 stack, and `cq_gpu_stream_0_r21` has a 16 B frame with 24 B of spills.
 
 **Plan R** (`queries::plan_r`, runner argument `R`) is the reference
-traversal in written order (`order(written, coarse)`) with ASIA bound as
-`meta.asia` from `Catalog::text_id`. Structures:
-`[sorted_indexes, sorted_runs, prefix_runs, retype(dedup => DeviceSet<_, For>)]`.
-`sorted_indexes` records the reference's six builds with no hand-picked
-layout: Region by `r_name`, Nation by region, Customer by nation,
-date-selected Orders by customer, Lineitem by order, and Supplier as
-`PrefixRun [nation_key][supplier_key]`. Nation precedes supplier because
-the stream binds it first. Plan R is exact at SF1/SF10, and its query kernel
-has no stack or spills (54 registers). With the bound constant, its stream
-root is one `unit → bind` row and no expansion staging is recorded, so the
-printer traverses all five levels lane-locally from that one row: 882 ms at
-SF1 and 9.28 s at SF10. These are not result timings. Expansion staging is
-the next parity step.
+traversal in written order (`order(written, coarse)`) with ASIA as the literal
+`2`. Physical `[build_host_reads, retain_streams(r4)]`; Structures
+`[sorted_indexes, sorted_runs, prefix_runs, retype(dedup => DeviceSet<_, For>)]`;
+staging `expand_lookups(256, depth 5)`. The ASIA Region rows are a build-phase
+table. `retain_streams(r4)` stores Region ⋈ Nation ⋈ Customer, so the second
+kernel's grid spans every ASIA customer; without it the stream starts from the
+single ASIA region row and the printer launches one block (SF10 query kernel
+143 ms). Exact at SF1/SF10; median total 4.52 ms (SF1) and 24.78 ms (SF10),
+query kernel 2.65 / 13.26 ms, against `h05-reference` 1.89 / 9.70 ms. The
+remaining gap is the printer's staged kernel and i64 builds.
 
 ## Implementation
 

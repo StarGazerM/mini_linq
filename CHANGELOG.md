@@ -7,6 +7,17 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Add the opt-in Physical rewrite `cq_rewrites::retain_streams(r,...)`
+  (formal rule EXT-RetainStream): named stream results become retained `let`
+  rows, so a back end starts the consumer's parallel domain there. Compiled
+  H05 plan R retains Region ⋈ Nation ⋈ Customer (`r4`); its GPU stream now
+  starts from every ASIA customer instead of the single ASIA region row
+  (SF10 query kernel 143 → 13 ms, total 155 → 25 ms, exact).
+- The hand-written H05 reference follows the constant semantics: Region's
+  ASIA rows are a selected index built before the query (`region_asia_by_region`),
+  and `segments` starts from it; the full Region-by-name index and its in-query
+  binary search are removed (SF10 9.60 → 9.70 ms, exact).
+
 - Keep literal atom arguments in normal form and carry their source-column
   bindings on relation occurrences. Build all indexes over the matching rows
   with literal columns dropped, retaining filtered rows for stream sources.

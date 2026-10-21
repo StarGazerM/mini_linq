@@ -5,10 +5,11 @@
 //! Compression (`gpu-compress`, load, untimed): join keys as dense u32 IDs per
 //! domain (order-preserving), every stored column FOR bit-packed and resident.
 //! Timed, per iteration, from compressed resident base columns to the resident
-//! distinct answer: build the six sorted indexes with RCCL (Region by name;
-//! Nation by region; Customer by nation; date-selected Orders by customer,
-//! the selection compacted by flagged select before the build; Lineitem by
-//! order; Supplier by (nation, supplier)), probe ASIA, run the query, and
+//! distinct answer: build the six sorted indexes with RCCL (ASIA Region by
+//! region, holding only the constant's rows; Nation by region; Customer by
+//! nation; date-selected Orders by customer; Lineitem by order; Supplier by
+//! (nation, supplier)), each selection compacted by flagged select before its
+//! build; run the query from the ASIA Region index, and
 //! deduplicate with RCCL (radix sort, unique). The reported figure is host
 //! wall clock over that span; GPU events give the breakdown.
 //!
@@ -56,31 +57,18 @@ impl Base {
     }
 }
 
-/// Key of one sorted index (rows stably sorted by key, payload gathered).
-enum Key {
-    /// Dense ID columns in level order (column, domain), sorted
-    /// lexicographically: one stable radix pass per column, last column
-    /// first, each later pass gathering its column through the permutation
-    /// so far. The directory gives offsets for every ID of the first column.
-    Ids(Vec<(&'static str, usize)>),
-    /// i32 key: rows sorted by value; the sorted key is kept (a payload
-    /// column) and searched, no dense directory.
-    Sorted { column: &'static str, bounds: Bounds },
-}
+/// Key of one sorted index (rows stably sorted by key, payload gathered):
+/// dense ID columns in level order (column, domain), sorted lexicographically.
+/// The directory gives offsets for every ID of the first column.
+struct Key(Vec<(&'static str, usize)>);
 
 impl Key {
     fn column(&self) -> &'static str {
-        match self {
-            Key::Ids(columns) => columns[0].0,
-            Key::Sorted { column, .. } => column,
-        }
+        self.0[0].0
     }
     /// Directory entries: one per first-column ID plus the end.
-    fn entries(&self) -> Option<usize> {
-        match self {
-            Key::Ids(columns) => Some(columns[0].1 + 1),
-            Key::Sorted { .. } => None,
-        }
+    fn entries(&self) -> usize {
+        self.0[0].1 + 1
     }
 }
 
@@ -93,29 +81,29 @@ struct Selection {
 }
 
 /// One index to build: its key, an optional selection, payload columns
-/// (column, signed, bounds).
+/// (column, bounds) of dense u32 IDs.
 struct IndexSpec {
     name: &'static str,
     key: Key,
     selection: Option<Selection>,
-    payload: Vec<(&'static str, bool, Bounds)>,
+    payload: Vec<(&'static str, Bounds)>,
 }
 
 /// Count owners for device packing, allocated once outside timing. A
 /// selected index's row count is known per build, so it owns its own.
 struct Counts {
     rows: Option<Arc<Buffer<u64>>>,
-    offsets: Option<Arc<Buffer<u64>>>,
+    offsets: Arc<Buffer<u64>>,
 }
 
 struct BuiltIndex {
-    offsets: Option<EncodedColumn>,
+    offsets: EncodedColumn,
     payload: Vec<EncodedColumn>,
 }
 
 impl BuiltIndex {
     fn bytes(&self) -> usize {
-        self.offsets.as_ref().map_or(0, EncodedColumn::bytes) + self.payload.iter().map(EncodedColumn::bytes).sum::<usize>()
+        self.offsets.bytes() + self.payload.iter().map(EncodedColumn::bytes).sum::<usize>()
     }
 }
 
@@ -143,8 +131,8 @@ fn key_bits(domain: usize) -> u32 {
 /// compacts the qualifying row numbers (RCCL flagged select; its count is the
 /// index's row count, read back once). Then: decode (key, row) pairs; RCCL
 /// stable radix sort over only the key's bits; RCCL lower_bound of every
-/// outer ID for the offsets (none for a searched `Sorted` key); payload
-/// gathered by sorted row and FOR-packed in one pass.
+/// outer ID for the offsets; payload gathered by sorted row and FOR-packed in
+/// one pass.
 #[allow(clippy::too_many_arguments)]
 fn build_index(
     module: &reference::LoadedModule,
@@ -164,9 +152,9 @@ fn build_index(
         None => (base_rows, None),
         Some(selection) => {
             let flags = temporary::<u32>(stream, base_rows)?;
-            module.date_flags(
+            module.range_flags(
                 stream,
-                &module.prepare_date_flags(strided(base_rows))?,
+                &module.prepare_range_flags(strided(base_rows))?,
                 base.view(selection.column),
                 base_rows as u32,
                 selection.start,
@@ -215,61 +203,47 @@ fn build_index(
     // column sort (per-column radix or tuple merge sort, chosen from the
     // item count and bit widths); the first column is then decoded through
     // that order, already sorted, for the directory.
-    let mut presorted = false;
-    let bits = match &spec.key {
-        Key::Ids(columns) if columns.len() == 1 => {
-            fill(columns[0].0, source)?;
-            key_bits(columns[0].1)
-        }
-        Key::Ids(columns) => {
-            let plain = columns
-                .iter()
-                .map(|(column, _)| {
-                    let out = temporary::<u32>(stream, rows)?;
-                    module.decode_column(
-                        stream,
-                        &module.prepare_decode_column(launch_keys)?,
-                        base.view(column),
-                        source.unwrap_or(std::ptr::null()),
-                        rows as u32,
-                        pointer(&out),
-                    )?;
-                    Ok(out)
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let widths: Vec<u32> = columns.iter().map(|(_, domain)| key_bits(*domain)).collect();
-            let mut permutation = temporary::<u32>(stream, rows)?;
-            sort_columns_lexicographic(exec, &plain.iter().collect::<Vec<_>>(), &widths, &mut permutation, None)?;
-            // Sorted positions index the selected rows; map them to base rows.
-            let base_order = match &selected {
-                Some(selected) => {
-                    let mut mapped = temporary::<u32>(stream, rows)?;
-                    gather(exec, selected.view(), permutation.view(), mapped.view_mut())?;
-                    release(stream, permutation)?;
-                    mapped
-                }
-                None => permutation,
-            };
-            fill(columns[0].0, Some(pointer(&base_order) as *const u32))?;
-            for buffer in plain.into_iter().chain([base_order]) {
-                release(stream, buffer)?;
+    let columns = &spec.key.0;
+    let presorted = columns.len() > 1;
+    if presorted {
+        let plain = columns
+            .iter()
+            .map(|(column, _)| {
+                let out = temporary::<u32>(stream, rows)?;
+                module.decode_column(
+                    stream,
+                    &module.prepare_decode_column(launch_keys)?,
+                    base.view(column),
+                    source.unwrap_or(std::ptr::null()),
+                    rows as u32,
+                    pointer(&out),
+                )?;
+                Ok(out)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let widths: Vec<u32> = columns.iter().map(|(_, domain)| key_bits(*domain)).collect();
+        let mut permutation = temporary::<u32>(stream, rows)?;
+        sort_columns_lexicographic(exec, &plain.iter().collect::<Vec<_>>(), &widths, &mut permutation, None)?;
+        // Sorted positions index the selected rows; map them to base rows.
+        let base_order = match &selected {
+            Some(selected) => {
+                let mut mapped = temporary::<u32>(stream, rows)?;
+                gather(exec, selected.view(), permutation.view(), mapped.view_mut())?;
+                release(stream, permutation)?;
+                mapped
             }
-            presorted = true;
-            key_bits(columns[0].1)
+            None => permutation,
+        };
+        fill(columns[0].0, Some(pointer(&base_order) as *const u32))?;
+        for buffer in plain.into_iter().chain([base_order]) {
+            release(stream, buffer)?;
         }
-        Key::Sorted { column, bounds } => {
-            if selected.is_some() {
-                return Err(format!("{}: selections are supported on ID keys only", spec.name).into());
-            }
-            let (min, bits) = match *bounds {
-                Bounds::Empty => (0, 0),
-                Bounds::Inclusive { min, max } => (min as i32, 64 - ((max - min) as u64).leading_zeros()),
-            };
-            module.signed_keys_and_rows(stream, &module.prepare_signed_keys_and_rows(launch_keys)?, base.view(column), min, rows as u32, key_ptr, order_ptr)?;
-            bits
-        }
-    };
-    let mut offsets = spec.key.entries().map(|entries| temporary::<u64>(stream, entries)).transpose()?;
+    } else {
+        fill(columns[0].0, source)?;
+    }
+    let bits = key_bits(columns[0].1);
+    let entries = spec.key.entries();
+    let mut offsets = temporary::<u64>(stream, entries)?;
     let payload = {
         let mut pairs = DoubleBuffer::paired((&mut keys, &mut order), (&mut alternate_keys, &mut alternate_order))
             .ok_or("radix double buffer extents differ")?;
@@ -277,41 +251,30 @@ fn build_index(
             rccl_cub::device_radix_sort_pairs_buffer(launch, &mut pairs, 0..bits, sort)?;
         }
         let (sorted_keys, sorted_order) = pairs.current();
-        if let (Some(offsets), Some(entries)) = (offsets.as_mut(), spec.key.entries()) {
-            lower_bound(exec, sorted_keys.view(), arithmetic_range(0_u32, 1, entries), offsets.view_mut())?;
-        }
+        lower_bound(exec, sorted_keys.view(), arithmetic_range(0_u32, 1, entries), offsets.view_mut())?;
         let sorted = sorted_order.cu_deviceptr() as *const u32;
         spec.payload
             .iter()
-            .map(|(column, signed, bounds)| unsafe {
-                if *signed {
-                    EncodedColumn::from_gather::<_, i32>(pool.clone(), base.view(column), sorted, rows, row_count.clone(), 0, *bounds)
-                } else {
-                    EncodedColumn::from_gather::<_, u32>(pool.clone(), base.view(column), sorted, rows, row_count.clone(), 0, *bounds)
-                }
+            .map(|(column, bounds)| unsafe {
+                EncodedColumn::from_gather::<_, u32>(pool.clone(), base.view(column), sorted, rows, row_count.clone(), 0, *bounds)
             })
             .collect::<Result<Vec<_>>>()?
     };
-    let offsets_column = match (&offsets, &counts.offsets, spec.key.entries()) {
-        (Some(offsets), Some(owner), Some(entries)) => Some(unsafe {
-            EncodedColumn::from_device(
-                pool.clone(),
-                pointer(offsets) as *const i64,
-                entries,
-                owner.clone(),
-                0,
-                Codec::For,
-                Bounds::Inclusive { min: 0, max: rows as i64 },
-            )?
-        }),
-        _ => None,
+    let offsets_column = unsafe {
+        EncodedColumn::from_device(
+            pool.clone(),
+            pointer(&offsets) as *const i64,
+            entries,
+            counts.offsets.clone(),
+            0,
+            Codec::For,
+            Bounds::Inclusive { min: 0, max: rows as i64 },
+        )?
     };
     for buffer in [keys, order, alternate_keys, alternate_order].into_iter().chain(selected) {
         release(stream, buffer)?;
     }
-    if let Some(offsets) = offsets {
-        release(stream, offsets)?;
-    }
+    release(stream, offsets)?;
     Ok(BuiltIndex { offsets: offsets_column, payload })
 }
 
@@ -407,12 +370,12 @@ fn main() -> Result<()> {
     let compress_started = Instant::now();
     let base = Base { catalog: Catalog::compress(&pool, &source, &schema())? };
     let compress_ms = compress_started.elapsed().as_secs_f64() * 1000.0;
-    // The query's bound constant at r_name's stored type (interned text ID).
-    let constants = Constants { asia: base.catalog.text_id("region.r_name", "ASIA")? };
+    // `Region(region_key, ASIA)`: the constant at r_name's stored type
+    // (interned text ID), selected into the ASIA Region index before the query.
+    let asia = base.catalog.text_id("region.r_name", "ASIA")?;
     let declared_bytes = source.declared_bytes();
     let sf = source.manifest()["sf"].clone();
     let nation_rows = base.rows("nation.n_nationkey");
-    let region_rows = base.rows("region.r_regionkey");
     drop(source);
 
     let answer: Vec<(i64, i64, i64)> = {
@@ -437,46 +400,52 @@ fn main() -> Result<()> {
     if order_bits + supplier_bits + nation_bits > 64 {
         return Err("packed answer key exceeds 64 bits for these dictionary sizes".into());
     }
-    // The compiler's recorded program for R N C O L S (written order): Region
-    // by name probed with the bound ASIA ID; Nation by region; Customer by
-    // nation; date-selected Orders by customer; Lineitem by order; Supplier
-    // by (nation, supplier) for the closing full-key probe.
+    // The compiler's recorded program for R N C O L S (written order): the
+    // constant atom `Region(region_key, ASIA)` reads an index holding only the
+    // ASIA rows (built from Region by the selection, keyed by region ID); then
+    // Nation by region; Customer by nation; date-selected Orders by customer;
+    // Lineitem by order; Supplier by (nation, supplier) for the closing
+    // full-key probe.
     let specs = [
         IndexSpec {
-            name: "region_by_name",
-            key: Key::Sorted { column: "region.r_name", bounds: base.bounds("region.r_name") },
-            selection: None,
-            payload: vec![("region.r_name", true, base.bounds("region.r_name")), ("region.r_regionkey", false, regions.bounds())],
+            name: "region_asia_by_region",
+            key: Key(vec![("region.r_regionkey", regions.len())]),
+            selection: Some(Selection {
+                column: "region.r_name",
+                start: asia,
+                end: asia.checked_add(1).ok_or("ASIA text ID has no successor")?,
+            }),
+            payload: vec![("region.r_regionkey", regions.bounds())],
         },
         IndexSpec {
             name: "nation_by_region",
-            key: Key::Ids(vec![("nation.n_regionkey", regions.len())]),
+            key: Key(vec![("nation.n_regionkey", regions.len())]),
             selection: None,
-            payload: vec![("nation.n_nationkey", false, nations.bounds())],
+            payload: vec![("nation.n_nationkey", nations.bounds())],
         },
         IndexSpec {
             name: "customer_by_nation",
-            key: Key::Ids(vec![("customer.c_nationkey", nations.len())]),
+            key: Key(vec![("customer.c_nationkey", nations.len())]),
             selection: None,
-            payload: vec![("customer.c_custkey", false, customers.bounds())],
+            payload: vec![("customer.c_custkey", customers.bounds())],
         },
         IndexSpec {
             name: "orders_by_customer",
-            key: Key::Ids(vec![("orders.o_custkey", customers.len())]),
+            key: Key(vec![("orders.o_custkey", customers.len())]),
             selection: Some(Selection { column: "orders.o_orderdate", start: date_start, end: date_end }),
-            payload: vec![("orders.o_orderkey", false, orders.bounds())],
+            payload: vec![("orders.o_orderkey", orders.bounds())],
         },
         IndexSpec {
             name: "lineitem_by_order",
-            key: Key::Ids(vec![("lineitem.l_orderkey", orders.len())]),
+            key: Key(vec![("lineitem.l_orderkey", orders.len())]),
             selection: None,
-            payload: vec![("lineitem.l_suppkey", false, suppliers.bounds())],
+            payload: vec![("lineitem.l_suppkey", suppliers.bounds())],
         },
         IndexSpec {
             name: "supplier_by_nation_supplier",
-            key: Key::Ids(vec![("supplier.s_nationkey", nations.len()), ("supplier.s_suppkey", suppliers.len())]),
+            key: Key(vec![("supplier.s_nationkey", nations.len()), ("supplier.s_suppkey", suppliers.len())]),
             selection: None,
-            payload: vec![("supplier.s_suppkey", false, suppliers.bounds())],
+            payload: vec![("supplier.s_suppkey", suppliers.bounds())],
         },
     ];
     let counts: Vec<Counts> = specs
@@ -487,7 +456,7 @@ fn main() -> Result<()> {
                     None => Some(Arc::new(Buffer::from_host(pool.clone(), &[base.rows(spec.key.column()) as u64])?)),
                     Some(_) => None,
                 },
-                offsets: spec.key.entries().map(|entries| Buffer::from_host(pool.clone(), &[entries as u64]).map(Arc::new)).transpose()?,
+                offsets: Arc::new(Buffer::from_host(pool.clone(), &[spec.key.entries() as u64])?),
             })
         })
         .collect::<Result<_>>()?;
@@ -507,7 +476,7 @@ fn main() -> Result<()> {
     let segments_launch = module.prepare_segments(LaunchConfig1D::new(1, 256, 0))?;
     let expand_launch = module.prepare_expand(LaunchConfig1D::new(EXPAND_GRID, 256, EXPAND_SHARED_BYTES))?;
     let timing = Some(cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT);
-    let segment_capacity = (region_rows * nation_rows).max(1);
+    let segment_capacity = (base.rows("region.r_regionkey") * nation_rows).max(1);
 
     let mut workspace = Workspace::new(&pool, &launch, segment_capacity, capacity)?;
     let mut retries = 0;
@@ -524,12 +493,12 @@ fn main() -> Result<()> {
             built.push(build_index(&module, &exec, &launch, sort, &pool, &base, spec, count)?);
             index_events.push(stream.record_event(timing)?);
         }
-        let offsets = |index: usize| unsafe { built[index].offsets.as_ref().expect("directory index").view() };
+        let offsets = |index: usize| unsafe { built[index].offsets.view() };
         let payload = |index: usize, column: usize| unsafe { built[index].payload[column].view() };
         let ix = Indexes {
-            region_name: payload(0, 0),
-            region_id: payload(0, 1),
-            region_rows: region_rows as u32,
+            region_offsets: offsets(0),
+            region_id: payload(0, 0),
+            region_domain: regions.len() as u32,
             nation_offsets: offsets(1),
             nation_id: payload(1, 0),
             customer_offsets: offsets(2),
@@ -557,7 +526,7 @@ fn main() -> Result<()> {
         unsafe {
             cuda_core::memory::memset_d8_async(w.meta.cu_deviceptr(), 0, w.meta.bytes(), stream.cu_stream())?;
         }
-        module.segments(stream, &segments_launch, ix, constants, segments, meta)?;
+        module.segments(stream, &segments_launch, ix, segments, meta)?;
         module.expand(stream, &expand_launch, ix, segments, out, meta)?;
         let expanded = stream.record_event(timing)?;
         // The emitted count sizes the dedup; it is the query's control readback.

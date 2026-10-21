@@ -273,6 +273,45 @@ pub fn build_host_reads(source: &ir::Program, arguments: TokenStream) -> syn::Re
     Ok(target)
 }
 
+/// Retain selected stream results (`pipe` → `let`): their rows are
+/// materialized once, and their consumer streams from the retained rows.
+///
+/// This records only a Physical mode decision, a kernel or task boundary at a
+/// retained result (formal rule EXT-RetainStream). Operators, keys and Rust
+/// steps are unchanged; under exhaustive evaluation the retained rows and any
+/// panic are those of the stream. A host rename is a reusable host read, not a
+/// stream, and is rejected.
+pub fn retain_streams(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
+    ir::contract::check(source)?;
+    let selected = Results::parse(arguments)?;
+    if matches!(selected, Results::All) {
+        return Err(syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "retain_streams requires the names of the stream results to retain",
+        ));
+    }
+    let mut target = source.clone();
+    let mut matched = BTreeSet::new();
+    for definition in &mut target.program.definitions {
+        if !selected.includes(&definition.name) {
+            continue;
+        }
+        if matches!(definition.operator, Operator::Rename(_))
+            || !matches!(definition.mode, ir::Mode::Pipe(_))
+        {
+            return Err(syn::Error::new_spanned(
+                &definition.name,
+                "retain_streams selects a pipe result that is not a host rename",
+            ));
+        }
+        definition.mode = ir::Mode::Let(Default::default());
+        matched.insert(symbol_name(&definition.name));
+    }
+    selected.require_matches(&matched)?;
+    ir::check_rewrite(source, &target)?;
+    Ok(target)
+}
+
 /// Record checked full-heading host sets, then remove only canon boundaries
 /// already implied by the resulting keys. Arguments name host relations.
 pub fn host_sets(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {

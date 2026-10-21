@@ -244,7 +244,30 @@ Kernels & lanes and collectives & boundaries, lanes, state & GPU\\
 \end{center}
 The first three rows extend shared levels with new terms and keep their
 denotation; the kernel level is a refinement that diverges below Space. The
-sequential CPU emitter is the one-part instance of Space. The parallel
-Datalog extension's partitioned leading scan and grain are a Space policy
-over \code{rows}, and its sharded admission is SPACE-KeyPartition. A printer
-of either back end realizes these terms and decides none of them.
+sequential CPU emitter is the one-part instance of Space.
+
+\paragraph{The parallel Datalog extension as Space terms.} The extension of
+Section~\ref{sec:datalog-languages} already records parallel decisions, but
+outside CQ and at the granularity of whole rule holes. Its pieces map onto
+this section as follows, so that the Space level reuses them rather than
+restating them:
+\begin{itemize}
+\item a Round \code{ScanBinding} is the whole immutable producer, $\mathsf{rows}\ r$;
+the execution substitution of CK-DL-Partition, which exposes that scan as a
+chunk parameter, is a partition of $\mathsf{rows}\ r$ (SPACE-Partition);
+\item its \code{grain} and \code{threshold} are a tiling policy of that space,
+recorded per program; the runtime grain $\max(g,n/4t)$ and Rayon scheduling
+are free choices;
+\item sharded admission (DL-ShardedAdmission) routes candidates by a full-tuple
+hash, which is SPACE-KeyPartition, and CK-DL-ShardOwnership's disjoint
+covering shards are its premise;
+\item exclusive layout publication (DL-LayoutPublication) and its barriers order
+materializations; inside one CQ hole the analogous boundaries are
+KER-Boundary's retained results.
+\end{itemize}
+Two differences stay explicit. The extension partitions only a hole's leading
+occurrence and leaves each hole's CQ pipeline unchanged, whereas Space
+decomposes the stream inside one CQ, including nested flattens. And its parts
+produce owned candidate buffers merged before global admission, which is
+OUT-Reserve at hole granularity. A printer of either back end realizes these
+terms and decides none of them.

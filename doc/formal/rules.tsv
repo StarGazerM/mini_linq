@@ -211,3 +211,4 @@ OUT-Bound	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex
 KER-Boundary	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex); no pass implements it yet.
 KER-Lane	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex); no pass implements it yet.
 KER-Collective	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex); no pass implements it yet.
+EXT-RetainStream	implementation	features/rewrites/passes/src/physical.rs	(formal rule EXT-RetainStream)	Change only named non-host stream results from pipe to let; erasure and the exhaustive bag are preserved.

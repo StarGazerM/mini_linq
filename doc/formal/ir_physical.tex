@@ -57,6 +57,20 @@ union (\code{any}) has an empty interface; a fused union names its prefix and
 every arm depends on it; cross-arm canon on a statically disjoint union is
 rejected. Physical checks neither IX demands nor canonical return evidence.
 
+\paragraph{Retained streams.}
+The opt-in Physical rewrite \code{cq_rewrites::retain_streams(r,...)} changes
+only the mode of named stream results from \code{pipe} to \code{let}; operators,
+keys and Rust steps are unchanged.
+\begin{mathpar}
+\Rule{EXT-RetainStream}{\mathsf{mode}(r)=pipe\quad r\text{ is not a host rename}}
+ {\mathsf{mode}(r):=let\text{ preserves erasure and the exhaustive bag of }r}
+\end{mathpar}
+Under exhaustive evaluation the retained rows, and any panic, are those of the
+stream, so the rewrite is a refinement checked by \code{check_rewrite}. It is a
+decomposition decision: a back end may start a new kernel or task at the
+retained rows, so the consumer's parallel domain becomes those rows instead of
+the stream's first relation.
+
 \paragraph{Checked host sets.}
 The opt-in Physical rewrite \code{cq_rewrites::host_sets(R,...)} consumes
 relation-name advice and records \code{host_set R;} in the program text.
