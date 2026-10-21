@@ -37,19 +37,19 @@ pub fn compile(source: &storage::Program) -> syn::Result<Program> {
     construct(
         source,
         default_pipeline(),
-        PullPrinters::default(),
+        TerminalRegistry::default(),
         syn::parse_quote!(none),
     )
 }
 struct Arguments {
     pipeline: cq_stage::Pipeline,
-    pull_printers: PullPrinters,
+    terminals: TerminalRegistry,
     timing: Ident,
 }
 impl syn::parse::Parse for Arguments {
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
         let mut pipeline = None;
-        let mut pull_printers = None;
+        let mut terminals = None;
         let mut timing = None;
         while !input.is_empty() {
             let name: Ident = input.parse()?;
@@ -58,8 +58,8 @@ impl syn::parse::Parse for Arguments {
                 pipeline = Some(input.parse()?);
             } else if name == "timing" && timing.is_none() {
                 timing = Some(input.parse()?);
-            } else if name == "pull_printers" && pull_printers.is_none() {
-                pull_printers = Some(input.parse()?);
+            } else if name == "terminals" && terminals.is_none() {
+                terminals = Some(input.parse()?);
             } else {
                 return Err(syn::Error::new_spanned(
                     name,
@@ -70,7 +70,7 @@ impl syn::parse::Parse for Arguments {
         }
         Ok(Self {
             pipeline: pipeline.unwrap_or_else(default_pipeline),
-            pull_printers: pull_printers.unwrap_or_default(),
+            terminals: terminals.unwrap_or_default(),
             timing: timing.unwrap_or_else(|| syn::parse_quote!(none)),
         })
     }
@@ -78,10 +78,10 @@ impl syn::parse::Parse for Arguments {
 pub fn compile_with(source: &storage::Program, args: TokenStream) -> syn::Result<Program> {
     let Arguments {
         pipeline,
-        pull_printers,
+        terminals,
         timing,
     } = syn::parse2(args)?;
-    construct(source, pipeline, pull_printers, timing)
+    construct(source, pipeline, terminals, timing)
 }
 /// Formal rule CK-DL-Fork: independently check storage embedding and every hole.
 pub fn check(source: &storage::Program, target: &Program) -> syn::Result<()> {
@@ -196,10 +196,12 @@ fn hole_inputs<'a>(
 fn construct(
     source: &storage::Program,
     pipeline: cq_stage::Pipeline,
-    pull_printers: PullPrinters,
+    terminals: TerminalRegistry,
     timing: Ident,
 ) -> syn::Result<Program> {
     let analysis = storage::contract::check(source)?;
+    terminals.check()?;
+    let interface = terminals.interface(&pipeline)?;
     let variants = &source.incremental.variants;
     let representation = key_representation(source)?;
     let mut fresh = Fresh::new(source);
@@ -469,14 +471,14 @@ fn construct(
         .map(|cq| Hole {
             cq,
             pipeline: pipeline.clone(),
-            interface: HoleInterface::Pull,
+            interface,
         })
         .collect();
     let target = Program {
         storage: source.clone(),
         context,
         holes,
-        pull_printers,
+        terminals,
         execution: Vec::new(),
         policy: RoundPolicy { timing },
     };

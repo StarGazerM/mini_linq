@@ -35,6 +35,14 @@
 //! inside that configuration. Its resolved queue is recorded on each hole.
 //! [`DatalogConfiguration`] exposes the same resolution to Rust callers.
 //!
+//! Select streaming push holes with
+//! `cq = pipeline { print = ::cq_datalog::passes::print_push; };`.
+//! Rule answers are passed directly to canonical admission, and negation keys
+//! directly to their key-set provider, without a printer-owned result buffer.
+//! The default registry recognizes both pull and push terminals; custom paths
+//! declare their interface with `terminals = [my::printer => push];`.
+//! Parallel and phase-timed execution retain their explicit candidate storage.
+//!
 //! Datalog defaults to unkeyed Fx hashing for layout maps, IDB membership,
 //! EDB canonicalization, negation key sets, and hole-local CQ deduplication.
 //! This assumes trusted inputs: Fx is not collision-attack resistant.
@@ -232,6 +240,7 @@ pub mod __codegen {
 /// Direct checked entries, each consuming its source IR and a continuation.
 pub mod passes {
     pub use cq_datalog_macros::{
-        fork, incremental, print_rounds, storage, stratify, surface_if_let,
+        fork, incremental, print_hole, print_rounds, storage, stratify, surface_if_let,
     };
+    pub use own_push::push_into as print_push;
 }

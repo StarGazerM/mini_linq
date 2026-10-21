@@ -11,8 +11,8 @@ use cq_syntax::rust;
 use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, format_ident, quote};
 pub use round::{
-    Execution, Hole, InputSource, KeyRepresentation, Layout, Program, RoundContext, RuleHole,
-    Stratum,
+    Execution, Hole, HoleInterface, InputSource, KeyRepresentation, Layout, Program, RoundContext,
+    RuleHole, Stratum,
 };
 use std::collections::BTreeSet;
 use syn::Ident;
@@ -20,10 +20,73 @@ mod codegen;
 
 pub fn splice(program: &Program) -> syn::Result<Vec<TokenStream>> {
     splice_with(program, |hole| {
-        hole.pipeline.clone().start(hole.cq.to_token_stream())
+        let mut pipeline = hole.pipeline.clone();
+        if hole.interface == HoleInterface::Push {
+            let terminal = pipeline.passes.last_mut().expect("checked terminal");
+            let arguments = &terminal.arguments;
+            let consumer = consumer_name();
+            terminal.arguments = quote!(consumer { #consumer }; #arguments);
+        }
+        pipeline.start(hole.cq.to_token_stream())
     })
 }
+
+fn consumer_name() -> Ident {
+    Ident::new("__cq_datalog_consumer", Span::mixed_site())
+}
+
+/// Formal rule P-DL-Push: Pass each answer directly to the caller's admission consumer.
+///
+/// Push expansions use the consumer bound here through their terminal's
+/// `consumer { ... };` argument. Pull expansions are iterated normally.
+/// Neither branch introduces a result buffer.
+pub fn consume_hole(
+    interface: HoleInterface,
+    invocation: &TokenStream,
+    consumer: TokenStream,
+) -> TokenStream {
+    let name = consumer_name();
+    match interface {
+        HoleInterface::Pull => quote!({
+            let mut #name = #consumer;
+            for row in #invocation { (#name)(row); }
+        }),
+        HoleInterface::Push => quote!({
+            let #name = #consumer;
+            #invocation;
+        }),
+    }
+}
+
+/// Collect directly into the requested provider, without an intermediate buffer.
+/// Push providers implement `Default + Extend<Row>`; pull retains `FromIterator`.
+pub fn collect_hole(
+    interface: HoleInterface,
+    invocation: &TokenStream,
+    provider: TokenStream,
+) -> TokenStream {
+    match interface {
+        HoleInterface::Pull => quote!((#invocation).collect::<#provider>()),
+        HoleInterface::Push => {
+            let rows = Ident::new("__cq_collected_rows", Span::mixed_site());
+            let consume = consume_hole(
+                interface,
+                invocation,
+                quote!(|row| {
+                    #rows.extend(::core::iter::once(row));
+                }),
+            );
+            quote!({
+                let mut #rows: #provider = ::core::default::Default::default();
+                #consume;
+                #rows
+            })
+        }
+    }
+}
 /// Splice one caller-owned expansion per checked hole, in recorded order.
+/// Push callbacks must emit an expression consuming the terminal's
+/// `consumer { ... };` argument, as the ordinary [`splice`] implementation does.
 pub fn splice_with(
     program: &Program,
     expand: impl FnMut(&Hole) -> syn::Result<TokenStream>,
@@ -45,7 +108,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
     )?;
     let timed = program.policy.timing == "phases";
     compile_with(program, |rules, context, holes, _| {
-        Ok(evaluate(rules, context, holes, timed))
+        Ok(evaluate(rules, context, holes, &program.holes, timed))
     })
 }
 pub fn compile_with(
@@ -119,10 +182,13 @@ fn render_admitted(
             let name = &key.name;
             let invocation = &holes[key.hole];
             let provider = &key.provider;
+            let collection = collect_hole(
+                program.holes[key.hole].interface,
+                invocation,
+                quote!(#provider),
+            );
             match key.representation {
-                KeyRepresentation::Borrowed => {
-                    quote!(let #name = &(#invocation).collect::<#provider>();)
-                }
+                KeyRepresentation::Borrowed => quote!(let #name = &#collection;),
             }
         });
         let seeds = evaluator(&stratum.seeds, context, holes, &program.execution)?;
@@ -406,6 +472,7 @@ pub fn evaluate(
     rules: &[RuleHole],
     context: &RoundContext,
     holes: &[TokenStream],
+    specifications: &[Hole],
     materialize: bool,
 ) -> (TokenStream, TokenStream) {
     let mut evaluations = Vec::new();
@@ -417,7 +484,24 @@ pub fn evaluate(
         let candidates = format_ident!("__cq_candidates_{}", rule.hole, span = Span::mixed_site());
         let types = head.declaration.columns.iter().map(|c| &c.ty);
         let consume = if materialize {
-            quote!((#invocation).collect::<::std::vec::Vec<(#(#types,)*)>>())
+            collect_hole(
+                specifications[rule.hole].interface,
+                invocation,
+                quote!(::std::vec::Vec<(#(#types,)*)>),
+            )
+        } else if specifications[rule.hole].interface == HoleInterface::Push {
+            let seen = &head.seen;
+            let next = &head.next;
+            let insertion = &rule.insertion;
+            consume_hole(
+                HoleInterface::Push,
+                invocation,
+                quote!(|row: (#(#types,)*)| {
+                    if #seen.#insertion(::core::clone::Clone::clone(&row)) {
+                        #next.push(row);
+                    }
+                }),
+            )
         } else {
             insert_new(rule, context, invocation)
         };

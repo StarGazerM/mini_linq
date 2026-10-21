@@ -2,6 +2,56 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[test]
 #[allow(non_snake_case)]
+fn consumer_form_matches_pull_with_borrowed_and_owned_columns() {
+    let R = [(1_i32,), (2,), (2,), (3,)];
+    let S = [(1_i32, 10_i32), (2, 20), (2, 20)];
+    let pull: BTreeSet<_> = mini_linq::compile! {
+        pipeline {}
+        struct Q; relation R(x:i32); relation S(x:i32,y:i32);
+        answer(x,label) :- R(x), S(x,y), let label:String = y.to_string();
+    }
+    .map(|(x, label)| (*x, label))
+    .collect();
+    let mut pushed = BTreeSet::new();
+    let result: () = mini_linq::compile! {
+        pipeline {
+            print = own_push::push_into(consumer {
+                |(x, label): (&i32, String)| { pushed.insert((*x, label)); }
+            };);
+        }
+        struct Q; relation R(x:i32); relation S(x:i32,y:i32);
+        answer(x,label) :- R(x), S(x,y), let label:String = y.to_string();
+    };
+    assert_eq!(result, ());
+    assert_eq!(pushed, pull);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn consumer_runs_before_the_next_answer_is_evaluated() {
+    // An operational regression witness, not an extension of CQ's pure semantics.
+    let R = [(1_i32,), (2,), (3,)];
+    let evaluated = std::cell::Cell::new(0);
+    let consumed = std::cell::Cell::new(0);
+    let next = |x: i32| {
+        assert_eq!(evaluated.get(), consumed.get(), "answer buffering");
+        evaluated.set(evaluated.get() + 1);
+        x
+    };
+    mini_linq::compile! {
+        pipeline {
+            print = own_push::push_into(consumer {
+                |(_x,): (i32,)| { consumed.set(consumed.get() + 1); }
+            };);
+        }
+        struct Q; relation R(x:i32); relation answer(x:i32);
+        answer(next(*x)) :- R(x);
+    };
+    assert_eq!(consumed.get(), 3);
+}
+
+#[test]
+#[allow(non_snake_case)]
 fn staged_selection_chain_pushes_only_survivors_into_partial_suffix() {
     let R = [(0, 9, 90), (1, 7, 70), (2, 8, 80), (3, 7, 70), (4, 9, 90)];
     let answers: BTreeSet<_> = own_push::push! {

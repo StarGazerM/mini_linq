@@ -75,6 +75,24 @@ pub fn reverse_publication(input: proc_macro::TokenStream) -> proc_macro::TokenS
     .into()
 }
 
+/// Independently select two rule holes: `(batch_hole, positions_hole)`.
+/// The first uses `stage(batch(64))`; the second uses `represent(positions)`.
+#[proc_macro]
+pub fn per_hole_pipeline(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    cq_stage::rewrite::<cq_lang_datalog_round::Program>(input.into(), rewrites::per_hole_pipeline)
+        .into()
+}
+
+/// Opt every pull hole into the registered, partitioned pull terminal.
+#[proc_macro]
+pub fn partition_holes(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    cq_stage::rewrite::<cq_lang_datalog_round::Program>(input.into(), |source, args| {
+        no_arguments(args)?;
+        rewrites::partition_holes(source)
+    })
+    .into()
+}
+
 /// Evaluate checked DL-Source using native Rust and a naive set fixpoint.
 /// Returns a HashSet for one output, or a tuple of HashSets for many outputs.
 #[proc_macro]

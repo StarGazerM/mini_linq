@@ -100,7 +100,7 @@ fn configuration_records_the_alias_declaration_for_independent_round_checks() {
     let incremental = cq_datalog_incremental::compile(&strata).unwrap();
     let storage = cq_datalog_storage::compile(&incremental).unwrap();
     let config: DatalogConfiguration = syn::parse_quote! { pipeline {
-        pull_printers = [crate::alias::pull, ::other::pull];
+        terminals = [crate::alias::pull => pull, ::other::push => push];
         cq = pipeline { print = crate::alias::pull; };
     } };
     let queue = config.resolve(DatalogConfiguration::defaults()).unwrap();
@@ -123,7 +123,7 @@ fn configuration_records_the_alias_declaration_for_independent_round_checks() {
         cq_lang_datalog_round::contract::check(&push)
             .unwrap_err()
             .to_string()
-            .contains("push hole interface is unsupported")
+            .contains("hole interface does not match its registered terminal interface")
     );
     let unlisted: DatalogConfiguration = syn::parse_quote! { pipeline {
         cq = pipeline { print = crate::alias::pull; };

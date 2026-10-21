@@ -2,9 +2,10 @@
 //!
 //! The complete checked Structures program is the only compiler input. Its
 //! Physical operators and concrete read, build, retention and canonical state
-//! types are preserved. Nested loops push rows into a Vec endpoint; retained
-//! construction shares the recorded Build, FromIterator and Selection providers
-//! with pull. Positional pipes fetch survivors directly into their push sink.
+//! types are preserved. `push` collects nested-loop results into a Vec endpoint;
+//! `push_into` invokes its consumer immediately without an endpoint buffer.
+//! Retained construction shares the recorded Build, FromIterator and Selection
+//! providers with pull. Positional pipes fetch survivors directly into their sink.
 //!
 //! Queries denote `bottom + Set`, refining desugared written order. Opaque Rust
 //! binds and guards keep their chain and receive shared references. Host columns
@@ -46,7 +47,40 @@ pub fn push(input: TokenStream) -> TokenStream {
         if !arguments.is_empty() {
             return error(&arguments, "own_push::push accepts no arguments");
         }
-        compile(source)
+        compile(source, None)
+    })
+    .into()
+}
+
+mod kw {
+    syn::custom_keyword!(consumer);
+}
+
+struct Consumer(syn::Expr);
+impl syn::parse::Parse for Consumer {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        input.parse::<kw::consumer>()?;
+        let contents;
+        syn::braced!(contents in input);
+        let expression = contents.parse()?;
+        if !contents.is_empty() {
+            return Err(contents.error("expected one consumer expression"));
+        }
+        input.parse::<syn::Token![;]>()?;
+        Ok(Self(expression))
+    }
+}
+
+/// Structures → unit, invoking an `FnMut(Row)` consumer once per answer.
+///
+/// Select `print = own_push::push_into(consumer { callback };)`
+/// or use `arguments { consumer { callback }; };` at a direct pass entry.
+/// Consumer evaluation happens once; no result Vec or iterator is constructed.
+#[proc_macro]
+pub fn push_into(input: TokenStream) -> TokenStream {
+    cq_stage::pass::<structures::Program, syn::Expr>(input.into(), |source, arguments| {
+        let consumer: Consumer = syn::parse2(arguments)?;
+        compile(source, Some(&consumer.0))
     })
     .into()
 }
@@ -65,7 +99,7 @@ impl<'a> std::ops::Deref for Push<'a> {
     }
 }
 
-fn compile(module: &structures::Program) -> syn::Result<syn::Expr> {
+fn compile(module: &structures::Program, consumer: Option<&syn::Expr>) -> syn::Result<syn::Expr> {
     let analysis = structures::contract::check(module)?;
     // Refuse unsupported written choices even in an otherwise unused result.
     for definition in &module.physical.program.definitions {
@@ -83,11 +117,21 @@ fn compile(module: &structures::Program) -> syn::Result<syn::Expr> {
     }
     for entry in &module.structures.entries {
         match &entry.structure {
-            structures::Structure::Repr { witness: Some(_), .. } => {
-                return error(entry, format!("own_push: `{} repr witness` is unsupported", entry.name));
+            structures::Structure::Repr {
+                witness: Some(_), ..
+            } => {
+                return error(
+                    entry,
+                    format!("own_push: `{} repr witness` is unsupported", entry.name),
+                );
             }
-            structures::Structure::Stage { expand: Some(_), .. } => {
-                return error(entry, format!("own_push: `{} stage expand` is unsupported", entry.name));
+            structures::Structure::Stage {
+                expand: Some(_), ..
+            } => {
+                return error(
+                    entry,
+                    format!("own_push: `{} stage expand` is unsupported", entry.name),
+                );
             }
             _ => {}
         }
@@ -131,21 +175,33 @@ fn compile(module: &structures::Program) -> syn::Result<syn::Expr> {
     let returned = &module.physical.program.returned;
     let name = symbol_name(returned);
     let out = temporary("out", &name);
-    let body = push.head(&name, &module.physical.program.head, &out);
+    let body = push.head(
+        &name,
+        &module.physical.program.head,
+        &out,
+        consumer.is_some(),
+    );
     let body = push.emit(&name, body)?;
     let head_state = analysis.head_dedup.get(&name).map(|ty| {
         let seen = temporary("head_seen", &name);
         quote!(let mut #seen = <#ty>::new();)
     });
     let statements = &push.statements;
+    let (endpoint, result) = match consumer {
+        Some(consumer) => (quote!(let mut #out = #consumer;), Tokens::new()),
+        None => (
+            quote!(let mut #out = ::std::vec::Vec::new();),
+            quote!(::core::iter::IntoIterator::into_iter(#out)),
+        ),
+    };
     let mut expression = syn::parse2(quote!({
         #[allow(unused_imports)]
         use ::cq_storage::HashSetConstructor as _;
         #(#statements)*
-        let mut #out = ::std::vec::Vec::new();
+        #endpoint
         #head_state
         #body
-        ::core::iter::IntoIterator::into_iter(#out)
+        #result
     }))?;
     cq_print::own_captures(&mut expression, &push.owned);
     Ok(expression)
@@ -199,7 +255,13 @@ fn selection_chain(
 }
 
 impl Push<'_> {
-    fn head(&self, result: &str, head: &structures::syntax::Atom, out: &syn::Ident) -> Tokens {
+    fn head(
+        &self,
+        result: &str,
+        head: &structures::syntax::Atom,
+        out: &syn::Ident,
+        consumer: bool,
+    ) -> Tokens {
         let mut bindings = Vec::new();
         let mut fields = Vec::new();
         for (i, expression) in head.args.iter().enumerate() {
@@ -221,16 +283,21 @@ impl Push<'_> {
                 let (#(#ids,)*) = { #(#shadows)* (#(#expressions,)*) };
             }
         });
+        let emit = if consumer {
+            quote!((#out)((#(#fields,)*));)
+        } else {
+            quote!(#out.push((#(#fields,)*));)
+        };
         let insert = if self.analysis.head_dedup.contains_key(result) {
             let seen = temporary("head_seen", result);
             let key = cloned_key(fields.iter().cloned());
             quote! {
                 let __push_key = #key;
                 ::cq_storage::require::leibniz(&__push_key);
-                if #seen.insert(__push_key) { #out.push((#(#fields,)*)); }
+                if #seen.insert(__push_key) { #emit }
             }
         } else {
-            quote!(#out.push((#(#fields,)*));)
+            emit
         };
         quote! { #evaluations #insert }
     }

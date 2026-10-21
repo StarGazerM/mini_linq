@@ -25,7 +25,15 @@ fn render(expanded: Expanded) -> TokenStream {
     let mut expression = render_with(
         &expanded.program,
         &expanded.holes,
-        |rules, context, holes, _| Ok(evaluate(rules, context, holes, false)),
+        |rules, context, holes, _| {
+            Ok(evaluate(
+                rules,
+                context,
+                holes,
+                &expanded.program.holes,
+                false,
+            ))
+        },
     )
     .unwrap();
     erase_partitions(&mut expression);
@@ -128,7 +136,7 @@ fn authored_round_expansion_matches_independent_fixture() {
     .unwrap();
     let fork = expand(&program, |_| Ok(quote!(authored_rows()))).unwrap();
     let partitioned = render_with(&fork.program, &fork.holes, |rules, context, holes, _| {
-        Ok(evaluate(rules, context, holes, false))
+        Ok(evaluate(rules, context, holes, &fork.program.holes, false))
     })
     .unwrap()
     .to_token_stream()
@@ -440,5 +448,70 @@ fn edb_canonicalization_precedes_and_is_shared_by_layouts_keys_and_outputs() {
             .matches("collect :: < :: std :: collections :: HashSet")
             .count(),
         1
+    );
+}
+
+fn push_program() -> Program {
+    let source: source::Program = syn::parse_quote! {
+        struct Push;
+        relation E(x:i32) = (input);
+        relation B(x:i32) = (blocked);
+        relation R(x:i32);
+        output R;
+        R(*x) :- E(x), !B(x);
+    };
+    let strata = cq_datalog_stratify::compile(&source).unwrap();
+    let incremental = cq_datalog_incremental::compile(&strata).unwrap();
+    let storage = cq_datalog_storage::compile(&incremental).unwrap();
+    let mut program = cq_datalog_fork::compile(&storage).unwrap();
+    for hole in &mut program.holes {
+        hole.interface = HoleInterface::Push;
+        hole.pipeline.passes.last_mut().unwrap().path =
+            syn::parse_quote!(::cq_datalog::passes::print_push);
+    }
+    program
+}
+
+#[test]
+fn push_rule_and_key_holes_receive_consumers_without_iterator_adapters() {
+    let program = push_program();
+    let holes = splice(&program).unwrap();
+    assert_eq!(holes.len(), 2);
+    for invocation in &holes {
+        assert!(
+            invocation
+                .to_string()
+                .contains("consumer { __cq_datalog_consumer }")
+        );
+    }
+    let expression = compile(&program).unwrap().to_token_stream().to_string();
+    assert_eq!(expression.matches("print_push").count(), 2);
+    assert!(expression.contains("__cq_collected_rows . extend"));
+    assert!(!expression.contains("__cq_candidates_"));
+    assert!(!expression.contains("IntoIterator"));
+}
+
+#[test]
+fn renderer_rejects_incomplete_push_splices_before_evaluation() {
+    let program = push_program();
+    let holes = splice(&program).unwrap();
+    let error = render_with(&program, &holes[..1], |_, _, _, _| {
+        panic!("incomplete splice reached the evaluator")
+    })
+    .unwrap_err();
+    assert!(error.to_string().contains("hole splice coverage changed"));
+}
+
+#[test]
+fn pull_collection_tokens_remain_unchanged() {
+    let provider = quote!(::std::vec::Vec<(i32,)>);
+    let actual = collect_hole(
+        HoleInterface::Pull,
+        &quote!(authored_rows()),
+        provider.clone(),
+    );
+    assert_eq!(
+        actual.to_string(),
+        quote!((authored_rows()).collect::<#provider>()).to_string(),
     );
 }
