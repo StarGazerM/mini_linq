@@ -141,6 +141,28 @@
 //! Rule holes retain their projected heads: returning all body variables still
 //! triggers the frozen core's canonical-return deduplication for borrowed hosts,
 //! so widening those rows does not remove the per-call canonical set.
+//!
+//! # DOOP engine features
+//!
+//! The `datalog-doop` package retains the `doop` CLI. Its default Cargo features
+//! enable all three engines: `mini`, `mini-fx`, and `ascent`. For a single-engine
+//! build, disable defaults and explicitly select the matching engine feature:
+//!
+//! ```text
+//! cargo run --release --locked -p datalog-doop --no-default-features --features mini -- /tmp/doop-data/cassandra --engine mini
+//! cargo run --release --locked -p datalog-doop -- /tmp/doop-data/cassandra --check
+//! ```
+//!
+//! `--check` requires all three comparison features (`mini,mini-fx,ascent`);
+//! selecting only one engine cannot provide the full comparison.
+//! `doop/shared` (`doop-shared`) owns facts, interning, loading, the common
+//! harness, and engine-source macros without instantiating a heavy engine.
+//! Separate `doop/engines/{mini,mini-fx,ascent}` crates (`doop-mini`,
+//! `doop-mini-fx`, and `doop-ascent`) instantiate the engines. CLI features
+//! select those optional dependencies; `phase-timing` forwards instrumentation
+//! only to enabled engines rather than enabling additional engines.
+//! Fetch published facts with `python3 doop/fetch.py cassandra` from
+//! `features/datalog`; generated facts remain outside the repository.
 
 pub use cq_datalog_configuration::DatalogConfiguration;
 pub use cq_datalog_macros::datalog;

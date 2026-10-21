@@ -2,6 +2,11 @@
 """Check all six DOOP applications, then measure isolated processes on macOS.
 
 Build binaries separately; this runner never builds or modifies cached facts.
+Build datalog-parallel-doop with its default engine features: this runner uses
+--check, which requires mini,mini-fx,ascent,mini-par,mini-par-fx,ascent-par.
+A --no-default-features single-engine binary cannot perform this comparison.
+The CLI selects separate engine crates and shares doop-shared with the base CLI;
+it does not depend on the base datalog-doop CLI package.
 Example (from features/datalog-parallel):
   python3 doop/sweep.py --binary /tmp/target-ext/release/doop-parallel \
       --baseline /tmp/target-baseline/release/doop

@@ -608,11 +608,3 @@ pub fn $name(facts: $crate::Facts) -> $crate::Results {
 }
     };
 }
-doop_engine!(run, pipeline {});
-doop_engine!(run_fx, pipeline {
-    storage_rewrites = [cq_datalog_hasher::hasher(fx)];
-    round = [cq_datalog_hasher::hasher_round(fx)];
-    cq = pipeline {
-        structures = [cq_rewrites::retype(dedup => ::std::collections::HashSet<_, ::std::hash::BuildHasherDefault<::rustc_hash::FxHasher>>)];
-    };
-});

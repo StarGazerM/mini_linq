@@ -2,6 +2,10 @@
 """Check Fx full answers, then compare hashers in isolated interleaved processes.
 
 Build doop-parallel in release mode without counters/timing features first.
+Keep datalog-parallel-doop's default engine features enabled: --check requires
+all six (mini,mini-fx,ascent,mini-par,mini-par-fx,ascent-par), not only Fx engines.
+Each feature selects its own engine crate; phase-timing is an optional forward
+to enabled engines and must remain disabled for these measurements.
 Run with no other benchmark or build workload on the machine:
   python3 doop/hash_sweep.py --binary /tmp/target-Fx/release/doop-parallel
 The same executable supplies sequential and parallel engines; facts loading is

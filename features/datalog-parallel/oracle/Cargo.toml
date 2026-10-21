@@ -11,17 +11,20 @@ name = "datalog-parallel-oracle"
 path = "src/main.rs"
 
 [features]
-default = []
-phase-timing = ["cq-datalog/phase-timing", "datalog-oracle/phase-timing"]
-counters = ["cq-datalog/counters", "cq-storage/counters", "datalog-oracle/counters"]
+default = ["mini", "ascent", "mini-par", "ascent-par"]
+mini = ["dep:oracle-mini"]
+ascent = ["dep:oracle-ascent"]
+mini-par = ["dep:oracle-mini-par"]
+ascent-par = ["dep:oracle-ascent-par"]
+phase-timing = ["oracle-mini?/phase-timing", "oracle-mini-par?/phase-timing"]
+counters = ["oracle-shared/counters", "dep:cq-storage", "cq-storage/counters", "oracle-mini?/counters", "oracle-mini-par?/counters"]
 
 [dependencies]
-datalog-oracle = { path = "../../datalog/oracle" }
-cq-datalog-parallel = { path = ".." }
-cq-datalog-parallel-runtime = { path = "../runtime" }
-cq-datalog = { path = "../../datalog/facade/cq-datalog" }
-mini-linq = { version = "0.1.0", path = "../../../facade/mini-linq" }
-cq-storage = { version = "0.1.0", path = "../../../runtime/cq-storage" }
-ascent = { version = "0.8", default-features = false, features = ["par"] }
+oracle-shared = { path = "../../datalog/oracle/shared" }
+oracle-mini = { path = "../../datalog/oracle/engines/mini", optional = true }
+oracle-ascent = { path = "../../datalog/oracle/engines/ascent", optional = true }
+oracle-mini-par = { path = "engines/mini-par", optional = true }
+oracle-ascent-par = { path = "engines/ascent-par", optional = true }
+cq-storage = { version = "0.1.0", path = "../../../runtime/cq-storage", optional = true }
 rayon = "1"
 cq-testkit = { version = "0.1.0", path = "../../../testkit/cq-testkit", features = ["golden"] }
