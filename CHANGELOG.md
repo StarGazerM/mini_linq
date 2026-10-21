@@ -7,6 +7,11 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Fx hashing is the Datalog default (Storage and Round providers, hole dedup
+  sets). Keyed aHash for adversarial inputs: `hasher(keyed)` +
+  `hasher_round(keyed)`; DOOP engines `mini-keyed` / `mini-par-keyed`.
+  Exact vs Ascent on all six apps; goldens unchanged.
+
 - DOOP and oracle engines split into feature-selected crates over shared
   harness crates; the parallel CLIs no longer rebuild sequential engines.
   Warm rebuilds: DOOP 30.1 → 15.4 s (sequential), 72.2 → 30.2 s (parallel);
