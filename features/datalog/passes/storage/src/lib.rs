@@ -23,9 +23,17 @@ pub fn compile(source: &incremental::Program) -> syn::Result<Program> {
                     .collect();
                 Providers {
                     canonical_name: syn::parse_quote!(Canonical),
-                    canonical_set: syn::parse_quote!(::cq_storage::HashSet<R>),
+                    canonical_set: if declaration.value.is_some() {
+                        syn::parse_quote!(::std::collections::HashSet<R, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>)
+                    } else {
+                        syn::parse_quote!(::cq_storage::HashSet<R>)
+                    },
                     all: syn::parse_quote!(::std::vec::Vec<(#(#types,)*)>),
-                    seen: syn::parse_quote!(::cq_storage::HashSet<(#(#types,)*)>),
+                    seen: if declaration.value.is_some() {
+                        syn::parse_quote!(::cq_storage::HashSet<(#(#types,)*)>)
+                    } else {
+                        syn::parse_quote!(::std::collections::HashSet<(#(#types,)*), ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>)
+                    },
                     delta: syn::parse_quote!(::std::vec::Vec<(#(#types,)*)>),
                     next: syn::parse_quote!(::std::vec::Vec<(#(#types,)*)>),
                     all_init: syn::parse_quote!(::std::vec::Vec::new()),
@@ -107,7 +115,7 @@ fn choose_layouts(
                         ::std::collections::HashMap<
                             (#(#key_types,)*),
                             ::std::vec::Vec<(#(#value_types,)*)>,
-                            ::cq_storage::HashState
+                            ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>
                         >
                     ),
                     maintenance: if is_delta {

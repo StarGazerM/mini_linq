@@ -19,7 +19,7 @@ macro_rules! closure {
 }
 
 #[test]
-fn recursive_duplicate_heavy_negation_matches_base_and_restored_default() {
+fn recursive_duplicate_heavy_negation_matches_fx_default_and_keyed() {
     let edges = [(1, 2), (1, 2), (2, 3), (3, 4), (2, 4), (4, 1)];
     let blocked = [(4,), (4,)];
     let base: BTreeSet<_> = closure!(edges, blocked;).collect();
@@ -29,20 +29,31 @@ fn recursive_duplicate_heavy_negation_matches_base_and_restored_default() {
         cq = pipeline {
             structures = [cq_rewrites::retype(dedup =>
                 ::std::collections::HashSet<_,
-                    ::std::hash::BuildHasherDefault<::rustc_hash::FxHasher>>)];
+                    ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>)];
         };
     )
     .collect();
-    let restored: BTreeSet<_> = closure!(edges, blocked;
-        storage_rewrites = [cq_datalog_hasher::hasher(fx), cq_datalog_hasher::hasher(default)];
-        round = [cq_datalog_hasher::hasher_round(fx), cq_datalog_hasher::hasher_round(default)];
+    let keyed: Vec<_> = closure!(edges, blocked;
+        storage_rewrites = [cq_datalog_hasher::hasher(fx), cq_datalog_hasher::hasher(keyed), cq_datalog_hasher::hasher(keyed)];
+        round = [cq_datalog_hasher::hasher_round(fx), cq_datalog_hasher::hasher_round(keyed), cq_datalog_hasher::hasher_round(keyed)];
+        cq = pipeline {
+            structures = [cq_rewrites::retype(dedup => ::cq_storage::HashSet<_>)];
+        };
+    )
+    .collect();
+    let restored: Vec<_> = closure!(edges, blocked;
+        storage_rewrites = [cq_datalog_hasher::hasher(keyed), cq_datalog_hasher::hasher(fx), cq_datalog_hasher::hasher(fx)];
+        round = [cq_datalog_hasher::hasher_round(keyed), cq_datalog_hasher::hasher_round(fx), cq_datalog_hasher::hasher_round(fx)];
     )
     .collect();
     let expected: BTreeSet<_> = (1..=4).flat_map(|x| (1..=3).map(move |y| (x, y))).collect();
     assert_eq!(base, expected);
     assert_eq!(fx.len(), expected.len());
     assert_eq!(fx.into_iter().collect::<BTreeSet<_>>(), expected);
-    assert_eq!(restored, expected);
+    assert_eq!(keyed.len(), expected.len());
+    assert_eq!(keyed.into_iter().collect::<BTreeSet<_>>(), expected);
+    assert_eq!(restored.len(), expected.len());
+    assert_eq!(restored.into_iter().collect::<BTreeSet<_>>(), expected);
 }
 
 #[test]
@@ -55,8 +66,8 @@ fn borrowed_string_edbs_and_owned_outputs_use_selected_canonical_sets() {
         ];
         cq_datalog::datalog! {
             pipeline {
-                storage_rewrites = [cq_datalog_hasher::hasher(fx)];
-                round = [cq_datalog_hasher::hasher_round(fx)];
+                storage_rewrites = [cq_datalog_hasher::hasher(keyed)];
+                round = [cq_datalog_hasher::hasher_round(keyed)];
             }
             struct CanonicalOutput;
             relation Names(name:String) = (&rows);
@@ -76,8 +87,8 @@ fn empty_inputs_and_empty_idbs_remain_empty() {
     let edges: [(i32, i32); 0] = [];
     let blocked: [(i32,); 0] = [];
     let answer: Vec<_> = closure!(edges, blocked;
-        storage_rewrites = [cq_datalog_hasher::hasher(fx)];
-        round = [cq_datalog_hasher::hasher_round(fx)];
+        storage_rewrites = [cq_datalog_hasher::hasher(keyed)];
+        round = [cq_datalog_hasher::hasher_round(keyed)];
     )
     .collect();
     assert!(answer.is_empty());
@@ -89,12 +100,10 @@ fn zero_column_negation_keys_preserve_existential_blocking() {
     let blocked = [(9_i32,), (9,)];
     let answer: Vec<_> = cq_datalog::datalog! {
         pipeline {
-            storage_rewrites = [cq_datalog_hasher::hasher(fx)];
-            round = [cq_datalog_hasher::hasher_round(fx)];
+            storage_rewrites = [cq_datalog_hasher::hasher(keyed)];
+            round = [cq_datalog_hasher::hasher_round(keyed)];
             cq = pipeline {
-                structures = [cq_rewrites::retype(dedup =>
-                    ::std::collections::HashSet<_,
-                        ::std::hash::BuildHasherDefault<::rustc_hash::FxHasher>>)];
+                structures = [cq_rewrites::retype(dedup => ::cq_storage::HashSet<_>)];
             };
         }
         struct Existential;

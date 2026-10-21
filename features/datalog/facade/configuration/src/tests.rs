@@ -31,6 +31,46 @@ fn defaults_include_surface_and_every_checked_stage() {
 }
 
 #[test]
+fn cq_structure_overrides_follow_default_fx_dedup() {
+    for (configuration, has_fx, has_keyed) in [
+        (syn::parse_quote!(pipeline {}), true, false),
+        (
+            syn::parse_quote!(pipeline { cq = pipeline { plan = custom::plan; }; }),
+            true,
+            false,
+        ),
+        (
+            syn::parse_quote!(pipeline { cq = pipeline { structures = []; }; }),
+            true,
+            false,
+        ),
+        (
+            syn::parse_quote!(pipeline {
+                cq = pipeline {
+                    structures = [::cq_datalog::cq_rewrites::retype(dedup => ::cq_storage::HashSet<_>)];
+                };
+            }),
+            true,
+            true,
+        ),
+    ] {
+        let configuration: DatalogConfiguration = configuration;
+        let queue = configuration
+            .resolve(DatalogConfiguration::defaults())
+            .unwrap();
+        let args = queue.passes[4].arguments.to_string();
+        assert_eq!(args.contains("FxHasher"), has_fx);
+        assert_eq!(
+            args.contains("dedup => :: cq_storage :: HashSet < _ >"),
+            has_keyed
+        );
+        if has_keyed {
+            assert!(args.find("FxHasher").unwrap() < args.find("cq_storage").unwrap());
+        }
+    }
+}
+
+#[test]
 fn named_phases_preserve_order_and_opaque_arguments() {
     let config: DatalogConfiguration = syn::parse_quote! { pipeline {
         surface = [sugar(opaque(tokens)), sugar_two];
@@ -53,6 +93,9 @@ fn named_phases_preserve_order_and_opaque_arguments() {
         cq_surface(opaque(tokens)), planner(no_reduce),
         ::mini_linq::passes::index_demands, ::mini_linq::passes::lower,
         physical_a(eight), physical_b, ::mini_linq::passes::select,
+        ::cq_datalog::cq_rewrites::retype(
+            dedup => ::std::collections::HashSet<_, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
+        ),
         structures(nine), ::mini_linq::passes::represent,
         ::mini_linq::passes::stage, ::mini_linq::passes::print_pull
     } };

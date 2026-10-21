@@ -260,7 +260,7 @@ fn storage_rewrites_only_idb_seen_and_preserves_all_native_layouts() {
     assert_eq!(target.providers[1], source.providers[1]);
     assert_eq!(
         target.providers[2].seen,
-        syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedSeen<(i32, i32,)>)
+        syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedSeen<(i32, i32,), ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>)
     );
     assert!(!target.delta_layouts.is_empty());
     assert_eq!(target.layouts, source.layouts);

@@ -3,7 +3,7 @@
 
 Build binaries separately; this runner never builds or modifies cached facts.
 Build datalog-parallel-doop with its default engine features: this runner uses
---check, which requires mini,mini-fx,ascent,mini-par,mini-par-fx,ascent-par.
+--check, which requires mini,mini-keyed,ascent,mini-par,mini-par-keyed,ascent-par.
 A --no-default-features single-engine binary cannot perform this comparison.
 The CLI selects separate engine crates and shares doop-shared with the base CLI;
 it does not depend on the base datalog-doop CLI package.
@@ -12,6 +12,9 @@ Example (from features/datalog-parallel):
       --baseline /tmp/target-baseline/release/doop
 
 The baseline must be the sequential pre-change binary from the archived source.
+Current mini/mini-par measurements use Fx by default; the archived baseline's
+hashing policy belongs to its source revision. Use hash_sweep.py for a paired
+Fx/keyed comparison within one current binary.
 Use an uninstrumented release binary for timing; use a separate phase-timing
 build/output directory to collect per-round phase lines in the retained stderr.
 5P+10E is a heterogeneous CPU description, not an affinity guarantee: Rayon
@@ -74,8 +77,10 @@ def main():
             subprocess.run(command, env=environment, stdout=stdout, stderr=stderr, check=True)
         text = (output / f"{label}.stdout").read_text()
         if check:
-            for name in ("mini", "mini-par", "ascent-par"):
-                expected = (f"check=ok engine={name} threads={threads} "
+            for name, width in (("mini", 1), ("mini-keyed", 1),
+                                ("mini-par", threads), ("mini-par-keyed", threads),
+                                ("ascent-par", threads)):
+                expected = (f"check=ok engine={name} threads={width} "
                             "relations=26 comparison=full_tuple_sets")
                 if expected not in text:
                     raise RuntimeError(f"missing full tuple equality marker: {label}: {name}")

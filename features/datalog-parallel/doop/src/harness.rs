@@ -7,10 +7,10 @@ pub const ENGINES: &[Engine] = &[
         evaluate: doop_mini::run,
         threads: || 1,
     },
-    #[cfg(feature = "mini-fx")]
+    #[cfg(feature = "mini-keyed")]
     Engine {
-        name: "mini-fx",
-        evaluate: doop_mini_fx::run,
+        name: "mini-keyed",
+        evaluate: doop_mini_keyed::run,
         threads: || 1,
     },
     #[cfg(feature = "ascent")]
@@ -25,10 +25,10 @@ pub const ENGINES: &[Engine] = &[
         evaluate: doop_mini_par::run,
         threads: rayon::current_num_threads,
     },
-    #[cfg(feature = "mini-par-fx")]
+    #[cfg(feature = "mini-par-keyed")]
     Engine {
-        name: "mini-par-fx",
-        evaluate: doop_mini_par_fx::run,
+        name: "mini-par-keyed",
+        evaluate: doop_mini_par_keyed::run,
         threads: rayon::current_num_threads,
     },
     #[cfg(feature = "ascent-par")]
@@ -49,9 +49,15 @@ pub fn main(args: impl IntoIterator<Item = String>) -> Result<()> {
             "ascent",
         ],
         reference: "ascent",
-        checked: &["mini", "mini-fx", "mini-par", "mini-par-fx", "ascent-par"],
+        checked: &[
+            "mini",
+            "mini-keyed",
+            "mini-par",
+            "mini-par-keyed",
+            "ascent-par",
+        ],
         options: &["--threads"],
-        usage: "usage: doop-parallel <facts_dir> [--engine mini|mini-fx|mini-par|mini-par-fx|ascent|ascent-par|both] [--threads N] [--check]",
+        usage: "usage: doop-parallel <facts_dir> [--engine mini|mini-keyed|mini-par|mini-par-keyed|ascent|ascent-par|both] [--threads N] [--check]",
     };
     let options = harness.parse(args)?;
     let execute = || harness.execute(&options);
@@ -61,7 +67,7 @@ pub fn main(args: impl IntoIterator<Item = String>) -> Result<()> {
         || (options.engine == "both" && harness.defaults.is_empty())
         || matches!(
             options.engine.as_str(),
-            "mini-par" | "mini-par-fx" | "ascent-par"
+            "mini-par" | "mini-par-keyed" | "ascent-par"
         ) {
         let mut builder = rayon::ThreadPoolBuilder::new();
         if let Some(count) = options.threads {
@@ -87,7 +93,7 @@ mod tests {
             .install(|| {
                 for engine in ENGINES {
                     let expected =
-                        if matches!(engine.name, "mini-par" | "mini-par-fx" | "ascent-par") {
+                        if matches!(engine.name, "mini-par" | "mini-par-keyed" | "ascent-par") {
                             3
                         } else {
                             1
