@@ -59,6 +59,7 @@ pub use ownership::own_captures;
 pub struct Host {
     pub value: Ident,
     pub layout: Vec<String>,
+    pub types: Vec<syn::Type>,
 }
 
 /// Where a result's rows live once printed.
@@ -247,6 +248,11 @@ impl<'a> Context<'a> {
                 Host {
                     value,
                     layout: analysis.host_layouts[&name].clone(),
+                    types: input
+                        .columns
+                        .iter()
+                        .map(|column| column.ty.clone())
+                        .collect(),
                 },
             );
         }

@@ -54,3 +54,49 @@ fn generator_preserves_input_constants_without_scalar_literal_inference() {
     ]);
     assert!(!result.contains("union"));
 }
+
+#[test]
+fn occurrence_constants_round_trip_and_require_literal_values() {
+    use cq_syntax::algebra::Rename;
+    for text in [
+        "rename R@0 {a -> x} constants {b = 7, c = -2}",
+        "rename R@0 {} constants {a = true, b = \"fixed\"}",
+        "rename R@0 {a -> x}",
+    ] {
+        let rename: Rename = syn::parse_str(text).unwrap();
+        if let Some(constants) = &rename.constants {
+            constants.check().unwrap();
+        }
+        assert_eq!(
+            syn::parse2::<Rename>(rename.to_token_stream()).unwrap(),
+            rename
+        );
+    }
+    for text in [
+        "constants {}",
+        "constants {a = x}",
+        "constants {a = 7, a = 8}",
+    ] {
+        let constants: cq_syntax::algebra::OccurrenceConstants = syn::parse_str(text).unwrap();
+        assert!(constants.check().is_err());
+    }
+    assert!(syn::parse_str::<Rename>("rename R@0 {} constants {a = f()}").is_err());
+}
+
+#[test]
+fn normalized_atoms_accept_literals_but_not_repeated_variables_or_expressions() {
+    for text in ["R(x,7,-2)", "R(7,true,\"fixed\",7)", "R()"] {
+        assert!(
+            syn::parse_str::<cq_syntax::Atom>(text)
+                .unwrap()
+                .is_normalized()
+        );
+    }
+    for text in ["R(x,x)", "R(x,_)", "R(x,f())"] {
+        assert!(
+            !syn::parse_str::<cq_syntax::Atom>(text)
+                .unwrap()
+                .is_normalized()
+        );
+    }
+}

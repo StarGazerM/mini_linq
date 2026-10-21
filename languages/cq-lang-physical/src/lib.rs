@@ -540,10 +540,33 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                     row.types.insert(target.clone(), column.ty.clone());
                     mapping.insert(target, source);
                 }
+                if let Some(constants) = &r.constants {
+                    constants.check()?;
+                    if matches!(definition.mode, Mode::Pipe(_)) {
+                        return error(r, "constant occurrences require retained filtered storage");
+                    }
+                    for equality in &constants.equalities {
+                        let source = symbol_name(&equality.left);
+                        let Some(column) = declaration
+                            .columns
+                            .iter()
+                            .find(|c| symbol_name(&c.name) == source)
+                        else {
+                            return error(equality, format!("`{host}` has no column `{source}`"));
+                        };
+                        cq_syntax::algebra::check_leibniz_type(&column.ty, &column.name)?;
+                        if !sources.insert(source) {
+                            return error(
+                                equality,
+                                "rename source columns must occur exactly once",
+                            );
+                        }
+                    }
+                }
                 if sources.len() != declaration.columns.len() {
                     return error(
                         r,
-                        format!("rename `{name}` must map every column of `{host}`"),
+                        format!("rename `{name}` must map or constrain every column of `{host}`"),
                     );
                 }
                 analysis.hosts.insert(name.clone(), host);

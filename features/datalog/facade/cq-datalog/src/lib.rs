@@ -67,7 +67,7 @@
 //! its owned iterator directly. Outputs must be distinct declared EDBs or IDBs.
 //! EDB outputs are deduplicated and cloned into owned rows without consuming
 //! their host bindings. An EDB-only program does not require any rules.
-//! Constants in positive atoms use the ordinary CQ selection rules, including
+//! Literals in positive atoms use CQ's filtered-relation occurrences, including
 //! string literals against `String` columns. All heads, including recursive
 //! heads, accept Rust expressions and body `let` bindings (for example
 //! `Path(*x, *z, *length + 1)` with a preceding `if *length < 10` guard).
@@ -107,9 +107,10 @@
 //! Wildcards are omitted; an all-constant/wildcard atom uses an existence key.
 //! Closed Rust expressions such as `symbol("abstract")` are also supported;
 //! parenthesize a captured constant name to distinguish it from a logical variable.
-//! Key-hole constant comparisons run after scanning the completed relation, so
-//! an owned constant such as `String::from("static")` is not moved through
-//! a fanout iterator closure. Only borrowed variable columns enter the key set.
+//! Key-hole literals remain in their atom and become occurrence constants.
+//! Nonliteral constant expressions compare after scanning the completed relation,
+//! so an owned value such as `String::from("static")` is not moved through a
+//! fanout iterator closure. Only borrowed variable columns enter the key set.
 //! Negative constants cannot reference rule-local bindings or opaque macros.
 //!
 //! # Oracle and performance commands

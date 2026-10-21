@@ -367,6 +367,121 @@ fn filtered_checks() -> Vec<proc_macro2::TokenStream> {
     checks
 }
 
+fn occurrence_checks() -> Vec<proc_macro2::TokenStream> {
+    let mut checks = Vec::new();
+    for reader in [
+        quote!(j = pipe canon probe first [x] l,r;),
+        quote!(j = pipe canon semi eager [x] l,r;),
+    ] {
+        let source: structures::physical::Program = syn::parse2(quote! { physical {
+            relation L(a:i32); relation R(tag:i32,a:i32);
+            l = pipe rename L@0 {a -> x};
+            r = let rename R@1 {a -> x} constants {tag = -7};
+            #reader
+            return j as answer(x);
+        }})
+        .unwrap();
+        let selected = cq_structure_selection::compile(&source).unwrap();
+        let facts = structures::contract::check(&selected).unwrap();
+        assert!(!facts.retained.contains_key("r"));
+        assert!(!facts.filtered.contains_key("r"));
+        let expression = compile(&selected).unwrap();
+        checks.push(quote!({
+            let L: &[(i32,)] = &[(1,), (2,), (3,)];
+            let R: &[(i32,i32)] = &[(-7,1),(-7,1),(7,2),(-7,3)];
+            let actual: ::std::collections::BTreeSet<_> =
+                (#expression).map(|(x,)| *x).collect();
+            assert_eq!(actual, [1,3].into_iter().collect());
+        }));
+    }
+    let authored: structures::Program = syn::parse_quote! { physical {
+        relation L(a:i32); relation R(tag:i32,a:i32,b:i32,unused:i32);
+        l = pipe rename L@0 {a -> x};
+        r = let rename R@1 {a -> x,b -> y,unused -> z} constants {tag = -7};
+        p = pipe probe first [x] l,r;
+        j = pipe canon project p keep {x,y};
+        return j as answer(x,y);
+    } structures {
+        l host scan = ::core::iter::Map<_,_> [];
+        r host scan = ::core::iter::Map<_,_> [];
+        r = ::cq_storage::HashIndex<'_,_,_> [x];
+        j canon = ::cq_storage::HashSet<_>;
+    }};
+    let expression = compile(&authored).unwrap();
+    checks.push(quote!({
+        let L: &[(i32,)] = &[(1,), (2,), (3,)];
+        let R: &[(i32,i32,i32,i32)] =
+            &[(-7,1,10,100),(-7,1,11,101),(7,2,20,200),(-7,3,30,300)];
+        let actual: ::std::collections::BTreeSet<_> =
+            (#expression).map(|(x,y)| (*x,*y)).collect();
+        assert_eq!(actual, [(1,10),(1,11),(3,30)].into_iter().collect());
+    }));
+    let source: structures::physical::Program = syn::parse_quote! { physical {
+        relation L(a:i32); relation R(tag:i32,a:i32,b:i32);
+        l = pipe rename L@0 {a -> x};
+        r = let rename R@1 {a -> x,b -> y} constants {tag = -7};
+        p = pipe probe first [x] l,r;
+        q = pipe project p keep {y};
+        j = pipe canon probe first [y] q,r;
+        return j as answer(x,y);
+    }};
+    let selected = cq_structure_selection::compile(&source).unwrap();
+    let facts = structures::contract::check(&selected).unwrap();
+    assert_eq!(facts.built["r"].len(), 2);
+    assert!(facts.retained.contains_key("r"));
+    assert!(!facts.filtered.contains_key("r"));
+    let expression = compile(&selected).unwrap();
+    checks.push(quote!({
+        let L: &[(i32,)] = &[(1,),(2,),(3,)];
+        let R: &[(i32,i32,i32)] = &[(-7,1,10),(7,2,20),(-7,3,30)];
+        let actual: ::std::collections::BTreeSet<_> =
+            (#expression).map(|(x,y)| (*x,*y)).collect();
+        assert_eq!(actual, [(1,10),(3,30)].into_iter().collect());
+    }));
+    let source: structures::physical::Program = syn::parse_quote! { physical {
+        relation R(tag:String,a:i32,b:bool);
+        r = let rename R@0 {a -> tag} constants {tag = "yes", b = true};
+        g = pipe canon guard r if (*tag > 1);
+        return g as answer(tag);
+    }};
+    let selected = cq_structure_selection::compile(&source).unwrap();
+    assert!(
+        structures::contract::check(&selected)
+            .unwrap()
+            .retained
+            .contains_key("r")
+    );
+    let expression = compile(&selected).unwrap();
+    checks.push(quote!({
+        let R = vec![
+            (String::from("yes"),1,true),
+            (String::from("yes"),2,true),
+            (String::from("yes"),2,true),
+            (String::from("no"),3,true),
+            (String::from("yes"),4,false),
+        ];
+        let actual: Vec<_> = (#expression).map(|(x,)| *x).collect();
+        assert_eq!(actual, vec![2]);
+    }));
+    let source: structures::physical::Program = syn::parse_quote! { physical {
+        relation R(a:i32);
+        r = exists canon rename R@0 {} constants {a = 7};
+        return r as answer();
+    }};
+    let expression = compile(&cq_structure_selection::compile(&source).unwrap()).unwrap();
+    checks.push(quote!({
+        for (R, expected) in [
+            (&[(7,), (7,), (8,)][..], vec![()]),
+            (&[(8,)][..], vec![]),
+            (&[][..], vec![]),
+        ] {
+            let actual: Vec<()> = (#expression).collect();
+            assert_eq!(actual, expected);
+        }
+    }));
+    checks
+}
+
 /// `answer(c, a) :- L(a), R(b, a), S(b, c)`: the head reverses the sorted
 /// heading `[a, c]`, and `R` declares `b` before `a`.
 #[test]
@@ -407,6 +522,7 @@ fn complete_scenarios_compile_and_execute_against_authored_answers() {
     }
     checks.extend(mixed_smallest_checks());
     checks.extend(filtered_checks());
+    checks.extend(occurrence_checks());
     let source = quote! {
         #![allow(non_snake_case, unused_variables)]
         fn main() { #(#checks)* }

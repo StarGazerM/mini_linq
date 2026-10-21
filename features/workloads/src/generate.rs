@@ -6,6 +6,8 @@
 //! near miss per composite-key component. `EmptyInput` and `NoMatch` are
 //! separate semantic distributions rather than misleading special rows hidden
 //! in that positive dataset. `Scale` controls only volume.
+//! Planting is restricted to variable-only atoms; literal-filtered compilation
+//! is supported independently, but is not a baseline dataset-generation shape.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error as StdError;
@@ -811,7 +813,9 @@ fn positive_atoms(query: &cq::Query) -> Result<Vec<&cq::Atom>, GenerateError> {
         .map(|item| {
             #[allow(unreachable_patterns)]
             match item {
-                cq::BodyItem::Positive { atom } => Ok(atom),
+                cq::BodyItem::Positive { atom } if atom.variables().count() == atom.args.len() => {
+                    Ok(atom)
+                }
                 _ => Err(GenerateError::UnsupportedBodyItem),
             }
         })
@@ -996,8 +1000,9 @@ impl fmt::Display for GenerateError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidQuery(error) => write!(formatter, "invalid workload query: {error}"),
-            Self::UnsupportedBodyItem => formatter
-                .write_str("the baseline generator accepts only positive conjunctive queries"),
+            Self::UnsupportedBodyItem => formatter.write_str(
+                "the baseline generator accepts only variable-only positive conjunctive queries",
+            ),
             Self::UnknownRelation(relation) => {
                 write!(formatter, "body uses undeclared relation `{relation}`")
             }
@@ -1637,6 +1642,28 @@ duplicate(x) :- R(x), R(x);
                 occurrence: 2,
                 relation,
             } if relation == "R"
+        ));
+    }
+
+    #[test]
+    fn literal_atoms_remain_outside_baseline_generation() {
+        let module: cq::Program = syn::parse_quote! {
+            struct LiteralProgram;
+            relation R(tag: i32, value: i32);
+            answer(value) :- R(7, value);
+        };
+        assert!(matches!(
+            check_program_scenario(&module, Scenario::Coverage),
+            Err(GenerateError::UnsupportedBodyItem)
+        ));
+        assert!(matches!(
+            generate_module(
+                &module,
+                Suite::Classic,
+                "literal",
+                config(Scenario::Coverage, Scale::Tiny, 23),
+            ),
+            Err(GenerateError::UnsupportedBodyItem)
         ));
     }
 

@@ -421,3 +421,23 @@ fn branch_generators_capture_written_environment_and_keep_kind() {
         }
     }
 }
+
+#[test]
+fn branch_literal_constants_are_local_filters_not_disjoint_interface_values() {
+    let (vo, target) = plan("struct Q; relation R(a:i32,b:i32); answer(x) :- {R(x,7)} | {R(x,8)};");
+    assert!(cq_lang_ra::disjoint_unions(&target).unwrap().is_empty());
+    let mut changed = target.clone();
+    let rename = changed
+        .plan
+        .definitions
+        .iter_mut()
+        .find_map(|d| match &mut d.operator {
+            cq_lang_ra::Operator::Rename(r) => Some(r),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(rename.mapping.len(), 1);
+    rename.constants = Some(syn::parse_quote!(constants {b = 9}));
+    cq_lang_ra::contract::check(&changed).unwrap();
+    assert!(check(&vo, &changed).is_err());
+}

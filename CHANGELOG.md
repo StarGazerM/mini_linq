@@ -7,6 +7,14 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Keep literal atom arguments in normal form and carry their source-column
+  bindings on relation occurrences. Build all indexes over the matching rows
+  with literal columns dropped, retaining filtered rows for stream sources.
+  Occurrences use ordinary `let` storage and generic index/row builds; only
+  their row source is constant-specific. GPU streams read the occurrence table
+  produced in the build phase, without a per-row literal test in the query kernel.
+  Explicit guards and nonliteral argument bindings retain their existing behavior.
+
 - Add explicit `cq_elaborate::simplify_expansions` to LE only, preserving default
   and Hypergraph plans. Eliminate unobservable expansions by checked RA identities:
   under canonical answer semantics, dead introduced columns require only a

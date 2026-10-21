@@ -441,16 +441,24 @@ fn construct(
                                 .collect(),
                         )
                     };
-                    // Keep owned constant expressions in post-scan predicates.
-                    // An atom expression becomes an owned CQ prefix binding;
-                    // carrying that binding through scan fanout can move it out
-                    // of an FnMut closure. Comparison borrows both operands.
-                    let selections = key.filters.iter().map(|(column, expression)| {
-                        let variable = &variables[*column];
-                        quote!(if *#variable == (#expression))
-                    });
+                    // Literals stay in the filtered occurrence. Nonliteral
+                    // expressions compare after scanning so owned values cannot
+                    // move through an FnMut fanout closure.
+                    let mut arguments: Vec<syn::Expr> = variables
+                        .iter()
+                        .map(|variable| syn::parse_quote!(#variable))
+                        .collect();
+                    let mut selections = Vec::new();
+                    for (column, expression) in &key.filters {
+                        if cq_syntax::equality::literal(cq_syntax::rust::unparen(expression)) {
+                            arguments[*column] = cq_syntax::rust::unparen(expression).clone();
+                        } else {
+                            let variable = &variables[*column];
+                            selections.push(quote!(if *#variable == (#expression)));
+                        }
+                    }
                     let declarations = hole_inputs(&context, std::iter::once(source_name));
-                    holes.push(syn::parse2(quote!(struct #name; #(#declarations)* relation #name(#(#output_columns),*); #name(#(#selected),*) :- #source_name(#(#variables),*) #(, #selections)*;))?);
+                    holes.push(syn::parse2(quote!(struct #name; #(#declarations)* relation #name(#(#output_columns),*); #name(#(#selected),*) :- #source_name(#(#arguments),*) #(, #selections)*;))?);
                     stratum.keys.push(key);
                     stratum.keys.len() - 1
                 };

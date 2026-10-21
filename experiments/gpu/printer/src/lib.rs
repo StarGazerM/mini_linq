@@ -39,6 +39,10 @@
 //! materializing a decompressed global column.
 //! Host row tuples must exactly match declared relation types, not merely their
 //! encoded widths. Integral predicate literals use the compared column's type.
+//! Rename occurrence constants compare original source columns before retaining
+//! filtered rows or building their recorded index. Only mapped nonliteral
+//! columns survive; these occurrences never alias an unfiltered host projection
+//! or use an unfiltered frozen host index.
 //! Range reads are scan filters, never claimed as indexed reads. Output bounds
 //! follow copied input/run columns and certified constants through resident
 //! answer chaining; `probe first` never establishes primary-key uniqueness.

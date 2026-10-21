@@ -79,6 +79,103 @@ impl<'a> Context<'a> {
 
     /// Enumerate borrowed columns in declaration order, then apply the rename.
     pub fn host_scan(&self, result: &str) -> TokenStream {
+        if let Operator::Rename(rename) = &self.physical[result].operator {
+            // Literal predicates belong only to this row source. Retained rows
+            // and indices consume its projected tuples through ordinary builds.
+            if let Some(constants) = &rename.constants {
+                let host = &self.hosts[&self.physical_analysis.hosts[result]];
+                let value = &host.value;
+                let bindings = host
+                    .layout
+                    .iter()
+                    .enumerate()
+                    .map(|(i, _)| format_ident!("__cq_source_{i}"))
+                    .collect::<Vec<_>>();
+                let tests = constants.equalities.iter().map(|equality| {
+                    let position = host
+                        .layout
+                        .iter()
+                        .position(|column| *column == symbol_name(&equality.left))
+                        .expect("checked occurrence column");
+                    let binding = &bindings[position];
+                    let structures::syntax::EqualityValue::Literal(literal) = &equality.right
+                    else {
+                        unreachable!("checked occurrence literal")
+                    };
+                    if matches!(
+                        literal,
+                        Expr::Lit(syn::ExprLit {
+                            lit: syn::Lit::Str(_),
+                            ..
+                        })
+                    ) {
+                        quote!(::cq_storage::relational_string_eq(*#binding, &#literal))
+                    } else {
+                        quote!(::cq_storage::relational_eq(*#binding, &#literal))
+                    }
+                });
+                let row = self.carrier(result, |column| {
+                    let source = &self.physical_analysis.renames[result][column];
+                    let position = host
+                        .layout
+                        .iter()
+                        .position(|column| column == source)
+                        .expect("checked occurrence mapping");
+                    bindings[position].to_token_stream()
+                });
+                let ty = self.fallback_type(result, "scan", &[]);
+                let literals: BTreeMap<_, _> = constants
+                    .equalities
+                    .iter()
+                    .map(|equality| {
+                        let structures::syntax::EqualityValue::Literal(literal) = &equality.right
+                        else {
+                            unreachable!("checked occurrence literal")
+                        };
+                        (symbol_name(&equality.left), literal)
+                    })
+                    .collect();
+                let prefix = host
+                    .layout
+                    .iter()
+                    .take_while(|column| literals.contains_key(*column))
+                    .count();
+                let native_key = prefix > 0 && (0..prefix).all(|i| {
+                    !matches!(literals[&host.layout[i]], Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(_), .. }))
+                        || matches!(&host.types[i], syn::Type::Reference(reference)
+                            if matches!(&*reference.elem, syn::Type::Path(path) if path.path.is_ident("str")))
+                });
+                let rows = if native_key {
+                    let types = &host.types[..prefix];
+                    let values = host.layout[..prefix].iter().map(|column| literals[column]);
+                    quote!({
+                        use ::cq_storage::dispatch::PointRead as _;
+                        (&&::cq_storage::dispatch::PointHost::<_, (#(#types,)*), _>::new(
+                            #value,
+                            move || {
+                                let __cq_scan: #ty = ::core::iter::Iterator::map(
+                                    ::cq_storage::rows::Rows::rows(#value),
+                                    ::core::convert::identity
+                                );
+                                __cq_scan
+                            }
+                        )).point(&(#(#values,)*))
+                    })
+                } else {
+                    quote!(::cq_storage::rows::Rows::rows(#value))
+                };
+                return quote! {{
+                    let __cq_scan: #ty = ::core::iter::Iterator::map(
+                        ::core::iter::Iterator::filter(
+                            #rows,
+                            move |(#(#bindings,)*)| true #(&& #tests)*
+                        ),
+                        move |(#(#bindings,)*)| #row
+                    );
+                    __cq_scan
+                }};
+            }
+        }
         if let Some(ids) = self.join_filter_ids(result) {
             return self.positional_rows(result, ids);
         }

@@ -57,8 +57,8 @@
 //! no such context reduction may modify a negated original branch.
 //!
 pub use cq_syntax::algebra::{
-    Anti, AttributeRename, Bind, BlockOrigin, Correlation, Domain, Environment, Guard, Project,
-    Rename, Select, Theta, Union, Unit,
+    Anti, AttributeRename, Bind, BlockOrigin, Correlation, Domain, Environment, Guard,
+    OccurrenceConstants, Project, Rename, Select, Theta, Union, Unit,
 };
 pub use cq_syntax::{Equality, EqualityValue};
 
@@ -698,24 +698,43 @@ fn check_rename(rename: &Rename, declaration: &cq_syntax::RelationDecl) -> syn::
             ));
         }
     }
+    let mut constant_sources = BTreeSet::new();
+    if let Some(constants) = &rename.constants {
+        constants.check()?;
+        for equality in &constants.equalities {
+            let source = symbol_name(&equality.left);
+            let Some(column) = declaration
+                .columns
+                .iter()
+                .find(|c| symbol_name(&c.name) == source)
+            else {
+                return Err(syn::Error::new_spanned(
+                    &equality.left,
+                    format!("occurrence constant source attribute `{source}` is not declared"),
+                ));
+            };
+            if by_source.contains_key(&source) {
+                return Err(syn::Error::new_spanned(
+                    &equality.left,
+                    "occurrence constant source attribute must not also be mapped",
+                ));
+            }
+            check_leibniz(&column.ty, &column.name)?;
+            constant_sources.insert(source);
+        }
+    }
 
-    if by_source.len() != declaration.columns.len() {
+    if by_source.len() + constant_sources.len() != declaration.columns.len() {
         return Err(syn::Error::new_spanned(
             rename,
             format!(
-                "rename of `{}` must map every declared source attribute exactly once",
+                "rename of `{}` must map or constrain every declared source attribute exactly once",
                 rename.relation
             ),
         ));
     }
 
-    let mut heading = Heading::new();
-    for column in &declaration.columns {
-        let source = symbol_name(&column.name);
-        let attribute = by_source[&source];
-        heading.insert(symbol_name(&attribute.target));
-    }
-    Ok(heading)
+    Ok(targets)
 }
 
 fn earlier_relation<'a>(

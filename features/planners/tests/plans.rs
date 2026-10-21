@@ -143,6 +143,19 @@ fn retail_h07_selections_belong_to_atoms_with_and_without_blocks() {
             let mut ranges = 0;
             let mut constants = 0;
             for definition in &target.plan.definitions {
+                if let ra::Operator::Rename(rename) = &definition.operator {
+                    if let Some(selection) = &rename.constants {
+                        assert_eq!(rename.relation, "Nation", "blocks={blocks} {planner:?}");
+                        assert!(selection.equalities.iter().all(|e| e.left == "name"));
+                        assert!(
+                            rename
+                                .mapping
+                                .iter()
+                                .all(|mapping| mapping.source != "name")
+                        );
+                        constants += selection.equalities.len();
+                    }
+                }
                 let ra::Operator::Select(select) = &definition.operator else {
                     continue;
                 };
@@ -164,19 +177,6 @@ fn retail_h07_selections_belong_to_atoms_with_and_without_blocks() {
                         target.to_token_stream()
                     );
                     ranges += select.condition.constraints.len();
-                }
-                if select
-                    .condition
-                    .equalities
-                    .iter()
-                    .any(|e| matches!(e.right, ra::EqualityValue::Literal(_)))
-                {
-                    assert!(
-                        matches!(&input.operator, ra::Operator::Rename(r) if r.relation == "Nation"),
-                        "blocks={blocks} {planner:?}: {}",
-                        target.to_token_stream()
-                    );
-                    constants += select.condition.equalities.len();
                 }
             }
             assert_eq!(ranges, 1, "blocks={blocks} {planner:?}");
@@ -385,7 +385,7 @@ fn transfer_reduces_forward_into_the_stream_then_backward_from_filtered_sides() 
     assert_eq!(
         reductions,
         [
-            "reduce S @ 2 with T @ 3 (c , _) ;",
+            "reduce S @ 2 with T @ 3 (c) ;",
             "reduce R @ 0 with S @ 2 (b , _) ;",
             "reduce S @ 2 with R @ 0 (_ , b) ;",
             "reduce T @ 3 with S @ 2 (_ , c) ;",
@@ -540,7 +540,10 @@ fn le_h05_plan_b_keeps_nation_as_an_existential_lookup() {
             .iter()
             .filter(|definition| {
                 matches!(&definition.operator, ra::Operator::Semijoin(join)
-                if analysis[&join.right.to_string()].heading.contains("__cq_2_1"))
+                if target.plan.definitions.iter().any(|input|
+                    input.result == join.right
+                        && matches!(&input.operator, ra::Operator::Rename(rename)
+                            if rename.relation == "Region" && rename.constants.is_some())))
             })
             .count(),
         1,

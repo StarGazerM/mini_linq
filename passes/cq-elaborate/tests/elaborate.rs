@@ -103,9 +103,24 @@ fn literals_are_relational_reads_and_repeats_are_relational_equalities() {
         })
         .collect();
     assert!(
-        selections
+        !selections
             .iter()
             .any(|s| s.condition.constant_keys().is_some())
+    );
+    let rename = target
+        .plan
+        .definitions
+        .iter()
+        .find_map(|d| match &d.operator {
+            ra::Operator::Rename(rename) if rename.relation == "R" => Some(rename),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(rename.mapping.len(), 1);
+    assert_eq!(rename.mapping[0].source, "a");
+    assert_eq!(
+        rename.constants.as_ref().unwrap().equalities,
+        syn::parse_quote!(b = 5)
     );
     assert!(selections.iter().any(|s| {
         s.condition
@@ -809,10 +824,10 @@ fn seed_997_reductions_match_equality_classes_before_rust() {
     let reduced = vo(
         &normal,
         quote! {
-            reduce r1@2 with r1@0(_, _);
-            reduce r0@3 with r1@2(_, v3);
-            reduce r1@2 with r0@3(v4, _, _);
-            reduce r1@0 with r1@2(_, _);
+            reduce r1@1 with r1@0(_);
+            reduce r0@2 with r1@1(_, v3);
+            reduce r1@1 with r0@2(v4);
+            reduce r1@0 with r1@1(_, _);
             #(#steps)*
         },
     );
@@ -1041,9 +1056,9 @@ fn shared_scenarios_and_mutated_output_correspondence() {
 }
 
 #[test]
-fn executable_written_reference_does_not_hoist_a_later_literal() {
-    // R={(0,0,6)} makes the written bind panic before the literal rejects 6.
-    // The optimized target may suppress that panic; the oracle must preserve it.
+fn written_reference_filters_literal_columns_before_dependent_expressions() {
+    // The literal belongs to the occurrence: a mismatching row never reaches
+    // the dependent binding, in either the written or optimized plan.
     let surface = cq(quote! {
         struct Q; relation R(x:i32, value:i32, tag:i32);
         answer(x) :- R(x, 10 / *x, 5);
@@ -1052,23 +1067,23 @@ fn executable_written_reference_does_not_hoist_a_later_literal() {
     let source = coarse(&normal);
     let written = cq_elaborate::compile_written(&source).unwrap();
     check(&source, &written).unwrap();
-    let bind = written
-        .plan
-        .definitions
-        .iter()
-        .position(|d| matches!(d.operator, ra::Operator::Bind(_)))
-        .unwrap();
-    let literal = written.plan.definitions.iter().position(|d| matches!(&d.operator, ra::Operator::Select(s) if s.condition.constant_keys().is_some())).unwrap();
-    assert!(bind < literal);
-    let optimized = compile(&source).unwrap();
-    let bind = optimized
-        .plan
-        .definitions
-        .iter()
-        .position(|d| matches!(d.operator, ra::Operator::Bind(_)))
-        .unwrap();
-    let literal = optimized.plan.definitions.iter().position(|d| matches!(&d.operator, ra::Operator::Select(s) if s.condition.constant_keys().is_some())).unwrap();
-    assert!(literal < bind);
+    for target in [written, compile(&source).unwrap()] {
+        let bind = target
+            .plan
+            .definitions
+            .iter()
+            .position(|d| matches!(d.operator, ra::Operator::Bind(_)))
+            .unwrap();
+        let literal = target
+            .plan
+            .definitions
+            .iter()
+            .position(|d| matches!(&d.operator, ra::Operator::Rename(r) if r.constants.is_some()))
+            .unwrap();
+        assert!(literal < bind);
+        assert!(!target.plan.definitions.iter().any(|d|
+            matches!(&d.operator, ra::Operator::Select(s) if s.condition.constant_keys().is_some())));
+    }
 }
 
 #[test]
@@ -1535,4 +1550,72 @@ fn generator_elaboration_round_trips_and_certifies_set_valued_binding() {
     };
     binding.expression = syn::parse_quote!(0..100);
     assert!(check(&source, &changed).is_err());
+}
+
+#[test]
+fn literal_occurrences_drop_exact_source_positions_and_reject_changed_values() {
+    for body in [
+        quote!(R(7, x, -2)),
+        quote!(R(x, 7, -2)),
+        quote!(R(7, -2, x)),
+    ] {
+        let source = cq(quote! {
+            struct Q; relation R(a:i32,b:i32,c:i32);
+            answer(x) :- #body;
+        });
+        let normal = cq::normal::normalize(&source).unwrap();
+        assert_eq!(normal, source);
+        let planned = coarse(&normal);
+        let target = compile(&planned).unwrap();
+        let rename = target
+            .plan
+            .definitions
+            .iter()
+            .find_map(|d| match &d.operator {
+                ra::Operator::Rename(r) => Some(r),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(rename.mapping.len(), 1);
+        assert_eq!(rename.constants.as_ref().unwrap().equalities.len(), 2);
+        assert!(
+            !target
+                .plan
+                .definitions
+                .iter()
+                .any(|d| matches!(d.operator, ra::Operator::Select(_) | ra::Operator::Guard(_)))
+        );
+        assert_eq!(
+            syn::parse2::<ra::Program>(target.to_token_stream()).unwrap(),
+            target
+        );
+        let mut changed = target.clone();
+        let rename = changed
+            .plan
+            .definitions
+            .iter_mut()
+            .find_map(|d| match &mut d.operator {
+                ra::Operator::Rename(r) => Some(r),
+                _ => None,
+            })
+            .unwrap();
+        rename.constants.as_mut().unwrap().equalities[0].right =
+            ra::EqualityValue::Literal(syn::parse_quote!(99));
+        ra::contract::check(&changed).unwrap();
+        assert!(check(&planned, &changed).is_err());
+    }
+    let source = cq(quote! {
+        struct Q; relation R(a:i32,b:bool,c:&str); relation answer(value:i32);
+        answer(1) :- R(-7,true,"fixed");
+    });
+    let normal = cq::normal::normalize(&source).unwrap();
+    let target = compile(&coarse(&normal)).unwrap();
+    let rows = ra::contract::check(&target).unwrap();
+    let occurrence = target
+        .plan
+        .definitions
+        .iter()
+        .find(|definition| matches!(definition.operator, ra::Operator::Rename(_)))
+        .unwrap();
+    assert!(rows[&occurrence.result.to_string()].heading.is_empty());
 }

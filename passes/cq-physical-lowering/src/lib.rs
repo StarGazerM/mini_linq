@@ -1,6 +1,6 @@
 //! IX → Physical: choose operators and retention using plan reads only.
-//! Host renames are reusable pipe reads. Literal selections are one-key point
-//! reads: native leading-prefix dispatch or scan/filter, with no index build.
+//! Unfiltered host renames are reusable pipe reads. Literal occurrences build
+//! filtered retained rows or keyed storage from a base scan.
 //! Meaning is bottom + Set. Opaque partial Rust bind/guard nodes retain their
 //! ancestry chain; relational steps may move earlier, never later across them.
 //! I/O, mutation and evaluation counts are outside the denotation.
@@ -217,6 +217,9 @@ fn modes(operations: &[(Ident, Op)], reads: &BTreeMap<String, Reads>) -> Vec<phy
             let name = symbol_name(name);
             let result = &reads[&name];
             match op {
+                Op::Rename(rename) if rename.constants.is_some() => {
+                    physical::Mode::Let(Default::default())
+                }
                 Op::Rename(_) => physical::Mode::Pipe(Default::default()),
                 _ if !result.keyed.is_empty() || result.count >= 2 => {
                     physical::Mode::Let(Default::default())
@@ -281,7 +284,9 @@ fn fuse_modes(
                 .iter()
                 .position(|(id, _)| symbol_name(id) == prefix)
             {
-                modes[i] = physical::Mode::Pipe(Default::default());
+                if !matches!(&operations[i].1, Op::Rename(rename) if rename.constants.is_some()) {
+                    modes[i] = physical::Mode::Pipe(Default::default());
+                }
             }
         }
     }

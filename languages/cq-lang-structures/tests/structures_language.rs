@@ -2,6 +2,56 @@
 use cq_lang_structures as structures;
 use quote::ToTokens;
 
+#[test]
+fn constant_occurrences_use_ordinary_storage() {
+    let source: structures::Program = syn::parse_quote! { physical {
+        relation R(a:i32,b:i32);
+        r = let canon rename R@0 {a -> x} constants {b = 7};
+        return r as answer(x);
+    } structures {
+        r host scan = ::core::iter::Map<_,_> [];
+        r rows = ::std::vec::Vec<_>;
+        r canon = ::cq_storage::HashSet<_>;
+    }};
+    structures::contract::check(&source).unwrap();
+    assert_eq!(
+        syn::parse2::<structures::Program>(source.to_token_stream()).unwrap(),
+        source
+    );
+    for rows in [
+        quote::quote!(r rows = ::std::vec::Vec<_> payload [] constants {};),
+        quote::quote!(r rows = ::std::vec::Vec<_> payload [x] constants {b = 7};),
+    ] {
+        assert!(syn::parse2::<structures::Entry>(rows).is_err());
+    }
+    let indexed: structures::Program = syn::parse_quote! { physical {
+        relation L(a:i32); relation R(a:i32,b:i32,c:i32);
+        l = pipe rename L@0 {a -> x};
+        r = let rename R@1 {a -> x,c -> y} constants {b = 7};
+        j = pipe canon probe first [x] l,r;
+        return j as answer(x,y);
+    } structures {
+        l host scan = ::core::iter::Map<_,_> [];
+        r host scan = ::core::iter::Map<_,_> [];
+        r = ::cq_storage::HashIndex<'_,_,_> [x];
+        j canon = ::cq_storage::HashSet<_>;
+    }};
+    let facts = structures::contract::check(&indexed).unwrap();
+    assert!(!facts.filtered.contains_key("r"));
+    assert!(!facts.retained.contains_key("r"));
+    assert!(!facts.host_read("r"));
+    for entry in [
+        syn::parse_quote!(
+            r = ::cq_storage::HashIndex<'_,_,_> [x] payload [x,y] constants {};
+        ),
+        syn::parse_quote!(r host j = ::cq_storage::HashIndex<'_,_,_> [x];),
+    ] {
+        let mut invalid = indexed.clone();
+        invalid.structures.entries[2] = entry;
+        assert!(structures::contract::check(&invalid).is_err());
+    }
+}
+
 fn smallest_expand_program() -> structures::Program {
     syn::parse_quote! { physical {
         relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);

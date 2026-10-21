@@ -164,13 +164,13 @@ impl Atom {
         self.args.iter().filter_map(rust::variable)
     }
     pub fn is_normalized(&self) -> bool {
-        self.variables().count() == self.args.len()
-            && self
-                .variables()
-                .map(symbol_name)
-                .collect::<BTreeSet<_>>()
-                .len()
-                == self.args.len()
+        let mut variables = BTreeSet::new();
+        self.args.iter().all(|argument| {
+            rust::variable(argument).map_or_else(
+                || equality::literal(argument),
+                |variable| variables.insert(symbol_name(variable)),
+            )
+        })
     }
 }
 

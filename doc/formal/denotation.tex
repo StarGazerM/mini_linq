@@ -26,6 +26,12 @@ Then $\Val_I(C_1\land C_2)=\Val_I(C_1)\bowtie\Val_I(C_2)$, and for head variable
 $\bar h$ with $H=\set(\bar h)$,
 $\sem q_I=\operatorname{out}_{\bar h}(\pi_H\Val_I(C))$ where
 $\operatorname{out}_{\bar h}$ fixes answer order and repeated positions.
+In a positive atom, literal positions restrict the declared relation before
+its other columns are renamed: for source-column bindings $C$ and the remaining
+column map $m$, its relation is $\delta_m(\pi_{\dom m}\sigma_C I(R))$.
+Literal columns therefore do not bind variables. This is an occurrence read,
+not a subsequent guard; dependent argument binds see only its matching rows.
+
 
 \subsection{The written-order denotation}
 Let $T X=\{\bot\}+\operatorname{Set}_{\rm fin}(X)$, $\eta(x)=\{x\}$, and for

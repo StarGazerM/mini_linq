@@ -720,6 +720,7 @@ impl<'a> View<'a> {
                 Atom {
                     relation: atom.relation.clone(),
                     bindings: atom.bindings.clone(),
+                    constants: atom.constants.clone(),
                     node: result,
                 },
             );
@@ -792,7 +793,7 @@ impl<'a> View<'a> {
                 })
                 .collect::<Vec<_>>();
             let relation = Ident::new("block", proc_macro2::Span::call_site());
-            let atom = self.result.atom(id, &relation, &mapping);
+            let atom = self.result.atom(id, &relation, &mapping, None);
             if let Some(prefix) = original.correlation {
                 let prefix = self.node(prefix)?;
                 self.result.join(prefix, atom, false)

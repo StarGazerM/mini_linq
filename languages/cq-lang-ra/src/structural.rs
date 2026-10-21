@@ -89,6 +89,7 @@ impl Reduction {
 pub(super) struct Atom {
     relation: String,
     bindings: HashMap<String, String>,
+    constants: std::collections::BTreeMap<String, String>,
     node: usize,
 }
 
@@ -141,8 +142,9 @@ impl Schedule {
         path: &cq_syntax::Occurrence,
         relation: &Ident,
         mapping: &[(Ident, Ident)],
+        constants: Option<&crate::OccurrenceConstants>,
     ) -> usize {
-        self.atom(self.paths[path], relation, mapping)
+        self.atom(self.paths[path], relation, mapping, constants)
     }
     pub fn union_frame(
         &mut self,
@@ -228,6 +230,7 @@ impl Schedule {
         occurrence: usize,
         relation: &Ident,
         mapping: &[(Ident, Ident)],
+        constants: Option<&crate::OccurrenceConstants>,
     ) -> usize {
         let view = row_view(&mut self.row_views, None, false);
         let node = self.push(Node {
@@ -261,6 +264,11 @@ impl Schedule {
                 bindings: mapping
                     .iter()
                     .map(|(s, t)| (symbol_name(s), symbol_name(t)))
+                    .collect(),
+                constants: constants
+                    .into_iter()
+                    .flat_map(|c| &c.equalities)
+                    .map(|e| (symbol_name(&e.left), e.right.to_token_stream().to_string()))
                     .collect(),
                 node,
             },
@@ -769,6 +777,7 @@ impl Schedule {
                         .iter()
                         .map(|m| (m.source.clone(), m.target.clone()))
                         .collect::<Vec<_>>(),
+                    r.constants.as_ref(),
                 ),
                 Operator::Project(p) => schedule.project(
                     results[&symbol_name(&p.input)],
@@ -1280,6 +1289,17 @@ fn compare(source: &Schedule, target: &Schedule) -> Result<(), String> {
     if source.head != target.head {
         return Err("output head differs from source".into());
     }
+    if source.atoms.len() != target.atoms.len()
+        || source.atoms.iter().any(|(occurrence, atom)| {
+            target.atoms.get(occurrence).is_none_or(|t| {
+                atom.relation != t.relation
+                    || atom.constants != t.constants
+                    || atom.bindings.keys().collect::<HashSet<_>>() != t.bindings.keys().collect()
+            })
+        })
+    {
+        return Err("atom occurrence multiset differs from source".into());
+    }
     if source
         .nodes
         .iter()
@@ -1296,16 +1316,6 @@ fn compare(source: &Schedule, target: &Schedule) -> Result<(), String> {
             .any(|(s, t)| s.payload != t.payload)
     {
         return Err("Rust chain differs in order, payload or bindings".into());
-    }
-    if source.atoms.len() != target.atoms.len()
-        || source.atoms.iter().any(|(occurrence, atom)| {
-            target.atoms.get(occurrence).is_none_or(|t| {
-                atom.relation != t.relation
-                    || atom.bindings.keys().collect::<HashSet<_>>() != t.bindings.keys().collect()
-            })
-        })
-    {
-        return Err("atom occurrence multiset differs from source".into());
     }
     if source.split_views() || target.split_views() {
         // Independent projected reads of a single occurrence are outside the

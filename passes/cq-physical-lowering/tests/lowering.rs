@@ -3,6 +3,32 @@ use cq_lang_physical as physical;
 use cq_physical_lowering::{check, compile, erase};
 use cq_testkit::{cases, corpus as scenarios, rewrites as authored, semantics as oracle, values};
 #[test]
+fn literal_occurrences_lower_to_retained_sources_without_select_or_guard() {
+    let (source, target) = lower(
+        "relational { relation R(a:i32,b:i32);
+        r = rename R@0 {a -> x} constants {b = 7}; output r as answer(x);
+        } indexes {}",
+    );
+    assert_eq!(target.program.definitions.len(), 1);
+    assert!(matches!(
+        target.program.definitions[0].mode,
+        physical::Mode::Let(_)
+    ));
+    assert!(matches!(&target.program.definitions[0].operator,
+        physical::Operator::Rename(rename) if rename.constants.is_some()));
+    assert_eq!(erase(&target), source.ra);
+    let (_, target) = lower(
+        "relational { relation R(a:i32);
+        r = rename R@0 {} constants {a = 7}; output r as answer();
+        } indexes {}",
+    );
+    assert!(matches!(
+        target.program.definitions[0].mode,
+        physical::Mode::Exists(_)
+    ));
+}
+
+#[test]
 fn scenarios_preserve_relational_answers_under_probe_and_merge() {
     for case in scenarios::SCENARIOS {
         let source = case.parse_ix().unwrap();

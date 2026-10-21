@@ -1032,3 +1032,73 @@ fn generator_before_facts_are_structural() {
     } };
     assert!(ra::check_rewrite(&source, &moved).is_err());
 }
+
+#[test]
+fn occurrence_constants_roundtrip_drop_columns_and_preserve_source_types() {
+    let source: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32,b:bool,c:i64);
+        r = rename R@0 {c -> x} constants {a = -7, b = true};
+        output r as answer(x);
+    }};
+    let facts = ra::contract::check(&source).unwrap();
+    assert_eq!(facts["r"].heading, ["x".into()].into());
+    assert_eq!(facts["r"].types["x"], syn::parse_quote!(i64));
+    assert_eq!(
+        syn::parse2::<ra::Program>(source.to_token_stream()).unwrap(),
+        source
+    );
+    let all: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32);
+        r = rename R@0 {} constants {a = 7};
+        output r as answer();
+    }};
+    assert!(ra::contract::check(&all).unwrap()["r"].heading.is_empty());
+}
+
+#[test]
+fn occurrence_constants_require_an_exact_literal_source_partition() {
+    for operator in [
+        quote!(rename R@0 {a -> x} constants {}),
+        quote!(rename R@0 {a -> x} constants {b = x}),
+        quote!(rename R@0 {a -> x} constants {b = 7, b = 8}),
+        quote!(rename R@0 {a -> x} constants {a = 7}),
+        quote!(rename R@0 {a -> x} constants {missing = 7}),
+        quote!(rename R@0 {} constants {b = 7}),
+    ] {
+        assert!(
+            check(quote! { relational {
+                relation R(a:i32,b:i32);
+                r = #operator;
+                output r as answer();
+            }})
+            .is_err()
+        );
+    }
+    assert!(
+        check(quote! { relational {
+            relation R(a:i32,b:f64);
+            r = rename R@0 {a -> x} constants {b = 1.0};
+            output r as answer(x);
+        }})
+        .is_err()
+    );
+}
+
+#[test]
+fn rewrites_preserve_occurrence_constants_without_inventing_union_disjointness() {
+    let source: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32,b:i32);
+        r = rename R@0 {a -> x} constants {b = 7};
+        s = rename R@1 {a -> x} constants {b = 8};
+        u = union r, s;
+        output u as answer(x);
+    }};
+    ra::contract::check(&source).unwrap();
+    assert!(ra::disjoint_unions(&source).unwrap().is_empty());
+    let mut changed = source.clone();
+    if let ra::Operator::Rename(rename) = &mut changed.plan.definitions[0].operator {
+        rename.constants = Some(syn::parse_quote!(constants {b = 9}));
+    }
+    ra::contract::check(&changed).unwrap();
+    assert!(ra::check_rewrite(&source, &changed).is_err());
+}

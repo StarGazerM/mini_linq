@@ -443,41 +443,43 @@ fn owned_negative_constants_are_post_scan_filters_not_owned_prefixes() {
 }
 
 #[test]
-fn literal_key_filter_correspondence_uses_complete_cq_recognition() {
+fn literal_key_filter_correspondence_preserves_atom_literals() {
     let source = constant_schedule();
     let target = compile(&source).unwrap();
     let key = &target.context.strata[0].keys[0];
     let hole = &target.holes[key.hole].cq;
+    assert_eq!(hole.query.body.len(), 1);
     let BodyItem::Positive { atom } = &hole.query.body[0] else {
         unreachable!()
     };
-    let variable = &atom.args[0];
-    let raw: BodyItem = syn::parse_quote!(if *#variable == ("abstract"));
-    assert!(matches!(raw, BodyItem::Filter(_)));
-    assert!(matches!(
-        hole.query.body[1],
-        BodyItem::Equality(_) | BodyItem::Constraint(_)
-    ));
-    assert_ne!(hole.query.body[1], raw);
+    assert_eq!(atom.args[0], syn::parse_quote!("abstract"));
+    assert_eq!(atom.variables().count(), 1);
     check(&source, &target).unwrap();
     let restored: cq_lang_cq::Program = syn::parse2(hole.to_token_stream()).unwrap();
     assert_eq!(&restored, hole);
+    let normal = cq_lang_cq::normal::normalize(hole).unwrap();
+    assert_eq!(normal.query.body.len(), 1);
+    let BodyItem::Positive { atom } = &normal.query.body[0] else {
+        unreachable!()
+    };
+    assert_eq!(atom.args[0], syn::parse_quote!("abstract"));
 
-    // A different literal remains a well-formed, recognized CQ predicate,
-    // but must not pass correspondence with the recorded source selection.
-    let name = &hole.name;
-    let declarations = &hole.declarations;
-    let head = &hole.query.head;
-    let changed_hole: cq_lang_cq::Program = syn::parse2(quote! {
-        struct #name;
-        #(#declarations)*
-        #head :- #atom, if *#variable == ("changed");
-    })
-    .unwrap();
-    cq_lang_cq::contract::check(&changed_hole).unwrap();
+    let all_constants = &target.holes[target.context.strata[1].keys[1].hole].cq;
+    assert_eq!(all_constants.query.body.len(), 1);
+    let BodyItem::Positive { atom } = &all_constants.query.body[0] else {
+        unreachable!()
+    };
+    assert_eq!(atom.variables().count(), 0);
+    assert_eq!(atom.args[1], syn::parse_quote!(7));
+
+    // A changed literal is still valid CQ, but changes the recorded selection.
     let hole_index = key.hole;
     let mut changed = target;
-    changed.holes[hole_index].cq = changed_hole;
+    let BodyItem::Positive { atom } = &mut changed.holes[hole_index].cq.query.body[0] else {
+        unreachable!()
+    };
+    atom.args[0] = syn::parse_quote!("changed");
+    cq_lang_cq::contract::check(&changed.holes[hole_index].cq).unwrap();
     assert!(check(&source, &changed).is_err());
 }
 
@@ -873,11 +875,13 @@ fn leveled_device_layouts_cover_only_changing_keyed_full_reads() {
     let target = cq_datalog_fork::compile_with_ratio(&source, 8).unwrap();
     check(&source, &target).unwrap();
     assert_eq!(target.context.leveled_ratio, 8);
-    assert_eq!(target.context.changing_layout_realization,
-        cq_lang_datalog_round::LayoutRealization::MaintainedLeveledDeviceIndex);
+    assert_eq!(
+        target.context.changing_layout_realization,
+        cq_lang_datalog_round::LayoutRealization::MaintainedLeveledDeviceIndex
+    );
     assert_eq!(target.context.strata[0].leveled_layouts, [1]);
     assert!(target.context.strata[0].frozen_layouts.is_empty());
-    for layouts in [vec![], vec![2], vec![1,1], vec![3]] {
+    for layouts in [vec![], vec![2], vec![1, 1], vec![3]] {
         let mut wrong = target.clone();
         wrong.context.strata[0].leveled_layouts = layouts;
         assert!(check(&source, &wrong).is_err());
@@ -888,7 +892,11 @@ fn leveled_device_layouts_cover_only_changing_keyed_full_reads() {
     assert!(check(&source, &wrong).is_err());
     assert!(cq_datalog_fork::compile_with_ratio(&source, 1).is_err());
     assert_eq!(compile(&source).unwrap().context.leveled_ratio, 4);
-    assert!(compile(&authored()).unwrap().context.strata[0].leveled_layouts.is_empty());
+    assert!(
+        compile(&authored()).unwrap().context.strata[0]
+            .leveled_layouts
+            .is_empty()
+    );
 }
 
 #[test]

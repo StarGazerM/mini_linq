@@ -335,10 +335,13 @@ pub(crate) fn check_storage_with_analysis(
             )?;
             let hole = checked_hole(source, target, key.hole, &mut used_holes)?;
             add_name(&hole.name)?;
+            let literal_count = key.filters.iter()
+                .filter(|(_, expression)| cq_syntax::equality::literal(rust::unparen(expression)))
+                .count();
             ensure(
-                hole.query.body.len() == 1 + key.filters.len(),
+                hole.query.body.len() == 1 + key.filters.len() - literal_count,
                 source,
-                "key hole must be a projection with exactly its constant filters",
+                "key hole must retain literal columns and exactly its nonliteral filters",
             )?;
             let BodyItem::Positive { atom } = &hole.query.body[0] else {
                 return Err(syn::Error::new_spanned(
@@ -353,15 +356,22 @@ pub(crate) fn check_storage_with_analysis(
             )?;
             let variables: Vec<_> = atom.args.iter().map(rust::variable).collect();
             ensure(
-                variables
+                atom.args.iter().enumerate().all(|(column, argument)| {
+                    match key.filters.iter().find(|(i, expression)| {
+                        *i == column && cq_syntax::equality::literal(rust::unparen(expression))
+                    }) {
+                        Some((_, expression)) => argument == rust::unparen(expression),
+                        None => rust::variable(argument).is_some(),
+                    }
+                }) && variables
                     .iter()
                     .flatten()
                     .map(|id| symbol_name(id))
                     .collect::<BTreeSet<_>>()
                     .len()
-                    == declaration.arity(),
+                    == declaration.arity() - literal_count,
                 source,
-                "key projection requires distinct variables",
+                "key projection requires distinct variables and unchanged literal columns",
             )?;
             let mut output = declaration.clone();
             output.name = hole.name.clone();
@@ -403,13 +413,15 @@ pub(crate) fn check_storage_with_analysis(
             let mut expected_declarations = required_inputs(context, &hole.query);
             expected_declarations.push(output);
             let name = &hole.name;
-            let selections = key.filters.iter().map(|(column, expression)| {
-                let variable = variables[*column].expect("checked filter variable");
-                quote!(if *#variable == (#expression))
+            let selections = key.filters.iter().filter_map(|(column, expression)| {
+                if cq_syntax::equality::literal(rust::unparen(expression)) {
+                    None
+                } else {
+                    let variable = variables[*column].expect("checked filter variable");
+                    Some(quote!(if *#variable == (#expression)))
+                }
             });
-            // A complete CQ parse recognizes literal equalities and total
-            // predicates. Parsing isolated BodyItems would leave raw Filters
-            // and compare different language representations of the same clause.
+            // Parse complete CQ to preserve recognition of authored predicates.
             let expected: CqProgram = syn::parse2(quote! {
                 struct #name;
                 #(#expected_declarations)*

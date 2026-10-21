@@ -141,12 +141,16 @@ pub(super) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
             _ => {
                 return error(
                     &definition.name,
-                    "filtered storage requires a point or range selection",
+                    "filtered storage requires a point or range selection, or union",
                 );
             }
         };
         let multiple = matches!(&definition.operator,Operator::Union(union) if union.origin.as_ref().is_none_or(|origin|origin.over.is_none()));
-        let built = &analysis.built[name];
+        let built = analysis
+            .built
+            .get(name)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         if analysis.physical.modes[name] != ModeKind::Let
             || (analysis.physical.scanned.contains(name) || analysis.retained.contains_key(name))
                 && !multiple

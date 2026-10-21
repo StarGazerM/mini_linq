@@ -233,3 +233,26 @@ fn membership_and_parameters_are_const_but_disjunction_and_variable_bounds_are_f
     wrong.indexes[0].requirement.supply = syn::parse_quote!(range);
     assert!(check(&source, &wrong).is_err());
 }
+
+#[test]
+fn occurrence_constants_are_not_index_keys_or_selection_demands() {
+    let source: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32,b:i32,c:i32); relation S(a:i32);
+        r = rename R@0 {a -> x, c -> y} constants {b = 7};
+        s = rename S@1 {a -> x};
+        j = natural_join s with r;
+        output j as answer(x,y);
+    }};
+    let expected: ix::Program = syn::parse_quote! { #source indexes {
+        i0 = @r[0] stream;
+    }};
+    let target = compile(&source).unwrap();
+    assert_eq!(target, expected);
+    check(&source, &target).unwrap();
+    let lone: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32);
+        r = rename R@0 {} constants {a = 7};
+        output r as answer();
+    }};
+    assert!(compile(&lone).unwrap().indexes.is_empty());
+}

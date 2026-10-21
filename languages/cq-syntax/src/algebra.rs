@@ -5,6 +5,7 @@ pub mod kw {
     syn::custom_keyword!(keep);
     syn::custom_keyword!(project);
     syn::custom_keyword!(rename);
+    syn::custom_keyword!(constants);
     syn::custom_keyword!(unit);
     syn::custom_keyword!(select);
     syn::custom_keyword!(with);
@@ -125,12 +126,12 @@ pub struct AttributeRename {
     pub target: Ident,
 }
 
-/// A complete one-to-one rename of one declared relation occurrence.
+/// Filter literal source columns, drop them, and rename the remaining columns.
 ///
 /// ```text
 /// Rename ::= "rename" RelationName "@" Int "{"
 ///              [AttributeRename ("," AttributeRename)* [","]]
-///            "}"
+///            "}" ["constants" "{" Equality ("," Equality)* [","] "}"]
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Rename {
@@ -143,6 +144,55 @@ pub struct Rename {
     #[syn(in = mapping_brace)]
     #[parse(CommaList::parse_terminated)]
     pub mapping: CommaList<AttributeRename>,
+    #[parse(parse_constants)]
+    pub constants: Option<OccurrenceConstants>,
+}
+
+/// Literal restrictions in source-column names, absent from the result heading.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct OccurrenceConstants {
+    pub constants_token: kw::constants,
+    #[syn(braced)]
+    pub brace: token::Brace,
+    #[syn(in = brace)]
+    #[parse(CommaList::parse_terminated)]
+    pub equalities: CommaList<crate::Equality>,
+}
+
+impl OccurrenceConstants {
+    pub fn check(&self) -> syn::Result<()> {
+        if self.equalities.is_empty() {
+            return Err(syn::Error::new_spanned(
+                self,
+                "occurrence constants must not be empty",
+            ));
+        }
+        let mut sources = std::collections::BTreeSet::new();
+        for equality in &self.equalities {
+            equality.check()?;
+            if !matches!(equality.right, crate::EqualityValue::Literal(_)) {
+                return Err(syn::Error::new_spanned(
+                    equality,
+                    "occurrence constants require literal values",
+                ));
+            }
+            if !sources.insert(crate::symbol_name(&equality.left)) {
+                return Err(syn::Error::new_spanned(
+                    &equality.left,
+                    "occurrence constant source column is repeated",
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn parse_constants(input: syn::parse::ParseStream<'_>) -> syn::Result<Option<OccurrenceConstants>> {
+    if input.peek(kw::constants) {
+        input.parse().map(Some)
+    } else {
+        Ok(None)
+    }
 }
 
 /// A conjunction of central relational constraints, including boolean

@@ -57,7 +57,23 @@ fn collect(
                         heading: columns.iter().cloned().collect(),
                         rows: database[&symbol_name(&atom.relation)]
                             .iter()
-                            .map(|row| columns.iter().cloned().zip(row.iter().copied()).collect())
+                            .filter_map(|row| {
+                                let mut binding = Binding::new();
+                                for (argument, value) in atom.args.iter().zip(row) {
+                                    if let Some(variable) = cq::rust::variable(argument) {
+                                        if binding
+                                            .insert(symbol_name(variable), *value)
+                                            .is_some_and(|previous| previous != *value)
+                                        {
+                                            return None;
+                                        }
+                                    } else if evaluate_integer(argument, &Binding::new()) != *value
+                                    {
+                                        return None;
+                                    }
+                                }
+                                Some(binding)
+                            })
                             .collect(),
                     },
                 );

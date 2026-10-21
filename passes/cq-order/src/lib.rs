@@ -526,8 +526,9 @@ fn fine(
             .atom
             .as_ref()
             .expect("atom heading")
-            .args
-            .is_empty()
+            .variables()
+            .next()
+            .is_none()
         {
             plan.subatom(clause, clauses[clause].atom.as_ref().expect("atom heading"));
         }

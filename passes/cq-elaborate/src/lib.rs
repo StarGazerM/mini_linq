@@ -97,7 +97,7 @@ pub fn compile_written(source: &valuation::Program) -> syn::Result<ra::Program> 
                         (BodyItem::Positive { atom }, valuation::Step::Atom(subatom, _)) => {
                             subatom.clause == path
                                 && subatom.relation == atom.relation
-                                && subatom.variables().count() == atom.args.len()
+                                && subatom.variables().count() == atom.variables().count()
                                 && subatom
                                     .variables()
                                     .map(|(_, v)| symbol_name(v))
@@ -669,14 +669,17 @@ impl<'a> State<'a> {
         let mapping = declaration
             .columns
             .iter()
-            .zip(atom.variables())
-            .map(|(column, variable)| ra::AttributeRename {
-                source: column.name.clone(),
-                minus_token: Default::default(),
-                gt_token: Default::default(),
-                target: self.canonical(variable),
+            .zip(&atom.args)
+            .filter_map(|(column, argument)| {
+                cq::rust::variable(argument).map(|variable| ra::AttributeRename {
+                    source: column.name.clone(),
+                    minus_token: Default::default(),
+                    gt_token: Default::default(),
+                    target: self.canonical(variable),
+                })
             })
             .collect();
+        let constants = occurrence_constants(declaration, atom);
         let mut result = self.emit(ra::Operator::Rename(Box::new(ra::Rename {
             rename_token: Default::default(),
             relation: atom.relation.clone(),
@@ -687,6 +690,7 @@ impl<'a> State<'a> {
             },
             mapping_brace: Default::default(),
             mapping,
+            constants,
         })));
         // A literal equality is a keyed relational read of this occurrence.
         // It may move earlier across Rust because it only restricts its domain.
@@ -1210,11 +1214,33 @@ fn aliases(source: &valuation::cq::Program) -> BTreeMap<String, Ident> {
                 .variables()
                 .map(|v| symbol_name(&canonical(v, &proposed)))
                 .collect();
-            names.len() != atom.args.len()
+            names.len() != atom.variables().count()
         }) {
             continue;
         }
         aliases = proposed;
     }
     aliases
+}
+
+fn occurrence_constants(
+    declaration: &cq::RelationDecl,
+    atom: &cq::Atom,
+) -> Option<ra::OccurrenceConstants> {
+    let equalities: cq::CommaList<_> = declaration
+        .columns
+        .iter()
+        .zip(&atom.args)
+        .filter(|(_, argument)| cq::equality::literal(argument))
+        .map(|(column, argument)| ra::Equality {
+            left: column.name.clone(),
+            eq_token: Default::default(),
+            right: ra::EqualityValue::Literal(argument.clone()),
+        })
+        .collect();
+    (!equalities.is_empty()).then_some(ra::OccurrenceConstants {
+        constants_token: Default::default(),
+        brace: Default::default(),
+        equalities,
+    })
 }

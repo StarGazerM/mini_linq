@@ -23,12 +23,12 @@
 //!   They never call pass compilation, planner, heading-analysis, or key helpers.
 //!   Inputs must satisfy the language contracts, be finite, have the declared
 //!   widths, and provide every declared table. The supported fragment consists of
-//!   positive variable-only atoms, relational integer constraints, and total
-//!   integer comparison guards. VO additionally assumes distinct variables within
-//!   each base atom; repeated positions must be desugared before using that oracle.
-//!   Literals/wildcards/expressions in atom arguments, computed bindings, Rust
-//!   generators (`for`), negation, aggregation, arbitrary Rust, and extension
-//!   clauses are outside this fragment. Generators use compiled Rust references,
+//!   positive atoms with variables and integer literals, relational integer
+//!   constraints, and total integer comparison guards. Literal positions filter
+//!   original source columns and do not contribute to occurrence headings.
+//!   Wildcards/expressions in atom arguments, computed bindings, Rust generators
+//!   (`for`), negation, aggregation, arbitrary Rust, and extension clauses are
+//!   outside this fragment. Generators use compiled Rust references,
 //!   including iterator-advancement panics; no interpreter evaluates arbitrary Rust.
 //!   Unsupported expressions or malformed inputs may panic. Constraint parameters,
 //!   when interpreting individual constraints, belong in the external binding map.

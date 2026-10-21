@@ -1,7 +1,7 @@
 //! Independent active-domain valuation enumeration against original CQ tables.
 //!
-//! Assumes contract-valid positive variable-only atoms, finite declared-width
-//! integer tables, Set semantics, Leibniz equality, and total comparison guards.
+//! Assumes contract-valid positive atoms with variables and integer literals,
+//! finite declared-width integer tables, Set semantics, and total comparison guards.
 //! Exhaustive enumeration is exponential in the number of query variables.
 //! No compiler normalizer, planner, or pass is used. Unsupported clauses panic.
 
@@ -9,7 +9,7 @@ use crate::{
     cq,
     values::{
         Binding, Database, Relation, Rows, evaluate_constraint, evaluate_equality,
-        evaluate_predicate,
+        evaluate_integer, evaluate_predicate,
     },
 };
 use cq_syntax::symbol_name;
@@ -57,13 +57,14 @@ pub fn body(
                         .filter_map(|row| {
                             let mut binding = Binding::new();
                             for (argument, value) in atom.args.iter().zip(row) {
-                                let variable = cq::rust::variable(argument)
-                                    .expect("integer oracle requires variable-only atoms");
-                                let name = symbol_name(variable);
-                                if binding
-                                    .insert(name.clone(), *value)
-                                    .is_some_and(|previous| previous != *value)
-                                {
+                                if let Some(variable) = cq::rust::variable(argument) {
+                                    if binding
+                                        .insert(symbol_name(variable), *value)
+                                        .is_some_and(|previous| previous != *value)
+                                    {
+                                        return None;
+                                    }
+                                } else if evaluate_integer(argument, &Binding::new()) != *value {
                                     return None;
                                 }
                             }

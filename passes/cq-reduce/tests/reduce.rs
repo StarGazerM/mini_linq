@@ -613,3 +613,19 @@ fn reductions_preserve_generators_as_opaque_non_targets() {
         assert!(check(&source, &changed, &options).is_err());
     }
 }
+
+#[test]
+fn reductions_keep_literal_occurrences_without_literal_columns() {
+    let source: valuation::Program = syn::parse_quote! {
+        struct Q; relation R(a:i32,b:i32); relation S(a:i32); relation T(a:i32);
+        answer(x) :- R(7,x), S(x), T(9);
+        valuation { R@0(x); S@1(x); T@2(); }
+    };
+    for semijoins in [Reductions::None, Reductions::Tree, Reductions::Hypergraph] {
+        let options = Options { semijoins };
+        let target = compile(&source, &options).unwrap();
+        check(&source, &target, &options).unwrap();
+        assert_eq!(target.cq, source.cq);
+        valuation::contract::check(&target).unwrap();
+    }
+}

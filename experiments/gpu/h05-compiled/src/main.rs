@@ -1,7 +1,7 @@
 #![recursion_limit = "1024"]
 mod queries;
-use gpu_compress::{tpch::schema, Catalog, Source};
 use cq_gpu_runtime::{DeviceColumns, For, Pool};
+use gpu_compress::{tpch::schema, Catalog, Source};
 use serde_json::{json, Value};
 use std::{fs, path::Path, sync::Arc, time::Instant};
 
@@ -54,8 +54,13 @@ impl Rows {
 fn load_answer(dir: &Path) -> Result<Vec<(i64, i64, i64)>, Error> {
     let mut answer = Vec::new();
     for line in fs::read_to_string(dir.join("answer.tsv"))?.lines() {
-        let fields = line.split('\t').map(str::parse::<i64>).collect::<Result<Vec<_>, _>>()?;
-        let [o, s, n] = fields[..] else { return Err("answer must have three columns".into()) };
+        let fields = line
+            .split('\t')
+            .map(str::parse::<i64>)
+            .collect::<Result<Vec<_>, _>>()?;
+        let [o, s, n] = fields[..] else {
+            return Err("answer must have three columns".into());
+        };
         answer.push((o, s, n));
     }
     answer.sort_unstable();
@@ -96,12 +101,16 @@ fn main() -> Result<(), Error> {
     let manifest = source.manifest();
     let sf = manifest["sf"].clone();
     let constant = |name: &str| -> Result<i32, Error> {
-        Ok(i32::try_from(manifest["constants"][name].as_i64().ok_or_else(|| format!("missing constant {name}"))?)?)
+        Ok(i32::try_from(
+            manifest["constants"][name]
+                .as_i64()
+                .ok_or_else(|| format!("missing constant {name}"))?,
+        )?)
     };
     if (constant("date_start_days")?, constant("date_end_days")?) != (8766, 9131) {
         return Err("H05 query constants disagree with manifest date window".into());
     }
-    
+
     let load_started = Instant::now();
     let pool: Arc<Pool> = Pool::new(0, 0, 0)?;
     let catalog = Catalog::compress(&pool, &source, &schema())?;
@@ -109,7 +118,9 @@ fn main() -> Result<(), Error> {
     // The query's ASIA literal must be the stored text ID.
     let asia = catalog.text_id("region.r_name", "ASIA")?;
     if asia != queries::ASIA || asia != constant("asia_id")? {
-        return Err(format!("ASIA stored ID {asia} disagrees with the query literal or manifest").into());
+        return Err(
+            format!("ASIA stored ID {asia} disagrees with the query literal or manifest").into(),
+        );
     }
     let load_encode_ms = load_started.elapsed().as_secs_f64() * 1000.0;
     let declared_bytes = source.declared_bytes();
@@ -121,17 +132,21 @@ fn main() -> Result<(), Error> {
                 "encoded_bytes": stored.columns.iter().map(|c| c.column.bytes()).sum::<usize>()})
         })
         .collect();
-    let (orders, suppliers, nations) =
-        (catalog.domain("orderkey")?, catalog.domain("suppkey")?, catalog.domain("nationkey")?);
-    println!("sf={sf} host_load_ms={host_load_ms:.6} load_encode_ms={load_encode_ms:.6} declared_bytes={declared_bytes} compressed_bytes={}", catalog.bytes());
+    let (orders, suppliers, nations) = (
+        catalog.domain("orderkey")?,
+        catalog.domain("suppkey")?,
+        catalog.domain("nationkey")?,
+    );
+    println!(
+        "sf={sf} host_load_ms={host_load_ms:.6} load_encode_ms={load_encode_ms:.6} declared_bytes={declared_bytes} compressed_bytes={}",
+        catalog.bytes()
+    );
     let mut results = Vec::new();
-    // Plan R's ASIA constant at r_name's stored type, bound by field path.
-    let meta = queries::Meta { asia };
-    type Query<'m> = Box<dyn for<'a> Fn(&'a Rows) -> DeviceColumns<'a, queries::Answer, For> + 'm>;
+    type Query = Box<dyn for<'a> Fn(&'a Rows) -> DeviceColumns<'a, queries::Answer, For>>;
     let plans: [(&str, Query); 3] = [
         ("A", Box::new(queries::plan_a)),
         ("B", Box::new(queries::plan_b)),
-        ("R", Box::new(|rows| queries::plan_r(rows, &meta))),
+        ("R", Box::new(queries::plan_r)),
     ];
     for (plan, query) in plans {
         if selected != "both" && selected != plan {

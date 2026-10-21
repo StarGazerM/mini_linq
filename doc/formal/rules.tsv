@@ -19,7 +19,7 @@ CQ-Guard	implementation	languages/cq-lang-cq/src/lib.rs	fn check_query	Local str
 CQ-Bind	implementation	languages/cq-lang-cq/src/lib.rs	fn check_query	Local structural rule; its implementing function checks the stated premises and derives the conclusion.
 CQ-For	implementation	languages/cq-lang-cq/src/lib.rs	/// Formal rule CQ-For:	Check generator RHS in the incoming scope and extend it with fresh pattern names; finite purity is a host premise.
 RA-Unit	implementation	languages/cq-lang-ra/src/lib.rs	fn check_in	Local structural rule; its implementing function checks the stated premises and derives the conclusion.
-RA-Rename	implementation	languages/cq-lang-ra/src/lib.rs	fn check_in	Local structural rule; its implementing function checks the stated premises and derives the conclusion.
+RA-Rename	implementation	languages/cq-lang-ra/src/lib.rs	fn check_in	Mapping and literal bindings partition declared columns; only mapped columns enter the occurrence heading.
 RA-Join	implementation	languages/cq-lang-ra/src/lib.rs	fn check_in	Local structural rule; its implementing function checks the stated premises and derives the conclusion.
 RA-Semi	implementation	languages/cq-lang-ra/src/lib.rs	fn check_in	Local structural rule; its implementing function checks the stated premises and derives the conclusion.
 RA-Project	implementation	languages/cq-lang-ra/src/lib.rs	fn check_in	Local structural rule; its implementing function checks the stated premises and derives the conclusion.
@@ -28,12 +28,12 @@ RA-Extend	implementation	languages/cq-lang-ra/src/lib.rs	fn check_in	Local struc
 RA-For	implementation	languages/cq-lang-ra/src/lib.rs	/// Formal rule RA-For:	Check set-valued Bind heading, visible RHS and fresh item columns while retaining the generator tag.
 RA-Def	implementation	languages/cq-lang-ra/src/lib.rs	fn check_in	Local structural rule; its implementing function checks the stated premises and derives the conclusion.
 WF-CQ	implementation	languages/cq-lang-cq/src/lib.rs	/// Formal rule WF-CQ:	Check CQ declarations, positive scope, output arity and symbolic type availability.
-WF-NF	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule WF-NF:	Check CQ plus distinct bare arguments within each body atom.
+WF-NF	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule WF-NF:	Check CQ plus distinct variables or literals within each body atom.
 WF-VO	implementation	languages/cq-lang-vo/src/lib.rs	/// Formal rule WF-VO:	Check NF and the local valuation schedule with coverage and reduction premises.
 WF-RA	implementation	languages/cq-lang-ra/src/lib.rs	/// Formal rule WF-RA:	Check declarations, unique atom occurrences, local operators, output heading and reachability.
 WF-IX	implementation	languages/cq-lang-ix/src/lib.rs	/// Formal rule WF-IX:	Check valid unique used descriptors; complete coverage is a pass obligation.
 WF-Physical	implementation	languages/cq-lang-physical/src/lib.rs	/// Formal rule WF-Physical:	Derive local headings and reads, then check output, reachability and modes.
-PH-Pipe	implementation	languages/cq-lang-physical/src/lib.rs	/// Formal rule PH-Pipe:	Require one stream read for a derived pipe; noncanonical host renames are reusable.
+PH-Pipe	implementation	languages/cq-lang-physical/src/lib.rs	/// Formal rule PH-Pipe:	Require one stream read for a derived pipe; only noncanonical unfiltered host renames are reusable, and literal-bearing renames retain filtered data.
 PH-Let	implementation	languages/cq-lang-physical/src/lib.rs	/// Formal rule PH-Let:	Require every let to be read.
 PH-HostSet	implementation	languages/cq-lang-physical/src/lib.rs	/// Formal rule PH-HostSet:	A rename of a certified host set has its full heading as uniqueness key.
 IF-HostSet	implementation	passes/cq-print/src/lib.rs	    /// Formal rule IF-HostSet:	Certify exact full-row host distinctness before query execution; duplicate inputs fail with a named error.
@@ -51,7 +51,6 @@ CK-Structures	implementation	passes/cq-structure-selection/src/correspondence.rs
 A-Variable	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Variable:	Keep the first bare occurrence within an atom, including shared query names.
 A-Repeat	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Repeat:	Replace a repeated name only within one atom and append identity.
 A-Wildcard	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Wildcard:	Replace a wildcard by a fresh unconstrained atom variable.
-A-Constant	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Constant:	Replace a literal with a fresh atom column and an atom-position relational literal equality.
 A-Prefix	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Prefix:	Emit an opaque Rust binding immediately before its atom when its query inputs are already bound.
 A-Local	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Local:	Emit an opaque Rust binding after its atom, then a relational equality with the fresh atom column.
 D-Atom	implementation	passes/cq-order/src/lib.rs	/// Formal rule D-Atom:	Atom provides its columns and requires scalar-let- or generator-supplied columns.
@@ -78,7 +77,7 @@ Y-Up	implementation	passes/cq-reduce/src/lib.rs	/// Formal rule Y-Up:	Produce up
 Y-Down	implementation	passes/cq-reduce/src/lib.rs	/// Formal rule Y-Down:	Produce downward child-with-parent VO steps in BFS order.
 R-Tree	implementation	passes/cq-reduce/src/lib.rs	/// Formal rule R-Tree:	Insert only relational tree semijoins before atom reads.
 E-Emit	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule E-Emit:	Append the operator under rN in definition emission order.
-E-Relation	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule E-Relation:	Reuse a clause result or emit its complete positional rename at first use.
+E-Relation	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule E-Relation:	Reuse a clause result or emit its positional rename with literal source-column bindings and only variable columns in its heading.
 E-Check	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule E-Check:	A partial subatom with no new names semijoins an existing prefix.
 E-Project	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule E-Project:	Project a partial subatom unless it is an existing-prefix check.
 B-Root	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule B-Root:	Install the first full or projected subatom as the prefix.
@@ -142,7 +141,7 @@ IF-PushPositional	implementation	features/own-dialect/printer/src/lib.rs	Formal 
 STR-Existential	implementation	languages/cq-lang-structures/src/filtered.rs	/// Formal rule STR-Existential:	Full-key filtered projections with no observed payload use exact membership, not witness enumeration.
 EXT-SetFold	implementation	features/extensions/cq-ext-aggregate/src/expansion.rs	/// Formal rule EXT-SetFold:	Checked canonical terminals need no extension dedup; unknown terminals retain fast-hashed set boundaries.
 EXT-ConstantGroup	implementation	features/extensions/cq-ext-aggregate/src/expansion.rs	/// Formal rule EXT-ConstantGroup:	Literal-bound group columns use an optional accumulator and preserve empty-input semantics.
-H-FilterRank	implementation	languages/cq-lang-cq/src/hypergraph.rs	/// Formal rule H-FilterRank:	Rank local total predicates through equality classes, without data statistics.
+H-FilterRank	implementation	languages/cq-lang-cq/src/hypergraph.rs	/// Formal rule H-FilterRank:	Rank literal-bearing occurrences and local total predicates through equality classes, without data statistics.
 S-Filtered	implementation	passes/cq-order/src/lib.rs	/// Formal rule S-Filtered:	Rank ready occurrences by connectivity, local filter strength, then written position.
 R-Filtered	implementation	passes/cq-reduce/src/lib.rs	/// Formal rule R-Filtered:	Propagate independently filtered components, omitting range-only support against a point-filtered component; order strongest siblings first.
 H-SpanningCore	implementation	languages/cq-lang-cq/src/hypergraph.rs	// Formal rule H-SpanningCore:	The reduction tree is the GYO join tree, or GYO ears plus a spanning tree of the cyclic core over shared variables (most shared, then earliest).
@@ -193,3 +192,22 @@ CK-DL-ShardStorage	implementation	features/datalog-parallel/partition/src/sharde
 CK-DL-ShardOwnership	implementation	features/datalog-parallel/partition/src/sharded.rs	/// Formal rule CK-DL-ShardOwnership:	Direct checks establish admission shard ownership, total injective native-layout owners and exact member-layout publication barriers without invoking the producer; the printer consumes these certificates.
 DL-ShardedAdmission	implementation	features/datalog-parallel/runtime/src/lib.rs	/// Formal rule DL-ShardedAdmission:	Full-tuple hash ownership admits each fresh tuple once and concatenates per-shard next in shard order.
 DL-LayoutPublication	implementation	features/datalog-parallel/print/src/publication.rs	/// Formal rule DL-LayoutPublication:	Each full or delta native layout has one exclusive task; full publication joins before delta replacement and all delta rebuilds join before evaluation.
+CODE-Leibniz	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex); no pass implements it yet.
+CODE-Order	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex); no pass implements it yet.
+CODE-Dense	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex); no pass implements it yet.
+CODE-Literal	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex); no pass implements it yet.
+CODE-Pack	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex); no pass implements it yet.
+PROV-Csr	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex); no pass implements it yet.
+PROV-Exists	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex); no pass implements it yet.
+PROV-Canon	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex); no pass implements it yet.
+SPACE-Flatten	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex); no pass implements it yet.
+SPACE-Partition	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex); no pass implements it yet.
+SPACE-Retain	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex); no pass implements it yet.
+SPACE-KeyPartition	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex); no pass implements it yet.
+OUT-Count	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex); no pass implements it yet.
+OUT-Reserve	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex); no pass implements it yet.
+OUT-Block	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex); no pass implements it yet.
+OUT-Bound	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex); no pass implements it yet.
+KER-Boundary	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex); no pass implements it yet.
+KER-Lane	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex); no pass implements it yet.
+KER-Collective	abstract	-	-	Design rule of the back-end IR (doc/formal/backend_ir.tex); no pass implements it yet.

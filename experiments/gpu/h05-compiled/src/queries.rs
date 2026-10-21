@@ -1,8 +1,7 @@
 use crate::Rows;
 
-/// Stored i32 ID of "ASIA" in region.r_name, written as a literal: a
-/// captured host value (`meta.asia`) is exact but the planner lowers it to a
-/// late bind + join instead of an early selection. main checks the value.
+/// Stored i32 ID of "ASIA" in region.r_name. Literal occurrences filter Region
+/// before retaining its keys; main checks the stored value.
 pub const ASIA: i32 = 2;
 use cq_gpu_runtime::{DeviceColumns, For};
 
@@ -14,10 +13,10 @@ pub fn plan_a<'a>(data: &'a Rows) -> DeviceColumns<'a, Answer, For> {
         pipeline {
             plan = ::cq_planners::order(le);
             physical = [::cq_rewrites::build_host_reads];
-            // r2 is ASIA-filtered Region, r3 reduced Nation; LE needs only their key memberships.
+            // r1 is ASIA-filtered Region, r2 reduced Nation; LE needs only their key memberships.
             structures = [::cq_rewrites::sorted_runs, ::cq_gpu::prefix_runs, ::cq_rewrites::retain_lookups,
+                ::cq_rewrites::retype(r1 => ::cq_storage::SortedRun<_, _, ::cq_storage::BorrowedI64TupleCodec>),
                 ::cq_rewrites::retype(r2 => ::cq_storage::SortedRun<_, _, ::cq_storage::BorrowedI64TupleCodec>),
-                ::cq_rewrites::retype(r3 => ::cq_storage::SortedRun<_, _, ::cq_storage::BorrowedI64TupleCodec>),
                 ::cq_rewrites::retype(dedup => ::cq_gpu_runtime::DeviceSet<_, ::cq_gpu_runtime::For>)];
             print = ::cq_gpu::print(capacity(Lineitem));
         }
@@ -44,10 +43,10 @@ pub fn plan_b<'a>(data: &'a Rows) -> DeviceColumns<'a, Answer, For> {
             physical = [::cq_rewrites::build_host_reads];
             // Supplier's directory is explicit; nation is searched exactly within
             // that prefix. A separate nation run preserves the earlier semijoin.
-            // r2 is ASIA-filtered Region, r3 reduced Nation; record both membership runs explicitly.
+            // r1 is ASIA-filtered Region, r2 reduced Nation; record both membership runs explicitly.
             structures = [::cq_rewrites::sorted_runs, ::cq_gpu::prefix_runs(Supplier => supplier_key), ::cq_rewrites::retain_lookups,
+                ::cq_rewrites::retype(r1 => ::cq_storage::SortedRun<_, _, ::cq_storage::BorrowedI64TupleCodec>),
                 ::cq_rewrites::retype(r2 => ::cq_storage::SortedRun<_, _, ::cq_storage::BorrowedI64TupleCodec>),
-                ::cq_rewrites::retype(r3 => ::cq_storage::SortedRun<_, _, ::cq_storage::BorrowedI64TupleCodec>),
                 ::cq_rewrites::expand_lookups(256, depth 3),
                 ::cq_rewrites::retype(dedup => ::cq_gpu_runtime::DeviceSet<_, ::cq_gpu_runtime::For>)];
             print = ::cq_gpu::print(capacity(Lineitem), tile(256,4), frontier(8), directory(rank));
@@ -82,21 +81,17 @@ pub fn chain<'a>(input: &'a DeviceColumns<'_, Answer, For>) -> DeviceColumns<'a,
     }
 }
 
-/// Query constants at their stored types, computed on the host.
-pub struct Meta {
-    pub asia: i32,
-}
-
 /// The reference traversal R N C O L S in written order; sorted index
 /// layouts from `sorted_indexes`.
-pub fn plan_r<'a>(data: &'a Rows, meta: &Meta) -> DeviceColumns<'a, Answer, For> {
+pub fn plan_r<'a>(data: &'a Rows) -> DeviceColumns<'a, Answer, For> {
     mini_linq::compile! {
         pipeline {
             plan = ::cq_planners::order(written, coarse);
             physical = [::cq_rewrites::build_host_reads];
             structures = [::cq_rewrites::sorted_indexes, ::cq_rewrites::sorted_runs, ::cq_gpu::prefix_runs,
                 ::cq_rewrites::retype(dedup => ::cq_gpu_runtime::DeviceSet<_, ::cq_gpu_runtime::For>)];
-            print = ::cq_gpu::print;
+            stage = ::cq_rewrites::expand_lookups(256, depth 5);
+            print = ::cq_gpu::print(tile(256,4), frontier(8), directory(rank));
         }
         struct H05R;
         relation Customer(c_custkey:u32,c_nationkey:u32) = (&data.customer);
@@ -106,7 +101,7 @@ pub fn plan_r<'a>(data: &'a Rows, meta: &Meta) -> DeviceColumns<'a, Answer, For>
         relation Nation(n_nationkey:u32,n_regionkey:u32) = (&data.nation);
         relation Region(r_regionkey:u32,r_name:i32) = (&data.region);
         answer(order_key,supplier_key,nation_key) :-
-            Region(region_key,meta.asia), Nation(nation_key,region_key),
+            Region(region_key,2), Nation(nation_key,region_key),
             Customer(customer_key,nation_key),
             Orders(order_key,customer_key,order_date),
             #[total] if *order_date >= 8766 && *order_date < 9131,

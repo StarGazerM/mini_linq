@@ -1625,6 +1625,9 @@ pub(crate) fn compile(
         );
     }
     let returned = symbol_name(&program.physical.program.returned);
+    // Retained producers are build boundaries, including Rename row sources.
+    // Their stream consumers start from the materialized table just as they do
+    // for a retained Select; source predicates must not be fused into readers.
     let endpoints: BTreeSet<_> = program
         .physical
         .program
@@ -1806,7 +1809,8 @@ pub(crate) fn compile(
                             .unwrap()
                     })
                     .collect::<Vec<_>>();
-                let projection = !facts.join_filters.contains_key(&chain[0])
+                let projection = rename.constants.is_none()
+                    && !facts.join_filters.contains_key(&chain[0])
                     && chain.iter().all(|name| {
                         matches!(
                             &context.physical[name].operator,
@@ -1854,6 +1858,33 @@ pub(crate) fn compile(
                         let variable = id("value", &column);
                         loads.push(quote!(let #variable=if __valid {::cq_gpu_runtime::column(__driver,#index,__row)} else {0};));
                         state.columns.insert(column, quote!(#variable));
+                    }
+                }
+                if let Some(constants) = &rename.constants {
+                    let input = program
+                        .physical
+                        .inputs()
+                        .find(|input| input.name == rename.relation)
+                        .expect("checked occurrence source");
+                    for equality in &constants.equalities {
+                        let (index, column) = input
+                            .columns
+                            .iter()
+                            .enumerate()
+                            .find(|(_, column)| column.name == equality.left)
+                            .expect("checked occurrence constant column");
+                        let syntax::EqualityValue::Literal(expression) = &equality.right else {
+                            return fail(
+                                equality,
+                                "CQ_GPU_OCCURRENCE_CONSTANT",
+                                "occurrence constants require literal values",
+                            );
+                        };
+                        let value = all_constants.literal(expression, Some(&column.ty))?;
+                        loads.push(quote! {
+                            __valid = __valid
+                                && ::cq_gpu_runtime::column(__driver,#index,__row) == #value;
+                        });
                     }
                 }
                 (

@@ -382,10 +382,17 @@ impl Case {
                     }
                     Term::Constant(value) => conditions.push(format!("{field} = {value}")),
                     Term::Wildcard => (),
-                    Term::Expression(expression) => conditions.push(format!(
-                        "{field} = {}",
+                    Term::Expression(_) => (),
+                }
+            }
+            // Same-atom dependencies may occur to the right of an expression.
+            // Resolve expressions only after every variable position is known.
+            for (column, term) in atom.terms.iter().enumerate() {
+                if let Term::Expression(expression) = term {
+                    conditions.push(format!(
+                        "a{occurrence}.c{column} = {}",
                         sql_expression(expression, &environment)
-                    )),
+                    ));
                 }
             }
         }
@@ -1547,8 +1554,8 @@ fn generate_partial(seed: u64) -> Case {
             query.atoms[1].terms[0] = Term::Expression(partial(if position == 2 { 0 } else { 2 }));
             query.order.push(Step::Atom(1));
             if position == 3 {
-                // A mismatching literal after a same-atom partial expression
-                // must not suppress that expression in the written oracle.
+                // Literal positions filter the original row before same-atom
+                // partial expressions, regardless of argument order.
                 query.schema[1].arity = 3;
                 query.atoms[1].terms.push(Term::Constant(5));
             }
@@ -1654,6 +1661,9 @@ fn generate_partial(seed: u64) -> Case {
         for row in &mut data[1] {
             row.push(5 + random.pick(2) as i32);
         }
+        // This row must be removed by the occurrence literal before evaluating
+        // a local division/remainder/unwrap at zero, even with the literal last.
+        data[1].push(vec![0, 0, 6]);
     }
     // Domain-sensitive emptiness: an earlier empty generator must suppress
     // later partial terms even under eager-index and split configurations.

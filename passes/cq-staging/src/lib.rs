@@ -61,7 +61,7 @@ fn decisions(
     let scan_spine = |mut name: String| {
         loop {
             match &definitions[&name].operator {
-                Operator::Rename(_) => return true,
+                Operator::Rename(rename) => return rename.constants.is_none(),
                 Operator::Select(s) | Operator::Point(_, s) | Operator::Range(_, s) => {
                     name = symbol_name(&s.input)
                 }

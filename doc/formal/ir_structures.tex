@@ -27,14 +27,19 @@ Predicate ::= physical | membership s [K] summary (exact | row)
 key answers a union of a prefix of its levels;
 (2)~host entries record fallback types per reader, not native trait claims;
 (3)~retained scans, multiple unfiltered builds and exists state record row
-storage; host renames record scan and keyed-reader fallbacks;
+storage; unfiltered host renames record scan and keyed-reader fallbacks;
 (4)~every definition canon has a dedup entry; \code{return canon} has a head
 dedup entry; computed heads that may collapse valuations have one too;
 (5)~filtered entries (point/range selections or unions only) record one shared
 projection; their readers are stream \code{probe first}, semi or anti on a level
 prefix; payload plus the singleton constants proved by the selection cover all
 downstream keys, predicates, Rust free variables and answers. Constant columns
-are reconstructed, not stored;
+are reconstructed, not stored. Literal-bearing renames instead have ordinary
+\code{let} storage entries, with no filtered payload annotation: their source
+filters and drops literal columns before ordinary row retention and index builds.
+Eligible leading literal keys use the host's native point read; otherwise the
+build source scans and filters. GPU retained occurrence tables are produced in
+the build phase, not filtered inside the query stream kernel;
 (6)~selection, keyset and read entries independently rederive a single declared
 host occurrence and a total, injective logical-to-host mapping over the reader's
 heading. Rename, declarative selection, occurrence-preserving projection and

@@ -32,10 +32,14 @@ pub(super) fn check(
         let mapping = declaration
             .columns
             .iter()
-            .zip(atom.variables())
-            .map(|(c, v)| (c.name.clone(), v.clone()))
+            .zip(&atom.args)
+            .filter_map(|(c, a)| cq::rust::variable(a).map(|v| (c.name.clone(), v.clone())))
             .collect::<Vec<_>>();
-        relations.insert(*clause, schedule.atom(*clause, &atom.relation, &mapping));
+        let constants = super::occurrence_constants(declaration, atom);
+        relations.insert(
+            *clause,
+            schedule.atom(*clause, &atom.relation, &mapping, constants.as_ref()),
+        );
     }
     let hypergraph = cq::hypergraph::Analysis::of(&source.cq);
     let mut prefix = None;

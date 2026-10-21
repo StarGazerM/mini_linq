@@ -43,6 +43,153 @@ fn host_set_checks_full_host_before_consumers_and_remains_opt_in() {
     assert!(!ordinary.contains("certify_host_set"), "{ordinary}");
 }
 
+fn assert_occurrence_build_boundary(generated: &syn::Expr) {
+    let syn::Expr::Block(block) = generated else {
+        panic!("GPU generation must return a block");
+    };
+    let module = block
+        .block
+        .stmts
+        .iter()
+        .find_map(|statement| match statement {
+            syn::Stmt::Item(syn::Item::Mod(module)) => module.content.as_ref(),
+            _ => None,
+        })
+        .expect("generated device module");
+    let kernels = module
+        .1
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Fn(function)
+                if function.sig.ident.to_string().starts_with("cq_gpu_stream_") =>
+            {
+                Some((
+                    function.sig.ident.to_string(),
+                    function
+                        .block
+                        .to_token_stream()
+                        .to_string()
+                        .split_whitespace()
+                        .collect::<String>(),
+                ))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(kernels.len(), 2, "{kernels:?}");
+    let (_, build) = kernels
+        .iter()
+        .find(|(name, _)| name.ends_with("_r"))
+        .expect("retained occurrence build kernel");
+    let (_, query) = kernels
+        .iter()
+        .find(|(name, _)| name.ends_with("_out"))
+        .expect("query kernel consuming retained occurrence");
+    assert!(build.contains("==__cq_gpu_constant_0"), "{build}");
+    assert!(!query.contains("==__cq_gpu_constant_0"), "{query}");
+    let compact = generated
+        .to_token_stream()
+        .to_string()
+        .split_whitespace()
+        .collect::<String>();
+    let build = compact
+        .find("let__cq_gpu_table_r=")
+        .expect("retained build");
+    let query = compact
+        .find("let__cq_gpu_table_out=")
+        .expect("query output");
+    assert!(build < query, "{compact}");
+}
+
+#[test]
+fn occurrence_constants_filter_source_columns_before_retaining_projection() {
+    for (ty, literal) in [
+        (quote!(u32), quote!(4_000_000_000)),
+        (quote!(i32), quote!(-7)),
+        (quote!(bool), quote!(true)),
+        (quote!(String), quote!("tag")),
+    ] {
+        let source: ir::Program = syn::parse2(quote! { physical {
+            relation R(a:i64,b:#ty);
+            r = let rename R@0 {a -> x} constants {b = #literal};
+            out = pipe canon project r keep {x};
+            return out as answer(x);
+        } structures {
+            r host scan = ::core::iter::Map<_,_> [];
+            r rows = ::std::vec::Vec<_>;
+            out canon = ::cq_gpu_runtime::DeviceSet<_>;
+        } })
+        .unwrap();
+        for options in [quote!(), quote!(output(retry))] {
+            let retry = !options.is_empty();
+            let expression = compile(&source, syn::parse2(options).unwrap()).unwrap();
+            assert_occurrence_build_boundary(&expression);
+            let generated = expression.to_token_stream().to_string();
+            let compact = generated.split_whitespace().collect::<String>();
+            assert!(compact.contains("==__cq_gpu_constant_0"), "{generated}");
+            assert!(
+                !compact.contains("project_table(__cq_gpu_host_R,"),
+                "{generated}"
+            );
+            assert!(
+                compact.contains("table_view(__cq_gpu_table_r)"),
+                "{generated}"
+            );
+            if !retry {
+                assert!(
+                    compact.contains("execute_selection(__cq_gpu_host_R,&[0usize]"),
+                    "{generated}"
+                );
+                assert!(
+                    compact.contains("column_view(__cq_gpu_host_R,1usize)"),
+                    "{generated}"
+                );
+            }
+            if ty.to_string() == "u32" || ty.to_string() == "i32" {
+                assert!(
+                    generated.contains(&quote!(let __cq_gpu_literal: #ty = #literal).to_string()),
+                    "{generated}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn occurrence_constants_build_indexes_over_only_retained_columns() {
+    let source: ir::Program = syn::parse_quote! { physical {
+        relation L(a:i64); relation R(b:i32,a:i64,v:i64);
+        l = pipe rename L@0 {a -> x};
+        r = let rename R@1 {a -> x,v -> y} constants {b = 7};
+        out = pipe canon probe first [x] l,r;
+        return out as answer(x,y);
+    } structures {
+        l host scan = ::core::iter::Map<_,_> [];
+        r host scan = ::core::iter::Map<_,_> [];
+        r = ::cq_storage::SortedRun<_,_,::cq_storage::BorrowedI64TupleCodec> [x];
+        out canon = ::cq_gpu_runtime::DeviceSet<_>;
+    } };
+    for options in [quote!(), quote!(output(retry))] {
+        let expression = compile(&source, syn::parse2(options).unwrap()).unwrap();
+        assert_occurrence_build_boundary(&expression);
+        let generated = expression.to_token_stream().to_string();
+        let compact = generated.split_whitespace().collect::<String>();
+        assert!(compact.contains("==__cq_gpu_constant_0"), "{generated}");
+        let build = compact.find("let__cq_gpu_table_r=").unwrap();
+        let index = compact
+            .find("prepare_run(__cq_gpu_table_r,0usize)")
+            .unwrap();
+        let query = compact.find("let__cq_gpu_table_out=").unwrap();
+        assert!(build < index && index < query, "{generated}");
+        assert!(!compact.contains("resident_run("), "{generated}");
+        assert!(
+            compact.contains("run_column(__cq_gpu_run_view_r,1usize,")
+                || compact.contains("__cq_gpu_run_view_r.columns.add(1usize).read()"),
+            "{generated}"
+        );
+    }
+}
+
 #[test]
 fn packed_fused_counts_preserve_both_block_prefixes() {
     for seed in 0..16u32 {

@@ -40,8 +40,12 @@ a positive context semijoin can reference prefix Rust without making it arm Rust
 Positive semijoins distribute into arms while negative operands remain the
 original named branch results. No input keys or constraints are assumed.
 
-Normalization makes body atoms variable-only, inserts positioned equalities
-and Rust binds, and turns computed heads into final binds. Ordering records
+Normalization leaves literals in body atoms, makes their other arguments distinct
+variables, inserts positioned equalities and Rust binds, and turns computed heads
+into final binds. A literal such as `R(a, 7)` reads the relation of matching rows
+with the literal column dropped; it is not the guard `R(a,b), if b == 7`.
+Elaboration records `rename R@0 {a -> a} constants {b = 7}`. Expressions such as
+`meta.asia` still use positioned binds. Ordering records
 valuation order and coarse/fine granularity in VO; reduction records relational
 tree semijoins; elaboration writes RA′. IX adds exact demand descriptors without
 changing RA′. Physical records operators, modes, intersection choices, semijoin
@@ -58,12 +62,22 @@ Declarations supply ordered columns and optional leaf expressions. Declaration
 order fixes host layout; types and runtime traits determine native access.
 Leading-prefix stream reads use native traits when available, otherwise a
 recorded fallback is built lazily once. Const/range reads use direct access or
-scan/filter without building an index. Built structures answer reads at their
-recorded key levels. Host types establish no plan canonicality.
+scan/filter without building an index. Those predicate reads are distinct from
+literal-bearing atom occurrences: every index for such an occurrence holds only
+its filtered, projected data, including retained rows when it is a stream source.
+Building that data uses native leading-prefix point lookup when available,
+falling back to a host scan and filter, without changing the retained relation.
+Only the occurrence's row source is constant-specific. Its ordinary `let`
+entries, retained rows, and indexes use the same selection and build machinery
+as every other retained relation; no occurrence-specific `payload/constants`
+storage annotation is added. On GPU the filtered occurrence table is produced
+in the build phase, so its query stream kernel reads it without a literal test.
+Built structures answer reads at their recorded key levels. Host types establish
+no plan canonicality.
 
 A derived `pipe` has one stream consumer; fused block arms may share their
 recorded prefix pipe, which is consumed once. A `let` retains rows or indexes.
-Reusable host renames remain `pipe`. An `exists` consumes its entire source
+Reusable host renames without literal bindings remain `pipe`. An `exists` consumes its entire source
 and retains nonemptiness. A `canon` boundary and noninjective computed head use
 the recorded dedup type. Merge requires ordered inputs. The printer preserves
 these choices, borrows host/built fields, and emits runtime trait obligations.

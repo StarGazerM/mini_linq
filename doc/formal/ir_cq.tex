@@ -171,10 +171,12 @@ form, so a relational comparison such as \code{total > 0} is unambiguous.
 
 \paragraph{Normal form.}
 CQ$_{\rm NF}$ restricts the same \code{cq::Program}: every atom argument is a
-distinct bare variable, every head argument a variable. Shared names across
-atoms are natural-join variables. Repeats within an occurrence and literals
-become relational identities at the atom's position; computed arguments become
-positioned binds plus identities; computed heads become final binds.
+distinct bare variable or a literal, every head argument a variable. Shared names
+across atoms are natural-join variables. Literals remain in their atom: they
+restrict the corresponding declared columns and drop those columns from the
+occurrence's heading. They bind no variable and are not guards. Repeats within
+an occurrence become relational identities at the atom's position; computed
+arguments become positioned binds plus identities; computed heads become final binds.
 
 \paragraph{Contract.}
 $\mathsf{CQScope}(s)$ is the scope rules plus:
@@ -190,7 +192,7 @@ Eq/Ord failures are rejected; a recognizable unsplit guard is rejected.
 \begin{mathpar}
 \Rule{WF-CQ}{\mathsf{CQScope}(s)}{\mathsf{WF}_{CQ}(s)\Downarrow\ok}
 
-\Rule{WF-NF}{\mathsf{WF}_{CQ}(s)\quad\text{every nested atom has distinct bare arguments}\\
+\Rule{WF-NF}{\mathsf{WF}_{CQ}(s)\quad\text{every nested atom has distinct variables or literals}\\
  \text{head arguments are bound variables; known inadmissible types rejected}}
  {\mathsf{WF}_{NF}(s)\Downarrow\ok}
 \end{mathpar}

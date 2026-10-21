@@ -12,7 +12,8 @@ no equivalence.
 For an atom at clause $i$, walk its arguments left to right against the declared
 types $\tau_j$. $B$ holds names bound by earlier clauses, $L$ names already seen in
 this occurrence (reset per occurrence), $A$ bare names this atom supplies that
-are not in $B$. Fresh $k$ starts at \code{__cq_i_j}. Cases are tried in order:
+are not in $B$. Literals remain in the atom and bind no name. For other
+arguments, fresh $k$ starts at \code{__cq_i_j}; cases are tried in order:
 \begin{mathpar}
 \Rule{A-Variable}{a_j=x\quad x\notin L}
  {a_j\leadsto_{NF}x\quad[L:=L\cup\{x\}]}
@@ -22,9 +23,6 @@ are not in $B$. Fresh $k$ starts at \code{__cq_i_j}. Cases are tried in order:
 
 \Rule{A-Wildcard}{a_j=\_\quad k\text{ fresh}}
  {a_j\leadsto_{NF}k\quad[\text{unconstrained witness}]}
-
-\Rule{A-Constant}{a_j\text{ is a literal}\quad k\text{ fresh}}
- {a_j\leadsto_{NF}k\quad[\mathit{after}:=\mathit{after}\concat[k=a_j]]}
 
 \Rule{A-Prefix}{a_j=e\text{ is a remaining expression}\quad
  \uses(e,A)=\emptyset\quad k\text{ fresh}}
@@ -111,17 +109,19 @@ graph. Written/Fine splits atoms in place. $\mathsf{flush}$ emits ready waiting
 steps (constraints first); a variable is eligible if no Rust step supplies it or
 it is bound; $\mathsf{introduce}$ emits a subatom of its first holding atom and
 then the others' checks. Incomplete atoms count toward Before until their full
-row is checked.
+row is checked. Literal-only occurrences have an empty variable heading and
+are placed as complete zero-column reads before the fine variable loop.
 The production facade uses Written/Coarse; Filtered/Coarse serves external
 planners and R-Masks' sibling order. Under H-FilterRank, $f_i$ is
-$0$ for a local constant equality, $1$ for a local constant range,
+$0$ for an occurrence containing a literal or a local constant equality, $1$ for a local constant range,
 $2$ for a derived domain, total predicate or finite relational block, and
 $3$ otherwise. Equality classes determine locality; opaque Rust guards
 never improve a rank. This is a syntax-only priority, not a cardinality
 estimate. Written remains available to explicit planner clients.
 \[
-\Rule{H-FilterRank}{P_i=\text{local total predicates on }\kappa(O_i)}
- {f_i=\min(\{3\}\cup\{\mathsf{strength}(p)\mid p\in P_i\})}
+\Rule{H-FilterRank}{P_i=\text{local total predicates on }\kappa(O_i)\quad
+ L_i=\{0\mid O_i\text{ has a literal argument}\}}
+ {f_i=\min(\{3\}\cup L_i\cup\{\mathsf{strength}(p)\mid p\in P_i\})}
 \]
 \[
 \Rule{CK-Order}{\mathsf{WF}_{NF}(s)\quad\mathsf{WF}_{VO}(t)\\
@@ -282,8 +282,9 @@ fixed occurrence paths.
 \Rule{E-Emit}{r=\text{next unused }\code{rN}\text{ in emission order}}
  {\emit(D,o)=(D\concat[r=o],r)}
 
-\Rule{E-Relation}{i\notin\dom M\quad m_i\text{ maps declared columns positionally to }\bar X_i\\
- (D',r)=\emit(D,\delta_{m_i}(R_i@i))}
+\Rule{E-Relation}{i\notin\dom M\quad C_i=\{c_j=a_j\mid a_j\text{ is literal}\}\\
+ m_i:\operatorname{cols}(R_i)\setminus\dom C_i\cong\bar X_i\quad
+ (D',r)=\emit(D,\delta_{m_i}(\pi_{\dom m_i}\sigma_{C_i}(R_i@i)))}
  {\mathsf{relation}(i;D,M)=(D',M[i\mapsto r],r)}
 
 \Rule{E-Check}{K\subsetneq X_i\quad\mathsf{introduces}=\emptyset\quad p\ne\bot}
@@ -495,6 +496,10 @@ since IX adds no meaning.
 Lowering restates each RA result with one physical operator and the mode its
 reads allow; defaults are first probes, eager semis and anti, union defaults of
 Section~\ref{sec:physical}.
+An occurrence's literal bindings remain on its rename, not a select operator.
+Such a rename is retained (\code{let}, or \code{exists} for an empty heading):
+every chosen index is built over the filtered, projected occurrence, and a
+stream source retains filtered rows rather than filtering a reusable host scan.
 \begin{mathpar}
 \Rule{PH-Range}{\theta\text{ constant order bounds on one column }c}
  {\mathsf{reads}(range\ select\ r\ if\ (\theta))=(r,\{c\},range)}
@@ -518,7 +523,11 @@ The default constructor copies Physical and records default types for every
 built level, host reader fallback, retained collection and dedup boundary;
 compatible membership prefixes may share a curried structure; a smallest
 intersection records two candidate levels per retained side; const/range
-supplies never justify a build.
+supplies never justify a build. This restriction concerns predicate reads,
+not atom literals: literal-bearing renames always build their filtered relation.
+Their entries use the ordinary \code{let} retention and index rules, without
+filtered-storage annotations. Literal restriction and projection belong only to
+the occurrence's row source; GPU materializes that source in the build phase.
 The optional \code{positional(H,...)} arguments assert host capabilities at this
 boundary; Physical contains only relational schemas, so unspecified hosts keep
 the previous representation. The initial selector handles recorded point/range
