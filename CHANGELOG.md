@@ -7,6 +7,11 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- DOOP and oracle engines split into feature-selected crates over shared
+  harness crates; the parallel CLIs no longer rebuild sequential engines.
+  Warm rebuilds: DOOP 30.1 → 15.4 s (sequential), 72.2 → 30.2 s (parallel);
+  oracle 8.2 → 3.2 s / 16.3 → 7.5 s. Single engine: mini 13.4 s, mini-par 21.1 s.
+
 - Datalog printer partitions generated code into separately monomorphized
   component/hole functions (hidden facade dispatch helpers), so LLVM uses
   more codegen units. Base DOOP crate rebuild 53.9 → 30.3 s (LLVM 38.8 →
