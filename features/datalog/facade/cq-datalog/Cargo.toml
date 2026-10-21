@@ -38,6 +38,10 @@ name = "execution"
 path = "../../tests/execution.rs"
 
 [[test]]
+name = "per_hole"
+path = "../../tests/per_hole.rs"
+
+[[test]]
 name = "counters"
 path = "../../tests/counters.rs"
 required-features = ["counters"]
