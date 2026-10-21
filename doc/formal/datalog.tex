@@ -270,9 +270,10 @@ For example, \code{pull\_printers = [crate::alias::pull];} in
 \code{cq = pipeline \{ print = crate::alias::pull; \};}, explicitly replaces
 that list. Fork serializes the complete pull-printer allowlist into Round text,
 so a resumed Round needs neither configuration nor compilation to check it.
-Each CQ hole declares only its referenced relations, deltas, layouts, frozen
-keys and scan bindings, including its output head. The Round checker derives
-this required declaration set independently from the query and recorded reads.
+Each CQ hole declares only the relations, deltas and layouts it reads
+positively, any scan binding, and its output head; negative key sets remain
+predicate captures. The Round checker derives this required declaration set
+independently from the query and recorded reads.
 Unlisted terminals (including the default push printer) and typed push holes
 are rejected.
 Declaring an alternate path is the caller's assertion of its pull calling

@@ -7,6 +7,12 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Datalog compile time: holes declare only what they read (checked
+  independently in Round), one check per pass, linear `dl-source` checks (shared
+  query context, DFS reachability), optimized proc macros (`build-override
+  opt-level = 3`). Per DOOP engine, proc-macro work 65 s → 3.2 s (debug) /
+  11.7 s → 0.7 s (release); base DOOP crate macro expansion 139 s → 3.4 s.
+
 - Opt-in Datalog Fx hashing plug-in (Storage + Round rewrites; hole dedup via
   `retype`); parallel admission reuses the routing hash. DOOP 1.28× faster
   sequential and 1.12× at 15 threads (geometric means), exact vs Ascent.
