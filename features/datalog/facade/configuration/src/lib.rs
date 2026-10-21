@@ -106,11 +106,7 @@ impl DatalogConfiguration {
                 "missing Datalog pipeline default",
             )
         };
-        let cq = self
-            .cq
-            .or(defaults.cq)
-            .unwrap_or_default()
-            .resolve(cq_datalog_fork::cq_defaults())?;
+        let cq = cq_datalog_fork::resolve_cq(self.cq.or(defaults.cq).unwrap_or_default())?;
         let mut fork = self.fork.or(defaults.fork).ok_or_else(missing)?;
         fork.arguments.extend(quote!(cq = #cq;));
         let pull_printers = self

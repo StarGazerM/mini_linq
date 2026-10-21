@@ -9,15 +9,21 @@
 //!
 //! Run from `features/datalog`:
 //! - Exactness (no counters): `cargo test -p datalog-oracle`.
-//! - Uninstrumented sweep: `cargo run --release -p datalog-oracle -- bench`.
-//! - Fx sweep: `cargo run --release -p datalog-oracle -- bench --engine mini-fx`.
+//! - Uninstrumented Fx-default sweep: `cargo run --release -p datalog-oracle -- bench`.
+//! - Keyed sweep: `cargo run --release -p datalog-oracle -- bench --engine mini-keyed`.
 //!   This uses the same fixtures, five-sample medians and full-set Ascent checks
 //!   as `bench` (or `bench --engine mini`), including reach and TC workloads.
-//!   Fx changes storage and Structures-stage hole deduplication, not the programs.
+//!   Keyed aHash replaces Fx in storage and Structures-stage hole deduplication,
+//!   without changing the programs.
 //! - Paired hasher sweep: `cargo run --release -p datalog-oracle -- bench --engine both`.
 //!   Warm both engines, then compare three checked samples per hasher in AB/BA/AB
-//!   order on every fixture. This is the interleaved hasher-comparison protocol.
+//!   order on every fixture. `ahash_us` measures `mini-keyed`, `fx_us` measures
+//!   Fx-default `mini`, and `fx_speedup` is `ahash_us / fx_us`.
 //! - Counter assertions: `cargo run --release -p datalog-oracle --features counters -- counters`.
+//!
+//! `hasher-summary.tsv` retains the original `dadaed6` measurements, when Fx was
+//! opt-in and `mini` used keyed aHash. Its `ahash_us`, `fx_us` and `fx_speedup`
+//! columns describe those historical implementations, not this default cutover.
 //!
 //! `oracle_shared::oracle_programs!` accepts a single engine selector (`mini` or
 //! `ascent`) and arbitrary named pipeline configuration; unselected engines never expand.
@@ -29,9 +35,9 @@
 //! `oracle_shared::harness` owns CLI parsing, benchmark fixtures, checked median
 //! timing and callback-based counter obligations. This crate's [`harness`] only
 //! dispatches sequential comparisons; parallel consumers use shared helpers directly.
-//! Engines compile independently; default features select `mini`, `mini-fx`, and
+//! Engines compile independently; default features select `mini`, `mini-keyed`, and
 //! `ascent`. A focused build uses `--no-default-features --features mini,ascent`
-//! (or `mini-fx,ascent`). Comparisons require Ascent plus the selected engine.
+//! (or `mini-keyed,ascent`). Comparisons require Ascent plus the selected engine.
 use cq_testkit::golden;
 use oracle_shared::{Data, Result, Rows, SCENARIOS, generate, golden_root};
 #[cfg(test)]
@@ -55,9 +61,9 @@ macro_rules! cases {
         #[cfg(all(feature = "mini", feature = "ascent"))]
         pub const CASES: &[Case] = &[$(Case {name: stringify!($name), arity: $arity,
             mini: oracle_mini::$name::mini, oracle: oracle_ascent::$name::oracle}),*];
-        #[cfg(all(feature = "mini-fx", feature = "ascent"))]
-        pub const FX_CASES: &[Case] = &[$(Case {name: stringify!($name), arity: $arity,
-            mini: oracle_mini_fx::$name::mini, oracle: oracle_ascent::$name::oracle}),*];
+        #[cfg(all(feature = "mini-keyed", feature = "ascent"))]
+        pub const KEYED_CASES: &[Case] = &[$(Case {name: stringify!($name), arity: $arity,
+            mini: oracle_mini_keyed::$name::mini, oracle: oracle_ascent::$name::oracle}),*];
     }
 }
 cases! { reach:1, tc_left:2, tc_right:2, tc_nonlinear:2, same_generation:2,
@@ -66,15 +72,15 @@ recursive_upper:2, andersen:2, cspa:3 }
 
 #[cfg(not(all(feature = "mini", feature = "ascent")))]
 pub const CASES: &[Case] = &[];
-#[cfg(not(all(feature = "mini-fx", feature = "ascent")))]
-pub const FX_CASES: &[Case] = &[];
+#[cfg(not(all(feature = "mini-keyed", feature = "ascent")))]
+pub const KEYED_CASES: &[Case] = &[];
 fn selected_cases() -> Result<&'static [Case]> {
     if !CASES.is_empty() {
         Ok(CASES)
-    } else if !FX_CASES.is_empty() {
-        Ok(FX_CASES)
+    } else if !KEYED_CASES.is_empty() {
+        Ok(KEYED_CASES)
     } else {
-        Err("comparisons require features ascent and mini or mini-fx".into())
+        Err("comparisons require features ascent and mini or mini-keyed".into())
     }
 }
 pub fn goldens(write: bool, mini: bool) -> Result<BTreeSet<PathBuf>> {
@@ -101,7 +107,11 @@ pub fn goldens(write: bool, mini: bool) -> Result<BTreeSet<PathBuf>> {
     Ok(checked)
 }
 
-#[cfg(all(test, feature = "ascent", any(feature = "mini", feature = "mini-fx")))]
+#[cfg(all(
+    test,
+    feature = "ascent",
+    any(feature = "mini", feature = "mini-keyed")
+))]
 mod tests {
     use super::*;
     #[test]
@@ -114,7 +124,7 @@ mod tests {
                 check(c, "random", seed);
             }
         }
-        for c in FX_CASES {
+        for c in KEYED_CASES {
             for scenario in SCENARIOS {
                 check(c, scenario, 0x5eed);
             }
@@ -136,7 +146,7 @@ mod tests {
     }
     #[test]
     fn larger_differential_matrix() {
-        for c in CASES.iter().chain(FX_CASES) {
+        for c in CASES.iter().chain(KEYED_CASES) {
             for n in [20, 50] {
                 for scenario in SCENARIOS {
                     let d = generate(scenario, n, 0x5eed);

@@ -209,7 +209,7 @@ fn default_providers_record_concrete_types_in_declaration_order() {
     let expected: Vec<cq_lang_datalog_storage::Providers> = vec![
         syn::parse_quote! {
             canonical_name { Canonical }
-            canonical_set { ::cq_storage::HashSet<R> }
+            canonical_set { ::std::collections::HashSet<R, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>> }
             all { ::std::vec::Vec<(i32, u64,)> }
             seen { ::cq_storage::HashSet<(i32, u64,)> }
             delta { ::std::vec::Vec<(i32, u64,)> }
@@ -222,7 +222,7 @@ fn default_providers_record_concrete_types_in_declaration_order() {
             canonical_name { Canonical }
             canonical_set { ::cq_storage::HashSet<R> }
             all { ::std::vec::Vec<(u64, i32,)> }
-            seen { ::cq_storage::HashSet<(u64, i32,)> }
+            seen { ::std::collections::HashSet<(u64, i32,), ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>> }
             delta { ::std::vec::Vec<(u64, i32,)> }
             next { ::std::vec::Vec<(u64, i32,)> }
             all_init { ::std::vec::Vec::new() }
@@ -232,11 +232,11 @@ fn default_providers_record_concrete_types_in_declaration_order() {
     ];
     assert_eq!(target.providers, expected);
     let scan: syn::Type = syn::parse_quote!(
-        ::std::collections::HashMap<(), ::std::vec::Vec<(i32, u64,)>, ::cq_storage::HashState>
+        ::std::collections::HashMap<(), ::std::vec::Vec<(i32, u64,)>, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
     );
     assert_eq!(target.layouts[0].provider, scan);
     let lookup: syn::Type = syn::parse_quote!(
-        ::std::collections::HashMap<(i32, u64,), ::std::vec::Vec<()>, ::cq_storage::HashState>
+        ::std::collections::HashMap<(i32, u64,), ::std::vec::Vec<()>, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
     );
     assert_eq!(target.layouts[1].provider, lookup);
     assert!(

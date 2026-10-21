@@ -100,7 +100,9 @@ dependencies = [
  "cq-lang-datalog-source",
  "cq-lang-datalog-storage",
  "cq-lang-datalog-strata",
+ "cq-rewrites",
  "cq-storage",
+ "rustc-hash",
 ]
 
 [[package]]
@@ -655,9 +657,9 @@ dependencies = [
  "doop-ascent",
  "doop-ascent-par",
  "doop-mini",
- "doop-mini-fx",
+ "doop-mini-keyed",
  "doop-mini-par",
- "doop-mini-par-fx",
+ "doop-mini-par-keyed",
  "doop-shared",
  "rayon",
 ]
@@ -714,7 +716,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "doop-mini-fx"
+name = "doop-mini-keyed"
 version = "0.1.0"
 dependencies = [
  "cq-datalog",
@@ -723,7 +725,6 @@ dependencies = [
  "cq-storage",
  "doop-shared",
  "mini-linq",
- "rustc-hash",
 ]
 
 [[package]]
@@ -740,7 +741,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "doop-mini-par-fx"
+name = "doop-mini-par-keyed"
 version = "0.1.0"
 dependencies = [
  "cq-datalog",
@@ -752,7 +753,6 @@ dependencies = [
  "doop-shared",
  "mini-linq",
  "rayon",
- "rustc-hash",
 ]
 
 [[package]]

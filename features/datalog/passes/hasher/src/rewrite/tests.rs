@@ -19,11 +19,33 @@ fn fixture() -> storage::Program {
 }
 
 #[test]
-fn selects_all_applicable_fields_and_restores_base_exactly() {
+fn selects_both_directions_and_restores_fx_base_exactly() {
     let source = fixture();
     assert!(!source.delta_layouts.is_empty());
-    let selected = storage(&source, Choice::Fx).unwrap();
-    let state: Type = syn::parse_quote!(::std::hash::BuildHasherDefault<::rustc_hash::FxHasher>);
+    let keyed = storage(&source, Choice::Keyed).unwrap();
+    assert_ne!(keyed, source);
+    assert_eq!(storage(&keyed, Choice::Keyed).unwrap(), keyed);
+    assert_eq!(
+        keyed.providers[0].canonical_set,
+        syn::parse_quote!(::cq_storage::HashSet<R>)
+    );
+    assert_eq!(
+        keyed.providers[2].seen,
+        syn::parse_quote!(::cq_storage::HashSet<(i32, i32,)>)
+    );
+    for layout in keyed.layouts.iter().chain(&keyed.delta_layouts) {
+        assert!(
+            layout
+                .provider
+                .to_token_stream()
+                .to_string()
+                .contains("HashState")
+        );
+    }
+    check_storage(&source, &keyed, Choice::Keyed).unwrap();
+    let selected = storage(&keyed, Choice::Fx).unwrap();
+    let state: Type =
+        syn::parse_quote!(::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>);
     assert_eq!(
         selected.providers[0].canonical_set,
         syn::parse_quote!(::std::collections::HashSet<R, #state>)
@@ -48,8 +70,8 @@ fn selects_all_applicable_fields_and_restores_base_exactly() {
     }
     check_storage(&source, &selected, Choice::Fx).unwrap();
     assert_eq!(storage(&selected, Choice::Fx).unwrap(), selected);
-    assert_eq!(storage(&selected, Choice::Default).unwrap(), source);
-    assert_eq!(storage(&source, Choice::Default).unwrap(), source);
+    assert_eq!(selected, source);
+    assert_eq!(storage(&selected, Choice::Keyed).unwrap(), keyed);
     let replay: storage::Program = syn::parse2(selected.to_token_stream()).unwrap();
     assert_eq!(replay, selected);
 }
@@ -84,14 +106,15 @@ fn accepts_explicit_std_hashers_and_post_sharding_order() {
     source.layouts[0].provider =
         syn::parse_quote!(std::collections::HashMap<(i32, i32,), Vec<()>, CustomState>);
     let selected = storage(&source, Choice::Fx).unwrap();
-    let state: Type = syn::parse_quote!(::std::hash::BuildHasherDefault<::rustc_hash::FxHasher>);
+    let state: Type =
+        syn::parse_quote!(::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>);
     for fields in &selected.providers[2..] {
         assert_eq!(
             fields.seen,
             syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedSeen<(i32, i32,), #state>)
         );
     }
-    let restored = storage(&selected, Choice::Default).unwrap();
+    let restored = storage(&selected, Choice::Keyed).unwrap();
     for fields in &restored.providers[2..] {
         assert_eq!(
             fields.seen,
@@ -106,6 +129,26 @@ fn accepts_explicit_std_hashers_and_post_sharding_order() {
         restored.layouts[0].provider,
         syn::parse_quote!(::std::collections::HashMap<(i32, i32,), Vec<()>, ::cq_storage::HashState>)
     );
+    assert_eq!(storage(&restored, Choice::Keyed).unwrap(), restored);
+    assert_eq!(storage(&restored, Choice::Fx).unwrap(), selected);
+}
+
+#[test]
+fn normalizes_direct_fx_paths_to_facade_providers() {
+    let mut ty: Type = syn::parse_quote!(
+        ::std::collections::HashSet<i32, ::std::hash::BuildHasherDefault<::rustc_hash::FxHasher>>
+    );
+    let source = ty.clone();
+    select(&mut ty, Choice::Fx).unwrap();
+    assert_eq!(
+        ty,
+        syn::parse_quote!(::std::collections::HashSet<i32,
+            ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>)
+    );
+    check_provider(&source, &ty, Choice::Fx).unwrap();
+    select(&mut ty, Choice::Keyed).unwrap();
+    assert_eq!(ty, syn::parse_quote!(::cq_storage::HashSet<i32>));
+    check_provider(&source, &ty, Choice::Keyed).unwrap();
 }
 
 #[test]
@@ -115,7 +158,7 @@ fn independent_storage_checker_rejects_mutations() {
     let mutations: &[fn(&mut storage::Program)] = &[
         |p| p.providers[0].canonical_set = syn::parse_quote!(::cq_storage::HashSet<R>),
         |p| p.providers[2].seen = syn::parse_quote!(::cq_storage::HashSet<(i32, i32,)>),
-        |p| p.providers[2].seen = syn::parse_quote!(::std::collections::HashSet<(u64,), ::std::hash::BuildHasherDefault<::rustc_hash::FxHasher>>),
+        |p| p.providers[2].seen = syn::parse_quote!(::std::collections::HashSet<(u64,), ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>),
         |p| {
             p.layouts[0].provider =
                 syn::parse_quote!(::std::collections::HashMap<(), Vec<()>, ::cq_storage::HashState>)
@@ -140,7 +183,22 @@ fn independent_storage_checker_rejects_mutations() {
             "mutation {index}"
         );
     }
-    assert!(check_storage(&source, &selected, Choice::Default).is_err());
+    assert!(check_storage(&source, &selected, Choice::Keyed).is_err());
+    let keyed = storage(&source, Choice::Keyed).unwrap();
+    assert!(check_storage(&source, &keyed, Choice::Fx).is_err());
+    for (index, mutate) in mutations.iter().enumerate().skip(2) {
+        let mut mutation = keyed.clone();
+        mutate(&mut mutation);
+        assert!(
+            check_storage(&source, &mutation, Choice::Keyed).is_err(),
+            "keyed mutation {index}"
+        );
+    }
+    for index in [0, 2] {
+        let mut mutation = keyed.clone();
+        mutation.providers[index] = source.providers[index].clone();
+        assert!(check_storage(&source, &mutation, Choice::Keyed).is_err());
+    }
 }
 
 #[test]
@@ -155,7 +213,13 @@ fn round_selects_only_negation_key_providers() {
             .sum::<usize>(),
         1
     );
-    let selected = round(&source, Choice::Fx).unwrap();
+    let keyed = round(&source, Choice::Keyed).unwrap();
+    assert_ne!(keyed, source);
+    assert_eq!(round(&keyed, Choice::Keyed).unwrap(), keyed);
+    for key in keyed.context.strata.iter().flat_map(|s| &s.keys) {
+        assert_eq!(key.provider, syn::parse_quote!(::cq_storage::HashSet<_>));
+    }
+    let selected = round(&keyed, Choice::Fx).unwrap();
     assert_eq!(selected.storage, source.storage);
     assert_eq!(selected.holes, source.holes);
     let key = selected
@@ -167,10 +231,11 @@ fn round_selects_only_negation_key_providers() {
         .unwrap();
     assert_eq!(
         key.provider,
-        syn::parse_quote!(::std::collections::HashSet<_, ::std::hash::BuildHasherDefault<::rustc_hash::FxHasher>>)
+        syn::parse_quote!(::std::collections::HashSet<_, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>)
     );
     assert_eq!(round(&selected, Choice::Fx).unwrap(), selected);
-    assert_eq!(round(&selected, Choice::Default).unwrap(), source);
+    assert_eq!(selected, source);
+    assert_eq!(round(&selected, Choice::Keyed).unwrap(), keyed);
     let replay: rounds::Program = syn::parse2(selected.to_token_stream()).unwrap();
     assert_eq!(replay, selected);
     let mut ordered = source.clone();
@@ -183,6 +248,7 @@ fn round_selects_only_negation_key_providers() {
         .unwrap()
         .provider = syn::parse_quote!(::std::collections::BTreeSet<_>);
     assert_eq!(round(&ordered, Choice::Fx).unwrap(), ordered);
+    assert_eq!(round(&ordered, Choice::Keyed).unwrap(), ordered);
 }
 
 #[test]
@@ -206,7 +272,7 @@ fn independent_round_checker_rejects_mutations() {
                 .flat_map(|s| &mut s.keys)
                 .next()
                 .unwrap()
-                .provider = syn::parse_quote!(::std::collections::HashSet<(i32,), ::std::hash::BuildHasherDefault<::rustc_hash::FxHasher>>)
+                .provider = syn::parse_quote!(::std::collections::HashSet<(i32,), ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>)
         },
         |p| p.policy.timing = syn::parse_quote!(phases),
         |p| {
@@ -238,7 +304,20 @@ fn independent_round_checker_rejects_mutations() {
             "mutation {index}"
         );
     }
-    assert!(check_round(&source, &selected, Choice::Default).is_err());
+    assert!(check_round(&source, &selected, Choice::Keyed).is_err());
+    let keyed = round(&source, Choice::Keyed).unwrap();
+    assert!(check_round(&source, &keyed, Choice::Fx).is_err());
+    for (index, mutate) in mutations.iter().enumerate().skip(1) {
+        let mut mutation = keyed.clone();
+        mutate(&mut mutation);
+        assert!(
+            check_round(&source, &mutation, Choice::Keyed).is_err(),
+            "keyed mutation {index}"
+        );
+    }
+    let mut mutation = keyed.clone();
+    mutation.context = source.context.clone();
+    assert!(check_round(&source, &mutation, Choice::Keyed).is_err());
 }
 
 #[test]
@@ -246,7 +325,8 @@ fn reports_bad_arguments_and_malformed_known_providers() {
     for args in [
         quote!(),
         quote!(random),
-        quote!(fx, default),
+        quote!(default),
+        quote!(fx, keyed),
         quote!(fx extra),
         quote!(42),
     ] {
@@ -285,6 +365,22 @@ fn stage_protocol_forwards_checked_provider_selections() {
     .to_string();
     assert!(output.contains("downstream :: consume"));
     assert!(output.contains("FxHasher"));
+    assert!(!output.contains("compile_error"));
+    let output = cq_stage::rewrite::<storage::Program>(
+        quote!(arguments { keyed }; pipeline { downstream::consume }; #source),
+        |source, args| storage(source, syn::parse2(args)?),
+    )
+    .to_string();
+    assert!(output.contains("downstream :: consume"));
+    assert!(output.contains("HashState"));
+    assert!(!output.contains("compile_error"));
+    let output = cq_stage::rewrite::<rounds::Program>(
+        quote!(arguments { keyed }; pipeline { downstream::consume }; #round_source),
+        |source, args| round(source, syn::parse2(args)?),
+    )
+    .to_string();
+    assert!(output.contains("downstream :: consume"));
+    assert!(output.contains("cq_storage :: HashSet"));
     assert!(!output.contains("compile_error"));
     let error = cq_stage::rewrite::<storage::Program>(
         quote!(arguments { unsupported }; pipeline { downstream::consume }; #source),

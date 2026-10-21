@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
-"""Check Fx full answers, then compare hashers in isolated interleaved processes.
+"""Check Fx and keyed full answers, then compare isolated interleaved processes.
 
 Build doop-parallel in release mode without counters/timing features first.
 Keep datalog-parallel-doop's default engine features enabled: --check requires
-all six (mini,mini-fx,ascent,mini-par,mini-par-fx,ascent-par), not only Fx engines.
+all six (mini,mini-keyed,ascent,mini-par,mini-par-keyed,ascent-par).
 Each feature selects its own engine crate; phase-timing is an optional forward
 to enabled engines and must remain disabled for these measurements.
 Run with no other benchmark or build workload on the machine:
-  python3 doop/hash_sweep.py --binary /tmp/target-Fx/release/doop-parallel
+  python3 doop/hash_sweep.py --binary /tmp/target-hashers/release/doop-parallel
 The same executable supplies sequential and parallel engines; facts loading is
 excluded from compute time. Three samples per configuration alternate AB/BA/AB.
+mini/mini-par now use Fx; mini-keyed/mini-par-keyed use keyed aHash.
+The checked-in hasher CSV/JSON files retain historical dadaed6 measurements:
+there mini/mini-par meant aHash and mini-fx/mini-par-fx meant opt-in Fx.
+This script produces new evidence and does not relabel those historical files.
 """
 import argparse
 import csv
@@ -29,7 +33,7 @@ def main():
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--cache", type=Path, default=Path("/tmp/doop-data"))
     parser.add_argument("--output", type=Path, default=Path("/tmp") / (
-        "doop-fx-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")))
+        "doop-hashers-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")))
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     cache = args.cache.resolve(strict=True)
@@ -41,6 +45,7 @@ def main():
     (output / "environment.txt").write_text(
         f"platform={platform.platform()}\nbinary={binary}\ncache={cache}\n"
         "repetitions=3\norder=AB,BA,AB\nthreads=1,15\n"
+        "engines=mini:fx,mini-keyed:ahash,mini-par:fx,mini-par-keyed:ahash\n"
         "affinity=OS scheduled; no pinning\nfeatures=no counters or phase/hole timing\n")
     environment = dict(os.environ, RAYON_NUM_THREADS="15")
 
@@ -52,7 +57,8 @@ def main():
             subprocess.run(command, env=environment, stdout=stdout, stderr=stderr, check=True)
         text = (output / f"{label}.stdout").read_text()
         if engine is None:
-            for name, threads in (("mini-fx", 1), ("mini-par-fx", 15)):
+            for name, threads in (("mini", 1), ("mini-keyed", 1),
+                                  ("mini-par", 15), ("mini-par-keyed", 15)):
                 marker = (f"check=ok engine={name} threads={threads} "
                           "relations=26 comparison=full_tuple_sets")
                 if marker not in text:
@@ -65,14 +71,14 @@ def main():
 
     for app in APPS:
         invoke(app, f"check-{app}")
-        print(f"exactness {app}: Fx sequential and 15 workers, all 26 relations", flush=True)
+        print(f"exactness {app}: Fx and keyed, sequential and 15 workers, all 26 relations", flush=True)
     measurements = {}
     with (output / "samples.csv").open("w", newline="") as samples:
         writer = csv.writer(samples)
         writer.writerow(("app", "engine", "threads", "repetition", "compute_seconds", "rss_bytes"))
         for app in APPS:
             for base, threads in (("mini", 1), ("mini-par", 15)):
-                pair = (base, base + "-fx")
+                pair = (base + "-keyed", base)
                 for repetition in range(3):
                     for engine in pair if repetition % 2 == 0 else reversed(pair):
                         seconds, rss = invoke(app, f"{app}-{engine}-r{repetition}", engine)
@@ -85,8 +91,8 @@ def main():
         writer.writerow(("app", "threads", "ahash_median_seconds", "fx_median_seconds", "fx_speedup"))
         for app in APPS:
             for base, threads in (("mini", 1), ("mini-par", 15)):
-                ahash = statistics.median(measurements[app, base, threads])
-                fx = statistics.median(measurements[app, base + "-fx", threads])
+                ahash = statistics.median(measurements[app, base + "-keyed", threads])
+                fx = statistics.median(measurements[app, base, threads])
                 row = (app, threads, ahash, fx, ahash / fx)
                 writer.writerow(row)
                 print("\t".join(map(str, row)))

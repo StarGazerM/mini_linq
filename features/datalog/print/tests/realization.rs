@@ -437,7 +437,7 @@ fn edb_canonicalization_precedes_and_is_shared_by_layouts_keys_and_outputs() {
     // Output collection must not introduce a second all-column hash set.
     assert_eq!(
         rendered
-            .matches("collect :: < :: cq_storage :: HashSet")
+            .matches("collect :: < :: std :: collections :: HashSet")
             .count(),
         1
     );

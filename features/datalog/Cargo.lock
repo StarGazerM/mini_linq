@@ -92,11 +92,13 @@ dependencies = [
  "cq-lang-datalog-source",
  "cq-lang-datalog-storage",
  "cq-lang-datalog-strata",
+ "cq-rewrites",
  "cq-stage",
  "cq-storage",
  "mini-linq",
  "proc-macro2",
  "quote",
+ "rustc-hash",
  "syn 2.0.119",
 ]
 
@@ -148,7 +150,6 @@ dependencies = [
  "mini-linq",
  "proc-macro2",
  "quote",
- "rustc-hash",
  "syn 2.0.119",
 ]
 
@@ -608,7 +609,7 @@ version = "0.1.0"
 dependencies = [
  "doop-ascent",
  "doop-mini",
- "doop-mini-fx",
+ "doop-mini-keyed",
  "doop-shared",
 ]
 
@@ -625,7 +626,7 @@ dependencies = [
  "mini-linq",
  "oracle-ascent",
  "oracle-mini",
- "oracle-mini-fx",
+ "oracle-mini-keyed",
  "oracle-shared",
 ]
 
@@ -659,7 +660,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "doop-mini-fx"
+name = "doop-mini-keyed"
 version = "0.1.0"
 dependencies = [
  "cq-datalog",
@@ -668,7 +669,6 @@ dependencies = [
  "cq-storage",
  "doop-shared",
  "mini-linq",
- "rustc-hash",
 ]
 
 [[package]]
@@ -863,7 +863,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "oracle-mini-fx"
+name = "oracle-mini-keyed"
 version = "0.1.0"
 dependencies = [
  "cq-datalog",
@@ -872,7 +872,6 @@ dependencies = [
  "cq-storage",
  "mini-linq",
  "oracle-shared",
- "rustc-hash",
 ]
 
 [[package]]

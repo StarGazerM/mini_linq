@@ -1,5 +1,5 @@
 [package]
-name = "doop-mini-par-fx"
+name = "doop-mini-par-keyed"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85.1"
@@ -17,7 +17,6 @@ mini-linq = { path = "../../../../../facade/mini-linq" }
 cq-storage = { path = "../../../../../runtime/cq-storage" }
 cq-datalog-hasher = { path = "../../../../datalog/passes/hasher" }
 cq-rewrites = { path = "../../../../rewrites" }
-rustc-hash = "2.1.3"
 cq-datalog-parallel = { path = "../../.." }
 cq-datalog-parallel-runtime = { path = "../../../runtime" }
 rayon = "1"

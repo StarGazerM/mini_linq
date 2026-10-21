@@ -1,19 +1,20 @@
 [package]
-name = "doop-mini-fx"
+name = "oracle-mini-keyed"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85.1"
-license = "MIT OR Apache-2.0"
+rust-version = "1.85"
 publish = false
+license = "MIT OR Apache-2.0"
 
 [features]
+default = []
+counters = ["oracle-shared/counters", "cq-datalog/counters", "cq-storage/counters"]
 phase-timing = ["cq-datalog/phase-timing"]
 
 [dependencies]
-doop-shared = { path = "../../shared" }
+oracle-shared = { path = "../../shared" }
 cq-datalog = { path = "../../../facade/cq-datalog" }
 mini-linq = { path = "../../../../../facade/mini-linq" }
 cq-storage = { path = "../../../../../runtime/cq-storage" }
 cq-datalog-hasher = { path = "../../../passes/hasher" }
 cq-rewrites = { path = "../../../../rewrites" }
-rustc-hash = "2.1.3"

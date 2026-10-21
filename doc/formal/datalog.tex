@@ -10,6 +10,8 @@ Structural checks examine the supplied IR and never rerun a producer to compare
 with its chosen output.
 The default generated Rust preserves the captured baseline's behavior;
 declaration pruning removes only unused hole-local declarations and bindings.
+The Fx-default cutover intentionally changes the post-pruning baseline only in
+hash-provider type paths and the default hole-local deduplication rewrite.
 
 \paragraph{Semantic domain and limits.}
 Each relation declares a model slot $M$; the base accepts only \code{set}.
@@ -220,12 +222,14 @@ reference executions. These are semantic premises, not proofs obtained by
 parsing a type name or by checking method availability.
 
 \paragraph{Defaults and checked alternatives.} The default canonical wrapper
-is named \code{Canonical}, with \code{::cq\_storage::HashSet<R>} storage.
+is named \code{Canonical}, with \code{::std::collections::HashSet<R, Fx>} storage,
+where \code{Fx} abbreviates the recorded concrete type
+\code{::std::hash::BuildHasherDefault<::cq\_datalog::rustc\_hash::FxHasher>}.
 The accumulated, delta and next providers are concrete \code{Vec} row types,
 initialized with \code{::std::vec::Vec::new()}; membership uses
-\code{::cq\_storage::HashSet} of complete rows. Layouts use
+\code{::std::collections::HashSet<Tuple, Fx>} of complete rows. Layouts use
 \code{::std::collections::HashMap} from key tuples to \code{Vec} payload
-tuples, with \code{::cq\_storage::HashState}. These are default records, not
+tuples, with the same Fx build hasher. These are default records, not
 the definition of admissibility. A concrete \code{BTreeMap} layout with the
 same key/payload types is admitted under its lawful ordering premise.
 Likewise a later changing occurrence may select a direct delta scan instead
@@ -295,7 +299,8 @@ premises its $\alpha$-image refines the Incremental transition system.
 projected columns, filters, runtime name, construction hole, borrowed
 representation (\code{KeyRepresentation::Borrowed}, text \code{borrowed})
 and opaque Rust \code{provider} type. The default is
-\code{::cq\_storage::HashSet<\_>}; this is not a type whitelist.
+\code{::std::collections::HashSet<\_, Fx>}, with the same unkeyed Fx build
+hasher as Storage; this is not a type whitelist.
 Collection and borrowed membership must implement precisely the recorded
 projection/filter set, with lawful equality and any required hashing or ordering.
 Type correctness alone does not establish these laws. A checked Round rewrite
@@ -568,19 +573,27 @@ application/engine comparisons). Build statistics, all CGU sizes, commands,
 and all 24 raw timing samples are retained in
 \code{features/datalog/doop/codegen-evidence.json}.
 
-\paragraph{Opt-in hash-provider selection.}
-The public \code{cq-datalog-hasher} plug-in expresses one hasher choice at
-two IR levels: \code{hasher(fx)} rewrites Storage's native layout maps,
-IDB membership sets and EDB canonical sets, while \code{hasher\_round(fx)}
-rewrites Round's negation key sets. Both rewrites are parallel-agnostic;
-neither is installed in the default queue. The matching \code{default}
-choice restores the recorded aHash provider. Hole-local CQ deduplication is
-selected independently through the existing Structures
-\code{cq\_rewrites::retype(dedup => ...)} rewrite. Fx uses
-\code{BuildHasherDefault<rustc\_hash::FxHasher>} from the same 2.1.3 dependency
-as the Ascent oracle. These choices assume lawful hashing and equality and
-trusted inputs; unlike random-seeded aHash, Fx is not collision-attack resistant.
-Core fallback index directories and core-internal sets are not rewritten.
+\paragraph{Default and alternative hash-provider selection.}
+Datalog directly records unkeyed Fx providers for Storage's native layout
+maps, IDB membership sets, EDB canonical sets, and Round's negation key sets.
+Its default hole-local CQ configuration installs the existing Structures
+\code{::cq\_datalog::cq\_rewrites::retype(dedup => ...)} rewrite with the
+same Fx provider before authored CQ \code{structures} rewrites, so an explicit
+later deduplication \code{retype} selects an alternative.
+No MiniLinq core defaults are changed. The facade reexports both the rewrite
+and \code{rustc\_hash}, so default consumers need no new direct dependencies.
+The public \code{cq-datalog-hasher} plug-in retains explicit
+\code{hasher(fx)} and \code{hasher\_round(fx)} selections.
+For adversarial inputs, \code{hasher(keyed)} selects random-seeded aHash for
+Storage and \code{hasher\_round(keyed)} does so for Round; hole-local CQ
+deduplication must also be selected with
+\code{retype(dedup => ::cq\_storage::HashSet<\_>)}.
+These rewrites are parallel-agnostic and are not installed in the default queue.
+Fx uses \code{BuildHasherDefault<rustc\_hash::FxHasher>} from version 2.1.3,
+as does the Ascent oracle. All providers require lawful hashing and equality.
+The default additionally assumes trusted input: unkeyed Fx is not
+collision-attack resistant. Core fallback index directories and core-internal
+sets are not rewritten.
 
 \subsection{Parallel partition: Round to extension-owned annotated Round}
 The separate extension accepts an unannotated source with sharded admission,
@@ -697,6 +710,12 @@ executions and zero fallback builds. The rejected index provider is removed,
 not retained as an unmeasured default or compatibility path.
 
 \paragraph{Opt-in Fx comparison (2026-10-20).}
+The measurements below are historical evidence from commit \code{dadaed6},
+before the Fx-default cutover. Their engine labels, provider counts, and
+plug-in descriptions retain that historical meaning; the archived sample,
+summary, and evidence files are unchanged. Current ordinary MiniLinq Datalog
+engines use Fx by default, and the alternate engines are named
+\code{mini-keyed} and \code{mini-par-keyed}.
 On an Apple M5 Pro (5 performance plus 10 efficiency cores, 24\,GiB),
 Rust 1.97.1 release binaries without counters or phase/hole timing measured the
 following compute-only seconds. Facts loading is outside the timer.

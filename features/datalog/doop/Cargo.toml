@@ -11,14 +11,14 @@ name = "doop"
 path = "src/main.rs"
 
 [features]
-default = ["mini", "mini-fx", "ascent"]
+default = ["mini", "mini-keyed", "ascent"]
 mini = ["dep:doop-mini"]
-mini-fx = ["dep:doop-mini-fx"]
+mini-keyed = ["dep:doop-mini-keyed"]
 ascent = ["dep:doop-ascent"]
-phase-timing = ["doop-mini?/phase-timing", "doop-mini-fx?/phase-timing"]
+phase-timing = ["doop-mini?/phase-timing", "doop-mini-keyed?/phase-timing"]
 
 [dependencies]
 doop-shared = { path = "shared" }
 doop-mini = { path = "engines/mini", optional = true }
-doop-mini-fx = { path = "engines/mini-fx", optional = true }
+doop-mini-keyed = { path = "engines/mini-keyed", optional = true }
 doop-ascent = { path = "engines/ascent", optional = true }

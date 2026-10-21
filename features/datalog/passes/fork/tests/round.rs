@@ -18,6 +18,49 @@ fn storage_and_round_are_complete_checked_languages() {
     round::contract::check(&round).unwrap();
     assert!(round.execution.is_empty());
 }
+
+#[test]
+fn default_negation_sets_and_hole_dedup_use_fx() {
+    let source = syn::parse_quote! {
+        struct Q;
+        relation E(x:i32) = (e);
+        relation Blocked(x:i32) = (blocked);
+        relation R(x:i32);
+        output R;
+        R(*x) :- E(x), !Blocked(x);
+    };
+    let strata = cq_datalog_stratify::compile(&source).unwrap();
+    let incremental = cq_datalog_incremental::compile(&strata).unwrap();
+    let storage = cq_datalog_storage::compile(&incremental).unwrap();
+    let target = compile(&storage).unwrap();
+    let provider: syn::Type = syn::parse_quote!(
+        ::std::collections::HashSet<_, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
+    );
+    let keys: Vec<_> = target.context.strata.iter().flat_map(|s| &s.keys).collect();
+    assert!(!keys.is_empty());
+    assert!(keys.iter().all(|key| key.provider == provider));
+    let expected: cq_stage::Pipeline = syn::parse_quote!(pipeline {
+        ::mini_linq::passes::plan,
+        ::mini_linq::passes::index_demands,
+        ::mini_linq::passes::lower,
+        ::mini_linq::passes::select,
+        ::cq_datalog::cq_rewrites::retype(
+            dedup => ::std::collections::HashSet<_, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
+        ),
+        ::mini_linq::passes::represent,
+        ::mini_linq::passes::stage,
+        ::mini_linq::passes::print_pull
+    });
+    assert!(!target.holes.is_empty());
+    let expected = expected.to_token_stream().to_string();
+    assert!(
+        target
+            .holes
+            .iter()
+            .all(|hole| { hole.pipeline.to_token_stream().to_string() == expected })
+    );
+    check(&storage, &target).unwrap();
+}
 #[test]
 fn per_hole_queues_check_terminal_path_not_incidental_tokens() {
     let source = source();

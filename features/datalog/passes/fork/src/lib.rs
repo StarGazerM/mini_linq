@@ -15,14 +15,23 @@ pub fn cq_defaults() -> cq_stage::Configuration {
         lower = ::mini_linq::passes::lower;
         select = ::mini_linq::passes::select;
         represent = ::mini_linq::passes::represent;
+        structures = [::cq_datalog::cq_rewrites::retype(
+            dedup => ::std::collections::HashSet<_, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
+        )];
         stage = ::mini_linq::passes::stage;
         print = ::mini_linq::passes::print_pull;
     })
 }
+/// Install Datalog's dedup choice before any authored Structures rewrites.
+/// A later `retype(dedup => ...)` therefore selects an alternative provider.
+pub fn resolve_cq(mut configuration: cq_stage::Configuration) -> syn::Result<cq_stage::Pipeline> {
+    let mut defaults = cq_defaults();
+    defaults.structures.append(&mut configuration.structures);
+    configuration.structures = std::mem::take(&mut defaults.structures);
+    configuration.resolve(defaults)
+}
 pub fn default_pipeline() -> cq_stage::Pipeline {
-    cq_stage::Configuration::default()
-        .resolve(cq_defaults())
-        .expect("complete CQ defaults")
+    resolve_cq(cq_stage::Configuration::default()).expect("complete CQ defaults")
 }
 pub fn compile(source: &storage::Program) -> syn::Result<Program> {
     construct(
@@ -371,7 +380,7 @@ fn construct(
                         filters: selections,
                         name: fresh.id("keys"),
                         representation,
-                        provider: syn::parse_quote!(::cq_storage::HashSet<_>),
+                        provider: syn::parse_quote!(::std::collections::HashSet<_, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>),
                         hole: holes.len(),
                     };
                     let name = fresh.id("key_hole");

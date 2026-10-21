@@ -6,7 +6,7 @@ use oracle_shared::harness::counters;
     test,
     feature = "counters",
     feature = "mini",
-    feature = "mini-fx",
+    feature = "mini-keyed",
     feature = "ascent"
 ))]
 use oracle_shared::harness::reach_cost;
@@ -26,12 +26,13 @@ fn bench_hashers() {
     println!("program\tscenario\tnodes\tedges\trows\tahash_us\tfx_us\tfx_speedup");
     bench_inputs(|name, scenario, n, data| {
         let baseline = CASES.iter().find(|case| case.name == name).unwrap();
-        let selected = crate::FX_CASES
+        let selected = crate::KEYED_CASES
             .iter()
             .find(|case| case.name == name)
             .unwrap();
         let expected = (baseline.oracle)(data).0;
-        let evaluators = [baseline.mini, selected.mini];
+        // Keep keyed aHash first and Fx second to match the reported columns.
+        let evaluators = [selected.mini, baseline.mini];
         let mut samples = [[Duration::ZERO; 2]; 3];
         // Warm both implementations before comparing short microbenchmarks.
         for evaluate in evaluators {
@@ -65,7 +66,7 @@ pub fn run(args: &[String]) -> Result<()> {
     match command(
         args,
         &["--write"],
-        "usage: datalog-oracle golden [--write] | counters | bench [--engine mini|mini-fx|both]",
+        "usage: datalog-oracle golden [--write] | counters | bench [--engine mini|mini-keyed|both]",
     )? {
         Command::Golden { write } => {
             crate::goldens(write, false)?;
@@ -76,8 +77,8 @@ pub fn run(args: &[String]) -> Result<()> {
                 bench_hashers();
                 return Ok(());
             }
-            let column = if engine == "mini-fx" {
-                "mini_fx_us"
+            let column = if engine == "mini-keyed" {
+                "mini_keyed_us"
             } else {
                 "mini_us"
             };
@@ -113,10 +114,10 @@ fn bench_engine(args: &[String]) -> Result<(&[String], &'static [crate::Case], &
     if args.len() == 3 && args[0] == "bench" && args[1] == "--engine" {
         return match args[2].as_str() {
             "mini" if !CASES.is_empty() => Ok((&args[..1], CASES, "mini")),
-            "mini-fx" if !crate::FX_CASES.is_empty() => {
-                Ok((&args[..1], crate::FX_CASES, "mini-fx"))
+            "mini-keyed" if !crate::KEYED_CASES.is_empty() => {
+                Ok((&args[..1], crate::KEYED_CASES, "mini-keyed"))
             }
-            "both" if !CASES.is_empty() && !crate::FX_CASES.is_empty() => {
+            "both" if !CASES.is_empty() && !crate::KEYED_CASES.is_empty() => {
                 Ok((&args[..1], CASES, "both"))
             }
             name => Err(format!("unknown or disabled engine: {name}").into()),
@@ -125,11 +126,15 @@ fn bench_engine(args: &[String]) -> Result<(&[String], &'static [crate::Case], &
     Ok((
         args,
         crate::selected_cases()?,
-        if CASES.is_empty() { "mini-fx" } else { "mini" },
+        if CASES.is_empty() {
+            "mini-keyed"
+        } else {
+            "mini"
+        },
     ))
 }
 
-#[cfg(all(test, feature = "mini", feature = "mini-fx", feature = "ascent"))]
+#[cfg(all(test, feature = "mini", feature = "mini-keyed", feature = "ascent"))]
 mod tests {
     use super::*;
 
@@ -138,8 +143,8 @@ mod tests {
     }
 
     #[test]
-    fn fx_bench_selection_is_explicit() {
-        for name in ["mini", "mini-fx", "both"] {
+    fn keyed_bench_selection_is_explicit() {
+        for name in ["mini", "mini-keyed", "both"] {
             let words = args(&["bench", "--engine", name]);
             let (remaining, cases, selected) = bench_engine(&words).unwrap();
             assert_eq!(remaining, &words[..1]);
@@ -148,6 +153,7 @@ mod tests {
         }
         assert_eq!(bench_engine(&args(&["bench"])).unwrap().2, "mini");
         assert!(bench_engine(&args(&["bench", "--engine", "unknown"])).is_err());
+        assert!(bench_engine(&args(&["bench", "--engine", "mini-fx"])).is_err());
     }
 
     #[cfg(feature = "counters")]
@@ -181,8 +187,8 @@ mod feature_tests {
     fn engine_selection_matches_compiled_dependencies() {
         for (name, enabled) in [
             ("mini", !CASES.is_empty()),
-            ("mini-fx", !crate::FX_CASES.is_empty()),
-            ("both", !CASES.is_empty() && !crate::FX_CASES.is_empty()),
+            ("mini-keyed", !crate::KEYED_CASES.is_empty()),
+            ("both", !CASES.is_empty() && !crate::KEYED_CASES.is_empty()),
         ] {
             let args = ["bench", "--engine", name].map(String::from);
             assert_eq!(bench_engine(&args).is_ok(), enabled, "{name}");
@@ -190,7 +196,7 @@ mod feature_tests {
         let args = ["bench".to_owned()];
         assert_eq!(
             bench_engine(&args).is_ok(),
-            !CASES.is_empty() || !crate::FX_CASES.is_empty()
+            !CASES.is_empty() || !crate::KEYED_CASES.is_empty()
         );
     }
 }
