@@ -232,9 +232,10 @@ cq_lang_sequence::<impl {"resolved_path":{"args":null,"id":"cq_lang_sequence::Pr
 cq_lang_sequence::<impl {"resolved_path":{"args":null,"id":"cq_lang_sequence::Program","path":"Program"}} as {"args":null,"id":"core::marker::UnsafeUnpin","path":"UnsafeUnpin"}>	{"blanket_impl":null,"for":{"resolved_path":{"args":null,"id":"cq_lang_sequence::Program","path":"Program"}},"generics":{"params":[],"where_predicates":[]},"is_negative":false,"is_synthetic":true,"is_unsafe":false,"provided_trait_methods":[],"trait":{"args":null,"id":"core::marker::UnsafeUnpin","path":"UnsafeUnpin"}}
 cq_lang_sequence::<impl {"resolved_path":{"args":null,"id":"cq_lang_sequence::Program","path":"Program"}} as {"args":null,"id":"core::panic::unwind_safe::RefUnwindSafe","path":"RefUnwindSafe"}>	{"blanket_impl":null,"for":{"resolved_path":{"args":null,"id":"cq_lang_sequence::Program","path":"Program"}},"generics":{"params":[],"where_predicates":[]},"is_negative":false,"is_synthetic":true,"is_unsafe":false,"provided_trait_methods":[],"trait":{"args":null,"id":"core::panic::unwind_safe::RefUnwindSafe","path":"RefUnwindSafe"}}
 cq_lang_sequence::<impl {"resolved_path":{"args":null,"id":"cq_lang_sequence::Program","path":"Program"}} as {"args":null,"id":"core::panic::unwind_safe::UnwindSafe","path":"UnwindSafe"}>	{"blanket_impl":null,"for":{"resolved_path":{"args":null,"id":"cq_lang_sequence::Program","path":"Program"}},"generics":{"params":[],"where_predicates":[]},"is_negative":false,"is_synthetic":true,"is_unsafe":false,"provided_trait_methods":[],"trait":{"args":null,"id":"core::panic::unwind_safe::UnwindSafe","path":"UnwindSafe"}}
-cq_lang_sequence::<impl {"resolved_path":{"args":null,"id":"cq_lang_sequence::Program","path":"Program"}} as {"args":null,"id":"cq_stage::Language","path":"Language"}>	{"blanket_impl":null,"for":{"resolved_path":{"args":null,"id":"cq_lang_sequence::Program","path":"Program"}},"generics":{"params":[],"where_predicates":[]},"is_negative":false,"is_synthetic":false,"is_unsafe":false,"provided_trait_methods":["terminal"],"trait":{"args":null,"id":"cq_stage::Language","path":"Language"}}
+cq_lang_sequence::<impl {"resolved_path":{"args":null,"id":"cq_lang_sequence::Program","path":"Program"}} as {"args":null,"id":"cq_stage::Language","path":"Language"}>	{"blanket_impl":null,"for":{"resolved_path":{"args":null,"id":"cq_lang_sequence::Program","path":"Program"}},"generics":{"params":[],"where_predicates":[]},"is_negative":false,"is_synthetic":false,"is_unsafe":false,"provided_trait_methods":["context","terminal"],"trait":{"args":null,"id":"cq_stage::Language","path":"Language"}}
 cq_lang_sequence::<impl {"resolved_path":{"args":null,"id":"cq_lang_sequence::Program","path":"Program"}} as {"args":null,"id":"cq_stage::Language","path":"Language"}>::check	{"function":{"generics":{"params":[],"where_predicates":[]},"header":{"abi":"Rust","is_async":false,"is_const":false,"is_unsafe":false},"sig":{"inputs":[["self",{"borrowed_ref":{"is_mutable":false,"lifetime":null,"type":{"generic":"Self"}}}]],"is_c_variadic":false,"output":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"tuple":[]}}],"constraints":[]}},"id":"syn::error::Result","path":"syn::Result"}}}}}
 cq_lang_sequence::<impl {"resolved_path":{"args":null,"id":"cq_lang_sequence::Program","path":"Program"}} as {"args":null,"id":"cq_stage::Language","path":"Language"}>::check_rewrite	{"function":{"generics":{"params":[],"where_predicates":[]},"header":{"abi":"Rust","is_async":false,"is_const":false,"is_unsafe":false},"sig":{"inputs":[["source",{"borrowed_ref":{"is_mutable":false,"lifetime":null,"type":{"generic":"Self"}}}],["target",{"borrowed_ref":{"is_mutable":false,"lifetime":null,"type":{"generic":"Self"}}}]],"is_c_variadic":false,"output":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"tuple":[]}}],"constraints":[]}},"id":"syn::error::Result","path":"syn::Result"}}}}}
+cq_lang_sequence::<impl {"resolved_path":{"args":null,"id":"cq_lang_sequence::Program","path":"Program"}} as {"args":null,"id":"cq_stage::Language","path":"Language"}>::context	{"function":{"generics":{"params":[],"where_predicates":[]},"header":{"abi":"Rust","is_async":false,"is_const":false,"is_unsafe":false},"sig":{"inputs":[["self",{"borrowed_ref":{"is_mutable":false,"lifetime":null,"type":{"generic":"Self"}}}]],"is_c_variadic":false,"output":{"resolved_path":{"args":null,"id":"cq_stage::Context","path":"cq_stage::Context"}}}}}
 cq_lang_sequence::<impl {"resolved_path":{"args":null,"id":"cq_lang_sequence::Program","path":"Program"}} as {"args":null,"id":"quote::to_tokens::ToTokens","path":"ToTokens"}>	{"blanket_impl":null,"for":{"resolved_path":{"args":null,"id":"cq_lang_sequence::Program","path":"Program"}},"generics":{"params":[],"where_predicates":[]},"is_negative":false,"is_synthetic":false,"is_unsafe":false,"provided_trait_methods":["to_token_stream","into_token_stream"],"trait":{"args":null,"id":"quote::to_tokens::ToTokens","path":"ToTokens"}}
 cq_lang_sequence::<impl {"resolved_path":{"args":null,"id":"cq_lang_sequence::Program","path":"Program"}} as {"args":null,"id":"quote::to_tokens::ToTokens","path":"ToTokens"}>::to_tokens	{"function":{"generics":{"params":[],"where_predicates":[]},"header":{"abi":"Rust","is_async":false,"is_const":false,"is_unsafe":false},"sig":{"inputs":[["self",{"borrowed_ref":{"is_mutable":false,"lifetime":null,"type":{"generic":"Self"}}}],["tokens",{"borrowed_ref":{"is_mutable":true,"lifetime":null,"type":{"resolved_path":{"args":null,"id":"proc_macro2::TokenStream","path":"TokenStream"}}}}]],"is_c_variadic":false,"output":null}}}
 cq_lang_sequence::<impl {"resolved_path":{"args":null,"id":"cq_lang_sequence::Program","path":"Program"}} as {"args":null,"id":"syn::parse::Parse","path":"Parse"}>	{"blanket_impl":null,"for":{"resolved_path":{"args":null,"id":"cq_lang_sequence::Program","path":"Program"}},"generics":{"params":[],"where_predicates":[]},"is_negative":false,"is_synthetic":false,"is_unsafe":false,"provided_trait_methods":[],"trait":{"args":null,"id":"syn::parse::Parse","path":"Parse"}}
@@ -331,26 +332,26 @@ cq_lang_sequence::Graded::grades	{"struct_field":{"resolved_path":{"args":{"angl
 cq_lang_sequence::Graded::machine	{"struct_field":{"resolved_path":{"args":null,"id":"proc_macro2::Ident","path":"syn::Ident"}}}
 cq_lang_sequence::Guard	{"enum":{"generics":{"params":[],"where_predicates":[]},"has_stripped_variants":false,"variants":["cq_lang_sequence::Guard::Lt","cq_lang_sequence::Guard::Ge","cq_lang_sequence::Guard::Else"]}}
 cq_lang_sequence::Guard::Else	{"variant":{"discriminant":null,"kind":"plain"}}
-cq_lang_sequence::Guard::Ge	{"variant":{"discriminant":null,"kind":{"tuple":[312,313]}}}
+cq_lang_sequence::Guard::Ge	{"variant":{"discriminant":null,"kind":{"tuple":[314,315]}}}
 cq_lang_sequence::Guard::Ge::0	{"struct_field":{"resolved_path":{"args":null,"id":"cq_lang_sequence::Len","path":"Len"}}}
 cq_lang_sequence::Guard::Ge::1	{"struct_field":{"primitive":"usize"}}
-cq_lang_sequence::Guard::Lt	{"variant":{"discriminant":null,"kind":{"tuple":[309,310]}}}
+cq_lang_sequence::Guard::Lt	{"variant":{"discriminant":null,"kind":{"tuple":[311,312]}}}
 cq_lang_sequence::Guard::Lt::0	{"struct_field":{"resolved_path":{"args":null,"id":"cq_lang_sequence::Len","path":"Len"}}}
 cq_lang_sequence::Guard::Lt::1	{"struct_field":{"primitive":"usize"}}
 cq_lang_sequence::Len	{"enum":{"generics":{"params":[],"where_predicates":[]},"has_stripped_variants":false,"variants":["cq_lang_sequence::Len::Input","cq_lang_sequence::Len::Scan","cq_lang_sequence::Len::Lit","cq_lang_sequence::Len::Add","cq_lang_sequence::Len::CeilDiv","cq_lang_sequence::Len::Unknown"]}}
-cq_lang_sequence::Len::Add	{"variant":{"discriminant":null,"kind":{"tuple":[271,273]}}}
+cq_lang_sequence::Len::Add	{"variant":{"discriminant":null,"kind":{"tuple":[273,275]}}}
 cq_lang_sequence::Len::Add::0	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"resolved_path":{"args":null,"id":"cq_lang_sequence::Len","path":"Len"}}}],"constraints":[]}},"id":"alloc::boxed::Box","path":"Box"}}}
 cq_lang_sequence::Len::Add::1	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"resolved_path":{"args":null,"id":"cq_lang_sequence::Len","path":"Len"}}}],"constraints":[]}},"id":"alloc::boxed::Box","path":"Box"}}}
-cq_lang_sequence::Len::CeilDiv	{"variant":{"discriminant":null,"kind":{"tuple":[275,276]}}}
+cq_lang_sequence::Len::CeilDiv	{"variant":{"discriminant":null,"kind":{"tuple":[277,278]}}}
 cq_lang_sequence::Len::CeilDiv::0	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"resolved_path":{"args":null,"id":"cq_lang_sequence::Len","path":"Len"}}}],"constraints":[]}},"id":"alloc::boxed::Box","path":"Box"}}}
 cq_lang_sequence::Len::CeilDiv::1	{"struct_field":{"primitive":"usize"}}
-cq_lang_sequence::Len::Input	{"variant":{"discriminant":null,"kind":{"tuple":[264]}}}
+cq_lang_sequence::Len::Input	{"variant":{"discriminant":null,"kind":{"tuple":[266]}}}
 cq_lang_sequence::Len::Input::0	{"struct_field":{"resolved_path":{"args":null,"id":"alloc::string::String","path":"String"}}}
-cq_lang_sequence::Len::Lit	{"variant":{"discriminant":null,"kind":{"tuple":[269]}}}
+cq_lang_sequence::Len::Lit	{"variant":{"discriminant":null,"kind":{"tuple":[271]}}}
 cq_lang_sequence::Len::Lit::0	{"struct_field":{"primitive":"usize"}}
-cq_lang_sequence::Len::Scan	{"variant":{"discriminant":null,"kind":{"tuple":[267]}}}
+cq_lang_sequence::Len::Scan	{"variant":{"discriminant":null,"kind":{"tuple":[269]}}}
 cq_lang_sequence::Len::Scan::0	{"struct_field":{"resolved_path":{"args":null,"id":"alloc::string::String","path":"String"}}}
-cq_lang_sequence::Len::Unknown	{"variant":{"discriminant":null,"kind":{"tuple":[278]}}}
+cq_lang_sequence::Len::Unknown	{"variant":{"discriminant":null,"kind":{"tuple":[280]}}}
 cq_lang_sequence::Len::Unknown::0	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"primitive":"usize"}}],"constraints":[]}},"id":"core::option::Option","path":"Option"}}}
 cq_lang_sequence::LevelNode	{"struct":{"generics":{"params":[],"where_predicates":[]},"kind":{"plain":{"fields":["cq_lang_sequence::LevelNode::name","cq_lang_sequence::LevelNode::collaborative","cq_lang_sequence::LevelNode::dynamic","cq_lang_sequence::LevelNode::children"],"has_stripped_fields":false}}}}
 cq_lang_sequence::LevelNode::children	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"resolved_path":{"args":null,"id":"cq_lang_sequence::LevelNode","path":"LevelNode"}}}],"constraints":[]}},"id":"alloc::vec::Vec","path":"Vec"}}}
@@ -363,7 +364,7 @@ cq_lang_sequence::Machine::root	{"struct_field":{"resolved_path":{"args":null,"i
 cq_lang_sequence::Monoid	{"enum":{"generics":{"params":[],"where_predicates":[]},"has_stripped_variants":false,"variants":["cq_lang_sequence::Monoid::Count","cq_lang_sequence::Monoid::Or","cq_lang_sequence::Monoid::Sum"]}}
 cq_lang_sequence::Monoid::Count	{"variant":{"discriminant":null,"kind":"plain"}}
 cq_lang_sequence::Monoid::Or	{"variant":{"discriminant":null,"kind":"plain"}}
-cq_lang_sequence::Monoid::Sum	{"variant":{"discriminant":null,"kind":{"tuple":[233]}}}
+cq_lang_sequence::Monoid::Sum	{"variant":{"discriminant":null,"kind":{"tuple":[235]}}}
 cq_lang_sequence::Monoid::Sum::0	{"struct_field":{"resolved_path":{"args":null,"id":"proc_macro2::Ident","path":"syn::Ident"}}}
 cq_lang_sequence::Obligation	{"enum":{"generics":{"params":[],"where_predicates":[]},"has_stripped_variants":false,"variants":["cq_lang_sequence::Obligation::Codec","cq_lang_sequence::Obligation::Provider","cq_lang_sequence::Obligation::Canon","cq_lang_sequence::Obligation::Failure"]}}
 cq_lang_sequence::Obligation::Canon	{"variant":{"discriminant":null,"kind":{"struct":{"fields":["cq_lang_sequence::Obligation::Canon::result","cq_lang_sequence::Obligation::Canon::ty"],"has_stripped_fields":false}}}}
@@ -392,28 +393,28 @@ cq_lang_sequence::Sequence	{"struct":{"generics":{"params":[],"where_predicates"
 cq_lang_sequence::Sequence::definitions	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"resolved_path":{"args":null,"id":"cq_lang_sequence::Definition","path":"Definition"}}}],"constraints":[]}},"id":"alloc::vec::Vec","path":"Vec"}}}
 cq_lang_sequence::Sequence::output	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"resolved_path":{"args":null,"id":"cq_lang_sequence::OutputProtocol","path":"OutputProtocol"}}}],"constraints":[]}},"id":"core::option::Option","path":"Option"}}}
 cq_lang_sequence::Term	{"enum":{"generics":{"params":[],"where_predicates":[]},"has_stripped_variants":false,"variants":["cq_lang_sequence::Term::Rows","cq_lang_sequence::Term::Map","cq_lang_sequence::Term::Flatten","cq_lang_sequence::Term::Compact","cq_lang_sequence::Term::Tile","cq_lang_sequence::Term::Lookup","cq_lang_sequence::Term::Fold","cq_lang_sequence::Term::Canon","cq_lang_sequence::Term::Store","cq_lang_sequence::Term::Choose","cq_lang_sequence::Term::Ref","cq_lang_sequence::Term::Union"]}}
-cq_lang_sequence::Term::Canon	{"variant":{"discriminant":null,"kind":{"tuple":[190]}}}
+cq_lang_sequence::Term::Canon	{"variant":{"discriminant":null,"kind":{"tuple":[192]}}}
 cq_lang_sequence::Term::Canon::0	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"resolved_path":{"args":null,"id":"cq_lang_sequence::Term","path":"Term"}}}],"constraints":[]}},"id":"alloc::boxed::Box","path":"Box"}}}
-cq_lang_sequence::Term::Choose	{"variant":{"discriminant":null,"kind":{"tuple":[195]}}}
+cq_lang_sequence::Term::Choose	{"variant":{"discriminant":null,"kind":{"tuple":[197]}}}
 cq_lang_sequence::Term::Choose::0	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"tuple":[{"resolved_path":{"args":null,"id":"cq_lang_sequence::Guard","path":"Guard"}},{"resolved_path":{"args":null,"id":"cq_lang_sequence::Term","path":"Term"}}]}}],"constraints":[]}},"id":"alloc::vec::Vec","path":"Vec"}}}
-cq_lang_sequence::Term::Compact	{"variant":{"discriminant":null,"kind":{"tuple":[175,176]}}}
+cq_lang_sequence::Term::Compact	{"variant":{"discriminant":null,"kind":{"tuple":[177,178]}}}
 cq_lang_sequence::Term::Compact::0	{"struct_field":{"resolved_path":{"args":null,"id":"proc_macro2::Ident","path":"syn::Ident"}}}
 cq_lang_sequence::Term::Compact::1	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"resolved_path":{"args":null,"id":"cq_lang_sequence::Term","path":"Term"}}}],"constraints":[]}},"id":"alloc::boxed::Box","path":"Box"}}}
-cq_lang_sequence::Term::Flatten	{"variant":{"discriminant":null,"kind":{"tuple":[173]}}}
+cq_lang_sequence::Term::Flatten	{"variant":{"discriminant":null,"kind":{"tuple":[175]}}}
 cq_lang_sequence::Term::Flatten::0	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"resolved_path":{"args":null,"id":"cq_lang_sequence::Term","path":"Term"}}}],"constraints":[]}},"id":"alloc::boxed::Box","path":"Box"}}}
-cq_lang_sequence::Term::Fold	{"variant":{"discriminant":null,"kind":{"tuple":[186,188]}}}
+cq_lang_sequence::Term::Fold	{"variant":{"discriminant":null,"kind":{"tuple":[188,190]}}}
 cq_lang_sequence::Term::Fold::0	{"struct_field":{"resolved_path":{"args":null,"id":"cq_lang_sequence::Monoid","path":"Monoid"}}}
 cq_lang_sequence::Term::Fold::1	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"resolved_path":{"args":null,"id":"cq_lang_sequence::Term","path":"Term"}}}],"constraints":[]}},"id":"alloc::boxed::Box","path":"Box"}}}
 cq_lang_sequence::Term::Lookup	{"variant":{"discriminant":null,"kind":{"struct":{"fields":["cq_lang_sequence::Term::Lookup::provider","cq_lang_sequence::Term::Lookup::keys","cq_lang_sequence::Term::Lookup::inner"],"has_stripped_fields":false}}}}
 cq_lang_sequence::Term::Lookup::inner	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"resolved_path":{"args":null,"id":"cq_lang_sequence::Term","path":"Term"}}}],"constraints":[]}},"id":"alloc::boxed::Box","path":"Box"}}}
 cq_lang_sequence::Term::Lookup::keys	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"resolved_path":{"args":null,"id":"proc_macro2::Ident","path":"syn::Ident"}}}],"constraints":[]}},"id":"alloc::vec::Vec","path":"Vec"}}}
 cq_lang_sequence::Term::Lookup::provider	{"struct_field":{"resolved_path":{"args":null,"id":"proc_macro2::Ident","path":"syn::Ident"}}}
-cq_lang_sequence::Term::Map	{"variant":{"discriminant":null,"kind":{"tuple":[169,170]}}}
+cq_lang_sequence::Term::Map	{"variant":{"discriminant":null,"kind":{"tuple":[171,172]}}}
 cq_lang_sequence::Term::Map::0	{"struct_field":{"resolved_path":{"args":null,"id":"proc_macro2::Ident","path":"syn::Ident"}}}
 cq_lang_sequence::Term::Map::1	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"resolved_path":{"args":null,"id":"cq_lang_sequence::Term","path":"Term"}}}],"constraints":[]}},"id":"alloc::boxed::Box","path":"Box"}}}
-cq_lang_sequence::Term::Ref	{"variant":{"discriminant":null,"kind":{"tuple":[198]}}}
+cq_lang_sequence::Term::Ref	{"variant":{"discriminant":null,"kind":{"tuple":[200]}}}
 cq_lang_sequence::Term::Ref::0	{"struct_field":{"resolved_path":{"args":null,"id":"proc_macro2::Ident","path":"syn::Ident"}}}
-cq_lang_sequence::Term::Rows	{"variant":{"discriminant":null,"kind":{"tuple":[167]}}}
+cq_lang_sequence::Term::Rows	{"variant":{"discriminant":null,"kind":{"tuple":[169]}}}
 cq_lang_sequence::Term::Rows::0	{"struct_field":{"resolved_path":{"args":null,"id":"proc_macro2::Ident","path":"syn::Ident"}}}
 cq_lang_sequence::Term::Store	{"variant":{"discriminant":null,"kind":{"struct":{"fields":["cq_lang_sequence::Term::Store::capacity","cq_lang_sequence::Term::Store::inner"],"has_stripped_fields":false}}}}
 cq_lang_sequence::Term::Store::capacity	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"primitive":"usize"}}],"constraints":[]}},"id":"core::option::Option","path":"Option"}}}
@@ -422,7 +423,7 @@ cq_lang_sequence::Term::Tile	{"variant":{"discriminant":null,"kind":{"struct":{"
 cq_lang_sequence::Term::Tile::inner	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"resolved_path":{"args":null,"id":"cq_lang_sequence::Term","path":"Term"}}}],"constraints":[]}},"id":"alloc::boxed::Box","path":"Box"}}}
 cq_lang_sequence::Term::Tile::items	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"primitive":"usize"}}],"constraints":[]}},"id":"core::option::Option","path":"Option"}}}
 cq_lang_sequence::Term::Tile::n	{"struct_field":{"primitive":"usize"}}
-cq_lang_sequence::Term::Union	{"variant":{"discriminant":null,"kind":{"tuple":[200]}}}
+cq_lang_sequence::Term::Union	{"variant":{"discriminant":null,"kind":{"tuple":[202]}}}
 cq_lang_sequence::Term::Union::0	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"resolved_path":{"args":null,"id":"cq_lang_sequence::Term","path":"Term"}}}],"constraints":[]}},"id":"alloc::vec::Vec","path":"Vec"}}}
 cq_lang_sequence::Tiling	{"enum":{"generics":{"params":[],"where_predicates":[]},"has_stripped_variants":false,"variants":["cq_lang_sequence::Tiling::Distribute","cq_lang_sequence::Tiling::Strip"]}}
 cq_lang_sequence::Tiling::Distribute	{"variant":{"discriminant":null,"kind":"plain"}}

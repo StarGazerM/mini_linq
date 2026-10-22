@@ -266,3 +266,61 @@ fn generator_bind_round_trip_checks_and_key_transfer() {
         Some(Vec::new())
     );
 }
+
+#[test]
+fn interleaved_context_facts_round_trip_and_remain_distinct() {
+    let program: physical::Program = syn::parse_quote! { physical {
+        relation R(a:i32); relation S(a:i32);
+        host_set R discharged;
+        consumer canonical;
+        host_set S;
+        r = pipe rename R@0 {a -> x};
+        s = pipe rename S@1 {a -> x};
+        u = pipe union r,s;
+        return u as answer(x);
+    }};
+    let facts = physical::contract::check(&program).unwrap();
+    assert!(facts.consumer_canonical);
+    assert_eq!(facts.discharged_host_sets, ["R".to_owned()].into());
+    assert_eq!(
+        syn::parse2::<physical::Program>(program.to_token_stream()).unwrap(),
+        program
+    );
+    let mut certified = program.clone();
+    certified.program.host_sets[0].discharged = None;
+    assert_ne!(certified, program);
+    assert!(physical::check_rewrite(&program, &certified).is_err());
+    let mut duplicate = program.clone();
+    duplicate
+        .program
+        .host_sets
+        .push(program.program.host_sets[0].clone());
+    assert!(physical::contract::check(&duplicate).is_err());
+    let mut invalid = program;
+    invalid.program.return_canon = Some(Default::default());
+    assert!(physical::contract::check(&invalid).is_err());
+}
+
+#[test]
+fn context_fact_grammar_rejects_duplicates_and_malformed_packets() {
+    assert!(syn::parse_str::<physical::Program>(
+        "physical { consumer canonical; consumer canonical; u = pipe unit; return u as answer(); }"
+    ).is_err());
+    for arguments in [
+        "consumer = canonical, consumer = canonical",
+        "host_set R discharged, host_set R discharged",
+        "host_set R",
+        "consumer canonical",
+        "consumer = unknown",
+        "host_set R discharged consumer = canonical",
+    ] {
+        assert!(
+            syn::parse_str::<physical::FactPacket>(arguments).is_err(),
+            "{arguments}"
+        );
+    }
+    let packet: physical::FactPacket =
+        syn::parse_str("host_set R discharged, consumer = canonical,").unwrap();
+    assert!(packet.context().consumer_canonical);
+    assert!(packet.context().discharged_host_sets.contains("R"));
+}

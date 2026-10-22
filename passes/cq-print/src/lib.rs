@@ -175,6 +175,7 @@ impl<'a> Context<'a> {
 
     /// Emit eager, exact certificates over entire declared host rows.
     /// Formal rule IF-HostSet: Certify exact full-row host distinctness before query execution.
+    /// Formal rule CTX-Certify: Only locally certified facts emit eager checks.
     ///
     /// CPU source preparation calls this before emitting any operator builds or
     /// reads. `Rows` preserves declaration layout, including columns discarded
@@ -182,6 +183,9 @@ impl<'a> Context<'a> {
     /// stores borrowed column tuples and is dropped before query evaluation.
     pub fn certify_host_sets(&mut self, module: &structures::Program) {
         for fact in &module.physical.program.host_sets {
+            if fact.discharged.is_some() {
+                continue;
+            }
             let name = symbol_name(&fact.relation);
             let host = &self.hosts[&name].value;
             let message = format!("host_set {name} certificate failed: duplicate full host row");

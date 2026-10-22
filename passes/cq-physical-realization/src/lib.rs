@@ -584,13 +584,15 @@ impl Printer<'_> {
         };
         // Canonical valuations can have the same computed answer. The map is
         // injective only when its bare outputs retain every source column.
-        // Otherwise canonicalize the image with the caller's state provider.
-        if heading.iter().all(|column| {
-            variables
-                .iter()
-                .flatten()
-                .any(|variable| symbol_name(variable) == *column)
-        }) {
+        // A canonical consumer owns the image boundary instead of local state.
+        if !self.analysis.head_dedup.contains_key(result)
+            || heading.iter().all(|column| {
+                variables
+                    .iter()
+                    .flatten()
+                    .any(|variable| symbol_name(variable) == *column)
+            })
+        {
             mapped
         } else {
             self.distinct_width(

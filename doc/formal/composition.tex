@@ -53,9 +53,31 @@ is checked by the pass protocol, not inferred from its macro path.
 The host-only translator currently has no profile-counter variant.
 The workload corpus and fuzz configuration opt into this target with
 \code{MINI_LINQ_SEQUENCE=1}; their default remains unchanged.
-An authored program may enter at any compatible macro with
+An authored fact-free program may enter at any compatible macro with
 \code{arguments \{..\}; pipeline \{..\}; <program>}. Passes receive no
 configuration beyond their arguments: every choice is in the program text.
+
+\paragraph{Context envelopes at invocation boundaries.}
+The rules above retain the fact-free protocol. When a source already records
+discharged host facts or a consumer fact (Section~\ref{sec:context}), its
+invocation must instead carry an explicit \code{context \{..\};} envelope
+between the optional arguments and the pipeline. The envelope must equal
+the recorded source facts in both directions: it may neither omit a recorded
+fact nor add an unrecorded one. Locally certified host facts are not envelope
+facts. A lower/select argument packet may introduce facts into a fact-free
+source; naming facts in such a packet never substitutes for the required
+envelope on an already-factful source. The enclosing compiler that emits a
+hole invocation must write that envelope and prove its facts.
+
+Each invocation consumes and checks its own envelope. In \textsc{ST-Next},
+the emitted invocation derives a fresh envelope from the recorded facts of
+$t$, its next source, rather than blindly forwarding the consumed envelope;
+it omits the envelope if those facts are empty. Physical facts carried by
+containment into Structures and Sequence preserve the envelope when those
+facts are unchanged. Ordinary passes and rewrites may preserve or drop facts,
+not introduce them; only the lower/select packet boundary authorizes
+introduction. Missing or inexact envelopes and unauthorized introductions
+are rejected as \textsc{CTX-Entry} failures.
 
 Optional features are standalone workspaces under \code{features/} that depend
 on the packaged core only: planners, rewrites, surface extensions (negation,

@@ -3,8 +3,9 @@
 
 \paragraph{Grammar.} A complete standalone program.
 \begin{lstlisting}
-Physical ::= physical { Decl* HostSet* Def* return [canon] r as Head; }
-HostSet ::= host_set R;
+Physical ::= physical { Decl* Fact* Def* return [canon] r as Head; }
+Fact ::= host_set R [discharged];
+       | consumer canonical;
 Def ::= r = (pipe | let | exists) [canon] Op;
 Op  ::= unit | rename R@path {..} [constants {source = literal, ...}]
       | select ... | point select ... | range select ...
@@ -74,10 +75,13 @@ the stream's first relation.
 \paragraph{Checked host sets.}
 The opt-in Physical rewrite \code{cq_rewrites::host_sets(R,...)} consumes
 relation-name advice and records \code{host_set R;} in the program text.
-Each fact names a used declared host, occurs once, and requires admissible
-Leibniz equality on every declared column. It is not a host-type inference or
-an unchecked assertion: every printer must discharge the exact runtime
-certificate obligation \textsc{IF-HostSet} before executing the query.
+Each host-set fact names a used declared host, occurs once, and requires
+admissible Leibniz equality on every declared column. It is not a host-type
+inference or an unchecked assertion: a certified fact requires the exact
+runtime certificate obligation \textsc{IF-HostSet}; a \code{discharged} fact
+requires the invoking compiler's proof (\textsc{CTX-Discharge}).
+Host-set and consumer facts may be interleaved in the fact prefix.
+Section~\ref{sec:context} specifies their admission and discharge.
 \begin{mathpar}
 \Rule{PH-HostSet}{\code{host\_set R}\in t\quad r=\mathsf{rename}(R)\quad
  H=\mathsf{heading}(r)}
@@ -94,8 +98,8 @@ multiplicity gating belongs to the future K-relation contract.
 
 \paragraph{Meaning.} Erasure to RA prime: probe and merge are joins, semi is a
 semijoin, point/range are selections, modes and canon flags are dropped, union
-and anti keep their origins. Host-set facts erase after their runtime
-certificate obligation; modes and choices change evaluation, not meaning.
+and anti keep their origins. Context facts erase after their certificate or
+discharge obligations; modes and choices change evaluation, not meaning.
 Erasure retains the scalar/generator distinction, including in IX demand and
 Physical rewrite certificates. Item multiplicity cannot justify scalar
 uniqueness or literal inference.

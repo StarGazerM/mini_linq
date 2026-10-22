@@ -172,3 +172,246 @@ fn sequence_phases_are_ordered_and_require_a_complete_target() {
             .is_ok()
     );
 }
+
+#[derive(Clone)]
+struct Facts(cq_stage::Context);
+
+impl Parse for Facts {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let contents;
+        syn::braced!(contents in input);
+        Ok(Self(contents.parse()?))
+    }
+}
+
+impl ToTokens for Facts {
+    fn to_tokens(&self, output: &mut TokenStream) {
+        let facts = &self.0;
+        output.extend(quote!({ #facts }));
+    }
+}
+
+impl Language for Facts {
+    fn check(&self) -> syn::Result<()> {
+        Ok(())
+    }
+
+    fn check_rewrite(_: &Self, _: &Self) -> syn::Result<()> {
+        Ok(())
+    }
+
+    fn context(&self) -> cq_stage::Context {
+        self.0.clone()
+    }
+}
+
+fn next_input(tokens: TokenStream) -> TokenStream {
+    syn::parse2::<syn::Macro>(tokens).unwrap().tokens
+}
+
+#[test]
+fn recorded_facts_require_exact_envelope_on_direct_entry() {
+    for facts in [
+        quote!(consumer = canonical),
+        quote!(host_set R discharged),
+        quote!(consumer = canonical, host_set R discharged),
+    ] {
+        let output = pass::<Facts, Facts>(quote!(pipeline { printer }; { #facts }), |_, _| {
+            panic!("unauthorized facts reached transform")
+        });
+        assert!(output.to_string().contains("CTX-Entry"));
+
+        // Opaque packets at ordinary passes cannot authorize new facts.
+        let output = pass::<Facts, Facts>(
+            quote!(arguments { #facts }; pipeline { printer }; { #facts }),
+            |_, _| panic!("ordinary pass authorized facts"),
+        );
+        assert!(output.to_string().contains("CTX-Entry"));
+    }
+}
+
+#[test]
+fn matching_lower_select_packets_cannot_replace_source_envelopes() {
+    for facts in [
+        quote!(consumer = canonical),
+        quote!(host_set R discharged),
+        quote!(consumer = canonical, host_set R discharged),
+    ] {
+        let output = cq_stage::pass_with_context::<Facts, Facts>(
+            quote!(arguments { #facts }; pipeline { printer }; { #facts }),
+            syn::parse2,
+            |_, _| panic!("matching packet authorized factful reentry"),
+        );
+        assert!(output.to_string().contains("compile_error"));
+        assert!(output.to_string().contains("CTX-Entry"));
+
+        let output = cq_stage::pass_with_context::<Facts, Facts>(
+            quote!(
+                arguments { #facts };
+                context { #facts };
+                pipeline { printer };
+                { #facts }
+            ),
+            syn::parse2,
+            |source, _| Ok(source.clone()),
+        );
+        assert_eq!(
+            output.to_string(),
+            quote!(printer! { context { #facts }; pipeline {}; { #facts } }).to_string()
+        );
+    }
+}
+
+#[test]
+fn packets_cannot_add_facts_to_already_factful_sources() {
+    let output = cq_stage::pass_with_context::<Facts, Facts>(
+        quote!(
+            arguments { consumer = canonical, host_set R discharged };
+            context { consumer = canonical };
+            pipeline { printer };
+            { consumer = canonical }
+        ),
+        syn::parse2,
+        |_, _| panic!("packet added facts to a factful source"),
+    );
+    assert!(output.to_string().contains("CTX-Entry"));
+    assert!(output.to_string().contains("fact-free source"));
+}
+
+#[test]
+fn checked_continuation_preserves_facts_and_opaque_arguments() {
+    let output = cq_stage::pass_with_context::<Facts, Facts>(
+        quote!(
+            arguments { consumer = canonical, host_set R discharged };
+            pipeline { arbitrary(x + (y * z)), printer };
+            {}
+        ),
+        syn::parse2,
+        |_, args| Ok(Facts(syn::parse2(args)?)),
+    );
+    let output = rewrite::<Facts>(next_input(output), |source, args| {
+        assert_eq!(args.to_string(), "x + (y * z)");
+        Ok(source.clone())
+    });
+    let output = pass::<Facts, syn::Expr>(next_input(output), |source, args| {
+        assert!(source.0.consumer_canonical);
+        assert!(source.0.discharged_host_sets.contains("R"));
+        assert!(args.is_empty());
+        Ok(syn::parse_quote!(42))
+    });
+    assert_eq!(output.to_string(), "42");
+}
+
+#[test]
+fn printed_program_reentry_does_not_inherit_context() {
+    let source: Facts = syn::parse_quote!({ consumer = canonical, host_set R discharged });
+    let pipeline: cq_stage::Pipeline = syn::parse_quote!(pipeline {
+        continuation,
+        printer
+    });
+    let invocation = pipeline.start(source.to_token_stream()).unwrap();
+    let output = pass::<Facts, Facts>(next_input(invocation), |_, _| {
+        panic!("printed facts were trusted on reentry")
+    });
+    assert!(output.to_string().contains("compile_error"));
+    assert!(output.to_string().contains("CTX-Entry"));
+}
+
+#[test]
+fn continuation_context_must_equal_source_not_authorize_future_facts() {
+    for input in [
+        quote!(
+            context { consumer = canonical };
+            pipeline { printer }; {}
+        ),
+        quote!(
+            context { consumer = canonical };
+            pipeline { printer }; { consumer = canonical, host_set R discharged }
+        ),
+        quote!(
+            context { consumer = canonical, host_set R discharged };
+            pipeline { printer }; { consumer = canonical }
+        ),
+    ] {
+        let output = rewrite::<Facts>(input, |_, _| panic!("stale context reached transform"));
+        assert!(output.to_string().contains("exactly match"));
+        assert!(output.to_string().contains("CTX-Entry"));
+    }
+
+    let output = rewrite::<Facts>(
+        quote!(
+            context { consumer = canonical };
+            pipeline { printer }; { consumer = canonical }
+        ),
+        |_, _| Ok(syn::parse_quote!({ consumer = canonical, host_set R discharged })),
+    );
+    assert!(output.to_string().contains("only lower/select"));
+}
+
+#[test]
+fn ordinary_pass_cannot_introduce_facts_and_packets_must_record_them() {
+    let output = pass::<Facts, Facts>(
+        quote!(arguments { consumer = canonical }; pipeline { printer }; {}),
+        |_, _| Ok(syn::parse_quote!({ consumer = canonical })),
+    );
+    assert!(output.to_string().contains("only lower/select"));
+
+    let output = cq_stage::pass_with_context::<Facts, Facts>(
+        quote!(arguments { consumer = canonical }; pipeline { printer }; {}),
+        syn::parse2,
+        |source, _| Ok(source.clone()),
+    );
+    assert!(output.to_string().contains("record every authorized"));
+}
+
+#[test]
+fn dropping_recorded_facts_drops_the_continuation_envelope() {
+    let output = pass::<Facts, Facts>(
+        quote!(
+            context { consumer = canonical };
+            pipeline { printer }; { consumer = canonical }
+        ),
+        |_, _| Ok(syn::parse_quote!({})),
+    );
+    assert_eq!(
+        output.to_string(),
+        quote!(printer! { pipeline {}; {} }).to_string()
+    );
+}
+
+#[test]
+fn dropping_one_fact_forwards_only_remaining_facts() {
+    let output = pass::<Facts, Facts>(
+        quote!(
+            context { consumer = canonical, host_set R discharged };
+            pipeline { continuation, printer };
+            { consumer = canonical, host_set R discharged }
+        ),
+        |_, _| Ok(syn::parse_quote!({ host_set R discharged })),
+    );
+    assert_eq!(
+        output.to_string(),
+        quote!(continuation! {
+            context { host_set R discharged };
+            pipeline { printer };
+            { host_set R discharged }
+        })
+        .to_string()
+    );
+    let output = pass::<Facts, Facts>(next_input(output), |source, _| Ok(source.clone()));
+    assert!(!output.to_string().contains("compile_error"));
+}
+
+#[test]
+fn continuation_context_normalizes_raw_host_names() {
+    let facts: cq_stage::Context = syn::parse_quote!(host_set r#type discharged);
+    assert!(facts.discharged_host_sets.contains("type"));
+    assert_eq!(
+        syn::parse2::<cq_stage::Context>(facts.to_token_stream()).unwrap(),
+        facts
+    );
+    assert!(
+        syn::parse2::<cq_stage::Context>(quote!(host_set R discharged, host_set r#R discharged))
+            .is_err()
+    );
+}

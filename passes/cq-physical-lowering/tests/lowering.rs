@@ -172,3 +172,90 @@ fn chain_reordering_fails_erasure_even_if_local_program_is_scoped() {
     physical::contract::check(&changed).unwrap();
     assert!(check(&source, &changed).is_err());
 }
+
+#[test]
+fn consumer_canonical_relaxes_only_the_return_boundary() {
+    let source: ix::Program = syn::parse_quote! {
+        relational {
+            relation R(a:i32);
+            r = rename R@0 {a -> x};
+            b = bind r with y:i32 = (*x % 2);
+            p = project b keep {y};
+            output p as answer(y);
+        } indexes {}
+    };
+    let ordinary = compile(&source).unwrap();
+    assert!(ordinary.program.definitions[2].canon.is_some());
+    let target =
+        cq_physical_lowering::compile_with(&source, quote::quote!(consumer = canonical)).unwrap();
+    assert!(target.program.consumer_canonical.is_some());
+    assert!(target.program.definitions[2].canon.is_none());
+    assert!(target.program.return_canon.is_none());
+    check(&source, &target).unwrap();
+    let mut missing = target.clone();
+    missing.program.consumer_canonical = None;
+    assert!(check(&source, &missing).is_err());
+    let mut invalid = target;
+    invalid.program.return_canon = Some(Default::default());
+    assert!(check(&source, &invalid).is_err());
+    assert_eq!(
+        compile(&source).unwrap(),
+        cq_physical_lowering::compile_with(&source, Default::default(),).unwrap()
+    );
+}
+
+#[test]
+fn discharged_host_sets_seed_uniqueness_without_a_consumer_fact() {
+    let source: ix::Program = syn::parse_quote! {
+        relational {
+            relation R(a:i32,b:i32);
+            r = rename R@0 {a -> x,b -> y};
+            p = project r keep {x,y};
+            output p as answer(x,y);
+        } indexes {}
+    };
+    let target =
+        cq_physical_lowering::compile_with(&source, quote::quote!(host_set R discharged)).unwrap();
+    assert!(
+        target
+            .program
+            .definitions
+            .iter()
+            .all(|definition| definition.canon.is_none())
+    );
+    assert!(target.program.host_sets[0].discharged.is_some());
+    check(&source, &target).unwrap();
+    let mut missing = target;
+    missing.program.host_sets.clear();
+    assert!(check(&source, &missing).is_err());
+    assert!(
+        cq_physical_lowering::compile_with(&source, quote::quote!(host_set Missing discharged),)
+            .is_err()
+    );
+}
+
+#[test]
+fn consumer_fact_preserves_internal_union_canonicalization() {
+    let case = cq_testkit::blocks::SCENARIOS
+        .iter()
+        .find(|case| case.name == "block_union")
+        .unwrap();
+    let source = case.parse_ix().unwrap();
+    let ordinary = compile(&source).unwrap();
+    let target =
+        cq_physical_lowering::compile_with(&source, quote::quote!(consumer = canonical)).unwrap();
+    for (before, after) in ordinary
+        .program
+        .definitions
+        .iter()
+        .zip(&target.program.definitions)
+    {
+        if before.name != ordinary.program.returned {
+            assert_eq!(before.canon, after.canon);
+        }
+    }
+    assert!(target.program.definitions.iter().any(|definition| {
+        matches!(definition.operator, physical::Operator::Union(_)) && definition.canon.is_some()
+    }));
+    check(&source, &target).unwrap();
+}

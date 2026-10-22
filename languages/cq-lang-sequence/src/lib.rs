@@ -629,6 +629,10 @@ impl ToTokens for OutputProtocol {
 }
 
 impl cq_stage::Language for Program {
+    fn context(&self) -> cq_stage::Context {
+        cq_stage::Language::context(&self.structures)
+    }
+
     fn check(&self) -> syn::Result<()> {
         contract::check(self).map(|_| ())
     }

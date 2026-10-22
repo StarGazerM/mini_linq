@@ -53,6 +53,18 @@
 //! surface expansions operate on raw tokens before that boundary. Known invalid
 //! standard representations fail contracts; rustc checks arbitrary user types
 //! against the generated Build, read and dedup obligations.
+//!
+//! Restricted context facts enter only through [`pass_with_context`] (the
+//! lower/select adapters). Checked continuations carry a separate
+//! `context { consumer = canonical, host_set R discharged };` envelope after
+//! arguments. Its facts must equal the source's recorded facts; ordinary passes
+//! cannot add facts. Printing an IR does not print this envelope, so factful
+//! re-entry requires an explicit exact envelope from the enclosing compiler.
+//! Lower/select arguments introduce facts only into a fact-free source; matching
+//! arguments never replace an envelope. Fact-free expansions retain their
+//! original token protocol, and pass arguments remain opaque.
+
+use std::collections::BTreeSet;
 
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
@@ -62,6 +74,11 @@ use syn::{Token, braced, parenthesized};
 mod kw {
     syn::custom_keyword!(pipeline);
     syn::custom_keyword!(arguments);
+    syn::custom_keyword!(context);
+    syn::custom_keyword!(consumer);
+    syn::custom_keyword!(canonical);
+    syn::custom_keyword!(host_set);
+    syn::custom_keyword!(discharged);
 }
 
 /// Public contract implemented by each IR language. Rust expressions terminate
@@ -69,6 +86,10 @@ mod kw {
 pub trait Language: Parse + ToTokens {
     fn check(&self) -> syn::Result<()>;
     fn check_rewrite(source: &Self, target: &Self) -> syn::Result<()>;
+    /// Restricted facts recorded in this program, not ambient Rust assumptions.
+    fn context(&self) -> Context {
+        Context::default()
+    }
     fn terminal() -> bool {
         false
     }
@@ -98,6 +119,84 @@ impl Language for syn::Expr {
     }
     fn terminal() -> bool {
         true
+    }
+}
+
+/// Facts whose provenance must survive the checked pass queue.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Context {
+    pub consumer_canonical: bool,
+    pub discharged_host_sets: BTreeSet<String>,
+}
+impl Context {
+    pub fn is_empty(&self) -> bool {
+        !self.consumer_canonical && self.discharged_host_sets.is_empty()
+    }
+
+    pub fn is_subset(&self, other: &Self) -> bool {
+        (!self.consumer_canonical || other.consumer_canonical)
+            && self
+                .discharged_host_sets
+                .is_subset(&other.discharged_host_sets)
+    }
+
+    fn extend(&mut self, other: &Self) {
+        self.consumer_canonical |= other.consumer_canonical;
+        self.discharged_host_sets
+            .extend(other.discharged_host_sets.iter().cloned());
+    }
+}
+impl Parse for Context {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        use syn::ext::IdentExt;
+
+        let mut context = Self::default();
+        while !input.is_empty() {
+            if input.peek(kw::consumer) {
+                input.parse::<kw::consumer>()?;
+                input.parse::<Token![=]>()?;
+                input.parse::<kw::canonical>()?;
+                if context.consumer_canonical {
+                    return Err(input.error("CTX-Entry: duplicate consumer context fact"));
+                }
+                context.consumer_canonical = true;
+            } else {
+                input.parse::<kw::host_set>()?;
+                let host: syn::Ident = input.parse()?;
+                input.parse::<kw::discharged>()?;
+                if !context
+                    .discharged_host_sets
+                    .insert(host.unraw().to_string())
+                {
+                    return Err(syn::Error::new_spanned(
+                        host,
+                        "CTX-Entry: duplicate host context fact",
+                    ));
+                }
+            }
+            if !input.is_empty() {
+                input.parse::<Token![,]>()?;
+            }
+        }
+        Ok(context)
+    }
+}
+impl ToTokens for Context {
+    fn to_tokens(&self, output: &mut TokenStream) {
+        let mut comma = false;
+        if self.consumer_canonical {
+            output.extend(quote!(consumer = canonical));
+            comma = true;
+        }
+        for host in &self.discharged_host_sets {
+            if comma {
+                output.extend(quote!(,));
+            }
+            let host: syn::Ident = syn::parse_str(host)
+                .unwrap_or_else(|_| syn::Ident::new_raw(host, proc_macro2::Span::call_site()));
+            output.extend(quote!(host_set #host discharged));
+            comma = true;
+        }
     }
 }
 
@@ -157,7 +256,17 @@ impl ToTokens for Pipeline {
 }
 impl Pipeline {
     /// Start this pipeline with unchecked tokens (surface expansion is allowed).
-    pub fn start(mut self, program: TokenStream) -> syn::Result<TokenStream> {
+    /// This does not authorize recorded facts: a factful payload still requires
+    /// an exact context envelope at the receiving pass (CTX-Entry).
+    pub fn start(self, program: TokenStream) -> syn::Result<TokenStream> {
+        self.start_with_context(program, Context::default())
+    }
+
+    fn start_with_context(
+        mut self,
+        program: TokenStream,
+        context: Context,
+    ) -> syn::Result<TokenStream> {
         if self.passes.is_empty() {
             return Err(syn::Error::new_spanned(
                 program,
@@ -167,16 +276,22 @@ impl Pipeline {
         let next = self.passes.remove(0);
         let path = next.path;
         let args = next.arguments;
-        Ok(if args.is_empty() {
-            quote!(#path! { #self ; #program })
+        let context = if context.is_empty() {
+            TokenStream::new()
         } else {
-            quote!(#path! { arguments { #args }; #self ; #program })
+            quote!(context { #context };)
+        };
+        Ok(if args.is_empty() {
+            quote!(#path! { #context #self ; #program })
+        } else {
+            quote!(#path! { arguments { #args }; #context #self ; #program })
         })
     }
 }
 
 struct Input<L> {
     args: TokenStream,
+    context: Option<Context>,
     pipeline: Pipeline,
     program: L,
 }
@@ -192,10 +307,21 @@ impl<L: Parse> Parse for Input<L> {
         } else {
             TokenStream::new()
         };
+        let context = if input.peek(kw::context) {
+            input.parse::<kw::context>()?;
+            let contents;
+            braced!(contents in input);
+            let context = contents.parse()?;
+            input.parse::<Token![;]>()?;
+            Some(context)
+        } else {
+            None
+        };
         let pipeline = input.parse()?;
         input.parse::<Token![;]>()?;
         Ok(Self {
             args,
+            context,
             pipeline,
             program: input.parse()?,
         })
@@ -210,7 +336,23 @@ pub fn pass<In: Language, Out: Language>(
     input: TokenStream,
     f: impl FnOnce(&In, TokenStream) -> syn::Result<Out>,
 ) -> TokenStream {
-    run(input, f, |_, _| Ok(()))
+    run(input, |_| Ok(Context::default()), f, |_, _| Ok(()))
+}
+
+/// Introduce facts named by a lower/select argument packet into a fact-free source.
+///
+/// Unlike [`pass`], this entry point may introduce facts, but every authorized
+/// fact must be recorded in the target. Already-factful sources require an exact
+/// context envelope, even when arguments name the same facts, and packets cannot
+/// add facts to those sources. The argument parser is supplied by the lower/select
+/// implementation, so ordinary pass packets stay opaque.
+/// Formal rule CTX-Entry: Admit recorded restricted facts only with an exact context envelope.
+pub fn pass_with_context<In: Language, Out: Language>(
+    input: TokenStream,
+    authorize: impl FnOnce(TokenStream) -> syn::Result<Context>,
+    f: impl FnOnce(&In, TokenStream) -> syn::Result<Out>,
+) -> TokenStream {
+    run(input, authorize, f, |_, _| Ok(()))
 }
 
 /// Run an L → L pass and the language's exported correspondence check.
@@ -218,20 +360,60 @@ pub fn rewrite<L: Language>(
     input: TokenStream,
     f: impl FnOnce(&L, TokenStream) -> syn::Result<L>,
 ) -> TokenStream {
-    run(input, f, L::check_rewrite)
+    run(input, |_| Ok(Context::default()), f, L::check_rewrite)
 }
 
 fn run<In: Language, Out: Language>(
     input: TokenStream,
+    authorize: impl FnOnce(TokenStream) -> syn::Result<Context>,
     f: impl FnOnce(&In, TokenStream) -> syn::Result<Out>,
     correspondence: impl FnOnce(&In, &Out) -> syn::Result<()>,
 ) -> TokenStream {
     let result = (|| {
         let input: Input<In> = syn::parse2(input)?;
+        let source_context = input.program.context();
+        if input
+            .context
+            .as_ref()
+            .is_some_and(|context| context != &source_context)
+        {
+            return Err(syn::Error::new_spanned(
+                &input.program,
+                "CTX-Entry: continuation context must exactly match the source's recorded facts",
+            ));
+        }
+        if !source_context.is_empty() && input.context.is_none() {
+            return Err(syn::Error::new_spanned(
+                &input.program,
+                "CTX-Entry: recorded context facts require an explicit exact context envelope",
+            ));
+        }
+        let authorized = authorize(input.args.clone())?;
+        if !source_context.is_empty() && !authorized.is_subset(&source_context) {
+            return Err(syn::Error::new_spanned(
+                &input.program,
+                "CTX-Entry: lower/select argument packets may introduce facts only into a fact-free source",
+            ));
+        }
         input.program.check()?;
         let target = f(&input.program, input.args)?;
         target.check()?;
         correspondence(&input.program, &target)?;
+        let target_context = target.context();
+        let mut allowed = source_context;
+        allowed.extend(&authorized);
+        if !target_context.is_subset(&allowed) {
+            return Err(syn::Error::new_spanned(
+                &target,
+                "CTX-Entry: only lower/select argument packets may introduce context facts",
+            ));
+        }
+        if !authorized.is_subset(&target_context) {
+            return Err(syn::Error::new_spanned(
+                &target,
+                "CTX-Entry: lower/select must record every authorized context fact",
+            ));
+        }
         if input.pipeline.passes.is_empty() {
             if Out::terminal() {
                 Ok(target.to_token_stream())
@@ -247,7 +429,9 @@ fn run<In: Language, Out: Language>(
                 "Rust printer must be the final pass",
             ))
         } else {
-            input.pipeline.start(target.to_token_stream())
+            input
+                .pipeline
+                .start_with_context(target.to_token_stream(), target_context)
         }
     })();
     result.unwrap_or_else(syn::Error::into_compile_error)

@@ -19,6 +19,10 @@ Physical ::= physical { Decl* Fact* Def* return [canon] r as Head; }
 Fact     ::= host_set R [discharged];
            | consumer canonical;
 \end{lstlisting}
+The two fact forms may be interleaved before definitions. Each host has at
+most one host-set fact (certified or discharged), and the consumer fact occurs
+at most once. With no facts, the grammar and generated program retain the
+unconditional defaults.
 A fact without \code{discharged} is \emph{certified}: the generated program
 establishes it at runtime before the query executes (\textsc{IF-HostSet}).
 A fact marked \code{discharged} is established by the compiler that invoked
@@ -73,19 +77,63 @@ intermediate joins, not the result's set-ness.
  \mathsf{check}_C(\text{invoking program})\text{ proves }\varphi}
  {\text{the invoking compiler }C\text{ establishes }\varphi}
 
-\Rule{CTX-Entry}{\code{mini\_linq::compile!}\{\ldots\}\text{ starts }\pi\quad
- \Gamma\text{ contains a discharged fact}}
- {\text{rejected: a top-level entry has no context to discharge it}}
+\Rule{CTX-Entry}{\Gamma_{\!d}(s)\ne\emptyset\quad
+ \bigl(E\text{ absent}\ \vee\ \mathsf{facts}(E)\ne\Gamma_{\!d}(s)\bigr)}
+ {\text{rejected: CTX-Entry requires an exact explicit context envelope}}
 \end{mathpar}
-A discharged fact enters a pass only through its argument packet
-(\textsc{ST-Next}: passes receive no configuration beyond their arguments),
-so the recorded program names the fact and the pass that wrote it names the
-packet. The invoking compiler $C$ is any language that compiles to CQ and
-owns a checker: its correspondence check must prove $\varphi$ structurally,
-never by rerunning its own producer. \textsc{CTX-Entry} makes the
-unconditional case the default: every existing program has
-$\Gamma=\emptyset$, and a user who writes a discharged fact by hand at the
-top level is refused rather than trusted.
+Here $\Gamma_{\!d}(s)$ comprises the source's discharged host facts and
+consumer fact, excluding locally certified host facts; $E$ is the invocation's
+explicit \code{context} envelope. An envelope, when present, must equal
+$\Gamma_{\!d}(s)$ even if that set is empty: neither missing nor extra facts
+are allowed. A \code{lower} or \code{select} argument packet may introduce
+facts into a fact-free source, but cannot authorize entry to an already
+factful source, even when it names every recorded fact.
+The invoking compiler $C$ is any language that compiles to CQ and owns a
+checker: its correspondence check must prove $\varphi$ structurally, never
+by rerunning its own producer. When $C$ emits an invocation for an already
+factful hole, $C$ must write its exact envelope. This provenance check does
+not itself prove the facts. Fact-free invocations retain the existing
+protocol without an envelope.
+
+\paragraph{Pass argument packets and continuation.}
+The \code{lower} and \code{select} passes accept context facts in their own
+comma-separated argument packets, not as global pipeline configuration:
+\begin{lstlisting}
+ContextArg ::= consumer = canonical | host_set R discharged
+LowerArgs  ::= [ContextArg ("," ContextArg)* [","]]
+SelectArgs ::= [SelectArg ("," SelectArg)* [","]]
+SelectArg  ::= ContextArg | positional(R, ...)
+\end{lstlisting}
+Thus \code{lower(consumer = canonical, host_set R discharged)} records
+\code{consumer canonical;} and \code{host_set R discharged;} in Physical.
+The equals sign belongs only to the packet's consumer argument; semicolons
+belong only to the recorded facts. A host-set packet argument requires
+\code{discharged}; certified host sets continue to be recorded by
+\code{host_sets(R,...)}. Duplicate consumer or host arguments are rejected.
+In \code{select}, \code{positional(...)} may occur at most once and may be
+interleaved with context arguments; it retains its existing host-capability
+meaning. Empty packets retain the existing lowering and selection defaults.
+
+Once recorded, restricted facts travel in a separate checked context envelope:
+\begin{lstlisting}
+[arguments { PassArgs };]
+context { ContextArg ("," ContextArg)* [","] };
+pipeline { ... };
+Program
+\end{lstlisting}
+The envelope's facts must equal the parsed source's discharged host facts
+and consumer fact in both directions. It is not inserted into a later
+pass's opaque arguments. Ordinary passes and rewrites may preserve or drop
+these facts, but cannot introduce new ones; only the lower/select packet
+boundary authorizes introduction.
+A consumed envelope is not blindly forwarded: the next invocation's
+envelope is derived from the next source's recorded facts and omitted when
+those facts are empty. Containment carries the Physical facts through
+Structures and Sequence, so these language boundaries preserve the envelope
+when the contained facts are unchanged. Re-entering a factful printed program
+without its exact explicit envelope is rejected by \textsc{CTX-Entry},
+even with a matching lower/select argument packet. These checks enforce
+provenance; they do not replace the invoking compiler's semantic proof.
 
 \begin{theorem}[Closed context]
 If $\Gamma\vdash P$, $C$ discharges every discharged fact of $\Gamma$, and
