@@ -4,6 +4,7 @@
 //!
 //! | Macro | Advice | Effect |
 //! |---|---|---|
+//! | `store` | `d` | Materialize the named producer without changing its rows. |
 //! | `store_level` | `d`, named list, `all`, or empty | Store selected flatten definitions (BE-Offsets). |
 //! | `tile` | `d, n` or `d, n, items m` | Wrap in positive contiguous tiles (BE-Partition). Unknown-length stores need capacity. |
 //! | `choose` | `d, len x < k => a, else => b` | Select earlier equal-Structures-result definitions (BE-Choose). |
@@ -53,6 +54,7 @@ macro_rules! sequence_rewrite {
     };
 }
 
+sequence_rewrite!(store, missing);
 sequence_rewrite!(store_level, a);
 sequence_rewrite!(tile, a, 0);
 sequence_rewrite!(choose, b, len r < 4 => a, else => missing);

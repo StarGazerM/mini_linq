@@ -8,7 +8,7 @@
 //! it records capacity 1024 instead of the benchmark's explicit 1048576.
 #![recursion_limit = "1024"]
 
-use cq_gpu_runtime::{DeviceColumns, For, Pool};
+use cq_gpu_runtime::{DeviceColumns, Pool};
 use cq_gpu_sequence_runtime::DenseDictionary;
 use gpu_compress::{Catalog, Source, tpch::schema};
 use serde_json::{Value, json};
@@ -17,31 +17,12 @@ use std::{error::Error, fs, path::Path, sync::Arc, time::Instant};
 #[allow(dead_code)]
 #[path = "../tests/support/h05_program.rs"]
 mod h05_program;
+#[path = "../tests/support/h05_rows.rs"]
+mod h05_rows;
+use h05_rows::Rows;
 
 type Result<T, E = Box<dyn Error>> = std::result::Result<T, E>;
 type Answer = (u32, u32, u32);
-
-/// Same typed resident bindings and declared column order as h05-compiled.
-struct Rows {
-    customer: DeviceColumns<'static, (u32, u32), For>,
-    orders: DeviceColumns<'static, (u32, u32, i32), For>,
-    lineitem: DeviceColumns<'static, (u32, u32), For>,
-    supplier: DeviceColumns<'static, (u32, u32), For>,
-    nation: DeviceColumns<'static, (u32, u32), For>,
-    region: DeviceColumns<'static, (u32, i32), For>,
-}
-impl Rows {
-    fn bind(catalog: &Catalog) -> Result<Self> {
-        Ok(Self {
-            customer: catalog.device_columns("customer")?,
-            orders: catalog.device_columns("orders")?,
-            lineitem: catalog.device_columns("lineitem")?,
-            supplier: catalog.device_columns("supplier")?,
-            nation: catalog.device_columns("nation")?,
-            region: catalog.device_columns("region")?,
-        })
-    }
-}
 
 macro_rules! recorded_query {
     ($capacity:literal) => {

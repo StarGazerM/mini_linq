@@ -22,7 +22,44 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
+name = "cq-lang-cq"
+version = "0.1.0"
+dependencies = [
+ "cq-stage",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "syn_derive",
+]
+
+[[package]]
+name = "cq-lang-ix"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-ra",
+ "cq-stage",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "syn_derive",
+]
+
+[[package]]
 name = "cq-lang-physical"
+version = "0.1.0"
+dependencies = [
+ "cq-stage",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "syn_derive",
+]
+
+[[package]]
+name = "cq-lang-ra"
 version = "0.1.0"
 dependencies = [
  "cq-stage",
@@ -50,6 +87,19 @@ name = "cq-lang-structures"
 version = "0.1.0"
 dependencies = [
  "cq-lang-physical",
+ "cq-stage",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "syn_derive",
+]
+
+[[package]]
+name = "cq-lang-vo"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-cq",
  "cq-stage",
  "cq-syntax",
  "proc-macro2",
@@ -98,22 +148,9 @@ version = "0.1.0"
 dependencies = [
  "cq-lang-sequence",
  "cq-sequence-pull",
- "cq-sequence-tasks-test-macros",
- "cq-storage",
- "proc-macro2",
- "quote",
- "rayon",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "cq-sequence-tasks-test-macros"
-version = "0.1.0"
-dependencies = [
- "cq-lang-sequence",
- "cq-sequence-pull",
- "cq-sequence-tasks",
  "cq-structure-selection",
+ "cq-testkit",
+ "proc-macro2",
  "quote",
  "syn 2.0.119",
 ]
@@ -125,14 +162,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
-]
-
-[[package]]
-name = "cq-storage"
-version = "0.1.0"
-dependencies = [
- "ahash",
- "hashbrown",
 ]
 
 [[package]]
@@ -154,6 +183,28 @@ dependencies = [
  "quote",
  "syn 2.0.119",
  "syn_derive",
+]
+
+[[package]]
+name = "cq-testkit"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "cq-lang-cq",
+ "cq-lang-ix",
+ "cq-lang-physical",
+ "cq-lang-ra",
+ "cq-lang-sequence",
+ "cq-lang-structures",
+ "cq-lang-vo",
+ "cq-sequence-pull",
+ "cq-sequence-tasks",
+ "cq-syntax",
+ "hashbrown",
+ "proc-macro2",
+ "quote",
+ "rayon",
+ "syn 2.0.119",
 ]
 
 [[package]]

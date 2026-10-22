@@ -32,6 +32,24 @@ fn definition(program: &Program, name: &Ident) -> syn::Result<usize> {
         .ok_or_else(|| syn::Error::new_spanned(name, "unknown Sequence definition"))
 }
 
+/// Materialize one explicitly named definition without changing its producer.
+/// The construction-based rewrite checker validates the storage boundary;
+/// target-specific placement remains the caller's separate grading obligation.
+// Materialization preserves the producer's support (EXT-SeqStore).
+pub fn store(source: &Program, arguments: TokenStream) -> syn::Result<Program> {
+    let name: Ident = syn::parse2(arguments)?;
+    let index = definition(source, &name)?;
+    let mut target = source.clone();
+    let term = &mut target.sequence.definitions[index].term;
+    if !matches!(term, Term::Store { .. }) {
+        *term = Term::Store {
+            capacity: None,
+            inner: Box::new(term.clone()),
+        };
+    }
+    checked(source, target)
+}
+
 /// Materialize selected flatten definitions. Empty advice or `all` selects all
 /// flatten definitions; named selections must all exist and be flatten terms.
 // Formal rule EXT-SeqStore: Materialize a flatten level using its exclusive-scan length.

@@ -69,3 +69,76 @@ pub fn ordered_dedup(input: proc_macro::TokenStream) -> proc_macro::TokenStream 
     })
     .into()
 }
+
+/// Compile an existing authored corpus query through its exact configured
+/// pipeline, replacing only the terminal with a serialized Sequence program.
+#[proc_macro]
+pub fn conformance_program(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    use quote::{ToTokens, quote};
+    use syn::parse::{Parse, ParseStream};
+    struct Request {
+        case: syn::Ident,
+        positional: bool,
+        pipeline: proc_macro2::TokenStream,
+    }
+    impl Parse for Request {
+        fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+            let case = input.parse()?;
+            input.parse::<syn::Token![,]>()?;
+            let advice;
+            syn::bracketed!(advice in input);
+            let positional = !advice.is_empty();
+            let _: proc_macro2::TokenStream = advice.parse()?;
+            input.parse::<syn::Token![,]>()?;
+            let pipeline;
+            syn::braced!(pipeline in input);
+            Ok(Self {
+                case,
+                positional,
+                pipeline: pipeline.parse()?,
+            })
+        }
+    }
+    let result = (|| -> syn::Result<proc_macro2::TokenStream> {
+        let request: Request = syn::parse(input)?;
+        let name = request.case.to_string();
+        let name = name.strip_prefix("run_").unwrap_or(&name);
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../src/queries");
+        let path = ["classic", "retail"]
+            .into_iter()
+            .map(|suite| root.join(suite).join(format!("{name}.rs")))
+            .find(|path| path.is_file())
+            .ok_or_else(|| syn::Error::new_spanned(&request.case, "unknown corpus query"))?;
+        let source = cq_workload_authored::program(&path)?;
+        let names: Vec<_> = source.inputs().map(|input| &input.name).collect();
+        let advice = request.positional.then(|| quote!(positional(#(#names),*)));
+        let pipeline = request.pipeline;
+        let source = source.to_token_stream();
+        let path = path.to_string_lossy();
+        Ok(quote!({
+            const _: &str = include_str!(#path);
+            ::mini_linq::compile! {
+                pipeline {
+                    #pipeline
+                    select = ::mini_linq::passes::select(#advice);
+                    print = ::cq_workload_passes::sequence_literal;
+                }
+                #source
+            }
+        }))
+    })();
+    result.unwrap_or_else(syn::Error::into_compile_error).into()
+}
+
+/// Preserve the complete selected construction for runtime target conformance.
+#[proc_macro]
+pub fn sequence_literal(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    use quote::ToTokens;
+    cq_stage::pass::<cq_lang_structures::Program, syn::Expr>(input.into(), |source, _| {
+        let sequence = cq_sequence_lowering::compile(source)?;
+        cq_sequence_lowering::check(source, &sequence)?;
+        let source = sequence.to_token_stream().to_string();
+        Ok(syn::parse_quote!(::syn::parse_str::<::cq_lang_sequence::Program>(#source).unwrap()))
+    })
+    .into()
+}

@@ -1,5 +1,5 @@
 use cq_lang_sequence::{Graded, OutputProtocol, Program, Term, check_rewrite, contract};
-use cq_sequence_rewrite_passes::{choose, grade, output, store_level, tile};
+use cq_sequence_rewrite_passes::{choose, grade, output, store, store_level, tile};
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 
@@ -27,6 +27,28 @@ fn apply(pass: Rewrite, source: &Program, advice: TokenStream) -> Program {
         target
     );
     target
+}
+
+#[test]
+fn store_materializes_a_named_producer_and_is_idempotent() {
+    let source = program(quote!(a = rows r; b = canon a; out = store b;));
+    let target = apply(store, &source, quote!(b));
+    assert_eq!(
+        target.sequence.definitions[1].term,
+        syn::parse2::<Term>(quote!(store canon a)).unwrap()
+    );
+    assert_eq!(
+        target.sequence.definitions[0],
+        source.sequence.definitions[0]
+    );
+    assert_eq!(
+        target.sequence.definitions[2],
+        source.sequence.definitions[2]
+    );
+    assert_eq!(apply(store, &target, quote!(b)), target);
+    for advice in [quote!(), quote!(missing), quote!(a, b)] {
+        assert!(store(&source, advice).is_err());
+    }
 }
 
 #[test]

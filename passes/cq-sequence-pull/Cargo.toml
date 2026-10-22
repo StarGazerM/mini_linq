@@ -15,7 +15,7 @@ quote.workspace = true
 syn.workspace = true
 
 [dev-dependencies]
-cq-testkit.workspace = true
+cq-testkit = { workspace = true, features = ["sequence-conformance"] }
 cq-storage.workspace = true
 cq-structure-selection.workspace = true
 cq-sequence-lowering = { path = "../cq-sequence-lowering" }

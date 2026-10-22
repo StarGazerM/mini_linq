@@ -1,0 +1,343 @@
+//! Executable answer conformance: ignore enumeration order, not multiplicity.
+//!
+//! `assert_answers_equal` is dependency-light and also serves external targets.
+//! Enable `sequence-conformance` for the CPU translation driver. It changes only
+//! machine grading, never Physical, Structures, or Sequence decisions.
+
+use std::collections::BTreeMap;
+use std::fmt::Debug;
+
+/// Compare answer rows after the answer map. Canonical outputs compare as sets;
+/// other outputs compare as multisets. Report the first differing row and counts.
+pub fn assert_answers_equal<Row: Ord + Debug>(
+    reference_name: &str,
+    reference: impl IntoIterator<Item = Row>,
+    target_name: &str,
+    actual: impl IntoIterator<Item = Row>,
+    canonical: bool,
+) {
+    fn counts<Row: Ord>(
+        rows: impl IntoIterator<Item = Row>,
+        canonical: bool,
+    ) -> BTreeMap<Row, usize> {
+        let mut counts = BTreeMap::new();
+        for row in rows {
+            let count = counts.entry(row).or_default();
+            if canonical {
+                *count = 1;
+            } else {
+                *count += 1;
+            }
+        }
+        counts
+    }
+    let reference = counts(reference, canonical);
+    let actual = counts(actual, canonical);
+    for row in reference.keys().chain(actual.keys()) {
+        let expected = reference.get(row).copied().unwrap_or(0);
+        let observed = actual.get(row).copied().unwrap_or(0);
+        assert_eq!(
+            expected, observed,
+            "answer divergence: {reference_name} vs {target_name}; row {row:?}; \
+             {reference_name} multiplicity {expected}, {target_name} multiplicity {observed}"
+        );
+    }
+}
+
+#[cfg(feature = "sequence-conformance")]
+pub use cpu::*;
+
+#[cfg(feature = "sequence-conformance")]
+mod cpu {
+    use super::assert_answers_equal;
+    use crate::Database;
+    use cq_lang_sequence::{Analysis, Grade, Graded, LevelNode, Machine, Program, Term};
+    use cq_syntax::symbol_name;
+    use quote::{ToTokens, quote};
+
+    /// CPU translations available to the executable testkit.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Target {
+        Sequential,
+        Tasks,
+    }
+
+    /// Grade identical Sequence terms for a target. Authored Tasks placement is
+    /// retained. Without authored placement, the final publication runs at pool
+    /// and preceding definitions stay at host. Unsupported crossings are errors,
+    /// not repaired by inserting stores or changing the program.
+    pub fn grade(program: &Program, target: Target) -> syn::Result<(Program, Analysis)> {
+        let mut program = program.clone();
+        let machine = match target {
+            Target::Sequential => Machine {
+                name: syn::parse_quote!(sequential),
+                root: LevelNode {
+                    name: syn::parse_quote!(host),
+                    collaborative: false,
+                    dynamic: false,
+                    children: vec![],
+                },
+            },
+            Target::Tasks => cq_sequence_tasks::machine(),
+        };
+        if target == Target::Sequential {
+            program.graded = None;
+        } else if !program
+            .graded
+            .as_ref()
+            .is_some_and(|graded| graded.machine == machine.name)
+        {
+            let last = program.sequence.definitions.len().checked_sub(1);
+            program.graded = Some(Graded {
+                machine: machine.name.clone(),
+                grades: program
+                    .sequence
+                    .definitions
+                    .iter()
+                    .enumerate()
+                    .map(|(index, definition)| Grade {
+                        name: definition.name.clone(),
+                        level: vec![if Some(index) == last {
+                            syn::parse_quote!(pool)
+                        } else {
+                            syn::parse_quote!(host)
+                        }],
+                    })
+                    .collect(),
+            });
+        }
+        let analysis = cq_lang_sequence::check_grading(&program, &machine)?;
+        Ok((program, analysis))
+    }
+
+    /// Whether the final answer stream has an explicit global canonical boundary.
+    /// Partition-local canonicalization does not establish global uniqueness.
+    fn output_is_canonical(program: &Program, analysis: &Analysis) -> bool {
+        fn canonical(
+            term: &Term,
+            dimensions: usize,
+            program: &Program,
+            analysis: &Analysis,
+        ) -> bool {
+            match term {
+                Term::Canon(_) => dimensions == 1,
+                Term::Store { inner, .. } => canonical(inner, dimensions, program, analysis),
+                Term::Tile { inner, .. } => canonical(inner, dimensions - 1, program, analysis),
+                Term::Flatten(inner) => canonical(inner, dimensions + 1, program, analysis),
+                Term::Ref(name) => program
+                    .sequence
+                    .definitions
+                    .iter()
+                    .find(|definition| definition.name == *name)
+                    .is_some_and(|definition| {
+                        canonical(
+                            &definition.term,
+                            analysis.shapes[&symbol_name(name)].len(),
+                            program,
+                            analysis,
+                        )
+                    }),
+                _ => false,
+            }
+        }
+        let Some(last) = program.sequence.definitions.last() else {
+            return false;
+        };
+        if let Some(result) = analysis.results.get(&symbol_name(&last.name)) {
+            if analysis.structures.head_dedup.contains_key(result) {
+                return true;
+            }
+            // A canonical valuation stream may still project to repeated
+            // answers. Only an injective answer map preserves its uniqueness.
+            let head = &program.structures.physical.program.head;
+            if !analysis.structures.physical.headings[result]
+                .iter()
+                .all(|column| {
+                    head.args
+                        .iter()
+                        .filter_map(cq_syntax::rust::variable)
+                        .any(|variable| symbol_name(variable) == *column)
+                })
+            {
+                return false;
+            }
+        }
+        program
+            .sequence
+            .definitions
+            .last()
+            .is_some_and(|definition| {
+                canonical(
+                    &definition.term,
+                    analysis.shapes[&symbol_name(&definition.name)].len(),
+                    program,
+                    analysis,
+                )
+            })
+    }
+
+    /// Compare translations on deterministic empty, full and sampled binary-domain
+    /// databases. Use `assert_conformant_on` for an authored corpus database.
+    pub fn assert_conformant(program: &Program, targets: &[Target]) {
+        for seed in [0, 1, 7] {
+            let database = crate::databases::binary_relations(
+                program
+                    .structures
+                    .physical
+                    .program
+                    .declarations
+                    .iter()
+                    .map(|relation| (symbol_name(&relation.name), relation.columns.len())),
+                seed,
+            );
+            assert_conformant_on(program, targets, &database);
+        }
+    }
+
+    /// Compare translations using exactly one shared finite integer database.
+    pub fn assert_conformant_on(program: &Program, targets: &[Target], database: &Database) {
+        let borrowed: Vec<_> = database
+            .iter()
+            .map(|(name, rows)| {
+                (
+                    name.as_str(),
+                    rows.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+                )
+            })
+            .collect();
+        let inputs: Vec<_> = borrowed
+            .iter()
+            .map(|(name, rows)| (*name, rows.as_slice()))
+            .collect();
+        assert_conformant_with_inputs(program, targets, &inputs);
+    }
+
+    /// Compare translations on raw authored inputs (the same representation as
+    /// `Case::inputs`), retaining duplicate input rows.
+    pub fn assert_conformant_with_inputs(
+        program: &Program,
+        targets: &[Target],
+        inputs: &[(&str, &[&[i32]])],
+    ) {
+        let declarations = program
+            .structures
+            .physical
+            .program
+            .declarations
+            .iter()
+            .map(|relation| {
+                let name = &relation.name;
+                let types: Vec<_> = relation.columns.iter().map(|column| &column.ty).collect();
+                let rows = inputs
+                    .iter()
+                    .find(|(input, _)| *input == symbol_name(name))
+                    .unwrap_or_else(|| panic!("missing conformance input {name}"))
+                    .1;
+                let values = rows.iter().map(|row| {
+                    assert_eq!(row.len(), types.len(), "input width for {name}");
+                    quote!((#(#row as #types,)*))
+                });
+                quote!(let #name: Vec<(#(#types,)*)> = vec![#(#values),*];)
+            })
+            .collect::<Vec<_>>();
+        assert_conformant_with_source(program, targets, &quote!(#(#declarations)*));
+    }
+
+    /// Execute a shared caller-authored input setup, for example the corpus's
+    /// map-host fixtures. Setup is inserted unchanged for every translation.
+    pub fn assert_conformant_with_source(
+        program: &Program,
+        targets: &[Target],
+        setup: &proc_macro2::TokenStream,
+    ) {
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../runtime/cq-storage/src/lib.rs");
+        let runtime = crate::rustc::Runtime::new(&source, false);
+        assert_conformant_with_runtime(program, targets, setup, &runtime);
+    }
+
+    /// Reuse a rustc driver with the caller's exact linked provider dependencies.
+    /// Like `Runtime`, this is a serial driver: do not run simultaneous queries
+    /// against one runtime directory.
+    pub fn assert_conformant_with_runtime(
+        program: &Program,
+        targets: &[Target],
+        setup: &proc_macro2::TokenStream,
+        runtime: &crate::rustc::Runtime,
+    ) {
+        assert!(
+            targets.len() >= 2,
+            "conformance requires at least two targets"
+        );
+        let mut reference: Option<(Target, Vec<String>)> = None;
+        for &target in targets {
+            let (graded, analysis) = grade(program, target)
+                .unwrap_or_else(|error| panic!("{target:?} grading rejected: {error}"));
+            let expression = match target {
+                Target::Sequential => cq_sequence_pull::translate(&graded, &analysis),
+                Target::Tasks => cq_sequence_tasks::translate(&graded, &analysis),
+            }
+            .unwrap_or_else(|error| panic!("{target:?} translation failed: {error}"));
+            let generated = quote! {
+                #![allow(non_snake_case, unused_variables)]
+                fn main() {
+                    #setup
+                    for row in #expression {
+                        println!("{:?}", row);
+                    }
+                }
+            };
+            eprintln!("conformance: compiling {target:?}");
+            let output = runtime.run(&generated.to_token_stream().to_string());
+            let rows: Vec<_> = String::from_utf8(output.stdout)
+                .expect("UTF-8 answer rows")
+                .lines()
+                .map(str::to_owned)
+                .collect();
+            if let Some((first, expected)) = &reference {
+                assert_answers_equal(
+                    &format!("{first:?}"),
+                    expected.iter(),
+                    &format!("{target:?}"),
+                    rows.iter(),
+                    output_is_canonical(program, &analysis),
+                );
+            } else {
+                reference = Some((target, rows));
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::assert_answers_equal;
+
+    #[test]
+    fn order_is_not_observable() {
+        assert_answers_equal(
+            "pull",
+            [vec![1], vec![2], vec![1]],
+            "tasks",
+            [vec![1], vec![1], vec![2]],
+            false,
+        );
+    }
+
+    #[test]
+    fn canonical_answers_compare_as_sets() {
+        assert_answers_equal("pull", [vec![1], vec![1]], "tasks", [vec![1]], true);
+    }
+
+    #[test]
+    #[should_panic(expected = "answer divergence: pull vs tasks; row [1]")]
+    fn noncanonical_multiplicity_is_observable() {
+        assert_answers_equal("pull", [vec![1], vec![1]], "tasks", [vec![1]], false);
+    }
+
+    #[test]
+    #[should_panic(expected = "answer divergence: pull vs tasks; row [2]")]
+    fn additional_answer_is_observable() {
+        assert_answers_equal("pull", [vec![1]], "tasks", [vec![1], vec![2]], true);
+    }
+}

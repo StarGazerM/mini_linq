@@ -42,14 +42,7 @@ struct Checker<'a> {
 /// A successful check records a required failure channel; it does not certify an
 /// emitter's implementation of that channel.
 pub fn check_grading(program: &Program, machine: &Machine) -> syn::Result<Analysis> {
-    // A host-only executor consumes nested buckets sequentially and stores
-    // rows. It does not materialize the generic BE-Offsets addressing table.
-    // Tiled domains still request ranges through the structural contract.
-    let mut analysis = if machine.root.children.is_empty() {
-        crate::contract::check_host_rows(program)?
-    } else {
-        crate::contract::check(program)?
-    };
+    let mut analysis = crate::contract::check(program)?;
     // Formal rule BE-Abort: every below-host dispatch records a channel to the
     // distinguished host root, to be discharged by the target's emitter/runtime.
     if symbol_name(&machine.root.name) != "host" {
@@ -383,6 +376,7 @@ impl<'a> Checker<'a> {
                             .error(owner, "BE-Scope: distributed tile requires one child level"));
                     }
                     self.publication_tile = None;
+                    self.require_ranges(inner);
                     self.parts
                         .entry(self.name(owner))
                         .and_modify(|width| {
@@ -400,13 +394,13 @@ impl<'a> Checker<'a> {
             }
             Term::Fold(monoid, inner) => {
                 self.collective(owner, level, monoid.clone(), tiled, uniform)?;
-                if !self.levels[level].children.is_empty() {
+                if level != 0 && !self.levels[level].children.is_empty() {
                     self.require_ranges(inner);
                 }
                 inputs.push(self.visit(inner, owner, level, tiled, uniform, false)?);
             }
             Term::Flatten(inner) => {
-                if !self.levels[level].children.is_empty() {
+                if level != 0 && !self.levels[level].children.is_empty() {
                     self.require_ranges(inner);
                 }
                 // Stored flatten offsets can be read without executing a new
