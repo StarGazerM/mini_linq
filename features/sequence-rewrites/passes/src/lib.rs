@@ -16,6 +16,9 @@ pub use decomposition::{partition, segment};
 mod selection;
 use selection::Results;
 
+mod catalog;
+pub use catalog::select_from_catalog;
+
 mod kw {
     syn::custom_keyword!(items);
     syn::custom_keyword!(at);

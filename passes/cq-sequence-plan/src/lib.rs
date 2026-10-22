@@ -12,6 +12,8 @@ pub use cost::{Cost, cost};
 mod decomposition;
 mod placement;
 
+pub use cq_sequence_rewrite_passes::select_from_catalog;
+
 /// One invocation of the same checked library function exposed by a rewrite macro.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Advice {

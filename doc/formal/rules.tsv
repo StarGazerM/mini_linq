@@ -222,6 +222,7 @@ EXT-SeqGrade	implementation	features/sequence-rewrites/passes/src/lib.rs	// Form
 PL-Closure	implementation	passes/cq-sequence-plan/src/lib.rs	// Formal rule PL-Closure:	Return a replayable trace of checked Sequence rewrites and a machine-checked graded program.
 PL-Precedence	implementation	passes/cq-sequence-plan/src/lib.rs	// Formal rule PL-Precedence:	Preserve authored decisions, fill only missing decomposition and validate recorded catalog obligations.
 PL-Det	implementation	passes/cq-sequence-plan/src/lib.rs	// Formal rule PL-Det:	Enumerate candidates and catalog tokens in fixed order and break remaining ties by that order.
+PL-Select	implementation	features/sequence-rewrites/passes/src/catalog.rs	// Formal rule PL-Select:	Select built provider types in entry order using the first host-capable catalog token satisfying every read, through checked retype.
 PL-Cost	implementation	passes/cq-sequence-plan/src/cost.rs	// Formal rule PL-Cost:	Compare type-length work and span, then store and dispatch counts; cost does not change meaning.
 L-Sequence	implementation	passes/cq-sequence-lowering/src/lib.rs	// Formal rule L-Sequence:	Default one-part lowering preserves Physical retention and records explicit lookup, membership, union and final count-store terms.
 T-Pull	implementation	passes/cq-sequence-pull/src/lib.rs	// Formal rule T-Pull:	Host iterator interpretation of checked Sequence constructors with recorded provider capabilities and explicit Vec stores.

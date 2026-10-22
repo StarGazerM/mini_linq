@@ -26,6 +26,67 @@ cargo oxide build --arch sm_89 -- --release --workspace
 cargo oxide test --arch sm_89 -- --release --workspace
 ```
 
+### Planner-driven 11-query TPC-H suite
+
+`tpch` is one crate with one binary, `cq-gpu-tpch`. It imports the CPU
+`retail_kernel!` invocations directly with `include_str!`; no second query body
+or per-query plan is maintained. Build-time compilation uses the same CQ macro
+substitution, checked default CQ → Physical → Structures passes, generic
+`cq_sequence_plan::select_from_catalog`, Sequence lowering,
+`cq_sequence_plan::plan` with `cq_gpu_sequence::{machine, catalog}`, grading,
+and `cq_gpu_sequence::translate`. These are the programmatic equivalents of
+the facade's `plan(machine)` → `machine_grade!` → `translate!` pipeline.
+The manifest loader records its uniform `DeviceColumns` host adapter through
+the checked retype rewrite; neither the loader nor translator chooses a plan.
+
+The loader reads only each imported query's declared columns. It preserves
+integer keys, resolves text literals from the column's `.dict.txt`, uses i32
+epoch-day dates and scale-2 integer decimals, and shares resident columns
+between repeated aliases. It does not reinterpret substring predicates as
+comparisons on dictionary IDs. Unsupported terms remain checked rejections.
+
+```sh
+export CUDA_HOME=/opt/nvidia/hpc_sdk/Linux_x86_64/25.5/cuda/12.9
+cargo oxide build --arch sm_89 -- --release -p cq-gpu-tpch
+cargo oxide test --arch sm_89 -- --release -p cq-gpu-tpch -- --nocapture
+./target/release/cq-gpu-tpch
+```
+
+The binary visits both SF1 and SF10 and writes
+[`compare/gpu_tpch.results.json`](compare/gpu_tpch.results.json). For accepted
+translations it performs one warmup plus five measured iterations, checks every
+iteration exactly against `answer.retail_<query>.tsv` and its `.count`, and
+reports median CUDA-event total/build/kernels/dedup milliseconds. Input loading,
+answer download, and comparison are outside those event intervals. SF1 also
+compares the GPU answer to independent Sequential translation of the identical
+Physical using `cq_testkit::conformance::assert_answers_equal`, the external
+target API used by H05 (`assert_conformant` itself exposes only CPU targets).
+The eleven named conformance tests print `NOT RUN` with the exact rejection
+and term when compilation does not reach an executable GPU translation.
+`TPCH_GPU_DATA_ROOT` changes the fixture root at build time.
+
+Observed inventory: all eleven queries are rejected at both scales, so **no GPU
+exactness, conformance agreement, or timing is claimed**. The release build and
+13 tests passed (two source/encoding tests plus eleven explicit rejection
+reports). No compiler gap was patched around. The table abbreviates only the
+large `syn::Type` debug payload in catalog errors; the JSON preserves each full
+error, failed phase, complete term, and imported CPU query. DuckDB values are
+the existing per-query t24 medians, converted from seconds to milliseconds.
+
+| query | SF1 exact | SF10 exact | GPU total ms SF10 (build/kernels/dedup) | DuckDB t24 SF10 ms | status |
+|---|---|---|---|---|---|
+| h03 | not run | not run | — | 167 | translate rejected: Sequence lookup lacks checked Physical row provenance |
+| h05 | not run | not run | — | 172 | planner rejected: P-Decompose: unmet catalog obligation Provider; `r13`, `[nation_key, supplier_key]`, Range, `DeviceColumns` |
+| h07 | not run | not run | — | 137 | translate rejected: T-Gpu: provider predicate requires a recorded contiguous range selection |
+| h07_block | not run | not run | — | 139 | planner rejected: BE-Boundary: a dispatch must have one unambiguous outer stored space (definition `r3`) |
+| h08 | not run | not run | — | 116 | planner rejected: P-Decompose: unmet catalog obligation Provider; `r11`, `[supplier_key]`, Range, `DeviceColumns` |
+| h09 | not run | not run | — | 4472 | planner rejected: BE-Partial: opaque Physical Rust must be evaluated at host before dispatch |
+| h21_positive | not run | not run | — | 3942 | translate rejected: T-Gpu: provider bound must be a constant or host parameter |
+| d19 | not run | not run | — | 204 | planner rejected: P-Decompose: unmet catalog obligation Provider; `r8`, `[part_key]`, Range, `DeviceColumns` |
+| d27 | not run | not run | — | 79 | translate rejected: Sequence lookup lacks checked Physical row provenance |
+| d72_inner | not run | not run | — | 292 | planner rejected: P-Decompose: unmet catalog obligation Provider; `r9`, `[supplier_key]`, Range, `DeviceColumns` |
+| d85 | not run | not run | — | 191 | planner rejected: P-Decompose: unmet catalog obligation Provider; `r14`, `[part_key]`, Range, `DeviceColumns` |
+
 ### TPC-H data
 
 TPC-H datasets are `/data/tpch-gpu/sf1` and `/data/tpch-gpu/sf10` (ignored,

@@ -48,6 +48,7 @@ impl Kind {
 }
 
 enum Selector {
+    Entry(usize),
     Result(Ident),
     JoinFilter(Ident),
     Kind(Kind),
@@ -63,7 +64,15 @@ impl Parse for Retype {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let at: Ident = input.parse()?;
         let selector =
-            if (at == "result" || at == "kind") && input.peek(syn::token::Paren) {
+            if at == "entry" && input.peek(syn::token::Paren) {
+                let contents;
+                syn::parenthesized!(contents in input);
+                let index: syn::LitInt = contents.parse()?;
+                if !contents.is_empty() {
+                    return Err(contents.error("expected one entry index"));
+                }
+                Selector::Entry(index.base10_parse()?)
+            } else if (at == "result" || at == "kind") && input.peek(syn::token::Paren) {
                 let contents;
                 syn::parenthesized!(contents in input);
                 let name: Ident = contents.parse()?;
@@ -104,15 +113,27 @@ impl Parse for Retype {
 /// selected read kind. Scan/point/range adapters are not keyed representations.
 /// Levels, reader names and Physical are preserved, even for custom types.
 /// Dedup includes both canon and computed-head state; rows selects buffers.
+/// `entry(N)` selects exactly one provider-bearing entry by its zero-based
+/// Structures order, including host adapters, without touching sibling entries.
 pub fn retype(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
     let analysis = ir::contract::check(source)?;
     let request: Retype = syn::parse2(arguments)?;
     ir::concrete_type(&request.ty)?;
     let mut target = source.clone();
     let mut changed = false;
-    for entry in &mut target.structures.entries {
+    for (index, entry) in target.structures.entries.iter_mut().enumerate() {
         let name = symbol_name(&entry.name);
         let matches = match request.selector {
+            Selector::Entry(selected) => {
+                index == selected
+                    && !matches!(
+                        entry.structure,
+                        Structure::Read { .. }
+                            | Structure::Repr { .. }
+                            | Structure::Stage { .. }
+                            | Structure::Share { .. }
+                    )
+            }
             Selector::Result(ref result) => {
                 name == symbol_name(result) && keyed_read(&entry.structure, source)
             }
@@ -371,14 +392,20 @@ pub fn sorted_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<
 /// Bucket collisions are resolved by comparing every recorded key column.
 pub fn hashed_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
     if !arguments.is_empty() {
-        return Err(syn::Error::new_spanned(arguments, "hashed_runs takes no arguments"));
+        return Err(syn::Error::new_spanned(
+            arguments,
+            "hashed_runs takes no arguments",
+        ));
     }
     let analysis = ir::contract::check(source)?;
     let candidates = ir::physical::candidate_prefixes(&source.physical, &analysis.physical);
     let mut target = source.clone();
     for entry in &mut target.structures.entries {
-        let Structure::Built { keyed, .. } = &mut entry.structure else { continue };
-        if keyed.levels.len() != 1 || keyed.levels[0].columns.len() < 2
+        let Structure::Built { keyed, .. } = &mut entry.structure else {
+            continue;
+        };
+        if keyed.levels.len() != 1
+            || keyed.levels[0].columns.len() < 2
             || keyed.membership.is_some()
             || !matches!(&keyed.ty, Type::Path(p) if p.qself.is_none()
                 && p.path.segments.iter().map(|s| s.ident.to_string()).eq(["cq_storage", "HashIndex"]))
@@ -387,7 +414,11 @@ pub fn hashed_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<
         }
         let name = symbol_name(&entry.name);
         let columns = keyed.level_names().remove(0);
-        if candidates.iter().any(|c| c.sides.iter().any(|(side, key)| *side == name && *key == columns)) {
+        if candidates.iter().any(|c| {
+            c.sides
+                .iter()
+                .any(|(side, key)| *side == name && *key == columns)
+        }) {
             continue;
         }
         if columns.iter().all(|column| {

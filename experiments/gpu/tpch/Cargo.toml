@@ -1,0 +1,46 @@
+[package]
+name = "cq-gpu-tpch"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+cq-gpu-runtime = { path = "../printer-runtime" }
+cq-gpu-sequence-runtime = { path = "../sequence-runtime" }
+gpu-device-columns = { path = "../device-columns" }
+cq-storage = { path = "../../../runtime/cq-storage" }
+cq-testkit = { path = "../../../testkit/cq-testkit", default-features = false }
+cuda-core.workspace = true
+cuda-device.workspace = true
+cuda-host.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[build-dependencies]
+cq-lang-cq = { path = "../../../languages/cq-lang-cq" }
+cq-lang-physical = { path = "../../../languages/cq-lang-physical" }
+cq-lang-structures = { path = "../../../languages/cq-lang-structures" }
+cq-lang-sequence = { path = "../../../languages/cq-lang-sequence" }
+cq-order = { path = "../../../passes/cq-order" }
+cq-reduce = { path = "../../../passes/cq-reduce" }
+cq-elaborate = { path = "../../../passes/cq-elaborate" }
+cq-index-policy = { path = "../../../passes/cq-index-policy" }
+cq-physical-lowering = { path = "../../../passes/cq-physical-lowering" }
+cq-structure-selection = { path = "../../../passes/cq-structure-selection" }
+cq-sequence-lowering = { path = "../../../passes/cq-sequence-lowering" }
+cq-sequence-plan = { path = "../../../passes/cq-sequence-plan" }
+cq-sequence-pull = { path = "../../../passes/cq-sequence-pull" }
+cq-gpu-sequence = { path = "../sequence" }
+cq-rewrite-passes = { path = "../../../features/rewrites/passes" }
+cq-load = { path = "../../../runtime/cq-load", default-features = false }
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full", "visit-mut", "extra-traits"] }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full", "visit-mut", "extra-traits"] }
+cq-lang-cq = { path = "../../../languages/cq-lang-cq" }
+cq-load = { path = "../../../runtime/cq-load", default-features = false }

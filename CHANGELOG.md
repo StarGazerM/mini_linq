@@ -19,6 +19,33 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   Completed keys apply constants and repeated-variable equalities once per
   stratum, then project distinct variables; rule calls use borrowed host
   membership (or an empty-key witness test) without rebuilding negation indexes.
+- Add `experiments/gpu/tpch`, a single-crate/single-binary planner-driven inventory
+  of all eleven CPU CQ-shaped retail TPC-H kernels at SF1 and SF10. Query bodies
+  are imported directly from the CPU workload files, not maintained as GPU
+  copies. The generic manifest loader resolves dictionary literals, epoch-day
+  dates, and scale-2 decimals. Accepted translations have one warmup plus five
+  exact-checked measurements and SF1 Sequential-of-the-same-Physical conformance
+  through the H05 external-target `cq-testkit` comparison API.
+  The observed release build and 13 tests passed, but all 22 query/scale
+  compilations were rejected: eleven conformance cases explicitly reported
+  `NOT RUN`; no GPU answer agreement or GPU timing is claimed. No compiler gap
+  was patched. Full exact errors, terms, source queries and baseline metadata
+  are in `experiments/gpu/compare/gpu_tpch.results.json`; the table below omits
+  only catalog errors' verbose `syn::Type` debug payload.
+
+  | query | SF1 exact | SF10 exact | GPU total ms SF10 (build/kernels/dedup) | DuckDB t24 SF10 ms | status |
+  |---|---|---|---|---|---|
+  | h03 | not run | not run | — | 167 | translate rejected: Sequence lookup lacks checked Physical row provenance |
+  | h05 | not run | not run | — | 172 | planner rejected: P-Decompose: unmet catalog obligation Provider; `r13`, `[nation_key, supplier_key]`, Range, `DeviceColumns` |
+  | h07 | not run | not run | — | 137 | translate rejected: T-Gpu: provider predicate requires a recorded contiguous range selection |
+  | h07_block | not run | not run | — | 139 | planner rejected: BE-Boundary: a dispatch must have one unambiguous outer stored space (definition `r3`) |
+  | h08 | not run | not run | — | 116 | planner rejected: P-Decompose: unmet catalog obligation Provider; `r11`, `[supplier_key]`, Range, `DeviceColumns` |
+  | h09 | not run | not run | — | 4472 | planner rejected: BE-Partial: opaque Physical Rust must be evaluated at host before dispatch |
+  | h21_positive | not run | not run | — | 3942 | translate rejected: T-Gpu: provider bound must be a constant or host parameter |
+  | d19 | not run | not run | — | 204 | planner rejected: P-Decompose: unmet catalog obligation Provider; `r8`, `[part_key]`, Range, `DeviceColumns` |
+  | d27 | not run | not run | — | 79 | translate rejected: Sequence lookup lacks checked Physical row provenance |
+  | d72_inner | not run | not run | — | 292 | planner rejected: P-Decompose: unmet catalog obligation Provider; `r9`, `[supplier_key]`, Range, `DeviceColumns` |
+  | d85 | not run | not run | — | 191 | planner rejected: P-Decompose: unmet catalog obligation Provider; `r14`, `[part_key]`, Range, `DeviceColumns` |
 
 - Add shared executable Sequence conformance in `cq-testkit`: Sequential and
   Rayon Tasks translations run on identical authored or deterministic inputs,

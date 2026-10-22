@@ -255,6 +255,12 @@ Let $t_0=t$, $t_i=r_i(t_{i-1})$, and let $A(t)$ record authored choices.
   \text{candidate and catalog order fixed}}
  {\mathsf{plan}(t,M,K)\text{ has one result (or one rejection)}}
 
+\Rule{PL-Select}{e\in\mathsf{Structures}(s)\quad
+ k=\mathsf{first}\{k\in K\mid \mathsf{needs}(e)\subseteq\mathsf{caps}(k),
+ \ \mathsf{host}\in\mathsf{levels}(k)\}}
+ {\mathsf{select}(s,K):\
+ e.\mathsf{type}\gets k.\mathsf{type}\quad\text{by checked retype}}
+
 \Rule{PL-Cost}{C=(c_1,\ldots,c_k)\text{ admissible, preserving }A(t)\quad
   \kappa(c)=(W(c),S(c),\#\mathsf{stores}(c),\#\mathsf{dispatches}(c))}
  {c^*=\mathsf{foldl}\bigl(
@@ -271,6 +277,14 @@ not a semantic preference. Here $\prec$ is provable strict lexicographic
 symbolic cost dominance: work first, then span, stores and dispatches.
 Bounds and coefficient dominance establish comparisons; unresolved
 comparisons, like equal costs, retain the earlier candidate.
+PL-Select is an explicit Structures selection operation before decomposition,
+not an implicit override by PL-Precedence. It visits built indexes, sets,
+row buffers and canon providers in recorded entry order, selecting the first
+catalog token satisfying all reads of that entry; host adapters are unchanged.
+Structures has no machine grading, so selection requires host publication.
+Later Sequence planning validates every actual execution level.
+Each substitution uses the existing source/target Structures retype checks;
+an absent token rejects with the structure, capabilities and level.
 Unknown lengths remain type-length expressions rather than measured input
 data or invented cardinalities. Work counts evaluated constructor positions;
 aliases, tiles and stores add no evaluation work, with stores a separate
