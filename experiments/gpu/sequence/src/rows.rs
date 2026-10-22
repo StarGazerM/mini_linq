@@ -1,11 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use cq_lang_sequence::{Analysis, Program};
-use cq_lang_structures::physical::{symbol_name, Definition, Operator};
+use cq_lang_sequence::{Analysis, Obligation, Program};
+use cq_lang_structures::physical::{Definition, Operator, symbol_name};
 use cq_lang_structures::syntax::{
+    EqualityValue,
     algebra::Theta,
     constraint::{Comparison, Constraint, Term},
-    EqualityValue,
 };
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
@@ -35,6 +35,78 @@ struct Provider {
     keys: Vec<String>,
 }
 
+/// Device bindings are scalar codes or direct reads through a parent's owner
+/// index. Missing bindings are dead columns, never a second physical row.
+#[derive(Clone, Default)]
+pub struct DeviceRow(pub BTreeMap<usize, TokenStream>);
+
+impl DeviceRow {
+    pub fn uses(tokens: TokenStream) -> syn::Result<BTreeSet<usize>> {
+        struct Uses(BTreeSet<usize>);
+        impl VisitMut for Uses {
+            fn visit_expr_mut(&mut self, expression: &mut syn::Expr) {
+                if let Some(slot) = row_slot(expression) {
+                    self.0.insert(slot);
+                }
+                syn::visit_mut::visit_expr_mut(self, expression);
+            }
+        }
+        let mut block: syn::Block = syn::parse2(quote!({#tokens}))?;
+        let mut uses = Uses(BTreeSet::new());
+        uses.visit_block_mut(&mut block);
+        Ok(uses.0)
+    }
+    pub fn rewrite(&self, tokens: TokenStream) -> syn::Result<TokenStream> {
+        struct Rewrite<'a>(&'a DeviceRow);
+        impl VisitMut for Rewrite<'_> {
+            fn visit_expr_mut(&mut self, expression: &mut syn::Expr) {
+                if let syn::Expr::Assign(assign) = expression
+                    && let Some(slot) = row_slot(&assign.left)
+                {
+                    if let Some(value) = self.0.0.get(&slot) {
+                        let right = &assign.right;
+                        *expression = syn::parse_quote!(#value = (#right) as _);
+                    } else {
+                        *expression = syn::parse_quote!(());
+                    }
+                    return;
+                }
+                if let Some(slot) = row_slot(expression) {
+                    *expression = self.0.0.get(&slot).map_or_else(
+                        || syn::parse_quote!(0i64),
+                        |value| syn::parse_quote!(#value),
+                    );
+                    return;
+                }
+                syn::visit_mut::visit_expr_mut(self, expression);
+            }
+        }
+        let mut block: syn::Block = syn::parse2(quote!({#tokens}))?;
+        Rewrite(self).visit_block_mut(&mut block);
+        let statements = block.stmts;
+        Ok(quote!(#(#statements)*))
+    }
+}
+
+fn row_slot(expression: &syn::Expr) -> Option<usize> {
+    let syn::Expr::Index(index) = expression else {
+        return None;
+    };
+    let syn::Expr::Path(path) = &*index.expr else {
+        return None;
+    };
+    if !path.path.is_ident("__row") {
+        return None;
+    }
+    let syn::Expr::Lit(literal) = &*index.index else {
+        return None;
+    };
+    let syn::Lit::Int(index) = &literal.lit else {
+        return None;
+    };
+    index.base10_parse().ok()
+}
+
 /// Physical adapters only: layouts and predicates are already recorded by the
 /// Structures prefix. This module never schedules a Sequence constructor.
 pub struct Rows {
@@ -44,6 +116,7 @@ pub struct Rows {
     pub build: TokenStream,
     pub parameters: Vec<(Ident, Type, TokenStream)>,
     pub output_columns: Vec<String>,
+    pub dense: BTreeSet<usize>,
     sources: BTreeMap<String, Source>,
     providers: BTreeMap<String, Provider>,
     bounds: BTreeMap<String, TokenStream>,
@@ -404,6 +477,39 @@ impl Rows {
             .iter()
             .map(|(name, row)| (name.clone(), row.types.clone()))
             .collect();
+        let codec_columns: BTreeSet<_> = analysis
+            .obligations
+            .iter()
+            .filter_map(|obligation| {
+                if let Obligation::Codec { columns, .. } = obligation {
+                    Some(columns)
+                } else {
+                    None
+                }
+            })
+            .flatten()
+            .collect();
+        let dense = columns
+            .iter()
+            .filter_map(|(column, slot)| {
+                // A codec obligation alone does not prove nonnegative code width.
+                // Use the checked physical code type as well.
+                (codec_columns.contains(column)
+                    && analysis
+                        .structures
+                        .physical
+                        .rows
+                        .values()
+                        .filter_map(|row| row.types.get(column))
+                        .all(|ty| {
+                            matches!(
+                                primitive(ty).as_deref(),
+                                Some("u32" | "u16" | "u8" | "bool")
+                            )
+                        }))
+                .then_some(*slot)
+            })
+            .collect();
         Ok(Self {
             width: columns.len().max(1),
             columns,
@@ -411,6 +517,7 @@ impl Rows {
             build,
             parameters,
             output_columns,
+            dense,
             sources,
             providers,
             bounds,
@@ -434,8 +541,11 @@ impl Rows {
             Some(positions) => quote!(unsafe { *#positions.add((#position) as usize) } as u64),
             None => quote!((#position) as u64),
         };
-        let reads = source.reads.iter().map(|(slot, view)| quote! {
-            #row[#slot] = unsafe { ::cq_gpu_sequence_runtime::device::decode(#view, #position) };
+        let reads = source.reads.iter().map(|(slot, view)| {
+            let decode = if self.dense.contains(slot) { format_ident!("decode_u32") } else { format_ident!("decode") };
+            quote! {
+                #row[#slot] = unsafe { ::cq_gpu_sequence_runtime::device::#decode(#view, #position) } as i64;
+            }
         });
         Ok(quote!(#(#reads)*))
     }
@@ -495,11 +605,29 @@ impl Rows {
                 | Operator::Range(_, select) => {
                     validate_theta(&select.condition)?;
                     let input = symbol_name(&select.input);
-                    let bindings = self.types[&input].iter().map(|(column, ty)| {
-                        let id = Ident::new(column, proc_macro2::Span::call_site());
-                        let slot = self.columns[column];
-                        quote!(let #id = &(#row[#slot] as #ty);)
-                    });
+                    let tokens = cq_print::expressions::relational_condition_with(
+                        &select.condition,
+                        &BTreeMap::new(),
+                    );
+                    struct Uses(BTreeSet<String>);
+                    impl VisitMut for Uses {
+                        fn visit_expr_path_mut(&mut self, path: &mut syn::ExprPath) {
+                            if let Some(id) = path.path.get_ident() {
+                                self.0.insert(id.to_string());
+                            }
+                            syn::visit_mut::visit_expr_path_mut(self, path);
+                        }
+                    }
+                    let mut uses = Uses(BTreeSet::new());
+                    uses.visit_expr_mut(&mut syn::parse2(tokens)?);
+                    let bindings = self.types[&input]
+                        .iter()
+                        .filter(|(column, _)| uses.0.contains(*column))
+                        .map(|(column, ty)| {
+                            let id = Ident::new(column, proc_macro2::Span::call_site());
+                            let slot = self.columns[column];
+                            quote!(let #id = &(#row[#slot] as #ty);)
+                        });
                     let tokens = cq_print::expressions::relational_condition_with(
                         &select.condition,
                         &BTreeMap::new(),

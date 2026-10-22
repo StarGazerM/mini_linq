@@ -1,11 +1,11 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use cq_lang_sequence::{Analysis, Capability, Guard, Len, Monoid, OutputProtocol, Program, Term};
-use cq_lang_structures::physical::{symbol_name, Operator};
+use cq_lang_structures::physical::{Operator, symbol_name};
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote};
 
-use crate::rows::Rows;
+use crate::rows::{DeviceRow, Rows};
 
 fn error(message: impl std::fmt::Display) -> syn::Error {
     syn::Error::new(Span::call_site(), message)
@@ -49,24 +49,6 @@ fn local_tiles(operations: &[Operation]) -> Vec<(usize, usize)> {
             }
         })
         .collect()
-}
-
-fn stripes(width: usize, items: usize, load: TokenStream, body: TokenStream) -> TokenStream {
-    quote! {
-        let mut __batch=__partition_begin;
-        while __batch<__partition_end {
-            let mut __item=0usize;
-            while __item<#items {
-                let __position=__batch+(__item*256+__tid) as u64;
-                let mut __live=__position<__partition_end;
-                let mut __row=[0i64;#width];
-                if __live {#load}
-                #body
-                __item+=1;
-            }
-            __batch+=(#items as u64)*256;
-        }
-    }
 }
 
 fn nested_partitions(tiles: &[(usize, usize)], mut body: TokenStream) -> TokenStream {
@@ -393,7 +375,7 @@ impl<'a> Compiler<'a> {
                 });
             } else {
                 membership_checks.extend(quote! {
-                    let __key=__row[#slot];
+                    let __key=__row[#slot] as i64;
                     let __column=*#view.payload.add(#index);
                     let (mut __low,mut __high)=(__begin,__end);
                     while __low<__high {
@@ -416,7 +398,7 @@ impl<'a> Compiler<'a> {
         }
         Ok(quote! {
             let (mut __begin, mut __end) = (0u32, 0u32);
-            if __live && __row[#slot] >= 0 && (__row[#slot] as u64) < #view.domain as u64 {
+            if __live && (__row[#slot] as i64) >= 0 && (__row[#slot] as u64) < #view.domain as u64 {
                 (__begin, __end) = ::cq_gpu_sequence_runtime::device::range(#view.offsets, __row[#slot] as u32);
             }
             #membership_checks
@@ -427,7 +409,8 @@ impl<'a> Compiler<'a> {
         let (view, payload, _) = self.rows.provider(provider)?;
         let assignments = payload.iter().enumerate().map(|(index,column)| {
             let slot=self.slot(column)?;
-            Ok(quote!(__row[#slot] = ::cq_gpu_sequence_runtime::device::decode(*#view.payload.add(#index), (#position) as u64);))
+            let decode = if self.rows.dense.contains(&slot) { format_ident!("decode_u32") } else { format_ident!("decode") };
+            Ok(quote!(__row[#slot] = ::cq_gpu_sequence_runtime::device::#decode(*#view.payload.add(#index), (#position) as u64) as i64;))
         }).collect::<syn::Result<Vec<_>>>()?;
         Ok(quote!(#(#assignments)*))
     }
@@ -438,7 +421,16 @@ struct Kernel<'c, 'p> {
     shared_bytes: usize,
     virtual_range: Option<String>,
     packed_columns: Option<Vec<String>>,
+    publication_columns: BTreeSet<usize>,
     sink: Option<TokenStream>,
+    scalar_output: bool,
+}
+
+struct StripeInput {
+    items: usize,
+    inherited: DeviceRow,
+    prelude: TokenStream,
+    load: TokenStream,
 }
 
 impl Kernel<'_, '_> {
@@ -449,21 +441,321 @@ impl Kernel<'_, '_> {
         at
     }
 
-    fn partition(
+    fn output_slots(&self) -> syn::Result<BTreeSet<usize>> {
+        if let Some(columns) = &self.packed_columns {
+            columns
+                .iter()
+                .map(|column| self.compiler.slot(column))
+                .collect()
+        } else {
+            Ok(self.publication_columns.clone())
+        }
+    }
+
+    /// Backwards column liveness follows the checked row functions and provider
+    /// payload headings. No scheduling or provider choice is made here.
+    fn live_columns(&self, operations: &[Operation]) -> syn::Result<BTreeSet<usize>> {
+        let mut live = if let Some(sink) = &self.sink {
+            DeviceRow::uses(sink.clone())?
+        } else {
+            self.output_slots()?
+        };
+        for operation in operations.iter().rev() {
+            match operation {
+                Operation::Map(name, input) => live.extend(DeviceRow::uses(
+                    self.compiler
+                        .rows
+                        .map(name, input, quote!(__row), quote!(__live))?,
+                )?),
+                Operation::Lookup {
+                    provider,
+                    keys,
+                    membership,
+                } => {
+                    if !membership {
+                        for column in self.compiler.rows.provider(provider)?.1 {
+                            live.remove(&self.compiler.slot(&column)?);
+                        }
+                    }
+                    for column in keys {
+                        live.insert(self.compiler.slot(column)?);
+                    }
+                }
+                Operation::Fold(monoid) => {
+                    live.clear();
+                    if let Monoid::Sum(column) = monoid {
+                        live.insert(self.compiler.slot(&symbol_name(column))?);
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(live)
+    }
+
+    fn code_type(&self, slot: usize) -> TokenStream {
+        if self.compiler.rows.dense.contains(&slot) {
+            quote!(u32)
+        } else {
+            quote!(i64)
+        }
+    }
+
+    fn scalar_stripes(
+        &mut self,
+        operations: &[Operation],
+        items: usize,
+        inherited: DeviceRow,
+        prelude: TokenStream,
+        load: TokenStream,
+    ) -> syn::Result<TokenStream> {
+        let mut row = inherited;
+        let mut declarations = TokenStream::new();
+        for slot in self.live_columns(operations)? {
+            if let std::collections::btree_map::Entry::Vacant(entry) = row.0.entry(slot) {
+                let id = format_ident!("__code_{slot}");
+                let ty = self.code_type(slot);
+                declarations.extend(quote!(let mut #id: #ty = 0;));
+                entry.insert(quote!(#id));
+            }
+        }
+        let load = row.rewrite(load)?;
+        let terminal = self.sink.is_none()
+            && operations.iter().enumerate().all(|(at, operation)| {
+                if let Operation::Lookup {
+                    provider,
+                    membership: false,
+                    ..
+                } = operation
+                {
+                    self.virtual_range.as_deref() == Some(provider)
+                        && operations[at + 1..]
+                            .iter()
+                            .all(|op| matches!(op, Operation::Flatten | Operation::Store))
+                } else {
+                    true
+                }
+            });
+        let mut gather_declare = TokenStream::new();
+        let mut emit = TokenStream::new();
+        let previous_sink = self.sink.clone();
+        if terminal {
+            let mut gathered = DeviceRow::default();
+            let mut collect = TokenStream::new();
+            for slot in self.output_slots()? {
+                let id = format_ident!("__found_code_{slot}");
+                let ty = self.code_type(slot);
+                gather_declare.extend(quote!(let mut #id = [0 as #ty; #items];));
+                collect.extend(quote!(#id[__item] = __row[#slot] as #ty;));
+                gathered.0.insert(slot, quote!(#id[__item]));
+            }
+            let mut range_load = TokenStream::new();
+            if self.virtual_range.is_some() {
+                gather_declare.extend(quote! {
+                    let mut __found_begin = [0u32; #items];
+                    let mut __found_end = [0u32; #items];
+                });
+                collect.extend(quote! {
+                    __found_begin[__item] = __begin;
+                    __found_end[__item] = __end;
+                });
+                range_load = quote! {
+                    let __begin = __found_begin[__item];
+                    let __end = __found_end[__item];
+                };
+            }
+            self.sink = Some(quote! {
+                __found[__item] = __live;
+                if __live { #collect __found_count += 1; }
+            });
+            let write = gathered.rewrite(self.output_write()?)?;
+            emit = Self::reserve(
+                quote!(__found_count),
+                quote! {
+                    let mut __destination = (*__reservation).wrapping_add(__prefix);
+                    let mut __item = 0usize;
+                    while __item < #items {
+                        if __found[__item] {
+                            if __destination < __capacity { #range_load #write }
+                            __destination = __destination.wrapping_add(1);
+                        }
+                        __item += 1;
+                    }
+                },
+            );
+            gather_declare.extend(quote! {
+                let mut __found = [false; #items];
+                let mut __found_count = 0u32;
+            });
+        }
+        let body = self.scalar_operations(operations, &row)?;
+        self.sink = previous_sink;
+        Ok(quote! {
+            let mut __batch = __partition_begin;
+            while __batch < __partition_end {
+                #gather_declare
+                let mut __item = 0usize;
+                while __item < #items {
+                    let __position = __batch + (__item * 256 + __tid) as u64;
+                    let mut __live = __position < __partition_end;
+                    #prelude
+                    #declarations
+                    if __live { #load }
+                    #body
+                    __item += 1;
+                }
+                #emit
+                __batch += (#items as u64) * 256;
+            }
+        })
+    }
+
+    fn scalar_operations(
+        &mut self,
+        operations: &[Operation],
+        row: &DeviceRow,
+    ) -> syn::Result<TokenStream> {
+        let Some((operation, rest)) = operations.split_first() else {
+            return row.rewrite(self.finish()?);
+        };
+        match operation {
+            Operation::Map(name, input) => {
+                let map = row.rewrite(self.compiler.rows.map(
+                    name,
+                    input,
+                    quote!(__row),
+                    quote!(__live),
+                )?)?;
+                let rest = self.scalar_operations(rest, row)?;
+                Ok(quote!(#map #rest))
+            }
+            Operation::Lookup {
+                provider,
+                keys,
+                membership,
+            } => {
+                let lookup = row.rewrite(self.compiler.lookup(provider, keys, *membership)?)?;
+                if *membership {
+                    let rest = self.scalar_operations(rest, row)?;
+                    return Ok(quote!(#lookup __live = __live && __begin < __end; #rest));
+                }
+                if self.virtual_range.as_deref() == Some(provider)
+                    && rest
+                        .iter()
+                        .all(|op| matches!(op, Operation::Flatten | Operation::Store))
+                {
+                    let finish = row.rewrite(self.finish()?)?;
+                    return Ok(quote!(#lookup __live = __live && __begin < __end; #finish));
+                }
+                if !rest.iter().any(|op| matches!(op, Operation::Flatten)) {
+                    return Err(error(
+                        "range lookup must be flattened or published as offsets",
+                    ));
+                }
+                let payload_columns = self
+                    .compiler
+                    .rows
+                    .provider(provider)?
+                    .1
+                    .iter()
+                    .map(|column| self.compiler.slot(column))
+                    .collect::<syn::Result<BTreeSet<_>>>()?;
+                let begin_offset = self.allocate(256 * 4, 4);
+                let offsets_offset = self.allocate(257 * 4, 4);
+                let begins = format_ident!("__begins_{begin_offset}");
+                let offsets = format_ident!("__offsets_{offsets_offset}");
+                let owner = format_ident!("__owner_{begin_offset}");
+                let mut shared = TokenStream::new();
+                let mut child = DeviceRow::default();
+                for slot in self.live_columns(rest)?.difference(&payload_columns) {
+                    let ty = self.code_type(*slot);
+                    let bytes = if self.compiler.rows.dense.contains(slot) {
+                        4
+                    } else {
+                        8
+                    };
+                    let at = self.allocate(256 * bytes, bytes);
+                    let id = format_ident!("__parent_{at}");
+                    let value = row
+                        .0
+                        .get(slot)
+                        .ok_or_else(|| error("live parent column lacks checked provenance"))?;
+                    shared.extend(quote! {
+                        let #id = __shared.add(#at).cast::<#ty>();
+                        *#id.add(__tid) = #value;
+                    });
+                    child.0.insert(*slot, quote!(*#id.add(#owner)));
+                }
+                let tiles = local_tiles(rest);
+                let tile = tiles.first().map_or(256, |tile| tile.0);
+                let items = tiles.last().map_or(1, |tile| tile.1);
+                let payload = self.compiler.payload(provider, quote!(__child_position))?;
+                let (_, partition, _, _) = self.partition_rows(rest, false,
+                    tiles.get(1..).unwrap_or_default(), StripeInput {
+                        items,
+                        inherited: child,
+                        prelude: quote! {
+                            let #owner = if __live {
+                                ::cq_gpu_sequence_runtime::device::owner(#offsets, 256, __position as u32) as usize
+                            } else { 0 };
+                        },
+                        load: quote! {
+                            let __child_position = *#begins.add(#owner) + (__position as u32 - *#offsets.add(#owner));
+                            #payload
+                        },
+                    })?;
+                Ok(quote! {
+                    #lookup
+                    #shared
+                    let #begins = __shared.add(#begin_offset).cast::<u32>();
+                    let #offsets = __shared.add(#offsets_offset).cast::<u32>();
+                    *#begins.add(__tid) = __begin;
+                    let (__offset, __children) = ::cq_gpu_sequence_runtime::device::checked_scan(
+                        if __live { __end - __begin } else { 0 }, __scratch, __meta.add(2));
+                    *#offsets.add(__tid) = __offset;
+                    if __tid == 0 { *#offsets.add(256) = __children; }
+                    ::cuda_device::thread::sync_threads();
+                    if __tid == 0 { *__abort_slot = *__meta.add(2); }
+                    ::cuda_device::thread::sync_threads();
+                    if *__abort_slot != 0 { return; }
+                    let mut __child_base = 0u64;
+                    while __child_base < __children as u64 {
+                        let __partition_begin = __child_base;
+                        let __partition_end = (__child_base + #tile as u64).min(__children as u64);
+                        #partition
+                        __child_base += #tile as u64;
+                    }
+                    ::cuda_device::thread::sync_threads();
+                })
+            }
+            Operation::Fold(_) => Err(error("scalar row template cannot cross a reduction scope")),
+            _ => self.scalar_operations(rest, row),
+        }
+    }
+
+    fn partition_rows(
         &mut self,
         operations: &[Operation],
         source: bool,
-    ) -> syn::Result<(TokenStream, TokenStream, TokenStream, bool, usize)> {
+        tiles: &[(usize, usize)],
+        input_rows: StripeInput,
+    ) -> syn::Result<(TokenStream, TokenStream, TokenStream, bool)> {
         let Some(at) = operations
             .iter()
             .position(|operation| matches!(operation, Operation::Fold(_)))
         else {
+            let rows = self.scalar_stripes(
+                operations,
+                input_rows.items,
+                input_rows.inherited,
+                input_rows.prelude,
+                input_rows.load,
+            )?;
             return Ok((
                 TokenStream::new(),
-                self.operations(operations)?,
+                nested_partitions(tiles, rows),
                 TokenStream::new(),
                 false,
-                usize::MAX,
             ));
         };
         let target = active_tile(&operations[..at]);
@@ -482,12 +774,18 @@ impl Kernel<'_, '_> {
             .min(at);
         let current = active_tile(&operations[..next_lookup]);
         if !(source && target.is_none()) && (target != current || target.is_none()) {
+            let rows = self.scalar_stripes(
+                operations,
+                input_rows.items,
+                input_rows.inherited,
+                input_rows.prelude,
+                input_rows.load,
+            )?;
             return Ok((
                 TokenStream::new(),
-                self.operations(operations)?,
+                nested_partitions(tiles, rows),
                 TokenStream::new(),
                 false,
-                usize::MAX,
             ));
         }
         let Operation::Fold(monoid) = &operations[at] else {
@@ -502,42 +800,77 @@ impl Kernel<'_, '_> {
         let output = self.compiler.slot(&self.compiler.rows.output_columns[0])?;
         let reduction = crate::reduce::build(monoid, input, output, offset, &accumulator)?;
         let previous = self.sink.replace(reduction.update);
-        let body = self.operations(&operations[..at])?;
+        let body = self.scalar_stripes(
+            &operations[..at],
+            input_rows.items,
+            input_rows.inherited,
+            input_rows.prelude,
+            input_rows.load,
+        )?;
         self.sink = previous;
-        let suffix = self.operations(&operations[at + 1..])?;
-        let finish = reduction.finish;
-        let width = self.compiler.rows.width;
+        let mut output_row = DeviceRow::default();
+        output_row.0.insert(output, quote!(__fold_result));
+        // A reduction result is an i64 value, not a dense code inherited
+        // from the physical column whose output slot it reuses.
+        let previous_scalar = std::mem::replace(&mut self.scalar_output, true);
+        let suffix = self.scalar_operations(&operations[at + 1..], &output_row)?;
+        self.scalar_output = previous_scalar;
+        let finish = output_row.rewrite(reduction.finish)?;
+        let finish = quote! {
+            let mut __fold_result = 0i64;
+            let mut __live = false;
+            #finish
+            #suffix
+        };
         let scope = target.map_or(0, |target| {
             operations[..=target]
                 .iter()
                 .filter(|operation| matches!(operation, Operation::Tile { .. }))
                 .count()
         });
-        Ok((
-            reduction.declare,
-            body,
-            quote! {
-                let mut __row=[0i64;#width];
-                let mut __live=false;
-                #finish
-                #suffix
-            },
-            target.is_none(),
-            scope,
-        ))
+        if target.is_none() {
+            Ok((
+                reduction.declare,
+                nested_partitions(tiles, body),
+                finish,
+                true,
+            ))
+        } else {
+            Ok((
+                TokenStream::new(),
+                partition_body(tiles, scope, reduction.declare, body, finish),
+                TokenStream::new(),
+                false,
+            ))
+        }
     }
 
     fn finish(&self) -> syn::Result<TokenStream> {
         if let Some(sink) = &self.sink {
             return Ok(sink.clone());
         }
+        let write = self.output_write()?;
+        Ok(Self::reserve(
+            quote!(__live as u32),
+            quote! {
+                let __destination=(*__reservation).wrapping_add(__prefix);
+                if __live && __destination < __capacity { #write }
+            },
+        ))
+    }
+
+    fn output_write(&self) -> syn::Result<TokenStream> {
         let width = self.compiler.rows.width;
         let write = if let Some(columns) = &self.packed_columns {
             let parts=columns.iter().enumerate().map(|(i,column)| {
                 let slot=self.compiler.slot(column)?;
                 let base=format_ident!("__cq_pack_base_{i}");
                 let shift=format_ident!("__cq_pack_shift_{i}");
-                Ok(quote!((if #shift==64 {0u64} else {(__row[#slot].wrapping_sub(#base) as u64) << #shift})))
+                if self.compiler.rows.dense.contains(&slot) && !self.scalar_output {
+                    Ok(quote!((if #shift==64 {0u64} else {((__row[#slot] as u32).wrapping_sub(#base as u32) as u64) << #shift})))
+                } else {
+                    Ok(quote!((if #shift==64 {0u64} else {(__row[#slot].wrapping_sub(#base) as u64) << #shift})))
+                }
             }).collect::<syn::Result<Vec<_>>>()?;
             quote!(*__output_keys.add(__destination as usize) = 0u64 #(| #parts)*;)
         } else {
@@ -549,17 +882,20 @@ impl Kernel<'_, '_> {
             } else {
                 TokenStream::new()
             };
+            let columns = (0..width).map(|slot| quote! {
+                *__output_rows.add(__destination as usize * #width + #slot) = __row[#slot] as i64;
+            });
             quote! {
-                let mut __column=0usize;
-                while __column < #width {
-                    *__output_rows.add(__destination as usize * #width + __column) = __row[__column];
-                    __column += 1;
-                }
+                #(#columns)*
                 #range
             }
         };
-        Ok(quote! {
-            let (__prefix,__total) = ::cq_gpu_sequence_runtime::device::checked_scan(__live as u32, __scratch, __meta.add(2));
+        Ok(write)
+    }
+
+    fn reserve(count: TokenStream, emit: TokenStream) -> TokenStream {
+        quote! {
+            let (__prefix,__total) = ::cq_gpu_sequence_runtime::device::checked_scan(#count, __scratch, __meta.add(2));
             if __tid == 0 {
                 let __base = if __total == 0 { 0 } else {
                     ::cuda_device::atomic::DeviceAtomicU32::from_ptr(__meta).fetch_add(__total, ::cuda_device::atomic::AtomicOrdering::Relaxed)
@@ -570,116 +906,8 @@ impl Kernel<'_, '_> {
                 *__reservation = __base;
             }
             ::cuda_device::thread::sync_threads();
-            let __destination=(*__reservation).wrapping_add(__prefix);
-            if __live && __destination < __capacity { #write }
+            #emit
             ::cuda_device::thread::sync_threads();
-        })
-    }
-
-    fn operations(&mut self, operations: &[Operation]) -> syn::Result<TokenStream> {
-        let Some((operation, rest)) = operations.split_first() else {
-            return self.finish();
-        };
-        let width = self.compiler.rows.width;
-        match operation {
-            Operation::Map(name, input) => {
-                let map = self
-                    .compiler
-                    .rows
-                    .map(name, input, quote!(__row), quote!(__live))?;
-                let rest = self.operations(rest)?;
-                Ok(quote! { #map #rest })
-            }
-            Operation::Lookup {
-                provider,
-                keys,
-                membership,
-            } => {
-                let lookup = self.compiler.lookup(provider, keys, *membership)?;
-                if *membership {
-                    let rest = self.operations(rest)?;
-                    return Ok(quote! { #lookup __live = __live && __begin < __end; #rest });
-                }
-                // A terminal flattened lookup stored at a separated boundary is
-                // represented by its parent row and an offset range, not expanded.
-                if self.virtual_range.as_deref() == Some(provider)
-                    && rest
-                        .iter()
-                        .all(|op| matches!(op, Operation::Flatten | Operation::Store))
-                {
-                    let finish = self.finish()?;
-                    return Ok(quote! { #lookup __live = __live && __begin < __end; #finish });
-                }
-                if !rest.iter().any(|op| matches!(op, Operation::Flatten)) {
-                    return Err(error(
-                        "range lookup must be flattened or published as offsets",
-                    ));
-                }
-                let rows_offset = self.allocate(width * 256 * 8, 8);
-                let begin_offset = self.allocate(256 * 4, 4);
-                let offsets_offset = self.allocate(257 * 4, 4);
-                let payload = self.compiler.payload(provider, quote!(__child_position))?;
-                let tiles = local_tiles(rest);
-                let tile = tiles.first().map_or(256, |tile| tile.0);
-                let items = tiles.last().map_or(1, |tile| tile.1);
-                let (declare, nested, finish, _, scope) = self.partition(rest, false)?;
-                let load = quote! {
-                    let __parent=::cq_gpu_sequence_runtime::device::owner(__offsets,256,__position as u32) as usize;
-                    let mut __column=0usize;
-                    while __column<#width {__row[__column]=*__parents.add(__parent*#width+__column);__column+=1;}
-                    let __child_position=*__begins.add(__parent)+(__position as u32-*__offsets.add(__parent));
-                    #payload
-                };
-                let rows = stripes(width, items, load, nested);
-                let partition = partition_body(
-                    tiles.get(1..).unwrap_or_default(),
-                    scope,
-                    declare,
-                    rows,
-                    finish,
-                );
-                Ok(quote! {
-                    #lookup
-                    let __parents=__shared.add(#rows_offset).cast::<i64>();
-                    let __begins=__shared.add(#begin_offset).cast::<u32>();
-                    let __offsets=__shared.add(#offsets_offset).cast::<u32>();
-                    let mut __column=0usize;
-                    while __column < #width { *__parents.add(__tid * #width + __column)=__row[__column]; __column+=1; }
-                    *__begins.add(__tid)=__begin;
-                    let (__offset,__children)=::cq_gpu_sequence_runtime::device::checked_scan(
-                        if __live {__end - __begin} else {0}, __scratch, __meta.add(2));
-                    *__offsets.add(__tid)=__offset;
-                    if __tid==0 { *__offsets.add(256)=__children; }
-                    ::cuda_device::thread::sync_threads();
-                    if __tid==0 {*__abort_slot=*__meta.add(2);}
-                    ::cuda_device::thread::sync_threads();
-                    if *__abort_slot!=0 {return;}
-                    let mut __child_base=0u64;
-                    while __child_base < __children as u64 {
-                        let __partition_begin=__child_base;
-                        let __partition_end=(__child_base+#tile as u64).min(__children as u64);
-                        #partition
-                        __child_base += #tile as u64;
-                    }
-                    ::cuda_device::thread::sync_threads();
-                })
-            }
-            Operation::Store => {
-                let at = self.allocate(width * 256 * 8, 8);
-                let rest = self.operations(rest)?;
-                Ok(quote! {
-                    let __stored=__shared.add(#at).cast::<i64>();
-                    let mut __column=0usize;
-                    while __column < #width { *__stored.add(__tid*#width+__column)=__row[__column]; __column+=1; }
-                    ::cuda_device::thread::sync_threads();
-                    __column=0;
-                    while __column < #width { __row[__column]=*__stored.add(__tid*#width+__column); __column+=1; }
-                    ::cuda_device::thread::sync_threads();
-                    #rest
-                })
-            }
-            Operation::Fold(_) => Err(error("GPU fold has no enclosing recorded partition scope")),
-            Operation::Flatten | Operation::Tile { .. } | Operation::Canon => self.operations(rest),
         }
     }
 }
@@ -780,7 +1008,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
         let base = format_ident!("__cq_pack_base_{i}");
         let shift = format_ident!("__cq_pack_shift_{i}");
         packing.push(quote! {
-            let (#base, __cq_width)=match #bounds {
+            let (#base, __cq_width)=match (#bounds) {
                 ::cq_gpu_runtime::Bounds::Empty => (0i64,0u32),
                 ::cq_gpu_runtime::Bounds::Inclusive {min,max} => {
                     let difference=(max as i128-min as i128) as u64;
@@ -991,7 +1219,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                 let base = format_ident!("__cq_pack_base_{i}");
                 let shift = format_ident!("__cq_pack_shift_{i}");
                 local_packing.push(quote! {
-                    let (#base,__cq_width)=match #bounds {
+                    let (#base,__cq_width)=match (#bounds) {
                         ::cq_gpu_runtime::Bounds::Empty=>(0i64,0u32),
                         ::cq_gpu_runtime::Bounds::Inclusive {min,max}=>
                             (min,64-((max as i128-min as i128) as u64).leading_zeros()),
@@ -1058,7 +1286,21 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
             shared_bytes: 48,
             virtual_range: virtual_range.clone(),
             packed_columns: packed_columns.clone(),
+            publication_columns: chains
+                .iter()
+                .flat_map(|chain| {
+                    analysis
+                        .structures
+                        .physical
+                        .headings
+                        .get(&chain.result)
+                        .into_iter()
+                        .flatten()
+                })
+                .map(|column| compiler.slot(column))
+                .collect::<syn::Result<_>>()?,
             sink: None,
+            scalar_output: false,
         };
         let mut bodies = Vec::new();
         let mut host_domains = Vec::new();
@@ -1112,31 +1354,29 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                     quote! {let __key=*#keys.add(__position as usize);#unpack}
                 } else if let Some(provider) = &compiler.stored[prior].range {
                     let payload = compiler.payload(provider, quote!(__source_position))?;
+                    let copy = (0..width).map(|slot| {
+                        quote! {
+                            __row[#slot] = *#rows.add(__parent * #width + #slot);
+                        }
+                    });
                     quote! {
                         let __parent=::cq_gpu_sequence_runtime::device::owner(#offsets,*#meta,__position as u32) as usize;
-                        let mut __column=0usize;
-                        while __column<#width {__row[__column]=*#rows.add(__parent*#width+__column);__column+=1;}
+                        #(#copy)*
                         let __source_position=*#begin.add(__parent)+(__position as u32-*#offsets.add(__parent));
                         #payload
                     }
                 } else {
-                    quote! {
-                        let mut __column=0usize;
-                        while __column<#width {__row[__column]=*#rows.add(__position as usize*#width+__column);__column+=1;}
-                    }
+                    let copy = (0..width).map(|slot| {
+                        quote! {
+                            __row[#slot] = *#rows.add(__position as usize * #width + #slot);
+                        }
+                    });
+                    quote!(#(#copy)*)
                 }
             } else {
                 compiler
                     .rows
                     .source(&chain.source, quote!(__position), quote!(__row))?
-            };
-            let (declare, body, finish, whole, scope) =
-                generator.partition(&chain.operations, true)?;
-            whole_reduction |= whole;
-            let (outside_declare, inside_declare, outside_finish, inside_finish) = if whole {
-                (declare, TokenStream::new(), finish, TokenStream::new())
-            } else {
-                (TokenStream::new(), declare, TokenStream::new(), finish)
             };
             let tiles = local_tiles(&chain.operations);
             let tile = dispatch
@@ -1146,14 +1386,18 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                 return Err(error("zero-width dispatch tile"));
             }
             let items = tiles.last().map_or(tile.div_ceil(256), |tile| tile.1);
-            let rows = stripes(width, items, source, body);
-            let partition = partition_body(
+            let (outside_declare, partition, outside_finish, whole) = generator.partition_rows(
+                &chain.operations,
+                true,
                 tiles.get(1..).unwrap_or_default(),
-                scope,
-                inside_declare,
-                rows,
-                inside_finish,
-            );
+                StripeInput {
+                    items,
+                    inherited: DeviceRow::default(),
+                    prelude: TokenStream::new(),
+                    load: source,
+                },
+            )?;
+            whole_reduction |= whole;
             // Every block finishes one branch before entering the next. Distinct
             // cursor words avoid cross-branch reset races in multi-block launches.
             let cursor = 4 + chain_index;
@@ -1366,4 +1610,84 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
             Ok(__cq_result)
         })().expect("GPU Sequence execution failed")
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reduction_templates_keep_the_recorded_scope_and_wide_results() {
+        for ty in [syn::parse_quote!(i64), syn::parse_quote!(u32)] {
+            let ty: syn::Type = ty;
+            let program: Program = syn::parse_quote! {
+                physical {
+                    relation R(a:#ty) = (&data.r);
+                    r = pipe canon rename R@0 {a -> a};
+                    return r as answer(a);
+                }
+                structures { r host scan = Reader []; r canon = Canon; }
+                sequence { input = store canon rows r; }
+                graded gpu { input at host; }
+            };
+            let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
+            let compiler = Compiler {
+                program: &program,
+                analysis: &analysis,
+                rows: Rows::new(&program, &analysis).unwrap(),
+                stored: Vec::new(),
+                definitions: BTreeMap::new(),
+            };
+            for monoid in [Monoid::Count, Monoid::Sum(syn::parse_quote!(a))] {
+                for tiled in [false, true] {
+                    let mut operations = Vec::new();
+                    if tiled {
+                        operations.push(Operation::Tile { n: 1024, items: 4 });
+                    }
+                    operations.push(Operation::Fold(monoid.clone()));
+                    let mut kernel = Kernel {
+                        compiler: &compiler,
+                        shared_bytes: 48,
+                        virtual_range: None,
+                        packed_columns: Some(vec!["a".into()]),
+                        publication_columns: BTreeSet::new(),
+                        sink: None,
+                        scalar_output: false,
+                    };
+                    let (declare, body, finish, whole) = kernel
+                        .partition_rows(
+                            &operations,
+                            true,
+                            &[],
+                            StripeInput {
+                                items: 4,
+                                inherited: DeviceRow::default(),
+                                prelude: TokenStream::new(),
+                                load: compiler
+                                    .rows
+                                    .source("r", quote!(__position), quote!(__row))
+                                    .unwrap(),
+                            },
+                        )
+                        .unwrap();
+                    let tokens = quote!({#declare #body #finish});
+                    syn::parse2::<syn::Block>(tokens.clone()).unwrap();
+                    let generated = tokens.to_string();
+                    assert_eq!(whole, !tiled);
+                    assert!(generated.contains("__cq_fold_accumulator_"));
+                    assert!(generated.contains("__fold_result"));
+                    assert!(!generated.contains("__row"));
+                    assert!(!generated.contains("__fold_result as u32"));
+                    if matches!(monoid, Monoid::Sum(_)) {
+                        let input_type = if compiler.rows.dense.contains(&0) {
+                            "u32"
+                        } else {
+                            "i64"
+                        };
+                        assert!(generated.contains(&format!("let mut __code_0 : {input_type}")));
+                    }
+                }
+            }
+        }
+    }
 }

@@ -549,8 +549,59 @@ per-iteration loading. Remaining stream synchronizations are five RCCL
 `lower_bound` completions, two flagged-selection completions, five explicit
 count readbacks, one adjacent-unique completion, and final completion.
 They include waiting for useful GPU work: the SF10 warm API wait sum is 8.443 ms,
-not an additional 8.443 ms beyond the GPU span. Query expansion (1.170 versus
-0.502 ms) is now the main remaining gap, not index build.
+not an additional 8.443 ms beyond the GPU span. In this build-resource baseline,
+query expansion (1.170 versus 0.502 ms) was the main remaining gap, not index build.
+
+The Sequence row templates now derive live columns backwards from checked
+Physical headings, row predicates, and provider payloads. Dense codec columns
+with unsigned 32-bit-compatible Physical types use `u32` device bindings and
+shared arrays; other columns retain `i64`. Children read inherited fields
+directly through their owner's shared column arrays. Local stores no longer
+copy a complete row into shared memory and immediately reload it. In a terminal
+`items m` stripe, each lane gathers its live results in fixed-size register
+arrays, then the block performs one checked scan and one output reservation
+for the entire stripe. Output bounds and scan/owner synchronization remain in
+place, as do the recorded partitions, provider choices, dispatches, and host
+output protocol. Collective reductions use the same live-column bindings but
+retain their recorded reduction scopes and `i64` results, including when their
+input is a dense `u32` code. The scalar-fold packing template also parenthesizes
+literal bounds in `match` scrutinees so its generated host expression parses.
+
+The live-column template measurement (same GPU, one warmup/five measured runs;
+all full answers exact) is:
+
+| Scale / implementation | Build ms | Query kernels ms | Dedup ms | Total ms |
+|---|---:|---:|---:|---:|
+| SF1 Sequence before | 1.501 | 0.194 | 0.138 | 1.834 |
+| SF1 Sequence live columns | 1.502 | 0.252 | 0.138 | 1.892 |
+| SF1 reference, same session | 1.578 | 0.170 | 0.134 | 1.881 |
+| SF10 Sequence before | 8.996 | 1.170 | 0.197 | 10.365 |
+| SF10 Sequence live columns | 8.961 | 0.565 | 0.186 | 9.710 |
+| SF10 reference, same session | 9.008 | 0.501 | 0.179 | 9.691 |
+
+SF10 query time is 0.564704 ms versus the reference's 0.500736 ms (+12.8%),
+within the 20% target; build/dedup remain near their baseline and total falls
+with query time. SF1 query time regresses by 0.058 ms; this is not hidden in the
+SF10 improvement. Both `cuda-oracle` (SF1/SF10) and `cuda-retry-oracle` (SF1,
+capacity 1024) match every answer, including the no-duplicates check.
+The complete datasets on this machine are `/data/tpch-gpu/sf1` and
+`/data/tpch-gpu/sf10`; the workspace-relative data directories only contain
+DuckDB files. The reference comparison command was
+`./target/release/h05-reference /data/tpch-gpu/sf10 /tmp/ref.json`.
+
+The remaining phase gap was profiled, not tuned away. Nsight Compute reports
+the main generated kernel at 48 registers/thread, 7,232 dynamic shared bytes,
+83.33% theoretical / 73.83% achieved occupancy, and 464.70 us under replay;
+reference `expand` uses 62 registers, 19,552 shared bytes, 66.67% / 61.22%
+occupancy, and 484.38 us under the same replay settings. These replay durations
+are not substituted for the unprofiled phase medians. Nsight Systems' five warm
+generated calls have a median 491.14-us main expansion, approximately 27 us
+across the two executions of the first query kernel, a 518.116-us summed kernel
+duration, and 55.329 us of inter-kernel gaps. The trace shows the preserved
+count/readback protocol (`cuMemcpyDtoHAsync_v2`, stream synchronization, metadata
+reset, and launch) in those gaps. Shared-memory occupancy is no longer the
+limiter; the extra first-dispatch execution and host-controlled publication
+remain outside this template-only change.
 
 srdatalog's scope was checked on an Nsight timeline: `prepare` ends with the
 host-to-device copies and a device synchronize; the index sorts

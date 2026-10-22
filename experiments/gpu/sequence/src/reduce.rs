@@ -25,7 +25,7 @@ pub fn build(
             let slot = input_slot.ok_or_else(|| {
                 syn::Error::new_spanned(column, "T-Gpu: sum lacks a checked input column slot")
             })?;
-            quote!(__row[#slot])
+            quote!(__row[#slot] as i64)
         }
     };
     let update = if matches!(monoid, Monoid::Or) {
