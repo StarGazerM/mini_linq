@@ -1,5 +1,5 @@
 use cq_lang_sequence::{Program, check_rewrite, contract};
-use cq_sequence_rewrite_passes::{choose, grade, output, store_level, tile};
+use cq_sequence_rewrite_passes::{choose, grade, output, partition, segment, store_level, tile};
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 
@@ -63,6 +63,16 @@ fn every_registered_macro_applies_and_round_trips() {
             quote!(b, 4, items 2),
         ),
         (
+            apply_macro!(cq_sequence_rewrites::partition, d, 4, items 2),
+            partition,
+            quote!(d, 4, items 2),
+        ),
+        (
+            apply_macro!(cq_sequence_rewrites::segment, b, 4, items 2),
+            segment,
+            quote!(b, 4, items 2),
+        ),
+        (
             apply_macro!(cq_sequence_rewrites::choose, c, len r < 32 => a, else => b),
             choose,
             quote!(c, len r < 32 => a, else => b),
@@ -94,6 +104,8 @@ fn rejected_advice_stops_each_macro_before_continuation() {
     for (pass, advice) in [
         (store_level as Rewrite, quote!(a)),
         (tile, quote!(a, 0)),
+        (partition, quote!(d, 0)),
+        (segment, quote!(a, 4)),
         (choose, quote!(b, len r < 4 => a, else => missing)),
         (output, quote!(invalid)),
         (grade, quote!(custom, missing at host)),

@@ -16,6 +16,10 @@
 //! Sequence lowering runs after `stage`, followed by optional `decompose`
 //! rewrites, `sequential` grading, and `translate_pull`. This host-only path
 //! returns a pull iterator with optional runtime profiling counters.
+//! To fill unauthored Sequence decisions, end `decompose` with
+//! `mini_linq::passes::plan(target::plan)` (for Sequential, the target is
+//! `mini_linq::passes::plan_sequential`). Earlier advice retains precedence;
+//! the target-owned macro supplies its exported machine and catalog.
 //! An explicit Structures printer such as `own_push::push` replaces the default
 //! Sequence target; custom Sequence terminals select `sequence` and `grade` too.
 //! ```
@@ -44,7 +48,8 @@ pub use mini_linq_macros::{compile, mini_linq, relation_loaders, workload_query}
 /// Core default passes. Customization is an external pass or an authored IR.
 pub mod passes {
     pub use mini_linq_macros::{
-        index_demands, lower, plan, represent, select, sequence, sequential, stage, translate_pull,
+        index_demands, lower, plan, plan_sequential, represent, select, sequence, sequential, stage,
+        translate_pull,
     };
 }
 

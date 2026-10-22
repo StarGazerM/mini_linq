@@ -19,6 +19,7 @@ struct Node<'a> {
     level: usize,
     inputs: Vec<usize>,
     separated_store: bool,
+    tiling: Option<usize>,
 }
 
 struct Checker<'a> {
@@ -236,7 +237,7 @@ impl<'a> Checker<'a> {
     fn error(&self, owner: usize, message: &str) -> syn::Error {
         syn::Error::new(
             self.program.sequence.definitions[owner].name.span(),
-            message,
+            format!("{message} (definition `{}`)", self.name(owner)),
         )
     }
 
@@ -304,6 +305,7 @@ impl<'a> Checker<'a> {
         named: bool,
     ) -> syn::Result<usize> {
         let mut inputs = Vec::new();
+        let mut tiling = None;
         let separated_store = level != 0
             && matches!(term, Term::Store { .. })
             && !self.levels[level].model.collaborative;
@@ -333,6 +335,16 @@ impl<'a> Checker<'a> {
             }
             Term::Ref(name) => {
                 let source = self.reference(name, owner, level)?;
+                if let Some(tile) = self.publication_tile
+                    && let Some(node) = self.nodes.iter().find(|node| std::ptr::eq(node.term, tile))
+                {
+                    let tile_owner = self.name(node.owner);
+                    let ordinal = node.tiling.expect("a recorded tile has a tiling ordinal");
+                    self.distribute(owner, tile)?;
+                    self.tilings
+                        .get_mut(&tile_owner)
+                        .expect("recorded tile owner")[ordinal] = crate::Tiling::Distribute;
+                }
                 if level != 0
                     && (tiled || !uniform)
                     && self.requires_collective(source, &mut BTreeSet::new())
@@ -363,33 +375,19 @@ impl<'a> Checker<'a> {
                 }
                 inputs.push(self.visit(inner, owner, level, tiled, uniform, false)?);
             }
-            Term::Tile { n, inner, .. } => {
+            Term::Tile { inner, .. } => {
                 let kind = if self
                     .publication_tile
                     .is_some_and(|outer| std::ptr::eq(outer, term))
                 {
-                    if self
-                        .publication
-                        .is_none_or(|publication| self.levels[publication].children.len() != 1)
-                    {
-                        return Err(self
-                            .error(owner, "BE-Scope: distributed tile requires one child level"));
-                    }
-                    self.publication_tile = None;
-                    self.require_ranges(inner);
-                    self.parts
-                        .entry(self.name(owner))
-                        .and_modify(|width| {
-                            if *width != Some(*n) {
-                                *width = None;
-                            }
-                        })
-                        .or_insert(Some(*n));
+                    self.distribute(owner, term)?;
                     crate::Tiling::Distribute
                 } else {
                     crate::Tiling::Strip
                 };
-                self.tilings.entry(self.name(owner)).or_default().push(kind);
+                let kinds = self.tilings.entry(self.name(owner)).or_default();
+                tiling = Some(kinds.len());
+                kinds.push(kind);
                 inputs.push(self.visit(inner, owner, level, tiled, uniform, false)?);
             }
             Term::Fold(monoid, inner) => {
@@ -423,7 +421,7 @@ impl<'a> Checker<'a> {
                 let publication_tile = self.publication_tile;
                 if separated_store {
                     self.publication = Some(level);
-                    self.publication_tile = outer_tile(inner);
+                    self.publication_tile = outer_tile(inner, self.program, &self.definitions);
                 }
                 let input = self.visit(inner, owner, producer, tiled, uniform, false);
                 self.publication = publication;
@@ -438,7 +436,8 @@ impl<'a> Checker<'a> {
                 let mut branch_uniform = uniform;
                 let publication_tile = self.publication_tile;
                 for (guard, alternative) in alternatives {
-                    self.publication_tile = publication_tile.and_then(|_| outer_tile(alternative));
+                    self.publication_tile = publication_tile
+                        .and_then(|_| outer_tile(alternative, self.program, &self.definitions));
                     let guard_uniform = match guard {
                         Guard::Lt(length, _) | Guard::Ge(length, _) => {
                             self.uniform_length(length, owner, level)?
@@ -464,8 +463,32 @@ impl<'a> Checker<'a> {
             level,
             inputs,
             separated_store,
+            tiling,
         });
         Ok(index)
+    }
+
+    fn distribute(&mut self, owner: usize, tile: &'a Term) -> syn::Result<()> {
+        if self
+            .publication
+            .is_none_or(|publication| self.levels[publication].children.len() != 1)
+        {
+            return Err(self.error(owner, "BE-Scope: distributed tile requires one child level"));
+        }
+        let Term::Tile { n, inner, .. } = tile else {
+            unreachable!("publication tile is selected from a Tile constructor");
+        };
+        self.publication_tile = None;
+        self.require_ranges(inner);
+        self.parts
+            .entry(self.name(owner))
+            .and_modify(|width| {
+                if *width != Some(*n) {
+                    *width = None;
+                }
+            })
+            .or_insert(Some(*n));
+        Ok(())
     }
 
     fn requires_collective(&self, index: usize, visited: &mut BTreeSet<usize>) -> bool {
@@ -857,18 +880,34 @@ fn representative(parents: &mut [usize], mut index: usize) -> usize {
 
 /// The first tile applied to input data is the outer partition of the shape,
 /// even though it is the innermost tile constructor in the syntax tree.
-fn outer_tile(term: &Term) -> Option<&Term> {
+fn outer_tile<'a>(
+    term: &'a Term,
+    program: &'a Program,
+    definitions: &BTreeMap<String, usize>,
+) -> Option<&'a Term> {
     match term {
-        Term::Tile { inner, .. } => outer_tile(inner).or(Some(term)),
+        Term::Tile { inner, .. } => outer_tile(inner, program, definitions).or(Some(term)),
         Term::Map(_, inner)
         | Term::Compact(_, inner)
         | Term::Flatten(inner)
         | Term::Fold(_, inner)
         | Term::Canon(inner)
         | Term::Store { inner, .. }
-        | Term::Lookup { inner, .. } => outer_tile(inner),
-        Term::Choose(arms) => arms.iter().find_map(|(_, arm)| outer_tile(arm)),
-        Term::Union(arms) => arms.iter().find_map(outer_tile),
-        Term::Rows(_) | Term::Ref(_) => None,
+        | Term::Lookup { inner, .. } => outer_tile(inner, program, definitions),
+        Term::Choose(arms) => arms
+            .iter()
+            .find_map(|(_, arm)| outer_tile(arm, program, definitions)),
+        Term::Union(arms) => arms
+            .iter()
+            .find_map(|arm| outer_tile(arm, program, definitions)),
+        Term::Ref(name) => {
+            let definition = &program.sequence.definitions[*definitions.get(&symbol_name(name))?];
+            if matches!(definition.term, Term::Store { .. }) {
+                None
+            } else {
+                outer_tile(&definition.term, program, definitions)
+            }
+        }
+        Term::Rows(_) => None,
     }
 }

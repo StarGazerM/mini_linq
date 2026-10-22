@@ -13,6 +13,21 @@ fn no_arguments(arguments: proc_macro2::TokenStream) -> syn::Result<()> {
     }
 }
 
+/// Fill unauthored decomposition using the GPU's exported machine and catalog.
+#[proc_macro]
+pub fn plan(input: TokenStream) -> TokenStream {
+    cq_stage::rewrite::<cq_lang_sequence::Program>(input.into(), |source, arguments| {
+        no_arguments(arguments)?;
+        Ok(cq_sequence_plan::plan(
+            source,
+            &cq_gpu_sequence_core::machine(),
+            &cq_gpu_sequence_core::catalog(),
+        )?
+        .program)
+    })
+    .into()
+}
+
 /// Check the authored grades against the GPU machine without choosing grades.
 #[proc_macro]
 pub fn machine_grade(input: TokenStream) -> TokenStream {

@@ -10,6 +10,9 @@ use proc_macro2::TokenStream;
 use syn::parse::{Parse, ParseStream};
 use syn::{Ident, LitInt, Token};
 
+mod decomposition;
+pub use decomposition::{partition, segment};
+
 mod selection;
 use selection::Results;
 

@@ -118,6 +118,54 @@ fn representation_and_stage_overrides_keep_other_defaults() {
 }
 
 #[test]
+fn sequence_planning_follows_all_authored_advice() {
+    let config: cq_stage::Configuration = syn::parse_quote!(pipeline {
+        plan = cq_plan; ix = ix; lower = lower; select = select;
+        represent = represent; stage = stage; sequence = sequence;
+        decompose = [
+            authored_grade, authored_tile, authored_output,
+            mini_linq::passes::plan(target::plan)
+        ];
+        grade = machine_grade; print = translate;
+    });
+    assert_eq!(
+        config
+            .resolve(Default::default())
+            .unwrap()
+            .to_token_stream()
+            .to_string(),
+        quote!(pipeline {
+            cq_plan, ix, lower, select, represent, stage, sequence,
+            authored_grade, authored_tile, authored_output,
+            mini_linq::passes::plan(target::plan), machine_grade, translate
+        })
+        .to_string(),
+    );
+}
+
+#[test]
+fn target_delegation_preserves_context_and_continuation_verbatim() {
+    let packet = quote!(
+        context { consumer = canonical, host_set R discharged };
+        pipeline { grade, printer };
+        opaque source tokens
+    );
+    assert_eq!(
+        cq_stage::delegate(quote!(arguments { target::plan }; #packet)).to_string(),
+        quote!(target::plan! { #packet }).to_string(),
+    );
+    assert_eq!(
+        cq_stage::delegate(quote!(arguments { target::plan }; pipeline {}; 1)).to_string(),
+        quote!(target::plan! { pipeline {}; 1 }).to_string(),
+    );
+    assert!(
+        cq_stage::delegate(quote!(arguments { target::plan, extra }; pipeline {}; 1))
+            .to_string()
+            .contains("expected a target planner macro path"),
+    );
+}
+
+#[test]
 fn sequence_phases_are_ordered_and_require_a_complete_target() {
     let defaults: cq_stage::Configuration = syn::parse_quote!(pipeline {
         plan = p; ix = i; lower = l; select = s;

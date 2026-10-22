@@ -1,6 +1,6 @@
 #![cfg(feature = "sequence-conformance")]
 
-use cq_testkit::conformance::{Target, assert_conformant, assert_conformant_with_inputs, grade};
+use cq_testkit::conformance::{Target, assert_conformant, assert_conformant_with_inputs, plan};
 
 fn program() -> cq_lang_sequence::Program {
     syn::parse_quote! {
@@ -33,12 +33,22 @@ fn identical_programs_compare_after_the_answer_map_with_duplicate_inputs() {
 }
 
 #[test]
-fn grading_changes_only_placement_and_preserves_authored_tasks_grades() {
+fn planning_uses_target_catalogs_and_preserves_authored_decisions() {
     let original = program();
-    let (tasks, _) = grade(&original, Target::Tasks).unwrap();
-    assert_eq!(tasks.structures, original.structures);
-    assert_eq!(tasks.sequence, original.sequence);
-    assert_eq!(grade(&tasks, Target::Tasks).unwrap().0, tasks);
-    let (sequential, _) = grade(&tasks, Target::Sequential).unwrap();
-    assert_eq!(sequential, original);
+    for target in [Target::Sequential, Target::Tasks] {
+        let (planned, _) = plan(&original, target).unwrap();
+        assert_eq!(planned.structures, original.structures);
+        assert_eq!(planned.sequence.definitions, original.sequence.definitions);
+        assert_eq!(plan(&planned, target).unwrap().0, planned);
+        let (machine, catalog) = match target {
+            Target::Sequential => (cq_sequence_pull::machine(), cq_sequence_pull::catalog()),
+            Target::Tasks => (cq_sequence_tasks::machine(), cq_sequence_tasks::catalog()),
+        };
+        assert_eq!(
+            planned,
+            cq_sequence_plan::plan(&original, &machine, &catalog)
+                .unwrap()
+                .program,
+        );
+    }
 }

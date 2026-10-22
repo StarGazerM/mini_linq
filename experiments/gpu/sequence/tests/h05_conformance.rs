@@ -53,6 +53,36 @@ fn sequential(data: &HostRows) -> Vec<Answer> {
         .collect()
 }
 
+fn planned_a(data: &Rows) -> DeviceColumns<'_, Answer> {
+    cq_gpu_sequence_test_macros::planned_h05!(A)
+}
+
+fn planned_b(data: &Rows) -> DeviceColumns<'_, Answer> {
+    cq_gpu_sequence_test_macros::planned_h05!(B)
+}
+
+fn planned_r(data: &Rows) -> DeviceColumns<'_, Answer> {
+    cq_gpu_sequence_test_macros::planned_h05!(R)
+}
+
+fn sequential_a(data: &HostRows) -> Vec<Answer> {
+    cq_gpu_sequence_test_macros::h05_physical_reference!(A)
+        .map(|(order, supplier, nation)| (*order, *supplier, *nation))
+        .collect()
+}
+
+fn sequential_b(data: &HostRows) -> Vec<Answer> {
+    cq_gpu_sequence_test_macros::h05_physical_reference!(B)
+        .map(|(order, supplier, nation)| (*order, *supplier, *nation))
+        .collect()
+}
+
+fn sequential_r(data: &HostRows) -> Vec<Answer> {
+    cq_gpu_sequence_test_macros::h05_physical_reference!(R)
+        .map(|(order, supplier, nation)| (*order, *supplier, *nation))
+        .collect()
+}
+
 #[test]
 fn h05_cuda_matches_sequential_physical_reference_on_sf1() -> Result<()> {
     let directory = Path::new("/data/tpch-gpu/sf1");
@@ -97,5 +127,18 @@ fn h05_cuda_matches_sequential_physical_reference_on_sf1() -> Result<()> {
         actual,
         true,
     );
+    for (name, expected, actual) in [
+        ("A", sequential_a(&host), planned_a(&resident).to_host()?),
+        ("B", sequential_b(&host), planned_b(&resident).to_host()?),
+        ("R", sequential_r(&host), planned_r(&resident).to_host()?),
+    ] {
+        assert_answers_equal(
+            &format!("Sequential Physical H05 {name} (sf1)"),
+            expected,
+            &format!("planned CUDA H05 {name} (sf1)"),
+            actual,
+            true,
+        );
+    }
     Ok(())
 }

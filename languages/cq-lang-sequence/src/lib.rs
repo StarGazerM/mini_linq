@@ -22,6 +22,7 @@ pub mod contract;
 mod grading;
 
 pub use contract::check_rewrite;
+pub use cq_lang_structures as structures;
 pub use grading::check_grading;
 
 mod kw {
@@ -138,6 +139,8 @@ pub struct Grade {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Machine {
     pub name: Ident,
+    /// Preferred per-lane item count; the planner also considers one item.
+    pub items: usize,
     pub root: LevelNode,
 }
 
@@ -146,6 +149,8 @@ pub struct LevelNode {
     pub name: Ident,
     pub collaborative: bool,
     pub dynamic: bool,
+    /// Fixed distributing width, or `None` for dynamically sized levels.
+    pub width: Option<usize>,
     pub children: Vec<LevelNode>,
 }
 
@@ -155,6 +160,44 @@ pub enum Capability {
     Range,
     Membership,
     Ordered,
+}
+
+/// Ordered target tokens used to discharge planner obligations.
+///
+/// Catalogs contain syntax and capabilities only, never target implementations.
+/// Candidate order breaks ties. Levels are explicit absolute machine paths;
+/// an empty level list permits no execution level.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Catalog {
+    pub providers: Vec<ProviderToken>,
+    pub codecs: Vec<CodecToken>,
+    pub canons: Vec<CanonToken>,
+}
+
+/// An authored provider type supported at the listed execution levels.
+///
+/// In token patterns, `_` matches any type or const argument and `'_` any lifetime.
+/// Matching never replaces the author's provider type.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProviderToken {
+    pub ty: syn::Type,
+    pub capabilities: Vec<Capability>,
+    pub levels: Vec<Vec<String>>,
+}
+
+/// A value-refinement token; `ordered` certifies monotone encoding.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CodecToken {
+    pub ty: syn::Type,
+    pub ordered: bool,
+    pub levels: Vec<Vec<String>>,
+}
+
+/// A canonicalization token supported at the listed execution levels.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CanonToken {
+    pub ty: syn::Type,
+    pub levels: Vec<Vec<String>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -21,6 +21,11 @@
 //! Planning options use that same invocation argument slot, for example
 //! `plan = mini_linq::passes::plan(no_reduce);` opts out of the facade's
 //! default Hypergraph semijoin reduction without adding a phase-level setting.
+//! Sequence decomposition planning uses `decompose = [authored_advice(...),
+//! mini_linq::passes::plan(target::plan)];`. The target-owned planner macro
+//! obtains its machine and catalog; shared protocol crates never import targets.
+//! Advice executes in list order, so authored grades, tiles and output decisions
+//! precede planning. `grade` then validates the completed target placement.
 //! Surface passes receive raw CQ tokens before the CQ contract. They expand
 //! authored `name!{...}` clauses. The planner then parses and checks CQ.
 //!
@@ -361,6 +366,30 @@ pub fn rewrite<L: Language>(
     f: impl FnOnce(&L, TokenStream) -> syn::Result<L>,
 ) -> TokenStream {
     run(input, |_| Ok(Context::default()), f, L::check_rewrite)
+}
+
+/// Delegate an invocation's checked packet to a target-owned macro path.
+///
+/// The sole argument is the destination macro. The remaining context envelope,
+/// pipeline and program are forwarded verbatim: delegation cannot manufacture
+/// authorization or replace the destination's source and rewrite checks.
+pub fn delegate(input: TokenStream) -> TokenStream {
+    use syn::parse::Parser;
+    let parser = |input: ParseStream<'_>| -> syn::Result<TokenStream> {
+        input.parse::<kw::arguments>()?;
+        let arguments;
+        braced!(arguments in input);
+        let target: syn::Path = arguments.parse()?;
+        if !arguments.is_empty() {
+            return Err(arguments.error("expected a target planner macro path"));
+        }
+        input.parse::<Token![;]>()?;
+        let packet: TokenStream = input.parse()?;
+        Ok(quote!(#target! { #packet }))
+    };
+    parser
+        .parse2(input)
+        .unwrap_or_else(syn::Error::into_compile_error)
 }
 
 fn run<In: Language, Out: Language>(

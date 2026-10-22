@@ -22,6 +22,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
+name = "cq-elaborate"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-ra",
+ "cq-lang-vo",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-index-policy"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-ix",
+ "cq-lang-ra",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "cq-lang-cq"
 version = "0.1.0"
 dependencies = [
@@ -109,6 +130,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-order"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-cq",
+ "cq-lang-vo",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-physical-lowering"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-ix",
+ "cq-lang-physical",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "cq-physical-realization"
 version = "0.1.0"
 dependencies = [
@@ -130,6 +173,46 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-reduce"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-vo",
+ "proc-macro2",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-represent"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-structures",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-sequence-lowering"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-sequence",
+ "cq-lang-structures",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-sequence-plan"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-sequence",
+ "cq-sequence-rewrite-passes",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "cq-sequence-pull"
 version = "0.1.0"
 dependencies = [
@@ -140,6 +223,25 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-sequence-rewrite-passes"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-sequence",
+ "cq-syntax",
+ "proc-macro2",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-sequence-rewrites"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-sequence",
+ "cq-sequence-rewrite-passes",
+ "cq-stage",
 ]
 
 [[package]]
@@ -156,9 +258,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-sequence-tasks-macros"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-sequence",
+ "cq-sequence-plan",
+ "cq-sequence-pull",
+ "cq-sequence-rewrites",
+ "cq-sequence-tasks",
+ "cq-stage",
+ "mini-linq",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "cq-stage"
 version = "0.1.0"
 dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-staging"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-structures",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -197,6 +324,7 @@ dependencies = [
  "cq-lang-sequence",
  "cq-lang-structures",
  "cq-lang-vo",
+ "cq-sequence-plan",
  "cq-sequence-pull",
  "cq-sequence-tasks",
  "cq-syntax",
@@ -261,6 +389,41 @@ name = "libc"
 version = "0.2.189"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
+
+[[package]]
+name = "mini-linq"
+version = "0.1.0"
+dependencies = [
+ "mini-linq-macros",
+]
+
+[[package]]
+name = "mini-linq-macros"
+version = "0.1.0"
+dependencies = [
+ "cq-elaborate",
+ "cq-index-policy",
+ "cq-lang-cq",
+ "cq-lang-ix",
+ "cq-lang-physical",
+ "cq-lang-ra",
+ "cq-lang-sequence",
+ "cq-lang-structures",
+ "cq-lang-vo",
+ "cq-order",
+ "cq-physical-lowering",
+ "cq-reduce",
+ "cq-represent",
+ "cq-sequence-lowering",
+ "cq-sequence-plan",
+ "cq-sequence-pull",
+ "cq-stage",
+ "cq-staging",
+ "cq-structure-selection",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
 
 [[package]]
 name = "once_cell"

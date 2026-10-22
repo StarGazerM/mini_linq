@@ -1392,13 +1392,17 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                     .source(&chain.source, quote!(__position), quote!(__row))?
             };
             let tiles = local_tiles(&chain.operations);
-            let tile = dispatch
-                .parts
-                .unwrap_or_else(|| tiles.first().map_or(256, |tile| tile.0));
-            if tile == 0 {
-                return Err(error("zero-width dispatch tile"));
-            }
-            let items = tiles.last().map_or(tile.div_ceil(256), |tile| tile.1);
+            let tile = if let Some(width) = dispatch.parts {
+                if width == 0 {
+                    return Err(error("zero-width dispatch tile"));
+                }
+                quote!(#width)
+            } else {
+                // No distributing tile denotes one whole input part, not an
+                // emitter-selected width or an implicit multi-block schedule.
+                quote!((#domain as u64).max(1))
+            };
+            let items = tiles.last().map_or(1, |tile| tile.1);
             let (outside_declare, partition, outside_finish, whole) = generator.partition_rows(
                 &chain.operations,
                 true,
@@ -1485,7 +1489,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
         let store_length = format_ident!("__cq_store_length_{index}");
         let output_keys = format_ident!("__cq_store_keys_{index}");
         let meta_words = 4 + chains.len();
-        let grid = if virtual_range.is_some() || whole_reduction {
+        let grid = if dispatch.parts.is_none() || virtual_range.is_some() || whole_reduction {
             1u32
         } else {
             2272u32

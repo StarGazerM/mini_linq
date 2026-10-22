@@ -14,23 +14,49 @@ use quote::quote;
 pub fn machine() -> Machine {
     Machine {
         name: syn::parse_quote!(tasks),
+        items: 1,
         root: LevelNode {
             name: syn::parse_quote!(host),
             collaborative: false,
             dynamic: false,
+            width: None,
             children: vec![LevelNode {
                 name: syn::parse_quote!(pool),
                 collaborative: false,
                 dynamic: true,
+                width: None,
                 children: vec![LevelNode {
                     name: syn::parse_quote!(task),
                     collaborative: false,
                     dynamic: false,
+                    width: None,
                     children: vec![],
                 }],
             }],
         },
     }
+}
+
+/// Native runtime tokens are valid at host, pool publication and task levels.
+///
+/// Task chunks own their native values; no device codec or provider is implied.
+pub fn catalog() -> cq_lang_sequence::Catalog {
+    let mut catalog = cq_sequence_pull::catalog();
+    let levels = vec![
+        vec!["host".into()],
+        vec!["host".into(), "pool".into()],
+        vec!["host".into(), "pool".into(), "task".into()],
+    ];
+    for token in &mut catalog.providers {
+        token.levels = levels.clone();
+    }
+    for token in &mut catalog.codecs {
+        token.levels = levels.clone();
+    }
+    for token in &mut catalog.canons {
+        token.levels = levels.clone();
+    }
+    catalog
 }
 
 /// Translate checked Sequence into an owned, deterministically concatenated Vec.

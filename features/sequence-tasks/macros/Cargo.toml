@@ -1,0 +1,22 @@
+[package]
+name = "cq-sequence-tasks-macros"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Target-owned checked Sequence planning adapter for Rayon tasks"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+cq-lang-sequence.workspace = true
+cq-sequence-tasks.workspace = true
+cq-sequence-plan = { path = "../../../passes/cq-sequence-plan" }
+cq-stage = { path = "../../../facade/cq-stage" }
+syn.workspace = true
+
+[dev-dependencies]
+cq-sequence-pull.workspace = true
+mini-linq = { path = "../../../facade/mini-linq" }
+cq-sequence-rewrites = { path = "../../sequence-rewrites" }
+quote.workspace = true

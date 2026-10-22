@@ -3,8 +3,7 @@ use cq_testkit::conformance::{Target, assert_conformant, assert_conformant_with_
 
 const TARGETS: &[Target] = &[Target::Sequential, Target::Tasks];
 
-// Complete the authored provider packet exactly as the old fixture macro did;
-// conformance itself never makes or changes storage decisions.
+// Complete the authored provider packet before target-specific planning.
 fn program(mut program: Program) -> Program {
     let providers = program.structures.structures.entries.clone();
     program.structures = cq_structure_selection::compile(&program.structures.physical).unwrap();
@@ -37,9 +36,8 @@ fn host_hash_lookup_store_keeps_exact_capability_on_tasks_machine() {
             joined = store flatten lookup r [a] input;
             result = store joined;
         }
-        graded tasks { r at host; input at host; joined at host; result at pool; }
     });
-    let (_, analysis) = cq_testkit::conformance::grade(&program, Target::Tasks).unwrap();
+    let (_, analysis) = cq_testkit::conformance::plan(&program, Target::Tasks).unwrap();
     assert_eq!(
         analysis.capabilities[&("r".into(), vec!["a".into()])],
         cq_lang_sequence::Capability::Exact,
@@ -70,7 +68,6 @@ fn join() {
             input = store rows l;
             result = store tile 2 canon flatten lookup r [a] input;
         }
-        graded tasks { r at host; input at host; result at pool; }
     });
     assert_conformant(&program, TARGETS);
     assert_conformant_with_inputs(
@@ -104,7 +101,6 @@ fn chain() {
             input = store rows l;
             result = store tile 2 canon flatten lookup s [b] flatten lookup r [a] input;
         }
-        graded tasks { r at host; s at host; input at host; result at pool; }
     });
     assert_conformant_with_inputs(
         &program,
@@ -132,7 +128,6 @@ fn semi() {
             input = store rows l;
             result = store tile 2 canon compact j lookup r [a] input;
         }
-        graded tasks { r at host; input at host; result at pool; }
     });
     assert_conformant_with_inputs(
         &program,
@@ -150,7 +145,6 @@ fn canon_prefilters_parts_then_deduplicates_globally() {
             return r as answer(a);
         } structures {}
         sequence { input = store rows r; result = store canon input; }
-        graded tasks { input at host; result at pool; }
     });
     // Duplicate rows straddle Rayon partition boundaries.
     let rows: Vec<_> = (0..5000).map(|index| [index % 7]).collect();
@@ -167,7 +161,6 @@ fn empty_and_partial_tiles_have_equal_answers() {
             return r as answer(a);
         } structures {}
         sequence { input = store rows r; result = store tile 2 canon input; }
-        graded tasks { input at host; result at pool; }
     });
     for rows in [
         &[][..],

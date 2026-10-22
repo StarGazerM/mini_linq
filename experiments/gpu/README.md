@@ -26,7 +26,91 @@ cargo oxide build --arch sm_89 -- --release --workspace
 cargo oxide test --arch sm_89 -- --release --workspace
 ```
 
-TPCH datasets are `/data/tpch-gpu/sf1` and `/data/tpch-gpu/sf10`.
+### TPC-H data
+
+TPC-H datasets are `/data/tpch-gpu/sf1` and `/data/tpch-gpu/sf10` (ignored,
+never committed). Regenerate all authored CQ projections and reference answers
+from each directory's existing `dbgen.duckdb`, from the repository root:
+
+```sh
+python3 experiments/gpu/compare/export_tpch.py --root /data/tpch-gpu --sf 1 10
+```
+
+The exporter reads every `features/workloads/src/queries/retail/tpch/*.rs`
+relation declaration and its exact `sql r#"..."#` reference, including guards.
+These are positive CQ kernels, not the original aggregate TPC-H/TPC-DS queries.
+The required union of columns is:
+
+| Table | Exported columns |
+|---|---|
+| customer | c_custkey, c_nationkey, c_mktsegment |
+| orders | o_orderkey, o_custkey, o_orderdate, o_orderstatus |
+| lineitem | l_orderkey, l_partkey, l_suppkey, l_shipdate, l_quantity, l_receiptdate, l_commitdate |
+| supplier | s_suppkey, s_nationkey |
+| nation | n_nationkey, n_regionkey, n_name |
+| region | r_regionkey, r_name |
+| part | p_partkey, p_brand, p_type, p_name |
+| partsupp | ps_partkey, ps_suppkey, ps_availqty |
+
+`manifest.json` schema version 2 contains `sf`, `byte_order: "little"`,
+`binary_bytes`, `constants` (the original H05 date bounds and ASIA ID),
+`relations`, and `queries`. Each relation has `rows` and a `columns` array;
+each column has `name`, physical `type` (`i32`/`i64`), `logical_type`,
+`encoding`, and `file`. Binary files are headerless aligned columns in original
+database row order. Encodings:
+
+* `plain`: signed integer keys/quantities, with the declared Rust width.
+* `days_since_epoch`: signed i32 dates, `epoch: "1970-01-01"`, `unit: "day"`.
+* `dictionary`: i32 indices into the named UTF-8 `dictionary` (`*.dict.txt`),
+  one lexicographically sorted value per line, `dictionary_index_base: 0`;
+  `dictionary_entries` records cardinality. Dictionaries are per column.
+* `scaled_integer`: i64 decimal values with `scale: 2`; divide by 100 to decode.
+  Thus the D72 `l_quantity > 20.00` guard compares encoded values to 2000.
+
+Every `queries.<query>` entry records source path, exact SQL,
+`required_columns` grouped by table (the complete per-query input inventory),
+answer filename, distinct answer count, and timing filename. Answers are
+`answer.retail_<query>.tsv` plus `.count`, sorted by all output columns.
+`duckdb_timing.retail_<query>.json` retains the original timing schema:
+engine/version, SQL, seconds, one warmup and five measured full SELECT DISTINCT
+runs, and thread-keyed warmup/samples/median at 1 and 24 threads. Raw CLI logs
+are retained per query/thread count; timings include normal result emission,
+not a COUNT wrapper or the separate sorted answer export. H05 additionally
+retains `answer.tsv`, `answer.count`, and `duckdb_timing.json`.
+
+All pre-existing `.bin` files are SHA-256 checked before and after export;
+`binary_checksums.json` records both maps and requires equality, preserving
+the H05 binary inputs byte-for-byte. The manifest is published only after all
+columns, checksums, answers, and timings complete. Temporary projected TSVs
+are removed after conversion.
+
+The completed SF1/SF10 export has the following distinct counts and DuckDB
+median wall times in seconds (five samples after one warmup):
+
+| Query (`retail_` prefix) | SF1 count | SF1 1 thread | SF1 24 threads | SF10 count | SF10 1 thread | SF10 24 threads |
+|---|---:|---:|---:|---:|---:|---:|
+| d19 | 8,962 | 0.086 | 0.096 | 90,015 | 0.600 | 0.204 |
+| d27 | 357 | 0.078 | 0.023 | 3,575 | 0.806 | 0.079 |
+| d72_inner | 5,344 | 0.232 | 0.119 | 53,966 | 1.648 | 0.292 |
+| d85 | 8,962 | 0.058 | 0.035 | 90,015 | 0.655 | 0.191 |
+| h03 | 11,620 | 0.054 | 0.034 | 114,003 | 0.735 | 0.167 |
+| h05 | 7,242 | 0.062 | 0.024 | 72,983 | 0.681 | 0.172 |
+| h07 | 5,501 | 0.064 | 0.030 | 54,142 | 0.724 | 0.137 |
+| h07_block | 5,501 | 0.062 | 0.029 | 54,142 | 0.724 | 0.139 |
+| h08 | 2,603 | 0.069 | 0.018 | 24,254 | 0.918 | 0.116 |
+| h09 | 319,402 | 0.694 | 0.466 | 3,261,612 | 7.327 | 4.472 |
+| h21_positive | 302,284 | 0.514 | 0.418 | 2,930,274 | 5.438 | 3.942 |
+
+| Bytes (logical file sizes) | SF1 | SF10 |
+|---|---:|---:|
+| Binary columns | 325,773,800 | 3,256,586,628 |
+| String dictionaries | 6,753,882 | 67,493,549 |
+| Named query answer TSVs | 12,386,099 | 143,352,887 |
+| Entire directory, including database, logs, and H05 copies | 757,972,236 | 7,876,436,632 |
+
+All 13 pre-existing H05 `.bin` files at each scale passed before/after SHA-256
+equality. The manifest includes all 11 query inventories and all 8 tables.
+
 `h05-reference` remains the independent H05 reference implementation.
 The Sequence H05 example in `sequence/examples/h05.rs` is also available with
 `--features cq-gpu-sequence/cuda-oracle`.

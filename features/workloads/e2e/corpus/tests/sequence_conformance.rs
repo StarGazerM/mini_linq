@@ -3,7 +3,7 @@
 #![allow(dead_code)]
 
 use cq_lang_sequence::Program;
-use cq_testkit::conformance::{Target, grade};
+use cq_testkit::conformance::Target;
 use cq_workloads::{Scenario, catalog, execution};
 use quote::quote;
 
@@ -163,6 +163,22 @@ fn sequential_and_tasks_agree_on_every_corpus_configuration_and_scenario() {
         ),
         linked_dependency::<cq_workloads::Scenario>("cq_workloads", "cq_workloads::Scenario"),
     ]);
+    // This provider belongs to the workload, not to either target crate.
+    let catalog = cq_lang_sequence::Catalog {
+        providers: vec![cq_lang_sequence::ProviderToken {
+            ty: syn::parse_quote!(::cq_workloads::SortedIndex<_, _>),
+            capabilities: vec![
+                cq_lang_sequence::Capability::Exact,
+                cq_lang_sequence::Capability::Membership,
+            ],
+            levels: vec![
+                vec!["host".into()],
+                vec!["host".into(), "pool".into()],
+                vec!["host".into(), "pool".into(), "task".into()],
+            ],
+        }],
+        ..Default::default()
+    };
     let mut entries: Vec<_> = inventory::iter::<Entry>.into_iter().collect();
     entries.sort_by_key(|entry| entry.configuration);
     let configurations = entries.len();
@@ -184,32 +200,26 @@ fn sequential_and_tasks_agree_on_every_corpus_configuration_and_scenario() {
         registered, expected,
         "every catalog query must be registered"
     );
+    // Diagnose unsupported authored tokens before compiling the executable cases.
+    for entry in &entries {
+        for target in [Target::Sequential, Target::Tasks] {
+            cq_testkit::conformance::plan_with_catalog(&(entry.program)(), target, &catalog)
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "{}: {target:?} planning rejected: {error}",
+                        entry.configuration
+                    )
+                });
+        }
+    }
     let mut agreed = 0;
-    let mut skipped = 0;
     let mut failed = Vec::new();
-    let mut rejection_counts = std::collections::BTreeMap::new();
     for entry in entries {
         let stem = entry.case.strip_prefix("run_").expect("corpus macro name");
         let case = catalog::all()
             .find(|case| case.name.replace('-', "_") == stem)
             .expect("registered corpus query");
-        let source = (entry.program)();
-        // Explicit fixture preparation: materialize the producer consumed by the
-        // final publication. Both targets receive this identical construction.
-        let returned = &source.structures.physical.program.returned;
-        let sequence = cq_sequence_rewrite_passes::store(&source, quote!(#returned))
-            .unwrap_or_else(|error| {
-                panic!("{}: store preparation failed: {error}", entry.configuration)
-            });
-        grade(&sequence, Target::Sequential).unwrap_or_else(|error| {
-            panic!(
-                "{}: Sequential grading failed: {error}",
-                entry.configuration
-            )
-        });
-        let rejection = grade(&sequence, Target::Tasks)
-            .err()
-            .map(|error| error.into_compile_error().to_string());
+        let sequence = (entry.program)();
         for &scenario in execution::scenarios(case.name) {
             let label = format!(
                 "{}/{}/{}",
@@ -217,14 +227,8 @@ fn sequential_and_tasks_agree_on_every_corpus_configuration_and_scenario() {
                 case.name,
                 scenario.as_str()
             );
-            // Validate the same fixtures even when grading rejects execution.
+            // Both targets plan this unmodified fixture using their own catalog.
             let _ = execution::inputs(case.name, scenario);
-            if let Some(reason) = &rejection {
-                eprintln!("{label}: skipped (Tasks grading rejection): {reason}");
-                skipped += 1;
-                *rejection_counts.entry(reason.clone()).or_insert(0usize) += 1;
-                continue;
-            }
             eprintln!("{label}: comparing Sequential vs Tasks");
             let bindings = bindings(case, scenario, entry.loader);
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -233,22 +237,20 @@ fn sequential_and_tasks_agree_on_every_corpus_configuration_and_scenario() {
                     &[Target::Sequential, Target::Tasks],
                     &bindings,
                     &runtime,
+                    &catalog,
                 );
             }));
             if result.is_ok() {
                 agreed += 1;
             } else {
-                eprintln!("{label}: FAILED (translation or answer divergence; not a grading skip)");
+                eprintln!("{label}: FAILED (planning, translation or answer divergence)");
                 failed.push(label);
             }
         }
     }
     eprintln!(
-        "Sequence corpus conformance: {configurations} configurations; {agreed} agreed / {skipped} skipped / {} failed",
+        "Sequence corpus conformance: {configurations} configurations; {agreed} agreed / {} failed",
         failed.len()
     );
-    for (reason, count) in rejection_counts {
-        eprintln!("Tasks rejection ({count} scenarios): {reason}");
-    }
     assert!(failed.is_empty(), "conformance failures: {failed:#?}");
 }

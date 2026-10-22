@@ -25,6 +25,7 @@ members = [
     "passes/cq-physical-lowering",
     "passes/cq-structure-selection",
     "passes/cq-sequence-lowering",
+    "passes/cq-sequence-plan",
     "passes/cq-represent",
     "passes/cq-staging",
     "passes/cq-print",
@@ -73,6 +74,7 @@ cq-reduce = { path = "passes/cq-reduce", version = "0.1.0", default-features = f
 cq-index-policy = { path = "passes/cq-index-policy", version = "0.1.0", default-features = false }
 cq-structure-selection = { path = "passes/cq-structure-selection", version = "0.1.0", default-features = false }
 cq-sequence-lowering = { path = "passes/cq-sequence-lowering", version = "0.1.0", default-features = false }
+cq-sequence-plan = { path = "passes/cq-sequence-plan", version = "0.1.0" }
 cq-represent = { path = "passes/cq-represent", version = "0.1.0", default-features = false }
 cq-staging = { path = "passes/cq-staging", version = "0.1.0", default-features = false }
 cq-physical-lowering = { path = "passes/cq-physical-lowering", version = "0.1.0", default-features = false }

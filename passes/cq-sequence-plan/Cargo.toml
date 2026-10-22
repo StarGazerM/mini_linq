@@ -1,0 +1,21 @@
+[package]
+name = "cq-sequence-plan"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+cq-lang-sequence.workspace = true
+cq-syntax.workspace = true
+cq-sequence-rewrite-passes = { path = "../../features/sequence-rewrites/passes" }
+proc-macro2.workspace = true
+quote.workspace = true
+syn.workspace = true
+
+[dev-dependencies]
+cq-sequence-lowering.workspace = true
+
+[package.metadata.cq]
+source = "cq-lang-sequence"
+target = "cq-lang-sequence"

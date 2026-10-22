@@ -62,8 +62,14 @@ pub enum Term { Rows(Ident), Map(Ident, Box<Term>), Flatten(Box<Term>), Compact(
                 Choose(Vec<(Guard, Term)>), Ref(Ident) }
 
 /// Machine model: a tree of levels with labels. Data, not code; each target exports one.
-pub struct Machine { pub name: Ident, pub root: LevelNode }
-pub struct LevelNode { pub name: Ident, pub collaborative: bool, pub dynamic: bool, pub children: Vec<LevelNode> }
+pub struct Machine { pub name: Ident, pub items: usize, pub root: LevelNode }
+pub struct LevelNode { pub name: Ident, pub collaborative: bool, pub dynamic: bool, pub width: Option<usize>, pub children: Vec<LevelNode> }
+
+/// Target catalogs are ordered syntax/capability data, with no target dependency here.
+pub struct Catalog { pub providers: Vec<ProviderToken>, pub codecs: Vec<CodecToken>, pub canons: Vec<CanonToken> }
+pub struct ProviderToken { pub ty: syn::Type, pub capabilities: Vec<Capability>, pub levels: Vec<Vec<String>> }
+pub struct CodecToken { pub ty: syn::Type, pub ordered: bool, pub levels: Vec<Vec<String>> }
+pub struct CanonToken { pub ty: syn::Type, pub levels: Vec<Vec<String>> }
 
 /// Lengths as symbolic expressions (size types).
 pub enum Len { Input(String), Scan(String), Lit(usize), Add(Box<Len>, Box<Len>), CeilDiv(Box<Len>, usize), Unknown(/*capacity*/ Option<usize>) }
@@ -86,6 +92,17 @@ pub fn check_grading(p: &Program, m: &Machine) -> syn::Result<Analysis>;   // BE
 pub fn check_rewrite(s: &Program, t: &Program) -> syn::Result<()>;         // Structures unchanged; supp∘α equal by construction rules
 impl cq_stage::Language for Program { … }
 ```
+
+`Machine.items` is the preferred per-lane count (the planner also considers one);
+`LevelNode.width` records a fixed distributing width, or `None` for dynamic
+levels. The GPU machine has 256-wide blocks and four items; the native sequential
+and task machines use one item with dynamic widths. Each target exports
+`machine()` and `catalog()`. Catalog levels are explicit absolute paths beginning
+with `host`; an empty list admits no levels. Provider type patterns allow `_`
+type/const arguments and `'_` lifetimes while retaining the author's actual type.
+Native catalogs describe the storage providers, identity/dense codecs and set
+canonicalizers; the GPU catalog describes resident `RangeProvider`,
+`DenseDictionary`/identity codes and publication-level `PackedCanon`.
 
 Checks (each a named `// Formal rule BE-…:` marker):
 - BE-Alpha: every Term is well-formed over Structures (named results exist, `map` names a total segment, `lookup` key ⊆ heading, `compact` names a select).
@@ -254,16 +271,19 @@ The first divergence names both targets and the differing row multiplicities.
 The default driver uses deterministic binary-domain databases; authored corpus
 inputs and raw duplicate-preserving `Case::inputs` use the same execution path.
 
-The workload corpus runner checks its configured programs and databases using
-the same checked `store` rewrite an author applies before tasks grading.
-Remaining tasks grading rejections are reported and counted as skips, never
-treated as agreement. The tasks spot fixtures also use this shared harness.
-Execution failures are collected separately and fail the runner after all
-configurations have been exercised. Capability inference is shared across
+The workload corpus runner sends each unmodified Sequence program through
+the shared planner with each target's exported machine and catalog. Caller-owned
+runtime providers extend those catalogs through `plan_with_catalog` and the
+catalog argument to `assert_conformant_with_runtime`; the corpus registers its
+own `SortedIndex` rather than introducing a workload dependency in a target.
+There is no private store-wrapping or grading preparation. The tasks spot
+fixtures use the same shared harness. Catalog planning is checked before the
+executable cases; translation and execution failures are collected before the
+runner fails. Failures are never counted as agreement or skipped. Capability inference is shared across
 machines: host row stores need exact buckets, while segmented flattening and
 distributed execution require ranges in their actual read context.
 
-Acceptance exercised 3,436 configurations and 10,272 applicable scenarios:
+Box [9] acceptance before the planner cutover exercised 3,436 configurations and 10,272 applicable scenarios:
 10,272 agreed, zero grading skips, zero execution failures. The workload
 workspace passed 3,528 tests; the root passed 753, Tasks 12, and Sequence
 rewrites 17. CUDA passed 10 tests, including the SF1 H05 comparison without
@@ -284,3 +304,107 @@ CPU callers use the default Sequence target instead of the removed direct
 Structures pull path. GPU callers select `machine_grade` and
 `cq_gpu_sequence::translate` with explicit Sequence lowering; the old GPU printer and blocked-run path
 are removed.
+
+## [10] `passes/cq-sequence-plan` (decomposition planner; P-Decompose)
+
+The planner is an advice generator over Sequence, exposed as
+`cq_sequence_plan::plan(program: &Program, machine: &Machine, catalog: &Catalog)
+-> syn::Result<Planned>`, where `Planned { program, trace: Vec<Advice> }`.
+`Program` and the target-data-only `Catalog` belong to `cq-lang-sequence`;
+target crates export their catalogs without introducing target dependencies
+into shared planning. Each `Advice` replays through `.apply(&Program)`, so
+folding the returned trace over the input reproduces the returned program.
+The trace uses the same checked `store`/`store_level`/`tile`/`segment`/
+`choose`/`output`/`grade` rewrites available to authors through [3].
+The planner decides nothing an author could not write, preserves authored
+choices, and leaves the emitter decision-free.
+
+Laws:
+- PL-Closure: `t' = r_n ∘ … ∘ r_1 (t)` with every `r_i` a [3] rewrite and
+  `check_rewrite(r_{i-1}…, r_i…)` passing; `check_grading(t', M)` passes.
+  Soundness is therefore inherited from BE-* and EXT-Seq*; the planner adds
+  no law about values.
+- PL-Precedence: authored rewrites are kept; the planner fills only missing
+  grades, tiles and output protocols, and validates recorded obligations.
+- PL-Det: a pure function of `(t, M, K)`; candidates are enumerated in a
+  fixed order and ties broken by that order.
+- PL-Cost: candidates are compared by the work/span cost of the formal
+  "Cost" paragraph, computed from the lengths in types; equal-work
+  candidates prefer smaller span, then fewer stores, then fewer dispatches.
+  Cost is an argument, never a meaning.
+
+The checked `cq_sequence_plan::cost(&Program, &Machine)` API exposes the same
+symbolic model for authored and planned programs, with `.leq`,
+`.partial_cmp` and `Display` for comparisons and reports. Work counts
+per-constructor evaluated positions; aliases, tiles and stores add no
+evaluation work, with stores counted separately in the tie-break tier.
+Span follows dependency chains and takes the maximum across branches.
+An actual graded `Distribute` introduces symbolic
+`maxpart(length; driver; rows)`; distribution follows machine width, not
+`tile_width * items`. Unknown bucket sizes remain symbolic.
+Comparisons use bounds and coefficient dominance, not measured or guessed
+cardinalities; `.partial_cmp` can leave symbolic costs incomparable.
+The planner replaces its current candidate only for a provably smaller
+cost, retaining the first candidate on equality or incomparability;
+`.leq` does not treat incomparability as success.
+
+Decision procedure (bounded enumeration, no search):
+1. Grading: `rows` at host; a store that feeds a `lookup`, a `canon`, or is
+   the final publication goes to the deepest level of `M` that may hold it
+   (BE-Scope, BE-Separate); everything between inherits its producer's
+   level.
+2. Tiling: the first fanout in each `flatten` chain below host is tiled at
+   the distributing level's width (`LevelNode::width`, a machine property;
+   `None` for dynamic levels). Bounded candidates are plain or segmented
+   decomposition crossed with `items m` from `{1, M.items}`, in fixed
+   plain-first order. Further flattens receive `store_level` plus an inner
+   tile only when grading requires offsets (BE-Offsets) or PL-Cost proves
+   lower span; otherwise the fewer-stores tie-break favors plain tiling.
+   Where separate primitives cannot express the change, the checked
+   `segment(d, n, items m)` rewrite pairs an inner-flatten store with an
+   outer tile (BE-Offsets and BE-Partition), shared by the library and macro.
+3. Output: preserve every recorded protocol, including `count` inserted by
+   lowering. Only when output is absent, fill `count` when the final length
+   is a function of input lengths (no `compact`/`canon` on the final chain),
+   else `reserve`; `bounded(n)` only when a capacity is authored.
+4. Obligations: validate each reported codec/canon/provider obligation
+   against catalog capabilities at its level. Structures already records
+   provider and canon types; planning does not replace them or introduce
+   codec/canon selection syntax. Codec laws remain abstract runtime
+   premises, with catalog support validated here. Missing support rejects
+   with the obligation.
+
+Integration acceptance contracts (not a report of executed checks):
+- H05: keep authored R/B references unchanged. Planning each plan's
+  Structures must produce a program that grades and translates for GPU,
+  with results exactly matching Sequential over the same Physical program.
+  Compare planner and authored PL-Cost, print both, and require planner
+  cost no greater than authored cost. At SF10, report both GPU timings and
+  require planner execution time within 10% of the authored reference.
+  These are acceptance obligations, not recorded outcomes.
+- Tasks: the planner over the whole corpus yields graded programs that
+  pass [9] conformance against Sequential (replaces the harness's own
+  store-wrap + grade preparation, which is deleted).
+- Facade: a `plan(machine)` phase; a pipeline with `plan` and no authored
+  decomposition grades exactly as the planner says; authored advice plus
+  `plan` fills the rest (PL-Precedence). GPU examples may drop hand
+  tiles/stores where reproduced, but the authored H05 R/B references remain
+  unchanged for the cost, correctness and timing comparisons above.
+- Formal: `doc/formal/backend_ir.tex` subsection "Decomposition", rules
+  PL-Closure, PL-Precedence, PL-Det, PL-Cost in `rules.tsv`, markers in
+  the pass.
+
+Executed box [10] acceptance: 3,436 corpus configurations, 10,272 agreed
+scenarios, zero skips and zero failures. The workloads workspace passed 3,528
+tests; root passed 784, Tasks 15, Sequence rewrites 19, and the GPU workspace
+25. The catalog-aware testkit suite additionally passed 42 tests. The formal
+inventory contains 234 rules, and all 27 public API snapshots passed.
+
+H05 planned A/B/R matched their same-Physical Sequential references at SF1 and
+the independent oracle at SF10 (72,983 rows). Symbolic planner/authored cost
+ordering is `Equal` for B and `Less` for R; the acceptance tests print both
+complete symbolic costs. SF10 GPU total-time medians, excluding warmup and
+one-time input loading, were A 18.705631 ms authored / 19.290016 ms planned,
+B 10.190016 / 10.626240 ms, and R 10.347200 / 10.878368 ms. Planned B and R
+were respectively 4.28% and 5.13% above their authored references, within the
+10% acceptance bound.

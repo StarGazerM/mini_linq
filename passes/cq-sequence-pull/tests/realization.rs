@@ -15,10 +15,12 @@ fn sequence_rows(module: &structures::Program) -> syn::Result<syn::Expr> {
         &program,
         &cq_lang_sequence::Machine {
             name: syn::parse_quote!(sequential),
+            items: 1,
             root: cq_lang_sequence::LevelNode {
                 name: syn::parse_quote!(host),
                 collaborative: false,
                 dynamic: false,
+                width: None,
                 children: vec![],
             },
         },
