@@ -43,9 +43,17 @@ impl Printer<'_> {
                             }
                             Term::Constant(v) => conditions.push(format!("{field} = {v}")),
                             Term::Wildcard => (),
-                            Term::Expression(e) => {
-                                conditions.push(format!("{field} = {}", sql_expression(e, &names)))
-                            }
+                            Term::Expression(_) => (),
+                        }
+                    }
+                    // Resolve local expression dependencies after all variable
+                    // positions, including variables written to their right.
+                    for (column, term) in atom.terms.iter().enumerate() {
+                        if let Term::Expression(expression) = term {
+                            conditions.push(format!(
+                                "a.c{column} = {}",
+                                sql_expression(expression, &names)
+                            ));
                         }
                     }
                     let condition = if conditions.is_empty() {

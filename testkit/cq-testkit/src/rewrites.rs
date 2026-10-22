@@ -32,9 +32,10 @@ pub fn canonical_projects(source: &physical::Program) -> syn::Result<physical::P
     for d in &mut target.program.definitions {
         let name = d.name.to_string();
         let heading = facts.headings[&name].clone();
-        let inherited = physical::inherited_key(&d.operator, &heading, |id| {
-            keys.get(&id.to_string()).cloned()
-        });
+        let inherited =
+            physical::inherited_key(&d.operator, &heading, &target.program.host_sets, |id| {
+                keys.get(&id.to_string()).cloned()
+            });
         d.canon = (inherited.is_none()
             && (matches!(d.operator, Operator::Project(_)) || d.name == target.program.returned))
             .then(Default::default);

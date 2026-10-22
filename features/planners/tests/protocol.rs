@@ -21,6 +21,7 @@ fn every_planner_runs_through_the_named_facade() {
     verify!(written, coarse);
     verify!(written, fine);
     verify!(hypergraph);
+    verify!(le);
     verify!(prefix connected, coarse);
     verify!(prefix connected, fine);
     verify!(prefix greedy, coarse);
@@ -28,6 +29,26 @@ fn every_planner_runs_through_the_named_facade() {
     verify!(elimination, coarse);
     verify!(elimination, fine);
     verify!();
+}
+
+#[test]
+fn le_generators_join_generated_keys_and_preserve_lowered_if_let() {
+    let limits = [(3_i32,), (0,)];
+    let labels = [(0_i32, String::from("zero")), (2, String::from("two"))];
+    let answer: std::collections::BTreeSet<_> = mini_linq::compile! {
+        pipeline { plan = cq_planners::order(le); }
+        struct Q;
+        relation limits(n:i32); relation labels(key:i32,label:String);
+        relation answer(value:i32,label:String,next:i32);
+        answer(value,label,next) :- limits(n), for value in 0..*n,
+            labels(value,label),
+            for (next,) in match label.strip_prefix("z") {
+                Some(_) => ::core::option::Option::Some((*value + 1,)),
+                _ => ::core::option::Option::None,
+            };
+    }
+    .collect();
+    assert_eq!(answer, [(0, &labels[0].1, 1)].into_iter().collect());
 }
 
 #[test]

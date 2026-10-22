@@ -3,6 +3,7 @@ use cq_datalog_support::ensure;
 use cq_lang_datalog_source as source;
 use cq_lang_datalog_strata as strata;
 use std::collections::BTreeSet;
+pub mod invariants;
 pub fn compile(source: &source::Program) -> syn::Result<strata::Program> {
     let analysis = source::contract::check(source)?;
     let graph = &analysis.graph;

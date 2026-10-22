@@ -6,14 +6,25 @@ use syn::parse::{Parse, ParseStream};
 
 mod kw {
     syn::custom_keyword!(pipeline);
+    syn::custom_keyword!(arguments);
+    syn::custom_keyword!(hoist_invariants);
 }
 
 struct Entry {
     configuration: DatalogConfiguration,
+    hoist_invariants: bool,
     source: proc_macro2::TokenStream,
 }
 impl Parse for Entry {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let mut hoist_invariants = cfg!(feature = "hoist-invariants");
+        if input.peek(kw::arguments) {
+            input.parse::<kw::arguments>()?;
+            let arguments;
+            syn::braced!(arguments in input);
+            hoist_invariants |= invariant_arguments(&arguments)?;
+            input.parse::<Token![;]>()?;
+        }
         let configuration = if input.peek(kw::pipeline) {
             let configuration = input.parse()?;
             if input.peek(Token![;]) {
@@ -25,13 +36,20 @@ impl Parse for Entry {
         };
         Ok(Self {
             configuration,
+            hoist_invariants,
             source: input.parse()?,
         })
     }
 }
 
 fn expand(input: proc_macro2::TokenStream) -> syn::Result<proc_macro2::TokenStream> {
-    let entry: Entry = syn::parse2(input)?;
+    let mut entry: Entry = syn::parse2(input)?;
+    if entry.hoist_invariants {
+        let incremental = entry.configuration.incremental.get_or_insert_with(|| {
+            syn::parse_quote!(::cq_datalog::passes::incremental)
+        });
+        incremental.arguments.extend(quote::quote!(hoist_invariants;));
+    }
     entry
         .configuration
         .resolve(DatalogConfiguration::defaults())?
@@ -55,6 +73,18 @@ fn no_arguments(arguments: proc_macro2::TokenStream) -> syn::Result<()> {
             "this default Datalog pass accepts no arguments",
         ))
     }
+}
+
+fn invariant_arguments(input: ParseStream<'_>) -> syn::Result<bool> {
+    let enabled = input.peek(kw::hoist_invariants);
+    if enabled {
+        input.parse::<kw::hoist_invariants>()?;
+        input.parse::<Token![;]>()?;
+    }
+    if !input.is_empty() {
+        return Err(input.error("expected hoist_invariants;"));
+    }
+    Ok(enabled)
 }
 
 /// Surface tokens → Source tokens, expanding refutable bindings explicitly.
@@ -89,8 +119,14 @@ pub fn incremental(input: TokenStream) -> TokenStream {
     cq_stage::pass::<cq_lang_datalog_strata::Program, cq_lang_datalog_incremental::Program>(
         input.into(),
         |source, args| {
-            no_arguments(args)?;
-            cq_datalog_incremental::compile(source)
+            use syn::parse::Parser;
+            let hoist = invariant_arguments.parse2(args)? || cfg!(feature = "hoist-invariants");
+            if hoist && source.source.invariants.is_empty() {
+                let source = cq_datalog_stratify::invariants::compile(source)?;
+                cq_datalog_incremental::compile(&source)
+            } else {
+                cq_datalog_incremental::compile(source)
+            }
         },
     )
     .into()

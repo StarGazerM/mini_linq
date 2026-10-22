@@ -5,6 +5,70 @@ use cq_testkit::corpus as scenarios;
 use quote::ToTokens;
 
 #[test]
+fn literal_occurrences_select_ordinary_rows_or_shared_indices() {
+    let scanned: physical::Program = syn::parse_quote! { physical {
+        relation R(a:i32,b:i32);
+        r = let canon rename R@0 {a -> x} constants {b = 7};
+        return r as answer(x);
+    }};
+    let selected = compile(&scanned).unwrap();
+    let facts = structures::contract::check(&selected).unwrap();
+    assert!(facts.retained.contains_key("r"));
+    assert!(!facts.filtered.contains_key("r"));
+    assert!(!facts.lineage.contains_key("r"));
+    assert_eq!(
+        syn::parse2::<structures::Program>(selected.to_token_stream()).unwrap(),
+        selected
+    );
+    let probed: physical::Program = syn::parse_quote! { physical {
+        relation L(a:i32); relation R(a:i32,b:i32);
+        l = pipe rename L@0 {a -> x};
+        r = let rename R@1 {a -> x} constants {b = 7};
+        j = pipe canon probe first [x] l,r;
+        return j as answer(x);
+    }};
+    let selected = compile(&probed).unwrap();
+    let facts = structures::contract::check(&selected).unwrap();
+    assert_eq!(facts.built["r"].len(), 1);
+    assert!(!facts.filtered.contains_key("r"));
+    assert!(!facts.retained.contains_key("r"));
+    assert!(!facts.host_read("r"));
+    let mut membership = probed;
+    membership.program.definitions[2] = syn::parse_quote!(j = pipe canon semi eager [x] l,r;);
+    let selected = compile(&membership).unwrap();
+    let facts = structures::contract::check(&selected).unwrap();
+    assert_eq!(
+        facts.built["r"][0].1,
+        syn::parse_quote!(::cq_storage::HashSet<_>)
+    );
+    assert!(!facts.filtered.contains_key("r"));
+    assert!(!facts.retained.contains_key("r"));
+}
+
+#[test]
+fn literal_occurrences_retain_ordinary_rows_for_multiple_indices() {
+    let source: physical::Program = syn::parse_quote! { physical {
+        relation L(a:i32); relation R(tag:i32,a:i32,b:i32);
+        l = pipe rename L@0 {a -> x};
+        r = let rename R@1 {a -> x,b -> y} constants {tag = 7};
+        p = pipe probe first [x] l,r;
+        q = pipe project p keep {y};
+        j = pipe canon probe first [y] q,r;
+        return j as answer(x,y);
+    }};
+    let selected = compile(&source).unwrap();
+    let facts = structures::contract::check(&selected).unwrap();
+    assert_eq!(facts.built["r"].len(), 2);
+    assert!(facts.retained.contains_key("r"));
+    assert!(!facts.filtered.contains_key("r"));
+    assert!(!facts.host_read("r"));
+    assert!(selected.structures.entries.iter().all(|entry| {
+        !matches!(&entry.structure, structures::Structure::Built { keyed, .. }
+            if entry.name == "r" && keyed.filtered.is_some())
+    }));
+}
+
+#[test]
 fn existential_filtered_probe_records_key_only_storage_and_checks_projection() {
     let source: physical::Program = syn::parse_quote! {physical {
         relation L(a:i64); relation R(a:i64,b:i64);

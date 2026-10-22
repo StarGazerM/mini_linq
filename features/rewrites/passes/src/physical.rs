@@ -73,9 +73,12 @@ pub fn canon_prefixes(source: &ir::Program, arguments: TokenStream) -> syn::Resu
     for definition in &mut target.program.definitions {
         let name = symbol_name(&definition.name);
         let heading = facts.headings[&name].clone();
-        let inherited = ir::inherited_key(&definition.operator, &heading, |id| {
-            unique.get(&symbol_name(id)).cloned()
-        });
+        let inherited = ir::inherited_key(
+            &definition.operator,
+            &heading,
+            &target.program.host_sets,
+            |id| unique.get(&symbol_name(id)).cloned(),
+        );
         if selected.includes(&definition.name) {
             if let Operator::Project(p) = &definition.operator {
                 if heading.len() < facts.headings[&symbol_name(&p.input)].len() {
@@ -108,6 +111,9 @@ pub fn canon_prefixes(source: &ir::Program, arguments: TokenStream) -> syn::Resu
 /// Expose binary intersections by hoisting independent relational definitions
 /// before their candidate probe, then record smallest. Rust nodes stay pinned.
 /// Admissibility and correspondence belong to the public language checks.
+/// In bag semantics, choosing a membership intersection also requires checked
+/// host_set facts (or derived keys) on candidate sources: multiplicities cannot
+/// be discarded. This language currently denotes Set; K-relation gating is separate.
 pub fn smallest_intersections(
     source: &ir::Program,
     arguments: TokenStream,
@@ -213,6 +219,144 @@ pub fn lazy_semijoins(source: &ir::Program, arguments: TokenStream) -> syn::Resu
         }
     }
     selected.require_matches(&matched)?;
+    ir::check_rewrite(source, &target)?;
+    Ok(target)
+}
+
+/// Retain reusable host renames that serve integral keyed stream reads.
+///
+/// This records only a Physical mode decision. Key columns, predicates and
+/// reader order are unchanged; selection subsequently chooses the providers.
+/// Const-only point/range scans and lazy membership groups remain host reads.
+pub fn build_host_reads(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
+    let facts = ir::contract::check(source)?;
+    let selected = Results::parse(arguments)?;
+    let mut target = source.clone();
+    let mut matched = BTreeSet::new();
+    for definition in &mut target.program.definitions {
+        if !selected.includes(&definition.name)
+            || !matches!(definition.operator, Operator::Rename(_))
+        {
+            continue;
+        }
+        let name = symbol_name(&definition.name);
+        let reads = facts
+            .keyed_reads
+            .get(&name)
+            .into_iter()
+            .flatten()
+            .filter(|(_, _, supply)| *supply == ir::syntax::SupplyKind::Stream)
+            .collect::<Vec<_>>();
+        if reads.is_empty()
+            || !reads.iter().all(|(_, keys, _)| {
+                !keys.is_empty()
+                    && keys.iter().all(|key| {
+                        crate::indexes::sorted_key(&facts.rows[&name].types[key])
+                    })
+            })
+        {
+            continue;
+        }
+        // A lazy keyed read has a distinct demand contract; retaining its host
+        // eagerly is not a mode-only refinement.
+        if source.program.definitions.iter().any(|reader| {
+            matches!(&reader.operator, Operator::Semi(_, key) | Operator::Anti(_, key)
+                if symbol_name(&key.right) == name && matches!(key.choice, Some(Choice::Lazy(_))))
+        }) {
+            continue;
+        }
+        definition.mode = ir::Mode::Let(Default::default());
+        matched.insert(name);
+    }
+    selected.require_matches(&matched)?;
+    ir::check_rewrite(source, &target)?;
+    Ok(target)
+}
+
+/// Retain selected stream results (`pipe` → `let`): their rows are
+/// materialized once, and their consumer streams from the retained rows.
+///
+/// This records only a Physical mode decision, a kernel or task boundary at a
+/// retained result (formal rule EXT-RetainStream). Operators, keys and Rust
+/// steps are unchanged; under exhaustive evaluation the retained rows and any
+/// panic are those of the stream. A host rename is a reusable host read, not a
+/// stream, and is rejected.
+pub fn retain_streams(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
+    ir::contract::check(source)?;
+    let selected = Results::parse(arguments)?;
+    if matches!(selected, Results::All) {
+        return Err(syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "retain_streams requires the names of the stream results to retain",
+        ));
+    }
+    let mut target = source.clone();
+    let mut matched = BTreeSet::new();
+    for definition in &mut target.program.definitions {
+        if !selected.includes(&definition.name) {
+            continue;
+        }
+        if matches!(definition.operator, Operator::Rename(_))
+            || !matches!(definition.mode, ir::Mode::Pipe(_))
+        {
+            return Err(syn::Error::new_spanned(
+                &definition.name,
+                "retain_streams selects a pipe result that is not a host rename",
+            ));
+        }
+        definition.mode = ir::Mode::Let(Default::default());
+        matched.insert(symbol_name(&definition.name));
+    }
+    selected.require_matches(&matched)?;
+    ir::check_rewrite(source, &target)?;
+    Ok(target)
+}
+
+/// Record checked full-heading host sets, then remove only canon boundaries
+/// already implied by the resulting keys. Arguments name host relations.
+pub fn host_sets(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
+    use syn::parse::Parser;
+    let relations = syn::punctuated::Punctuated::<syn::Ident, syn::Token![,]>::parse_terminated
+        .parse2(arguments)?;
+    if relations.is_empty() {
+        return Err(syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "host_sets requires host relation names",
+        ));
+    }
+    let facts = ir::contract::check(source)?;
+    let mut target = source.clone();
+    for relation in relations {
+        if !target.program.host_is_set(&relation) {
+            target.program.host_sets.push(ir::HostSet {
+                host_set_token: Default::default(),
+                relation,
+                semi_token: Default::default(),
+            });
+        }
+    }
+    ir::contract::check(&target)?;
+    let mut keys = BTreeMap::<String, Vec<String>>::new();
+    for definition in &mut target.program.definitions {
+        let name = symbol_name(&definition.name);
+        let heading = &facts.headings[&name];
+        let inherited = ir::inherited_key(
+            &definition.operator,
+            heading,
+            &target.program.host_sets,
+            |id| keys.get(&symbol_name(id)).cloned(),
+        );
+        if inherited.is_some() {
+            definition.canon = None;
+        }
+        if let Some(key) = inherited.or_else(|| definition.canon.is_some().then(|| heading.clone()))
+        {
+            keys.insert(name, key);
+        }
+    }
+    if keys.contains_key(&symbol_name(&target.program.returned)) {
+        target.program.return_canon = None;
+    }
     ir::check_rewrite(source, &target)?;
     Ok(target)
 }

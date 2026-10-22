@@ -10,6 +10,7 @@ publish = false
 default = []
 counters = ["cq-storage/counters"]
 phase-timing = ["cq-datalog-configuration/phase-timing"]
+hoist-invariants = ["cq-datalog-macros/hoist-invariants"]
 
 [dependencies]
 cq-datalog-configuration.workspace = true

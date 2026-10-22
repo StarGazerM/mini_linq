@@ -17,16 +17,19 @@ members = [
     "languages/cq-lang-ix",
     "languages/cq-lang-physical",
     "languages/cq-lang-structures",
+    "languages/cq-lang-sequence",
     "passes/cq-order",
     "passes/cq-reduce",
     "passes/cq-elaborate",
     "passes/cq-index-policy",
     "passes/cq-physical-lowering",
     "passes/cq-structure-selection",
+    "passes/cq-sequence-lowering",
     "passes/cq-represent",
     "passes/cq-staging",
     "passes/cq-print",
     "passes/cq-physical-realization",
+    "passes/cq-sequence-pull",
     "runtime/cq-storage",
     "runtime/cq-load",
     "testkit/cq-testkit",
@@ -57,6 +60,7 @@ cq-stage = { path = "facade/cq-stage", version = "0.1.0" }
 cq-lang-physical = { path = "languages/cq-lang-physical", version = "0.1.0", default-features = false }
 cq-lang-cq = { path = "languages/cq-lang-cq", version = "0.1.0", default-features = false }
 cq-lang-structures = { path = "languages/cq-lang-structures", version = "0.1.0", default-features = false }
+cq-lang-sequence = { path = "languages/cq-lang-sequence", version = "0.1.0", default-features = false }
 cq-lang-ra = { path = "languages/cq-lang-ra", version = "0.1.0", default-features = false }
 cq-syntax = { path = "languages/cq-syntax", version = "0.1.0" }
 cq-lang-ix = { path = "languages/cq-lang-ix", version = "0.1.0", default-features = false }
@@ -68,10 +72,12 @@ cq-elaborate = { path = "passes/cq-elaborate", version = "0.1.0", default-featur
 cq-reduce = { path = "passes/cq-reduce", version = "0.1.0", default-features = false }
 cq-index-policy = { path = "passes/cq-index-policy", version = "0.1.0", default-features = false }
 cq-structure-selection = { path = "passes/cq-structure-selection", version = "0.1.0", default-features = false }
+cq-sequence-lowering = { path = "passes/cq-sequence-lowering", version = "0.1.0", default-features = false }
 cq-represent = { path = "passes/cq-represent", version = "0.1.0", default-features = false }
 cq-staging = { path = "passes/cq-staging", version = "0.1.0", default-features = false }
 cq-physical-lowering = { path = "passes/cq-physical-lowering", version = "0.1.0", default-features = false }
 cq-physical-realization = { path = "passes/cq-physical-realization", version = "0.1.0", default-features = false }
+cq-sequence-pull = { path = "passes/cq-sequence-pull", version = "0.1.0", default-features = false }
 mini-linq = { path = "facade/mini-linq", version = "0.1.0" }
 proc-macro2 = "1"
 quote = "1"

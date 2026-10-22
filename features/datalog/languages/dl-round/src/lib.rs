@@ -54,8 +54,30 @@ pub struct Layout {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KeyRepresentation {
     Borrowed,
+    DeviceSetOwned,
 }
 
+/// Concrete index lifetimes selected by the checked storage policy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LayoutRealization {
+    MaintainedGroupedHost,
+    MaintainedFrozenDeviceIndex,
+    MaintainedLeveledDeviceIndex,
+}
+impl KeyRepresentation {
+    pub fn layouts(self) -> LayoutRealization {
+        match self {
+            Self::Borrowed => LayoutRealization::MaintainedGroupedHost,
+            Self::DeviceSetOwned => LayoutRealization::MaintainedFrozenDeviceIndex,
+        }
+    }
+    pub fn changing_layouts(self) -> LayoutRealization {
+        match self {
+            Self::Borrowed => LayoutRealization::MaintainedGroupedHost,
+            Self::DeviceSetOwned => LayoutRealization::MaintainedLeveledDeviceIndex,
+        }
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KeySet {
     pub relation: usize,
@@ -94,6 +116,10 @@ pub struct RuleHole {
 pub struct Stratum {
     pub members: Vec<usize>,
     pub keys: Vec<KeySet>,
+    /// Exact keyed full reads of completed inputs, built before this component.
+    pub frozen_layouts: Vec<usize>,
+    /// Exact keyed full reads of changing members, maintained each round.
+    pub leveled_layouts: Vec<usize>,
     pub seeds: Vec<RuleHole>,
     pub steps: Vec<RuleHole>,
     pub phases: Vec<Ident>,
@@ -127,6 +153,10 @@ pub struct Output {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RoundContext {
+    pub representation: KeyRepresentation,
+    pub layout_realization: LayoutRealization,
+    pub changing_layout_realization: LayoutRealization,
+    pub leveled_ratio: u32,
     pub relations: Vec<Relation>,
     pub layouts: Vec<Layout>,
     pub delta_layouts: Vec<Layout>,
@@ -326,14 +356,14 @@ record!(ScanBinding {
     binding: Ident
 });
 record!(RuleHole { variant: usize, head: usize, hole: usize, scan: Option<ScanBinding>, insertion: Ident });
-record!(Stratum { members: Vec<usize>, keys: Vec<KeySet>, seeds: Vec<RuleHole>, steps: Vec<RuleHole>, phases: Vec<Ident>, publication: Vec<Publication>, termination: Vec<usize>, termination_test: Ident, observer: Ident, key_scope: Ident, loop_form: Ident });
+record!(Stratum { members: Vec<usize>, keys: Vec<KeySet>, frozen_layouts: Vec<usize>, leveled_layouts: Vec<usize>, seeds: Vec<RuleHole>, steps: Vec<RuleHole>, phases: Vec<Ident>, publication: Vec<Publication>, termination: Vec<usize>, termination_test: Ident, observer: Ident, key_scope: Ident, loop_form: Ident });
 record!(Publication { relation: usize, operations: Vec<PublicationOp> });
 record!(PublicationOp { kind: Ident, layouts: Vec<usize> });
 record!(Output {
     relation: usize,
     conversion: Ident
 });
-record!(RoundContext { relations: Vec<Relation>, layouts: Vec<Layout>, delta_layouts: Vec<Layout>, strata: Vec<Stratum>, outputs: Vec<Output>, observer: Option<Expr>, observer_name: Ident, round_name: Ident });
+record!(RoundContext { representation: KeyRepresentation, layout_realization: LayoutRealization, changing_layout_realization: LayoutRealization, leveled_ratio: u32, relations: Vec<Relation>, layouts: Vec<Layout>, delta_layouts: Vec<Layout>, strata: Vec<Stratum>, outputs: Vec<Output>, observer: Option<Expr>, observer_name: Ident, round_name: Ident });
 impl Text for InputSource {
     fn parse_text(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
         let kind: Ident = input.parse()?;
@@ -362,6 +392,8 @@ impl Text for KeyRepresentation {
         let id: Ident = input.parse()?;
         if id == "borrowed" {
             Ok(Self::Borrowed)
+        } else if id == "device_set_owned" {
+            Ok(Self::DeviceSetOwned)
         } else {
             Err(syn::Error::new_spanned(
                 id,
@@ -370,7 +402,28 @@ impl Text for KeyRepresentation {
         }
     }
     fn text(&self) -> TokenStream {
-        quote!(borrowed)
+        match self {
+            Self::Borrowed => quote!(borrowed),
+            Self::DeviceSetOwned => quote!(device_set_owned),
+        }
+    }
+}
+impl Text for LayoutRealization {
+    fn parse_text(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let id: Ident = input.parse()?;
+        match id.to_string().as_str() {
+            "grouped_host" => Ok(Self::MaintainedGroupedHost),
+            "frozen_device_index" => Ok(Self::MaintainedFrozenDeviceIndex),
+            "leveled_device_index" => Ok(Self::MaintainedLeveledDeviceIndex),
+            _ => Err(syn::Error::new_spanned(id, "unsupported layout realization")),
+        }
+    }
+    fn text(&self) -> TokenStream {
+        match self {
+            Self::MaintainedGroupedHost => quote!(grouped_host),
+            Self::MaintainedFrozenDeviceIndex => quote!(frozen_device_index),
+            Self::MaintainedLeveledDeviceIndex => quote!(leveled_device_index),
+        }
     }
 }
 

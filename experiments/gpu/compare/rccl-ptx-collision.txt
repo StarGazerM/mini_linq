@@ -1,0 +1,25 @@
+Observed before removing RCCL from the device path (2026-10-16).
+
+Command:
+/opt/nvidia/hpc_sdk/Linux_x86_64/25.5/cuda/12.9/bin/ptxas -arch=sm_89 target/diagnostic-merged.ptx -o /dev/null
+
+Output:
+ptxas target/diagnostic-merged.ptx, line 6987; error   : Duplicate definition of variable '__shared_mem_0'
+ptxas fatal   : Ptx assembly aborted due to errors
+
+The diagnostic file concatenated gpu_blocked_run.ptx, rccl_cub.ptx and
+blocked_run_oracle.ptx, removing subsequent .version/.target/.address_size
+headers as the runtime merger does. The first definition is a static shared
+allocation in RCCL radix kernels monomorphized into gpu_blocked_run.ptx;
+the second is in RCCL's non-generic u32 scan artifact rccl_cub.ptx.
+Every handwritten tile/H05 helper uses dynamic shared memory only.
+
+The actual run-builder oracle failed before any nonempty build at:
+Error: Custom { kind: InvalidInput, error: "RCCL program load: failed to load embedded CUDA module: DriverError(218, \"a PTX JIT compilation failed\")" }
+
+Compiler source: mir-lower/src/convert/ops/memory/shared.rs creates
+__shared_mem_{counter}, with a module-local counter. cuda-host/src/embedded.rs
+load_all_ptx_bundles_merged concatenates PTX without namespacing those globals.
+No RCCL or compiler checkout was changed. The approved experiment workaround
+replaces RCCL sorting/scans with dense counting sort and dynamic shared scans,
+and replaces RCCL sort/unique with an exact atomic-CAS u64 set.

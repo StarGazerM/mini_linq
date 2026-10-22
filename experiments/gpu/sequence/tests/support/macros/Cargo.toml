@@ -1,0 +1,14 @@
+[package]
+name = "cq-gpu-sequence-test-macros"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+proc-macro = true
+
+[dependencies]
+cq-gpu-sequence = { path = "../../.." }
+cq-lang-sequence = { path = "../../../../../../languages/cq-lang-sequence" }
+quote = "1"
+syn = { version = "2", features = ["full"] }

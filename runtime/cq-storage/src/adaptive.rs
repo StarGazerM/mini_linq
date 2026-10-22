@@ -50,6 +50,14 @@ impl KeyCodec<i32> for I64Codec {
         self.ordinal(&i64::from(*key))
     }
 }
+impl KeyCodec<u32> for I64Codec {
+    fn total(self) -> bool {
+        true
+    }
+    fn ordinal(self, key: &u32) -> Option<u128> {
+        self.ordinal(&i64::from(*key))
+    }
+}
 #[derive(Clone, Copy, Default)]
 pub struct BorrowedI64TupleCodec;
 impl KeyCodec<(&i64,)> for BorrowedI64TupleCodec {
@@ -65,6 +73,14 @@ impl KeyCodec<(&i32,)> for BorrowedI64TupleCodec {
         true
     }
     fn ordinal(self, key: &(&i32,)) -> Option<u128> {
+        I64Codec.ordinal(key.0)
+    }
+}
+impl KeyCodec<(&u32,)> for BorrowedI64TupleCodec {
+    fn total(self) -> bool {
+        true
+    }
+    fn ordinal(self, key: &(&u32,)) -> Option<u128> {
         I64Codec.ordinal(key.0)
     }
 }

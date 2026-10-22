@@ -1,8 +1,8 @@
 // Full supported triangle product, split by planner to bound rustc memory.
 // Push has only probe/first; merge and smallest are public UI rejection cases.
-// Coarse/hypergraph merge reads native leading keys, so it needs a BTreeMap.
+// Coarse/hypergraph/LE merge reads native leading keys, so it needs a BTreeMap.
 // Fine planners retain ordered structures and allow every host representation.
-// Five planners have 224 rows; four fine planners have 320: 2,400 total.
+// Seven planners have 224 rows; four fine planners have 320: 2,848 total.
 macro_rules! matrix_branch {
     ($case:ident; [$($chosen:tt)*]; [$($next:tt)*]; $rest:tt) => {
         matrix_product!($case; [$($chosen)* $($next)*]; $rest);

@@ -551,7 +551,7 @@ MiniLinq workload tasks
   cargo xtask differential [--cases N] [--seed S]
   cargo xtask explain CASE [--through STAGE]
   cargo xtask bench [--scale N] [--seed N]
-  cargo xtask bench --tpch --sf 0.1|1 [--runs N] [--query NAME] [--reduction-comparison]
+  cargo xtask bench --tpch --sf 0.1|1 [--runs N] [--query NAME] [--config NAME | --reduction-comparison]
   cargo xtask profile --tpch --sf 0.1|1 [--query NAME] [--config NAME]
 
 SCENARIO is coverage, empty-input, no-match, or all.

@@ -118,10 +118,9 @@ fn written_coarse_follows_the_normal_body() {
         expected(
             &messy,
             quote! {
-                R@0(x, __cq_0_1);
-                __cq_0_1 = 5;
-                S@2(__cq_1_0, z);
-                R@3(x, __cq_2_1);
+                R@0(x);
+                S@1(__cq_1_0, z);
+                R@2(x, __cq_2_1);
                 x = __cq_2_1;
                 if { z > 1 };
                 let w: i32 = x + z;
@@ -329,7 +328,7 @@ fn prefix_rankings_place_clauses_in_the_pinned_sequences() {
 }
 
 #[test]
-fn literals_are_relational_steps_after_their_atoms() {
+fn literals_stay_in_atoms_without_relational_steps() {
     let normal = normal(quote! {
         struct Q; relation R(a:i32,b:i32); relation S(a:i32,b:i32); relation T(a:i32,b:i32);
         answer(x,z) :- R(x,7), S(7,z), T(z,x);
@@ -348,7 +347,7 @@ fn literals_are_relational_steps_after_their_atoms() {
             .iter()
             .filter(|item| matches!(item, BodyItem::Equality(_)))
             .count(),
-        2
+        0
     );
     for heuristic in [
         Heuristic::Written,
@@ -358,6 +357,22 @@ fn literals_are_relational_steps_after_their_atoms() {
         for split in [Split::Coarse, Split::Fine] {
             plan(&normal, heuristic, split);
         }
+    }
+}
+
+#[test]
+fn fine_order_places_literal_only_occurrences_before_dependent_bindings() {
+    let normal = normal(quote! {
+        struct Q; relation R(a:i32,b:i32); relation answer(value:i32);
+        answer(2) :- R(7,8);
+    });
+    for heuristic in [
+        Heuristic::Written,
+        Heuristic::Prefix(Ranking::Connected),
+        Heuristic::Prefix(Ranking::GreedyWidth),
+        Heuristic::Elimination,
+    ] {
+        plan(&normal, heuristic, Split::Fine);
     }
 }
 
@@ -995,5 +1010,20 @@ fn generator_planners_preserve_chain_dependencies_and_before() {
             changed.valuation.steps.swap(0, generator);
             assert!(cq_order::check(&source, &changed, &Options { heuristic, split }).is_err());
         }
+    }
+}
+
+#[test]
+fn filtered_priority_uses_literal_occurrences_without_extra_steps() {
+    let source = normal(quote! {
+        struct Q; relation R(a:i32); relation S(a:i32,b:i32);
+        answer(x) :- R(x), S(x,7);
+    });
+    for split in [Split::Coarse, Split::Fine] {
+        let target = plan(&source, Heuristic::Filtered, split);
+        assert_eq!(target.cq, source);
+        assert_eq!(target.valuation.steps.len(), 2);
+        assert!(matches!(&target.valuation.steps[0],
+            valuation::Step::Atom(atom, _) if atom.clause() == 1 && atom.columns.len() == 1));
     }
 }

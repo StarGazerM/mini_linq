@@ -1,0 +1,13 @@
+error: CQ_GPU_DATALOG_POLICY: requires device_set_all_columns/device_set_owned; CPU HashSet schedules cannot be reinterpreted
+  --> tests/ui/cpu_policy.rs:2:5
+   |
+ 2 | /     cq_datalog::passes::stratify! {
+ 3 | |         pipeline {
+ 4 | |             ::cq_datalog::passes::incremental,
+ 5 | |             ::cq_datalog::passes::storage,
+...  |
+12 | |         R(*x) :- E(x);
+13 | |     };
+   | |_____^
+   |
+   = note: this error originates in the macro `::cq_gpu_datalog::__scheduled` (in Nightly builds, run with -Z macro-backtrace for more info)

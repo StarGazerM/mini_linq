@@ -36,6 +36,8 @@ pub(crate) fn check_witnesses(
     let mut result = BTreeMap::new();
     // STR-Witness: The extra cursor abstracts to lookup_b(k), and every path
     // consumes it at the force probe before any materialization or scope escape.
+    // Distinct prefixes may share a Smallest force; each cursor keeps its own
+    // build and keys, with admissibility independently established by ST-Share.
     for entry in &program.structures.entries {
         let Structure::Repr {
             witness: Some(witness),

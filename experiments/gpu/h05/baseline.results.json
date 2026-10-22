@@ -1,0 +1,111 @@
+[
+  {
+    "allocation_scope": "iteration including exactness readback copies; peak bytes includes persistent outputs, excludes input uploads",
+    "answer_count": 72983,
+    "bandwidth_model_gbps": 960,
+    "build_algorithm": "device-detected sorted adjacency or bitmap-word prefix counting sort with stable provenance heapsort",
+    "build_ms": {
+      "median": 4.906112194061279,
+      "min": 4.8928961753845215
+    },
+    "dedup_algorithm": "exact packed-triple u64 CAS set",
+    "dedup_ms": {
+      "median": 0.3736000061035156,
+      "min": 0.3503679931163788
+    },
+    "exact": true,
+    "expansion_policy": "fixed-depth in-tile loop; no cross-block stealing",
+    "frontier_spill_required": false,
+    "kernel_ms": {
+      "median": 0.9349120259284973,
+      "min": 0.9328640103340149
+    },
+    "max_expansion_rows": [
+      0,
+      0
+    ],
+    "max_m_over_t": 0.0,
+    "peak_mem_mib": 9608.0,
+    "peak_mem_scope": "cuMemGetInfo sampled after combined build metadata and dedup submission; includes reserved pool",
+    "plan": "A",
+    "pool_bytes": 8721138688,
+    "regs": null,
+    "runs": 5,
+    "samples": {
+      "allocation_count": [
+        59,
+        59,
+        59,
+        59,
+        59
+      ],
+      "build_ms": [
+        4.906112194061279,
+        4.9271039962768555,
+        4.985151767730713,
+        4.898303985595703,
+        4.8928961753845215
+      ],
+      "dedup_ms": [
+        0.3736000061035156,
+        0.4177919924259186,
+        0.44755199551582336,
+        0.35737600922584534,
+        0.3503679931163788
+      ],
+      "kernel_ms": [
+        0.9379519820213318,
+        0.9336640238761902,
+        0.9359359741210938,
+        0.9328640103340149,
+        0.9349120259284973
+      ],
+      "peak_bytes": [
+        2699859640,
+        2699859640,
+        2699859640,
+        2699859640,
+        2699859640
+      ],
+      "sorted_builds": [
+        [
+          "customer",
+          "supplier"
+        ],
+        [
+          "customer",
+          "supplier"
+        ],
+        [
+          "customer",
+          "supplier"
+        ],
+        [
+          "customer",
+          "supplier"
+        ],
+        [
+          "customer",
+          "supplier"
+        ]
+      ],
+      "total_ms": [
+        6.217663764953613,
+        6.278560161590576,
+        6.368639945983887,
+        6.188543796539307,
+        6.178175926208496
+      ]
+    },
+    "scan_gbps": 1026.59587788146,
+    "sf": 10,
+    "smem": 9216,
+    "sorted_path": "GPU adjacent-key nondecreasing check; device-gated histogram/scatter/heapsort; sorted adjacency builds bitmap and CSR",
+    "spills": null,
+    "total_ms": {
+      "median": 6.217663764953613,
+      "min": 6.178175926208496
+    },
+    "warmups": 1
+  }
+]

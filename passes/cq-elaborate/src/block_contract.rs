@@ -108,11 +108,16 @@ impl Body<'_, '_> {
                 let mapping = declaration
                     .columns
                     .iter()
-                    .zip(atom.variables())
-                    .map(|(c, v)| (c.name.clone(), v.clone()))
+                    .zip(&atom.args)
+                    .filter_map(|(c, a)| cq::rust::variable(a).map(|v| (c.name.clone(), v.clone())))
                     .collect::<Vec<_>>();
-                self.schedule
-                    .atom_path(&self.path(clause), &atom.relation, &mapping)
+                let constants = super::occurrence_constants(declaration, atom);
+                self.schedule.atom_path(
+                    &self.path(clause),
+                    &atom.relation,
+                    &mapping,
+                    constants.as_ref(),
+                )
             }
             cq::BodyItem::Block(block) => {
                 let prefix = cq::blocks::bound_before(self.body, clause, &self.context);

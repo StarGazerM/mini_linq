@@ -385,6 +385,70 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-ext-aggregate"
+version = "0.1.0"
+dependencies = [
+ "cq-ext-support",
+ "cq-lang-cq",
+ "cq-stage",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-ext-correlated"
+version = "0.1.0"
+dependencies = [
+ "cq-ext-support",
+ "cq-lang-cq",
+ "cq-stage",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-ext-negation"
+version = "0.1.0"
+dependencies = [
+ "cq-ext-support",
+ "cq-lang-cq",
+ "cq-stage",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-ext-recursion"
+version = "0.1.0"
+dependencies = [
+ "cq-ext-support",
+ "cq-lang-cq",
+ "cq-stage",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-ext-support"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-cq",
+ "cq-stage",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "cq-index-policy"
 version = "0.1.0"
 dependencies = [
@@ -394,6 +458,13 @@ dependencies = [
  "cq-testkit",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-join-filters"
+version = "0.1.0"
+dependencies = [
+ "cq-storage",
 ]
 
 [[package]]
@@ -443,6 +514,18 @@ dependencies = [
  "quote",
  "syn 2.0.119",
  "syn_derive",
+]
+
+[[package]]
+name = "cq-lang-sequence"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-structures",
+ "cq-stage",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -526,6 +609,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-planners"
+version = "0.1.0"
+dependencies = [
+ "cq-planners-macros",
+ "cq-planners-plan",
+]
+
+[[package]]
+name = "cq-planners-macros"
+version = "0.1.0"
+dependencies = [
+ "cq-planners-plan",
+ "cq-stage",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-planners-plan"
+version = "0.1.0"
+dependencies = [
+ "cq-elaborate",
+ "cq-lang-cq",
+ "cq-lang-ra",
+ "cq-lang-vo",
+ "cq-order",
+ "cq-reduce",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "cq-print"
 version = "0.1.0"
 dependencies = [
@@ -552,6 +667,65 @@ name = "cq-represent"
 version = "0.1.0"
 dependencies = [
  "cq-lang-structures",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-rewrite-passes"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-physical",
+ "cq-lang-structures",
+ "proc-macro2",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-rewrites"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-physical",
+ "cq-lang-structures",
+ "cq-rewrite-passes",
+ "cq-stage",
+]
+
+[[package]]
+name = "cq-sequence-lowering"
+version = "0.1.0"
+dependencies = [
+ "cq-index-policy",
+ "cq-lang-sequence",
+ "cq-lang-structures",
+ "cq-physical-lowering",
+ "cq-planners-plan",
+ "cq-structure-selection",
+ "cq-testkit",
+ "cq-workloads",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-sequence-pull"
+version = "0.1.0"
+dependencies = [
+ "cq-elaborate",
+ "cq-index-policy",
+ "cq-lang-cq",
+ "cq-lang-sequence",
+ "cq-lang-structures",
+ "cq-order",
+ "cq-physical-lowering",
+ "cq-physical-realization",
+ "cq-print",
+ "cq-sequence-lowering",
+ "cq-storage",
+ "cq-structure-selection",
+ "cq-testkit",
+ "cq-workloads",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -623,6 +797,58 @@ dependencies = [
  "cq-syntax",
  "duckdb",
  "hashbrown 0.15.5",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-workload-authored"
+version = "0.1.0"
+dependencies = [
+ "cq-ext-support",
+ "cq-lang-cq",
+ "cq-syntax",
+ "proc-macro2",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-workload-passes"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-structures",
+ "cq-stage",
+ "proc-macro2",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-workloads"
+version = "0.1.0"
+dependencies = [
+ "cq-ext-aggregate",
+ "cq-ext-correlated",
+ "cq-ext-negation",
+ "cq-ext-recursion",
+ "cq-index-policy",
+ "cq-join-filters",
+ "cq-lang-cq",
+ "cq-lang-physical",
+ "cq-lang-structures",
+ "cq-load",
+ "cq-physical-lowering",
+ "cq-planners",
+ "cq-planners-plan",
+ "cq-rewrite-passes",
+ "cq-rewrites",
+ "cq-storage",
+ "cq-structure-selection",
+ "cq-syntax",
+ "cq-testkit",
+ "cq-workload-authored",
+ "cq-workload-passes",
+ "mini-linq",
+ "proc-macro2",
+ "quote",
  "syn 2.0.119",
 ]
 
@@ -1135,6 +1361,7 @@ dependencies = [
  "cq-lang-ix",
  "cq-lang-physical",
  "cq-lang-ra",
+ "cq-lang-sequence",
  "cq-lang-structures",
  "cq-lang-vo",
  "cq-order",
@@ -1142,6 +1369,8 @@ dependencies = [
  "cq-physical-realization",
  "cq-reduce",
  "cq-represent",
+ "cq-sequence-lowering",
+ "cq-sequence-pull",
  "cq-stage",
  "cq-staging",
  "cq-structure-selection",

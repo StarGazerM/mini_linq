@@ -1,0 +1,234 @@
+{
+  "mechanism": "checked Physical host_set full-heading fact; exact adjacent sortedness certificate with exact row-index hash fallback",
+  "gpu_oracle": {
+    "exit_code": 0,
+    "stdout": "host-set exact=true sorted=true unsorted=true duplicate-rejected=true hash-collisions=true projection=true\n",
+    "log": "host_sets.oracle.log"
+  },
+  "initial_dblp": {
+    "runs": [
+      {
+        "iteration": 0,
+        "rows": 2224385,
+        "query_ms": 3.602,
+        "retry_attempts": 2,
+        "output_capacity": 2224385,
+        "output_bytes": 53385240
+      },
+      {
+        "iteration": 1,
+        "rows": 2224385,
+        "query_ms": 0.957,
+        "retry_attempts": 1,
+        "output_capacity": 2224385,
+        "output_bytes": 106795056
+      },
+      {
+        "iteration": 2,
+        "rows": 2224385,
+        "query_ms": 0.934,
+        "retry_attempts": 1,
+        "output_capacity": 2224385,
+        "output_bytes": 106795056
+      },
+      {
+        "iteration": 3,
+        "rows": 2224385,
+        "query_ms": 0.952,
+        "retry_attempts": 1,
+        "output_capacity": 2224385,
+        "output_bytes": 106795056
+      },
+      {
+        "iteration": 4,
+        "rows": 2224385,
+        "query_ms": 0.947,
+        "retry_attempts": 1,
+        "output_capacity": 2224385,
+        "output_bytes": 106795056
+      },
+      {
+        "iteration": 5,
+        "rows": 2224385,
+        "query_ms": 0.96,
+        "retry_attempts": 1,
+        "output_capacity": 2224385,
+        "output_bytes": 106795056
+      }
+    ],
+    "certificate_ms": [
+      0.087,
+      0.042,
+      0.041,
+      0.04,
+      0.041,
+      0.042
+    ],
+    "full_tuple_exact": true
+  },
+  "initial_livejournal": {
+    "exit_code": 1,
+    "stdout": "distinct_edges=68993773\n",
+    "stderr": "Error: \"CQ_GPU_VRAM_EXCEEDED: CUDA memory operation failed: DriverError(2, \\\"out of memory\\\")\"\n"
+  },
+  "checks": {
+    "rewrite_execution_tests_passed": 13,
+    "physical_structures_lowering_tests_passed": 61,
+    "gpu_host_certificate_tests_passed": 3,
+    "formal_rule_inventory": 173,
+    "bounded_retry_memory_tests_passed": 3
+  },
+  "timing_scope": "Host wall query including certificate, index builds, retry/output allocation and kernels; excludes ingestion/upload and output downloads. Certificate-only samples run after the query samples, exclude bind_host and ingestion/upload.",
+  "hardware": {
+    "gpu": "NVIDIA RTX 6000 Ada Generation",
+    "memory_mib": 49140,
+    "driver": "580.178.04",
+    "arch": "sm_89"
+  },
+  "toolchain": "nightly-2026-08-28",
+  "date": "2026-10-19",
+  "datasets": {
+    "dblp": {
+      "runs": [
+        {
+          "iteration": 0,
+          "rows": 2224385,
+          "query_ms": 3.553,
+          "retry_attempts": 2,
+          "output_capacity": 2224385,
+          "output_bytes": 53385240
+        },
+        {
+          "iteration": 1,
+          "rows": 2224385,
+          "query_ms": 1.099,
+          "retry_attempts": 1,
+          "output_capacity": 2224385,
+          "output_bytes": 53385240
+        },
+        {
+          "iteration": 2,
+          "rows": 2224385,
+          "query_ms": 0.9,
+          "retry_attempts": 1,
+          "output_capacity": 2224385,
+          "output_bytes": 53385240
+        },
+        {
+          "iteration": 3,
+          "rows": 2224385,
+          "query_ms": 0.881,
+          "retry_attempts": 1,
+          "output_capacity": 2224385,
+          "output_bytes": 53385240
+        },
+        {
+          "iteration": 4,
+          "rows": 2224385,
+          "query_ms": 0.867,
+          "retry_attempts": 1,
+          "output_capacity": 2224385,
+          "output_bytes": 53385240
+        },
+        {
+          "iteration": 5,
+          "rows": 2224385,
+          "query_ms": 0.861,
+          "retry_attempts": 1,
+          "output_capacity": 2224385,
+          "output_bytes": 53385240
+        }
+      ],
+      "certificate_ms": [
+        0.044,
+        0.042,
+        0.041,
+        0.04,
+        0.041,
+        0.042
+      ],
+      "full_tuple_exact": true,
+      "exit_code": 0,
+      "expected_rows": 2224385,
+      "cold_query_ms": 3.553,
+      "warm_median_query_ms": 0.881,
+      "warm_median_certificate_ms": 0.041,
+      "log": "host_sets.dblp.exact_capacity.log"
+    },
+    "livejournal": {
+      "runs": [
+        {
+          "iteration": 0,
+          "rows": 946400853,
+          "query_ms": 267.781,
+          "retry_attempts": 2,
+          "output_capacity": 946400853,
+          "output_bytes": 22713620472
+        },
+        {
+          "iteration": 1,
+          "rows": 946400853,
+          "query_ms": 160.262,
+          "retry_attempts": 1,
+          "output_capacity": 946400853,
+          "output_bytes": 22713620472
+        },
+        {
+          "iteration": 2,
+          "rows": 946400853,
+          "query_ms": 160.69,
+          "retry_attempts": 1,
+          "output_capacity": 946400853,
+          "output_bytes": 22713620472
+        },
+        {
+          "iteration": 3,
+          "rows": 946400853,
+          "query_ms": 161.112,
+          "retry_attempts": 1,
+          "output_capacity": 946400853,
+          "output_bytes": 22713620472
+        },
+        {
+          "iteration": 4,
+          "rows": 946400853,
+          "query_ms": 160.609,
+          "retry_attempts": 1,
+          "output_capacity": 946400853,
+          "output_bytes": 22713620472
+        },
+        {
+          "iteration": 5,
+          "rows": 946400853,
+          "query_ms": 162.564,
+          "retry_attempts": 1,
+          "output_capacity": 946400853,
+          "output_bytes": 22713620472
+        }
+      ],
+      "certificate_ms": [
+        1.619,
+        1.672,
+        1.653,
+        1.636,
+        1.658,
+        1.456
+      ],
+      "full_tuple_exact": false,
+      "exit_code": 0,
+      "expected_rows": 946400853,
+      "cold_query_ms": 267.781,
+      "warm_median_query_ms": 160.69,
+      "warm_median_certificate_ms": 1.653,
+      "log": "host_sets.livejournal.exact_capacity.log"
+    }
+  },
+  "notes": [
+    "DBLP exactness compares every sorted output tuple against an independent CPU adjacency-list reference.",
+    "LiveJournal validates the requested count only; no full-tuple equivalence claim is made.",
+    "Each query includes its own host-set certificate. Separate certificate-only measurements run afterward against the resident input and discard their first sample.",
+    "Output bytes are allocated encoded column bytes, not total pool/device peak.",
+    "Direct retry history uses the previous exact count and available-memory budgeting; oversized estimates count first at zero output capacity.",
+    "Count/timing runs call checked_len, retaining ancestor-error checking without allocating decoded device scratch or downloading all output tuples. Each answer is dropped before the next iteration."
+  ]
+}

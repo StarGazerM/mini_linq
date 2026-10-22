@@ -5,7 +5,7 @@ use cq_lang_datalog_round::{self as round, *};
 use cq_lang_datalog_storage as storage;
 use cq_syntax::symbol_name;
 use proc_macro2::TokenStream;
-use quote::{ToTokens, quote};
+use quote::quote;
 use syn::Ident;
 
 pub fn cq_defaults() -> cq_stage::Configuration {
@@ -34,23 +34,30 @@ pub fn default_pipeline() -> cq_stage::Pipeline {
     resolve_cq(cq_stage::Configuration::default()).expect("complete CQ defaults")
 }
 pub fn compile(source: &storage::Program) -> syn::Result<Program> {
+    compile_with_ratio(source, 4)
+}
+/// Record explicit device index capacity advice without changing CPU lowering.
+pub fn compile_with_ratio(source: &storage::Program, ratio: u32) -> syn::Result<Program> {
     construct(
         source,
         default_pipeline(),
         TerminalRegistry::default(),
         syn::parse_quote!(none),
+        ratio,
     )
 }
 struct Arguments {
     pipeline: cq_stage::Pipeline,
     terminals: TerminalRegistry,
     timing: Ident,
+    ratio: u32,
 }
 impl syn::parse::Parse for Arguments {
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
         let mut pipeline = None;
         let mut terminals = None;
         let mut timing = None;
+        let mut ratio = None;
         while !input.is_empty() {
             let name: Ident = input.parse()?;
             input.parse::<syn::Token![=]>()?;
@@ -60,6 +67,8 @@ impl syn::parse::Parse for Arguments {
                 timing = Some(input.parse()?);
             } else if name == "terminals" && terminals.is_none() {
                 terminals = Some(input.parse()?);
+            } else if name == "leveled_ratio" && ratio.is_none() {
+                ratio = Some(input.parse::<syn::LitInt>()?.base10_parse()?);
             } else {
                 return Err(syn::Error::new_spanned(
                     name,
@@ -72,6 +81,7 @@ impl syn::parse::Parse for Arguments {
             pipeline: pipeline.unwrap_or_else(default_pipeline),
             terminals: terminals.unwrap_or_default(),
             timing: timing.unwrap_or_else(|| syn::parse_quote!(none)),
+            ratio: ratio.unwrap_or(4),
         })
     }
 }
@@ -80,8 +90,9 @@ pub fn compile_with(source: &storage::Program, args: TokenStream) -> syn::Result
         pipeline,
         terminals,
         timing,
+        ratio,
     } = syn::parse2(args)?;
-    construct(source, pipeline, terminals, timing)
+    construct(source, pipeline, terminals, timing, ratio)
 }
 /// Formal rule CK-DL-Fork: independently check storage embedding and every hole.
 pub fn check(source: &storage::Program, target: &Program) -> syn::Result<()> {
@@ -101,6 +112,12 @@ pub fn check(source: &storage::Program, target: &Program) -> syn::Result<()> {
 
 fn guard(atom: &cq_syntax::Atom, key: &KeySet) -> BodyItem {
     let name = &key.name;
+    if key.representation == KeyRepresentation::DeviceSetOwned {
+        let args = key.columns.iter().map(|&i| &atom.args[i]);
+        return syn::parse_quote!(
+            #[total] if !::cq_gpu_runtime::datalog::contains(&#name, &(#(#args,)*))
+        );
+    }
     if key.columns.is_empty() {
         syn::parse_quote!(#[total] if !#name.contains(&((),)))
     } else {
@@ -112,9 +129,10 @@ fn guard(atom: &cq_syntax::Atom, key: &KeySet) -> BodyItem {
 fn key_representation(source: &storage::Program) -> syn::Result<KeyRepresentation> {
     match Some(symbol_name(&source.policy.negation_keys)).as_deref() {
         Some("borrowed") => Ok(KeyRepresentation::Borrowed),
+        Some("device_set_owned") => Ok(KeyRepresentation::DeviceSetOwned),
         _ => Err(syn::Error::new_spanned(
             source,
-            "fork requires borrowed negation keys",
+            "fork requires a checked negation key representation",
         )),
     }
 }
@@ -198,7 +216,9 @@ fn construct(
     pipeline: cq_stage::Pipeline,
     terminals: TerminalRegistry,
     timing: Ident,
+    ratio: u32,
 ) -> syn::Result<Program> {
+    ensure(ratio >= 2, source, "leveled device index ratio must be at least two")?;
     let analysis = storage::contract::check(source)?;
     terminals.check()?;
     let interface = terminals.interface(&pipeline)?;
@@ -206,6 +226,10 @@ fn construct(
     let representation = key_representation(source)?;
     let mut fresh = Fresh::new(source);
     let mut context = RoundContext {
+        representation,
+        layout_realization: representation.layouts(),
+        changing_layout_realization: representation.changing_layouts(),
+        leveled_ratio: ratio,
         relations: source
             .incremental
             .strata
@@ -281,11 +305,13 @@ fn construct(
         observer_name: fresh.id("observer"),
         round_name: fresh.id("round"),
     };
-    let mut holes = Vec::new();
+    let mut holes: Vec<round::cq::Program> = Vec::new();
     for members in &analysis.components {
         let mut stratum = Stratum {
             members: members.clone(),
             keys: Vec::new(),
+            frozen_layouts: Vec::new(),
+            leveled_layouts: Vec::new(),
             seeds: Vec::new(),
             steps: Vec::new(),
             phases: vec![
@@ -394,12 +420,21 @@ fn construct(
                         .collect();
                     let (selected, output_columns): (Vec<_>, Vec<_>) = if key.columns.is_empty() {
                         let column = &variables[0];
-                        (vec![quote!(())], vec![quote!(#column: ())])
+                        match representation {
+                            KeyRepresentation::Borrowed => (vec![quote!(())], vec![quote!(#column: ())]),
+                            KeyRepresentation::DeviceSetOwned => (vec![quote!(0u8)], vec![quote!(#column: u8)]),
+                        }
                     } else {
                         (
                             key.columns
                                 .iter()
-                                .map(|&i| variables[i].to_token_stream())
+                                .map(|&i| {
+                                    let variable = &variables[i];
+                                    match representation {
+                                        KeyRepresentation::Borrowed => quote!(#variable),
+                                        KeyRepresentation::DeviceSetOwned => quote!(*#variable),
+                                    }
+                                })
                                 .collect(),
                             key.columns
                                 .iter()
@@ -409,21 +444,32 @@ fn construct(
                                         [relation]
                                         .columns[i]
                                         .ty;
-                                    quote!(#variable: &#ty)
+                                    match representation {
+                                        KeyRepresentation::Borrowed => quote!(#variable: &#ty),
+                                        KeyRepresentation::DeviceSetOwned => quote!(#variable: #ty),
+                                    }
                                 })
                                 .collect(),
                         )
                     };
-                    // Keep owned constant expressions in post-scan predicates.
-                    // An atom expression becomes an owned CQ prefix binding;
-                    // carrying that binding through scan fanout can move it out
-                    // of an FnMut closure. Comparison borrows both operands.
-                    let selections = key.filters.iter().map(|(column, expression)| {
-                        let variable = &variables[*column];
-                        quote!(if *#variable == (#expression))
-                    });
+                    // Literals stay in the filtered occurrence. Nonliteral
+                    // expressions compare after scanning so owned values cannot
+                    // move through an FnMut fanout closure.
+                    let mut arguments: Vec<syn::Expr> = variables
+                        .iter()
+                        .map(|variable| syn::parse_quote!(#variable))
+                        .collect();
+                    let mut selections = Vec::new();
+                    for (column, expression) in &key.filters {
+                        if cq_syntax::equality::literal(cq_syntax::rust::unparen(expression)) {
+                            arguments[*column] = cq_syntax::rust::unparen(expression).clone();
+                        } else {
+                            let variable = &variables[*column];
+                            selections.push(quote!(if *#variable == (#expression)));
+                        }
+                    }
                     let declarations = hole_inputs(&context, std::iter::once(source_name));
-                    holes.push(syn::parse2(quote!(struct #name; #(#declarations)* relation #name(#(#output_columns),*); #name(#(#selected),*) :- #source_name(#(#variables),*) #(, #selections)*;))?);
+                    holes.push(syn::parse2(quote!(struct #name; #(#declarations)* relation #name(#(#output_columns),*); #name(#(#selected),*) :- #source_name(#(#arguments),*) #(, #selections)*;))?);
                     stratum.keys.push(key);
                     stratum.keys.len() - 1
                 };
@@ -462,6 +508,21 @@ fn construct(
                 stratum.steps.push(rule);
             } else {
                 stratum.seeds.push(rule);
+            }
+        }
+        if representation == KeyRepresentation::DeviceSetOwned {
+            for (index, layout) in context.layouts.iter().enumerate() {
+                if layout.key != 0 && stratum.seeds.iter().chain(&stratum.steps).any(|rule| {
+                    holes[rule.hole].query.body.iter().any(|item| {
+                        matches!(item, BodyItem::Positive { atom } if atom.relation == layout.name)
+                    })
+                }) {
+                    if members.contains(&layout.relation) {
+                        stratum.leveled_layouts.push(index);
+                    } else {
+                        stratum.frozen_layouts.push(index);
+                    }
+                }
             }
         }
         context.strata.push(stratum);

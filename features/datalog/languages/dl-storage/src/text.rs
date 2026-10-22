@@ -32,6 +32,15 @@ impl Text for usize {
         quote!(#n)
     }
 }
+impl Text for u32 {
+    fn parse_text(input: ParseStream<'_>) -> syn::Result<Self> {
+        input.parse::<syn::LitInt>()?.base10_parse()
+    }
+    fn text(&self) -> TokenStream {
+        let n = syn::LitInt::new(&self.to_string(), proc_macro2::Span::call_site());
+        quote!(#n)
+    }
+}
 impl<T: Text> Text for Vec<T> {
     fn parse_text(input: ParseStream<'_>) -> syn::Result<Self> {
         let list;

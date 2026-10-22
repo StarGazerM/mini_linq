@@ -1,0 +1,5 @@
+error: CQ_GPU_DUPLICATE_ARGUMENT: repeated printer option
+ --> tests/ui/duplicate_printer_context.rs:4:44
+  |
+4 |         pipeline { print = ::cq_gpu::print(completion(query)); }
+  |                                            ^^^^^^^^^^

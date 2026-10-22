@@ -1,0 +1,62 @@
+{
+  "date": "2026-10-18",
+  "scope": "Targeted runtime audit; not an H05 benchmark or replacement for historical baselines",
+  "gpu": "NVIDIA RTX 6000 Ada Generation",
+  "driver": "580.178.04",
+  "toolchain": "nightly-2026-08-28",
+  "architecture": "sm_89",
+  "build": "CUDA_HOME=/opt/nvidia/hpc_sdk/Linux_x86_64/25.5/cuda CARGO_TARGET_DIR=/data/mini_linq-gpu/experiments/gpu/target CUDA_OXIDE_PTX_DIR=/data/mini_linq/experiments/gpu/target/oxide-runtime-repro cargo +nightly-2026-08-28 oxide build --arch sm_89 -- --release -p gpu-device-columns-oracle --bins",
+  "command": "/data/mini_linq-gpu/experiments/gpu/target/release/runtime-oracle --membership",
+  "input": {
+    "rows": 4000000,
+    "codec": "For",
+    "key_formula": "-4000000 + 2*i, 0 <= i < 4000000",
+    "bitmap_budget_bytes": 1000008,
+    "probe_keys": 8000002,
+    "description": "One resident upload before measurement, fresh membership build per iteration; every key in and just outside the domain checked on GPU and compared with the CPU formula after timing. No dedup/join/materialization time is included in build_ms."
+  },
+  "before": {
+    "implementation": "Original serial membership_bounds; elapsed synchronizes after each operation",
+    "warmup_build_ms": 418.096405,
+    "build_ms": [403.802521, 403.801117, 403.806122, 403.807190, 403.816132],
+    "wall_ms": [403.859026, 403.820201, 403.828979, 403.829078, 403.838977],
+    "exact": true
+  },
+  "after": {
+    "implementation": "Sound loader domain initializes bounds without a scan; bounded parallel extrema fallback for conservative domains exceeding budget; event collection only at finish",
+    "warmup_build_ms": 0.107584,
+    "build_ms": [0.122624, 0.102624, 0.129856, 0.134272, 0.128704],
+    "wall_ms": [0.134898, 0.114860, 0.141592, 0.146511, 0.141171],
+    "exact": true
+  },
+  "profile": {
+    "command": "nsys profile --trace=cuda --sample=none --cpuctxsw=none --force-overwrite=true -o /data/mini_linq/experiments/gpu/target/runtime-membership-audit /data/mini_linq-gpu/experiments/gpu/target/release/runtime-oracle --membership",
+    "capture": "target/runtime-membership-audit.nsys-rep (ignored local artifact)",
+    "membership_bounds_instances": 6,
+    "membership_bounds_total_ns": 6656,
+    "membership_insert_instances": 6,
+    "membership_insert_total_ns": 433091,
+    "codec_offsets_instances": 1,
+    "codec_offsets_total_ns": 1824,
+    "codec_scan_offsets_instances": 1,
+    "codec_scan_offsets_total_ns": 1376,
+    "codec_finish_offsets_instances": 1,
+    "codec_finish_offsets_total_ns": 1248,
+    "query_build_memcpy_counts": [0, 0, 0, 0, 0, 0],
+    "scope": "Memcpy counts cover each status initialize_count through membership_insert completion; full process additionally includes initial loader transfers, explicit probe answer downloads and status reads. Event synchronization calls from CudaEvent::elapsed_ms occur at finish after stream synchronization, not during stage submission. Profile timings are separate from unprofiled samples."
+  },
+  "correctness": {
+    "original_count_owner_repro": "runtime-oracle panicked: escaped encoded column lost its count owner",
+    "original_empty_derived_run_repro": "runtime-oracle --bounds returned CQ_GPU_RUN_DOMAIN: dense rank domain exceeds 2^32 key positions",
+    "codec_oracle_cases_passed": 599,
+    "runtime_oracle": "passed escaped-column ownership, resident indexed output, empty/negative bounds, conservative-domain reduction, empty/full-width membership domain errors and compressed capacity error propagation",
+    "h05_resident_smoke": {
+      "command": "/data/mini_linq/experiments/gpu/target/release/gpu-h05-compiled /data/tpch-gpu/synthetic both compare/gpu_h05_compiled.runtime-audit.smoke.results.json",
+      "plans": ["A", "B"],
+      "calls_per_plan": 6,
+      "answer_rows": 579,
+      "exact": true,
+      "scope": "Correctness smoke with all six resident relations, packed answer -> compiled identity -> explicit download. Another host build was active; do not treat these smoke timings as a new performance baseline."
+    }
+  }
+}

@@ -1,0 +1,785 @@
+   Compiling cq-gpu-datalog v0.1.0 (/data/mini_linq/experiments/gpu/datalog)
+warning: `#[inline]` is ignored on externally exported functions
+  --> tiles/src/lib.rs:22:1
+   |
+22 | #[inline(always)]
+   | ^^^^^^^^^^^^^^^^^
+   |
+   = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+   = note: `#[warn(unused_attributes)]` (part of `#[warn(unused)]`) on by default
+
+warning: `#[inline]` is ignored on externally exported functions
+  --> tiles/src/lib.rs:78:1
+   |
+78 | #[inline(always)]
+   | ^^^^^^^^^^^^^^^^^
+   |
+   = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> tiles/src/lib.rs:102:1
+    |
+102 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> tiles/src/lib.rs:127:1
+    |
+127 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> tiles/src/lib.rs:175:1
+    |
+175 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `gpu-tiles` (lib) generated 5 warnings
+warning: `#[inline]` is ignored on externally exported functions
+  --> device-columns/src/device.rs:46:1
+   |
+46 | #[inline(always)]
+   | ^^^^^^^^^^^^^^^^^
+   |
+   = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+   = note: `#[warn(unused_attributes)]` (part of `#[warn(unused)]`) on by default
+
+warning: `#[inline]` is ignored on externally exported functions
+  --> device-columns/src/device.rs:56:1
+   |
+56 | #[inline(always)]
+   | ^^^^^^^^^^^^^^^^^
+   |
+   = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+  --> device-columns/src/device.rs:66:1
+   |
+66 | #[inline(always)]
+   | ^^^^^^^^^^^^^^^^^
+   |
+   = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+  --> device-columns/src/device.rs:76:1
+   |
+76 | #[inline(always)]
+   | ^^^^^^^^^^^^^^^^^
+   |
+   = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> device-columns/src/device.rs:102:1
+    |
+102 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> device-columns/src/device.rs:132:1
+    |
+132 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> device-columns/src/device.rs:145:1
+    |
+145 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> device-columns/src/device.rs:169:1
+    |
+169 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> device-columns/src/device.rs:210:1
+    |
+210 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> device-columns/src/device.rs:281:1
+    |
+281 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> device-columns/src/device.rs:358:1
+    |
+358 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> device-columns/src/device.rs:387:1
+    |
+387 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> blocked-run/src/lib.rs:126:1
+    |
+126 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+    = note: `#[warn(unused_attributes)]` (part of `#[warn(unused)]`) on by default
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> blocked-run/src/lib.rs:815:5
+    |
+815 |     #[inline(always)]
+    |     ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `gpu-device-columns` (lib) generated 12 warnings
+warning: `gpu-blocked-run` (lib) generated 2 warnings
+   Compiling cq-gpu-runtime v0.1.0 (/data/mini_linq/experiments/gpu/printer-runtime)
+warning: `#[inline]` is ignored on externally exported functions
+  --> printer-runtime/src/device.rs:30:1
+   |
+30 | #[inline(always)]
+   | ^^^^^^^^^^^^^^^^^
+   |
+   = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+   = note: `#[warn(unused_attributes)]` (part of `#[warn(unused)]`) on by default
+
+warning: `#[inline]` is ignored on externally exported functions
+  --> printer-runtime/src/device.rs:64:1
+   |
+64 | #[inline(always)]
+   | ^^^^^^^^^^^^^^^^^
+   |
+   = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> printer-runtime/src/device.rs:131:1
+    |
+131 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> printer-runtime/src/device.rs:136:1
+    |
+136 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> printer-runtime/src/device.rs:143:1
+    |
+143 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> printer-runtime/src/device.rs:165:1
+    |
+165 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> printer-runtime/src/device.rs:177:1
+    |
+177 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> printer-runtime/src/device.rs:183:1
+    |
+183 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> printer-runtime/src/device.rs:190:1
+    |
+190 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> printer-runtime/src/device.rs:204:1
+    |
+204 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> printer-runtime/src/device.rs:216:1
+    |
+216 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> printer-runtime/src/device.rs:221:1
+    |
+221 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> printer-runtime/src/device.rs:226:1
+    |
+226 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> printer-runtime/src/device.rs:238:1
+    |
+238 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> printer-runtime/src/device.rs:271:1
+    |
+271 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> printer-runtime/src/device.rs:305:1
+    |
+305 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> printer-runtime/src/device.rs:312:1
+    |
+312 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> printer-runtime/src/device.rs:447:1
+    |
+447 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> printer-runtime/src/device.rs:452:1
+    |
+452 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> printer-runtime/src/device.rs:457:1
+    |
+457 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: unused attribute
+   --> printer-runtime/src/device.rs:252:1
+    |
+252 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^ help: remove this attribute
+    |
+note: attribute also specified here
+   --> printer-runtime/src/device.rs:251:1
+    |
+251 | #[device]
+    | ^^^^^^^^^
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: this warning originates in the attribute macro `device` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: `cq-gpu-runtime` (lib) generated 21 warnings (run `cargo fix --lib -p cq-gpu-runtime` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.04s
+     Running unittests src/lib.rs (target/debug/build/cq-gpu/f59477d6ba8e2e7f/out/cq_gpu-f59477d6ba8e2e7f)
+
+running 49 tests
+test prefix::tests::rejects_missing_and_out_of_range_recorded_columns ... ok
+test tests::dictionary_order_is_never_silently_integer_order ... ok
+test tests::backend_rejection_codes_name_unsupported_recorded_storage ... ok
+test tests::backend_rejection_codes_name_every_unsupported_operator ... ok
+test prefix::tests::explicit_choice_cannot_discard_an_existing_prefix_read ... ok
+test prefix::tests::rejects_unknown_build_and_nonkey_choice ... ok
+test prefix::tests::preserves_all_key_levels_and_physical_reads ... ok
+test prefix::tests::explicit_result_choice_is_supported ... ok
+test prefix::tests::printer_rejects_recorded_column_outside_the_directory_level ... ok
+test tests::printer_options_are_explicit_and_checked ... ok
+test tests::pure_projection_uses_runtime_without_a_redundant_copy_kernel ... ok
+test tests::decoded_root_descriptors_come_from_the_materialized_table ... ok
+test tests::closed_capture_respects_written_bind_scope ... ok
+test tests::capacity_is_explicit_and_names_a_declared_input ... ok
+test tests::range_reads_are_truthfully_scan_filters ... ok
+test tests::generators_are_rejected_before_device_lowering ... ok
+test tests::lossy_and_repeated_heads_canon_after_projection ... ok
+test tests::kernels_read_resident_logical_count_not_allocation_capacity ... ok
+test tests::certified_exact_membership_is_device_only_and_schema_checked ... ok
+test tests::join_filter_does_not_silently_replace_bloom_or_opaque_providers ... ok
+test tests::copied_and_literal_binds_preserve_types_and_bounds ... ok
+test tests::recorded_stage_sizes_are_not_silently_changed ... ok
+test tests::typed_literals_follow_declared_types_in_relational_predicates ... ok
+test tests::resident_host_binding_preserves_codec_ownership_and_explicit_download ... ok
+test tests::every_keyed_read_has_exactly_one_provenance_entry_and_witness_does_not_reprobe ... ok
+test tests::typed_bind_rejects_opaque_numeric_and_type_changing_expressions ... ok
+test tests::generated_module_cache_is_thread_local_and_context_owned ... ok
+test tests::selection_decodes_one_convergent_stripe_before_row_predicates ... ok
+test tests::output_bounds_follow_driver_and_run_payload_without_full_domain_fallback ... ok
+test tests::recorded_join_filter_keeps_its_exact_covering_read_and_budget ... ok
+test tests::recorded_prefix_run_preserves_all_residual_key_comparisons ... ok
+test prefix::tests::explicit_relation_choice_records_and_uses_the_selected_directory_column ... ok
+test tests::unknown_codec_aliases_and_conflicting_materializations_are_rejected ... ok
+test tests::recorded_membership_uses_its_bitmap_budget_and_reconstructs_constants ... ok
+test tests::dedup_execution_policy_is_read_only_from_the_recorded_type ... ok
+test prefix::tests::explicit_choice_records_a_separate_run_for_displaced_prefix_reads ... ok
+test tests::unbounded_expansion_uses_saved_device_execution_state ... ok
+test tests::physical_anti_reuses_recorded_run_and_inverts_exact_membership ... ok
+test tests::unshared_first_probe_still_expands_every_range_row ... ok
+test tests::completion_boundary_is_explicit_and_query_default_is_unchanged ... ok
+test tests::composite_hashed_runs_require_recorded_type_and_check_every_key ... ok
+test tests::resumable_expansion_preserves_recorded_batch_and_frontier ... ok
+test tests::fixed_full_tile_scan_keeps_only_two_decoded_registers_live_per_column ... ok
+test tests::recorded_expand_enables_frontier_and_zero_disables_it ... ok
+test tests::shared_datalog_dictionary_seeds_input_free_literal_rules ... ok
+test tests::closed_typed_scalar_binds_are_encoded_once_on_host ... ok
+test tests::derived_codecs_follow_only_recorded_provider_types ... ok
+test tests::provider_names_must_resolve_to_the_supported_recorded_paths ... ok
+test tests::integer_literal_encoding_compiles_large_values_but_rejects_declared_type_overflow ... ok
+
+test result: ok. 49 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+     Running tests/ui.rs (target/debug/build/cq-gpu/2e501742c0926120/out/ui-2e501742c0926120)
+
+running 1 test
+    Checking cq-gpu-tests v0.0.0 (/data/mini_linq/experiments/gpu/target/tests/trybuild/cq-gpu)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.03s
+
+
+test tests/ui/generator.rs ... ok
+test tests/ui/merge.rs ... ok
+test tests/ui/non_integral_key.rs ... ok
+test tests/ui/opaque_guard.rs ... ok
+test tests/ui/union.rs ... ok
+
+
+test unsupported_structures_fail_at_the_public_macro_boundary ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+     Running unittests src/lib.rs (target/debug/build/cq-gpu-datalog/075e91a9a34c1d9c/out/cq_gpu_datalog-075e91a9a34c1d9c)
+
+running 4 tests
+test tests::single_output_preserves_direct_result_shape ... ok
+test tests::cpu_schedule_is_not_reinterpreted ... ok
+test tests::string_domain_uses_stable_authored_literal_order ... ok
+test tests::every_hole_uses_gpu_printer_and_resident_publication ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/compile_fail.rs (target/debug/build/cq-gpu-datalog/1726c6778543f506/out/compile_fail-1726c6778543f506)
+
+running 1 test
+   Compiling cq-gpu-datalog v0.1.0 (/data/mini_linq/experiments/gpu/datalog)
+warning: `#[inline]` is ignored on externally exported functions
+  --> /data/mini_linq/experiments/gpu/tiles/src/lib.rs:22:1
+   |
+22 | #[inline(always)]
+   | ^^^^^^^^^^^^^^^^^
+   |
+   = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+   = note: `#[warn(unused_attributes)]` (part of `#[warn(unused)]`) on by default
+
+warning: `#[inline]` is ignored on externally exported functions
+  --> /data/mini_linq/experiments/gpu/tiles/src/lib.rs:78:1
+   |
+78 | #[inline(always)]
+   | ^^^^^^^^^^^^^^^^^
+   |
+   = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> /data/mini_linq/experiments/gpu/tiles/src/lib.rs:102:1
+    |
+102 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> /data/mini_linq/experiments/gpu/tiles/src/lib.rs:127:1
+    |
+127 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> /data/mini_linq/experiments/gpu/tiles/src/lib.rs:175:1
+    |
+175 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `gpu-tiles` (lib) generated 5 warnings
+warning: `#[inline]` is ignored on externally exported functions
+  --> /data/mini_linq/experiments/gpu/device-columns/src/device.rs:46:1
+   |
+46 | #[inline(always)]
+   | ^^^^^^^^^^^^^^^^^
+   |
+   = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+   = note: `#[warn(unused_attributes)]` (part of `#[warn(unused)]`) on by default
+
+warning: `#[inline]` is ignored on externally exported functions
+  --> /data/mini_linq/experiments/gpu/device-columns/src/device.rs:56:1
+   |
+56 | #[inline(always)]
+   | ^^^^^^^^^^^^^^^^^
+   |
+   = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+  --> /data/mini_linq/experiments/gpu/device-columns/src/device.rs:66:1
+   |
+66 | #[inline(always)]
+   | ^^^^^^^^^^^^^^^^^
+   |
+   = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+  --> /data/mini_linq/experiments/gpu/device-columns/src/device.rs:76:1
+   |
+76 | #[inline(always)]
+   | ^^^^^^^^^^^^^^^^^
+   |
+   = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> /data/mini_linq/experiments/gpu/device-columns/src/device.rs:102:1
+    |
+102 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> /data/mini_linq/experiments/gpu/device-columns/src/device.rs:132:1
+    |
+132 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> /data/mini_linq/experiments/gpu/device-columns/src/device.rs:145:1
+    |
+145 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> /data/mini_linq/experiments/gpu/device-columns/src/device.rs:169:1
+    |
+169 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> /data/mini_linq/experiments/gpu/device-columns/src/device.rs:210:1
+    |
+210 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> /data/mini_linq/experiments/gpu/device-columns/src/device.rs:281:1
+    |
+281 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> /data/mini_linq/experiments/gpu/device-columns/src/device.rs:358:1
+    |
+358 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> /data/mini_linq/experiments/gpu/device-columns/src/device.rs:387:1
+    |
+387 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> /data/mini_linq/experiments/gpu/blocked-run/src/lib.rs:126:1
+    |
+126 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+    = note: `#[warn(unused_attributes)]` (part of `#[warn(unused)]`) on by default
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> /data/mini_linq/experiments/gpu/blocked-run/src/lib.rs:815:5
+    |
+815 |     #[inline(always)]
+    |     ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `gpu-device-columns` (lib) generated 12 warnings
+warning: `gpu-blocked-run` (lib) generated 2 warnings
+    Checking cq-gpu-runtime v0.1.0 (/data/mini_linq/experiments/gpu/printer-runtime)
+warning: `#[inline]` is ignored on externally exported functions
+  --> /data/mini_linq/experiments/gpu/printer-runtime/src/device.rs:30:1
+   |
+30 | #[inline(always)]
+   | ^^^^^^^^^^^^^^^^^
+   |
+   = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+   = note: `#[warn(unused_attributes)]` (part of `#[warn(unused)]`) on by default
+
+warning: `#[inline]` is ignored on externally exported functions
+  --> /data/mini_linq/experiments/gpu/printer-runtime/src/device.rs:64:1
+   |
+64 | #[inline(always)]
+   | ^^^^^^^^^^^^^^^^^
+   |
+   = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> /data/mini_linq/experiments/gpu/printer-runtime/src/device.rs:131:1
+    |
+131 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> /data/mini_linq/experiments/gpu/printer-runtime/src/device.rs:136:1
+    |
+136 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> /data/mini_linq/experiments/gpu/printer-runtime/src/device.rs:143:1
+    |
+143 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> /data/mini_linq/experiments/gpu/printer-runtime/src/device.rs:165:1
+    |
+165 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> /data/mini_linq/experiments/gpu/printer-runtime/src/device.rs:177:1
+    |
+177 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> /data/mini_linq/experiments/gpu/printer-runtime/src/device.rs:183:1
+    |
+183 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> /data/mini_linq/experiments/gpu/printer-runtime/src/device.rs:190:1
+    |
+190 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> /data/mini_linq/experiments/gpu/printer-runtime/src/device.rs:204:1
+    |
+204 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> /data/mini_linq/experiments/gpu/printer-runtime/src/device.rs:216:1
+    |
+216 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> /data/mini_linq/experiments/gpu/printer-runtime/src/device.rs:221:1
+    |
+221 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> /data/mini_linq/experiments/gpu/printer-runtime/src/device.rs:226:1
+    |
+226 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> /data/mini_linq/experiments/gpu/printer-runtime/src/device.rs:238:1
+    |
+238 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> /data/mini_linq/experiments/gpu/printer-runtime/src/device.rs:271:1
+    |
+271 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> /data/mini_linq/experiments/gpu/printer-runtime/src/device.rs:305:1
+    |
+305 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> /data/mini_linq/experiments/gpu/printer-runtime/src/device.rs:312:1
+    |
+312 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> /data/mini_linq/experiments/gpu/printer-runtime/src/device.rs:447:1
+    |
+447 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> /data/mini_linq/experiments/gpu/printer-runtime/src/device.rs:452:1
+    |
+452 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> /data/mini_linq/experiments/gpu/printer-runtime/src/device.rs:457:1
+    |
+457 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: unused attribute
+   --> /data/mini_linq/experiments/gpu/printer-runtime/src/device.rs:252:1
+    |
+252 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^ help: remove this attribute
+    |
+note: attribute also specified here
+   --> /data/mini_linq/experiments/gpu/printer-runtime/src/device.rs:251:1
+    |
+251 | #[device]
+    | ^^^^^^^^^
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: this warning originates in the attribute macro `device` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: `cq-gpu-runtime` (lib) generated 21 warnings (run `cargo fix --lib -p cq-gpu-runtime` to apply 1 suggestion)
+    Checking cq-gpu-datalog-tests v0.0.0 (/data/mini_linq/experiments/gpu/target/tests/trybuild/cq-gpu-datalog)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.44s
+
+
+test tests/ui/cpu_policy.rs ... ok
+test tests/ui/grouped_host.rs ... ok
+test tests/ui/rust_head.rs ... ok
+test tests/ui/unsafe_negation.rs ... ok
+
+
+test unsupported_device_programs_are_rejected ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.12s
+
+   Doc-tests cq_gpu
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests cq_gpu_datalog
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

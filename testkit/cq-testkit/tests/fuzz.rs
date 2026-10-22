@@ -135,3 +135,79 @@ fn generator_minimization_keeps_captures_and_nested_binding_scope() {
     cq_testkit::cq::contract::check(&program).unwrap();
     assert!(smaller.has_partial_terms());
 }
+
+#[test]
+fn literal_atoms_keep_source_positions_and_resolve_local_dependencies() {
+    use cq_testkit::fuzz::{Atom, Block, BlockKind, Case, Expr, Query, Relation, Step, Term};
+    let mut case = Case {
+        seed: 0,
+        query: Query {
+            schema: vec![Relation {
+                name: "r0".into(),
+                arity: 3,
+            }],
+            atoms: vec![Atom {
+                relation: 0,
+                terms: vec![
+                    Term::Expression(Expr::Negate(Box::new(Expr::Var(0)))),
+                    Term::Var(0),
+                    Term::Constant(5),
+                ],
+            }],
+            bindings: Vec::new(),
+            guards: Vec::new(),
+            constraints: Vec::new(),
+            blocks: Vec::new(),
+            head: vec![Expr::Var(0)],
+            order: vec![Step::Atom(0)],
+        },
+        data: vec![vec![vec![-2, 2, 5], vec![-3, 3, 6]]],
+    };
+    for source in [case.cq(), case.written_cq()] {
+        let program: cq_testkit::cq::Program = syn::parse_str(&source).unwrap();
+        assert_eq!(
+            program.query.body.len(),
+            1,
+            "literals must not become guards"
+        );
+        let cq_testkit::cq::BodyItem::Positive { atom } = &program.query.body[0] else {
+            panic!("expected original atom");
+        };
+        assert_eq!(atom.args.len(), 3);
+        assert!(matches!(atom.args[2], syn::Expr::Lit(_)));
+    }
+    assert!(case.sql().contains("a0.c2 = 5"));
+    assert!(case.sql().contains("a0.c0 = (-(a0.c1))"));
+    case.query.blocks.push(Block {
+        kind: BlockKind::Union,
+        branches: vec![vec![Step::Atom(0)], vec![Step::Atom(0)]],
+        interface: vec![0],
+    });
+    case.query.order = vec![Step::Block(0)];
+    assert!(case.sql().contains("a.c2 = 5"));
+    assert!(case.sql().contains("a.c0 = (-(a.c1))"));
+}
+
+#[test]
+fn partial_generator_samples_literal_excluded_local_zero_rows() {
+    use cq_testkit::fuzz::{Expr, PartialOp, Term};
+    let mut found = false;
+    for seed in 0..2048 {
+        let case = generate(seed);
+        for atom in &case.query.atoms {
+            if matches!(
+                atom.terms.as_slice(),
+                [
+                    Term::Expression(Expr::Partial(PartialOp::Divide, _)),
+                    Term::Var(_),
+                    Term::Constant(5)
+                ]
+            ) && !case.data[atom.relation].is_empty()
+            {
+                assert!(case.data[atom.relation].contains(&vec![0, 0, 6]));
+                found = true;
+            }
+        }
+    }
+    assert!(found, "sample the literal filter before a local division");
+}

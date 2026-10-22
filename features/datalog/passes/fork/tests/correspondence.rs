@@ -443,41 +443,43 @@ fn owned_negative_constants_are_post_scan_filters_not_owned_prefixes() {
 }
 
 #[test]
-fn literal_key_filter_correspondence_uses_complete_cq_recognition() {
+fn literal_key_filter_correspondence_preserves_atom_literals() {
     let source = constant_schedule();
     let target = compile(&source).unwrap();
     let key = &target.context.strata[0].keys[0];
     let hole = &target.holes[key.hole].cq;
+    assert_eq!(hole.query.body.len(), 1);
     let BodyItem::Positive { atom } = &hole.query.body[0] else {
         unreachable!()
     };
-    let variable = &atom.args[0];
-    let raw: BodyItem = syn::parse_quote!(if *#variable == ("abstract"));
-    assert!(matches!(raw, BodyItem::Filter(_)));
-    assert!(matches!(
-        hole.query.body[1],
-        BodyItem::Equality(_) | BodyItem::Constraint(_)
-    ));
-    assert_ne!(hole.query.body[1], raw);
+    assert_eq!(atom.args[0], syn::parse_quote!("abstract"));
+    assert_eq!(atom.variables().count(), 1);
     check(&source, &target).unwrap();
     let restored: cq_lang_cq::Program = syn::parse2(hole.to_token_stream()).unwrap();
     assert_eq!(&restored, hole);
+    let normal = cq_lang_cq::normal::normalize(hole).unwrap();
+    assert_eq!(normal.query.body.len(), 1);
+    let BodyItem::Positive { atom } = &normal.query.body[0] else {
+        unreachable!()
+    };
+    assert_eq!(atom.args[0], syn::parse_quote!("abstract"));
 
-    // A different literal remains a well-formed, recognized CQ predicate,
-    // but must not pass correspondence with the recorded source selection.
-    let name = &hole.name;
-    let declarations = &hole.declarations;
-    let head = &hole.query.head;
-    let changed_hole: cq_lang_cq::Program = syn::parse2(quote! {
-        struct #name;
-        #(#declarations)*
-        #head :- #atom, if *#variable == ("changed");
-    })
-    .unwrap();
-    cq_lang_cq::contract::check(&changed_hole).unwrap();
+    let all_constants = &target.holes[target.context.strata[1].keys[1].hole].cq;
+    assert_eq!(all_constants.query.body.len(), 1);
+    let BodyItem::Positive { atom } = &all_constants.query.body[0] else {
+        unreachable!()
+    };
+    assert_eq!(atom.variables().count(), 0);
+    assert_eq!(atom.args[1], syn::parse_quote!(7));
+
+    // A changed literal is still valid CQ, but changes the recorded selection.
     let hole_index = key.hole;
     let mut changed = target;
-    changed.holes[hole_index].cq = changed_hole;
+    let BodyItem::Positive { atom } = &mut changed.holes[hole_index].cq.query.body[0] else {
+        unreachable!()
+    };
+    atom.args[0] = syn::parse_quote!("changed");
+    cq_lang_cq::contract::check(&changed.holes[hole_index].cq).unwrap();
     assert!(check(&source, &changed).is_err());
 }
 
@@ -780,6 +782,121 @@ fn fork_preserves_generators_and_generated_join_values() {
     let hole = stratum.steps[0].hole;
     changed.holes[hole].cq.query.body[2] = syn::parse_quote!(for y in [*x + 2]);
     assert!(check(&source, &changed).is_err());
+}
+
+#[test]
+fn device_keys_have_owned_schema_and_checked_membership_intrinsic() {
+    let mut source = authored();
+    source.policy.insertion = syn::parse_quote!(device_set_all_columns);
+    source.policy.negation_keys = syn::parse_quote!(device_set_owned);
+    let mut target = compile(&source).unwrap();
+    check(&source, &target).unwrap();
+    let replay: Fork = syn::parse2(target.to_token_stream()).unwrap();
+    assert_eq!(target, replay);
+    check(&source, &replay).unwrap();
+    assert_eq!(
+        target.context.representation,
+        cq_lang_datalog_round::KeyRepresentation::DeviceSetOwned
+    );
+    let key = &target.context.strata[0].keys[0];
+    let key_hole = &target.holes[key.hole].cq;
+    assert_eq!(
+        key_hole.declarations.len(),
+        2,
+        "only completed input and output"
+    );
+    assert_eq!(
+        key_hole.declarations.last().unwrap().columns[0].ty,
+        syn::parse_quote!(i32)
+    );
+    let rule = &target.context.strata[0].seeds[0];
+    assert_eq!(
+        target.holes[rule.hole].cq.declarations.len(),
+        2,
+        "only used layout and output"
+    );
+    assert!(
+        target.holes[rule.hole]
+            .to_token_stream()
+            .to_string()
+            .contains("datalog :: contains")
+    );
+    target.context.representation = cq_lang_datalog_round::KeyRepresentation::Borrowed;
+    assert!(check(&source, &target).is_err());
+}
+
+#[test]
+fn frozen_device_layout_lifetime_is_an_exact_checked_certificate() {
+    let mut source = authored();
+    source.policy.insertion = syn::parse_quote!(device_set_all_columns);
+    source.policy.negation_keys = syn::parse_quote!(device_set_owned);
+    let target = compile(&source).unwrap();
+    assert_eq!(
+        target.context.layout_realization,
+        cq_lang_datalog_round::LayoutRealization::MaintainedFrozenDeviceIndex
+    );
+    assert_eq!(target.context.strata[0].frozen_layouts, vec![1]);
+    for layouts in [vec![], vec![0], vec![1, 1], vec![2]] {
+        let mut wrong = target.clone();
+        wrong.context.strata[0].frozen_layouts = layouts;
+        assert!(
+            check(&source, &wrong)
+                .unwrap_err()
+                .to_string()
+                .contains("frozen device indexes")
+        );
+    }
+    let mut wrong = target.clone();
+    wrong.context.layout_realization = cq_lang_datalog_round::LayoutRealization::MaintainedGroupedHost;
+    assert!(check(&source, &wrong).is_err());
+    let cpu = compile(&authored()).unwrap();
+    assert!(cpu.context.strata[0].frozen_layouts.is_empty());
+}
+
+#[test]
+fn leveled_device_layouts_cover_only_changing_keyed_full_reads() {
+    let mut source = schedule(&syn::parse_quote! {
+        struct Closure;
+        relation Edge(x:i32,y:i32) = (edges);
+        relation Reach(x:i32,y:i32);
+        output Reach;
+        Reach(*x,*y) :- Edge(x,y);
+        Reach(*x,*z) :- Reach(x,y), Reach(y,z);
+        strata { component [Reach]; }
+        incremental { scheme seminaive_covering;
+            delta Reach = Recent;
+            variant 0 seed { Reach(*x,*y) :- Edge(x,y); }
+            variant 1 delta 0 { Reach(*x,*z) :- Recent(x,y), Reach(y,z); }
+            variant 1 delta 1 { Reach(*x,*z) :- Reach(x,y), Recent(y,z); }
+        }
+    }).unwrap();
+    source.policy.insertion = syn::parse_quote!(device_set_all_columns);
+    source.policy.negation_keys = syn::parse_quote!(device_set_owned);
+    let target = cq_datalog_fork::compile_with_ratio(&source, 8).unwrap();
+    check(&source, &target).unwrap();
+    assert_eq!(target.context.leveled_ratio, 8);
+    assert_eq!(
+        target.context.changing_layout_realization,
+        cq_lang_datalog_round::LayoutRealization::MaintainedLeveledDeviceIndex
+    );
+    assert_eq!(target.context.strata[0].leveled_layouts, [1]);
+    assert!(target.context.strata[0].frozen_layouts.is_empty());
+    for layouts in [vec![], vec![2], vec![1, 1], vec![3]] {
+        let mut wrong = target.clone();
+        wrong.context.strata[0].leveled_layouts = layouts;
+        assert!(check(&source, &wrong).is_err());
+    }
+    let mut wrong = target.clone();
+    wrong.context.changing_layout_realization =
+        cq_lang_datalog_round::LayoutRealization::MaintainedFrozenDeviceIndex;
+    assert!(check(&source, &wrong).is_err());
+    assert!(cq_datalog_fork::compile_with_ratio(&source, 1).is_err());
+    assert_eq!(compile(&source).unwrap().context.leveled_ratio, 4);
+    assert!(
+        compile(&authored()).unwrap().context.strata[0]
+            .leveled_layouts
+            .is_empty()
+    );
 }
 
 #[test]

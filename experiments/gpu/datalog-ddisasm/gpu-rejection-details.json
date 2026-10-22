@@ -1,0 +1,269 @@
+{
+  "method": "Temporary consumer-local proc-macro renderer copy substituted a tracing printer; compiler/options/predicate/prefix modules referenced original shared sources read-only. Tracing printer invoked unchanged compiler::compile, preserving and serializing each rejected Structures Program. Scaffolding removed afterward.",
+  "diagnostic_build_exit_code": 101,
+  "rejected_holes": 18,
+  "build_type_holes": 16,
+  "opaque_bind_holes": 2,
+  "blockers": {
+    "CQ_GPU_BUILD_TYPE": {
+      "missing_fact": "Recorded compatible device index representation for a composite key. Existing Structures records a one-level cq_storage::HashIndex with multiple columns, not a supported SortedRun / PrefixRun or certified AdaptiveKeySet.",
+      "why_rewrites_leave_it": "sorted_runs only retypes a single stored integral key and rejects owned/computed keys; prefix_runs only handles multi-level Trie, not one-level composite HashIndex.",
+      "source_refs": [
+        "features/rewrites/passes/src/structures.rs:296-310",
+        "features/rewrites/passes/src/structures.rs:354-359",
+        "experiments/gpu/printer/src/prefix.rs:88-118",
+        "experiments/gpu/printer/src/compiler.rs:371-395"
+      ],
+      "minimal_fix_required": "A checked representation/physical rewrite that exposes an integral singleton prefix and preserves every remaining composite-key equality as an exact residual predicate, then records a supported device run. Simply renaming HashIndex to SortedRun is invalid: the printer also requires a singleton first level."
+    },
+    "CQ_GPU_OPAQUE_BIND": {
+      "missing_fact": "A certified closed host scalar capture classification for typed i64 meta fields; current GPU Bind proof accepts only copied relational dereferences or literals, not field expressions.",
+      "source_refs": [
+        "experiments/gpu/printer/src/compiler.rs:160-238"
+      ],
+      "minimal_fix_required": "Extend the checked Bind fragment with explicitly certified, rule-independent typed Copy scalar captures; evaluate once on the host and pass encoded scalar parameters. Keep arbitrary Rust/rule-dependent expressions rejected. DefUsedAddr1 and DefUsedAddr4 also contain unsupported recorded HashIndex builds, which remain after fixing captures."
+    }
+  },
+  "holes": [
+    {
+      "hole": "__cq_datalog_hole_0",
+      "source_rule": "JumpTableTargetRule",
+      "source_ref": "/data/doop-next-round/source/examples/ddisasm.py:504",
+      "diagnostic": "CQ_GPU_BUILD_TYPE: record SortedRun, PrefixRun, or certified AdaptiveKeySet membership",
+      "recorded_builds": [
+        "r1 = :: cq_storage :: HashIndex < '_, _, _ > [size, tableStart];"
+      ],
+      "dynamic_bind_expressions": [],
+      "first_rejected_build": "r1 = :: cq_storage :: HashIndex < '_, _, _ > [size, tableStart];",
+      "structures_text": "physical\n{\n    relation\n    __cq_datalog_layout_0(c0 : i64, c1 : i64, c2 : i64, c3 : i64, c4 : i64) =\n    (& __cq_datalog_host_0); relation\n    __cq_datalog_layout_1(c1 : i64, c2 : i64, c0 : i64, c3 : i64, c4 : i64, c5\n    : i64, c6 : i64) = (& __cq_datalog_host_1); relation\n    __cq_datalog_hole_0(c0 : i64, c1 : i64); r0 = pipe rename\n    __cq_datalog_layout_0 @ 0\n    {\n        c0 - > ea, c1 - > size, c2 - > tableStart, c3 - > __cq_0_3, c4 - >\n        __cq_0_4\n    }; r1 = let rename __cq_datalog_layout_1 @ 1\n    {\n        c1 - > tableStart, c2 - > size, c0 - > __cq_1_2, c3 - > __cq_1_3, c4 -\n        > dest, c5 - > __cq_1_5, c6 - > __cq_1_6\n    }; r2 = pipe probe first [size, tableStart] r0, r1; r3 = pipe bind r2 with\n    __cq_2_0 : i64 = (* ea); r4 = pipe bind r3 with __cq_2_1 : i64 = (* dest);\n    r5 = pipe canon project r4 keep { __cq_2_0, __cq_2_1 }; return r5 as\n    __cq_datalog_hole_0(__cq_2_0, __cq_2_1);\n} structures\n{\n    r1 = :: cq_storage :: HashIndex < '_, _, _ > [size, tableStart]; r0 host\n    scan = :: core :: iter :: Map < _, _ > []; r1 host scan = :: core :: iter\n    :: Map < _, _ > []; r5 canon = :: cq_gpu_runtime :: DeviceSet < _ > ; r0\n    stage = batch 128;\n}"
+    },
+    {
+      "hole": "__cq_datalog_hole_1",
+      "source_rule": "RegDefUsed1",
+      "source_ref": "/data/doop-next-round/source/examples/ddisasm.py:509",
+      "diagnostic": "CQ_GPU_BUILD_TYPE: record SortedRun, PrefixRun, or certified AdaptiveKeySet membership",
+      "recorded_builds": [
+        "r1 = :: cq_storage :: HashIndex < '_, _, _ > [eaUsed, mvar];"
+      ],
+      "dynamic_bind_expressions": [],
+      "first_rejected_build": "r1 = :: cq_storage :: HashIndex < '_, _, _ > [eaUsed, mvar];",
+      "structures_text": "physical\n{\n    relation __cq_datalog_layout_2(c0 : i64, c1 : i64, c2 : i64) =\n    (& __cq_datalog_host_2); relation\n    __cq_datalog_layout_3(c0 : i64, c2 : i64, c1 : i64) =\n    (& __cq_datalog_host_3); relation\n    __cq_datalog_hole_1(c0 : i64, c1 : i64, c2 : i64, c3 : i64); r0 = pipe\n    rename __cq_datalog_layout_2 @ 0\n    { c0 - > eaUsed, c1 - > mvar, c2 - > index }; r1 = let rename\n    __cq_datalog_layout_3 @ 1 { c0 - > eaUsed, c2 - > mvar, c1 - > eaDef }; r2\n    = pipe probe first [eaUsed, mvar] r0, r1; r3 = pipe bind r2 with __cq_2_0\n    : i64 = (* eaDef); r4 = pipe bind r3 with __cq_2_1 : i64 = (* mvar); r5 =\n    pipe bind r4 with __cq_2_2 : i64 = (* eaUsed); r6 = pipe bind r5 with\n    __cq_2_3 : i64 = (* index); r7 = pipe canon project r6 keep\n    { __cq_2_0, __cq_2_1, __cq_2_2, __cq_2_3 }; return r7 as\n    __cq_datalog_hole_1(__cq_2_0, __cq_2_1, __cq_2_2, __cq_2_3);\n} structures\n{\n    r1 = :: cq_storage :: HashIndex < '_, _, _ > [eaUsed, mvar]; r0 host scan\n    = :: core :: iter :: Map < _, _ > []; r1 host scan = :: core :: iter ::\n    Map < _, _ > []; r7 canon = :: cq_gpu_runtime :: DeviceSet < _ > ; r0\n    stage = batch 128;\n}"
+    },
+    {
+      "hole": "__cq_datalog_hole_2",
+      "source_rule": "RegDefUsed2",
+      "source_ref": "/data/doop-next-round/source/examples/ddisasm.py:513",
+      "diagnostic": "CQ_GPU_BUILD_TYPE: record SortedRun, PrefixRun, or certified AdaptiveKeySet membership",
+      "recorded_builds": [
+        "r1 = :: cq_storage :: HashIndex < '_, _, _ > [blk, mvar];",
+        "r3 = :: cq_storage :: HashIndex < '_, _, _ > [blockUsed, mvar];"
+      ],
+      "dynamic_bind_expressions": [],
+      "first_rejected_build": "r1 = :: cq_storage :: HashIndex < '_, _, _ > [blk, mvar];",
+      "structures_text": "physical\n{\n    relation __cq_datalog_delta_5(c0 : i64, c1 : i64, c2 : i64) =\n    (& __cq_datalog_delta_16); relation\n    __cq_datalog_layout_4(c0 : i64, c2 : i64, c1 : i64, c3 : i64) =\n    (& __cq_datalog_host_4); relation\n    __cq_datalog_layout_5(c0 : i64, c1 : i64, c2 : i64, c3 : i64) =\n    (& __cq_datalog_host_5); relation\n    __cq_datalog_hole_2(c0 : i64, c1 : i64, c2 : i64, c3 : i64); r0 = pipe\n    rename __cq_datalog_delta_5 @ 0\n    { c0 - > blk, c1 - > blockUsed, c2 - > mvar }; r1 = let rename\n    __cq_datalog_layout_4 @ 1\n    { c0 - > blk, c2 - > mvar, c1 - > varIdentity, c3 - > eaDef }; r2 = pipe\n    probe first [blk, mvar] r0, r1; r3 = let rename __cq_datalog_layout_5 @ 2\n    { c0 - > blockUsed, c1 - > mvar, c2 - > eaUsed, c3 - > index }; r4 = pipe\n    probe first [blockUsed, mvar] r2, r3; r5 = pipe bind r4 with __cq_3_0 :\n    i64 = (* eaDef); r6 = pipe bind r5 with __cq_3_1 : i64 = (* varIdentity);\n    r7 = pipe bind r6 with __cq_3_2 : i64 = (* eaUsed); r8 = pipe bind r7 with\n    __cq_3_3 : i64 = (* index); r9 = pipe canon project r8 keep\n    { __cq_3_0, __cq_3_1, __cq_3_2, __cq_3_3 }; return r9 as\n    __cq_datalog_hole_2(__cq_3_0, __cq_3_1, __cq_3_2, __cq_3_3);\n} structures\n{\n    r1 = :: cq_storage :: HashIndex < '_, _, _ > [blk, mvar]; r3 = ::\n    cq_storage :: HashIndex < '_, _, _ > [blockUsed, mvar]; r0 host scan = ::\n    core :: iter :: Map < _, _ > []; r1 host scan = :: core :: iter :: Map <\n    _, _ > []; r3 host scan = :: core :: iter :: Map < _, _ > []; r9 canon =\n    :: cq_gpu_runtime :: DeviceSet < _ > ; r0 stage = batch 128;\n}"
+    },
+    {
+      "hole": "__cq_datalog_hole_3",
+      "source_rule": "RegDefUsed2",
+      "source_ref": "/data/doop-next-round/source/examples/ddisasm.py:513",
+      "diagnostic": "CQ_GPU_BUILD_TYPE: record SortedRun, PrefixRun, or certified AdaptiveKeySet membership",
+      "recorded_builds": [
+        "r1 = :: cq_storage :: HashIndex < '_, _, _ > [blk, mvar];",
+        "r3 = :: cq_storage :: HashIndex < '_, _, _ > [blockUsed, mvar];"
+      ],
+      "dynamic_bind_expressions": [],
+      "first_rejected_build": "r1 = :: cq_storage :: HashIndex < '_, _, _ > [blk, mvar];",
+      "structures_text": "physical\n{\n    relation __cq_datalog_layout_4(c0 : i64, c2 : i64, c1 : i64, c3 : i64) =\n    (& __cq_datalog_host_4); relation\n    __cq_datalog_layout_6(c0 : i64, c1 : i64, c2 : i64) =\n    (& __cq_datalog_host_6); relation\n    __cq_datalog_delta_layout_0(c0 : i64, c1 : i64, c2 : i64, c3 : i64) =\n    (& __cq_datalog_delta_host_0); relation\n    __cq_datalog_hole_3(c0 : i64, c1 : i64, c2 : i64, c3 : i64); r0 = pipe\n    rename __cq_datalog_layout_6 @ 0\n    { c0 - > blk, c1 - > blockUsed, c2 - > mvar }; r1 = let rename\n    __cq_datalog_layout_4 @ 1\n    { c0 - > blk, c2 - > mvar, c1 - > varIdentity, c3 - > eaDef }; r2 = pipe\n    probe first [blk, mvar] r0, r1; r3 = let rename\n    __cq_datalog_delta_layout_0 @ 2\n    { c0 - > blockUsed, c1 - > mvar, c2 - > eaUsed, c3 - > index }; r4 = pipe\n    probe first [blockUsed, mvar] r2, r3; r5 = pipe bind r4 with __cq_3_0 :\n    i64 = (* eaDef); r6 = pipe bind r5 with __cq_3_1 : i64 = (* varIdentity);\n    r7 = pipe bind r6 with __cq_3_2 : i64 = (* eaUsed); r8 = pipe bind r7 with\n    __cq_3_3 : i64 = (* index); r9 = pipe canon project r8 keep\n    { __cq_3_0, __cq_3_1, __cq_3_2, __cq_3_3 }; return r9 as\n    __cq_datalog_hole_3(__cq_3_0, __cq_3_1, __cq_3_2, __cq_3_3);\n} structures\n{\n    r1 = :: cq_storage :: HashIndex < '_, _, _ > [blk, mvar]; r3 = ::\n    cq_storage :: HashIndex < '_, _, _ > [blockUsed, mvar]; r0 host scan = ::\n    core :: iter :: Map < _, _ > []; r1 host scan = :: core :: iter :: Map <\n    _, _ > []; r3 host scan = :: core :: iter :: Map < _, _ > []; r9 canon =\n    :: cq_gpu_runtime :: DeviceSet < _ > ; r0 stage = batch 128;\n}"
+    },
+    {
+      "hole": "__cq_datalog_hole_4",
+      "source_rule": "RegDefUsed3",
+      "source_ref": "/data/doop-next-round/source/examples/ddisasm.py:519",
+      "diagnostic": "CQ_GPU_BUILD_TYPE: record SortedRun, PrefixRun, or certified AdaptiveKeySet membership",
+      "recorded_builds": [
+        "r1 = :: cq_storage :: HashIndex < '_, _, _ > [eaUsed, mvar];",
+        "r3 = :: cq_storage :: HashIndex < '_, _, _ > [mvar, nxtBlk];"
+      ],
+      "dynamic_bind_expressions": [],
+      "first_rejected_build": "r1 = :: cq_storage :: HashIndex < '_, _, _ > [eaUsed, mvar];",
+      "structures_text": "physical\n{\n    relation __cq_datalog_delta_4(c0 : i64, c1 : i64, c2 : i64) =\n    (& __cq_datalog_delta_15); relation\n    __cq_datalog_layout_5(c0 : i64, c1 : i64, c2 : i64, c3 : i64) =\n    (& __cq_datalog_host_5); relation\n    __cq_datalog_layout_7(c1 : i64, c2 : i64, c0 : i64, c3 : i64) =\n    (& __cq_datalog_host_7); relation\n    __cq_datalog_hole_4(c0 : i64, c1 : i64, c2 : i64, c3 : i64); r0 = pipe\n    rename __cq_datalog_delta_4 @ 0\n    { c0 - > eaUsed, c1 - > nxtBlk, c2 - > mvar }; r1 = let rename\n    __cq_datalog_layout_7 @ 1\n    { c1 - > mvar, c2 - > eaUsed, c0 - > eaDef, c3 - > __cq_1_3 }; r2 = pipe\n    probe first [eaUsed, mvar] r0, r1; r3 = let rename __cq_datalog_layout_5 @\n    2 { c0 - > nxtBlk, c1 - > mvar, c2 - > nextEaUsed, c3 - > nextIndex }; r4\n    = pipe probe first [mvar, nxtBlk] r2, r3; r5 = pipe bind r4 with __cq_3_0\n    : i64 = (* eaDef); r6 = pipe bind r5 with __cq_3_1 : i64 = (* mvar); r7 =\n    pipe bind r6 with __cq_3_2 : i64 = (* nextEaUsed); r8 = pipe bind r7 with\n    __cq_3_3 : i64 = (* nextIndex); r9 = pipe canon project r8 keep\n    { __cq_3_0, __cq_3_1, __cq_3_2, __cq_3_3 }; return r9 as\n    __cq_datalog_hole_4(__cq_3_0, __cq_3_1, __cq_3_2, __cq_3_3);\n} structures\n{\n    r1 = :: cq_storage :: HashIndex < '_, _, _ > [eaUsed, mvar]; r3 = ::\n    cq_storage :: HashIndex < '_, _, _ > [mvar, nxtBlk]; r0 host scan = ::\n    core :: iter :: Map < _, _ > []; r1 host scan = :: core :: iter :: Map <\n    _, _ > []; r3 host scan = :: core :: iter :: Map < _, _ > []; r9 canon =\n    :: cq_gpu_runtime :: DeviceSet < _ > ; r0 stage = batch 128;\n}"
+    },
+    {
+      "hole": "__cq_datalog_hole_5",
+      "source_rule": "RegDefUsed3",
+      "source_ref": "/data/doop-next-round/source/examples/ddisasm.py:519",
+      "diagnostic": "CQ_GPU_BUILD_TYPE: record SortedRun, PrefixRun, or certified AdaptiveKeySet membership",
+      "recorded_builds": [
+        "r1 = :: cq_storage :: HashIndex < '_, _, _ > [eaUsed, mvar];",
+        "r3 = :: cq_storage :: HashIndex < '_, _, _ > [mvar, nxtBlk];"
+      ],
+      "dynamic_bind_expressions": [],
+      "first_rejected_build": "r1 = :: cq_storage :: HashIndex < '_, _, _ > [eaUsed, mvar];",
+      "structures_text": "physical\n{\n    relation __cq_datalog_layout_5(c0 : i64, c1 : i64, c2 : i64, c3 : i64) =\n    (& __cq_datalog_host_5); relation\n    __cq_datalog_layout_8(c0 : i64, c1 : i64, c2 : i64) =\n    (& __cq_datalog_host_8); relation\n    __cq_datalog_delta_layout_1(c1 : i64, c2 : i64, c0 : i64, c3 : i64) =\n    (& __cq_datalog_delta_host_1); relation\n    __cq_datalog_hole_5(c0 : i64, c1 : i64, c2 : i64, c3 : i64); r0 = pipe\n    rename __cq_datalog_layout_8 @ 0\n    { c0 - > eaUsed, c1 - > nxtBlk, c2 - > mvar }; r1 = let rename\n    __cq_datalog_delta_layout_1 @ 1\n    { c1 - > mvar, c2 - > eaUsed, c0 - > eaDef, c3 - > __cq_1_3 }; r2 = pipe\n    probe first [eaUsed, mvar] r0, r1; r3 = let rename __cq_datalog_layout_5 @\n    2 { c0 - > nxtBlk, c1 - > mvar, c2 - > nextEaUsed, c3 - > nextIndex }; r4\n    = pipe probe first [mvar, nxtBlk] r2, r3; r5 = pipe bind r4 with __cq_3_0\n    : i64 = (* eaDef); r6 = pipe bind r5 with __cq_3_1 : i64 = (* mvar); r7 =\n    pipe bind r6 with __cq_3_2 : i64 = (* nextEaUsed); r8 = pipe bind r7 with\n    __cq_3_3 : i64 = (* nextIndex); r9 = pipe canon project r8 keep\n    { __cq_3_0, __cq_3_1, __cq_3_2, __cq_3_3 }; return r9 as\n    __cq_datalog_hole_5(__cq_3_0, __cq_3_1, __cq_3_2, __cq_3_3);\n} structures\n{\n    r1 = :: cq_storage :: HashIndex < '_, _, _ > [eaUsed, mvar]; r3 = ::\n    cq_storage :: HashIndex < '_, _, _ > [mvar, nxtBlk]; r0 host scan = ::\n    core :: iter :: Map < _, _ > []; r1 host scan = :: core :: iter :: Map <\n    _, _ > []; r3 host scan = :: core :: iter :: Map < _, _ > []; r9 canon =\n    :: cq_gpu_runtime :: DeviceSet < _ > ; r0 stage = batch 128;\n}"
+    },
+    {
+      "hole": "__cq_datalog_hole_6",
+      "source_rule": "RegDefUsed3",
+      "source_ref": "/data/doop-next-round/source/examples/ddisasm.py:519",
+      "diagnostic": "CQ_GPU_BUILD_TYPE: record SortedRun, PrefixRun, or certified AdaptiveKeySet membership",
+      "recorded_builds": [
+        "r1 = :: cq_storage :: HashIndex < '_, _, _ > [eaUsed, mvar];",
+        "r3 = :: cq_storage :: HashIndex < '_, _, _ > [mvar, nxtBlk];"
+      ],
+      "dynamic_bind_expressions": [],
+      "first_rejected_build": "r1 = :: cq_storage :: HashIndex < '_, _, _ > [eaUsed, mvar];",
+      "structures_text": "physical\n{\n    relation __cq_datalog_layout_7(c1 : i64, c2 : i64, c0 : i64, c3 : i64) =\n    (& __cq_datalog_host_7); relation\n    __cq_datalog_layout_8(c0 : i64, c1 : i64, c2 : i64) =\n    (& __cq_datalog_host_8); relation\n    __cq_datalog_delta_layout_0(c0 : i64, c1 : i64, c2 : i64, c3 : i64) =\n    (& __cq_datalog_delta_host_0); relation\n    __cq_datalog_hole_6(c0 : i64, c1 : i64, c2 : i64, c3 : i64); r0 = pipe\n    rename __cq_datalog_layout_8 @ 0\n    { c0 - > eaUsed, c1 - > nxtBlk, c2 - > mvar }; r1 = let rename\n    __cq_datalog_layout_7 @ 1\n    { c1 - > mvar, c2 - > eaUsed, c0 - > eaDef, c3 - > __cq_1_3 }; r2 = pipe\n    probe first [eaUsed, mvar] r0, r1; r3 = let rename\n    __cq_datalog_delta_layout_0 @ 2\n    { c0 - > nxtBlk, c1 - > mvar, c2 - > nextEaUsed, c3 - > nextIndex }; r4 =\n    pipe probe first [mvar, nxtBlk] r2, r3; r5 = pipe bind r4 with __cq_3_0 :\n    i64 = (* eaDef); r6 = pipe bind r5 with __cq_3_1 : i64 = (* mvar); r7 =\n    pipe bind r6 with __cq_3_2 : i64 = (* nextEaUsed); r8 = pipe bind r7 with\n    __cq_3_3 : i64 = (* nextIndex); r9 = pipe canon project r8 keep\n    { __cq_3_0, __cq_3_1, __cq_3_2, __cq_3_3 }; return r9 as\n    __cq_datalog_hole_6(__cq_3_0, __cq_3_1, __cq_3_2, __cq_3_3);\n} structures\n{\n    r1 = :: cq_storage :: HashIndex < '_, _, _ > [eaUsed, mvar]; r3 = ::\n    cq_storage :: HashIndex < '_, _, _ > [mvar, nxtBlk]; r0 host scan = ::\n    core :: iter :: Map < _, _ > []; r1 host scan = :: core :: iter :: Map <\n    _, _ > []; r3 host scan = :: core :: iter :: Map < _, _ > []; r9 canon =\n    :: cq_gpu_runtime :: DeviceSet < _ > ; r0 stage = batch 128;\n}"
+    },
+    {
+      "hole": "__cq_datalog_hole_7",
+      "source_rule": "RegDefUsed4",
+      "source_ref": "/data/doop-next-round/source/examples/ddisasm.py:535",
+      "diagnostic": "CQ_GPU_BUILD_TYPE: record SortedRun, PrefixRun, or certified AdaptiveKeySet membership",
+      "recorded_builds": [
+        "r1 = :: cq_storage :: SortedRun < _, _, :: cq_storage :: BorrowedI64TupleCodec > [callee];",
+        "r3 = :: cq_storage :: HashIndex < '_, _, _ > [blockEnd, reg];"
+      ],
+      "dynamic_bind_expressions": [],
+      "first_rejected_build": "r3 = :: cq_storage :: HashIndex < '_, _, _ > [blockEnd, reg];",
+      "structures_text": "physical\n{\n    relation\n    __cq_datalog_delta_2(c0 : i64, c1 : i64, c2 : i64, c3 : i64, c4 : i64) =\n    (& __cq_datalog_delta_13); relation\n    __cq_datalog_layout_3(c0 : i64, c2 : i64, c1 : i64) =\n    (& __cq_datalog_host_3); relation\n    __cq_datalog_layout_9(c0 : i64, c1 : i64, c2 : i64, c3 : i64) =\n    (& __cq_datalog_host_9); relation\n    __cq_datalog_hole_7(c0 : i64, c1 : i64, c2 : i64, c3 : i64); r0 = pipe\n    rename __cq_datalog_delta_2 @ 0\n    {\n        c0 - > __cq_0_0, c1 - > callee, c2 - > reg, c3 - > eaUsed, c4 - >\n        index\n    }; r1 = let rename __cq_datalog_layout_9 @ 1\n    { c0 - > callee, c1 - > __cq_1_1, c2 - > __cq_1_2, c3 - > blockEnd }; r2 =\n    pipe probe first [callee] r0, r1; r3 = let rename __cq_datalog_layout_3 @\n    2 { c0 - > blockEnd, c2 - > reg, c1 - > eaDef }; r4 = pipe probe first\n    [blockEnd, reg] r2, r3; r5 = pipe bind r4 with __cq_3_0 : i64 = (* eaDef);\n    r6 = pipe bind r5 with __cq_3_1 : i64 = (* reg); r7 = pipe bind r6 with\n    __cq_3_2 : i64 = (* eaUsed); r8 = pipe bind r7 with __cq_3_3 : i64 =\n    (* index); r9 = pipe canon project r8 keep\n    { __cq_3_0, __cq_3_1, __cq_3_2, __cq_3_3 }; return r9 as\n    __cq_datalog_hole_7(__cq_3_0, __cq_3_1, __cq_3_2, __cq_3_3);\n} structures\n{\n    r1 = :: cq_storage :: SortedRun < _, _, :: cq_storage ::\n    BorrowedI64TupleCodec > [callee]; r3 = :: cq_storage :: HashIndex < '_, _,\n    _ > [blockEnd, reg]; r0 host scan = :: core :: iter :: Map < _, _ > []; r1\n    host scan = :: core :: iter :: Map < _, _ > []; r3 host scan = :: core ::\n    iter :: Map < _, _ > []; r9 canon = :: cq_gpu_runtime :: DeviceSet < _ > ;\n    r0 stage = batch 128;\n}"
+    },
+    {
+      "hole": "__cq_datalog_hole_11",
+      "source_rule": "LiveVarAtPriorUsed",
+      "source_ref": "/data/doop-next-round/source/examples/ddisasm.py:558",
+      "diagnostic": "CQ_GPU_BUILD_TYPE: record SortedRun, PrefixRun, or certified AdaptiveKeySet membership",
+      "recorded_builds": [
+        "r3 = :: cq_storage :: HashIndex < '_, _, _ > [blk, mvar];"
+      ],
+      "dynamic_bind_expressions": [],
+      "first_rejected_build": "r3 = :: cq_storage :: HashIndex < '_, _, _ > [blk, mvar];",
+      "structures_text": "physical\n{\n    relation __cq_datalog_delta_5(c0 : i64, c1 : i64, c2 : i64) =\n    (& __cq_datalog_delta_16); relation\n    __cq_datalog_layout_14(c0 : i64, c2 : i64, c1 : i64, c3 : i64) =\n    (& __cq_datalog_host_14); relation\n    __cq_datalog_hole_11(c0 : i64, c1 : i64, c2 : i64); r0 = pipe rename\n    __cq_datalog_delta_5 @ 0 { c0 - > blk, c1 - > blockUsed, c2 - > mvar }; r1\n    = pipe select r0 if\n    (#[total] { blk = blk, mvar = mvar }\n    (! :: cq_gpu_runtime :: datalog ::\n    contains(& __cq_datalog_keys_1, & (blk, mvar,)))); r2 = pipe rename\n    __cq_datalog_layout_14 @ 1\n    { c0 - > blk, c2 - > mvar, c1 - > eaUsed, c3 - > __cq_1_3 }; r3 = let\n    select r2 if\n    (#[total] { blk = blk, mvar = mvar }\n    (! :: cq_gpu_runtime :: datalog ::\n    contains(& __cq_datalog_keys_1, & (blk, mvar,)))); r4 = pipe probe first\n    [blk, mvar] r1, r3; r5 = pipe bind r4 with __cq_3_0 : i64 = (* eaUsed); r6\n    = pipe bind r5 with __cq_3_1 : i64 = (* blockUsed); r7 = pipe bind r6 with\n    __cq_3_2 : i64 = (* mvar); r8 = pipe canon project r7 keep\n    { __cq_3_0, __cq_3_1, __cq_3_2 }; return r8 as\n    __cq_datalog_hole_11(__cq_3_0, __cq_3_1, __cq_3_2);\n} structures\n{\n    r3 = :: cq_storage :: HashIndex < '_, _, _ > [blk, mvar]; r0 host scan =\n    :: core :: iter :: Map < _, _ > []; r2 host scan = :: core :: iter :: Map\n    < _, _ > []; r8 canon = :: cq_gpu_runtime :: DeviceSet < _ > ; r1 stage =\n    batch 128;\n}"
+    },
+    {
+      "hole": "__cq_datalog_hole_16",
+      "source_rule": "StackLiveVarPriorUsed",
+      "source_ref": "/data/doop-next-round/source/examples/ddisasm.py:676",
+      "diagnostic": "CQ_GPU_BUILD_TYPE: record SortedRun, PrefixRun, or certified AdaptiveKeySet membership",
+      "recorded_builds": [
+        "r5 = :: cq_storage :: HashIndex < '_, _, _ > [blk, varp, varr];"
+      ],
+      "dynamic_bind_expressions": [],
+      "first_rejected_build": "r5 = :: cq_storage :: HashIndex < '_, _, _ > [blk, varp, varr];",
+      "structures_text": "physical\n{\n    relation __cq_datalog_layout_28(c0 : i64, c1 : i64, c2 : i64, c3 : i64) =\n    (& __cq_datalog_host_28); relation\n    __cq_datalog_layout_38(c0 : i64, c2 : i64, c3 : i64, c1 : i64, c4 : i64) =\n    (& __cq_datalog_host_38); relation\n    __cq_datalog_hole_16(c0 : i64, c1 : i64, c2 : i64, c3 : i64); r0 = pipe\n    rename __cq_datalog_layout_28 @ 0\n    { c0 - > blk, c1 - > blockUsed, c2 - > varr, c3 - > varp }; r1 = pipe\n    select r0 if\n    (#[total] { blk = blk, varr = varr }\n    (! :: cq_gpu_runtime :: datalog ::\n    contains(& __cq_datalog_keys_6, & (blk, varr,)))); r2 = pipe select r1 if\n    (#[total] { blk = blk, varp = varp, varr = varr }\n    (! :: cq_gpu_runtime :: datalog ::\n    contains(& __cq_datalog_keys_7, & (blk, varr, varp,)))); r3 = pipe rename\n    __cq_datalog_layout_38 @ 1\n    { c0 - > blk, c2 - > varr, c3 - > varp, c1 - > eaUsed, c4 - > __cq_1_4 };\n    r4 = pipe select r3 if\n    (#[total] { blk = blk, varr = varr }\n    (! :: cq_gpu_runtime :: datalog ::\n    contains(& __cq_datalog_keys_6, & (blk, varr,)))); r5 = let select r4 if\n    (#[total] { blk = blk, varp = varp, varr = varr }\n    (! :: cq_gpu_runtime :: datalog ::\n    contains(& __cq_datalog_keys_7, & (blk, varr, varp,)))); r6 = pipe probe\n    first [blk, varp, varr] r2, r5; r7 = pipe bind r6 with __cq_4_0 : i64 =\n    (* eaUsed); r8 = pipe bind r7 with __cq_4_1 : i64 = (* blockUsed); r9 =\n    pipe bind r8 with __cq_4_2 : i64 = (* varr); r10 = pipe bind r9 with\n    __cq_4_3 : i64 = (* varp); r11 = pipe canon project r10 keep\n    { __cq_4_0, __cq_4_1, __cq_4_2, __cq_4_3 }; return r11 as\n    __cq_datalog_hole_16(__cq_4_0, __cq_4_1, __cq_4_2, __cq_4_3);\n} structures\n{\n    r5 = :: cq_storage :: HashIndex < '_, _, _ > [blk, varp, varr]; r0 host\n    scan = :: core :: iter :: Map < _, _ > []; r3 host scan = :: core :: iter\n    :: Map < _, _ > []; r11 canon = :: cq_gpu_runtime :: DeviceSet < _ > ; r2\n    stage = batch 128;\n}"
+    },
+    {
+      "hole": "__cq_datalog_hole_17",
+      "source_rule": "StackDefUsed1",
+      "source_ref": "/data/doop-next-round/source/examples/ddisasm.py:626",
+      "diagnostic": "CQ_GPU_BUILD_TYPE: record SortedRun, PrefixRun, or certified AdaptiveKeySet membership",
+      "recorded_builds": [
+        "r1 = :: cq_storage :: HashIndex < '_, _, _ > [eaUsed, varp, varr];"
+      ],
+      "dynamic_bind_expressions": [],
+      "first_rejected_build": "r1 = :: cq_storage :: HashIndex < '_, _, _ > [eaUsed, varp, varr];",
+      "structures_text": "physical\n{\n    relation __cq_datalog_layout_26(c0 : i64, c1 : i64, c2 : i64, c3 : i64) =\n    (& __cq_datalog_host_26); relation\n    __cq_datalog_layout_27(c0 : i64, c2 : i64, c3 : i64, c1 : i64) =\n    (& __cq_datalog_host_27); relation\n    __cq_datalog_hole_17(c0 : i64, c1 : i64, c2 : i64, c3 : i64, c4 : i64, c5\n    : i64); r0 = pipe rename __cq_datalog_layout_26 @ 0\n    { c0 - > eaUsed, c1 - > varr, c2 - > varp, c3 - > __cq_0_3 }; r1 = let\n    rename __cq_datalog_layout_27 @ 1\n    { c0 - > eaUsed, c2 - > varr, c3 - > varp, c1 - > eaDef }; r2 = pipe probe\n    first [eaUsed, varp, varr] r0, r1; r3 = pipe bind r2 with __cq_2_0 : i64 =\n    (* eaDef); r4 = pipe bind r3 with __cq_2_1 : i64 = (* varr); r5 = pipe\n    bind r4 with __cq_2_2 : i64 = (* varp); r6 = pipe bind r5 with __cq_2_3 :\n    i64 = (* eaUsed); r7 = pipe bind r6 with __cq_2_4 : i64 = (* varr); r8 =\n    pipe bind r7 with __cq_2_5 : i64 = (* varp); r9 = pipe canon project r8\n    keep { __cq_2_0, __cq_2_1, __cq_2_2, __cq_2_3, __cq_2_4, __cq_2_5 };\n    return r9 as\n    __cq_datalog_hole_17(__cq_2_0, __cq_2_1, __cq_2_2, __cq_2_3, __cq_2_4,\n    __cq_2_5);\n} structures\n{\n    r1 = :: cq_storage :: HashIndex < '_, _, _ > [eaUsed, varp, varr]; r0 host\n    scan = :: core :: iter :: Map < _, _ > []; r1 host scan = :: core :: iter\n    :: Map < _, _ > []; r9 canon = :: cq_gpu_runtime :: DeviceSet < _ > ; r0\n    stage = batch 128;\n}"
+    },
+    {
+      "hole": "__cq_datalog_hole_18",
+      "source_rule": "StackDefUsed2",
+      "source_ref": "/data/doop-next-round/source/examples/ddisasm.py:631",
+      "diagnostic": "CQ_GPU_BUILD_TYPE: record SortedRun, PrefixRun, or certified AdaptiveKeySet membership",
+      "recorded_builds": [
+        "r1 = :: cq_storage :: HashIndex < '_, _, _ > [blk, varp, varr];",
+        "r3 = :: cq_storage :: HashIndex < '_, _, _ > [blockUsed, varp, varr];"
+      ],
+      "dynamic_bind_expressions": [],
+      "first_rejected_build": "r1 = :: cq_storage :: HashIndex < '_, _, _ > [blk, varp, varr];",
+      "structures_text": "physical\n{\n    relation __cq_datalog_layout_28(c0 : i64, c1 : i64, c2 : i64, c3 : i64) =\n    (& __cq_datalog_host_28); relation\n    __cq_datalog_layout_29(c0 : i64, c3 : i64, c4 : i64, c1 : i64, c2 : i64,\n    c5 : i64) = (& __cq_datalog_host_29); relation\n    __cq_datalog_layout_30(c0 : i64, c1 : i64, c2 : i64, c3 : i64, c4 : i64,\n    c5 : i64, c6 : i64, c7 : i64) = (& __cq_datalog_host_30); relation\n    __cq_datalog_hole_18(c0 : i64, c1 : i64, c2 : i64, c3 : i64, c4 : i64, c5\n    : i64); r0 = pipe rename __cq_datalog_layout_28 @ 0\n    { c0 - > blk, c1 - > blockUsed, c2 - > varr, c3 - > varp }; r1 = let\n    rename __cq_datalog_layout_29 @ 1\n    {\n        c0 - > blk, c3 - > varr, c4 - > varp, c1 - > defVarr, c2 - > defVarp,\n        c5 - > eaDef\n    }; r2 = pipe probe first [blk, varp, varr] r0, r1; r3 = let rename\n    __cq_datalog_layout_30 @ 2\n    {\n        c0 - > blockUsed, c1 - > varr, c2 - > varp, c3 - > varUsedr, c4 - >\n        varUsedp, c5 - > eaUsed, c6 - > __cq_2_6, c7 - > __cq_2_7\n    }; r4 = pipe probe first [blockUsed, varp, varr] r2, r3; r5 = pipe bind r4\n    with __cq_3_0 : i64 = (* eaDef); r6 = pipe bind r5 with __cq_3_1 : i64 =\n    (* defVarr); r7 = pipe bind r6 with __cq_3_2 : i64 = (* defVarp); r8 =\n    pipe bind r7 with __cq_3_3 : i64 = (* eaUsed); r9 = pipe bind r8 with\n    __cq_3_4 : i64 = (* varUsedr); r10 = pipe bind r9 with __cq_3_5 : i64 =\n    (* varUsedp); r11 = pipe canon project r10 keep\n    { __cq_3_0, __cq_3_1, __cq_3_2, __cq_3_3, __cq_3_4, __cq_3_5 }; return r11\n    as\n    __cq_datalog_hole_18(__cq_3_0, __cq_3_1, __cq_3_2, __cq_3_3, __cq_3_4,\n    __cq_3_5);\n} structures\n{\n    r1 = :: cq_storage :: HashIndex < '_, _, _ > [blk, varp, varr]; r3 = ::\n    cq_storage :: HashIndex < '_, _, _ > [blockUsed, varp, varr]; r0 host scan\n    = :: core :: iter :: Map < _, _ > []; r1 host scan = :: core :: iter ::\n    Map < _, _ > []; r3 host scan = :: core :: iter :: Map < _, _ > []; r11\n    canon = :: cq_gpu_runtime :: DeviceSet < _ > ; r0 stage = batch 128;\n}"
+    },
+    {
+      "hole": "__cq_datalog_hole_19",
+      "source_rule": "StackDefUsed3",
+      "source_ref": "/data/doop-next-round/source/examples/ddisasm.py:639",
+      "diagnostic": "CQ_GPU_BUILD_TYPE: record SortedRun, PrefixRun, or certified AdaptiveKeySet membership",
+      "recorded_builds": [
+        "r1 = :: cq_storage :: SortedRun < _, _, :: cq_storage :: BorrowedI64TupleCodec > [ea];",
+        "r3 = :: cq_storage :: SortedRun < _, _, :: cq_storage :: BorrowedI64TupleCodec > [eaDef];",
+        "r5 = :: cq_storage :: HashIndex < '_, _, _ > [blk, ea];",
+        "r7 = :: cq_storage :: HashIndex < '_, _, _ > [defVarp, defVarr, eaDef];"
+      ],
+      "dynamic_bind_expressions": [],
+      "first_rejected_build": "r5 = :: cq_storage :: HashIndex < '_, _, _ > [blk, ea];",
+      "structures_text": "physical\n{\n    relation\n    __cq_datalog_layout_31(c0 : i64, c1 : i64, c2 : i64, c3 : i64, c4 : i64,\n    c5 : i64, c6 : i64, c7 : i64) = (& __cq_datalog_host_31); relation\n    __cq_datalog_layout_32(c1 : i64, c0 : i64) = (& __cq_datalog_host_32);\n    relation __cq_datalog_layout_33(c0 : i64, c1 : i64) =\n    (& __cq_datalog_host_33); relation\n    __cq_datalog_layout_34(c0 : i64, c1 : i64) = (& __cq_datalog_host_34);\n    relation __cq_datalog_layout_35(c0 : i64, c1 : i64, c2 : i64) =\n    (& __cq_datalog_host_35); relation\n    __cq_datalog_hole_19(c0 : i64, c1 : i64, c2 : i64, c3 : i64, c4 : i64, c5\n    : i64); r0 = pipe rename __cq_datalog_layout_31 @ 0\n    {\n        c0 - > ea, c1 - > defVarr, c2 - > defVarp, c3 - > usedVarr, c4 - >\n        usedVarp, c5 - > eaUsed, c6 - > __cq_0_6, c7 - > __cq_0_7\n    }; r1 = let rename __cq_datalog_layout_32 @ 1 { c1 - > ea, c0 - > eaDef };\n    r2 = pipe probe first [ea] r0, r1; r3 = let rename __cq_datalog_layout_33\n    @ 2 { c0 - > eaDef, c1 - > blk }; r4 = pipe probe first [eaDef] r2, r3; r5\n    = let rename __cq_datalog_layout_34 @ 3 { c0 - > ea, c1 - > blk }; r6 =\n    pipe probe first [blk, ea] r4, r5; r7 = let rename __cq_datalog_layout_35\n    @ 4 { c0 - > eaDef, c1 - > defVarr, c2 - > defVarp }; r8 = pipe probe\n    first [defVarp, defVarr, eaDef] r6, r7; r9 = pipe bind r8 with __cq_5_0 :\n    i64 = (* eaDef); r10 = pipe bind r9 with __cq_5_1 : i64 = (* defVarr); r11\n    = pipe bind r10 with __cq_5_2 : i64 = (* defVarp); r12 = pipe bind r11\n    with __cq_5_3 : i64 = (* eaUsed); r13 = pipe bind r12 with __cq_5_4 : i64\n    = (* usedVarr); r14 = pipe bind r13 with __cq_5_5 : i64 = (* usedVarp);\n    r15 = pipe canon project r14 keep\n    { __cq_5_0, __cq_5_1, __cq_5_2, __cq_5_3, __cq_5_4, __cq_5_5 }; return r15\n    as\n    __cq_datalog_hole_19(__cq_5_0, __cq_5_1, __cq_5_2, __cq_5_3, __cq_5_4,\n    __cq_5_5);\n} structures\n{\n    r1 = :: cq_storage :: SortedRun < _, _, :: cq_storage ::\n    BorrowedI64TupleCodec > [ea]; r3 = :: cq_storage :: SortedRun < _, _, ::\n    cq_storage :: BorrowedI64TupleCodec > [eaDef]; r5 = :: cq_storage ::\n    HashIndex < '_, _, _ > [blk, ea]; r7 = :: cq_storage :: HashIndex < '_, _,\n    _ > [defVarp, defVarr, eaDef]; r0 host scan = :: core :: iter :: Map < _,\n    _ > []; r1 host scan = :: core :: iter :: Map < _, _ > []; r3 host scan =\n    :: core :: iter :: Map < _, _ > []; r5 host scan = :: core :: iter :: Map\n    < _, _ > []; r7 host scan = :: core :: iter :: Map < _, _ > []; r15 canon\n    = :: cq_gpu_runtime :: DeviceSet < _ > ; r0 stage = batch 128;\n}"
+    },
+    {
+      "hole": "__cq_datalog_hole_20",
+      "source_rule": "StackDefUsed4",
+      "source_ref": "/data/doop-next-round/source/examples/ddisasm.py:649",
+      "diagnostic": "CQ_GPU_BUILD_TYPE: record SortedRun, PrefixRun, or certified AdaptiveKeySet membership",
+      "recorded_builds": [
+        "r1 = :: cq_storage :: HashIndex < '_, _, _ > [eaUsed, varp, varr];",
+        "r3 = :: cq_storage :: HashIndex < '_, _, _ > [nxtBlk, varp, varr];"
+      ],
+      "dynamic_bind_expressions": [],
+      "first_rejected_build": "r1 = :: cq_storage :: HashIndex < '_, _, _ > [eaUsed, varp, varr];",
+      "structures_text": "physical\n{\n    relation\n    __cq_datalog_layout_30(c0 : i64, c1 : i64, c2 : i64, c3 : i64, c4 : i64,\n    c5 : i64, c6 : i64, c7 : i64) = (& __cq_datalog_host_30); relation\n    __cq_datalog_layout_36(c0 : i64, c1 : i64, c2 : i64, c3 : i64) =\n    (& __cq_datalog_host_36); relation\n    __cq_datalog_delta_layout_5(c3 : i64, c4 : i64, c5 : i64, c0 : i64, c1 :\n    i64, c2 : i64) = (& __cq_datalog_delta_host_5); relation\n    __cq_datalog_hole_20(c0 : i64, c1 : i64, c2 : i64, c3 : i64, c4 : i64, c5\n    : i64); r0 = pipe rename __cq_datalog_layout_36 @ 0\n    { c0 - > eaUsed, c1 - > nxtBlk, c2 - > varr, c3 - > varp }; r1 = let\n    rename __cq_datalog_delta_layout_5 @ 1\n    {\n        c3 - > eaUsed, c4 - > varr, c5 - > varp, c0 - > eaDef, c1 - > varDefr,\n        c2 - > varDefp\n    }; r2 = pipe probe first [eaUsed, varp, varr] r0, r1; r3 = let rename\n    __cq_datalog_layout_30 @ 2\n    {\n        c0 - > nxtBlk, c1 - > varr, c2 - > varp, c3 - > varUsedr, c4 - >\n        varUsedp, c5 - > nextEaUsed, c6 - > __cq_2_6, c7 - > __cq_2_7\n    }; r4 = pipe probe first [nxtBlk, varp, varr] r2, r3; r5 = pipe bind r4\n    with __cq_3_0 : i64 = (* eaDef); r6 = pipe bind r5 with __cq_3_1 : i64 =\n    (* varDefr); r7 = pipe bind r6 with __cq_3_2 : i64 = (* varDefp); r8 =\n    pipe bind r7 with __cq_3_3 : i64 = (* nextEaUsed); r9 = pipe bind r8 with\n    __cq_3_4 : i64 = (* varUsedr); r10 = pipe bind r9 with __cq_3_5 : i64 =\n    (* varUsedp); r11 = pipe canon project r10 keep\n    { __cq_3_0, __cq_3_1, __cq_3_2, __cq_3_3, __cq_3_4, __cq_3_5 }; return r11\n    as\n    __cq_datalog_hole_20(__cq_3_0, __cq_3_1, __cq_3_2, __cq_3_3, __cq_3_4,\n    __cq_3_5);\n} structures\n{\n    r1 = :: cq_storage :: HashIndex < '_, _, _ > [eaUsed, varp, varr]; r3 = ::\n    cq_storage :: HashIndex < '_, _, _ > [nxtBlk, varp, varr]; r0 host scan =\n    :: core :: iter :: Map < _, _ > []; r1 host scan = :: core :: iter :: Map\n    < _, _ > []; r3 host scan = :: core :: iter :: Map < _, _ > []; r11 canon\n    = :: cq_gpu_runtime :: DeviceSet < _ > ; r0 stage = batch 128;\n}"
+    },
+    {
+      "hole": "__cq_datalog_hole_21",
+      "source_rule": "DefUsedAddr1",
+      "source_ref": "/data/doop-next-round/source/examples/ddisasm.py:603",
+      "diagnostic": "CQ_GPU_OPAQUE_BIND: only copied dereferences and typed integral, bool or &str literals are supported",
+      "recorded_builds": [
+        "r2 = :: cq_storage :: HashIndex < '_, _, _ > [__cq_0_0];"
+      ],
+      "dynamic_bind_expressions": [
+        "meta.pc_relative",
+        "meta.pc_relative"
+      ],
+      "first_rejected_build": null,
+      "structures_text": "physical\n{\n    relation __cq_datalog_layout_19(c2 : i64, c0 : i64, c1 : i64) =\n    (& __cq_datalog_host_19); relation\n    __cq_datalog_hole_21(c0 : i64, c1 : i64, c2 : i64); r0 = pipe unit; r1 =\n    pipe bind r0 with __cq_0_0 : i64 = (meta.pc_relative); r2 = let rename\n    __cq_datalog_layout_19 @ 1 { c2 - > __cq_0_0, c0 - > ea, c1 - > reg }; r3\n    = pipe probe first [__cq_0_0] r1, r2; r4 = pipe bind r3 with __cq_1_0 :\n    i64 = (* ea); r5 = pipe bind r4 with __cq_1_1 : i64 = (* reg); r6 = pipe\n    bind r5 with __cq_1_2 : i64 = (meta.pc_relative); r7 = pipe canon project\n    r6 keep { __cq_1_0, __cq_1_1, __cq_1_2 }; return r7 as\n    __cq_datalog_hole_21(__cq_1_0, __cq_1_1, __cq_1_2);\n} structures\n{\n    r2 = :: cq_storage :: HashIndex < '_, _, _ > [__cq_0_0]; r2 host scan = ::\n    core :: iter :: Map < _, _ > []; r7 canon = :: cq_gpu_runtime :: DeviceSet\n    < _ > ;\n}"
+    },
+    {
+      "hole": "__cq_datalog_hole_22",
+      "source_rule": "DefUsedAddr2",
+      "source_ref": "/data/doop-next-round/source/examples/ddisasm.py:607",
+      "diagnostic": "CQ_GPU_BUILD_TYPE: record SortedRun, PrefixRun, or certified AdaptiveKeySet membership",
+      "recorded_builds": [
+        "r1 = :: cq_storage :: HashIndex < '_, _, _ > [ea, reg];"
+      ],
+      "dynamic_bind_expressions": [],
+      "first_rejected_build": "r1 = :: cq_storage :: HashIndex < '_, _, _ > [ea, reg];",
+      "structures_text": "physical\n{\n    relation __cq_datalog_layout_20(c0 : i64, c1 : i64, c2 : i64, c3 : i64) =\n    (& __cq_datalog_host_20); relation\n    __cq_datalog_layout_21(c0 : i64, c1 : i64, c2 : i64) =\n    (& __cq_datalog_host_21); relation\n    __cq_datalog_hole_22(c0 : i64, c1 : i64, c2 : i64); r0 = pipe rename\n    __cq_datalog_layout_20 @ 0\n    { c0 - > eaDef, c1 - > reg, c2 - > ea, c3 - > __cq_0_3 }; r1 = let rename\n    __cq_datalog_layout_21 @ 1 { c0 - > ea, c1 - > reg, c2 - > mtype }; r2 =\n    pipe probe first [ea, reg] r0, r1; r3 = pipe bind r2 with __cq_2_0 : i64 =\n    (* eaDef); r4 = pipe bind r3 with __cq_2_1 : i64 = (* reg); r5 = pipe bind\n    r4 with __cq_2_2 : i64 = (* mtype); r6 = pipe canon project r5 keep\n    { __cq_2_0, __cq_2_1, __cq_2_2 }; return r6 as\n    __cq_datalog_hole_22(__cq_2_0, __cq_2_1, __cq_2_2);\n} structures\n{\n    r1 = :: cq_storage :: HashIndex < '_, _, _ > [ea, reg]; r0 host scan = ::\n    core :: iter :: Map < _, _ > []; r1 host scan = :: core :: iter :: Map <\n    _, _ > []; r6 canon = :: cq_gpu_runtime :: DeviceSet < _ > ; r0 stage =\n    batch 128;\n}"
+    },
+    {
+      "hole": "__cq_datalog_hole_24",
+      "source_rule": "DefUsedAddr4",
+      "source_ref": "/data/doop-next-round/source/examples/ddisasm.py:618",
+      "diagnostic": "CQ_GPU_OPAQUE_BIND: only copied dereferences and typed integral, bool or &str literals are supported",
+      "recorded_builds": [
+        "r3 = :: cq_storage :: HashIndex < '_, _, _ > [__cq_1_0, __cq_1_3, eaLoad, reg2];",
+        "r5 = :: cq_storage :: HashIndex < '_, _, _ > [eaLoad, regBaseLoad, stackPosLoad];",
+        "r9 = :: cq_storage :: HashIndex < '_, _, _ > [__cq_3_0, __cq_3_3, eaSt, regBaseSt, stackPosSt];",
+        "r11 = :: cq_storage :: HashIndex < '_, _, _ > [eaSt, reg1];"
+      ],
+      "dynamic_bind_expressions": [
+        "meta.load",
+        "meta.none",
+        "meta.store",
+        "meta.none"
+      ],
+      "first_rejected_build": null,
+      "structures_text": "physical\n{\n    relation __cq_datalog_delta_7(c0 : i64, c1 : i64, c2 : i64) =\n    (& __cq_datalog_delta_18); relation\n    __cq_datalog_layout_7(c1 : i64, c2 : i64, c0 : i64, c3 : i64) =\n    (& __cq_datalog_host_7); relation\n    __cq_datalog_layout_23(c0 : i64, c1 : i64, c2 : i64, c4 : i64, c3 : i64,\n    c5 : i64) = (& __cq_datalog_host_23); relation\n    __cq_datalog_layout_24(c3 : i64, c4 : i64, c5 : i64, c0 : i64, c1 : i64,\n    c2 : i64) = (& __cq_datalog_host_24); relation\n    __cq_datalog_layout_25(c0 : i64, c1 : i64, c3 : i64, c4 : i64, c5 : i64,\n    c2 : i64) = (& __cq_datalog_host_25); relation\n    __cq_datalog_hole_24(c0 : i64, c1 : i64, c2 : i64); r0 = pipe rename\n    __cq_datalog_delta_7 @ 0 { c0 - > eaLoad, c1 - > reg2, c2 - > mtype }; r1\n    = pipe bind r0 with __cq_1_0 : i64 = (meta.load); r2 = pipe bind r1 with\n    __cq_1_3 : i64 = (meta.none); r3 = let rename __cq_datalog_layout_23 @ 3\n    {\n        c0 - > __cq_1_0, c1 - > eaLoad, c2 - > reg2, c4 - > __cq_1_3, c3 - >\n        regBaseLoad, c5 - > stackPosLoad\n    }; r4 = pipe probe first [__cq_1_0, __cq_1_3, eaLoad, reg2] r2, r3; r5 =\n    let rename __cq_datalog_layout_24 @ 4\n    {\n        c3 - > eaLoad, c4 - > regBaseLoad, c5 - > stackPosLoad, c0 - > eaSt,\n        c1 - > regBaseSt, c2 - > stackPosSt\n    }; r6 = pipe probe first [eaLoad, regBaseLoad, stackPosLoad] r4, r5; r7 =\n    pipe bind r6 with __cq_3_0 : i64 = (meta.store); r8 = pipe bind r7 with\n    __cq_3_3 : i64 = (meta.none); r9 = let rename __cq_datalog_layout_25 @ 7\n    {\n        c0 - > __cq_3_0, c1 - > eaSt, c3 - > regBaseSt, c4 - > __cq_3_3, c5 -\n        > stackPosSt, c2 - > reg1\n    }; r10 = pipe probe first\n    [__cq_3_0, __cq_3_3, eaSt, regBaseSt, stackPosSt] r8, r9; r11 = let rename\n    __cq_datalog_layout_7 @ 8\n    { c1 - > reg1, c2 - > eaSt, c0 - > eaDef, c3 - > __cq_4_3 }; r12 = pipe\n    probe first [eaSt, reg1] r10, r11; r13 = pipe bind r12 with __cq_5_0 : i64\n    = (* eaDef); r14 = pipe bind r13 with __cq_5_1 : i64 = (* reg1); r15 =\n    pipe bind r14 with __cq_5_2 : i64 = (* mtype); r16 = pipe canon project\n    r15 keep { __cq_5_0, __cq_5_1, __cq_5_2 }; return r16 as\n    __cq_datalog_hole_24(__cq_5_0, __cq_5_1, __cq_5_2);\n} structures\n{\n    r3 = :: cq_storage :: HashIndex < '_, _, _ >\n    [__cq_1_0, __cq_1_3, eaLoad, reg2]; r5 = :: cq_storage :: HashIndex < '_,\n    _, _ > [eaLoad, regBaseLoad, stackPosLoad]; r9 = :: cq_storage ::\n    HashIndex < '_, _, _ > [__cq_3_0, __cq_3_3, eaSt, regBaseSt, stackPosSt];\n    r11 = :: cq_storage :: HashIndex < '_, _, _ > [eaSt, reg1]; r0 host scan =\n    :: core :: iter :: Map < _, _ > []; r3 host scan = :: core :: iter :: Map\n    < _, _ > []; r5 host scan = :: core :: iter :: Map < _, _ > []; r9 host\n    scan = :: core :: iter :: Map < _, _ > []; r11 host scan = :: core :: iter\n    :: Map < _, _ > []; r16 canon = :: cq_gpu_runtime :: DeviceSet < _ > ;\n}"
+    },
+    {
+      "hole": "__cq_datalog_hole_25",
+      "source_rule": "RegRegArithDefs",
+      "source_ref": "/data/doop-next-round/source/examples/ddisasm.py:576",
+      "diagnostic": "CQ_GPU_BUILD_TYPE: record SortedRun, PrefixRun, or certified AdaptiveKeySet membership",
+      "recorded_builds": [
+        "r3 = :: cq_storage :: HashIndex < '_, _, _ > [ea, reg1];",
+        "r6 = :: cq_storage :: HashIndex < '_, _, _ > [ea, reg2];",
+        "r7 = :: cq_storage :: HashIndex < '_, _, _ > [ea, regDef];"
+      ],
+      "dynamic_bind_expressions": [],
+      "first_rejected_build": "r3 = :: cq_storage :: HashIndex < '_, _, _ > [ea, reg1];",
+      "structures_text": "physical\n{\n    relation __cq_datalog_layout_7(c1 : i64, c2 : i64, c0 : i64, c3 : i64) =\n    (& __cq_datalog_host_7); relation\n    __cq_datalog_layout_17(c0 : i64, c1 : i64, c2 : i64) =\n    (& __cq_datalog_host_17); relation\n    __cq_datalog_layout_18(c0 : i64, c1 : i64, c2 : i64, c3 : i64, c4 : i64,\n    c5 : i64) = (& __cq_datalog_host_18); relation\n    __cq_datalog_hole_25(c0 : i64, c1 : i64, c2 : i64, c3 : i64, c4 : i64, c5\n    : i64, c6 : i64, c7 : i64); r0 = pipe rename __cq_datalog_layout_18 @ 1\n    {\n        c0 - > ea, c1 - > regDef, c2 - > reg1, c3 - > reg2, c4 - > mult, c5 -\n        > offset\n    }; r1 = pipe select r0 if (reg1 != reg2); r2 = pipe rename\n    __cq_datalog_layout_7 @ 3\n    { c1 - > reg1, c2 - > ea, c0 - > eaDef1, c3 - > __cq_3_3 }; r3 = let\n    select r2 if (ea != eaDef1); r4 = pipe semi eager [ea, reg1] r1, r3; r5 =\n    pipe rename __cq_datalog_layout_7 @ 5\n    { c1 - > reg2, c2 - > ea, c0 - > eaDef2, c3 - > __cq_5_3 }; r6 = let\n    select r5 if (ea != eaDef2); r7 = let semi eager [ea, reg2] r4, r6; r8 =\n    pipe rename __cq_datalog_layout_17 @ 0\n    { c0 - > ea, c1 - > regDef, c2 - > __cq_0_2 }; r9 = pipe probe first\n    [ea, regDef] r8, r7; r10 = pipe probe first [ea, reg1] r9, r3; r11 = pipe\n    probe first [ea, reg2] r10, r6; r12 = pipe bind r11 with __cq_7_0 : i64 =\n    (* ea); r13 = pipe bind r12 with __cq_7_1 : i64 = (* regDef); r14 = pipe\n    bind r13 with __cq_7_2 : i64 = (* eaDef1); r15 = pipe bind r14 with\n    __cq_7_3 : i64 = (* reg1); r16 = pipe bind r15 with __cq_7_4 : i64 =\n    (* eaDef2); r17 = pipe bind r16 with __cq_7_5 : i64 = (* reg2); r18 = pipe\n    bind r17 with __cq_7_6 : i64 = (* mult); r19 = pipe bind r18 with __cq_7_7\n    : i64 = (* offset); r20 = pipe canon project r19 keep\n    {\n        __cq_7_0, __cq_7_1, __cq_7_2, __cq_7_3, __cq_7_4, __cq_7_5, __cq_7_6,\n        __cq_7_7\n    }; return r20 as\n    __cq_datalog_hole_25(__cq_7_0, __cq_7_1, __cq_7_2, __cq_7_3, __cq_7_4,\n    __cq_7_5, __cq_7_6, __cq_7_7);\n} structures\n{\n    r3 = :: cq_storage :: HashIndex < '_, _, _ > [ea, reg1]; r6 = ::\n    cq_storage :: HashIndex < '_, _, _ > [ea, reg2]; r7 = :: cq_storage ::\n    HashIndex < '_, _, _ > [ea, regDef]; r0 host scan = :: core :: iter :: Map\n    < _, _ > []; r2 host scan = :: core :: iter :: Map < _, _ > []; r5 host\n    scan = :: core :: iter :: Map < _, _ > []; r8 host scan = :: core :: iter\n    :: Map < _, _ > []; r20 canon = :: cq_gpu_runtime :: DeviceSet < _ > ; r8\n    stage = batch 128;\n}"
+    }
+  ]
+}

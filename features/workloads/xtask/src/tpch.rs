@@ -18,6 +18,7 @@ struct Options {
     sf: String,
     runs: usize,
     query: Option<String>,
+    config: Option<String>,
     reduction_comparison: bool,
 }
 impl Options {
@@ -26,6 +27,7 @@ impl Options {
         let mut sf = None;
         let mut runs = None;
         let mut query = None;
+        let mut config = None;
         let mut reduction_comparison = false;
         let mut args = arguments.into_iter();
         while let Some(arg) = args.next() {
@@ -34,6 +36,9 @@ impl Options {
                 "--reduction-comparison" if !reduction_comparison => reduction_comparison = true,
                 "--query" if query.is_none() => {
                     query = Some(args.next().ok_or("--query requires a catalog query")?)
+                }
+                "--config" if config.is_none() => {
+                    config = Some(args.next().ok_or("--config requires a configuration name")?)
                 }
                 "--sf" if sf.is_none() => sf = Some(args.next().ok_or("--sf requires 0.1 or 1")?),
                 "--runs" if runs.is_none() => {
@@ -58,10 +63,14 @@ impl Options {
         if runs < 3 || runs % 2 == 0 {
             return Err("--runs must be odd and at least 3".into());
         }
+        if config.is_some() && reduction_comparison {
+            return Err("--config and --reduction-comparison are mutually exclusive".into());
+        }
         Ok(Self {
             sf,
             runs,
             query,
+            config,
             reduction_comparison,
         })
     }
@@ -173,7 +182,14 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
             )
         })
         .collect::<Result<Vec<_>>>()?;
-    if options.reduction_comparison {
+    if let Some(config) = &options.config {
+        for query in &mut queries {
+            if !query.configs.contains(config) {
+                return Err(format!("{} has no configuration {config}", query.name).into());
+            }
+            query.configs.retain(|name| name == "default" || name == config);
+        }
+    } else if options.reduction_comparison {
         for query in &mut queries {
             query
                 .configs
@@ -215,6 +231,9 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
         .query
         .as_ref()
         .map_or(String::new(), |name| format!("-{name}"));
+    if let Some(config) = &options.config {
+        suffix.push_str(&format!("-config-{config}"));
+    }
     if options.reduction_comparison {
         suffix.push_str("-reduction-comparison");
     }
@@ -579,14 +598,23 @@ mod tests {
                 sf: "0.1".into(),
                 runs: 5,
                 query: None,
+                config: None,
                 reduction_comparison: false,
             }
+        );
+        assert_eq!(
+            parse(&["--tpch", "--sf", "1", "--runs", "5", "--config", "le"])
+                .unwrap().config.as_deref(),
+            Some("le"),
         );
         for args in [
             vec!["--tpch"],
             vec!["--tpch", "--sf", "2"],
             vec!["--tpch", "--sf", "1", "--runs", "2"],
             vec!["--tpch", "--sf", "1", "--sf", "1"],
+            vec!["--tpch", "--sf", "1", "--config"],
+            vec!["--tpch", "--sf", "1", "--config", "le", "--config", "le_runs"],
+            vec!["--tpch", "--sf", "1", "--config", "le", "--reduction-comparison"],
             vec![
                 "--tpch",
                 "--sf",

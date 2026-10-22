@@ -98,6 +98,11 @@ fn splice_admitted(
     program: &Program,
     mut expand: impl FnMut(&Hole) -> syn::Result<TokenStream>,
 ) -> syn::Result<Vec<TokenStream>> {
+    ensure(
+        program.storage.policy.insertion == "all_columns",
+        program,
+        "CPU Datalog printer requires all_columns insertion",
+    )?;
     program.holes.iter().map(&mut expand).collect()
 }
 pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
@@ -164,6 +169,11 @@ fn render_admitted(
     mut publish: impl FnMut(&RoundContext, &Stratum) -> Vec<TokenStream>,
 ) -> syn::Result<syn::Expr> {
     ensure(
+        program.storage.policy.insertion == "all_columns",
+        program,
+        "CPU Datalog printer requires all_columns insertion",
+    )?;
+    ensure(
         holes.len() == program.holes.len(),
         program,
         "hole splice coverage changed",
@@ -189,6 +199,9 @@ fn render_admitted(
             );
             match key.representation {
                 KeyRepresentation::Borrowed => quote!(let #name = &#collection;),
+                KeyRepresentation::DeviceSetOwned => {
+                    unreachable!("CPU printer rejects device policy")
+                }
             }
         });
         let seeds = evaluator(&stratum.seeds, context, holes, &program.execution)?;

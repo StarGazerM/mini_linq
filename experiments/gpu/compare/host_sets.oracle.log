@@ -1,0 +1,11 @@
+host-set exact=true sorted=true unsorted=true duplicate-rejected=true hash-collisions=true projection=true
+
+thread 'main' (3761912) panicked at h05-compiled/src/bin/printer-oracle.rs:47:21:
+CQ_GPU_EXECUTION: CQ_GPU_HOST_SET_DUPLICATE: host relation `Edges` violates host_set: duplicate full row
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'main' (3761912) panicked at h05-compiled/src/bin/printer-oracle.rs:47:21:
+CQ_GPU_EXECUTION: CQ_GPU_HOST_SET_DUPLICATE: host relation `Edges` violates host_set: duplicate full row
+
+thread 'main' (3761912) panicked at h05-compiled/src/bin/printer-oracle.rs:47:21:
+CQ_GPU_EXECUTION: CQ_GPU_HOST_SET_DUPLICATE: host relation `Edges` violates host_set: duplicate full row

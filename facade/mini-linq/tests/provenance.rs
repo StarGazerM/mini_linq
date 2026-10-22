@@ -299,87 +299,33 @@ fn seed_997_hypergraph_executes_against_the_written_reference() {
 }
 
 #[test]
-fn seed_997_source_before_literals_prevent_a_panic_in_rust_step_zero() {
-    let mut normal = seed_997_normal();
-    let assertions: Vec<_> = normal
-        .query
-        .body
-        .iter()
-        .filter_map(|item| {
-            let cq_lang_cq::BodyItem::Equality(e) = item else {
-                return None;
-            };
-            let cq_lang_cq::EqualityValue::Literal(literal) = &e.right else {
-                return None;
-            };
-            let column = &e.left;
-            Some(quote!(assert!(*#column == #literal);))
-        })
-        .collect();
-    let first_guard = normal
-        .query
-        .body
-        .iter_mut()
-        .find_map(|item| match item {
-            cq_lang_cq::BodyItem::Filter(g) => Some(g),
-            _ => None,
-        })
-        .unwrap();
-    let condition = &first_guard.condition;
-    first_guard.condition = syn::parse_quote!({ #(#assertions)* #condition });
+fn seed_997_literal_occurrences_are_preserved_before_rust() {
+    let normal = seed_997_normal();
     let (written_vo, reference, target) = hypergraph_programs(&normal);
-    let mut late = reference.clone();
-    let literal = late.plan.definitions.iter().position(|d|
-        matches!(&d.operator, cq_lang_ra::Operator::Select(s) if s.condition.constant_keys().is_some())
-    ).unwrap();
-    let cq_lang_ra::Operator::Select(select) = &mut late.plan.definitions[literal].operator else {
-        unreachable!()
-    };
-    let delayed = select.clone();
-    for e in &mut select.condition.equalities {
-        e.right = cq_lang_ra::EqualityValue::Variable(e.left.clone());
-    }
-    let guard = late
+    let mut changed = reference.clone();
+    let constants = changed
         .plan
         .definitions
-        .iter()
-        .position(|d| matches!(d.operator, cq_lang_ra::Operator::Guard(_)))
+        .iter_mut()
+        .find_map(|definition| {
+            let cq_lang_ra::Operator::Rename(rename) = &mut definition.operator else {
+                return None;
+            };
+            rename.constants.as_mut()
+        })
         .unwrap();
-    let guard_result = late.plan.definitions[guard].result.clone();
-    let cq_lang_ra::Operator::Guard(next) = &mut late.plan.definitions[guard + 1].operator else {
-        unreachable!()
-    };
-    next.input = syn::parse_quote!(late_literal);
-    let delayed_condition = &delayed.condition;
-    late.plan.definitions.insert(
-        guard + 1,
-        syn::parse_quote!(
-            late_literal = select #guard_result if (#delayed_condition);
-        ),
-    );
-    cq_lang_ra::contract::check(&late).unwrap();
-    assert!(
-        cq_elaborate::check(&written_vo, &late)
-            .unwrap_err()
-            .to_string()
-            .contains("source-before")
-    );
-    assert!(
-        cq_lang_ra::check_rewrite(&reference, &late)
-            .unwrap_err()
-            .to_string()
-            .contains("source-before")
-    );
+    constants.equalities[0].right = cq_lang_ra::EqualityValue::Literal(syn::parse_quote!(99));
+    cq_lang_ra::contract::check(&changed).unwrap();
+    assert!(cq_elaborate::check(&written_vo, &changed).is_err());
+    assert!(cq_lang_ra::check_rewrite(&reference, &changed).is_err());
     let written = realize(&reference, "ordered_dedup");
     let hypergraph = realize(&target, "ordered_dedup");
-    let delayed = realize(&late, "ordered_dedup");
     run_cases(&[quote!({
         let r0: &[(i32,i32,i32)] = &[(-3,1,-3)];
         let r1: &[(i32,i32)] = &[(1,0),(7,-3)];
         let expected: ::std::collections::BTreeSet<_> = (#written).collect();
         let actual: ::std::collections::BTreeSet<_> = (#hypergraph).collect();
         assert!(expected.is_empty()); assert_eq!(actual, expected);
-        assert!(::std::panic::catch_unwind(|| (#delayed).collect::<Vec<_>>()).is_err());
     })]);
 }
 

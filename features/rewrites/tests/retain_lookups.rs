@@ -2,6 +2,129 @@ use cq_lang_structures::{self as ir, Structure};
 use cq_rewrite_passes::{retain_lookups, sorted_runs};
 use quote::{ToTokens, quote};
 
+fn triangle_source() -> ir::Program {
+    syn::parse_quote! { physical {
+        relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);
+        l = pipe rename L@0 {a -> a,b -> b};
+        r = let rename R@1 {b -> b,c -> c};
+        pre_r = pipe semi eager [b] l,r;
+        s = let rename S@2 {a -> a,c -> c};
+        pre_s = pipe semi eager [a] pre_r,s;
+        candidate = pipe probe smallest [b] pre_s,r;
+        checked = pipe canon semi eager [a,c] candidate,s;
+        return checked as answer(a,b,c);
+    } structures {
+        r = ::cq_gpu::PrefixRun [b][c];
+        s = ::cq_gpu::PrefixRun [a][c];
+        l host scan = ::core::iter::Map<_, _> [];
+        r host scan = ::core::iter::Map<_, _> [];
+        s host scan = ::core::iter::Map<_, _> [];
+        r rows = ::std::vec::Vec<_>;
+        s rows = ::std::vec::Vec<_>;
+        checked canon = ::std::collections::HashSet<_>;
+    } }
+}
+
+#[test]
+fn triangle_records_both_prefix_witnesses_at_first_probe() {
+    let source = triangle_source();
+    let target = retain_lookups(&source, quote!()).unwrap();
+    let facts = ir::contract::check(&target).unwrap();
+    assert_eq!(facts.witnesses.len(), 2);
+    assert_eq!(facts.shares.len(), 2);
+    for (first, build, key) in [("pre_r", "r", "b"), ("pre_s", "s", "a")] {
+        let share = &facts.shares[first];
+        assert_eq!(share.build, build);
+        assert_eq!(share.keys, [key]);
+        assert_eq!(share.force, "candidate");
+        assert_eq!(
+            facts.witnesses[first].ty,
+            syn::parse_quote!(::cq_storage::RunCursor<'_, _>)
+        );
+    }
+    assert_eq!(source.physical, target.physical);
+    assert_eq!(retain_lookups(&target, quote!()).unwrap(), target);
+    assert_eq!(
+        syn::parse2::<ir::Program>(target.to_token_stream()).unwrap(),
+        target
+    );
+}
+
+#[test]
+fn leveled_host_lookup_retains_exact_snapshot_ranges() {
+    let mut source: ir::Program = syn::parse_quote! { physical {
+        relation L(a:i64); relation R(a:i64,b:i64);
+        l = pipe rename L@0 {a -> x};
+        r = pipe rename R@1 {a -> x,b -> y};
+        s = pipe semi eager [x] l,r;
+        p = pipe canon probe first [x] s,r;
+        return p as answer(x,y);
+    } structures {
+        l host scan = ::core::iter::Map<_,_> [];
+        r host scan = ::core::iter::Map<_,_> [];
+        r host s = ::cq_gpu_runtime::LeveledDeviceIndex<_,_,((::cq_gpu_runtime::FrozenKey<0>,),)> [x];
+        r host p = ::cq_gpu_runtime::LeveledDeviceIndex<_,_,((::cq_gpu_runtime::FrozenKey<0>,),)> [x];
+        p canon = ::std::collections::HashSet<_>;
+    } };
+    let target = retain_lookups(&source, quote!()).unwrap();
+    let facts = ir::contract::check(&target).unwrap();
+    assert_eq!(facts.shares["s"].force, "p");
+    assert!(facts.witnesses.contains_key("s"));
+    assert_eq!(target.physical, source.physical);
+    assert_eq!(retain_lookups(&target, quote!()).unwrap(), target);
+    source.structures.entries[3] = syn::parse_quote! {
+        r host p = ::cq_gpu_runtime::LeveledDeviceIndex<_,_,((::cq_gpu_runtime::FrozenKey<1>,),)> [x];
+    };
+    assert!(retain_lookups(&source, quote!()).is_err());
+}
+
+#[test]
+fn triangle_prefix_shares_reject_wrong_build_key_and_force() {
+    let target = retain_lookups(&triangle_source(), quote!()).unwrap();
+    for replacement in [
+        syn::parse_quote!(pre_s share = lookup r [a] first pre_s force candidate;),
+        syn::parse_quote!(pre_s share = lookup s [c] first pre_s force candidate;),
+        syn::parse_quote!(pre_s share = lookup s [a] first pre_s force checked;),
+    ] {
+        let mut bad = target.clone();
+        let slot = bad
+            .structures
+            .entries
+            .iter_mut()
+            .find(|entry| {
+                entry.name == "pre_s" && matches!(entry.structure, Structure::Share { .. })
+            })
+            .unwrap();
+        *slot = replacement;
+        assert!(ir::contract::check(&bad).is_err());
+    }
+}
+
+#[test]
+fn triangle_prefix_witnesses_do_not_escape_or_infer_integral_keys() {
+    let mut nonintegral = triangle_source();
+    nonintegral.physical = syn::parse2(
+        nonintegral
+            .physical
+            .to_token_stream()
+            .to_string()
+            .replace("i32", "bool")
+            .parse()
+            .unwrap(),
+    )
+    .unwrap();
+    // Nonintegral directories are not retained even when the provider type is named.
+    ir::contract::check(&nonintegral).unwrap();
+    assert_eq!(retain_lookups(&nonintegral, quote!()).unwrap(), nonintegral);
+    let mut escaping = triangle_source();
+    escaping.physical.program.definitions[4].canon = Some(Default::default());
+    escaping
+        .structures
+        .entries
+        .push(syn::parse_quote!(pre_s canon = ::std::collections::HashSet<_>;));
+    assert_eq!(retain_lookups(&escaping, quote!()).unwrap(), escaping);
+}
+
 fn hashed_source() -> ir::Program {
     let physical = syn::parse_quote! { physical {
         relation L(a:i32); relation R(a:i32,b:i32);

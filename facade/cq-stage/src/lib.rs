@@ -7,13 +7,14 @@
 //! pipeline. [`rewrite`] additionally checks language correspondence.
 //!
 //! The facade accepts the named configuration below. This crate knows phase
-//! names, but no pass names. Omitted single phases use caller-supplied defaults;
-//! omitted pass lists are empty.
+//! names, but does not resolve macro types. Omitted single phases use caller-supplied
+//! defaults; omitted pass lists are empty. Sequence targets must opt in together.
 //! ```text
 //! pipeline {
 //!   plan = Path[(tokens)]; ix = Path; lower = Path;
 //!   physical = [Path[(tokens)], ...]; select = Path;
-//!   structures = [Path[(tokens)], ...]; represent = Path; stage = Path; print = Path;
+//!   structures = [Path[(tokens)], ...]; represent = Path; stage = Path;
+//!   sequence = Path; decompose = [Path[(tokens)], ...]; grade = Path; print = Path;
 //!   surface = [Path[(tokens)], ...];
 //! }
 //! ```
@@ -263,6 +264,9 @@ pub struct Configuration {
     pub structures: Vec<Invocation>,
     pub represent: Option<Invocation>,
     pub stage: Option<Invocation>,
+    pub sequence: Option<Invocation>,
+    pub decompose: Vec<Invocation>,
+    pub grade: Option<Invocation>,
     pub print: Option<Invocation>,
     pub surface: Vec<Invocation>,
 }
@@ -286,8 +290,10 @@ impl Parse for Configuration {
                 "select" => config.select = Some(contents.parse()?),
                 "represent" => config.represent = Some(contents.parse()?),
                 "stage" => config.stage = Some(contents.parse()?),
+                "sequence" => config.sequence = Some(contents.parse()?),
+                "grade" => config.grade = Some(contents.parse()?),
                 "print" => config.print = Some(contents.parse()?),
-                "physical" | "structures" | "surface" => {
+                "physical" | "structures" | "surface" | "decompose" => {
                     let list;
                     syn::bracketed!(list in contents);
                     let entries = list
@@ -297,6 +303,7 @@ impl Parse for Configuration {
                     match name.to_string().as_str() {
                         "physical" => config.physical = entries,
                         "structures" => config.structures = entries,
+                        "decompose" => config.decompose = entries,
                         _ => config.surface = entries,
                     }
                 }
@@ -309,6 +316,30 @@ impl Parse for Configuration {
 }
 impl Configuration {
     pub fn resolve(self, defaults: Self) -> syn::Result<Pipeline> {
+        let default_sequence_target = defaults.sequence.is_some() && defaults.grade.is_some();
+        let sequence = self.sequence.or(defaults.sequence);
+        let grade = self.grade.or(defaults.grade);
+        let sequence_target = sequence.is_some() || grade.is_some() || !self.decompose.is_empty();
+        let explicit_print = self.print.is_some();
+        let print = self.print.or(defaults.print);
+        let terminal = print.as_ref().and_then(|p| p.path.segments.last());
+        if sequence_target
+            && (sequence.is_none()
+                || grade.is_none()
+                || (!explicit_print && !default_sequence_target)
+                || terminal.is_some_and(|p| p.ident == "print_pull" || p.ident == "push"))
+        {
+            return Err(syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "sequence, grade and an explicit Sequence-consuming print must be selected together",
+            ));
+        }
+        if !sequence_target && terminal.is_some_and(|p| p.ident == "translate_pull") {
+            return Err(syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "translate_pull requires sequence and grade phases",
+            ));
+        }
         let mut passes = self.surface;
         let missing =
             || syn::Error::new(proc_macro2::Span::call_site(), "missing pipeline default");
@@ -320,7 +351,10 @@ impl Configuration {
         passes.extend(self.structures);
         passes.push(self.represent.or(defaults.represent).ok_or_else(missing)?);
         passes.push(self.stage.or(defaults.stage).ok_or_else(missing)?);
-        passes.push(self.print.or(defaults.print).ok_or_else(missing)?);
+        passes.extend(sequence);
+        passes.extend(self.decompose);
+        passes.extend(grade);
+        passes.push(print.ok_or_else(missing)?);
         Ok(Pipeline { passes })
     }
 }

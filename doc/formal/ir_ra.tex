@@ -4,7 +4,7 @@
 \paragraph{Grammar.} A standalone named DAG; declarations and output are part of it.
 \begin{lstlisting}
 RA ::= relational { Decl* (r = Op;)* output r as Head; }
-Op ::= unit | rename R@path {source -> variable, ...}
+Op ::= unit | rename R@path {source -> variable, ...} [constants {source = literal, ...}]
      | natural_join l with r | semijoin l with r
      | project r keep {columns} | select r if (Theta)
      | guard r if (Expr) [Environment]
@@ -14,8 +14,13 @@ Environment ::= scope[names] [@path]
 BlockOrigin ::= block @path free[F] interface[I]
                 [fallback] [over prefix] [domain input]
 \end{lstlisting}
-Every \code{rename} carries the fixed source occurrence it realizes. Mathematically
-$o::=\mathbf1\mid\delta_m(R)\mid r\bowtie s\mid r\ltimes s\mid\pi_Ur\mid\sigma_\theta r
+Every \code{rename} carries the fixed source occurrence it realizes.
+Its mapping and literal bindings partition the declared columns. Writing
+$C$ for those bindings, the occurrence denotes
+$\delta_m(\pi_{\dom m}\sigma_C(R))$; the dropped columns are not interface columns
+and cannot prove disjointness of union arms.
+Mathematically,
+$o::=\mathbf1\mid\delta_m(\pi_{\dom m}\sigma_C(R))\mid r\bowtie s\mid r\ltimes s\mid\pi_Ur\mid\sigma_\theta r
 \mid\operatorname{guard}_er\mid\operatorname{bind}_{N,e}r
 \mid\operatorname{for}_{N,e}r\mid\bigcup_jr_j\mid r\triangleright_Fs$,
 and $\Delta(r)=(V,T,C)$ records sort, symbolic Rust types and computed columns.
@@ -27,8 +32,10 @@ The Environment syntax is unchanged. IX and Physical preserve this token.
 \begin{mathpar}
 \Rule{RA-Unit}{}{\Sigma;\Delta\vdash\mathbf1:\emptyset}
 
-\Rule{RA-Rename}{R\in\dom\Sigma\quad m:\operatorname{cols}(\Sigma(R))\cong V}
- {\Sigma;\Delta\vdash\delta_m(R):V}
+\Rule{RA-Rename}{R\in\dom\Sigma\quad
+ \operatorname{cols}(\Sigma(R))=\dom m\uplus\dom C\quad m:\dom m\cong V\\
+ C\text{ assigns admissible literals to declared columns}}
+ {\Sigma;\Delta\vdash\delta_m(\pi_{\dom m}\sigma_C(R)):V}
 
 \Rule{RA-Join}{\Delta(r).V=V\quad\Delta(s).V=W}
  {\Sigma;\Delta\vdash r\bowtie s:V\cup W}

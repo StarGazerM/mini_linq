@@ -25,6 +25,13 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   `hasher_round(keyed)`; DOOP engines `mini-keyed` / `mini-par-keyed`.
   Exact vs Ascent on all six apps; goldens unchanged.
 
+- Sequence GPU providers reuse setup-time count owners and payload view tables;
+  asynchronous pinned uploads replace stream-synchronizing descriptor copies.
+  Exact-sized native range/canonicalization scratch persists across calls,
+  while retained output publications keep independent metadata. Generated
+  setup warms kernel modules before the measured build/query/dedup region;
+  recorded layouts, capacities and scheduling decisions are unchanged.
+
 - DOOP and oracle engines split into feature-selected crates over shared
   harness crates; the parallel CLIs no longer rebuild sequential engines.
   Warm rebuilds: DOOP 30.1 → 15.4 s (sequential), 72.2 → 30.2 s (parallel);
@@ -36,6 +43,71 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   16.2 s), parallel DOOP 72.9 → 57.4 s; runtime unchanged. Open: nested CQ
   closures still concentrate in one codegen unit (~48% of IR).
 
+- Add the opt-in Physical rewrite `cq_rewrites::retain_streams(r,...)`
+  (formal rule EXT-RetainStream): named stream results become retained `let`
+  rows, so a back end starts the consumer's parallel domain there. Compiled
+  H05 plan R retains Region ⋈ Nation ⋈ Customer (`r4`); its GPU stream now
+  starts from every ASIA customer instead of the single ASIA region row
+  (SF10 query kernel 143 → 13 ms, total 155 → 25 ms, exact).
+- The hand-written H05 reference follows the constant semantics: Region's
+  ASIA rows are a selected index built before the query (`region_asia_by_region`),
+  and `segments` starts from it; the full Region-by-name index and its in-query
+  binary search are removed (SF10 9.60 → 9.70 ms, exact).
+
+- Keep literal atom arguments in normal form and carry their source-column
+  bindings on relation occurrences. Build all indexes over the matching rows
+  with literal columns dropped, retaining filtered rows for stream sources.
+  Occurrences use ordinary `let` storage and generic index/row builds; only
+  their row source is constant-specific. GPU streams read the occurrence table
+  produced in the build phase, without a per-row literal test in the query kernel.
+  Explicit guards and nonliteral argument bindings retain their existing behavior.
+
+- Add explicit `cq_elaborate::simplify_expansions` to LE only, preserving default
+  and Hypergraph plans. Eliminate unobservable expansions by checked RA identities:
+  under canonical answer semantics, dead introduced columns require only a
+  semijoin, and exact named-result lineage discharges already-satisfied support
+  checks. Preserve opaque Rust, negative ancestry and block boundaries; no
+  printer-side inference or data-dependent key assumption is introduced.
+
+- Add experimental `cq_gpu_datalog::datalog!` using the existing checked
+  strata, semi-naive variants and fork, with explicit device admission and
+  negative-key policies. Exact resident union/difference publishes immutable
+  SCC snapshots and returns persistent device relations. Support copied/literal
+  GPU heads and stratified exact negative membership; reject unsupported Rust
+  expressions and CPU-policy schedules. Seed one compatible dictionary across
+  all rule holes so different string constants cannot acquire conflicting IDs.
+  This baseline rebuilds indexes/sets; it does not implement a maintained spine.
+
+- Integrate upstream CQ generators with LE scheduling; reject unsupported GPU
+  generators explicitly. GPU cleanup pins RCCL to a published revision,
+  removes mandatory local checkout paths, and archives duplicate generated
+  evidence. Fix range-read classification, declared host-schema/literal typing,
+  stage-size validation, resident answer bounds and packed-column metadata
+  ownership. Parallelize membership/codec metadata work and collect timing at
+  the completion boundary rather than synchronizing after every operation.
+
+- Refresh GPU design/co-design documentation around the implemented
+  Structures→Expr printer and share/witness contracts; remove the superseded
+  Device grammar and duplicate proposal prose. Separate historical tuning
+  evidence from current status, counts from tuples, and resident execution
+  from load/setup. Clarify traversal, expansion and recursion boundaries.
+
+- Add the external `cq_gpu::print` Structures terminal printer and its pooled
+  host runtime in `experiments/gpu`: generic CUDA tile streams, exact recorded
+  keyed-read provenance, retained lookup witnesses, segmented expansion
+  with a bounded explicit frontier, budgeted membership bitmaps and exact multiword
+  device dedup. Input batch size does not bound expanded output cardinality.
+  The CPU-neutral `cq_rewrites::build_host_reads` records retained
+  host modes; explicit `cq_gpu::prefix_runs` and `retype(dedup => DeviceSet<_>)`
+  record device representations rather than silently replacing CPU providers.
+  Initial integration evidence: nested macro expansion ran on CUDA; smoke
+  agreed with pull, and a 20,000-answer fanout exercised frontier/grow/relaunch.
+  Compiled retail_h05 A/B matched all 7,242 SF1 and 72,983 SF10 answers after one
+  warmup and five runs. Historical SF10 median GPU totals were 19.039/117.689 ms
+  versus hand-written 6.2/10.1 ms; these are not current resident measurements
+  or like-for-like end-to-end speedups. Both generated kernels then used
+  40 registers with 44/36-byte spill stores/loads. Current restrictions,
+  measurements and tuple-transfer boundaries are in `experiments/gpu/README.md`.
 - Datalog compile time: holes declare only what they read (checked
   independently in Round), one check per pass, linear `dl-source` checks (shared
   query context, DFS reachability), optimized proc macros (`build-override
@@ -80,8 +152,8 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   host (expansion differs only by the chunk binding). DOOP: all 6 apps exact
   vs Ascent at 1–15 threads; best speedups 1.86–3.05× on 5P+10E cores.
 
-- Lookup&Expand sharing on the R/E/C back end (contract of record
-  `/data/codex/gpu-le-reply.md`, confirmed by the GPU session). Structures gains
+- Lookup&Expand sharing on the R/E/C back end (see
+  `doc/GPU-LE-BACKEND-CODESIGN.md`). Structures gains
   `r share = lookup b [K] first s force p;` (ST-Share: the keyed read is
   evaluated once at the eager semi and reused by the forcing probe; coupling
   invariant `memo = lookup b k`), a `witness { b [K] at s as Type }` clause on
@@ -91,12 +163,26 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   an exists before its forcing probe), and `r stage = batch N expand;`
   (ST-Expand: a stage may span a probe whose build exposes a Copy range cursor
   because the chunk's expansion is a segmented flatten, total and
-  length-known). `SortedRun` (Copy range cursor, O(1) `nth`) and the
+  length-known; this does not bound its total length by N or remove runtime
+  capacity/index-domain obligations). `SortedRun` (Copy range cursor, O(1) `nth`) and the
   `sorted_runs` retype are cherry-picked from `gpu`; `cq_rewrites::retain_lookups`
   records share+witness for eligible eager-semi/later-probe pairs on such
   builds. Pull printer carries the witness as a non-column item pruned at the
   forcing probe and realizes `expand` through `cq_storage::stage::segmented`;
   the push printer refuses both by name. Defaults record nothing.
+- Workload corpus adds `le` and `le_runs` planner-axis witnesses and two
+  224-configuration triangle kernel targets. A deterministic pairwise extender
+  preserves the original 80 handwritten witnesses and case lists; both families
+  now require all 367 axis pairs. Of 92 additional pairwise witnesses, 90 are
+  accepted; D85 LE/LE-runs merge-on-HashMap requires `OrderedRead` and is pinned
+  by two negative UI fixtures, matching the corpus's existing accepted-domain
+  policy. TPC-H benchmarking accepts `--config NAME` to measure `default`
+  alongside that named configuration, keeping separate uninstrumented timing
+  workers, existing DuckDB columns and exact oracle checks.
+  Three-job corpus gate: 3,440 passed, zero failed, 127.07 s wall time;
+  the compile-fail test includes all eleven rejection fixtures. SF1 five-run
+  benchmarks for both named configurations and their default baselines matched
+  DuckDB exactly on all thirteen queries (also gated at SF0.1).
 - Back end split into three recorded, checked layers (`doc/formal/backend.tex`;
   rules STR-Repr, ST-Total, ST-Stage, BK-Dual). Structures gains
   `r repr = tuples | positions {H lineage {..}, ..} owned [..];` (data
@@ -118,6 +204,23 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   push printer is ported to it and refuses `positions` explicitly. Join
   transport of positions (index payload = `RowId`) is deferred. Q6 gains a
   `staged` configuration (`positions` + `batch(1024)`).
+- Join filters admit `SortedRun` payload builds: both exact payload providers
+  enumerate the same distinct keys, so `sorted_runs` keeps existing join
+  filters. Generated TPC-H measurement workers use the workload crate's
+  recursion allowance so counter/timing wrappers can represent the full
+  iterator chain. Sorted-run payload construction counts copied occurrences,
+  not set-insertion attempts, matching HashIndex and the independent
+  operator-profile checks. All thirteen TPC-H-derived queries register
+  `le_runs` (`order(le)` with `sorted_runs`).
+- Add `cq_planners::order(le)`: early bound-key lookups in GYO ear order,
+  demand-delayed coarse full-row expansion, recursive block scheduling, and
+  the default Masks reducer. Independent CK-Le checks occurrence phases,
+  written column ownership, Rust Before obligations and normalized CQ
+  correspondence. Retail profiling accepts `--config le`.
+- Add payload-exact `SortedRun` storage with Copy borrowed lookup cursors,
+  stable key clustering and bounded integer rank directories. The external
+  `cq_rewrites::sorted_runs` Structures rewrite records eligible one-level
+  payload retyping without changing default representation selection.
 - Merge upstream measurement, feature lockfile and CI fixes through `7e5c2c6`
   while retaining readable workload cases, pairwise configurations, the triangle
   kernel and UI fixtures. Drop generated-corpus sharding: its two commits add

@@ -97,13 +97,17 @@ pub fn read_plan(
         let mut bound = BTreeSet::new();
         let head = analysis.positions[&symbol_name(&variant.query.head.relation)];
         let component = analysis.component[head].expect("checked IDB component");
+        let order = incremental::variant_order(
+            &program.incremental.strata.source.rules[variant.rule], variant.driver,
+        )?;
         for (position, item) in variant.query.body.iter().enumerate() {
             match item {
                 BodyItem::Positive { atom } => {
-                    let is_delta = variant.delta == Some(position);
+                    let source_position = order[position];
+                    let is_delta = variant.delta == Some(source_position);
                     let relation = if is_delta {
                         let BodyItem::Positive { atom } =
-                            &program.incremental.strata.source.rules[variant.rule].body[position]
+                            &program.incremental.strata.source.rules[variant.rule].body[source_position]
                         else {
                             unreachable!("checked changing occurrence")
                         };
@@ -219,7 +223,8 @@ pub mod contract {
         layouts::check(program, &analysis)?;
         let p = &program.policy;
         ensure(
-            p.insertion == "all_columns" && p.negation_keys == "borrowed",
+            (p.insertion == "all_columns" && p.negation_keys == "borrowed")
+                || (p.insertion == "device_set_all_columns" && p.negation_keys == "device_set_owned"),
             program,
             "unsupported storage insertion or negation semantics",
         )?;
@@ -234,7 +239,7 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
 // The stage runner has already checked both language contracts.
 fn check_rewrite_admitted(source: &Program, target: &Program) -> syn::Result<()> {
     ensure(
-        source.incremental == target.incremental,
+        source.incremental == target.incremental && source.policy == target.policy,
         target,
         "storage rewrite changed its incremental base program",
     )

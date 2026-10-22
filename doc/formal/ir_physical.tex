@@ -3,9 +3,11 @@
 
 \paragraph{Grammar.} A complete standalone program.
 \begin{lstlisting}
-Physical ::= physical { Decl* Def* return [canon] r as Head; }
+Physical ::= physical { Decl* HostSet* Def* return [canon] r as Head; }
+HostSet ::= host_set R;
 Def ::= r = (pipe | let | exists) [canon] Op;
-Op  ::= unit | rename R@path {..} | select ... | point select ... | range select ...
+Op  ::= unit | rename R@path {..} [constants {source = literal, ...}]
+      | select ... | point select ... | range select ...
       | bind ... | guard ... | project r keep {..} | merge [K] l, r
       | probe [first|smallest] [K] l, r
       | semi [eager|lazy] [K] l, r | anti [eager|lazy] [F] l, r
@@ -16,7 +18,8 @@ and unchanged Environment suffix: the optional token is semantic, not a read
 mode. Generator Bind is streamed unnest, never an independent build target.
 
 \paragraph{Contract.} $\mathsf{PHeading}(t,A)$ checks:
-(1)~declarations, unique results, earlier operands, total one-to-one renames,
+(1)~declarations, unique results, earlier operands, one-to-one renames whose
+mapping and literal bindings partition declared columns,
 fresh bind columns, subset projections, visible expression uses, a defined and
 reachable output;
 (2)~probe/merge/semi keys are duplicate-free and equal the operands' common
@@ -30,7 +33,7 @@ The analysis derives rows, source identifiers, types, computed columns, hosts,
 keyed/merge/range reads, scans, modes and canon flags. With
 $\mathsf{reads}(r)$ the operand and return uses of $r$:
 \begin{mathpar}
-\Rule{PH-Pipe}{\mathsf{mode}(r)=pipe\\
+\Rule{PH-Pipe}{\mathsf{mode}(r)=pipe\quad r\text{ is not a literal-bearing rename}\\
  \mathsf{reusableHost}(r)\ \lor\
  (\mathsf{linearOrFused}(r)\land r\notin\dom A.key\_reads)}
  {\mathsf{PModeOK}(r)}
@@ -45,7 +48,8 @@ $\mathsf{reads}(r)$ the operand and return uses of $r$:
 \Rule{WF-Physical}{\mathsf{PHeading}(t,A)\quad\mathsf{PMode}(t,A)}
  {\mathsf{WF}_{Physical}(t)\Downarrow A}
 \end{mathpar}
-A reusable host is a noncanonical host rename; linear-or-fused means one read,
+A reusable host is a noncanonical host rename without literal bindings;
+literal-bearing renames retain their filtered relation. Linear-or-fused means one read,
 or only shared prefix reads inside a checked fused group. \code{exists} needs an
 empty heading. \code{probe smallest} needs an adjacent admissible intersection.
 Lazy semi/anti needs a reusable host read only lazily on that key. A witness
@@ -53,9 +57,45 @@ union (\code{any}) has an empty interface; a fused union names its prefix and
 every arm depends on it; cross-arm canon on a statically disjoint union is
 rejected. Physical checks neither IX demands nor canonical return evidence.
 
+\paragraph{Retained streams.}
+The opt-in Physical rewrite \code{cq_rewrites::retain_streams(r,...)} changes
+only the mode of named stream results from \code{pipe} to \code{let}; operators,
+keys and Rust steps are unchanged.
+\begin{mathpar}
+\Rule{EXT-RetainStream}{\mathsf{mode}(r)=pipe\quad r\text{ is not a host rename}}
+ {\mathsf{mode}(r):=let\text{ preserves erasure and the exhaustive bag of }r}
+\end{mathpar}
+Under exhaustive evaluation the retained rows, and any panic, are those of the
+stream, so the rewrite is a refinement checked by \code{check_rewrite}. It is a
+decomposition decision: a back end may start a new kernel or task at the
+retained rows, so the consumer's parallel domain becomes those rows instead of
+the stream's first relation.
+
+\paragraph{Checked host sets.}
+The opt-in Physical rewrite \code{cq_rewrites::host_sets(R,...)} consumes
+relation-name advice and records \code{host_set R;} in the program text.
+Each fact names a used declared host, occurs once, and requires admissible
+Leibniz equality on every declared column. It is not a host-type inference or
+an unchecked assertion: every printer must discharge the exact runtime
+certificate obligation \textsc{IF-HostSet} before executing the query.
+\begin{mathpar}
+\Rule{PH-HostSet}{\code{host\_set R}\in t\quad r=\mathsf{rename}(R)\quad
+ H=\mathsf{heading}(r)}
+ {\mathsf{key}(r)=H}
+\end{mathpar}
+Join combines operand keys; projection preserves a key only when it retains
+every key column. A returned heading containing the inherited key needs no
+\code{canon}; a projection dropping that key still does. The rewrite removes
+only boundaries implied by this transfer, leaving all other decisions intact.
+The current \code{smallest} intersection law denotes Set. In bag/K-relation
+semantics, replacing candidate enumeration by membership also requires this
+checked set fact or a derived uniqueness key on the candidate source;
+multiplicity gating belongs to the future K-relation contract.
+
 \paragraph{Meaning.} Erasure to RA prime: probe and merge are joins, semi is a
 semijoin, point/range are selections, modes and canon flags are dropped, union
-and anti keep their origins. Modes and choices change evaluation, not meaning.
+and anti keep their origins. Host-set facts erase after their runtime
+certificate obligation; modes and choices change evaluation, not meaning.
 Erasure retains the scalar/generator distinction, including in IX demand and
 Physical rewrite certificates. Item multiplicity cannot justify scalar
 uniqueness or literal inference.

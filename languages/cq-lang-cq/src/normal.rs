@@ -1,6 +1,6 @@
 //! CQ normal form for `T X = bottom + Set X`.
 //!
-//! Atoms contain only variables. Relational equality is Leibniz identity,
+//! Atoms contain distinct variables and literals. Relational equality is Leibniz identity,
 //! decided by an admissible column's `==`. Residual Rust lets and guards are opaque
 //! partial functions under functional extensionality. The reference is
 //! written order. Preserving the Rust chain and including every source
@@ -15,7 +15,7 @@ use quote::{ToTokens, format_ident, quote};
 use std::collections::{BTreeMap, BTreeSet};
 use syn::Ident;
 
-/// Formal rule WF-NF: Check CQ, distinct bare atom arguments and variable-only output.
+/// Formal rule WF-NF: Check CQ, distinct variable or literal atom arguments and variable-only output.
 pub fn check(module: &Program) -> syn::Result<()> {
     super::contract::check(module)?;
     for item in super::blocks::walk(&module.query.body) {
@@ -25,7 +25,7 @@ pub fn check(module: &Program) -> syn::Result<()> {
                 return Err(syn::Error::new_spanned(
                     atom,
                     format!(
-                        "normal form: `{}` atom arguments are distinct variables",
+                        "normal form: `{}` atom arguments are distinct variables or literals",
                         atom.relation
                     ),
                 ));
@@ -74,7 +74,6 @@ pub fn check(module: &Program) -> syn::Result<()> {
 /// Formal rule A-Variable: Keep the first occurrence within this atom, including shared query names.
 /// Formal rule A-Repeat: Replace only a variable repeated within one atom and append identity.
 /// Formal rule A-Wildcard: Replace a wildcard with an unused witness variable.
-/// Formal rule A-Constant: Replace a literal and append relational literal equality.
 /// Formal rule A-Prefix: Place an opaque binding immediately before its atom.
 /// Formal rule A-Local: Place a dependent binding and relational equality after its atom.
 pub fn normalize(module: &Program) -> syn::Result<Program> {
@@ -148,14 +147,13 @@ fn normalize_body(
                         }
                         continue;
                     }
+                    if super::syntax::equality::literal(argument) {
+                        args.push(argument.clone());
+                        continue;
+                    }
                     let key = fresh(names, clause, position);
                     if matches!(argument, syn::Expr::Infer(_)) {
                         // A wildcard binds an unconstrained, unused witness.
-                    } else if super::syntax::equality::literal(argument) {
-                        after.push(equality(
-                            key.clone(),
-                            EqualityValue::Literal(argument.clone()),
-                        ));
                     } else if rust::free_variables(argument)
                         .dependencies(&local)
                         .is_empty()
@@ -240,10 +238,17 @@ fn check_leibniz_types(module: &Program) -> syn::Result<()> {
     for item in super::blocks::walk(&module.query.body) {
         match item {
             BodyItem::Positive { atom } => {
-                for (variable, column) in atom
-                    .variables()
+                for (argument, column) in atom
+                    .args
+                    .iter()
                     .zip(&schemas[&symbol_name(&atom.relation)].columns)
                 {
+                    let Some(variable) = rust::variable(argument) else {
+                        if super::syntax::equality::literal(argument) {
+                            super::syntax::algebra::check_leibniz_type(&column.ty, &column.name)?;
+                        }
+                        continue;
+                    };
                     let name = symbol_name(variable);
                     let entries = columns.entry(name.clone()).or_default();
                     if !entries.is_empty() || let_bound.contains(&name) {

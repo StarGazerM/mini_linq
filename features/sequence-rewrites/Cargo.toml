@@ -1,0 +1,38 @@
+[workspace]
+members = ["passes"]
+default-members = [".", "passes"]
+resolver = "3"
+
+[workspace.dependencies]
+cq-stage = { version = "0.1.0", path = "../../facade/cq-stage" }
+cq-lang-sequence = { version = "0.1.0", path = "../../languages/cq-lang-sequence" }
+cq-syntax = { version = "0.1.0", path = "../../languages/cq-syntax" }
+cq-sequence-rewrite-passes = { version = "0.1.0", path = "passes" }
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full", "extra-traits"] }
+
+[package]
+name = "cq-sequence-rewrites"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+description = "Checked Sequence scheduling rewrite macros for MiniLinq"
+
+[package.metadata.cq]
+source = "cq-lang-sequence"
+target = "cq-lang-sequence"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+cq-stage.workspace = true
+cq-lang-sequence.workspace = true
+cq-sequence-rewrite-passes.workspace = true
+
+[dev-dependencies]
+proc-macro2.workspace = true
+quote.workspace = true
+syn.workspace = true

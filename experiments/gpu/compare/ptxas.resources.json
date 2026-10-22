@@ -1,0 +1,142 @@
+{
+  "probe": {
+    "regs": 16,
+    "stack_bytes": 0,
+    "spill_stores_bytes": 0,
+    "spill_loads_bytes": 0,
+    "static_smem_bytes": 0
+  },
+  "dedup_insert": {
+    "regs": 18,
+    "stack_bytes": 0,
+    "spill_stores_bytes": 0,
+    "spill_loads_bytes": 0,
+    "static_smem_bytes": 0
+  },
+  "scan_blocks": {
+    "regs": 18,
+    "stack_bytes": 0,
+    "spill_stores_bytes": 0,
+    "spill_loads_bytes": 0,
+    "static_smem_bytes": 0
+  },
+  "fences": {
+    "regs": 10,
+    "stack_bytes": 0,
+    "spill_stores_bytes": 0,
+    "spill_loads_bytes": 0,
+    "static_smem_bytes": 0
+  },
+  "gather": {
+    "regs": 10,
+    "stack_bytes": 0,
+    "spill_stores_bytes": 0,
+    "spill_loads_bytes": 0,
+    "static_smem_bytes": 0
+  },
+  "order_bins": {
+    "regs": 22,
+    "stack_bytes": 0,
+    "spill_stores_bytes": 0,
+    "spill_loads_bytes": 0,
+    "static_smem_bytes": 0
+  },
+  "directory": {
+    "regs": 17,
+    "stack_bytes": 0,
+    "spill_stores_bytes": 0,
+    "spill_loads_bytes": 0,
+    "static_smem_bytes": 0
+  },
+  "extrema": {
+    "regs": 16,
+    "stack_bytes": 0,
+    "spill_stores_bytes": 0,
+    "spill_loads_bytes": 0,
+    "static_smem_bytes": 0
+  },
+  "add_prefix": {
+    "regs": 10,
+    "stack_bytes": 0,
+    "spill_stores_bytes": 0,
+    "spill_loads_bytes": 0,
+    "static_smem_bytes": 0
+  },
+  "histogram": {
+    "regs": 10,
+    "stack_bytes": 0,
+    "spill_stores_bytes": 0,
+    "spill_loads_bytes": 0,
+    "static_smem_bytes": 0
+  },
+  "scatter": {
+    "regs": 16,
+    "stack_bytes": 0,
+    "spill_stores_bytes": 0,
+    "spill_loads_bytes": 0,
+    "static_smem_bytes": 0
+  },
+  "plan_b": {
+    "regs": 34,
+    "stack_bytes": 0,
+    "spill_stores_bytes": 0,
+    "spill_loads_bytes": 0,
+    "static_smem_bytes": 0
+  },
+  "plan_a": {
+    "regs": 32,
+    "stack_bytes": 0,
+    "spill_stores_bytes": 0,
+    "spill_loads_bytes": 0,
+    "static_smem_bytes": 0
+  },
+  "filter_orders": {
+    "regs": 16,
+    "stack_bytes": 0,
+    "spill_stores_bytes": 0,
+    "spill_loads_bytes": 0,
+    "static_smem_bytes": 0
+  },
+  "vecadd": {
+    "regs": 12,
+    "stack_bytes": 0,
+    "spill_stores_bytes": 0,
+    "spill_loads_bytes": 0,
+    "static_smem_bytes": 0
+  },
+  "owner_case": {
+    "regs": 12,
+    "stack_bytes": 0,
+    "spill_stores_bytes": 0,
+    "spill_loads_bytes": 0,
+    "static_smem_bytes": 0
+  },
+  "merge_case": {
+    "regs": 14,
+    "stack_bytes": 0,
+    "spill_stores_bytes": 0,
+    "spill_loads_bytes": 0,
+    "static_smem_bytes": 0
+  },
+  "scan_case": {
+    "regs": 20,
+    "stack_bytes": 0,
+    "spill_stores_bytes": 0,
+    "spill_loads_bytes": 0,
+    "static_smem_bytes": 0
+  },
+  "compact_case": {
+    "regs": 22,
+    "stack_bytes": 0,
+    "spill_stores_bytes": 0,
+    "spill_loads_bytes": 0,
+    "static_smem_bytes": 0
+  },
+  "sort_case": {
+    "regs": 20,
+    "stack_bytes": 0,
+    "spill_stores_bytes": 0,
+    "spill_loads_bytes": 0,
+    "static_smem_bytes": 0
+  }
+}

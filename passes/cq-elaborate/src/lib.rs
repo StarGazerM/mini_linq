@@ -97,7 +97,7 @@ pub fn compile_written(source: &valuation::Program) -> syn::Result<ra::Program> 
                         (BodyItem::Positive { atom }, valuation::Step::Atom(subatom, _)) => {
                             subatom.clause == path
                                 && subatom.relation == atom.relation
-                                && subatom.variables().count() == atom.args.len()
+                                && subatom.variables().count() == atom.variables().count()
                                 && subatom
                                     .variables()
                                     .map(|(_, v)| symbol_name(v))
@@ -206,8 +206,25 @@ pub fn simplify_reductions(source: &ra::Program) -> syn::Result<ra::Program> {
     reductions::simplify(source)
 }
 
+/// Eliminate expansions already witnessed by an earlier named-result lookup.
+///
+/// In positive relational scopes, an expansion whose introduced columns have
+/// no observer is replaced by a semijoin. Under canon this preserves answers,
+/// not intermediate bag multiplicities. Exact named-result lineage can then
+/// remove a semijoin whose support is already witnessed by its left input.
+/// This explicit pass is used by LE, not by the default or Hypergraph pipeline.
+///
+/// The identity does not cross Rust, negative, or block boundaries. Only
+/// definitions made unreachable by checked identities are pruned. Each local
+/// rewrite is checked with [`ra::check_rewrite`].
+pub fn simplify_expansions(source: &ra::Program) -> syn::Result<ra::Program> {
+    reductions::eliminate_expansions(source.clone())
+}
+
 /// The RA definitions refine the supplied VO schedule, retaining its Rust
 /// chain and preceding relational constraints.
+/// Pure targets may use checked inverse dead expansions under canonicalization
+/// to establish a primary witness, without recompiling or selecting a plan.
 /// Formal rule CK-Elaborate: Check contracts, clause occurrences, named reductions, constraints, Rust chain and Before.
 pub fn check(source: &valuation::Program, target: &ra::Program) -> syn::Result<()> {
     let analysis = valuation::contract::check(source)?;
@@ -230,7 +247,7 @@ pub fn check(source: &valuation::Program, target: &ra::Program) -> syn::Result<(
             ),
         ));
     }
-    structural::check(source, &analysis, &target_schedule).map_err(|message| {
+    structural::check(source, &analysis, &target_schedule, target).map_err(|message| {
         syn::Error::new_spanned(
             &target.plan.output,
             format!("result `{}`: {message}", target.plan.output.input),
@@ -652,14 +669,17 @@ impl<'a> State<'a> {
         let mapping = declaration
             .columns
             .iter()
-            .zip(atom.variables())
-            .map(|(column, variable)| ra::AttributeRename {
-                source: column.name.clone(),
-                minus_token: Default::default(),
-                gt_token: Default::default(),
-                target: self.canonical(variable),
+            .zip(&atom.args)
+            .filter_map(|(column, argument)| {
+                cq::rust::variable(argument).map(|variable| ra::AttributeRename {
+                    source: column.name.clone(),
+                    minus_token: Default::default(),
+                    gt_token: Default::default(),
+                    target: self.canonical(variable),
+                })
             })
             .collect();
+        let constants = occurrence_constants(declaration, atom);
         let mut result = self.emit(ra::Operator::Rename(Box::new(ra::Rename {
             rename_token: Default::default(),
             relation: atom.relation.clone(),
@@ -670,6 +690,7 @@ impl<'a> State<'a> {
             },
             mapping_brace: Default::default(),
             mapping,
+            constants,
         })));
         // A literal equality is a keyed relational read of this occurrence.
         // It may move earlier across Rust because it only restricts its domain.
@@ -1193,11 +1214,33 @@ fn aliases(source: &valuation::cq::Program) -> BTreeMap<String, Ident> {
                 .variables()
                 .map(|v| symbol_name(&canonical(v, &proposed)))
                 .collect();
-            names.len() != atom.args.len()
+            names.len() != atom.variables().count()
         }) {
             continue;
         }
         aliases = proposed;
     }
     aliases
+}
+
+fn occurrence_constants(
+    declaration: &cq::RelationDecl,
+    atom: &cq::Atom,
+) -> Option<ra::OccurrenceConstants> {
+    let equalities: cq::CommaList<_> = declaration
+        .columns
+        .iter()
+        .zip(&atom.args)
+        .filter(|(_, argument)| cq::equality::literal(argument))
+        .map(|(column, argument)| ra::Equality {
+            left: column.name.clone(),
+            eq_token: Default::default(),
+            right: ra::EqualityValue::Literal(argument.clone()),
+        })
+        .collect();
+    (!equalities.is_empty()).then_some(ra::OccurrenceConstants {
+        constants_token: Default::default(),
+        brace: Default::default(),
+        equalities,
+    })
 }

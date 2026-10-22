@@ -1,0 +1,5 @@
+error: CQ_GPU_DATALOG_SCHEDULE_ARGUMENT: expected delta_first or hoist_invariants
+ --> tests/ui/unknown_schedule_advice.rs:4:47
+  |
+4 |         schedule = ::cq_gpu_datalog::schedule(unknown);
+  |                                               ^^^^^^^

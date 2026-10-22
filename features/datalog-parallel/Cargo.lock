@@ -302,6 +302,7 @@ dependencies = [
  "cq-datalog-support",
  "cq-lang-datalog-source",
  "cq-lang-datalog-strata",
+ "cq-syntax",
  "proc-macro2",
  "quote",
  "syn 2.0.119",

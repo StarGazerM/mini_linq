@@ -1,0 +1,11 @@
+[package]
+name = "gpu-device-columns-oracle"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+gpu-device-columns = { path = "../device-columns" }
+cq-gpu-runtime = { path = "../printer-runtime" }
+cuda-core.workspace = true
+cuda-device.workspace = true
+cuda-host.workspace = true

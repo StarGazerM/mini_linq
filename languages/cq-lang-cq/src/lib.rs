@@ -176,7 +176,7 @@ impl syn::parse::Parse for Query {
 }
 
 impl Query {
-    /// The positive, distinct-variable fragment accepted by the basic route.
+    /// The positive, distinct-variable/literal fragment accepted by the basic route.
     pub fn is_basic(&self) -> bool {
         let bound: BTreeSet<_> = self
             .body
@@ -186,6 +186,7 @@ impl Query {
             .map(symbol_name)
             .collect();
         self.head.is_normalized()
+            && self.head.variables().count() == self.head.args.len()
             && self
                 .head
                 .variables()

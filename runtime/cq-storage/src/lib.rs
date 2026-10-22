@@ -98,6 +98,7 @@ mod membership;
 mod ordered;
 pub mod rows;
 mod sorted_run;
+pub mod sequence;
 mod trie;
 
 pub use answers::{Answers, GroupedAnswers, SingleGroup};

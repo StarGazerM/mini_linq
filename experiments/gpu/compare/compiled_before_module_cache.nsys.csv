@@ -1,0 +1,49 @@
+
+NOTICE: Existing SQLite export found: /tmp/compiled-stage2.sqlite
+        It is assumed file was previously exported from: /tmp/compiled-stage2.nsys-rep
+        Consider using --force-export=true if needed.
+
+Processing [/tmp/compiled-stage2.sqlite] with [/opt/nvidia/hpc_sdk/Linux_x86_64/25.5/profilers/Nsight_Systems/host-linux-x64/reports/cuda_gpu_kern_sum.py]... 
+Time (%),Total Time (ns),Instances,Avg (ns),Med (ns),Min (ns),Max (ns),StdDev (ns),Name
+42.0,6233705,6,1038950.8,1037255.0,1033863,1046182,5446.8,cq_gpu_stream_0_r21
+36.7,5455620,12,454635.0,455043.5,422979,485219,31367.1,cq_gpu_stream_0_r8
+5.2,769093,24,32045.5,2704.0,928,121985,52949.6,order_bins
+4.4,659654,24,27485.6,6896.0,1216,96993,39836.4,sorted_starts
+3.0,443777,24,18490.7,2240.0,1120,68672,29406.0,word_offsets
+1.6,243299,12,20274.9,20176.5,11104,29697,9529.6,cq_gpu_stream_0_r5
+1.5,215459,132,1632.3,1312.0,1120,4704,973.6,scan_blocks
+1.3,198274,24,8261.4,6704.0,1760,17793,6466.3,sorted_directory
+0.8,117665,48,2451.4,2240.0,1120,6304,1556.8,gather
+0.6,93632,60,1560.5,1088.0,1024,3424,932.2,add_prefix
+0.5,78497,6,13082.8,13008.5,12640,13760,407.4,set_insert
+0.5,69568,24,2898.7,2688.0,1216,5024,1369.0,sorted_check
+0.2,35680,24,1486.7,1456.0,928,2112,456.9,scatter
+0.2,35584,24,1482.7,1456.0,928,2112,452.0,histogram
+0.2,28512,24,1188.0,1184.0,1088,1280,64.9,fences
+0.2,28384,24,1182.7,1216.0,928,1632,174.4,clear_histogram
+0.2,26848,6,4474.7,4480.0,4384,4544,76.8,extrema
+0.2,26208,24,1092.0,1104.0,992,1248,62.1,complete_stats
+0.2,22784,24,949.3,896.0,864,1152,111.1,initialize
+0.2,22272,12,1856.0,1872.0,1792,1920,43.1,cq_gpu_stream_0_r3
+0.1,21088,12,1757.3,1728.0,1664,2240,157.0,cq_gpu_stream_0_r2
+0.1,14208,6,2368.0,2368.0,2336,2432,35.1,pack
+0.0,6784,6,1130.7,1120.0,1120,1152,16.5,membership_insert
+
+Processing [/tmp/compiled-stage2.sqlite] with [/opt/nvidia/hpc_sdk/Linux_x86_64/25.5/profilers/Nsight_Systems/host-linux-x64/reports/cuda_api_sum.py]... 
+Time (%),Total Time (ns),Num Calls,Avg (ns),Med (ns),Min (ns),Max (ns),StdDev (ns),Name
+85.1,443309571,192,2308904.0,3642.0,2034,30793722,6520135.7,cuMemcpyHtoDAsync_v2
+6.4,33359243,120,277993.7,274500.5,162411,513334,67970.3,cuModuleLoadData
+2.6,13398756,283,47345.4,3076.0,451,1576521,228252.4,cuStreamSynchronize
+2.0,10304770,7,1472110.0,2229731.0,187459,2483077,1072472.1,cuMemFree_v2
+1.3,6742591,343,19657.7,381.0,220,1047347,136362.5,cuEventSynchronize
+0.9,4475262,84,53276.9,10229.0,8346,436406,108811.9,cuMemcpyDtoHAsync_v2
+0.7,3517190,120,29309.9,23691.0,10961,152983,28706.7,cuModuleUnload
+0.4,2147414,582,3689.7,2825.5,2284,20709,2203.9,cuLaunchKernel
+0.3,1458516,7,208359.4,219060.0,107236,268755,57037.8,cuMemAlloc_v2
+0.2,868063,1025,846.9,251.0,211,13967,1707.1,cuEventRecord
+0.2,798095,252,3167.0,2976.0,1573,8726,1149.9,cuMemsetD8Async
+0.1,285511,229,1246.8,631.0,191,6553,1431.7,cuEventCreate
+0.0,164196,24,6841.5,6192.0,5901,9228,1226.5,cuMemcpyDtoDAsync_v2
+0.0,73011,229,318.8,240.0,90,5230,430.8,cuEventDestroy_v2
+0.0,501,1,501.0,501.0,501,501,0.0,cuCtxSetCurrent
+

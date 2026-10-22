@@ -116,3 +116,59 @@ fn representation_and_stage_overrides_keep_other_defaults() {
         quote!(pipeline { p, i, l, s, positional(positions), chunked(batch(64)), out }).to_string()
     );
 }
+
+#[test]
+fn sequence_phases_are_ordered_and_require_a_complete_target() {
+    let defaults: cq_stage::Configuration = syn::parse_quote!(pipeline {
+        plan = p; ix = i; lower = l; select = s;
+        represent = r; stage = b; print = print_pull;
+    });
+    let config: cq_stage::Configuration = syn::parse_quote!(pipeline {
+        surface = [surface];
+        physical = [physical];
+        structures = [structures];
+        sequence = sequence;
+        decompose = [tile(32), store];
+        grade = sequential;
+        print = translate_pull;
+    });
+    assert_eq!(
+        config
+            .resolve(defaults.clone())
+            .unwrap()
+            .to_token_stream()
+            .to_string(),
+        quote!(pipeline {
+            surface, p, i, l, physical, s, structures, r, b,
+            sequence, tile(32), store, sequential, translate_pull
+        })
+        .to_string()
+    );
+    for invalid in [
+        quote!(sequence = sequence;),
+        quote!(grade = sequential;),
+        quote!(print = translate_pull;),
+        quote!(sequence = sequence; grade = sequential;),
+        quote!(sequence = sequence; print = translate_pull;),
+        quote!(grade = sequential; print = translate_pull;),
+        quote!(sequence = sequence; grade = sequential; print = print_pull;),
+        quote!(sequence = sequence; grade = sequential; print = own_push::push;),
+        quote!(decompose = [tile(32)];),
+    ] {
+        let config: cq_stage::Configuration = syn::parse2(quote!(pipeline { #invalid })).unwrap();
+        assert!(config.resolve(defaults.clone()).is_err(), "{invalid}");
+    }
+    let custom: cq_stage::Configuration = syn::parse_quote!(pipeline {
+        sequence = lower_custom; grade = target_custom; print = custom::translate;
+    });
+    assert!(custom.resolve(defaults.clone()).is_ok());
+    let mut sequence_defaults = defaults;
+    sequence_defaults.sequence = Some(syn::parse_quote!(sequence));
+    sequence_defaults.grade = Some(syn::parse_quote!(sequential));
+    sequence_defaults.print = Some(syn::parse_quote!(translate_pull));
+    assert!(
+        cq_stage::Configuration::default()
+            .resolve(sequence_defaults)
+            .is_ok()
+    );
+}

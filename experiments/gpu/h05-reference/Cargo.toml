@@ -1,0 +1,20 @@
+[package]
+name = "gpu-h05-reference"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+cuda-core.workspace = true
+cuda-device.workspace = true
+cuda-host.workspace = true
+gpu-compress = { path = "../compress" }
+gpu-device-columns = { path = "../device-columns" }
+gpu-tiles = { path = "../tiles" }
+rccl-cub.workspace = true
+rccl-memory.workspace = true
+rccl-thrust.workspace = true
+serde_json.workspace = true
+
+[[bin]]
+name = "h05-reference"
+path = "src/main.rs"

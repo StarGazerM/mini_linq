@@ -965,8 +965,7 @@ macro_rules! configuration {
 
 macro_rules! configurations {
     ($case:ident; $($configuration:ident),+ $(,)?) => {
-        $(mod $configuration { configuration!($configuration, $case); })+
-        pub const CONFIGURATIONS: &[[usize; 10]] = &[$($configuration::CONFIG),+];
+        extend_configurations!($case; $($configuration),+);
     };
 }
 

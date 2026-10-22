@@ -1,0 +1,11 @@
+struct H09;
+relation Lineitem(l_orderkey:i64,l_partkey:i64,l_suppkey:i64);
+relation PartSupp(ps_partkey:i64,ps_suppkey:i64);
+relation Part(p_partkey:i64,p_name:String);
+relation Supplier(s_suppkey:i64,s_nationkey:i32);
+relation Orders(o_orderkey:i64);
+relation Nation(n_nationkey:i32);
+answer(order_key,part_key,supplier_key) :-
+Orders(order_key), Lineitem(order_key,part_key,supplier_key), PartSupp(part_key,supplier_key),
+Part(part_key,part_name), if part_name.contains("green"),
+Supplier(supplier_key,nation_key), Nation(nation_key);

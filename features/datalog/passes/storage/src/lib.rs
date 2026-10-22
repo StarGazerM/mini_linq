@@ -1,11 +1,25 @@
-//! Choose the existing stable written-order storage refinement.
+//! Choose stable storage layouts in the independently checked variant-driver order.
 use cq_datalog_support::{ensure, key_columns};
 use cq_lang_datalog_incremental as incremental;
 use cq_lang_datalog_storage::{BodyItem, Layout, Policy, Program, Providers};
 use cq_syntax::symbol_name;
 use std::collections::BTreeSet;
 
+/// Admission and negative-key representation, independent of incremental coverage.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Representation {
+    #[default]
+    CpuHashSet,
+    DeviceSet,
+}
 pub fn compile(source: &incremental::Program) -> syn::Result<Program> {
+    compile_with_representation(source, Representation::CpuHashSet)
+}
+
+pub fn compile_with_representation(
+    source: &incremental::Program,
+    representation: Representation,
+) -> syn::Result<Program> {
     let analysis = incremental::contract::check(source)?;
     let (layouts, delta_layouts) = choose_layouts(source, &analysis);
     let mut target = Program {
@@ -46,9 +60,15 @@ pub fn compile(source: &incremental::Program) -> syn::Result<Program> {
         delta_layouts,
         reads: Vec::new(),
         negations: Vec::new(),
-        policy: Policy {
-            insertion: syn::parse_quote!(all_columns),
-            negation_keys: syn::parse_quote!(borrowed),
+        policy: match representation {
+            Representation::CpuHashSet => Policy {
+                insertion: syn::parse_quote!(all_columns),
+                negation_keys: syn::parse_quote!(borrowed),
+            },
+            Representation::DeviceSet => Policy {
+                insertion: syn::parse_quote!(device_set_all_columns),
+                negation_keys: syn::parse_quote!(device_set_owned),
+            },
         },
     };
     (target.reads, target.negations) = cq_lang_datalog_storage::read_plan(&target, &analysis)?;
@@ -76,15 +96,18 @@ fn choose_layouts(
     ordered.sort_by_key(|variant| (variant.rule, variant.delta));
     for variant in ordered {
         let mut bound = BTreeSet::new();
+        let order = incremental::variant_order(&source.strata.source.rules[variant.rule], variant.driver)
+            .expect("checked driver order");
         for (position, item) in variant.query.body.iter().enumerate() {
             let BodyItem::Positive { atom } = item else {
                 continue;
             };
             let (keys, key) = key_columns(atom, &bound);
-            let is_delta = Some(position) == variant.delta;
+            let source_position = order[position];
+            let is_delta = Some(source_position) == variant.delta;
             let relation = if is_delta {
                 let BodyItem::Positive { atom: base } =
-                    &source.strata.source.rules[variant.rule].body[position]
+                    &source.strata.source.rules[variant.rule].body[source_position]
                 else {
                     unreachable!("changing source position is a positive atom")
                 };

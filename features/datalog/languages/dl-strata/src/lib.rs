@@ -1,5 +1,7 @@
 //! DL-Strata records dependency-ordered unions of SCCs over DL-Source.
 //! Its meaning is sequential composition of the source component fixpoints.
+//! Frozen-filter certificates additionally preserve the erased partition and
+//! require their materialized helpers to complete before recursive consumers.
 use cq_datalog_support::ensure;
 pub use cq_lang_datalog_source as source;
 use cq_syntax::symbol_name;
@@ -11,6 +13,7 @@ use syn::{
     Ident, Token,
     parse::{Parse, ParseStream},
 };
+pub mod invariants;
 pub mod kw {
     syn::custom_keyword!(strata);
     syn::custom_keyword!(component);
@@ -110,6 +113,7 @@ pub mod contract {
             dependencies,
         } = source::contract::check(&program.source)?;
         check_strata(program, &graph)?;
+        invariants::check(program, &graph)?;
         let components: Vec<Vec<usize>> = program
             .components
             .iter()
@@ -166,11 +170,27 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
 }
 // The stage runner has already checked both language contracts.
 fn check_rewrite_admitted(source: &Program, target: &Program) -> syn::Result<()> {
-    ensure(
-        source.source == target.source,
-        target,
-        "strata rewrite changed the source program",
-    )
+    if !source.source.invariants.is_empty() || !target.source.invariants.is_empty() {
+        ensure(
+            source.source.invariants.is_empty()
+                || source.source.invariants == target.source.invariants,
+            target,
+            "strata rewrite changed existing invariant decisions",
+        )?;
+        let source = invariants::erase(source)?;
+        let target_erased = invariants::erase(target)?;
+        ensure(
+            source == target_erased,
+            target,
+            "strata invariant rewrite changed the erased source or partition",
+        )
+    } else {
+        ensure(
+            source.source == target.source,
+            target,
+            "strata rewrite changed the source program",
+        )
+    }
 }
 /// The rewrite callback assumes `cq_stage::run` checked both contracts.
 /// Standalone callers must use the public free [`check_rewrite`] function.

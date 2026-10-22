@@ -132,6 +132,12 @@ pub fn use_scan(
 
 fn guard(atom: &cq_syntax::Atom, key: &KeySet) -> BodyItem {
     let name = &key.name;
+    if key.representation == KeyRepresentation::DeviceSetOwned {
+        let args = key.columns.iter().map(|&i| &atom.args[i]);
+        return syn::parse_quote!(
+            #[total] if !::cq_gpu_runtime::datalog::contains(&#name, &(#(#args,)*))
+        );
+    }
     if key.columns.is_empty() {
         syn::parse_quote!(#[total] if !#name.contains(&((),)))
     } else {
@@ -143,9 +149,10 @@ fn guard(atom: &cq_syntax::Atom, key: &KeySet) -> BodyItem {
 fn key_representation(source: &storage::Program) -> syn::Result<KeyRepresentation> {
     match Some(symbol_name(&source.policy.negation_keys)).as_deref() {
         Some("borrowed") => Ok(KeyRepresentation::Borrowed),
+        Some("device_set_owned") => Ok(KeyRepresentation::DeviceSetOwned),
         _ => Err(syn::Error::new_spanned(
             source,
-            "fork requires borrowed negation keys",
+            "fork requires a checked negation key representation",
         )),
     }
 }
@@ -166,6 +173,14 @@ pub(crate) fn check_storage_with_analysis(
     let variants = &source.incremental.variants;
     let representation = key_representation(source)?;
     let context = &target.context;
+    ensure(
+        context.representation == representation
+            && context.layout_realization == representation.layouts()
+            && context.changing_layout_realization == representation.changing_layouts(),
+        source,
+        "fork changed the recorded representation policy",
+    )?;
+    ensure(context.leveled_ratio >= 2, source, "invalid leveled device index ratio")?;
     ensure(
         context.relations.len() == source.incremental.strata.source.declarations.len()
             && context.strata.len() == analysis.components.len(),
@@ -283,6 +298,8 @@ pub(crate) fn check_storage_with_analysis(
         )?;
         let mut projections = Vec::new();
         let mut used_keys = BTreeSet::new();
+        let mut frozen_layouts = BTreeSet::new();
+        let mut leveled_layouts = BTreeSet::new();
         for key in &stratum.keys {
             add_name(&key.name)?;
             ensure(
@@ -318,10 +335,13 @@ pub(crate) fn check_storage_with_analysis(
             )?;
             let hole = checked_hole(source, target, key.hole, &mut used_holes)?;
             add_name(&hole.name)?;
+            let literal_count = key.filters.iter()
+                .filter(|(_, expression)| cq_syntax::equality::literal(rust::unparen(expression)))
+                .count();
             ensure(
-                hole.query.body.len() == 1 + key.filters.len(),
+                hole.query.body.len() == 1 + key.filters.len() - literal_count,
                 source,
-                "key hole must be a projection with exactly its constant filters",
+                "key hole must retain literal columns and exactly its nonliteral filters",
             )?;
             let BodyItem::Positive { atom } = &hole.query.body[0] else {
                 return Err(syn::Error::new_spanned(
@@ -336,23 +356,38 @@ pub(crate) fn check_storage_with_analysis(
             )?;
             let variables: Vec<_> = atom.args.iter().map(rust::variable).collect();
             ensure(
-                variables
+                atom.args.iter().enumerate().all(|(column, argument)| {
+                    match key.filters.iter().find(|(i, expression)| {
+                        *i == column && cq_syntax::equality::literal(rust::unparen(expression))
+                    }) {
+                        Some((_, expression)) => argument == rust::unparen(expression),
+                        None => rust::variable(argument).is_some(),
+                    }
+                }) && variables
                     .iter()
                     .flatten()
                     .map(|id| symbol_name(id))
                     .collect::<BTreeSet<_>>()
                     .len()
-                    == declaration.arity(),
+                    == declaration.arity() - literal_count,
                 source,
-                "key projection requires distinct variables",
+                "key projection requires distinct variables and unchanged literal columns",
             )?;
             let mut output = declaration.clone();
             output.name = hole.name.clone();
             output.value = None;
             let expected_args: Vec<Expr> = if key.columns.is_empty() {
                 let column = &hole.declarations.last().expect("checked output").columns[0].name;
-                output.columns = syn::parse_quote!(#column: ());
-                vec![syn::parse_quote!(())]
+                match representation {
+                    KeyRepresentation::Borrowed => {
+                        output.columns = syn::parse_quote!(#column: ());
+                        vec![syn::parse_quote!(())]
+                    }
+                    KeyRepresentation::DeviceSetOwned => {
+                        output.columns = syn::parse_quote!(#column: u8);
+                        vec![syn::parse_quote!(0u8)]
+                    }
+                }
             } else {
                 output.columns = key
                     .columns
@@ -361,22 +396,32 @@ pub(crate) fn check_storage_with_analysis(
                         let mut column = declaration.columns[i].clone();
                         column.name = variables[i].expect("checked key variable").clone();
                         let ty = &column.ty;
-                        column.ty = syn::parse_quote!(&#ty);
+                        if representation == KeyRepresentation::Borrowed {
+                            column.ty = syn::parse_quote!(&#ty);
+                        }
                         column
                     })
                     .collect();
-                key.columns.iter().map(|&i| atom.args[i].clone()).collect()
+                key.columns.iter().map(|&i| {
+                    let arg = &atom.args[i];
+                    match representation {
+                        KeyRepresentation::Borrowed => arg.clone(),
+                        KeyRepresentation::DeviceSetOwned => syn::parse_quote!(*#arg),
+                    }
+                }).collect()
             };
             let mut expected_declarations = required_inputs(context, &hole.query);
             expected_declarations.push(output);
             let name = &hole.name;
-            let selections = key.filters.iter().map(|(column, expression)| {
-                let variable = variables[*column].expect("checked filter variable");
-                quote!(if *#variable == (#expression))
+            let selections = key.filters.iter().filter_map(|(column, expression)| {
+                if cq_syntax::equality::literal(rust::unparen(expression)) {
+                    None
+                } else {
+                    let variable = variables[*column].expect("checked filter variable");
+                    Some(quote!(if *#variable == (#expression)))
+                }
             });
-            // A complete CQ parse recognizes literal equalities and total
-            // predicates. Parsing isolated BodyItems would leave raw Filters
-            // and compare different language representations of the same clause.
+            // Parse complete CQ to preserve recognition of authored predicates.
             let expected: CqProgram = syn::parse2(quote! {
                 struct #name;
                 #(#expected_declarations)*
@@ -410,6 +455,21 @@ pub(crate) fn check_storage_with_analysis(
                 let mut query = variant.query.clone();
                 query.head.relation = hole.name.clone();
                 use_layouts(&mut query, context, source, rule.variant)?;
+                if representation == KeyRepresentation::DeviceSetOwned {
+                    for item in &query.body {
+                        if let BodyItem::Positive { atom } = item {
+                            if let Some((index, layout)) = context.layouts.iter().enumerate()
+                                .find(|(_, layout)| layout.name == atom.relation && layout.key != 0)
+                            {
+                                if members.contains(&layout.relation) {
+                                    leveled_layouts.insert(index);
+                                } else {
+                                    frozen_layouts.insert(index);
+                                }
+                            }
+                        }
+                    }
+                }
                 ensure(
                     rule.scan.as_ref().map(|scan| &scan.source)
                         == scan_source(&query, context).as_ref(),
@@ -464,6 +524,16 @@ pub(crate) fn check_storage_with_analysis(
                 )?;
             }
         }
+        ensure(
+            stratum.frozen_layouts.iter().copied().eq(frozen_layouts),
+            source,
+            "fork frozen device indexes must exactly cover keyed EDB/lower-stratum layouts in layout order",
+        )?;
+        ensure(
+            stratum.leveled_layouts.iter().copied().eq(leveled_layouts),
+            source,
+            "fork leveled device indexes must exactly cover changing keyed full layouts in layout order",
+        )?;
         ensure(
             used_keys.len() == stratum.keys.len(),
             source,

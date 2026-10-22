@@ -1,0 +1,222 @@
+{
+  "build_ms": {
+    "median": 8.955391883850098,
+    "min": 8.93398380279541,
+    "samples": [
+      8.93398380279541,
+      8.952351570129395,
+      8.955391883850098,
+      9.045215606689453,
+      9.075551986694336
+    ]
+  },
+  "capacity_retries": 1,
+  "dedup_ms": {
+    "median": 0.17817600071430206,
+    "min": 0.17423999309539795,
+    "samples": [
+      0.17423999309539795,
+      0.17715199291706085,
+      0.17817600071430206,
+      0.17919999361038208,
+      0.1802240014076233
+    ]
+  },
+  "duckdb_answers": 72983,
+  "emitted_bindings": 72985,
+  "exact": true,
+  "expand_ms": {
+    "median": 0.506879985332489,
+    "min": 0.4986880123615265,
+    "samples": [
+      0.4986880123615265,
+      0.502784013748169,
+      0.506879985332489,
+      0.5079039931297302,
+      0.5089280009269714
+    ]
+  },
+  "gpu_ms": {
+    "median": 9.640447616577148,
+    "min": 9.613920211791992,
+    "samples": [
+      9.613920211791992,
+      9.639455795288086,
+      9.640447616577148,
+      9.718144416809082,
+      9.764703750610352
+    ]
+  },
+  "index_ms": {
+    "customer_by_nation": {
+      "median": 0.17612800002098083,
+      "min": 0.17612800002098083,
+      "samples": [
+        0.17612800002098083,
+        0.17612800002098083,
+        0.17612800002098083,
+        0.17715199291706085,
+        0.17817600071430206
+      ]
+    },
+    "lineitem_by_order": {
+      "median": 7.306240081787109,
+      "min": 7.2867841720581055,
+      "samples": [
+        7.2867841720581055,
+        7.305215835571289,
+        7.306240081787109,
+        7.392255783081055,
+        7.414783954620361
+      ]
+    },
+    "nation_by_region": {
+      "median": 0.0655359998345375,
+      "min": 0.06451199948787689,
+      "samples": [
+        0.06451199948787689,
+        0.0655359998345375,
+        0.0655359998345375,
+        0.0655359998345375,
+        0.06656000018119812
+      ]
+    },
+    "orders_by_customer": {
+      "median": 1.1110399961471558,
+      "min": 1.1089919805526733,
+      "samples": [
+        1.1089919805526733,
+        1.1100159883499146,
+        1.1110399961471558,
+        1.1151360273361206,
+        1.1182080507278442
+      ]
+    },
+    "region_by_name": {
+      "median": 0.05276799947023392,
+      "min": 0.05244800075888634,
+      "samples": [
+        0.05244800075888634,
+        0.05273599922657013,
+        0.05276799947023392,
+        0.05283199995756149,
+        0.05411199852824211
+      ]
+    },
+    "supplier_by_nation_supplier": {
+      "median": 0.24371199309825897,
+      "min": 0.24268800020217896,
+      "samples": [
+        0.24268800020217896,
+        0.24371199309825897,
+        0.24371199309825897,
+        0.24371199309825897,
+        0.24371199309825897
+      ]
+    }
+  },
+  "plan": "R N C O L S",
+  "representation": {
+    "base_columns": [
+      {
+        "encoded_bytes": 1922088,
+        "name": "customer.c_custkey",
+        "rows": 1500000
+      },
+      {
+        "encoded_bytes": 984488,
+        "name": "customer.c_nationkey",
+        "rows": 1500000
+      },
+      {
+        "encoded_bytes": 65677224,
+        "name": "lineitem.l_orderkey",
+        "rows": 59986052
+      },
+      {
+        "encoded_bytes": 129346856,
+        "name": "lineitem.l_suppkey",
+        "rows": 59986052
+      },
+      {
+        "encoded_bytes": 680,
+        "name": "nation.n_nationkey",
+        "rows": 25
+      },
+      {
+        "encoded_bytes": 424,
+        "name": "nation.n_regionkey",
+        "rows": 25
+      },
+      {
+        "encoded_bytes": 19219368,
+        "name": "orders.o_orderkey",
+        "rows": 15000000
+      },
+      {
+        "encoded_bytes": 39845288,
+        "name": "orders.o_custkey",
+        "rows": 15000000
+      },
+      {
+        "encoded_bytes": 22969640,
+        "name": "orders.o_orderdate",
+        "rows": 15000000
+      },
+      {
+        "encoded_bytes": 424,
+        "name": "region.r_regionkey",
+        "rows": 5
+      },
+      {
+        "encoded_bytes": 424,
+        "name": "region.r_name",
+        "rows": 5
+      },
+      {
+        "encoded_bytes": 128584,
+        "name": "supplier.s_suppkey",
+        "rows": 100000
+      },
+      {
+        "encoded_bytes": 65864,
+        "name": "supplier.s_nationkey",
+        "rows": 100000
+      }
+    ],
+    "compressed_base_bytes": 280161352,
+    "declared_source_bytes": 1278977072,
+    "dictionary_ids": {
+      "custkey": 1500000,
+      "nationkey": 25,
+      "orderkey": 15000000,
+      "regionkey": 5,
+      "suppkey": 100000
+    },
+    "id_bits": {
+      "nationkey": 5,
+      "orderkey": 24,
+      "suppkey": 17
+    },
+    "index_bytes": 193848328
+  },
+  "sf": 10,
+  "timed": "compressed resident base -> GPU index build (RCCL) + query + dedup (RCCL) -> resident distinct answer",
+  "unique_answers": 72983,
+  "untimed_load": {
+    "compress_ms": 7610.95411,
+    "read_ms": 1490.828575
+  },
+  "wall_ms": {
+    "median": 9.65236,
+    "min": 9.623916,
+    "samples": [
+      9.623916,
+      9.649515,
+      9.65236,
+      9.728957,
+      9.775905999999999
+    ]
+  },
+  "warmup_excluded": 1
+}

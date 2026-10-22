@@ -1,0 +1,304 @@
+{
+  "schema_version": 1,
+  "benchmark": "ddisasm SRDatalog slice",
+  "measurement_date": "2026-10-18",
+  "status": "single-run measurements; cvc5 GPU full tuples exact after backend unblock",
+  "program": {
+    "rules": 23,
+    "declared_relations": 39,
+    "declared_inputs": 28,
+    "outputs": 11,
+    "upstream_fixture_strata": 11,
+    "column_type": "i64 interned identities",
+    "fixture_crosscheck": "All 23 logical heads and body relation atoms, polarity, original order and z3-resolved constants matched independent HIR fixture; only LiveVarUsed2 reorders negative atom in Rust.",
+    "unused_input": "BlockLastInstr loaded by CPU/GPU; SRDatalog Program discovers only 38 relations/27 inputs"
+  },
+  "cpu_command": "cargo run --release --manifest-path features/datalog/Cargo.toml -p datalog-ddisasm --bin ddisasm -- DATA --engine both --check [--meta JSON]",
+  "cpu_timing_boundary": "engine run including indexes and output collection; excludes parsing, input clone and exact comparison",
+  "srdatalog_evidence": "srdatalog-results.json",
+  "srdatalog_commands": [
+    [
+      "uv",
+      "run",
+      "--project",
+      "/home/stargazermiao/workspace/srdatalog-python",
+      "python",
+      "/data/mini_linq/experiments/gpu/datalog-ddisasm/measure_srdatalog.py",
+      "cvc5"
+    ],
+    [
+      "uv",
+      "run",
+      "--project",
+      "/home/stargazermiao/workspace/srdatalog-python",
+      "python",
+      "/data/mini_linq/experiments/gpu/datalog-ddisasm/measure_srdatalog.py",
+      "z3"
+    ]
+  ],
+  "environment": {
+    "CUDA_HOME": "/opt/nvidia/hpc_sdk/Linux_x86_64/25.5/cuda/12.9",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "gpu": "NVIDIA RTX 6000 Ada Generation",
+    "gpu_uuid": "GPU-68f100db-f9a9-79f6-755e-e9812d5cb35c",
+    "driver_version": "580.178.04",
+    "gpu_memory_mib": 49140
+  },
+  "srdatalog_timing_boundary": {
+    "upstream_total_execution_time": {
+      "source": "/home/stargazermiao/workspace/SRDatalog/integration_tests/examples/ddisasm/ddisasm.nim",
+      "lines": "577-588",
+      "includes": "DdisasmPlan_Runner::run(device_db)",
+      "excludes": [
+        "CUDA initialization",
+        "CSV host loading",
+        "copy_host_to_device",
+        "post-run result size printing"
+      ],
+      "unit": "integer milliseconds"
+    },
+    "measured_run_call": {
+      "source": "/home/stargazermiao/workspace/srdatalog-python/src/srdatalog/ir/codegen/cuda/main_file.py",
+      "lines": "970-990,561-571",
+      "description": "srdatalog_prepare separately copies host to device and synchronizes. Timed srdatalog_run(0) consumes prepared DB, calls Runner::run including generated step and final size prints; unlimited fixpoint."
+    },
+    "measured_run_synchronized": "Same prepared run boundary plus checked cuda device synchronization before stopping perf_counter; excludes subsequent ctypes cardinality extraction and shutdown. This is comparable compute scope to Nim Total execution time, not process end-to-end.",
+    "generic_example_run": "/data/doop-next-round/source/examples/run_benchmark.py:220-226 times srdatalog_run without prior prepare; that boundary also includes fresh H2D. Not used for reported prepared run."
+  },
+  "gpu": {
+    "status": "built_nvtx_enabled",
+    "build_exit_code": 0,
+    "build_log": "gpu-unblock-build.log",
+    "historical_rejection_details": "gpu-rejection-details.json",
+    "historical_rejection_log": "gpu-rejection-build.log",
+    "representations": [
+      "Checked HashedRun for one-level composite scalar keys; exact comparison on every key resolves bucket collisions.",
+      "SortedRun for singleton keys, including owned closed captures with NoDense.",
+      "Closed integral/bool Bind expressions use checked variable analysis and once-only host scalar parameters.",
+      "Datalog explicitly records DeviceSet<_, Plain, Compacting>; standalone Staged remains unchanged.",
+      "Checked round publication compacts full and delta capacities using the existing count batch."
+    ],
+    "timing_boundary": "Synchronized resident computation after all EDB uploads; includes EDB canonicalization, first-use query module loads, per-hole indexes, recursive evaluation, exact dedup/compaction/admission/publication; excludes CSV parsing, uploads, result downloads and CPU exactness comparison.",
+    "comparison_boundary": "MiniLinq fixedpoint_seconds and SRDatalog run_synchronized both time prepared resident execution with completion synchronization, excluding CSV/H2D and output checking. Initialization inside those intervals differs: MiniLinq includes first-use query module loads and EDB canonicalization. Neither number is end-to-end process time.",
+    "standalone_default": "DeviceSet<_, Plain, Staged>",
+    "checks": {
+      "cq_gpu_and_datalog_tests": "55 passed",
+      "rewrite_tests": "124 passed",
+      "printer_oracle": "passed; closed captures, forced bucket collisions, skew and heavy multiplicity under Compacting/Staged",
+      "datalog_runtime_oracle": "passed; exact delta capacities and one checked batch per round",
+      "gpu_datalog_oracle_bench": "passed; all nine scenarios exact",
+      "string_dictionary": "passed"
+    }
+  },
+  "datasets": {
+    "cvc5": {
+      "metadata": "/home/stargazermiao/workspace/SRDatalog/integration_tests/examples/ddisasm/cvc5_consts.json",
+      "constants": {
+        "LOAD": 332573,
+        "STORE": 333071,
+        "NONE": 332575,
+        "PCRelative": 371929
+      },
+      "srdatalog": {
+        "timers_seconds": {
+          "emit": 0.020474101009313017,
+          "compile": 92.99700632697204,
+          "init": 0.16240948101039976,
+          "load_all": 0.0693595299962908,
+          "prepare": 0.005845804000273347,
+          "run_call": 0.6090517619741149,
+          "run_synchronized": 0.6090620220056735
+        },
+        "output_counts": {
+          "JumpTableTarget": 811,
+          "RegDefUseDefUsed": 65950,
+          "RegDefUseLiveVarAtBlockEnd": 84775,
+          "RegDefUseLiveVarUsed": 41186,
+          "RegDefUseLiveVarAtPriorUsed": 46552,
+          "RegDefUseReturnValUsed": 4442,
+          "RegRegArithOpDefs": 117,
+          "DefUsedForAddress": 10299,
+          "StackDefUseDefUsed": 2065369,
+          "StackDefUseLiveVarAtBlockEnd": 21236205,
+          "StackDefUseLiveVarAtPriorUsed": 4289196
+        }
+      },
+      "gpu": {
+        "evidence": "gpu-cvc5.json",
+        "full_tuple_check": "passed: all 11 outputs compared against CPU full tuples",
+        "exact_cpu_check": true,
+        "fixedpoint_seconds": 11.444805542,
+        "upload_seconds": 0.013844034,
+        "allocator_peak_bytes": 6504636136,
+        "upload_allocator_peak_bytes": 35528160,
+        "fixedpoint_allocations": 342198,
+        "checked_rounds": 878,
+        "nonempty_publications": 871,
+        "host_waits": 7122,
+        "control_readbacks": 7121,
+        "resume_readbacks": 5442,
+        "compaction_readbacks": 773,
+        "srdatalog_prepared_seconds": 0.6090620220056735,
+        "minilinq_over_srdatalog_time": 18.7908704343634,
+        "profile_summary": "../profile/README.md",
+        "nsys_analysis": "/data/artifacts/mini-linq-gpu-profiles/2026-10-19-ddisasm/cvc5.analysis.json",
+        "profile_fixedpoint_ms": 12896.982728,
+        "profile_gpu_busy_percent": 80.13645033083431,
+        "profile_kernels": 629196,
+        "profile_overlap_percent": 0.0,
+        "profile_active_streams": 1,
+        "profile_idle_ms": 2561.79857,
+        "profile_idle_cuda_api_ms": 1704.880742,
+        "profile_idle_outside_cuda_api_ms": 856.917828,
+        "profile_timing_note": "Instrumented NVTX fixed-point excludes EDB canonicalization and is not the same interval as consumer fixedpoint_seconds; nsys overhead is included.",
+        "ncu_metrics": "/data/artifacts/mini-linq-gpu-profiles/2026-10-19-ddisasm/ncu-cvc5/metrics.json",
+        "ncu_sampling": "Top five kernels ranked by aggregate nsys GPU time; NCU measures one selected launch per kernel, not an execution-weighted average."
+      },
+      "cpu": {
+        "ascent": {
+          "counts": {
+            "DefUsedForAddress": 10299,
+            "JumpTableTarget": 811,
+            "RegDefUseDefUsed": 65950,
+            "RegDefUseLiveVarAtBlockEnd": 84775,
+            "RegDefUseLiveVarAtPriorUsed": 46552,
+            "RegDefUseLiveVarUsed": 41186,
+            "RegDefUseReturnValUsed": 4442,
+            "RegRegArithOpDefs": 117,
+            "StackDefUseDefUsed": 2065369,
+            "StackDefUseLiveVarAtBlockEnd": 21236205,
+            "StackDefUseLiveVarAtPriorUsed": 4289196
+          },
+          "seconds": 50.150976424
+        },
+        "compute_boundary": "engine run including indexes and output collection; excludes parsing, input clone and exact comparison",
+        "dataset": "/home/stargazermiao/workspace/SRDatalog/benchmarks/data/ddisasm/cvc5",
+        "full_tuple_check": "passed: all 11 outputs sorted and deduplicated",
+        "load_seconds": 5.497992762,
+        "mini": {
+          "counts": {
+            "DefUsedForAddress": 10299,
+            "JumpTableTarget": 811,
+            "RegDefUseDefUsed": 65950,
+            "RegDefUseLiveVarAtBlockEnd": 84775,
+            "RegDefUseLiveVarAtPriorUsed": 46552,
+            "RegDefUseLiveVarUsed": 41186,
+            "RegDefUseReturnValUsed": 4442,
+            "RegRegArithOpDefs": 117,
+            "StackDefUseDefUsed": 2065369,
+            "StackDefUseLiveVarAtBlockEnd": 21236205,
+            "StackDefUseLiveVarAtPriorUsed": 4289196
+          },
+          "seconds": 36.012746643
+        }
+      },
+      "counts_match_srdatalog": {
+        "DefUsedForAddress": true,
+        "JumpTableTarget": true,
+        "RegDefUseDefUsed": true,
+        "RegDefUseLiveVarAtBlockEnd": true,
+        "RegDefUseLiveVarAtPriorUsed": true,
+        "RegDefUseLiveVarUsed": true,
+        "RegDefUseReturnValUsed": true,
+        "RegRegArithOpDefs": true,
+        "StackDefUseDefUsed": true,
+        "StackDefUseLiveVarAtBlockEnd": true,
+        "StackDefUseLiveVarAtPriorUsed": true
+      }
+    },
+    "z3": {
+      "cpu": {
+        "dataset": "/home/stargazermiao/workspace/SRDatalog/benchmarks/data/ddisasm/z3",
+        "load_seconds": 9.070957374,
+        "compute_boundary": "engine run including indexes and output collection; excludes parsing, input clone and exact comparison",
+        "full_tuple_check": "passed: all 11 outputs sorted and deduplicated",
+        "mini": {
+          "seconds": 2085.226109883,
+          "counts": {
+            "DefUsedForAddress": 1398119,
+            "JumpTableTarget": 21170,
+            "RegDefUseDefUsed": 8886292,
+            "RegDefUseLiveVarAtBlockEnd": 17474127,
+            "RegDefUseLiveVarAtPriorUsed": 4505301,
+            "RegDefUseLiveVarUsed": 4460395,
+            "RegDefUseReturnValUsed": 628021,
+            "RegRegArithOpDefs": 242234,
+            "StackDefUseDefUsed": 578706,
+            "StackDefUseLiveVarAtBlockEnd": 37769498,
+            "StackDefUseLiveVarAtPriorUsed": 547991
+          }
+        },
+        "ascent": {
+          "seconds": 119.720479604,
+          "counts": {
+            "DefUsedForAddress": 1398119,
+            "JumpTableTarget": 21170,
+            "RegDefUseDefUsed": 8886292,
+            "RegDefUseLiveVarAtBlockEnd": 17474127,
+            "RegDefUseLiveVarAtPriorUsed": 4505301,
+            "RegDefUseLiveVarUsed": 4460395,
+            "RegDefUseReturnValUsed": 628021,
+            "RegRegArithOpDefs": 242234,
+            "StackDefUseDefUsed": 578706,
+            "StackDefUseLiveVarAtBlockEnd": 37769498,
+            "StackDefUseLiveVarAtPriorUsed": 547991
+          }
+        }
+      },
+      "counts_match_srdatalog": {
+        "DefUsedForAddress": true,
+        "JumpTableTarget": true,
+        "RegDefUseDefUsed": true,
+        "RegDefUseLiveVarAtBlockEnd": true,
+        "RegDefUseLiveVarAtPriorUsed": true,
+        "RegDefUseLiveVarUsed": true,
+        "RegDefUseReturnValUsed": true,
+        "RegRegArithOpDefs": true,
+        "StackDefUseDefUsed": true,
+        "StackDefUseLiveVarAtBlockEnd": true,
+        "StackDefUseLiveVarAtPriorUsed": true
+      },
+      "metadata": "/home/stargazermiao/workspace/SRDatalog/integration_tests/examples/ddisasm/z3_consts.json",
+      "constants": {
+        "LOAD": 0,
+        "STORE": 2309374,
+        "NONE": 4,
+        "PCRelative": 8859592
+      },
+      "srdatalog": {
+        "timers_seconds": {
+          "emit": 0.02027774800080806,
+          "compile": 85.07260733901057,
+          "init": 0.16096282796934247,
+          "load_all": 5.945257926010527,
+          "prepare": 0.6990256439894438,
+          "run_call": 1.946785609005019,
+          "run_synchronized": 1.9468003580113873
+        },
+        "output_counts": {
+          "JumpTableTarget": 21170,
+          "RegDefUseDefUsed": 8886292,
+          "RegDefUseLiveVarAtBlockEnd": 17474127,
+          "RegDefUseLiveVarUsed": 4460395,
+          "RegDefUseLiveVarAtPriorUsed": 4505301,
+          "RegDefUseReturnValUsed": 628021,
+          "RegRegArithOpDefs": 242234,
+          "DefUsedForAddress": 1398119,
+          "StackDefUseDefUsed": 578706,
+          "StackDefUseLiveVarAtBlockEnd": 37769498,
+          "StackDefUseLiveVarAtPriorUsed": 547991
+        }
+      },
+      "gpu": {
+        "status": "attempt_interrupted_on_user_wrap_up_request",
+        "command": "target/release/gpu-datalog-ddisasm DATA/z3 --check --meta META/z3_consts.json",
+        "exact_cpu_check": null,
+        "fixedpoint_seconds": null,
+        "upload_seconds": null,
+        "allocator_peak_bytes": null,
+        "checked_rounds": null,
+        "note": "The full-check process was still running without a completed report when the user requested wrap-up. It was stopped; no GPU timing, OOM conclusion, or exactness claim is made for z3."
+      }
+    }
+  }
+}

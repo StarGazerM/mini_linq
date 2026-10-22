@@ -1,0 +1,39 @@
+CHOSEN_PLANS: [{"rule": "KnowsLoad", "var_order": ["x", "y"], "clause_order": [0], "join_vars": [], "body": ["Atom(rel='KnowsInput', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='x', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='y', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))"]}, {"rule": "TriangleJoin", "var_order": ["b", "a", "c"], "clause_order": [0, 1, 2], "join_vars": ["a", "b", "c"], "body": ["Atom(rel='Knows', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='a', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='b', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))", "Atom(rel='Knows', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='b', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='c', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))", "Atom(rel='Knows', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='a', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='c', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))"]}]
+>> CUDA Device: NVIDIA RTX 6000 Ada Generation (Compute 8.9)
+[Step 0 (simple)] Relations: Knows completed in 100 ms
+[Step 1 (simple)]  completed in 1 ms
+ >>>>>>>>>>>>>>>>> TriangleJoin count: 946400853
+[Step 2 (simple)] Relations: Triangle completed in 1674 ms
+[Step 3 (simple)]  completed in 0 ms
+dataset=livejournal order=bac iteration=0 load_s=3.793160 prepare_ms=485.616609 run_ms=1777.469218 Triangle=946400853
+[Step 0 (simple)] Relations: Knows completed in 91 ms
+[Step 1 (simple)]  completed in 1 ms
+ >>>>>>>>>>>>>>>>> TriangleJoin count: 946400853
+[Step 2 (simple)] Relations: Triangle completed in 1663 ms
+[Step 3 (simple)]  completed in 0 ms
+dataset=livejournal order=bac iteration=1 load_s=3.920943 prepare_ms=423.995992 run_ms=1756.938006 Triangle=946400853
+[Step 0 (simple)] Relations: Knows completed in 91 ms
+[Step 1 (simple)]  completed in 1 ms
+ >>>>>>>>>>>>>>>>> TriangleJoin count: 946400853
+[Step 2 (simple)] Relations: Triangle completed in 1667 ms
+[Step 3 (simple)]  completed in 0 ms
+dataset=livejournal order=bac iteration=2 load_s=3.808109 prepare_ms=565.437832 run_ms=1760.871440 Triangle=946400853
+[Step 0 (simple)] Relations: Knows completed in 91 ms
+[Step 1 (simple)]  completed in 1 ms
+ >>>>>>>>>>>>>>>>> TriangleJoin count: 946400853
+[Step 2 (simple)] Relations: Triangle completed in 1668 ms
+[Step 3 (simple)]  completed in 0 ms
+dataset=livejournal order=bac iteration=3 load_s=4.281359 prepare_ms=541.625478 run_ms=1761.740972 Triangle=946400853
+[Step 0 (simple)] Relations: Knows completed in 91 ms
+[Step 1 (simple)]  completed in 1 ms
+ >>>>>>>>>>>>>>>>> TriangleJoin count: 946400853
+[Step 2 (simple)] Relations: Triangle completed in 1697 ms
+[Step 3 (simple)]  completed in 0 ms
+dataset=livejournal order=bac iteration=4 load_s=4.213427 prepare_ms=415.311775 run_ms=1790.466839 Triangle=946400853
+[Step 0 (simple)] Relations: Knows completed in 90 ms
+[Step 1 (simple)]  completed in 1 ms
+ >>>>>>>>>>>>>>>>> TriangleJoin count: 946400853
+[Step 2 (simple)] Relations: Triangle completed in 1668 ms
+[Step 3 (simple)]  completed in 0 ms
+dataset=livejournal order=bac iteration=5 load_s=2.574393 prepare_ms=339.135273 run_ms=1760.952371 Triangle=946400853
+{"dataset": "livejournal", "order": "bac", "requested_var_order": ["b", "a", "c"], "status": "ok", "phase": "complete", "compile_s": 0.011531525989994407, "load_s": [3.9209428309695795, 3.808109279954806, 4.281358624983113, 4.213427165988833, 2.5743933309568092], "prepare_ms": [423.99599199416116, 565.4378320323303, 541.6254780138843, 415.31177499564365, 339.13527301047], "run_ms": [1756.9380060303956, 1760.8714399975725, 1761.7409719969146, 1790.466839040164, 1760.952370997984], "counts": [946400853, 946400853, 946400853, 946400853, 946400853, 946400853], "expected_count": 946400853, "answer_count": 946400853, "count_exact": true, "peak_vram_mib": 9374, "peak_vram_note": "whole GPU 0, 1 Hz sampled lower bound", "chosen_plans": [{"rule": "KnowsLoad", "var_order": ["x", "y"], "clause_order": [0], "join_vars": [], "body": ["Atom(rel='KnowsInput', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='x', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='y', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))"]}, {"rule": "TriangleJoin", "var_order": ["b", "a", "c"], "clause_order": [0, 1, 2], "join_vars": ["a", "b", "c"], "body": ["Atom(rel='Knows', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='a', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='b', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))", "Atom(rel='Knows', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='b', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='c', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))", "Atom(rel='Knows', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='a', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='c', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))"]}], "project_dir": "/data/mini_linq-gpu/features/gpu/compare/srdatalog_build/jit/Trianglesbac_DB_ED6E", "artifact": "/data/mini_linq-gpu/features/gpu/compare/srdatalog_build/jit/Trianglesbac_DB_ED6E/libTrianglesbac_DB_ED6E.so", "warmup_ms": 1777.4692180100828, "warmup_load_s": 3.7931604650220834, "warmup_prepare_ms": 485.6166089884937, "median_ms": 1760.952370997984, "min_ms": 1756.9380060303956}

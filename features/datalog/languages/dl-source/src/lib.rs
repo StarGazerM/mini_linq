@@ -1,6 +1,9 @@
 //! DL-Source denotes the stratified least fixpoint of set-valued relations.
 //! Rust clauses are pure partial computations; panic is bottom and termination
 //! remains a caller premise. Surface sugar is not part of this language.
+//! Optional `invariants { hoist N using Helper { original_rule; } }` after
+//! the rules records a bounded frozen filter and its independently checked
+//! erasure. Helpers preserve one positive input's bindings and cardinality.
 use cq_datalog_support::{Fresh, ensure};
 pub use cq_lang_cq::{BodyItem, Query};
 use cq_stage::Language;
@@ -12,10 +15,14 @@ use syn::{
     Expr, Ident, Token,
     parse::{Parse, ParseStream},
 };
+pub mod invariants;
 pub mod kw {
     syn::custom_keyword!(output);
     syn::custom_keyword!(observe);
     syn::custom_keyword!(model);
+    syn::custom_keyword!(invariants);
+    syn::custom_keyword!(hoist);
+    syn::custom_keyword!(using);
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Program {
@@ -25,6 +32,14 @@ pub struct Program {
     pub rules: Vec<Query>,
     pub observer: Option<Expr>,
     pub models: BTreeMap<String, Ident>,
+    pub invariants: Vec<Invariant>,
+}
+/// A checked frozen-filter factorization retaining the original rule for erasure.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Invariant {
+    pub rule: usize,
+    pub helper: Ident,
+    pub source: Query,
 }
 impl Parse for Program {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
@@ -77,6 +92,25 @@ impl Parse for Program {
         while input.peek(Ident) && input.peek2(syn::token::Paren) {
             rules.push(input.parse()?);
         }
+        let mut invariants = Vec::new();
+        if input.peek(kw::invariants) {
+            input.parse::<kw::invariants>()?;
+            let body;
+            syn::braced!(body in input);
+            while !body.is_empty() {
+                body.parse::<kw::hoist>()?;
+                let rule = body.parse::<syn::LitInt>()?.base10_parse()?;
+                body.parse::<kw::using>()?;
+                let helper = body.parse()?;
+                let original;
+                syn::braced!(original in body);
+                let source = original.parse()?;
+                if !original.is_empty() {
+                    return Err(original.error("unexpected invariant source text"));
+                }
+                invariants.push(Invariant { rule, helper, source });
+            }
+        }
         Ok(Self {
             name,
             declarations,
@@ -84,6 +118,7 @@ impl Parse for Program {
             rules,
             observer,
             models,
+            invariants,
         })
     }
 }
@@ -96,6 +131,7 @@ impl ToTokens for Program {
             rules,
             observer,
             models,
+            invariants,
         } = self;
         if let Some(e) = observer {
             tokens.extend(quote!(observe = #e;));
@@ -108,6 +144,15 @@ impl ToTokens for Program {
             }
         }
         tokens.extend(quote!(output #(#outputs),*; #(#rules)*));
+        if !invariants.is_empty() {
+            let entries = invariants.iter().map(|entry| {
+                let rule = syn::Index::from(entry.rule);
+                let helper = &entry.helper;
+                let source = &entry.source;
+                quote!(hoist #rule using #helper { #source })
+            });
+            tokens.extend(quote!(invariants { #(#entries)* }));
+        }
     }
 }
 fn active_column(e: &Expr) -> Option<&Ident> {
@@ -258,6 +303,7 @@ pub mod contract {
     use super::*;
     /// Formal rule WF-DL-Source: check schemas, scope, models and stratifiability.
     pub fn check(program: &Program) -> syn::Result<Analysis> {
+        invariants::check(program)?;
         let graph = check_source(program)?;
         ensure(
             program.models.len() == program.declarations.len(),
@@ -302,6 +348,14 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
 
 // The stage runner has already checked both operands.
 fn check_rewrite_admitted(source: &Program, target: &Program) -> syn::Result<()> {
+    if !source.invariants.is_empty() || !target.invariants.is_empty() {
+        ensure(
+            source.invariants.is_empty() || source.invariants == target.invariants,
+            target,
+            "Datalog rewrite changed existing invariant decisions",
+        )?;
+        return check_rewrite_admitted(&invariants::erase(source)?, &invariants::erase(target)?);
+    }
     ensure(
         source.name == target.name
             && source.declarations == target.declarations

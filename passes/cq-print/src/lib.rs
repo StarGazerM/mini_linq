@@ -59,6 +59,7 @@ pub use ownership::own_captures;
 pub struct Host {
     pub value: Ident,
     pub layout: Vec<String>,
+    pub types: Vec<syn::Type>,
 }
 
 /// Where a result's rows live once printed.
@@ -172,6 +173,32 @@ impl<'a> Context<'a> {
         )
     }
 
+    /// Emit eager, exact certificates over entire declared host rows.
+    /// Formal rule IF-HostSet: Certify exact full-row host distinctness before query execution.
+    ///
+    /// CPU source preparation calls this before emitting any operator builds or
+    /// reads. `Rows` preserves declaration layout, including columns discarded
+    /// by later projections. Only opted-in hosts require `Eq + Hash`; the set
+    /// stores borrowed column tuples and is dropped before query evaluation.
+    pub fn certify_host_sets(&mut self, module: &structures::Program) {
+        for fact in &module.physical.program.host_sets {
+            let name = symbol_name(&fact.relation);
+            let host = &self.hosts[&name].value;
+            let message = format!("host_set {name} certificate failed: duplicate full host row");
+            self.statements.push(syn::parse_quote! {
+                {
+                    let mut __cq_host_set_seen = ::std::collections::HashSet::new();
+                    for __cq_host_set_row in ::cq_storage::rows::Rows::rows(#host) {
+                        ::core::assert!(
+                            __cq_host_set_seen.insert(__cq_host_set_row),
+                            #message
+                        );
+                    }
+                }
+            });
+        }
+    }
+
     /// Construct printer state from the complete program and its checked analysis.
     pub fn new(module: &'a structures::Program, analysis: &'a structures::Analysis) -> Self {
         let mut hosts = BTreeMap::new();
@@ -221,6 +248,11 @@ impl<'a> Context<'a> {
                 Host {
                     value,
                     layout: analysis.host_layouts[&name].clone(),
+                    types: input
+                        .columns
+                        .iter()
+                        .map(|column| column.ty.clone())
+                        .collect(),
                 },
             );
         }

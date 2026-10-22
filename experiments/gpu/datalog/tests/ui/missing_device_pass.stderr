@@ -1,0 +1,13 @@
+error: CQ_GPU_NON_DEVICE_CANON: canon must explicitly record ::cq_gpu_runtime::DeviceSet<_>
+  --> tests/ui/missing_device_pass.rs:3:5
+   |
+ 3 | /     cq_gpu_datalog::datalog! {
+ 4 | |         hole(rule 0, seed) pipeline { structures = []; }
+ 5 | |         struct Copy;
+ 6 | |         relation E(x:i64) = (input);
+...  |
+ 9 | |         R(*x) :- E(x);
+10 | |     };
+   | |_____^
+   |
+   = note: this error originates in the macro `::cq_planners::order` (in Nightly builds, run with -Z macro-backtrace for more info)

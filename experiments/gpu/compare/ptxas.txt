@@ -1,0 +1,122 @@
+FILE target/oxide-ir/blocked_run_oracle.ptx
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function 'probe' for 'sm_89'
+ptxas info    : Function properties for probe
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 16 registers, used 0 barriers, 424 bytes cmem[0]
+ptxas info    : Compile time = 2.520 ms
+
+FILE target/oxide-ir/dedup_oracle.ptx
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function 'dedup_insert' for 'sm_89'
+ptxas info    : Function properties for dedup_insert
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 18 registers, used 0 barriers, 432 bytes cmem[0]
+ptxas info    : Compile time = 3.270 ms
+
+FILE target/oxide-ir/gpu_blocked_run.ptx
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function 'scan_blocks' for 'sm_89'
+ptxas info    : Function properties for scan_blocks
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 18 registers, used 1 barriers, 376 bytes cmem[0]
+ptxas info    : Compile time = 3.554 ms
+ptxas info    : Compiling entry function 'fences' for 'sm_89'
+ptxas info    : Function properties for fences
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 10 registers, used 0 barriers, 376 bytes cmem[0]
+ptxas info    : Compile time = 1.087 ms
+ptxas info    : Compiling entry function 'gather' for 'sm_89'
+ptxas info    : Function properties for gather
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 10 registers, used 0 barriers, 392 bytes cmem[0]
+ptxas info    : Compile time = 0.863 ms
+ptxas info    : Compiling entry function 'order_bins' for 'sm_89'
+ptxas info    : Function properties for order_bins
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 22 registers, used 0 barriers, 440 bytes cmem[0]
+ptxas info    : Compile time = 4.896 ms
+ptxas info    : Compiling entry function 'directory' for 'sm_89'
+ptxas info    : Function properties for directory
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 17 registers, used 0 barriers, 400 bytes cmem[0]
+ptxas info    : Compile time = 18.510 ms
+ptxas info    : Compiling entry function 'extrema' for 'sm_89'
+ptxas info    : Function properties for extrema
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 16 registers, used 0 barriers, 376 bytes cmem[0]
+ptxas info    : Compile time = 4.491 ms
+ptxas info    : Compiling entry function 'add_prefix' for 'sm_89'
+ptxas info    : Function properties for add_prefix
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 10 registers, used 0 barriers, 384 bytes cmem[0]
+ptxas info    : Compile time = 0.806 ms
+ptxas info    : Compiling entry function 'histogram' for 'sm_89'
+ptxas info    : Function properties for histogram
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 10 registers, used 0 barriers, 384 bytes cmem[0]
+ptxas info    : Compile time = 0.727 ms
+ptxas info    : Compiling entry function 'scatter' for 'sm_89'
+ptxas info    : Function properties for scatter
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 16 registers, used 0 barriers, 408 bytes cmem[0]
+ptxas info    : Compile time = 1.030 ms
+
+FILE target/oxide-ir/gpu_h05.ptx
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function 'dedup_insert' for 'sm_89'
+ptxas info    : Function properties for dedup_insert
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 18 registers, used 0 barriers, 432 bytes cmem[0]
+ptxas info    : Compile time = 3.263 ms
+ptxas info    : Compiling entry function 'plan_b' for 'sm_89'
+ptxas info    : Function properties for plan_b
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 34 registers, used 1 barriers, 688 bytes cmem[0], 40 bytes cmem[2]
+ptxas info    : Compile time = 27.509 ms
+ptxas info    : Compiling entry function 'plan_a' for 'sm_89'
+ptxas info    : Function properties for plan_a
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 32 registers, used 1 barriers, 584 bytes cmem[0], 8 bytes cmem[2]
+ptxas info    : Compile time = 17.613 ms
+ptxas info    : Compiling entry function 'filter_orders' for 'sm_89'
+ptxas info    : Function properties for filter_orders
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 16 registers, used 1 barriers, 440 bytes cmem[0]
+ptxas info    : Compile time = 4.414 ms
+
+FILE target/oxide-ir/smoke.ptx
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function 'vecadd' for 'sm_89'
+ptxas info    : Function properties for vecadd
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 12 registers, used 0 barriers, 400 bytes cmem[0]
+ptxas info    : Compile time = 1.580 ms
+
+FILE target/oxide-ir/tiles_oracle.ptx
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function 'owner_case' for 'sm_89'
+ptxas info    : Function properties for owner_case
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 12 registers, used 0 barriers, 408 bytes cmem[0]
+ptxas info    : Compile time = 2.064 ms
+ptxas info    : Compiling entry function 'merge_case' for 'sm_89'
+ptxas info    : Function properties for merge_case
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 14 registers, used 0 barriers, 408 bytes cmem[0]
+ptxas info    : Compile time = 1.647 ms
+ptxas info    : Compiling entry function 'scan_case' for 'sm_89'
+ptxas info    : Function properties for scan_case
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 20 registers, used 1 barriers, 384 bytes cmem[0]
+ptxas info    : Compile time = 5.363 ms
+ptxas info    : Compiling entry function 'compact_case' for 'sm_89'
+ptxas info    : Function properties for compact_case
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 22 registers, used 1 barriers, 384 bytes cmem[0]
+ptxas info    : Compile time = 8.924 ms
+ptxas info    : Compiling entry function 'sort_case' for 'sm_89'
+ptxas info    : Function properties for sort_case
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 20 registers, used 1 barriers, 400 bytes cmem[0]
+ptxas info    : Compile time = 6.080 ms

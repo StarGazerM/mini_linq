@@ -1,5 +1,32 @@
 use cq_lang_physical as physical;
 use quote::ToTokens;
+#[test]
+fn constant_occurrences_drop_source_columns_and_require_retention() {
+    let source: physical::Program = syn::parse_quote! { physical {
+        relation R(a:i32,b:i32);
+        r = let canon rename R@0 {a -> x} constants {b = -7};
+        return r as answer(x);
+    }};
+    let facts = physical::contract::check(&source).unwrap();
+    assert_eq!(facts.headings["r"], ["x"]);
+    assert_eq!(facts.renames["r"].len(), 1);
+    assert_eq!(
+        syn::parse2::<physical::Program>(source.to_token_stream()).unwrap(),
+        source
+    );
+    for definition in [
+        syn::parse_quote!(r = pipe canon rename R@0 {a -> x} constants {b = -7};),
+        syn::parse_quote!(r = let canon rename R@0 {a -> x} constants {a = 7};),
+        syn::parse_quote!(r = let canon rename R@0 {a -> x} constants {missing = 7};),
+        syn::parse_quote!(r = let canon rename R@0 {a -> x} constants {b = x};),
+        syn::parse_quote!(r = let canon rename R@0 {a -> x} constants {};),
+    ] {
+        let mut invalid = source.clone();
+        invalid.program.definitions[0] = definition;
+        assert!(physical::contract::check(&invalid).is_err());
+    }
+}
+
 const SOURCE: &str = "physical {
     relation R(a:i32,b:i32); relation S(b:i32,c:i32);
     r = pipe rename R@0 {a -> x,b -> y}; s = let rename S@1 {b -> y,c -> z};
@@ -215,7 +242,7 @@ fn generator_bind_round_trip_checks_and_key_transfer() {
         source
     );
     let op = &source.program.definitions[1].operator;
-    assert!(physical::inherited_key(op, &facts.headings["g"], |_| Some(Vec::new())).is_none());
+    assert!(physical::inherited_key(op, &facts.headings["g"], &[], |_| Some(Vec::new())).is_none());
     for replacement in [
         "bind u with for x = ([*x])",
         "bind absent with for x = ([1])",
@@ -233,6 +260,7 @@ fn generator_bind_round_trip_checks_and_key_transfer() {
         physical::inherited_key(
             &scalar.program.definitions[1].operator,
             &["x".into()],
+            &[],
             |_| Some(Vec::new())
         ),
         Some(Vec::new())

@@ -1,10 +1,10 @@
 //! IX → Physical: choose operators and retention using plan reads only.
-//! Host renames are reusable pipe reads. Literal selections are one-key point
-//! reads: native leading-prefix dispatch or scan/filter, with no index build.
+//! Unfiltered host renames are reusable pipe reads. Literal occurrences build
+//! filtered retained rows or keyed storage from a base scan.
 //! Meaning is bottom + Set. Opaque partial Rust bind/guard nodes retain their
 //! ancestry chain; relational steps may move earlier, never later across them.
 //! I/O, mutation and evaluation counts are outside the denotation.
-//! Canonicality follows only from plan operators and explicit canon boundaries.
+//! Canonicality follows from plan operators, checked host_set facts, and canon boundaries.
 //!
 //! Relational equality is Leibniz identity, decided by admissible column `==`.
 //! Functional extensionality of shared-reference Rust inputs permits canonical
@@ -56,7 +56,7 @@ pub fn compile(source: &ix::Program) -> syn::Result<physical::Program> {
     let mut modes = modes(&operations, &reads);
     fuse_modes(&operations, &operators, &reads, &mut modes);
     let disjoint = ix::ra::disjoint_unions(&source.ra)?;
-    let unique = canonical(&info, &operations, &returned, &disjoint);
+    let unique = canonical(&info, &operations, &returned, &disjoint, &[]);
     let definitions = operations
         .iter()
         .zip(modes)
@@ -83,6 +83,7 @@ pub fn compile(source: &ix::Program) -> syn::Result<physical::Program> {
         brace: Default::default(),
         program: physical::Body {
             declarations: source.ra.plan.declarations.clone(),
+            host_sets: Vec::new(),
             definitions,
             return_token: Default::default(),
             return_canon: (!unique.contains(&symbol_name(&returned))
@@ -216,6 +217,9 @@ fn modes(operations: &[(Ident, Op)], reads: &BTreeMap<String, Reads>) -> Vec<phy
             let name = symbol_name(name);
             let result = &reads[&name];
             match op {
+                Op::Rename(rename) if rename.constants.is_some() => {
+                    physical::Mode::Let(Default::default())
+                }
                 Op::Rename(_) => physical::Mode::Pipe(Default::default()),
                 _ if !result.keyed.is_empty() || result.count >= 2 => {
                     physical::Mode::Let(Default::default())
@@ -280,7 +284,9 @@ fn fuse_modes(
                 .iter()
                 .position(|(id, _)| symbol_name(id) == prefix)
             {
-                modes[i] = physical::Mode::Pipe(Default::default());
+                if !matches!(&operations[i].1, Op::Rename(rename) if rename.constants.is_some()) {
+                    modes[i] = physical::Mode::Pipe(Default::default());
+                }
             }
         }
     }
@@ -291,6 +297,7 @@ fn canonical(
     operations: &[(Ident, Op)],
     returned: &Ident,
     disjoint: &BTreeSet<String>,
+    host_sets: &[physical::HostSet],
 ) -> BTreeSet<String> {
     let mut unique: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut inherited = BTreeSet::new();
@@ -312,7 +319,10 @@ fn canonical(
             }
             Op::Anti(anti) => unique.get(&symbol_name(&anti.left)).cloned(),
             Op::Unit(_) => Some(Vec::new()),
-            Op::Rename(_) => None,
+            Op::Rename(rename) => host_sets
+                .iter()
+                .any(|fact| symbol_name(&fact.relation) == symbol_name(&rename.relation))
+                .then(|| heading.clone()),
             Op::NaturalJoin(j) => match (
                 unique.get(&symbol_name(&j.left)),
                 unique.get(&symbol_name(&j.right)),

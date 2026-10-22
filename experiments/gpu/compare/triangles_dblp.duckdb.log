@@ -1,0 +1,14 @@
+[{"kind":"stats","input_rows":1049866,"edge_count":1049866,"duplicates":0,"node_min":0,"node_max":425956}]
+[{"kind":"wedges","wedges":7064738}]
+[{"triangle_count":2224385}]
+Run Time (s): real 0.103 user 0.666065 sys 0.051078
+[{"triangle_count":2224385}]
+Run Time (s): real 0.073 user 0.612600 sys 0.023708
+[{"triangle_count":2224385}]
+Run Time (s): real 0.081 user 0.626232 sys 0.038649
+[{"triangle_count":2224385}]
+Run Time (s): real 0.080 user 0.584241 sys 0.028464
+[{"triangle_count":2224385}]
+Run Time (s): real 0.073 user 0.608498 sys 0.001905
+[{"triangle_count":2224385}]
+Run Time (s): real 0.077 user 0.724018 sys 0.026164

@@ -13,16 +13,18 @@
 //! used as smallest-intersection candidates are unchanged. The replacement
 //! requires Ord + Copy keys and Copy items (Leibniz admissibility is a premise);
 //! rustc checks Build, IndexRead and ExactMembership at the existing guards.
-//! Only a single stored borrowed i32/i64 column is eligible, recording
-//! BorrowedI64TupleCodec for the rank directory. Multi-column, non-integral,
-//! and computed/owned keys remain HashIndex rather than selecting NoDense.
+//! A single stored i32/i64 column is eligible. Borrowed keys record
+//! BorrowedI64TupleCodec for the rank directory; computed/owned keys record
+//! NoDense for exact binary search. Multi-column and non-integral keys remain HashIndex.
 //! Eligible rank spans exceeding 1,048,576 bits still fall back to binary
 //! search at runtime. No default selection changes.
 //! Use `pipeline { structures = [cq_rewrites::sorted_runs]; }`.
 //!
 //! `retain_lookups` takes no arguments and records a `share` decision and a
 //! `repr` witness for each eligible eager semijoin followed by a probe of the
-//! same SortedRun build and preserved keys. The cursor is
+//! same SortedRun build and preserved keys, or either singleton integral
+//! PrefixRun directory prefix of a recorded binary Smallest intersection.
+//! Both prefix witnesses force at the introducing probe. The cursor is
 //! `::cq_storage::RunCursor<'_, _>`; an existing positions representation is
 //! preserved. The Structures contract rejects witness escape across retained
 //! rows, canonicalization, opaque steps or other unsupported boundaries.
@@ -56,17 +58,23 @@
 //! |---|---|---|
 //! | `merge_joins` | `probe` becomes `merge` | Nonempty Ord key; each side is retained, a reusable host, or a merge stream ordered on that same key. Native ordered host reads still require `OrderedRead` from rustc. |
 //! | `canon_prefixes` | Adds `canon` on a projection | Drops columns without retaining an inferred uniqueness key; retained columns satisfy the language's Leibniz checks. Existing canonical boundaries remain. |
+//! | `host_sets(E, ...)` | Records `host_set E;` and removes canon implied by full-heading keys | Names used host relations. Every printer checks exact input distinctness before execution and fails on duplicates; this is not an unchecked promise. Dropping a key still needs canon. |
 //! | `smallest_intersections` | Hoists independent relational definitions and records `probe smallest` | The public Physical `binary_intersection` predicate accepts the probe/check pair, and every interposed definition can move before the probe without moving Rust or breaking dependencies. |
 //! | `lazy_semijoins` | `semi eager` becomes `semi lazy` | The right input is a reusable host and all readers sharing its key are lazy membership reads after the rewrite. Named selections must include every eager peer. |
+//! | `build_host_reads` | Reusable host rename becomes retained `let` | Has nonempty integral (`i32`/`i64`) keyed stream reads and no lazy membership reader. Keys and relational predicates are unchanged; selection records providers afterwards. Const-only point/range scans remain host scans. |
 //!
-//! These passes preserve the operator graph, declarations, keys, modes, return
-//! head, and opaque Rust expressions. `smallest_intersections` moves interposed
+//! Except for `build_host_reads`' explicit retention decision, these passes
+//! preserve the operator graph, declarations, keys, modes, return head, and
+//! opaque Rust expressions. `smallest_intersections` moves interposed
 //! relational definitions earlier, preserving their dependency order, to make
 //! the candidate probe and its check adjacent. This includes reusable host
 //! renames and retained relational chains. Bind/guard nodes stay at their original
 //! positions with the same payloads. An interposed Rust node or a consumer of the
 //! candidate blocks the rewrite; an explicit named selection then reports an
 //! inadmissible result. Other passes preserve definition order.
+//! `smallest_intersections` currently has Set semantics. For future bag/K-relation
+//! semantics, discarding candidate multiplicity additionally requires the checked
+//! `host_set` fact (or a derived uniqueness key); bag gating is not implicit here.
 //!
 //! The generated generic-fine triangle and the corpus `fine_triangle` both get
 //! an active smallest choice. For example:
@@ -231,6 +239,9 @@ physical_rewrite!(merge_joins);
 physical_rewrite!(canon_prefixes);
 physical_rewrite!(smallest_intersections);
 physical_rewrite!(lazy_semijoins);
+physical_rewrite!(build_host_reads);
+physical_rewrite!(host_sets);
+physical_rewrite!(retain_streams);
 
 /// Change only the representation types matched by `selector => RustType`.
 #[proc_macro]
@@ -245,10 +256,26 @@ pub fn join_filter(input: TokenStream) -> TokenStream {
         .into()
 }
 
+/// Record sorted index layouts for built results: a minimum chain cover of
+/// their read keys, columns ordered by binding order; `Rel => [a][b]`
+/// overrides one result's layout. Compose before `sorted_runs`/`prefix_runs`.
+#[proc_macro]
+pub fn sorted_indexes(input: TokenStream) -> TokenStream {
+    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), cq_rewrite_passes::sorted_indexes).into()
+}
+
 /// Retype eligible one-level payload builds to stable sorted runs.
 #[proc_macro]
 pub fn sorted_runs(input: TokenStream) -> TokenStream {
     cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), cq_rewrite_passes::sorted_runs)
+        .into()
+}
+
+/// Record one-level composite scalar HashIndex providers as exact GPU hashed runs.
+/// Compose after `sorted_runs`; this opt-in rewrite leaves CPU defaults unchanged.
+#[proc_macro]
+pub fn hashed_runs(input: TokenStream) -> TokenStream {
+    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), cq_rewrite_passes::hashed_runs)
         .into()
 }
 
@@ -262,6 +289,20 @@ pub fn retain_lookups(input: TokenStream) -> TokenStream {
     cq_stage::rewrite::<cq_lang_structures::Program>(
         input.into(),
         cq_rewrite_passes::retain_lookups,
+    )
+    .into()
+}
+
+/// Record `stage = batch N expand` at probes whose builds expose length-known
+/// ranges, accepted only by the Structures stage contract. Opt-in.
+/// `expand_lookups(N, depth D)` bounds nested frames per stream; omitted depth
+/// defaults to two. Deeper probes stay lane-local without changing providers.
+/// This is a depth bound, not a byte-budget proof for arbitrary carried payloads.
+#[proc_macro]
+pub fn expand_lookups(input: TokenStream) -> TokenStream {
+    cq_stage::rewrite::<cq_lang_structures::Program>(
+        input.into(),
+        cq_rewrite_passes::expand_lookups,
     )
     .into()
 }

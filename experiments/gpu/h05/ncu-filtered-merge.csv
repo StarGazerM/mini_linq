@@ -1,0 +1,6 @@
+==PROF== Connected to process 2333800 (/data/mini_linq-gpu/features/gpu/target/release/gpu-h05)
+==PROF== Disconnected from process 2333800
+"ID","Process ID","Process Name","Host Name","Kernel Name","Context","Stream","Block Size","Grid Size","Device","CC","Section Name","Metric Name","Metric Unit","Metric Value"
+"0","2333800","gpu-h05","127.0.0.1","plan_a_merge","1","7","(256, 1, 1)","(568, 1, 1)","0","8.9","Command line profiler metrics","dram__bytes_read.sum","byte","567,158,016"
+"0","2333800","gpu-h05","127.0.0.1","plan_a_merge","1","7","(256, 1, 1)","(568, 1, 1)","0","8.9","Command line profiler metrics","dram__bytes_write.sum","byte","4,665,216"
+"0","2333800","gpu-h05","127.0.0.1","plan_a_merge","1","7","(256, 1, 1)","(568, 1, 1)","0","8.9","Command line profiler metrics","dram__throughput.avg.pct_of_peak_sustained_elapsed","%","9.85"

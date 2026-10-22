@@ -1,0 +1,147 @@
+{
+  "allocation_scope": "fixed RCCL pool primed before warmup; no cuMemAlloc/Free in timed regions",
+  "bfs": {
+    "available_bytes": 43942019072,
+    "compact_u32_triple_bytes": 70987607340,
+    "materialized_bytes": 141975214680,
+    "note": "full i64 triples cannot fit; no allocation attempted",
+    "status": "oom_preflight",
+    "wedges": 5915633945
+  },
+  "device_total_bytes": 50855870464,
+  "directory": "rank",
+  "distinct_edges": 68993773,
+  "expected_count": 946400853,
+  "gpu": [
+    {
+      "answer_count": 946400853,
+      "build_median_ms": 7.600031852722168,
+      "build_ms": [
+        7.600031852722168,
+        7.5682878494262695,
+        7.630112171173096,
+        7.632607936859131,
+        7.547008037567139
+      ],
+      "descriptor_bytes": 14340,
+      "exact": true,
+      "grid_blocks": 568,
+      "k": 0,
+      "kernel_median_ms": 88.25484466552734,
+      "kernel_ms": [
+        87.75852966308594,
+        88.84009552001953,
+        88.25484466552734,
+        88.46662139892578,
+        88.1297607421875
+      ],
+      "max_expansion": 398101,
+      "max_m_over_t": 388.7705078125,
+      "mode": "pool_off",
+      "pool_capacity": 64,
+      "pool_full": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "publications": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "steals": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "tile_items": 1024,
+      "total_median_ms": 95.88495635986328,
+      "total_ms": [
+        95.35855865478516,
+        96.40838623046875,
+        95.88495635986328,
+        96.09923553466797,
+        95.67676544189453
+      ]
+    },
+    {
+      "answer_count": 946400853,
+      "build_median_ms": 11.887264251708984,
+      "build_ms": [
+        13.949983596801758,
+        7.7354559898376465,
+        11.85814380645752,
+        11.936448097229004,
+        11.887264251708984
+      ],
+      "descriptor_bytes": 14340,
+      "exact": true,
+      "grid_blocks": 568,
+      "k": 8,
+      "kernel_median_ms": 89.43122863769531,
+      "kernel_ms": [
+        88.87417602539062,
+        89.40640258789062,
+        89.9152603149414,
+        89.92098999023438,
+        89.43122863769531
+      ],
+      "max_expansion": 398101,
+      "max_m_over_t": 388.7705078125,
+      "mode": "pool_on",
+      "pool_capacity": 64,
+      "pool_full": [
+        57021,
+        56886,
+        56877,
+        56936,
+        56863
+      ],
+      "publications": [
+        7158,
+        7293,
+        7302,
+        7243,
+        7316
+      ],
+      "steals": [
+        2401,
+        2838,
+        1740,
+        2363,
+        3607
+      ],
+      "tile_items": 1024,
+      "total_median_ms": 101.77340698242188,
+      "total_ms": [
+        102.82415771484375,
+        97.14185333251953,
+        101.77340698242188,
+        101.85743713378906,
+        101.31849670410156
+      ]
+    }
+  ],
+  "host_canonicalization_ms": 4859.487136000001,
+  "host_wedge_demand_count_ms": 48809.696051000006,
+  "input": "/data/dataset/graph/soc-LiveJournal/edge.facts",
+  "input_rows": 68993773,
+  "loadavg": "22.31 21.20 13.29 29/2835 2354601\n",
+  "peak_device_bytes": 5674893312,
+  "peak_device_scope": "cuMemGetInfo sampled with fixed pool live, relative to post-module/pre-upload baseline; includes pool reserve",
+  "pool_reserved_bytes": 4566416136,
+  "runs": 5,
+  "semantics": "directed distinct edges; no symmetrization or vertex inequality guards",
+  "source_domain": [
+    0,
+    4847570
+  ],
+  "timing_scope": "CUDA events: GPU run build and query; ingestion/sort/dedup/upload excluded",
+  "warmups": 1
+}

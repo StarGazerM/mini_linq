@@ -98,7 +98,7 @@ pub fn lineages(
             continue;
         }
         let origin = match &d.operator {
-            Operator::Rename(r) => Some(Lineage {
+            Operator::Rename(r) if r.constants.is_none() => Some(Lineage {
                 base: symbol_name(&r.relation),
                 occurrence: name.clone(),
                 columns: r

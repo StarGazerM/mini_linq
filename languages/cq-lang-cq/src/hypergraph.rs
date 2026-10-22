@@ -69,10 +69,14 @@ pub fn filter_ranks(body: &super::CommaList<BodyItem>, graph: &Analysis) -> BTre
         .map(|&c| {
             (
                 c,
-                if matches!(body[c], BodyItem::Block(_)) {
-                    2
-                } else {
-                    3
+                match &body[c] {
+                    BodyItem::Positive { atom }
+                        if atom.args.iter().any(cq_syntax::equality::literal) =>
+                    {
+                        0
+                    }
+                    BodyItem::Block(_) => 2,
+                    _ => 3,
                 },
             )
         })

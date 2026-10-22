@@ -82,6 +82,20 @@ pub fn evaluate_plan<'a>(
                     heading: mapping.iter().map(|(_, x)| x.clone()).collect(),
                     rows: database[&symbol_name(&rename.relation)]
                         .iter()
+                        .filter(|row| {
+                            rename.constants.as_ref().is_none_or(|constants| {
+                                let source: Binding = input
+                                    .columns
+                                    .iter()
+                                    .zip(row.iter())
+                                    .map(|(column, value)| (symbol_name(&column.name), *value))
+                                    .collect();
+                                constants
+                                    .equalities
+                                    .iter()
+                                    .all(|equality| evaluate_equality(equality, &source))
+                            })
+                        })
                         .map(|row| {
                             mapping
                                 .iter()

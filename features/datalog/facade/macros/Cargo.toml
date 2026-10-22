@@ -9,6 +9,9 @@ publish = false
 [lib]
 proc-macro = true
 
+[features]
+hoist-invariants = []
+
 [dependencies]
 cq-datalog-configuration.workspace = true
 cq-lang-datalog-source.workspace = true

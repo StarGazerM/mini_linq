@@ -6,7 +6,7 @@ fn cq(tokens: proc_macro2::TokenStream) -> cq::Program {
 }
 
 #[test]
-fn normalization_moves_every_non_variable_argument_out_of_atoms() {
+fn normalization_preserves_literals_and_extracts_other_non_variable_arguments() {
     let source = cq(quote! {
         struct Q;
         relation R(a: i32, b: i32);
@@ -15,11 +15,8 @@ fn normalization_moves_every_non_variable_argument_out_of_atoms() {
     });
     let normal = cq::normal::normalize(&source).unwrap();
     let text = normal.query.to_token_stream().to_string();
-    // The constant becomes a relational selection at its atom position.
-    assert!(
-        text.starts_with("answer (x , z) : - R (x , __cq_0_1) , if __cq_0_1 == 5"),
-        "{text}"
-    );
+    // A literal filters the occurrence without introducing a variable or guard.
+    assert!(text.starts_with("answer (x , z) : - R (x , 5)"), "{text}");
     // The wildcard is a distinct witness; repeated variables get relational equality.
     assert!(
         text.contains("S (__cq_1_0 , z) , R (x , __cq_2_1) , if x == __cq_2_1 , if z > 1"),
@@ -57,7 +54,7 @@ fn literal_repeat_and_computed_terms_have_distinct_semantic_kinds() {
     });
     let normal = cq::normal::normalize(&source).unwrap();
     let text = normal.to_token_stream().to_string();
-    assert!(text.contains("if __cq_0_1 == - 1"), "{text}");
+    assert!(text.contains("R (x , - 1)"), "{text}");
     assert!(
         text.contains("if x != 0 , let __cq_2_0 : i32 = 10 / * x , S"),
         "{text}"
@@ -338,4 +335,33 @@ fn constraint_scope_and_premises_are_local_contract_obligations() {
             .to_string()
             .contains("query variable")
     );
+}
+
+#[test]
+fn literals_preserve_argument_positions_and_do_not_bind_head_or_block_names() {
+    let source = cq(quote! {
+        struct Q; relation R(a:i32,b:bool,c:&str,d:i64);
+        answer(x) :- R(-7,true,"fixed",x);
+    });
+    assert_eq!(cq::normal::normalize(&source).unwrap(), source);
+    cq::normal::check(&source).unwrap();
+    assert!(source.query.is_basic());
+    let literal_head = cq(quote! {
+        struct Q; relation R(a:i32);
+        relation answer(a:i32);
+        answer(7) :- R(7);
+    });
+    assert!(!literal_head.query.is_basic());
+    assert!(cq::normal::check(&literal_head).is_err());
+    let normal = cq::normal::normalize(&literal_head).unwrap();
+    assert!(matches!(
+        normal.query.body[0],
+        cq::BodyItem::Positive { .. }
+    ));
+    assert!(matches!(normal.query.body[1], cq::BodyItem::Let(_)));
+    let shifted_float = cq(quote! {
+        struct Q; relation R(a:i32,b:f64);
+        answer(x) :- R(7,x);
+    });
+    assert!(cq::normal::check(&shifted_float).is_err());
 }

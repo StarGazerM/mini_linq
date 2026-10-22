@@ -208,21 +208,22 @@ fn absorbed_and_bound_variables_keep_the_tree_and_the_facts_honest() {
 }
 
 #[test]
-fn analysis_requires_normal_form() {
+fn literal_columns_are_not_hypergraph_vertices() {
     let module: cq::Program = syn::parse2(quote! {
         struct Q;
         relation R(a: i32, b: i32);
         answer(x) :- R(x, 5);
     })
     .unwrap();
-    assert!(cq::normal::check(&module).is_err());
+    cq::normal::check(&module).unwrap();
     let normal = cq::normal::normalize(&module).unwrap();
     cq::normal::check(&normal).unwrap();
     let analysis = Analysis::of(&normal);
-    // The constant became a let-bound join key, so it is a vertex of R.
+    assert_eq!(normal, module);
+    assert_eq!(analysis.clauses[&0], ["x"]);
     assert_eq!(
-        analysis.clauses[&analysis.clauses.keys().next().copied().unwrap()].len(),
-        2
+        cq::hypergraph::filter_ranks(&normal.query.body, &analysis)[&0],
+        0
     );
     assert!(analysis.acyclic);
     assert_graph(&analysis);
@@ -243,4 +244,19 @@ fn normalization_keeps_shared_names_cycles_and_join_tree_connectivity() {
         assert!(after.equivalent("y", "y"));
         assert!(!after.shared(0, 1).is_empty());
     }
+}
+
+#[test]
+fn constant_only_atoms_keep_their_occurrence_and_point_rank() {
+    let source: cq::Program = syn::parse_quote! {
+        struct Q; relation R(a:i32,b:i32); relation S(a:i32);
+        answer(x) :- R(7,-2), S(x);
+    };
+    cq::normal::check(&source).unwrap();
+    let graph = Analysis::of(&source);
+    assert!(graph.clauses[&0].is_empty());
+    assert_eq!(graph.clauses[&1], ["x"]);
+    let ranks = cq::hypergraph::filter_ranks(&source.query.body, &graph);
+    assert_eq!(ranks[&0], 0);
+    assert_eq!(ranks[&1], 3);
 }

@@ -16,6 +16,8 @@ const AXES: [&[&str]; 10] = [
         "prefix_greedy_fine",
         "elimination_coarse",
         "elimination_fine",
+        "le",
+        "le_runs",
     ],
     &["probe", "merge"],
     &["keep", "canon"],
@@ -28,7 +30,7 @@ const AXES: [&[&str]; 10] = [
     &["unadvised", "positional"],
 ];
 
-const PLANNERS: [&str; 9] = [
+const PLANNERS: [&str; 11] = [
     "written, coarse",
     "written, fine",
     "hypergraph",
@@ -38,6 +40,8 @@ const PLANNERS: [&str; 9] = [
     "prefix greedy, fine",
     "elimination, coarse",
     "elimination, fine",
+    "le",
+    "le_runs",
 ];
 
 fn decode_name(name: &str) -> [usize; 10] {
@@ -47,7 +51,7 @@ fn decode_name(name: &str) -> [usize; 10] {
         let (value, suffix) = values
             .iter()
             .enumerate()
-            .find_map(|(value, spelling)| {
+            .filter_map(|(value, spelling)| {
                 let suffix = rest.strip_prefix(spelling)?;
                 if axis == 9 {
                     suffix.is_empty().then_some((value, suffix))
@@ -55,6 +59,7 @@ fn decode_name(name: &str) -> [usize; 10] {
                     suffix.strip_prefix('_').map(|suffix| (value, suffix))
                 }
             })
+            .min_by_key(|(_, suffix)| suffix.len())
             .unwrap_or_else(|| panic!("{name}: unknown or missing axis {axis} in {rest:?}"));
         row[axis] = value;
         rest = suffix;
@@ -114,15 +119,13 @@ fn expected_expansion(row: [usize; 10]) -> String {
     )
 }
 
-#[test]
-fn configuration_names_rows_and_pipeline_tokens_agree() {
-    let source = syn::parse_file(include_str!("support/configurations.rs"))
-        .expect("configuration source must parse as Rust");
+fn check_configurations(source: &str, macro_name: &str, expected: usize) -> BTreeSet<usize> {
+    let source = syn::parse_file(source).expect("configuration source must parse as Rust");
     let definitions: Vec<_> = source
         .items
         .into_iter()
         .filter_map(|item| match item {
-            syn::Item::Macro(item) if item.ident.as_ref().is_some_and(|id| id == "configuration") => {
+            syn::Item::Macro(item) if item.ident.as_ref().is_some_and(|id| id == macro_name) => {
                 Some(item)
             }
             _ => None,
@@ -133,6 +136,7 @@ fn configuration_names_rows_and_pipeline_tokens_agree() {
     assert!(definition.mac.path.is_ident("macro_rules"));
     let mut arms = definition.mac.tokens.clone().into_iter();
     let mut names = BTreeSet::new();
+    let mut planners = BTreeSet::new();
     while let Some(matcher) = arms.next() {
         let matcher = group(Some(matcher), Delimiter::Parenthesis, "configuration arm");
         let name = match matcher.stream().into_iter().next() {
@@ -141,6 +145,7 @@ fn configuration_names_rows_and_pipeline_tokens_agree() {
         };
         assert!(names.insert(name.clone()), "{name}: duplicate configuration arm");
         let row = decode_name(&name);
+        planners.insert(row[0]);
         assert_tokens(matcher.stream(), &format!("{name}, $case:ident"), &name, "matcher");
         punctuation(arms.next(), '=', &name);
         punctuation(arms.next(), '>', &name);
@@ -148,5 +153,20 @@ fn configuration_names_rows_and_pipeline_tokens_agree() {
         assert_tokens(expansion.stream(), &expected_expansion(row), &name, "CONFIG/pipeline");
         punctuation(arms.next(), ';', &name);
     }
-    assert_eq!(names.len(), 80, "expected all 80 configuration arms");
+    assert_eq!(names.len(), expected, "configuration arm count changed");
+    planners
+}
+
+#[test]
+fn configuration_names_rows_and_pipeline_tokens_agree() {
+    assert_eq!(
+        check_configurations(include_str!("support/configurations.rs"), "configuration", 80),
+        (0..9).collect(),
+        "the original 80 witnesses and nine planner indices stay unchanged",
+    );
+    assert_eq!(
+        check_configurations(include_str!("support/le_configurations.rs"), "le_configuration", 18),
+        [9, 10].into_iter().collect(),
+        "both LE planners must have independent configuration witnesses",
+    );
 }

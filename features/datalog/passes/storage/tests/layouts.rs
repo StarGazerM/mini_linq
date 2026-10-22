@@ -254,3 +254,98 @@ fn default_providers_record_concrete_types_in_declaration_order() {
     let replay: Program = syn::parse2(target.to_token_stream()).unwrap();
     assert_eq!(target, replay);
 }
+
+#[test]
+fn device_selection_preserves_cover_and_checks_policy_pairs() {
+    let (incremental, cpu) = scheduled(syn::parse_quote! {
+        struct Policies;
+        relation Edge(x:i32,y:i32) = (edges);
+        relation Reach(x:i32,y:i32);
+        output Reach;
+        Reach(*x,*y) :- Edge(x,y);
+        Reach(*x,*z) :- Reach(x,y), Edge(y,z);
+    });
+    let device = cq_datalog_storage::compile_with_representation(
+        &incremental, cq_datalog_storage::Representation::DeviceSet,
+    ).unwrap();
+    assert_eq!(cpu.incremental, device.incremental);
+    assert_eq!(cpu.layouts, device.layouts);
+    assert_eq!(cpu.delta_layouts, device.delta_layouts);
+    check(&incremental, &device).unwrap();
+    let restored: Program = syn::parse2(device.to_token_stream()).unwrap();
+    assert_eq!(device, restored);
+    contract::check(&restored).unwrap();
+    assert!(cq_lang_datalog_storage::check_rewrite(&cpu, &device).is_err());
+    let mut mixed = device;
+    mixed.policy.negation_keys = cpu.policy.negation_keys;
+    assert!(contract::check(&mixed).is_err());
+}
+
+#[test]
+fn gpu_delta_driver_is_recorded_and_independently_checked() {
+    let source: source::Program = syn::parse_quote! {
+        struct Drivers;
+        relation E(x:i32,y:i32) = (e);
+        relation R(x:i32,y:i32);
+        output R;
+        R(*x,*y) :- E(x,y);
+        R(*x,*z) :- E(x,y), R(y,z);
+    };
+    let strata = stratify::compile(&source).unwrap();
+    let incremental = cq_datalog_incremental::compile_with_driver(
+        &strata, cq_datalog_incremental::DriverPolicy::DeltaFirst,
+    ).unwrap();
+    let target = cq_datalog_storage::compile_with_representation(
+        &incremental, cq_datalog_storage::Representation::DeviceSet,
+    ).unwrap();
+    let variant = &target.incremental.variants[1];
+    assert_eq!(variant.delta, Some(1));
+    assert_eq!(variant.driver, Some(1));
+    assert!(matches!(&variant.query.body[0], BodyItem::Positive { atom }
+        if atom.relation == target.incremental.deltas[0].name));
+    assert!(target.delta_layouts.is_empty());
+    assert!(target.to_token_stream().to_string().contains("delta 1 driver 1"));
+    let replay = syn::parse2(target.to_token_stream()).unwrap();
+    check(&incremental, &replay).unwrap();
+    let mut wrong = target.clone();
+    wrong.incremental.variants[1].driver = Some(0);
+    assert!(contract::check(&wrong).is_err());
+    let mut wrong = target.clone();
+    let body = &mut wrong.incremental.variants[1].query.body;
+    let first = body[0].clone();
+    body[0] = body[1].clone();
+    body[1] = first;
+    assert!(contract::check(&wrong).is_err());
+    let mut wrong = target.clone();
+    wrong.incremental.variants[1].delta = Some(0);
+    assert!(contract::check(&wrong).is_err());
+    let cpu = cq_datalog_incremental::compile(&strata).unwrap();
+    assert_eq!(cpu.variants[1].driver, Some(0));
+    let mut wrong = target.clone();
+    let index = wrong.reads.iter().find(|read| read.variant == 1 && read.position == 1).unwrap().index;
+    wrong.layouts[index].columns.swap(0, 1);
+    assert!(contract::check(&wrong).is_err());
+}
+
+#[test]
+fn delta_driver_never_crosses_before_constraints() {
+    for clause in ["if *x > 0", "!Blocked(x)", "let copied = *x", "for copied in [*x]"] {
+        let source: source::Program = syn::parse_str(&format!(
+            "struct Barriers;
+             relation E(x:i32) = (e);
+             relation Blocked(x:i32) = (blocked);
+             relation R(x:i32);
+             output R;
+             R(*x) :- E(x);
+             R(*x) :- E(x), {clause}, R(x);"
+        )).unwrap();
+        let strata = stratify::compile(&source).unwrap();
+        let target = cq_datalog_incremental::compile_with_driver(
+            &strata, cq_datalog_incremental::DriverPolicy::DeltaFirst,
+        ).unwrap();
+        assert_eq!(target.variants[1].driver, Some(0));
+        let mut wrong = target.clone();
+        wrong.variants[1].driver = Some(2);
+        assert!(incremental::contract::check(&wrong).unwrap_err().to_string().contains("Before"));
+    }
+}

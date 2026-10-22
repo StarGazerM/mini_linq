@@ -64,6 +64,12 @@ only rename, project, select, point, range, and left semi/anti may forward
 the witness. Every path must reach the force probe before canon, return,
 retained let/rows, exists, union/fallback operands, fused prefixes, or opaque
 bind/guard. Rust checks the cursor's type and Copy capability.
+For a maintained leveled host the cursor is the bounded sequence of
+$(\mathit{run},\mathit{begin},\mathit{end})$ ranges obtained from its snapshot,
+not a single contiguous range. Its abstraction is their bag concatenation
+(\textsc{STR-RunRead}). The force reuses every range without searching again;
+the snapshot is immutable throughout the hole and cannot be inserted into or
+compacted until all readers have been enqueued (\textsc{STR-RunSnapshot}).
 
 \begin{lemma}[Witness abstraction]
 Under STR-Witness, replacing the forcing probe's lookup by its carried
@@ -125,23 +131,31 @@ spine feeding a built probe. Unannotated authored Structures remain scalar;
 the default pipeline preserves its earlier decisions by recording them.
 
 \paragraph{By-need lookup sharing.}
-\code{r share = lookup b [K] first s force p;} names an earlier retained,
-one-level payload build, an eager semi with result $r=s$, and a later probe.
+\code{r share = lookup b [K] first s force p;} names an earlier retained
+payload build or a recorded immutable leveled host snapshot, an eager semi
+with result $r=s$, and a later probe.
 \begin{mathpar}
 \Rule{ST-Share}{
- b<s<p\quad \mathsf{letPayload}(b,K)\quad
+ b<s<p\quad
+ (\mathsf{letPayload}(b,K)\lor\mathsf{sameSnapshotLayout}(b,K,s,p))\quad
  s=\mathsf{semi}_{eager}[K](l,b)\\
  p=\mathsf{probe}[K](l',b)\quad\mathsf{preservedKeys}(s,l',K)
 }{\mathsf{share}(s)=(b,K,s,p)}
 \end{mathpar}
 Each $(b,K,s)$ has one sharing decision. Without a witness it retains
-ordinary re-evaluation. Neither curried nor membership-only builds qualify.
+ordinary re-evaluation. One-level HashIndex/SortedRun payloads and integral,
+complete leading PrefixRun levels qualify; membership-only builds do not.
+Leveled host reads qualify only when both demands record the same exact
+provider layout and key on the same host occurrence. Snapshot publication
+belongs to the SCC bridge, not the lookup-retention pass. An arbitrary host
+reader, a different layout, or a different key cannot establish this premise.
 \begin{lemma}[Lookup coupling]
 The retained memo satisfies $\mathsf{memo}=\mathsf{lookup}_b(k)$ at both demands.
 \end{lemma}
 \begin{proof}
-Host immutability and the earlier let keep the build unchanged. The checked
-chain preserves key terms. IndexRead's lookup law (STR-SortedRun for runs)
+Host immutability and the earlier let, or the shared snapshot lifetime,
+keep the provider unchanged. The checked chain preserves key terms.
+IndexRead's lookup law (STR-SortedRun and STR-RunRead for runs)
 therefore identifies both total reads; no partial evaluation moves.
 \end{proof}
 
@@ -152,7 +166,19 @@ therefore identifies both total reads; no partial evaluation moves.
  \quad N>0\quad\mathsf{boundaryBeforePartial}(r)
 }{r\;\mathsf{stage}=\mathsf{batch}\ N\ \mathsf{expand}\text{ is admissible}}
 \end{mathpar}
-Here rangeCursor is declared by a one-level SortedRun build, not HashIndex.
+Here rangeCursor is declared by a one-level SortedRun build, a complete
+leading prefix of a lexicographic PrefixRun, or an exact resident sorted host.
+A leveled host supplies a bounded sequence of exact ranges, one per snapshot
+run. Expansion descriptors retain each run identity together with its range;
+the same exclusive scan applies to their concatenation. Retained witnesses
+reuse these descriptors without repeating the prefix searches.
+HashedRun bucket ranges contain collisions and do not qualify. The GPU
+\code{prefix\_runs} rewrite records integral composite payload builds consumed
+by probes as singleton-level PrefixRuns before witness retention and expansion;
+the printer only consumes these checked decisions.
+A Smallest intersection records expansion only at its introducing probe.
+Its forcing read is part of that same total intersection, not an independent
+cursor; subsequent staged probes may cross it without adding a force-stage.
 \begin{lemma}[Segmented flatten]
 Flattening $N$ finite ranges is total and length-known: with exclusive
 offsets $o_i=\sum_{j<i}|R_j|$, its length is $M=\sum_i|R_i|$.

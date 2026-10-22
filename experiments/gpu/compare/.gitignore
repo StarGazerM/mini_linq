@@ -1,0 +1,8 @@
+srdatalog_build/
+*.nsys-rep
+*.ncu-rep
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.answer.tsv
+!srdatalog_sf1_fact.answer.tsv

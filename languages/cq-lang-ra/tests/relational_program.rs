@@ -808,6 +808,67 @@ fn semijoin_wiring_cannot_restore_a_hidden_shared_support_column() {
 }
 
 #[test]
+fn dead_expansion_cannot_erase_a_downstream_implicit_join_key() {
+    let source: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32); relation S(a:i32,b:i32); relation T(b:i32);
+        r = rename R@0 {a -> x};
+        s = rename S@1 {a -> x,b -> y};
+        t = rename T@2 {b -> y};
+        expansion = natural_join r with s;
+        later = natural_join expansion with t;
+        answer_rows = project later keep {x};
+        output answer_rows as answer(x);
+    }};
+    for later in [
+        syn::parse_quote!(natural_join expansion with t),
+        syn::parse_quote!(semijoin expansion with t),
+    ] {
+        let mut source = source.clone();
+        source.plan.definitions[4].operator = later;
+        let mut target = source.clone();
+        target.plan.definitions[3].operator = syn::parse_quote!(semijoin r with s);
+        // Both target operators remain locally well headed, but replacing
+        // the expansion removes the later implicit equality on y. Witnesses
+        // S(x, y1) and T(y2) must not become independently existential.
+        ra::contract::check(&source).unwrap();
+        ra::contract::check(&target).unwrap();
+        assert!(ra::check_rewrite(&source, &target).is_err());
+        let schedule = ra::contract::Schedule::from_program(&source).unwrap();
+        assert!(schedule.check_dead_expansions(&target, &[]).is_err());
+    }
+}
+
+#[test]
+fn inverse_dead_expansion_restores_only_a_checked_primary_witness() {
+    let source: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32); relation S(a:i32,b:i32); relation T(b:i32);
+        r = rename R@0 {a -> x};
+        s = rename S@1 {a -> x,b -> y};
+        t = rename T@2 {b -> y};
+        support = semijoin s with t;
+        lookup = semijoin r with support;
+        expansion = natural_join lookup with support;
+        answer_rows = project expansion keep {x};
+        output answer_rows as answer(x);
+    }};
+    let target: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32); relation S(a:i32,b:i32); relation T(b:i32);
+        r = rename R@0 {a -> x};
+        s = rename S@1 {a -> x,b -> y};
+        t = rename T@2 {b -> y};
+        support = semijoin s with t;
+        lookup = semijoin r with support;
+        answer_rows = project lookup keep {x};
+        output answer_rows as answer(x);
+    }};
+    let schedule = ra::contract::Schedule::from_program(&source).unwrap();
+    // The original s-with-t reduction remains required even though its
+    // equalities need a certified primary expansion to become visible.
+    schedule.check_dead_expansions(&target, &[(1, 2)]).unwrap();
+    ra::check_rewrite(&source, &target).unwrap();
+}
+
+#[test]
 fn final_equality_does_not_deduplicate_distinct_before_constraints() {
     let source: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32,b:i32); r = rename R@0 {a -> x,b -> y};
@@ -970,4 +1031,74 @@ fn generator_before_facts_are_structural() {
         output s as answer(x,y);
     } };
     assert!(ra::check_rewrite(&source, &moved).is_err());
+}
+
+#[test]
+fn occurrence_constants_roundtrip_drop_columns_and_preserve_source_types() {
+    let source: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32,b:bool,c:i64);
+        r = rename R@0 {c -> x} constants {a = -7, b = true};
+        output r as answer(x);
+    }};
+    let facts = ra::contract::check(&source).unwrap();
+    assert_eq!(facts["r"].heading, ["x".into()].into());
+    assert_eq!(facts["r"].types["x"], syn::parse_quote!(i64));
+    assert_eq!(
+        syn::parse2::<ra::Program>(source.to_token_stream()).unwrap(),
+        source
+    );
+    let all: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32);
+        r = rename R@0 {} constants {a = 7};
+        output r as answer();
+    }};
+    assert!(ra::contract::check(&all).unwrap()["r"].heading.is_empty());
+}
+
+#[test]
+fn occurrence_constants_require_an_exact_literal_source_partition() {
+    for operator in [
+        quote!(rename R@0 {a -> x} constants {}),
+        quote!(rename R@0 {a -> x} constants {b = x}),
+        quote!(rename R@0 {a -> x} constants {b = 7, b = 8}),
+        quote!(rename R@0 {a -> x} constants {a = 7}),
+        quote!(rename R@0 {a -> x} constants {missing = 7}),
+        quote!(rename R@0 {} constants {b = 7}),
+    ] {
+        assert!(
+            check(quote! { relational {
+                relation R(a:i32,b:i32);
+                r = #operator;
+                output r as answer();
+            }})
+            .is_err()
+        );
+    }
+    assert!(
+        check(quote! { relational {
+            relation R(a:i32,b:f64);
+            r = rename R@0 {a -> x} constants {b = 1.0};
+            output r as answer(x);
+        }})
+        .is_err()
+    );
+}
+
+#[test]
+fn rewrites_preserve_occurrence_constants_without_inventing_union_disjointness() {
+    let source: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32,b:i32);
+        r = rename R@0 {a -> x} constants {b = 7};
+        s = rename R@1 {a -> x} constants {b = 8};
+        u = union r, s;
+        output u as answer(x);
+    }};
+    ra::contract::check(&source).unwrap();
+    assert!(ra::disjoint_unions(&source).unwrap().is_empty());
+    let mut changed = source.clone();
+    if let ra::Operator::Rename(rename) = &mut changed.plan.definitions[0].operator {
+        rename.constants = Some(syn::parse_quote!(constants {b = 9}));
+    }
+    ra::contract::check(&changed).unwrap();
+    assert!(ra::check_rewrite(&source, &changed).is_err());
 }

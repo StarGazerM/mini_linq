@@ -1,0 +1,82 @@
+[
+ {
+  "sf": 1,
+  "threads": 24,
+  "duckdb_version": "1.5.6",
+  "wall_ms": {
+   "median": 15.250016935169697,
+   "min": 13.72583000920713,
+   "samples": [
+    15.250016935169697,
+    15.867140959016979,
+    15.255817910656333,
+    15.134054003283381,
+    13.72583000920713
+   ]
+  },
+  "answers": 7242,
+  "exact": true,
+  "warmup_excluded": 1,
+  "scope": "resident native storage -> SELECT DISTINCT materialized as resident temp table"
+ },
+ {
+  "sf": 1,
+  "threads": 1,
+  "duckdb_version": "1.5.6",
+  "wall_ms": {
+   "median": 46.428662026301026,
+   "min": 46.0504760267213,
+   "samples": [
+    47.74272395297885,
+    46.29346204455942,
+    46.63153097499162,
+    46.0504760267213,
+    46.428662026301026
+   ]
+  },
+  "answers": 7242,
+  "exact": true,
+  "warmup_excluded": 1,
+  "scope": "resident native storage -> SELECT DISTINCT materialized as resident temp table"
+ },
+ {
+  "sf": 10,
+  "threads": 24,
+  "duckdb_version": "1.5.6",
+  "wall_ms": {
+   "median": 65.830236999318,
+   "min": 63.948294962756336,
+   "samples": [
+    64.87582600675523,
+    66.72919308766723,
+    65.830236999318,
+    63.948294962756336,
+    72.45360396336764
+   ]
+  },
+  "answers": 72983,
+  "exact": true,
+  "warmup_excluded": 1,
+  "scope": "resident native storage -> SELECT DISTINCT materialized as resident temp table"
+ },
+ {
+  "sf": 10,
+  "threads": 1,
+  "duckdb_version": "1.5.6",
+  "wall_ms": {
+   "median": 516.0521439975128,
+   "min": 513.3056460181251,
+   "samples": [
+    513.3056460181251,
+    515.7645640429109,
+    516.0521439975128,
+    516.0889730323106,
+    539.7250769892707
+   ]
+  },
+  "answers": 72983,
+  "exact": true,
+  "warmup_excluded": 1,
+  "scope": "resident native storage -> SELECT DISTINCT materialized as resident temp table"
+ }
+]

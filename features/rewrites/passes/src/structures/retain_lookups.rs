@@ -3,8 +3,9 @@ use proc_macro2::TokenStream;
 
 /// Record Copy range witnesses for eager semijoins with a later matching probe.
 ///
-/// Candidate generation only selects SortedRun payload builds; the language's
-/// structural contract independently proves key preservation and witness escape.
+/// Candidate generation selects SortedRun payloads, PrefixRun directories, and
+/// identical leveled snapshot host layouts at both demands; the language
+/// independently proves provider identity, key preservation and non-escape.
 /// Existing representation choices are preserved, including positions carriers.
 pub fn retain_lookups(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
     if !arguments.is_empty() {
@@ -15,6 +16,7 @@ pub fn retain_lookups(source: &ir::Program, arguments: TokenStream) -> syn::Resu
     }
     let facts = ir::contract::check(source)?;
     let definitions = &source.physical.program.definitions;
+    let candidates = ir::physical::candidate_prefixes(&source.physical, &facts.physical);
     let mut target = source.clone();
     for (index, first) in definitions.iter().enumerate() {
         let Operator::Semi(_, read) = &first.operator else {
@@ -34,25 +36,44 @@ pub fn retain_lookups(source: &ir::Program, arguments: TokenStream) -> syn::Resu
             symbol_name(&entry.name) == build
                 && matches!(&entry.structure, Structure::Built { keyed, .. }
                     if keyed.membership.is_none()
-                        && keyed.level_names().as_slice() == std::slice::from_ref(&keys)
                         && matches!(&keyed.ty, syn::Type::Path(path)
                             if path.qself.is_none()
-                                && path.path.segments.last()
-                                    .is_some_and(|segment| segment.ident == "SortedRun")))
+                                && path.path.segments.last().is_some_and(|segment| {
+                                    (segment.ident == "SortedRun"
+                                        && keyed.level_names().as_slice() == std::slice::from_ref(&keys))
+                                        || (segment.ident == "PrefixRun"
+                                            && ir::prefix_depth(&keyed.level_names(), &keys).is_some())
+                                })))
         });
-        if !eligible_build {
+        let leveled = ir::leveled_host_read(source, &build, &name, &keys);
+        if !eligible_build && leveled.is_none() {
             continue;
         }
         for force in &definitions[index + 1..] {
             let Operator::Probe(_, probe) = &force.operator else {
                 continue;
             };
-            if symbol_name(&probe.right) != build
-                || probe.columns.len() != keys.len()
-                || !probe
-                    .columns
-                    .iter()
-                    .all(|column| keys.contains(&symbol_name(column)))
+            if let Some(provider) = leveled {
+                if ir::leveled_host_read(source, &build, &symbol_name(&force.name), &keys)
+                    != Some(provider)
+                {
+                    continue;
+                }
+            }
+            let candidate = candidates.iter().any(|candidate| {
+                symbol_name(candidate.reader) == symbol_name(&force.name)
+                    && candidate
+                        .sides
+                        .iter()
+                        .any(|(side, prefix)| side == &build && prefix == &keys)
+            });
+            if (!candidate
+                && (symbol_name(&probe.right) != build
+                    || probe.columns.len() != keys.len()
+                    || !probe
+                        .columns
+                        .iter()
+                        .all(|column| keys.contains(&symbol_name(column)))))
                 || facts
                     .shares
                     .get(&name)

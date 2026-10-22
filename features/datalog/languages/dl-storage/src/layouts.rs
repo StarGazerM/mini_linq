@@ -5,6 +5,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// Check declared representations and each recorded occurrence binding.
 /// Per-layout maintenance covers even unused extra layouts.
+/// Occurrence positions refer to emitted variant order; source positions and
+/// delta identity are recovered only from the independently checked driver.
 pub(crate) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
     for (layout, maintenance) in program
         .layouts
@@ -67,13 +69,15 @@ pub(crate) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
         let head = analysis.positions[&symbol_name(&query.head.relation)];
         let component = analysis.component[head].expect("checked IDB component");
         let mut bound = BTreeSet::new();
-        for (position, item) in query.body.iter().enumerate() {
+        let order = crate::incremental::variant_order(query, variant.driver)?;
+        for (position, &source_position) in order.iter().enumerate() {
+            let item = &query.body[source_position];
             match item {
                 BodyItem::Positive { atom } => {
                     let read = reads.remove(&(variant_index, position)).ok_or_else(|| {
                         syn::Error::new_spanned(atom, "storage omitted a read binding")
                     })?;
-                    let is_delta = variant.delta == Some(position);
+                    let is_delta = variant.delta == Some(source_position);
                     if read.kind == "direct" {
                         ensure(
                             is_delta

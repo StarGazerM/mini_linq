@@ -1,0 +1,19 @@
+[package]
+name = "cq-gpu-runtime"
+version = "0.1.0"
+edition.workspace = true
+
+[features]
+default = []
+nvtx = []
+timings = []
+dedup-diagnostics = []
+
+[dependencies]
+cuda-core.workspace = true
+cuda-device.workspace = true
+cuda-host.workspace = true
+gpu-blocked-run = { path = "../blocked-run" }
+gpu-tiles = { path = "../tiles" }
+gpu-device-columns = { path = "../device-columns" }
+rccl-memory.workspace = true

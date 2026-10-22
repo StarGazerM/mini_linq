@@ -29,7 +29,8 @@ pub struct JoinFilterCandidate {
 }
 
 /// Every admissible filter of `covering`, one per scalar `i64` key column:
-/// an eager probe or semijoin into a total single-level hash index, whose left
+/// an eager probe or semijoin into a total single-level exact hash index or
+/// sorted run, whose unique keys supply the conservative filter, and whose left
 /// operand reaches a scan through an exclusive pipe spine of declarative
 /// selections, projections and the left operands of eager probes/semijoins,
 /// carrying the key column from the scan's lineage.
@@ -66,7 +67,13 @@ pub fn join_filter_candidates(
         || facts.physical.modes[&build] != ModeKind::Let
         || !facts.physical.rows[&build].computed.is_empty()
         || facts.built_on(&build, &columns).is_none_or(|(ty, levels)| {
-            levels != 1 || *ty != syn::parse_quote!(::cq_storage::HashIndex<'_, _, _>)
+            let sorted_run = matches!(ty, syn::Type::Path(path)
+                if path.qself.is_none()
+                    && path.path.segments.len() == 2
+                    && path.path.segments[0].ident == "cq_storage"
+                    && path.path.segments[1].ident == "SortedRun");
+            levels != 1
+                || !(*ty == syn::parse_quote!(::cq_storage::HashIndex<'_, _, _>) || sorted_run)
         })
     {
         return Vec::new();

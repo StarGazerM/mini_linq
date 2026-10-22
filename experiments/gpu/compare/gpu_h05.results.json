@@ -1,0 +1,2892 @@
+[
+  {
+    "answer_count": 579,
+    "bandwidth_model_gbps": 960,
+    "build_algorithm": "dense counting sort with stable provenance heapsort",
+    "build_ms": {
+      "median": 1.2326079607009888,
+      "min": 1.2217600345611572
+    },
+    "dedup_algorithm": "exact packed-triple u64 CAS set",
+    "dedup_ms": {
+      "median": 0.32416000962257385,
+      "min": 0.31545600295066833
+    },
+    "exact": true,
+    "expansion_policy": "fixed-depth in-tile loop; no cross-block stealing",
+    "frontier_spill_required": false,
+    "kernel_ms": {
+      "median": 0.016672000288963318,
+      "min": 0.016383999958634377
+    },
+    "max_expansion_rows": [
+      0,
+      0
+    ],
+    "max_m_over_t": 0.0,
+    "peak_mem_mib": 4.0,
+    "peak_mem_scope": "cuMemGetInfo sampled with build scratch live, after build and dedup",
+    "plan": "A",
+    "regs": 32,
+    "runs": 5,
+    "samples": {
+      "build_ms": [
+        1.321023941040039,
+        1.2505279779434204,
+        1.2326079607009888,
+        1.229151964187622,
+        1.2217600345611572
+      ],
+      "dedup_ms": [
+        0.33932799100875854,
+        0.32416000962257385,
+        0.32185599207878113,
+        0.3251839876174927,
+        0.31545600295066833
+      ],
+      "kernel_ms": [
+        0.016672000288963318,
+        0.016543999314308167,
+        0.01740800030529499,
+        0.016383999958634377,
+        0.017311999574303627
+      ],
+      "total_ms": [
+        1.677024006843567,
+        1.5912319421768188,
+        1.571871995925903,
+        1.5707199573516846,
+        1.554527997970581
+      ]
+    },
+    "scan_gbps": 69.11612164275289,
+    "sf": "synthetic",
+    "smem": 9216,
+    "spills": {
+      "loads_bytes": 0,
+      "stores_bytes": 0
+    },
+    "stack_bytes": 0,
+    "static_smem_bytes": 0,
+    "total_ms": {
+      "median": 1.571871995925903,
+      "min": 1.554527997970581
+    },
+    "warmups": 1
+  },
+  {
+    "answer_count": 579,
+    "bandwidth_model_gbps": 960,
+    "build_algorithm": "dense counting sort with stable provenance heapsort",
+    "build_ms": {
+      "median": 1.6608320474624634,
+      "min": 1.6367360353469849
+    },
+    "dedup_algorithm": "exact packed-triple u64 CAS set",
+    "dedup_ms": {
+      "median": 0.30748799443244934,
+      "min": 0.30480000376701355
+    },
+    "exact": true,
+    "expansion_policy": "fixed-depth in-tile loop; no cross-block stealing",
+    "frontier_spill_required": false,
+    "kernel_ms": {
+      "median": 0.047968000173568726,
+      "min": 0.047168001532554626
+    },
+    "max_expansion_rows": [
+      1192,
+      6146
+    ],
+    "max_m_over_t": 6.001953125,
+    "peak_mem_mib": 6.0,
+    "peak_mem_scope": "cuMemGetInfo sampled with build scratch live, after build and dedup",
+    "plan": "B",
+    "regs": 34,
+    "runs": 5,
+    "samples": {
+      "build_ms": [
+        1.6367360353469849,
+        1.6761280298233032,
+        1.6762239933013916,
+        1.6608320474624634,
+        1.6403199434280396
+      ],
+      "dedup_ms": [
+        0.30480000376701355,
+        0.3107520043849945,
+        0.30748799443244934,
+        0.3161599934101105,
+        0.3056960105895996
+      ],
+      "kernel_ms": [
+        0.048128001391887665,
+        0.047968000173568726,
+        0.04800000041723251,
+        0.047359999269247055,
+        0.047168001532554626
+      ],
+      "total_ms": [
+        1.9896639585494995,
+        2.0348479747772217,
+        2.031712055206299,
+        2.0243520736694336,
+        1.993183970451355
+      ]
+    },
+    "scan_gbps": null,
+    "sf": "synthetic",
+    "smem": 33808,
+    "spills": {
+      "loads_bytes": 0,
+      "stores_bytes": 0
+    },
+    "stack_bytes": 0,
+    "static_smem_bytes": 0,
+    "total_ms": {
+      "median": 2.0243520736694336,
+      "min": 1.9896639585494995
+    },
+    "warmups": 1
+  },
+  {
+    "allocation_scope": "iteration including exactness readback copies; peak bytes includes persistent outputs, excludes input uploads",
+    "answer_count": 7242,
+    "bandwidth_model_gbps": 960,
+    "build_algorithm": "device-detected sorted adjacency or bitmap-word prefix counting sort with stable provenance heapsort",
+    "build_ms": {
+      "median": 1.4264960289001465,
+      "min": 1.4118399620056152
+    },
+    "dedup_algorithm": "exact packed-triple u64 CAS set",
+    "dedup_ms": {
+      "median": 0.33792001008987427,
+      "min": 0.33484798669815063
+    },
+    "exact": true,
+    "expansion_policy": "fixed-depth in-tile loop; no cross-block stealing",
+    "frontier_spill_required": false,
+    "kernel_ms": {
+      "median": 0.09312000125646593,
+      "min": 0.09251199662685394
+    },
+    "max_expansion_rows": [
+      0,
+      0
+    ],
+    "max_m_over_t": 0.0,
+    "measurement_date": "2026-10-18",
+    "measurement_revision": "bf34e9f",
+    "optimization_history": [
+      {
+        "answer_count": 7242,
+        "build_ms": {
+          "median": 3.0440640449523926,
+          "min": 3.015199899673462
+        },
+        "commit": "52d461d",
+        "dedup_ms": {
+          "median": 0.3259199857711792,
+          "min": 0.3171199858188629
+        },
+        "exact": true,
+        "kernel_ms": {
+          "median": 0.08806400001049042,
+          "min": 0.08796799927949905
+        },
+        "profile": {
+          "build_dtoh_per_run": 10,
+          "build_kernel_sum_ms_median": 0.24237,
+          "timed_cuda_api_per_run": {
+            "cuMemAlloc": 57,
+            "cuMemFree": 29,
+            "cuMemcpyDtoH": 12
+          },
+          "whole_iteration_cuda_allocations": 60,
+          "whole_iteration_cuda_frees": 60,
+          "whole_iteration_dtoh_per_run": 17
+        },
+        "runs": 5,
+        "samples": {
+          "build_ms": [
+            3.0985920429229736,
+            3.060960054397583,
+            3.0440640449523926,
+            3.015199899673462,
+            3.019615888595581
+          ],
+          "dedup_ms": [
+            0.33609598875045776,
+            0.337119996547699,
+            0.3259199857711792,
+            0.3200640082359314,
+            0.3171199858188629
+          ],
+          "kernel_ms": [
+            0.08908800035715103,
+            0.08806400001049042,
+            0.08806400001049042,
+            0.08892799913883209,
+            0.08796799927949905
+          ],
+          "total_ms": [
+            3.523776054382324,
+            3.4861440658569336,
+            3.458048105239868,
+            3.424191951751709,
+            3.424704074859619
+          ]
+        },
+        "scan_dram_bytes": 50439552,
+        "stage": "baseline",
+        "total_ms": {
+          "median": 3.458048105239868,
+          "min": 3.424191951751709
+        },
+        "warmups": 1
+      },
+      {
+        "answer_count": 7242,
+        "build_ms": {
+          "median": 1.4092799425125122,
+          "min": 1.4034240245819092
+        },
+        "commit": "8880ac1",
+        "dedup_ms": {
+          "median": 0.3433600068092346,
+          "min": 0.34147199988365173
+        },
+        "exact": true,
+        "kernel_ms": {
+          "median": 0.0870399996638298,
+          "min": 0.0870399996638298
+        },
+        "runs": 5,
+        "samples": {
+          "allocation_count": [
+            60,
+            60,
+            60,
+            60,
+            60
+          ],
+          "build_ms": [
+            1.4116480350494385,
+            1.4037760496139526,
+            1.4092799425125122,
+            1.4034240245819092,
+            1.4115840196609497
+          ],
+          "dedup_ms": [
+            0.3439359962940216,
+            0.3433600068092346,
+            0.3500480055809021,
+            0.3416000008583069,
+            0.34147199988365173
+          ],
+          "kernel_ms": [
+            0.0870399996638298,
+            0.0870399996638298,
+            0.08787199854850769,
+            0.0872960016131401,
+            0.0870399996638298
+          ],
+          "peak_bytes": [
+            232685516,
+            232685516,
+            232685516,
+            232685516,
+            232685516
+          ],
+          "total_ms": [
+            1.842623949050903,
+            1.834175944328308,
+            1.8472000360488892,
+            1.832319974899292,
+            1.8400959968566897
+          ]
+        },
+        "stage": "pool",
+        "total_ms": {
+          "median": 1.8400959968566897,
+          "min": 1.832319974899292
+        },
+        "warmups": 1
+      },
+      {
+        "answer_count": 7242,
+        "build_ms": {
+          "median": 1.291167974472046,
+          "min": 1.2755520343780518
+        },
+        "commit": "4ab6c3c",
+        "dedup_ms": {
+          "median": 0.35020801424980164,
+          "min": 0.34508800506591797
+        },
+        "exact": true,
+        "kernel_ms": {
+          "median": 0.10201600193977356,
+          "min": 0.1013759970664978
+        },
+        "runs": 5,
+        "samples": {
+          "allocation_count": [
+            56,
+            56,
+            56,
+            56,
+            56
+          ],
+          "build_ms": [
+            1.3238400220870972,
+            1.2924480438232422,
+            1.291167974472046,
+            1.2775360345840454,
+            1.2755520343780518
+          ],
+          "dedup_ms": [
+            0.35020801424980164,
+            0.35225600004196167,
+            0.3563520014286041,
+            0.35020801424980164,
+            0.34508800506591797
+          ],
+          "kernel_ms": [
+            0.1013759970664978,
+            0.10201600193977356,
+            0.1013759970664978,
+            0.10224000364542007,
+            0.10211200267076492
+          ],
+          "peak_bytes": [
+            269766352,
+            269766352,
+            269766352,
+            269766352,
+            269766352
+          ],
+          "total_ms": [
+            1.7754240036010742,
+            1.7467199563980105,
+            1.7488960027694702,
+            1.7299840450286863,
+            1.7227519750595093
+          ]
+        },
+        "stage": "device-sizes",
+        "total_ms": {
+          "median": 1.7467199563980105,
+          "min": 1.7227519750595093
+        },
+        "warmups": 1
+      },
+      {
+        "answer_count": 7242,
+        "build_ms": {
+          "median": 1.1938879489898682,
+          "min": 1.1845760345458984
+        },
+        "commit": "f3b4b7d",
+        "dedup_ms": {
+          "median": 0.34121599793434143,
+          "min": 0.33792001008987427
+        },
+        "exact": true,
+        "global_scan_dram_bytes": 1613696,
+        "kernel_ms": {
+          "median": 0.10118400305509569,
+          "min": 0.1003519967198372
+        },
+        "runs": 5,
+        "samples": {
+          "allocation_count": [
+            57,
+            57,
+            57,
+            57,
+            57
+          ],
+          "build_ms": [
+            1.2110719680786133,
+            1.1952320337295532,
+            1.1845760345458984,
+            1.1938879489898682,
+            1.192736029624939
+          ],
+          "dedup_ms": [
+            0.34303998947143555,
+            0.3420160114765167,
+            0.33792001008987427,
+            0.3409920036792755,
+            0.34121599793434143
+          ],
+          "kernel_ms": [
+            0.1003519967198372,
+            0.10118400305509569,
+            0.1013759970664978,
+            0.1003519967198372,
+            0.1013759970664978
+          ],
+          "peak_bytes": [
+            270048708,
+            270048708,
+            270048708,
+            270048708,
+            270048708
+          ],
+          "total_ms": [
+            1.6544640064239502,
+            1.6384320259094238,
+            1.6238720417022705,
+            1.6352319717407229,
+            1.6353280544281006
+          ]
+        },
+        "scan_dram_bytes": 27049216,
+        "stage": "word-scan",
+        "total_ms": {
+          "median": 1.6353280544281006,
+          "min": 1.6238720417022705
+        },
+        "warmups": 1
+      },
+      {
+        "answer_count": 7242,
+        "build_ms": {
+          "median": 1.4264960289001465,
+          "min": 1.4118399620056152
+        },
+        "commit": "bf34e9f",
+        "dedup_ms": {
+          "median": 0.33792001008987427,
+          "min": 0.33484798669815063
+        },
+        "exact": true,
+        "kernel_ms": {
+          "median": 0.09312000125646593,
+          "min": 0.09251199662685394
+        },
+        "profile": {
+          "build_dtoh_per_run": 1,
+          "build_kernel_sum_ms_median": 0.287329,
+          "timed_cuda_api_per_run": {
+            "cuMemAlloc": 0,
+            "cuMemFree": 0,
+            "cuMemcpyDtoH": 2
+          },
+          "whole_iteration_dtoh_per_run": 7
+        },
+        "runs": 5,
+        "samples": {
+          "allocation_count": [
+            57,
+            57,
+            57,
+            57,
+            57
+          ],
+          "build_ms": [
+            1.4287359714508057,
+            1.4994239807128906,
+            1.4264960289001465,
+            1.4118399620056152,
+            1.416159987449646
+          ],
+          "dedup_ms": [
+            0.33792001008987427,
+            0.34406399726867676,
+            0.33484798669815063,
+            0.33587199449539185,
+            0.34166398644447327
+          ],
+          "kernel_ms": [
+            0.09296000003814696,
+            0.09312000125646593,
+            0.09318400174379347,
+            0.09318400174379347,
+            0.09251199662685394
+          ],
+          "peak_bytes": [
+            270048720,
+            270048720,
+            270048720,
+            270048720,
+            270048720
+          ],
+          "sorted_builds": [
+            [
+              "customer",
+              "supplier"
+            ],
+            [
+              "customer",
+              "supplier"
+            ],
+            [
+              "customer",
+              "supplier"
+            ],
+            [
+              "customer",
+              "supplier"
+            ],
+            [
+              "customer",
+              "supplier"
+            ]
+          ],
+          "total_ms": [
+            1.8596160411834717,
+            1.9366079568862915,
+            1.8545279502868652,
+            1.8408960103988647,
+            1.850335955619812
+          ]
+        },
+        "scan_dram_bytes": 26415616,
+        "stage": "sorted",
+        "total_ms": {
+          "median": 1.8545279502868652,
+          "min": 1.8408960103988647
+        },
+        "warmups": 1
+      }
+    ],
+    "peak_mem_mib": 1016.0,
+    "peak_mem_scope": "cuMemGetInfo sampled after combined build metadata and dedup submission; includes reserved pool",
+    "plan": "A",
+    "pool_bytes": 926003712,
+    "profile": {
+      "build_dtoh_per_run": 1,
+      "build_kernel_sum_ms_median": 0.287329,
+      "nsys_report": "/tmp/gpu-h05-after-sf1.nsys-rep",
+      "scope": "one warmup excluded; median of five build kernel sums; CUDA API counts exclude startup and shutdown; exactness downloads remain outside timed interval",
+      "timed_cuda_api_per_run": {
+        "cuMemAlloc": 0,
+        "cuMemFree": 0,
+        "cuMemcpyDtoH": 2
+      },
+      "whole_iteration_cuda_allocations": 0,
+      "whole_iteration_cuda_frees": 0,
+      "whole_iteration_dtoh_per_run": 7
+    },
+    "regs": null,
+    "runs": 5,
+    "samples": {
+      "allocation_count": [
+        57,
+        57,
+        57,
+        57,
+        57
+      ],
+      "build_ms": [
+        1.4287359714508057,
+        1.4994239807128906,
+        1.4264960289001465,
+        1.4118399620056152,
+        1.416159987449646
+      ],
+      "dedup_ms": [
+        0.33792001008987427,
+        0.34406399726867676,
+        0.33484798669815063,
+        0.33587199449539185,
+        0.34166398644447327
+      ],
+      "kernel_ms": [
+        0.09296000003814696,
+        0.09312000125646593,
+        0.09318400174379347,
+        0.09318400174379347,
+        0.09251199662685394
+      ],
+      "peak_bytes": [
+        270048720,
+        270048720,
+        270048720,
+        270048720,
+        270048720
+      ],
+      "sorted_builds": [
+        [
+          "customer",
+          "supplier"
+        ],
+        [
+          "customer",
+          "supplier"
+        ],
+        [
+          "customer",
+          "supplier"
+        ],
+        [
+          "customer",
+          "supplier"
+        ],
+        [
+          "customer",
+          "supplier"
+        ]
+      ],
+      "total_ms": [
+        1.8596160411834717,
+        1.9366079568862915,
+        1.8545279502868652,
+        1.8408960103988647,
+        1.850335955619812
+      ]
+    },
+    "scan_dram": {
+      "global_scan_bytes": 1615360,
+      "kernel_launches": 21,
+      "metric": "dram__bytes.sum",
+      "ncu_csv": "/tmp/gpu-h05-after-sf1-a-ncu.csv",
+      "pipeline_bytes": 26415616,
+      "scope": "first complete build iteration, ncu kernel replay; word_offsets + scan_blocks + add_prefix; excludes histogram and sorted adjacency kernels"
+    },
+    "scan_gbps": 1031.1365840250432,
+    "sf": 1,
+    "smem": 9216,
+    "sorted_path": "GPU adjacent-key nondecreasing check; device-gated histogram/scatter/heapsort; sorted adjacency builds bitmap and CSR",
+    "spills": null,
+    "total_ms": {
+      "median": 1.8545279502868652,
+      "min": 1.8408960103988647
+    },
+    "warmups": 1
+  },
+  {
+    "allocation_scope": "iteration including exactness readback copies; peak bytes includes persistent outputs, excludes input uploads",
+    "answer_count": 7242,
+    "bandwidth_model_gbps": 960,
+    "build_algorithm": "device-detected sorted adjacency or bitmap-word prefix counting sort with stable provenance heapsort",
+    "build_ms": {
+      "median": 2.1998720169067383,
+      "min": 2.190272092819214
+    },
+    "dedup_algorithm": "exact packed-triple u64 CAS set",
+    "dedup_ms": {
+      "median": 0.33689600229263306,
+      "min": 0.33484798669815063
+    },
+    "exact": true,
+    "expansion_policy": "fixed-depth in-tile loop; no cross-block stealing",
+    "frontier_spill_required": false,
+    "kernel_ms": {
+      "median": 0.04198399931192398,
+      "min": 0.04198399931192398
+    },
+    "max_expansion_rows": [
+      413,
+      1660
+    ],
+    "max_m_over_t": 1.62109375,
+    "measurement_date": "2026-10-18",
+    "measurement_revision": "bf34e9f",
+    "optimization_history": [
+      {
+        "answer_count": 7242,
+        "build_ms": {
+          "median": 4.937056064605713,
+          "min": 4.917280197143555
+        },
+        "commit": "52d461d",
+        "dedup_ms": {
+          "median": 0.31494399905204773,
+          "min": 0.31327998638153076
+        },
+        "exact": true,
+        "kernel_ms": {
+          "median": 0.035840000957250595,
+          "min": 0.03481600061058998
+        },
+        "profile": {
+          "build_dtoh_per_run": 13,
+          "build_kernel_sum_ms_median": 1.088487,
+          "timed_cuda_api_per_run": {
+            "cuMemAlloc": 74,
+            "cuMemFree": 39,
+            "cuMemcpyDtoH": 15
+          },
+          "whole_iteration_cuda_allocations": 77,
+          "whole_iteration_cuda_frees": 77,
+          "whole_iteration_dtoh_per_run": 20
+        },
+        "runs": 5,
+        "samples": {
+          "build_ms": [
+            4.953824043273926,
+            4.95084810256958,
+            4.927999973297119,
+            4.937056064605713,
+            4.917280197143555
+          ],
+          "dedup_ms": [
+            0.32716798782348633,
+            0.3193280100822449,
+            0.31327998638153076,
+            0.3148159980773926,
+            0.31494399905204773
+          ],
+          "kernel_ms": [
+            0.035840000957250595,
+            0.03561599925160408,
+            0.035840000957250595,
+            0.035840000957250595,
+            0.03481600061058998
+          ],
+          "total_ms": [
+            5.316832065582275,
+            5.305791854858398,
+            5.277120113372803,
+            5.287712097167969,
+            5.267039775848389
+          ]
+        },
+        "scan_dram_bytes": 51686656,
+        "stage": "baseline",
+        "total_ms": {
+          "median": 5.287712097167969,
+          "min": 5.267039775848389
+        },
+        "warmups": 1
+      },
+      {
+        "answer_count": 7242,
+        "build_ms": {
+          "median": 2.5954880714416504,
+          "min": 2.5861759185791016
+        },
+        "commit": "8880ac1",
+        "dedup_ms": {
+          "median": 0.34911999106407166,
+          "min": 0.3441599905490875
+        },
+        "exact": true,
+        "kernel_ms": {
+          "median": 0.04281599819660187,
+          "min": 0.04182400181889534
+        },
+        "runs": 5,
+        "samples": {
+          "allocation_count": [
+            77,
+            77,
+            77,
+            77,
+            77
+          ],
+          "build_ms": [
+            2.591871976852417,
+            2.5861759185791016,
+            2.5954880714416504,
+            2.6366078853607178,
+            2.63155198097229
+          ],
+          "dedup_ms": [
+            0.3473599851131439,
+            0.34911999106407166,
+            0.3517119884490967,
+            0.3607999980449677,
+            0.3441599905490875
+          ],
+          "kernel_ms": [
+            0.04281599819660187,
+            0.04371200129389763,
+            0.043007999658584595,
+            0.04275200143456459,
+            0.04182400181889534
+          ],
+          "peak_bytes": [
+            368159636,
+            368159636,
+            368159636,
+            368159636,
+            368159636
+          ],
+          "total_ms": [
+            2.9820480346679688,
+            2.9790079593658447,
+            2.9902079105377197,
+            3.0401599407196045,
+            3.017535924911499
+          ]
+        },
+        "stage": "pool",
+        "total_ms": {
+          "median": 2.9902079105377197,
+          "min": 2.9790079593658447
+        },
+        "warmups": 1
+      },
+      {
+        "answer_count": 7242,
+        "build_ms": {
+          "median": 2.342463970184326,
+          "min": 2.3416640758514404
+        },
+        "commit": "4ab6c3c",
+        "dedup_ms": {
+          "median": 0.3460800051689148,
+          "min": 0.34281599521636963
+        },
+        "exact": true,
+        "kernel_ms": {
+          "median": 0.04198399931192398,
+          "min": 0.04195199906826019
+        },
+        "runs": 5,
+        "samples": {
+          "allocation_count": [
+            72,
+            72,
+            72,
+            72,
+            72
+          ],
+          "build_ms": [
+            2.342463970184326,
+            2.3419840335845947,
+            2.352864027023315,
+            2.3524160385131836,
+            2.3416640758514404
+          ],
+          "dedup_ms": [
+            0.35123199224472046,
+            0.3555839955806732,
+            0.34281599521636963,
+            0.3460800051689148,
+            0.34332799911499023
+          ],
+          "kernel_ms": [
+            0.04198399931192398,
+            0.04195199906826019,
+            0.04195199906826019,
+            0.04201599955558777,
+            0.04198399931192398
+          ],
+          "peak_bytes": [
+            439642236,
+            439642236,
+            439642236,
+            439642236,
+            439642236
+          ],
+          "total_ms": [
+            2.735680103302002,
+            2.7395200729370117,
+            2.7376320362091064,
+            2.740511894226074,
+            2.726975917816162
+          ]
+        },
+        "stage": "device-sizes",
+        "total_ms": {
+          "median": 2.7376320362091064,
+          "min": 2.726975917816162
+        },
+        "warmups": 1
+      },
+      {
+        "answer_count": 7242,
+        "build_ms": {
+          "median": 2.247040033340454,
+          "min": 2.2280960083007812
+        },
+        "commit": "f3b4b7d",
+        "dedup_ms": {
+          "median": 0.34406399726867676,
+          "min": 0.3412800133228302
+        },
+        "exact": true,
+        "global_scan_dram_bytes": 1675136,
+        "kernel_ms": {
+          "median": 0.04262400045990944,
+          "min": 0.04198399931192398
+        },
+        "runs": 5,
+        "samples": {
+          "allocation_count": [
+            73,
+            73,
+            73,
+            73,
+            73
+          ],
+          "build_ms": [
+            2.238336086273194,
+            2.2280960083007812,
+            2.247040033340454,
+            2.248512029647827,
+            2.260607957839966
+          ],
+          "dedup_ms": [
+            0.3463999927043915,
+            0.34406399726867676,
+            0.34703999757766724,
+            0.3420160114765167,
+            0.3412800133228302
+          ],
+          "kernel_ms": [
+            0.04198399931192398,
+            0.04297599941492081,
+            0.042080000042915344,
+            0.04262400045990944,
+            0.043007999658584595
+          ],
+          "peak_bytes": [
+            439924592,
+            439924592,
+            439924592,
+            439924592,
+            439924592
+          ],
+          "total_ms": [
+            2.6267199516296387,
+            2.615135908126831,
+            2.636159896850586,
+            2.6331520080566406,
+            2.6448960304260254
+          ]
+        },
+        "scan_dram_bytes": 27724800,
+        "stage": "word-scan",
+        "total_ms": {
+          "median": 2.6331520080566406,
+          "min": 2.615135908126831
+        },
+        "warmups": 1
+      },
+      {
+        "answer_count": 7242,
+        "build_ms": {
+          "median": 2.1998720169067383,
+          "min": 2.190272092819214
+        },
+        "commit": "bf34e9f",
+        "dedup_ms": {
+          "median": 0.33689600229263306,
+          "min": 0.33484798669815063
+        },
+        "exact": true,
+        "kernel_ms": {
+          "median": 0.04198399931192398,
+          "min": 0.04198399931192398
+        },
+        "profile": {
+          "build_dtoh_per_run": 1,
+          "build_kernel_sum_ms_median": 0.674179,
+          "timed_cuda_api_per_run": {
+            "cuMemAlloc": 0,
+            "cuMemFree": 0,
+            "cuMemcpyDtoH": 2
+          },
+          "whole_iteration_dtoh_per_run": 7
+        },
+        "runs": 5,
+        "samples": {
+          "allocation_count": [
+            73,
+            73,
+            73,
+            73,
+            73
+          ],
+          "build_ms": [
+            2.2140159606933594,
+            2.190272092819214,
+            2.197312116622925,
+            2.214240074157715,
+            2.1998720169067383
+          ],
+          "dedup_ms": [
+            0.3359679877758026,
+            0.33932799100875854,
+            0.33689600229263306,
+            0.33484798669815063,
+            0.3409920036792755
+          ],
+          "kernel_ms": [
+            0.048128001391887665,
+            0.04198399931192398,
+            0.04265600070357323,
+            0.04198399931192398,
+            0.04198399931192398
+          ],
+          "peak_bytes": [
+            439924608,
+            439924608,
+            439924608,
+            439924608,
+            439924608
+          ],
+          "sorted_builds": [
+            [
+              "customer",
+              "supplier",
+              "lineitem"
+            ],
+            [
+              "customer",
+              "supplier",
+              "lineitem"
+            ],
+            [
+              "customer",
+              "supplier",
+              "lineitem"
+            ],
+            [
+              "customer",
+              "supplier",
+              "lineitem"
+            ],
+            [
+              "customer",
+              "supplier",
+              "lineitem"
+            ]
+          ],
+          "total_ms": [
+            2.598112106323242,
+            2.5715839862823486,
+            2.576864004135132,
+            2.5910720825195312,
+            2.582848072052002
+          ]
+        },
+        "scan_dram_bytes": 3083904,
+        "stage": "sorted",
+        "total_ms": {
+          "median": 2.582848072052002,
+          "min": 2.5715839862823486
+        },
+        "warmups": 1
+      }
+    ],
+    "peak_mem_mib": 1016.0,
+    "peak_mem_scope": "cuMemGetInfo sampled after combined build metadata and dedup submission; includes reserved pool",
+    "plan": "B",
+    "pool_bytes": 926003712,
+    "profile": {
+      "build_dtoh_per_run": 1,
+      "build_kernel_sum_ms_median": 0.674179,
+      "nsys_report": "/tmp/gpu-h05-after-sf1.nsys-rep",
+      "scope": "one warmup excluded; median of five build kernel sums; CUDA API counts exclude startup and shutdown; exactness downloads remain outside timed interval",
+      "timed_cuda_api_per_run": {
+        "cuMemAlloc": 0,
+        "cuMemFree": 0,
+        "cuMemcpyDtoH": 2
+      },
+      "whole_iteration_cuda_allocations": 0,
+      "whole_iteration_cuda_frees": 0,
+      "whole_iteration_dtoh_per_run": 7
+    },
+    "regs": null,
+    "runs": 5,
+    "samples": {
+      "allocation_count": [
+        73,
+        73,
+        73,
+        73,
+        73
+      ],
+      "build_ms": [
+        2.2140159606933594,
+        2.190272092819214,
+        2.197312116622925,
+        2.214240074157715,
+        2.1998720169067383
+      ],
+      "dedup_ms": [
+        0.3359679877758026,
+        0.33932799100875854,
+        0.33689600229263306,
+        0.33484798669815063,
+        0.3409920036792755
+      ],
+      "kernel_ms": [
+        0.048128001391887665,
+        0.04198399931192398,
+        0.04265600070357323,
+        0.04198399931192398,
+        0.04198399931192398
+      ],
+      "peak_bytes": [
+        439924608,
+        439924608,
+        439924608,
+        439924608,
+        439924608
+      ],
+      "sorted_builds": [
+        [
+          "customer",
+          "supplier",
+          "lineitem"
+        ],
+        [
+          "customer",
+          "supplier",
+          "lineitem"
+        ],
+        [
+          "customer",
+          "supplier",
+          "lineitem"
+        ],
+        [
+          "customer",
+          "supplier",
+          "lineitem"
+        ],
+        [
+          "customer",
+          "supplier",
+          "lineitem"
+        ]
+      ],
+      "total_ms": [
+        2.598112106323242,
+        2.5715839862823486,
+        2.576864004135132,
+        2.5910720825195312,
+        2.582848072052002
+      ]
+    },
+    "scan_dram": {
+      "global_scan_bytes": 1672064,
+      "kernel_launches": 28,
+      "metric": "dram__bytes.sum",
+      "ncu_csv": "/tmp/gpu-h05-after-sf1-b-ncu.csv",
+      "pipeline_bytes": 3083904,
+      "scope": "first complete build iteration, ncu kernel replay; word_offsets + scan_blocks + add_prefix; excludes histogram and sorted adjacency kernels"
+    },
+    "scan_gbps": null,
+    "sf": 1,
+    "smem": 33808,
+    "sorted_path": "GPU adjacent-key nondecreasing check; device-gated histogram/scatter/heapsort; sorted adjacency builds bitmap and CSR",
+    "spills": null,
+    "total_ms": {
+      "median": 2.582848072052002,
+      "min": 2.5715839862823486
+    },
+    "warmups": 1
+  },
+  {
+    "allocation_scope": "iteration including exactness readback copies; peak bytes includes persistent outputs, excludes input uploads",
+    "answer_count": 72983,
+    "bandwidth_model_gbps": 960,
+    "build_algorithm": "device-detected sorted adjacency or bitmap-word prefix counting sort with stable provenance heapsort",
+    "build_ms": {
+      "median": 4.884064197540283,
+      "min": 4.880064010620117
+    },
+    "dedup_algorithm": "exact packed-triple u64 CAS set",
+    "dedup_ms": {
+      "median": 0.3471679985523224,
+      "min": 0.3461120128631592
+    },
+    "exact": true,
+    "expansion_policy": "fixed-depth in-tile loop; no cross-block stealing",
+    "frontier_spill_required": false,
+    "kernel_ms": {
+      "median": 0.9388160109519958,
+      "min": 0.936959981918335
+    },
+    "max_expansion_rows": [
+      0,
+      0
+    ],
+    "max_m_over_t": 0.0,
+    "measurement_date": "2026-10-18",
+    "measurement_revision": "bf34e9f",
+    "optimization_history": [
+      {
+        "answer_count": 72983,
+        "build_ms": {
+          "median": 13.001888275146484,
+          "min": 12.926239967346191
+        },
+        "commit": "52d461d",
+        "dedup_ms": {
+          "median": 1.3394880294799805,
+          "min": 1.3165440559387207
+        },
+        "exact": true,
+        "kernel_ms": {
+          "median": 0.9371200203895568,
+          "min": 0.9367679953575134
+        },
+        "profile": {
+          "build_dtoh_per_run": 10,
+          "build_kernel_sum_ms_median": 3.683762,
+          "timed_cuda_api_per_run": {
+            "cuMemAlloc": 60,
+            "cuMemFree": 32,
+            "cuMemcpyDtoH": 12
+          },
+          "whole_iteration_cuda_allocations": 63,
+          "whole_iteration_cuda_frees": 63,
+          "whole_iteration_dtoh_per_run": 17
+        },
+        "runs": 5,
+        "samples": {
+          "build_ms": [
+            12.926239967346191,
+            12.9868803024292,
+            13.024864196777344,
+            13.001888275146484,
+            13.026816368103027
+          ],
+          "dedup_ms": [
+            1.3434239625930786,
+            1.3375680446624756,
+            1.3165440559387207,
+            1.3521599769592283,
+            1.3394880294799805
+          ],
+          "kernel_ms": [
+            0.9367679953575134,
+            0.9379839897155762,
+            0.9371200203895568,
+            0.936959981918335,
+            0.9390079975128174
+          ],
+          "total_ms": [
+            15.206432342529297,
+            15.262432098388672,
+            15.278528213500977,
+            15.291007995605469,
+            15.305312156677246
+          ]
+        },
+        "scan_dram_bytes": 864474496,
+        "stage": "baseline",
+        "total_ms": {
+          "median": 15.278528213500977,
+          "min": 15.206432342529297
+        },
+        "warmups": 1
+      },
+      {
+        "answer_count": 72983,
+        "build_ms": {
+          "median": 5.557216167449951,
+          "min": 5.539328098297119
+        },
+        "commit": "8880ac1",
+        "dedup_ms": {
+          "median": 0.3622719943523407,
+          "min": 0.35023999214172363
+        },
+        "exact": true,
+        "kernel_ms": {
+          "median": 0.9002559781074524,
+          "min": 0.8980479836463928
+        },
+        "profile": {
+          "build_dtoh_per_run": 10,
+          "build_kernel_sum_ms_median": 3.711346,
+          "timed_cuda_api_per_run": {
+            "cuMemAlloc": 0,
+            "cuMemFree": 0,
+            "cuMemcpyDtoH": 12
+          },
+          "whole_iteration_dtoh_per_run": 17
+        },
+        "runs": 5,
+        "samples": {
+          "allocation_count": [
+            63,
+            63,
+            63,
+            63,
+            63
+          ],
+          "build_ms": [
+            5.607295989990234,
+            5.604288101196289,
+            5.55241584777832,
+            5.557216167449951,
+            5.539328098297119
+          ],
+          "dedup_ms": [
+            0.36579200625419617,
+            0.40508800745010376,
+            0.3622719943523407,
+            0.35731199383735657,
+            0.35023999214172363
+          ],
+          "kernel_ms": [
+            0.9002559781074524,
+            0.9021440148353576,
+            0.9007999897003174,
+            0.9000959992408752,
+            0.8980479836463928
+          ],
+          "peak_bytes": [
+            2326230244,
+            2326230244,
+            2326230244,
+            2326230244,
+            2326230244
+          ],
+          "total_ms": [
+            6.8733439445495605,
+            6.911520004272461,
+            6.815487861633301,
+            6.814623832702637,
+            6.787615776062012
+          ]
+        },
+        "stage": "pool",
+        "total_ms": {
+          "median": 6.815487861633301,
+          "min": 6.787615776062012
+        },
+        "warmups": 1
+      },
+      {
+        "answer_count": 72983,
+        "build_ms": {
+          "median": 5.486015796661377,
+          "min": 5.468575954437256
+        },
+        "commit": "4ab6c3c",
+        "dedup_ms": {
+          "median": 0.34534400701522827,
+          "min": 0.34303998947143555
+        },
+        "exact": true,
+        "kernel_ms": {
+          "median": 0.936576008796692,
+          "min": 0.9359359741210938
+        },
+        "profile": {
+          "build_dtoh_per_run": 1,
+          "build_kernel_sum_ms_median": 3.790963,
+          "timed_cuda_api_per_run": {
+            "cuMemAlloc": 0,
+            "cuMemFree": 0,
+            "cuMemcpyDtoH": 2
+          },
+          "whole_iteration_dtoh_per_run": 7
+        },
+        "runs": 5,
+        "samples": {
+          "allocation_count": [
+            59,
+            59,
+            59,
+            59,
+            59
+          ],
+          "build_ms": [
+            5.478943824768066,
+            5.490431785583496,
+            5.486015796661377,
+            5.4890241622924805,
+            5.468575954437256
+          ],
+          "dedup_ms": [
+            0.35737600922584534,
+            0.34534400701522827,
+            0.347135990858078,
+            0.34303998947143555,
+            0.34508800506591797
+          ],
+          "kernel_ms": [
+            0.936959981918335,
+            0.936576008796692,
+            0.9359359741210938,
+            0.9359359741210938,
+            0.936959981918335
+          ],
+          "peak_bytes": [
+            2697036096,
+            2697036096,
+            2697036096,
+            2697036096,
+            2697036096
+          ],
+          "total_ms": [
+            6.773280143737793,
+            6.77235221862793,
+            6.769087791442871,
+            6.76800012588501,
+            6.750624179840088
+          ]
+        },
+        "stage": "device-sizes",
+        "total_ms": {
+          "median": 6.769087791442871,
+          "min": 6.750624179840088
+        },
+        "warmups": 1
+      },
+      {
+        "answer_count": 72983,
+        "build_ms": {
+          "median": 4.2335357666015625,
+          "min": 4.228544235229492
+        },
+        "commit": "f3b4b7d",
+        "dedup_ms": {
+          "median": 0.35020801424980164,
+          "min": 0.34278398752212524
+        },
+        "exact": true,
+        "global_scan_dram_bytes": 15568128,
+        "kernel_ms": {
+          "median": 0.9376959800720216,
+          "min": 0.9341440200805664
+        },
+        "profile": {
+          "build_dtoh_per_run": 1,
+          "build_kernel_sum_ms_median": 2.54782,
+          "timed_cuda_api_per_run": {
+            "cuMemAlloc": 0,
+            "cuMemFree": 0,
+            "cuMemcpyDtoH": 2
+          },
+          "whole_iteration_dtoh_per_run": 7
+        },
+        "runs": 5,
+        "samples": {
+          "allocation_count": [
+            59,
+            59,
+            59,
+            59,
+            59
+          ],
+          "build_ms": [
+            4.2442240715026855,
+            4.2335357666015625,
+            4.230527877807617,
+            4.228544235229492,
+            4.2541117668151855
+          ],
+          "dedup_ms": [
+            0.35017600655555725,
+            0.35020801424980164,
+            0.35123199224472046,
+            0.34278398752212524,
+            0.3686400055885315
+          ],
+          "kernel_ms": [
+            0.9380159974098206,
+            0.9377599954605104,
+            0.9376320242881776,
+            0.9341440200805664,
+            0.9376959800720216
+          ],
+          "peak_bytes": [
+            2699859628,
+            2699859628,
+            2699859628,
+            2699859628,
+            2699859628
+          ],
+          "total_ms": [
+            5.532415866851807,
+            5.521503925323486,
+            5.519392013549805,
+            5.505472183227539,
+            5.560448169708252
+          ]
+        },
+        "scan_dram_bytes": 466995072,
+        "stage": "word-scan",
+        "total_ms": {
+          "median": 5.521503925323486,
+          "min": 5.505472183227539
+        },
+        "warmups": 1
+      },
+      {
+        "answer_count": 72983,
+        "build_ms": {
+          "median": 4.884064197540283,
+          "min": 4.880064010620117
+        },
+        "commit": "bf34e9f",
+        "dedup_ms": {
+          "median": 0.3471679985523224,
+          "min": 0.3461120128631592
+        },
+        "exact": true,
+        "kernel_ms": {
+          "median": 0.9388160109519958,
+          "min": 0.936959981918335
+        },
+        "profile": {
+          "build_dtoh_per_run": 1,
+          "build_kernel_sum_ms_median": 3.567031,
+          "timed_cuda_api_per_run": {
+            "cuMemAlloc": 0,
+            "cuMemFree": 0,
+            "cuMemcpyDtoH": 2
+          },
+          "whole_iteration_dtoh_per_run": 7
+        },
+        "runs": 5,
+        "samples": {
+          "allocation_count": [
+            59,
+            59,
+            59,
+            59,
+            59
+          ],
+          "build_ms": [
+            4.983039855957031,
+            4.880064010620117,
+            4.880640029907227,
+            4.884064197540283,
+            4.89686393737793
+          ],
+          "dedup_ms": [
+            0.3678399920463562,
+            0.3492160141468048,
+            0.3461120128631592,
+            0.3463999927043915,
+            0.3471679985523224
+          ],
+          "kernel_ms": [
+            0.9379839897155762,
+            0.9390079975128174,
+            0.9388160109519958,
+            0.936959981918335,
+            0.9391999840736388
+          ],
+          "peak_bytes": [
+            2699859640,
+            2699859640,
+            2699859640,
+            2699859640,
+            2699859640
+          ],
+          "sorted_builds": [
+            [
+              "customer",
+              "supplier"
+            ],
+            [
+              "customer",
+              "supplier"
+            ],
+            [
+              "customer",
+              "supplier"
+            ],
+            [
+              "customer",
+              "supplier"
+            ],
+            [
+              "customer",
+              "supplier"
+            ]
+          ],
+          "total_ms": [
+            6.2888641357421875,
+            6.168288230895996,
+            6.165567874908447,
+            6.167424201965332,
+            6.183231830596924
+          ]
+        },
+        "scan_dram_bytes": 460751232,
+        "stage": "sorted",
+        "total_ms": {
+          "median": 6.168288230895996,
+          "min": 6.165567874908447
+        },
+        "warmups": 1
+      }
+    ],
+    "peak_mem_mib": 9608.0,
+    "peak_mem_scope": "cuMemGetInfo sampled after combined build metadata and dedup submission; includes reserved pool",
+    "plan": "A",
+    "pool_bytes": 8721138688,
+    "profile": {
+      "build_dtoh_per_run": 1,
+      "build_kernel_sum_ms_median": 3.567031,
+      "nsys_report": "/tmp/gpu-h05-after-sf10.nsys-rep",
+      "scope": "one warmup excluded; median of five build kernel sums; CUDA API counts exclude startup and shutdown; exactness downloads remain outside timed interval",
+      "timed_cuda_api_per_run": {
+        "cuMemAlloc": 0,
+        "cuMemFree": 0,
+        "cuMemcpyDtoH": 2
+      },
+      "whole_iteration_cuda_allocations": 0,
+      "whole_iteration_cuda_frees": 0,
+      "whole_iteration_dtoh_per_run": 7
+    },
+    "regs": null,
+    "runs": 5,
+    "samples": {
+      "allocation_count": [
+        59,
+        59,
+        59,
+        59,
+        59
+      ],
+      "build_ms": [
+        4.983039855957031,
+        4.880064010620117,
+        4.880640029907227,
+        4.884064197540283,
+        4.89686393737793
+      ],
+      "dedup_ms": [
+        0.3678399920463562,
+        0.3492160141468048,
+        0.3461120128631592,
+        0.3463999927043915,
+        0.3471679985523224
+      ],
+      "kernel_ms": [
+        0.9379839897155762,
+        0.9390079975128174,
+        0.9388160109519958,
+        0.936959981918335,
+        0.9391999840736388
+      ],
+      "peak_bytes": [
+        2699859640,
+        2699859640,
+        2699859640,
+        2699859640,
+        2699859640
+      ],
+      "sorted_builds": [
+        [
+          "customer",
+          "supplier"
+        ],
+        [
+          "customer",
+          "supplier"
+        ],
+        [
+          "customer",
+          "supplier"
+        ],
+        [
+          "customer",
+          "supplier"
+        ],
+        [
+          "customer",
+          "supplier"
+        ]
+      ],
+      "total_ms": [
+        6.2888641357421875,
+        6.168288230895996,
+        6.165567874908447,
+        6.167424201965332,
+        6.183231830596924
+      ]
+    },
+    "scan_dram": {
+      "global_scan_bytes": 15573888,
+      "kernel_launches": 25,
+      "metric": "dram__bytes.sum",
+      "ncu_csv": "/tmp/gpu-h05-after-sf10-a-ncu.csv",
+      "pipeline_bytes": 460751232,
+      "scope": "first complete build iteration, ncu kernel replay; word_offsets + scan_blocks + add_prefix; excludes histogram and sorted adjacency kernels"
+    },
+    "scan_gbps": 1022.326867888362,
+    "sf": 10,
+    "smem": 9216,
+    "sorted_path": "GPU adjacent-key nondecreasing check; device-gated histogram/scatter/heapsort; sorted adjacency builds bitmap and CSR",
+    "spills": null,
+    "total_ms": {
+      "median": 6.168288230895996,
+      "min": 6.165567874908447
+    },
+    "warmups": 1
+  },
+  {
+    "allocation_scope": "iteration including exactness readback copies; peak bytes includes persistent outputs, excludes input uploads",
+    "answer_count": 72983,
+    "bandwidth_model_gbps": 960,
+    "build_algorithm": "device-detected sorted adjacency or bitmap-word prefix counting sort with stable provenance heapsort",
+    "build_ms": {
+      "median": 9.47708797454834,
+      "min": 9.462656021118164
+    },
+    "dedup_algorithm": "exact packed-triple u64 CAS set",
+    "dedup_ms": {
+      "median": 0.35123199224472046,
+      "min": 0.3420479893684387
+    },
+    "exact": true,
+    "expansion_policy": "fixed-depth in-tile loop; no cross-block stealing",
+    "frontier_spill_required": false,
+    "kernel_ms": {
+      "median": 0.3049600124359131,
+      "min": 0.3030399978160858
+    },
+    "max_expansion_rows": [
+      407,
+      1643
+    ],
+    "max_m_over_t": 1.6044921875,
+    "measurement_date": "2026-10-18",
+    "measurement_revision": "bf34e9f",
+    "optimization_history": [
+      {
+        "answer_count": 72983,
+        "build_ms": {
+          "median": 22.5118408203125,
+          "min": 22.47648048400879
+        },
+        "commit": "52d461d",
+        "dedup_ms": {
+          "median": 0.9078400135040284,
+          "min": 0.8964160084724426
+        },
+        "exact": true,
+        "kernel_ms": {
+          "median": 0.3020800054073334,
+          "min": 0.2979840040206909
+        },
+        "profile": {
+          "build_dtoh_per_run": 13,
+          "build_kernel_sum_ms_median": 12.061921,
+          "timed_cuda_api_per_run": {
+            "cuMemAlloc": 77,
+            "cuMemFree": 42,
+            "cuMemcpyDtoH": 15
+          },
+          "whole_iteration_cuda_allocations": 80,
+          "whole_iteration_cuda_frees": 80,
+          "whole_iteration_dtoh_per_run": 20
+        },
+        "runs": 5,
+        "samples": {
+          "build_ms": [
+            23.98889541625977,
+            22.5118408203125,
+            22.47648048400879,
+            22.47769546508789,
+            22.513120651245117
+          ],
+          "dedup_ms": [
+            0.9351999759674072,
+            0.9292479753494264,
+            0.9078400135040284,
+            0.905888020992279,
+            0.8964160084724426
+          ],
+          "kernel_ms": [
+            0.30105599761009216,
+            0.3052479922771454,
+            0.3020800054073334,
+            0.30502399802207947,
+            0.2979840040206909
+          ],
+          "total_ms": [
+            25.22515106201172,
+            23.746335983276367,
+            23.686399459838867,
+            23.688608169555664,
+            23.70751953125
+          ]
+        },
+        "scan_dram_bytes": 876934144,
+        "stage": "baseline",
+        "total_ms": {
+          "median": 23.70751953125,
+          "min": 23.686399459838867
+        },
+        "warmups": 1
+      },
+      {
+        "answer_count": 72983,
+        "build_ms": {
+          "median": 14.60806369781494,
+          "min": 14.59609603881836
+        },
+        "commit": "8880ac1",
+        "dedup_ms": {
+          "median": 0.3532800078392029,
+          "min": 0.3526720106601715
+        },
+        "exact": true,
+        "kernel_ms": {
+          "median": 0.3020800054073334,
+          "min": 0.3019840121269226
+        },
+        "profile": {
+          "build_dtoh_per_run": 13,
+          "build_kernel_sum_ms_median": 12.457891,
+          "timed_cuda_api_per_run": {
+            "cuMemAlloc": 0,
+            "cuMemFree": 0,
+            "cuMemcpyDtoH": 15
+          },
+          "whole_iteration_dtoh_per_run": 20
+        },
+        "runs": 5,
+        "samples": {
+          "allocation_count": [
+            80,
+            80,
+            80,
+            80,
+            80
+          ],
+          "build_ms": [
+            14.59609603881836,
+            14.60806369781494,
+            14.598976135253906,
+            14.61903953552246,
+            14.615232467651367
+          ],
+          "dedup_ms": [
+            0.35280001163482666,
+            0.3532800078392029,
+            0.35756799578666687,
+            0.3561919927597046,
+            0.3526720106601715
+          ],
+          "kernel_ms": [
+            0.3022719919681549,
+            0.3051519989967346,
+            0.3020800054073334,
+            0.3019840121269226,
+            0.3020800054073334
+          ],
+          "peak_bytes": [
+            3680448432,
+            3680448432,
+            3680448432,
+            3680448432,
+            3680448432
+          ],
+          "total_ms": [
+            15.251168251037598,
+            15.26649570465088,
+            15.258624076843262,
+            15.277215957641602,
+            15.269984245300291
+          ]
+        },
+        "stage": "pool",
+        "total_ms": {
+          "median": 15.26649570465088,
+          "min": 15.251168251037598
+        },
+        "warmups": 1
+      },
+      {
+        "answer_count": 72983,
+        "build_ms": {
+          "median": 13.343232154846191,
+          "min": 13.318079948425291
+        },
+        "commit": "4ab6c3c",
+        "dedup_ms": {
+          "median": 0.3440000116825104,
+          "min": 0.3421120047569275
+        },
+        "exact": true,
+        "kernel_ms": {
+          "median": 0.30316799879074097,
+          "min": 0.30105599761009216
+        },
+        "profile": {
+          "build_dtoh_per_run": 1,
+          "build_kernel_sum_ms_median": 10.678037,
+          "timed_cuda_api_per_run": {
+            "cuMemAlloc": 0,
+            "cuMemFree": 0,
+            "cuMemcpyDtoH": 2
+          },
+          "whole_iteration_dtoh_per_run": 7
+        },
+        "runs": 5,
+        "samples": {
+          "allocation_count": [
+            75,
+            75,
+            75,
+            75,
+            75
+          ],
+          "build_ms": [
+            13.318079948425291,
+            13.323776245117188,
+            13.346303939819336,
+            13.343232154846191,
+            13.346431732177734
+          ],
+          "dedup_ms": [
+            0.34303998947143555,
+            0.36032000184059143,
+            0.34729599952697754,
+            0.3421120047569275,
+            0.3440000116825104
+          ],
+          "kernel_ms": [
+            0.3102720081806183,
+            0.30294400453567505,
+            0.3070720136165619,
+            0.30105599761009216,
+            0.30316799879074097
+          ],
+          "peak_bytes": [
+            4395105352,
+            4395105352,
+            4395105352,
+            4395105352,
+            4395105352
+          ],
+          "total_ms": [
+            13.971391677856444,
+            13.98703956604004,
+            14.000672340393066,
+            13.98639965057373,
+            13.993599891662598
+          ]
+        },
+        "stage": "device-sizes",
+        "total_ms": {
+          "median": 13.98703956604004,
+          "min": 13.971391677856444
+        },
+        "warmups": 1
+      },
+      {
+        "answer_count": 72983,
+        "build_ms": {
+          "median": 12.38809585571289,
+          "min": 12.367232322692873
+        },
+        "commit": "f3b4b7d",
+        "dedup_ms": {
+          "median": 0.35123199224472046,
+          "min": 0.347135990858078
+        },
+        "exact": true,
+        "global_scan_dram_bytes": 15977472,
+        "kernel_ms": {
+          "median": 0.30003198981285095,
+          "min": 0.29996800422668457
+        },
+        "profile": {
+          "build_dtoh_per_run": 1,
+          "build_kernel_sum_ms_median": 9.7332,
+          "timed_cuda_api_per_run": {
+            "cuMemAlloc": 0,
+            "cuMemFree": 0,
+            "cuMemcpyDtoH": 2
+          },
+          "whole_iteration_dtoh_per_run": 7
+        },
+        "runs": 5,
+        "samples": {
+          "allocation_count": [
+            75,
+            75,
+            75,
+            75,
+            75
+          ],
+          "build_ms": [
+            12.372608184814451,
+            12.388192176818848,
+            12.367232322692873,
+            12.38809585571289,
+            12.407967567443848
+          ],
+          "dedup_ms": [
+            0.366784006357193,
+            0.3553920090198517,
+            0.35023999214172363,
+            0.35123199224472046,
+            0.347135990858078
+          ],
+          "kernel_ms": [
+            0.30003198981285095,
+            0.3012160062789917,
+            0.3041279911994934,
+            0.29996800422668457,
+            0.30003198981285095
+          ],
+          "peak_bytes": [
+            4397928884,
+            4397928884,
+            4397928884,
+            4397928884,
+            4397928884
+          ],
+          "total_ms": [
+            13.039423942565918,
+            13.0447998046875,
+            13.021599769592283,
+            13.03929615020752,
+            13.055135726928713
+          ]
+        },
+        "scan_dram_bytes": 473732224,
+        "stage": "word-scan",
+        "total_ms": {
+          "median": 13.039423942565918,
+          "min": 13.021599769592283
+        },
+        "warmups": 1
+      },
+      {
+        "answer_count": 72983,
+        "build_ms": {
+          "median": 9.47708797454834,
+          "min": 9.462656021118164
+        },
+        "commit": "bf34e9f",
+        "dedup_ms": {
+          "median": 0.35123199224472046,
+          "min": 0.3420479893684387
+        },
+        "exact": true,
+        "kernel_ms": {
+          "median": 0.3049600124359131,
+          "min": 0.3030399978160858
+        },
+        "profile": {
+          "build_dtoh_per_run": 1,
+          "build_kernel_sum_ms_median": 7.181522,
+          "timed_cuda_api_per_run": {
+            "cuMemAlloc": 0,
+            "cuMemFree": 0,
+            "cuMemcpyDtoH": 2
+          },
+          "whole_iteration_dtoh_per_run": 7
+        },
+        "runs": 5,
+        "samples": {
+          "allocation_count": [
+            75,
+            75,
+            75,
+            75,
+            75
+          ],
+          "build_ms": [
+            9.467616081237791,
+            9.462656021118164,
+            9.755135536193848,
+            9.882559776306152,
+            9.47708797454834
+          ],
+          "dedup_ms": [
+            0.3420479893684387,
+            0.35020801424980164,
+            0.4086720049381256,
+            0.4331519901752472,
+            0.35123199224472046
+          ],
+          "kernel_ms": [
+            0.3040960133075714,
+            0.30720001459121704,
+            0.3049600124359131,
+            0.3080640137195587,
+            0.3030399978160858
+          ],
+          "peak_bytes": [
+            4397928900,
+            4397928900,
+            4397928900,
+            4397928900,
+            4397928900
+          ],
+          "sorted_builds": [
+            [
+              "customer",
+              "supplier",
+              "lineitem"
+            ],
+            [
+              "customer",
+              "supplier",
+              "lineitem"
+            ],
+            [
+              "customer",
+              "supplier",
+              "lineitem"
+            ],
+            [
+              "customer",
+              "supplier",
+              "lineitem"
+            ],
+            [
+              "customer",
+              "supplier",
+              "lineitem"
+            ]
+          ],
+          "total_ms": [
+            10.113759994506836,
+            10.12006378173828,
+            10.468768119812012,
+            10.62377643585205,
+            10.131360054016112
+          ]
+        },
+        "scan_dram_bytes": 29904256,
+        "stage": "sorted",
+        "total_ms": {
+          "median": 10.131360054016112,
+          "min": 10.113759994506836
+        },
+        "warmups": 1
+      }
+    ],
+    "peak_mem_mib": 9608.0,
+    "peak_mem_scope": "cuMemGetInfo sampled after combined build metadata and dedup submission; includes reserved pool",
+    "plan": "B",
+    "pool_bytes": 8721138688,
+    "profile": {
+      "build_dtoh_per_run": 1,
+      "build_kernel_sum_ms_median": 7.181522,
+      "nsys_report": "/tmp/gpu-h05-after-sf10.nsys-rep",
+      "scope": "one warmup excluded; median of five build kernel sums; CUDA API counts exclude startup and shutdown; exactness downloads remain outside timed interval",
+      "timed_cuda_api_per_run": {
+        "cuMemAlloc": 0,
+        "cuMemFree": 0,
+        "cuMemcpyDtoH": 2
+      },
+      "whole_iteration_cuda_allocations": 0,
+      "whole_iteration_cuda_frees": 0,
+      "whole_iteration_dtoh_per_run": 7
+    },
+    "regs": null,
+    "runs": 5,
+    "samples": {
+      "allocation_count": [
+        75,
+        75,
+        75,
+        75,
+        75
+      ],
+      "build_ms": [
+        9.467616081237791,
+        9.462656021118164,
+        9.755135536193848,
+        9.882559776306152,
+        9.47708797454834
+      ],
+      "dedup_ms": [
+        0.3420479893684387,
+        0.35020801424980164,
+        0.4086720049381256,
+        0.4331519901752472,
+        0.35123199224472046
+      ],
+      "kernel_ms": [
+        0.3040960133075714,
+        0.30720001459121704,
+        0.3049600124359131,
+        0.3080640137195587,
+        0.3030399978160858
+      ],
+      "peak_bytes": [
+        4397928900,
+        4397928900,
+        4397928900,
+        4397928900,
+        4397928900
+      ],
+      "sorted_builds": [
+        [
+          "customer",
+          "supplier",
+          "lineitem"
+        ],
+        [
+          "customer",
+          "supplier",
+          "lineitem"
+        ],
+        [
+          "customer",
+          "supplier",
+          "lineitem"
+        ],
+        [
+          "customer",
+          "supplier",
+          "lineitem"
+        ],
+        [
+          "customer",
+          "supplier",
+          "lineitem"
+        ]
+      ],
+      "total_ms": [
+        10.113759994506836,
+        10.12006378173828,
+        10.468768119812012,
+        10.62377643585205,
+        10.131360054016112
+      ]
+    },
+    "scan_dram": {
+      "global_scan_bytes": 15972352,
+      "kernel_launches": 32,
+      "metric": "dram__bytes.sum",
+      "ncu_csv": "/tmp/gpu-h05-after-sf10-b-ncu.csv",
+      "pipeline_bytes": 29904256,
+      "scope": "first complete build iteration, ncu kernel replay; word_offsets + scan_blocks + add_prefix; excludes histogram and sorted adjacency kernels"
+    },
+    "scan_gbps": null,
+    "sf": 10,
+    "smem": 33808,
+    "sorted_path": "GPU adjacent-key nondecreasing check; device-gated histogram/scatter/heapsort; sorted adjacency builds bitmap and CSR",
+    "spills": null,
+    "total_ms": {
+      "median": 10.131360054016112,
+      "min": 10.113759994506836
+    },
+    "warmups": 1
+  },
+  {
+    "allocation_scope": "iteration including exactness readback copies; peak bytes includes persistent outputs, excludes input uploads",
+    "answer_count": 7242,
+    "bandwidth_model_gbps": 960,
+    "build_algorithm": "device-detected sorted adjacency or bitmap-word prefix counting sort with stable provenance heapsort",
+    "build_ms": {
+      "median": 3.9147520065307617,
+      "min": 3.8847360610961914
+    },
+    "dedup_algorithm": "exact packed-triple u64 CAS set",
+    "dedup_ms": {
+      "median": 0.5038080215454102,
+      "min": 0.4997119903564453
+    },
+    "exact": true,
+    "expansion_policy": "fixed-depth in-tile loop; no cross-block stealing",
+    "frontier_spill_required": false,
+    "kernel_ms": {
+      "median": 0.09529600292444229,
+      "min": 0.09494400024414062
+    },
+    "max_expansion_rows": [
+      0,
+      0
+    ],
+    "max_m_over_t": 0.0,
+    "merge_block_limit": 4,
+    "orders_date_bytes": 0,
+    "orders_key_customer_bytes": 3641552,
+    "orders_rows": 227597,
+    "peak_mem_mib": 1028.0,
+    "peak_mem_scope": "cuMemGetInfo sampled after combined build metadata and dedup submission; includes reserved pool",
+    "plan": "A",
+    "pool_bytes": 938031248,
+    "probe_mode": "point",
+    "regs": null,
+    "runs": 5,
+    "samples": {
+      "allocation_count": [
+        59,
+        59,
+        59,
+        59,
+        59
+      ],
+      "build_ms": [
+        3.9252800941467285,
+        3.8847360610961914,
+        3.8949759006500244,
+        3.9147520065307617,
+        3.931391954421997
+      ],
+      "dedup_ms": [
+        0.5038080215454102,
+        0.4997119903564453,
+        0.5048320293426514,
+        0.5038080215454102,
+        0.5058559775352478
+      ],
+      "kernel_ms": [
+        0.09529600292444229,
+        0.09494400024414062,
+        0.09523200243711472,
+        0.09625600278377533,
+        0.0960640013217926
+      ],
+      "peak_bytes": [
+        270072252,
+        270072252,
+        270072252,
+        270072252,
+        270072252
+      ],
+      "sorted_builds": [
+        [
+          "customer",
+          "supplier",
+          "orders_by_order"
+        ],
+        [
+          "customer",
+          "supplier",
+          "orders_by_order"
+        ],
+        [
+          "customer",
+          "supplier",
+          "orders_by_order"
+        ],
+        [
+          "customer",
+          "supplier",
+          "orders_by_order"
+        ],
+        [
+          "customer",
+          "supplier",
+          "orders_by_order"
+        ]
+      ],
+      "total_ms": [
+        4.524384021759033,
+        4.479392051696777,
+        4.495039939880371,
+        4.514815807342529,
+        4.53331184387207
+      ]
+    },
+    "scan_gbps": 1007.591473444393,
+    "sf": 1,
+    "smem": 9216,
+    "sorted_path": "GPU adjacent-key nondecreasing check; device-gated histogram/scatter/heapsort; sorted adjacency builds bitmap and CSR",
+    "spills": null,
+    "total_ms": {
+      "median": 4.514815807342529,
+      "min": 4.479392051696777
+    },
+    "unfiltered_orders": false,
+    "warmups": 1
+  },
+  {
+    "answer_count": 7242,
+    "build_ms": {
+      "median": 7.130848050117493,
+      "min": 7.0713600516319275
+    },
+    "dedup_ms": {
+      "median": 0.6202239990234375,
+      "min": 0.6167359948158264
+    },
+    "exact": true,
+    "handwritten_sf10_total_ms": 6.2,
+    "implementation": "cq_gpu::print",
+    "kernel_ms": {
+      "median": 3.867456018924713,
+      "min": 3.859712064266205
+    },
+    "plan": "A",
+    "runs": 5,
+    "samples": {
+      "build_ms": [
+        7.1942079067230225,
+        7.0713600516319275,
+        7.330943942070007,
+        7.130848050117493,
+        7.092191994190216
+      ],
+      "dedup_ms": [
+        0.6202239990234375,
+        0.6167359948158264,
+        0.6289920210838318,
+        0.6282879710197449,
+        0.6183040142059326
+      ],
+      "kernel_ms": [
+        3.864512026309967,
+        3.9016639292240143,
+        3.9144000709056854,
+        3.859712064266205,
+        3.867456018924713
+      ],
+      "total_ms": [
+        11.678943932056429,
+        11.589759975671768,
+        11.874336034059525,
+        11.618848085403442,
+        11.577952027320862
+      ],
+      "wall_ms": [
+        253.988343,
+        254.642335,
+        257.430447,
+        263.667487,
+        258.042169
+      ]
+    },
+    "sf": 1,
+    "timing_scope": "GPU builds, query kernels and exact device dedup; host columnization, upload and answer download excluded; wall_ms includes all execution work",
+    "total_ms": {
+      "median": 11.618848085403442,
+      "min": 11.577952027320862
+    },
+    "wall_ms": {
+      "median": 257.430447,
+      "min": 253.988343
+    },
+    "warmups": 1,
+    "kernel_resources": {
+      "cq_gpu_stream_0_r11": {
+        "stack_bytes": 0,
+        "spill_stores_bytes": 0,
+        "spill_loads_bytes": 0,
+        "registers": 34
+      },
+      "cq_gpu_stream_0_r21": {
+        "stack_bytes": 40,
+        "spill_stores_bytes": 44,
+        "spill_loads_bytes": 36,
+        "registers": 40
+      },
+      "cq_gpu_stream_0_r3": {
+        "stack_bytes": 0,
+        "spill_stores_bytes": 0,
+        "spill_loads_bytes": 0,
+        "registers": 34
+      },
+      "cq_gpu_stream_0_r8": {
+        "stack_bytes": 0,
+        "spill_stores_bytes": 0,
+        "spill_loads_bytes": 0,
+        "registers": 34
+      },
+      "cq_gpu_stream_0_r5": {
+        "stack_bytes": 0,
+        "spill_stores_bytes": 0,
+        "spill_loads_bytes": 0,
+        "registers": 34
+      },
+      "cq_gpu_stream_0_r2": {
+        "stack_bytes": 0,
+        "spill_stores_bytes": 0,
+        "spill_loads_bytes": 0,
+        "registers": 32
+      }
+    },
+    "main_kernel": "cq_gpu_stream_0_r21",
+    "regs": 40,
+    "spills": {
+      "stores_bytes": 44,
+      "loads_bytes": 36
+    },
+    "pipeline": {
+      "plan": "cq_planners::order(le)",
+      "physical": [
+        "cq_rewrites::build_host_reads"
+      ],
+      "structures": [
+        "cq_rewrites::sorted_runs",
+        "cq_gpu::prefix_runs",
+        "cq_rewrites::retain_lookups",
+        "cq_rewrites::retype(dedup => cq_gpu_runtime::DeviceSet<_>)"
+      ],
+      "print": "cq_gpu::print"
+    },
+    "ptxas_audit": "gpu_h05_compiled.ptxas.txt"
+  },
+  {
+    "answer_count": 7242,
+    "build_ms": {
+      "median": 8.361919820308685,
+      "min": 8.30703991651535
+    },
+    "dedup_ms": {
+      "median": 0.6312959790229797,
+      "min": 0.6176959872245789
+    },
+    "exact": true,
+    "handwritten_sf10_total_ms": 10.1,
+    "implementation": "cq_gpu::print",
+    "kernel_ms": {
+      "median": 5.683968007564545,
+      "min": 5.644767999649048
+    },
+    "plan": "B",
+    "runs": 5,
+    "samples": {
+      "build_ms": [
+        8.349408030509949,
+        9.035743951797484,
+        8.30703991651535,
+        8.371520042419434,
+        8.361919820308685
+      ],
+      "dedup_ms": [
+        0.6312959790229797,
+        0.6347519755363464,
+        0.638047993183136,
+        0.6296319961547852,
+        0.6176959872245789
+      ],
+      "kernel_ms": [
+        5.644767999649048,
+        5.659999966621399,
+        5.7354240119457245,
+        5.699136048555374,
+        5.683968007564545
+      ],
+      "total_ms": [
+        14.625472009181976,
+        15.33049589395523,
+        14.68051192164421,
+        14.700288087129591,
+        14.663583815097809
+      ],
+      "wall_ms": [
+        278.594268,
+        259.03998099999995,
+        258.031088,
+        262.710163,
+        259.317613
+      ]
+    },
+    "sf": 1,
+    "timing_scope": "GPU builds, query kernels and exact device dedup; host columnization, upload and answer download excluded; wall_ms includes all execution work",
+    "total_ms": {
+      "median": 14.68051192164421,
+      "min": 14.625472009181976
+    },
+    "wall_ms": {
+      "median": 259.317613,
+      "min": 258.031088
+    },
+    "warmups": 1,
+    "kernel_resources": {
+      "cq_gpu_stream_1_r7": {
+        "stack_bytes": 0,
+        "spill_stores_bytes": 0,
+        "spill_loads_bytes": 0,
+        "registers": 34
+      },
+      "cq_gpu_stream_1_r9": {
+        "stack_bytes": 0,
+        "spill_stores_bytes": 0,
+        "spill_loads_bytes": 0,
+        "registers": 34
+      },
+      "cq_gpu_stream_1_r2": {
+        "stack_bytes": 0,
+        "spill_stores_bytes": 0,
+        "spill_loads_bytes": 0,
+        "registers": 32
+      },
+      "cq_gpu_stream_1_r19": {
+        "stack_bytes": 40,
+        "spill_stores_bytes": 44,
+        "spill_loads_bytes": 36,
+        "registers": 40
+      },
+      "cq_gpu_stream_1_r15": {
+        "stack_bytes": 0,
+        "spill_stores_bytes": 0,
+        "spill_loads_bytes": 0,
+        "registers": 34
+      },
+      "cq_gpu_stream_1_r3": {
+        "stack_bytes": 0,
+        "spill_stores_bytes": 0,
+        "spill_loads_bytes": 0,
+        "registers": 34
+      }
+    },
+    "main_kernel": "cq_gpu_stream_1_r19",
+    "regs": 40,
+    "spills": {
+      "stores_bytes": 44,
+      "loads_bytes": 36
+    },
+    "pipeline": {
+      "plan": "cq_planners::order(le)",
+      "physical": [
+        "cq_rewrites::build_host_reads"
+      ],
+      "structures": [
+        "cq_rewrites::sorted_runs",
+        "cq_gpu::prefix_runs",
+        "cq_rewrites::retain_lookups",
+        "cq_rewrites::retype(dedup => cq_gpu_runtime::DeviceSet<_>)"
+      ],
+      "print": "cq_gpu::print"
+    },
+    "ptxas_audit": "gpu_h05_compiled.ptxas.txt"
+  },
+  {
+    "answer_count": 72983,
+    "build_ms": {
+      "median": 9.435487926006317,
+      "min": 9.414592146873474
+    },
+    "dedup_ms": {
+      "median": 0.6439359784126282,
+      "min": 0.6291840076446533
+    },
+    "exact": true,
+    "handwritten_sf10_total_ms": 6.2,
+    "implementation": "cq_gpu::print",
+    "kernel_ms": {
+      "median": 8.980031907558441,
+      "min": 8.966592252254486
+    },
+    "plan": "A",
+    "runs": 5,
+    "samples": {
+      "build_ms": [
+        9.435487926006317,
+        9.414592146873474,
+        9.619520246982574,
+        9.48336011171341,
+        9.41891211271286
+      ],
+      "dedup_ms": [
+        0.630079984664917,
+        0.6446400284767151,
+        0.7210239768028259,
+        0.6439359784126282,
+        0.6291840076446533
+      ],
+      "kernel_ms": [
+        8.966592252254486,
+        8.980031907558441,
+        9.476383924484253,
+        9.00710380077362,
+        8.968128114938736
+      ],
+      "total_ms": [
+        19.03216016292572,
+        19.03926408290863,
+        19.816928148269653,
+        19.134399890899658,
+        19.01622423529625
+      ],
+      "wall_ms": [
+        1079.851386,
+        1149.596006,
+        1166.923175,
+        1109.810406,
+        1164.580846
+      ]
+    },
+    "sf": 10,
+    "timing_scope": "GPU builds, query kernels and exact device dedup; host columnization, upload and answer download excluded; wall_ms includes all execution work",
+    "total_ms": {
+      "median": 19.03926408290863,
+      "min": 19.01622423529625
+    },
+    "wall_ms": {
+      "median": 1149.596006,
+      "min": 1079.851386
+    },
+    "warmups": 1,
+    "kernel_resources": {
+      "cq_gpu_stream_0_r11": {
+        "stack_bytes": 0,
+        "spill_stores_bytes": 0,
+        "spill_loads_bytes": 0,
+        "registers": 34
+      },
+      "cq_gpu_stream_0_r21": {
+        "stack_bytes": 40,
+        "spill_stores_bytes": 44,
+        "spill_loads_bytes": 36,
+        "registers": 40
+      },
+      "cq_gpu_stream_0_r3": {
+        "stack_bytes": 0,
+        "spill_stores_bytes": 0,
+        "spill_loads_bytes": 0,
+        "registers": 34
+      },
+      "cq_gpu_stream_0_r8": {
+        "stack_bytes": 0,
+        "spill_stores_bytes": 0,
+        "spill_loads_bytes": 0,
+        "registers": 34
+      },
+      "cq_gpu_stream_0_r5": {
+        "stack_bytes": 0,
+        "spill_stores_bytes": 0,
+        "spill_loads_bytes": 0,
+        "registers": 34
+      },
+      "cq_gpu_stream_0_r2": {
+        "stack_bytes": 0,
+        "spill_stores_bytes": 0,
+        "spill_loads_bytes": 0,
+        "registers": 32
+      }
+    },
+    "main_kernel": "cq_gpu_stream_0_r21",
+    "regs": 40,
+    "spills": {
+      "stores_bytes": 44,
+      "loads_bytes": 36
+    },
+    "pipeline": {
+      "plan": "cq_planners::order(le)",
+      "physical": [
+        "cq_rewrites::build_host_reads"
+      ],
+      "structures": [
+        "cq_rewrites::sorted_runs",
+        "cq_gpu::prefix_runs",
+        "cq_rewrites::retain_lookups",
+        "cq_rewrites::retype(dedup => cq_gpu_runtime::DeviceSet<_>)"
+      ],
+      "print": "cq_gpu::print"
+    },
+    "ptxas_audit": "gpu_h05_compiled.ptxas.txt"
+  },
+  {
+    "answer_count": 72983,
+    "build_ms": {
+      "median": 24.371008217334747,
+      "min": 24.195392191410065
+    },
+    "dedup_ms": {
+      "median": 0.7298880219459534,
+      "min": 0.6611520051956177
+    },
+    "exact": true,
+    "handwritten_sf10_total_ms": 10.1,
+    "implementation": "cq_gpu::print",
+    "kernel_ms": {
+      "median": 92.6015052497387,
+      "min": 92.17721304297447
+    },
+    "plan": "B",
+    "runs": 5,
+    "samples": {
+      "build_ms": [
+        24.195392191410065,
+        24.371008217334747,
+        24.426144242286682,
+        24.599679708480835,
+        24.221503853797913
+      ],
+      "dedup_ms": [
+        0.8863040208816528,
+        0.7240639925003052,
+        0.6611520051956177,
+        0.7298880219459534,
+        0.7450559735298157
+      ],
+      "kernel_ms": [
+        92.70873793959618,
+        92.17721304297447,
+        92.6015052497387,
+        92.63158065080643,
+        92.50012671947479
+      ],
+      "total_ms": [
+        117.7904341518879,
+        117.27228525280952,
+        117.688801497221,
+        117.96114838123322,
+        117.46668654680252
+      ],
+      "wall_ms": [
+        1285.0361269999999,
+        1237.856592,
+        1248.306734,
+        1235.264354,
+        1242.538771
+      ]
+    },
+    "sf": 10,
+    "timing_scope": "GPU builds, query kernels and exact device dedup; host columnization, upload and answer download excluded; wall_ms includes all execution work",
+    "total_ms": {
+      "median": 117.688801497221,
+      "min": 117.27228525280952
+    },
+    "wall_ms": {
+      "median": 1242.538771,
+      "min": 1235.264354
+    },
+    "warmups": 1,
+    "kernel_resources": {
+      "cq_gpu_stream_1_r7": {
+        "stack_bytes": 0,
+        "spill_stores_bytes": 0,
+        "spill_loads_bytes": 0,
+        "registers": 34
+      },
+      "cq_gpu_stream_1_r9": {
+        "stack_bytes": 0,
+        "spill_stores_bytes": 0,
+        "spill_loads_bytes": 0,
+        "registers": 34
+      },
+      "cq_gpu_stream_1_r2": {
+        "stack_bytes": 0,
+        "spill_stores_bytes": 0,
+        "spill_loads_bytes": 0,
+        "registers": 32
+      },
+      "cq_gpu_stream_1_r19": {
+        "stack_bytes": 40,
+        "spill_stores_bytes": 44,
+        "spill_loads_bytes": 36,
+        "registers": 40
+      },
+      "cq_gpu_stream_1_r15": {
+        "stack_bytes": 0,
+        "spill_stores_bytes": 0,
+        "spill_loads_bytes": 0,
+        "registers": 34
+      },
+      "cq_gpu_stream_1_r3": {
+        "stack_bytes": 0,
+        "spill_stores_bytes": 0,
+        "spill_loads_bytes": 0,
+        "registers": 34
+      }
+    },
+    "main_kernel": "cq_gpu_stream_1_r19",
+    "regs": 40,
+    "spills": {
+      "stores_bytes": 44,
+      "loads_bytes": 36
+    },
+    "pipeline": {
+      "plan": "cq_planners::order(le)",
+      "physical": [
+        "cq_rewrites::build_host_reads"
+      ],
+      "structures": [
+        "cq_rewrites::sorted_runs",
+        "cq_gpu::prefix_runs",
+        "cq_rewrites::retain_lookups",
+        "cq_rewrites::retype(dedup => cq_gpu_runtime::DeviceSet<_>)"
+      ],
+      "print": "cq_gpu::print"
+    },
+    "ptxas_audit": "gpu_h05_compiled.ptxas.txt"
+  }
+]

@@ -1,0 +1,358 @@
+=========================================
+RUSTC-CODEGEN-CUDA CARGO build
+=========================================
+
+Running cargo build --release -p gpu-datalog-ddisasm -p gpu-h05-compiled -p gpu-device-columns-oracle -p gpu-datalog-oracle --bin gpu-datalog-ddisasm --bin printer-oracle --bin datalog-runtime-oracle --bin gpu-datalog-oracle --bin string-dictionary --features cq-gpu-runtime/nvtx...
+
+   Compiling cq-gpu-datalog v0.1.0 (/data/mini_linq/experiments/gpu/datalog)
+warning: `#[inline]` is ignored on externally exported functions
+  --> tiles/src/lib.rs:22:1
+   |
+22 | #[inline(always)]
+   | ^^^^^^^^^^^^^^^^^
+   |
+   = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+   = note: `#[warn(unused_attributes)]` (part of `#[warn(unused)]`) on by default
+
+warning: `#[inline]` is ignored on externally exported functions
+  --> tiles/src/lib.rs:78:1
+   |
+78 | #[inline(always)]
+   | ^^^^^^^^^^^^^^^^^
+   |
+   = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> tiles/src/lib.rs:102:1
+    |
+102 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> tiles/src/lib.rs:127:1
+    |
+127 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> tiles/src/lib.rs:175:1
+    |
+175 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `gpu-tiles` (lib) generated 5 warnings
+warning: `#[inline]` is ignored on externally exported functions
+  --> device-columns/src/device.rs:46:1
+   |
+46 | #[inline(always)]
+   | ^^^^^^^^^^^^^^^^^
+   |
+   = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+   = note: `#[warn(unused_attributes)]` (part of `#[warn(unused)]`) on by default
+
+warning: `#[inline]` is ignored on externally exported functions
+  --> device-columns/src/device.rs:56:1
+   |
+56 | #[inline(always)]
+   | ^^^^^^^^^^^^^^^^^
+   |
+   = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+  --> device-columns/src/device.rs:66:1
+   |
+66 | #[inline(always)]
+   | ^^^^^^^^^^^^^^^^^
+   |
+   = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+  --> device-columns/src/device.rs:76:1
+   |
+76 | #[inline(always)]
+   | ^^^^^^^^^^^^^^^^^
+   |
+   = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> device-columns/src/device.rs:102:1
+    |
+102 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> device-columns/src/device.rs:132:1
+    |
+132 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> device-columns/src/device.rs:145:1
+    |
+145 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> device-columns/src/device.rs:169:1
+    |
+169 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> device-columns/src/device.rs:210:1
+    |
+210 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> device-columns/src/device.rs:281:1
+    |
+281 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> device-columns/src/device.rs:358:1
+    |
+358 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> device-columns/src/device.rs:387:1
+    |
+387 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `DynamicSharedArray` returns CUDA dynamic shared memory; make sure the kernel launch config provides enough `shared_mem_bytes`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> blocked-run/src/lib.rs:126:1
+    |
+126 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+    = note: `#[warn(unused_attributes)]` (part of `#[warn(unused)]`) on by default
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> blocked-run/src/lib.rs:815:5
+    |
+815 |     #[inline(always)]
+    |     ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `gpu-device-columns` (lib) generated 13 warnings
+warning: `gpu-blocked-run` (lib) generated 3 warnings (1 duplicate)
+   Compiling cq-gpu-runtime v0.1.0 (/data/mini_linq/experiments/gpu/printer-runtime)
+warning: `#[inline]` is ignored on externally exported functions
+  --> printer-runtime/src/device.rs:30:1
+   |
+30 | #[inline(always)]
+   | ^^^^^^^^^^^^^^^^^
+   |
+   = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+   = note: `#[warn(unused_attributes)]` (part of `#[warn(unused)]`) on by default
+
+warning: `#[inline]` is ignored on externally exported functions
+  --> printer-runtime/src/device.rs:64:1
+   |
+64 | #[inline(always)]
+   | ^^^^^^^^^^^^^^^^^
+   |
+   = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> printer-runtime/src/device.rs:131:1
+    |
+131 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> printer-runtime/src/device.rs:136:1
+    |
+136 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> printer-runtime/src/device.rs:143:1
+    |
+143 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> printer-runtime/src/device.rs:165:1
+    |
+165 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> printer-runtime/src/device.rs:177:1
+    |
+177 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> printer-runtime/src/device.rs:183:1
+    |
+183 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> printer-runtime/src/device.rs:190:1
+    |
+190 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> printer-runtime/src/device.rs:204:1
+    |
+204 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> printer-runtime/src/device.rs:216:1
+    |
+216 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> printer-runtime/src/device.rs:221:1
+    |
+221 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> printer-runtime/src/device.rs:226:1
+    |
+226 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> printer-runtime/src/device.rs:238:1
+    |
+238 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> printer-runtime/src/device.rs:271:1
+    |
+271 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> printer-runtime/src/device.rs:305:1
+    |
+305 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> printer-runtime/src/device.rs:312:1
+    |
+312 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> printer-runtime/src/device.rs:447:1
+    |
+447 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> printer-runtime/src/device.rs:452:1
+    |
+452 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: `#[inline]` is ignored on externally exported functions
+   --> printer-runtime/src/device.rs:457:1
+    |
+457 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^
+    |
+    = help: externally exported functions are functions with `#[no_mangle]`, `#[export_name]`, or `#[linkage]`
+
+warning: unused attribute
+   --> printer-runtime/src/device.rs:252:1
+    |
+252 | #[inline(always)]
+    | ^^^^^^^^^^^^^^^^^ help: remove this attribute
+    |
+note: attribute also specified here
+   --> printer-runtime/src/device.rs:251:1
+    |
+251 | #[device]
+    | ^^^^^^^^^
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: this warning originates in the attribute macro `device` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: `cq-gpu-runtime` (lib) generated 21 warnings (run `cargo fix --lib -p cq-gpu-runtime` to apply 1 suggestion)
+   Compiling gpu-datalog-oracle v0.1.0 (/data/mini_linq/experiments/gpu/datalog-oracle)
+   Compiling gpu-datalog-ddisasm v0.1.0 (/data/mini_linq/experiments/gpu/datalog-ddisasm)
+   Compiling gpu-h05-compiled v0.1.0 (/data/mini_linq/experiments/gpu/h05-compiled)
+   Compiling gpu-device-columns-oracle v0.1.0 (/data/mini_linq/experiments/gpu/device-columns-oracle)
+warning: `gpu-datalog-oracle` (bin "string-dictionary") generated 1 warning (1 duplicate)
+warning: `gpu-h05-compiled` (bin "printer-oracle") generated 1 warning (1 duplicate)
+warning: `gpu-datalog-oracle` (bin "gpu-datalog-oracle") generated 1 warning (1 duplicate)
+warning: `gpu-datalog-ddisasm` (bin "gpu-datalog-ddisasm") generated 1 warning (1 duplicate)
+    Finished `release` profile [optimized] target(s) in 23.83s
+
+✓ Cargo build succeeded
+
+
+Wall time: 24.05 seconds
