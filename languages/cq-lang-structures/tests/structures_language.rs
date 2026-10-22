@@ -980,3 +980,51 @@ fn witness_cannot_escape_into_fused_prefix() {
     let error = structures::contract::check(&p).unwrap_err().to_string();
     assert!(error.contains("witness s for b escapes at s"), "{error}");
 }
+
+#[test]
+fn canonical_consumer_accepts_bag_return_and_forbids_head_dedup() {
+    let program: structures::Program = syn::parse_quote! {
+        physical {
+            relation R(a:i32);
+            consumer canonical;
+            r = pipe rename R@0 {a -> x};
+            return r as answer(*x % 2);
+        }
+        structures { r host scan = ::core::iter::Map<_,_> []; }
+    };
+    let facts = structures::contract::check(&program).unwrap();
+    assert!(!facts.unique.contains_key("r"));
+    assert!(!structures::head_needs_dedup(
+        &program.physical,
+        &facts.physical
+    ));
+    assert!(facts.head_dedup.is_empty());
+    let mut missing = program.clone();
+    missing.physical.program.consumer_canonical = None;
+    assert!(structures::contract::check(&missing).is_err());
+    let mut invalid = program;
+    invalid.structures.entries.push(syn::parse_quote!(
+        r head = ::std::collections::HashSet<_>;
+    ));
+    assert!(structures::contract::check(&invalid).is_err());
+}
+
+#[test]
+fn discharged_host_uniqueness_does_not_survive_a_lossy_projection() {
+    let program: structures::Program = syn::parse_quote! {
+        physical {
+            relation R(a:i32,b:i32);
+            host_set R discharged;
+            r = pipe rename R@0 {a -> x,b -> y};
+            p = pipe project r keep {x,y};
+            return p as answer(x,y);
+        }
+        structures { r host scan = ::core::iter::Map<_,_> []; }
+    };
+    let facts = structures::contract::check(&program).unwrap();
+    assert_eq!(facts.unique["p"], ["x", "y"]);
+    let mut lossy = program;
+    lossy.physical.program.definitions[1] = syn::parse_quote!(p = pipe project r keep {x};);
+    lossy.physical.program.head = syn::parse_quote!(answer(x));
+    assert!(structures::contract::check(&lossy).is_err());
+}

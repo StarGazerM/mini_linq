@@ -405,6 +405,7 @@ fn error<T>(spanned: &impl quote::ToTokens, message: impl std::fmt::Display) -> 
 /// Formal rule WF-Structures: Check entries, read coverage and inferred canonical return.
 /// Formal rule STR-Key: Answer probe and semi reads by host dispatch or a built level prefix.
 /// Formal rule STR-Merge: Answer each merge side by ordered storage or a same-key merge pipe.
+/// Formal rule CK-Return: A canonical consumer may own the returned set boundary.
 fn analyze(program: &Program) -> syn::Result<Analysis> {
     let module = &program.structures;
     let mut analysis = Analysis {
@@ -549,7 +550,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                         {
                             return error(
                                 entry,
-                                "head dedup requires a noninjective computed head",
+                                "head dedup requires a noninjective computed head without a canonical consumer",
                             );
                         }
                         &mut analysis.head_dedup
@@ -891,7 +892,10 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
         }
     }
     let returned = symbol_name(&program.physical.program.returned);
-    if !analysis.unique.contains_key(&returned) && program.physical.program.return_canon.is_none() {
+    if !analysis.unique.contains_key(&returned)
+        && program.physical.program.return_canon.is_none()
+        && !analysis.physical.consumer_canonical
+    {
         return error(
             &module.structures_token,
             format!(
@@ -915,6 +919,9 @@ pub use cq_syntax as syntax;
 
 /// Whether computed answers can collapse distinct canonical valuations.
 pub fn head_needs_dedup(program: &physical::Program, facts: &physical::Analysis) -> bool {
+    if facts.consumer_canonical {
+        return false;
+    }
     if program.program.return_canon.is_some() {
         return true;
     }
@@ -980,6 +987,9 @@ mod filtered;
 pub use filtered::{required_columns, selection_constants};
 
 impl cq_stage::Language for Program {
+    fn context(&self) -> cq_stage::Context {
+        cq_stage::Language::context(&self.physical)
+    }
     fn check(&self) -> syn::Result<()> {
         contract::check(self).map(|_| ())
     }

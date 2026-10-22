@@ -335,3 +335,65 @@ fn computed_branch_merges_use_the_retained_ordered_index() {
     );
     run(quote!(fn main() { #check }));
 }
+
+#[test]
+fn canonical_consumer_receives_duplicate_witnesses_without_local_answer_sets() {
+    let mut checks = Vec::new();
+    for head in [quote!(a), quote!(*a % 2)] {
+        let physical = syn::parse2(quote! {
+            physical {
+                relation R(a:i32);
+                consumer canonical;
+                r = pipe rename R@0 {a -> a};
+                return r as answer(#head);
+            }
+        })
+        .unwrap();
+        let structures = cq_structure_selection::compile(&physical).unwrap();
+        let sequence = cq_sequence_lowering::compile(&structures).unwrap();
+        let analysis = contract::check(&sequence).unwrap();
+        let output = cq_sequence_pull::translate(&sequence, &analysis).unwrap();
+        let pull = cq_physical_realization::compile(&structures).unwrap();
+        for expression in [&output, &pull] {
+            let printed = expression.to_token_stream().to_string();
+            assert!(!printed.contains("__cq_seen"), "{printed}");
+            assert!(!printed.contains("HashSet"), "{printed}");
+        }
+        checks.push(quote! {
+            {
+                let R = [(1i32,), (1,), (3,)];
+                let rows = #output;
+                assert_eq!(rows.len(), 3);
+                let rows: Vec<_> = (#pull).collect();
+                assert_eq!(rows.len(), 3);
+            }
+        });
+    }
+    run(quote!(fn main() { #(#checks)* }));
+}
+
+#[test]
+fn canonical_consumer_preserves_internal_canon() {
+    let physical = syn::parse_quote! {
+        physical {
+            relation R(a:i32,b:i32);
+            consumer canonical;
+            r = pipe canon rename R@0 {a -> a,b -> b};
+            p = pipe project r keep {a};
+            return p as answer(a);
+        }
+    };
+    let structures = cq_structure_selection::compile(&physical).unwrap();
+    let sequence = cq_sequence_lowering::compile(&structures).unwrap();
+    let analysis = contract::check(&sequence).unwrap();
+    let output = cq_sequence_pull::translate(&sequence, &analysis).unwrap();
+    let printed = output.to_token_stream().to_string();
+    assert_eq!(printed.matches("let mut __cq_seen").count(), 1, "{printed}");
+    run(quote! {
+        fn main() {
+            let R = [(1i32, 10i32), (1, 10), (1, 20)];
+            let rows = #output;
+            assert_eq!(rows, vec![(&1i32,), (&1i32,)]);
+        }
+    });
+}

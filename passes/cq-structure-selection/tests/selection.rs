@@ -750,3 +750,37 @@ fn a_later_merge_does_not_remove_an_earlier_scan_requirement() {
         .retain(|e| e.name != "r" || !matches!(e.structure, structures::Structure::Rows { .. }));
     assert!(check(&source, &bad).is_err());
 }
+
+#[test]
+fn selection_records_context_before_choosing_dedup_types() {
+    let source: physical::Program = syn::parse_quote! { physical {
+        relation R(a:i32);
+        r = pipe canon rename R@0 {a -> x};
+        return r as answer(*x % 2);
+    }};
+    let selected = cq_structure_selection::compile_with(
+        &source,
+        quote::quote!(consumer = canonical, host_set R discharged,),
+    )
+    .unwrap();
+    let facts = structures::contract::check(&selected).unwrap();
+    assert!(facts.physical.consumer_canonical);
+    assert!(facts.physical.discharged_host_sets.contains("R"));
+    assert!(facts.dedup.is_empty());
+    assert!(facts.head_dedup.is_empty());
+    assert!(selected.physical.program.definitions[0].canon.is_none());
+    check(&selected.physical, &selected).unwrap();
+    assert!(check(&source, &selected).is_err());
+    let context = cq_structure_selection::context(quote::quote!(
+        host_set R discharged, positional(R), consumer = canonical,
+    ))
+    .unwrap();
+    assert!(context.consumer_canonical);
+    assert!(context.discharged_host_sets.contains("R"));
+    let ordinary = compile(&source).unwrap();
+    let empty = cq_structure_selection::compile_with(&source, Default::default()).unwrap();
+    assert_eq!(
+        ordinary.to_token_stream().to_string(),
+        empty.to_token_stream().to_string()
+    );
+}

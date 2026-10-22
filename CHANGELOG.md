@@ -7,6 +7,13 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Physical context facts support `host_set R discharged;` and
+  `consumer canonical;` for checked stacked compilers. Lower/select argument
+  packets record the assumptions; factful re-entry requires an exact explicit
+  context envelope, regenerated from each checked pass's recorded output facts.
+  Discharged host sets skip runtime certification, and canonical consumers own
+  the returned set boundary without changing internal canonicalization.
+
 - `cq-datalog-testkit` executes each Datalog IR's meaning: `eval_incremental`
   (semi-naive round system, the only evaluation scheme) and `eval_round`
   (recorded phases, holes with native partial-Rust bodies). Pass, plug-in and

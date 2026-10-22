@@ -7,7 +7,8 @@
 //! premises. IX demands and relational erasure belong to the lowering pass.
 //!
 //! ```text
-//! Program ::= "physical" "{" RelationDecl* Definition* "return" Ident "as" Atom ";" "}"
+//! Program ::= "physical" "{" RelationDecl* Fact* Definition* "return" ["canon"] Ident "as" Atom ";" "}"
+//! Fact ::= "host_set" Ident ["discharged"] ";" | "consumer" "canonical" ";"
 //! Definition ::= Ident "=" Mode ["canon"] Operator ";"
 //! Mode ::= "pipe" | "let"
 //! Operator ::= Unit | Rename | Select | Point | Range | Bind | Guard | Project
@@ -45,6 +46,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use syn::{Ident, Token, token};
 
+pub use cq_stage::Context;
 pub use cq_syntax::{CommaList, symbol_name};
 pub mod kw {
     pub use cq_syntax::algebra::kw::*;
@@ -65,6 +67,9 @@ pub mod kw {
     syn::custom_keyword!(all);
     syn::custom_keyword!(fused);
     syn::custom_keyword!(host_set);
+    syn::custom_keyword!(discharged);
+    syn::custom_keyword!(consumer);
+    syn::custom_keyword!(canonical);
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -76,15 +81,14 @@ pub struct Program {
     pub program: Body,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::ToTokens)]
 pub struct Body {
-    #[parse(cq_syntax::parse_declarations)]
     #[to_tokens(|tokens, declarations| quote::TokenStreamExt::append_all(tokens, declarations))]
     pub declarations: Vec<cq_syntax::RelationDecl>,
-    #[parse(parse_host_sets)]
     #[to_tokens(|tokens, facts| quote::TokenStreamExt::append_all(tokens, facts))]
     pub host_sets: Vec<HostSet>,
-    #[syn(repeat, until = Token![return])]
+    pub consumer_canonical: Option<ConsumerCanonical>,
+    #[to_tokens(|tokens, definitions| quote::TokenStreamExt::append_all(tokens, definitions))]
     pub definitions: Vec<Definition>,
     pub return_token: Token![return],
     pub return_canon: Option<kw::canon>,
@@ -94,12 +98,13 @@ pub struct Body {
     pub return_semi: Token![;],
 }
 
-/// A checked full-heading host uniqueness fact. Printers must certify the
-/// actual input before executing any plan that relies on this fact.
+/// A full-heading host uniqueness fact, certified at runtime unless its
+/// invoking compiler has discharged the obligation.
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct HostSet {
     pub host_set_token: kw::host_set,
     pub relation: Ident,
+    pub discharged: Option<kw::discharged>,
     pub semi_token: Token![;],
 }
 
@@ -111,12 +116,166 @@ impl Body {
     }
 }
 
-fn parse_host_sets(input: syn::parse::ParseStream<'_>) -> syn::Result<Vec<HostSet>> {
-    let mut facts = Vec::new();
-    while input.peek(kw::host_set) {
-        facts.push(input.parse()?);
+/// Formal rule CTX-Consumer: The invoking consumer owns the returned set boundary.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct ConsumerCanonical {
+    pub consumer_token: kw::consumer,
+    pub canonical_token: kw::canonical,
+    pub semi_token: Token![;],
+}
+
+impl syn::parse::Parse for Body {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let declarations = cq_syntax::parse_declarations(input)?;
+        let mut host_sets = Vec::new();
+        let mut consumer_canonical = None;
+        while input.peek(kw::host_set) || input.peek(kw::consumer) {
+            if input.peek(kw::host_set) {
+                host_sets.push(input.parse()?);
+            } else {
+                let fact: ConsumerCanonical = input.parse()?;
+                if consumer_canonical.replace(fact).is_some() {
+                    return Err(input.error("duplicate consumer canonical fact"));
+                }
+            }
+        }
+        let mut definitions = Vec::new();
+        while !input.peek(Token![return]) && !input.is_empty() {
+            definitions.push(input.parse()?);
+        }
+        Ok(Self {
+            declarations,
+            host_sets,
+            consumer_canonical,
+            definitions,
+            return_token: input.parse()?,
+            return_canon: input.parse()?,
+            returned: input.parse()?,
+            as_token: input.parse()?,
+            head: input.parse()?,
+            return_semi: input.parse()?,
+        })
     }
-    Ok(facts)
+}
+
+/// Explicit context arguments shared by lowering and structure selection.
+/// Facts are comma-separated: `consumer = canonical, host_set R discharged`.
+#[derive(Clone, Debug, Default)]
+pub struct FactPacket {
+    pub host_sets: Vec<HostSet>,
+    pub consumer_canonical: Option<ConsumerCanonical>,
+}
+
+impl FactPacket {
+    /// The discharged assumptions authorized by this packet.
+    pub fn context(&self) -> cq_stage::Context {
+        cq_stage::Context {
+            consumer_canonical: self.consumer_canonical.is_some(),
+            discharged_host_sets: self
+                .host_sets
+                .iter()
+                .filter(|fact| fact.discharged.is_some())
+                .map(|fact| symbol_name(&fact.relation))
+                .collect(),
+        }
+    }
+
+    /// Parse one fact, leaving its separating comma to the enclosing packet.
+    pub fn parse_fact(&mut self, input: syn::parse::ParseStream<'_>) -> syn::Result<()> {
+        if input.peek(kw::host_set) {
+            let fact = HostSet {
+                host_set_token: input.parse()?,
+                relation: input.parse()?,
+                discharged: Some(input.parse()?),
+                semi_token: Default::default(),
+            };
+            if self
+                .host_sets
+                .iter()
+                .any(|previous| symbol_name(&previous.relation) == symbol_name(&fact.relation))
+            {
+                return error(&fact, "duplicate host_set argument");
+            }
+            self.host_sets.push(fact);
+        } else {
+            let consumer_token = input.parse()?;
+            let _: Token![=] = input.parse()?;
+            let fact = ConsumerCanonical {
+                consumer_token,
+                canonical_token: input.parse()?,
+                semi_token: Default::default(),
+            };
+            if self.consumer_canonical.replace(fact).is_some() {
+                return Err(input.error("duplicate consumer canonical argument"));
+            }
+        }
+        Ok(())
+    }
+
+    /// Formal rule CTX-Discharge: Record context facts supplied by the invoking
+    /// compiler's packet. Its correspondence checker must prove these premises.
+    pub fn apply(&self, program: &mut Program) -> syn::Result<()> {
+        for fact in &self.host_sets {
+            if let Some(previous) = program
+                .program
+                .host_sets
+                .iter_mut()
+                .find(|previous| symbol_name(&previous.relation) == symbol_name(&fact.relation))
+            {
+                previous.discharged = fact.discharged;
+            } else {
+                program.program.host_sets.push(fact.clone());
+            }
+        }
+        if let Some(fact) = &self.consumer_canonical {
+            program.program.consumer_canonical = Some(fact.clone());
+            program.program.return_canon = None;
+            let returned = &program.program.returned;
+            let internal =
+                program
+                    .program
+                    .definitions
+                    .iter()
+                    .any(|definition| match &definition.operator {
+                        Operator::Union(union) => {
+                            union.operands.iter().any(|input| input == returned)
+                        }
+                        Operator::Probe(_, keyed)
+                        | Operator::Merge(_, keyed)
+                        | Operator::Semi(_, keyed)
+                        | Operator::Anti(_, keyed) => {
+                            &keyed.left == returned || &keyed.right == returned
+                        }
+                        operator => operator.input() == Some(returned),
+                    });
+            if !internal {
+                if let Some(definition) = program
+                    .program
+                    .definitions
+                    .iter_mut()
+                    .find(|definition| definition.name == *returned)
+                {
+                    if !matches!(definition.operator, Operator::Union(_)) {
+                        definition.canon = None;
+                    }
+                }
+            }
+        }
+        contract::check(program).map(|_| ())
+    }
+}
+
+impl syn::parse::Parse for FactPacket {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let mut packet = Self::default();
+        while !input.is_empty() {
+            packet.parse_fact(input)?;
+            if !input.is_empty() {
+                let _: Token![,] = input.parse()?;
+            }
+        }
+        Ok(packet)
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Definition {
@@ -294,6 +453,10 @@ impl Operator {
 /// How a result's grades and reads are known once the contract holds.
 #[derive(Clone, Debug, Default)]
 pub struct Analysis {
+    /// Host uniqueness premises established by the invoking compiler.
+    pub discharged_host_sets: BTreeSet<String>,
+    /// The invoking consumer owns canonicalization of returned answers.
+    pub consumer_canonical: bool,
     /// Union arms are disjoint only by fallback construction or different
     /// explicit literals on the same interface column.
     pub disjoint: BTreeSet<String>,
@@ -374,6 +537,7 @@ fn error<T>(spanned: &impl quote::ToTokens, message: impl std::fmt::Display) -> 
 /// Formal rule WF-Physical: Derive local headings and reads, then check output, reachability and modes.
 /// Formal rule PH-Pipe: Require linear stream use except for reusable noncanonical host renames.
 /// Formal rule PH-Let: Require every let to be read.
+/// Formal rule CTX-HostSet: Require each uniqueness fact to name one used host.
 fn analyze(module: &Program) -> syn::Result<Analysis> {
     let program = &module.program;
     let declarations = cq_syntax::check_input_declarations(&program.declarations)?;
@@ -397,6 +561,9 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
             cq_syntax::algebra::check_leibniz_type(&column.ty, &column.name)?;
         }
     }
+    if program.consumer_canonical.is_some() && program.return_canon.is_some() {
+        return error(&program.returned, "consumer canonical forbids return canon");
+    }
     if let Some(output) = declarations.get(&symbol_name(&program.head.relation)) {
         output.check_result()?;
     }
@@ -412,7 +579,16 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
             _ => Vec::new(),
         })
         .collect();
-    let mut analysis = Analysis::default();
+    let mut analysis = Analysis {
+        discharged_host_sets: program
+            .host_sets
+            .iter()
+            .filter(|fact| fact.discharged.is_some())
+            .map(|fact| symbol_name(&fact.relation))
+            .collect(),
+        consumer_canonical: program.consumer_canonical.is_some(),
+        ..Analysis::default()
+    };
     let mut readers: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut operands: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut chains: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -1162,8 +1338,8 @@ pub fn inherited_key(
 /// every source Before obligation survives: no relational definition moves
 /// later across a Rust node.
 pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
-    contract::check(source)?;
-    contract::check(target)?;
+    let source_facts = contract::check(source)?;
+    let target_facts = contract::check(target)?;
     let mut target_chain = Vec::new();
     let target_definitions: BTreeMap<_, _> = target
         .program
@@ -1179,6 +1355,8 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
         })
         .collect();
     if source.program.declarations != target.program.declarations
+        || source_facts.discharged_host_sets != target_facts.discharged_host_sets
+        || source_facts.consumer_canonical != target_facts.consumer_canonical
         || source.program.head != target.program.head
         || source.program.returned != target.program.returned
         || source.program.definitions.len() != target.program.definitions.len()
@@ -1360,6 +1538,18 @@ fn same_logical_operator(source: &Operator, target: &Operator) -> bool {
 }
 
 impl cq_stage::Language for Program {
+    fn context(&self) -> cq_stage::Context {
+        cq_stage::Context {
+            consumer_canonical: self.program.consumer_canonical.is_some(),
+            discharged_host_sets: self
+                .program
+                .host_sets
+                .iter()
+                .filter(|fact| fact.discharged.is_some())
+                .map(|fact| symbol_name(&fact.relation))
+                .collect(),
+        }
+    }
     fn check(&self) -> syn::Result<()> {
         contract::check(self).map(|_| ())
     }

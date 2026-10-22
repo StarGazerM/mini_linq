@@ -331,6 +331,7 @@ pub fn host_sets(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir
             target.program.host_sets.push(ir::HostSet {
                 host_set_token: Default::default(),
                 relation,
+                discharged: None,
                 semi_token: Default::default(),
             });
         }

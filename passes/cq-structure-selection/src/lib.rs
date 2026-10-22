@@ -490,36 +490,66 @@ pub use correspondence::check;
 
 mod positional;
 
-/// Default selection with explicit positional host capabilities. Arguments are
-/// `positional(R, S)`; omitted hosts retain their original representations. The
-/// generated marker/PositionalRows/BlockRead obligations check each assertion.
+/// Select with comma-separated context facts and/or `positional(R, S)`.
+/// Record facts before choosing representations and checking correspondence.
 pub fn compile_with(
     source: &physical::Program,
     arguments: TokenStream,
 ) -> syn::Result<structures::Program> {
-    use syn::parse::Parser;
     if arguments.is_empty() {
         return compile(source);
     }
-    let parser = |input: syn::parse::ParseStream<'_>| {
-        let keyword: syn::Ident = input.parse()?;
-        if keyword != "positional" {
-            return Err(syn::Error::new_spanned(
-                keyword,
-                "expected positional(host, ...)",
-            ));
-        }
-        let body;
-        syn::parenthesized!(body in input);
-        let names = structures::CommaList::<syn::Ident>::parse_terminated(&body)?;
-        if !input.is_empty() {
-            return Err(input.error("unexpected selection arguments"));
-        }
-        Ok(names.iter().map(symbol_name).collect::<BTreeSet<_>>())
-    };
-    let hosts = parser.parse2(arguments)?;
-    let mut target = compile(source)?;
-    positional::choose(&mut target, &hosts)?;
-    check(source, &target)?;
+    let arguments: Arguments = syn::parse2(arguments)?;
+    let mut recorded = source.clone();
+    arguments.facts.apply(&mut recorded)?;
+    let mut target = compile(&recorded)?;
+    if let Some(hosts) = arguments.hosts {
+        positional::choose(&mut target, &hosts)?;
+    }
+    check(&recorded, &target)?;
     Ok(target)
+}
+
+/// Context premises authorized by this pass's explicit argument packet.
+pub fn context(arguments: TokenStream) -> syn::Result<physical::Context> {
+    Ok(syn::parse2::<Arguments>(arguments)?.facts.context())
+}
+
+#[derive(Default)]
+struct Arguments {
+    facts: physical::FactPacket,
+    hosts: Option<BTreeSet<String>>,
+}
+
+impl syn::parse::Parse for Arguments {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let mut arguments = Self::default();
+        while !input.is_empty() {
+            if input.peek(physical::kw::consumer) || input.peek(physical::kw::host_set) {
+                arguments.facts.parse_fact(input)?;
+            } else {
+                let keyword: syn::Ident = input.parse()?;
+                if keyword != "positional" {
+                    return Err(syn::Error::new_spanned(
+                        keyword,
+                        "expected positional(host, ...), consumer = canonical, or host_set R discharged",
+                    ));
+                }
+                if arguments.hosts.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        keyword,
+                        "duplicate positional arguments",
+                    ));
+                }
+                let body;
+                syn::parenthesized!(body in input);
+                let names = structures::CommaList::<syn::Ident>::parse_terminated(&body)?;
+                arguments.hosts = Some(names.iter().map(symbol_name).collect());
+            }
+            if !input.is_empty() {
+                let _: syn::Token![,] = input.parse()?;
+            }
+        }
+        Ok(arguments)
+    }
 }

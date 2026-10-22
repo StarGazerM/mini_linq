@@ -825,3 +825,53 @@ fn both_printers_borrow_generator_captures_inside_union_and_fallback() {
     assert_eq!(captured.len(), 2);
     assert_eq!(alternate.len(), 1);
 }
+
+#[test]
+#[allow(non_snake_case)]
+fn canonical_consumer_delegates_duplicate_answers_and_keeps_internal_canon() {
+    let R = [(1_i32, 10_i32), (1, 10), (1, 20), (3, 30)];
+    let mut witnesses = Vec::new();
+    own_push::push_into! {
+        arguments { consumer { |(a,): (i32,)| witnesses.push(a) }; };
+        context { consumer = canonical };
+        pipeline {};
+        physical {
+            relation R(a:i32,b:i32);
+            consumer canonical;
+            r = pipe canon rename R@0 {a -> a,b -> b};
+            return r as answer(*a % 2);
+        }
+        structures {
+            r host scan = ::core::iter::Map<_,_> [];
+            r canon = ::std::collections::BTreeSet<_>;
+        }
+    };
+    assert_eq!(witnesses, vec![1, 1, 1]);
+    let canonical: BTreeSet<_> = witnesses.into_iter().collect();
+    assert_eq!(canonical, BTreeSet::from([1]));
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn discharged_host_fact_needs_no_hashable_columns_in_either_printer() {
+    #[derive(PartialEq, Eq)]
+    struct NoHash(i32);
+    let R = [(NoHash(1),), (NoHash(2),)];
+    macro_rules! recorded {
+        ($($printer:ident)::+) => {
+            $($printer)::+! {
+                context { host_set R discharged };
+                pipeline {};
+                physical {
+                    relation R(a:NoHash);
+                    host_set R discharged;
+                    r = pipe rename R@0 {a -> a};
+                    return r as answer(a);
+                }
+                structures { r host scan = ::core::iter::Map<_,_> []; }
+            }
+        };
+    }
+    assert_eq!(recorded!(own_push::push).count(), 2);
+    assert_eq!(recorded!(mini_linq::passes::print_pull).count(), 2);
+}

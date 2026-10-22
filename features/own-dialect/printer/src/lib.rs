@@ -681,3 +681,65 @@ impl Push<'_> {
         self.emit(&input, quote!(if { #(#shadows)* #condition } { #sink }))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn certificates_distinguish_local_checks_from_discharged_facts() {
+        for (fact, certified) in [
+            (quote!(host_set R;), true),
+            (quote!(host_set R discharged;), false),
+        ] {
+            let module = syn::parse2(quote! {
+                physical {
+                    relation R(a:i32); #fact
+                    r = pipe rename R@0 {a -> a};
+                    return r as answer(a);
+                }
+                structures { r host scan = ::core::iter::Map<_,_> []; }
+            })
+            .unwrap();
+            let printed = compile(&module, None)
+                .unwrap()
+                .to_token_stream()
+                .to_string();
+            assert_eq!(printed.contains("__cq_host_set_seen"), certified);
+            assert_eq!(printed.contains("certificate failed"), certified);
+        }
+    }
+
+    #[test]
+    fn canonical_consumer_expansion_has_no_local_answer_set() {
+        for (head, project) in [
+            (quote!(a, b), false),
+            (quote!(a), true),
+            (quote!(*a % 2), false),
+        ] {
+            let projection = project.then(|| quote!(p = pipe project r keep {a};));
+            let returned = if project { quote!(p) } else { quote!(r) };
+            let module = syn::parse2(quote! {
+                physical {
+                    relation R(a:i32,b:i32);
+                    consumer canonical;
+                    r = pipe rename R@0 {a -> a,b -> b};
+                    #projection
+                    return #returned as answer(#head);
+                }
+                structures { r host scan = ::core::iter::Map<_,_> []; }
+            })
+            .unwrap();
+            let callback = syn::parse_quote!(consume);
+            for consumer in [None, Some(&callback)] {
+                let printed = compile(&module, consumer)
+                    .unwrap()
+                    .to_token_stream()
+                    .to_string();
+                assert!(!printed.contains("head_seen"), "{printed}");
+                assert!(!printed.contains("HashSet <"), "{printed}");
+                assert!(!printed.contains("__cq_seen"), "{printed}");
+            }
+        }
+    }
+}

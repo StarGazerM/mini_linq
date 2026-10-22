@@ -42,6 +42,21 @@ struct Reads {
 
 /// Lower IX to Physical with deterministic defaults, then check the Physical contract.
 pub fn compile(source: &ix::Program) -> syn::Result<physical::Program> {
+    compile_with(source, proc_macro2::TokenStream::new())
+}
+
+/// Context premises authorized by the lowering argument packet.
+pub fn context(arguments: proc_macro2::TokenStream) -> syn::Result<physical::Context> {
+    Ok(syn::parse2::<physical::FactPacket>(arguments)?.context())
+}
+
+/// Lower under explicit facts established by the invoking compiler.
+pub fn compile_with(
+    source: &ix::Program,
+    arguments: proc_macro2::TokenStream,
+) -> syn::Result<physical::Program> {
+    let packet: physical::FactPacket = syn::parse2(arguments)?;
+    let consumer_canonical = packet.consumer_canonical.is_some();
     ix::contract::check(source)?;
     let info = ix::ra::contract::check(&source.ra)?;
     let operations: Vec<_> = source
@@ -56,7 +71,7 @@ pub fn compile(source: &ix::Program) -> syn::Result<physical::Program> {
     let mut modes = modes(&operations, &reads);
     fuse_modes(&operations, &operators, &reads, &mut modes);
     let disjoint = ix::ra::disjoint_unions(&source.ra)?;
-    let unique = canonical(&info, &operations, &returned, &disjoint, &[]);
+    let unique = canonical(&info, &operations, &returned, &disjoint, &packet.host_sets);
     let definitions = operations
         .iter()
         .zip(modes)
@@ -71,7 +86,7 @@ pub fn compile(source: &ix::Program) -> syn::Result<physical::Program> {
             } else {
                 mode
             },
-            canon: ((!unique.contains(&symbol_name(name)) && name == &returned && !disjoint.contains(&symbol_name(name)))
+            canon: ((name == &returned && (!consumer_canonical || reads[&symbol_name(name)].count > 1) && !unique.contains(&symbol_name(name)) && !disjoint.contains(&symbol_name(name)))
                 || matches!(_op, Op::Union(union) if !disjoint.contains(&symbol_name(name)) && union.origin.as_ref().is_none_or(|o| !o.interface.is_empty())))
                 .then(Default::default),
             operator,
@@ -83,10 +98,12 @@ pub fn compile(source: &ix::Program) -> syn::Result<physical::Program> {
         brace: Default::default(),
         program: physical::Body {
             declarations: source.ra.plan.declarations.clone(),
-            host_sets: Vec::new(),
+            host_sets: packet.host_sets,
+            consumer_canonical: packet.consumer_canonical,
             definitions,
             return_token: Default::default(),
-            return_canon: (!unique.contains(&symbol_name(&returned))
+            return_canon: (!consumer_canonical
+                && !unique.contains(&symbol_name(&returned))
                 && disjoint.contains(&symbol_name(&returned)))
             .then(Default::default),
             returned,

@@ -33,24 +33,74 @@ fn defaults() -> cq_stage::Configuration {
     } }
 }
 
+/// CQ entry is not a checked continuation. In particular, a printed lower IR
+/// cannot import restricted facts through a custom surface/planning adapter.
+/// Configured lower/select packets introduce facts later, on their own pass.
+fn check_entry(tokens: &proc_macro2::TokenStream) -> syn::Result<()> {
+    use cq_stage::Language;
+    use syn::parse::Parser;
+
+    let mut prefix = tokens.clone().into_iter();
+    let Some(proc_macro2::TokenTree::Ident(name)) = prefix.next() else {
+        return Ok(());
+    };
+    if (name == "context" || name == "arguments")
+        && matches!(prefix.next(), Some(proc_macro2::TokenTree::Group(group))
+            if group.delimiter() == proc_macro2::Delimiter::Brace)
+        && matches!(prefix.next(), Some(proc_macro2::TokenTree::Punct(punct))
+            if punct.as_char() == ';')
+    {
+        return Err(syn::Error::new_spanned(
+            tokens,
+            "CTX-Entry: CQ entry does not accept a checked continuation envelope",
+        ));
+    }
+    // Structures and Sequence both begin with their complete Physical program.
+    // Do not parse normal CQ or opaque surface input as three other languages.
+    if name != "physical" {
+        return Ok(());
+    }
+    let recorded = |input: ParseStream<'_>| -> syn::Result<bool> {
+        let program: cq_lang_physical::Program = input.parse()?;
+        let _: proc_macro2::TokenStream = input.parse()?;
+        Ok(!program.context().is_empty())
+    };
+    if recorded.parse2(tokens.clone()).unwrap_or(false) {
+        Err(syn::Error::new_spanned(
+            tokens,
+            "CTX-Entry: recorded context facts require an explicit exact context envelope; CQ entry is not a checked continuation",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn expand_compile(input: proc_macro2::TokenStream) -> syn::Result<proc_macro2::TokenStream> {
+    let source: Source = syn::parse2(input)?;
+    check_entry(&source.tokens)?;
+    source.config.resolve(defaults())?.start(source.tokens)
+}
+
+fn expand_mini_linq(input: proc_macro2::TokenStream) -> syn::Result<proc_macro2::TokenStream> {
+    check_entry(&input)?;
+    defaults()
+        .resolve(cq_stage::Configuration::default())?
+        .start(input)
+}
+
 /// Compile CQ with a named pipeline; omitted phases use the core defaults.
 #[proc_macro]
 pub fn compile(input: TokenStream) -> TokenStream {
-    (|| {
-        let source: Source = syn::parse(input)?;
-        source.config.resolve(defaults())?.start(source.tokens)
-    })()
-    .unwrap_or_else(syn::Error::into_compile_error)
-    .into()
+    expand_compile(input.into())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
 }
 
 /// Compile CQ with the deterministic default pipeline.
 /// Formal rule ST-Entry: Start CQ surface expansion and the selected checked pipeline.
 #[proc_macro]
 pub fn mini_linq(input: TokenStream) -> TokenStream {
-    defaults()
-        .resolve(cq_stage::Configuration::default())
-        .and_then(|pipeline| pipeline.start(input.into()))
+    expand_mini_linq(input.into())
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
@@ -238,14 +288,14 @@ pub fn index_demands(input: TokenStream) -> TokenStream {
 }
 
 /// IX → Physical with probe/keep/first/eager defaults.
+/// Comma-separated `consumer = canonical` and `host_set R discharged`
+/// arguments explicitly supply restricted context facts.
 #[proc_macro]
 pub fn lower(input: TokenStream) -> TokenStream {
-    cq_stage::pass::<cq_lang_ix::Program, cq_lang_physical::Program>(
+    cq_stage::pass_with_context::<cq_lang_ix::Program, cq_lang_physical::Program>(
         input.into(),
-        |source, args| {
-            no_arguments(args)?;
-            cq_physical_lowering::compile(source)
-        },
+        cq_physical_lowering::context,
+        cq_physical_lowering::compile_with,
     )
     .into()
 }
@@ -253,10 +303,12 @@ pub fn lower(input: TokenStream) -> TokenStream {
 /// Physical → Structures with concrete default Rust types.
 /// Optional `positional(H, ...)` arguments assert the default typed-column
 /// capability for those hosts; unspecified hosts retain their original path.
+/// Lower/select context facts may be interleaved with positional arguments.
 #[proc_macro]
 pub fn select(input: TokenStream) -> TokenStream {
-    cq_stage::pass::<cq_lang_physical::Program, cq_lang_structures::Program>(
+    cq_stage::pass_with_context::<cq_lang_physical::Program, cq_lang_structures::Program>(
         input.into(),
+        cq_structure_selection::context,
         cq_structure_selection::compile_with,
     )
     .into()
@@ -355,8 +407,9 @@ pub fn workload_query(input: TokenStream) -> TokenStream {
 
 #[cfg(test)]
 mod tests {
-    use super::PlanOptions;
-    use quote::quote;
+    use super::{PlanOptions, expand_compile, expand_mini_linq};
+    use cq_stage::Language;
+    use quote::{ToTokens, quote};
 
     #[test]
     fn plan_options_reduce_by_default_and_allow_explicit_opt_out() {
@@ -379,5 +432,125 @@ mod tests {
         ] {
             assert!(syn::parse2::<PlanOptions>(arguments).is_err());
         }
+    }
+
+    fn physical(facts: proc_macro2::TokenStream) -> cq_lang_physical::Program {
+        syn::parse2(quote!(physical {
+            relation R(a: i32);
+            #facts
+            r = pipe rename R@0 { a -> x };
+            return r as answer(x);
+        }))
+        .unwrap()
+    }
+
+    fn rejects_printed_entry<L: Language>(program: &L) {
+        let printed = program.to_token_stream();
+        for result in [
+            expand_mini_linq(printed.clone()),
+            expand_compile(quote!(pipeline { plan = custom; } #printed)),
+        ] {
+            assert!(result.unwrap_err().to_string().contains("CTX-Entry"));
+        }
+        let output = cq_stage::pass::<L, syn::Expr>(quote!(pipeline {}; #printed), |_, _| {
+            panic!("unauthorized printed context reached transform")
+        });
+        assert!(output.to_string().contains("CTX-Entry"));
+    }
+
+    #[test]
+    fn cq_entries_and_direct_pass_reject_printed_lower_ir_facts() {
+        for facts in [
+            quote!(consumer canonical;),
+            quote!(host_set R discharged;),
+            quote!(host_set R discharged; consumer canonical;),
+        ] {
+            let physical = physical(facts);
+            rejects_printed_entry(&physical);
+            let structures = cq_structure_selection::compile(&physical).unwrap();
+            rejects_printed_entry(&structures);
+            let sequence = cq_sequence_lowering::compile(&structures).unwrap();
+            assert_eq!(sequence.context(), physical.context());
+            rejects_printed_entry(&sequence);
+        }
+    }
+
+    #[test]
+    fn cq_entry_cannot_replay_checked_continuation_envelopes() {
+        let program = physical(quote!(consumer canonical;));
+        for input in [
+            quote!(context { consumer = canonical }; #program),
+            quote!(arguments {}; context { consumer = canonical }; #program),
+        ] {
+            assert!(expand_mini_linq(input.clone()).is_err());
+            assert!(
+                expand_compile(quote!(
+                    pipeline { surface = [strip_envelope]; } #input
+                ))
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn plain_host_certificates_are_not_restricted_entry_facts() {
+        let physical = physical(quote!(host_set R;));
+        assert!(physical.context().is_empty());
+        super::check_entry(&physical.to_token_stream()).unwrap();
+    }
+
+    #[test]
+    fn configured_packets_are_forwarded_without_authorizing_cq_entry() {
+        let cq = quote!(struct Q; relation R(a: i32); answer(x) :- R(x););
+        let output = expand_compile(quote!(
+            pipeline {
+                lower = lower(consumer = canonical, host_set R discharged);
+                select = select(positional(R));
+            }
+            #cq
+        ))
+        .unwrap();
+        assert_eq!(
+            output.to_string(),
+            quote!(::mini_linq::passes::plan! {
+                pipeline {
+                    ::mini_linq::passes::index_demands,
+                    lower(consumer = canonical, host_set R discharged),
+                    select(positional(R)),
+                    ::mini_linq::passes::represent,
+                    ::mini_linq::passes::stage,
+                    ::mini_linq::passes::print_pull
+                };
+                #cq
+            })
+            .to_string()
+        );
+    }
+
+    #[test]
+    fn select_packet_authorization_survives_structures_continuation() {
+        let physical = physical(quote!());
+        let output =
+            cq_stage::pass_with_context::<cq_lang_physical::Program, cq_lang_structures::Program>(
+                quote!(
+                    arguments { consumer = canonical, positional(R), host_set R discharged };
+                    pipeline { printer };
+                    #physical
+                ),
+                cq_structure_selection::context,
+                cq_structure_selection::compile_with,
+            );
+        let invocation: syn::Macro = syn::parse2(output).unwrap();
+        let output = cq_stage::pass::<cq_lang_structures::Program, syn::Expr>(
+            invocation.tokens,
+            |source, args| {
+                assert!(args.is_empty());
+                let context = source.context();
+                assert!(context.consumer_canonical);
+                assert_eq!(context.discharged_host_sets, ["R".to_owned()].into());
+                Ok(syn::parse_quote!(42))
+            },
+        );
+        assert_eq!(output.to_string(), "42");
     }
 }

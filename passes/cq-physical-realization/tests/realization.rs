@@ -611,3 +611,50 @@ fn adapter_carriers_drop_columns_after_their_last_reader() {
     assert!(printed.contains("& (a , _ ,)"), "{printed}");
     assert!(!printed.contains("dead"), "{printed}");
 }
+
+#[test]
+fn host_certificates_only_emit_for_locally_checked_facts() {
+    for (fact, certified) in [
+        (quote!(host_set R;), true),
+        (quote!(host_set R discharged;), false),
+    ] {
+        let module: structures::Program = syn::parse2(quote! {
+            physical {
+                relation R(a:i32); #fact
+                r = pipe rename R@0 {a -> a};
+                return r as answer(a);
+            }
+            structures {}
+        })
+        .unwrap();
+        let printed = program(&module);
+        assert_eq!(printed.contains("__cq_host_set_seen"), certified);
+        assert_eq!(printed.contains("certificate failed"), certified);
+    }
+}
+
+#[test]
+fn canonical_consumer_omits_local_answer_state_for_every_head_shape() {
+    for (head, project) in [
+        (quote!(a, b), false),
+        (quote!(a), true),
+        (quote!(*a % 2), false),
+    ] {
+        let projection = project.then(|| quote!(p = pipe project r keep {a};));
+        let returned = if project { quote!(p) } else { quote!(r) };
+        let module: structures::Program = syn::parse2(quote! {
+            physical {
+                relation R(a:i32,b:i32);
+                consumer canonical;
+                r = pipe rename R@0 {a -> a,b -> b};
+                #projection
+                return #returned as answer(#head);
+            }
+            structures {}
+        })
+        .unwrap();
+        let printed = program(&module);
+        assert!(!printed.contains("__cq_seen"), "{printed}");
+        assert!(!printed.contains("HashSet"), "{printed}");
+    }
+}

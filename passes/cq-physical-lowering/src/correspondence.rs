@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// Check source/target contracts, logical erasure, IX demands, and recorded decisions.
 /// Materialization is free whenever the language premises hold.
 /// Formal rule CK-Physical: Check local contracts, RA erasure, IX demands and decision admissibility.
+/// Formal rule CK-Return: Require an inferred key, return canon, or a canonical consumer.
 pub fn check(source: &ix::Program, target: &physical::Program) -> syn::Result<()> {
     ix::contract::check(source)?;
     let facts = physical::contract::check(target)?;
@@ -61,7 +62,10 @@ pub fn check(source: &ix::Program, target: &physical::Program) -> syn::Result<()
         }
     }
     let returned = symbol_name(&target.program.returned);
-    if !keys.contains_key(&returned) && target.program.return_canon.is_none() {
+    if !keys.contains_key(&returned)
+        && target.program.return_canon.is_none()
+        && !facts.consumer_canonical
+    {
         return Err(syn::Error::new_spanned(
             &target.program.returned,
             format!("return `{returned}`: not canonical by flag or plan key inference"),

@@ -511,7 +511,7 @@ stream source retains filtered rows rather than filtering a reusable host scan.
 
 \Rule{CK-Physical}{\mathsf{WF}_{IX}(s)\quad\mathsf{WF}_{Physical}(t)\\
  \mathsf{erase}(t)=s.ra\quad\mathsf{demands}(s,t)\quad
- \mathsf{unique}(t.returned)\text{ inferred or explicit return canon}}
+ \textsc{CK-Return}(t,\Gamma)}
  {\mathsf{check}_{physical}(s,t)\Downarrow\ok}
 \end{mathpar}
 No missing demand is synthesized; merge has its own ordering premise; the check
