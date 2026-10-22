@@ -280,7 +280,16 @@ dependencies = [
  "cq-datalog-print",
  "cq-datalog-storage",
  "cq-datalog-stratify",
+ "cq-index-policy",
  "cq-lang-datalog-round",
+ "cq-lang-sequence",
+ "cq-lang-structures",
+ "cq-physical-lowering",
+ "cq-planners-plan",
+ "cq-sequence-lowering",
+ "cq-sequence-pull",
+ "cq-stage",
+ "cq-structure-selection",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -561,6 +570,21 @@ version = "0.1.0"
 dependencies = [
  "cq-lang-structures",
  "cq-print",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-planners-plan"
+version = "0.1.0"
+dependencies = [
+ "cq-elaborate",
+ "cq-lang-cq",
+ "cq-lang-ra",
+ "cq-lang-vo",
+ "cq-order",
+ "cq-reduce",
  "proc-macro2",
  "quote",
  "syn 2.0.119",

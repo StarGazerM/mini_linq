@@ -35,8 +35,11 @@ fn expected_push(mut program: Program) -> Program {
     {
         let hole = &mut program.holes[rule.hole];
         hole.interface = round::HoleInterface::Push;
-        hole.pipeline.passes.last_mut().unwrap().path =
-            syn::parse_quote!(::cq_datalog::passes::print_push);
+        let start = hole.pipeline.passes.len() - 3;
+        hole.pipeline.passes.splice(
+            start..,
+            [syn::parse_quote!(::cq_datalog::passes::print_push)],
+        );
     }
     program
 }
@@ -476,6 +479,97 @@ fn task_realization_preserves_custom_terminals_arguments_and_registry_premises()
     assert_eq!(round::erase(&target.round).unwrap(), source);
 }
 
+#[test]
+fn task_realization_replaces_only_the_standard_sequence_tail() {
+    for relative in [false, true] {
+        let mut source = authored();
+        let index = source.context.strata[0].seeds[0].hole;
+        let passes = &mut source.holes[index].pipeline.passes;
+        let start = passes.len() - 3;
+        if relative {
+            for pass in &mut passes[start..] {
+                pass.path.leading_colon = None;
+            }
+        }
+        let target = compile_sharded(&source).unwrap();
+        check_sharded(&source, &target).unwrap();
+        let erased = round::erase(&target.round).unwrap();
+        let before = &source.holes[index];
+        let after = &erased.holes[index];
+        assert_eq!(after.pipeline.passes.len(), start + 1);
+        for (after, before) in after.pipeline.passes[..start]
+            .iter()
+            .zip(&before.pipeline.passes[..start])
+        {
+            assert_eq!(
+                after.to_token_stream().to_string(),
+                before.to_token_stream().to_string()
+            );
+        }
+        assert_eq!(
+            after.pipeline.passes[start].path,
+            syn::parse_quote!(::cq_datalog::passes::print_push)
+        );
+        assert!(after.pipeline.passes[start].arguments.is_empty());
+        assert_eq!(after.lower, before.lower);
+        assert_eq!(after.facts, before.facts);
+
+        // Reintroducing any part of the Sequence tail is not an allowed rewrite.
+        for pass in &before.pipeline.passes[start..start + 2] {
+            let mut invalid = target.clone();
+            invalid.round.holes[index]
+                .pipeline
+                .passes
+                .insert(start, pass.clone());
+            round::contract::check(&invalid.round).unwrap();
+            assert!(check_sharded(&source, &invalid).is_err());
+        }
+    }
+}
+
+#[test]
+fn task_realization_preserves_authored_sequence_lowering_grades_and_rewrites() {
+    let changes: &[fn(&mut Vec<cq_stage::Invocation>)] = &[
+        |passes| {
+            let start = passes.len() - 3;
+            passes[start].path = syn::parse_quote!(custom::sequence);
+        },
+        |passes| {
+            let grade = passes.len() - 2;
+            passes[grade].path = syn::parse_quote!(custom::grade);
+        },
+        |passes| {
+            let start = passes.len() - 3;
+            passes[start].arguments = quote!(opaque(arguments));
+        },
+        |passes| {
+            let grade = passes.len() - 2;
+            passes[grade].arguments = quote!(opaque(arguments));
+        },
+        |passes| {
+            let grade = passes.len() - 2;
+            passes.insert(grade, syn::parse_quote!(custom::decompose));
+        },
+    ];
+    for change in changes {
+        let mut source = authored();
+        let index = source.context.strata[0].seeds[0].hole;
+        change(&mut source.holes[index].pipeline.passes);
+        let target = compile_sharded(&source).unwrap();
+        check_sharded(&source, &target).unwrap();
+        let erased = round::erase(&target.round).unwrap();
+        assert_eq!(erased.holes[index], source.holes[index]);
+    }
+}
+
+#[test]
+fn task_realization_preserves_existing_structures_push_holes() {
+    let source = expected_push(authored());
+    round::contract::check(&source).unwrap();
+    let target = compile_sharded(&source).unwrap();
+    check_sharded(&source, &target).unwrap();
+    assert_eq!(round::erase(&target.round).unwrap(), source);
+}
 #[test]
 fn task_realization_rejects_unrequested_terminal_and_key_rewrites() {
     let source = authored();

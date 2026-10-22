@@ -22,3 +22,12 @@ cq-datalog-fork = { path = "../../datalog/passes/fork" }
 cq-datalog-storage = { path = "../../datalog/passes/storage" }
 cq-datalog-stratify = { path = "../../datalog/passes/stratify" }
 cq-datalog-incremental = { path = "../../datalog/passes/incremental" }
+cq-stage = { path = "../../../facade/cq-stage" }
+cq-planners-plan = { path = "../../planners/plan" }
+cq-index-policy = { path = "../../../passes/cq-index-policy" }
+cq-physical-lowering = { path = "../../../passes/cq-physical-lowering" }
+cq-structure-selection = { path = "../../../passes/cq-structure-selection" }
+cq-sequence-lowering = { path = "../../../passes/cq-sequence-lowering" }
+cq-sequence-pull = { path = "../../../passes/cq-sequence-pull" }
+cq-lang-structures = { path = "../../../languages/cq-lang-structures" }
+cq-lang-sequence = { path = "../../../languages/cq-lang-sequence" }

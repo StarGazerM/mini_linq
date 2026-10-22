@@ -339,7 +339,7 @@ mod tests {
     use super::*;
     use quote::ToTokens;
 
-    fn program() -> cq_datalog_partition::ShardedProgram {
+    fn pull_program() -> round::Program {
         let source = syn::parse_quote! {
             struct Tasks;
             relation E(x:i32) = (rows);
@@ -354,8 +354,141 @@ mod tests {
         let incremental = cq_datalog_incremental::compile(&strata).unwrap();
         let storage = cq_datalog_storage::compile(&incremental).unwrap();
         let storage = cq_datalog_partition::compile_storage(&storage).unwrap();
-        let round = cq_datalog_fork::compile(&storage).unwrap();
-        cq_datalog_partition::compile_sharded(&round).unwrap()
+        cq_datalog_fork::compile(&storage).unwrap()
+    }
+
+    fn program() -> cq_datalog_partition::ShardedProgram {
+        cq_datalog_partition::compile_sharded(&pull_program()).unwrap()
+    }
+
+    /// Canonical admission and certified host inputs belong to Round, not to
+    /// an individual CQ. Sequence must carry those facts across both serialized
+    /// pass boundaries; dropping an envelope must not silently restore dedup.
+    #[test]
+    fn discharged_holes_preserve_sequence_envelopes_without_local_dedup() {
+        use cq_stage::Language;
+
+        let pull = pull_program();
+        let parallel = cq_datalog_partition::compile_sharded(&pull).unwrap();
+        let machine = cq_lang_sequence::Machine {
+            name: syn::parse_quote!(sequential),
+            root: cq_lang_sequence::LevelNode {
+                name: syn::parse_quote!(host),
+                collaborative: false,
+                dynamic: false,
+                children: vec![],
+            },
+        };
+        assert!(!pull.context.strata[0].keys.is_empty());
+        assert!(
+            pull.context.strata[0]
+                .seeds
+                .iter()
+                .any(|rule| rule.scan.is_none())
+        );
+        for program in [&pull, &parallel.round] {
+            let splices = cq_datalog_print::splice(program).unwrap();
+            assert_eq!(splices.len(), program.holes.len());
+            for (hole, splice) in program.holes.iter().zip(splices) {
+                assert!(hole.facts.consumer_canonical);
+                assert!(!hole.facts.discharged_host_sets.is_empty());
+                let arguments = &hole.pipeline.passes[hole.lower].arguments;
+                assert_eq!(
+                    cq_physical_lowering::context(arguments.clone()).unwrap(),
+                    hole.facts,
+                );
+                let ra = cq_planners_plan::compile(&hole.cq, cq_planners_plan::Planner::default())
+                    .unwrap();
+                let ix = cq_index_policy::compile(&ra).unwrap();
+                let physical = cq_physical_lowering::compile_with(&ix, arguments.clone()).unwrap();
+                assert_eq!(physical.context(), hole.facts);
+                assert!(physical.program.return_canon.is_none());
+                assert!(
+                    physical
+                        .program
+                        .definitions
+                        .iter()
+                        .all(|definition| definition.canon.is_none())
+                );
+                let structures = cq_structure_selection::compile(&physical).unwrap();
+                assert_eq!(structures.context(), hole.facts);
+                let facts = &hole.facts;
+                let continuation = cq_stage::pass::<
+                    cq_lang_structures::Program,
+                    cq_lang_sequence::Program,
+                >(
+                    quote!(context { #facts }; pipeline { sequential, translate_pull }; #structures),
+                    |source, _| cq_sequence_lowering::compile(source),
+                );
+                let continuation: syn::Macro = syn::parse2(continuation).unwrap();
+                let graded = cq_stage::rewrite::<cq_lang_sequence::Program>(
+                    continuation.tokens,
+                    |source, _| {
+                        assert_eq!(source.context(), hole.facts);
+                        cq_lang_sequence::check_grading(source, &machine)?;
+                        Ok(source.clone())
+                    },
+                );
+                let graded: syn::Macro = syn::parse2(graded).unwrap();
+                let emitted = cq_stage::pass::<cq_lang_sequence::Program, syn::Expr>(
+                    graded.tokens,
+                    |source, _| {
+                        assert_eq!(source.context(), hole.facts);
+                        let analysis = cq_lang_sequence::check_grading(source, &machine)?;
+                        let plain = cq_sequence_pull::translate(source, &analysis)?;
+                        let profile = cq_sequence_pull::translate_profile(source, &analysis)?;
+                        for expression in [&plain, &profile] {
+                            let tokens = expression.to_token_stream().to_string();
+                            assert!(!tokens.contains("__cq_seen"), "{tokens}");
+                            assert!(!tokens.contains("HashSet"), "{tokens}");
+                        }
+                        Ok(plain)
+                    },
+                );
+                syn::parse2::<syn::Expr>(emitted).unwrap();
+                let sequence = cq_sequence_lowering::compile(&structures).unwrap();
+                let rejected = cq_stage::pass::<cq_lang_sequence::Program, syn::Expr>(
+                    quote!(pipeline {}; #sequence),
+                    |_, _| panic!("discharged Sequence entered without its envelope"),
+                );
+                assert!(rejected.to_string().contains("CTX-Entry"));
+
+                let tail = &hole.pipeline.passes[hole.lower + 1..];
+                let names: Vec<_> = tail
+                    .iter()
+                    .map(|pass| pass.path.segments.last().unwrap().ident.to_string())
+                    .collect();
+                if hole.interface == round::HoleInterface::Push {
+                    // The registered push adapter is a Structures terminal,
+                    // never an invented Sequence consumer entry.
+                    assert_eq!(names.last().unwrap(), "print_push");
+                    assert!(!names.iter().any(|name| name == "sequence"));
+                    assert!(
+                        splice
+                            .to_string()
+                            .contains("consumer { __cq_datalog_consumer }")
+                    );
+                } else {
+                    assert!(names.ends_with(&[
+                        "sequence".into(),
+                        "sequential".into(),
+                        "translate_pull".into(),
+                    ]));
+                }
+            }
+        }
+        assert!(
+            parallel
+                .round
+                .holes
+                .iter()
+                .any(|hole| hole.interface == round::HoleInterface::Push)
+        );
+        assert!(
+            pull.holes
+                .iter()
+                .all(|hole| hole.interface == round::HoleInterface::Pull)
+        );
     }
 
     #[test]
