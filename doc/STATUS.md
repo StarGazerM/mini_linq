@@ -477,10 +477,18 @@ for both: lattices and custom providers; DOOP probe efficiency (flat value
 storage, batched/prefetched probes on Datalog hosts; probes are 43–46% of DOOP
 compute at `8dc918a`); geometric run merging.
 
-Pending core fix (approved to record, not yet designed): let lowering know a
-host is duplicate-free, or let a consumer own a query's deduplication, so
-Datalog rule queries stop building a per-call `__cq_seen` set (see the core
-tension above). Expected to close the same-generation gap to Ascent.
+Context facts (`doc/formal/context.tex`, core change `37a545a`/`655ceb6`,
+approved): Physical records `host_set R [discharged];` and
+`consumer canonical;`; CK-Return relaxes the returned canonical boundary;
+facts enter only through `lower`/`select` argument packets into fact-free
+sources, and any factful source needs an exact `context {..}` envelope
+(CTX-Entry), so a top-level `mini_linq!` cannot carry them. Fact-free
+expansion is byte-identical. Next: the Datalog discharge job (Storage proves
+`host_set .. discharged`, Round `admit R from [..]` proves
+`consumer canonical`), which removes the per-call `__cq_seen` from rule
+holes. Known: `experiments/gpu/printer` still certifies discharged hosts
+(GPU side's file). Deferred facts: `host_key`, `consumer exists`,
+`guard total`, terminal `canonical-return`.
 
 The abandoned design (`codex/datalog`, `codex/datalog-lang`,
 `codex/maintained-structures`, `codex/datalog-*`, `codex/tests-reshape`,
