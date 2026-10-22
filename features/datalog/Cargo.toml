@@ -13,8 +13,10 @@ license = "MIT OR Apache-2.0"
 cq-stage = { version = "0.1.0", path = "../../facade/cq-stage" }
 cq-syntax = { version = "0.1.0", path = "../../languages/cq-syntax" }
 cq-lang-cq = { version = "0.1.0", path = "../../languages/cq-lang-cq" }
+cq-lang-sequence = { version = "0.1.0", path = "../../languages/cq-lang-sequence" }
+cq-sequence-pull = { version = "0.1.0", path = "../../passes/cq-sequence-pull" }
 cq-lang-structures = { version = "0.1.0", path = "../../languages/cq-lang-structures" }
-cq-physical-realization = { version = "0.1.0", path = "../../passes/cq-physical-realization" }
+cq-sequence-lowering = { version = "0.1.0", path = "../../passes/cq-sequence-lowering" }
 mini-linq = { version = "0.1.0", path = "../../facade/mini-linq" }
 cq-storage = { version = "0.1.0", path = "../../runtime/cq-storage" }
 cq-rewrites = { version = "0.1.0", path = "../rewrites" }

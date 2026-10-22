@@ -8,6 +8,11 @@
   (Written/Coarse); the first clause of each scope streams, later clauses are
   indexed and probed, and no pass commutes operands. `plan(no_reduce)` keeps
   the order but emits no semijoins.
+- Sequence is the shipped CPU target: `sequence` → `sequential` →
+  `translate_pull`, including profile counters. Explicit Structures push
+  terminals remain selectable without Sequence phases. The former direct
+  Structures pull terminal and its compile APIs are removed; shared
+  realization helpers remain for the push printer.
 - Reduction (Masks): each indexed clause is reduced by its filtered subtrees of
   the stream-rooted reduction tree (GYO join tree, or GYO ears plus a spanning
   tree of the cyclic core), children first, before the stream starts: the
@@ -244,14 +249,14 @@ not a universal speedup or a saved-descriptor GPU implementation.
 
 ### GPU integration
 
-The external `cq_gpu::print` terminal consumes checked Structures directly.
-There is no Device IR; sharing and expansion use the same recorded R/E
-contracts as the CPU pull printer. `probe first` is not a uniqueness fact,
+The external `cq_gpu_sequence::translate` terminal consumes checked, graded
+Sequence; `machine_grade` validates the GPU machine model. There is no Device
+IR. `probe first` is not a uniqueness fact,
 and integral host keys need not be dense or hole-free. Finite input batches
 do not bound total expansion or eliminate host synchronization.
 
 See [the current design](GPU-DESIGN.md) and
-[the workspace evidence](../experiments/gpu/README.md#structures-gpu-terminal-printer)
+[the workspace evidence](../experiments/gpu/README.md)
 for supported constructs, exactness checks, resident/load/transfer boundaries
 and historical tuning results. Counts-only measurements are not full-tuple
 measurements. The triangle GPU baseline excludes host edge sort/dedup and

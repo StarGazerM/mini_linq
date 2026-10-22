@@ -14,7 +14,9 @@ cq-lang-physical = { version = "0.1.0", path = "../../../languages/cq-lang-physi
 cq-lang-structures = { version = "0.1.0", path = "../../../languages/cq-lang-structures" }
 cq-physical-lowering = { version = "0.1.0", path = "../../../passes/cq-physical-lowering" }
 cq-structure-selection = { version = "0.1.0", path = "../../../passes/cq-structure-selection" }
-cq-physical-realization = { version = "0.1.0", path = "../../../passes/cq-physical-realization" }
+cq-lang-sequence = { version = "0.1.0", path = "../../../languages/cq-lang-sequence" }
+cq-sequence-lowering = { version = "0.1.0", path = "../../../passes/cq-sequence-lowering" }
+cq-sequence-pull = { version = "0.1.0", path = "../../../passes/cq-sequence-pull" }
 proc-macro2 = "1"
 syn = { version = "2", features = ["full", "extra-traits"] }
 

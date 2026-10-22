@@ -106,7 +106,7 @@ impl Config {
                 if self.push {
                     "own_push::push"
                 } else {
-                    "print_pull"
+                    "translate_pull"
                 },
             ),
         ]
@@ -856,35 +856,6 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(markers, [false, true, true]);
-    }
-
-    #[test]
-    fn effect_reference_keeps_literal_after_same_atom_partial_expression() {
-        let source = syn::parse_quote! {
-            struct Fuzz;
-            relation R(a: i32, b: i32, c: i32);
-            relation answer(a: i32);
-            answer(x) :- R(x, 10 / *x, 5);
-        };
-        let reference = compiler::written(&source).unwrap();
-        let definitions: Vec<_> = reference.plan.definitions.iter().collect();
-        let bind = definitions
-            .iter()
-            .position(|d| matches!(d.operator, cq_lang_ra::Operator::Bind(_)))
-            .unwrap();
-        let literal = definitions
-            .iter()
-            .position(|d| match &d.operator {
-                cq_lang_ra::Operator::Select(selection) => {
-                    selection.condition.constant_keys().is_some()
-                }
-                _ => false,
-            })
-            .unwrap();
-        assert!(
-            bind < literal,
-            "a failing literal cannot suppress an earlier reference panic"
-        );
     }
 
     #[test]

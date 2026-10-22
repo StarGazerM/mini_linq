@@ -1,29 +1,15 @@
-error[E0271]: type mismatch resolving `<&&Vec<(i64, String)> as HostColumns<'_>>::Row == (i64, i64)`
-  --> tests/ui/host_type.rs:3:13
-   |
- 3 |       let _ = cq_gpu::print! {
-   |  _____________^
- 4 | |         arguments {};
- 5 | |         pipeline {};
- 6 | |         physical {
-...  |
-16 | |     };
-   | |     ^
-   | |     |
-   | |_____expected `(i64, i64)`, found `(i64, String)`
-   |       required by a bound introduced by this call
-   |
-   = note: expected tuple `(_, i64)`
-              found tuple `(_, String)`
-note: required by a bound in `__cq_gpu_check_schema`
-  --> tests/ui/host_type.rs:3:13
-   |
- 3 |       let _ = cq_gpu::print! {
-   |  _____________^
- 4 | |         arguments {};
- 5 | |         pipeline {};
- 6 | |         physical {
-...  |
-16 | |     };
-   | |_____^ required by this bound in `__cq_gpu_check_schema`
-   = note: this error originates in the macro `cq_gpu::print` (in Nightly builds, run with -Z macro-backtrace for more info)
+error[E0308]: mismatched types
+ --> tests/ui/host_type.rs:6:10
+  |
+6 |     bind(rows);
+  |     ---- ^^^^ expected `&DeviceColumns<'_, (i64, i64)>`, found `&DeviceColumns<'_, (i64, String)>`
+  |     |
+  |     arguments to this function are incorrect
+  |
+  = note: expected reference `&DeviceColumns<'_, (_, i64)>`
+             found reference `&DeviceColumns<'_, (_, String)>`
+note: function defined here
+ --> tests/ui/host_type.rs:3:4
+  |
+3 | fn bind(_: &DeviceColumns<'_, (i64, i64)>) {}
+  |    ^^^^ ---------------------------------

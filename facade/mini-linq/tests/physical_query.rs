@@ -1,4 +1,4 @@
-//! The real chain, CQ through Physical and Structures to executed Rust,
+//! The real chain, CQ through Physical, Structures and Sequence to executed Rust,
 //! under several policies: host maps read in place, compiler-built hash
 //! indexes, a user-defined index type, merge joins over compiler-built
 //! ordered maps, the acyclic planner's Yannakakis plan, and a bounded scan
@@ -166,7 +166,7 @@ mod custom_indexes {
         S: &'a [(Value, Value)],
     ) -> Vec<(&'a Value, &'a Value)> {
         ::core::iter::Iterator::collect(
-            ::mini_linq::passes::select! { pipeline { ::core_pass_fixtures::custom_indexes, ::mini_linq::passes::print_pull };
+            ::mini_linq::passes::select! { pipeline { ::core_pass_fixtures::custom_indexes, ::mini_linq::passes::sequence, ::mini_linq::passes::sequential, ::mini_linq::passes::translate_pull };
                 physical {
                     relation L(a: Value); relation R(a: Value, b: Value); relation S(b: Value, c: Value);
                     l = pipe rename L@0 {a -> a}; r = pipe rename R@1 {a -> a, b -> b};
@@ -431,7 +431,7 @@ fn key_only_filtered_index_preserves_existential_answers_without_primary_keys() 
     let l = [(1_i64,), (1,), (2,), (3,), (4,)];
     let r = [(1_i64, 2_i64), (1, 3), (1, 3), (2, 0), (3, 2), (9, 5)];
     let rows: Vec<_> = mini_linq::passes::select! {
-        pipeline { mini_linq::passes::print_pull };
+        pipeline { mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
         physical {
             relation l(a:i64); relation r(a:i64,b:i64);
             left = pipe rename l@0 {a -> x};

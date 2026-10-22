@@ -3,8 +3,12 @@
 mod le_configurations;
 
 macro_rules! host_view {
-    (slice, $rows:expr) => { &$rows[..] };
-    (map, $rows:expr) => { &$rows };
+    (slice, $rows:expr) => {
+        &$rows[..]
+    };
+    (map, $rows:expr) => {
+        &$rows
+    };
 }
 
 // Resolve a named configuration to one pipeline block and one host loader.
@@ -40,7 +44,7 @@ macro_rules! pipeline_configuration {
                 plan = cq_planners::order($($plan)*);
                 physical = [$($canon)* $($intersection)* $($membership)* $($merge)*];
                 structures = [$($dedup)* $($payload)*];
-                print = cq_workload_passes::terminal($printer);
+                print = $printer;
             }
         }
     };

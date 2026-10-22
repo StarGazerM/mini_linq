@@ -31,6 +31,7 @@ struct Checker<'a> {
     program: &'a Program,
     analysis: Analysis,
     facts: BTreeMap<String, Fact>,
+    store_offsets: bool,
 }
 
 fn fail<T>(term: &impl ToTokens, rule: &str, message: &str) -> syn::Result<T> {
@@ -42,10 +43,20 @@ pub fn check(program: &Program) -> syn::Result<Analysis> {
     analyze(program).map(|checker| checker.analysis)
 }
 
+/// Host pull stores retain rows, rather than BE-Offsets addressing tables.
+pub(crate) fn check_host_rows(program: &Program) -> syn::Result<Analysis> {
+    analyze_stores(program, false).map(|checker| checker.analysis)
+}
+
 fn analyze(program: &Program) -> syn::Result<Checker<'_>> {
+    analyze_stores(program, true)
+}
+
+fn analyze_stores(program: &Program, store_offsets: bool) -> syn::Result<Checker<'_>> {
     let structures = cq_lang_structures::contract::check(&program.structures)?;
     let mut checker = Checker {
         program,
+        store_offsets,
         analysis: Analysis {
             structures,
             results: BTreeMap::new(),
@@ -653,7 +664,7 @@ impl Checker<'_> {
             Term::Store { capacity, inner } => {
                 // Formal rule BE-Length: Host stores may grow; separated unknown stores require capacity.
                 let mut fact = self.term(inner, owner)?;
-                if self.flatten_view(inner) {
+                if self.store_offsets && self.flatten_view(inner) {
                     self.range_reads(&fact)?;
                 }
                 if matches!(fact.len, Len::Unknown(_)) {

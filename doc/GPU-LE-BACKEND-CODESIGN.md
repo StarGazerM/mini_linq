@@ -1,11 +1,17 @@
 # Lookup&Expand on the R/E/C back-end model
 
-The co-design is implemented through existing Structures contracts, not a
-separate GPU language. `cq_gpu::print` consumes checked Structures and emits
-`syn::Expr`. The old `p via cursor s;` hidden-field implementation and proposed
-`cq-lang-device` layer have been removed from the design.
+The active GPU backend translates explicitly graded Sequence through
+`cq_gpu_sequence::translate`; decomposition records evaluation and storage
+decisions before `machine_grade` checks GPU placements. See
+[the active workspace](../experiments/gpu/README.md).
 
-## Current responsibilities
+The Structures contracts below describe the isolated legacy Datalog backend
+in `experiments/gpu/legacy-datalog`. Its maintained frozen/leveled indexes and
+frontier scheduling have not been reinterpreted as Sequence terms.
+The removed `p via cursor s;` implementation and proposed `cq-lang-device`
+layer are not compatibility paths.
+
+## Legacy responsibilities
 
 1. **Plan:** `cq_planners::order(le)` records non-introducing partial subatoms
    for early lookup and coarse full subatoms for later expansion. Plan-Le and
@@ -49,7 +55,7 @@ contracts. The host inputs remain immutable during a query.
   the R/E/C refinement obligations.
 - [Lookup-expand status and CPU measurements](STATUS.md#lookup-expand-route-cq_plannersorderle).
 - [GPU design and evidence boundaries](GPU-DESIGN.md).
-- [Implemented GPU pipeline, restrictions and measurements](../experiments/gpu/README.md#structures-gpu-terminal-printer).
+- [Legacy GPU restrictions and measurements](../experiments/gpu/legacy-datalog/README.md#structures-gpu-terminal-printer).
 
 Historical timing anecdotes from the pre-integration proposal are superseded
 by those linked records; they are not evidence that sharing alone caused a

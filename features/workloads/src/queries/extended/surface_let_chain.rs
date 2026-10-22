@@ -17,6 +17,8 @@ pub fn check(scenario: Scenario) {
         answer(*sum, *shifted) :- R(x, y), let sum: i32 = *x + *y,
             let shifted: i32 = *sum * 2 - 1, if *shifted > 0;
     };
-    let actual = result.map(|(column_0, column_1,)| vec![column_0, column_1]).collect();
+    let actual = result
+        .map(|(column_0, column_1)| vec![column_0, column_1])
+        .collect();
     case.check(scenario, actual);
 }

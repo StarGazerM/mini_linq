@@ -1,11 +1,18 @@
 # GPU execution: current design and evidence
 
-The external `cq_gpu::print` terminal printer in `experiments/gpu` consumes
-checked Structures and emits a Rust expression (`Structures → syn::Expr`).
-There is no Device IR. The earlier `cq-lang-device` grammar and `via cursor`
-encoding are superseded, not pending implementation.
+The `cq_gpu_sequence::translate` terminal in `experiments/gpu` consumes checked,
+explicitly graded Sequence and emits CUDA-backed Rust. The
+`cq_gpu_sequence::machine_grade` adapter validates placements against the GPU
+machine; neither adapter chooses a plan. Sequence records tiles, stores,
+canonicalization, output protocols, and machine grades before translation.
 
-## Implemented contract
+The former Structures implementation remains isolated in
+`experiments/gpu/legacy-datalog` for maintained-index Datalog and handwritten
+baselines. Maintained frozen/leveled indexes have no Sequence term yet.
+The following contract and measurements describe that legacy implementation,
+not additional capabilities of the Sequence translator.
+
+## Legacy Structures contract
 
 - **Plan:** `cq_planners::order(le)` records early non-introducing lookups and
   demand-delayed coarse expansions, respecting written Rust Before boundaries.
@@ -40,9 +47,9 @@ symbol collision prevents that combination. Unsupported constructs are
 rejected rather than run on an implicit CPU fallback. These include opaque
 Rust, generators, arbitrary computed heads, union/fallback, merge/smallest,
 and aggregates. GPU recursion is handled by a separate checked Datalog bridge,
-not a new CQ operator. See the [workspace contract and supported domain](../experiments/gpu/README.md#structures-gpu-terminal-printer)
-for current codecs, provider restrictions, reproduction commands and resource
-audits. The printer is experimental, not a general GPU implementation of all CQ.
+not a new CQ operator. See the [legacy workspace contract](../experiments/gpu/legacy-datalog/README.md)
+for its codecs, provider restrictions and historical commands; the
+[Sequence workspace](../experiments/gpu/README.md) documents the active backend.
 
 ## Measurements and provenance
 
@@ -79,13 +86,13 @@ hand-written result, not the generated printer's current performance.
 Canonical evidence, rather than duplicate specification and tuning narratives:
 
 - [H05 samples and optimization history](../experiments/gpu/compare/gpu_h05.results.json),
-  [H05 measurements](../experiments/gpu/h05/README.md), and
-  [original environment and commands](../experiments/gpu/README.md#historical-original-measurements-2026-10-16).
-- [Generated printer and resident measurements](../experiments/gpu/README.md#structures-gpu-terminal-printer):
+  [legacy H05 measurements](../experiments/gpu/legacy-datalog/h05/README.md), and
+  [original environment and commands](../experiments/gpu/legacy-datalog/README.md#historical-original-measurements-2026-10-16).
+- [Generated printer and resident measurements](../experiments/gpu/legacy-datalog/README.md#structures-gpu-terminal-printer):
   distinguish device execution, setup/load, tuple transfer and counts-only paths.
-- [SRDatalog order sweep](../experiments/gpu/README.md#srdatalog-variableclause-order-sweep-2026-10-18):
+- [SRDatalog order sweep](../experiments/gpu/legacy-datalog/README.md#srdatalog-variableclause-order-sweep-2026-10-18):
   rejected wrong-answer configurations are not timing baselines.
-- [Triangle experiment](../experiments/gpu/README.md#directed-triangle-lookup-expand-experiment)
+- [Triangle experiment](../experiments/gpu/legacy-datalog/README.md#directed-triangle-lookup-expand-experiment)
   and [samples](../experiments/gpu/compare/gpu_triangles.results.json): directed
   set triangles, with host edge sort/dedup and upload excluded from GPU timing.
   Its count baseline is not a like-for-like end-to-end full-tuple speedup.
@@ -99,10 +106,10 @@ the accumulated relation on device; every SCC successor is prepared before
 publication. Full/delta outputs remain immutable resident snapshots. Small
 checked metadata readbacks control convergence and allocation.
 
-This implementation rebuilds sets and per-hole indexes. It does not maintain
-a spine or claim amortized compaction costs. Supported syntax, dictionary
-requirements, oracle cases and measured boundaries are documented under
-[Resident Datalog](../experiments/gpu/README.md#resident-datalog).
+The legacy bridge maintains explicit frozen and leveled index snapshots; this
+is the boundary not represented by the Sequence cutover. Supported syntax,
+dictionary requirements, oracle cases and historical measurements remain under
+[Resident Datalog](../experiments/gpu/legacy-datalog/README.md#resident-datalog).
 
 Immutable sorted batches and cursor merges are useful reference mechanisms
 from Differential Dataflow, but its logical timestamp compaction is not

@@ -1,0 +1,40 @@
+[workspace]
+members = ["datalog", "datalog-oracle", "datalog-ddisasm", "printer", "blocked-run", "runtime-oracle", "h05", "triangles", "triangles-runner"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+
+[workspace.dependencies]
+cuda-core = { git = "https://github.com/StarGazerM/cuda-oxide.git", rev = "5f7c34fddadcf250f2e45d0cffe83a3d27f2bea3" }
+cuda-device = { git = "https://github.com/StarGazerM/cuda-oxide.git", rev = "5f7c34fddadcf250f2e45d0cffe83a3d27f2bea3" }
+cuda-host = { git = "https://github.com/StarGazerM/cuda-oxide.git", rev = "5f7c34fddadcf250f2e45d0cffe83a3d27f2bea3" }
+rccl-memory = { git = "https://github.com/StarGazerM/rccl.git", rev = "745f53cc8d447ec58033d97f4d13f2d7e2f7463a" }
+rccl-cub = { git = "https://github.com/StarGazerM/rccl.git", rev = "745f53cc8d447ec58033d97f4d13f2d7e2f7463a" }
+rccl-thrust = { git = "https://github.com/StarGazerM/rccl.git", rev = "745f53cc8d447ec58033d97f4d13f2d7e2f7463a" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+lto = false
+codegen-units = 1
+
+# Preserve the GPU workspace's local device-linking fixes for legacy workloads.
+[patch."https://github.com/StarGazerM/rccl.git"]
+rccl-memory = { path = "/data/rccl/rccl-memory" }
+rccl-cub = { path = "/data/rccl/rccl-cub" }
+rccl-thrust = { path = "/data/rccl/rccl-thrust" }
+
+[patch."https://github.com/StarGazerM/cuda-oxide.git"]
+cuda-artifact-finalizer = { path = "/data/cuda-oxide/crates/cuda-artifact-finalizer" }
+cuda-bindings = { path = "/data/cuda-oxide/crates/cuda-bindings" }
+cuda-core = { path = "/data/cuda-oxide/crates/cuda-core" }
+cuda-device = { path = "/data/cuda-oxide/crates/cuda-device" }
+cuda-host = { path = "/data/cuda-oxide/crates/cuda-host" }
+cuda-macros = { path = "/data/cuda-oxide/crates/cuda-macros" }
+cuda-target-spec = { path = "/data/cuda-oxide/crates/cuda-target-spec" }
+libnvvm-sys = { path = "/data/cuda-oxide/crates/libnvvm-sys" }
+nvjitlink-sys = { path = "/data/cuda-oxide/crates/nvjitlink-sys" }
+oxide-artifacts = { path = "/data/cuda-oxide/crates/oxide-artifacts" }
+ptx-parse = { path = "/data/cuda-oxide/crates/ptx-parse" }
+reserved-oxide-symbols = { path = "/data/cuda-oxide/crates/reserved-oxide-symbols" }

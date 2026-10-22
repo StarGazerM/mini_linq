@@ -183,7 +183,7 @@ mod custom_indexes {
         S: &'a [(Value, Value)],
     ) -> Vec<(&'a Value, &'a Value)> {
         ::core::iter::Iterator::collect(
-            select_case! { pipeline { ::stacked_ir_test_passes::custom_indexes, ::mini_linq::passes::print_pull };
+            select_case! { pipeline { ::stacked_ir_test_passes::custom_indexes, ::mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
                 physical {
                     relation L(a: Value); relation R(a: Value, b: Value); relation S(b: Value, c: Value);
                     l = pipe rename L@0 {a -> a}; r = pipe rename R@1 {a -> a, b -> b};

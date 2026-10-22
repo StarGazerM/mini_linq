@@ -12,6 +12,8 @@ pub fn run(source: Source) {
 
         calendar_shipping(label, orderkey, price, shipdate) :-
             Calendar(shipdate, label), Shipment(shipdate, orderkey, price);
-    }.map(|(a,b,c,d)| vec![a.to_string(), b.to_string(), c.to_string(), d.to_string()]).collect();
+    }
+    .map(|(a, b, c, d)| vec![a.to_string(), b.to_string(), c.to_string(), d.to_string()])
+    .collect();
     typed::check("typed_calendar_shipping", rows);
 }

@@ -1,4 +1,4 @@
-use cq_datalog_fork::{check, compile, compile_with};
+use cq_datalog_fork::{check, compile, compile_with, resolve_cq};
 use cq_lang_datalog_round::{self as round, storage};
 use quote::{ToTokens, quote};
 fn source() -> storage::Program {
@@ -46,7 +46,9 @@ fn default_negation_sets_use_fx_without_a_hole_dedup_override() {
         ::mini_linq::passes::select,
         ::mini_linq::passes::represent,
         ::mini_linq::passes::stage,
-        ::mini_linq::passes::print_pull
+        ::mini_linq::passes::sequence,
+        ::mini_linq::passes::sequential,
+        ::mini_linq::passes::translate_pull
     });
     assert!(!target.holes.is_empty());
     for hole in &target.holes {
@@ -60,15 +62,40 @@ fn default_negation_sets_use_fx_without_a_hole_dedup_override() {
     }
     check(&storage, &target).unwrap();
 }
+
+#[test]
+fn explicit_push_skips_sequence_defaults_but_pull_inherits_them() {
+    for (terminal, sequence) in [
+        (quote!(::cq_datalog::passes::print_push), false),
+        (quote!(::mini_linq::passes::translate_pull), true),
+    ] {
+        let configuration = syn::parse2(quote!(pipeline { print = #terminal; })).unwrap();
+        let queue = resolve_cq(configuration).unwrap();
+        let sequence_path: syn::Path = syn::parse_quote!(::mini_linq::passes::sequence);
+        let grade_path: syn::Path = syn::parse_quote!(::mini_linq::passes::sequential);
+        assert_eq!(
+            queue.passes.iter().any(|pass| pass.path == sequence_path),
+            sequence
+        );
+        assert_eq!(
+            queue.passes.iter().any(|pass| pass.path == grade_path),
+            sequence
+        );
+        assert_eq!(
+            queue.passes.last().unwrap().path,
+            syn::parse2::<syn::Path>(terminal).unwrap()
+        );
+    }
+}
 #[test]
 fn per_hole_queues_check_terminal_path_not_incidental_tokens() {
     let source = source();
     let target = compile(&source).unwrap();
     let mut changed = target.clone();
-    changed.holes[0].pipeline = syn::parse_quote!(pipeline { custom::transform(::mini_linq::passes::print_pull), custom::print });
+    changed.holes[0].pipeline = syn::parse_quote!(pipeline { custom::transform(::mini_linq::passes::translate_pull), custom::print });
     assert!(round::contract::check(&changed).is_err());
     let facts = &changed.holes[0].facts;
-    changed.holes[0].pipeline = syn::parse_quote!(pipeline { custom::transform, custom::lower(#facts), ::mini_linq::passes::print_pull });
+    changed.holes[0].pipeline = syn::parse_quote!(pipeline { custom::transform, custom::lower(#facts), ::mini_linq::passes::translate_pull });
     changed.holes[0].lower = 1;
     round::contract::check(&changed).unwrap();
     round::check_rewrite(&target, &changed).unwrap();
@@ -83,11 +110,11 @@ fn per_hole_queues_check_terminal_path_not_incidental_tokens() {
     changed.holes[0].pipeline.passes.clear();
     assert!(round::contract::check(&changed).is_err());
     changed = target.clone();
-    changed.holes[0].pipeline = syn::parse_quote!(pipeline{other::print_pull});
+    changed.holes[0].pipeline = syn::parse_quote!(pipeline{other::translate_pull});
     assert!(round::contract::check(&changed).is_err());
     changed = target.clone();
     let facts = &changed.holes[0].facts;
-    changed.holes[0].pipeline = syn::parse_quote!(pipeline{custom::lower(#facts), mini_linq::passes::print_pull(unchecked)});
+    changed.holes[0].pipeline = syn::parse_quote!(pipeline{custom::lower(#facts), mini_linq::passes::translate_pull(unchecked)});
     changed.holes[0].lower = 0;
     round::check_rewrite(&target, &changed).unwrap();
 }
@@ -96,7 +123,7 @@ fn fork_arguments_record_queue_and_timing_and_reject_unknown_options() {
     let source = source();
     let target = compile_with(
         &source,
-        quote!(timing=phases;cq=pipeline{custom::plan,custom::lower,mini_linq::passes::print_pull};),
+        quote!(timing=phases;cq=pipeline{custom::plan,custom::lower,mini_linq::passes::translate_pull};),
     )
     .unwrap();
     assert_eq!(target.policy.timing, "phases");
@@ -260,8 +287,8 @@ fn declared_terminal_paths_and_typed_interfaces_survive_round_text() {
     assert_eq!(
         defaults.terminals,
         syn::parse_quote!([
-            ::mini_linq::passes::print_pull => pull,
-            mini_linq::passes::print_pull => pull,
+            ::mini_linq::passes::translate_pull => pull,
+            mini_linq::passes::translate_pull => pull,
             ::cq_datalog::passes::print_push => push
         ])
     );
@@ -325,7 +352,7 @@ fn fork_infers_both_interfaces_and_round_rewrites_preserve_the_registry() {
     let storage = source();
     for (terminal, interface) in [
         (
-            quote!(::mini_linq::passes::print_pull),
+            quote!(::mini_linq::passes::translate_pull),
             round::HoleInterface::Pull,
         ),
         (
@@ -364,7 +391,7 @@ fn fork_infers_both_interfaces_and_round_rewrites_preserve_the_registry() {
         let mut mismatched = changed.clone();
         mismatched.holes[0].pipeline.passes.last_mut().unwrap().path = match interface {
             round::HoleInterface::Pull => syn::parse_quote!(::cq_datalog::passes::print_push),
-            round::HoleInterface::Push => syn::parse_quote!(::mini_linq::passes::print_pull),
+            round::HoleInterface::Push => syn::parse_quote!(::mini_linq::passes::translate_pull),
         };
         assert!(round::check_rewrite(&source, &mismatched).is_err());
         mismatched.holes[0].interface = match interface {
@@ -744,7 +771,7 @@ fn uncertified_hosts_do_not_receive_discharge_facts() {
 #[test]
 fn custom_lower_aliases_require_an_explicit_role() {
     let storage = source();
-    let queue = quote!(cq = pipeline { custom::physical, ::mini_linq::passes::print_pull };);
+    let queue = quote!(cq = pipeline { custom::physical, ::mini_linq::passes::translate_pull };);
     assert!(
         compile_with(&storage, queue.clone())
             .unwrap_err()
@@ -756,8 +783,8 @@ fn custom_lower_aliases_require_an_explicit_role() {
     for arguments in [
         quote!(#queue lower = 7;),
         quote!(#queue lower = 0; lower = 0;),
-        quote!(cq = pipeline { lower, lower, ::mini_linq::passes::print_pull };),
-        quote!(cq = pipeline { lower(host_set Unknown discharged), ::mini_linq::passes::print_pull };),
+        quote!(cq = pipeline { lower, lower, ::mini_linq::passes::translate_pull };),
+        quote!(cq = pipeline { lower(host_set Unknown discharged), ::mini_linq::passes::translate_pull };),
     ] {
         assert!(compile_with(&storage, arguments).is_err());
     }

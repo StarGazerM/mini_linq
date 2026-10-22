@@ -8,8 +8,8 @@
 
 use std::path::{Path, PathBuf};
 
-use cq_load::{Date, Decimal};
 use crate::schema::{ColumnType, Relation};
+use cq_load::{Date, Decimal};
 
 /// A named fixture relation, independent of query syntax.
 pub trait Schema: cq_load::Relation {
@@ -80,7 +80,11 @@ pub fn load<S: Schema>(case: &str, source: Source) -> Vec<S::Row> {
     let result = match source {
         Source::Csv => cq_load::Loader::<S>::csv(
             directory.join(format!("{}.csv", S::SCHEMA.name)),
-            cq_load::CsvOptions { headers: true, batch_size: 2, ..Default::default() },
+            cq_load::CsvOptions {
+                headers: true,
+                batch_size: 2,
+                ..Default::default()
+            },
         ),
         #[cfg(feature = "parquet")]
         Source::Parquet => cq_load::Loader::<S>::parquet(

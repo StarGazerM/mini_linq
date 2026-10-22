@@ -20,7 +20,9 @@ cq-order = { version = "0.1.0", path = "../../passes/cq-order" }
 cq-reduce = { version = "0.1.0", path = "../../passes/cq-reduce" }
 cq-elaborate = { version = "0.1.0", path = "../../passes/cq-elaborate" }
 cq-structure-selection = { version = "0.1.0", path = "../../passes/cq-structure-selection" }
-cq-physical-realization = { version = "0.1.0", path = "../../passes/cq-physical-realization" }
+cq-lang-sequence = { version = "0.1.0", path = "../../languages/cq-lang-sequence" }
+cq-sequence-lowering = { version = "0.1.0", path = "../../passes/cq-sequence-lowering" }
+cq-sequence-pull = { version = "0.1.0", path = "../../passes/cq-sequence-pull" }
 cq-storage = { version = "0.1.0", path = "../../runtime/cq-storage" }
 cq-testkit = { version = "0.1.0", path = "../../testkit/cq-testkit" }
 mini-linq = { version = "0.1.0", path = "../../facade/mini-linq" }
@@ -43,7 +45,9 @@ trace-bridge.workspace = true
 cq-physical-lowering = { version = "0.1.0", path = "../../passes/cq-physical-lowering" }
 cq-stage.workspace = true
 cq-structure-selection.workspace = true
-cq-physical-realization.workspace = true
+cq-lang-sequence.workspace = true
+cq-sequence-lowering.workspace = true
+cq-sequence-pull.workspace = true
 cq-storage.workspace = true
 cq-testkit.workspace = true
 mini-linq.workspace = true

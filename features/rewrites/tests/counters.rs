@@ -13,7 +13,7 @@ macro_rules! runner {
                     $($rewrite,)*
                     mini_linq::passes::select,
                     cq_rewrites::retype(dedup => cq_storage::counters::DistinctSet<_>),
-                    mini_linq::passes::print_pull
+                    mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull
                 }
             }.map(|(a, b, c)| vec![*a, *b, *c]).collect()
         }

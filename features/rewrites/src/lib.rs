@@ -160,7 +160,7 @@
 //! let input = [(1, 2), (1, 3)];
 //! let output: Vec<_> = cq_rewrites::canon_prefixes! {
 //!     arguments { projected };
-//!     pipeline { mini_linq::passes::select, mini_linq::passes::print_pull };
+//!     pipeline { mini_linq::passes::select, mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
 //!     physical {
 //!         relation R(a: i32, b: i32) = (input);
 //!         r = pipe rename R@0 { a -> x, b -> y };
@@ -261,7 +261,11 @@ pub fn join_filter(input: TokenStream) -> TokenStream {
 /// overrides one result's layout. Compose before `sorted_runs`/`prefix_runs`.
 #[proc_macro]
 pub fn sorted_indexes(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), cq_rewrite_passes::sorted_indexes).into()
+    cq_stage::rewrite::<cq_lang_structures::Program>(
+        input.into(),
+        cq_rewrite_passes::sorted_indexes,
+    )
+    .into()
 }
 
 /// Retype eligible one-level payload builds to stable sorted runs.

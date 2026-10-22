@@ -14,6 +14,34 @@ fn checked() -> (cq_lang_sequence::Program, cq_lang_sequence::Analysis) {
 }
 
 #[test]
+fn repeated_translations_have_distinct_cuda_exports() {
+    fn export_names(expression: syn::Expr) -> (syn::Ident, Vec<String>) {
+        let syn::Expr::Block(block) = &expression else {
+            panic!("translation must emit a scoped block")
+        };
+        let Some(syn::Stmt::Item(syn::Item::Mod(module))) = block.block.stmts.first() else {
+            panic!("translation must declare its CUDA module")
+        };
+        let mut functions = Functions::default();
+        functions.visit_expr(&expression);
+        let kernels = functions
+            .queries
+            .iter()
+            .map(|function| function.sig.ident.to_string())
+            .collect();
+        (module.ident.clone(), kernels)
+    }
+    let (program, analysis) = checked();
+    let first = export_names(cq_gpu_sequence::translate(&program, &analysis).unwrap());
+    let second = export_names(cq_gpu_sequence::translate(&program, &analysis).unwrap());
+    assert_ne!(first.0, second.0, "query expansions need distinct modules");
+    assert!(
+        first.1.iter().all(|name| !second.1.contains(name)),
+        "CUDA kernel exports must not collide across query expansions"
+    );
+}
+
+#[test]
 fn physical_and_sequence_contracts_preserve_the_written_join_chain() {
     let program = h05_program::program();
     let analysis = cq_lang_sequence::contract::check(&program).unwrap();
@@ -182,9 +210,13 @@ fn check_generated(program: &cq_lang_sequence::Program) {
         "one query kernel per recorded dispatch"
     );
     for (index, function) in functions.queries.iter().enumerate() {
-        assert_eq!(
-            function.sig.ident,
-            format!("__cq_sequence_dispatch_{index}")
+        assert!(
+            function
+                .sig
+                .ident
+                .to_string()
+                .starts_with(&format!("__cq_sequence_dispatch_{index}_")),
+            "dispatch names must retain their index and an expansion-specific suffix"
         );
         NoQueryConstants.visit_block(&function.block);
         let attributes = function

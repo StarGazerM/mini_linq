@@ -50,13 +50,13 @@ macro_rules! full_matrix {
             kernel_hosts!(all; $plan, [], {
                 first => [intersection: [];],
                 smallest => [intersection: [cq_rewrites::smallest_intersections,];],
-            }, { pull => [printer: mini_linq::passes::print_pull;] });
+            }, { pull => [printer: mini_linq::passes::translate_pull;] });
         }
         mod merge_pull {
             kernel_hosts!($merge_hosts; $plan, [cq_rewrites::merge_joins,], {
                 first => [intersection: [];],
                 smallest => [intersection: [cq_rewrites::smallest_intersections,];],
-            }, { pull => [printer: mini_linq::passes::print_pull;] });
+            }, { pull => [printer: mini_linq::passes::translate_pull;] });
         }
         mod probe_push {
             kernel_hosts!(all; $plan, [], {

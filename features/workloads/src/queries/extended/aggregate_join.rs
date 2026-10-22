@@ -20,12 +20,13 @@ pub fn check(scenario: Scenario) {
             rows(d, id, a) :- Sale(d, id, a), Allowed(d);
         }
     };
-    let actual = result.iter().flat_map(|(key, payload)| {
-        payload.iter().map(move |value| vec![
-            key.0,
-            value.0,
-            value.1,
-        ])
-    }).collect();
+    let actual = result
+        .iter()
+        .flat_map(|(key, payload)| {
+            payload
+                .iter()
+                .map(move |value| vec![key.0, value.0, value.1])
+        })
+        .collect();
     case.check(scenario, actual);
 }

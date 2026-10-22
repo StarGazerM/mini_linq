@@ -19,7 +19,7 @@ correspondence-performance-fixture	manifest-test	hypergraph-proof	tools/fixtures
 cq-index-policy	test	index_demands	passes/cq-index-policy/tests/index_demands.rs
 cq-structure-selection	test	selection	passes/cq-structure-selection/tests/selection.rs
 cq-physical-lowering	test	lowering	passes/cq-physical-lowering/tests/lowering.rs
-cq-physical-realization	test	realization	passes/cq-physical-realization/tests/realization.rs
+cq-sequence-pull	test	realization	passes/cq-sequence-pull/tests/realization.rs
 mini-linq	test	physical_query	facade/mini-linq/tests/physical_query.rs
 mini-linq-macros	lib	macro_inputs	facade/mini-linq-macros/src/lib.rs
 cq-reduce	test	ya_schedule	passes/cq-reduce/tests/ya_schedule.rs

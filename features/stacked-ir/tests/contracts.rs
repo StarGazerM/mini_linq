@@ -52,13 +52,26 @@ fn corpus_passes_have_exact_fixtures_correspondence_and_set_answers() {
 
 #[test]
 fn all_corpus_rust_expressions_are_unchanged() {
+    let machine = cq_lang_sequence::Machine {
+        name: syn::parse_quote!(sequential),
+        root: cq_lang_sequence::LevelNode {
+            name: syn::parse_quote!(host),
+            collaborative: false,
+            dynamic: false,
+            children: vec![],
+        },
+    };
     for scenario in SCENARIOS {
         let source = scenario.parse_physical().unwrap();
         let returned = leave::compile(&enter::compile(&source).unwrap()).unwrap();
         let reference = cq_structure_selection::compile(&source).unwrap();
         let stacked = cq_structure_selection::compile(&returned).unwrap();
-        let reference = cq_physical_realization::compile(&reference).unwrap();
-        let stacked = cq_physical_realization::compile(&stacked).unwrap();
+        let reference = cq_sequence_lowering::compile(&reference).unwrap();
+        let reference_analysis = cq_lang_sequence::check_grading(&reference, &machine).unwrap();
+        let reference = cq_sequence_pull::translate(&reference, &reference_analysis).unwrap();
+        let stacked = cq_sequence_lowering::compile(&stacked).unwrap();
+        let stacked_analysis = cq_lang_sequence::check_grading(&stacked, &machine).unwrap();
+        let stacked = cq_sequence_pull::translate(&stacked, &stacked_analysis).unwrap();
         assert_eq!(reference, stacked, "{}", scenario.name);
         assert_eq!(
             reference.to_token_stream().to_string(),

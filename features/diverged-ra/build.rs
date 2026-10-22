@@ -37,7 +37,7 @@ fn main() {
                     #inputs
                     theta_passes::lower! {
                         pipeline {
-                            #rewrite theta_passes::select, theta_passes::print_pull
+                            #rewrite theta_passes::select, theta_passes::sequence, theta_passes::sequential, theta_passes::translate_pull
                         };
                         #indexes
                     }

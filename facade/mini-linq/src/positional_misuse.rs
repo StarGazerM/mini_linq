@@ -14,8 +14,8 @@
 //! ```compile_fail
 //! type NoInterval<T> = std::collections::HashSet<T>;
 //! let left = [(1_i64,)]; let right = [(1_i64,1_i64)];
-//! let _: Vec<_> = mini_linq::passes::print_pull! {
-//!     pipeline {};
+//! let _: Vec<_> = mini_linq::passes::sequence! {
+//!     pipeline { mini_linq::passes::sequential, mini_linq::passes::translate_pull };
 //!     physical {
 //!         relation L(a:i64) = (left); relation R(b:i64,c:i64) = (right);
 //!         l = pipe rename L@0 {a -> x}; r = pipe rename R@1 {b -> x,c -> z};

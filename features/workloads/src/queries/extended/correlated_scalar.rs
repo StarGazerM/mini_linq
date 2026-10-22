@@ -20,6 +20,8 @@ pub fn check(scenario: Scenario) {
         relation answer(x: i32, v: i32);
         answer(*x, v) :- A(x), scalar!{ v: i32=(0); select (*y); S(x, y, id) }, if *v > limit;
     };
-    let actual = result.map(|(column_0, column_1,)| vec![column_0, column_1]).collect();
+    let actual = result
+        .map(|(column_0, column_1)| vec![column_0, column_1])
+        .collect();
     case.check(scenario, actual);
 }

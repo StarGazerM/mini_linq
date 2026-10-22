@@ -137,12 +137,21 @@ pipeline {
     surface = [Path(tokens), ...];
     plan = Path(tokens); ix = Path; lower = Path;
     physical = [Path(tokens), ...]; select = Path;
-    structures = [Path(tokens), ...]; print = Path;
+    structures = [Path(tokens), ...];
+    represent = Path(tokens); stage = Path(tokens);
+    sequence = Path(tokens); decompose = [Path(tokens), ...];
+    grade = Path(tokens); print = Path(tokens);
 }
 ```
 
 The resolved order is surface → plan → ix → lower → physical rewrites →
-select → Structures rewrites → print. A pass macro receives
+select → Structures rewrites → represent → stage → sequence → decompose →
+grade → print. The shipped CPU target is `sequence` → `sequential` →
+`translate_pull`; the translator also emits the profile-counter variant.
+An explicit Structures terminal such as `own_push::push`, with no authored
+sequence, grade, or decompose phases, bypasses the default Sequence phases.
+Custom Sequence terminal paths must explicitly select sequence and grade.
+A pass macro receives
 `arguments { tokens }; pipeline { remaining_paths }; <program>`; the
 arguments packet is omitted when empty. An authored IR can start directly at
 a compatible macro with an explicit queue.

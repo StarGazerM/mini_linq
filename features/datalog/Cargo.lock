@@ -188,7 +188,7 @@ dependencies = [
  "cq-lang-datalog-source",
  "cq-lang-datalog-storage",
  "cq-lang-datalog-strata",
- "cq-lang-structures",
+ "cq-lang-sequence",
  "cq-stage",
  "proc-macro2",
  "quote",
@@ -219,8 +219,10 @@ dependencies = [
 name = "cq-datalog-print-hole"
 version = "0.0.0"
 dependencies = [
+ "cq-lang-sequence",
  "cq-lang-structures",
- "cq-physical-realization",
+ "cq-sequence-lowering",
+ "cq-sequence-pull",
  "cq-stage",
  "proc-macro2",
  "quote",
@@ -885,7 +887,6 @@ dependencies = [
  "cq-lang-vo",
  "cq-order",
  "cq-physical-lowering",
- "cq-physical-realization",
  "cq-reduce",
  "cq-represent",
  "cq-sequence-lowering",

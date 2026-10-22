@@ -1,5 +1,9 @@
 //! Structures → Rust push printer, composed with `pipeline { print = own_push::push; }`.
 //!
+//! This explicit terminal keeps its Structures boundary. The default pull route
+//! instead lowers through `sequence`, checks `sequential` grading, and ends at
+//! `translate_pull`; direct comparisons must supply that complete pass queue.
+//!
 //! The complete checked Structures program is the only compiler input. Its
 //! Physical operators and concrete read, build, retention and canonical state
 //! types are preserved. `push` collects nested-loop results into a Vec endpoint;

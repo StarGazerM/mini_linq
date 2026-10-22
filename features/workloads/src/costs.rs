@@ -40,7 +40,7 @@ configuration!(keep, {
     }
     pub(super) fn projection(r: &[Edge], s: &[Edge]) -> Answers {
         ::mini_linq::passes::index_demands! {
-            pipeline { mini_linq::passes::lower, mini_linq::passes::select, cq_rewrites::retype(dedup => crate::measurement::Dedup<_>), mini_linq::passes::print_pull };
+            pipeline { mini_linq::passes::lower, mini_linq::passes::select, cq_rewrites::retype(dedup => crate::measurement::Dedup<_>), mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
             relational {
                 relation r(a:i32,dropped:i32); relation s(a:i32,b:i32);
                 r0 = rename r@0 { a -> a, dropped -> dropped };
@@ -140,7 +140,7 @@ configuration!(canon, {
     }
     pub(super) fn projection(r: &[Edge], s: &[Edge]) -> Answers {
         ::mini_linq::passes::index_demands! {
-            pipeline { mini_linq::passes::lower, cq_rewrites::canon_prefixes, mini_linq::passes::select, cq_rewrites::retype(dedup => crate::measurement::Dedup<_>), mini_linq::passes::print_pull };
+            pipeline { mini_linq::passes::lower, cq_rewrites::canon_prefixes, mini_linq::passes::select, cq_rewrites::retype(dedup => crate::measurement::Dedup<_>), mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
             relational {
                 relation r(a:i32,dropped:i32); relation s(a:i32,b:i32);
                 r0 = rename r@0 { a -> a, dropped -> dropped };

@@ -273,14 +273,19 @@ fn constant_group_fuses_owned_measures_without_losing_set_semantics() {
                 let group:i32 = 0, let amount:i64 = *value * 2;
         }
     };
-    let rows: Vec<_> = groups.iter().flat_map(|(key, values)| values.iter().map(move |value| (*key,*value))).collect();
+    let rows: Vec<_> = groups
+        .iter()
+        .flat_map(|(key, values)| values.iter().map(move |value| (*key, *value)))
+        .collect();
     assert_eq!(rows, [((0,), (3, 32, -8, 20))]);
     // The allocation-free result remains a reusable keyed and scanned CQ host.
     let selected: Vec<_> = mini_linq::compile! {
         pipeline {}
         struct Reuse; relation groups(group:i32,n:usize,total:i64,lo:i64,hi:i64);
         answer(total) :- groups(group,n,total,lo,hi), if *group == 0;
-    }.map(|(total,)| *total).collect();
+    }
+    .map(|(total,)| *total)
+    .collect();
     assert_eq!(selected, [32]);
     let Sale: [(i32, i64); 0] = [];
     let empty = mini_linq::compile! {

@@ -121,9 +121,10 @@ per-run counts/timings and validation witnesses go to
 running a second scale replaces the named summary files. Raw runs keep the scale.
 
 cq-storage/counters selects the measured pull expression through profile_select!;
-the unselected expression disappears during macro expansion. The ordinary
-cq-physical-realization::compile function continues to emit its original tokens.
-Physical and Structures representations and the selected algorithms are unchanged.
+the unselected expression disappears during macro expansion. The default pull
+pipeline lowers Structures to Sequence, checks host-only grading, then uses
+cq-sequence-pull::translate or cq-sequence-pull::translate_profile. Physical and
+Structures representations and the selected algorithms are unchanged.
 
 Each Physical result has a record even when no consumer demands it. Positional
 projections folded into immutable selections are aliases: their rows and inclusive

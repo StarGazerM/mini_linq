@@ -527,8 +527,8 @@ not their order. The printer
 still has a refinement obligation to implement each operation correctly:
 structural record checks are not an independent Rust equivalence proof.
 \paragraph{Nested CQ codegen boundary.} The optional Datalog-owned
-\code{print\_hole(partition(N))} terminal delegates Structures realization to
-the same public pull-printing API as \code{print\_pull}, then wraps the resulting
+\code{print\_hole(partition(N))} terminal delegates checked Sequence translation
+to the same public pull translation API as \code{translate\_pull}, then wraps the resulting
 expression in a separately monomorphized facade dispatch helper. It does not
 alter the CQ, collect the iterator, or clone its rows. Partition numbers select
 codegen homes, not execution threads or query partitions. This is an explicit

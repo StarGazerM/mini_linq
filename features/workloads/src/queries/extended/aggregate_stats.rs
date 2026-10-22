@@ -18,14 +18,19 @@ pub fn check(scenario: Scenario) {
             rows(d, id, a) :- Sale(d, id, a), if *d > 0;
         }
     };
-    let actual = result.iter().flat_map(|(key, payload)| {
-        payload.iter().map(move |value| vec![
-            key.0,
-            i32::try_from(value.0).unwrap(),
-            value.1,
-            value.2,
-            value.3,
-        ])
-    }).collect();
+    let actual = result
+        .iter()
+        .flat_map(|(key, payload)| {
+            payload.iter().map(move |value| {
+                vec![
+                    key.0,
+                    i32::try_from(value.0).unwrap(),
+                    value.1,
+                    value.2,
+                    value.3,
+                ]
+            })
+        })
+        .collect();
     case.check(scenario, actual);
 }

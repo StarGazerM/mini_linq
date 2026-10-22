@@ -146,7 +146,11 @@ fn device_output(pool: &Arc<Pool>, codec: Codec, len: usize, order: &[usize]) ->
             count.clone(),
             0,
             codec,
-            if len == 0 { Bounds::Empty } else { Bounds::Inclusive { min: -48, max: 48 } },
+            if len == 0 {
+                Bounds::Empty
+            } else {
+                Bounds::Inclusive { min: -48, max: 48 }
+            },
         )?
     };
     let decoded = encoded.decoded()?;
@@ -158,12 +162,19 @@ fn device_output(pool: &Arc<Pool>, codec: Codec, len: usize, order: &[usize]) ->
             count.clone(),
             0,
             codec,
-            if len == 0 { Bounds::Empty } else { Bounds::Inclusive { min: -48, max: 48 } },
+            if len == 0 {
+                Bounds::Empty
+            } else {
+                Bounds::Inclusive { min: -48, max: 48 }
+            },
         )?
     };
     let owner = Arc::downgrade(&count);
     drop(count);
-    assert!(owner.upgrade().is_some(), "packed columns must retain count ownership");
+    assert!(
+        owner.upgrade().is_some(),
+        "packed columns must retain count ownership"
+    );
     inspect(
         "device-output",
         &encoded,
@@ -199,8 +210,17 @@ fn owned_plain(pool: &Arc<Pool>, len: usize) -> Result<()> {
     let count = Arc::new(Buffer::from_host(pool.clone(), &[u64::MAX, len as u64])?);
     let owner = Arc::downgrade(&count);
     let column = EncodedColumn::from_plain_buffer(
-        raw, count.clone(), 8,
-        if len == 0 { Bounds::Empty } else { Bounds::Inclusive { min: -1700, max: 1372 } },
+        raw,
+        count.clone(),
+        8,
+        if len == 0 {
+            Bounds::Empty
+        } else {
+            Bounds::Inclusive {
+                min: -1700,
+                max: 1372,
+            }
+        },
     )?;
     drop(count);
     assert!(
@@ -229,7 +249,9 @@ fn invalid_plain_count(pool: &Arc<Pool>) -> Result<()> {
     for offset in [1, 8, usize::MAX] {
         let raw = Buffer::from_host(pool.clone(), &[1i64])?;
         let count = Arc::new(Buffer::from_host(pool.clone(), &[1u64])?);
-        assert!(EncodedColumn::from_plain_buffer(raw, count, offset, Bounds::singleton(1)).is_err());
+        assert!(
+            EncodedColumn::from_plain_buffer(raw, count, offset, Bounds::singleton(1)).is_err()
+        );
     }
     Ok(())
 }
@@ -304,7 +326,13 @@ fn main() -> Result<()> {
             cases += 1;
         }
         let many_vectors: Vec<_> = (0..(1024 * 513 + 7))
-            .map(|i| if i / 1024 % 3 == 0 { -71 } else { (i as i64 * 17 % 1237) - 600 })
+            .map(|i| {
+                if i / 1024 % 3 == 0 {
+                    -71
+                } else {
+                    (i as i64 * 17 % 1237) - 600
+                }
+            })
             .collect();
         check(&pool, "hierarchical-offsets", &many_vectors, codec, &order)?;
         cases += 1;

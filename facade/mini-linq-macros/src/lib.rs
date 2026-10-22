@@ -29,7 +29,9 @@ fn defaults() -> cq_stage::Configuration {
         select = ::mini_linq::passes::select;
         represent = ::mini_linq::passes::represent;
         stage = ::mini_linq::passes::stage;
-        print = ::mini_linq::passes::print_pull;
+        sequence = ::mini_linq::passes::sequence;
+        grade = ::mini_linq::passes::sequential;
+        print = ::mini_linq::passes::translate_pull;
     } }
 }
 
@@ -366,29 +368,18 @@ pub fn sequential(input: TokenStream) -> TokenStream {
     .into()
 }
 
-/// Sequence → final Rust pull iterator (without profile counters).
+/// Sequence → final Rust pull iterator, with optional runtime profile counters.
 #[proc_macro]
 pub fn translate_pull(input: TokenStream) -> TokenStream {
     cq_stage::pass::<cq_lang_sequence::Program, syn::Expr>(input.into(), |source, args| {
         no_arguments(args)?;
         let analysis = cq_lang_sequence::check_grading(source, &sequential_machine())?;
-        let expression = cq_sequence_pull::translate(source, &analysis)?;
-        Ok(syn::parse_quote!((#expression).into_iter()))
-    })
-    .into()
-}
-
-/// Structures → final Rust pull expression.
-/// Formal rule ST-Terminal: Print checked Structures with no remaining continuation.
-#[proc_macro]
-pub fn print_pull(input: TokenStream) -> TokenStream {
-    cq_stage::pass::<cq_lang_structures::Program, syn::Expr>(input.into(), |source, args| {
-        no_arguments(args)?;
-        let plain = cq_physical_realization::compile(source)?;
-        let profile = cq_physical_realization::compile_profile(source)?;
-        Ok(syn::parse_quote!(
-            ::cq_storage::profile_select! { plain { #plain } counters { #profile } }
-        ))
+        let plain = cq_sequence_pull::translate(source, &analysis)?;
+        let profile = cq_sequence_pull::translate_profile(source, &analysis)?;
+        Ok(syn::parse_quote!(::cq_storage::profile_select! {
+            plain { (#plain).into_iter() }
+            counters { (#profile).into_iter() }
+        }))
     })
     .into()
 }
@@ -519,7 +510,9 @@ mod tests {
                     select(positional(R)),
                     ::mini_linq::passes::represent,
                     ::mini_linq::passes::stage,
-                    ::mini_linq::passes::print_pull
+                    ::mini_linq::passes::sequence,
+                    ::mini_linq::passes::sequential,
+                    ::mini_linq::passes::translate_pull
                 };
                 #cq
             })

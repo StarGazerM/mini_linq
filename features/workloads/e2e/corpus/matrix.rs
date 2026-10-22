@@ -10,7 +10,10 @@ pub fn verify_cover(rows: &[Config]) {
         for (axis, &value) in row.iter().enumerate() {
             assert!(value < AXIS_SIZES[axis], "unknown axis value: {row:?}");
         }
-        assert!(row[4] == 0 || row[9] == 0, "positional advice requires a slice");
+        assert!(
+            row[4] == 0 || row[9] == 0,
+            "positional advice requires a slice"
+        );
         for a in 0..10 {
             for b in a + 1..10 {
                 observed.insert((a, row[a], b, row[b]));
@@ -26,12 +29,14 @@ pub fn verify_cover(rows: &[Config]) {
                     if a == 4 && b == 9 && x != 0 && y == 1 {
                         continue;
                     }
-                    assert!(observed.contains(&(a, x, b, y)), "uncovered axes {a}={x}, {b}={y}");
+                    assert!(
+                        observed.contains(&(a, x, b, y)),
+                        "uncovered axes {a}={x}, {b}={y}"
+                    );
                     required += 1;
                 }
             }
         }
-
     }
     assert_eq!(required, 367);
     // Every value participates in at least one required pair, so pair coverage
@@ -42,8 +47,18 @@ pub fn verify_cover(rows: &[Config]) {
 pub fn verify_catalog(suite: &str, included: &[&str]) {
     use std::collections::BTreeSet;
     let actual: BTreeSet<_> = included.iter().copied().collect();
-    assert_eq!(actual.len(), included.len(), "duplicate {suite} case registration");
-    let expected: BTreeSet<_> = cq_workloads::catalog::named(suite).unwrap()
-        .iter().map(|case| case.name).collect();
-    assert_eq!(actual, expected, "{suite} execution must include every catalog case");
+    assert_eq!(
+        actual.len(),
+        included.len(),
+        "duplicate {suite} case registration"
+    );
+    let expected: BTreeSet<_> = cq_workloads::catalog::named(suite)
+        .unwrap()
+        .iter()
+        .map(|case| case.name)
+        .collect();
+    assert_eq!(
+        actual, expected,
+        "{suite} execution must include every catalog case"
+    );
 }

@@ -3,19 +3,24 @@ name = "gpu-h05-compiled"
 version = "0.1.0"
 edition.workspace = true
 
+[features]
+triangle-sequence-rejection = []
+h05-a-sequence-rejection = []
+h05-b-sequence-rejection = []
+
 [dependencies]
 mini-linq = { path = "../../../facade/mini-linq" }
 cq-planners = { path = "../../../features/planners" }
 cq-rewrites = { path = "../../../features/rewrites" }
-cq-storage = { path = "../../../runtime/cq-storage" }
-cq-gpu = { path = "../printer" }
+cq-gpu-sequence = { path = "../sequence" }
+cq-gpu-sequence-runtime = { path = "../sequence-runtime" }
+cq-sequence-rewrites = { path = "../../../features/sequence-rewrites" }
 cq-gpu-runtime = { path = "../printer-runtime" }
+cq-storage = { path = "../../../runtime/cq-storage" }
 cuda-core.workspace = true
 gpu-compress = { path = "../compress" }
 cuda-device.workspace = true
 cuda-host.workspace = true
-gpu-tiles = { path = "../tiles" }
-gpu-blocked-run = { path = "../blocked-run" }
 serde_json.workspace = true
 
 [dev-dependencies]

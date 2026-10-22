@@ -8,7 +8,7 @@ fn main() {
     let l = [(1,)];
     let r = [(1, 2)];
     let _ = mini_linq::passes::select! {
- pipeline { cq_rewrites::retype(payload => crate::MissingRead<_,_>), mini_linq::passes::print_pull };
+ pipeline { cq_rewrites::retype(payload => crate::MissingRead<_,_>), mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
         physical {
             relation l(a: i32); relation r(a: i32, b: i32);
             left = pipe rename l@0 {a -> a}; right = let rename r@1 {a -> a, b -> b};

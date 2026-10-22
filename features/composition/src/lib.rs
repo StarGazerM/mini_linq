@@ -56,7 +56,7 @@ pub fn query<'a>(
             physical = [];
             select = mini_linq::passes::select;
             structures = [];
-            print = mini_linq::passes::print_pull;
+            print = mini_linq::passes::translate_pull;
             surface = [];
         }
         struct Join;
@@ -71,7 +71,7 @@ pub fn query<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cq_testkit::{cq_semantics, harness, Database, Rows};
+    use cq_testkit::{Database, Rows, cq_semantics, harness};
 
     #[test]
     fn composed_pipeline_preserves_nested_union_and_fallback() {
@@ -84,7 +84,7 @@ mod tests {
                 ix = mini_linq::passes::index_demands;
                 lower = mini_linq::passes::lower;
                 select = mini_linq::passes::select;
-                print = mini_linq::passes::print_pull;
+                print = mini_linq::passes::translate_pull;
             }
             struct Q; relation L(a:i32); relation R(a:i32,b:i32); relation S(a:i32,b:i32);
             answer(a,b) :- L(a), {{R(a,b)} | {R(a,b)}} else {S(a,b)};
@@ -208,7 +208,7 @@ mod tests {
                 ix = mini_linq::passes::index_demands;
                 lower = mini_linq::passes::lower;
                 select = mini_linq::passes::select;
-                print = mini_linq::passes::print_pull;
+                print = mini_linq::passes::translate_pull;
             }
             struct Native;
             relation L(a: i32);
@@ -262,7 +262,7 @@ mod tests {
                                     ix = mini_linq::passes::index_demands;
                                     lower = mini_linq::passes::lower;
                                     select = mini_linq::passes::select;
-                                    print = mini_linq::passes::print_pull;
+                                    print = mini_linq::passes::translate_pull;
                                 }
                                 struct Partial;
                                 relation L(a: i32);

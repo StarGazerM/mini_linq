@@ -32,6 +32,10 @@
 //! `surface = [];` explicitly disables surface expansion.
 //! Select the embedded CQ compiler with `cq = pipeline { plan = pass; ... };`
 //! inside that configuration. Its resolved queue is recorded on each hole.
+//! Embedded holes default to `sequence`, `sequential`, and `translate_pull`
+//! after Structures representation and staging. Custom Sequence terminals,
+//! including `print_hole`, explicitly select `sequence` and `grade` in their
+//! CQ configuration; terminal-only custom choices retain Structures input.
 //! [`DatalogConfiguration`] exposes the same resolution to Rust callers.
 //!
 //! Each rule hole records `consumer canonical`: its result belongs to exactly
@@ -93,7 +97,7 @@
 //! unchanged registry. It cannot add registry entries or alter the hole's
 //! context facts, canonical owner, or CQ meaning.
 //! Parallel partition selects push for rule holes whose terminal is exactly
-//! registered `::mini_linq::passes::print_pull` with empty arguments, provided
+//! registered `::mini_linq::passes::translate_pull` with empty arguments, provided
 //! `::cq_datalog::passes::print_push` is also registered. It preserves custom
 //! terminals, authored terminal arguments, and all frozen-key holes. This
 //! applies with or without task-local deduplication, including no-scan rules.

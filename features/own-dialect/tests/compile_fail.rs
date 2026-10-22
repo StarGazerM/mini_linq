@@ -143,7 +143,7 @@ fn unsupported_written_choices_are_refused_after_core_contracts() {
         };
         success(compiler.compile(
             &format!("{name}_pull"),
-            &expression("mini_linq::passes::print_pull"),
+            &expression("mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull"),
         ));
         let diagnostic = if name == "merge" {
             "own_push: merge is unsupported"
@@ -209,7 +209,7 @@ fn printer_rejects_arguments_and_a_remaining_queue() {
         compiler.compile(
             "remaining",
             &format!(
-                "own_push::push! {{ pipeline {{ mini_linq::passes::print_pull }}; {source} }}"
+                "own_push::push! {{ pipeline {{ mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull }}; {source} }}"
             ),
         ),
         "Rust printer must be the final pass",
@@ -220,7 +220,10 @@ fn printer_rejects_arguments_and_a_remaining_queue() {
 fn positional_advice_requires_a_positional_host() {
     let compiler = Compiler::new();
     for (name, printer) in [
-        ("pull_positions", "mini_linq::passes::print_pull"),
+        (
+            "pull_positions",
+            "mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull",
+        ),
         ("push_positions", "own_push::push"),
     ] {
         failure(

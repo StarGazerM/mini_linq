@@ -26,8 +26,14 @@ fn layouts(program: &ir::Program, result: &str) -> Vec<(Vec<Vec<String>>, String
         .filter(|entry| symbol_name(&entry.name) == result)
         .filter_map(|entry| match &entry.structure {
             Structure::Built { keyed, .. } => Some((
-                keyed.levels.iter().map(|l| l.columns.iter().map(symbol_name).collect()).collect(),
-                quote::ToTokens::to_token_stream(&keyed.ty).to_string().replace(' ', ""),
+                keyed
+                    .levels
+                    .iter()
+                    .map(|l| l.columns.iter().map(symbol_name).collect())
+                    .collect(),
+                quote::ToTokens::to_token_stream(&keyed.ty)
+                    .to_string()
+                    .replace(' ', ""),
             )),
             _ => None,
         })
@@ -45,25 +51,44 @@ fn default_layouts_cover_reads_in_binding_order() {
     assert_eq!(
         layouts(&target, "c"),
         [
-            (vec![vec!["z".into()]], "::cq_storage::HashIndex<'_,_,_>".into()),
-            (vec![vec!["z".into()], vec!["a".into()]], "::cq_storage::Trie<'_,_,::cq_storage::HashSet<_>>".into()),
+            (
+                vec![vec!["z".into()]],
+                "::cq_storage::HashIndex<'_,_,_>".into()
+            ),
+            (
+                vec![vec!["z".into()], vec!["a".into()]],
+                "::cq_storage::Trie<'_,_,::cq_storage::HashSet<_>>".into()
+            ),
         ]
     );
     // The composite read is ordered by binding, not alphabetically.
     assert_eq!(
         layouts(&target, "d"),
-        [(vec![vec!["z".into()], vec!["a".into()]], "::cq_storage::Trie<'_,_,::cq_storage::HashIndex<'_,_,_>>".into())]
+        [(
+            vec![vec!["z".into()], vec!["a".into()]],
+            "::cq_storage::Trie<'_,_,::cq_storage::HashIndex<'_,_,_>>".into()
+        )]
     );
     // Idempotent on its own output.
-    assert_eq!(cq_rewrite_passes::sorted_indexes(&target, quote!()).unwrap(), target);
+    assert_eq!(
+        cq_rewrite_passes::sorted_indexes(&target, quote!()).unwrap(),
+        target
+    );
 }
 
 #[test]
 fn an_explicit_layout_overrides_the_default_but_must_serve_every_read() {
     let source = program();
     let target = cq_rewrite_passes::sorted_indexes(&source, quote!(D => [a][z])).unwrap();
-    assert_eq!(layouts(&target, "d")[0].0, [vec!["a".to_string()], vec!["z".to_string()]]);
-    assert_eq!(layouts(&target, "c").len(), 2, "other results keep the default");
+    assert_eq!(
+        layouts(&target, "d")[0].0,
+        [vec!["a".to_string()], vec!["z".to_string()]]
+    );
+    assert_eq!(
+        layouts(&target, "c").len(),
+        2,
+        "other results keep the default"
+    );
     // `c` is probed on [z]; one layout [a][z] cannot serve that read.
     assert!(cq_rewrite_passes::sorted_indexes(&source, quote!(C => [a][z])).is_err());
     // Levels must be single columns of the result.
@@ -76,7 +101,9 @@ fn an_explicit_layout_overrides_the_default_but_must_serve_every_read() {
 #[test]
 fn chain_cover_is_minimum_and_checked() {
     use std::collections::BTreeSet;
-    let demands: BTreeSet<Vec<u8>> = [vec![1], vec![1, 2], vec![3], vec![1, 2, 3], vec![2, 3]].into_iter().collect();
+    let demands: BTreeSet<Vec<u8>> = [vec![1], vec![1, 2], vec![3], vec![1, 2, 3], vec![2, 3]]
+        .into_iter()
+        .collect();
     let chains = cq_rewrite_passes::chain_cover(&demands, |_| true);
     cq_rewrite_passes::check_chain_cover(&demands, &chains).unwrap();
     // The poset's width is 2 ({1} and {3} are incomparable): two chains.

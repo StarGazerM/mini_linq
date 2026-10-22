@@ -244,6 +244,7 @@ pub fn config_tokens(config: &Configuration) -> TokenStream {
         stage,
         print,
         surface,
+        ..
     } = config;
     let plan = plan.as_ref().map(|pass| quote!(plan = #pass;));
     let ix = ix.as_ref().map(|pass| quote!(ix = #pass;));

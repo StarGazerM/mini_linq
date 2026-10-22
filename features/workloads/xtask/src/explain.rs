@@ -91,7 +91,7 @@ impl Stage {
             Self::Structures => "recorded runtime representations and boundaries",
             Self::Repr => "recorded result carriers",
             Self::Stage => "recorded total batch boundaries",
-            Self::Rust => "Rust realization of the recorded Structures program",
+            Self::Rust => "Rust translation of the host-graded Sequence program",
         }
     }
 }
@@ -206,8 +206,24 @@ fn explain_case(case: &QueryCase, through: Stage, repository_root: &Path) -> Res
     if through == Stage::Stage {
         return artifacts.finish(through);
     }
-    let rust = artifacts.attempt("Structures -> Rust", || {
-        cq_physical_realization::compile(&staged)
+    let sequence = artifacts.attempt("Structures -> Sequence", || {
+        cq_sequence_lowering::compile(&staged)
+    })?;
+    let machine = cq_lang_sequence::Machine {
+        name: syn::parse_quote!(sequential),
+        root: cq_lang_sequence::LevelNode {
+            name: syn::parse_quote!(host),
+            collaborative: false,
+            dynamic: false,
+            children: vec![],
+        },
+    };
+    let analysis = artifacts.attempt("Sequence host grading", || {
+        cq_lang_sequence::check_grading(&sequence, &machine)
+    })?;
+    let rust = artifacts.attempt("Sequence -> Rust", || {
+        let rows = cq_sequence_pull::translate(&sequence, &analysis)?;
+        Ok::<syn::Expr, syn::Error>(syn::parse_quote!((#rows).into_iter()))
     })?;
     artifacts.write_stage(Stage::Rust, &format!("{}\n", rust.to_token_stream()))?;
     artifacts.finish(through)

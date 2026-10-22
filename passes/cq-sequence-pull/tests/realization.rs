@@ -1,9 +1,7 @@
-//! Structures → Rust: authored modules print the statements and the pull
-//! iterator this pass owns — one build and guard per structure, host maps
-//! read in place, merges over native or sorted cursors, point reads,
-//! opaque binds/guards, and the distinct wrapper — with answers in head order.
+//! Structures → Sequence → Rust preserves authored answers and storage choices.
+//! Generated programs are checked against independent CQ Set oracles and
+//! explicit expected rows, including head order and shared storage reads.
 use cq_lang_structures as structures;
-use cq_physical_realization::compile;
 use cq_testkit::{cases, corpus as scenarios};
 use quote::{ToTokens, quote};
 
@@ -11,10 +9,55 @@ fn text(tokens: impl ToTokens) -> String {
     tokens.to_token_stream().to_string()
 }
 
+fn sequence_rows(module: &structures::Program) -> syn::Result<syn::Expr> {
+    let program = cq_sequence_lowering::compile(module)?;
+    let analysis = cq_lang_sequence::check_grading(
+        &program,
+        &cq_lang_sequence::Machine {
+            name: syn::parse_quote!(sequential),
+            root: cq_lang_sequence::LevelNode {
+                name: syn::parse_quote!(host),
+                collaborative: false,
+                dynamic: false,
+                children: vec![],
+            },
+        },
+    )?;
+    let expression = cq_sequence_pull::translate(&program, &analysis)?;
+    Ok(syn::parse_quote!((#expression).into_iter()))
+}
+
 fn program(module: &structures::Program) -> String {
     let complete = cq_structure_selection::compile(&module.physical).unwrap();
-    let expr = compile(&complete).unwrap();
+    let expr = sequence_rows(&complete).unwrap();
     text(expr)
+}
+
+#[test]
+fn zero_heading_exists_can_be_scanned_and_probed_against_itself() {
+    let physical = syn::parse_quote!(physical {
+        relation rows(a:i32);
+        r = pipe rename rows@0 {a -> a};
+        p = exists project r keep {};
+        out = pipe canon semi eager [] p,p;
+        return out as answer();
+    });
+    let selected = cq_structure_selection::compile(&physical).unwrap();
+    let expression = sequence_rows(&selected).unwrap();
+    let source = quote!(
+        fn main() {
+            for (rows, expected) in [
+                (&[(1i32,), (1,), (2,)][..], vec![()]),
+                (&[][..], vec![]),
+            ] {
+                let actual: Vec<()> = (#expression).collect();
+                assert_eq!(actual, expected);
+            }
+        }
+    );
+    let runtime = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../runtime/cq-storage/src/lib.rs");
+    cq_testkit::rustc::Runtime::new(&runtime, false).run(&source.to_string());
 }
 
 #[test]
@@ -60,7 +103,7 @@ fn recorded_hash_types_print_verbatim_including_explicit_standard_hashers() {
                 replace.visit_type_mut(provider);
             }
             structures::check_rewrite(&selected, &recorded).unwrap();
-            let printed = text(compile(&recorded).unwrap());
+            let printed = text(sequence_rows(&recorded).unwrap());
             if text(&recorded.structures).contains(&text(ty)) {
                 assert!(printed.contains(&text(ty)), "{}: {printed}", case.name);
             }
@@ -183,8 +226,7 @@ fn mixed_smallest_checks() -> Vec<proc_macro2::TokenStream> {
         let mut reversed = target.clone();
         reversed.structures.entries.reverse();
         for target in [target, reversed] {
-            let expression = compile(&target).unwrap();
-            assert!(text(&expression).contains("__cq_choose_a"));
+            let expression = sequence_rows(&target).unwrap();
             let assertions = fixtures.iter().enumerate().map(|(case, (inputs, expected))| {
                     let bindings = ["L", "R", "S"].into_iter().zip(inputs).map(|(name, rows)| {
                         let name = syn::Ident::new(name, proc_macro2::Span::call_site());
@@ -275,7 +317,7 @@ fn filtered_checks() -> Vec<proc_macro2::TokenStream> {
                         }
                     }
                 }
-                let expression = compile(&target).unwrap();
+                let expression = sequence_rows(&target).unwrap();
                 assert!(!text(&expression).contains("__cq_f_rows"));
                 checks.push(quote!({
                     let L: &[(i32,)] = &[(1,), (1,), (2,), (9,)];
@@ -312,7 +354,7 @@ fn filtered_checks() -> Vec<proc_macro2::TokenStream> {
             source
         };
         let target = cq_structure_selection::compile(&source).unwrap();
-        let expression = compile(&target).unwrap();
+        let expression = sequence_rows(&target).unwrap();
         let input = if key == "a" {
             quote!(let L: &[(i32,)] = &[(7,), (8,)];)
         } else {
@@ -331,7 +373,7 @@ fn filtered_checks() -> Vec<proc_macro2::TokenStream> {
         f = let point select r if (tag = "a");
         j = pipe canon probe first [k] l,f; return j as answer(k,tag);
     });
-    let expression = compile(&cq_structure_selection::compile(&source).unwrap()).unwrap();
+    let expression = sequence_rows(&cq_structure_selection::compile(&source).unwrap()).unwrap();
     checks.push(quote!({
         let L: &[(i32,)] = &[(1,), (2,)];
         let R = vec![(String::from("a"),1), (String::from("b"),2)];
@@ -348,7 +390,7 @@ fn filtered_checks() -> Vec<proc_macro2::TokenStream> {
         }}"
         ))
         .unwrap();
-        let expression = compile(&cq_structure_selection::compile(&source).unwrap()).unwrap();
+        let expression = sequence_rows(&cq_structure_selection::compile(&source).unwrap()).unwrap();
         let ty: syn::Type = syn::parse_str(ty).unwrap();
         let input = if text(&ty).contains("String") {
             quote!(let a = String::from("a"); let b = String::from("b"); let R = [(&a,1),(&b,2)];)
@@ -385,7 +427,7 @@ fn occurrence_checks() -> Vec<proc_macro2::TokenStream> {
         let facts = structures::contract::check(&selected).unwrap();
         assert!(!facts.retained.contains_key("r"));
         assert!(!facts.filtered.contains_key("r"));
-        let expression = compile(&selected).unwrap();
+        let expression = sequence_rows(&selected).unwrap();
         checks.push(quote!({
             let L: &[(i32,)] = &[(1,), (2,), (3,)];
             let R: &[(i32,i32)] = &[(-7,1),(-7,1),(7,2),(-7,3)];
@@ -407,7 +449,7 @@ fn occurrence_checks() -> Vec<proc_macro2::TokenStream> {
         r = ::cq_storage::HashIndex<'_,_,_> [x];
         j canon = ::cq_storage::HashSet<_>;
     }};
-    let expression = compile(&authored).unwrap();
+    let expression = sequence_rows(&authored).unwrap();
     checks.push(quote!({
         let L: &[(i32,)] = &[(1,), (2,), (3,)];
         let R: &[(i32,i32,i32,i32)] =
@@ -430,7 +472,7 @@ fn occurrence_checks() -> Vec<proc_macro2::TokenStream> {
     assert_eq!(facts.built["r"].len(), 2);
     assert!(facts.retained.contains_key("r"));
     assert!(!facts.filtered.contains_key("r"));
-    let expression = compile(&selected).unwrap();
+    let expression = sequence_rows(&selected).unwrap();
     checks.push(quote!({
         let L: &[(i32,)] = &[(1,),(2,),(3,)];
         let R: &[(i32,i32,i32)] = &[(-7,1,10),(7,2,20),(-7,3,30)];
@@ -451,7 +493,7 @@ fn occurrence_checks() -> Vec<proc_macro2::TokenStream> {
             .retained
             .contains_key("r")
     );
-    let expression = compile(&selected).unwrap();
+    let expression = sequence_rows(&selected).unwrap();
     checks.push(quote!({
         let R = vec![
             (String::from("yes"),1,true),
@@ -468,7 +510,7 @@ fn occurrence_checks() -> Vec<proc_macro2::TokenStream> {
         r = exists canon rename R@0 {} constants {a = 7};
         return r as answer();
     }};
-    let expression = compile(&cq_structure_selection::compile(&source).unwrap()).unwrap();
+    let expression = sequence_rows(&cq_structure_selection::compile(&source).unwrap()).unwrap();
     checks.push(quote!({
         for (R, expected) in [
             (&[(7,), (7,), (8,)][..], vec![()]),
@@ -489,7 +531,7 @@ fn complete_scenarios_compile_and_execute_against_authored_answers() {
     let mut checks = Vec::new();
     for case in scenarios::SCENARIOS {
         let source = case.parse_structures().unwrap();
-        let expression = compile(&source).unwrap();
+        let expression = sequence_rows(&source).unwrap();
         let data_name = if case.name == "fine_triangle" {
             "triangle"
         } else {
@@ -538,7 +580,7 @@ fn complete_scenarios_compile_and_execute_against_authored_answers() {
         j = pipe canon merge[a] l,r; return j as answer(a);
     } structures {});
     let complete = cq_structure_selection::compile(&unordered.physical).unwrap();
-    let expression = compile(&complete).unwrap();
+    let expression = sequence_rows(&complete).unwrap();
     let invalid = quote!(#source
         #[allow(non_snake_case)] fn unordered_merge() {
             let L: &[(i32,)] = &[(1,)]; let R: &[(i32,)] = &[(1,)];
@@ -606,7 +648,7 @@ fn adapter_carriers_drop_columns_after_their_last_reader() {
     assert_eq!(context.carried("r"), ["a", "b"]);
     assert_eq!(context.carried("s"), ["b"]);
     assert_eq!(context.carried("p"), ["b"]);
-    let printed = text(compile(&module).unwrap());
+    let printed = text(sequence_rows(&module).unwrap());
     assert!(printed.contains("(a , b , _ ,)"), "{printed}");
     assert!(printed.contains("& (a , _ ,)"), "{printed}");
     assert!(!printed.contains("dead"), "{printed}");

@@ -37,7 +37,9 @@ cq-physical-lowering = { version = "0.1.0", path = "../../passes/cq-physical-low
 cq-structure-selection = { version = "0.1.0", path = "../../passes/cq-structure-selection" }
 cq-represent = { version = "0.1.0", path = "../../passes/cq-represent" }
 cq-staging = { version = "0.1.0", path = "../../passes/cq-staging" }
-cq-physical-realization = { version = "0.1.0", path = "../../passes/cq-physical-realization" }
+cq-lang-sequence = { version = "0.1.0", path = "../../languages/cq-lang-sequence" }
+cq-sequence-lowering = { version = "0.1.0", path = "../../passes/cq-sequence-lowering" }
+cq-sequence-pull = { version = "0.1.0", path = "../../passes/cq-sequence-pull" }
 cq-planners = { path = "../planners" }
 cq-planners-plan = { path = "../planners/plan" }
 cq-rewrites = { path = "../rewrites" }

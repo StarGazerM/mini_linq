@@ -216,7 +216,7 @@ mod tests {
                             ix = mini_linq::passes::index_demands;
                             lower = mini_linq::passes::lower;
                             select = mini_linq::passes::select;
-                            print = mini_linq::passes::print_pull;
+                            print = mini_linq::passes::translate_pull;
                         }
                         struct Scoped;
                         relation R(value: i32);

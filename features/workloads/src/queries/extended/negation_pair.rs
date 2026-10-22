@@ -18,6 +18,8 @@ pub fn check(scenario: Scenario) {
         relation answer(x: i32, y: i32);
         answer(*x,*y) :- A(x, y), neg!{ S(x, y) };
     };
-    let actual = result.map(|(column_0, column_1,)| vec![column_0, column_1]).collect();
+    let actual = result
+        .map(|(column_0, column_1)| vec![column_0, column_1])
+        .collect();
     case.check(scenario, actual);
 }

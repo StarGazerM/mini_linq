@@ -48,8 +48,20 @@ fn realize(ra: &cq_lang_ra::Program, decisions: &str) -> TokenStream {
         structures
     };
     cq_structure_selection::check(&physical, &structures).unwrap();
-    let expression = cq_physical_realization::compile(&structures).unwrap();
-    quote!(#expression)
+    let sequence = cq_sequence_lowering::compile(&structures).unwrap();
+    cq_sequence_lowering::check(&structures, &sequence).unwrap();
+    let machine = cq_lang_sequence::Machine {
+        name: syn::parse_quote!(sequential),
+        root: cq_lang_sequence::LevelNode {
+            name: syn::parse_quote!(host),
+            collaborative: false,
+            dynamic: false,
+            children: vec![],
+        },
+    };
+    let analysis = cq_lang_sequence::check_grading(&sequence, &machine).unwrap();
+    let expression = cq_sequence_pull::translate(&sequence, &analysis).unwrap();
+    quote!((#expression).into_iter())
 }
 
 #[test]

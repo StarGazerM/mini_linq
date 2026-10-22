@@ -7,6 +7,6 @@ edition.workspace = true
 cuda-core.workspace = true
 cuda-device.workspace = true
 cuda-host.workspace = true
-gpu-tiles = { path = "../tiles" }
+gpu-tiles = { path = "../../tiles" }
 gpu-blocked-run = { path = "../blocked-run" }
 rccl-memory.workspace = true

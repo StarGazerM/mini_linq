@@ -4,6 +4,7 @@
 //! `graded machine { name at level.path; ... }` to a complete Structures program.
 //! Terms are prefix forms: `rows`, `map`, `flatten`, `compact`, `tile`, `lookup`,
 //! `fold`, `canon`, `store`, `union` and `choose`, or references to earlier definitions.
+//! Constructor names are also valid references when followed by a term boundary.
 //! A store may declare `store capacity N term`; the optional final sequence
 //! statement `output count;`, `output reserve;` or `output bounded;` selects the
 //! final store's output protocol. Bounded output takes its capacity from that
@@ -264,7 +265,7 @@ impl Parse for Sequence {
         let mut definitions = Vec::new();
         let mut output = None;
         while !body.is_empty() {
-            if body.peek(kw::output) {
+            if body.peek(kw::output) && !body.peek2(Token![=]) {
                 body.parse::<kw::output>()?;
                 output = Some(body.parse()?);
                 body.parse::<Token![;]>()?;
@@ -312,6 +313,16 @@ impl ToTokens for Definition {
 
 impl Parse for Term {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        // Every prefix constructor's final operand is a term, so a bare
+        // identifier at a term boundary is always a reference, even when its
+        // spelling is a constructor keyword.
+        if input.peek(Ident) {
+            let rest = input.fork();
+            rest.parse::<Ident>()?;
+            if rest.is_empty() || rest.peek(Token![;]) || rest.peek(Token![,]) {
+                return Ok(Self::Ref(input.parse()?));
+            }
+        }
         if input.peek(Token![union]) {
             input.parse::<Token![union]>()?;
             let body;
@@ -369,7 +380,7 @@ impl Parse for Term {
             Ok(Self::Canon(input.parse()?))
         } else if input.peek(kw::store) {
             input.parse::<kw::store>()?;
-            let capacity = if input.peek(kw::capacity) {
+            let capacity = if input.peek(kw::capacity) && input.peek2(LitInt) {
                 input.parse::<kw::capacity>()?;
                 Some(parse_usize(input)?)
             } else {

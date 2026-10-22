@@ -124,6 +124,85 @@ fn every_grammar_form_round_trips() {
 }
 
 #[test]
+fn constructor_names_remain_definition_names_and_references() {
+    for spelling in [
+        "rows", "map", "flatten", "compact", "tile", "lookup", "fold", "canon", "store", "union",
+        "choose", "capacity", "output",
+    ] {
+        let name: syn::Ident = syn::parse_str(spelling).unwrap();
+        let sequence: Sequence = syn::parse2(quote! {
+            sequence {
+                #name = rows r;
+                direct = #name;
+                nested = store #name;
+                arms = union [#name, canon #name];
+                choices = choose [len r < 1 => #name, else => store #name];
+                output count;
+            }
+        })
+        .unwrap();
+        let reference = Term::Ref(name.clone());
+        assert_eq!(sequence.definitions[0].name, name);
+        assert_eq!(sequence.definitions[1].term, reference);
+        assert_eq!(
+            sequence.definitions[2].term,
+            Term::Store {
+                capacity: None,
+                inner: Box::new(reference.clone()),
+            }
+        );
+        assert_eq!(
+            sequence.definitions[3].term,
+            Term::Union(vec![
+                reference.clone(),
+                Term::Canon(Box::new(reference.clone())),
+            ])
+        );
+        let Term::Choose(alternatives) = &sequence.definitions[4].term else {
+            panic!("expected choose constructor");
+        };
+        assert_eq!(alternatives[0].1, reference);
+        assert_eq!(alternatives[1].1, sequence.definitions[2].term);
+        assert_eq!(syn::parse2::<Term>(quote!(#name)).unwrap(), reference);
+        assert_eq!(
+            syn::parse2::<Sequence>(sequence.to_token_stream()).unwrap(),
+            sequence
+        );
+    }
+}
+
+#[test]
+fn physical_rows_name_is_preserved_in_sequence_references() {
+    let p: Program = syn::parse2(quote! {
+        physical {
+            relation R(a:i32);
+            rows = pipe canon rename R@0 {a -> a};
+            return rows as answer(a);
+        } structures {
+            rows host scan = Reader [];
+            rows canon = Canon;
+        }
+        sequence {
+            source = rows rows;
+            result = store rows;
+        }
+    })
+    .unwrap();
+    assert_eq!(
+        p.sequence.definitions[0].term,
+        Term::Rows(syn::parse_quote!(rows))
+    );
+    assert_eq!(
+        p.sequence.definitions[1].term,
+        Term::Store {
+            capacity: None,
+            inner: Box::new(Term::Ref(syn::parse_quote!(rows))),
+        }
+    );
+    assert_eq!(syn::parse2::<Program>(p.to_token_stream()).unwrap(), p);
+}
+
+#[test]
 fn lengths_views_stores_and_output_are_derived() {
     let p = program(quote! { a = rows r; b = tile 8 a; c = flatten b; d = store canon c; });
     let a = contract::check(&p).unwrap();
@@ -486,6 +565,55 @@ fn leaf_flatten_is_sequential_but_parent_fold_needs_collaboration() {
     reject_grade(&p, &tasks, "BE-Collective");
     grade(&mut p, quote!(a at device.block;));
     check_grading(&p, &gpu()).unwrap();
+}
+
+#[test]
+fn host_retained_probe_stores_rows_without_requiring_range_offsets() {
+    let p: Program = syn::parse_quote! {
+        physical {
+            relation L(a:i32); relation R(a:i32,b:i32);
+            l = pipe rename L@0 {a -> a};
+            r = let rename R@1 {a -> a,b -> b};
+            j = let canon probe first [a] l,r;
+            return j as answer(a,b);
+        } structures {
+            l host scan = Reader [];
+            r host scan = Reader [];
+            r = Provider [a];
+            j rows = Retained;
+            j canon = Canon;
+        } sequence {
+            input = rows l;
+            joined = store flatten lookup r [a] input;
+            answer = store joined;
+            output count;
+        }
+    };
+    let key = ("r".into(), vec!["a".into()]);
+    let analysis = check_grading(&p, &sequential()).unwrap();
+    assert_eq!(analysis.capabilities[&key], Capability::Exact);
+    assert!(analysis.obligations.iter().any(|obligation| matches!(
+        obligation,
+        Obligation::Provider { provider, capability: Capability::Exact, .. }
+            if provider == "r"
+    )));
+    assert!(analysis.obligations.iter().all(|obligation| !matches!(
+        obligation,
+        Obligation::Provider {
+            capability: Capability::Range,
+            ..
+        }
+    )));
+    // An explicitly stored offsets view keeps its generic contract.
+    assert_eq!(
+        contract::check(&p).unwrap().capabilities[&key],
+        Capability::Range
+    );
+    let tiled = lookup_program(quote!(a = store tile 8 flatten lookup r [a] rows l;));
+    assert_eq!(
+        check_grading(&tiled, &sequential()).unwrap().capabilities[&key],
+        Capability::Range
+    );
 }
 
 #[test]

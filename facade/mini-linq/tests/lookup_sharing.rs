@@ -6,8 +6,8 @@ fn shared_lookup_expands_ranges_in_scalar_order() {
     let left = [(0_i32,), (2,), (1,), (3,), (2,), (4,)];
     let right = [(2_i32, 20_i32), (1, 11), (2, 21), (2, 22), (4, 40)];
     cq_storage::counters::reset();
-    let result: Vec<_> = mini_linq::passes::print_pull! {
-        pipeline {};
+    let result: Vec<_> = mini_linq::passes::sequence! {
+        pipeline { mini_linq::passes::sequential, mini_linq::passes::translate_pull };
         physical {
             relation L(k:i32) = (left); relation R(k:i32,v:i32) = (right);
             l = pipe rename L@0 {k -> k};
@@ -40,8 +40,8 @@ fn positional_witness_is_consumed_by_scalar_probe() {
     let left = [(1_i32,), (3,), (2,)];
     let right = [(2_i32, 20_i32), (1, 11), (2, 21)];
     cq_storage::counters::reset();
-    let result: Vec<_> = mini_linq::passes::print_pull! {
-        pipeline {};
+    let result: Vec<_> = mini_linq::passes::sequence! {
+        pipeline { mini_linq::passes::sequential, mini_linq::passes::translate_pull };
         physical {
             relation L(k:i32) = (left); relation R(k:i32,v:i32) = (right);
             l = pipe rename L@0 {k -> k};

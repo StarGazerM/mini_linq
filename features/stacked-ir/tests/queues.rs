@@ -11,7 +11,7 @@ fn explicit_physical_and_trace_queues_execute_like_the_default() {
     }
     .collect();
     let from_physical: BTreeSet<_> = stacked_ir::enter! {
-        pipeline { stacked_ir::leave, mini_linq::passes::select, mini_linq::passes::print_pull };
+        pipeline { stacked_ir::leave, mini_linq::passes::select, mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
         physical {
             relation R(x: i32) = (rows);
             r = pipe rename R@0 {x -> x};
@@ -21,7 +21,7 @@ fn explicit_physical_and_trace_queues_execute_like_the_default() {
     }
     .collect();
     let from_trace: BTreeSet<_> = stacked_ir::leave! {
-        pipeline { mini_linq::passes::select, mini_linq::passes::print_pull };
+        pipeline { mini_linq::passes::select, mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
         physical {
             relation R(x: i32) = (rows);
             r = pipe rename R@0 {x -> x};

@@ -364,7 +364,6 @@ dependencies = [
  "cq-lang-vo",
  "cq-order",
  "cq-physical-lowering",
- "cq-physical-realization",
  "cq-reduce",
  "cq-represent",
  "cq-sequence-lowering",

@@ -67,12 +67,13 @@ fn named_phases_preserve_order_and_opaque_arguments() {
         ::mini_linq::passes::index_demands, ::mini_linq::passes::lower,
         physical_a(eight), physical_b, ::mini_linq::passes::select,
         structures(nine), ::mini_linq::passes::represent,
-        ::mini_linq::passes::stage, ::mini_linq::passes::print_pull
+        ::mini_linq::passes::stage, ::mini_linq::passes::sequence,
+        ::mini_linq::passes::sequential, ::mini_linq::passes::translate_pull
     } };
     let expected: Pipeline = syn::parse_quote! { pipeline {
         sugar(opaque(tokens)), sugar_two, components(one), variants(two), stores(three),
         rewrite_a(four), rewrite_b, holes(five; cq = #cq; lower = 3; terminals = [
-            ::mini_linq::passes::print_pull => pull, mini_linq::passes::print_pull => pull,
+            ::mini_linq::passes::translate_pull => pull, mini_linq::passes::translate_pull => pull,
             ::cq_datalog::passes::print_push => push
         ];),
         round_a(six), round_b, terminal(seven)
@@ -161,8 +162,8 @@ fn terminal_declarations_replace_defaults_and_preserve_exact_paths() {
     assert_eq!(
         defaults.terminals.as_ref().unwrap(),
         &syn::parse_quote!([
-            ::mini_linq::passes::print_pull => pull,
-            mini_linq::passes::print_pull => pull,
+            ::mini_linq::passes::translate_pull => pull,
+            mini_linq::passes::translate_pull => pull,
             ::cq_datalog::passes::print_push => push
         ])
     );
@@ -177,7 +178,7 @@ fn terminal_declarations_replace_defaults_and_preserve_exact_paths() {
             "terminals = [crate :: alias :: pull => pull , :: alternate :: push => push]"
         )
     );
-    assert!(!args.contains("mini_linq :: passes :: print_pull"));
+    assert!(!args.contains("mini_linq :: passes :: translate_pull"));
     let empty: DatalogConfiguration = syn::parse_quote!(pipeline { terminals = []; });
     let queue = empty.resolve(DatalogConfiguration::defaults()).unwrap();
     assert!(

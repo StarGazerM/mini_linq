@@ -1,10 +1,17 @@
-//! Printer-parameterised positional execution fixtures. Invokers provide
-//! mini-linq, cq-storage and cq-load as test dependencies.
+//! Terminal-parameterised positional execution fixtures. An optional bracketed
+//! queue lowers Structures before the terminal; omit it for Structures terminals.
+//! Invokers provide mini-linq, cq-storage and cq-load as test dependencies.
 
 /// Instantiate common positional queries and their authored expected answers.
 #[macro_export]
 macro_rules! positional_cases {
     ($($printer:ident)::+) => {
+        $crate::positional_cases!(@pipeline [$($printer)::+;] $($printer)::+);
+    };
+    ([$($first:ident)::+ $(, $pass:path)*] $($printer:ident)::+) => {
+        $crate::positional_cases!(@pipeline [$($first)::+; $($pass,)* $($printer)::+,] $($printer)::+);
+    };
+    (@pipeline [$($first:ident)::+; $($pass:path,)*] $($printer:ident)::+) => {
 struct PayloadOnly<T>(T);
 impl<T: cq_storage::IndexRead> Clone for PayloadOnly<T> {
     fn clone(&self) -> Self {
@@ -75,7 +82,7 @@ fn empty_positional_left_does_not_force_lazy_semi_rhs() {
     let right = UnusedRight;
     let result: Vec<_> = mini_linq::passes::select! {
         arguments { positional(L) };
-        pipeline { $($printer)::+ };
+        pipeline { $($first)::+, $($pass,)* };
         physical {
             relation L(a:i64) = (left); relation R(b:i64) = (right);
             l = pipe rename L@0 {a -> x}; empty = pipe range select l if (x > 100);
@@ -95,8 +102,8 @@ fn custom_aliases_and_bare_build_provider_keep_selected_source_contracts() {
     type Payload<'a, K, V> = PayloadOnly<cq_storage::HashIndex<'a, K, V>>;
     let left = [(1_i64, 10_i64), (1, 20), (2, 30)];
     let right = [(1_i64, 1_i64), (2, 0)];
-    let actual: BTreeSet<_> = $($printer)::+! {
-        pipeline {};
+    let actual: BTreeSet<_> = $($first)::+! {
+        pipeline { $($pass,)* };
         physical {
             relation L(a:i64,b:i64) = (left); relation R(c:i64,d:i64) = (right);
             l = pipe rename L@0 {a -> x,b -> y}; r = pipe rename R@1 {c -> x,d -> z};
@@ -142,7 +149,7 @@ fn a_computed_left_key_can_test_an_owned_set_without_becoming_a_selection() {
     let right = [(2_i64, 1_i64), (8, 0)];
     let values: Vec<_> = mini_linq::passes::select! {
         arguments { positional(L,R) };
-        pipeline { $($printer)::+ };
+        pipeline { $($first)::+, $($pass,)* };
         physical {
             relation L(a:i64) = (left); relation R(b:i64,c:i64) = (right);
             l = pipe rename L@0 {a -> a};
@@ -179,11 +186,19 @@ fn raw_identifiers_survive_recorded_base_and_column_lineage() {
 /// The retained positional-mask query used with several host layouts.
 #[macro_export]
 macro_rules! positional_reduced {
-    ($($printer:ident)::+, $left:expr, $right:expr) => { $crate::positional_reduced!(@typed $($printer)::+, i64, $left, $right) };
+    ($($printer:ident)::+, $left:expr, $right:expr) => {
+        $crate::positional_reduced!(@typed [] $($printer)::+, i64, $left, $right)
+    };
+    ([$($pass:path),*] $($printer:ident)::+, $left:expr, $right:expr) => {
+        $crate::positional_reduced!(@typed [$($pass),*] $($printer)::+, i64, $left, $right)
+    };
     (@typed $($printer:ident)::+, $ty:ty, $left:expr, $right:expr) => {
+        $crate::positional_reduced!(@typed [] $($printer)::+, $ty, $left, $right)
+    };
+    (@typed [$($pass:path),*] $($printer:ident)::+, $ty:ty, $left:expr, $right:expr) => {
         mini_linq::passes::select! {
             arguments { positional(L, R) };
-            pipeline { $($printer)::+ };
+            pipeline { $($pass,)* $($printer)::+ };
             physical {
                 relation L(a:$ty, b:$ty) = ($left);
                 relation R(c:$ty, flag:$ty) = ($right);

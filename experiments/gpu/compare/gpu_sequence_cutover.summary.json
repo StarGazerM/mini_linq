@@ -1,0 +1,26 @@
+{
+  "device": "NVIDIA RTX 6000 Ada Generation",
+  "architecture": "sm_89",
+  "h05_scope": "One warmup and five measured calls; medians in milliseconds. GPU includes resident index build, query, and dedup; excludes load/upload and explicit download. Chain is separately timed. Both implementations compare full tuples against answer.tsv.",
+  "h05": [
+    {"sf": 1, "plan": "R", "exact": true, "rows": 7242, "sequence_gpu_ms": 2.0862720012664795, "sequence_wall_ms": 2.148636, "reference_gpu_ms": 1.8955520391464233, "reference_wall_ms": 1.906872, "chain_gpu_ms": 0.18188799917697904, "chain_wall_ms": 0.239018},
+    {"sf": 10, "plan": "R", "exact": true, "rows": 72983, "sequence_gpu_ms": 10.139391899108887, "sequence_wall_ms": 10.206828, "reference_gpu_ms": 9.759231567382812, "reference_wall_ms": 9.769801, "chain_gpu_ms": 0.22864000499248505, "chain_wall_ms": 0.285467}
+  ],
+  "reference_sf1_gpu_samples_ms": [1.8552639484405518, 1.886944055557251, 1.8955520391464233, 1.8963840007781982, 1.9039360284805298],
+  "reference_sf1_wall_samples_ms": [1.865813, 1.8967630000000002, 1.906872, 1.907022, 1.914386],
+  "reference_sf1_provenance": "Captured from h05-reference stdout; its single-object JSON output path was subsequently overwritten by the SF10 run, whose full artifact is gpu_sequence_cutover.reference.sf10.json.",
+  "sequence_oracles": {"smoke": "two cases exact: five input rows/four answers and empty input", "projection": "empty, sorted, unsorted, duplicate inputs exact", "repeated_head": "exact"},
+  "exercised_compile_rejections": [
+    {"feature": "h05-a-sequence-rejection", "error": "T-Gpu: r2 has no recorded resident range layout"},
+    {"feature": "h05-b-sequence-rejection", "error": "T-Gpu: r2 has no recorded resident range layout"},
+    {"feature": "triangle-sequence-rejection", "error": "T-Gpu: range payload needs a recorded u32/i32 dense code"}
+  ],
+  "legacy_workspace": {
+    "migrated_to_sequence": false,
+    "build": "cargo oxide build --arch sm_89 -- --release --workspace passed",
+    "datalog_oracle": {"exact": true, "scenarios": 8, "execution_ms": {"empty": 935.211, "self-loop": 19.919, "chain-alternating-deltas": 9.783, "cycle": 10.422, "disconnected": 8.255, "duplicates": 7.765, "empty-seeds": 6.731}, "timing_scope": "single executions including cold setup/module effects; fused-distinct-retry reports correctness only"},
+    "triangles_oracle": {"exact": true, "cases": 7, "oracle": "independent CPU count and materialized tuple checks", "largest_case": "power_law_degree_1000000", "largest_answer_count": 3999859},
+    "ddisasm_cvc5": {"exact_cpu_check": true, "outputs": 11, "fixedpoint_ms": 8482.318727, "upload_ms": 21.341804, "cpu_ms": 28605.943648, "fixedpoint_allocator_peak_bytes": 6140409032, "checked_rounds": 878, "timing_scope": "single smoke run, not a repeated timing distribution"}
+  },
+  "checks": {"main_workspace_build": "passed", "main_workspace_tests": 16, "schema_ui_cases": 3, "formal_rule_inventory": 226}
+}

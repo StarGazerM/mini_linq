@@ -89,7 +89,11 @@ fn assert_tokens(actual: TokenStream, expected: &str, name: &str, part: &str) {
     let expected: TokenStream = expected.parse().expect("valid expected Rust tokens");
     // Both sides are tokenized first: whitespace/comments are immaterial, but
     // every identifier, literal, punctuation token and delimiter is retained.
-    assert_eq!(actual.to_string(), expected.to_string(), "{name}: {part} drift");
+    assert_eq!(
+        actual.to_string(),
+        expected.to_string(),
+        "{name}: {part} drift"
+    );
 }
 
 fn expected_expansion(row: [usize; 10]) -> String {
@@ -101,7 +105,7 @@ fn expected_expansion(row: [usize; 10]) -> String {
     let dedup = ["", "cq_workload_passes::ordered_dedup,"][row[5]];
     let payload = ["", "cq_workload_passes::sorted_payload,"][row[6]];
     let membership = ["", "cq_rewrites::lazy_semijoins,"][row[7]];
-    let printer = ["mini_linq::passes::print_pull", "own_push::push"][row[8]];
+    let printer = ["mini_linq::passes::translate_pull", "own_push::push"][row[8]];
     let advice = ["", "positional"][row[9]];
     format!(
         "pub const CONFIG: [usize; 10] = {row:?};
@@ -143,14 +147,27 @@ fn check_configurations(source: &str, macro_name: &str, expected: usize) -> BTre
             Some(TokenTree::Ident(name)) => name.to_string(),
             other => panic!("configuration arm: expected a configuration name, got {other:?}"),
         };
-        assert!(names.insert(name.clone()), "{name}: duplicate configuration arm");
+        assert!(
+            names.insert(name.clone()),
+            "{name}: duplicate configuration arm"
+        );
         let row = decode_name(&name);
         planners.insert(row[0]);
-        assert_tokens(matcher.stream(), &format!("{name}, $case:ident"), &name, "matcher");
+        assert_tokens(
+            matcher.stream(),
+            &format!("{name}, $case:ident"),
+            &name,
+            "matcher",
+        );
         punctuation(arms.next(), '=', &name);
         punctuation(arms.next(), '>', &name);
         let expansion = group(arms.next(), Delimiter::Brace, &name);
-        assert_tokens(expansion.stream(), &expected_expansion(row), &name, "CONFIG/pipeline");
+        assert_tokens(
+            expansion.stream(),
+            &expected_expansion(row),
+            &name,
+            "CONFIG/pipeline",
+        );
         punctuation(arms.next(), ';', &name);
     }
     assert_eq!(names.len(), expected, "configuration arm count changed");
@@ -160,12 +177,20 @@ fn check_configurations(source: &str, macro_name: &str, expected: usize) -> BTre
 #[test]
 fn configuration_names_rows_and_pipeline_tokens_agree() {
     assert_eq!(
-        check_configurations(include_str!("support/configurations.rs"), "configuration", 80),
+        check_configurations(
+            include_str!("support/configurations.rs"),
+            "configuration",
+            80
+        ),
         (0..9).collect(),
         "the original 80 witnesses and nine planner indices stay unchanged",
     );
     assert_eq!(
-        check_configurations(include_str!("support/le_configurations.rs"), "le_configuration", 18),
+        check_configurations(
+            include_str!("support/le_configurations.rs"),
+            "le_configuration",
+            18
+        ),
         [9, 10].into_iter().collect(),
         "both LE planners must have independent configuration witnesses",
     );

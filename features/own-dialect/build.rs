@@ -87,7 +87,9 @@ fn emit(
     let (push, pull) = if let Some(source) = structures {
         (
             format!("own_push::push! {{ pipeline {{}}; {source} }}"),
-            format!("mini_linq::passes::print_pull! {{ pipeline {{}}; {source} }}"),
+            format!(
+                "mini_linq::passes::sequence! {{ pipeline {{ mini_linq::passes::sequential, mini_linq::passes::translate_pull }}; {source} }}"
+            ),
         )
     } else {
         (

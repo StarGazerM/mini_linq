@@ -7,7 +7,7 @@ Generated Rust borrows host data through public runtime traits and returns
 distinct answer tuples.
 
 ```text
-CQ → CQ-NF → VO → RA′ → IX → Physical → Structures → Rust
+CQ → CQ-NF → VO → RA′ → IX → Physical → Structures → Sequence → Rust
 ```
 
 Each structural pass has an independent source/target check. Printers are
@@ -55,12 +55,17 @@ scan. Each block branch is analyzed independently. Select
 `plan = mini_linq::passes::plan(no_reduce);` to disable optional reductions while
 retaining written order; other phases keep their defaults.
 
+The shipped CPU target lowers with `sequence`, grades with `sequential`, and
+emits with `translate_pull`, including profile counters when enabled.
+An explicit Structures terminal such as `own_push::push` remains selectable:
+set `print` without authoring `sequence`, `grade`, or `decompose`.
+
 ```rust
 let rows = [(1_i32,), (1,), (2,)];
 let answers: Vec<_> = mini_linq::compile! {
     pipeline {
         plan = mini_linq::passes::plan;
-        print = mini_linq::passes::print_pull;
+        print = mini_linq::passes::translate_pull;
     }
     struct Q;
     relation R(x: i32) = (rows);

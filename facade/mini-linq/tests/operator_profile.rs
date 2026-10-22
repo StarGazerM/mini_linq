@@ -39,7 +39,10 @@ fn positional_selection_counts_survivors() {
     let l = [(1_i64, 10_i64), (1, 20), (2, 30), (3, 40), (5, 15)];
     let r = [(1_i64, 1_i64), (2, 0), (3, 1), (9, 1)];
     counters::reset();
-    let answer = cq_testkit::positional_reduced!(mini_linq::passes::print_pull, l, r);
+    let answer = cq_testkit::positional_reduced!(
+        [mini_linq::passes::sequence, mini_linq::passes::sequential]
+        mini_linq::passes::translate_pull, l, r
+    );
     assert_eq!(answer.len(), 2);
     let ops = counters::operators();
     println!("{}", counters::render_operators(&ops));

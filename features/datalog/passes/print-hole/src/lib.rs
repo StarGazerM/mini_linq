@@ -5,8 +5,8 @@
 //! the default terminal. A Round rewrite can assign partitions independently
 //! without changing CQ, the pull interface, or the terminal registry.
 //!
-//! The public `cq_physical_realization` entry points are the same ones used by
-//! `mini_linq::passes::print_pull`. Both ordinary and counter-enabled output are
+//! The public `cq_sequence_pull` entry points are the same ones used by
+//! `mini_linq::passes::translate_pull`. Both ordinary and counter-enabled output are
 //! retained verbatim inside the wrapper. The wrapper adds no row allocation,
 //! collection, cloning, or ownership conversion. Its non-move closure preserves
 //! the original expression's capture and borrow behavior. Iterator consumption
@@ -55,17 +55,30 @@ fn wrap(expression: syn::Expr, partition: Partition) -> syn::Expr {
     )
 }
 
-/// Print checked Structures through the public pull API, then partition it.
+/// Translate checked Sequence through the public pull API, then partition it.
 /// Arguments are empty or `partition(N)`, where `N` is between zero and fifteen.
 pub fn compile_with(
-    source: &cq_lang_structures::Program,
+    source: &cq_lang_sequence::Program,
     arguments: TokenStream,
 ) -> syn::Result<syn::Expr> {
     let partition = syn::parse2(arguments)?;
-    let plain = cq_physical_realization::compile(source)?;
-    let profile = cq_physical_realization::compile_profile(source)?;
+    let machine = cq_lang_sequence::Machine {
+        name: syn::parse_quote!(sequential),
+        root: cq_lang_sequence::LevelNode {
+            name: syn::parse_quote!(host),
+            collaborative: false,
+            dynamic: false,
+            children: vec![],
+        },
+    };
+    let analysis = cq_lang_sequence::check_grading(source, &machine)?;
+    let plain = cq_sequence_pull::translate(source, &analysis)?;
+    let profile = cq_sequence_pull::translate_profile(source, &analysis)?;
     Ok(wrap(
-        syn::parse_quote!(::cq_storage::profile_select! { plain { #plain } counters { #profile } }),
+        syn::parse_quote!(::cq_storage::profile_select! {
+            plain { (#plain).into_iter() }
+            counters { (#profile).into_iter() }
+        }),
         partition,
     ))
 }
@@ -127,7 +140,7 @@ mod tests {
     fn factful_hole_reentry_requires_its_exact_context_envelope() {
         use cq_stage::Language;
 
-        let source: cq_lang_structures::Program = syn::parse_quote! {
+        let structures: cq_lang_structures::Program = syn::parse_quote! {
             physical {
                 relation rows(x:i32);
                 host_set rows discharged;
@@ -139,7 +152,8 @@ mod tests {
                 r host scan = ::core::iter::Map<_,_> [];
             }
         };
-        let rejected = cq_stage::pass::<cq_lang_structures::Program, syn::Expr>(
+        let source = cq_sequence_lowering::compile(&structures).unwrap();
+        let rejected = cq_stage::pass::<cq_lang_sequence::Program, syn::Expr>(
             quote!(arguments { partition(3) }; pipeline {}; #source),
             |_, _| panic!("a missing envelope must fail before printing"),
         );
@@ -150,7 +164,7 @@ mod tests {
             quote!(host_set rows discharged),
             quote!(consumer = canonical, host_set other discharged),
         ] {
-            let rejected = cq_stage::pass::<cq_lang_structures::Program, syn::Expr>(
+            let rejected = cq_stage::pass::<cq_lang_sequence::Program, syn::Expr>(
                 quote!(context { #context }; pipeline {}; #source),
                 |_, _| panic!("a mismatched envelope must fail before printing"),
             );
@@ -158,7 +172,7 @@ mod tests {
         }
 
         let context = source.context();
-        let printed = cq_stage::pass::<cq_lang_structures::Program, syn::Expr>(
+        let printed = cq_stage::pass::<cq_lang_sequence::Program, syn::Expr>(
             quote!(
                 arguments { partition(3) };
                 context { #context };

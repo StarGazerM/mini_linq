@@ -87,13 +87,19 @@ fn default_pass_arguments_are_not_silently_ignored() {
 fn invariant_arguments_reach_the_incremental_pass() {
     use syn::parse::Parser;
     assert!(!invariant_arguments.parse2(quote!()).unwrap());
-    assert!(invariant_arguments.parse2(quote!(hoist_invariants;)).unwrap());
+    assert!(
+        invariant_arguments
+            .parse2(quote!(hoist_invariants;))
+            .unwrap()
+    );
     assert!(invariant_arguments.parse2(quote!(unexpected;)).is_err());
     let source = source();
     let expanded = expand(quote! {
         arguments { hoist_invariants; };
         #source
-    }).unwrap().to_string();
+    })
+    .unwrap()
+    .to_string();
     assert!(expanded.contains("incremental (hoist_invariants ;)"));
 }
 

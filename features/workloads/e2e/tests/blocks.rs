@@ -5,8 +5,8 @@ fn both_printers_build_independent_union_indices_directly() {
     let L = [(1_i32,), (2,)];
     let A = [(1_i32, 10_i32), (1, 10), (2, 20)];
     let B = [(1_i32, 10_i32), (3, 30)];
-    macro_rules! run { ($printer:path) => { mini_linq::passes::select! {
-        pipeline {$printer};
+    macro_rules! run { ($($pass:path),+ $(,)?) => { mini_linq::passes::select! {
+        pipeline {$($pass),+};
         physical {
             relation L(a:i32); relation A(a:i32,b:i32); relation B(a:i32,b:i32);
             l = pipe rename L@0 {a -> x}; a = pipe rename A@1.0.0 {a -> x,b -> y}; b = pipe rename B@1.1.0 {a -> x,b -> y};
@@ -14,7 +14,11 @@ fn both_printers_build_independent_union_indices_directly() {
             j = pipe probe first [x] l,d; q = pipe project j keep {y}; out = pipe canon semi eager [y] q,d; return out as answer(y);
         }
     }.map(|(y,)|*y).collect::<std::collections::BTreeSet<_>>() }; }
-    let pull = run!(mini_linq::passes::print_pull);
+    let pull = run!(
+        mini_linq::passes::sequence,
+        mini_linq::passes::sequential,
+        mini_linq::passes::translate_pull,
+    );
     let push = run!(own_push::push);
     assert_eq!(pull, push);
     assert_eq!(pull, std::collections::BTreeSet::from([10, 20]));
@@ -25,8 +29,8 @@ fn both_printers_keep_curried_union_indices_and_a_recorded_scan() {
     let L = [(1_i32, 10_i32), (2, 20), (9, 90)];
     let A = [(1_i32, 10_i32, 100_i32), (1, 11, 101), (2, 20, 200)];
     let B = [(1_i32, 10_i32, 100_i32), (3, 30, 300)];
-    macro_rules! run { ($printer:path) => { mini_linq::passes::select! {
-        pipeline {$printer};
+    macro_rules! run { ($($pass:path),+ $(,)?) => { mini_linq::passes::select! {
+        pipeline {$($pass),+};
         physical {
             relation L(a:i32,b:i32); relation A(a:i32,b:i32,c:i32); relation B(a:i32,b:i32,c:i32);
             l = pipe rename L@0 {a -> x,b -> y}; a = pipe rename A@1.0.0 {a -> x,b -> y,c -> z}; b = pipe rename B@1.1.0 {a -> x,b -> y,c -> z};
@@ -37,7 +41,11 @@ fn both_printers_keep_curried_union_indices_and_a_recorded_scan() {
             result = pipe canon project out keep {x,z}; return result as answer(x,z);
         }
     }.map(|(x,z)|(*x,*z)).collect::<std::collections::BTreeSet<_>>() }; }
-    let pull = run!(mini_linq::passes::print_pull);
+    let pull = run!(
+        mini_linq::passes::sequence,
+        mini_linq::passes::sequential,
+        mini_linq::passes::translate_pull,
+    );
     let push = run!(own_push::push);
     assert_eq!(pull, push);
     assert_eq!(pull, std::collections::BTreeSet::from([(1, 100), (2, 200)]));

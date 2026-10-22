@@ -1,4 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use cq_lang_sequence::{Analysis, Capability, Guard, Len, Monoid, OutputProtocol, Program, Term};
 use cq_lang_structures::physical::{Operator, symbol_name};
@@ -1021,6 +1023,16 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
             __cq_fields.push(::cq_gpu_sequence_runtime::canon::PackedField {base:#base,shift:#shift,bits:__cq_width});
         });
     }
+    // CUDA exports are not scoped by the surrounding Rust expression. Give
+    // each expansion its own module, including repeated identical programs.
+    static NEXT_MODULE: AtomicUsize = AtomicUsize::new(0);
+    let mut fingerprint = std::collections::hash_map::DefaultHasher::new();
+    quote!(#program).to_string().hash(&mut fingerprint);
+    let module_name = format_ident!(
+        "__cq_sequence_kernels_{:016x}_{}",
+        fingerprint.finish(),
+        NEXT_MODULE.fetch_add(1, Ordering::Relaxed)
+    );
     for (index, dispatch) in analysis.dispatches.iter().enumerate() {
         let publication = dispatch
             .inner_stores
@@ -1231,8 +1243,8 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                 });
             }
         }
-        let kernel_name = format_ident!("__cq_sequence_dispatch_{index}");
-        let prepare_name = format_ident!("prepare___cq_sequence_dispatch_{index}");
+        let kernel_name = format_ident!("__cq_sequence_dispatch_{index}_{module_name}");
+        let prepare_name = format_ident!("prepare_{kernel_name}");
         let mut parameters = Vec::new();
         let mut arguments = Vec::new();
         for (name, ty, value) in &compiler.rows.parameters {
@@ -1565,7 +1577,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
     let build = &compiler.rows.build;
     syn::parse2(quote!({
         #[::cuda_device::cuda_module]
-        mod __cq_sequence_kernels {
+        mod #module_name {
             use ::cuda_device::{kernel,launch_bounds,launch_contract};
             #(#kernels)*
         }
@@ -1574,7 +1586,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
             ::std::thread_local! {
                 static __CQ_SEQUENCE_MODULE: ::std::cell::RefCell<Option<(
                     ::std::sync::Arc<::cuda_core::CudaContext>,
-                    __cq_sequence_kernels::LoadedModule,
+                    #module_name::LoadedModule,
                 )>> = const { ::std::cell::RefCell::new(None) };
             }
             let __cq_module=__CQ_SEQUENCE_MODULE.with(|cache| -> ::cq_gpu_runtime::Result<_> {
@@ -1584,7 +1596,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                         return Ok(module.clone());
                     }
                 }
-                let module=unsafe {__cq_sequence_kernels::load(__cq_pool.context())?};
+                let module=unsafe {#module_name::load(__cq_pool.context())?};
                 *cache=Some((__cq_pool.context().clone(),module.clone()));
                 Ok(module)
             })?;

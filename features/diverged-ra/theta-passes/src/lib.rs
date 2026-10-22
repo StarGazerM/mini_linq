@@ -1,4 +1,4 @@
-//! External macro adapters for IX → Physical → Structures → Rust.
+//! External macro adapters for IX → Physical → Structures → Sequence → Rust.
 //!
 //! Each adapter uses the public checked cq-stage protocol. The merge rewrite
 //! writes ordered joins into Physical and checks its correspondence; selection
@@ -69,12 +69,49 @@ pub fn select(input: TokenStream) -> TokenStream {
     .into()
 }
 
+/// Lower the checked Structures program to Sequence.
+#[proc_macro]
+pub fn sequence(input: TokenStream) -> TokenStream {
+    cq_stage::pass::<cq_lang_structures::Program, cq_lang_sequence::Program>(
+        input.into(),
+        |source, arguments| {
+            no_arguments(arguments)?;
+            cq_sequence_lowering::compile(source)
+        },
+    )
+    .into()
+}
+
+fn sequential_machine() -> cq_lang_sequence::Machine {
+    cq_lang_sequence::Machine {
+        name: syn::parse_quote!(sequential),
+        root: cq_lang_sequence::LevelNode {
+            name: syn::parse_quote!(host),
+            collaborative: false,
+            dynamic: false,
+            children: vec![],
+        },
+    }
+}
+
+/// Check host-only grading without changing authored Sequence decisions.
+#[proc_macro]
+pub fn sequential(input: TokenStream) -> TokenStream {
+    cq_stage::rewrite::<cq_lang_sequence::Program>(input.into(), |source, arguments| {
+        no_arguments(arguments)?;
+        cq_lang_sequence::check_grading(source, &sequential_machine())?;
+        Ok(source.clone())
+    })
+    .into()
+}
+
 /// End the queue with a Rust pull expression.
 #[proc_macro]
-pub fn print_pull(input: TokenStream) -> TokenStream {
-    cq_stage::pass::<cq_lang_structures::Program, syn::Expr>(input.into(), |source, arguments| {
+pub fn translate_pull(input: TokenStream) -> TokenStream {
+    cq_stage::pass::<cq_lang_sequence::Program, syn::Expr>(input.into(), |source, arguments| {
         no_arguments(arguments)?;
-        cq_physical_realization::compile(source)
+        let analysis = cq_lang_sequence::check_grading(source, &sequential_machine())?;
+        cq_sequence_pull::translate(source, &analysis)
     })
     .into()
 }
@@ -128,14 +165,17 @@ mod tests {
         let selected = cq_structure_selection::compile(&target).unwrap();
         assert_eq!(selected.physical, target);
         cq_structure_selection::check(&target, &selected).unwrap();
-        cq_physical_realization::compile(&selected).unwrap();
+        let sequence = cq_sequence_lowering::compile(&selected).unwrap();
+        cq_sequence_lowering::check(&selected, &sequence).unwrap();
+        let analysis = cq_lang_sequence::check_grading(&sequence, &sequential_machine()).unwrap();
+        cq_sequence_pull::translate(&sequence, &analysis).unwrap();
     }
 
     #[test]
     fn lowering_continues_only_with_an_explicit_printer_queue() {
         let source = indexes();
         let output = lower_stage(quote! {
-            pipeline { theta_passes::select, theta_passes::print_pull }; #source
+            pipeline { theta_passes::select, theta_passes::sequence, theta_passes::sequential, theta_passes::translate_pull }; #source
         });
         assert!(output.to_string().starts_with("theta_passes :: select !"));
         let missing = lower_stage(quote!(pipeline {}; #source)).to_string();

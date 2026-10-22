@@ -15,8 +15,8 @@ fn push_path() -> syn::Path {
 }
 
 fn can_push(program: &Program, hole: &round::Hole) -> bool {
-    let pull: syn::Path = syn::parse_quote!(::mini_linq::passes::print_pull);
-    let relative_pull: syn::Path = syn::parse_quote!(mini_linq::passes::print_pull);
+    let pull: syn::Path = syn::parse_quote!(::mini_linq::passes::translate_pull);
+    let relative_pull: syn::Path = syn::parse_quote!(mini_linq::passes::translate_pull);
     let push = push_path();
     hole.interface == round::HoleInterface::Pull
         && hole.pipeline.passes.last().is_some_and(|terminal| {
