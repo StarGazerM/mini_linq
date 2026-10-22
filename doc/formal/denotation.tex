@@ -95,6 +95,10 @@ iteration is finite. Their partial set-valued meaning depends only on free
 query values and fixed host captures, with no observable mutation or I/O.
 Purity covers the iterator implementation, not just its construction.
 Rust's \code{IntoIterator} bound proves none of these semantic premises.
+\item \textbf{Asserted totality.} A guard written \code{\#[total] if e} is
+trusted to be defined (no panic, no divergence) on every value of its declared
+types. This is an unchecked premise and is scheduled for removal; recognized
+comparisons are total under premises 1--2 alone.
 \item \textbf{Pinned Rust.} Rust guards, scalar binds and generators are opaque.
 They keep their
 written relative order (a tree under blocks, Section~\ref{sec:blocks}), their
@@ -102,6 +106,21 @@ free-variable binders and every relational fact written before them
 (their \emph{Before} set). Relational steps commute among themselves and may
 move earlier across Rust, never later.
 \end{enumerate}
+\begin{lemma}[Motion]
+Let a pure predicate $g$ be evaluated on rows $D$ by a reference plan and on
+$D'\supseteq D$ by a target with the same later steps. The target returns the
+reference's answer whenever the reference returns iff $g(\rho)\ne\bot$ for
+every $\rho\in D'\setminus D$.
+\end{lemma}
+\begin{proof}On $D'\setminus D$ a defined $g$ only filters rows that later
+steps intersect away; a single $\rho$ with $g(\rho)=\bot$ makes the target
+$\bot$ while the reference may return a set (the counterexample below).
+\end{proof}
+Shrinking an evaluation domain is therefore always legal, which is why
+relational steps may move earlier across opaque Rust; growing it requires
+definedness on the growth region, which totality on all declared values
+supplies independently of the plan.
+
 Consequently any surviving representative of \code{==}-equal values is the
 value, and dedup, canonical projection, and projection before opaque Rust that
 keeps its free variables are sound. Moving a relational step earlier only

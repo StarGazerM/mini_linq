@@ -55,7 +55,9 @@ only other members, so a branch cannot depend on its future fact-side probe.
 \paragraph{Meaning.} Compose the steps in schedule order under
 Section~\ref{sec:denotation}: a subatom extends valuations with matching
 projected rows, a reduction is a relational semijoin on its target, and Rust
-steps are as in CQ. By invariants (1)--(4) a schedule refines its CQ: relational
+steps are as in CQ. By invariants (1)--(4) a schedule refines its CQ under the premises of
+Section~\ref{sec:premises}, including the totality of every constraint placed
+ahead of its written position (Motion lemma, Section~\ref{sec:premises}): relational
 steps only moved earlier, Rust order and Before are kept, and every atom's full
 row is checked.
 

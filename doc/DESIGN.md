@@ -13,7 +13,10 @@ functions of shared-reference inputs and host captures. I/O, mutation, and
 evaluation counts are outside this meaning.
 
 The reference evaluates the desugared body in written order. Whenever it
-returns, a target must return the same set without panic. Relational steps may
+returns, a target must return the same set without panic, under the premises
+below; guard motion additionally rests on the totality of the moved predicate
+(recognized comparisons under the Eq/Ord premises, or the trusted
+`#[total]` assertion, scheduled for removal). Relational steps may
 move earlier across Rust steps; Rust steps keep their relative order, binders,
 and source-before relational requirements. Relational equality assumes Leibniz
 identity; ordered comparisons assume a total, consistent order. Rust trait

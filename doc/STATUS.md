@@ -16,7 +16,9 @@
 - Predicates: relational disjunctions derive implied per-occurrence domains
   (H07 `n_name ∈ {FRANCE, GERMANY}`) while keeping the exact predicate. Guards
   over allowlisted total std operations, or marked `#[total] if <expr>`, move
-  like relational filters; other Rust guards stay where written.
+  like relational filters; other Rust guards stay where written. The
+  `#[total]` assertion is trusted, not checked, and is scheduled for removal;
+  the allowlist matches type names and is scheduled for replacement.
 - Aggregates: one required set dedup; constant-group folds use `SingleGroup`;
   grouped containers use the recorded fast hasher.
 - Join filters (SQL Server bitmaps): every probe or semijoin into a filtered

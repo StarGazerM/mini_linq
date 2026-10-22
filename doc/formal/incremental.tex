@@ -23,9 +23,10 @@ panic from any reached valuation. A relational atom extends a valuation, a
 guard retains or discards it, and the head projects or maps it.
 Commutativity of the \emph{total} set/bag fragment does not establish
 commutativity of arbitrary partial computations: an empty earlier relation
-can prevent a later panic. Total guards still require their binders, pure
-value-based behavior and the existing dependency checks; they do not move
-across arbitrary operators merely because they are total.
+can prevent a later panic. Total guards still require their binders and pure value-based behavior; given
+those, they move like relational selections (CQ-Total, C-Ready, E-Constraint),
+which is legal exactly because they are total (Motion lemma,
+Section~\ref{sec:premises}). Opaque guards keep the Rust chain.
 
 An iterator supplies an ordered, demand-driven operational sequence, not a
 bag by definition. For a finite successful exhaustive traversal, forgetting
