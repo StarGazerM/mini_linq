@@ -16,3 +16,9 @@ cq-datalog-partition = { path = "../partition" }
 proc-macro2 = "1"
 quote = "1"
 syn = { version = "2", features = ["full"] }
+
+[dev-dependencies]
+cq-datalog-fork = { path = "../../datalog/passes/fork" }
+cq-datalog-storage = { path = "../../datalog/passes/storage" }
+cq-datalog-stratify = { path = "../../datalog/passes/stratify" }
+cq-datalog-incremental = { path = "../../datalog/passes/incremental" }

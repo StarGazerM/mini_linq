@@ -16,7 +16,6 @@ cq-datalog = { path = "../../../../datalog/facade/cq-datalog" }
 mini-linq = { path = "../../../../../facade/mini-linq" }
 cq-storage = { path = "../../../../../runtime/cq-storage" }
 cq-datalog-hasher = { path = "../../../../datalog/passes/hasher" }
-cq-rewrites = { path = "../../../../rewrites" }
 cq-datalog-parallel = { path = "../../.." }
 cq-datalog-parallel-runtime = { path = "../../../runtime" }
 rayon = "1"

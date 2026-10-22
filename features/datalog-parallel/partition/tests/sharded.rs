@@ -35,6 +35,21 @@ fn authored_round() -> Program {
     cq_datalog_fork::compile(&storage).unwrap()
 }
 
+fn expected_push(mut program: Program) -> Program {
+    for rule in program
+        .context
+        .strata
+        .iter()
+        .flat_map(|s| s.seeds.iter().chain(&s.steps))
+    {
+        let hole = &mut program.holes[rule.hole];
+        hole.interface = round::HoleInterface::Push;
+        hole.pipeline.passes.last_mut().unwrap().path =
+            syn::parse_quote!(::cq_datalog::passes::print_push);
+    }
+    program
+}
+
 fn rejected(change: impl FnOnce(&mut ShardedProgram)) {
     let source = authored_round();
     let mut target = compile_sharded(&source).unwrap();
@@ -376,7 +391,10 @@ fn sharded_round_records_threshold_grain_and_lossless_certificate() {
     let target = compile_sharded(&source).unwrap();
     assert_eq!(target.certificate.threshold, DEFAULT_THRESHOLD);
     assert_eq!(target.certificate.grain, DEFAULT_GRAIN);
-    assert_eq!(round::erase(&target.round).unwrap(), source);
+    assert_eq!(
+        round::erase(&target.round).unwrap(),
+        expected_push(source.clone())
+    );
     assert_eq!(
         syn::parse2::<ShardedProgram>(target.to_token_stream()).unwrap(),
         target
@@ -402,6 +420,63 @@ fn sharded_round_records_threshold_grain_and_lossless_certificate() {
     assert!(compile_sharded(&target.round).is_err());
     let sequential = cq_datalog_fork::compile(&authored_storage()).unwrap();
     assert!(compile_sharded(&sequential).is_err());
+}
+
+#[test]
+fn task_self_deduplication_is_erasable_and_matches_each_scan_witness() {
+    let source = authored_round();
+    for policy in [None, Some(syn::parse_quote!(per_task))] {
+        let mut target = compile_sharded(&source).unwrap();
+        target.certificate.self_dedup = policy.clone();
+        for execution in &mut target.round.execution {
+            execution.self_dedup = policy.clone();
+        }
+        check_sharded(&source, &target).unwrap();
+        Language::check(&target).unwrap();
+        assert_eq!(
+            round::erase(&target.round).unwrap(),
+            expected_push(source.clone())
+        );
+        assert_eq!(
+            syn::parse2::<ShardedProgram>(target.to_token_stream()).unwrap(),
+            target,
+        );
+        let mut mismatch = target.clone();
+        mismatch.round.execution[0].self_dedup = if policy.is_some() {
+            None
+        } else {
+            Some(syn::parse_quote!(per_task))
+        };
+        assert!(
+            check_sharded(&source, &mismatch)
+                .unwrap_err()
+                .to_string()
+                .contains("disagrees with its execution witness")
+        );
+        target.certificate.self_dedup = Some(syn::parse_quote!(global));
+        assert!(check_sharded(&source, &target).is_err());
+    }
+
+    let storage = lower_storage(quote! {
+        struct GuardFirst;
+        relation E(x:i32) = (rows);
+        relation R(x:i32);
+        output R;
+        R(*x % 2) :- if enabled, E(x);
+    });
+    let storage = compile_storage(&storage).unwrap();
+    let source = cq_datalog_fork::compile(&storage).unwrap();
+    let mut target = compile_sharded(&source).unwrap();
+    assert!(target.round.execution.is_empty());
+    target.certificate.self_dedup = Some(syn::parse_quote!(per_task));
+    check_sharded(&source, &target).unwrap();
+    target.certificate.self_dedup = Some(syn::parse_quote!(global));
+    assert!(
+        check_sharded(&source, &target)
+            .unwrap_err()
+            .to_string()
+            .contains("must be per_task or absent")
+    );
 }
 
 #[test]
@@ -568,7 +643,7 @@ fn sharded_checker_preserves_opaque_holes_and_exact_scan_coverage() {
     let source = cq_datalog_fork::compile(&compile_storage(&storage).unwrap()).unwrap();
     let target = compile_sharded(&source).unwrap();
     assert!(target.round.execution.is_empty());
-    assert_eq!(target.round, source);
+    assert_eq!(target.round, expected_push(source));
     Language::check(&target).unwrap();
 }
 

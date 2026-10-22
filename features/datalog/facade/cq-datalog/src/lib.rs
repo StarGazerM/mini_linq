@@ -6,9 +6,8 @@
 //! Datalog owns its pipeline configuration without changing core CQ planning.
 //!
 //! Consumers declare direct `mini-linq` and `cq-storage` dependencies, just as
-//! ordinary generated CQ programs do. Fx and the hole-local retype pass are
-//! supplied through this facade; no direct `rustc-hash` or `cq-rewrites`
-//! dependency is needed for the default pipeline.
+//! ordinary generated CQ programs do. Fx is supplied through this facade;
+//! no direct `rustc-hash` dependency is needed for the default pipeline.
 //!
 //! ```
 //! let edges = [(0_i32, 1_i32), (1, 2), (2, 3)];
@@ -35,6 +34,47 @@
 //! inside that configuration. Its resolved queue is recorded on each hole.
 //! [`DatalogConfiguration`] exposes the same resolution to Rust callers.
 //!
+//! Each rule hole records `consumer canonical`: its result belongs to exactly
+//! one checked admission owner for its head relation. Frozen-key holes have
+//! their own canonical key-set consumer. Storage certificates establish
+//! `host_set H discharged` for certified positive hosts: canonical EDBs,
+//! admitted IDB all/delta rows, and their maintained layouts. Certificates may
+//! cover a subset of hosts; an uncertified host receives no discharged fact.
+//! Provider types are not whitelisted. Checked scan substitutions preserve the
+//! certificate for the renamed input.
+//! Round checks owners and host provenance directly from the supplied records;
+//! it never regenerates Fork's output to justify these facts. Opaque providers
+//! must still obey their recorded collection, membership and maintenance laws.
+//!
+//! Raw CQ entry remains fact-free; Fork records facts in the selected lower
+//! argument packet. `Hole.lower` records that invocation's ordinal, and Round
+//! checks its parsed context exactly equals `Hole.facts`. Fork's explicit
+//! `lower = N` argument selects a custom lowering alias by ordinal; otherwise
+//! the queue must have one path ending in `lower`.
+//! Checked scan renaming updates both facts and the packet, and facts naming
+//! non-read inputs are rejected before erasure.
+//! Once recorded in Physical, they travel in an exact explicit
+//! `context { consumer = canonical, host_set H discharged, ... };` envelope.
+//! Reentering a factful CQ IR requires that envelope: missing or extra facts
+//! are rejected, and matching pass arguments do not replace it. Per-hole
+//! rewrites and both pull and push terminals preserve this checked boundary.
+//! Sharded execution also preserves owners and facts; candidate buffers do not
+//! become new set boundaries, and shard admission remains responsible for
+//! full-row uniqueness before publication.
+//! Parallel execution may record `ShardCertificate.self_dedup = Some(per_task)`
+//! to deduplicate candidates within each task before global admission.
+//! Partitioned scans repeat the policy in `Execution.self_dedup`, checked only
+//! with `rayon_sharded`; a rule without a partitionable scan is one task.
+//! Frozen-key holes are excluded. The task-local collector uses `HashTable<usize>`
+//! indices into an owned `Vec`, shares the admission hasher, preserves first
+//! occurrence order, and returns that vector without row cloning or CQ
+//! `__cq_seen` state. The collector alone does not eliminate retained pull
+//! result materialization; checked push selection streams into it directly.
+//! These checked realization records erase without changing the CQ or context
+//! facts. The optimization is never the canonical owner: cross-task duplicates
+//! and old rows still require global admission. Sequential execution has no
+//! such annotation or local dedup state.
+//!
 //! Opt into bounded frozen positive-plus-negation materialization with
 //! `arguments { hoist_invariants; };` before the named pipeline or program.
 //! The checked transformation runs between Strata and Incremental, before
@@ -48,24 +88,34 @@
 //! directly to their key-set provider, without a printer-owned result buffer.
 //! The default registry recognizes both pull and push terminals; custom paths
 //! declare their interface with `terminals = [my::printer => push];`.
+//! A checked Round rewrite may change a hole's interface together with its
+//! pipeline and lowering ordinal, but the selected terminal must match the
+//! unchanged registry. It cannot add registry entries or alter the hole's
+//! context facts, canonical owner, or CQ meaning.
+//! Parallel partition selects push for rule holes whose terminal is exactly
+//! registered `::mini_linq::passes::print_pull` with empty arguments, provided
+//! `::cq_datalog::passes::print_push` is also registered. It preserves custom
+//! terminals, authored terminal arguments, and all frozen-key holes. This
+//! applies with or without task-local deduplication, including no-scan rules.
+//! The partition checker restores only that allowed terminal/interface change
+//! before requiring exact erased correspondence; it never changes the registry.
 //! Parallel and phase-timed execution retain their explicit candidate storage.
 //!
 //! Datalog defaults to unkeyed Fx hashing for layout maps, IDB membership,
-//! EDB canonicalization, negation key sets, and hole-local CQ deduplication.
+//! EDB canonicalization, and negation key sets. Checked context facts eliminate
+//! dedup representations in the generated rule holes, so the default queue
+//! installs no CQ dedup retype rewrite.
 //! This assumes trusted inputs: Fx is not collision-attack resistant.
-//! For adversarial input, select keyed hashing at all three boundaries:
+//! For adversarial input, select keyed hashing at both Datalog boundaries:
 //! ```ignore
 //! pipeline {
 //!     storage_rewrites = [cq_datalog_hasher::hasher(keyed)];
 //!     round = [cq_datalog_hasher::hasher_round(keyed)];
-//!     cq = pipeline {
-//!         structures = [cq_datalog::cq_rewrites::retype(dedup => ::cq_storage::HashSet<_>)];
-//!     };
 //! }
 //! ```
-//! Explicit `hasher(fx)` and `hasher_round(fx)` remain available. Authored CQ
-//! `structures` rewrites run after the default Fx dedup rewrite, so a later
-//! `retype(dedup => ...)` overrides it. MiniLinq core defaults are unchanged.
+//! Explicit `hasher(fx)` and `hasher_round(fx)` remain available. Do not add
+//! `retype(dedup => ...)` to the discharged hole pipeline: it has no dedup
+//! representation to retype. MiniLinq core defaults are unchanged.
 //!
 //! Resume authored IR at its next pass, not at a separate front-end macro:
 //! `cq_datalog::passes::incremental! { pipeline {
@@ -173,9 +223,12 @@
 //! before timing, evaluation includes index construction, and canonical answer
 //! sorting occurs after timing. Build first and do not compile concurrently
 //! with a timing run.
-//! Rule holes retain their projected heads: returning all body variables still
-//! triggers the frozen core's canonical-return deduplication for borrowed hosts,
-//! so widening those rows does not remove the per-call canonical set.
+//! Rule holes retain their projected heads; widening them is unnecessary.
+//! Checked `consumer canonical` facts assign the returned set boundary to
+//! admission, eliminating the per-hole `__cq_seen` set and unnecessary
+//! `return canon`. Discharged host facts also let CQ infer uniqueness from
+//! canonical inputs. Internal canonicalization needed by intermediate operators
+//! remains; this is not an instruction to erase every deduplication operation.
 //!
 //! # DOOP engine features
 //!

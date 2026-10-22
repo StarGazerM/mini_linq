@@ -104,7 +104,7 @@ pub fn compile(source: &Program) -> syn::Result<Program> {
             .find(|id| {
                 !text
                     .split(|c: char| !c.is_alphanumeric() && c != '_')
-                    .any(|word| word == id.to_string())
+                    .any(|word| id == word)
             })
             .unwrap();
         let input = &source.source.declarations[analysis.positions[&symbol_name(&atom.relation)]];
@@ -152,12 +152,16 @@ pub fn compile(source: &Program) -> syn::Result<Program> {
                 }
             })
             .collect();
-        let consumer = target.components
+        let consumer = target
+            .components
             .iter()
             .position(|members| members.contains(&query.head.relation))
             .unwrap();
         target.components.insert(consumer, vec![helper.clone()]);
-        target.source.models.insert(symbol_name(&helper), syn::parse_quote!(set));
+        target
+            .source
+            .models
+            .insert(symbol_name(&helper), syn::parse_quote!(set));
         target.source.invariants.push(Invariant {
             rule,
             helper,
@@ -173,8 +177,7 @@ pub fn check(source: &Program, target: &Program) -> syn::Result<()> {
     contract::check(source)?;
     contract::check(target)?;
     ensure(
-        source.source.invariants.is_empty()
-            || source.source.invariants == target.source.invariants,
+        source.source.invariants.is_empty() || source.source.invariants == target.source.invariants,
         target,
         "invariant scheduling changed existing certificates",
     )?;

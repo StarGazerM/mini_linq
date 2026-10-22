@@ -4,7 +4,7 @@
 //! Shared generators preserve DOOP's 103-relation, 135-rule source.
 //! `doop-parallel FACTS --check --threads N` compares all 26 full tuple sets.
 //! `--engine mini|mini-keyed|mini-par|mini-par-keyed|ascent|ascent-par` isolates
-//! timing and RSS. `mini` and `mini-par` use Fx storage and hole deduplication;
+//! timing and RSS. `mini` and `mini-par` use Fx storage and canonical consumers;
 //! the `-keyed` alternatives use keyed aHash. Default CLI execution runs `mini`
 //! and `ascent`; Cargo enables all six engines.
 //! For 15 workers, use

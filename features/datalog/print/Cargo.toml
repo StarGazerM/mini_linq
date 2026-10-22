@@ -19,3 +19,7 @@ cq-datalog-fork.workspace = true
 cq-datalog-storage.workspace = true
 cq-datalog-stratify.workspace = true
 cq-datalog-incremental.workspace = true
+cq-stage.workspace = true
+cq-lang-ix = { path = "../../../languages/cq-lang-ix" }
+cq-lang-physical = { path = "../../../languages/cq-lang-physical" }
+cq-physical-lowering = { path = "../../../passes/cq-physical-lowering" }

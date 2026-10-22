@@ -147,7 +147,6 @@ dependencies = [
  "cq-datalog-support",
  "cq-lang-datalog-round",
  "cq-lang-datalog-storage",
- "cq-rewrites",
  "cq-stage",
  "cq-storage",
  "mini-linq",
@@ -206,6 +205,10 @@ dependencies = [
  "cq-datalog-stratify",
  "cq-datalog-support",
  "cq-lang-datalog-round",
+ "cq-lang-ix",
+ "cq-lang-physical",
+ "cq-physical-lowering",
+ "cq-stage",
  "cq-syntax",
  "proc-macro2",
  "quote",
@@ -218,6 +221,7 @@ version = "0.0.0"
 dependencies = [
  "cq-lang-structures",
  "cq-physical-realization",
+ "cq-stage",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -719,7 +723,6 @@ version = "0.1.0"
 dependencies = [
  "cq-datalog",
  "cq-datalog-hasher",
- "cq-rewrites",
  "cq-storage",
  "doop-shared",
  "mini-linq",
@@ -925,7 +928,6 @@ version = "0.1.0"
 dependencies = [
  "cq-datalog",
  "cq-datalog-hasher",
- "cq-rewrites",
  "cq-storage",
  "mini-linq",
  "oracle-shared",

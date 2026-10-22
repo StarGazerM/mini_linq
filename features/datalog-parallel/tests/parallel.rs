@@ -361,3 +361,46 @@ fn small_work_threshold_evaluates_inline_and_preserves_sets() {
             assert_eq!(actual, (0..=31).map(|x| (x,)).collect());
         });
 }
+
+#[test]
+fn duplicate_heavy_partitioned_and_single_task_rules_share_canonical_admission() {
+    for threads in [1, 4] {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+            .install(|| {
+                let rows: Vec<_> = (0..128_i32).map(|x| (x,)).collect();
+                let blocked = [(127_i32,)];
+                let enabled = true;
+                macro_rules! run {
+                    ($($mode:tt)*) => {
+                        cq_datalog::datalog! {
+                            pipeline { $($mode)* }
+                            struct RepeatedCandidates;
+                            relation E(x:i32) = (&rows);
+                            relation B(x:i32) = (blocked);
+                            relation R(x:i32);
+                            output R;
+                            R(*x % 4) :- E(x), !B(x);
+                            R((*x + *offset) % 4) :- if enabled, E(x),
+                                for offset in [0, 0, 1, 1], !B(x);
+                            R((*x + 1) % 4) :- R(x);
+                        }.collect::<Vec<_>>()
+                    };
+                }
+                let sequential = run!();
+                let parallel = run!(
+                    storage_rewrites = [cq_datalog_parallel::shard_storage];
+                    round = [cq_datalog_parallel::partition(threshold = 0, grain = 2)];
+                    print = cq_datalog_parallel::print_rounds;
+                );
+                assert_eq!(parallel.len(), 4);
+                assert_same(&parallel, &sequential);
+                assert_eq!(
+                    parallel.into_iter().collect::<BTreeSet<_>>(),
+                    BTreeSet::from([(0,), (1,), (2,), (3,)])
+                );
+            });
+    }
+}

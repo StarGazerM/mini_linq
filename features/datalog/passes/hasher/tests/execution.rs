@@ -1,4 +1,4 @@
-//! Exercise the public stage macros, generated providers, and CQ hole dedup.
+//! Exercise the public stage macros, generated providers, and canonical consumers.
 use std::collections::BTreeSet;
 
 macro_rules! closure {
@@ -26,19 +26,11 @@ fn recursive_duplicate_heavy_negation_matches_fx_default_and_keyed() {
     let fx: Vec<_> = closure!(edges, blocked;
         storage_rewrites = [cq_datalog_hasher::hasher(fx)];
         round = [cq_datalog_hasher::hasher_round(fx)];
-        cq = pipeline {
-            structures = [cq_rewrites::retype(dedup =>
-                ::std::collections::HashSet<_,
-                    ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>)];
-        };
     )
     .collect();
     let keyed: Vec<_> = closure!(edges, blocked;
         storage_rewrites = [cq_datalog_hasher::hasher(fx), cq_datalog_hasher::hasher(keyed), cq_datalog_hasher::hasher(keyed)];
         round = [cq_datalog_hasher::hasher_round(fx), cq_datalog_hasher::hasher_round(keyed), cq_datalog_hasher::hasher_round(keyed)];
-        cq = pipeline {
-            structures = [cq_rewrites::retype(dedup => ::cq_storage::HashSet<_>)];
-        };
     )
     .collect();
     let restored: Vec<_> = closure!(edges, blocked;
@@ -102,9 +94,6 @@ fn zero_column_negation_keys_preserve_existential_blocking() {
         pipeline {
             storage_rewrites = [cq_datalog_hasher::hasher(keyed)];
             round = [cq_datalog_hasher::hasher_round(keyed)];
-            cq = pipeline {
-                structures = [cq_rewrites::retype(dedup => ::cq_storage::HashSet<_>)];
-            };
         }
         struct Existential;
         relation E(x:i32) = (rows);

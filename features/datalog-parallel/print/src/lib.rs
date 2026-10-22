@@ -1,5 +1,10 @@
 //! Checked sharded admission and exclusive-layout publication around CQ evaluation.
 //! Bindings, round barriers, observers and outputs reuse the base printer.
+//! Certified chunk inputs retain their renamed host-set facts. The checked
+//! per-task realization removes local duplicates without cloning owned rows.
+//! Cross-task/round duplicates still reach the recorded canonical admission owner.
+//! Standard rule tasks use the registered push adapter to feed the collector
+//! directly; custom pull terminals retain iteration through their authored API.
 use cq_lang_datalog_round::{self as round, InputSource, RoundContext, RuleHole};
 #[cfg(feature = "hole-timing")]
 use cq_lang_datalog_round::{Execution, Program};
@@ -14,7 +19,6 @@ pub fn compile(program: &cq_datalog_partition::ShardedProgram) -> syn::Result<sy
     let source = round::erase(&program.round)?;
     cq_datalog_partition::check_sharded(&source, program)?;
     let holes = cq_datalog_print::splice(&program.round)?;
-    let threshold = program.certificate.threshold;
     let mut stratum_index = 0usize;
     cq_datalog_print::render_with_publication(
         &program.round,
@@ -25,8 +29,7 @@ pub fn compile(program: &cq_datalog_partition::ShardedProgram) -> syn::Result<sy
                 context,
                 holes,
                 &program.round,
-                threshold,
-                program.certificate.grain,
+                &program.certificate,
                 #[cfg(feature = "hole-timing")]
                 &source,
             )
@@ -49,10 +52,12 @@ fn evaluate(
     context: &RoundContext,
     holes: &[TokenStream],
     program: &round::Program,
-    threshold: usize,
-    partition_grain: usize,
+    certificate: &cq_datalog_partition::ShardCertificate,
     #[cfg(feature = "hole-timing")] original: &Program,
 ) -> syn::Result<(TokenStream, TokenStream)> {
+    let threshold = certificate.threshold;
+    let partition_grain = certificate.grain;
+    let self_dedup = certificate.self_dedup.is_some();
     let specifications = &program.holes;
     let execution = &program.execution;
     let mut declarations = Vec::new();
@@ -69,13 +74,27 @@ fn evaluate(
         let invocation = &holes[rule.hole];
         let head = &context.relations[rule.head];
         let types = head.declaration.columns.iter().map(|column| &column.ty);
-        let consume = cq_datalog_print::collect_hole(
-            specifications[rule.hole].interface,
-            invocation,
-            quote!(::std::vec::Vec<(#(#types,)*)>),
-        );
+        let consume = if self_dedup {
+            let hasher = format_ident!("__cq_task_hasher_{}", rule.hole, span = Span::mixed_site());
+            let seen = &head.seen;
+            // Borrow only S before task closures: capturing seen inside a split
+            // evaluation would request mutable storage and impose row Sync.
+            declarations.push(quote!(let #hasher = #seen.hasher();));
+            collect_task(
+                specifications[rule.hole].interface,
+                invocation,
+                quote!((#(#types,)*)),
+                &hasher,
+            )
+        } else {
+            cq_datalog_print::collect_hole(
+                specifications[rule.hole].interface,
+                invocation,
+                quote!(::std::vec::Vec<(#(#types,)*)>),
+            )
+        };
         #[cfg(feature = "hole-timing")]
-        let consume = timed_chunk(consume, rule, execution);
+        let consume = timed_chunk(consume, rule, execution, self_dedup);
         let evaluation = if let Some(scan) = &rule.scan {
             let annotation = execution
                 .iter()
@@ -135,6 +154,8 @@ fn evaluate(
             let cq = original.holes[hole].cq.query.to_token_stream().to_string();
             let invocation_id = Ident::new("__cq_timing_invocation", Span::mixed_site());
             let chunk_counter = Ident::new("__cq_timing_chunks", Span::mixed_site());
+            let raw_counter = Ident::new("__cq_timing_candidates_before", Span::mixed_site());
+            let emitted = Ident::new("__cq_timing_candidates_after", Span::mixed_site());
             let sequence = Ident::new("__cq_timing_sequence", Span::mixed_site());
             let started = Ident::new("__cq_timing_started", Span::mixed_site());
             let elapsed = Ident::new("__cq_timing_elapsed", Span::mixed_site());
@@ -143,15 +164,17 @@ fn evaluate(
                     ::std::sync::atomic::AtomicUsize::new(0);
                 let #invocation_id = #sequence.fetch_add(1, ::std::sync::atomic::Ordering::Relaxed);
                 let #chunk_counter = ::std::sync::atomic::AtomicUsize::new(0);
+                let #raw_counter = ::std::sync::atomic::AtomicUsize::new(0);
                 let #started = ::std::time::Instant::now();
                 #candidates = #evaluation;
                 let #elapsed = #started.elapsed().as_nanos();
+                let #emitted = #candidates.iter().map(|chunk| chunk.len()).sum::<usize>();
                 ::std::eprintln!(
-                    "cq_hole_timing\tkind=hole\thole={}\tvariant={}\tinvocation={}\tpartitioned={}\telapsed_ns={}\tcandidates={}\tchunks={}\tcq={:?}",
+                    "cq_hole_timing\tkind=hole\thole={}\tvariant={}\tinvocation={}\tpartitioned={}\telapsed_ns={}\tcandidates={}\tchunks={}\tcq={:?}\tcandidates_before={}\tcandidates_after={}",
                     #hole, #variant, #invocation_id, #partitioned, #elapsed,
-                    #candidates.iter().map(|chunk| chunk.len()).sum::<usize>(),
+                    #emitted,
                     #chunk_counter.load(::std::sync::atomic::Ordering::Relaxed),
-                    #cq,
+                    #cq, #raw_counter.load(::std::sync::atomic::Ordering::Relaxed), #emitted,
                 );
             }));
         }
@@ -227,13 +250,50 @@ fn evaluate(
     Ok((evaluation, quote!(#(#admissions)*)))
 }
 
+fn collect_task(
+    interface: round::HoleInterface,
+    invocation: &TokenStream,
+    row_type: TokenStream,
+    hasher: &Ident,
+) -> TokenStream {
+    let candidates = Ident::new("__cq_task_candidates", Span::mixed_site());
+    #[cfg(feature = "hole-timing")]
+    let count = {
+        let raw = Ident::new("__cq_timing_chunk_before", Span::mixed_site());
+        quote!(#raw += 1;)
+    };
+    #[cfg(not(feature = "hole-timing"))]
+    let count = TokenStream::new();
+    let consume = cq_datalog_print::consume_hole(
+        interface,
+        invocation,
+        quote!(|row| {
+            #count
+            #candidates.insert(row);
+        }),
+    );
+    quote!({
+        let mut #candidates =
+            ::cq_datalog_parallel_runtime::TaskCandidates::<#row_type, _>::with_hasher(#hasher);
+        #consume;
+        #candidates.into_rows()
+    })
+}
+
 /// Diagnostic records are tab-separated key/value fields. `cq` is a Rust-debug
 /// escaped string (so tabs/newlines never split records); other fields are
 /// integers, booleans, or `unknown`. Hole wall time includes chunk-record output,
 /// while chunk elapsed time measures only CQ collection, excluding record output.
 /// Invocation numbers are local to each generated hole evaluation site.
+/// `candidates_before` counts raw CQ answers, `candidates_after` counts emitted
+/// task candidates, and the existing `candidates` field aliases the latter.
 #[cfg(feature = "hole-timing")]
-fn timed_chunk(consume: TokenStream, rule: &RuleHole, execution: &[Execution]) -> TokenStream {
+fn timed_chunk(
+    consume: TokenStream,
+    rule: &RuleHole,
+    execution: &[Execution],
+    self_dedup: bool,
+) -> TokenStream {
     let hole = rule.hole;
     let variant = rule.variant;
     let partitioned = rule.scan.is_some();
@@ -243,6 +303,10 @@ fn timed_chunk(consume: TokenStream, rule: &RuleHole, execution: &[Execution]) -
     let started = Ident::new("__cq_timing_chunk_started", Span::mixed_site());
     let elapsed = Ident::new("__cq_timing_chunk_elapsed", Span::mixed_site());
     let result = Ident::new("__cq_timing_chunk_result", Span::mixed_site());
+    let raw = Ident::new("__cq_timing_chunk_before", Span::mixed_site());
+    let raw_counter = Ident::new("__cq_timing_candidates_before", Span::mixed_site());
+    let before = self_dedup.then(|| quote!(let mut #raw = 0usize;));
+    let after = (!self_dedup).then(|| quote!(let #raw = #result.len();));
     let input_rows = if partitioned {
         let chunk = &execution
             .iter()
@@ -256,13 +320,129 @@ fn timed_chunk(consume: TokenStream, rule: &RuleHole, execution: &[Execution]) -
     quote!({
         let #chunk_id = #chunk_counter.fetch_add(1, ::std::sync::atomic::Ordering::Relaxed);
         let #started = ::std::time::Instant::now();
+        #before
         let #result = #consume;
+        #after
+        #raw_counter.fetch_add(#raw, ::std::sync::atomic::Ordering::Relaxed);
         let #elapsed = #started.elapsed().as_nanos();
         ::std::eprintln!(
-            "cq_hole_timing\tkind=chunk\thole={}\tvariant={}\tinvocation={}\tchunk={}\tpartitioned={}\telapsed_ns={}\tcandidates={}\tinput_rows={}",
+            "cq_hole_timing\tkind=chunk\thole={}\tvariant={}\tinvocation={}\tchunk={}\tpartitioned={}\telapsed_ns={}\tcandidates={}\tinput_rows={}\tcandidates_before={}\tcandidates_after={}",
             #hole, #variant, #invocation_id, #chunk_id, #partitioned,
-            #elapsed, #result.len(), #input_rows,
+            #elapsed, #result.len(), #input_rows, #raw, #result.len(),
         );
         #result
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use quote::ToTokens;
+
+    fn program() -> cq_datalog_partition::ShardedProgram {
+        let source = syn::parse_quote! {
+            struct Tasks;
+            relation E(x:i32) = (rows);
+            relation B(x:i32) = (blocked);
+            relation R(x:i32);
+            output R;
+            R(*x % 2) :- E(x), !B(x);
+            R(*x % 2) :- if enabled, E(x), !B(x);
+            R((*x + 1) % 2) :- R(x);
+        };
+        let strata = cq_datalog_stratify::compile(&source).unwrap();
+        let incremental = cq_datalog_incremental::compile(&strata).unwrap();
+        let storage = cq_datalog_storage::compile(&incremental).unwrap();
+        let storage = cq_datalog_partition::compile_storage(&storage).unwrap();
+        let round = cq_datalog_fork::compile(&storage).unwrap();
+        cq_datalog_partition::compile_sharded(&round).unwrap()
+    }
+
+    #[test]
+    fn checked_task_policy_covers_scan_and_single_task_rules_but_not_key_holes() {
+        for interface in [round::HoleInterface::Pull, round::HoleInterface::Push] {
+            let mut program = program();
+            if interface == round::HoleInterface::Pull {
+                program
+                    .round
+                    .terminals
+                    .0
+                    .push(syn::parse_quote!(custom::pull => pull));
+                for rule in program
+                    .round
+                    .context
+                    .strata
+                    .iter()
+                    .flat_map(|s| s.seeds.iter().chain(&s.steps))
+                {
+                    let hole = &mut program.round.holes[rule.hole];
+                    hole.interface = interface;
+                    hole.pipeline.passes.last_mut().unwrap().path = syn::parse_quote!(custom::pull);
+                }
+            }
+            let component = &program.round.context.strata[0];
+            assert_eq!(component.keys.len(), 1);
+            assert!(component.seeds.iter().any(|rule| rule.scan.is_none()));
+            let count = component.seeds.len() + component.steps.len();
+            for rule in component.seeds.iter().chain(&component.steps) {
+                assert_eq!(program.round.holes[rule.hole].interface, interface);
+            }
+            for key in &component.keys {
+                assert_eq!(
+                    program.round.holes[key.hole].interface,
+                    round::HoleInterface::Pull
+                );
+            }
+            let printed = compile(&program).unwrap().to_token_stream().to_string();
+            assert_eq!(printed.matches("TaskCandidates").count(), count);
+            assert_eq!(printed.matches(". hasher ()").count(), count);
+            assert_eq!(printed.matches(". into_rows ()").count(), count);
+            assert!(!printed.contains("__cq_seen"));
+            let holes = cq_datalog_print::splice(&program.round).unwrap();
+            let (evaluation, _) = evaluate(
+                &component.seeds,
+                &program.round.context,
+                &holes,
+                &program.round,
+                &program.certificate,
+                #[cfg(feature = "hole-timing")]
+                &round::erase(&program.round).unwrap(),
+            )
+            .unwrap();
+            let evaluation = evaluation.to_string();
+            assert_eq!(
+                evaluation.contains("for row in"),
+                interface == round::HoleInterface::Pull,
+            );
+            if interface == round::HoleInterface::Push {
+                assert_eq!(printed.matches("print_push").count(), count);
+                assert_eq!(
+                    printed
+                        .matches("consumer { __cq_datalog_consumer }")
+                        .count(),
+                    count
+                );
+            }
+            for relation in &program.round.context.relations {
+                let seen = &relation.seen;
+                assert!(!evaluation.contains(&quote!(&mut #seen).to_string()));
+            }
+            #[cfg(feature = "hole-timing")]
+            {
+                assert!(printed.contains("candidates_before="));
+                assert!(printed.contains("candidates_after="));
+                assert!(printed.contains("__cq_timing_chunk_before += 1"));
+            }
+            #[cfg(not(feature = "hole-timing"))]
+            assert!(!printed.contains("__cq_timing_chunk_before"));
+
+            program.certificate.self_dedup = None;
+            for execution in &mut program.round.execution {
+                execution.self_dedup = None;
+            }
+            let ordinary = compile(&program).unwrap().to_token_stream().to_string();
+            assert!(!ordinary.contains("TaskCandidates"));
+            assert!(!ordinary.contains(". hasher ()"));
+        }
+    }
 }

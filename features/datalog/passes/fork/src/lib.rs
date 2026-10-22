@@ -5,7 +5,7 @@ use cq_lang_datalog_round::{self as round, *};
 use cq_lang_datalog_storage as storage;
 use cq_syntax::symbol_name;
 use proc_macro2::TokenStream;
-use quote::quote;
+use quote::{ToTokens, quote};
 use syn::Ident;
 
 pub fn cq_defaults() -> cq_stage::Configuration {
@@ -15,20 +15,13 @@ pub fn cq_defaults() -> cq_stage::Configuration {
         lower = ::mini_linq::passes::lower;
         select = ::mini_linq::passes::select;
         represent = ::mini_linq::passes::represent;
-        structures = [::cq_datalog::cq_rewrites::retype(
-            dedup => ::std::collections::HashSet<_, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
-        )];
         stage = ::mini_linq::passes::stage;
         print = ::mini_linq::passes::print_pull;
     })
 }
-/// Install Datalog's dedup choice before any authored Structures rewrites.
-/// A later `retype(dedup => ...)` therefore selects an alternative provider.
-pub fn resolve_cq(mut configuration: cq_stage::Configuration) -> syn::Result<cq_stage::Pipeline> {
-    let mut defaults = cq_defaults();
-    defaults.structures.append(&mut configuration.structures);
-    configuration.structures = std::mem::take(&mut defaults.structures);
-    configuration.resolve(defaults)
+/// Resolve authored CQ phases over the fact-aware Datalog defaults.
+pub fn resolve_cq(configuration: cq_stage::Configuration) -> syn::Result<cq_stage::Pipeline> {
+    configuration.resolve(cq_defaults())
 }
 pub fn default_pipeline() -> cq_stage::Pipeline {
     resolve_cq(cq_stage::Configuration::default()).expect("complete CQ defaults")
@@ -44,6 +37,7 @@ pub fn compile_with_ratio(source: &storage::Program, ratio: u32) -> syn::Result<
         TerminalRegistry::default(),
         syn::parse_quote!(none),
         ratio,
+        None,
     )
 }
 struct Arguments {
@@ -51,6 +45,7 @@ struct Arguments {
     terminals: TerminalRegistry,
     timing: Ident,
     ratio: u32,
+    lower: Option<usize>,
 }
 impl syn::parse::Parse for Arguments {
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
@@ -58,6 +53,7 @@ impl syn::parse::Parse for Arguments {
         let mut terminals = None;
         let mut timing = None;
         let mut ratio = None;
+        let mut lower = None;
         while !input.is_empty() {
             let name: Ident = input.parse()?;
             input.parse::<syn::Token![=]>()?;
@@ -69,6 +65,8 @@ impl syn::parse::Parse for Arguments {
                 terminals = Some(input.parse()?);
             } else if name == "leveled_ratio" && ratio.is_none() {
                 ratio = Some(input.parse::<syn::LitInt>()?.base10_parse()?);
+            } else if name == "lower" && lower.is_none() {
+                lower = Some(input.parse::<syn::LitInt>()?.base10_parse()?);
             } else {
                 return Err(syn::Error::new_spanned(
                     name,
@@ -82,6 +80,7 @@ impl syn::parse::Parse for Arguments {
             terminals: terminals.unwrap_or_default(),
             timing: timing.unwrap_or_else(|| syn::parse_quote!(none)),
             ratio: ratio.unwrap_or(4),
+            lower,
         })
     }
 }
@@ -91,8 +90,9 @@ pub fn compile_with(source: &storage::Program, args: TokenStream) -> syn::Result
         terminals,
         timing,
         ratio,
+        lower,
     } = syn::parse2(args)?;
-    construct(source, pipeline, terminals, timing, ratio)
+    construct(source, pipeline, terminals, timing, ratio, lower)
 }
 /// Formal rule CK-DL-Fork: independently check storage embedding and every hole.
 pub fn check(source: &storage::Program, target: &Program) -> syn::Result<()> {
@@ -217,11 +217,50 @@ fn construct(
     terminals: TerminalRegistry,
     timing: Ident,
     ratio: u32,
+    lower: Option<usize>,
 ) -> syn::Result<Program> {
-    ensure(ratio >= 2, source, "leveled device index ratio must be at least two")?;
+    ensure(
+        ratio >= 2,
+        source,
+        "leveled device index ratio must be at least two",
+    )?;
     let analysis = storage::contract::check(source)?;
     terminals.check()?;
     let interface = terminals.interface(&pipeline)?;
+    let lower = if let Some(lower) = lower {
+        ensure(
+            lower < pipeline.passes.len(),
+            source,
+            "lower invocation ordinal is out of range",
+        )?;
+        lower
+    } else {
+        let candidates: Vec<_> = pipeline
+            .passes
+            .iter()
+            .enumerate()
+            .filter(|(_, pass)| {
+                pass.path
+                    .segments
+                    .last()
+                    .is_some_and(|segment| segment.ident == "lower")
+            })
+            .map(|(index, _)| index)
+            .collect();
+        ensure(
+            candidates.len() == 1,
+            source,
+            "fork requires exactly one named lower invocation; supply lower = <ordinal> for a custom alias",
+        )?;
+        candidates[0]
+    };
+    // Only checked, per-hole facts may enter this invocation.
+    let authored: cq_stage::Context = syn::parse2(pipeline.passes[lower].arguments.clone())?;
+    ensure(
+        authored.is_empty(),
+        source,
+        "fork derives lower facts; do not author a separate lower fact packet",
+    )?;
     let variants = &source.incremental.variants;
     let representation = key_representation(source)?;
     let mut fresh = Fresh::new(source);
@@ -251,6 +290,7 @@ fn construct(
                     .deltas
                     .contains_key(&symbol_name(&declaration.name))
                     .then(|| fresh.id("delta")),
+                admit: Vec::new(),
             })
             .collect(),
         layouts: source
@@ -421,8 +461,12 @@ fn construct(
                     let (selected, output_columns): (Vec<_>, Vec<_>) = if key.columns.is_empty() {
                         let column = &variables[0];
                         match representation {
-                            KeyRepresentation::Borrowed => (vec![quote!(())], vec![quote!(#column: ())]),
-                            KeyRepresentation::DeviceSetOwned => (vec![quote!(0u8)], vec![quote!(#column: u8)]),
+                            KeyRepresentation::Borrowed => {
+                                (vec![quote!(())], vec![quote!(#column: ())])
+                            }
+                            KeyRepresentation::DeviceSetOwned => {
+                                (vec![quote!(0u8)], vec![quote!(#column: u8)])
+                            }
                         }
                     } else {
                         (
@@ -497,6 +541,7 @@ fn construct(
             holes.push(syn::parse2(
                 quote!(struct #name; #(#declarations)* #scan_declaration #output #query),
             )?);
+            context.relations[head].admit.push(hole);
             let rule = RuleHole {
                 variant: variant_index,
                 head,
@@ -512,11 +557,13 @@ fn construct(
         }
         if representation == KeyRepresentation::DeviceSetOwned {
             for (index, layout) in context.layouts.iter().enumerate() {
-                if layout.key != 0 && stratum.seeds.iter().chain(&stratum.steps).any(|rule| {
-                    holes[rule.hole].query.body.iter().any(|item| {
+                if layout.key != 0
+                    && stratum.seeds.iter().chain(&stratum.steps).any(|rule| {
+                        holes[rule.hole].query.body.iter().any(|item| {
                         matches!(item, BodyItem::Positive { atom } if atom.relation == layout.name)
                     })
-                }) {
+                    })
+                {
                     if members.contains(&layout.relation) {
                         stratum.leveled_layouts.push(index);
                     } else {
@@ -527,12 +574,62 @@ fn construct(
         }
         context.strata.push(stratum);
     }
+    let mut certified_hosts = std::collections::BTreeSet::new();
+    for certificate in &source.certificates {
+        let name = match symbol_name(&certificate.kind).as_str() {
+            "all" => Some(&context.relations[certificate.index].declaration.name),
+            "delta" => context.relations[certificate.index].delta.as_ref(),
+            "layout" => Some(&context.layouts[certificate.index].name),
+            "delta_layout" => Some(&context.delta_layouts[certificate.index].name),
+            _ => None,
+        };
+        if let Some(name) = name {
+            certified_hosts.insert(symbol_name(name));
+        }
+    }
+    for rule in context
+        .strata
+        .iter()
+        .flat_map(|s| s.seeds.iter().chain(&s.steps))
+    {
+        if let Some(scan) = &rule.scan {
+            let source_name = match scan.source {
+                InputSource::Delta(index) => context.relations[index].delta.as_ref(),
+                InputSource::Layout(index) => Some(&context.layouts[index].name),
+            };
+            if source_name.is_some_and(|name| certified_hosts.contains(&symbol_name(name))) {
+                certified_hosts.insert(symbol_name(&scan.binding));
+            }
+        }
+    }
     let holes = holes
         .into_iter()
-        .map(|cq| Hole {
-            cq,
-            pipeline: pipeline.clone(),
-            interface,
+        .map(|cq| {
+            let facts = cq_stage::Context {
+                consumer_canonical: true,
+                discharged_host_sets: cq
+                    .query
+                    .body
+                    .iter()
+                    .filter_map(|item| match item {
+                        BodyItem::Positive { atom }
+                            if certified_hosts.contains(&symbol_name(&atom.relation)) =>
+                        {
+                            Some(symbol_name(&atom.relation))
+                        }
+                        _ => None,
+                    })
+                    .collect(),
+            };
+            let mut pipeline = pipeline.clone();
+            pipeline.passes[lower].arguments = facts.to_token_stream();
+            Hole {
+                cq,
+                pipeline,
+                interface,
+                facts,
+                lower,
+            }
         })
         .collect();
     let target = Program {

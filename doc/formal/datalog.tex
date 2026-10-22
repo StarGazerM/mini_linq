@@ -8,10 +8,12 @@ and opaque concrete Rust providers, while retaining the
 \code{seminaive\_covering} evaluation scheme and a checked operational vocabulary.
 Structural checks examine the supplied IR and never rerun a producer to compare
 with its chosen output.
-The default generated Rust preserves the captured baseline's behavior;
-declaration pruning removes only unused hole-local declarations and bindings.
-The Fx-default cutover intentionally changes the post-pruning baseline only in
-hash-provider type paths and the default hole-local deduplication rewrite.
+Declaration pruning removes unused hole-local declarations and bindings.
+The Fx-default cutover changes hash-provider type paths. The context-discharge
+cutover assigns each hole's returned set boundary to its checked consumer and
+derives input uniqueness from structural storage certificates, eliminating
+the default hole-local deduplication rewrite. It does not change the
+set-valued source meaning or the core CQ compiler.
 
 \paragraph{Semantic domain and limits.}
 Each relation declares a model slot $M$; the base accepts only \code{set}.
@@ -228,6 +230,47 @@ provider laws, and these operations introduce no new panic on successful
 reference executions. These are semantic premises, not proofs obtained by
 parsing a type name or by checking method availability.
 
+\paragraph{Canonical host certificates.}
+The \code{certificates} vector records typed \code{HostCanonical} entries:
+each has a \code{kind}, structure \code{index}, structural \code{source}
+and \code{columns} provenance. Admitted kind/source pairs are
+\code{all/provider} for canonical EDBs, \code{all/admission} and
+\code{delta/admission} for IDBs, \code{layout/all} and
+\code{delta\_layout/delta} for maintained layouts, and
+\code{negation/projection} for frozen projected keys.
+A layout certificate requires its exact complete column permutation,
+maintenance operation and certified all/delta root. Certificates may cover
+only a subset of the storage hosts; an uncertified host receives no discharged
+fact. Eligibility follows structural provenance, not a provider-type whitelist.
+Opaque lawful collection and maintenance remain premises, not properties
+proved by inspecting Rust type names.
+Canonical EDB collection establishes distinct complete rows even when the
+original EDB traversal repeats them. IDB \code{all} starts empty and
+receives only admitted fresh batches; \code{delta} is precisely one such batch.
+A full layout receives each admitted row once, and a delta layout is reset and
+rebuilt from the current batch. Their complete column permutations preserve
+full-row identity, including the key/payload split. Thus buckets may contain
+many payloads with the same key, but not repeated complete represented rows.
+Frozen-key collection separately establishes a set of the recorded projected
+keys; projection alone would not establish uniqueness.
+\begin{mathpar}
+\Rule{DL-HostCanonical}{
+ \mathrm{WF}_{\mathrm{Storage}}(D)\quad
+ \mathsf{certified}_D(H)\quad
+ \mathsf{provenance}(H)\in
+ \{\mathsf{canonicalEDB},\mathsf{admittedAll},\mathsf{admittedDelta},
+   \mathsf{maintainedLayout},\mathsf{collectedKeys}\}\quad
+ \mathsf{operations}(H)\text{ satisfy the corresponding provider laws}}
+ {\mathsf{fullRows}(H)\text{ has no duplicates}}
+\end{mathpar}
+The Storage checker establishes the relation/version, permutation and
+maintenance premises from supplied records. Round additionally checks copied
+storage, publication coverage and order, and frozen-key construction before
+using a certificate at a hole. Neither checker reruns storage selection or
+Fork, and neither proves the laws of an opaque provider from its Rust type.
+A complete immutable scan or an independently checked slice of such a host
+inherits uniqueness; a raw external binding does not.
+
 \paragraph{Defaults and checked alternatives.} The default canonical wrapper
 is named \code{Canonical}, with \code{::std::collections::HashSet<R, Fx>} storage,
 where \code{Fx} abbreviates the recorded concrete type
@@ -262,6 +305,11 @@ members, component-local negative keys, ordered seed/step \code{RuleHole}
 lists, explicit phases, publication operations, termination references and test,
 observer placement, key scope and loop form. Each \code{RuleHole} records the variant, head,
 hole index, optional scan binding and membership \code{insertion} operation.
+Each runtime \code{Relation} records \code{admit}, a vector of owned rule-hole
+indices. Each \code{Hole} records \code{facts: cq\_stage::Context}, with a
+consumer-canonical flag and a set of discharged host names.
+Its \code{lower} field records the exact lowering invocation ordinal in the
+CQ queue, rather than identifying that boundary only by a path spelling.
 An \code{Output} records a relation reference and conversion operation.
 The program also records a typed \code{terminals} registry mapping exact macro
 paths to \code{pull} or \code{push}; duplicate paths are rejected.
@@ -318,6 +366,70 @@ Pull and push differ only at the CQ boundary: a pull iterator feeds the
 admission loop, while a push terminal receives that same admission operation
 as its consumer. Frozen-key holes similarly feed the recorded key provider.
 Neither interface permits publication during evaluation.
+
+\paragraph{Admission owners and per-hole context.}
+Each runtime relation's \code{admit} list records its admission ownership.
+Across all component seed/step rules, every rule-hole index appears exactly
+once, in its declared head relation's list, using all-column \code{insert};
+no owner may name a missing, foreign, duplicate or wrong-head hole. This
+ownership is checked independently against the supplied rule-hole records,
+rather than inferred from a producer's usual ordering. Frozen-key construction
+holes instead belong to exactly one recorded \code{KeySet.hole} consumer.
+Neither case requires the returned candidate stream
+itself to be duplicate-free.
+\begin{mathpar}
+\Rule{DL-Admit-Owner}{
+ \mathsf{owners}(h)=\{R\}\quad \mathsf{head}(h)=R\quad
+ \mathsf{admit}_R\text{ uses complete-row membership insertion}}
+ {\mathsf{admit}_R(B)=\mathsf{admit}_R(\mathrm{supp}(B))}
+\end{mathpar}
+Equality here concerns the admitted set and subsequent relational state, not
+candidate traversal order, insertion-attempt counts or timing.
+Under \textsc{DL-Admit-Owner}, a rule hole records
+\code{consumer canonical}; a frozen-key hole records the same fact under
+the key provider's collection/insertion law. For every positively read host
+$H$ with a valid structural certificate, \textsc{DL-HostCanonical} justifies
+\code{host\_set H discharged}; uncertified hosts receive no such fact.
+Facts refer to the hole's actual declarations
+after any checked scan substitution, not to unused relation names or negative
+key sets captured only by predicates. Key-set hosts are canonical, but a
+predicate capture is not a declared positive host-set argument.
+
+These typed per-hole facts are part of the checked Round interface.
+Raw CQ entry remains fact-free. Fork records the facts in the selected
+\code{lower} argument packet, preserving the rest of the authored queue.
+An explicit \code{fork lower=<usize>} argument selects a custom lowering
+alias; otherwise the queue must contain a unique path with suffix
+\code{lower}. Round independently parses the invocation at
+\code{Hole.lower} as \code{cq\_stage::Context} and requires exact equality
+with \code{Hole.facts}. Execution erasure renames both the discharged-host
+facts and that packet; checks before erasure reject facts naming non-read
+inputs. The core protocol also supports introduction through \code{select}.
+Once the facts are recorded in Physical, every factful reentry carries
+the exact explicit \code{context} envelope of Section~\ref{sec:context}:
+\begin{lstlisting}
+context { consumer = canonical, host_set H discharged };
+pipeline { ... };
+Program
+\end{lstlisting}
+The envelope equals the recorded consumer and discharged-host facts in both
+directions; neither an omitted fact nor an additional authorization is allowed.
+A matching lower/select packet does not authorize reentry to an already
+factful source. Ordinary continuation derives its next envelope from the
+next source rather than blindly forwarding the previous envelope.
+The provenance check complements, rather than replaces, Round's proof of the
+consumer and host facts.
+
+\paragraph{Redundant return deduplication.}
+Rule holes retain their projected heads. The consumer fact removes the
+hole-return \code{\_\_cq\_seen} set and unnecessary \code{return canon};
+there is no need to widen the head to all body variables. Discharged host facts
+also seed CQ's uniqueness analysis without runtime host certification.
+Internal canonicalization required by intermediate operators is unchanged.
+Pull iterators, direct push consumers, and phase-timed candidate buffers all
+end at the same checked canonical consumer; buffering does not transfer
+ownership of the set boundary.
+
 \begin{mathpar}
 \Rule{P-DL-Push}{\Gamma\vdash(h,Q,\mathrm{push})\ \mathrm{hole}\quad
  c=\mathrm{admit}_{M}\ \text{or the recorded frozen-key insertion}}
@@ -432,13 +544,16 @@ ordinary pull terminal remains the default; full measurements are recorded in
 \paragraph{Rewrite check.} Check both contracts and preserve Storage exactly.
 The target may change checked execution records, frozen-key provider types,
 timing and each hole's CQ sub-pipeline independently; it must retain the typed
-terminal registry, hole interfaces, runtime names and query correspondence
-except for the independently checked scan-certificate substitution.
+terminal registry, context facts, admission owners, runtime names and query
+correspondence except for the independently checked scan-certificate substitution.
 In particular, a rewrite may choose \code{stage(batch(64))} for one hole,
 \code{represent(positions)} for another, or insert Structures rewrites.
 These are recorded invocation arguments, not changes to the embedded CQ
-meaning. The target's terminal must still implement that hole's fixed interface;
-each selected CQ pass subsequently checks its own language and rewrite
+meaning. A rewrite may change a hole's interface together with its pipeline
+and lowering ordinal, provided both contracts independently check the selected
+terminal against the same unchanged registry. This selects a registered
+calling convention; it does not mutate the registry or assert a new alias.
+Each selected CQ pass subsequently checks its own language and rewrite
 obligations when the nested pipeline expands.
 Positional representation and batching additionally require positional runtime
 hosts. The example rewrite applies them to two direct-delta scan holes; a
@@ -446,7 +561,7 @@ grouped hash-map layout is not thereby made into a positional host.
 \begin{mathpar}
 \Rule{CK-DL-RoundRewrite}{\mathrm{WF}(R)\quad\mathrm{WF}(R')\quad
  D'=D\quad\Gamma'=\Gamma\quad
- \forall i.\ h'_i=h_i\land\iota'_i=\iota_i\quad
+ \forall i.\ h'_i=h_i\land\mathsf{facts}'_i=\mathsf{facts}_i\quad
  E'\text{ satisfies the admitted execution obligations}}
  {R\leadsto R'}
 \end{mathpar}
@@ -655,18 +770,18 @@ and all 24 raw timing samples are retained in
 \paragraph{Default and alternative hash-provider selection.}
 Datalog directly records unkeyed Fx providers for Storage's native layout
 maps, IDB membership sets, EDB canonical sets, and Round's negation key sets.
-Its default hole-local CQ configuration installs the existing Structures
-\code{::cq\_datalog::cq\_rewrites::retype(dedup => ...)} rewrite with the
-same Fx provider before authored CQ \code{structures} rewrites, so an explicit
-later deduplication \code{retype} selects an alternative.
-No MiniLinq core defaults are changed. The facade reexports both the rewrite
-and \code{rustc\_hash}, so default consumers need no new direct dependencies.
+The discharged default holes have no CQ dedup representations, so their queue
+installs no \code{retype(dedup => ...)} rewrite. An explicit dedup-provider
+override is likewise invalid when no such representation remains; it must not
+be retained as a no-op compatibility setting.
+No MiniLinq core defaults are changed. The facade reexports
+\code{rustc\_hash}, so default consumers need no new direct dependency for Fx.
 The public \code{cq-datalog-hasher} plug-in retains explicit
 \code{hasher(fx)} and \code{hasher\_round(fx)} selections.
 For adversarial inputs, \code{hasher(keyed)} selects random-seeded aHash for
-Storage and \code{hasher\_round(keyed)} does so for Round; hole-local CQ
-deduplication must also be selected with
-\code{retype(dedup => ::cq\_storage::HashSet<\_>)}.
+Storage and \code{hasher\_round(keyed)} does so for Round. These two Datalog
+boundaries replace the former three-part selection: no CQ dedup override is
+needed or admitted for the discharged default holes.
 These rewrites are parallel-agnostic and are not installed in the default queue.
 Fx uses \code{BuildHasherDefault<rustc\_hash::FxHasher>} from version 2.1.3,
 as does the Ascent oracle. All providers require lawful hashing and equality.
@@ -677,7 +792,9 @@ sets are not rewritten.
 \subsection{Parallel partition: Round to extension-owned annotated Round}
 The separate extension accepts an unannotated source with sharded admission,
 checks both Round contracts, and requires exact erasure of the embedded target
-Round to the source, including policies and per-hole CQ queues. It records
+Round to the source after restoring only the independently checked terminal
+substitution below. All other policies and per-hole CQ queue entries are preserved.
+It records
 exactly one annotation per eligible rule scan, in component seed/step order,
 selecting occurrence zero and strategy \code{rayon\_sharded}. The Round
 certificate checks a fresh direct scan binding and one renamed leading
@@ -686,10 +803,51 @@ The extension requires vector-backed delta inputs and a native layout's
 contiguous vector bucket for a key-zero scan. Opaque aliases and non-vector
 containers remain admissible in base Storage but are not supported by this
 extension.
+The renamed scan's host certificate is derived from the certified original
+host: indexed chunks are disjoint slices of the same immutable complete rows,
+so each chunk remains duplicate-free. The extension preserves the per-hole
+consumer and discharged-host facts under this checked renaming, along with
+their exact CQ context envelopes and all authored pass arguments.
+For rule holes only, partition may replace the exact registered standard
+\code{::mini\_linq::passes::print\_pull} terminal with empty arguments by
+the registered \code{::cq\_datalog::passes::print\_push} terminal and change
+the interface from Pull to Push. The registry itself is unchanged. A missing
+push registration, custom terminal path or authored terminal arguments preserve
+the original invocation. Frozen-key holes are untouched. This choice applies
+to scan and no-scan rules independently of the self-deduplication policy:
+push feeds either the task-local collector or the candidate vector directly.
+The correspondence checker restores only this permitted source terminal and
+interface before demanding exact equality after scan erasure; a general
+unregistered terminal replacement is not an admitted partition rewrite.
+The extension's \code{ShardCertificate.self\_dedup: Option<Ident>} records
+its candidate-deduplication policy. Absence retains the baseline stream;
+the only admitted present value is \code{per\_task}. Each partitioned scan's
+\code{Execution.self\_dedup} repeats this policy as a checked witness,
+admissible only with \code{rayon\_sharded}. The policy covers every rule
+evaluation: a rule without a partitionable scan is one task. Frozen-key holes
+are excluded. Task-local deduplication precedes global admission, using
+\code{HashTable<usize>} indices into an owned candidate \code{Vec} and the
+existing admission hasher. It preserves first-occurrence order and returns
+the vector directly, without cloning rows or introducing CQ's
+\code{\_\_cq\_seen}. The collector alone does not eliminate a retained pull
+terminal's result materialization; the checked standard-terminal substitution
+instead streams push candidates directly into the selected task collector.
+The checker validates the policy and matching scan witnesses before erasing
+these realization records; erasure leaves the CQ query, \code{Hole.facts},
+and admission owner unchanged. For task candidate bags $B_j$, the justification is
+\[
+ \mathrm{supp}\!\left(\biguplus_j \mathrm{supp}(B_j)\right)
+ =\mathrm{supp}\!\left(\biguplus_j B_j\right).
+\]
+This optimization does not establish global freshness: equal heads from
+different tasks, rules or prior rounds still require the same canonical
+admission owner. It neither restores CQ \code{return canon} nor adds a
+sequential hole-local set. Candidate multiplicities and insertion-attempt counts
+may change; relational support and the checked context envelope do not.
 \begin{mathpar}
-\Rule{CK-DL-Partition}{\mathrm{erase}(t.\mathrm{round})=s\quad
+\Rule{CK-DL-Partition}{\mathrm{restoreTerminals}_s(\mathrm{erase}(t.\mathrm{round}))=s\quad
  s\text{ is unannotated, with certified admission and native layout providers}\quad
- t\text{ has the exact ordered scan certificates}}
+ t\text{ has exact ordered scan certificates and valid self-dedup modes}}
  {\mathrm{check}_{\mathrm{partition}}(s,t)}
 \end{mathpar}
 The printer partitions the same immutable leading scan into indexed Rayon
@@ -757,6 +915,16 @@ Reordered certificates and valid owner permutations are accepted. Scoped tasks
 receive exclusive mutable seen shards or native maps, never locks. Below
 the recorded candidate threshold, admission runs inline while preserving shard
 concatenation order; publication similarly avoids tasks for small next sets.
+The base Round admission-owner lists remain checked independently of the
+extension's shard and layout owner certificates. A candidate buffer may contain
+duplicate heads from one hole, several holes or several workers; equal complete
+tuples route to the same admission shard and only fresh tuples enter next.
+Consequently sharded admission discharges the same \code{consumer canonical}
+fact, and exclusive-layout publication preserves \textsc{DL-HostCanonical}
+for the subsequent snapshot. Optional \code{per\_task} execution deduplication
+is only a candidate-volume optimization, not a CQ-owned canonical boundary.
+Sequential holes remain free of local dedup state, and neither execution mode
+weakens the exact context-envelope requirement.
 Purity, lawful hashing/equality/cloning and the partial-Rust prefix premises
 remain required. Neither ownership checking nor the counters regression is a
 general Rust equivalence proof.
@@ -854,9 +1022,11 @@ table, including random reach and same-generation cases, is retained in
 binary hashes, exactness markers and expansion hashes are recorded in
 \code{features/datalog-parallel/doop/hasher-evidence.json}.
 
-The expanded Fx engines each record 385 Fx provider sites: 124 native layout
-maps, 32 EDB canonical sets, 71 IDB seen sets, two negation key sets and
-156 hole-local dedup sets. All 385 are selected by plug-ins; there are no
+The pre-discharge expanded Fx engines in this measurement each recorded 385
+Fx provider sites: 124 native layout maps, 32 EDB canonical sets, 71 IDB seen
+sets, two negation key sets and 156 hole-local dedup sets. These are historical
+counts, not counts for the context-discharged pipeline. All 385 were selected
+by plug-ins; there were no
 remaining explicit aHash set providers. Core \code{HashIndex} directories
 remain aHash: 231 lazy native-read fallback sites and two eager indexes for
 negation-filtered inputs. Thus aHash represents 2 of 387 non-lazy constructor

@@ -25,7 +25,11 @@ fn reach_reuses_indexes_across_every_round() {
         // Sequential scans retain the original whole-host Rows realization.
         // Raw inputs: n; grouped seed: 2; deltas: n; edge matches: n - 1.
         assert_eq!(cost.rows_enumerated, 3 * n as u64 + 1);
-        println!("{n}\t{}\t{}", cost.index_builds, cost.rows_enumerated);
+        assert_eq!(cost.distinct_insertions, 0);
+        println!(
+            "{n}\t{}\t{}\t{}\t{}",
+            cost.index_builds, cost.rows_enumerated, cost.lookups, cost.distinct_insertions
+        );
     }
 }
 

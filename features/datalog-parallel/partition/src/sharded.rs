@@ -24,6 +24,10 @@ pub struct ShardedProgram {
 pub struct ShardCertificate {
     pub threshold: usize,
     pub grain: usize,
+    /// Extension-wide task realization, including rules without a scan binding.
+    /// Scan executions repeat this choice as their per-hole witness; key-set
+    /// holes are excluded because their consumer already constructs a set.
+    pub self_dedup: Option<Ident>,
     pub shard_count: Ident,
     pub admission: Vec<Admission>,
     pub layouts: Vec<LayoutOwnership>,
@@ -69,7 +73,7 @@ record!(ShardedProgram {
     certificate: ShardCertificate
 });
 record!(ShardCertificate {
-    threshold: usize, grain: usize, shard_count: Ident,
+    threshold: usize, grain: usize, self_dedup: Option<Ident>, shard_count: Ident,
     admission: Vec<Admission>, layouts: Vec<LayoutOwnership>,
     delta_layouts: Vec<LayoutOwnership>, publication: Vec<PublicationBarrier>
 });
@@ -213,6 +217,13 @@ pub fn compile_sharded(source: &Program) -> syn::Result<ShardedProgram> {
 /// Partition a Round program with sharded seen admission and native layouts.
 /// Threshold controls the sequential fallback; grain controls scan chunk size.
 /// A zero threshold forces the parallel path; grain must remain nonzero.
+/// The default `self_dedup per_task` realization removes duplicate owned
+/// candidates within each chunk or unpartitioned rule task before admission.
+/// A checked certificate with an absent policy and absent scan witnesses retains
+/// the direct-vector realization. Both erase to the same task-realized Round.
+/// Rule holes ending in the registered standard argument-free pull printer
+/// use the existing registered push adapter. Custom terminals and arguments,
+/// missing push registry entries, and key holes retain their authored queues.
 pub fn compile_sharded_with(
     source: &Program,
     arguments: TokenStream,
@@ -225,8 +236,9 @@ pub fn compile_sharded_with(
         "partition requires an unannotated Round program",
     )?;
     check_providers(source)?;
+    let realized = super::realize_tasks(source)?;
     let target = ShardedProgram {
-        round: super::partition_scans(source),
+        round: super::partition_scans(&realized),
         certificate: certificate(source, arguments),
     };
     check_sharded(source, &target)?;
@@ -235,16 +247,47 @@ pub fn compile_sharded_with(
 
 /// Formal rule CK-DL-Partition: certify exact scan coverage and reversible single-occurrence substitution.
 /// Formal rule CK-DL-ShardOwnership: certify disjoint admission shards, exclusive layout owners and a complete publication barrier.
-/// Check exact CQ erasure, exhaustive scan scheduling, ownership, and the
-/// complete publication barrier. Base Round independently checks each layout's
-/// maintenance ordering and coverage before permitting another evaluation.
+/// Compose the checked Round terminal realization with exact scan erasure,
+/// exhaustive scheduling, ownership, and the complete publication barrier.
+/// After restoring only the permitted standard terminal/interface replacements,
+/// source equality covers every other CQ queue token, discharged fact, lower
+/// packet, and admission-owner list. No registry premises are introduced.
 pub fn check_sharded(source: &Program, target: &ShardedProgram) -> syn::Result<()> {
     round::contract::check(source)?;
     round::contract::check(&target.round)?;
+    let erased = round::erase(&target.round)?;
+    round::check_rewrite(source, &erased)?;
+    let mut restored = erased;
+    for rule in source
+        .context
+        .strata
+        .iter()
+        .flat_map(|s| s.seeds.iter().chain(&s.steps))
+    {
+        let before = &source.holes[rule.hole];
+        if super::can_push(source, before) {
+            let after = &mut restored.holes[rule.hole];
+            let terminal = after.pipeline.passes.last_mut().expect("checked terminal");
+            ensure(
+                after.interface == round::HoleInterface::Push
+                    && terminal.path == super::push_path()
+                    && terminal.arguments.is_empty(),
+                &target.round.holes[rule.hole],
+                "sharded task changed its registered push realization",
+            )?;
+            *terminal = before
+                .pipeline
+                .passes
+                .last()
+                .expect("checked terminal")
+                .clone();
+            after.interface = before.interface;
+        }
+    }
     ensure(
-        source.execution.is_empty() && round::erase(&target.round)? == *source,
+        source.execution.is_empty() && restored == *source,
         target,
-        "sharded partition changed the erased Round program or its CQ pipelines",
+        "sharded partition changed the erased Round program beyond its task terminals",
     )?;
     check_providers(source)?;
     let mut annotations = target.round.execution.iter();
@@ -267,11 +310,25 @@ pub fn check_sharded(source: &Program, target: &ShardedProgram) -> syn::Result<(
             target,
             "sharded partition changed scan coverage, occurrence or strategy",
         )?;
+        ensure(
+            annotation.self_dedup == target.certificate.self_dedup,
+            target,
+            "task self-deduplication policy disagrees with its execution witness",
+        )?;
     }
     ensure(
         annotations.next().is_none(),
         target,
         "sharded partition added an ineligible scan",
+    )?;
+    ensure(
+        target
+            .certificate
+            .self_dedup
+            .as_ref()
+            .is_none_or(|policy| policy == "per_task"),
+        target,
+        "task self-deduplication must be per_task or absent",
     )?;
     ensure(
         target.certificate.grain > 0,
@@ -440,6 +497,7 @@ fn certificate(program: &Program, arguments: Arguments) -> ShardCertificate {
     ShardCertificate {
         threshold: arguments.threshold,
         grain: arguments.grain,
+        self_dedup: Some(syn::parse_quote!(per_task)),
         shard_count: syn::parse_quote!(power_of_two_at_least_threads),
         admission: program
             .context

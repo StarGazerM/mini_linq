@@ -31,43 +31,16 @@ fn defaults_include_surface_and_every_checked_stage() {
 }
 
 #[test]
-fn cq_structure_overrides_follow_default_fx_dedup() {
-    for (configuration, has_fx, has_keyed) in [
-        (syn::parse_quote!(pipeline {}), true, false),
-        (
-            syn::parse_quote!(pipeline { cq = pipeline { plan = custom::plan; }; }),
-            true,
-            false,
-        ),
-        (
-            syn::parse_quote!(pipeline { cq = pipeline { structures = []; }; }),
-            true,
-            false,
-        ),
-        (
-            syn::parse_quote!(pipeline {
-                cq = pipeline {
-                    structures = [::cq_datalog::cq_rewrites::retype(dedup => ::cq_storage::HashSet<_>)];
-                };
-            }),
-            true,
-            true,
-        ),
-    ] {
-        let configuration: DatalogConfiguration = configuration;
-        let queue = configuration
-            .resolve(DatalogConfiguration::defaults())
-            .unwrap();
-        let args = queue.passes[4].arguments.to_string();
-        assert_eq!(args.contains("FxHasher"), has_fx);
-        assert_eq!(
-            args.contains("dedup => :: cq_storage :: HashSet < _ >"),
-            has_keyed
-        );
-        if has_keyed {
-            assert!(args.find("FxHasher").unwrap() < args.find("cq_storage").unwrap());
-        }
-    }
+fn cq_structure_rewrites_are_authored_not_implicit_dedup() {
+    let configuration: DatalogConfiguration = syn::parse_quote!(pipeline {
+        cq = pipeline { structures = [custom::structures]; };
+    });
+    let queue = configuration
+        .resolve(DatalogConfiguration::defaults())
+        .unwrap();
+    let args = queue.passes[4].arguments.to_string();
+    assert!(args.contains("custom :: structures"));
+    assert!(!args.contains("dedup"));
 }
 
 #[test]
@@ -93,15 +66,12 @@ fn named_phases_preserve_order_and_opaque_arguments() {
         cq_surface(opaque(tokens)), planner(no_reduce),
         ::mini_linq::passes::index_demands, ::mini_linq::passes::lower,
         physical_a(eight), physical_b, ::mini_linq::passes::select,
-        ::cq_datalog::cq_rewrites::retype(
-            dedup => ::std::collections::HashSet<_, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
-        ),
         structures(nine), ::mini_linq::passes::represent,
         ::mini_linq::passes::stage, ::mini_linq::passes::print_pull
     } };
     let expected: Pipeline = syn::parse_quote! { pipeline {
         sugar(opaque(tokens)), sugar_two, components(one), variants(two), stores(three),
-        rewrite_a(four), rewrite_b, holes(five; cq = #cq; terminals = [
+        rewrite_a(four), rewrite_b, holes(five; cq = #cq; lower = 3; terminals = [
             ::mini_linq::passes::print_pull => pull, mini_linq::passes::print_pull => pull,
             ::cq_datalog::passes::print_push => push
         ];),
@@ -111,6 +81,20 @@ fn named_phases_preserve_order_and_opaque_arguments() {
         queue.to_token_stream().to_string(),
         expected.to_token_stream().to_string()
     );
+}
+
+#[test]
+fn named_lower_alias_retains_its_context_owner_position() {
+    let config: DatalogConfiguration = syn::parse_quote! { pipeline {
+        cq = pipeline {
+            surface = [first, second];
+            lower = custom::physical_lowering(opaque);
+        };
+    } };
+    let queue = config.resolve(DatalogConfiguration::defaults()).unwrap();
+    let arguments = queue.passes[4].arguments.to_string();
+    assert!(arguments.contains("custom :: physical_lowering (opaque)"));
+    assert!(arguments.contains("lower = 4 ;"));
 }
 
 #[test]

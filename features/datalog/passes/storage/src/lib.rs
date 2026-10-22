@@ -1,7 +1,7 @@
 //! Choose stable storage layouts in the independently checked variant-driver order.
 use cq_datalog_support::{ensure, key_columns};
 use cq_lang_datalog_incremental as incremental;
-use cq_lang_datalog_storage::{BodyItem, Layout, Policy, Program, Providers};
+use cq_lang_datalog_storage::{BodyItem, HostCanonical, Layout, Policy, Program, Providers};
 use cq_syntax::symbol_name;
 use std::collections::BTreeSet;
 
@@ -60,6 +60,7 @@ pub fn compile_with_representation(
         delta_layouts,
         reads: Vec::new(),
         negations: Vec::new(),
+        certificates: Vec::new(),
         policy: match representation {
             Representation::CpuHashSet => Policy {
                 insertion: syn::parse_quote!(all_columns),
@@ -72,6 +73,56 @@ pub fn compile_with_representation(
         },
     };
     (target.reads, target.negations) = cq_lang_datalog_storage::read_plan(&target, &analysis)?;
+    for (index, declaration) in source.strata.source.declarations.iter().enumerate() {
+        let columns: Vec<_> = (0..declaration.columns.len()).collect();
+        target.certificates.push(HostCanonical {
+            kind: syn::parse_quote!(all),
+            index,
+            source: if declaration.value.is_some() {
+                syn::parse_quote!(provider)
+            } else {
+                syn::parse_quote!(admission)
+            },
+            columns: columns.clone(),
+        });
+        if analysis
+            .deltas
+            .contains_key(&symbol_name(&declaration.name))
+        {
+            target.certificates.push(HostCanonical {
+                kind: syn::parse_quote!(delta),
+                index,
+                source: syn::parse_quote!(admission),
+                columns,
+            });
+        }
+    }
+    for (delta, layouts) in [(false, &target.layouts), (true, &target.delta_layouts)] {
+        for (index, layout) in layouts.iter().enumerate() {
+            target.certificates.push(HostCanonical {
+                kind: if delta {
+                    syn::parse_quote!(delta_layout)
+                } else {
+                    syn::parse_quote!(layout)
+                },
+                index,
+                source: if delta {
+                    syn::parse_quote!(delta)
+                } else {
+                    syn::parse_quote!(all)
+                },
+                columns: layout.columns.clone(),
+            });
+        }
+    }
+    for (index, negative) in target.negations.iter().enumerate() {
+        target.certificates.push(HostCanonical {
+            kind: syn::parse_quote!(negation),
+            index,
+            source: syn::parse_quote!(projection),
+            columns: negative.columns.clone(),
+        });
+    }
     check(source, &target)?;
     Ok(target)
 }
@@ -96,8 +147,9 @@ fn choose_layouts(
     ordered.sort_by_key(|variant| (variant.rule, variant.delta));
     for variant in ordered {
         let mut bound = BTreeSet::new();
-        let order = incremental::variant_order(&source.strata.source.rules[variant.rule], variant.driver)
-            .expect("checked driver order");
+        let order =
+            incremental::variant_order(&source.strata.source.rules[variant.rule], variant.driver)
+                .expect("checked driver order");
         for (position, item) in variant.query.body.iter().enumerate() {
             let BodyItem::Positive { atom } = item else {
                 continue;

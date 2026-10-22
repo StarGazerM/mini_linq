@@ -16,6 +16,10 @@
 //! order, followed by any scan binding and the output. Negative keys are Rust
 //! predicate captures, not CQ inputs. Correspondence derives this schema
 //! independently of the fork producer and rejects unused or misbound inputs.
+//! Canonical consumers have exactly one relation admission or key-set owner.
+//! Each hole records typed context facts and the lowering invocation that
+//! introduces them. Raw CQ entry remains fact-free; checked lower arguments
+//! establish the exact envelope subsequently carried by the core pass protocol.
 use cq_datalog_support::{collect_names, ensure};
 pub use cq_lang_cq as cq;
 use cq_lang_cq::{BodyItem, Program as CqProgram};
@@ -38,6 +42,8 @@ pub struct Relation {
     pub next: Ident,
     pub delta: Option<Ident>,
     pub delta_host: Option<Ident>,
+    /// Rule holes whose complete candidate rows share this admission set.
+    pub admit: Vec<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -181,16 +187,32 @@ pub struct Hole {
     pub cq: CqProgram,
     pub pipeline: cq_stage::Pipeline,
     pub interface: HoleInterface,
+    pub facts: cq_stage::Context,
+    /// Invocation that introduces this hole's facts through lower arguments.
+    pub lower: usize,
 }
 impl PartialEq for Hole {
     fn eq(&self, other: &Self) -> bool {
         self.cq == other.cq
             && self.interface == other.interface
+            && self.facts == other.facts
+            && self.lower == other.lower
             && self.pipeline.to_token_stream().to_string()
                 == other.pipeline.to_token_stream().to_string()
     }
 }
 impl Eq for Hole {}
+impl Hole {
+    /// Rename a certified scan input and its exact lowering argument packet.
+    pub fn rename_host_fact(&mut self, old: &Ident, new: &Ident) {
+        if self.facts.discharged_host_sets.remove(&symbol_name(old)) {
+            self.facts.discharged_host_sets.insert(symbol_name(new));
+            if let Some(lower) = self.pipeline.passes.get_mut(self.lower) {
+                lower.arguments = self.facts.to_token_stream();
+            }
+        }
+    }
+}
 
 /// The calling convention of an embedded CQ result.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -330,6 +352,9 @@ pub struct Execution {
     pub occurrence: usize,
     pub binding: Ident,
     pub strategy: Ident,
+    /// Optional task-local candidate suppression, never an admission owner.
+    /// `per_task` is an erasable realization of a sharded parallel execution.
+    pub self_dedup: Option<Ident>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RoundPolicy {
@@ -339,16 +364,19 @@ record!(Program { storage: storage::Program, context: RoundContext, holes: Vec<H
 record!(Hole {
     cq: CqProgram,
     pipeline: cq_stage::Pipeline,
-    interface: HoleInterface
+    interface: HoleInterface,
+    facts: cq_stage::Context,
+    lower: usize
 });
 record!(Execution {
     hole: usize,
     occurrence: usize,
     binding: Ident,
-    strategy: Ident
+    strategy: Ident,
+    self_dedup: Option<Ident>
 });
 record!(RoundPolicy { timing: Ident });
-record!(Relation { declaration: RelationDecl, providers: storage::Providers, all: Ident, seen: Ident, next: Ident, delta: Option<Ident>, delta_host: Option<Ident> });
+record!(Relation { declaration: RelationDecl, providers: storage::Providers, all: Ident, seen: Ident, next: Ident, delta: Option<Ident>, delta_host: Option<Ident>, admit: Vec<usize> });
 record!(Layout { relation: usize, columns: Vec<usize>, key: usize, name: Ident, host: Ident, provider: syn::Type, maintenance: Ident });
 record!(KeySet { relation: usize, columns: Vec<usize>, filters: Vec<(usize,Expr)>, name: Ident, representation: KeyRepresentation, provider: syn::Type, hole: usize });
 record!(ScanBinding {
@@ -415,7 +443,10 @@ impl Text for LayoutRealization {
             "grouped_host" => Ok(Self::MaintainedGroupedHost),
             "frozen_device_index" => Ok(Self::MaintainedFrozenDeviceIndex),
             "leveled_device_index" => Ok(Self::MaintainedLeveledDeviceIndex),
-            _ => Err(syn::Error::new_spanned(id, "unsupported layout realization")),
+            _ => Err(syn::Error::new_spanned(
+                id,
+                "unsupported layout realization",
+            )),
         }
     }
     fn text(&self) -> TokenStream {
@@ -427,7 +458,9 @@ impl Text for LayoutRealization {
     }
 }
 
-/// Erase only certified input substitutions. This never erases arbitrary CQ edits.
+/// Erase certified input substitutions and optional task-local self-deduplication.
+/// Self-deduplication preserves candidate sets; canonical admission remains the
+/// sole owner. Neither certificate permits arbitrary CQ or context edits.
 pub fn erase(program: &Program) -> syn::Result<Program> {
     let mut erased = program.clone();
     let mut used = BTreeSet::new();
@@ -474,6 +507,14 @@ pub fn erase(program: &Program) -> syn::Result<Program> {
         collect_names(cq.to_token_stream(), &mut names);
     }
     for entry in &program.execution {
+        ensure(
+            entry
+                .self_dedup
+                .as_ref()
+                .is_none_or(|mode| mode == "per_task" && entry.strategy == "rayon_sharded"),
+            entry,
+            "self_dedup requires per_task on a sharded parallel execution",
+        )?;
         ensure(
             used.insert(entry.hole),
             program,
@@ -544,6 +585,7 @@ pub fn erase(program: &Program) -> syn::Result<Program> {
             "execution certificate does not name its occurrence",
         )?;
         atom.relation = scan.binding.clone();
+        hole.rename_host_fact(&entry.binding, &scan.binding);
     }
     erased.execution.clear();
     Ok(erased)
@@ -554,6 +596,32 @@ pub fn check_pipeline(hole: &Hole, terminals: &TerminalRegistry) -> syn::Result<
         terminals.interface(&hole.pipeline)? == hole.interface,
         hole,
         "hole interface does not match its registered terminal interface",
+    )?;
+    let reads: BTreeSet<_> = hole
+        .cq
+        .query
+        .body
+        .iter()
+        .filter_map(|item| match item {
+            BodyItem::Positive { atom } => Some(symbol_name(&atom.relation)),
+            _ => None,
+        })
+        .collect();
+    ensure(
+        hole.facts.discharged_host_sets.is_subset(&reads),
+        hole,
+        "discharged fact names must be actual positive hole inputs",
+    )?;
+    let lower = hole
+        .pipeline
+        .passes
+        .get(hole.lower)
+        .ok_or_else(|| syn::Error::new_spanned(hole, "hole lowering invocation is missing"))?;
+    let packet: cq_stage::Context = syn::parse2(lower.arguments.clone())?;
+    ensure(
+        packet == hole.facts,
+        hole,
+        "lower argument packet must exactly match the hole facts",
     )
 }
 
@@ -707,6 +775,95 @@ fn check_execution(program: &Program) -> syn::Result<()> {
     }
     Ok(())
 }
+/// Formal rule DL-Admit-Owner: every candidate has exactly one matching set consumer.
+fn check_facts(program: &Program) -> syn::Result<()> {
+    let context = &program.context;
+    let certified = |kind: &str, index: usize| {
+        program
+            .storage
+            .certificates
+            .iter()
+            .any(|c| c.kind == kind && c.index == index)
+    };
+    let mut owners = vec![0usize; program.holes.len()];
+    for (index, relation) in context.relations.iter().enumerate() {
+        let expected: BTreeSet<_> = context
+            .strata
+            .iter()
+            .flat_map(|s| s.seeds.iter().chain(&s.steps))
+            .filter(|rule| rule.head == index)
+            .map(|rule| rule.hole)
+            .collect();
+        let actual: BTreeSet<_> = relation.admit.iter().copied().collect();
+        ensure(
+            actual == expected && actual.len() == relation.admit.len(),
+            relation,
+            "admission owner must list every matching rule variant exactly once",
+        )?;
+        for &hole in &relation.admit {
+            let owner = owners.get_mut(hole).ok_or_else(|| {
+                syn::Error::new_spanned(relation, "admission owner references missing hole")
+            })?;
+            *owner += 1;
+        }
+    }
+    for key in context.strata.iter().flat_map(|s| &s.keys) {
+        let owner = owners
+            .get_mut(key.hole)
+            .ok_or_else(|| syn::Error::new_spanned(key, "key owner references missing hole"))?;
+        *owner += 1;
+    }
+    for (index, hole) in program.holes.iter().enumerate() {
+        ensure(
+            owners[index] == 1 && hole.facts.consumer_canonical,
+            hole,
+            "consumer canonical requires exactly one matching admission or key-set owner",
+        )?;
+        let mut expected = BTreeSet::new();
+        for item in &hole.cq.query.body {
+            let BodyItem::Positive { atom } = item else {
+                continue;
+            };
+            let name = &atom.relation;
+            let relation_host = context.relations.iter().enumerate().any(|(i, r)| {
+                (&r.declaration.name == name && certified("all", i))
+                    || (r.delta.as_ref() == Some(name) && certified("delta", i))
+            });
+            let layout_host = context
+                .layouts
+                .iter()
+                .enumerate()
+                .any(|(i, l)| &l.name == name && certified("layout", i))
+                || context
+                    .delta_layouts
+                    .iter()
+                    .enumerate()
+                    .any(|(i, l)| &l.name == name && certified("delta_layout", i));
+            let scan_host = context
+                .strata
+                .iter()
+                .flat_map(|s| s.seeds.iter().chain(&s.steps))
+                .filter(|rule| rule.hole == index)
+                .filter_map(|rule| rule.scan.as_ref())
+                .any(|scan| {
+                    &scan.binding == name
+                        && match scan.source {
+                            InputSource::Delta(i) => certified("delta", i),
+                            InputSource::Layout(i) => certified("layout", i),
+                        }
+                });
+            if relation_host || layout_host || scan_host {
+                expected.insert(symbol_name(name));
+            }
+        }
+        ensure(
+            hole.facts.discharged_host_sets == expected,
+            hole,
+            "discharged inputs must exactly name the certified hosts actually read",
+        )?;
+    }
+    Ok(())
+}
 
 pub mod contract {
     use super::*;
@@ -730,6 +887,7 @@ pub mod contract {
         }
         let erased = erase(program)?;
         correspondence::check_storage_with_analysis(&program.storage, &erased, &analysis)?;
+        check_facts(&erased)?;
         check_execution(program)?;
         Ok(Analysis { storage: analysis })
     }
@@ -750,8 +908,8 @@ fn check_rewrite_admitted(source: &Program, target: &Program) -> syn::Result<()>
         "round rewrite changed storage",
     )?;
     // Both contexts independently establish the same Storage correspondence.
-    // Only explicit execution decisions may differ; names and hole interfaces
-    // remain part of the immutable calling convention.
+    // Execution decisions and registered terminal interfaces may differ;
+    // names, canonical owners, facts, and the terminal registry remain fixed.
     for (before, after) in source.context.strata.iter_mut().zip(&erased.context.strata) {
         before.phases = after.phases.clone();
         before.publication = after.publication.clone();
@@ -776,6 +934,8 @@ fn check_rewrite_admitted(source: &Program, target: &Program) -> syn::Result<()>
     source.policy.timing = erased.policy.timing.clone();
     for (before, after) in source.holes.iter_mut().zip(&erased.holes) {
         before.pipeline = after.pipeline.clone();
+        before.lower = after.lower;
+        before.interface = after.interface;
     }
     ensure(
         source == erased,
