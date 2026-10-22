@@ -1,7 +1,7 @@
 \section{Guards: earned position independence (design)}
 \label{sec:guards-design}
 
-\emph{Status: design for review; not implemented.} This section replaces the
+\emph{Status: approved design; implementation in progress.} This section replaces the
 trusted \code{\#[total]} assertion and the type-name allowlist (CQ-Total) by a
 single principle.
 
@@ -42,20 +42,63 @@ Every theorem that previously consumed ``total'' (C-Ready, E-Constraint,
 ST-Total, the mask lemma, BK-Dual's total case, BE-Boundary, DL-Delta) then
 holds under premises 1--2 and the purity premises alone.
 
-\paragraph{Consequences and open decisions.}
+\paragraph{Consequences.}
 \begin{enumerate}
-\item \emph{String predicates} (\code{name.contains("green")}, TPC-H
-\code{LIKE}): pinned. If position independence is needed, string matching must
-become a construct with a defined relational meaning (a pattern-match
-comparison in the vocabulary above), not a recognized Rust method. Open.
+\item \emph{Arbitrary Rust guards} (\code{name.contains("green")}, a TPC-H
+\code{LIKE}): ordinary Rust, type-checked by rustc and evaluated at their
+written position. Nothing special is recognized; pinning is the normal
+treatment of Rust, not a loss of meaning.
 \item \emph{Datalog negation} is emitted today as
-\code{\#[total] if !K.contains(..)} over a completed key set. Without the
-assertion it is an opaque, pinned guard. The principled form is relational: an
-anti-join against the completed lower-stratum relation. Core CQ parses
-\code{!R(..)} but its contract rejects it (the optional extended semantics).
-Admitting stratified negation as a relational anti-join in CQ is a core
-language change. Open.
+\code{\#[total] if !K.contains(..)}: an anti-join encoded as a Rust membership
+guard because the CQ contract rejected \code{!R(..)}. It becomes a CQ negation
+(below), elaborated to the existing RA \code{anti}. No Rust guard and no
+assertion remain.
 \item \emph{GPU translation} re-translates relational predicates only; the
 \code{h05} range guard becomes a recognized \code{Between} when written
 without the assertion, which also restores range reads.
 \end{enumerate}
+
+\subsection{Negation in CQ}
+\paragraph{Grammar.} \code{BodyItem ::= ... | "!" Atom} (already parsed).
+Arguments are logical variables, constants (literals, parameters) or
+\code{\_}.
+\paragraph{Contract.}
+\begin{mathpar}
+\Rule{CQ-Neg}{R\text{ a declared input relation}\quad
+ \mathrm{vars}(args)\subseteq\mathsf{bound\_before}(i)\\
+ \text{binds nothing}\quad \text{columns at constants and variables Leibniz}}
+ {\mathrm{WF}(\code{!R(args)}\text{ at clause }i)}
+\end{mathpar}
+Safety: every named variable is bound by earlier clauses; wildcards are
+existential and bind nothing. A negated relation is an input of the query (CQ
+has no recursion; stratification is the enclosing compiler's obligation).
+\paragraph{Meaning.}
+\[
+\llbracket\code{!R(args)}\rrbracket(\rho)=
+\begin{cases}\{\rho\}&\neg\exists t\in R.\ \mathsf{match}(args,\rho,t)\\
+\emptyset&\text{otherwise}\end{cases}
+\]
+where \code{match} compares named variables and constants by Leibniz equality
+and ignores wildcards. It never yields $\bot$: negation is total and
+relational, so the Motion lemma lets it move like a selection once its
+variables are bound.
+\paragraph{Elaboration.}
+\begin{mathpar}
+\Rule{E-Neg}{p\text{ the prefix binding }F=\mathrm{vars}(args)\quad
+ s=\pi_{F}(\sigma_{consts}(\mathsf{rename}(R)))}
+ {\code{!R(args)}\ \leadsto\ \mathsf{anti}_F(p,s)}
+\end{mathpar}
+Constants become selections on $R$, wildcards are projected away, and the
+result is the existing RA anti-join ($\sem{\mathsf{anti}_F(r,s)}=\sem
+r\triangleright_F\sem s$); Physical chooses \code{anti eager|lazy} and the read
+of $s$ (a host membership read when the host supports exact membership) as
+for block fallback anti steps. An all-wildcard atom is an emptiness test of
+$R$ ($F=\emptyset$).
+
+\paragraph{Datalog.} The fork emits \code{!K(args)} against the borrowed,
+completed key-set host of the lower stratum (or \code{!R(args)} against the
+relation), declared like any hole input; the Round checker's negation rule
+compares that atom instead of a Rust guard. Key sets stay built once per
+stratum; the anti read must use the host's membership, never a per-call
+build.
+

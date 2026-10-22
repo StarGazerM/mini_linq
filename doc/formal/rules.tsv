@@ -227,3 +227,5 @@ CK-Return	implementation	passes/cq-physical-lowering/src/correspondence.rs	/// F
 CTX-Certify	implementation	passes/cq-print/src/lib.rs	/// Formal rule CTX-Certify:	A certified host_set fact is established by the executing program (IF-HostSet); discharged facts emit no local certificate.
 CTX-Discharge	implementation	languages/cq-lang-physical/src/lib.rs	/// Formal rule CTX-Discharge:	Record facts supplied by the invoking compiler's argument packet; its checker must prove them.
 CTX-Entry	implementation	facade/cq-stage/src/lib.rs	/// Formal rule CTX-Entry:	Require an explicit context envelope exactly equal to restricted source facts; argument packets do not authorize factful reentry, and only lower/select introduce facts.
+CQ-Neg	abstract	-	-	A negated atom names a declared input, uses only variables bound earlier, binds nothing, and is total.
+E-Neg	abstract	-	-	A CQ negation elaborates to an RA anti-join of the prefix against the constant-selected, projected relation.
