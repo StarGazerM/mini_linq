@@ -13,6 +13,7 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   context envelope, regenerated from each checked pass's recorded output facts.
   Discharged host sets skip runtime certification, and canonical consumers own
   the returned set boundary without changing internal canonicalization.
+  Redundant fact packets preserve already-recorded explicit canonical boundaries.
 
 - `cq-datalog-testkit` executes each Datalog IR's meaning: `eval_incremental`
   (semi-naive round system, the only evaluation scheme) and `eval_round`

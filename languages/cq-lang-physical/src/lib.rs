@@ -214,6 +214,7 @@ impl FactPacket {
 
     /// Formal rule CTX-Discharge: Record context facts supplied by the invoking
     /// compiler's packet. Its correspondence checker must prove these premises.
+    /// Facts already recorded in the source leave its explicit choices intact.
     pub fn apply(&self, program: &mut Program) -> syn::Result<()> {
         for fact in &self.host_sets {
             if let Some(previous) = program
@@ -222,12 +223,18 @@ impl FactPacket {
                 .iter_mut()
                 .find(|previous| symbol_name(&previous.relation) == symbol_name(&fact.relation))
             {
+                if previous.discharged.is_some() == fact.discharged.is_some() {
+                    continue;
+                }
                 previous.discharged = fact.discharged;
             } else {
                 program.program.host_sets.push(fact.clone());
             }
         }
         if let Some(fact) = &self.consumer_canonical {
+            if program.program.consumer_canonical.is_some() {
+                return contract::check(program).map(|_| ());
+            }
             program.program.consumer_canonical = Some(fact.clone());
             program.program.return_canon = None;
             let returned = &program.program.returned;

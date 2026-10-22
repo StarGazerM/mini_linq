@@ -784,3 +784,30 @@ fn selection_records_context_before_choosing_dedup_types() {
         empty.to_token_stream().to_string()
     );
 }
+
+#[test]
+fn redundant_context_packets_preserve_explicit_canon() {
+    let source: physical::Program = syn::parse_quote! { physical {
+        relation R(a:i32);
+        host_set R discharged;
+        consumer canonical;
+        r = pipe canon rename R@0 {a -> x};
+        return r as answer(*x % 2);
+    }};
+    let ordinary = compile(&source).unwrap();
+    for arguments in [
+        quote::quote!(consumer = canonical),
+        quote::quote!(host_set R discharged),
+        quote::quote!(host_set R discharged, consumer = canonical),
+    ] {
+        let selected = cq_structure_selection::compile_with(&source, arguments).unwrap();
+        assert_eq!(selected.physical, source);
+        assert_eq!(
+            selected.to_token_stream().to_string(),
+            ordinary.to_token_stream().to_string()
+        );
+        let facts = structures::contract::check(&selected).unwrap();
+        assert!(facts.dedup.contains_key("r"));
+        assert!(facts.head_dedup.is_empty());
+    }
+}
