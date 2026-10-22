@@ -220,3 +220,9 @@ EXT-SeqGrade	implementation	features/sequence-rewrites/passes/src/lib.rs	// Form
 L-Sequence	implementation	passes/cq-sequence-lowering/src/lib.rs	// Formal rule L-Sequence:	Default one-part lowering preserves Physical retention and records explicit lookup, membership, union and final count-store terms.
 T-Pull	implementation	passes/cq-sequence-pull/src/lib.rs	// Formal rule T-Pull:	Host iterator interpretation of checked Sequence constructors with recorded provider capabilities and explicit Vec stores.
 T-Gpu	implementation	experiments/gpu/sequence/src/emit.rs	// Formal rule T-Gpu:	Interpret checked GPU dispatches with recorded tiles, collaborative scans, range providers, bounded publication and runtime packed canonicalization.
+CTX-HostSet	abstract	-	-	A host_set fact means the full rows of R form a set.
+CTX-Consumer	abstract	-	-	A consumer canonical fact means the returned stream's consumer is support-invariant.
+CK-Return	abstract	-	-	The returned boundary is admissible by inferred uniqueness, an explicit return canon, or a consumer canonical fact.
+CTX-Certify	abstract	-	-	A certified host_set fact is established by the executing program (IF-HostSet).
+CTX-Discharge	abstract	-	-	A discharged fact enters through the pass argument packet and is proved by the invoking compiler's checker.
+CTX-Entry	abstract	-	-	A top-level entry rejects programs carrying discharged facts.

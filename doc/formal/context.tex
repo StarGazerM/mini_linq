@@ -1,0 +1,142 @@
+\section{Context facts: assume--guarantee between compilers}
+\label{sec:context}
+
+Every pass proves refinement conditionally. The premises of
+Section~\ref{sec:premises} are global and unverifiable; the facts of this
+section are \emph{local}: a program states a fact about its context that it
+cannot establish itself, a lower contract relaxes an obligation under that
+fact, and whoever closes the context must discharge it. Nothing here changes
+the written-order denotation $T X=\bot+\operatorname{Set}X$ or the relation
+model; a context fact refines within the fixed meaning. Multiplicities,
+result order and annotation semirings are not context facts: they change the
+model and belong to a dialect with a checked translation
+(Section~\ref{sec:datalog-languages}).
+
+\paragraph{Grammar.} Context facts are recorded in Physical and carried by
+containment into Structures and Sequence.
+\begin{lstlisting}
+Physical ::= physical { Decl* Fact* Def* return [canon] r as Head; }
+Fact     ::= host_set R [discharged];
+           | consumer canonical;
+\end{lstlisting}
+A fact without \code{discharged} is \emph{certified}: the generated program
+establishes it at runtime before the query executes (\textsc{IF-HostSet}).
+A fact marked \code{discharged} is established by the compiler that invoked
+this pass; it costs nothing at runtime and is admissible only under
+\textsc{CTX-Discharge} below. \code{consumer canonical} has no certified
+form: no program can test what its consumer will do.
+
+\paragraph{Meaning of a program under facts.} Let $\Gamma$ be the recorded
+facts. The judgment $\Gamma\vdash P$ reads: $P$ denotes
+$\llbracket P\rrbracket$ in every context satisfying $\Gamma$. For
+$\Gamma=\emptyset$ this is the unconditional meaning used everywhere else.
+\begin{mathpar}
+\Rule{CTX-HostSet}{\code{host\_set R}\in\Gamma}
+ {\alpha(R)\text{ is a set: }\mathsf{fullRows}(R)\text{ has no duplicate}}
+
+\Rule{CTX-Consumer}{\code{consumer canonical}\in\Gamma\quad
+ \kappa\text{ consumes the returned stream}}
+ {\kappa(B)=\kappa(\mathrm{supp}(B))\text{ for every bag }B}
+\end{mathpar}
+Under \textsc{CTX-Consumer} the returned stream may repeat witnesses: the
+program's guarantee at the return is $\mathrm{supp}$-equality, and the set
+boundary is owned by $\kappa$. This is the statement, already present in
+Section~\ref{sec:incremental} (INC-Supp), that a consumer may own the final
+canonical boundary only when multiplicity is unobservable there.
+
+\paragraph{What a fact relaxes.} Exactly two obligations consult $\Gamma$;
+every other contract is unchanged.
+\textsc{PH-HostSet} (Section~\ref{sec:physical}) and:
+\begin{mathpar}
+\Rule{CK-Return}{\mathsf{unique}(t.returned)\ \vee\
+ \code{return canon}\in t\ \vee\ \code{consumer canonical}\in\Gamma}
+ {\text{the returned boundary of }t\text{ is admissible}}
+\end{mathpar}
+\textsc{PH-HostSet} seeds the uniqueness lattice at a host rename; joins
+combine keys and projections keep a key they retain, so a hole whose head
+keeps the inherited key needs no \code{canon} at all. \textsc{CK-Return}
+replaces the third premise of \textsc{CK-Physical} and the corresponding
+Structures rule: with \code{consumer canonical} lowering records no
+\code{return canon}, Structures records no head dedup provider, and the
+printers emit no local set. Internal \code{canon} boundaries (union arms,
+noninjective computed heads inside the plan) are untouched: they serve
+intermediate joins, not the result's set-ness.
+
+\paragraph{Discharge.} A fact is sound only if someone establishes it.
+\begin{mathpar}
+\Rule{CTX-Certify}{\code{host\_set R}\in\Gamma\text{ certified}\quad
+ \mathsf{certify}(R)\Downarrow\ok\ (\textsc{IF-HostSet})}
+ {\text{the executing program establishes CTX-HostSet}}
+
+\Rule{CTX-Discharge}{\varphi\in\Gamma\text{ discharged}\quad
+ \varphi\in\mathsf{facts}(args)\quad
+ \mathsf{check}_C(\text{invoking program})\text{ proves }\varphi}
+ {\text{the invoking compiler }C\text{ establishes }\varphi}
+
+\Rule{CTX-Entry}{\code{mini\_linq::compile!}\{\ldots\}\text{ starts }\pi\quad
+ \Gamma\text{ contains a discharged fact}}
+ {\text{rejected: a top-level entry has no context to discharge it}}
+\end{mathpar}
+A discharged fact enters a pass only through its argument packet
+(\textsc{ST-Next}: passes receive no configuration beyond their arguments),
+so the recorded program names the fact and the pass that wrote it names the
+packet. The invoking compiler $C$ is any language that compiles to CQ and
+owns a checker: its correspondence check must prove $\varphi$ structurally,
+never by rerunning its own producer. \textsc{CTX-Entry} makes the
+unconditional case the default: every existing program has
+$\Gamma=\emptyset$, and a user who writes a discharged fact by hand at the
+top level is refused rather than trusted.
+
+\begin{theorem}[Closed context]
+If $\Gamma\vdash P$, $C$ discharges every discharged fact of $\Gamma$, and
+the executing program certifies every certified fact, then $C[P]$ refines the
+unconditional meaning of $C[P']$ where $P'$ is $P$ with $\Gamma=\emptyset$
+and the relaxed boundaries restored.
+\end{theorem}
+\begin{proof}
+\textsc{PH-HostSet}: a duplicate-free rename has its heading as key, so every
+key the lattice derives from it is a key of the unconditional program's
+canonical result; dropping a \code{canon} implied by such a key keeps the
+set. \textsc{CK-Return}: the returned bag $B$ satisfies
+$\mathrm{supp}(B)=\llbracket P'\rrbracket$ by the unchanged pass
+refinements modulo $\mathrm{supp}$, and $\kappa(B)=\kappa(\mathrm{supp}(B))$
+by \textsc{CTX-Consumer}. Panics are unchanged: no relaxation adds a step.
+Compose with Theorem~\ref{thm:composition}.
+\end{proof}
+
+\paragraph{Pass refinement under a consumer fact.} For a pass $f:s\mapsto t$
+on a program with \code{consumer canonical}, the obligation at the returned
+result is $\mathrm{supp}(\llbracket s\rrbracket)=\mathrm{supp}(\llbracket
+t\rrbracket)$ and no new $\bot$; elsewhere it is unchanged. Reductions,
+disjoint-union rewrites and dedup retyping already satisfy this: none
+changes a support.
+
+\paragraph{Instances.} The following languages compile to CQ and may
+discharge facts; each names the checker that proves them.
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+Invoking compiler & Fact & Proof obligation of its checker\\
+\midrule
+Datalog Storage & \code{host\_set H discharged} & $H$ is a canonical EDB provider, an IDB \code{all}/\code{delta} fed only through admission, or a layout maintained from them\\
+Datalog Round & \code{consumer canonical} & the hole is listed in exactly one \code{admit R from [..]} with $R$ its head (DL-Admit-Owner)\\
+Recursion extension & both & delta is \code{Answers}; results enter \code{fixpoint\_seen}\\
+Aggregate, negation extensions & \code{consumer canonical} & results enter the extension's own set state\\
+Top-level \code{mini\_linq!} & \code{host\_set R} certified only & \textsc{IF-HostSet}\\
+\bottomrule
+\end{tabular}
+\end{center}
+Deferred, as further facts of the same shape: \code{host\_key R [c..]}
+(projection keeps a declared key; TPC-H primary keys), \code{consumer
+exists} (first witness, lawful early stop), \code{guard total} (a
+compiler-generated guard certified total, generalizing \code{\#[total]}),
+and the terminal guarantee \code{canonical-return} that replaces path-name
+matching in extension contexts (\textsc{EXT-SetFold}).
+
+\paragraph{Multi-stage control.} Facts are the interface between stages of a
+stacked compiler: the upper stage decides what it will guarantee about inputs
+and consumers, records it in the lower program it emits, and the lower stage
+compiles against that interface without knowing the upper language. The
+lower program remains a complete, checkable text; the only trace of the
+upper stage is $\Gamma$, and \textsc{CTX-Entry} ensures it cannot be run
+without that stage.
