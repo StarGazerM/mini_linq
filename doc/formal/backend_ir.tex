@@ -80,7 +80,7 @@ t ::= rows r                     // the positions of a retained result or host
 cursor and the gathers inside $f$ are \emph{views}: bijections on positions
 that change addressing and materialize nothing (Lift's layout patterns,
 Descend's views~\cite{paper-lift,paper-descend}). Only \code{store}
-materializes; a stored \code{flatten} is kept as its offsets (BE-Offsets).
+materializes; a segmented stored \code{flatten} retains offsets (BE-Offsets).
 Under BE-Alpha, constructors are lifted through outer tile levels:
 \code{map}, \code{compact}, \code{lookup}, \code{fold}, \code{canon} and
 \code{store} operate on innermost rows and preserve those outer partitions;
@@ -121,14 +121,13 @@ BE-Bind is the Kleisli bind of Section~\ref{sec:denotation} restated: a
 probe is a flatten of per-row lookups, so a join nest is a nested flatten
 and flattening it (NESL~\cite{paper-nesl,paper-ndp-gpu}) is what removes
 irregular nesting. A sequentially evaluated flatten of lookups needs only
-exact buckets; the contiguous-range capability (rangeCursor) is required
-exactly where the flatten's offsets are materialized: under an offsets
-\code{store} (BE-Offsets), as the domain of a \code{tile}, or when its lengths
-are folded at a level with members. The generic structural contract treats
-a stored flatten as offsets. Host-only grading instead uses the sequential
-row-store interpretation: retaining the flattened rows does not retain an
-offset table and therefore requires only exact buckets. This does not weaken
-the range requirement for tiled domains or collective execution.
+exact buckets, including when its rows are stored. The contiguous-range
+capability (rangeCursor) is required for a segmented flatten, a domain
+consumed by a \code{Distribute} tile, or lengths folded collectively below
+host. A \code{Strip} tile and an ordinary row store do not introduce this
+requirement. Structural inference is shared by every machine; grading adds
+only the range obligations of the actual distributed execution context,
+not of unused child levels in the machine.
 A \code{flatten} or \code{fold} graded at a
 leaf level (one sequential executor) is a loop, not a collective; BE-Collective
 constrains only terms graded at a level whose members jointly evaluate them. BE-Partition is the law every schedule relies on; it

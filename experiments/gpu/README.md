@@ -31,6 +31,26 @@ TPCH datasets are `/data/tpch-gpu/sf1` and `/data/tpch-gpu/sf10`.
 The Sequence H05 example in `sequence/examples/h05.rs` is also available with
 `--features cq-gpu-sequence/cuda-oracle`.
 
+The executable H05 conformance test uses the checked-in
+`sequence/tests/support/h05_program.rs` fixture for CUDA and translates that
+fixture's **same Physical program** through default CPU structure selection,
+Sequence lowering, and the Sequential translator for its reference:
+
+```sh
+cargo oxide test --arch sm_89 -- --release -p cq-gpu-sequence --test h05_conformance -- --nocapture
+```
+
+It loads `/data/tpch-gpu/sf1` once with the same catalog and resident bindings as
+the H05 example, then downloads those exact encoded input rows for the CPU.
+The shared `cq-testkit` answer comparator checks canonical answer sets in
+`(order, supplier, nation)` order. This is conformance to the Physical reference,
+not a claim that the CPU runs the GPU's provider types or identical Sequence
+terms. It does not use `answer.tsv` or a handwritten join as its reference.
+If the dataset directory is absent, it prints an explicit `SKIP` before CUDA
+initialization; loading or CUDA failures with the directory present fail the
+test. It also runs in the default `cargo oxide test --arch sm_89 -- --release -p cq-gpu-sequence`
+suite without feature flags; only the standalone example requires `cuda-oracle`.
+
 ## Legacy Datalog boundary
 
 `legacy-datalog/` is an excluded, independent workspace, not a compatibility

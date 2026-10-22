@@ -106,6 +106,16 @@ fn simple(body: TokenStream) -> Program {
 }
 
 #[test]
+fn sequential_and_tasks_share_the_sequence_answer_contract() {
+    use cq_testkit::conformance::{Target, assert_conformant};
+    let program = simple(quote! {
+        input = store rows r;
+        out = store tile 2 canon input;
+    });
+    assert_conformant(&program, &[Target::Sequential, Target::Tasks]);
+}
+
+#[test]
 fn constructors_execute_and_choose_uses_the_else_arm() {
     let cases = [
         (
@@ -154,7 +164,7 @@ fn translation_requires_host_grades_but_does_not_recheck_the_program() {
 }
 
 #[test]
-fn stored_lookup_uses_the_recorded_range_cursor() {
+fn stored_row_lookup_uses_exact_buckets_without_range_cursor() {
     let physical = syn::parse_quote! {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32);
@@ -182,10 +192,10 @@ fn stored_lookup_uses_the_recorded_range_cursor() {
     let analysis = contract::check(&program).unwrap();
     assert_eq!(
         analysis.capabilities[&("r".into(), vec!["a".into()])],
-        cq_lang_sequence::Capability::Range
+        cq_lang_sequence::Capability::Exact
     );
     let output = cq_sequence_pull::translate(&program, &analysis).unwrap();
-    assert!(output.to_token_stream().to_string().contains("RangeCursor"));
+    assert!(!output.to_token_stream().to_string().contains("RangeCursor"));
     run(quote!(
         fn main() {
             let L = vec![(1i32,), (3,), (1,)];

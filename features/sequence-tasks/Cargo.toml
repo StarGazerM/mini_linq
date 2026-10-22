@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "tests/macros"]
+members = ["."]
 resolver = "3"
 
 [workspace.dependencies]
@@ -26,9 +26,8 @@ quote.workspace = true
 syn.workspace = true
 
 [dev-dependencies]
-cq-sequence-tasks-test-macros = { path = "tests/macros" }
-cq-storage = { path = "../../runtime/cq-storage" }
-rayon = "1"
+cq-testkit = { path = "../../testkit/cq-testkit", features = ["sequence-conformance"] }
+cq-structure-selection = { path = "../../passes/cq-structure-selection" }
 
 [package.metadata.cq]
 source = "cq-lang-sequence"

@@ -245,9 +245,38 @@ terminal paths require explicit sequence and grade.
 
 ## [9] conformance
 
-`testkit`: `assert_conformant(program, [targets])` runs one Sequence
-program through each available translation and compares `supp∘α`.
-Fixtures: the workload corpus (CPU targets), triangles and H05 (GPU).
+Implemented: `cq-testkit`'s `sequence-conformance` feature exposes
+`assert_conformant(program, targets)` for `Sequential` and `Tasks`. Each
+target checks its machine grading, translates, and compiles/runs against the
+same inputs through the existing rustc driver. Answer rows compare as multisets,
+or sets at an explicit canonical output boundary; ordering is not observable.
+The first divergence names both targets and the differing row multiplicities.
+The default driver uses deterministic binary-domain databases; authored corpus
+inputs and raw duplicate-preserving `Case::inputs` use the same execution path.
+
+The workload corpus runner checks its configured programs and databases using
+the same checked `store` rewrite an author applies before tasks grading.
+Remaining tasks grading rejections are reported and counted as skips, never
+treated as agreement. The tasks spot fixtures also use this shared harness.
+Execution failures are collected separately and fail the runner after all
+configurations have been exercised. Capability inference is shared across
+machines: host row stores need exact buckets, while segmented flattening and
+distributed execution require ranges in their actual read context.
+
+Acceptance exercised 3,436 configurations and 10,272 applicable scenarios:
+10,272 agreed, zero grading skips, zero execution failures. The workload
+workspace passed 3,528 tests; the root passed 753, Tasks 12, and Sequence
+rewrites 17. CUDA passed 10 tests, including the SF1 H05 comparison without
+skipping. Formal inventory (228 rules) and all 26 API snapshots passed.
+
+The GPU workspace's executable `h05_conformance` test uses the checked-in H05
+CUDA fixture and the same Physical program through default CPU structure
+selection, Sequence lowering, and Sequential translation. Both consume the
+same encoded `/data/tpch-gpu/sf1` inputs and use the shared answer comparator.
+This is Physical-level conformance: device-only Structures are not presented
+as a host-compatible Sequence program. Missing SF1 data produces an explicit
+skip. Run it with `cargo oxide test --arch sm_89 -- --release -p cq-gpu-sequence`
+from `experiments/gpu`.
 
 ## Cutover
 

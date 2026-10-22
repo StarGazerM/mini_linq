@@ -20,6 +20,8 @@ cuda-retry-oracle = ["cuda-oracle"]
 cq-gpu-sequence-test-macros = { path = "tests/support/macros" }
 cq-gpu-runtime = { path = "../printer-runtime" }
 cq-gpu-sequence-runtime = { path = "../sequence-runtime" }
+cq-storage = { path = "../../../runtime/cq-storage" }
+cq-testkit = { path = "../../../testkit/cq-testkit", default-features = false }
 cuda-device.workspace = true
 cuda-core.workspace = true
 cuda-host.workspace = true

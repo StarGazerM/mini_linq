@@ -135,6 +135,8 @@ dependencies = [
  "cq-gpu-sequence-test-macros",
  "cq-lang-sequence",
  "cq-lang-structures",
+ "cq-storage",
+ "cq-testkit",
  "cuda-core",
  "cuda-device",
  "cuda-host",
@@ -190,6 +192,9 @@ version = "0.1.0"
 dependencies = [
  "cq-gpu-sequence",
  "cq-lang-sequence",
+ "cq-sequence-lowering",
+ "cq-sequence-pull",
+ "cq-structure-selection",
  "quote",
  "syn 2.0.119",
 ]
@@ -492,6 +497,22 @@ dependencies = [
  "quote",
  "syn 2.0.119",
  "syn_derive",
+]
+
+[[package]]
+name = "cq-testkit"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "cq-lang-cq",
+ "cq-lang-ix",
+ "cq-lang-physical",
+ "cq-lang-ra",
+ "cq-lang-structures",
+ "cq-lang-vo",
+ "cq-syntax",
+ "hashbrown 0.15.5",
+ "syn 2.0.119",
 ]
 
 [[package]]

@@ -7,6 +7,19 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Add shared executable Sequence conformance in `cq-testkit`: Sequential and
+  Rayon Tasks translations run on identical authored or deterministic inputs,
+  comparing answer multiplicities (sets at canonical output boundaries).
+  The workload corpus uses the public checked `store(def)` rewrite before tasks
+  grading and reports agreements and explicit rejections; migrated tasks spot
+  tests retain duplicate and partition-boundary fixtures.
+  Hand-authored conformance fixtures include the required host scan type;
+  formal rule inventory markers remain unique.
+  Unify capability inference across machines: ordinary host row stores retain
+  exact buckets; segmented, distributed, and collective reads require ranges.
+  The corpus reports execution failures separately from genuine grading skips.
+  CUDA H05 compares against default Sequential lowering of the same Physical
+  program on identical SF1 data, with an explicit skip when data is absent.
 - Make Sequence the shipped CPU target (`sequence` → `sequential` →
   `translate_pull`), including profile counters. Remove the direct Structures
   pull macro and `cq_physical_realization::{compile, compile_profile}`.

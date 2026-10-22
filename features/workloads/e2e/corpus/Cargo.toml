@@ -17,3 +17,8 @@ cq-workload-passes.workspace = true
 own-push.workspace = true
 proc-macro2.workspace = true
 syn.workspace = true
+cq-testkit = { workspace = true, features = ["sequence-conformance"] }
+cq-lang-sequence.workspace = true
+quote.workspace = true
+inventory = "0.3"
+cq-sequence-rewrite-passes = { path = "../../../sequence-rewrites/passes" }

@@ -1,5 +1,6 @@
 //! Public conformance tools for MiniLinq passes and external dialects. This crate
-//! depends on language crates, never compiler passes or the facade. All fixtures
+//! keeps language-only dependencies by default. The opt-in `sequence-conformance`
+//! feature adds CPU translations and executable answer comparison. All fixtures
 //! are included in the crate; consumers need no paths into a repository checkout.
 //! Add `cq-testkit` as a dev-dependency in a core language, pass, runtime, or
 //! facade crate. External feature crates can use the same API.
@@ -117,6 +118,7 @@
 
 pub mod blocks;
 pub mod cases;
+pub mod conformance;
 pub mod corpus;
 pub mod cq_semantics;
 pub mod databases;
@@ -144,6 +146,8 @@ pub use cq_lang_structures as structures;
 pub use cq_lang_vo as vo;
 
 pub use cases::{CASES, Case};
+#[cfg(feature = "sequence-conformance")]
+pub use conformance::{Target, assert_conformant};
 pub use corpus::{SCENARIOS, Scenario};
 pub use harness::PassCase;
 pub use values::{Binding, Database, Relation, Rows};
@@ -193,6 +197,22 @@ pub fn runtime_rustc() -> std::process::Command {
         .arg(format!("ahash={}", ahash.display()))
         .arg("--extern")
         .arg(format!("hashbrown={}", hashbrown.display()));
+    #[cfg(feature = "sequence-conformance")]
+    {
+        static RAYON: std::sync::LazyLock<std::path::PathBuf> = std::sync::LazyLock::new(|| {
+            let dependencies = std::env::current_exe().unwrap();
+            linked_runtime_backend(
+                dependencies.parent().unwrap(),
+                "rayon",
+                "rayon::ThreadPool",
+                &format!("{:?}", std::any::TypeId::of::<rayon::ThreadPool>()),
+            )
+            .unwrap_or_else(|error| panic!("{error}"))
+        });
+        command
+            .arg("--extern")
+            .arg(format!("rayon={}", RAYON.display()));
+    }
     command
 }
 

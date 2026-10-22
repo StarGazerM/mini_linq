@@ -10,5 +10,8 @@ proc-macro = true
 [dependencies]
 cq-gpu-sequence = { path = "../../.." }
 cq-lang-sequence = { path = "../../../../../../languages/cq-lang-sequence" }
+cq-sequence-lowering = { path = "../../../../../../passes/cq-sequence-lowering" }
+cq-sequence-pull = { path = "../../../../../../passes/cq-sequence-pull" }
+cq-structure-selection = { path = "../../../../../../passes/cq-structure-selection" }
 quote = "1"
 syn = { version = "2", features = ["full"] }

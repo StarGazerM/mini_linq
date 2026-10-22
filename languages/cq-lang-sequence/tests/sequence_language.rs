@@ -246,7 +246,7 @@ fn bind_rejects_provider_without_requested_key_capability() {
 
 #[test]
 fn bind_records_range_obligations_without_inspecting_type_names() {
-    let p = lookup_program(quote!(a = store flatten lookup r [a] rows l;));
+    let p = lookup_program(quote!(a = flatten lookup r [a] tile 8 rows l;));
     let a = contract::check(&p).unwrap();
     assert_eq!(
         a.capabilities[&("r".into(), vec!["a".into()])],
@@ -604,20 +604,20 @@ fn host_retained_probe_stores_rows_without_requiring_range_offsets() {
             ..
         }
     )));
-    // An explicitly stored offsets view keeps its generic contract.
+    // Placement-independent structural inference agrees with host grading.
     assert_eq!(
         contract::check(&p).unwrap().capabilities[&key],
-        Capability::Range
+        Capability::Exact
     );
     let tiled = lookup_program(quote!(a = store tile 8 flatten lookup r [a] rows l;));
     assert_eq!(
         check_grading(&tiled, &sequential()).unwrap().capabilities[&key],
-        Capability::Range
+        Capability::Exact
     );
 }
 
 #[test]
-fn streaming_lookup_needs_exact_and_materialized_offsets_need_range() {
+fn row_stores_need_exact_and_segmented_or_distributed_reads_need_range() {
     let streaming = lookup_program(quote!(a = flatten lookup r [a] rows l;));
     let key = ("r".into(), vec!["a".into()]);
     assert_eq!(
@@ -627,11 +627,22 @@ fn streaming_lookup_needs_exact_and_materialized_offsets_need_range() {
     let stored = lookup_program(quote!(a = store flatten lookup r [a] rows l;));
     assert_eq!(
         contract::check(&stored).unwrap().capabilities[&key],
-        Capability::Range
+        Capability::Exact
     );
     let tiled = lookup_program(quote!(a = tile 8 flatten lookup r [a] rows l;));
     assert_eq!(
         contract::check(&tiled).unwrap().capabilities[&key],
+        Capability::Exact
+    );
+    let segmented = lookup_program(quote!(a = flatten lookup r [a] tile 8 rows l;));
+    assert_eq!(
+        contract::check(&segmented).unwrap().capabilities[&key],
+        Capability::Range
+    );
+    let mut distributed = lookup_program(quote!(a = store tile 8 flatten lookup r [a] rows l;));
+    grade(&mut distributed, quote!(a at device;));
+    assert_eq!(
+        check_grading(&distributed, &gpu()).unwrap().capabilities[&key],
         Capability::Range
     );
     let mut collective = streaming;
