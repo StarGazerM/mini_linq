@@ -2,6 +2,12 @@
 //! `round = [cq_datalog_parallel::partition(threshold = 1024, grain = 64)];`
 //! and `print = cq_datalog_parallel::print_rounds;` in the Datalog pipeline.
 //! Checked Storage/Round refinements precede all CQ hole expansion.
+//! Eligible rule holes replace the entire standard `sequence -> sequential ->
+//! translate_pull` tail with the registered Structures `print_push` terminal,
+//! feeding the task collector directly. The checker preserves the preceding
+//! queue, lowering ordinal, discharged facts and terminal registry exactly.
+//! Custom Sequence lowering, grading, rewrites or arguments remain untouched,
+//! as do frozen-key holes and already-authored Structures push pipelines.
 //!
 //! # DOOP engine features
 //!

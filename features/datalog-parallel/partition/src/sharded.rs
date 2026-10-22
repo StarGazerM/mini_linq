@@ -221,9 +221,10 @@ pub fn compile_sharded(source: &Program) -> syn::Result<ShardedProgram> {
 /// candidates within each chunk or unpartitioned rule task before admission.
 /// A checked certificate with an absent policy and absent scan witnesses retains
 /// the direct-vector realization. Both erase to the same task-realized Round.
-/// Rule holes ending in the registered standard argument-free pull printer
-/// use the existing registered push adapter. Custom terminals and arguments,
-/// missing push registry entries, and key holes retain their authored queues.
+/// Rule holes ending in the standard argument-free `sequence`, `sequential`,
+/// `translate_pull` tail use the registered Structures push adapter instead.
+/// Custom lowering, grades, rewrites and arguments, missing push registry entries,
+/// and key holes retain their authored queues.
 pub fn compile_sharded_with(
     source: &Program,
     arguments: TokenStream,
@@ -265,22 +266,21 @@ pub fn check_sharded(source: &Program, target: &ShardedProgram) -> syn::Result<(
         .flat_map(|s| s.seeds.iter().chain(&s.steps))
     {
         let before = &source.holes[rule.hole];
-        if super::can_push(source, before) {
+        if let Some(start) = super::push_tail(source, before) {
             let after = &mut restored.holes[rule.hole];
-            let terminal = after.pipeline.passes.last_mut().expect("checked terminal");
             ensure(
                 after.interface == round::HoleInterface::Push
-                    && terminal.path == super::push_path()
-                    && terminal.arguments.is_empty(),
+                    && after.pipeline.passes.len() == start + 1
+                    && after.pipeline.passes[start].path == super::push_path()
+                    && after.pipeline.passes[start].arguments.is_empty(),
                 &target.round.holes[rule.hole],
                 "sharded task changed its registered push realization",
             )?;
-            *terminal = before
+            after.pipeline.passes.truncate(start);
+            after
                 .pipeline
                 .passes
-                .last()
-                .expect("checked terminal")
-                .clone();
+                .extend_from_slice(&before.pipeline.passes[start..]);
             after.interface = before.interface;
         }
     }

@@ -44,8 +44,11 @@ fn expected_push(mut program: Program) -> Program {
     {
         let hole = &mut program.holes[rule.hole];
         hole.interface = round::HoleInterface::Push;
-        hole.pipeline.passes.last_mut().unwrap().path =
-            syn::parse_quote!(::cq_datalog::passes::print_push);
+        let start = hole.pipeline.passes.len() - 3;
+        hole.pipeline.passes.splice(
+            start..,
+            [syn::parse_quote!(::cq_datalog::passes::print_push)],
+        );
     }
     program
 }
