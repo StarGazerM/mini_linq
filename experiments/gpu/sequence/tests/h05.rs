@@ -236,3 +236,52 @@ fn translation_is_not_specialized_to_h05_date_literals_or_store_names() {
     let program = syn::parse_str(&source).unwrap();
     check_generated(&program);
 }
+
+#[test]
+fn expansion_uses_live_code_columns_and_one_reservation_per_item_batch() {
+    let (program, analysis) = checked();
+    let expression = cq_gpu_sequence::translate(&program, &analysis).unwrap();
+    let mut functions = Functions::default();
+    functions.visit_expr(&expression);
+    let query = functions.queries[1].to_token_stream().to_string();
+    assert!(!query.contains("__row"));
+    assert!(!query.contains("__stored"));
+    assert!(query.contains("decode_u32"));
+    assert!(query.contains("__parent_"));
+    assert!(query.contains("__found_count"));
+
+    #[derive(Default)]
+    struct NestedItems(bool);
+    impl<'ast> Visit<'ast> for NestedItems {
+        fn visit_expr_while(&mut self, loop_: &'ast syn::ExprWhile) {
+            self.0 |= loop_
+                .cond
+                .to_token_stream()
+                .to_string()
+                .starts_with("__item <");
+            visit::visit_expr_while(self, loop_);
+        }
+    }
+    #[derive(Default)]
+    struct Batches(usize);
+    impl<'ast> Visit<'ast> for Batches {
+        fn visit_expr_while(&mut self, loop_: &'ast syn::ExprWhile) {
+            let condition = loop_.cond.to_token_stream().to_string();
+            let mut nested = NestedItems::default();
+            nested.visit_block(&loop_.body);
+            if condition == "__item < 4usize" && !nested.0 {
+                self.0 += 1;
+                let body = loop_.body.to_token_stream().to_string();
+                assert!(!body.contains("checked_scan"), "scan inside per-item loop");
+                assert!(
+                    !body.contains("fetch_add"),
+                    "reservation inside per-item loop"
+                );
+            }
+            visit::visit_expr_while(self, loop_);
+        }
+    }
+    let mut batches = Batches::default();
+    batches.visit_block(&functions.queries[1].block);
+    assert_eq!(batches.0, 2, "one gather loop and one output loop");
+}

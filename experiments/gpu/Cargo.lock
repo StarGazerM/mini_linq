@@ -170,7 +170,10 @@ dependencies = [
  "cq-lang-datalog-source",
  "cq-lang-datalog-storage",
  "cq-lang-datalog-strata",
+ "cq-rewrites",
  "cq-storage",
+ "own-push",
+ "rustc-hash",
 ]
 
 [[package]]
@@ -219,6 +222,7 @@ dependencies = [
  "cq-datalog-configuration",
  "cq-datalog-fork",
  "cq-datalog-incremental",
+ "cq-datalog-print-hole",
  "cq-datalog-print-rounds",
  "cq-datalog-storage",
  "cq-datalog-stratify",
@@ -228,6 +232,7 @@ dependencies = [
  "cq-lang-datalog-source",
  "cq-lang-datalog-storage",
  "cq-lang-datalog-strata",
+ "cq-lang-structures",
  "cq-stage",
  "proc-macro2",
  "quote",
@@ -241,6 +246,17 @@ dependencies = [
  "cq-datalog-support",
  "cq-lang-datalog-round",
  "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-print-hole"
+version = "0.0.0"
+dependencies = [
+ "cq-lang-structures",
+ "cq-physical-realization",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -1324,6 +1340,19 @@ name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
+
+[[package]]
+name = "own-push"
+version = "0.0.0"
+dependencies = [
+ "cq-lang-structures",
+ "cq-physical-realization",
+ "cq-print",
+ "cq-stage",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
 
 [[package]]
 name = "oxide-artifacts"
