@@ -220,6 +220,8 @@ name = "cq-datalog-print-hole"
 version = "0.0.0"
 dependencies = [
  "cq-lang-sequence",
+ "cq-lang-structures",
+ "cq-sequence-lowering",
  "cq-sequence-pull",
  "cq-stage",
  "proc-macro2",

@@ -12,4 +12,6 @@ quote.workspace = true
 syn.workspace = true
 
 [dev-dependencies]
+cq-lang-structures.workspace = true
+cq-sequence-lowering.workspace = true
 cq-stage.workspace = true

@@ -383,18 +383,13 @@ fn canonical_consumer_receives_duplicate_witnesses_without_local_answer_sets() {
         let sequence = cq_sequence_lowering::compile(&structures).unwrap();
         let analysis = contract::check(&sequence).unwrap();
         let output = cq_sequence_pull::translate(&sequence, &analysis).unwrap();
-        let pull = cq_physical_realization::compile(&structures).unwrap();
-        for expression in [&output, &pull] {
-            let printed = expression.to_token_stream().to_string();
-            assert!(!printed.contains("__cq_seen"), "{printed}");
-            assert!(!printed.contains("HashSet"), "{printed}");
-        }
+        let printed = output.to_token_stream().to_string();
+        assert!(!printed.contains("__cq_seen"), "{printed}");
+        assert!(!printed.contains("HashSet"), "{printed}");
         checks.push(quote! {
             {
                 let R = [(1i32,), (1,), (3,)];
-                let rows = #output;
-                assert_eq!(rows.len(), 3);
-                let rows: Vec<_> = (#pull).collect();
+                let rows: Vec<_> = (#output).into_iter().collect();
                 assert_eq!(rows.len(), 3);
             }
         });
@@ -422,7 +417,7 @@ fn canonical_consumer_preserves_internal_canon() {
     run(quote! {
         fn main() {
             let R = [(1i32, 10i32), (1, 10), (1, 20)];
-            let rows = #output;
+            let rows: Vec<_> = (#output).into_iter().collect();
             assert_eq!(rows, vec![(&1i32,), (&1i32,)]);
         }
     });

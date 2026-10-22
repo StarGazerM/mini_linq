@@ -140,7 +140,7 @@ mod tests {
     fn factful_hole_reentry_requires_its_exact_context_envelope() {
         use cq_stage::Language;
 
-        let source: cq_lang_structures::Program = syn::parse_quote! {
+        let structures: cq_lang_structures::Program = syn::parse_quote! {
             physical {
                 relation rows(x:i32);
                 host_set rows discharged;
@@ -152,7 +152,8 @@ mod tests {
                 r host scan = ::core::iter::Map<_,_> [];
             }
         };
-        let rejected = cq_stage::pass::<cq_lang_structures::Program, syn::Expr>(
+        let source = cq_sequence_lowering::compile(&structures).unwrap();
+        let rejected = cq_stage::pass::<cq_lang_sequence::Program, syn::Expr>(
             quote!(arguments { partition(3) }; pipeline {}; #source),
             |_, _| panic!("a missing envelope must fail before printing"),
         );
@@ -163,7 +164,7 @@ mod tests {
             quote!(host_set rows discharged),
             quote!(consumer = canonical, host_set other discharged),
         ] {
-            let rejected = cq_stage::pass::<cq_lang_structures::Program, syn::Expr>(
+            let rejected = cq_stage::pass::<cq_lang_sequence::Program, syn::Expr>(
                 quote!(context { #context }; pipeline {}; #source),
                 |_, _| panic!("a mismatched envelope must fail before printing"),
             );
@@ -171,7 +172,7 @@ mod tests {
         }
 
         let context = source.context();
-        let printed = cq_stage::pass::<cq_lang_structures::Program, syn::Expr>(
+        let printed = cq_stage::pass::<cq_lang_sequence::Program, syn::Expr>(
             quote!(
                 arguments { partition(3) };
                 context { #context };
