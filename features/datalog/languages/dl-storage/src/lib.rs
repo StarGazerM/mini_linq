@@ -3,6 +3,9 @@
 //! occurrence bindings, and negation-key projections. Applicable provider types and
 //! initializers are opaque Rust syntax whose collection laws are premises. Unused
 //! relation-kind fields retain checked defaults; delta and next share a move type.
+//! Optional per-host certificates record canonical-wrapper/admission roots,
+//! complete maintained layout permutations, and set-valued negation projections.
+//! Uncertified hosts remain valid storage but cannot discharge CQ host facts.
 //! See doc/formal/datalog.tex for the storage refinement obligations.
 use cq_datalog_support::{columns, ensure, filters, key_columns};
 pub use cq_lang_datalog_incremental as incremental;
@@ -21,6 +24,7 @@ pub struct Program {
     pub delta_layouts: Vec<Layout>,
     pub reads: Vec<Read>,
     pub negations: Vec<Negative>,
+    pub certificates: Vec<HostCanonical>,
     pub policy: Policy,
 }
 /// Concrete providers for one relation, indexed by source declaration order.
@@ -60,12 +64,21 @@ pub struct Negative {
     pub columns: Vec<usize>,
     pub filters: Vec<(usize, Expr)>,
 }
+/// Structural provenance of a canonical host, indexed in its storage vector.
+/// Opaque collection implementations still owe their declared collection laws.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HostCanonical {
+    pub kind: Ident,
+    pub index: usize,
+    pub source: Ident,
+    pub columns: Vec<usize>,
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Policy {
     pub insertion: Ident,
     pub negation_keys: Ident,
 }
-record!(Program { incremental: incremental::Program, providers: Vec<Providers>, layouts: Vec<Layout>, delta_layouts: Vec<Layout>, reads: Vec<Read>, negations: Vec<Negative>, policy: Policy });
+record!(Program { incremental: incremental::Program, providers: Vec<Providers>, layouts: Vec<Layout>, delta_layouts: Vec<Layout>, reads: Vec<Read>, negations: Vec<Negative>, certificates: Vec<HostCanonical>, policy: Policy });
 record!(Providers {
     canonical_name: Ident,
     canonical_set: Type,
@@ -80,6 +93,7 @@ record!(Providers {
 record!(Layout { relation: Ident, columns: Vec<usize>, key: usize, provider: Type, maintenance: Ident });
 record!(Read { variant: usize, position: usize, kind: Ident, index: usize, columns: Vec<usize> });
 record!(Negative { component: usize, relation: usize, columns: Vec<usize>, filters: Vec<(usize, Expr)> });
+record!(HostCanonical { kind: Ident, index: usize, source: Ident, columns: Vec<usize> });
 record!(Policy {
     insertion: Ident,
     negation_keys: Ident
@@ -98,7 +112,8 @@ pub fn read_plan(
         let head = analysis.positions[&symbol_name(&variant.query.head.relation)];
         let component = analysis.component[head].expect("checked IDB component");
         let order = incremental::variant_order(
-            &program.incremental.strata.source.rules[variant.rule], variant.driver,
+            &program.incremental.strata.source.rules[variant.rule],
+            variant.driver,
         )?;
         for (position, item) in variant.query.body.iter().enumerate() {
             match item {
@@ -106,8 +121,9 @@ pub fn read_plan(
                     let source_position = order[position];
                     let is_delta = variant.delta == Some(source_position);
                     let relation = if is_delta {
-                        let BodyItem::Positive { atom } =
-                            &program.incremental.strata.source.rules[variant.rule].body[source_position]
+                        let BodyItem::Positive { atom } = &program.incremental.strata.source.rules
+                            [variant.rule]
+                            .body[source_position]
                         else {
                             unreachable!("checked changing occurrence")
                         };
@@ -171,6 +187,89 @@ pub fn read_plan(
     }
     Ok((reads, negations))
 }
+/// Formal rule DL-HostCanonical: check provenance, complete headings and maintenance.
+fn check_certificates(program: &Program, analysis: &Analysis) -> syn::Result<()> {
+    let declarations = &program.incremental.strata.source.declarations;
+    let mut seen = BTreeSet::new();
+    for certificate in &program.certificates {
+        ensure(
+            seen.insert((symbol_name(&certificate.kind), certificate.index)),
+            certificate,
+            "duplicate canonical host certificate",
+        )?;
+        let full_heading = |relation: usize| -> Option<Vec<usize>> {
+            declarations
+                .get(relation)
+                .map(|d| (0..d.columns.len()).collect())
+        };
+        let valid = match symbol_name(&certificate.kind).as_str() {
+            "all" => declarations
+                .get(certificate.index)
+                .is_some_and(|declaration| {
+                    certificate.columns == full_heading(certificate.index).unwrap()
+                        && if declaration.value.is_some() {
+                            certificate.source == "provider"
+                        } else {
+                            certificate.source == "admission"
+                        }
+                }),
+            "delta" => declarations
+                .get(certificate.index)
+                .is_some_and(|declaration| {
+                    declaration.value.is_none()
+                        && analysis
+                            .deltas
+                            .contains_key(&symbol_name(&declaration.name))
+                        && certificate.source == "admission"
+                        && certificate.columns == full_heading(certificate.index).unwrap()
+                }),
+            "layout" | "delta_layout" => {
+                let delta = certificate.kind == "delta_layout";
+                let layouts = if delta {
+                    &program.delta_layouts
+                } else {
+                    &program.layouts
+                };
+                layouts.get(certificate.index).is_some_and(|layout| {
+                    let relation = analysis.positions[&symbol_name(&layout.relation)];
+                    let mut columns = layout.columns.clone();
+                    columns.sort_unstable();
+                    certificate.columns == layout.columns
+                        && Some(columns) == full_heading(relation)
+                        && certificate.source == if delta { "delta" } else { "all" }
+                        && layout.maintenance
+                            == if delta {
+                                "replace_each_run"
+                            } else {
+                                "admitted_rows"
+                            }
+                        && program.certificates.iter().any(|root| {
+                            root.index == relation
+                                && root.kind == if delta { "delta" } else { "all" }
+                        })
+                })
+            }
+            "negation" => program
+                .negations
+                .get(certificate.index)
+                .is_some_and(|negative| {
+                    certificate.source == "projection"
+                        && certificate.columns == negative.columns
+                        && program
+                            .certificates
+                            .iter()
+                            .any(|root| root.kind == "all" && root.index == negative.relation)
+                }),
+            _ => false,
+        };
+        ensure(
+            valid,
+            certificate,
+            "unsupported canonical host provenance or heading",
+        )?;
+    }
+    Ok(())
+}
 pub mod contract {
     use super::*;
     /// Formal rule WF-DL-Storage: admissible bindings, layouts and total maintenance.
@@ -224,10 +323,12 @@ pub mod contract {
         let p = &program.policy;
         ensure(
             (p.insertion == "all_columns" && p.negation_keys == "borrowed")
-                || (p.insertion == "device_set_all_columns" && p.negation_keys == "device_set_owned"),
+                || (p.insertion == "device_set_all_columns"
+                    && p.negation_keys == "device_set_owned"),
             program,
             "unsupported storage insertion or negation semantics",
         )?;
+        check_certificates(program, &analysis)?;
         Ok(analysis)
     }
 }

@@ -10,8 +10,8 @@
 //! `--check` compares all 26 full tuple sets against sequential Ascent.
 //! Uninstrumented output order is unspecified.
 //! `--engine mini|mini-keyed|ascent` isolates timing and peak RSS.
-//! `mini` uses Fx storage and hole deduplication by default; `mini-keyed` uses
-//! keyed aHash for both via explicit pipeline configuration.
+//! `mini` uses Fx storage and canonical consumers by default; `mini-keyed` uses
+//! keyed aHash for both via explicit Storage and Round pipeline configuration.
 //! Default CLI execution runs `mini` and `ascent`; Cargo enables all three.
 //! Enable `phase-timing` for per-round instrumentation separately from timing runs.
 //! Compute timing includes derived indexes and materializing the 26 outputs;

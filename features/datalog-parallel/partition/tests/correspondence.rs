@@ -25,6 +25,21 @@ fn authored() -> Program {
         Reach(*x,*z) :- Reach(x,y), Edge(y,z), !Blocked(z,_);
     })
 }
+
+fn expected_push(mut program: Program) -> Program {
+    for rule in program
+        .context
+        .strata
+        .iter()
+        .flat_map(|s| s.seeds.iter().chain(&s.steps))
+    {
+        let hole = &mut program.holes[rule.hole];
+        hole.interface = round::HoleInterface::Push;
+        hole.pipeline.passes.last_mut().unwrap().path =
+            syn::parse_quote!(::cq_datalog::passes::print_push);
+    }
+    program
+}
 fn rejected(change: impl FnOnce(&mut Program)) {
     let source = authored();
     let mut target = compile_sharded(&source).unwrap();
@@ -37,7 +52,10 @@ fn partition_metadata_selects_flat_slices_and_preserves_schemas() {
     let source = authored();
     let target = compile_sharded(&source).unwrap();
     check_sharded(&source, &target).unwrap();
-    assert_eq!(round::erase(&target.round).unwrap(), source);
+    assert_eq!(
+        round::erase(&target.round).unwrap(),
+        expected_push(source.clone())
+    );
     assert_eq!(
         syn::parse2::<ShardedProgram>(target.to_token_stream()).unwrap(),
         target
@@ -85,6 +103,106 @@ fn partition_metadata_selects_flat_slices_and_preserves_schemas() {
                 .any(|entry| entry.hole == key.hole)
         );
     }
+}
+
+#[test]
+fn partition_renames_only_certified_scan_facts_and_preserves_admission_owners() {
+    let source = authored();
+    let target = compile_sharded(&source).unwrap();
+    for (before, after) in source
+        .context
+        .relations
+        .iter()
+        .zip(&target.round.context.relations)
+    {
+        assert_eq!(before.admit, after.admit);
+    }
+    for rule in source
+        .context
+        .strata
+        .iter()
+        .flat_map(|stratum| stratum.seeds.iter().chain(&stratum.steps))
+    {
+        let before = &source.holes[rule.hole];
+        let after = &target.round.holes[rule.hole];
+        assert_eq!(before.lower, after.lower);
+        let mut expected = before.facts.clone();
+        if let Some(scan) = &rule.scan {
+            let binding = &target
+                .round
+                .execution
+                .iter()
+                .find(|entry| entry.hole == rule.hole)
+                .unwrap()
+                .binding;
+            assert!(
+                expected
+                    .discharged_host_sets
+                    .remove(&scan.binding.to_string())
+            );
+            assert!(expected.discharged_host_sets.insert(binding.to_string()));
+        }
+        assert_eq!(after.facts, expected);
+        assert_eq!(
+            after.pipeline.passes[after.lower].arguments.to_string(),
+            expected.to_token_stream().to_string(),
+        );
+        assert!(after.facts.consumer_canonical);
+    }
+    assert_eq!(round::erase(&target.round).unwrap(), expected_push(source));
+}
+
+#[test]
+fn partition_rejects_lost_forged_or_stale_context_and_admission_owners() {
+    rejected(|target| {
+        let hole = target.execution[0].hole;
+        target.holes[hole].facts.consumer_canonical = false;
+    });
+    rejected(|target| {
+        let hole = target.execution[0].hole;
+        target.holes[hole].facts.discharged_host_sets.clear();
+    });
+    rejected(|target| {
+        let hole = target.execution[0].hole;
+        target.holes[hole]
+            .facts
+            .discharged_host_sets
+            .insert("forged".into());
+    });
+    rejected(|target| {
+        let hole = &mut target.holes[target.execution[0].hole];
+        hole.pipeline.passes[hole.lower].arguments = quote!(consumer = canonical);
+    });
+    rejected(|target| {
+        let rule = &target.context.strata[0].seeds[0];
+        let scan = rule.scan.as_ref().unwrap();
+        let chunk = target
+            .execution
+            .iter()
+            .find(|entry| entry.hole == rule.hole)
+            .unwrap();
+        let hole = &mut target.holes[rule.hole];
+        hole.facts
+            .discharged_host_sets
+            .remove(&chunk.binding.to_string());
+        hole.facts
+            .discharged_host_sets
+            .insert(scan.binding.to_string());
+        hole.pipeline.passes[hole.lower].arguments = hole.facts.to_token_stream();
+    });
+    rejected(|target| {
+        let head = target.context.strata[0].seeds[0].head;
+        target.context.relations[head].admit.clear();
+    });
+    rejected(|target| {
+        let rule = &target.context.strata[0].seeds[0];
+        target.context.relations[rule.head].admit.push(rule.hole);
+    });
+    rejected(|target| {
+        let key = target.context.strata[0].keys[0].hole;
+        let head = target.context.strata[0].seeds[0].head;
+        target.context.relations[head].admit.push(key);
+    });
 }
 
 #[test]
@@ -176,7 +294,7 @@ fn a_leading_guard_is_not_moved_to_enable_partitioning() {
     });
     let target = compile_sharded(&source).unwrap();
     assert!(target.round.execution.is_empty());
-    assert_eq!(target.round, source);
+    assert_eq!(target.round, expected_push(source));
 }
 
 #[test]
@@ -191,7 +309,7 @@ fn keyed_initial_scans_and_key_holes_are_not_partitioned() {
     });
     let target = compile_sharded(&source).unwrap();
     assert!(target.round.execution.is_empty());
-    assert_eq!(target.round, source);
+    assert_eq!(target.round, expected_push(source));
 }
 
 #[test]
@@ -308,4 +426,80 @@ fn ordered_maps_with_vector_buckets_do_not_bypass_native_layout_ownership() {
     source.context.layouts[0].provider = source.storage.layouts[0].provider.clone();
     round::contract::check(&source).unwrap();
     assert!(compile_sharded(&source).is_err());
+}
+
+#[test]
+fn task_realization_preserves_custom_terminals_arguments_and_registry_premises() {
+    for (path, arguments, interface) in [
+        (
+            syn::parse_quote!(custom::print_pull),
+            quote!(opaque(argument)),
+            round::HoleInterface::Pull,
+        ),
+        (
+            syn::parse_quote!(::mini_linq::passes::print_pull),
+            quote!(opaque(argument)),
+            round::HoleInterface::Pull,
+        ),
+        (
+            syn::parse_quote!(custom::push),
+            quote!(opaque(argument)),
+            round::HoleInterface::Push,
+        ),
+    ] {
+        let mut source = authored();
+        let hole_index = source.context.strata[0].seeds[0].hole;
+        if !source.terminals.0.iter().any(|entry| entry.path == path) {
+            source.terminals.0.push(round::Terminal {
+                path: path.clone(),
+                interface,
+            });
+        }
+        let hole = &mut source.holes[hole_index];
+        hole.interface = interface;
+        let terminal = hole.pipeline.passes.last_mut().unwrap();
+        terminal.path = path;
+        terminal.arguments = arguments;
+        let target = compile_sharded(&source).unwrap();
+        check_sharded(&source, &target).unwrap();
+        let erased = round::erase(&target.round).unwrap();
+        assert_eq!(erased.holes[hole_index], source.holes[hole_index]);
+        assert_eq!(erased.terminals, source.terminals);
+    }
+
+    let mut source = authored();
+    source
+        .terminals
+        .0
+        .retain(|entry| entry.interface == round::HoleInterface::Pull);
+    let target = compile_sharded(&source).unwrap();
+    assert_eq!(round::erase(&target.round).unwrap(), source);
+}
+
+#[test]
+fn task_realization_rejects_unrequested_terminal_and_key_rewrites() {
+    let source = authored();
+    let mut target = compile_sharded(&source).unwrap();
+    let hole_index = source.context.strata[0].seeds[0].hole;
+    target.round.holes[hole_index].interface = round::HoleInterface::Pull;
+    target.round.holes[hole_index]
+        .pipeline
+        .passes
+        .last_mut()
+        .unwrap()
+        .path = syn::parse_quote!(::mini_linq::passes::print_pull);
+    round::contract::check(&target.round).unwrap();
+    assert!(check_sharded(&source, &target).is_err());
+
+    let mut target = compile_sharded(&source).unwrap();
+    let key = source.context.strata[0].keys[0].hole;
+    target.round.holes[key].interface = round::HoleInterface::Push;
+    target.round.holes[key]
+        .pipeline
+        .passes
+        .last_mut()
+        .unwrap()
+        .path = syn::parse_quote!(::cq_datalog::passes::print_push);
+    round::contract::check(&target.round).unwrap();
+    assert!(check_sharded(&source, &target).is_err());
 }

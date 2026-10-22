@@ -27,12 +27,12 @@
 //! pulling in otherwise disabled implementations. Build timing binaries
 //! without instrumentation and run each engine in a separate process.
 //!
-//! Sharding preserves the Datalog default Fx hasher for admission and layouts;
-//! the default CQ continuation also uses Fx deduplication. Fx is unkeyed: for
+//! Sharding preserves the Datalog default Fx hasher for admission and layouts.
+//! CQ holes discharge result canonicalization to admission and negation key
+//! sets rather than allocating separate answer-dedup sets. Fx is unkeyed: for
 //! adversarial inputs select `cq_datalog_hasher::hasher(keyed)` before
-//! `shard_storage`, `cq_datalog_hasher::hasher_round(keyed)` before `partition`,
-//! and override CQ deduplication with `cq_rewrites::retype(dedup =>
-//! ::cq_storage::HashSet<_>)`. Hash iteration order is not an output guarantee.
+//! `shard_storage` and `cq_datalog_hasher::hasher_round(keyed)` before `partition`.
+//! Hash iteration order is not an output guarantee.
 use proc_macro::TokenStream;
 
 #[proc_macro]

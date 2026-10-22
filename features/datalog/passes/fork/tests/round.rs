@@ -20,7 +20,7 @@ fn storage_and_round_are_complete_checked_languages() {
 }
 
 #[test]
-fn default_negation_sets_and_hole_dedup_use_fx() {
+fn default_negation_sets_use_fx_without_a_hole_dedup_override() {
     let source = syn::parse_quote! {
         struct Q;
         relation E(x:i32) = (e);
@@ -44,21 +44,20 @@ fn default_negation_sets_and_hole_dedup_use_fx() {
         ::mini_linq::passes::index_demands,
         ::mini_linq::passes::lower,
         ::mini_linq::passes::select,
-        ::cq_datalog::cq_rewrites::retype(
-            dedup => ::std::collections::HashSet<_, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
-        ),
         ::mini_linq::passes::represent,
         ::mini_linq::passes::stage,
         ::mini_linq::passes::print_pull
     });
     assert!(!target.holes.is_empty());
-    let expected = expected.to_token_stream().to_string();
-    assert!(
-        target
-            .holes
-            .iter()
-            .all(|hole| { hole.pipeline.to_token_stream().to_string() == expected })
-    );
+    for hole in &target.holes {
+        let mut expected = expected.clone();
+        expected.passes[hole.lower].arguments = hole.facts.to_token_stream();
+        assert_eq!(
+            hole.pipeline.to_token_stream().to_string(),
+            expected.to_token_stream().to_string()
+        );
+        assert!(hole.facts.consumer_canonical);
+    }
     check(&storage, &target).unwrap();
 }
 #[test]
@@ -68,8 +67,9 @@ fn per_hole_queues_check_terminal_path_not_incidental_tokens() {
     let mut changed = target.clone();
     changed.holes[0].pipeline = syn::parse_quote!(pipeline { custom::transform(::mini_linq::passes::print_pull), custom::print });
     assert!(round::contract::check(&changed).is_err());
-    changed.holes[0].pipeline =
-        syn::parse_quote!(pipeline { custom::transform, ::mini_linq::passes::print_pull });
+    let facts = &changed.holes[0].facts;
+    changed.holes[0].pipeline = syn::parse_quote!(pipeline { custom::transform, custom::lower(#facts), ::mini_linq::passes::print_pull });
+    changed.holes[0].lower = 1;
     round::contract::check(&changed).unwrap();
     round::check_rewrite(&target, &changed).unwrap();
     changed.holes[0].interface = round::HoleInterface::Push;
@@ -86,8 +86,9 @@ fn per_hole_queues_check_terminal_path_not_incidental_tokens() {
     changed.holes[0].pipeline = syn::parse_quote!(pipeline{other::print_pull});
     assert!(round::contract::check(&changed).is_err());
     changed = target.clone();
-    changed.holes[0].pipeline =
-        syn::parse_quote!(pipeline{mini_linq::passes::print_pull(unchecked)});
+    let facts = &changed.holes[0].facts;
+    changed.holes[0].pipeline = syn::parse_quote!(pipeline{custom::lower(#facts), mini_linq::passes::print_pull(unchecked)});
+    changed.holes[0].lower = 0;
     round::check_rewrite(&target, &changed).unwrap();
 }
 #[test]
@@ -95,12 +96,12 @@ fn fork_arguments_record_queue_and_timing_and_reject_unknown_options() {
     let source = source();
     let target = compile_with(
         &source,
-        quote!(timing=phases;cq=pipeline{custom::plan,mini_linq::passes::print_pull};),
+        quote!(timing=phases;cq=pipeline{custom::plan,custom::lower,mini_linq::passes::print_pull};),
     )
     .unwrap();
     assert_eq!(target.policy.timing, "phases");
     check(&source, &target).unwrap();
-    assert!(target.holes.iter().all(|h| h.pipeline.passes.len() == 2));
+    assert!(target.holes.iter().all(|h| h.pipeline.passes.len() == 3));
     for args in [
         quote!(unknown=none;),
         quote!(timing=none;timing=phases;),
@@ -132,6 +133,7 @@ fn policy_and_correspondence_mutations_are_rejected() {
                 occurrence: 0,
                 binding: syn::parse_quote!(fresh),
                 strategy: syn::parse_quote!(custom),
+                self_dedup: None,
             })
         },
         |p| p.context.strata[0].seeds[0].scan = None,
@@ -162,11 +164,13 @@ fn input_certificates_erase_exactly_and_cannot_hide_other_changes() {
         unreachable!()
     };
     atom.relation = binding.clone();
+    target.holes[rule.hole].rename_host_fact(original, &binding);
     target.execution.push(round::Execution {
         hole: rule.hole,
         occurrence: 0,
         binding,
         strategy: syn::parse_quote!(custom),
+        self_dedup: None,
     });
     round::contract::check(&target).unwrap();
     round::check_rewrite(&source, &target).unwrap();
@@ -174,6 +178,38 @@ fn input_certificates_erase_exactly_and_cannot_hide_other_changes() {
     let replay: round::Program = syn::parse2(target.to_token_stream()).unwrap();
     assert_eq!(replay, target);
     assert!(cq_datalog_print::compile(&target).is_err());
+    // Task-local suppression is an erasable realization, not another owner.
+    let mut suppressed = target.clone();
+    suppressed.execution[0].strategy = syn::parse_quote!(rayon_sharded);
+    suppressed.execution[0].self_dedup = Some(syn::parse_quote!(per_task));
+    round::contract::check(&suppressed).unwrap();
+    round::check_rewrite(&target, &suppressed).unwrap();
+    assert_eq!(round::erase(&suppressed).unwrap(), source);
+    assert_eq!(suppressed.context, target.context);
+    assert_eq!(suppressed.holes, target.holes);
+    let replay: round::Program = syn::parse2(suppressed.to_token_stream()).unwrap();
+    assert_eq!(replay, suppressed);
+    assert!(cq_datalog_print::compile(&suppressed).is_err());
+    let changes: &[fn(&mut round::Program)] = &[
+        |p| p.execution[0].self_dedup = Some(syn::parse_quote!(global)),
+        |p| p.execution[0].strategy = syn::parse_quote!(custom),
+        |p| p.context.relations[1].admit.clear(),
+        |p| p.holes[0].facts.consumer_canonical = false,
+    ];
+    for change in changes {
+        let mut changed = suppressed.clone();
+        change(&mut changed);
+        assert!(round::contract::check(&changed).is_err());
+        assert!(round::check_rewrite(&suppressed, &changed).is_err());
+    }
+    let mut invalid_mode = suppressed.clone();
+    invalid_mode.execution[0].self_dedup = Some(syn::parse_quote!(unknown));
+    assert!(round::erase(&invalid_mode).is_err());
+    let mut stale_facts = target.clone();
+    stale_facts.holes[rule.hole].facts = source.holes[rule.hole].facts.clone();
+    let hole = &mut stale_facts.holes[rule.hole];
+    hole.pipeline.passes[hole.lower].arguments = hole.facts.to_token_stream();
+    assert!(round::contract::check(&stale_facts).is_err());
     let changes: &[fn(&mut round::Program)] = &[
         |p| p.execution.push(p.execution[0].clone()),
         |p| p.execution[0].occurrence = 1,
@@ -232,7 +268,7 @@ fn declared_terminal_paths_and_typed_interfaces_survive_round_text() {
     let target = compile_with(
         &source,
         quote! {
-            cq = pipeline { crate::alias::pull };
+            cq = pipeline { custom::lower, crate::alias::pull };
             terminals = [crate::alias::pull => pull, ::declared::unused_push => push];
         },
     )
@@ -297,7 +333,11 @@ fn fork_infers_both_interfaces_and_round_rewrites_preserve_the_registry() {
             round::HoleInterface::Push,
         ),
     ] {
-        let source = compile_with(&storage, quote!(cq = pipeline { #terminal };)).unwrap();
+        let source = compile_with(
+            &storage,
+            quote!(cq = pipeline { custom::lower, #terminal };),
+        )
+        .unwrap();
         assert!(source.holes.iter().all(|hole| hole.interface == interface));
         let replay: round::Program = syn::parse2(source.to_token_stream()).unwrap();
         assert_eq!(replay, source);
@@ -306,11 +346,13 @@ fn fork_infers_both_interfaces_and_round_rewrites_preserve_the_registry() {
 
         let mut changed = source.clone();
         for hole in &mut changed.holes {
+            let facts = &hole.facts;
             hole.pipeline = syn::parse2(quote!(pipeline {
                 custom::plan(any(tokens)), custom::rewrite(changed = arguments),
-                #terminal(terminal = arguments)
+                custom::lower(#facts), #terminal(terminal = arguments)
             }))
             .unwrap();
+            hole.lower = 2;
         }
         round::check_rewrite(&source, &changed).unwrap();
 
@@ -330,7 +372,10 @@ fn fork_infers_both_interfaces_and_round_rewrites_preserve_the_registry() {
             round::HoleInterface::Push => round::HoleInterface::Pull,
         };
         round::contract::check(&mismatched).unwrap();
-        assert!(round::check_rewrite(&source, &mismatched).is_err());
+        round::check_rewrite(&source, &mismatched).unwrap();
+        round::check_rewrite(&mismatched, &source).unwrap();
+        assert_eq!(mismatched.holes[0].facts, source.holes[0].facts);
+        assert_eq!(mismatched.context, source.context);
 
         let mut altered_cq = changed.clone();
         altered_cq.holes[0].cq.name = syn::parse_quote!(ChangedHole);
@@ -352,7 +397,7 @@ fn fork_infers_both_interfaces_and_round_rewrites_preserve_the_registry() {
         &storage,
         quote! {
             terminals = [crate::alias::push => push];
-            cq = pipeline { crate::alias::push };
+            cq = pipeline { custom::lower, crate::alias::push };
         },
     )
     .unwrap();
@@ -563,6 +608,20 @@ fn later_direct_delta_remains_a_whole_delta_input() {
 
 #[test]
 fn execution_records_have_authored_lossless_grammar() {
+    for mode in [quote!([]), quote!([per_task])] {
+        let execution: round::Execution = syn::parse2(quote! {
+            hole { 0 }
+            occurrence { 0 }
+            binding { task_rows }
+            strategy { rayon_sharded }
+            self_dedup { #mode }
+        })
+        .unwrap();
+        assert_eq!(
+            syn::parse2::<round::Execution>(execution.to_token_stream()).unwrap(),
+            execution
+        );
+    }
     let publication: round::Publication = syn::parse_quote! {
         relation { 2 }
         operations { [
@@ -599,4 +658,107 @@ fn execution_records_have_authored_lossless_grammar() {
         })
         .is_err()
     );
+}
+
+#[test]
+fn canonical_consumers_have_exact_owners_and_certified_inputs() {
+    let target = compile(&source()).unwrap();
+    for (index, relation) in target.context.relations.iter().enumerate() {
+        let expected: Vec<_> = target
+            .context
+            .strata
+            .iter()
+            .flat_map(|s| s.seeds.iter().chain(&s.steps))
+            .filter(|r| r.head == index)
+            .map(|r| r.hole)
+            .collect();
+        assert_eq!(relation.admit, expected);
+    }
+    for hole in &target.holes {
+        assert!(hole.facts.consumer_canonical);
+        let inputs: std::collections::BTreeSet<_> = hole
+            .cq
+            .query
+            .body
+            .iter()
+            .filter_map(|item| match item {
+                round::cq::BodyItem::Positive { atom } => {
+                    Some(cq_syntax::symbol_name(&atom.relation))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(hole.facts.discharged_host_sets, inputs);
+        let packet: cq_stage::Context =
+            syn::parse2(hole.pipeline.passes[hole.lower].arguments.clone()).unwrap();
+        assert_eq!(packet, hole.facts);
+    }
+    let changes: &[fn(&mut round::Program)] = &[
+        |p| p.context.relations[1].admit.clear(),
+        |p| {
+            let hole = p.context.relations[1].admit[0];
+            p.context.relations[1].admit.push(hole);
+        },
+        |p| {
+            let hole = p.context.relations[1].admit[0];
+            p.context.relations[0].admit.push(hole);
+        },
+        |p| p.context.relations[1].admit[0] = usize::MAX,
+        |p| p.holes[0].facts.consumer_canonical = false,
+        |p| {
+            p.holes[0]
+                .facts
+                .discharged_host_sets
+                .insert("Unknown".into());
+        },
+        |p| p.holes[0].facts.discharged_host_sets.clear(),
+        |p| p.holes[0].cq.declarations[0].value = Some(syn::parse_quote!(= (unproved_rows))),
+    ];
+    for (index, change) in changes.iter().enumerate() {
+        let mut changed = target.clone();
+        change(&mut changed);
+        for hole in &mut changed.holes {
+            hole.pipeline.passes[hole.lower].arguments = hole.facts.to_token_stream();
+        }
+        assert!(
+            round::contract::check(&changed).is_err(),
+            "owner/fact mutation {index}"
+        );
+    }
+    let mut changed = target.clone();
+    let hole = &mut changed.holes[0];
+    hole.pipeline.passes[hole.lower].arguments = quote!(consumer = canonical);
+    assert!(round::contract::check(&changed).is_err());
+}
+
+#[test]
+fn uncertified_hosts_do_not_receive_discharge_facts() {
+    let mut storage = source();
+    storage.certificates.clear();
+    let target = compile(&storage).unwrap();
+    assert!(target.holes.iter().all(|hole| hole.facts.consumer_canonical
+        && hole.facts.discharged_host_sets.is_empty()));
+    round::contract::check(&target).unwrap();
+}
+
+#[test]
+fn custom_lower_aliases_require_an_explicit_role() {
+    let storage = source();
+    let queue = quote!(cq = pipeline { custom::physical, ::mini_linq::passes::print_pull };);
+    assert!(
+        compile_with(&storage, queue.clone())
+            .unwrap_err()
+            .to_string()
+            .contains("lower")
+    );
+    let target = compile_with(&storage, quote!(#queue lower = 0;)).unwrap();
+    assert!(target.holes.iter().all(|hole| hole.lower == 0));
+    for arguments in [
+        quote!(#queue lower = 7;),
+        quote!(#queue lower = 0; lower = 0;),
+        quote!(cq = pipeline { lower, lower, ::mini_linq::passes::print_pull };),
+        quote!(cq = pipeline { lower(host_set Unknown discharged), ::mini_linq::passes::print_pull };),
+    ] {
+        assert!(compile_with(&storage, arguments).is_err());
+    }
 }

@@ -13,8 +13,8 @@
 //! - Keyed sweep: `cargo run --release -p datalog-oracle -- bench --engine mini-keyed`.
 //!   This uses the same fixtures, five-sample medians and full-set Ascent checks
 //!   as `bench` (or `bench --engine mini`), including reach and TC workloads.
-//!   Keyed aHash replaces Fx in storage and Structures-stage hole deduplication,
-//!   without changing the programs.
+//!   Keyed aHash replaces Fx in storage, admission, and negation key sets,
+//!   without changing the programs or adding per-hole answer deduplication.
 //! - Paired hasher sweep: `cargo run --release -p datalog-oracle -- bench --engine both`.
 //!   Warm both engines, then compare three checked samples per hasher in AB/BA/AB
 //!   order on every fixture. `ahash_us` measures `mini-keyed`, `fx_us` measures

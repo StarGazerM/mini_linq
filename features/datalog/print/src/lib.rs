@@ -5,6 +5,11 @@
 //! admission, ordered publication operations, phase/loop control, termination,
 //! observer/key-set scope and output conversions. This terminal realizes those
 //! checked records rather than selecting a second execution plan.
+//!
+//! A hole's CQ input is fact-free, so its first invocation has the empty context.
+//! Round records discharged facts in the checked lower-owner argument packet;
+//! the core protocol introduces them there and emits their exact `context`
+//! envelope on every subsequent factful continuation, including key holes.
 use cq_datalog_support::ensure;
 pub use cq_lang_datalog_round as round;
 use cq_syntax::rust;
@@ -27,6 +32,8 @@ pub fn splice(program: &Program) -> syn::Result<Vec<TokenStream>> {
             let consumer = consumer_name();
             terminal.arguments = quote!(consumer { #consumer }; #arguments);
         }
+        // Do not attach the hole's eventual facts to its fact-free CQ source.
+        // The recorded lower packet introduces them at the authorized boundary.
         pipeline.start(hole.cq.to_token_stream())
     })
 }

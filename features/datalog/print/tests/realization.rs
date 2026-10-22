@@ -125,15 +125,18 @@ fn cpu_printer_rejects_device_policy_before_expanding_holes() {
     let storage = cq_datalog_storage::compile_with_representation(
         &incremental,
         cq_datalog_storage::Representation::DeviceSet,
-    ).unwrap();
+    )
+    .unwrap();
     let program = cq_datalog_fork::compile(&storage).unwrap();
-    let error = splice_with(&program, |_| panic!("device holes must not be expanded"))
-        .unwrap_err();
+    let error = splice_with(&program, |_| panic!("device holes must not be expanded")).unwrap_err();
     assert!(error.to_string().contains("CPU Datalog printer requires"));
     let holes = vec![quote!(hole); program.holes.len()];
-    assert!(render_with(&program, &holes, |_, _, _, _| {
-        panic!("device rounds must not be rendered")
-    }).is_err());
+    assert!(
+        render_with(&program, &holes, |_, _, _, _| {
+            panic!("device rounds must not be rendered")
+        })
+        .is_err()
+    );
 }
 #[test]
 fn authored_round_expansion_matches_independent_fixture() {
@@ -533,4 +536,81 @@ fn pull_collection_tokens_remain_unchanged() {
         actual.to_string(),
         quote!((authored_rows()).collect::<#provider>()).to_string(),
     );
+}
+
+#[test]
+fn rule_and_key_lower_continuations_carry_exact_recorded_context() {
+    use cq_stage::Language;
+
+    let program = push_program();
+    let invocations = splice(&program).unwrap();
+    assert_eq!(program.context.strata[0].keys.len(), 1);
+    for (hole, invocation) in program.holes.iter().zip(invocations) {
+        // CQ itself has no restricted facts. Lower is the first authorized
+        // boundary; putting the eventual facts on this entry would be invalid.
+        assert!(hole.cq.context().is_empty());
+        let initial: syn::Macro = syn::parse2(invocation).unwrap();
+        assert!(!initial.tokens.to_string().starts_with("context"));
+
+        let lower = &hole.pipeline.passes[hole.lower];
+        let arguments = &lower.arguments;
+        assert_eq!(
+            cq_physical_lowering::context(arguments.clone()).unwrap(),
+            hole.facts,
+        );
+        assert!(hole.facts.consumer_canonical);
+        assert_eq!(hole.facts.discharged_host_sets.len(), 1);
+
+        // Author an independent IX projection of the actual certified input.
+        // The non-injective head still needs no per-hole result canonicalizer:
+        // the rule admission/key-set consumer supplies that boundary.
+        let declaration = &hole.cq.declarations[0];
+        let host = &declaration.name;
+        let column = &declaration.columns[0].name;
+        let ix: cq_lang_ix::Program = syn::parse_quote! {
+            relational {
+                #declaration
+                r = rename #host@0 {#column -> x};
+                b = bind r with y:i32 = (*x % 2);
+                p = project b keep {y};
+                output p as answer(y);
+            }
+            indexes {}
+        };
+        let physical = cq_physical_lowering::compile_with(&ix, arguments.clone()).unwrap();
+        assert_eq!(physical.context(), hole.facts);
+        assert!(physical.program.return_canon.is_none());
+        assert!(
+            physical
+                .program
+                .definitions
+                .iter()
+                .all(|definition| definition.canon.is_none())
+        );
+        let continuation =
+            cq_stage::pass_with_context::<cq_lang_ix::Program, cq_lang_physical::Program>(
+                quote!(arguments { #arguments }; pipeline { next }; #ix),
+                cq_physical_lowering::context,
+                cq_physical_lowering::compile_with,
+            );
+        let context = &hole.facts;
+        assert_eq!(
+            continuation.to_string(),
+            quote!(next! { context { #context }; pipeline {}; #physical }).to_string(),
+        );
+        let continuation: syn::Macro = syn::parse2(continuation).unwrap();
+        let accepted = cq_stage::pass::<cq_lang_physical::Program, syn::Expr>(
+            continuation.tokens,
+            |source, _| {
+                assert_eq!(source.context(), hole.facts);
+                Ok(syn::parse_quote!(42))
+            },
+        );
+        assert_eq!(accepted.to_string(), "42");
+        let rejected = cq_stage::pass::<cq_lang_physical::Program, syn::Expr>(
+            quote!(pipeline {}; #physical),
+            |_, _| panic!("factful hole re-entry without an envelope reached its printer"),
+        );
+        assert!(rejected.to_string().contains("CTX-Entry"));
+    }
 }

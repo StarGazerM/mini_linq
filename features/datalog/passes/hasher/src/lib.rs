@@ -20,18 +20,15 @@
 //! language. `hasher_round(fx)` explicitly selects Fx without changing the
 //! embedded Storage program or the CQ hole pipelines.
 //!
-//! CQ hole dedup providers are a separate Structures decision. To opt all
-//! three layers into keyed hashing, use this configuration and depend directly
-//! on `cq-storage` and `cq-rewrites` in the consuming crate:
+//! CQ holes discharge result canonicalization to admission and negation key
+//! sets, so they have no separate answer-dedup provider to select. To opt these
+//! canonical consumers and storage into keyed hashing, depend directly on
+//! `cq-storage` and use:
 //!
 //! ```ignore
 //! pipeline {
 //!     storage_rewrites = [cq_datalog_hasher::hasher(keyed)];
 //!     round = [cq_datalog_hasher::hasher_round(keyed)];
-//!     cq = pipeline {
-//!         structures = [cq_rewrites::retype(dedup =>
-//!             ::cq_storage::HashSet<_>)];
-//!     };
 //! }
 //! ```
 //!

@@ -68,6 +68,56 @@ impl<T: Eq + Hash, S: BuildHasher> ShardedSeen<T, S> {
     }
 }
 
+/// Owned full-tuple candidates for one evaluation task.
+///
+/// This is a local realization choice, not an admission owner: duplicate rows
+/// from other tasks or earlier rounds are still rejected by `ShardedSeen`.
+/// The table borrows that owner's hasher, preserving keyed/Fx selection without
+/// cloning the hasher or any candidate row. First-occurrence order is retained,
+/// so this optimization does not perturb admission and layout traversal order.
+pub struct TaskCandidates<'a, T, S> {
+    positions: HashTable<usize>,
+    rows: Vec<T>,
+    routing: &'a S,
+}
+
+impl<T, S> ShardedSeen<T, S> {
+    /// Borrow only the hasher, without capturing membership storage in a task.
+    pub fn hasher(&self) -> &S {
+        &self.routing
+    }
+}
+
+impl<'a, T, S> TaskCandidates<'a, T, S> {
+    pub fn with_hasher(routing: &'a S) -> Self {
+        Self {
+            positions: HashTable::new(),
+            rows: Vec::new(),
+            routing,
+        }
+    }
+}
+
+impl<T: Eq + Hash, S: BuildHasher> TaskCandidates<'_, T, S> {
+    pub fn insert(&mut self, row: T) {
+        let hash = self.routing.hash_one(&row);
+        if let Entry::Vacant(entry) = self.positions.entry(
+            hash,
+            |&index| self.rows[index] == row,
+            |&index| self.routing.hash_one(&self.rows[index]),
+        ) {
+            entry.insert(self.rows.len());
+            self.rows.push(row);
+        }
+    }
+}
+
+impl<T, S> TaskCandidates<'_, T, S> {
+    pub fn into_rows(self) -> Vec<T> {
+        self.rows
+    }
+}
+
 impl<T: Eq + Hash + Clone + Send, S: BuildHasher + Sync> ShardedSeen<T, S> {
     /// Formal rule DL-ShardedAdmission: Admit unseen full tuples by exclusive shard ownership.
     ///

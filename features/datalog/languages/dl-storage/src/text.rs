@@ -105,6 +105,7 @@ syntax_text!(
     cq_syntax::RelationDecl,
     cq_lang_cq::Program,
     cq_stage::Pipeline,
+    cq_stage::Context,
     crate::incremental::Program
 );
 

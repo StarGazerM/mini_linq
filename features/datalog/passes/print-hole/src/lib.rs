@@ -12,6 +12,9 @@
 //! the original expression's capture and borrow behavior. Iterator consumption
 //! may still be instantiated by the caller; partitioning is not a performance
 //! guarantee.
+//!
+//! Factful Structures re-entry uses the core protocol's exact `context { ... };`
+//! envelope. Partitioning neither grants facts nor restores a discarded envelope.
 
 use proc_macro2::TokenStream;
 use quote::format_ident;
@@ -118,5 +121,57 @@ mod tests {
         ] {
             assert!(syn::parse2::<Partition>(args).is_err());
         }
+    }
+
+    #[test]
+    fn factful_hole_reentry_requires_its_exact_context_envelope() {
+        use cq_stage::Language;
+
+        let source: cq_lang_structures::Program = syn::parse_quote! {
+            physical {
+                relation rows(x:i32);
+                host_set rows discharged;
+                consumer canonical;
+                r = pipe rename rows@0 {x -> x};
+                return r as answer(*x % 2);
+            }
+            structures {
+                r host scan = ::core::iter::Map<_,_> [];
+            }
+        };
+        let rejected = cq_stage::pass::<cq_lang_structures::Program, syn::Expr>(
+            quote!(arguments { partition(3) }; pipeline {}; #source),
+            |_, _| panic!("a missing envelope must fail before printing"),
+        );
+        assert!(rejected.to_string().contains("CTX-Entry"));
+
+        for context in [
+            quote!(consumer = canonical),
+            quote!(host_set rows discharged),
+            quote!(consumer = canonical, host_set other discharged),
+        ] {
+            let rejected = cq_stage::pass::<cq_lang_structures::Program, syn::Expr>(
+                quote!(context { #context }; pipeline {}; #source),
+                |_, _| panic!("a mismatched envelope must fail before printing"),
+            );
+            assert!(rejected.to_string().contains("CTX-Entry"));
+        }
+
+        let context = source.context();
+        let printed = cq_stage::pass::<cq_lang_structures::Program, syn::Expr>(
+            quote!(
+                arguments { partition(3) };
+                context { #context };
+                pipeline {};
+                #source
+            ),
+            compile_with,
+        );
+        syn::parse2::<syn::Expr>(printed.clone()).unwrap();
+        let printed = printed.to_string();
+        assert!(printed.contains("partition_3"), "{printed}");
+        assert!(!printed.contains("compile_error"));
+        assert!(!printed.contains("__cq_seen"));
+        assert!(!printed.contains("__cq_host_set_seen"));
     }
 }

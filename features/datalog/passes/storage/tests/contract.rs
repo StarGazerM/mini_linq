@@ -196,6 +196,11 @@ fn alternate_layouts_and_recorded_reads_are_admissible() {
     // Layout storage order is not an IR obligation when bindings are updated.
     let count = alternate.layouts.len();
     alternate.layouts.reverse();
+    for certificate in &mut alternate.certificates {
+        if certificate.kind == "layout" {
+            certificate.index = count - 1 - certificate.index;
+        }
+    }
     for read in &mut alternate.reads {
         if read.kind == "full" {
             read.index = count - 1 - read.index;
@@ -386,4 +391,53 @@ fn provider_records_reject_missing_or_malformed_fields() {
     ] {
         assert!(syn::parse_str::<Layout>(&malformed).is_err());
     }
+}
+
+#[test]
+fn canonical_host_certificates_require_structural_provenance() {
+    let original = authored(INCREMENTAL);
+    assert!(!original.certificates.is_empty());
+    let changes: &[fn(&mut Program)] = &[
+        |p| p.certificates.push(p.certificates[0].clone()),
+        |p| p.certificates[0].kind = syn::parse_quote!(unknown),
+        |p| p.certificates[0].index = usize::MAX,
+        |p| p.certificates[0].source = syn::parse_quote!(admission),
+        |p| p.certificates[0].columns.clear(),
+        |p| {
+            p.certificates
+                .iter_mut()
+                .find(|c| c.kind == "layout")
+                .unwrap()
+                .columns = vec![0]
+        },
+        |p| {
+            p.certificates
+                .iter_mut()
+                .find(|c| c.kind == "layout")
+                .unwrap()
+                .source = syn::parse_quote!(delta)
+        },
+        |p| p.certificates.retain(|c| c.kind != "all"),
+        |p| {
+            p.certificates
+                .iter_mut()
+                .find(|c| c.kind == "negation")
+                .unwrap()
+                .source = syn::parse_quote!(provider)
+        },
+    ];
+    for (index, change) in changes.iter().enumerate() {
+        let mut changed = original.clone();
+        change(&mut changed);
+        assert!(
+            contract::check(&changed).is_err(),
+            "certificate mutation {index}"
+        );
+    }
+    let mut uncertified = original.clone();
+    uncertified.certificates.clear();
+    contract::check(&uncertified).unwrap();
+    check_rewrite(&original, &uncertified).unwrap();
+    let replay: Program = syn::parse2(original.to_token_stream()).unwrap();
+    assert_eq!(replay.certificates, original.certificates);
 }

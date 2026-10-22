@@ -274,8 +274,12 @@ dependencies = [
 name = "cq-datalog-rayon-print"
 version = "0.1.0"
 dependencies = [
+ "cq-datalog-fork",
+ "cq-datalog-incremental",
  "cq-datalog-partition",
  "cq-datalog-print",
+ "cq-datalog-storage",
+ "cq-datalog-stratify",
  "cq-lang-datalog-round",
  "proc-macro2",
  "quote",
@@ -807,7 +811,6 @@ version = "0.1.0"
 dependencies = [
  "cq-datalog",
  "cq-datalog-hasher",
- "cq-rewrites",
  "cq-storage",
  "doop-shared",
  "mini-linq",
@@ -834,7 +837,6 @@ dependencies = [
  "cq-datalog-hasher",
  "cq-datalog-parallel",
  "cq-datalog-parallel-runtime",
- "cq-rewrites",
  "cq-storage",
  "doop-shared",
  "mini-linq",

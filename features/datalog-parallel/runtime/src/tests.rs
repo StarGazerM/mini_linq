@@ -196,3 +196,55 @@ fn fx_routes_and_admits_exactly_with_one_hash_per_candidate() {
             });
     }
 }
+
+#[test]
+fn task_candidates_move_owned_rows_without_cloning_before_global_admission() {
+    let clones = Arc::new(AtomicUsize::new(0));
+    let row = |value: &str| Tracked {
+        value: value.to_owned(),
+        clones: Arc::clone(&clones),
+    };
+    let mut seen = ShardedSeen::<_>::new();
+    seen.insert(row("old"));
+    let mut first = TaskCandidates::with_hasher(seen.hasher());
+    for value in ["old", "new", "new", "next", "next"] {
+        first.insert(row(value));
+    }
+    let mut second = TaskCandidates::with_hasher(seen.hasher());
+    second.insert(row("new"));
+    second.insert(row("next"));
+    assert!(std::ptr::eq(first.routing, &seen.routing));
+    let first = first.into_rows();
+    let second = second.into_rows();
+    assert_eq!(first.len(), 3);
+    assert_eq!(second.len(), 2);
+    assert_eq!(clones.load(Ordering::Relaxed), 0);
+    let admitted = seen.admit(vec![first, second], 0);
+    assert_eq!(admitted.len(), 2);
+    assert_eq!(clones.load(Ordering::Relaxed), 2);
+    assert!(seen.admit(vec![admitted], 0).is_empty());
+    assert_eq!(clones.load(Ordering::Relaxed), 2);
+}
+
+#[test]
+fn task_candidates_support_nonclone_colliding_rows_and_empty_tasks() {
+    #[derive(Debug, PartialEq, Eq)]
+    struct Row(u32);
+    impl Hash for Row {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            0_u8.hash(state);
+        }
+    }
+    let seen = ShardedSeen::<Row, std::hash::BuildHasherDefault<rustc_hash::FxHasher>>::new();
+    assert!(
+        TaskCandidates::<Row, _>::with_hasher(seen.hasher())
+            .into_rows()
+            .is_empty()
+    );
+    let mut task = TaskCandidates::with_hasher(seen.hasher());
+    for value in [3, 1, 3, 2, 1, 2] {
+        task.insert(Row(value));
+    }
+    let rows = task.into_rows();
+    assert_eq!(rows, [Row(3), Row(1), Row(2)]);
+}

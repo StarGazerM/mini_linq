@@ -106,9 +106,13 @@ impl DatalogConfiguration {
                 "missing Datalog pipeline default",
             )
         };
-        let cq = cq_datalog_fork::resolve_cq(self.cq.or(defaults.cq).unwrap_or_default())?;
+        let cq_configuration = self.cq.or(defaults.cq).unwrap_or_default();
+        // CQ resolution orders surface passes, plan, ix, then lower. Retain the
+        // named role so aliases receive the same context packet as default lower.
+        let lower = syn::Index::from(cq_configuration.surface.len() + 2);
+        let cq = cq_datalog_fork::resolve_cq(cq_configuration)?;
         let mut fork = self.fork.or(defaults.fork).ok_or_else(missing)?;
-        fork.arguments.extend(quote!(cq = #cq;));
+        fork.arguments.extend(quote!(cq = #cq; lower = #lower;));
         let terminals = self.terminals.or(defaults.terminals).unwrap_or_default();
         terminals.check()?;
         fork.arguments.extend(quote!(terminals = #terminals;));
