@@ -483,12 +483,13 @@ approved): Physical records `host_set R [discharged];` and
 facts enter only through `lower`/`select` argument packets into fact-free
 sources, and any factful source needs an exact `context {..}` envelope
 (CTX-Entry), so a top-level `mini_linq!` cannot carry them. Fact-free
-expansion is byte-identical. Next: the Datalog discharge job (Storage proves
-`host_set .. discharged`, Round `admit R from [..]` proves
-`consumer canonical`), which removes the per-call `__cq_seen` from rule
-holes. Known: `experiments/gpu/printer` still certifies discharged hosts
-(GPU side's file). Deferred facts: `host_key`, `consumer exists`,
-`guard total`, terminal `canonical-return`.
+expansion is byte-identical. Datalog discharge landed (`2c6b23f`): rule holes
+have no local `__cq_seen`; admission owns every relation's set; the parallel
+extension restores baseline candidate counts with an erasable `self_dedup
+per_task` phase (task collector before sharded admission), realized through
+the checked per-hole push-terminal rewrite. Known: `experiments/gpu/printer`
+still certifies discharged hosts (GPU side's file). Deferred facts:
+`host_key`, `consumer exists`, `guard total`, terminal `canonical-return`.
 
 The abandoned design (`codex/datalog`, `codex/datalog-lang`,
 `codex/maintained-structures`, `codex/datalog-*`, `codex/tests-reshape`,

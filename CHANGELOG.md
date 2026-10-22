@@ -7,6 +7,15 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Datalog discharges context facts: Storage records canonicality
+  certificates per host, Round records `admit R from [holes]` owners and
+  per-hole facts (checked independently), fork emits `lower(consumer =
+  canonical, host_set .. discharged)` packets with exact `context {..}`
+  envelopes. Rule holes build no local `__cq_seen` (DOOP 156 → 0); admission is
+  the single set owner. Parallel extension adds an erasable `self_dedup
+  per_task` phase realized through the checked push-terminal hole rewrite.
+  DOOP: sequential −1.9 to −2.7%, 15 threads −2.5 to −3.5%; exact on all six.
+
 - Physical context facts support `host_set R discharged;` and
   `consumer canonical;` for checked stacked compilers. Lower/select argument
   packets record the assumptions; factful re-entry requires an exact explicit
