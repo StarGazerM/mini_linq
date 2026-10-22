@@ -498,8 +498,18 @@ the checked per-hole push-terminal rewrite. Known: `experiments/gpu/printer`
 still certifies discharged hosts (GPU side's file). Not context facts (by
 design, see context.tex): declared keys (need a provenance model; out of
 scope), first-witness consumption (lower-level `exists`/early stop), guard
-totality (CQ term semantics; `#[total]` syntax and meaning are an open design
-question), terminal canonical return (an exported Structures guarantee).
+totality (CQ term semantics; redesign proposed in `doc/formal/guards.tex`:
+remove `#[total]` and the type-name allowlist; open: string pattern matching,
+Datalog negation as a relational anti-join), terminal canonical return (an
+exported Structures guarantee).
+
+Sequence cutover (`358012d`, upstream): Datalog holes now end in `sequence →
+sequential → translate_pull`. The parallel extension's push holes replace that
+whole tail with the Structures `print_push` terminal (`fcc3fca`), because the
+Sequence back end has no supplied-consumer entry (`cq-sequence-pull`
+`lib.rs:654-711` collects a `Vec`; `sequence-tasks` uses the same path);
+GPU-side/core follow-up. DOOP vs `9d67023`: sequential −0.4/−1.4%,
+15 threads +3.8% (cassandra) / −4.0% (xalan); exact on all six.
 
 The abandoned design (`codex/datalog`, `codex/datalog-lang`,
 `codex/maintained-structures`, `codex/datalog-*`, `codex/tests-reshape`,
