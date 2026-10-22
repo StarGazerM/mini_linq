@@ -92,7 +92,7 @@ fn both_printers_preserve_fused_union_fallback_and_suffix_rust() {
         }.map(|(x,y)|(*x,*y)).collect::<BTreeSet<_>>() };
     }
     let push = run!(own_push::push);
-    let pull = run!(mini_linq::passes::print_pull);
+    let pull = run!(mini_linq::passes::translate_pull);
     assert_eq!(push, pull);
     assert_eq!(pull, BTreeSet::from([(1, 10), (1, 11), (2, 20)]));
 }
@@ -107,7 +107,10 @@ fn both_printers_keep_owned_non_copy_fallback_interfaces() {
         answer(y) :- R(x), {if std::convert::identity(*x)==1, let y:String=String::from("first")}
             else {let y:String=String::from("second")};
     }.map(|(y,)|y).collect::<BTreeSet<_>>() }; }
-    assert_eq!(run!(own_push::push), run!(mini_linq::passes::print_pull));
+    assert_eq!(
+        run!(own_push::push),
+        run!(mini_linq::passes::translate_pull)
+    );
     assert_eq!(
         run!(own_push::push),
         BTreeSet::from(["first".to_owned(), "second".to_owned()])
@@ -120,9 +123,9 @@ fn filtered_storage_reconstructs_constants_in_both_printers() {
     let L = [(1,), (2,), (3,)];
     let R = [(7, 1, 10), (8, 2, 20), (7, 3, 30), (7, 1, 10)];
     macro_rules! recorded {
-        ($($printer:ident)::+) => {
+        ($([$($passes:path),*])? $($printer:ident)::+) => {
             $($printer)::+! {
-                pipeline {};
+                pipeline { $($($passes),*)? };
                 physical {
                     relation L(k:i32); relation R(a:i32,k:i32,value:i32);
                     l = pipe rename L@0 {k -> k}; r = pipe rename R@1 {a -> a,k -> k,value -> value};
@@ -141,7 +144,7 @@ fn filtered_storage_reconstructs_constants_in_both_printers() {
         };
     }
     let push: BTreeSet<_> = recorded!(own_push::push).map(|(a, k)| (*a, *k)).collect();
-    let pull: BTreeSet<_> = recorded!(mini_linq::passes::print_pull)
+    let pull: BTreeSet<_> = recorded!([mini_linq::passes::sequential, mini_linq::passes::translate_pull] mini_linq::passes::sequence)
         .map(|(a, k)| (*a, *k))
         .collect();
     assert_eq!(push, [(7, 1), (7, 3)].into_iter().collect());
@@ -192,7 +195,11 @@ fn push_chain_preserves_guard_and_binds_computed_columns_as_references() {
             .unwrap();
             assert_eq!(
                 partial!(own_push::push, r.as_slice(), s.as_slice()),
-                partial!(mini_linq::passes::print_pull, r.as_slice(), s.as_slice()),
+                partial!(
+                    mini_linq::passes::translate_pull,
+                    r.as_slice(),
+                    s.as_slice()
+                ),
             );
         }
     }
@@ -215,9 +222,9 @@ fn authored_structures_control_build_retention_and_nested_canonical_states() {
         (Value(2), Value(20)),
     ];
     macro_rules! recorded {
-        ($($printer:ident)::+) => {
+        ($([$($passes:path),*])? $($printer:ident)::+) => {
             $($printer)::+! {
-                pipeline {};
+                pipeline { $($($passes),*)? };
                 physical {
                     relation R(a: Value,b: Value);
                     r = let canon rename R@0 { a -> a, b -> b };
@@ -237,7 +244,7 @@ fn authored_structures_control_build_retention_and_nested_canonical_states() {
         };
     }
     let push: Vec<(&Value, &Value)> = recorded!(own_push::push).collect();
-    let pull: Vec<(&Value, &Value)> = recorded!(mini_linq::passes::print_pull).collect();
+    let pull: Vec<(&Value, &Value)> = recorded!([mini_linq::passes::sequential, mini_linq::passes::translate_pull] mini_linq::passes::sequence).collect();
     let values = |rows: &[(&Value, &Value)]| {
         rows.iter()
             .map(|(b, a)| (b.0, a.0))
@@ -267,9 +274,9 @@ impl<T: Ord> HeadState<T> {
 fn computed_head_deduplicates_its_image_with_the_recorded_type() {
     let R = [(1,), (1,), (3,), (4,)];
     macro_rules! image {
-        ($($printer:ident)::+) => {
+        ($([$($passes:path),*])? $($printer:ident)::+) => {
             $($printer)::+! {
-                pipeline {};
+                pipeline { $($($passes),*)? };
                 physical {
                     relation R(x: i32);
                     r = pipe rename R@0 { x -> x };
@@ -285,7 +292,7 @@ fn computed_head_deduplicates_its_image_with_the_recorded_type() {
         };
     }
     let push: Vec<_> = image!(own_push::push).collect();
-    let pull: Vec<_> = image!(mini_linq::passes::print_pull).collect();
+    let pull: Vec<_> = image!([mini_linq::passes::sequential, mini_linq::passes::translate_pull] mini_linq::passes::sequence).collect();
     assert_eq!(push.len(), 2);
     assert_eq!(
         push.into_iter().collect::<BTreeSet<_>>(),
@@ -304,11 +311,11 @@ fn exists_consumes_the_full_source_and_retains_only_nonemptiness() {
         true
     }
     macro_rules! exists {
-        ($($printer:ident)::+, $rows:expr) => {{
+        ($([$($passes:path),*])? $($printer:ident)::+, $rows:expr) => {{
             #[allow(non_snake_case)]
             let R = $rows;
             $($printer)::+! {
-                pipeline {};
+                pipeline { $($($passes),*)? };
                 physical {
                     relation R(x: i32);
                     r = pipe rename R@0 { x -> x };
@@ -350,7 +357,7 @@ fn exists_consumes_the_full_source_and_retains_only_nonemptiness() {
             ));
         }
         cq_testkit::harness::check_refinement(
-            || exists!(mini_linq::passes::print_pull, rows.as_slice()),
+            || exists!([mini_linq::passes::sequential, mini_linq::passes::translate_pull] mini_linq::passes::sequence, rows.as_slice()),
             || exists!(own_push::push, rows.as_slice()),
         )
         .unwrap();
@@ -394,7 +401,7 @@ fn native_and_fallback_point_range_reads_agree_with_pull() {
         );
         assert_eq!(windows!(own_push::push, &ordered, low, high), expected);
         assert_eq!(
-            windows!(mini_linq::passes::print_pull, &ordered, low, high),
+            windows!(mini_linq::passes::translate_pull, &ordered, low, high),
             expected
         );
     }
@@ -417,7 +424,7 @@ fn native_and_fallback_point_range_reads_agree_with_pull() {
     );
     assert_eq!(
         points!(own_push::push, &ordered),
-        points!(mini_linq::passes::print_pull, &ordered)
+        points!(mini_linq::passes::translate_pull, &ordered)
     );
 }
 
@@ -427,9 +434,9 @@ fn full_depth_curried_probes_and_prefix_membership_use_written_levels() {
     let R = [(1, 10, 100), (1, 11, 101), (1, 10, 100), (2, 20, 200)];
     let L = [(1, 10), (1, 11), (1, 12), (2, 20), (3, 30)];
     macro_rules! curried {
-        ($($printer:ident)::+) => {
+        ($([$($passes:path),*])? $($printer:ident)::+) => {
             $($printer)::+! {
-                pipeline {};
+                pipeline { $($($passes),*)? };
                 physical {
                     relation R(a: i32,b: i32,c: i32);
                     relation L(a: i32,b: i32);
@@ -456,7 +463,7 @@ fn full_depth_curried_probes_and_prefix_membership_use_written_levels() {
     let push = curried!(own_push::push)
         .map(|(a, b, c)| (*a, *b, *c))
         .collect::<BTreeSet<_>>();
-    let pull = curried!(mini_linq::passes::print_pull)
+    let pull = curried!([mini_linq::passes::sequential, mini_linq::passes::translate_pull] mini_linq::passes::sequence)
         .map(|(a, b, c)| (*a, *b, *c))
         .collect::<BTreeSet<_>>();
     assert_eq!(
@@ -472,9 +479,9 @@ fn written_lazy_host_membership_and_fallback_type_are_preserved() {
     let R = [(1,), (2,), (2,), (3,)];
     let S = [(2,), (4,), (2,)];
     macro_rules! lazy {
-        ($($printer:ident)::+) => {
+        ($([$($passes:path),*])? $($printer:ident)::+) => {
             $($printer)::+! {
-                pipeline {};
+                pipeline { $($($passes),*)? };
                 physical {
                     relation R(x: i32);
                     relation S(x: i32);
@@ -494,7 +501,7 @@ fn written_lazy_host_membership_and_fallback_type_are_preserved() {
         };
     }
     let push: Vec<_> = lazy!(own_push::push).collect();
-    let pull: Vec<_> = lazy!(mini_linq::passes::print_pull).collect();
+    let pull: Vec<_> = lazy!([mini_linq::passes::sequential, mini_linq::passes::translate_pull] mini_linq::passes::sequence).collect();
     assert_eq!(push, [(&2,)]);
     assert_eq!(push, pull);
 }
@@ -546,7 +553,7 @@ fn wider_join_answers_use_grouped_keys_and_keep_flat_rows() {
         };
     }
     let push = wide!(own_push::push);
-    let pull = wide!(mini_linq::passes::print_pull);
+    let pull = wide!(mini_linq::passes::translate_pull);
     let expected = BTreeSet::from([
         vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13],
         vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14],
@@ -564,8 +571,8 @@ fn unit_has_one_empty_answer() {
         structures {}
     }
     .collect();
-    let pull: Vec<()> = mini_linq::passes::print_pull! {
-        pipeline {};
+    let pull: Vec<()> = mini_linq::passes::sequence! {
+        pipeline { mini_linq::passes::sequential, mini_linq::passes::translate_pull };
         physical { u = pipe unit; return u as answer(); }
         structures {}
     }
@@ -643,7 +650,7 @@ fn both_printers_execute_nested_generators_with_owned_tuple_prefixes() {
         (String::from("prefix"), String::from("1"), 1, 1),
     ]);
     assert_eq!(run!(own_push::push), expected);
-    assert_eq!(run!(mini_linq::passes::print_pull), expected);
+    assert_eq!(run!(mini_linq::passes::translate_pull), expected);
 }
 
 #[test]
@@ -663,7 +670,7 @@ fn both_printers_borrow_collections_and_canonicalize_generator_duplicates() {
         };
     }
     let push = run!(own_push::push);
-    let pull = run!(mini_linq::passes::print_pull);
+    let pull = run!(mini_linq::passes::translate_pull);
     assert_eq!(push.len(), 4);
     assert_eq!(pull.len(), 4);
     let expected = BTreeSet::from([
@@ -696,7 +703,7 @@ fn both_printers_join_generated_values_and_preserve_guard_before_chain() {
     }
     let expected = BTreeSet::from([(4, &labels[0].1, 5)]);
     assert_eq!(run!(own_push::push), expected);
-    assert_eq!(run!(mini_linq::passes::print_pull), expected);
+    assert_eq!(run!(mini_linq::passes::translate_pull), expected);
 }
 
 #[test]
@@ -713,9 +720,12 @@ fn both_printers_keep_dead_generators_empty_or_nonempty() {
         };
     }
     assert!(run!(own_push::push, 0_i32).is_empty());
-    assert!(run!(mini_linq::passes::print_pull, 0_i32).is_empty());
+    assert!(run!(mini_linq::passes::translate_pull, 0_i32).is_empty());
     assert_eq!(run!(own_push::push, 3_i32), [(&seed[0].0,)]);
-    assert_eq!(run!(mini_linq::passes::print_pull, 3_i32), [(&seed[0].0,)]);
+    assert_eq!(
+        run!(mini_linq::passes::translate_pull, 3_i32),
+        [(&seed[0].0,)]
+    );
 }
 
 #[test]
@@ -743,18 +753,18 @@ fn both_printers_propagate_generator_expression_and_iteration_panics() {
         };
     }
     assert!(run!(own_push::push, partial_expression).is_err());
-    assert!(run!(mini_linq::passes::print_pull, partial_expression).is_err());
+    assert!(run!(mini_linq::passes::translate_pull, partial_expression).is_err());
     assert!(run!(own_push::push, partial_iteration).is_err());
-    assert!(run!(mini_linq::passes::print_pull, partial_iteration).is_err());
+    assert!(run!(mini_linq::passes::translate_pull, partial_iteration).is_err());
 }
 
 #[test]
 fn both_printers_apply_ir_generator_annotations_to_items() {
     let rows = [(2_i32,)];
     macro_rules! run {
-        ($printer:path) => {
+        ($($passes:path),+) => {
             mini_linq::passes::select! {
-                pipeline { $printer };
+                pipeline { $($passes),+ };
                 physical {
                     relation rows(n:i32);
                     relation answer(value:i32,label:String);
@@ -770,7 +780,14 @@ fn both_printers_apply_ir_generator_annotations_to_items() {
     }
     let expected = BTreeSet::from([(0, String::from("0")), (1, String::from("1"))]);
     assert_eq!(run!(own_push::push), expected);
-    assert_eq!(run!(mini_linq::passes::print_pull), expected);
+    assert_eq!(
+        run!(
+            mini_linq::passes::sequence,
+            mini_linq::passes::sequential,
+            mini_linq::passes::translate_pull
+        ),
+        expected
+    );
 }
 
 #[test]
@@ -819,9 +836,12 @@ fn both_printers_borrow_generator_captures_inside_union_and_fallback() {
         (&rows[2].0, &captured[1]),
     ]);
     assert_eq!(union!(own_push::push), expected_union);
-    assert_eq!(union!(mini_linq::passes::print_pull), expected_union);
+    assert_eq!(union!(mini_linq::passes::translate_pull), expected_union);
     assert_eq!(fallback!(own_push::push), expected_fallback);
-    assert_eq!(fallback!(mini_linq::passes::print_pull), expected_fallback);
+    assert_eq!(
+        fallback!(mini_linq::passes::translate_pull),
+        expected_fallback
+    );
     assert_eq!(captured.len(), 2);
     assert_eq!(alternate.len(), 1);
 }
@@ -858,10 +878,10 @@ fn discharged_host_fact_needs_no_hashable_columns_in_either_printer() {
     struct NoHash(i32);
     let R = [(NoHash(1),), (NoHash(2),)];
     macro_rules! recorded {
-        ($($printer:ident)::+) => {
+        ($($printer:ident)::+; $($pipeline:tt)*) => {
             $($printer)::+! {
                 context { host_set R discharged };
-                pipeline {};
+                pipeline { $($pipeline)* };
                 physical {
                     relation R(a:NoHash);
                     host_set R discharged;
@@ -872,6 +892,8 @@ fn discharged_host_fact_needs_no_hashable_columns_in_either_printer() {
             }
         };
     }
-    assert_eq!(recorded!(own_push::push).count(), 2);
-    assert_eq!(recorded!(mini_linq::passes::print_pull).count(), 2);
+    assert_eq!(recorded!(own_push::push;).count(), 2);
+    assert_eq!(recorded!(mini_linq::passes::sequence;
+        mini_linq::passes::sequential, mini_linq::passes::translate_pull
+    ).count(), 2);
 }

@@ -62,7 +62,7 @@ fn explicit_queue_and_borrowed_leaf_with_partial_binding() {
             mini_linq::passes::index_demands,
             mini_linq::passes::lower,
             mini_linq::passes::select,
-            mini_linq::passes::print_pull
+            mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull
         };
         struct Q;
         relation R(x:i32) = (input());

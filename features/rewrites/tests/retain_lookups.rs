@@ -387,7 +387,7 @@ fn retained_cursor_executes_through_select_and_project() {
             pipeline {
                 ::cq_rewrites::sorted_runs,
                 ::cq_rewrites::retain_lookups,
-                mini_linq::passes::print_pull
+                mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull
             };
             physical {
                 relation L(a:i32) = (left); relation R(a:i32,b:i32) = (right);

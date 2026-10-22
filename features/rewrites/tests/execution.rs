@@ -8,7 +8,7 @@ mod from_ix {
             cq_rewrites::smallest_intersections,
             cq_rewrites::lazy_semijoins,
             mini_linq::passes::select,
-            mini_linq::passes::print_pull
+            mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull
         }
     }
 }
@@ -20,7 +20,7 @@ mod from_physical {
             cq_rewrites::smallest_intersections,
             cq_rewrites::lazy_semijoins,
             mini_linq::passes::select,
-            mini_linq::passes::print_pull
+            mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull
         }
     }
 }

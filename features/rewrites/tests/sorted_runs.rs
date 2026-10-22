@@ -68,7 +68,7 @@ fn one_run_answers_both_payload_and_membership_reads() {
     let left = [(1,), (2,), (3,), (4,)];
     let right = [(3, 30), (1, 10), (1, 11), (1, 10), (4, 40)];
     let actual: BTreeSet<_> = mini_linq::passes::select! {
-        pipeline { cq_rewrites::sorted_runs, mini_linq::passes::print_pull };
+        pipeline { cq_rewrites::sorted_runs, mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
         physical {
             relation L(a:i32) = (left); relation R(a:i32,b:i32) = (right);
             l = pipe rename L@0 {a -> x};
@@ -88,7 +88,7 @@ fn one_run_answers_both_payload_and_membership_reads() {
 fn closed_owned_probe_key_uses_exact_sorted_run() {
     let right = [(3i64, 30i64), (1, 10), (3, 31)];
     let actual: BTreeSet<_> = mini_linq::passes::select! {
-        pipeline { cq_rewrites::sorted_runs, mini_linq::passes::print_pull };
+        pipeline { cq_rewrites::sorted_runs, mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
         physical {
             relation R(a:i64,b:i64) = (&right);
             u = pipe unit;

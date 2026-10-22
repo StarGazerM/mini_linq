@@ -12,11 +12,6 @@ pass paths, each with argument tokens read only by that pass.
  {\mathsf{pass}_f(args,\pi,T)
   \longrightarrow k!\{args';\ \pi';\ \mathsf{quote}(t)\}}
 
-\Rule{ST-Terminal}{\operatorname{parse}_{Structures}(T)=s\quad
- \mathsf{WF}_{Structures}(s)\\
- e=\mathsf{print}(s,args)\quad\pi=[]}
- {\mathsf{pass}_{print}(args,\pi,T)\longrightarrow\mathsf{quote}_{Rust}(e)}
-
 \Rule{ST-Context}{\mathsf{pass}_f(args,\pi,\mathsf{quote}(s))\longrightarrow T'}
  {C[\mathsf{pass}_f(args,\pi,\mathsf{quote}(s))]\longrightarrow C[T']}
 
@@ -42,17 +37,16 @@ pipeline {
 \end{lstlisting}
 The order is surface, plan, ix, lower, Physical rewrites, select, Structures
 rewrites, represent, stage, sequence, decompose, grade, print. The shipped defaults
-remain \code{plan}, \code{index_demands}, \code{lower}, \code{select},
-\code{represent}, \code{stage}, and \code{print_pull}; no Sequence phase is enabled.
-The second target is selected explicitly with \code{sequence},
-\code{sequential}, and \code{translate_pull} in the sequence, grade, and print
-phases together. Decompose is an optional list of Sequence rewrites.
-The resolver rejects incomplete targets and the known Structures terminals
-\code{print_pull} and \code{push} on this path. Custom terminal compatibility
-is checked by the pass protocol, not inferred from its macro path.
-The host-only translator currently has no profile-counter variant.
-The workload corpus and fuzz configuration opt into this target with
-\code{MINI_LINQ_SEQUENCE=1}; their default remains unchanged.
+are \code{plan}, \code{index_demands}, \code{lower}, \code{select},
+\code{represent}, \code{stage}, \code{sequence}, \code{sequential}, and
+\code{translate_pull}. Thus ST-Sequence is the default CPU path.
+Decompose is an optional list of Sequence rewrites.
+An explicit Structures terminal such as \code{own_push::push}, with no
+authored sequence, grade, or decompose phases, bypasses the default Sequence
+phases. Custom Sequence terminal paths require explicit sequence and grade
+phases; terminal compatibility is checked by the pass protocol.
+\code{translate_pull} emits both ordinary and profile-counter variants.
+The workload corpus and fuzz configuration use this target by default.
 An authored fact-free program may enter at any compatible macro with
 \code{arguments \{..\}; pipeline \{..\}; <program>}. Passes receive no
 configuration beyond their arguments: every choice is in the program text.
@@ -99,8 +93,8 @@ invocations.\end{proof}
 
 \paragraph{Set aggregate contexts.}
 The aggregate context records its row-stream canonicality proof, owned head
-columns, constant-group proof and \code{cq_storage::HashState}. A stock pull
-terminal checks the Structures canonical-return boundary; the extension folds
+columns, constant-group proof and \code{cq_storage::HashState}. The default
+Sequence translator preserves the checked canonical-return boundary; the extension folds
 that stream directly without adding another distinct set. Unknown terminals
 may repeat rows and retain an explicit fast-hashed distinct boundary.
 \begin{mathpar}

@@ -27,7 +27,7 @@ fn selection_records_consumer_and_discharged_host_facts() {
     let visits = std::cell::Cell::new(0);
     let answer: HashSet<_> = mini_linq::passes::select! {
         arguments { consumer = canonical, host_set rows discharged };
-        pipeline { mini_linq::passes::print_pull };
+        pipeline { mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
         physical {
             relation rows(x:i32);
             r = pipe rename rows@0 {x -> x};
@@ -56,7 +56,7 @@ fn discharged_host_fact_survives_the_default_pipeline() {
 fn certified_host_fact_still_checks_duplicate_rows() {
     let rows = [(1,), (1,)];
     let _: Vec<_> = mini_linq::passes::select! {
-        pipeline { mini_linq::passes::print_pull };
+        pipeline { mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
         physical {
             relation rows(x:i32);
             host_set rows;

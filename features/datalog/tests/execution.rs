@@ -48,7 +48,7 @@ fn push_holes_match_pull_for_owned_heads_and_constant_filtered_keys() {
             .collect::<BTreeSet<_>>()
         };
     }
-    let pull = run!(::mini_linq::passes::print_pull);
+    let pull = run!(::mini_linq::passes::translate_pull);
     let push = run!(::cq_datalog::passes::print_push);
     assert_eq!(push, pull);
     assert_eq!(
@@ -82,7 +82,7 @@ fn push_key_holes_preserve_empty_tuple_and_empty_input_semantics() {
     for blocked in [absent.as_slice(), &[(9_i32,)]] {
         assert_eq!(
             run!(::cq_datalog::passes::print_push, blocked),
-            run!(::mini_linq::passes::print_pull, blocked),
+            run!(::mini_linq::passes::translate_pull, blocked),
         );
     }
     assert_eq!(
@@ -133,7 +133,7 @@ fn named_datalog_phases_and_nested_cq_configuration_execute() {
 }
 
 mod pull_alias {
-    pub use mini_linq::passes::print_pull as emit;
+    pub use mini_linq::passes::translate_pull as emit;
 }
 
 #[test]
@@ -143,7 +143,11 @@ fn configured_pull_printer_alias_executes_recursive_and_key_holes() {
     let answers: BTreeSet<_> = cq_datalog::datalog! {
         pipeline {
             terminals = [crate::pull_alias::emit => pull];
-            cq = pipeline { print = crate::pull_alias::emit; };
+            cq = pipeline {
+                sequence = mini_linq::passes::sequence;
+                grade = mini_linq::passes::sequential;
+                print = crate::pull_alias::emit;
+            };
         }
         struct Closure;
         relation Edge(x:i32,y:i32) = (edges);

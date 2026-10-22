@@ -432,12 +432,12 @@ fn ordered_maps_with_vector_buckets_do_not_bypass_native_layout_ownership() {
 fn task_realization_preserves_custom_terminals_arguments_and_registry_premises() {
     for (path, arguments, interface) in [
         (
-            syn::parse_quote!(custom::print_pull),
+            syn::parse_quote!(custom::translate_pull),
             quote!(opaque(argument)),
             round::HoleInterface::Pull,
         ),
         (
-            syn::parse_quote!(::mini_linq::passes::print_pull),
+            syn::parse_quote!(::mini_linq::passes::translate_pull),
             quote!(opaque(argument)),
             round::HoleInterface::Pull,
         ),
@@ -487,7 +487,7 @@ fn task_realization_rejects_unrequested_terminal_and_key_rewrites() {
         .passes
         .last_mut()
         .unwrap()
-        .path = syn::parse_quote!(::mini_linq::passes::print_pull);
+        .path = syn::parse_quote!(::mini_linq::passes::translate_pull);
     round::contract::check(&target.round).unwrap();
     assert!(check_sharded(&source, &target).is_err());
 

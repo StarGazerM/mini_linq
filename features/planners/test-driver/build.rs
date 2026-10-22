@@ -55,7 +55,7 @@ fn main() {
         let written = cq_order::compile(&normal, &cq_order::Options::default()).unwrap();
         let reference = cq_elaborate::compile_written(&written).unwrap();
         let invocation = format!(
-            "mini_linq::passes::index_demands! {{ pipeline {{ mini_linq::passes::lower, mini_linq::passes::select, mini_linq::passes::print_pull }}; {} }}",
+            "mini_linq::passes::index_demands! {{ pipeline {{ mini_linq::passes::lower, mini_linq::passes::select, mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull }}; {} }}",
             reference.to_token_stream()
         );
         consumers.push_str(&executable(&case, "reference", &invocation));

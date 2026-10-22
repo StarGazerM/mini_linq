@@ -10,12 +10,16 @@ fn retained_masks_and_payload_builds_work_on_vec_slice_array_and_zone_hosts() {
     let right = vec![(1_i64, 1_i64), (1, 1), (2, 0), (3, 1), (9, 1)];
     let expected = BTreeSet::from([(1, 10), (1, 20)]);
     assert_eq!(
-        cq_testkit::positional_reduced!(mini_linq::passes::print_pull, left, right),
+        cq_testkit::positional_reduced!(
+            [mini_linq::passes::sequence, mini_linq::passes::sequential]
+            mini_linq::passes::translate_pull, left, right
+        ),
         expected
     );
     assert_eq!(
         cq_testkit::positional_reduced!(
-            mini_linq::passes::print_pull,
+            [mini_linq::passes::sequence, mini_linq::passes::sequential]
+            mini_linq::passes::translate_pull,
             left.as_slice(),
             right.as_slice()
         ),
@@ -23,7 +27,8 @@ fn retained_masks_and_payload_builds_work_on_vec_slice_array_and_zone_hosts() {
     );
     assert_eq!(
         cq_testkit::positional_reduced!(
-            mini_linq::passes::print_pull,
+            [mini_linq::passes::sequence, mini_linq::passes::sequential]
+            mini_linq::passes::translate_pull,
             [(1_i64, 10_i64), (1, 20)],
             [(1_i64, 1_i64)]
         ),
@@ -35,7 +40,10 @@ fn retained_masks_and_payload_builds_work_on_vec_slice_array_and_zone_hosts() {
         ZoneRows::from_rows::<(MinMax<i64>, MinMax<i64>)>(right, NonZeroUsize::new(1).unwrap());
     cq_storage::counters::reset();
     assert_eq!(
-        cq_testkit::positional_reduced!(mini_linq::passes::print_pull, left, right),
+        cq_testkit::positional_reduced!(
+            [mini_linq::passes::sequence, mini_linq::passes::sequential]
+            mini_linq::passes::translate_pull, left, right
+        ),
         expected
     );
     let costs = cq_storage::counters::snapshot();
@@ -137,7 +145,7 @@ macro_rules! filtered_join {
     ($left:expr, $right:expr, {$($build:tt)*}) => {
         mini_linq::passes::select! {
             arguments { positional(L,R,H) };
-            pipeline { mini_linq::passes::print_pull };
+            pipeline { mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
             physical {
                 relation L(a:i64,b:i64) = ($left);
                 relation R(c:i64,d:i64) = ($right);
@@ -215,4 +223,7 @@ fn covered_exact_scan_filters_preserve_answers_and_skip_blocks() {
     assert_eq!(cq_storage::counters::snapshot().join_filter_tested, 0);
 }
 
-cq_testkit::positional_cases!(mini_linq::passes::print_pull);
+cq_testkit::positional_cases!(
+    [mini_linq::passes::sequence, mini_linq::passes::sequential]
+    mini_linq::passes::translate_pull
+);

@@ -37,6 +37,7 @@ fn direct_surface_packet_carries_arguments_through_stacked_union_negation() {
             mini_linq::passes::index_demands,
             mini_linq::passes::lower,
             mini_linq::passes::select,
+            mini_linq::passes::sequence, mini_linq::passes::sequential,
             cq_ext_test_passes::repeated(twice)
         };
         struct Direct; relation A(x:i32); relation B(x:i32); relation S(x:i32);
@@ -57,6 +58,8 @@ fn aggregate_nested_query_uses_the_callers_printer_and_deduplicates_its_witnesse
     let groups = mini_linq::compile! {
         pipeline {
             surface = [cq_ext_negation::negation, cq_ext_aggregate::aggregate];
+            sequence = mini_linq::passes::sequence;
+            grade = mini_linq::passes::sequential;
             print = cq_ext_test_passes::repeated(twice);
         }
         aggregate! { by(d); n=count(); s=sum(a);
@@ -77,6 +80,8 @@ fn recursive_seed_and_step_queries_use_the_callers_printer() {
     let rows: Vec<_> = mini_linq::compile! {
         pipeline {
             surface = [cq_ext_recursion::recursion];
+            sequence = mini_linq::passes::sequence;
+            grade = mini_linq::passes::sequential;
             print = cq_ext_test_passes::repeated(twice);
         }
         recursion! { struct R; relation Seed(x:i32); relation Edge(x:i32,y:i32); relation reach(x:i32);
@@ -97,6 +102,8 @@ fn correlated_inner_and_outer_queries_use_the_callers_printer() {
     let rows: Vec<_> = mini_linq::compile! {
         pipeline {
             surface = [cq_ext_correlated::correlated];
+            sequence = mini_linq::passes::sequence;
+            grade = mini_linq::passes::sequential;
             print = cq_ext_test_passes::repeated(twice);
         }
         struct C; relation A(x:i32); relation S(x:i32,y:i32); relation answer(x:i32,v:i32);

@@ -17,10 +17,10 @@ impl cq_storage::ConservativeMembership<i64> for ConservativeOnly {
 }
 
 macro_rules! run {
-    ($left:ident, $right:ident, $filter:ty, $printer:path) => {
+    ($left:ident, $right:ident, $filter:ty, $($passes:path),+) => {
         mini_linq::passes::select! {
             pipeline {
-                cq_rewrites::join_filter(l), cq_rewrites::retype(l join_filter => $filter), $printer
+                cq_rewrites::join_filter(l), cq_rewrites::retype(l join_filter => $filter), $($passes),+
             };
             physical {
                 relation L(a:i64,b:i64) = (&$left);
@@ -65,22 +65,50 @@ fn filter_corpus_agrees_with_independent_exact_join() {
             })
             .collect::<BTreeSet<_>>();
         assert_eq!(
-            run!(left, right, AlwaysTrue, mini_linq::passes::print_pull),
+            run!(
+                left,
+                right,
+                AlwaysTrue,
+                mini_linq::passes::sequence,
+                mini_linq::passes::sequential,
+                mini_linq::passes::translate_pull
+            ),
             expected
         );
         assert_eq!(
-            run!(left, right, FilterAlias, mini_linq::passes::print_pull),
+            run!(
+                left,
+                right,
+                FilterAlias,
+                mini_linq::passes::sequence,
+                mini_linq::passes::sequential,
+                mini_linq::passes::translate_pull
+            ),
             expected
         );
         assert_eq!(run!(left, right, AlwaysTrue, own_push::push), expected);
         assert_eq!(
-            run!(left, right, ConservativeOnly, mini_linq::passes::print_pull),
+            run!(
+                left,
+                right,
+                ConservativeOnly,
+                mini_linq::passes::sequence,
+                mini_linq::passes::sequential,
+                mini_linq::passes::translate_pull
+            ),
             expected
         );
         let left =
             ZoneRows::from_rows::<(MinMax<i64>, MinMax<i64>)>(left, NonZeroUsize::new(3).unwrap());
         assert_eq!(
-            run!(left, right, BloomFilter<2>, mini_linq::passes::print_pull),
+            run!(
+                left,
+                right,
+                BloomFilter<2>,
+                mini_linq::passes::sequence,
+                mini_linq::passes::sequential,
+                mini_linq::passes::translate_pull
+            ),
             expected
         );
         assert_eq!(run!(left, right, AlwaysTrue, own_push::push), expected);

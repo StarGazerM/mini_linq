@@ -1,9 +1,15 @@
 //! Plain schema data and typed views of already validated integer fixtures.
-use std::collections::{BTreeMap, HashMap};
 use crate::dataset::{Dataset, RelationData};
+use std::collections::{BTreeMap, HashMap};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ColumnType { I32, I64, Date, Decimal, Text }
+pub enum ColumnType {
+    I32,
+    I64,
+    Date,
+    Decimal,
+    Text,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Relation {
@@ -12,42 +18,66 @@ pub struct Relation {
 }
 
 pub fn declarations(inputs: &[Relation]) -> Vec<cq_syntax::RelationDecl> {
-    inputs.iter().map(|input| cq_syntax::RelationDecl {
-        relation_token: Default::default(),
-        name: syn::Ident::new(input.name, proc_macro2::Span::call_site()),
-        columns_paren: Default::default(),
-        columns: input.columns.iter().map(|&(name, kind)| cq_syntax::ColumnDecl {
-            name: syn::Ident::new(name, proc_macro2::Span::call_site()),
-            colon_token: Default::default(),
-            ty: syn::Type::Path(syn::TypePath {
-                qself: None,
-                path: {
-                    let name = syn::Ident::new(match kind {
-                        ColumnType::I32 => "i32", ColumnType::I64 => "i64",
-                        ColumnType::Date => "Date", ColumnType::Decimal => "Decimal",
-                        ColumnType::Text => "String",
-                    }, proc_macro2::Span::call_site());
-                    if matches!(kind, ColumnType::Date | ColumnType::Decimal) {
-                        let mut path: syn::Path = syn::Ident::new("cq_load", proc_macro2::Span::call_site()).into();
-                        path.segments.push(name.into());
-                        path
-                    } else {
-                        name.into()
-                    }
-                },
-            }),
-        }).collect(),
-        value: None, semi_token: Default::default(),
-    }).collect()
+    inputs
+        .iter()
+        .map(|input| cq_syntax::RelationDecl {
+            relation_token: Default::default(),
+            name: syn::Ident::new(input.name, proc_macro2::Span::call_site()),
+            columns_paren: Default::default(),
+            columns: input
+                .columns
+                .iter()
+                .map(|&(name, kind)| cq_syntax::ColumnDecl {
+                    name: syn::Ident::new(name, proc_macro2::Span::call_site()),
+                    colon_token: Default::default(),
+                    ty: syn::Type::Path(syn::TypePath {
+                        qself: None,
+                        path: {
+                            let name = syn::Ident::new(
+                                match kind {
+                                    ColumnType::I32 => "i32",
+                                    ColumnType::I64 => "i64",
+                                    ColumnType::Date => "Date",
+                                    ColumnType::Decimal => "Decimal",
+                                    ColumnType::Text => "String",
+                                },
+                                proc_macro2::Span::call_site(),
+                            );
+                            if matches!(kind, ColumnType::Date | ColumnType::Decimal) {
+                                let mut path: syn::Path =
+                                    syn::Ident::new("cq_load", proc_macro2::Span::call_site())
+                                        .into();
+                                path.segments.push(name.into());
+                                path
+                            } else {
+                                name.into()
+                            }
+                        },
+                    }),
+                })
+                .collect(),
+            value: None,
+            semi_token: Default::default(),
+        })
+        .collect()
 }
 
 /// Construct only after schema, manifest and provenance validation have passed.
-pub struct Inputs { relations: Vec<RelationData> }
+pub struct Inputs {
+    relations: Vec<RelationData>,
+}
 impl Inputs {
-    pub fn from_dataset(dataset: Dataset) -> Self { Self { relations: dataset.relations } }
+    pub fn from_dataset(dataset: Dataset) -> Self {
+        Self {
+            relations: dataset.relations,
+        }
+    }
 
     fn rows<T: IntegerRow>(&mut self, name: &str) -> std::vec::IntoIter<Vec<i32>> {
-        let position = self.relations.iter().position(|r| r.name == name)
+        let position = self
+            .relations
+            .iter()
+            .position(|r| r.name == name)
             .unwrap_or_else(|| panic!("missing or already bound relation {name}"));
         let relation = self.relations.remove(position);
         assert_eq!(relation.arity, T::ARITY, "{name} tuple width");

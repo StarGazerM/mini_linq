@@ -56,7 +56,7 @@
 //!     pipeline {
 //!         stacked_ir::leave,
 //!         mini_linq::passes::select,
-//!         mini_linq::passes::print_pull
+//!         mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull
 //!     };
 //!     physical {
 //!         relation R(x: i32) = (rows);
@@ -76,7 +76,7 @@
 //! ```compile_fail
 //! let _ = stacked_ir::enter! {
 //!     arguments { unexpected };
-//!     pipeline { stacked_ir::leave, mini_linq::passes::select, mini_linq::passes::print_pull };
+//!     pipeline { stacked_ir::leave, mini_linq::passes::select, mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
 //!     physical { out = pipe unit; return out as answer(); }
 //! };
 //! ```
@@ -84,7 +84,7 @@
 //! ```compile_fail
 //! let _ = stacked_ir::leave! {
 //!     arguments { unexpected };
-//!     pipeline { mini_linq::passes::select, mini_linq::passes::print_pull };
+//!     pipeline { mini_linq::passes::select, mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
 //!     physical { out = pipe unit; return out as answer(); }
 //!     trace {}
 //! };
@@ -93,7 +93,7 @@
 //! ```compile_fail
 //! let _ = stacked_ir::round_trip! {
 //!     arguments { unexpected };
-//!     pipeline { mini_linq::passes::select, mini_linq::passes::print_pull };
+//!     pipeline { mini_linq::passes::select, mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
 //!     physical { out = pipe unit; return out as answer(); }
 //! };
 //! ```

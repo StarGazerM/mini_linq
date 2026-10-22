@@ -328,7 +328,7 @@ fn composite_prefix_uses_declaration_order_and_shorter_keys_build() {
 fn direct_merge_requires_ordered_read_without_requiring_payload_lookup() {
     let l = std::collections::BTreeSet::from([(1,), (2,)]);
     let r = std::collections::BTreeSet::from([(2,), (3,)]);
-    let got: Vec<_> = ::mini_linq::passes::select! { pipeline { ::core_pass_fixtures::ordered_dedup, ::mini_linq::passes::print_pull };
+    let got: Vec<_> = ::mini_linq::passes::select! { pipeline { ::core_pass_fixtures::ordered_dedup, ::mini_linq::passes::sequence, ::mini_linq::passes::sequential, ::mini_linq::passes::translate_pull };
         physical {
             relation l(a:i32); relation r(a:i32);
             left = pipe rename l@0 {a -> a}; right = pipe rename r@1 {a -> a};
@@ -349,7 +349,7 @@ fn ordered_key_sets_support_relational_comparison_windows() {
 #[test]
 fn retained_opaque_guards_preserve_unsigned_comparisons() {
     let r = [(1_u64, 0), (2, 5), (9, 1)];
-    let got: Vec<_> = ::mini_linq::passes::select! { pipeline { ::core_pass_fixtures::ordered_dedup, ::mini_linq::passes::print_pull };
+    let got: Vec<_> = ::mini_linq::passes::select! { pipeline { ::core_pass_fixtures::ordered_dedup, ::mini_linq::passes::sequence, ::mini_linq::passes::sequential, ::mini_linq::passes::translate_pull };
         physical {
             relation r(a:u64,b:i32); rows = let rename r@0 {a -> a,b -> b};
             w = pipe canon guard rows if (*a < 9); return w as answer(a,b);

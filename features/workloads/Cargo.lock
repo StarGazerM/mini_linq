@@ -787,7 +787,6 @@ version = "0.1.0"
 dependencies = [
  "cq-lang-structures",
  "cq-stage",
- "proc-macro2",
  "syn 2.0.119",
 ]
 
@@ -831,11 +830,13 @@ dependencies = [
  "cq-lang-cq",
  "cq-lang-ix",
  "cq-lang-ra",
+ "cq-lang-sequence",
  "cq-order",
  "cq-physical-lowering",
- "cq-physical-realization",
  "cq-planners-plan",
  "cq-represent",
+ "cq-sequence-lowering",
+ "cq-sequence-pull",
  "cq-staging",
  "cq-structure-selection",
  "cq-testkit",
@@ -1327,7 +1328,6 @@ dependencies = [
  "cq-lang-vo",
  "cq-order",
  "cq-physical-lowering",
- "cq-physical-realization",
  "cq-reduce",
  "cq-represent",
  "cq-sequence-lowering",

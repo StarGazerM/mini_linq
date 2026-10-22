@@ -83,9 +83,7 @@ fn load(case: &Case, write: bool) -> Result<Connection> {
         let columns = relation
             .columns
             .iter()
-            .map(|(name, ty)| {
-                format!("{} {} NOT NULL", quote_identifier(name), sql_type(*ty))
-            })
+            .map(|(name, ty)| format!("{} {} NOT NULL", quote_identifier(name), sql_type(*ty)))
             .collect::<Vec<_>>()
             .join(", ");
         let csv = case.path("data").join(format!("{}.csv", relation.name));

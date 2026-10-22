@@ -280,8 +280,8 @@ impl ToTokens for Terminal {
 impl Default for TerminalRegistry {
     fn default() -> Self {
         syn::parse_quote!([
-            ::mini_linq::passes::print_pull => pull,
-            mini_linq::passes::print_pull => pull,
+            ::mini_linq::passes::translate_pull => pull,
+            mini_linq::passes::translate_pull => pull,
             ::cq_datalog::passes::print_push => push
         ])
     }

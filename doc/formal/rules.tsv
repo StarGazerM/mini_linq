@@ -101,9 +101,8 @@ Plan-Le	implementation	features/planners/plan/src/le.rs	// Formal rule Plan-Le:	
 CK-Le	implementation	features/planners/plan/src/le.rs	// Formal rule CK-Le:	Independently check normalized CQ identity, one non-introducing lookup before one coarse full expansion per inner occurrence, written column ownership, outer identity, recursive block contracts and Masks reductions.
 ST-Entry	implementation	facade/mini-linq-macros/src/lib.rs	/// Formal rule ST-Entry:	Start surface expansion and the selected checked CQ pipeline.
 ST-Next	implementation	facade/cq-stage/src/lib.rs	/// Formal rule ST-Next:	Parse and transform a payload, then emit the selected next macro invocation.
-ST-Terminal	implementation	facade/mini-linq-macros/src/lib.rs	/// Formal rule ST-Terminal:	Print checked Structures to final Rust with an empty continuation.
 ST-Context	implementation	facade/cq-stage/src/lib.rs	/// Formal rule ST-Context:	Checked pass invocations expand in their enclosing Rust context; rustc checks closing bindings.
-ST-Sequence	implementation	facade/mini-linq-macros/src/lib.rs	// Formal rule ST-Sequence:	Opt-in sequence lowering checks Structures correspondence; sequential grading validates the host-only machine unchanged; translate_pull emits the terminal Sequence iterator.
+ST-Sequence	implementation	facade/mini-linq-macros/src/lib.rs	// Formal rule ST-Sequence:	Default sequence lowering checks Structures correspondence; sequential grading validates the host-only machine unchanged; translate_pull emits the terminal Sequence iterator, including profile counters.
 IF-Surface	implementation	languages/cq-lang-cq/src/lib.rs	// Formal rule IF-Surface:	Reject every remaining extension clause by name.
 IF-Input	implementation	languages/cq-syntax/src/lib.rs	/// Formal rule IF-Input:	Check declaration names and arity; declaration order is layout.
 IF-Output	implementation	runtime/cq-storage/src/answers.rs	/// Formal rule IF-Output:	Collect distinct rows into a canonical input host.
@@ -221,7 +220,7 @@ EXT-SeqOutput	implementation	features/sequence-rewrites/passes/src/lib.rs	// For
 EXT-SeqGrade	implementation	features/sequence-rewrites/passes/src/lib.rs	// Formal rule EXT-SeqGrade:	Add or update placements on one named machine without changing construction; machine validation is deferred.
 L-Sequence	implementation	passes/cq-sequence-lowering/src/lib.rs	// Formal rule L-Sequence:	Default one-part lowering preserves Physical retention and records explicit lookup, membership, union and final count-store terms.
 T-Pull	implementation	passes/cq-sequence-pull/src/lib.rs	// Formal rule T-Pull:	Host iterator interpretation of checked Sequence constructors with recorded provider capabilities and explicit Vec stores.
-T-Gpu	implementation	experiments/gpu/sequence/src/emit.rs	// Formal rule T-Gpu:	Interpret checked GPU dispatches with recorded tiles, collaborative scans, range providers, bounded publication and runtime packed canonicalization.
+T-Gpu	implementation	experiments/gpu/sequence/core/src/emit.rs	// Formal rule T-Gpu:	Interpret checked GPU dispatches with recorded tiles, collaborative scans, range providers, bounded publication and runtime packed canonicalization.
 CTX-HostSet	implementation	languages/cq-lang-physical/src/lib.rs	/// Formal rule CTX-HostSet:	A host_set fact means the full rows of R form a set; check that each fact names one used host.
 CTX-Consumer	implementation	languages/cq-lang-physical/src/lib.rs	/// Formal rule CTX-Consumer:	Record that the invoking consumer owns the returned set boundary and is support-invariant.
 CK-Return	implementation	passes/cq-physical-lowering/src/correspondence.rs	/// Formal rule CK-Return:	The returned boundary is admissible by inferred uniqueness, an explicit return canon, or a consumer canonical fact.

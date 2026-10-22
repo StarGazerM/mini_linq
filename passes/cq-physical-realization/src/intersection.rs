@@ -10,6 +10,7 @@ impl Printer<'_> {
         &mut self,
         first: &physical::Definition,
         second: &physical::Definition,
+        realize: bool,
     ) -> syn::Result<bool> {
         let Some((a, b, variable)) =
             physical::binary_intersection(first, second, self.physical_analysis)
@@ -105,6 +106,7 @@ impl Printer<'_> {
             })
         };
         let repr = match physical::ModeKind::from(&second.mode) {
+            _ if !realize => Repr::Pipe(Some(self.profile_stream(&name, rows))),
             physical::ModeKind::Pipe => {
                 if second.canon.is_some() {
                     rows = self.distinct(&second.name, rows);

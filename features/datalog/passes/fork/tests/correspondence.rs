@@ -847,7 +847,8 @@ fn frozen_device_layout_lifetime_is_an_exact_checked_certificate() {
         );
     }
     let mut wrong = target.clone();
-    wrong.context.layout_realization = cq_lang_datalog_round::LayoutRealization::MaintainedGroupedHost;
+    wrong.context.layout_realization =
+        cq_lang_datalog_round::LayoutRealization::MaintainedGroupedHost;
     assert!(check(&source, &wrong).is_err());
     let cpu = compile(&authored()).unwrap();
     assert!(cpu.context.strata[0].frozen_layouts.is_empty());
@@ -869,7 +870,8 @@ fn leveled_device_layouts_cover_only_changing_keyed_full_reads() {
             variant 1 delta 0 { Reach(*x,*z) :- Recent(x,y), Reach(y,z); }
             variant 1 delta 1 { Reach(*x,*z) :- Reach(x,y), Recent(y,z); }
         }
-    }).unwrap();
+    })
+    .unwrap();
     source.policy.insertion = syn::parse_quote!(device_set_all_columns);
     source.policy.negation_keys = syn::parse_quote!(device_set_owned);
     let target = cq_datalog_fork::compile_with_ratio(&source, 8).unwrap();

@@ -26,9 +26,17 @@ pub fn directory(name: &str, scenario: Scenario) -> PathBuf {
 pub fn inputs(name: &str, scenario: Scenario) -> crate::schema::Inputs {
     let case = crate::case(name).expect("catalog case");
     let dataset = case.load(directory(name, scenario)).unwrap();
-    dataset.validate_provenance(case.suite, name, crate::GenerationConfig {
-        scenario, scale: crate::Scale::Tiny, seed: crate::seed_for(case),
-    }).unwrap();
+    dataset
+        .validate_provenance(
+            case.suite,
+            name,
+            crate::GenerationConfig {
+                scenario,
+                scale: crate::Scale::Tiny,
+                seed: crate::seed_for(case),
+            },
+        )
+        .unwrap();
     crate::schema::Inputs::from_dataset(dataset)
 }
 
@@ -40,9 +48,7 @@ pub fn check(name: &str, scenario: Scenario, mut actual: Vec<Vec<i32>>) {
         .join(name)
         .join(scenario.as_str())
         .join("tiny.csv");
-    let expected =
-        crate::dataset::read_result_rows(path, case.arity)
-            .unwrap();
+    let expected = crate::dataset::read_result_rows(path, case.arity).unwrap();
     let returned_rows = actual.len();
     actual.sort();
     actual.dedup();

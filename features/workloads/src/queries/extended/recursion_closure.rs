@@ -19,6 +19,8 @@ pub fn check(scenario: Scenario) {
             reach(*x,*z) :- reach(x, y), Edge(y, z);
         }
     };
-    let actual = result.map(|(column_0, column_1,)| vec![column_0, column_1]).collect();
+    let actual = result
+        .map(|(column_0, column_1)| vec![column_0, column_1])
+        .collect();
     case.check(scenario, actual);
 }

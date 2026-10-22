@@ -142,7 +142,7 @@ fn main() -> Result<(), Error> {
         catalog.bytes()
     );
     let mut results = Vec::new();
-    type Query = Box<dyn for<'a> Fn(&'a Rows) -> DeviceColumns<'a, queries::Answer, For>>;
+    type Query = Box<dyn for<'a> Fn(&'a Rows) -> queries::QueryResult<'a>>;
     let plans: [(&str, Query); 3] = [
         ("A", Box::new(queries::plan_a)),
         ("B", Box::new(queries::plan_b)),
@@ -165,7 +165,7 @@ fn main() -> Result<(), Error> {
                 profiler_boundary(true)?;
             }
             let started = Instant::now();
-            let resident = query(&rows);
+            let resident = query(&rows)?;
             let wall_ms = started.elapsed().as_secs_f64() * 1000.0;
             let timing = cq_gpu_runtime::take_last_timings()
                 .ok_or("printer supplied no execution timings")?;
@@ -223,7 +223,7 @@ fn main() -> Result<(), Error> {
             }
         }
         results.push(json!({
-            "implementation": "cq_gpu::print/resident", "sf": sf, "plan": plan,
+            "implementation": "cq_gpu_sequence::translate/resident", "sf": sf, "plan": plan,
             "exact": true, "answer_count": answer.len(), "warmups": 1, "runs": 5,
             "build_ms": metric(&build), "kernel_ms": metric(&kernel),
             "dedup_ms": metric(&dedup), "total_ms": metric(&total), "wall_ms": metric(&wall),

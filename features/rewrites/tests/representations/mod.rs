@@ -53,7 +53,7 @@ fn merge_native_hosts_executes_corpus_ix_with_ordered_retype() {
             cq_rewrites::merge_joins(all),
             mini_linq::passes::select,
             cq_rewrites::retype(ordered => Ordered<_, Vec<_>>),
-            mini_linq::passes::print_pull
+            mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull
         }
     }
     .map(|(x, y)| vec![*x, *y])
@@ -68,7 +68,7 @@ fn merge_mixed_native_and_retained_keys_execute_corpus_answers() {
     let R: BTreeMap<_, _> = r.into_iter().map(|row| (row, vec![()])).collect();
     let actual: Rows = cq_rewrites::merge_joins! {
         arguments { r2 };
-        pipeline { mini_linq::passes::select, mini_linq::passes::print_pull };
+        pipeline { mini_linq::passes::select, mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
         physical {
             relation R(first:i32, second:i32); relation S(first:i32, second:i32);
             r0 = pipe rename R@0 {first -> x, second -> y};
@@ -91,7 +91,7 @@ fn named_payload_and_dedup_retypes_execute_corpus_physical() {
             mini_linq::passes::select,
             cq_rewrites::retype(r1 => Payload<'_, _, _>),
             cq_rewrites::retype(dedup => State<_>),
-            mini_linq::passes::print_pull
+            mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull
         }
     }
     .map(|(x, y)| vec![*x, *y])
@@ -107,7 +107,7 @@ fn standard_hash_state_retypes_execute_after_fast_default_selection() {
         intersection; pipeline {
             mini_linq::passes::select,
             cq_rewrites::retype(dedup => ::std::collections::HashSet<_>),
-            mini_linq::passes::print_pull
+            mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull
         }
     }
     .map(|(x, y)| vec![*x, *y])
@@ -130,7 +130,7 @@ fn membership_trie_and_rows_retypes_execute_their_trait_obligations() {
             cq_rewrites::retype(trie => Curried<'_, _, Payload<'_, _, _>>),
             cq_rewrites::retype(rows => Buffer<_>),
             cq_rewrites::retype(dedup => State<_>),
-            mini_linq::passes::print_pull
+            mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull
         };
         physical {
             relation L(a:i32); relation R(a:i32,b:i32); relation S(a:i32); relation T(a:i32,b:i32);

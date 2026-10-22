@@ -122,9 +122,14 @@ probe is a flatten of per-row lookups, so a join nest is a nested flatten
 and flattening it (NESL~\cite{paper-nesl,paper-ndp-gpu}) is what removes
 irregular nesting. A sequentially evaluated flatten of lookups needs only
 exact buckets; the contiguous-range capability (rangeCursor) is required
-exactly where the flatten's offsets are materialized: under \code{store}
-(BE-Offsets), as the domain of a \code{tile}, or when its lengths are
-folded at a level with members. A \code{flatten} or \code{fold} graded at a
+exactly where the flatten's offsets are materialized: under an offsets
+\code{store} (BE-Offsets), as the domain of a \code{tile}, or when its lengths
+are folded at a level with members. The generic structural contract treats
+a stored flatten as offsets. Host-only grading instead uses the sequential
+row-store interpretation: retaining the flattened rows does not retain an
+offset table and therefore requires only exact buckets. This does not weaken
+the range requirement for tiled domains or collective execution.
+A \code{flatten} or \code{fold} graded at a
 leaf level (one sequential executor) is a loop, not a collective; BE-Collective
 constrains only terms graded at a level whose members jointly evaluate them. BE-Partition is the law every schedule relies on; it
 holds for partial $f$ (one undistinguished $\bot$) but licenses no early
@@ -257,11 +262,15 @@ grading, lengths and views.
   \mathsf{flatten}\mapsto\text{iterator concatenation},\
   \mathsf{tile}/\mathsf{choose}\mapsto\text{identity (one part, else arm)},\
   \mathsf{fold}\mapsto\oplus,\ \mathsf{canon}\mapsto\text{the recorded provider},\
-  \mathsf{store}\mapsto\code{Vec}}
+  \mathsf{store}\mapsto\text{intermediate }\code{Vec}\text{ or final count iterator}}
 \end{mathpar}
+The host-only translation leaves the final store with \code{output count}
+as a lazy pull iterator (BK-Dual); it does not collect the output into a
+\code{Vec}. Intermediate stores materialize, and rows escaping block-local
+storage may be collected to preserve their lifetime. The target-hook
+\code{translate_with} path remains materializing for task and GPU targets.
 The sequential interpretation preserves support under the provider laws and
-propagates Rust failure by unwinding; it is today's pull printer restated as
-a fold over terms.
+propagates Rust failure by unwinding.
 
 \subsection{Passes}
 \begin{mathpar}
@@ -278,8 +287,9 @@ The checker re-derives this construction and compares it structurally.
 \begin{itemize}
 \item Structures $\to$ Sequence: the default lowering records ``one part,
 nothing stored'': every result is a view or a device/host store as its
-Physical mode says, no tiles. Its sequential interpretation is today's pull
-printer, which is therefore already correct for it.
+Physical mode says, no tiles. The shipped CPU target checks sequential grading
+and translates this Sequence program to a pull iterator, with an optional
+profile-counter variant.
 \item Sequence $\to$ Sequence rewrites, advice-driven as the existing
 rewrites are (Section~\ref{sec:structures}), each with a law: store a
 flatten level (BE-Offsets), tile a space (BE-Partition), record a
@@ -321,7 +331,7 @@ graded term & sequential & tasks & GPU\\
 \code{store} at a collaborative level & local variables & task-local & shared memory with barriers\\
 \code{store} at a separated level & \code{Vec} & owned buffers & a device buffer with length or capacity\\
 \code{fold}, \code{scan} & a loop & reduction at join & warp/block collectives\\
-output \code{flatten} & \code{Vec::push} & per-task \code{Vec} merged & count / reserve / bounded retry\\
+output \code{flatten} & lazy iterator for final \code{count} & per-task \code{Vec} merged & count / reserve / bounded retry\\
 $\bot$ & unwind & propagate at join & flag at the boundary\\
 dynamic part claiming & none & work stealing & atomic cursor (free, BE-Partition)\\
 \bottomrule

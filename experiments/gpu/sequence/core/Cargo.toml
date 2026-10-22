@@ -1,0 +1,12 @@
+[package]
+name = "cq-gpu-sequence-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+cq-lang-sequence = { path = "../../../../languages/cq-lang-sequence" }
+cq-lang-structures = { path = "../../../../languages/cq-lang-structures" }
+cq-print = { path = "../../../../passes/cq-print" }
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full", "visit", "visit-mut"] }

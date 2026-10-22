@@ -1,8 +1,8 @@
-//! The opt-in Sequence backend preserves the shipped pull backend's answers.
+//! Sequence pipelines preserve independently authored expected answers.
 use std::collections::BTreeSet;
 
-macro_rules! compare {
-    ($($query:tt)*) => {{
+macro_rules! check {
+    ($expected:expr; $($query:tt)*) => {{
         let left = [(1i32, 2i32), (1, 2), (2, 3), (3, 4)];
         let right = [(2i32, 7i32), (2, 8), (3, 9), (5, 10)];
         let extra = [(7i32, 2i32), (9, 3)];
@@ -18,45 +18,39 @@ macro_rules! compare {
             relation S(c:i32,b:i32) = (extra);
             $($query)*
         }.collect();
-        let expected: BTreeSet<_> = mini_linq::mini_linq! {
-            struct Query;
-            relation L(a:i32,b:i32) = (left);
-            relation R(b:i32,c:i32) = (right);
-            relation S(c:i32,b:i32) = (extra);
-            $($query)*
-        }.collect();
+        let expected = BTreeSet::from($expected);
         assert_eq!(actual, expected);
     }};
 }
 
 #[test]
 fn join() {
-    compare!(answer(a,c) :- L(a,b), R(b,c););
+    check!([(&1, &7), (&1, &8), (&2, &9)]; answer(a,c) :- L(a,b), R(b,c););
 }
 
 #[test]
 fn constant_atom_stream() {
-    compare!(answer(b) :- L(1,b););
+    check!([(&2,)]; answer(b) :- L(1,b););
 }
 
 #[test]
 fn constant_atom_probed() {
-    compare!(answer(a) :- L(a,b), R(b,7););
+    check!([(&1,)]; answer(a) :- L(a,b), R(b,7););
 }
 
 #[test]
 fn semi() {
-    compare!(answer(a,b) :- L(a,b), R(b,_););
+    check!([(&1, &2), (&2, &3)]; answer(a,b) :- L(a,b), R(b,_););
 }
 
 #[test]
 fn dedup() {
-    compare!(answer(a) :- L(a,_););
+    check!([(&1,), (&2,), (&3,)]; answer(a) :- L(a,_););
 }
 
 #[test]
 fn union_block() {
-    compare!(answer(a,c) :- L(a,b), { R(b,c) } | { S(c,b) };);
+    check!([(&1, &7), (&1, &8), (&2, &9)]; answer(a,c) :- L(a,b), { R(b,c) } | { S(c,b) };);
 }
 
 #[test]
@@ -64,7 +58,7 @@ fn positional_point_and_range_reads_preserve_their_source_spine() {
     let rows = [(1i32, 4i32), (2, 3), (2, 3), (3, 2), (4, 1)];
     let cutoff = 2;
     macro_rules! check {
-        ($($query:tt)*) => {
+        ($expected:expr; $($query:tt)*) => {
             let actual: BTreeSet<_> = mini_linq::compile! {
                 pipeline {
                     select = ::mini_linq::passes::select(positional(R));
@@ -76,28 +70,26 @@ fn positional_point_and_range_reads_preserve_their_source_spine() {
                 relation R(a:i32,b:i32) = (rows);
                 $($query)*
             }.collect();
-            let expected: BTreeSet<_> = mini_linq::mini_linq! {
-                struct Query;
-                relation R(a:i32,b:i32) = (rows);
-                $($query)*
-            }.collect();
+            let expected = BTreeSet::from($expected);
             assert_eq!(actual, expected);
         };
     }
-    check!(answer(a,b) :- R(a,b), if *a == cutoff;);
-    check!(answer(a,b) :- R(a,b), if *a >= cutoff, if *b >= cutoff;);
+    check!([(&2, &3)]; answer(a,b) :- R(a,b), if *a == cutoff;);
+    check!([(&2, &3), (&3, &2)]; answer(a,b) :- R(a,b), if *a >= cutoff, if *b >= cutoff;);
 }
 
 #[test]
 fn retained_positional_range_keeps_its_host_source() {
     let r0 = [(1i32, 2i32), (2, 3), (3, 1)];
     let r1 = [(4i32, 1i32), (5, 2)];
-    macro_rules! run {
-        ($($pass:path),+) => {
-            mini_linq::passes::select! {
-                arguments { positional(r0,r1) };
-                pipeline { $($pass),+ };
-                physical {
+    let actual: BTreeSet<_> = mini_linq::passes::select! {
+        arguments { positional(r0,r1) };
+        pipeline {
+            mini_linq::passes::sequence,
+            mini_linq::passes::sequential,
+            mini_linq::passes::translate_pull
+        };
+        physical {
                     relation r0(c0:i32,c1:i32);
                     relation r1(c0:i32,c1:i32);
                     r2 = pipe rename r0@0 {c0 -> v0,c1 -> v1};
@@ -113,15 +105,8 @@ fn retained_positional_range_keeps_its_host_source() {
                     r12 = pipe canon project r11 keep {v1,v2};
                     return r12 as answer(v1,v2);
                 }
-            }
-        };
     }
-    let actual: BTreeSet<_> = run!(
-        mini_linq::passes::sequence,
-        mini_linq::passes::sequential,
-        mini_linq::passes::translate_pull
-    )
     .collect();
-    let expected: BTreeSet<_> = run!(mini_linq::passes::print_pull).collect();
+    let expected = BTreeSet::from([(&2, &4), (&2, &5), (&3, &4), (&3, &5)]);
     assert_eq!(actual, expected);
 }

@@ -25,7 +25,7 @@ fn independently_selected_batch_and_positions_holes_match_default_and_ascent() {
         };
         let partitioned = evaluate! {
             terminals = [
-                ::mini_linq::passes::print_pull => pull,
+                ::mini_linq::passes::translate_pull => pull,
                 ::cq_datalog::passes::print_hole => pull
             ];
             round = [cq_datalog_test_passes::per_hole_pipeline(1, 2),
@@ -52,7 +52,7 @@ fn independently_selected_batch_and_positions_holes_match_default_and_ascent() {
         };
         let partitioned_reference = evaluate! {
             terminals = [
-                ::mini_linq::passes::print_pull => pull,
+                ::mini_linq::passes::translate_pull => pull,
                 ::cq_datalog::passes::print_hole => pull
             ];
             round = [cq_datalog_test_passes::per_hole_pipeline(1, 2),
@@ -86,7 +86,7 @@ fn partitioned_rule_and_key_holes_preserve_local_types_and_captures() {
     let answers: BTreeSet<_> = cq_datalog::datalog! {
         pipeline {
             terminals = [
-                ::mini_linq::passes::print_pull => pull,
+                ::mini_linq::passes::translate_pull => pull,
                 ::cq_datalog::passes::print_hole => pull
             ];
             round = [cq_datalog_test_passes::partition_holes];
@@ -118,7 +118,11 @@ fn explicit_partition_preserves_nonstatic_borrowed_rows() {
     let answers: BTreeSet<_> = cq_datalog::datalog! {
         pipeline {
             terminals = [::cq_datalog::passes::print_hole => pull];
-            cq = pipeline { print = ::cq_datalog::passes::print_hole(partition(7)); };
+            cq = pipeline {
+                sequence = mini_linq::passes::sequence;
+                grade = mini_linq::passes::sequential;
+                print = ::cq_datalog::passes::print_hole(partition(7));
+            };
         }
         struct Borrowed;
         relation Input(value:&str) = (&rows);

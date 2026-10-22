@@ -12,23 +12,26 @@ fn pipeline(query: TokenStream) -> cq_lang_structures::Program {
     cq_structure_selection::compile(&physical).unwrap()
 }
 
-fn compare(structures: cq_lang_structures::Program, data: TokenStream) -> TokenStream {
+fn assert_answers(
+    structures: cq_lang_structures::Program,
+    data: TokenStream,
+    expected: TokenStream,
+) -> TokenStream {
     let program = cq_sequence_lowering::compile(&structures).unwrap();
     cq_sequence_lowering::check(&structures, &program).unwrap();
     let analysis = contract::check(&program).unwrap();
     let sequence = cq_sequence_pull::translate(&program, &analysis)
         .unwrap_or_else(|error| panic!("{error}\n{}", program.to_token_stream()));
-    let pull = cq_physical_realization::compile(&structures).unwrap();
     quote!({
         #data
         let actual: ::std::collections::BTreeSet<_> = (#sequence).into_iter().collect();
-        let expected: ::std::collections::BTreeSet<_> = (#pull).collect();
+        let expected: ::std::collections::BTreeSet<_> = (#expected).into_iter().collect();
         assert_eq!(actual, expected);
     })
 }
 
 #[test]
-fn cq_pipeline_answers_equal_the_existing_pull_printer() {
+fn cq_pipeline_answers_equal_independent_expected_sets() {
     let data = quote! {
         let L = vec![(1i32, 2i32), (1, 2), (2, 3), (3, 4)];
         let R = vec![(2i32, 7i32), (2, 8), (3, 9), (5, 10)];
@@ -41,17 +44,41 @@ fn cq_pipeline_answers_equal_the_existing_pull_printer() {
         relation S(c:i32,d:i32);
     };
     let queries = [
-        quote!(answer(a,c) :- L(a,b), R(b,c);),
-        quote!(answer(a,b,c) :- L(a,b), R(b,c), S(c,42);),
-        quote!(answer(a) :- L(a,b), R(b,7);),
-        quote!(answer(a,b) :- L(a,b), R(b,_);),
-        quote!(answer(a) :- L(a,_);),
-        quote!(answer(a,c) :- L(a,b), { R(b,c) } else { S(c,b) };),
-        quote!(answer(a,c) :- L(a,b), { R(b,c) } | { S(c,b) };),
+        (
+            quote!(answer(a,c) :- L(a,b), R(b,c);),
+            quote!([(&1i32, &7i32), (&1, &8), (&2, &9)]),
+        ),
+        (
+            quote!(answer(a,b,c) :- L(a,b), R(b,c), S(c,42);),
+            quote!([(&1i32, &2i32, &7i32), (&2, &3, &9)]),
+        ),
+        (quote!(answer(a) :- L(a,b), R(b,7);), quote!([(&1i32,)])),
+        (
+            quote!(answer(a,b) :- L(a,b), R(b,_);),
+            quote!([(&1i32, &2i32), (&2, &3)]),
+        ),
+        (
+            quote!(answer(a) :- L(a,_);),
+            quote!([(&1i32,), (&2,), (&3,)]),
+        ),
+        (
+            quote!(answer(a,c) :- L(a,b), { R(b,c) } else { S(c,b) };),
+            quote!([(&1i32, &7i32), (&1, &8), (&2, &9)]),
+        ),
+        (
+            quote!(answer(a,c) :- L(a,b), { R(b,c) } | { S(c,b) };),
+            quote!([(&1i32, &7i32), (&1, &8), (&2, &9)]),
+        ),
     ];
     let checks = queries
         .into_iter()
-        .map(|query| compare(pipeline(quote!(#declarations #query)), data.clone()))
+        .map(|(query, expected)| {
+            assert_answers(
+                pipeline(quote!(#declarations #query)),
+                data.clone(),
+                expected,
+            )
+        })
         .collect::<Vec<_>>();
     run(quote!(fn main() { #(#checks)* }));
 }
@@ -101,7 +128,7 @@ fn constructors_execute_and_choose_uses_the_else_arm() {
             let output = cq_sequence_pull::translate(&program, &analysis).unwrap();
             quote!({
                 let R = vec![(1i32,), (1,), (2,)];
-                assert_eq!(#output, #expected);
+                assert_eq!((#output).into_iter().collect::<Vec<_>>(), #expected);
             })
         })
         .collect::<Vec<_>>();
@@ -163,7 +190,7 @@ fn stored_lookup_uses_the_recorded_range_cursor() {
         fn main() {
             let L = vec![(1i32,), (3,), (1,)];
             let R = vec![(1i32, 7i32), (1, 8), (2, 9)];
-            assert_eq!(#output, vec![(&1, &7), (&1, &8)]);
+            assert_eq!((#output).into_iter().collect::<Vec<_>>(), vec![(&1, &7), (&1, &8)]);
         }
     ));
 }
@@ -181,7 +208,7 @@ fn canon_uses_the_recorded_set_constructor_without_requiring_build() {
     run(quote!(
         fn main() {
             let R = vec![(2i32,), (1,), (2,)];
-            assert_eq!(#output, vec![(&2,), (&1,)]);
+            assert_eq!((#output).into_iter().collect::<Vec<_>>(), vec![(&2,), (&1,)]);
         }
     ));
 }
@@ -198,12 +225,13 @@ fn membership_and_payload_reads_share_the_same_provider() {
             return j as answer(a,b);
         }
     };
-    let check = compare(
+    let check = assert_answers(
         cq_structure_selection::compile(&physical).unwrap(),
         quote! {
             let L = vec![(1i32,), (3,), (1,)];
             let R = vec![(1i32, 7i32), (1, 8), (2, 9)];
         },
+        quote!([(&1i32, &7i32), (&1, &8)]),
     );
     run(quote!(fn main() { #check }));
 }
@@ -220,12 +248,13 @@ fn non_host_exists_is_stored_before_a_membership_read() {
             return j as answer(a);
         }
     };
-    let check = compare(
+    let check = assert_answers(
         cq_structure_selection::compile(&physical).unwrap(),
         quote! {
             let L = vec![(1i32,), (3,), (1,)];
             let R = vec![(7i32,), (8,)];
         },
+        quote!([(&1i32,), (&3,)]),
     );
     run(quote!(fn main() { #check }));
 }
@@ -262,7 +291,7 @@ fn lifted_maps_folds_and_canon_preserve_tile_boundaries() {
             let output = cq_sequence_pull::translate(&program, &analysis).unwrap();
             quote!({
                 let R = vec![(1i32,), (1,), (2,)];
-                assert_eq!(#output, #expected);
+                assert_eq!((#output).into_iter().collect::<Vec<_>>(), #expected);
             })
         })
         .collect::<Vec<_>>();
@@ -294,14 +323,14 @@ fn retained_union_fallback_readers_keep_their_recorded_providers() {
     let analysis = contract::check(&program).unwrap();
     let output = cq_sequence_pull::translate(&program, &analysis)
         .unwrap_or_else(|error| panic!("{error}\n{}", program.to_token_stream()));
-    let expected = cq_physical_realization::compile(&structures).unwrap();
     run(quote!(
         fn main() {
             let r0 = vec![(1i32,), (2,), (3,)];
             let r1 = vec![(1i32, 4i32, 5i32), (1, 4, 6)];
             let r2 = vec![(1i32, 9i32, 0i32), (2, 7, 8)];
             let actual: ::std::collections::BTreeSet<_> = (#output).into_iter().collect();
-            let expected: ::std::collections::BTreeSet<_> = (#expected).collect();
+            let expected: ::std::collections::BTreeSet<_> =
+                [(&1i32, &4i32), (&2, &7)].into_iter().collect();
             assert_eq!(actual, expected);
         }
     ));
@@ -327,11 +356,12 @@ fn computed_branch_merges_use_the_retained_ordered_index() {
     };
     let physical = pipeline.physical(&source).unwrap();
     let structures = cq_structure_selection::compile(&physical).unwrap();
-    let check = compare(
+    let check = assert_answers(
         structures,
         quote! {
             let r0 = vec![(1i32,), (2,), (1,), (3,)];
         },
+        quote!([(&1i32,), (&2,)]),
     );
     run(quote!(fn main() { #check }));
 }

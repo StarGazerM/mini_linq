@@ -1,9 +1,8 @@
-# Sequence back end: implementation plan
+# Sequence back end: implementation contracts
 
-Design: `doc/formal/backend_ir.tex` (Section "Sequence"). This file fixes the
-crates, their public functions and the contracts between them so that the
-boxes can be implemented in parallel. Every box has (a) an owner crate,
-(b) its public API, (c) what it may depend on, (d) its acceptance test.
+Design: `doc/formal/backend_ir.tex` (Section "Sequence"). Sequence is the
+shipped default CPU target. This file records the crates, their public
+functions and contracts, with their dependencies and acceptance criteria.
 Nothing here names a data structure or an algorithm; implementations live in
 runtime crates behind traits.
 
@@ -179,7 +178,7 @@ checked by `check_rewrite`:
 Acceptance per macro: applies, round-trips, `check_rewrite` passes, and a
 rejection case (e.g. `tile` over a `store` at an unknown length).
 
-## [4] `passes/cq-sequence-pull` (sequential translation; replaces `cq-physical-realization` + `cq-print` at cutover)
+## [4] `passes/cq-sequence-pull` (default sequential translation)
 
 ```rust
 pub fn translate(p: &cq_lang_sequence::Program, a: &Analysis) -> syn::Result<syn::Expr>;
@@ -234,10 +233,15 @@ and device-columns; selected sources do not invent an unused index key.
 
 ## [8] facade
 
-`cq_stage::Configuration` gains phases `sequence`, `decompose = [...]`,
-`grade`; defaults `sequence = passes::sequence; grade = passes::sequential;
-print = passes::translate_pull`. `compile!`/`mini_linq!` unchanged for
-users. Old `print_pull` remains until [4] passes goldens, then is removed.
+`cq_stage::Configuration` includes phases `sequence`, `decompose = [...]`,
+`grade`; defaults are `sequence = passes::sequence; grade = passes::sequential;
+print = passes::translate_pull`. `compile!`/`mini_linq!` retain their entry
+syntax. `translate_pull` supports profile counters. The direct Structures
+pull macro and `cq_physical_realization::{compile, compile_profile}` are
+removed. Shared `RowEmitter` and source helpers remain for `own_push`.
+An explicit Structures terminal with no authored sequence, grade, or
+decompose phases bypasses the default Sequence phases. Custom Sequence
+terminal paths require explicit sequence and grade.
 
 ## [9] conformance
 
@@ -245,7 +249,9 @@ users. Old `print_pull` remains until [4] passes goldens, then is removed.
 program through each available translation and compares `supp∘α`.
 Fixtures: the workload corpus (CPU targets), triangles and H05 (GPU).
 
-## Cutover (after [6] is exact on H05, triangles, Datalog bridge)
+## Cutover
 
-Delete `experiments/gpu/printer`, `blocked-run`, the `print_pull` path;
-move `experiments/gpu/datalog` to `grade = gpu; print = cq_gpu::translate`.
+CPU callers use the default Sequence target instead of the removed direct
+Structures pull path. GPU callers select `machine_grade` and
+`cq_gpu_sequence::translate` with explicit Sequence lowering; the old GPU printer and blocked-run path
+are removed.

@@ -10,7 +10,6 @@ use crate::{
     schema::{self, ColumnType::I32, Relation},
 };
 
-
 #[derive(Clone, Copy, Debug)]
 pub struct Case {
     pub name: &'static str,

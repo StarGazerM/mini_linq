@@ -3,218 +3,218 @@ macro_rules! le_configuration {
     (le_probe_keep_first_slice_hash_dedup_default_eager_pull_unadvised, $case:ident) => {
         pub const CONFIG: [usize; 10] = [9, 0, 0, 0, 0, 0, 0, 0, 0, 0];
         pipeline_configuration! { $case, golden_scenarios; planner: [le];
-            merge: [];
-            canon: [];
-            intersection: [];
-            host: [take] slice [];
-            dedup: [];
-            payload: [];
-            membership: [];
-            printer: mini_linq::passes::print_pull; }
+        merge: [];
+        canon: [];
+        intersection: [];
+        host: [take] slice [];
+        dedup: [];
+        payload: [];
+        membership: [];
+        printer: mini_linq::passes::translate_pull; }
     };
     (le_probe_keep_first_slice_hash_dedup_default_eager_push_positional, $case:ident) => {
         pub const CONFIG: [usize; 10] = [9, 0, 0, 0, 0, 0, 0, 0, 1, 1];
         pipeline_configuration! { $case, golden_scenarios; planner: [le];
-            merge: [];
-            canon: [];
-            intersection: [];
-            host: [take] slice [positional];
-            dedup: [];
-            payload: [];
-            membership: [];
-            printer: own_push::push; }
+        merge: [];
+        canon: [];
+        intersection: [];
+        host: [take] slice [positional];
+        dedup: [];
+        payload: [];
+        membership: [];
+        printer: own_push::push; }
     };
     (le_probe_keep_first_hashmap_hash_dedup_default_eager_pull_unadvised, $case:ident) => {
         pub const CONFIG: [usize; 10] = [9, 0, 0, 0, 1, 0, 0, 0, 0, 0];
         pipeline_configuration! { $case, golden_scenarios; planner: [le];
-            merge: [];
-            canon: [];
-            intersection: [];
-            host: [take_hash] map [];
-            dedup: [];
-            payload: [];
-            membership: [];
-            printer: mini_linq::passes::print_pull; }
+        merge: [];
+        canon: [];
+        intersection: [];
+        host: [take_hash] map [];
+        dedup: [];
+        payload: [];
+        membership: [];
+        printer: mini_linq::passes::translate_pull; }
     };
     (le_probe_keep_smallest_slice_hash_dedup_default_eager_pull_unadvised, $case:ident) => {
         pub const CONFIG: [usize; 10] = [9, 0, 0, 1, 0, 0, 0, 0, 0, 0];
         pipeline_configuration! { $case, golden_scenarios; planner: [le];
-            merge: [];
-            canon: [];
-            intersection: [cq_rewrites::smallest_intersections,];
-            host: [take] slice [];
-            dedup: [];
-            payload: [];
-            membership: [];
-            printer: mini_linq::passes::print_pull; }
+        merge: [];
+        canon: [];
+        intersection: [cq_rewrites::smallest_intersections,];
+        host: [take] slice [];
+        dedup: [];
+        payload: [];
+        membership: [];
+        printer: mini_linq::passes::translate_pull; }
     };
     (le_probe_canon_smallest_slice_ordered_dedup_sorted_lazy_push_positional, $case:ident) => {
         pub const CONFIG: [usize; 10] = [9, 0, 1, 1, 0, 1, 1, 1, 1, 1];
         pipeline_configuration! { $case, golden_scenarios; planner: [le];
-            merge: [];
-            canon: [cq_rewrites::canon_prefixes,];
-            intersection: [cq_rewrites::smallest_intersections,];
-            host: [take] slice [positional];
-            dedup: [cq_workload_passes::ordered_dedup,];
-            payload: [cq_workload_passes::sorted_payload,];
-            membership: [cq_rewrites::lazy_semijoins,];
-            printer: own_push::push; }
+        merge: [];
+        canon: [cq_rewrites::canon_prefixes,];
+        intersection: [cq_rewrites::smallest_intersections,];
+        host: [take] slice [positional];
+        dedup: [cq_workload_passes::ordered_dedup,];
+        payload: [cq_workload_passes::sorted_payload,];
+        membership: [cq_rewrites::lazy_semijoins,];
+        printer: own_push::push; }
     };
     (le_probe_canon_smallest_btreemap_hash_dedup_sorted_eager_push_unadvised, $case:ident) => {
         pub const CONFIG: [usize; 10] = [9, 0, 1, 1, 2, 0, 1, 0, 1, 0];
         pipeline_configuration! { $case, golden_scenarios; planner: [le];
-            merge: [];
-            canon: [cq_rewrites::canon_prefixes,];
-            intersection: [cq_rewrites::smallest_intersections,];
-            host: [take_btree] map [];
-            dedup: [];
-            payload: [cq_workload_passes::sorted_payload,];
-            membership: [];
-            printer: own_push::push; }
+        merge: [];
+        canon: [cq_rewrites::canon_prefixes,];
+        intersection: [cq_rewrites::smallest_intersections,];
+        host: [take_btree] map [];
+        dedup: [];
+        payload: [cq_workload_passes::sorted_payload,];
+        membership: [];
+        printer: own_push::push; }
     };
     (le_merge_keep_first_btreemap_hash_dedup_default_eager_pull_unadvised, $case:ident) => {
         pub const CONFIG: [usize; 10] = [9, 1, 0, 0, 2, 0, 0, 0, 0, 0];
         pipeline_configuration! { $case, golden_scenarios; planner: [le];
-            merge: [cq_rewrites::merge_joins,];
-            canon: [];
-            intersection: [];
-            host: [take_btree] map [];
-            dedup: [];
-            payload: [];
-            membership: [];
-            printer: mini_linq::passes::print_pull; }
+        merge: [cq_rewrites::merge_joins,];
+        canon: [];
+        intersection: [];
+        host: [take_btree] map [];
+        dedup: [];
+        payload: [];
+        membership: [];
+        printer: mini_linq::passes::translate_pull; }
     };
     (le_merge_canon_first_hashmap_ordered_dedup_sorted_lazy_pull_unadvised, $case:ident) => {
         pub const CONFIG: [usize; 10] = [9, 1, 1, 0, 1, 1, 1, 1, 0, 0];
         pipeline_configuration! { $case, golden_scenarios; planner: [le];
-            merge: [cq_rewrites::merge_joins,];
-            canon: [cq_rewrites::canon_prefixes,];
-            intersection: [];
-            host: [take_hash] map [];
-            dedup: [cq_workload_passes::ordered_dedup,];
-            payload: [cq_workload_passes::sorted_payload,];
-            membership: [cq_rewrites::lazy_semijoins,];
-            printer: mini_linq::passes::print_pull; }
+        merge: [cq_rewrites::merge_joins,];
+        canon: [cq_rewrites::canon_prefixes,];
+        intersection: [];
+        host: [take_hash] map [];
+        dedup: [cq_workload_passes::ordered_dedup,];
+        payload: [cq_workload_passes::sorted_payload,];
+        membership: [cq_rewrites::lazy_semijoins,];
+        printer: mini_linq::passes::translate_pull; }
     };
     (le_merge_canon_smallest_btreemap_ordered_dedup_sorted_lazy_pull_unadvised, $case:ident) => {
         pub const CONFIG: [usize; 10] = [9, 1, 1, 1, 2, 1, 1, 1, 0, 0];
         pipeline_configuration! { $case, golden_scenarios; planner: [le];
-            merge: [cq_rewrites::merge_joins,];
-            canon: [cq_rewrites::canon_prefixes,];
-            intersection: [cq_rewrites::smallest_intersections,];
-            host: [take_btree] map [];
-            dedup: [cq_workload_passes::ordered_dedup,];
-            payload: [cq_workload_passes::sorted_payload,];
-            membership: [cq_rewrites::lazy_semijoins,];
-            printer: mini_linq::passes::print_pull; }
+        merge: [cq_rewrites::merge_joins,];
+        canon: [cq_rewrites::canon_prefixes,];
+        intersection: [cq_rewrites::smallest_intersections,];
+        host: [take_btree] map [];
+        dedup: [cq_workload_passes::ordered_dedup,];
+        payload: [cq_workload_passes::sorted_payload,];
+        membership: [cq_rewrites::lazy_semijoins,];
+        printer: mini_linq::passes::translate_pull; }
     };
     (le_runs_probe_keep_first_slice_hash_dedup_default_eager_pull_unadvised, $case:ident) => {
         pub const CONFIG: [usize; 10] = [10, 0, 0, 0, 0, 0, 0, 0, 0, 0];
         pipeline_configuration! { $case, golden_scenarios; planner: [le_runs];
-            merge: [];
-            canon: [];
-            intersection: [];
-            host: [take] slice [];
-            dedup: [];
-            payload: [];
-            membership: [];
-            printer: mini_linq::passes::print_pull; }
+        merge: [];
+        canon: [];
+        intersection: [];
+        host: [take] slice [];
+        dedup: [];
+        payload: [];
+        membership: [];
+        printer: mini_linq::passes::translate_pull; }
     };
     (le_runs_probe_keep_first_slice_hash_dedup_default_eager_push_positional, $case:ident) => {
         pub const CONFIG: [usize; 10] = [10, 0, 0, 0, 0, 0, 0, 0, 1, 1];
         pipeline_configuration! { $case, golden_scenarios; planner: [le_runs];
-            merge: [];
-            canon: [];
-            intersection: [];
-            host: [take] slice [positional];
-            dedup: [];
-            payload: [];
-            membership: [];
-            printer: own_push::push; }
+        merge: [];
+        canon: [];
+        intersection: [];
+        host: [take] slice [positional];
+        dedup: [];
+        payload: [];
+        membership: [];
+        printer: own_push::push; }
     };
     (le_runs_probe_keep_first_hashmap_hash_dedup_default_eager_pull_unadvised, $case:ident) => {
         pub const CONFIG: [usize; 10] = [10, 0, 0, 0, 1, 0, 0, 0, 0, 0];
         pipeline_configuration! { $case, golden_scenarios; planner: [le_runs];
-            merge: [];
-            canon: [];
-            intersection: [];
-            host: [take_hash] map [];
-            dedup: [];
-            payload: [];
-            membership: [];
-            printer: mini_linq::passes::print_pull; }
+        merge: [];
+        canon: [];
+        intersection: [];
+        host: [take_hash] map [];
+        dedup: [];
+        payload: [];
+        membership: [];
+        printer: mini_linq::passes::translate_pull; }
     };
     (le_runs_probe_keep_smallest_slice_hash_dedup_default_eager_pull_unadvised, $case:ident) => {
         pub const CONFIG: [usize; 10] = [10, 0, 0, 1, 0, 0, 0, 0, 0, 0];
         pipeline_configuration! { $case, golden_scenarios; planner: [le_runs];
-            merge: [];
-            canon: [];
-            intersection: [cq_rewrites::smallest_intersections,];
-            host: [take] slice [];
-            dedup: [];
-            payload: [];
-            membership: [];
-            printer: mini_linq::passes::print_pull; }
+        merge: [];
+        canon: [];
+        intersection: [cq_rewrites::smallest_intersections,];
+        host: [take] slice [];
+        dedup: [];
+        payload: [];
+        membership: [];
+        printer: mini_linq::passes::translate_pull; }
     };
     (le_runs_probe_canon_smallest_slice_ordered_dedup_sorted_lazy_push_positional, $case:ident) => {
         pub const CONFIG: [usize; 10] = [10, 0, 1, 1, 0, 1, 1, 1, 1, 1];
         pipeline_configuration! { $case, golden_scenarios; planner: [le_runs];
-            merge: [];
-            canon: [cq_rewrites::canon_prefixes,];
-            intersection: [cq_rewrites::smallest_intersections,];
-            host: [take] slice [positional];
-            dedup: [cq_workload_passes::ordered_dedup,];
-            payload: [cq_workload_passes::sorted_payload,];
-            membership: [cq_rewrites::lazy_semijoins,];
-            printer: own_push::push; }
+        merge: [];
+        canon: [cq_rewrites::canon_prefixes,];
+        intersection: [cq_rewrites::smallest_intersections,];
+        host: [take] slice [positional];
+        dedup: [cq_workload_passes::ordered_dedup,];
+        payload: [cq_workload_passes::sorted_payload,];
+        membership: [cq_rewrites::lazy_semijoins,];
+        printer: own_push::push; }
     };
     (le_runs_probe_canon_smallest_btreemap_hash_dedup_sorted_eager_push_unadvised, $case:ident) => {
         pub const CONFIG: [usize; 10] = [10, 0, 1, 1, 2, 0, 1, 0, 1, 0];
         pipeline_configuration! { $case, golden_scenarios; planner: [le_runs];
-            merge: [];
-            canon: [cq_rewrites::canon_prefixes,];
-            intersection: [cq_rewrites::smallest_intersections,];
-            host: [take_btree] map [];
-            dedup: [];
-            payload: [cq_workload_passes::sorted_payload,];
-            membership: [];
-            printer: own_push::push; }
+        merge: [];
+        canon: [cq_rewrites::canon_prefixes,];
+        intersection: [cq_rewrites::smallest_intersections,];
+        host: [take_btree] map [];
+        dedup: [];
+        payload: [cq_workload_passes::sorted_payload,];
+        membership: [];
+        printer: own_push::push; }
     };
     (le_runs_merge_keep_first_btreemap_hash_dedup_default_eager_pull_unadvised, $case:ident) => {
         pub const CONFIG: [usize; 10] = [10, 1, 0, 0, 2, 0, 0, 0, 0, 0];
         pipeline_configuration! { $case, golden_scenarios; planner: [le_runs];
-            merge: [cq_rewrites::merge_joins,];
-            canon: [];
-            intersection: [];
-            host: [take_btree] map [];
-            dedup: [];
-            payload: [];
-            membership: [];
-            printer: mini_linq::passes::print_pull; }
+        merge: [cq_rewrites::merge_joins,];
+        canon: [];
+        intersection: [];
+        host: [take_btree] map [];
+        dedup: [];
+        payload: [];
+        membership: [];
+        printer: mini_linq::passes::translate_pull; }
     };
     (le_runs_merge_canon_first_hashmap_ordered_dedup_sorted_lazy_pull_unadvised, $case:ident) => {
         pub const CONFIG: [usize; 10] = [10, 1, 1, 0, 1, 1, 1, 1, 0, 0];
         pipeline_configuration! { $case, golden_scenarios; planner: [le_runs];
-            merge: [cq_rewrites::merge_joins,];
-            canon: [cq_rewrites::canon_prefixes,];
-            intersection: [];
-            host: [take_hash] map [];
-            dedup: [cq_workload_passes::ordered_dedup,];
-            payload: [cq_workload_passes::sorted_payload,];
-            membership: [cq_rewrites::lazy_semijoins,];
-            printer: mini_linq::passes::print_pull; }
+        merge: [cq_rewrites::merge_joins,];
+        canon: [cq_rewrites::canon_prefixes,];
+        intersection: [];
+        host: [take_hash] map [];
+        dedup: [cq_workload_passes::ordered_dedup,];
+        payload: [cq_workload_passes::sorted_payload,];
+        membership: [cq_rewrites::lazy_semijoins,];
+        printer: mini_linq::passes::translate_pull; }
     };
     (le_runs_merge_canon_smallest_btreemap_ordered_dedup_sorted_lazy_pull_unadvised, $case:ident) => {
         pub const CONFIG: [usize; 10] = [10, 1, 1, 1, 2, 1, 1, 1, 0, 0];
         pipeline_configuration! { $case, golden_scenarios; planner: [le_runs];
-            merge: [cq_rewrites::merge_joins,];
-            canon: [cq_rewrites::canon_prefixes,];
-            intersection: [cq_rewrites::smallest_intersections,];
-            host: [take_btree] map [];
-            dedup: [cq_workload_passes::ordered_dedup,];
-            payload: [cq_workload_passes::sorted_payload,];
-            membership: [cq_rewrites::lazy_semijoins,];
-            printer: mini_linq::passes::print_pull; }
+        merge: [cq_rewrites::merge_joins,];
+        canon: [cq_rewrites::canon_prefixes,];
+        intersection: [cq_rewrites::smallest_intersections,];
+        host: [take_btree] map [];
+        dedup: [cq_workload_passes::ordered_dedup,];
+        payload: [cq_workload_passes::sorted_payload,];
+        membership: [cq_rewrites::lazy_semijoins,];
+        printer: mini_linq::passes::translate_pull; }
     };
 }
 

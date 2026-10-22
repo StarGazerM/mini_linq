@@ -8,23 +8,22 @@
 //! Rust binds and guards preserve their written ancestry and free variables.
 //!
 //! Select pass paths in named phases; omitted phases use the defaults:
-//! The default order is `plan, ix, lower, select, represent, stage, print`.
+//! The default order is `plan, ix, lower, select, represent, stage, sequence, grade, print`.
 //! Physical rewrites run before `select`; Structures rewrites run before
 //! `represent`. Representations remain tuples unless `represent(positions)` is
 //! requested. Staging preserves built-probe lookahead by default;
 //! `stage(batch(64))` also batches total scan predicates before partial Rust.
-//! The opt-in Sequence backend adds `sequence`, optional `decompose` rewrites,
-//! and `grade` after `stage`. Select all three target entries together:
-//! `sequence = ::mini_linq::passes::sequence;`
-//! `grade = ::mini_linq::passes::sequential;`
-//! `print = ::mini_linq::passes::translate_pull;`.
-//! This host-only path returns a pull iterator without profiling counters.
+//! Sequence lowering runs after `stage`, followed by optional `decompose`
+//! rewrites, `sequential` grading, and `translate_pull`. This host-only path
+//! returns a pull iterator with optional runtime profiling counters.
+//! An explicit Structures printer such as `own_push::push` replaces the default
+//! Sequence target; custom Sequence terminals select `sequence` and `grade` too.
 //! ```
 //! let rows = [(1_i32,), (1,), (2,)];
 //! let answers: Vec<_> = mini_linq::compile! {
 //!     pipeline {
 //!         plan = mini_linq::passes::plan;
-//!         print = mini_linq::passes::print_pull;
+//!         print = mini_linq::passes::translate_pull;
 //!     }
 //!     struct Q;
 //!     relation R(x: i32) = (rows);
@@ -45,8 +44,7 @@ pub use mini_linq_macros::{compile, mini_linq, relation_loaders, workload_query}
 /// Core default passes. Customization is an external pass or an authored IR.
 pub mod passes {
     pub use mini_linq_macros::{
-        index_demands, lower, plan, print_pull, represent, select, sequence, sequential, stage,
-        translate_pull,
+        index_demands, lower, plan, represent, select, sequence, sequential, stage, translate_pull,
     };
 }
 

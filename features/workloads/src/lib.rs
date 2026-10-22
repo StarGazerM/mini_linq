@@ -13,11 +13,10 @@
 //! One joining triangle kernel uses all 2,400 supported configurations; every
 //! catalog case also runs visible pairwise rows. Positional advice is slice-only.
 //! UI fixtures pin unsupported printer/host choices and malformed retained layouts.
-//! `MINI_LINQ_SEQUENCE=1` switches corpus terminals and xtask-generated pipeline
-//! configurations to checked Sequence lowering, host-only grading and pull
-//! translation. Unset (or any value other than `1`) keeps the original matrix.
-//! Cargo tracks this switch for corpus macro expansion. The independent fuzz
-//! reference and SQL oracle remain unchanged; Sequence has no counter variant.
+//! Pull configurations use checked Sequence lowering, host-only grading and pull
+//! translation by default. Explicit push configurations retain the Structures
+//! terminal. The independent fuzz reference and SQL oracle remain unchanged;
+//! counted pull executions use the matching Sequence profile translation.
 //!
 //! Queries keep Kleisli bottom + Set semantics, written-order refinement,
 //! opaque pinned Rust steps and Leibniz equality. Successful checks at one

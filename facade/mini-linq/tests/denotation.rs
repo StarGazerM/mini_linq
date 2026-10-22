@@ -3,6 +3,15 @@ use quote::quote;
 
 #[test]
 fn every_planner_keeps_partial_steps_in_their_written_domain() {
+    let machine = cq_lang_sequence::Machine {
+        name: syn::parse_quote!(sequential),
+        root: cq_lang_sequence::LevelNode {
+            name: syn::parse_quote!(host),
+            collaborative: false,
+            dynamic: false,
+            children: vec![],
+        },
+    };
     let queries: [(&str, proc_macro2::TokenStream); 3] = [
         (
             "struct Q; relation R(x:i32); relation S(w:i32); answer(x,y) :- R(x), S(w), if *x != 0 && *w > 1, let y:i32 = 10 / *x;",
@@ -43,8 +52,12 @@ fn every_planner_keeps_partial_steps_in_their_written_domain() {
                         cq_physical_lowering::check(&ix, &physical).unwrap();
                         let structures = cq_structure_selection::compile(&physical).unwrap();
                         cq_structure_selection::check(&physical, &structures).unwrap();
-                        let expression = cq_physical_realization::compile(&structures).unwrap();
-                        tests.push(quote!({ #bindings let rows: Vec<_> = (#expression).collect(); assert!(rows.is_empty()); }));
+                        let sequence = cq_sequence_lowering::compile(&structures).unwrap();
+                        cq_sequence_lowering::check(&structures, &sequence).unwrap();
+                        let analysis =
+                            cq_lang_sequence::check_grading(&sequence, &machine).unwrap();
+                        let expression = cq_sequence_pull::translate(&sequence, &analysis).unwrap();
+                        tests.push(quote!({ #bindings let rows: Vec<_> = (#expression).into_iter().collect(); assert!(rows.is_empty()); }));
                     }
                 }
             }
@@ -72,10 +85,13 @@ fn every_planner_keeps_partial_steps_in_their_written_domain() {
             .iter()
             .any(|entry| entry.name == "b")
     );
-    let expression = cq_physical_realization::compile(&structures).unwrap();
+    let sequence = cq_sequence_lowering::compile(&structures).unwrap();
+    cq_sequence_lowering::check(&structures, &sequence).unwrap();
+    let analysis = cq_lang_sequence::check_grading(&sequence, &machine).unwrap();
+    let expression = cq_sequence_pull::translate(&sequence, &analysis).unwrap();
     tests.push(quote!({
         let R: &[(i32,)] = &[(0,)]; let S: &[(i32,)] = &[]; let T: &[(i32,)] = &[(1,)];
-        let rows: Vec<_> = (#expression).collect(); assert!(rows.is_empty());
+        let rows: Vec<_> = (#expression).into_iter().collect(); assert!(rows.is_empty());
     }));
     let program = quote! {
         #![allow(non_snake_case, unused_variables)]

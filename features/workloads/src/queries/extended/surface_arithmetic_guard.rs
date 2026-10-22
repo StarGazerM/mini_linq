@@ -16,6 +16,8 @@ pub fn check(scenario: Scenario) {
         relation answer(c0: i32, c1: i32);
         answer(*x, *y) :- R(x, y), if *x + 2 * *y >= 3;
     };
-    let actual = result.map(|(column_0, column_1,)| vec![column_0, column_1]).collect();
+    let actual = result
+        .map(|(column_0, column_1)| vec![column_0, column_1])
+        .collect();
     case.check(scenario, actual);
 }

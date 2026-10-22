@@ -38,7 +38,10 @@ impl Options {
                     query = Some(args.next().ok_or("--query requires a catalog query")?)
                 }
                 "--config" if config.is_none() => {
-                    config = Some(args.next().ok_or("--config requires a configuration name")?)
+                    config = Some(
+                        args.next()
+                            .ok_or("--config requires a configuration name")?,
+                    )
                 }
                 "--sf" if sf.is_none() => sf = Some(args.next().ok_or("--sf requires 0.1 or 1")?),
                 "--runs" if runs.is_none() => {
@@ -187,7 +190,9 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
             if !query.configs.contains(config) {
                 return Err(format!("{} has no configuration {config}", query.name).into());
             }
-            query.configs.retain(|name| name == "default" || name == config);
+            query
+                .configs
+                .retain(|name| name == "default" || name == config);
         }
     } else if options.reduction_comparison {
         for query in &mut queries {
@@ -604,7 +609,9 @@ mod tests {
         );
         assert_eq!(
             parse(&["--tpch", "--sf", "1", "--runs", "5", "--config", "le"])
-                .unwrap().config.as_deref(),
+                .unwrap()
+                .config
+                .as_deref(),
             Some("le"),
         );
         for args in [
@@ -613,8 +620,17 @@ mod tests {
             vec!["--tpch", "--sf", "1", "--runs", "2"],
             vec!["--tpch", "--sf", "1", "--sf", "1"],
             vec!["--tpch", "--sf", "1", "--config"],
-            vec!["--tpch", "--sf", "1", "--config", "le", "--config", "le_runs"],
-            vec!["--tpch", "--sf", "1", "--config", "le", "--reduction-comparison"],
+            vec![
+                "--tpch", "--sf", "1", "--config", "le", "--config", "le_runs",
+            ],
+            vec![
+                "--tpch",
+                "--sf",
+                "1",
+                "--config",
+                "le",
+                "--reduction-comparison",
+            ],
             vec![
                 "--tpch",
                 "--sf",

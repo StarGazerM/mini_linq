@@ -42,7 +42,14 @@ struct Checker<'a> {
 /// A successful check records a required failure channel; it does not certify an
 /// emitter's implementation of that channel.
 pub fn check_grading(program: &Program, machine: &Machine) -> syn::Result<Analysis> {
-    let mut analysis = crate::contract::check(program)?;
+    // A host-only executor consumes nested buckets sequentially and stores
+    // rows. It does not materialize the generic BE-Offsets addressing table.
+    // Tiled domains still request ranges through the structural contract.
+    let mut analysis = if machine.root.children.is_empty() {
+        crate::contract::check_host_rows(program)?
+    } else {
+        crate::contract::check(program)?
+    };
     // Formal rule BE-Abort: every below-host dispatch records a channel to the
     // distinguished host root, to be discharged by the target's emitter/runtime.
     if symbol_name(&machine.root.name) != "host" {

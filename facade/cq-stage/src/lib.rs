@@ -500,18 +500,35 @@ impl Parse for Configuration {
 }
 impl Configuration {
     pub fn resolve(self, defaults: Self) -> syn::Result<Pipeline> {
-        let default_sequence_target = defaults.sequence.is_some() && defaults.grade.is_some();
-        let sequence = self.sequence.or(defaults.sequence);
-        let grade = self.grade.or(defaults.grade);
-        let sequence_target = sequence.is_some() || grade.is_some() || !self.decompose.is_empty();
+        let explicit_sequence =
+            self.sequence.is_some() || self.grade.is_some() || !self.decompose.is_empty();
         let explicit_print = self.print.is_some();
+        let structures_terminal = !explicit_sequence
+            && self.print.as_ref().is_some_and(|print| {
+                print
+                    .path
+                    .segments
+                    .last()
+                    .is_none_or(|p| p.ident != "translate_pull")
+            });
+        let default_sequence_target =
+            !structures_terminal && defaults.sequence.is_some() && defaults.grade.is_some();
+        let sequence = self.sequence.or_else(|| {
+            (!structures_terminal)
+                .then_some(defaults.sequence)
+                .flatten()
+        });
+        let grade = self
+            .grade
+            .or_else(|| (!structures_terminal).then_some(defaults.grade).flatten());
+        let sequence_target = sequence.is_some() || grade.is_some() || !self.decompose.is_empty();
         let print = self.print.or(defaults.print);
         let terminal = print.as_ref().and_then(|p| p.path.segments.last());
         if sequence_target
             && (sequence.is_none()
                 || grade.is_none()
                 || (!explicit_print && !default_sequence_target)
-                || terminal.is_some_and(|p| p.ident == "print_pull" || p.ident == "push"))
+                || terminal.is_some_and(|p| p.ident == "push"))
         {
             return Err(syn::Error::new(
                 proc_macro2::Span::call_site(),

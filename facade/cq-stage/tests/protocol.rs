@@ -121,7 +121,7 @@ fn representation_and_stage_overrides_keep_other_defaults() {
 fn sequence_phases_are_ordered_and_require_a_complete_target() {
     let defaults: cq_stage::Configuration = syn::parse_quote!(pipeline {
         plan = p; ix = i; lower = l; select = s;
-        represent = r; stage = b; print = print_pull;
+        represent = r; stage = b; print = custom::out;
     });
     let config: cq_stage::Configuration = syn::parse_quote!(pipeline {
         surface = [surface];
@@ -151,7 +151,6 @@ fn sequence_phases_are_ordered_and_require_a_complete_target() {
         quote!(sequence = sequence; grade = sequential;),
         quote!(sequence = sequence; print = translate_pull;),
         quote!(grade = sequential; print = translate_pull;),
-        quote!(sequence = sequence; grade = sequential; print = print_pull;),
         quote!(sequence = sequence; grade = sequential; print = own_push::push;),
         quote!(decompose = [tile(32)];),
     ] {
@@ -168,8 +167,39 @@ fn sequence_phases_are_ordered_and_require_a_complete_target() {
     sequence_defaults.print = Some(syn::parse_quote!(translate_pull));
     assert!(
         cq_stage::Configuration::default()
-            .resolve(sequence_defaults)
+            .resolve(sequence_defaults.clone())
             .is_ok()
+    );
+    let push: cq_stage::Configuration = syn::parse_quote!(pipeline {
+        print = own_push::push;
+    });
+    assert_eq!(
+        push.resolve(sequence_defaults.clone())
+            .unwrap()
+            .to_token_stream()
+            .to_string(),
+        quote!(pipeline { p, i, l, s, r, b, own_push::push }).to_string()
+    );
+    let pull: cq_stage::Configuration = syn::parse_quote!(pipeline {
+        print = translate_pull;
+    });
+    assert_eq!(
+        pull.resolve(sequence_defaults)
+            .unwrap()
+            .to_token_stream()
+            .to_string(),
+        quote!(pipeline {
+            p,
+            i,
+            l,
+            s,
+            r,
+            b,
+            sequence,
+            sequential,
+            translate_pull
+        })
+        .to_string()
     );
 }
 

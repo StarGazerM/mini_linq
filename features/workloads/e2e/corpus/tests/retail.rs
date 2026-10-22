@@ -7,6 +7,14 @@ mod support;
 mod configurations;
 #[path = "../matrix.rs"]
 mod matrix;
+#[path = "../../../src/queries/retail/retail_d19.rs"]
+mod retail_d19;
+#[path = "../../../src/queries/retail/retail_d27.rs"]
+mod retail_d27;
+#[path = "../../../src/queries/retail/retail_d72_inner.rs"]
+mod retail_d72_inner;
+#[path = "../../../src/queries/retail/retail_d85.rs"]
+mod retail_d85;
 #[path = "../../../src/queries/retail/retail_h03.rs"]
 mod retail_h03;
 #[path = "../../../src/queries/retail/retail_h05.rs"]
@@ -19,14 +27,6 @@ mod retail_h08;
 mod retail_h09;
 #[path = "../../../src/queries/retail/retail_h21_positive.rs"]
 mod retail_h21_positive;
-#[path = "../../../src/queries/retail/retail_d19.rs"]
-mod retail_d19;
-#[path = "../../../src/queries/retail/retail_d27.rs"]
-mod retail_d27;
-#[path = "../../../src/queries/retail/retail_d72_inner.rs"]
-mod retail_d72_inner;
-#[path = "../../../src/queries/retail/retail_d85.rs"]
-mod retail_d85;
 
 #[test]
 fn every_catalog_case_axis_value_and_pair_is_exercised() {
@@ -43,6 +43,9 @@ fn every_catalog_case_axis_value_and_pair_is_exercised() {
         ("retail_d85", retail_d85::CONFIGURATIONS),
     ];
     matrix::verify_catalog("retail", &cases.map(|(name, _)| name));
-    let rows: Vec<_> = cases.into_iter().flat_map(|(_, rows)| rows.iter().copied()).collect();
+    let rows: Vec<_> = cases
+        .into_iter()
+        .flat_map(|(_, rows)| rows.iter().copied())
+        .collect();
     matrix::verify_cover(&rows);
 }

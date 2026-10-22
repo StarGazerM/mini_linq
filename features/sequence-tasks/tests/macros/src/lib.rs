@@ -23,7 +23,7 @@ pub fn both(input: TokenStream) -> TokenStream {
         let pull = cq_sequence_pull::translate(&sequential, &sequential_analysis)?;
         let tasks = cq_sequence_tasks::translate(&program, &analysis)?;
         Ok::<_, syn::Error>(quote! {
-            (#pull, #tasks)
+            (::core::iter::Iterator::collect::<::std::vec::Vec<_>>(#pull), #tasks)
         })
     })();
     result.unwrap_or_else(syn::Error::into_compile_error).into()

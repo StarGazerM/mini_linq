@@ -16,7 +16,9 @@ pub fn cq_defaults() -> cq_stage::Configuration {
         select = ::mini_linq::passes::select;
         represent = ::mini_linq::passes::represent;
         stage = ::mini_linq::passes::stage;
-        print = ::mini_linq::passes::print_pull;
+        sequence = ::mini_linq::passes::sequence;
+        grade = ::mini_linq::passes::sequential;
+        print = ::mini_linq::passes::translate_pull;
     })
 }
 /// Resolve authored CQ phases over the fact-aware Datalog defaults.

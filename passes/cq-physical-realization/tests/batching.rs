@@ -1,6 +1,15 @@
 //! Bounded probe lookahead must never force an unvisited opaque guard.
 use quote::ToTokens;
 
+fn source_tokens(module: &cq_lang_structures::Program) -> syn::Result<proc_macro2::TokenStream> {
+    let analysis = cq_lang_structures::contract::check(module)?;
+    let context = cq_physical_realization::sources(module, &analysis)?;
+    let mut emitter = cq_physical_realization::RowEmitter::new(context);
+    let rows = emitter.scan(&module.physical.program.returned)?;
+    let statements = &emitter.context().statements;
+    Ok(quote::quote!(#(#statements)* #rows))
+}
+
 #[test]
 fn only_coarse_total_scans_use_lookahead() {
     for (outer, guard, expected) in [
@@ -25,7 +34,7 @@ fn only_coarse_total_scans_use_lookahead() {
         .unwrap();
         let structures = cq_structure_selection::compile(&physical).unwrap();
         let structures = cq_staging::compile(&structures).unwrap();
-        let expression = cq_physical_realization::compile(&structures).unwrap();
+        let expression = source_tokens(&structures).unwrap();
         let printed = expression.to_token_stream().to_string();
         assert!(printed.contains("IndexRead :: probe"));
         assert_eq!(printed.contains("probe :: < 128usize"), expected);
@@ -46,13 +55,13 @@ fn recorded_scan_selections_use_chunk_masks_before_partial_rust() {
         }
     };
     let selected = cq_structure_selection::compile(&physical).unwrap();
-    let scalar = cq_physical_realization::compile(&selected)
+    let scalar = source_tokens(&selected)
         .unwrap()
         .to_token_stream()
         .to_string();
     assert!(!scalar.contains("for_chunks"));
     let staged = cq_staging::compile_with(&selected, quote::quote!(batch(64))).unwrap();
-    let printed = cq_physical_realization::compile(&staged)
+    let printed = source_tokens(&staged)
         .unwrap()
         .to_token_stream()
         .to_string();

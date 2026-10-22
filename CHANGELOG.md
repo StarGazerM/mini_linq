@@ -7,6 +7,17 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Make Sequence the shipped CPU target (`sequence` → `sequential` →
+  `translate_pull`), including profile counters. Remove the direct Structures
+  pull macro and `cq_physical_realization::{compile, compile_profile}`.
+  Explicit Structures push terminals remain selectable; shared realization
+  and source helpers remain available to `own_push`.
+- Add checked GPU Sequence pipeline adapters (`machine_grade` → `translate`)
+  and migrate supported resident callers. Isolate the maintained-index GPU
+  Datalog bridge, its Structures printer, and blocked-run handwritten baselines
+  in `experiments/gpu/legacy-datalog`; unsupported Sequence plans remain
+  explicitly rejected rather than substituted.
+
 - Datalog discharges context facts: Storage records canonicality
   certificates per host, Round records `admit R from [holes]` owners and
   per-hole facts (checked independently), fork emits `lower(consumer =

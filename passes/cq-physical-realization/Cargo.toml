@@ -14,11 +14,9 @@ quote.workspace = true
 syn.workspace = true
 
 [dev-dependencies]
-cq-testkit.workspace = true
 cq-structure-selection.workspace = true
 cq-staging.workspace = true
 cq-represent.workspace = true
-cq-syntax.workspace = true
 
 
 [package.metadata.cq]
@@ -26,5 +24,3 @@ source = "cq-lang-structures"
 target = "rust"
 printer = true
 
-[[test]]
-name = "realization"

@@ -25,7 +25,7 @@ fn exists_retains_nonemptiness_and_consumes_its_entire_source() {
     assert_eq!(empty.iter().count(), 0);
     let rows = [(1,), (2,), (2,)];
     let answer: Vec<_> = mini_linq::passes::select! {
-        pipeline { mini_linq::passes::print_pull };
+        pipeline { mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
         physical { relation rows(x:i32);
             r = pipe rename rows@0 {x -> x}; p = exists project r keep {};
             out = pipe canon semi eager [] p,p; return out as answer();
@@ -88,7 +88,7 @@ fn lazy_semijoin_state_stops_at_a_match_and_keeps_prior_keys() {
     let left = [(1,), (2,)];
     let right = [(2,), (3,)];
     let answer: Vec<_> = mini_linq::passes::select! {
-        pipeline { mini_linq::passes::print_pull };
+        pipeline { mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
         physical { relation left(x:i32); relation right(x:i32);
             l = pipe rename left@0 {x -> x}; r = pipe rename right@1 {x -> x};
             out = pipe canon semi lazy [x] l,r; return out as answer(x);
@@ -120,7 +120,7 @@ fn point_fallback_types_use_logical_keys_while_native_reads_keep_declaration_ord
 fn a_shared_host_point_read_cannot_supply_the_stream_fallback_type() {
     let rows = [(1,), (1,), (2,)];
     let answer: Vec<_> = mini_linq::passes::select! {
-        pipeline { mini_linq::passes::print_pull };
+        pipeline { mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
         physical { relation rows(x:i32);
             r = pipe rename rows@0 {x -> x};
             a_point = pipe point select r if (x = 1);

@@ -1,5 +1,14 @@
 use quote::{ToTokens, quote};
 
+fn source_tokens(module: &cq_lang_structures::Program) -> syn::Result<proc_macro2::TokenStream> {
+    let analysis = cq_lang_structures::contract::check(module)?;
+    let context = cq_physical_realization::sources(module, &analysis)?;
+    let mut emitter = cq_physical_realization::RowEmitter::new(context);
+    let rows = emitter.scan(&module.physical.program.returned)?;
+    let statements = &emitter.context().statements;
+    Ok(quote!(#(#statements)* #rows))
+}
+
 #[test]
 fn positions_print_fetches_and_tuple_boundaries_after_probes() {
     let physical = syn::parse_quote! {
@@ -14,7 +23,7 @@ fn positions_print_fetches_and_tuple_boundaries_after_probes() {
     };
     let selected = cq_structure_selection::compile(&physical).unwrap();
     let represented = cq_represent::compile_with(&selected, quote!(positions)).unwrap();
-    let printed = cq_physical_realization::compile(&represented)
+    let printed = source_tokens(&represented)
         .unwrap()
         .to_token_stream()
         .to_string();
@@ -26,9 +35,7 @@ fn positions_print_fetches_and_tuple_boundaries_after_probes() {
     unsupported.structures.entries.push(syn::parse_quote! {
         j repr = positions { L lineage { k -> k }, R lineage { k -> k, v -> v } } owned [];
     });
-    let error = cq_physical_realization::compile(&unsupported)
-        .unwrap_err()
-        .to_string();
+    let error = source_tokens(&unsupported).unwrap_err().to_string();
     assert!(error.contains("j repr positions with 2 bases"), "{error}");
 }
 
@@ -63,7 +70,7 @@ fn retained_lookup_is_a_pruned_non_column_cursor() {
         assert_eq!(context.carried(result), ["k"]);
     }
     assert!(context.carried_witnesses["p"].is_empty());
-    let printed = cq_physical_realization::compile(&program)
+    let printed = source_tokens(&program)
         .unwrap()
         .to_token_stream()
         .to_string();
@@ -80,7 +87,7 @@ fn retained_lookup_is_a_pruned_non_column_cursor() {
         .structures
         .entries
         .retain(|entry| !matches!(entry.structure, cq_lang_structures::Structure::Stage { .. }));
-    let printed = cq_physical_realization::compile(&scalar)
+    let printed = source_tokens(&scalar)
         .unwrap()
         .to_token_stream()
         .to_string();
@@ -144,9 +151,7 @@ fn smallest_witness_selection_is_exact_and_host_prefix_retention_is_rejected() {
             .forcing_witness("candidate", "l", &["b".into()])
             .is_none()
     );
-    let error = cq_physical_realization::compile(&program)
-        .unwrap_err()
-        .to_string();
+    let error = source_tokens(&program).unwrap_err().to_string();
     assert!(
         error.contains("PrefixRun directory witnesses require the GPU printer"),
         "{error}"

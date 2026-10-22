@@ -11,5 +11,4 @@ proc-macro = true
 [dependencies]
 cq-stage.workspace = true
 cq-lang-structures.workspace = true
-proc-macro2.workspace = true
 syn.workspace = true

@@ -3,7 +3,6 @@ mini_linq::mini_linq	{"use":{"id":"mini_linq_macros::mini_linq","is_glob":false,
 mini_linq::passes::index_demands	{"use":{"id":"mini_linq_macros::index_demands","is_glob":false,"name":"index_demands","source":"mini_linq_macros::index_demands"}}
 mini_linq::passes::lower	{"use":{"id":"mini_linq_macros::lower","is_glob":false,"name":"lower","source":"mini_linq_macros::lower"}}
 mini_linq::passes::plan	{"use":{"id":"mini_linq_macros::plan","is_glob":false,"name":"plan","source":"mini_linq_macros::plan"}}
-mini_linq::passes::print_pull	{"use":{"id":"mini_linq_macros::print_pull","is_glob":false,"name":"print_pull","source":"mini_linq_macros::print_pull"}}
 mini_linq::passes::represent	{"use":{"id":"mini_linq_macros::represent","is_glob":false,"name":"represent","source":"mini_linq_macros::represent"}}
 mini_linq::passes::select	{"use":{"id":"mini_linq_macros::select","is_glob":false,"name":"select","source":"mini_linq_macros::select"}}
 mini_linq::passes::sequence	{"use":{"id":"mini_linq_macros::sequence","is_glob":false,"name":"sequence","source":"mini_linq_macros::sequence"}}

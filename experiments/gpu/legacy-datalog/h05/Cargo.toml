@@ -10,7 +10,7 @@ rccl-probe = ["dep:rccl-cub"]
 cuda-core.workspace = true
 cuda-device.workspace = true
 cuda-host.workspace = true
-gpu-tiles = { path = "../tiles" }
+gpu-tiles = { path = "../../tiles" }
 gpu-blocked-run = { path = "../blocked-run" }
 serde.workspace = true
 serde_json.workspace = true

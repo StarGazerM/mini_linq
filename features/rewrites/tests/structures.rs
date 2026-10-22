@@ -148,12 +148,22 @@ fn expand_lookups_limits_nested_frames_without_retyping_deeper_probes() {
     ] {
         let target = cq_rewrite_passes::expand_lookups(&source, arguments.clone()).unwrap();
         let facts = ir::contract::check(&target).unwrap();
-        assert_eq!(facts.expands.iter().map(String::as_str).collect::<Vec<_>>(), expected);
+        assert_eq!(
+            facts.expands.iter().map(String::as_str).collect::<Vec<_>>(),
+            expected
+        );
         assert_eq!(target.physical, source.physical);
         assert_eq!(facts.built, ir::contract::check(&source).unwrap().built);
-        assert_eq!(cq_rewrite_passes::expand_lookups(&target, arguments).unwrap(), target);
+        assert_eq!(
+            cq_rewrite_passes::expand_lookups(&target, arguments).unwrap(),
+            target
+        );
     }
-    for arguments in [quote!(256, depth 0), quote!(256, frames 2), quote!(256, depth 2,)] {
+    for arguments in [
+        quote!(256, depth 0),
+        quote!(256, frames 2),
+        quote!(256, depth 2,),
+    ] {
         assert!(cq_rewrite_passes::expand_lookups(&source, arguments).is_err());
     }
 }

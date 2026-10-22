@@ -32,6 +32,7 @@ impl Drop for Range {
     }
 }
 
+#[cfg(feature = "legacy-datalog")]
 #[inline(always)]
 pub(crate) fn name_stream(stream: *mut std::ffi::c_void) {
     #[cfg(feature = "nvtx")]

@@ -1,4 +1,4 @@
-//! Structures → Rust: print one pull program.
+//! Physical row and storage adapters for checked Sequence and explicit push emitters.
 //!
 //! Queries denote `bottom + Set`: one panic aborts evaluation. Opaque Rust
 //! binds and guards keep their written chain; relational steps may move only
@@ -51,7 +51,7 @@ use cq_lang_structures::syntax::symbol_name;
 use proc_macro2::TokenStream;
 use quote::{ToTokens, format_ident, quote};
 use std::collections::BTreeMap;
-use syn::{Expr, Ident};
+use syn::Ident;
 
 mod intersection;
 mod operators;
@@ -59,50 +59,6 @@ mod stage;
 
 use cq_print::access::{Access, Side};
 use cq_print::{Context, Repr, error, index, sorted};
-
-/// Print a complete Structures program as a Rust pull expression.
-pub fn compile(module: &structures::Program) -> syn::Result<Expr> {
-    compile_with_profile(module, false)
-}
-
-/// Emit a measured pull expression. Runtime counters must be enabled.
-pub fn compile_profile(module: &structures::Program) -> syn::Result<Expr> {
-    compile_with_profile(module, true)
-}
-
-fn compile_with_profile(module: &structures::Program, profile: bool) -> syn::Result<Expr> {
-    let analysis = structures::contract::check(module)?;
-    let mut printer = Printer {
-        context: sources_profile(module, &analysis, |_, _| {}, profile)?,
-        active_prefixes: BTreeMap::new(),
-        consumer: None,
-    };
-    let returned = &module.physical.program.returned;
-    let rows = printer.scan(returned)?;
-    let answer = format!("{}.answer", module.physical.program.returned);
-    if profile {
-        printer.profile_label(&answer, "ANSWER", "", vec![symbol_name(returned)]);
-    }
-    let rows = printer.profile_input(&answer, rows);
-    let output = printer.head(&symbol_name(returned), &module.physical.program.head, rows);
-    let output = printer.profile_stream(&answer, output);
-    if let Some(registration) = printer.profile_registration() {
-        printer.statements.insert(0, registration);
-    }
-    let statements = &printer.statements;
-    let value = if !printer.bound {
-        output
-    } else {
-        quote! {
-            ::core::iter::IntoIterator::into_iter(
-                ::core::iter::Iterator::collect::<::std::vec::Vec<_>>(#output)
-            )
-        }
-    };
-    let mut expression = syn::parse2(quote! { { #(#statements)* #value } })?;
-    cq_print::own_captures(&mut expression, &printer.owned);
-    Ok(expression)
-}
 
 /// Prepare row sources and recorded storage for a checked Structures program.
 /// Alternative emitters can share index construction without staging rows in
@@ -123,15 +79,7 @@ pub fn sources<'a>(
 pub fn sources_with<'a>(
     module: &'a structures::Program,
     analysis: &'a structures::Analysis,
-    prepared: impl FnMut(&str, &Repr),
-) -> syn::Result<Context<'a>> {
-    sources_profile(module, analysis, prepared, false)
-}
-fn sources_profile<'a>(
-    module: &'a structures::Program,
-    analysis: &'a structures::Analysis,
     mut prepared: impl FnMut(&str, &Repr),
-    profile: bool,
 ) -> syn::Result<Context<'a>> {
     for definition in &module.physical.program.definitions {
         let name = symbol_name(&definition.name);
@@ -143,7 +91,7 @@ fn sources_profile<'a>(
             return error(
                 &definition.name,
                 format!(
-                    "{name} repr positions with {} bases / {} owned columns is not realized by print_pull yet",
+                    "{name} repr positions with {} bases / {} owned columns is not realized by row adapters yet",
                     bases.len(),
                     owned.columns.len()
                 ),
@@ -172,7 +120,7 @@ fn sources_profile<'a>(
             return error(
                 &definition.name,
                 format!(
-                    "{name} repr positions outside a dependency-closed direct pipe scan chain is not realized by print_pull yet"
+                    "{name} repr positions outside a dependency-closed direct pipe scan chain is not realized by row adapters yet"
                 ),
             );
         }
@@ -181,11 +129,9 @@ fn sources_profile<'a>(
         context: Context::new(module, analysis),
         active_prefixes: BTreeMap::new(),
         consumer: None,
+        input: None,
     };
     printer.certify_host_sets(module);
-    if profile {
-        printer.enable_profile(module);
-    }
     let definitions = &module.physical.program.definitions;
     let mut position = 0;
     let deferred: std::collections::BTreeSet<_> = analysis
@@ -207,7 +153,7 @@ fn sources_profile<'a>(
                     "smallest requires its adjacent check",
                 );
             };
-            if !printer.intersection(&definitions[position], second)? {
+            if !printer.intersection(&definitions[position], second, true)? {
                 return error(
                     &definitions[position].name,
                     "Structures does not discharge smallest candidate reads",
@@ -243,6 +189,7 @@ impl<'a> RowEmitter<'a> {
                 context,
                 consumer: None,
                 active_prefixes: BTreeMap::new(),
+                input: None,
             },
         }
     }
@@ -256,12 +203,40 @@ impl<'a> RowEmitter<'a> {
     }
 
     /// Emit exactly one operator, reading caller-supplied operand streams.
-    pub fn operator(&mut self, name: &str) -> syn::Result<TokenStream> {
+    pub fn operator(
+        &mut self,
+        name: &str,
+        input: Option<(String, TokenStream)>,
+    ) -> syn::Result<TokenStream> {
         let definition = self.printer.physical[name];
         let previous = self.printer.consumer.replace(name.to_owned());
+        let previous_input = std::mem::replace(&mut self.printer.input, input);
         let result = self.printer.produce(name, definition);
         self.printer.consumer = previous;
+        self.printer.input = previous_input;
         result
+    }
+
+    /// Emit the recorded smallest candidate pair at its consuming boundary.
+    /// Canon and storage remain the surrounding Sequence constructors.
+    pub fn intersection(&mut self, name: &str) -> syn::Result<Option<TokenStream>> {
+        let second = self.printer.physical[name];
+        let Some(input) = second.operator.input() else {
+            return Ok(None);
+        };
+        let first = self.printer.physical[&symbol_name(input)];
+        if !matches!(&first.operator, Operator::Probe(_, keyed)
+            if matches!(keyed.choice, Some(physical::Choice::Smallest(_))))
+        {
+            return Ok(None);
+        }
+        if !self.printer.intersection(first, second, false)? {
+            return error(
+                &first.name,
+                "Structures does not discharge smallest candidate reads",
+            );
+        }
+        self.printer.scan(&second.name).map(Some)
     }
 
     /// Read a representation already installed by the caller.
@@ -335,6 +310,7 @@ struct Printer<'a> {
     context: Context<'a>,
     consumer: Option<String>,
     active_prefixes: BTreeMap<String, TokenStream>,
+    input: Option<(String, TokenStream)>,
 }
 impl<'a> std::ops::Deref for Printer<'a> {
     type Target = Context<'a>;
@@ -436,6 +412,11 @@ impl Printer<'_> {
         let name = symbol_name(result);
         if let Some(row) = self.active_prefixes.get(&name) {
             return Ok(quote!(::core::iter::once(#row)));
+        }
+        if let Some((input, rows)) = &self.input
+            && *input == name
+        {
+            return Ok(rows.clone());
         }
         match self.reprs.get(&name) {
             Some(Repr::Host) => {

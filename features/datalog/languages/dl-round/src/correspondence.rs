@@ -180,7 +180,11 @@ pub(crate) fn check_storage_with_analysis(
         source,
         "fork changed the recorded representation policy",
     )?;
-    ensure(context.leveled_ratio >= 2, source, "invalid leveled device index ratio")?;
+    ensure(
+        context.leveled_ratio >= 2,
+        source,
+        "invalid leveled device index ratio",
+    )?;
     ensure(
         context.relations.len() == source.incremental.strata.source.declarations.len()
             && context.strata.len() == analysis.components.len(),
@@ -335,7 +339,9 @@ pub(crate) fn check_storage_with_analysis(
             )?;
             let hole = checked_hole(source, target, key.hole, &mut used_holes)?;
             add_name(&hole.name)?;
-            let literal_count = key.filters.iter()
+            let literal_count = key
+                .filters
+                .iter()
                 .filter(|(_, expression)| cq_syntax::equality::literal(rust::unparen(expression)))
                 .count();
             ensure(
@@ -402,13 +408,16 @@ pub(crate) fn check_storage_with_analysis(
                         column
                     })
                     .collect();
-                key.columns.iter().map(|&i| {
-                    let arg = &atom.args[i];
-                    match representation {
-                        KeyRepresentation::Borrowed => arg.clone(),
-                        KeyRepresentation::DeviceSetOwned => syn::parse_quote!(*#arg),
-                    }
-                }).collect()
+                key.columns
+                    .iter()
+                    .map(|&i| {
+                        let arg = &atom.args[i];
+                        match representation {
+                            KeyRepresentation::Borrowed => arg.clone(),
+                            KeyRepresentation::DeviceSetOwned => syn::parse_quote!(*#arg),
+                        }
+                    })
+                    .collect()
             };
             let mut expected_declarations = required_inputs(context, &hole.query);
             expected_declarations.push(output);
@@ -458,8 +467,10 @@ pub(crate) fn check_storage_with_analysis(
                 if representation == KeyRepresentation::DeviceSetOwned {
                     for item in &query.body {
                         if let BodyItem::Positive { atom } = item {
-                            if let Some((index, layout)) = context.layouts.iter().enumerate()
-                                .find(|(_, layout)| layout.name == atom.relation && layout.key != 0)
+                            if let Some((index, layout)) =
+                                context.layouts.iter().enumerate().find(|(_, layout)| {
+                                    layout.name == atom.relation && layout.key != 0
+                                })
                             {
                                 if members.contains(&layout.relation) {
                                     leveled_layouts.insert(index);

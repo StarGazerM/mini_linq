@@ -7,7 +7,7 @@ use std::num::NonZeroUsize;
 macro_rules! compare_reduced {
     ($left:expr, $right:expr) => {{
         cq_storage::counters::reset();
-        let pull = cq_testkit::positional_reduced!(mini_linq::passes::print_pull, $left, $right);
+        let pull = cq_testkit::positional_reduced!([mini_linq::passes::sequence, mini_linq::passes::sequential] mini_linq::passes::translate_pull, $left, $right);
         let pull_cost = cq_storage::counters::snapshot();
         cq_storage::counters::reset();
         let push = cq_testkit::positional_reduced!(own_push::push, $left, $right);
@@ -91,7 +91,7 @@ fn positional_predicate_does_not_shadow_an_opaque_guard_capture() {
             .collect()
         };
     }
-    let values: Vec<_> = run!(mini_linq::passes::print_pull);
+    let values: Vec<_> = run!(mini_linq::passes::translate_pull);
     let pushed: Vec<_> = run!(own_push::push);
     assert_eq!(values, pushed);
     assert_eq!(values, vec![1]);
@@ -100,9 +100,9 @@ fn positional_predicate_does_not_shadow_an_opaque_guard_capture() {
 #[test]
 fn borrowed_keysets_preserve_positive_and_negative_membership() {
     macro_rules! run {
-        ($($printer:ident)::+, $operator:ident, $budget:literal, $left:expr, $right:expr) => {
+        ($([$($passes:path),*])? $($printer:ident)::+, $operator:ident, $budget:literal, $left:expr, $right:expr) => {
             $($printer)::+! {
-                pipeline {};
+                pipeline { $($($passes),*)? };
                 physical {
                     relation L(a:i64) = ($left); relation R(b:i64) = ($right);
                     l = pipe rename L@0 {a -> x}; r = pipe rename R@1 {b -> x};
@@ -123,7 +123,7 @@ fn borrowed_keysets_preserve_positive_and_negative_membership() {
     macro_rules! compare {
         ($operator:ident, $budget:literal, $left:expr, $right:expr, $expected:expr) => {{
             let pull = run!(
-                mini_linq::passes::print_pull,
+                [mini_linq::passes::sequential, mini_linq::passes::translate_pull] mini_linq::passes::sequence,
                 $operator,
                 $budget,
                 $left,
@@ -163,9 +163,9 @@ fn borrowed_scalar_point_and_range_parameters_agree() {
             .collect::<Vec<_>>()
         };
     }
-    assert_eq!(run!(mini_linq::passes::print_pull, ==), [2]);
+    assert_eq!(run!(mini_linq::passes::translate_pull, ==), [2]);
     assert_eq!(run!(own_push::push, ==), [2]);
-    assert_eq!(run!(mini_linq::passes::print_pull, >=), [2, 3]);
+    assert_eq!(run!(mini_linq::passes::translate_pull, >=), [2, 3]);
     assert_eq!(run!(own_push::push, >=), [2, 3]);
 }
 

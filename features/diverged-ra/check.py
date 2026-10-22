@@ -14,9 +14,11 @@ ROOT = HERE.parents[1]
 EXPECTED = {
     "cq-lang-ra": "languages", "cq-lang-ix": "languages",
     "cq-lang-physical": "languages", "cq-lang-structures": "languages",
+    "cq-lang-sequence": "languages",
     "cq-syntax": "languages", "cq-stage": "facade",
     "cq-physical-lowering": "passes", "cq-structure-selection": "passes",
     "cq-physical-realization": "passes", "cq-print": "passes",
+    "cq-sequence-lowering": "passes", "cq-sequence-pull": "passes",
     "cq-storage": "runtime",
 }
 TEST_ONLY = {"cq-testkit": "testkit", "cq-lang-cq": "languages", "cq-lang-vo": "languages"}

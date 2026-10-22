@@ -1,13 +1,22 @@
-//! Directed triangles through the compiler: `order(le)` + Smallest + sorted
-//! tries + recorded expansion. Input is canonicalized (sorted, distinct) on
-//! the host like `gpu-triangles` and uploaded once; timing covers the compiled
-//! query only (input set certificate, index builds, kernel), not upload.
-use cq_gpu_runtime::{Codec, DeviceColumns, Dictionary, Runtime};
+//! Directed i64 triangles: an explicit unsupported Sequence translation fixture.
+//!
+//! The resident range provider requires u32/i32 payload codes. Do not silently
+//! narrow arbitrary signed vertex IDs or substitute the handwritten GPU oracle.
+//! `--check` runs the independent CPU reference, not a compiled GPU query.
+//! Enable `triangle-sequence-rejection` to exercise the authored translation.
+//!
+//! Supported scheduling advice is recorded below: 256 lanes × 4 items becomes
+//! `tile 1024 items 4`, and range enumeration is `flatten lookup`. The old
+//! frontier(8), directory(rank), and output(retry) choices have no corresponding
+//! Sequence advice; they are not silently reinterpreted as another policy.
+#[cfg(feature = "triangle-sequence-rejection")]
+use cq_gpu_runtime::DeviceColumns;
 use std::{
     error::Error,
     io::{BufRead, BufReader},
-    time::Instant,
 };
+
+const REJECTION: &str = "T-Gpu: range payload needs a recorded u32/i32 dense code";
 
 fn load(path: &str) -> Result<Vec<(i64, i64)>, Box<dyn Error>> {
     let mut rows = Vec::new();
@@ -27,19 +36,42 @@ fn load(path: &str) -> Result<Vec<(i64, i64)>, Box<dyn Error>> {
     Ok(rows)
 }
 
+// TODO: the existing Sequence range provider cannot retain i64 adjacency payloads.
+// This fixture preserves the Smallest triangle and its signed vertex types.
+// The runtime rejection below is sourced from sequence/core/src/rows.rs, not
+// from adapter argument validation. The feature intentionally fails translation.
+#[cfg(feature = "triangle-sequence-rejection")]
 fn triangles<'a>(edges: &'a DeviceColumns<'_, (i64, i64)>) -> DeviceColumns<'a, (i64, i64, i64)> {
-    mini_linq::compile! {
-        pipeline {
-            plan = ::cq_planners::order(le);
-            physical = [::cq_rewrites::host_sets(E), ::cq_rewrites::build_host_reads,
-                ::cq_rewrites::smallest_intersections];
-            structures = [::cq_rewrites::sorted_runs, ::cq_rewrites::hashed_runs, ::cq_gpu::prefix_runs,
-                ::cq_rewrites::retain_lookups, ::cq_rewrites::expand_lookups(256)];
-            print = ::cq_gpu::print(tile(256,4), frontier(8), directory(rank), output(retry));
+    cq_sequence_rewrites::grade! {
+        arguments { gpu, Edges at host, ByB at host, ByA at host, result at device };
+        pipeline { ::cq_gpu_sequence::machine_grade, ::cq_gpu_sequence::translate };
+        physical {
+            relation E(src:i64,dst:i64) = (edges);
+            l = pipe rename E@0 {src -> a,dst -> b};
+            r = let rename E@1 {src -> b,dst -> c};
+            s = let rename E@2 {src -> a,dst -> c};
+            candidate = pipe probe smallest [b] l,r;
+            checked = pipe canon probe first [a,c] candidate,s;
+            return checked as answer(a,b,c);
         }
-        struct Triangle;
-        relation E(src:i64,dst:i64) = (edges);
-        answer(a,b,c) :- E(a,b), E(b,c), E(a,c);
+        structures {
+            l host scan = ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
+            r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
+            s host scan = ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
+            r = ::cq_gpu_sequence_runtime::RangeProvider [b][c];
+            s = ::cq_gpu_sequence_runtime::RangeProvider [a][c];
+            r rows = ::cq_gpu_sequence_runtime::RangeProvider;
+            s rows = ::cq_gpu_sequence_runtime::RangeProvider;
+            checked canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+        }
+        sequence {
+            Edges = store rows l;
+            ByB = store rows r;
+            ByA = store rows s;
+            result = store canon map checked flatten lookup s [a,c]
+                flatten lookup r [b] tile 1024 items 4 Edges;
+            output count;
+        }
     }
 }
 
@@ -67,63 +99,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let check = args.iter().any(|a| a == "--check");
     let rows = load(path)?;
     println!("distinct_edges={}", rows.len());
-    let runtime = Runtime::new()?;
-    let mut dictionary = Dictionary::default();
-    let edges = runtime.upload_rows(&rows, &mut dictionary, &[Codec::Plain; 2])?;
-    runtime.pool().stream().synchronize()?;
-    let mut times = Vec::new();
-    let mut count = 0;
-    for iteration in 0..6 {
-        let attempts_before = cq_gpu_runtime::retry_readback_count();
-        let started = Instant::now();
-        let answer = triangles(&edges);
-        runtime.pool().stream().synchronize()?;
-        let ms = started.elapsed().as_secs_f64() * 1000.0;
-        let attempts = cq_gpu_runtime::retry_readback_count() - attempts_before;
-        count = answer.checked_len()?;
-        if check && iteration == 0 {
-            let mut actual = answer.to_host()?;
-            actual.sort_unstable();
-            let expected = reference(&rows);
-            if actual != expected {
-                return Err(
-                    format!("mismatch: {} vs {} expected", actual.len(), expected.len()).into(),
-                );
-            }
-            println!("exact=true");
-        }
-        println!(
-            "iteration={iteration} rows={count} query_ms={ms:.3} retry_attempts={attempts} output_capacity={} output_bytes={}",
-            answer.capacity(),
-            answer.encoded_bytes()
-        );
-        drop(answer);
-        if iteration > 0 {
-            times.push(ms);
-        }
+    if check {
+        let expected = reference(&rows);
+        println!("cpu_reference_rows={}", expected.len());
     }
-    times.sort_by(f64::total_cmp);
-    println!(
-        "answer_rows={count} median_query_ms={:.3}",
-        times[times.len() / 2]
-    );
-    let mut certificate_times = Vec::new();
-    for sample in 0..6 {
-        let mut execution = runtime.execution();
-        let input = execution.bind_host(&edges, "E(src:i64,dst:i64)", 2)?;
-        let started = Instant::now();
-        execution.certify_host_set(input, "E")?;
-        runtime.pool().stream().synchronize()?;
-        let ms = started.elapsed().as_secs_f64() * 1000.0;
-        println!("certificate_sample={sample} certificate_ms={ms:.3}");
-        if sample > 0 {
-            certificate_times.push(ms);
-        }
-    }
-    certificate_times.sort_by(f64::total_cmp);
-    println!(
-        "median_certificate_ms={:.3}",
-        certificate_times[certificate_times.len() / 2]
-    );
-    Ok(())
+    Err(REJECTION.into())
 }

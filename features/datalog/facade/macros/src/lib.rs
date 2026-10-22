@@ -45,10 +45,13 @@ impl Parse for Entry {
 fn expand(input: proc_macro2::TokenStream) -> syn::Result<proc_macro2::TokenStream> {
     let mut entry: Entry = syn::parse2(input)?;
     if entry.hoist_invariants {
-        let incremental = entry.configuration.incremental.get_or_insert_with(|| {
-            syn::parse_quote!(::cq_datalog::passes::incremental)
-        });
-        incremental.arguments.extend(quote::quote!(hoist_invariants;));
+        let incremental = entry
+            .configuration
+            .incremental
+            .get_or_insert_with(|| syn::parse_quote!(::cq_datalog::passes::incremental));
+        incremental
+            .arguments
+            .extend(quote::quote!(hoist_invariants;));
     }
     entry
         .configuration
@@ -168,7 +171,7 @@ pub fn print_rounds(input: TokenStream) -> TokenStream {
 /// Structures → pull expression with an independently selected hole partition.
 #[proc_macro]
 pub fn print_hole(input: TokenStream) -> TokenStream {
-    cq_stage::pass::<cq_lang_structures::Program, syn::Expr>(
+    cq_stage::pass::<cq_lang_sequence::Program, syn::Expr>(
         input.into(),
         cq_datalog_print_hole::compile_with,
     )

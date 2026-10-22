@@ -18,7 +18,7 @@
 //! let right = [(1_i64, 3_i64)];
 //! let _ = mini_linq::passes::select! {
 //!     pipeline { cq_rewrites::join_filter(l),
-//!         cq_rewrites::retype(l join_filter => PredicateOnly), mini_linq::passes::print_pull };
+//!         cq_rewrites::retype(l join_filter => PredicateOnly), mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
 //!     physical {
 //!         relation L(a:i64,b:i64) = (left); relation R(c:i64,d:i64) = (right);
 //!         l = pipe rename L@0 {a -> x,b -> y};

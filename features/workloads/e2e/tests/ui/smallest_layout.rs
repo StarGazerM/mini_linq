@@ -1,13 +1,13 @@
 // Selection normally supplies r = Trie [b][c]. This hand-authored Structures
 // program omits that retained candidate index, while keeping the host-side
-// candidate/membership decisions. The public printer must reject the missing
+// candidate/membership decisions. Sequence lowering must reject the missing
 // two-level layout, not silently fall back to an ordinary full-key index.
 fn main() {
     let L = [(1_i32, 2_i32)];
     let R = [(2_i32, 3_i32)];
     let S = [(1_i32, 3_i32)];
-    let _ = mini_linq::passes::print_pull! {
-        pipeline {};
+    let _ = mini_linq::passes::sequence! {
+        pipeline { mini_linq::passes::sequential, mini_linq::passes::translate_pull };
         physical {
             relation L(a:i32,b:i32);
             relation R(b:i32,c:i32);

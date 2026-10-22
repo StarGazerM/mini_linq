@@ -34,6 +34,7 @@ pub struct Emitter<'a> {
     adapters: RowEmitter<'a>,
     values: BTreeMap<String, Value>,
     owner: String,
+    pull: bool,
 }
 
 impl<'a> Emitter<'a> {
@@ -46,6 +47,7 @@ impl<'a> Emitter<'a> {
             adapters: RowEmitter::new(context),
             values: BTreeMap::new(),
             owner: String::new(),
+            pull: false,
         }
     }
 
@@ -79,7 +81,8 @@ impl<'a> Emitter<'a> {
                 .contains_key(&result)
             {
                 self.context_mut().reprs.insert(result.clone(), Repr::Host);
-                self.context().host_scan(&result)
+                let rows = self.context().host_scan(&result);
+                self.context().profile_stream(&result, rows)
             } else {
                 self.adapters.scan(name)?
             }
@@ -138,6 +141,33 @@ impl<'a> Emitter<'a> {
             return Ok(input);
         }
         self.register(&result);
+        if let Some(rows) = self.adapters.intersection(&result)? {
+            let nested = matches!(
+                self.context().physical[&result].operator,
+                Operator::Probe(..)
+            );
+            return Ok(Value {
+                rows: if nested {
+                    quote!(::core::iter::once(#rows))
+                } else {
+                    rows
+                },
+                result: Some(result),
+                depth: usize::from(nested),
+                stored: false,
+            });
+        }
+        if self.analysis.structures.selections.contains_key(&result) {
+            let selection = self.context_mut().selection_source(&result)?;
+            let repr = self.context_mut().materialize(&result, selection);
+            self.context_mut().reprs.insert(result.clone(), repr);
+            return Ok(Value {
+                rows: self.adapters.scan(name)?,
+                result: Some(result),
+                depth: 0,
+                stored: false,
+            });
+        }
         if let Some(ids) = self.adapters.positions(&result)? {
             return Ok(Value {
                 rows: self.context().positional_rows(&result, ids),
@@ -167,26 +197,15 @@ impl<'a> Emitter<'a> {
                 // representation rather than an unstructured row iterator.
                 None
             } else {
-                let previous = self
-                    .context_mut()
-                    .reprs
-                    .insert(parent_name.clone(), Repr::Pipe(Some(input.rows)));
-                Some((parent_name, previous))
+                Some((parent_name, input.rows))
             }
         } else {
             None
         };
-        let rows = self.adapters.operator(&result);
-        // A local row adapter must not destroy a retained operand's provider:
-        // later definitions may still probe its recorded indexes.
-        if let Some((parent, previous)) = operand {
-            if let Some(previous) = previous {
-                self.context_mut().reprs.insert(parent, previous);
-            } else {
-                self.context_mut().reprs.remove(&parent);
-            }
-        }
-        let rows = rows?;
+        // The input stream is separate from its retained keyed representation:
+        // an operator may scan and probe the same stored result.
+        let rows = self.adapters.operator(&result, operand)?;
+        let rows = self.context().profile_stream(&result, rows);
         // Physical fan-out adapters already flatten their row iterator. Rewrap
         // it as one part so the explicit Sequence flatten remains structural.
         let nested = matches!(
@@ -247,6 +266,21 @@ impl<'a> Emitter<'a> {
             })?
             .clone();
         self.register(&result);
+        if self
+            .analysis
+            .structures
+            .physical
+            .fused
+            .contains_key(&result)
+        {
+            let rows = self.adapters.operator(&result, None)?;
+            return Ok(Value {
+                rows: self.context().profile_stream(&result, rows),
+                result: Some(result),
+                depth: 0,
+                stored: false,
+            });
+        }
         let mut chain = None;
         for arm in arms {
             let input = arm.result.as_ref().ok_or_else(|| {
@@ -352,6 +386,22 @@ impl<'a> Emitter<'a> {
             .ok_or_else(|| {
                 syn::Error::new_spanned(provider, "lookup has no checked result layout")
             })?;
+        if let Some(rows) = self.adapters.intersection(&result)? {
+            return Ok(Value {
+                rows: quote!(::core::iter::once(#rows)),
+                result: Some(result),
+                depth: 1,
+                stored: false,
+            });
+        }
+        if self
+            .context()
+            .forcing_witness(&result, &right, &columns)
+            .is_some()
+            || self.analysis.structures.stages.contains_key(&result)
+        {
+            return self.map(&Ident::new(&result, provider.span()), input);
+        }
         self.register(&result);
         let context = self.context();
         let mut setup = TokenStream::new();
@@ -416,12 +466,14 @@ impl<'a> Emitter<'a> {
                     .unwrap_or_else(|| context.access(left, column))
             }
         });
-        let rows = input.rows;
+        let rows = context.profile_input(&result, input.rows);
+        let output = quote!(::core::iter::Iterator::map(#lookup, move |__cq_payload| #row));
+        let output = context.profile_stream(&result, output);
         Ok(Value {
             rows: quote!({
                 #setup
                 ::core::iter::Iterator::map(#rows, move |#pattern| {
-                    ::core::iter::Iterator::map(#lookup, move |__cq_payload| #row)
+                    #output
                 })
             }),
             result: Some(result),
@@ -482,75 +534,89 @@ impl<'a> Emitter<'a> {
             .result
             .as_ref()
             .map_or(1, |result| self.context().carried(result).len());
-        input.rows = RowEmitter::canon(ty, input.rows, width);
+        let label = format!("{}.dedup", self.owner);
+        let inputs = input.result.iter().cloned().collect();
+        self.context_mut()
+            .profile_label(&label, "DEDUP", "", inputs);
+        let rows = self.context().profile_inserting(&label, input.rows);
+        let rows = RowEmitter::canon(ty, rows, width);
+        input.rows = self.context().profile_stream(&label, rows);
         input.stored = false;
         Ok(input)
     }
 
     fn store(&self, mut input: Value) -> Value {
-        let rows = input.rows;
-        input.rows = quote!(::core::iter::IntoIterator::into_iter(::core::iter::Iterator::collect::<::std::vec::Vec<_>>(#rows)));
+        let physical_store = input.result.as_ref().is_some_and(|result| {
+            input.depth == 0
+                && self.analysis.structures.physical.modes[result]
+                    != cq_lang_structures::physical::ModeKind::Pipe
+        });
+        if !physical_store {
+            let rows = input.rows;
+            input.rows = quote!(::core::iter::IntoIterator::into_iter(::core::iter::Iterator::collect::<::std::vec::Vec<_>>(#rows)));
+        }
         input.stored = true;
         input
     }
 
     fn publish(&mut self, name: &Ident, mut value: Value) -> syn::Result<Value> {
         if value.stored {
-            let id = format_ident!("__cq_sequence_store_{}", name);
-            let rows = &value.rows;
-            self.context_mut().statements.push(syn::parse_quote!(let #id = ::core::iter::Iterator::collect::<::std::vec::Vec<_>>(#rows);));
-            value.rows = quote!(::core::iter::Iterator::cloned(#id.iter()));
-            if let Some(result) = &value.result
-                && value.depth == 0
-            {
-                let builds = self
-                    .analysis
-                    .structures
-                    .built
-                    .get(result)
-                    .cloned()
-                    .unwrap_or_default();
-                let mut structures = Vec::new();
-                for (levels, ty) in builds {
-                    let context = self.context();
-                    let payload = context.built_payload(result, &levels);
-                    let fields = payload.iter().map(|c| context.access(result, c));
-                    let mut pair = quote!((#(#fields,)*));
-                    for level in levels.iter().rev() {
-                        let key = context
-                            .stored_key(result, level)
-                            .iter()
-                            .map(|c| context.key_field(result, c, context.owned_key(result, level)))
-                            .collect::<Vec<_>>();
-                        pair = quote!(((#(#key,)*), #pair));
-                    }
-                    let pattern = context.pattern(result);
-                    let index = format_ident!("__cq_sequence_index_{}_{}", name, structures.len());
-                    let source = &value.rows;
-                    let pairs = quote!(::core::iter::Iterator::map(#source, |#pattern| #pair));
-                    let bare = matches!(&ty, syn::Type::Path(p) if p.qself.is_none() && p.path.segments.iter().all(|s| s.arguments.is_none()));
-                    let build = if bare {
-                        quote!({ use ::cq_storage::Build as _; #ty::build(#pairs) })
-                    } else {
-                        quote!(<#ty as ::cq_storage::Build<_>>::build(#pairs))
-                    };
-                    self.context_mut()
-                        .statements
-                        .push(syn::parse_quote!(let #index = &#build;));
-                    structures.push((levels, index));
+            let physical_store = value
+                .result
+                .as_ref()
+                .filter(|result| {
+                    value.depth == 0
+                        && self.analysis.structures.physical.modes[*result]
+                            != cq_lang_structures::physical::ModeKind::Pipe
+                })
+                .cloned();
+            if let Some(result) = physical_store {
+                if !matches!(
+                    self.context().reprs.get(&result),
+                    Some(Repr::Selection { .. })
+                ) {
+                    let repr = self.context_mut().materialize(&result, value.rows.clone());
+                    self.context_mut().reprs.insert(result.clone(), repr);
                 }
-                self.context_mut().reprs.insert(
-                    result.clone(),
-                    Repr::Let {
-                        rows: Some(id),
-                        structures,
-                    },
+                if matches!(
+                    self.context().reprs.get(&result),
+                    Some(Repr::Selection { .. } | Repr::Let { rows: Some(_), .. })
+                ) {
+                    value.rows = self.adapters.scan(&Ident::new(&result, name.span()))?;
+                }
+            } else {
+                self.context_mut().bound = true;
+                let id = format_ident!("__cq_sequence_store_{}", name);
+                let label = format!("{name}.rows");
+                self.context_mut().profile_label(
+                    &label,
+                    "ROWS_BUILD",
+                    "",
+                    value.result.iter().cloned().collect(),
                 );
+                let rows = self.context().profile_inserting(&label, value.rows);
+                let build = self.context().profile_build(
+                    &label,
+                    quote!(::core::iter::Iterator::collect::<::std::vec::Vec<_>>(#rows)),
+                );
+                self.context_mut()
+                    .statements
+                    .push(syn::parse_quote!(let #id = #build;));
+                value.rows = quote!(::core::iter::Iterator::cloned(#id.iter()));
+                if let Some(result) = &value.result
+                    && value.depth == 0
+                {
+                    let mut repr = self.context_mut().materialize(result, value.rows.clone());
+                    if let Repr::Let { rows, .. } = &mut repr {
+                        *rows = Some(id);
+                    }
+                    self.context_mut().reprs.insert(result.clone(), repr);
+                }
             }
         } else if let Some(result) = &value.result
             && !matches!(
                 self.context().reprs.get(result),
-                Some(Repr::Host | Repr::Positions(_))
+                Some(Repr::Host | Repr::Positions(_) | Repr::Selection { .. })
             )
         {
             self.context_mut()
@@ -566,22 +632,54 @@ impl<'a> Emitter<'a> {
         for _ in 0..value.depth {
             rows = quote!(::core::iter::Iterator::flat_map(#rows, ::core::iter::IntoIterator::into_iter));
         }
+        let answer = format!(
+            "{}.answer",
+            self.program.structures.physical.program.returned
+        );
+        self.context_mut().profile_label(
+            &answer,
+            "ANSWER",
+            "",
+            value.result.iter().cloned().collect(),
+        );
+        rows = self.context().profile_input(&answer, rows);
         if let Some(result) = value.result {
             let head = &self.program.structures.physical.program.head;
             rows = self.adapters.head(&result, head, rows);
         }
+        rows = self.context().profile_stream(&answer, rows);
+        if let Some(registration) = self.context().profile_registration() {
+            self.context_mut().statements.insert(0, registration);
+        }
         let context = self.context();
         let statements = &context.statements;
-        let mut output = syn::parse2(
-            quote!({ #(#statements)* ::core::iter::Iterator::collect::<::std::vec::Vec<_>>(#rows) }),
-        )?;
+        let rows = if self.pull {
+            if context.bound {
+                quote!(::core::iter::IntoIterator::into_iter(
+                    ::core::iter::Iterator::collect::<::std::vec::Vec<_>>(#rows)))
+            } else {
+                rows
+            }
+        } else {
+            quote!(::core::iter::Iterator::collect::<::std::vec::Vec<_>>(#rows))
+        };
+        let mut output = syn::parse2(quote!({ #(#statements)* #rows }))?;
         cq_print::own_captures(&mut output, &context.owned);
         Ok(output)
     }
 }
 
-/// Emit a host-only checked Sequence program. Analysis belongs to this program.
+/// Emit a host-only checked Sequence iterator. Analysis belongs to this program.
 pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Expr> {
+    translate_host(program, analysis, false)
+}
+
+/// Emit the host interpretation with operator, build, and answer counters.
+pub fn translate_profile(program: &Program, analysis: &Analysis) -> syn::Result<syn::Expr> {
+    translate_host(program, analysis, true)
+}
+
+fn translate_host(program: &Program, analysis: &Analysis, profile: bool) -> syn::Result<syn::Expr> {
     if analysis
         .levels
         .values()
@@ -592,7 +690,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
             "sequential translation requires host-only grading",
         ));
     }
-    translate_with(program, analysis, |_, _, _, _, _, _| Ok(()))
+    translate_with_profile(program, analysis, profile, true, |_, _, _, _, _, _| Ok(()))
 }
 
 /// Structural fold with a target hook after each constructor. `input` is its
@@ -601,6 +699,23 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
 pub fn translate_with(
     program: &Program,
     analysis: &Analysis,
+    hook: impl FnMut(
+        &Term,
+        &mut Emitter<'_>,
+        Option<&Value>,
+        &mut Value,
+        &str,
+        usize,
+    ) -> syn::Result<()>,
+) -> syn::Result<syn::Expr> {
+    translate_with_profile(program, analysis, false, false, hook)
+}
+
+fn translate_with_profile(
+    program: &Program,
+    analysis: &Analysis,
+    profile: bool,
+    pull: bool,
     mut hook: impl FnMut(
         &Term,
         &mut Emitter<'_>,
@@ -682,10 +797,21 @@ pub fn translate_with(
                 Ok(emitter.store(rows))
             })?,
             Term::Union(arms) => {
-                let values = arms
-                    .iter()
-                    .map(|arm| term(emitter, arm, owner, tiles, false, hook))
-                    .collect::<syn::Result<Vec<_>>>()?;
+                let fused = emitter.analysis.results.get(owner).is_some_and(|result| {
+                    emitter
+                        .analysis
+                        .structures
+                        .physical
+                        .fused
+                        .contains_key(result)
+                });
+                let values = if fused {
+                    Vec::new()
+                } else {
+                    arms.iter()
+                        .map(|arm| term(emitter, arm, owner, tiles, false, hook))
+                        .collect::<syn::Result<Vec<_>>>()?
+                };
                 emitter.union(values)?
             }
             Term::Choose(arms) => {
@@ -698,12 +824,46 @@ pub fn translate_with(
     }
     // Formal rule T-Pull: Interpret Sequence by the host iterator algebra.
     let mut emitter = Emitter::new(program, analysis);
+    emitter.pull = pull;
+    if profile {
+        emitter.context_mut().enable_profile(&program.structures);
+    }
     let mut output = None;
+    // Recorded fused arms are emitted inside their prefix row's scope, not
+    // prepared eagerly as independent top-level streams.
+    let deferred: std::collections::BTreeSet<_> = analysis
+        .structures
+        .physical
+        .fused
+        .values()
+        .flat_map(|group| group.members.iter().cloned())
+        .collect();
     for (position, definition) in program.sequence.definitions.iter().enumerate() {
         let owner = symbol_name(&definition.name);
+        if analysis
+            .results
+            .get(&owner)
+            .is_some_and(|result| deferred.contains(result))
+        {
+            continue;
+        }
         emitter.owner = owner.clone();
-        let value = term(&mut emitter, &definition.term, &owner, 0, false, &mut hook)?;
-        output = Some(if position + 1 == program.sequence.definitions.len() {
+        let final_output = position + 1 == program.sequence.definitions.len();
+        let node = match &definition.term {
+            Term::Store { inner, .. }
+                if pull
+                    && final_output
+                    && matches!(
+                        program.sequence.output,
+                        Some(cq_lang_sequence::OutputProtocol::Count)
+                    ) =>
+            {
+                inner.as_ref()
+            }
+            node => node,
+        };
+        let value = term(&mut emitter, node, &owner, 0, false, &mut hook)?;
+        output = Some(if final_output {
             value
         } else {
             emitter.publish(&definition.name, value)?

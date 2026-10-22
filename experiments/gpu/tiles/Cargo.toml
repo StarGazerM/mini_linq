@@ -3,6 +3,7 @@ name = "gpu-tiles"
 version = "0.1.0"
 edition.workspace = true
 autobins = false
+workspace = ".."
 
 [dependencies]
 cuda-core.workspace = true

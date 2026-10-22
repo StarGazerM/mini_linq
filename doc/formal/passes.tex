@@ -550,11 +550,13 @@ point conjunct; positional pipe reads retain all residual conjuncts.
 \emph{Refinement:} the embedded Physical is unchanged; each type
 represents its relation under the storage laws (a premise checked by tests).
 
-\subsection{Realization: Structures $\to$ Rust}
-The core printer checks its Structures input and prints one pull expression over
-the \code{cq-storage} traits; an external push printer consumes the same program.
-There is no source/target check; evidence is answer oracles, rustc trait guards
-and expansion fixtures. Interfaces at the Rust boundary:
+\subsection{Realization: checked Sequence $\to$ Rust}
+The default CPU translator consumes checked, sequentially graded Sequence.
+Its host interpreter uses row adapters over the \code{cq-storage} traits;
+the shared realization helpers also serve an external push printer that
+consumes Structures directly. Rust translation has no source/target
+correspondence check; evidence is answer oracles, rustc trait guards and
+expansion fixtures. Interfaces at the Rust boundary:
 \begin{mathpar}
 \Rule{IF-Surface}{\operatorname{parse}_{CQ}(T)=s\quad
  \text{no unexpanded extension clause remains in }s}

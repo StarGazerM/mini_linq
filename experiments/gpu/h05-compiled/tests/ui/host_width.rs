@@ -1,17 +1,9 @@
-fn main() {
-    let rows = vec![(1i64,)];
-    let _ = cq_gpu::print! {
-        arguments {};
-        pipeline {};
-        physical {
-            relation R(a:i64,b:i64) = (&rows);
-            r = pipe rename R@0 {a -> x,b -> y};
-            p = pipe canon project r keep {x,y};
-            return p as answer(x,y);
-        }
-        structures {
-            r host scan = ::core::iter::Map<_,_> [];
-            p canon = ::cq_gpu_runtime::DeviceSet<_>;
-        }
-    };
+use cq_gpu_runtime::DeviceColumns;
+
+fn bind(_: &DeviceColumns<'_, (i64, i64)>) {}
+
+fn wrong_width(rows: &DeviceColumns<'_, (i64,)>) {
+    bind(rows);
 }
+
+fn main() {}

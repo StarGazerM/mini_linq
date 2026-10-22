@@ -1,8 +1,6 @@
 use std::collections::BTreeSet;
 
-use cq_ext_support::{
-    Fresh, Leaf, check_fresh, check_leaves, ensure, hoist, same_symbol,
-};
+use cq_ext_support::{Fresh, Leaf, check_fresh, check_leaves, ensure, hoist, same_symbol};
 use cq_lang_cq::Program;
 use cq_syntax::{rust, symbol_name};
 use proc_macro2::TokenStream;
@@ -231,9 +229,21 @@ pub fn check(source: &Source, target: &Context) -> syn::Result<()> {
         &target.hole,
         "aggregate row hole changed",
     )?;
-    ensure(target.constant_group == constant_group(source), source, "constant-group proof changed")?;
-    ensure(target.owned == owned_columns(&source.rows), source, "aggregate ownership proof changed")?;
-    ensure(target.hasher == syn::parse_quote!(::cq_storage::HashState), source, "aggregate hashing policy changed")?;
+    ensure(
+        target.constant_group == constant_group(source),
+        source,
+        "constant-group proof changed",
+    )?;
+    ensure(
+        target.owned == owned_columns(&source.rows),
+        source,
+        "aggregate ownership proof changed",
+    )?;
+    ensure(
+        target.hasher == syn::parse_quote!(::cq_storage::HashState),
+        source,
+        "aggregate hashing policy changed",
+    )?;
     ensure(target.keys == source.keys, source, "group layout changed")?;
     ensure(
         target.measures == source.measures,
@@ -244,12 +254,20 @@ pub fn check(source: &Source, target: &Context) -> syn::Result<()> {
 
 fn canonical_stream(pipeline: &cq_stage::Pipeline) -> bool {
     pipeline.passes.last().is_some_and(|pass| {
-        let path = pass.path.segments.iter().map(|s| s.ident.to_string()).collect::<Vec<_>>();
-        path == ["mini_linq", "passes", "print_pull"] && pass.arguments.is_empty()
+        let path = pass
+            .path
+            .segments
+            .iter()
+            .map(|s| s.ident.to_string())
+            .collect::<Vec<_>>();
+        path == ["mini_linq", "passes", "translate_pull"] && pass.arguments.is_empty()
     })
 }
 
-pub fn compile_with_pipeline(source: &Source, pipeline: &cq_stage::Pipeline) -> syn::Result<Context> {
+pub fn compile_with_pipeline(
+    source: &Source,
+    pipeline: &cq_stage::Pipeline,
+) -> syn::Result<Context> {
     let mut target = compile(source)?;
     target.canonical_stream = canonical_stream(pipeline);
     Ok(target)
@@ -259,9 +277,17 @@ pub fn compile_with_pipeline(source: &Source, pipeline: &cq_stage::Pipeline) -> 
 /// an unknown terminal retains a fast-hashed set boundary.
 /// Formal rule EXT-ConstantGroup: Literal-bound group columns use an optional
 /// accumulator, preserving empty-input and set-valued aggregate semantics.
-pub fn check_with_pipeline(source: &Source, target: &Context, pipeline: &cq_stage::Pipeline) -> syn::Result<()> {
+pub fn check_with_pipeline(
+    source: &Source,
+    target: &Context,
+    pipeline: &cq_stage::Pipeline,
+) -> syn::Result<()> {
     check(source, target)?;
-    ensure(target.canonical_stream == canonical_stream(pipeline), source, "aggregate canonical-stream proof changed")
+    ensure(
+        target.canonical_stream == canonical_stream(pipeline),
+        source,
+        "aggregate canonical-stream proof changed",
+    )
 }
 pub fn render(context: &Context, pipeline: &cq_stage::Pipeline) -> syn::Result<TokenStream> {
     let Context {
@@ -295,7 +321,11 @@ pub fn render(context: &Context, pipeline: &cq_stage::Pipeline) -> syn::Result<T
         })
         .collect();
     let reference = |column: &Ident| {
-        if owned.contains(&symbol_name(column)) { quote!(&#column) } else { quote!(#column) }
+        if owned.contains(&symbol_name(column)) {
+            quote!(&#column)
+        } else {
+            quote!(#column)
+        }
     };
     let mut fresh = Fresh::new(quote!(#hole #(#measures)* #(#keys)*));
     let groups = fresh.id("groups");
@@ -324,8 +354,14 @@ pub fn render(context: &Context, pipeline: &cq_stage::Pipeline) -> syn::Result<T
     // The stock terminal printer checks the Structures canonical-return fact.
     // An arbitrary caller-selected printer may repeat rows, so it retains an
     // explicit set boundary rather than inheriting a proof it did not establish.
-    ensure(*canonical_stream == self::canonical_stream(pipeline), hole, "aggregate canonical-stream proof changed")?;
-    let rows = if *canonical_stream { invocation } else {
+    ensure(
+        *canonical_stream == self::canonical_stream(pipeline),
+        hole,
+        "aggregate canonical-stream proof changed",
+    )?;
+    let rows = if *canonical_stream {
+        invocation
+    } else {
         let seen = fresh.id("aggregate_seen");
         let row = fresh.id("aggregate_row");
         quote!({
@@ -456,7 +492,7 @@ mod tests {
             struct Revenue; relation R(id:i32,value:i64);
             rows(group,id,amount) :- R(id,value), let group:i32 = 0, let amount:i64 = *value * 2;
         };
-        let pipeline: cq_stage::Pipeline = syn::parse_quote!(pipeline { mini_linq::passes::print_pull });
+        let pipeline: cq_stage::Pipeline = syn::parse_quote!(pipeline { mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull });
         let context = compile_with_pipeline(&source, &pipeline).unwrap();
         check_with_pipeline(&source, &context, &pipeline).unwrap();
         let rendered = render(&context, &pipeline).unwrap().to_string();
