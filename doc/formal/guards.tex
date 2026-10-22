@@ -1,0 +1,61 @@
+\section{Guards: earned position independence (design)}
+\label{sec:guards-design}
+
+\emph{Status: design for review; not implemented.} This section replaces the
+trusted \code{\#[total]} assertion and the type-name allowlist (CQ-Total) by a
+single principle.
+
+\paragraph{Principle.} A guard is position-independent exactly when the
+language itself can see that it is defined on every value of its declared
+types. By the Motion lemma (Section~\ref{sec:premises}) this is the condition
+under which a plan may evaluate it on rows the written order would not reach.
+Nothing the author asserts and nothing matched by name can supply it. Every
+other guard is opaque and pinned: it keeps its written position in the Rust
+chain, and relational steps may only move earlier across it, which can only
+shrink its evaluation domain.
+
+\paragraph{The relational vocabulary.} Position independence is earned only by
+constructs whose meaning the CQ language defines:
+\begin{enumerate}
+\item \emph{Comparisons} \code{== != < <= > >=} and the Boolean connectives
+\code{\&\& || !} over query names, parameters and literals (CQ-GuardRecognize,
+unchanged). Totality follows from the Leibniz and Order premises; the printer's
+\code{relational\_eq}/\code{relational\_cmp} obligations make rustc check the
+\code{Eq}/\code{Ord} bounds. This is the language's grammar, not an allowlist:
+it names operators of the relational algebra, never Rust functions or types.
+\item \emph{Relational operators}: atoms, semijoins and anti-joins. Membership
+of a value in a relation is relational, not a Rust call.
+\end{enumerate}
+
+\paragraph{Removed.}
+\begin{itemize}
+\item \code{\#[total] if e}: grammar, the \code{Filter.total} flag, and the
+asserted-totality premise.
+\item The allowlist (\code{total.rs}): method names \code{contains},
+\code{starts\_with}, \code{ends\_with} and type-name kinds. Such guards become
+opaque.
+\item \code{Constraint::Total} and its printed form
+\code{\#[total]\ \{..\}\ (e)} in RA, Physical, Structures and Sequence text,
+since no source produces it any more.
+\end{itemize}
+Every theorem that previously consumed ``total'' (C-Ready, E-Constraint,
+ST-Total, the mask lemma, BK-Dual's total case, BE-Boundary, DL-Delta) then
+holds under premises 1--2 and the purity premises alone.
+
+\paragraph{Consequences and open decisions.}
+\begin{enumerate}
+\item \emph{String predicates} (\code{name.contains("green")}, TPC-H
+\code{LIKE}): pinned. If position independence is needed, string matching must
+become a construct with a defined relational meaning (a pattern-match
+comparison in the vocabulary above), not a recognized Rust method. Open.
+\item \emph{Datalog negation} is emitted today as
+\code{\#[total] if !K.contains(..)} over a completed key set. Without the
+assertion it is an opaque, pinned guard. The principled form is relational: an
+anti-join against the completed lower-stratum relation. Core CQ parses
+\code{!R(..)} but its contract rejects it (the optional extended semantics).
+Admitting stratified negation as a relational anti-join in CQ is a core
+language change. Open.
+\item \emph{GPU translation} re-translates relational predicates only; the
+\code{h05} range guard becomes a recognized \code{Between} when written
+without the assertion, which also restores range reads.
+\end{enumerate}
