@@ -492,6 +492,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-lang-sequence"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-structures",
+ "cq-stage",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "cq-lang-structures"
 version = "0.1.0"
 dependencies = [
@@ -597,6 +609,28 @@ dependencies = [
  "cq-lang-structures",
  "cq-rewrite-passes",
  "cq-stage",
+]
+
+[[package]]
+name = "cq-sequence-lowering"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-sequence",
+ "cq-lang-structures",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-sequence-pull"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-sequence",
+ "cq-lang-structures",
+ "cq-physical-realization",
+ "cq-print",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -969,6 +1003,7 @@ dependencies = [
  "cq-lang-ix",
  "cq-lang-physical",
  "cq-lang-ra",
+ "cq-lang-sequence",
  "cq-lang-structures",
  "cq-lang-vo",
  "cq-order",
@@ -976,6 +1011,8 @@ dependencies = [
  "cq-physical-realization",
  "cq-reduce",
  "cq-represent",
+ "cq-sequence-lowering",
+ "cq-sequence-pull",
  "cq-stage",
  "cq-staging",
  "cq-structure-selection",

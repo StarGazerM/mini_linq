@@ -16,7 +16,15 @@ fn source() -> proc_macro2::TokenStream {
 fn entry_starts_surface_expansion_before_parsing_source() {
     let source = source();
     let expanded = expand(source.clone()).unwrap();
-    let expected = DatalogConfiguration::default()
+    let mut configuration = DatalogConfiguration::default();
+    if cfg!(feature = "hoist-invariants") {
+        configuration
+            .incremental
+            .get_or_insert_with(|| syn::parse_quote!(::cq_datalog::passes::incremental))
+            .arguments
+            .extend(quote!(hoist_invariants;));
+    }
+    let expected = configuration
         .resolve(DatalogConfiguration::defaults())
         .unwrap()
         .start(source)
