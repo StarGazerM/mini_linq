@@ -4,8 +4,8 @@ use cq_gpu_sequence_runtime::canon::{
     packed_columns, PackedCanon, PackedColumnsAdapter, PackedField,
 };
 use cq_gpu_sequence_runtime::{
-    Buffer, Codec, ColumnDescriptor, EncodedColumn, KeyDescriptor, PayloadDescriptor, PayloadKind,
-    Pool, RangeBuilder, RangeDescriptor, RangeSelection, RangeWorkspace, Result,
+    Bounds, Buffer, Codec, ColumnDescriptor, EncodedColumn, KeyDescriptor, PayloadDescriptor,
+    PayloadKind, Pool, RangeBuilder, RangeDescriptor, RangeSelection, RangeWorkspace, Result,
 };
 
 fn column(pool: &Arc<Pool>, values: &[u32]) -> Result<ColumnDescriptor> {
@@ -128,5 +128,224 @@ fn providers_preserve_ranges_duplicate_rows_and_canonical_support() -> Result<()
     unsafe { upload.write_async(&[9u32])? };
     assert_eq!(upload.to_host()?, [9, 2]);
     assert!(unsafe { upload.write_async(&[1u32, 2, 3]) }.is_err());
+    Ok(())
+}
+
+#[test]
+fn i64_payloads_preserve_full_width_values_and_partial_vectors() -> Result<()> {
+    let pool = Pool::new(0, 1 << 20, 128 << 20)?;
+    let values: Vec<i64> = (0..2051)
+        .map(|row| match row % 5 {
+            0 => i64::MIN,
+            1 => i64::MAX,
+            2 => i32::MIN as i64 - row as i64,
+            3 => u32::MAX as i64 + row as i64,
+            _ => -1,
+        })
+        .collect();
+    let keys: Vec<u32> = (0..values.len()).map(|row| (row % 3) as u32).collect();
+    let mut expected: Vec<_> = keys.iter().copied().zip(values.iter().copied()).collect();
+    expected.sort_by_key(|&(key, _)| key);
+    let expected: Vec<_> = expected.into_iter().map(|(_, value)| value).collect();
+    let builder = RangeBuilder::new(&pool)?;
+    for codec in [Codec::Plain, Codec::For, Codec::Delta] {
+        let payload = unsafe {
+            ColumnDescriptor::new(
+                Arc::new(EncodedColumn::from_host(pool.clone(), &values, codec)?),
+                values.len(),
+            )?
+        };
+        let mut descriptor = RangeDescriptor {
+            key: vec![KeyDescriptor {
+                column: column(&pool, &keys)?,
+                domain_size: 4,
+            }],
+            selection: None,
+            payload: vec![PayloadDescriptor {
+                column: payload.clone(),
+                kind: PayloadKind::I64,
+            }],
+        };
+        let result = builder.build(&descriptor)?;
+        assert_eq!(result.payload()[0].to_host()?, expected);
+        assert_eq!(result.offsets().to_host()?, [0, 684, 1368, 2051, 2051]);
+        descriptor.selection = Some(RangeSelection {
+            column: payload,
+            start: 1,
+            end: 1,
+        });
+        let empty = builder.build(&descriptor)?;
+        assert!(empty.payload()[0].to_host()?.is_empty());
+        assert_eq!(empty.offsets().to_host()?, [0, 0, 0, 0, 0]);
+    }
+    Ok(())
+}
+
+#[test]
+fn stored_sources_retain_strided_rows_and_packed_fields() -> Result<()> {
+    let pool = Pool::new(0, 1 << 20, 128 << 20)?;
+    let rows = Arc::new(Buffer::from_host(
+        pool.clone(),
+        &[
+            1i64,
+            i64::MAX,
+            0,
+            i64::MIN,
+            1,
+            -4_294_967_297,
+            0,
+            4_294_967_297,
+        ],
+    )?);
+    let key = unsafe {
+        ColumnDescriptor::from_rows(rows.clone(), 4, 2, 0, Bounds::Inclusive { min: 0, max: 1 })?
+    };
+    let payload = unsafe {
+        ColumnDescriptor::from_rows(
+            rows.clone(),
+            4,
+            2,
+            1,
+            Bounds::Inclusive {
+                min: i64::MIN,
+                max: i64::MAX,
+            },
+        )?
+    };
+    drop(rows);
+    let mut descriptor = RangeDescriptor {
+        key: vec![KeyDescriptor {
+            column: key,
+            domain_size: 3,
+        }],
+        selection: None,
+        payload: vec![PayloadDescriptor {
+            column: payload.clone(),
+            kind: PayloadKind::I64,
+        }],
+    };
+    let builder = RangeBuilder::new(&pool)?;
+    let retained = builder.build(&descriptor)?;
+    assert_eq!(
+        retained.payload()[0].to_host()?,
+        [i64::MIN, 4_294_967_297, i64::MAX, -4_294_967_297]
+    );
+    descriptor.selection = Some(RangeSelection {
+        column: payload,
+        start: i64::MIN,
+        end: 0,
+    });
+    let negative = builder.build(&descriptor)?;
+    assert_eq!(negative.offsets().to_host()?, [0, 1, 2, 2]);
+    assert_eq!(negative.payload()[0].to_host()?, [i64::MIN, -4_294_967_297]);
+    assert_eq!(
+        cq_gpu_sequence_runtime::select(pool.clone(), descriptor.selection.as_ref().unwrap())?
+            .len(),
+        2
+    );
+
+    let keys = Arc::new(Buffer::from_host(
+        pool.clone(),
+        &[0u64, u64::MAX, 1, 1u64 << 63],
+    )?);
+    let key = unsafe {
+        ColumnDescriptor::from_packed(
+            keys.clone(),
+            4,
+            PackedField {
+                shift: 64,
+                bits: 0,
+                base: 0,
+            },
+            Bounds::singleton(0),
+        )?
+    };
+    let payload = unsafe {
+        ColumnDescriptor::from_packed(
+            keys.clone(),
+            4,
+            PackedField {
+                shift: 0,
+                bits: 64,
+                base: i64::MIN,
+            },
+            Bounds::Inclusive {
+                min: i64::MIN,
+                max: i64::MAX,
+            },
+        )?
+    };
+    drop(keys);
+    let packed = builder.build(&RangeDescriptor {
+        key: vec![KeyDescriptor {
+            column: key,
+            domain_size: 2,
+        }],
+        selection: None,
+        payload: vec![PayloadDescriptor {
+            column: payload,
+            kind: PayloadKind::I64,
+        }],
+    })?;
+    assert_eq!(packed.offsets().to_host()?, [0, 4, 4]);
+    assert_eq!(
+        packed.payload()[0].to_host()?,
+        [i64::MIN, i64::MAX, i64::MIN + 1, 0]
+    );
+
+    let keys = Arc::new(Buffer::from_host(
+        pool.clone(),
+        &[
+            (1u64 << 42) | 3,
+            (((1u64 << 40) - 1) << 2) | 3,
+            (1u64 << 42) | (1u64 << 41) | 3,
+            7,
+        ],
+    )?);
+    let base = -(1i64 << 39);
+    let key = unsafe {
+        ColumnDescriptor::from_packed(
+            keys.clone(),
+            4,
+            PackedField {
+                shift: 42,
+                bits: 1,
+                base: 0,
+            },
+            Bounds::Inclusive { min: 0, max: 1 },
+        )?
+    };
+    let payload = unsafe {
+        ColumnDescriptor::from_packed(
+            keys.clone(),
+            4,
+            PackedField {
+                shift: 2,
+                bits: 40,
+                base,
+            },
+            Bounds::Inclusive {
+                min: base,
+                max: -base - 1,
+            },
+        )?
+    };
+    drop(keys);
+    let shifted = builder.build(&RangeDescriptor {
+        key: vec![KeyDescriptor {
+            column: key,
+            domain_size: 3,
+        }],
+        selection: None,
+        payload: vec![PayloadDescriptor {
+            column: payload,
+            kind: PayloadKind::I64,
+        }],
+    })?;
+    assert_eq!(shifted.offsets().to_host()?, [0, 2, 4, 4]);
+    assert_eq!(
+        shifted.payload()[0].to_host()?,
+        [-base - 1, base + 1, base, 0]
+    );
     Ok(())
 }

@@ -1,5 +1,5 @@
 use cuda_device::thread;
-use gpu_device_columns::{decode, decode_u32, ColumnView};
+use gpu_device_columns::{decode_source, decode_source_u32, SourceView};
 
 #[cuda_device::cuda_module]
 pub mod build {
@@ -11,7 +11,7 @@ pub mod build {
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
     pub fn keys_and_rows(
-        key: ColumnView,
+        key: SourceView,
         source: *const u32,
         rows: u32,
         keys: *mut u32,
@@ -26,7 +26,7 @@ pub mod build {
                 } else {
                     *source.add(i as usize)
                 };
-                *keys.add(i as usize) = decode_u32(key, row as u64);
+                *keys.add(i as usize) = decode_source_u32(key, row as u64);
                 *order.add(i as usize) = row;
             }
             i = match i.checked_add(stride) {
@@ -39,7 +39,7 @@ pub mod build {
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub fn sequence_decode_column(key: ColumnView, source: *const u32, rows: u32, out: *mut u32) {
+    pub fn sequence_decode_column(key: SourceView, source: *const u32, rows: u32, out: *mut u32) {
         let mut i = thread::index_1d().get() as u32;
         let stride = thread::gridDim_x() * 256;
         while i < rows {
@@ -49,7 +49,7 @@ pub mod build {
                 } else {
                     *source.add(i as usize)
                 };
-                *out.add(i as usize) = decode_u32(key, row as u64);
+                *out.add(i as usize) = decode_source_u32(key, row as u64);
             }
             i = match i.checked_add(stride) {
                 Some(next) => next,
@@ -62,12 +62,12 @@ pub mod build {
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub fn range_flags(column: ColumnView, rows: u32, start: i64, end: i64, flags: *mut u32) {
+    pub fn range_flags(column: SourceView, rows: u32, start: i64, end: i64, flags: *mut u32) {
         let mut row = thread::index_1d().get() as u32;
         let stride = thread::gridDim_x() * 256;
         while row < rows {
             unsafe {
-                let value = decode(column, row as u64);
+                let value = decode_source(column, row as u64);
                 *flags.add(row as usize) = (start <= value && value < end) as u32;
             }
             row = match row.checked_add(stride) {

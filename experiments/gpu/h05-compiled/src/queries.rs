@@ -6,10 +6,11 @@ pub const ASIA: i32 = 2;
 pub type Answer = (u32, u32, u32);
 pub type QueryResult<'a> = Result<DeviceColumns<'a, Answer>, Box<dyn std::error::Error>>;
 
-// TODO(Sequence resident derived providers): A and B retain the LE planner's
-// ASIA-filtered Region r1 and reduced Nation r2 membership runs. r2 is a
-// semijoin result, not a resident-origin range provider. Do not substitute R:
-// Rows::provider rejects it with the exact diagnostic below.
+// A and B retain the LE planner's ASIA-filtered Region r1 and reduced
+// Nation r2 membership runs. The recorded Sequence store publishes the semijoin
+// on device; the explicit Structures choice records r2's [nation] capability.
+// R2 must already be stored when the source contract checks lookup r2: an
+// EXT-SeqStore pipeline rewrite cannot repair an invalid source contract.
 // A traversal: Lineitem(order,supplier), Orders(order,customer,date),
 // 8766 <= date < 9131, Customer(customer,nation), Nation(nation,region),
 // Region(region,2), Supplier(supplier,nation).
@@ -23,28 +24,14 @@ pub type QueryResult<'a> = Result<DeviceColumns<'a, Answer>, Box<dyn std::error:
 // capacity(Lineitem) -> recorded store capacity + output(bounded), not an inferred
 // bound. frontier(8)/directory(rank) have no Sequence rewrite equivalent; do not
 // silently manufacture those choices. No old printer is used as a fallback.
-pub fn plan_a<'a>(_data: &'a Rows) -> QueryResult<'a> {
-    Err("TODO H05 A: T-Gpu: r2 has no recorded resident range layout".into())
-}
-
-pub fn plan_b<'a>(_data: &'a Rows) -> QueryResult<'a> {
-    Err("TODO H05 B: T-Gpu: r2 has no recorded resident range layout".into())
-}
-
-// Compile these independently to exercise the unsupported plans, rather than
-// testing the runtime TODO text or substituting the supported R traversal.
-#[cfg(any(
-    feature = "h05-a-sequence-rejection",
-    feature = "h05-b-sequence-rejection"
-))]
-macro_rules! rejected_le {
+macro_rules! compiled_le {
     ($data:ident; physical { $($physical:tt)* }
         structures { $($structures:tt)* } sequence { $($sequence:tt)* }) => {
         cq_sequence_rewrites::output! {
             arguments { count };
             pipeline {
                 ::cq_sequence_rewrites::grade(gpu,
-                    R1 at host, R2 at host, L at host, O at host,
+                    R1 at host, N at host, R2 at device, L at host, O at host,
                     C at host, S at host, result at device),
                 ::cq_gpu_sequence::machine_grade,
                 ::cq_gpu_sequence::translate
@@ -85,7 +72,8 @@ macro_rules! rejected_le {
             }
             sequence {
                 R1 = store map r1 compact region_selected rows region_base;
-                R2 = store compact r2 lookup r1 [region] rows nation_base;
+                N = store rows nation_base;
+                R2 = store compact r2 lookup r1 [region] flatten tile 256 N;
                 $($sequence)*
                 output count;
             }
@@ -93,9 +81,8 @@ macro_rules! rejected_le {
     };
 }
 
-#[cfg(feature = "h05-a-sequence-rejection")]
-fn reject_plan_a(data: &Rows) {
-    let _ = rejected_le! {
+pub fn plan_a<'a>(data: &'a Rows) -> QueryResult<'a> {
+    Ok(compiled_le! {
         data;
         physical {
             lo = pipe probe first [order] lineitem,orders;
@@ -121,12 +108,11 @@ fn reject_plan_a(data: &Rows) {
                 flatten lookup orders [order]
                 flatten tile 256 L;
         }
-    };
+    })
 }
 
-#[cfg(feature = "h05-b-sequence-rejection")]
-fn reject_plan_b(data: &Rows) {
-    let _ = rejected_le! {
+pub fn plan_b<'a>(data: &'a Rows) -> QueryResult<'a> {
+    Ok(compiled_le! {
         data;
         physical {
             asia = pipe semi eager [nation] customer,r2;
@@ -152,7 +138,7 @@ fn reject_plan_b(data: &Rows) {
                 compact asia lookup r2 [nation]
                 flatten tile 256 items 4 C;
         }
-    };
+    })
 }
 
 /// The reference R-N-C-O-L-S traversal, retaining the ASIA customer prefix.

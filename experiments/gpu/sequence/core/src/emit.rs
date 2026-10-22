@@ -1151,7 +1151,8 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                 }
             }
         }
-        let virtual_range = if !final_output && !canonical && chains.len() == 1 {
+        let provider_store = analysis.structures.built.contains_key(&chains[0].result);
+        let virtual_range = if !final_output && !canonical && !provider_store && chains.len() == 1 {
             let ops = &chains[0].operations;
             let last = ops.iter().rposition(|op| {
                 matches!(
@@ -1559,6 +1560,20 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                 let #fields=__cq_fields;
                 drop(#output_keys);
             });
+        }
+        if !final_output {
+            launches.push(compiler.rows.publish_provider(
+                analysis,
+                program,
+                &chains[0].result,
+                publication,
+                index,
+                if canonical {
+                    packed_columns.as_deref()
+                } else {
+                    None
+                },
+            )?);
         }
         compiler.stored.push(Stored {
             name: publication.clone(),

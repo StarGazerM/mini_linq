@@ -74,7 +74,10 @@ pub enum Bounds {
 }
 impl Bounds {
     pub const fn singleton(value: i64) -> Self {
-        Self::Inclusive { min: value, max: value }
+        Self::Inclusive {
+            min: value,
+            max: value,
+        }
     }
     pub fn from_values(values: &[i64]) -> Self {
         let Some((&first, rest)) = values.split_first() else {
@@ -93,7 +96,11 @@ impl Bounds {
     }
 }
 
-fn count_pointer<T: DeviceCopy>(pool: &Arc<Pool>, count: &Buffer<T>, offset: usize) -> Result<*const u64> {
+fn count_pointer<T: DeviceCopy>(
+    pool: &Arc<Pool>,
+    count: &Buffer<T>,
+    offset: usize,
+) -> Result<*const u64> {
     if !Arc::ptr_eq(pool, count.pool()) {
         return Err("column and count must share a pool".into());
     }
@@ -146,10 +153,17 @@ impl EncodedColumn {
     /// the compact extent is allowed here, outside the query compute path.
     pub fn from_host<L: Lane>(pool: Arc<Pool>, values: &[L], codec: Codec) -> Result<Self> {
         let input = Buffer::from_host(pool.clone(), values)?;
-        let bounds = values.iter().map(|v| v.widen()).fold(Bounds::Empty, |bounds, v| match bounds {
-            Bounds::Empty => Bounds::singleton(v),
-            Bounds::Inclusive { min, max } => Bounds::Inclusive { min: min.min(v), max: max.max(v) },
-        });
+        let bounds =
+            values
+                .iter()
+                .map(|v| v.widen())
+                .fold(Bounds::Empty, |bounds, v| match bounds {
+                    Bounds::Empty => Bounds::singleton(v),
+                    Bounds::Inclusive { min, max } => Bounds::Inclusive {
+                        min: min.min(v),
+                        max: max.max(v),
+                    },
+                });
         let (headers, extent) = Self::make_headers(
             pool.clone(),
             input.ptr() as *const u8,
@@ -160,7 +174,14 @@ impl EncodedColumn {
         )?;
         let words = usize::try_from(extent.to_host()?[0])?;
         let data = unsafe { Buffer::uninitialized(pool, words)? };
-        Self::pack(&headers, &data, input.ptr() as *const u8, L::ELEMENT, values.len(), std::ptr::null())?;
+        Self::pack(
+            &headers,
+            &data,
+            input.ptr() as *const u8,
+            L::ELEMENT,
+            values.len(),
+            std::ptr::null(),
+        )?;
         Ok(Self {
             headers: Some(headers),
             data: ColumnData::Packed(data),
@@ -226,7 +247,8 @@ impl EncodedColumn {
     ) -> Result<Self> {
         let count = count_pointer(&pool, &count_owner, count_offset)?;
         let input = input as *const u8;
-        let (headers, extent) = Self::make_headers(pool.clone(), input, L::ELEMENT, capacity, count, codec)?;
+        let (headers, extent) =
+            Self::make_headers(pool.clone(), input, L::ELEMENT, capacity, count, codec)?;
         let width = if codec == Codec::Plain || codec == Codec::Delta {
             64
         } else {
@@ -261,7 +283,7 @@ impl EncodedColumn {
     ///
     /// Each 1024-row vector keeps its own base and width but occupies a fixed
     /// slot sized by `bounds`, so no offset scan or extent readback is needed.
-    /// Only 32-bit lanes are supported (`u32`, `i32`).
+    /// Supports native `u32`, `i32`, and `i64` lanes without narrowing.
     ///
     /// # Safety
     /// `order` must hold `rows` indices into `source`'s live rows, ready on
@@ -275,26 +297,58 @@ impl EncodedColumn {
         count_offset: usize,
         bounds: Bounds,
     ) -> Result<Self> {
-        if L::ELEMENT != ELEMENT_U32 && L::ELEMENT != ELEMENT_I32 {
-            return Err("gathered packing supports 32-bit lanes only".into());
+        unsafe {
+            Self::from_gather_source::<T, L>(
+                pool,
+                source.into(),
+                order,
+                rows,
+                count_owner,
+                count_offset,
+                bounds,
+            )
         }
+    }
+
+    /// Gather a possibly strided or packed source directly into FOR storage.
+    ///
+    /// # Safety
+    /// The source storage and `order` must remain live on the pool stream.
+    /// Every index must address an initialized source row, and `bounds` must
+    /// enclose every gathered value, which must fit the declared lane type.
+    pub unsafe fn from_gather_source<T: DeviceCopy + 'static, L: Lane>(
+        pool: Arc<Pool>,
+        source: SourceView,
+        order: *const u32,
+        rows: usize,
+        count_owner: Arc<Buffer<T>>,
+        count_offset: usize,
+        bounds: Bounds,
+    ) -> Result<Self> {
         let count = count_pointer(&pool, &count_owner, count_offset)?;
         let slot_width = match bounds {
             Bounds::Empty => 0,
-            Bounds::Inclusive { min, max } => 64 - (max as u64).wrapping_sub(min as u64).leading_zeros(),
+            Bounds::Inclusive { min, max } => {
+                64 - (max as u64).wrapping_sub(min as u64).leading_zeros()
+            }
         };
         let vectors = rows.div_ceil(1024);
         let words = vectors
             .checked_mul(slot_width as usize * 16)
             .ok_or("gathered encoded capacity overflow")?;
-        let headers = unsafe { Buffer::<VectorHeader>::uninitialized(pool.clone(), vectors.max(1))? };
+        let headers =
+            unsafe { Buffer::<VectorHeader>::uninitialized(pool.clone(), vectors.max(1))? };
         let data = unsafe { Buffer::<u64>::uninitialized(pool.clone(), words.max(1))? };
         if vectors > 0 {
             let module = module(&pool)?;
             let launch = module.prepare_gather_encode(LaunchConfig1D::new(
                 vectors.div_ceil(8).clamp(1, 568 * 4) as u32,
                 256,
-                32768,
+                if L::ELEMENT == ELEMENT_I64 {
+                    65536
+                } else {
+                    32768
+                },
             ))?;
             unsafe {
                 module.gather_encode(
@@ -304,7 +358,7 @@ impl EncodedColumn {
                     order,
                     rows as u64,
                     slot_width,
-                    (L::ELEMENT == ELEMENT_I32) as u32,
+                    L::ELEMENT,
                     headers.ptr(),
                     data.ptr(),
                 )?;
@@ -336,9 +390,8 @@ impl EncodedColumn {
         let totals = unsafe { Buffer::uninitialized(pool.clone(), vectors.div_ceil(256).max(1))? };
         let module = module(&pool)?;
         let header_launch = module.prepare_headers(config(vectors * 32))?;
-        let offset_launch = module.prepare_offsets(LaunchConfig1D::new(
-            totals.len().min(568) as u32, 256, 2048,
-        ))?;
+        let offset_launch =
+            module.prepare_offsets(LaunchConfig1D::new(totals.len().min(568) as u32, 256, 2048))?;
         unsafe {
             module.headers(
                 pool.stream(),
@@ -364,10 +417,18 @@ impl EncodedColumn {
             let current = levels.last().unwrap();
             let next = unsafe { Buffer::uninitialized(pool.clone(), current.len().div_ceil(256))? };
             let launch = module.prepare_scan_offsets(LaunchConfig1D::new(
-                next.len().min(568) as u32, 256, 2048,
+                next.len().min(568) as u32,
+                256,
+                2048,
             ))?;
             unsafe {
-                module.scan_offsets(pool.stream(), &launch, current.ptr(), current.len(), next.ptr())?;
+                module.scan_offsets(
+                    pool.stream(),
+                    &launch,
+                    current.ptr(),
+                    current.len(),
+                    next.ptr(),
+                )?;
             }
             levels.push(next);
         }
@@ -377,7 +438,11 @@ impl EncodedColumn {
             let launch = module.prepare_add_offsets(config(current.len()))?;
             unsafe {
                 module.add_offsets(
-                    pool.stream(), &launch, current.ptr(), current.len(), levels[level + 1].ptr(),
+                    pool.stream(),
+                    &launch,
+                    current.ptr(),
+                    current.len(),
+                    levels[level + 1].ptr(),
                 )?;
             }
         }
@@ -385,7 +450,12 @@ impl EncodedColumn {
             let launch = module.prepare_finish_offsets(config(vectors))?;
             unsafe {
                 module.finish_offsets(
-                    pool.stream(), &launch, headers.ptr(), capacity as u64, count, levels[0].ptr(),
+                    pool.stream(),
+                    &launch,
+                    headers.ptr(),
+                    capacity as u64,
+                    count,
+                    levels[0].ptr(),
                 )?;
             }
         }

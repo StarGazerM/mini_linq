@@ -72,6 +72,14 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   while retained output publications keep independent metadata. Generated
   setup warms kernel modules before the measured build/query/dedup region;
   recorded layouts, capacities and scheduling decisions are unchanged.
+  Providers now consume explicitly published device row and canonical stores
+  through owning, zero-copy strided/packed source views, after their recorded
+  publication boundary. H05 A/B retain their written reduced-Nation plans.
+  Range payloads and fused gather packing support full signed `i64` values
+  without truncation. The original i64 triangle now translates and executes
+  directly; positive translation/runtime fixtures replace the A/B and triangle
+  rejection features. Dense-u32 key directory and packed-u64 output limits
+  remain explicit; no schema, provider, or plan is silently substituted.
 
 - DOOP and oracle engines split into feature-selected crates over shared
   harness crates; the parallel CLIs no longer rebuild sequential engines.

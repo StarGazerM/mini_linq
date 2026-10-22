@@ -317,3 +317,72 @@ fn expansion_uses_live_code_columns_and_one_reservation_per_item_batch() {
     batches.visit_block(&functions.queries[1].block);
     assert_eq!(batches.0, 2, "one gather loop and one output loop");
 }
+
+#[test]
+fn semijoin_device_store_builds_provider_after_publication() {
+    let program: cq_lang_sequence::Program = syn::parse_quote! {
+        physical {
+            relation Region(region:u32) = (&data.region);
+            relation Nation(nation:u32,region:u32) = (&data.nation);
+            relation Customer(customer:u32,nation:u32) = (&data.customer);
+            r1 = let rename Region@0 {region -> region};
+            nation_base = pipe rename Nation@1 {nation -> nation,region -> region};
+            r2 = let semi eager [region] nation_base,r1;
+            customer = pipe rename Customer@2 {customer -> customer,nation -> nation};
+            answer = pipe canon semi eager [nation] customer,r2;
+            return answer as answer(customer,nation);
+        }
+        structures {
+            r1 host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,)> [];
+            nation_base host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32)> [];
+            customer host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32)> [];
+            r1 = ::cq_gpu_sequence_runtime::RangeProvider [region];
+            r2 = ::cq_gpu_sequence_runtime::RangeProvider [nation];
+            answer canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+        }
+        sequence {
+            R1 = store rows r1;
+            N = store rows nation_base;
+            R2 = store compact r2 lookup r1 [region] flatten tile 256 N;
+            C = store rows customer;
+            result = store canon compact answer lookup r2 [nation] flatten tile 256 C;
+            output count;
+        }
+        graded gpu {
+            R1 at host;
+            N at host;
+            R2 at device;
+            C at host;
+            result at device;
+        }
+    };
+    // The authored source must satisfy BE-Scope before any scheduling rewrite.
+    // A later EXT-SeqStore pass cannot supply the earlier materialization fact.
+    let contract = cq_lang_sequence::contract::check(&program)
+        .expect("lookup r2 must have an earlier authored Sequence store");
+    assert_eq!(contract.results["R2"], "r2");
+    assert!(contract.stores.contains_key("R2"));
+    let analysis = cq_lang_sequence::check_grading(&program, &cq_gpu_sequence::machine())
+        .expect("the semijoin store and its provider capability are explicitly recorded");
+    assert_eq!(analysis.results["R2"], "r2");
+    assert!(analysis.stores.contains_key("R2"));
+    assert_eq!(
+        analysis.capabilities[&("r2".into(), vec!["nation".into()])],
+        Capability::Membership
+    );
+    let generated = cq_gpu_sequence::translate(&program, &analysis)
+        .unwrap()
+        .to_token_stream()
+        .to_string();
+    let provider = generated
+        .find("let __cq_sequence_provider_r2")
+        .expect("the device semijoin must build its recorded provider");
+    let publication = generated[..provider]
+        .rfind("let (__cq_store_rows_0")
+        .expect("device-store publication must precede provider construction");
+    assert!(
+        generated[publication..].contains("ColumnDescriptor :: from_rows"),
+        "the provider must describe published device rows"
+    );
+    assert!(publication < provider);
+}

@@ -70,9 +70,9 @@ Historical pre-cutover documentation is in
 
 ## Authored advice and rejection boundaries
 
-The resident H05 R and identity-chain callers author their Sequence programs
-directly, then apply checked output/grade rewrites. They do not infer grades
-from generated temporary names.
+The resident H05 A/B/R and identity-chain callers author their Sequence programs
+directly, then apply checked store/output/grade rewrites. They do not infer
+grades or provider choices from generated temporary names.
 
 | Former decision | Recorded Sequence decision |
 |---|---|
@@ -92,13 +92,74 @@ one-to-one Sequence advice mapping. They are not silently passed to the new
 terminal or asserted to be equivalent to count publication. No size-guarded
 alternative was authored for these callers, so none is invented with `choose`.
 
-H05 A/B retain explicit TODO rejection paths and independently selectable
-rejection fixtures (`h05-a-sequence-rejection`, `h05-b-sequence-rejection`).
-Their reduced Nation provider lacks a recorded resident range layout. The
-compiled triangle keeps its original `i64` relation and a
-`triangle-sequence-rejection` fixture; range payloads require recorded
-`u32`/`i32` dense codes. No narrowed schema, remapping, or alternate plan is
-substituted. These unavailable programs have no Sequence timing claim.
+H05 A/B explicitly publish the reduced Nation semijoin `r2` with an authored
+`R2 = store ...` graded at device (EXT-SeqStore), and a recorded
+`RangeProvider [nation]` Structures choice. The store is present before source
+contract checking; a later rewrite cannot establish scope for an earlier
+`lookup r2`. The provider is built only after that store is published; the
+translator neither chooses the representation nor substitutes R.
+
+Recorded range providers can consume published device row stores or canonical
+packed-key stores, not just base relations. Owning source descriptors project
+row-major fields with a stride and packed fields with their recorded
+base/shift/width; they retain the publication without an intermediate
+row-to-column copy or full unpack. Selection, key sorting, and payload gathering
+read those same views. Store publication must precede provider construction;
+no provider layout or new Sequence term is inferred.
+
+The compiled triangle keeps its original `i64` relation and now translates
+normally, with positive translation and executable tuple-comparison tests in
+place of the rejection fixture. Range payloads support `u32`, `i32`, and full
+signed `i64`, including values outside the 32-bit domain. Their fused gather
+and FOR packing preserves 64-bit extrema and decodes without narrowing.
+`triangle-compiled EDGES --check` uploads native i64 IDs, executes the authored
+Smallest/First plan, and compares actual GPU tuples with its CPU reference.
+It reports one discarded warmup and five measured resident calls, including
+per-call and median GPU build/kernel/dedup/total timings and query wall time.
+`--check` separately times the CPU tuple reference and checks every GPU call.
+Input loading/upload, answer download, and reference checks are excluded from
+the query samples.
+The recorded directory still requires dense nonnegative u32-range keys, and
+canonical output fields must fit one packed u64; no schema narrowing,
+ID remapping, or alternate plan is substituted.
+
+## Device-store and i64 acceptance
+
+On NVIDIA RTX 6000 Ada Generation (driver 580.178.04), the `sm_89` release
+workspace build and test commands pass, including 22 tests and all doc tests.
+The positive tests cover provider construction after device-store publication,
+i64 triangle translation/execution, signed 64-bit payload extrema, and strided
+and packed stored-column descriptors. `python3 doc/formal/check.py` reports
+228 synchronized rules; no new translation decision or rule was introduced.
+
+These H05 measurements use one discarded warmup and five measured resident
+calls. Every A/B/R call and the reference compare complete tuples against
+`answer.tsv`; all are exact. GPU time includes base provider construction,
+dispatches, device-store provider construction, and final canonicalization.
+The latter provider builds occur inside the reported kernel phase, after the
+base-build timing boundary. Upload and answer download are excluded.
+
+| Workload | Exact rows | Sequence GPU ms | Reference GPU ms | Sequence wall ms | Reference wall ms |
+|---|---:|---:|---:|---:|---:|
+| H05 A SF1 | 7,242 | 2.526368 | 1.922624 | 2.587867 | 1.931820 |
+| H05 B SF1 | 7,242 | 1.796928 | 1.922624 | 1.855975 | 1.931820 |
+| H05 R SF1 | 7,242 | 2.129568 | 1.922624 | 2.192349 | 1.931820 |
+| H05 A SF10 | 72,983 | 18.664608 | 9.899072 | 18.731918 | 9.909329 |
+| H05 B SF10 | 72,983 | 10.202752 | 9.899072 | 10.264289 | 9.909329 |
+| H05 R SF10 | 72,983 | 10.323200 | 9.899072 | 10.388337 | 9.909329 |
+
+`triangle-compiled /data/dataset/graph/com-dblp.ungraph.txt --check` retains
+1,049,866 distinct native-i64 edges and produces exactly 2,224,385 tuples,
+equal to its independent CPU reference on every call. One warmup is excluded
+from five GPU samples; the CPU reference is measured once.
+
+| Triangle workload | Build ms | Kernel ms | Dedup ms | GPU total ms | Query wall ms | CPU reference ms |
+|---|---:|---:|---:|---:|---:|---:|
+| DBLP, native i64 | 2.062880 | 3.302496 | 0.627648 | 6.020128 | 6.082209 | 244.443683 |
+
+The H05 samples are retained in
+`compare/gpu_sequence_device_stores.results.json` and
+`compare/gpu_sequence_device_stores.reference.sf{1,10}.json`.
 
 ## Cutover validation
 
@@ -125,14 +186,11 @@ resident projection for empty/sorted/unsorted/duplicate inputs and repeated
 head projection. These do not claim the old runtime certificate, multiword
 key, or resumable-provider coverage.
 
-All three rejection features were compiled independently and rejected by the
-translator, not merely by their runtime TODO wrappers:
-
-| Caller | Exact error |
-|---|---|
-| H05 A | `T-Gpu: r2 has no recorded resident range layout` |
-| H05 B | `T-Gpu: r2 has no recorded resident range layout` |
-| Signed-i64 compiled triangle | `T-Gpu: range payload needs a recorded u32/i32 dense code` |
+Historical cutover validation compiled the then-unsupported H05 A/B and
+signed-i64 triangle rejection fixtures independently. Those fixtures have now
+been removed in favor of positive device-store provider and i64 translation
+tests; the historical rejection results in the archived cutover summary are
+not current support boundaries.
 
 The **legacy** workspace also built independently. Its Datalog oracle passed
 eight scenarios, and its handwritten triangle oracle passed seven cases
