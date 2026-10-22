@@ -488,8 +488,11 @@ have no local `__cq_seen`; admission owns every relation's set; the parallel
 extension restores baseline candidate counts with an erasable `self_dedup
 per_task` phase (task collector before sharded admission), realized through
 the checked per-hole push-terminal rewrite. Known: `experiments/gpu/printer`
-still certifies discharged hosts (GPU side's file). Deferred facts:
-`host_key`, `consumer exists`, `guard total`, terminal `canonical-return`.
+still certifies discharged hosts (GPU side's file). Not context facts (by
+design, see context.tex): declared keys (need a provenance model; out of
+scope), first-witness consumption (lower-level `exists`/early stop), guard
+totality (CQ term semantics; `#[total]` syntax and meaning are an open design
+question), terminal canonical return (an exported Structures guarantee).
 
 The abandoned design (`codex/datalog`, `codex/datalog-lang`,
 `codex/maintained-structures`, `codex/datalog-*`, `codex/tests-reshape`,

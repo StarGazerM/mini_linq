@@ -174,12 +174,20 @@ Top-level \code{mini\_linq!} & \code{host\_set R} certified only & \textsc{IF-Ho
 \bottomrule
 \end{tabular}
 \end{center}
-Deferred, as further facts of the same shape: \code{host\_key R [c..]}
-(projection keeps a declared key; TPC-H primary keys), \code{consumer
-exists} (first witness, lawful early stop), \code{guard total} (a
-compiler-generated guard certified total, generalizing \code{\#[total]}),
-and the terminal guarantee \code{canonical-return} that replaces path-name
-matching in extension contexts (\textsc{EXT-SetFold}).
+\paragraph{What is not a context fact.} A context fact is an assumption about
+inputs or the consumer that only an enclosing compiler can establish and that
+never changes which query runs. The following are therefore excluded.
+Declared keys are statements about data identity (a Skolem/provenance notion);
+assuming one would let a pass replace the query by a different one, so keys
+are out of scope until a provenance model exists. First-witness consumption is
+a different consumer operation, owned by the lower level's control semantics
+(\code{exists} mode and lawful early stop, \textsc{BK-Dual}); an upper
+compiler requests it by emitting an \code{exists} query. Totality of a Rust
+guard is a property of the term, owned by the CQ language (today the trusted
+\code{\#[total]} annotation, an open design question), not by the context.
+A terminal's canonical return is a guarantee the lower level exports
+(\code{unique(returned)} in the Structures contract), the opposite direction
+of a context fact.
 
 \paragraph{Multi-stage control.} Facts are the interface between stages of a
 stacked compiler: the upper stage decides what it will guarantee about inputs
