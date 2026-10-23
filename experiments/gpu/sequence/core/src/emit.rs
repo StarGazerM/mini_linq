@@ -1165,7 +1165,9 @@ fn canon_type<'a>(analysis: &'a Analysis, publication: &str) -> syn::Result<&'a 
             _ => None,
         })
         .or_else(|| {
-            analysis.results.get(publication)
+            analysis
+                .results
+                .get(publication)
                 .and_then(|result| analysis.structures.dedup.get(result))
         })
         .ok_or_else(|| error("GPU canon publication requires its recorded provider type"))

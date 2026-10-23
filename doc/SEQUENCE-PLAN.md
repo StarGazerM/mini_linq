@@ -1116,3 +1116,19 @@ union consumers all decode arbitrary-width fields, including lane crossings.
 The formal `GPU-WideCanon` instance cites `BE-Canon`; runtime tests cover
 three-lane duplicates, repeated calls and empty input, and catalog tests cover
 the 128/192-bit boundary and rejection without a sufficiently wide provider.
+
+Acceptance on the release sm_89 build: all eight runtime provider tests and
+all ten catalog-selection tests passed. The formal inventory check passed
+(241 rules). H10's one warmup and all five measured runs matched the exported
+dbgen answers exactly; SF1 also passed Sequential-of-the-same-Physical
+conformance. GPU timing includes build, kernels and final publication work;
+DuckDB is the exported t24 median (not a new CPU measurement).
+
+| H10 advised | Exact rows | GPU total ms | Build ms | Kernels ms | Final publication ms | DuckDB t24 ms |
+|---|---:|---:|---:|---:|---:|---:|
+| SF1 | 37,967 | 22.187 | 1.671 | 12.221 | 8.306 | 141.000 |
+| SF10 | 381,105 | 299.008 | 11.871 | 266.077 | 21.056 | 1158.000 |
+
+Evidence: `/tmp/canon-h10.json`. The final-publication phase label is the
+suite's `dedup_ms`; intermediate canonicalization runs inside the kernel
+interval, so that column is not an isolated canon benchmark.
