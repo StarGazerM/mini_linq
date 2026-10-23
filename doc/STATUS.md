@@ -320,7 +320,8 @@ work is lower on H09 and D72.
 4. **Zone maps.** Block min/max exists only in the `hypergraph_zone`
    configuration; scan key sets skip blocks only there.
 5. **Known limits.** Static heuristics only (no statistics); no keys or
-   constraints on data; no parallel execution.
+   constraints on data; no parallel execution in the default sequential target
+   (`sequence-tasks` and `datalog-parallel` provide Rayon realizations).
 
 ### Decisions needed
 
@@ -347,52 +348,55 @@ work is lower on H09 and D72.
 Decide whether runtime adaptivity (abandon reductions whose builds keep over
 35% of their source) should choose such reductions without advice.
 
-## Datalog (`codex/datalog-v2`)
+## Datalog (`features/datalog`, `features/datalog-parallel`)
 
 Rule: features build on the public core API (`languages/`, `passes/`,
-`runtime/`, `facade/`, `testkit/`, root manifests). Core changes require user
-approval; this integration admits only the four decisions below.
+`runtime/`, `facade/`, `testkit/`, root manifests); core changes need user
+approval.
 
-- `features/datalog`: `language` (AST, contract, `Language`), `schedule`
-  (strata, semi-naive with declared deltas, recorded insertion, negation keys
-  and index layouts), `fork` (ordinary CQ holes), `bridge` (`datalog!`,
-  `stratified!`, `seminaive!`; round loop), `oracle` (sequential Ascent,
-  naive evaluators, 104 Ascent-generated goldens). Negation is core
-  `!R(..)` over completed strata; aggregates and nested blocks are rejected.
-  `cq-ext-recursion` is unchanged.
-- Indexes: Datalog keeps its relations as grouped-map hosts in the layouts it
-  records, updates them after each round, and passes them to one-shot CQ
-  holes; the existing compiler probes host indexes natively. Reach chain at
-  n = 2,000/4,000/8,000: 0 core index builds, rows enumerated 3n + 1.
-- Single-thread vs sequential Ascent, uninstrumented (`e981103`, two runs):
-  linear TC chain 1,024 18.7 vs 18.9 ms, chain 4,096 341–344 vs 497–521 ms;
-  nonlinear TC chain 512 78.5 vs 108 ms; reach chain 4,096 0.37 vs 0.27 ms;
-  reach random 5k 0.41–0.43 vs 0.37–0.41 ms; same-generation chain 4,096
-  0.40–0.43 vs 0.25–0.27 ms. Earlier numbers were built with `counters`,
-  which selects the per-operator profiled code.
-- Core tension (reported, not changed): each rule query deduplicates its own
-  answer per call (`__cq_seen`) although Datalog deduplicates again. Even
-  with a head returning every body variable, lowering marks the returned
-  join canonical because a host read (`Op::Rename`) is never known unique
-  (`passes/cq-physical-lowering/src/lib.rs:74-76,315-326`;
-  `languages/cq-lang-structures/src/lib.rs:809-816`). Removing it needs a core
-  way to declare a host duplicate-free or to hand deduplication to the
-  consumer. This is the remaining same-generation gap.
-- Workload tests are plain case files (`features/workloads/src/queries`):
-  query once, input helpers, golden check; pairwise CQ matrix (329 pairs per
-  family, named configurations) plus a 2,400-configuration triangle kernel;
-  rejected pipelines are UI fixtures. Workload tests 14,357 → 2,982; cold
-  test build 874 → 169 s.
-- Integration validation (`codex/integrate-upstream`): root 517, Datalog 57,
-  extensions 53, workloads 2,982; 151 byte-exact DuckDB goldens; dependency
-  isolation/frontends/consumers; 21 unchanged public-API snapshots; packaged
-  external builds/tests for all 11 features and mandatory fixtures; formal
-  inventory 155 rules. Datalog needed no API adaptation. Cargo ran serially
-  with two build jobs and separate root/feature targets.
-- Pre-integration SF 1 (one run): Q19 22.5, D19 12.7, D27 16.3, D72 75.9, H08 17.9,
-  H09 106.7, H03 28.1, Q6 16.5, H05 35.6, H21 107.3, H07 44.2, D85 62.8,
-  H07_block 72.6 ms; all exact. The H08/D19 slowdown seen on the abandoned
-  `codex/datalog` branch is absent, so it came from its core changes.
+- Structure (spec `doc/formal/datalog.tex`): checked languages Source, Strata,
+  Incremental, Storage, Round (each a `cq_stage::Language`); passes `if let`
+  surface, stratify, incremental (semi-naive only, by decision), storage,
+  fork, print_rounds; a Datalog-owned named configuration; shared printer
+  library `cq-datalog-print`; resume by entering any pass macro. Contracts
+  admit any correct choice, and Round records every former printer decision
+  (providers, maintenance, phases, publication order, termination, observer,
+  key scope, outputs). `cq-datalog-testkit` executes each IR's meaning.
+- Holes are ordinary CQ programs (default tail `sequence → sequential →
+  translate_pull`); typed hole interfaces (pull/push) are checked against a
+  terminal registry; Round rewrites may change one hole's CQ sub-pipeline.
+- Dedup ownership: Storage proves hosts canonical and Round records `admit R
+  from [holes]`, discharging `host_set .. discharged` and `consumer canonical`
+  (`doc/formal/context.tex`); rule holes build no local `__cq_seen`.
+- Negation is core `!R(..)` (anti-join, `doc/formal/guards.tex`) over key sets
+  built once per stratum; zero per-call index builds.
+- Fx hashing is the default; keyed `cq_storage` providers via
+  `hasher(keyed)`/`hasher_round(keyed)` (`mini-keyed` engines).
+- Compile time (base DOOP crate): macro expansion 139 → 3.4 s (holes declare
+  only what they read, one check per pass, linear source checks, optimized
+  proc macros); codegen partitioned per component/hole; one crate per engine.
+- Parallel extension: partition Round rewrite + Rayon printer, sharded
+  admission, per-layout exclusive publication, `self_dedup per_task` through
+  the checked push-terminal rewrite (Structures `print_push`, because the
+  Sequence back end has no supplied-consumer entry, `cq-sequence-pull`
+  `lib.rs:654-711`). DOOP at 15 threads ≈ 0.8 s (cassandra), 2.3 s (xalan);
+  all six apps exact vs Ascent sequentially and at 15 threads.
+- Open: reach chain at 15 threads below sequential; nested CQ code in one
+  codegen unit; rule-local aggregates; FlowLog comparison; partial-Rust
+  multi-round refinement; surface sugar (disjunction, facts, rule macros).
+- On hold (GPU-side storage design first): lattices and custom providers;
+  DOOP probe efficiency; geometric run merging.
+- Not context facts (see context.tex): declared keys (need a provenance
+  model), first-witness consumption, guard totality, terminal canonical
+  return.
+- Upstream items (GPU side): `sequence_conformance` corpus test does not finish
+  within 20 min (skip by exact name in workload runs); core→feature edges
+  (`cq-sequence-lowering` and `cq-sequence-pull` dev-deps, `cq-sequence-plan`
+  → `features/sequence-rewrites/passes`); packaged external gate fails on
+  `cq-testkit`'s optional path dependency on `features/sequence-tasks`;
+  `translate_pull` codegen triggers `clippy::unused_unit` in workloads.
+- Archived: abandoned v1-design branches are tags `archive/<name>`; the parked
+  pre-redesign refactor is `../mini_linq-archive/datalog-par-factor.patch`.
 
 Approved core integration decisions:
 
@@ -431,93 +435,5 @@ Raw data: `features/workloads/target/bench/tpch-1-reduction-comparison.{tsv,json
 | tpch_q06 | 1 | 17.136 | 17.099 | 8.961 |
 | tpch_q19 | 1 | 12.828 | 12.804 | 108.081 |
 
-Tooling notes: `tools/check_public_api.py` reads `ROOT/target/doc` regardless
-of `CARGO_TARGET_DIR`; the external gate needs `TMPDIR=/private/tmp` on macOS.
-
-Datalog compiler structure (`codex/datalog-redesign`, spec
-`doc/formal/datalog.tex`): checked languages Source, Strata, Incremental,
-Storage, Round (each `cq_stage::Language`), passes stratify / incremental /
-storage / fork / print_rounds plus the `if let` surface pass, wired by a
-Datalog-owned named configuration; shared printer library
-`cq-datalog-print`; resume by entering any pass macro. Default expansion
-byte-identical to `076bb40`.
-
-Admissibility (design step 3, `95acd2d`): contracts admit any correct
-choice (coarser strata without internal negation, at-least-once variant
-coverage, any layout set whose recorded reads have bound or constant keys);
-`check_rewrite` checks real per-IR preservation, so Source / Strata / Storage
-rewrite plugins are live (test plugins in `features/datalog/test-passes`).
-`cq-datalog-testkit` adds a typed naive reference evaluator with ⊥ as panic.
-Open: hole interfaces accept only `pull` printers on the configured
-allowlist. Storage/Round now record every former printer decision (providers,
-maintenance, phases, publication order, termination, observer placement, key
-scope, output conversion; `7360ce8`, `11f7d59`); remaining printer premises:
-empty `Default` construction for seen sets and layout hosts, slice-backed
-sources for the parallel partition.
-
-Remaining Datalog work: rule-local aggregates; FlowLog comparison;
-partial-Rust multi-round refinement.
-
-Parallel Datalog is the extension workspace `features/datalog-parallel`
-(partition Round rewrite + Rayon printer, selected by pipeline config; base
-has no parallel code). Slice 2 (`cfa8201`, `ed3831f`): full-tuple sharded
-`seen` with parallel admission; native layout maps published in parallel,
-one exclusive task per layout (fully sharded layouts were measured and
-rejected: per-probe shard routing slowed evaluation); adaptive grain
-`max(64, n/(4·threads))` fixed the avrora plateau (coarse 1024-row chunks on
-a small, expensive driver); recorded inline threshold. 15 threads, seconds
-(slice 1 → slice 2): cassandra 1.33 → 0.84, avrora 2.66 → 1.63, lusearch
-1.63 → 1.10, xalan 3.74 → 2.57, tomcat 1.74 → 1.14, zxing 2.80 → 1.99.
-Residual: reach chain 4096 still 0.74× sequential at 15 threads.
-
-Fx hashing (`dadaed6`, opt-in plug-in `cq_datalog_hasher::hasher(fx)` +
-`hasher_round(fx)` + hole `retype(dedup => Fx)`): DOOP 3-run interleaved
-medians, geometric mean 1.277× sequential, 1.123× at 15 threads; all 26
-relations exact vs Ascent for every app. Short reach chains mixed (−5.5% at
-1024 nodes). Core aHash remains only in 2 eager HashIndex sites and lazy
-fallbacks. Defaults unchanged pending a decision (Fx for trusted analytical
-inputs; keyed aHash resists adversarial keys). Next from Ascent: delta
-layouts built during admission, heavy-bucket splitting.
-
-On hold until the GPU-side storage work settles, so storage is designed once
-for both: lattices and custom providers; DOOP probe efficiency (flat value
-storage, batched/prefetched probes on Datalog hosts; probes are 43–46% of DOOP
-compute at `8dc918a`); geometric run merging.
-
-Context facts (`doc/formal/context.tex`, core change `37a545a`/`655ceb6`,
-approved): Physical records `host_set R [discharged];` and
-`consumer canonical;`; CK-Return relaxes the returned canonical boundary;
-facts enter only through `lower`/`select` argument packets into fact-free
-sources, and any factful source needs an exact `context {..}` envelope
-(CTX-Entry), so a top-level `mini_linq!` cannot carry them. Fact-free
-expansion is byte-identical. Datalog discharge landed (`2c6b23f`): rule holes
-have no local `__cq_seen`; admission owns every relation's set; the parallel
-extension restores baseline candidate counts with an erasable `self_dedup
-per_task` phase (task collector before sharded admission), realized through
-the checked per-hole push-terminal rewrite. Known: `experiments/gpu/printer`
-still certifies discharged hosts (GPU side's file). Not context facts (by
-design, see context.tex): declared keys (need a provenance model; out of
-scope), first-witness consumption (lower-level `exists`/early stop), guard
-totality (CQ term semantics: earned only by the relational vocabulary; the
-redesign landed as `f86f387`/`7b92d4e`/`2258607`, with Datalog negation as
-anti-joins over once-per-stratum key sets and zero per-call index builds),
-terminal canonical return (an exported Structures guarantee). Pre-existing
-upstream: `sequence_conformance` (Sequential vs Tasks over the corpus) does
-not finish within 20 min on base; one branch run sat CPU-idle for 6 h.
-Dependency gate (upstream, GPU side): core `cq-sequence-lowering` dev-depends
-on feature crates, and core `cq-sequence-plan` depends on
-`features/sequence-rewrites/passes`; the packaged external gate fails on
-`cq-testkit`'s optional path dependency on `features/sequence-tasks`.
-
-Sequence cutover (`358012d`, upstream): Datalog holes now end in `sequence →
-sequential → translate_pull`. The parallel extension's push holes replace that
-whole tail with the Structures `print_push` terminal (`fcc3fca`), because the
-Sequence back end has no supplied-consumer entry (`cq-sequence-pull`
-`lib.rs:654-711` collects a `Vec`; `sequence-tasks` uses the same path);
-GPU-side/core follow-up. DOOP vs `9d67023`: sequential −0.4/−1.4%,
-15 threads +3.8% (cassandra) / −4.0% (xalan); exact on all six.
-
-The abandoned design (`codex/datalog`, `codex/datalog-lang`,
-`codex/maintained-structures`, `codex/datalog-*`, `codex/tests-reshape`,
-`codex/cleanup-folders`, `codex/testkit-backend-identity`) changed core and is
-kept only for reference.
+Tooling notes: the external gate needs `TMPDIR=/private/tmp` on macOS; run
+long suites under a hard timeout.

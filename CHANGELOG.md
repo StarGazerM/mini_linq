@@ -7,6 +7,18 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Cleanup after the Sequence cutover and guard redesign: remove the
+  test-only `cq_physical_realization::sources`, the uncalled
+  `cq_print::Context::row` (and make `borrowed_pattern` private), unread
+  `printer = true` metadata, and the `#[total]` migration diagnostic (a
+  generic attribute error remains); share one uniqueness inference
+  (`physical::inherited_key`) between Structures and the lowering check;
+  dependency gate admits the Sequence adapter dependencies and still rejects
+  core→feature edges; API snapshot tool honors `CARGO_TARGET_DIR`. Fix raw
+  identifiers (`r#x`, `r#S`) in CQ negation. Datalog: remove the unadopted
+  `print-hole` experiment and the unused `cq_rewrites` re-export. Replace
+  `cq-ext-negation` (`neg!{..}`) with core `!R(..)` in every workload; the
+  extension is deleted, goldens byte-identical.
 - Reconcile the GPU TPC-H planner with earned guard position independence:
   host String filtering no longer relies on the removed totality assertion.
 - Make guard motion a relational-language property: remove `#[total]`,
@@ -210,8 +222,8 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   opt-level = 3`). Per DOOP engine, proc-macro work 65 s → 3.2 s (debug) /
   11.7 s → 0.7 s (release); base DOOP crate macro expansion 139 s → 3.4 s.
 
-- Opt-in Datalog Fx hashing plug-in (Storage + Round rewrites; hole dedup via
-  `retype`); parallel admission reuses the routing hash. DOOP 1.28× faster
+- Datalog Fx hashing plug-in (Storage + Round rewrites), since made the
+  default; parallel admission reuses the routing hash. DOOP 1.28× faster
   sequential and 1.12× at 15 threads (geometric means), exact vs Ascent.
 
 - Parallel Datalog slice 2 (extension): sharded parallel admission and
@@ -240,7 +252,7 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   workspace (pipeline plug-in; the `parallel;` keyword is removed). Default
   expansion byte-identical; DOOP exact; core unchanged.
 
-- Datalog `parallel;` (opt-in, Rayon, `features/datalog` only, core unchanged):
+- Datalog `parallel;` (Rayon; since moved to `features/datalog-parallel` and the keyword removed):
   rule holes run concurrently; a body-position-0 key-0 scan (delta `Vec` or
   key-0 full layout bucket) is split into contiguous chunks, recorded and
   checked as fork partition metadata. Admission and publication stay
@@ -420,9 +432,8 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   semijoins. Tree reduction only on acyclic scopes and only along
   filter-supported edges; exact block cuts on any scope.
 - Relational disjunctions derive implied per-occurrence domains, keeping the
-  exact predicate. Guards over allowlisted total std operations, or marked
-  `#[total] if <expr>`, move like relational filters; checkers recompute
-  domains and reject invented totality.
+  exact predicate; checkers recompute domains. (Guard motion was later made a
+  relational-language property; see the guard redesign entry above.)
 - Aggregates: redundant dedup layers removed, `SingleGroup` for constant-group
   folds, fast hasher for grouped containers; `AdaptiveKeySet` no longer
   allocates per duplicate key.
@@ -444,7 +455,7 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   H07 880 → 44 ms, H09 2,170 → 107 ms, H05 269 → 41 ms. D85 regressed to
   61 ms in the integrated tree (open item). Details in `doc/STATUS.md`.
 
-### Datalog branch (`codex/datalog-v2`, not merged)
+### Datalog (first integration)
 
 - `features/datalog`: Datalog on the unmodified compiler. Checked stratified,
   semi-naive stages resumable from text; core `!R(..)` negation; Datalog-owned

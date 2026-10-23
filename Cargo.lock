@@ -411,19 +411,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-ext-negation"
-version = "0.1.0"
-dependencies = [
- "cq-ext-support",
- "cq-lang-cq",
- "cq-stage",
- "cq-syntax",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "cq-ext-recursion"
 version = "0.1.0"
 dependencies = [
@@ -874,7 +861,6 @@ version = "0.1.0"
 dependencies = [
  "cq-ext-aggregate",
  "cq-ext-correlated",
- "cq-ext-negation",
  "cq-ext-recursion",
  "cq-index-policy",
  "cq-join-filters",
