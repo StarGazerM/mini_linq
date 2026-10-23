@@ -800,7 +800,6 @@ impl Schedule {
                     results[&symbol_name(&g.input)],
                     &crate::syntax::Filter {
                         if_token: g.if_token,
-                        total: None,
                         condition: g.condition.clone(),
                     },
                     g.environment.as_ref(),
@@ -1177,6 +1176,11 @@ struct Wiring {
 }
 
 fn wiring(schedule: &Schedule, intern: &mut HashMap<Wiring, usize>) -> Result<usize, String> {
+    let output = schedule.output.ok_or("schedule has no output")?;
+    Ok(wiring_ids(schedule, intern)[output])
+}
+
+fn wiring_ids(schedule: &Schedule, intern: &mut HashMap<Wiring, usize>) -> Vec<usize> {
     #[derive(Clone, Copy)]
     struct Wired {
         id: usize,
@@ -1282,7 +1286,63 @@ fn wiring(schedule: &Schedule, intern: &mut HashMap<Wiring, usize>) -> Result<us
             projection: matches!(node.kind, Kind::Project) && semijoin.is_none(),
         });
     }
-    Ok(nodes[schedule.output.ok_or("schedule has no output")?].id)
+    nodes.into_iter().map(|node| node.id).collect()
+}
+
+// Native anti joins are relational predicates, not positive witnesses or
+// fallback branch labels. Intern their entire negative operand exactly while
+// leaving the positive prefix free to reorder under the ordinary proof.
+fn native_antis(
+    schedule: &Schedule,
+    intern: &mut HashMap<Wiring, usize>,
+) -> Vec<(usize, Predicate)> {
+    if !schedule.nodes.iter().any(|node| {
+        matches!(node.kind, Kind::Anti(_))
+            && !matches!(schedule.nodes[node.operands[1]].kind, Kind::Negative(_))
+    }) {
+        return Vec::new();
+    }
+    let identities = wiring_ids(schedule, intern);
+    let mut reachable = vec![false; schedule.nodes.len()];
+    if let Some(output) = schedule.output {
+        reachable[output] = true;
+    }
+    for rust in &schedule.chain {
+        reachable[rust.input] = true;
+    }
+    for (index, node) in schedule.nodes.iter().enumerate().rev() {
+        if reachable[index] {
+            for operand in &node.operands {
+                reachable[*operand] = true;
+            }
+        }
+    }
+    schedule
+        .nodes
+        .iter()
+        .enumerate()
+        .filter_map(|(index, node)| {
+            let Kind::Anti(keys) = &node.kind else {
+                return None;
+            };
+            let right = node.operands[1];
+            if !reachable[index] || matches!(schedule.nodes[right].kind, Kind::Negative(_)) {
+                return None;
+            }
+            let mut keys: Vec<_> = keys.iter().collect();
+            keys.sort_unstable();
+            Some((
+                index,
+                Predicate {
+                    shape: format!("native anti {} {keys:?}", identities[right]),
+                    columns: keys
+                        .into_iter()
+                        .map(|key| schedule.nodes[node.operands[0]].heading[key].clone())
+                        .collect(),
+                },
+            ))
+        })
+        .collect()
 }
 
 fn compare(source: &Schedule, target: &Schedule) -> Result<(), String> {
@@ -1389,6 +1449,9 @@ fn compare(source: &Schedule, target: &Schedule) -> Result<(), String> {
             p.columns.iter().map(|c| uf.label(columns[c])).collect(),
         )
     };
+    let mut negative_intern = HashMap::new();
+    let source_antis = native_antis(source, &mut negative_intern);
+    let target_antis = native_antis(target, &mut negative_intern);
     let predicates = |schedule: &Schedule, uf: &mut UnionFind| {
         let mut facts = HashSet::new();
         for node in &schedule.nodes {
@@ -1398,7 +1461,17 @@ fn compare(source: &Schedule, target: &Schedule) -> Result<(), String> {
         }
         facts
     };
-    let (sf, tf) = (predicates(source, &mut su), predicates(target, &mut tu));
+    let (mut sf, mut tf) = (predicates(source, &mut su), predicates(target, &mut tu));
+    sf.extend(
+        source_antis
+            .iter()
+            .map(|(_, predicate)| key(predicate, &mut su)),
+    );
+    tf.extend(
+        target_antis
+            .iter()
+            .map(|(_, predicate)| key(predicate, &mut tu)),
+    );
     if sf != tf {
         return Err("relational constraints or projection correlations differ from source".into());
     }
@@ -1433,6 +1506,12 @@ fn compare(source: &Schedule, target: &Schedule) -> Result<(), String> {
             predicate_requests[*region].push((predicate.shape.clone(), arguments));
         }
     }
+    for (index, predicate) in &source_antis {
+        predicate_requests[sr[*index]].push((
+            predicate.shape.clone(),
+            predicate.columns.iter().map(|c| columns[c]).collect(),
+        ));
+    }
     for (ordinal, (s, t)) in source.chain.iter().zip(&target.chain).enumerate() {
         if s.arguments.keys().collect::<HashSet<_>>() != t.arguments.keys().collect() {
             return Err("Rust chain input bindings differ".into());
@@ -1460,6 +1539,13 @@ fn compare(source: &Schedule, target: &Schedule) -> Result<(), String> {
                 predicate.columns.iter().map(|c| columns[c]).collect(),
             ));
         }
+    }
+    for (index, predicate) in &target_antis {
+        additions[tr[*index]].push(target_predicates.len());
+        target_predicates.push((
+            predicate.shape.clone(),
+            predicate.columns.iter().map(|c| columns[c]).collect(),
+        ));
     }
     let mut before = Prefix::new(columns.len(), target_predicates);
     let mut reductions = vec![Vec::new(); buckets.len()];

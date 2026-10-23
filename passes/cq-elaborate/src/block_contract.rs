@@ -18,7 +18,7 @@ fn paths(
     for (c, item) in body.iter().enumerate() {
         let path = parent.map_or_else(|| Occurrence::new(c), |(p, j)| p.child(j, c));
         match item {
-            cq::BodyItem::Positive { .. } => result.push(path),
+            cq::BodyItem::Positive { .. } | cq::BodyItem::Negation(_) => result.push(path),
             cq::BodyItem::Block(block) => {
                 result.push(path.clone());
                 for (j, b) in block.branches.iter().enumerate() {
@@ -131,17 +131,7 @@ impl Body<'_, '_> {
                     })
                     .expect("VO block coverage");
                 let over = facts.rust.then(|| self.seed());
-                let domain = (!facts.rust
-                    && block.branches.iter().any(|branch| {
-                        let generated: BTreeSet<_> = cq::blocks::walk(&branch.body)
-                            .into_iter()
-                            .filter_map(cq::BodyItem::atom)
-                            .flat_map(cq_syntax::Atom::variables)
-                            .map(symbol_name)
-                            .collect();
-                        facts.free.keys().any(|name| !generated.contains(name))
-                    }))
-                .then(|| {
+                let domain = (!facts.rust && super::needs_domain(block, &facts)).then(|| {
                     let saved = self.prefix;
                     if !facts.free.keys().all(|name| self.heading.contains(name)) {
                         let mut input = None;
@@ -368,6 +358,35 @@ impl Body<'_, '_> {
                             constraints: std::iter::once(c.clone()).collect(),
                         },
                     ));
+                }
+                vo::Step::Negation(negation, _) => {
+                    let clause = self
+                        .body
+                        .iter()
+                        .enumerate()
+                        .find_map(|(clause, item)| {
+                            (!self.reads.contains(&clause)
+                                && matches!(item, cq::BodyItem::Negation(n) if n == negation))
+                            .then_some(clause)
+                        })
+                        .expect("VO negation coverage");
+                    let declaration = self
+                        .source
+                        .inputs()
+                        .find(|d| d.name == negation.atom.relation)
+                        .expect("contracted negative input");
+                    let bound = cq::blocks::bound_before(self.body, clause, &self.context);
+                    let path = self.path(clause);
+                    let input = self.seed();
+                    self.prefix = Some(super::negation::obligation(
+                        self.schedule,
+                        declaration,
+                        negation,
+                        &path,
+                        &bound,
+                        input,
+                    ));
+                    self.reads.insert(clause);
                 }
                 vo::Step::Guard(g, _) => {
                     let input = self.seed();

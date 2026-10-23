@@ -144,36 +144,11 @@ pub enum Constraint {
         literals: CommaList<syn::Expr>,
     },
     Or(Vec<Vec<Constraint>>),
-    /// A trusted total Rust predicate, with explicit lexical-to-relational bindings.
-    Total {
-        expression: Box<syn::Expr>,
-        bindings: Vec<(Ident, Term)>,
-    },
 }
 
 impl syn::parse::Parse for Constraint {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        if input.peek(Token![#]) {
-            crate::parse_total_attribute(input)?;
-            let names;
-            syn::braced!(names in input);
-            let mut bindings = Vec::new();
-            while !names.is_empty() {
-                let name = names.parse()?;
-                names.parse::<Token![=]>()?;
-                bindings.push((name, names.parse()?));
-                if names.is_empty() {
-                    break;
-                }
-                names.parse::<Token![,]>()?;
-            }
-            let body;
-            syn::parenthesized!(body in input);
-            return Ok(Self::Total {
-                expression: Box::new(body.parse()?),
-                bindings,
-            });
-        }
+        crate::reject_guard_attributes(input)?;
         if !input.peek(syn::token::Paren) {
             return atomic(input);
         }
@@ -279,13 +254,6 @@ pub fn unexpected(input: ParseStream<'_>, expected: &str) -> syn::Error {
 impl ToTokens for Constraint {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         match self {
-            Self::Total {
-                expression,
-                bindings,
-            } => {
-                let bindings = bindings.iter().map(|(name, term)| quote!(#name = #term));
-                tokens.extend(quote!(#[total] { #(#bindings),* } (#expression)));
-            }
             Self::Compare {
                 left,
                 comparison,
@@ -315,43 +283,6 @@ impl ToTokens for Constraint {
 }
 
 impl Constraint {
-    pub fn total(expression: syn::Expr, logical: &BTreeSet<String>) -> Self {
-        use syn::{spanned::Spanned, visit::Visit};
-        #[derive(Default)]
-        struct Names(std::collections::BTreeMap<String, Ident>);
-        impl<'ast> Visit<'ast> for Names {
-            fn visit_expr_path(&mut self, path: &'ast syn::ExprPath) {
-                if path.qself.is_none() {
-                    if let Some(name) = path.path.get_ident() {
-                        self.0
-                            .entry(symbol_name(name))
-                            .or_insert_with(|| name.clone());
-                    }
-                }
-                syn::visit::visit_expr_path(self, path);
-            }
-        }
-        let mut names = Names::default();
-        names.visit_expr(&expression);
-        let bindings = crate::rust::free_variables(&expression)
-            .dependencies(logical)
-            .into_iter()
-            .map(|name| {
-                let name = names.0.remove(&name).unwrap_or_else(|| {
-                    let mut id = syn::parse_str::<Ident>(&name)
-                        .unwrap_or_else(|_| Ident::new_raw(&name, expression.span()));
-                    id.set_span(expression.span());
-                    id
-                });
-                (name.clone(), Term::Variable(name))
-            })
-            .collect();
-        Self::Total {
-            expression: Box::new(expression),
-            bindings,
-        }
-    }
-
     /// Formal rule E-Domain: Project every disjunct's literal restrictions onto a common variable, retaining the exact predicate.
     pub fn implied_domains(&self) -> Vec<Self> {
         let Self::Or(branches) = self else {
@@ -404,7 +335,6 @@ impl Constraint {
     }
     pub fn terms(&self) -> Vec<&Term> {
         match self {
-            Self::Total { bindings, .. } => bindings.iter().map(|(_, term)| term).collect(),
             Self::Compare { left, right, .. } => vec![left, right],
             Self::Between { term, low, high } => vec![term, low, high],
             Self::In { term, .. } => vec![term],
@@ -428,7 +358,6 @@ impl Constraint {
 
     pub fn ordered_variables(&self) -> Vec<&Ident> {
         match self {
-            Self::Total { .. } => Vec::new(),
             Self::Compare { comparison, .. } if !comparison.ordered() => Vec::new(),
             Self::In { .. } => Vec::new(),
             Self::Or(branches) => branches
@@ -442,7 +371,6 @@ impl Constraint {
 
     pub fn map_terms(&mut self, f: &mut impl FnMut(&mut Term)) {
         match self {
-            Self::Total { bindings, .. } => bindings.iter_mut().for_each(|(_, term)| f(term)),
             Self::Compare { left, right, .. } => {
                 f(left);
                 f(right);
@@ -500,7 +428,6 @@ impl Constraint {
             Term::Literal(l) => quote!(#l),
         };
         match self {
-            Self::Total { expression, .. } => quote!(#expression),
             Self::Compare {
                 left,
                 comparison,
@@ -545,20 +472,6 @@ impl Constraint {
             }
         }
         match self {
-            Self::Total { bindings, .. } => {
-                let names: BTreeSet<_> =
-                    bindings.iter().map(|(name, _)| symbol_name(name)).collect();
-                if names.len() != bindings.len()
-                    || bindings
-                        .iter()
-                        .any(|(_, term)| !matches!(term, Term::Variable(_)))
-                {
-                    return Err(syn::Error::new_spanned(
-                        self,
-                        "total predicate bindings require distinct names and query variables",
-                    ));
-                }
-            }
             Self::In { literals, .. }
                 if literals.is_empty() || literals.iter().any(|l| !crate::equality::literal(l)) =>
             {

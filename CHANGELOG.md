@@ -7,6 +7,19 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Make guard motion a relational-language property: remove `#[total]`,
+  `Filter.total`, `Constraint::Total`, and the Rust method/type-name allowlist.
+  Unrecognized Rust guards remain pinned to their written Rust chain and
+  preceding relational facts.
+- Accept safe CQ negated atoms `!R(args)` with already-bound variables,
+  constants and wildcards, binding no names. VO records negation as a relational
+  step, not a Rust step or reduction candidate, and elaboration uses the existing
+  RA anti-join. Datalog emits negated atoms against completed lower-stratum
+  inputs instead of asserted-total Rust membership guards.
+  Completed keys apply constants and repeated-variable equalities once per
+  stratum, then project distinct variables; rule calls use borrowed host
+  membership (or an empty-key witness test) without rebuilding negation indexes.
+
 - Add shared executable Sequence conformance in `cq-testkit`: Sequential and
   Rayon Tasks translations run on identical authored or deterministic inputs,
   comparing answer multiplicities (sets at canonical output boundaries).

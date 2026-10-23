@@ -3,6 +3,41 @@ use cq_testkit::{PassCase, SCENARIOS, cq_semantics, databases, semantics, valuat
 use quote::{ToTokens, quote};
 
 #[test]
+fn every_planner_preserves_relational_negation() {
+    for clause in ["!K(x,_)", "!K(_, _)", "!K(x,7)", "!K(x,x)"] {
+        let source: cq::Program = syn::parse_str(&format!(
+            "struct Q; relation R(x:i32); relation K(a:i32,b:i32);
+             answer(x) :- R(x), {clause};"
+        ))
+        .unwrap();
+        for rows in [vec![], vec![vec![1, 7], vec![2, 2]]] {
+            let database = std::collections::BTreeMap::from([
+                (
+                    "R".into(),
+                    std::collections::BTreeSet::from([vec![1], vec![2], vec![3]]),
+                ),
+                ("K".into(), rows.into_iter().collect()),
+            ]);
+            let expected = cq_semantics::evaluate_cq(&source, &database);
+            for planner in Planner::ALL {
+                let valuation = compile_valuation(&source, planner).unwrap();
+                let algebra = compile(&source, planner).unwrap();
+                assert_eq!(
+                    valuation_semantics::evaluate(&valuation, &database),
+                    expected,
+                    "{planner:?}: {clause}"
+                );
+                assert_eq!(
+                    semantics::evaluate_ra(&algebra, &database).output,
+                    expected,
+                    "{planner:?}: {clause}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn every_planner_preserves_generator_mode_and_written_chain() {
     let source: cq::Program = syn::parse_quote! {
         struct Q;
@@ -520,7 +555,7 @@ fn le_h05_plan_b_keeps_nation_as_an_existential_lookup() {
         answer(order_key,supplier_key,nation_key) :-
             Customer(customer_key,nation_key), Nation(nation_key,region_key),
             Region(region_key,"ASIA"), Orders(order_key,customer_key,order_date),
-            #[total] if *order_date >= 8766 && *order_date < 9131,
+            if *order_date >= 8766 && *order_date < 9131,
             Lineitem(order_key,supplier_key), Supplier(supplier_key,nation_key);
     };
     let valuation = compile_valuation(&source, Planner::Le).unwrap();

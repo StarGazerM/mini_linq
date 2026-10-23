@@ -146,6 +146,158 @@ fn fallback_is_lazy_and_shared_for_membership() {
 }
 
 #[test]
+fn negation_reuses_native_owned_and_borrowed_key_sets_without_builds() {
+    macro_rules! negative {
+        ($left:ident, $keys:ident) => {
+            ::mini_linq::compile! {
+                pipeline { plan = ::mini_linq::passes::plan(no_reduce); }
+                struct Q;
+                relation $left(a: i32);
+                relation $keys(a: i32);
+                answer(a) :- $left(a), !$keys(a);
+            }
+        };
+    }
+    let left = [(1,), (2,), (3,), (4,)];
+    let keys = Observed::new(std::collections::HashSet::from([(1,), (3,)]));
+    for _ in 0..3 {
+        assert_eq!(
+            negative!(left, keys).map(|(a,)| *a).collect::<Vec<_>>(),
+            [2, 4]
+        );
+    }
+    assert_eq!((keys.scans.get(), keys.reads.get()), (0, 12));
+
+    let values = [1, 3];
+    let keys = Observed::new(std::collections::HashSet::from([
+        (&values[0],),
+        (&values[1],),
+    ]));
+    for _ in 0..3 {
+        assert_eq!(
+            negative!(left, keys).map(|(a,)| *a).collect::<Vec<_>>(),
+            [2, 4]
+        );
+    }
+    assert_eq!((keys.scans.get(), keys.reads.get()), (0, 12));
+
+    let keys = Observed::new([(1,), (3,)]);
+    assert_eq!(
+        negative!(left, keys).map(|(a,)| *a).collect::<Vec<_>>(),
+        [2, 4]
+    );
+    assert_eq!((keys.scans.get(), keys.reads.get()), (1, 0));
+}
+
+#[test]
+fn lazy_negation_uses_native_membership_and_builds_scan_fallback_once() {
+    macro_rules! negative {
+        ($left:ident, $keys:ident) => {
+            ::mini_linq::compile! {
+                pipeline {
+                    plan = ::mini_linq::passes::plan(no_reduce);
+                    physical = [::core_pass_fixtures::lazy_anti];
+                }
+                struct Q;
+                relation $left(a: i32);
+                relation $keys(a: i32);
+                answer(a) :- $left(a), !$keys(a);
+            }
+        };
+    }
+    let left = [(1,), (2,), (3,), (4,)];
+    let values = [1, 3];
+    let keys = Observed::new(std::collections::HashSet::from([
+        (&values[0],),
+        (&values[1],),
+    ]));
+    for _ in 0..3 {
+        assert_eq!(
+            negative!(left, keys).map(|(a,)| *a).collect::<Vec<_>>(),
+            [2, 4]
+        );
+    }
+    assert_eq!((keys.scans.get(), keys.reads.get()), (0, 12));
+    let keys = Observed::new([(1,), (3,)]);
+    assert_eq!(
+        negative!(left, keys).map(|(a,)| *a).collect::<Vec<_>>(),
+        [2, 4]
+    );
+    assert_eq!((keys.scans.get(), keys.reads.get()), (1, 0));
+}
+
+#[test]
+fn computed_negation_keys_still_probe_owned_and_borrowed_hosts_in_place() {
+    macro_rules! negative {
+        ($left:ident, $keys:ident) => {
+            ::mini_linq::compile! {
+                pipeline { plan = ::mini_linq::passes::plan(no_reduce); }
+                struct Q;
+                relation $left(a: i32);
+                relation $keys(y: String);
+                answer(a) :- $left(a), let y: String = a.to_string(), !$keys(y);
+            }
+        };
+    }
+    let left = [(1,), (2,), (3,)];
+    let values = [String::from("1"), String::from("3")];
+    let keys = Observed::new(std::collections::HashSet::from([
+        (values[0].clone(),),
+        (values[1].clone(),),
+    ]));
+    cq_storage::counters::reset();
+    assert_eq!(
+        negative!(left, keys).map(|(a,)| *a).collect::<Vec<_>>(),
+        [2]
+    );
+    assert_eq!((keys.scans.get(), keys.reads.get()), (0, 3));
+    assert_eq!(cq_storage::counters::snapshot().index_builds, 0);
+    let keys = Observed::new(std::collections::HashSet::from([
+        (&values[0],),
+        (&values[1],),
+    ]));
+    cq_storage::counters::reset();
+    assert_eq!(
+        negative!(left, keys).map(|(a,)| *a).collect::<Vec<_>>(),
+        [2]
+    );
+    assert_eq!((keys.scans.get(), keys.reads.get()), (0, 3));
+    assert_eq!(cq_storage::counters::snapshot().index_builds, 0);
+    let keys = Observed::new([(String::from("1"),), (String::from("3"),)]);
+    cq_storage::counters::reset();
+    assert_eq!(
+        negative!(left, keys).map(|(a,)| *a).collect::<Vec<_>>(),
+        [2]
+    );
+    assert_eq!((keys.scans.get(), keys.reads.get()), (1, 0));
+    assert_eq!(cq_storage::counters::snapshot().index_builds, 1);
+}
+
+#[test]
+fn generator_negation_keys_use_native_borrowed_membership_without_builds() {
+    let left = [(1,), (2,), (3,)];
+    let values = [String::from("1"), String::from("3")];
+    let keys = Observed::new(std::collections::HashSet::from([
+        (&values[0],),
+        (&values[1],),
+    ]));
+    cq_storage::counters::reset();
+    let answers: Vec<_> = ::mini_linq::compile! {
+        pipeline { plan = ::mini_linq::passes::plan(no_reduce); }
+        struct Q;
+        relation left(a:i32); relation keys(y:String);
+        answer(a) :- left(a), for y in Some(a.to_string()), !keys(y);
+    }
+    .map(|(a,)| *a)
+    .collect();
+    assert_eq!(answers, [2]);
+    assert_eq!((keys.scans.get(), keys.reads.get()), (0, 3));
+    let cost = cq_storage::counters::snapshot();
+    assert_eq!(cost.index_builds, 0);
+    assert_eq!(cost.lookups, 3);
+}
+
+#[test]
 fn first_host_answer_streams_and_owns_unused_dispatch_state() {
     let values: Vec<_> = (0..100_000).map(|a| (a,)).collect();
     let l = Observed::new(values.as_slice());

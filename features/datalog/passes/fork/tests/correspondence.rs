@@ -47,13 +47,6 @@ fn authored_holes_preserve_contracts_and_select_borrowed_hosts() {
         cq_lang_cq::contract::check(hole).unwrap();
         let parsed: cq_lang_cq::Program = syn::parse2(hole.to_token_stream()).unwrap();
         assert_eq!(&parsed, hole);
-        assert!(
-            !hole
-                .query
-                .body
-                .iter()
-                .any(|item| matches!(item, BodyItem::Negation(_)))
-        );
     }
     let hole = &target.holes[stratum.steps[0].hole].cq;
     let name = &hole.name;
@@ -64,9 +57,10 @@ fn authored_holes_preserve_contracts_and_select_borrowed_hosts() {
     let expected: cq_lang_cq::Program = syn::parse2(quote! {
         struct #name;
         relation #lookup(x:i32,y:i32) = (&#lookup_host);
+        relation #keys(x:i32) = (#keys);
         relation #binding(x:i32,y:i32) = (#binding);
         relation #name(x:i32,y:i32);
-        #name(*x,*z) :- #binding(x,y), #lookup(y,z), #[total] if !#keys.contains(&(z,));
+        #name(*x,*z) :- #binding(x,y), #lookup(y,z), !#keys(z);
     })
     .unwrap();
     assert_eq!(hole, &expected);
@@ -81,8 +75,14 @@ fn every_hole_declares_exactly_its_reads_and_output() {
         let mut required =
             std::collections::BTreeSet::from([cq_syntax::symbol_name(&hole.query.head.relation)]);
         for item in &hole.query.body {
-            if let BodyItem::Positive { atom } = item {
-                required.insert(cq_syntax::symbol_name(&atom.relation));
+            match item {
+                BodyItem::Positive { atom } => {
+                    required.insert(cq_syntax::symbol_name(&atom.relation));
+                }
+                BodyItem::Negation(negative) => {
+                    required.insert(cq_syntax::symbol_name(&negative.atom.relation));
+                }
+                _ => {}
             }
         }
         let actual: std::collections::BTreeSet<_> = hole
@@ -96,7 +96,7 @@ fn every_hole_declares_exactly_its_reads_and_output() {
     let key = target.context.strata[0].keys[0].hole;
     assert_eq!(target.holes[key].cq.declarations.len(), 2);
     let step = target.context.strata[0].steps[0].hole;
-    assert_eq!(target.holes[step].cq.declarations.len(), 3);
+    assert_eq!(target.holes[step].cq.declarations.len(), 4);
 }
 
 #[test]
@@ -173,7 +173,31 @@ fn checker_rejects_negation_mutations() {
     rejected(|t| t.context.strata[0].keys[0].hole = usize::MAX);
     rejected(|t| {
         let hole = t.context.strata[0].steps[0].hole;
-        t.holes[hole].cq.query.body[2] = syn::parse_quote!(#[total] if true);
+        t.holes[hole].cq.query.body[2] = syn::parse_quote!(if true);
+    });
+    rejected(|t| {
+        let stratum = &t.context.strata[0];
+        let hole = stratum.steps[0].hole;
+        let keys = &stratum.keys[0].name;
+        t.holes[hole].cq.query.body[2] = syn::parse_quote!(!#keys(y));
+    });
+    rejected(|t| {
+        let stratum = &t.context.strata[0];
+        let hole = stratum.steps[0].hole;
+        let keys = &stratum.keys[0].name;
+        t.holes[hole].cq.query.body[2] = syn::parse_quote!(!#keys(_));
+    });
+    rejected(|t| {
+        let stratum = &t.context.strata[0];
+        let hole = stratum.steps[0].hole;
+        let keys = &stratum.keys[0].name;
+        let declaration = t.holes[hole]
+            .cq
+            .declarations
+            .iter_mut()
+            .find(|declaration| declaration.name == *keys)
+            .unwrap();
+        declaration.value = Some(syn::parse_quote!(= (wrong_keys)));
     });
     rejected(|t| {
         let hole = t.context.strata[0].keys[0].hole;
@@ -325,6 +349,19 @@ fn filtered_key_sets_are_shared_per_stratum_not_per_probe() {
             (1, syn::parse_quote!(7))
         ]
     );
+    let rule_hole = &target.holes[second.seeds[0].hole].cq;
+    for (position, key) in second.keys.iter().enumerate() {
+        let name = &key.name;
+        let expected: BodyItem = syn::parse_quote!(!#name(_));
+        assert_eq!(rule_hole.query.body[position + 1], expected);
+        let declaration = rule_hole
+            .declarations
+            .iter()
+            .find(|declaration| declaration.name == *name)
+            .unwrap();
+        assert_eq!(declaration.columns[0].ty, syn::parse_quote!(()));
+        assert_eq!(declaration.value, Some(syn::parse_quote!(= (#name))));
+    }
     for entry in &target.holes {
         let hole = &entry.cq;
         cq_lang_cq::contract::check(hole).unwrap();
@@ -815,12 +852,12 @@ fn device_keys_have_owned_schema_and_checked_membership_intrinsic() {
         2,
         "only used layout and output"
     );
-    assert!(
-        target.holes[rule.hole]
-            .to_token_stream()
-            .to_string()
-            .contains("datalog :: contains")
+    let name = &key.name;
+    let expected: BodyItem = syn::parse_quote!(
+        if !::cq_gpu_runtime::datalog::contains(&#name, &(y,))
     );
+    assert!(matches!(&expected, BodyItem::Filter(_)));
+    assert_eq!(target.holes[rule.hole].cq.query.body[1], expected);
     target.context.representation = cq_lang_datalog_round::KeyRepresentation::Borrowed;
     assert!(check(&source, &target).is_err());
 }
@@ -923,4 +960,72 @@ fn providers_are_copied_and_key_providers_are_opaque_rewrite_premises() {
     let replay: Fork = syn::parse2(alternative.to_token_stream()).unwrap();
     assert_eq!(alternative, replay);
     check(&source, &replay).unwrap();
+}
+
+#[test]
+fn repeated_negative_columns_are_filtered_once_before_distinct_key_projection() {
+    let source = schedule(&syn::parse_quote! {
+        struct RepeatedKeys;
+        relation D(id:i32,x:String,y:String) = (domain);
+        relation R(kind:String,left:String,right:String,extra:i32) = (blocked);
+        relation A(id:i32);
+        output A;
+        A(*id) :- D(id,x,y), !R("blocked",x,x,_);
+        A(*id) :- D(id,x,y), !R("blocked",x,y,_);
+        A(*id) :- D(id,x,y), !R("blocked",y,y,_);
+        strata { component [A]; }
+        incremental { scheme seminaive_covering;
+            delta A = DA;
+            variant 0 seed { A(*id) :- D(id,x,y), !R("blocked",x,x,_); }
+            variant 1 seed { A(*id) :- D(id,x,y), !R("blocked",x,y,_); }
+            variant 2 seed { A(*id) :- D(id,x,y), !R("blocked",y,y,_); }
+        }
+    })
+    .unwrap();
+    let target = compile(&source).unwrap();
+    check(&source, &target).unwrap();
+    assert_eq!(source.negations.len(), 2);
+    assert_eq!(source.negations[0].columns, [1]);
+    assert_eq!(source.negations[0].equalities, [(1, 2)]);
+    let stratum = &target.context.strata[0];
+    assert_eq!(stratum.keys.len(), 2);
+    let key = &stratum.keys[0];
+    assert_eq!(key.columns, [1]);
+    assert_eq!(key.equalities, [(1, 2)]);
+    assert_eq!(stratum.keys[1].columns, [1, 2]);
+    assert!(stratum.keys[1].equalities.is_empty());
+    let hole = &target.holes[key.hole].cq;
+    assert_eq!(hole.query.head.args.len(), 1);
+    let BodyItem::Positive { atom } = &hole.query.body[0] else {
+        panic!("completed relation scan")
+    };
+    assert_eq!(atom.args[0], syn::parse_quote!("blocked"));
+    let left = &atom.args[1];
+    let right = &atom.args[2];
+    let expected = BodyItem::Equality(syn::parse_quote!(#left = #right));
+    assert_eq!(hole.query.body[1], expected);
+    let name = &key.name;
+    let expected_x: BodyItem = syn::parse_quote!(!#name(x));
+    let expected_y: BodyItem = syn::parse_quote!(!#name(y));
+    assert_eq!(
+        target.holes[stratum.seeds[0].hole].cq.query.body[1],
+        expected_x
+    );
+    assert_eq!(
+        target.holes[stratum.seeds[2].hole].cq.query.body[1],
+        expected_y
+    );
+    let restored: Fork = syn::parse2(target.to_token_stream()).unwrap();
+    assert_eq!(restored, target);
+    for equalities in [vec![], vec![(1, 3)], vec![(2, 1)], vec![(1, 2), (1, 2)]] {
+        let mut changed = target.clone();
+        changed.context.strata[0].keys[0].equalities = equalities;
+        assert!(check(&source, &changed).is_err());
+    }
+    let mut changed = target.clone();
+    changed.holes[key.hole].cq.query.body[1] = syn::parse_quote!(if true);
+    assert!(check(&source, &changed).is_err());
+    let mut changed_source = source.clone();
+    changed_source.negations[0].equalities.clear();
+    assert!(cq_lang_datalog_storage::contract::check(&changed_source).is_err());
 }

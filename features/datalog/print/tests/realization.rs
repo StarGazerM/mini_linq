@@ -564,7 +564,16 @@ fn rule_and_key_lower_continuations_carry_exact_recorded_context() {
         // Author an independent IX projection of the actual certified input.
         // The non-injective head still needs no per-hole result canonicalizer:
         // the rule admission/key-set consumer supplies that boundary.
-        let declaration = &hole.cq.declarations[0];
+        let declaration = hole
+            .cq
+            .declarations
+            .iter()
+            .find(|declaration| {
+                hole.facts
+                    .discharged_host_sets
+                    .contains(&declaration.name.to_string())
+            })
+            .unwrap();
         let host = &declaration.name;
         let column = &declaration.columns[0].name;
         let ix: cq_lang_ix::Program = syn::parse_quote! {

@@ -12,10 +12,15 @@
 //! Execution records specify admission, publication, termination, observer
 //! placement, component-local key scope, loop form, and output conversion.
 //! Opaque Rust providers carry the Storage laws as explicit premises.
-//! CQ holes declare exactly their positive inputs and head output, in context
-//! order, followed by any scan binding and the output. Negative keys are Rust
-//! predicate captures, not CQ inputs. Correspondence derives this schema
-//! independently of the fork producer and rejects unused or misbound inputs.
+//! CQ holes declare exactly their relational inputs in context order, including
+//! borrowed completed negative key sets, followed by any scan binding and the
+//! head output. CPU negation is a CQ `!K(args)` atom, not a Rust capture;
+//! device-owned keys retain an ordinary opaque membership guard. Correspondence
+//! derives these schemas and clauses independently of the fork producer and
+//! rejects unused or misbound inputs.
+//! Negative key holes apply constants and recorded repeated-column equalities
+//! before projecting one column per variable. Rule holes therefore probe the
+//! prepared host with distinct variables, without rebuilding a transformed RHS.
 //! Canonical consumers have exactly one relation admission or key-set owner.
 //! Each hole records typed context facts and the lowering invocation that
 //! introduces them. Raw CQ entry remains fact-free; checked lower arguments
@@ -89,6 +94,7 @@ pub struct KeySet {
     pub relation: usize,
     pub columns: Vec<usize>,
     pub filters: Vec<(usize, Expr)>,
+    pub equalities: Vec<(usize, usize)>,
     pub name: Ident,
     pub representation: KeyRepresentation,
     pub provider: syn::Type,
@@ -378,7 +384,7 @@ record!(Execution {
 record!(RoundPolicy { timing: Ident });
 record!(Relation { declaration: RelationDecl, providers: storage::Providers, all: Ident, seen: Ident, next: Ident, delta: Option<Ident>, delta_host: Option<Ident>, admit: Vec<usize> });
 record!(Layout { relation: usize, columns: Vec<usize>, key: usize, name: Ident, host: Ident, provider: syn::Type, maintenance: Ident });
-record!(KeySet { relation: usize, columns: Vec<usize>, filters: Vec<(usize,Expr)>, name: Ident, representation: KeyRepresentation, provider: syn::Type, hole: usize });
+record!(KeySet { relation: usize, columns: Vec<usize>, filters: Vec<(usize,Expr)>, equalities: Vec<(usize, usize)>, name: Ident, representation: KeyRepresentation, provider: syn::Type, hole: usize });
 record!(ScanBinding {
     source: InputSource,
     binding: Ident

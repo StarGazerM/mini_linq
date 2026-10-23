@@ -120,3 +120,51 @@ fn generators_round_trip_and_retain_chain_and_before() {
         .insert(0, syn::parse2(quote!(reduce R@0 with R@1(a);)).unwrap());
     assert!(valuation::contract::check(&changed).is_err());
 }
+
+#[test]
+fn negations_round_trip_bind_nothing_and_enforce_before_without_rust_chain_membership() {
+    let source: valuation::Program = syn::parse_quote! {
+        struct Negative; relation R(a:i32); relation K(a:i32,b:i32);
+        answer(x) :- R(x), if opaque(x), !K(x,_), let y = x;
+        valuation { R@0(x); !K(x,_); if opaque(x); let y = x; }
+    };
+    let analysis = valuation::contract::check(&source).unwrap();
+    assert!(analysis.introduces[1].is_empty());
+    assert_eq!(analysis.atoms.len(), 1);
+    assert_eq!(
+        syn::parse2::<valuation::Program>(source.to_token_stream()).unwrap(),
+        source
+    );
+    let mut early = source.clone();
+    early.valuation.steps.swap(0, 1);
+    assert!(valuation::contract::check(&early).is_err());
+    let mut late = source.clone();
+    let negation = late.valuation.steps.remove(1);
+    late.valuation.steps.push(negation);
+    assert!(
+        valuation::contract::check(&late)
+            .unwrap_err()
+            .to_string()
+            .contains("Before")
+    );
+    let mut missing = source.clone();
+    missing.valuation.steps.remove(1);
+    assert!(valuation::contract::check(&missing).is_err());
+    let mut duplicate = source.clone();
+    duplicate
+        .valuation
+        .steps
+        .insert(1, duplicate.valuation.steps[1].clone());
+    assert!(valuation::contract::check(&duplicate).is_err());
+    for reduction in [
+        quote!(reduce R@0 with K@2(x,_);),
+        quote!(reduce K@2 with R@0(x);),
+    ] {
+        let mut changed = source.clone();
+        changed
+            .valuation
+            .steps
+            .insert(0, syn::parse2(reduction).unwrap());
+        assert!(valuation::contract::check(&changed).is_err());
+    }
+}

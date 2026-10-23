@@ -1,5 +1,6 @@
-//! Stable autoref dispatch. The double-reference receiver tries a native read
-//! at the declared leading key type. The single-reference receiver builds once.
+//! Stable autoref dispatch. Membership first tries the borrowed query key
+//! through a triple-reference receiver; double-reference receivers try native
+//! reads at the declared leading key type. Single-reference receivers build once.
 use crate::rows::{Columns, Concat, OwnKey};
 use crate::{Candidates, ExactMembership, IndexRead, OrderedCursor, OrderedRead};
 use std::cell::{OnceCell, RefCell};
@@ -126,6 +127,42 @@ where
 {
     fn contains(self, key: &Q) -> bool {
         self.0.contains(&key.own_key())
+    }
+}
+
+// Borrowed key sets can answer the query's references directly, without
+// cloning the key into the declared owned type or initializing the fallback.
+impl<H, Q: OwnKey<Owned = K>, K, T, F> Contains<Q> for &&&Host<H, K, T, F>
+where
+    H: ExactMembership<Q>,
+{
+    fn contains(self, key: &Q) -> bool {
+        self.0.contains(key)
+    }
+}
+
+/// Membership with an owned fallback key. A computed query binding may be
+/// borrowed for the native probe even though retained fallback keys must own it.
+pub trait ContainsOwned<Q> {
+    fn contains_owned(self, key: &Q) -> bool;
+}
+impl<H, Q: OwnKey<Owned = K>, K, T: ExactMembership<K>, F: FnOnce() -> T> ContainsOwned<Q>
+    for &Host<H, K, T, F>
+{
+    fn contains_owned(self, key: &Q) -> bool {
+        self.1.get().contains(&key.own_key())
+    }
+}
+impl<H: ExactMembership<K>, Q: OwnKey<Owned = K>, K, T, F> ContainsOwned<Q> for &&Host<H, K, T, F> {
+    fn contains_owned(self, key: &Q) -> bool {
+        self.0.contains(&key.own_key())
+    }
+}
+impl<H: ExactMembership<Q>, Q: OwnKey<Owned = K>, K, T, F> ContainsOwned<Q>
+    for &&&Host<H, K, T, F>
+{
+    fn contains_owned(self, key: &Q) -> bool {
+        self.0.contains(key)
     }
 }
 

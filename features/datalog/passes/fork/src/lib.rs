@@ -1,5 +1,5 @@
 //! Record complete CQ holes, immutable round contexts, and their invocation queues.
-use cq_datalog_support::{Fresh, columns, ensure, filters};
+use cq_datalog_support::{Fresh, columns, ensure, equalities, filters};
 use cq_lang_datalog_round::cq::BodyItem;
 use cq_lang_datalog_round::{self as round, *};
 use cq_lang_datalog_storage as storage;
@@ -112,19 +112,19 @@ pub fn check(source: &storage::Program, target: &Program) -> syn::Result<()> {
     Ok(())
 }
 
-fn guard(atom: &cq_syntax::Atom, key: &KeySet) -> BodyItem {
+fn negation(atom: &cq_syntax::Atom, key: &KeySet) -> BodyItem {
     let name = &key.name;
     if key.representation == KeyRepresentation::DeviceSetOwned {
         let args = key.columns.iter().map(|&i| &atom.args[i]);
         return syn::parse_quote!(
-            #[total] if !::cq_gpu_runtime::datalog::contains(&#name, &(#(#args,)*))
+            if !::cq_gpu_runtime::datalog::contains(&#name, &(#(#args,)*))
         );
     }
     if key.columns.is_empty() {
-        syn::parse_quote!(#[total] if !#name.contains(&((),)))
+        syn::parse_quote!(!#name(_))
     } else {
         let args = key.columns.iter().map(|&i| &atom.args[i]);
-        syn::parse_quote!(#[total] if !#name.contains(&(#(#args,)*)))
+        syn::parse_quote!(!#name(#(#args),*))
     }
 }
 
@@ -167,10 +167,10 @@ fn scan_input(
     atom.relation = binding.clone();
     declaration
 }
-// Each hole owns only the CQ inputs it reads. Runtime key sets remain captured
-// by predicates rather than becoming CQ relation declarations.
+// Each hole owns only the CQ inputs it reads, including completed borrowed keys.
 fn hole_inputs<'a>(
     context: &RoundContext,
+    keys: &[KeySet],
     names: impl Iterator<Item = &'a Ident>,
 ) -> Vec<cq_syntax::RelationDecl> {
     let names: std::collections::BTreeSet<_> = names.map(symbol_name).collect();
@@ -207,6 +207,26 @@ fn hole_inputs<'a>(
                 .collect();
             let host = &layout.host;
             declaration.value = Some(syn::parse_quote!(= (&#host)));
+            inputs.push(declaration);
+        }
+    }
+    for key in keys {
+        if key.representation == KeyRepresentation::Borrowed
+            && names.contains(&symbol_name(&key.name))
+        {
+            let mut declaration = context.relations[key.relation].declaration.clone();
+            declaration.name = key.name.clone();
+            declaration.columns = if key.columns.is_empty() {
+                let column = &declaration.columns[0].name;
+                syn::parse_quote!(#column: ())
+            } else {
+                key.columns
+                    .iter()
+                    .map(|&column| declaration.columns[column].clone())
+                    .collect()
+            };
+            let host = &key.name;
+            declaration.value = Some(syn::parse_quote!(= (#host)));
             inputs.push(declaration);
         }
     }
@@ -425,6 +445,7 @@ fn construct(
                 let relation = analysis.positions[&symbol_name(&negative.atom.relation)];
                 let projection = columns(&negative.atom);
                 let selections = filters(&negative.atom);
+                let repeated = equalities(&negative.atom);
                 let planned = source
                     .negations
                     .iter()
@@ -433,14 +454,17 @@ fn construct(
                             && entry.relation == relation
                             && entry.columns == projection
                             && entry.filters == selections
+                            && entry.equalities == repeated
                     })
                     .expect("checked negative read plan");
                 let projection = planned.columns.clone();
                 let selections = planned.filters.clone();
+                let repeated = planned.equalities.clone();
                 let key_index = if let Some(index) = stratum.keys.iter().position(|key| {
                     key.relation == relation
                         && key.columns == projection
                         && key.filters == selections
+                        && key.equalities == repeated
                 }) {
                     index
                 } else {
@@ -448,6 +472,7 @@ fn construct(
                         relation,
                         columns: projection,
                         filters: selections,
+                        equalities: repeated,
                         name: fresh.id("keys"),
                         representation,
                         provider: syn::parse_quote!(::std::collections::HashSet<_, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>),
@@ -514,12 +539,17 @@ fn construct(
                             selections.push(quote!(if *#variable == (#expression)));
                         }
                     }
-                    let declarations = hole_inputs(&context, std::iter::once(source_name));
+                    for &(first, repeated) in &key.equalities {
+                        let first = &variables[first];
+                        let repeated = &variables[repeated];
+                        selections.push(quote!(if #first == #repeated));
+                    }
+                    let declarations = hole_inputs(&context, &[], std::iter::once(source_name));
                     holes.push(syn::parse2(quote!(struct #name; #(#declarations)* relation #name(#(#output_columns),*); #name(#(#selected),*) :- #source_name(#(#arguments),*) #(, #selections)*;))?);
                     stratum.keys.push(key);
                     stratum.keys.len() - 1
                 };
-                *item = guard(&negative.atom, &stratum.keys[key_index]);
+                *item = negation(&negative.atom, &stratum.keys[key_index]);
             }
             let scan = scan_source(&query, &context).map(|source| ScanBinding {
                 source,
@@ -534,8 +564,10 @@ fn construct(
             output.name = name.clone();
             let declarations = hole_inputs(
                 &context,
+                &stratum.keys,
                 query.body.iter().filter_map(|item| match item {
                     BodyItem::Positive { atom } => Some(&atom.relation),
+                    BodyItem::Negation(negative) => Some(&negative.atom.relation),
                     _ => None,
                 }),
             );

@@ -18,10 +18,10 @@
 //! opaque residual guard at the written position, in written order. In `a && f`,
 //! f already runs only where a holds; in `f && a`, moving total a earlier only
 //! shrinks f's domain. Mixed disjunctions and negations stay wholly opaque.
-//! Declared standard string `contains`/`starts_with`/`ends_with` and total
-//! Boolean compositions are also relational; `#[total] if e` explicitly asserts
-//! totality for other Rust expressions. Otherwise arithmetic, calls, methods,
-//! casts, indexing, blocks, macros and field access remain opaque.
+//! Calls, methods (including string membership), arithmetic, casts, indexing,
+//! blocks, macros and field access remain opaque. Relational negation `!R(args)`
+//! tests absence in a declared input, binds nothing, and is position-independent
+//! once its query variables are bound; wildcards are existential.
 //! Bare comparisons, `between`, and set membership are not CQ syntax.
 //! Normalized internal constraints retain the RA/IX/Physical forms.
 //! Functional extensionality of shared-reference Rust inputs permits canonical
@@ -47,7 +47,6 @@ pub mod hypergraph;
 pub mod normal;
 pub use blocks::{Block, Branch};
 mod sugar;
-mod total;
 pub use cq_syntax::Constraint;
 pub use cq_syntax::rust;
 pub use cq_syntax::{Equality, EqualityValue};
@@ -85,12 +84,6 @@ impl syn::parse::Parse for Program {
         }
         if queries.len() > 1 {
             sugar::combine(&mut program, queries)?;
-            let schema = program
-                .declarations
-                .iter()
-                .map(|d| (symbol_name(&d.name), d))
-                .collect();
-            total::recognize(&schema, &mut program.query.body, &BTreeMap::new())?;
         }
         Ok(program)
     }
@@ -108,21 +101,14 @@ impl Program {
     /// Surface extensions owning recursive rule syntax parse one rule before
     /// their own expansion; contracted core parsing combines multiple heads.
     pub fn parse_single(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
-        let mut program = Self {
+        Ok(Self {
             visibility: input.parse()?,
             struct_token: input.parse()?,
             name: input.parse()?,
             declaration_semi: input.parse()?,
             declarations: parse_declarations(input)?,
             query: input.parse()?,
-        };
-        let schema = program
-            .declarations
-            .iter()
-            .map(|d| (symbol_name(&d.name), d))
-            .collect();
-        total::recognize(&schema, &mut program.query.body, &BTreeMap::new())?;
-        Ok(program)
+        })
     }
     /// Input schemas in declaration order. Classifying the head is analysis,
     /// so parsing and token emission preserve every declaration where written.
@@ -206,7 +192,7 @@ impl Query {
 /// across that chain under the sufficient refinement check.
 ///
 /// ```text
-/// BodyItem ::= Atom | ["#[total]"] "if" RustExpr | "let" RustPat [":" RustType] "=" RustExpr
+/// BodyItem ::= Atom | "if" RustExpr | "let" RustPat [":" RustType] "=" RustExpr
 ///            | "for" RustPat "in" RustExpr
 ///            | Ident "!" "{" TokenTree* "}"
 ///            | "!" Atom | "agg" RustPat "=" Aggregator "(" [Ident ("," Ident)* [","]] ")" "in" Atom
@@ -288,9 +274,6 @@ impl quote::ToTokens for BodyItem {
                 let expr = Constraint::from_equality(x).cq_tokens();
                 output.extend(quote::quote!(if #expr));
             }
-            Self::Constraint(Constraint::Total { expression, .. }) => {
-                output.extend(quote::quote!(#[total] if #expression));
-            }
             Self::Constraint(x) => {
                 let expr = x.cq_tokens();
                 output.extend(quote::quote!(if #expr));
@@ -333,6 +316,19 @@ pub use cq_syntax::{Filter, For, Let, TypeAnnotation};
 pub struct Negation {
     pub not_token: Token![!],
     pub atom: Atom,
+}
+
+impl Negation {
+    /// Query variables are names with query binders; other bare names capture
+    /// host parameters, just as in relational guards. Negation binds nothing.
+    pub fn variables<'a>(
+        &'a self,
+        logical: &'a BTreeSet<String>,
+    ) -> impl Iterator<Item = &'a Ident> + 'a {
+        self.atom
+            .variables()
+            .filter(move |id| logical.contains(&symbol_name(id)))
+    }
 }
 
 /// The names in `arguments` are aggregate-local binders, as in Ascent.
@@ -411,7 +407,7 @@ pub mod contract {
     }
 }
 
-/// Formal rule WF-CQ: Check CQ declarations, positive scope, output arity and symbolic type availability.
+/// Formal rule WF-CQ: Check CQ declarations, written scope, output arity and symbolic type availability.
 fn check_program(program: &Program) -> syn::Result<()> {
     let mut schema = check_input_declarations(&program.declarations)?;
     if let Some(output) = schema.remove(&symbol_name(&program.query.head.relation)) {
@@ -500,7 +496,7 @@ fn check_query(
     }
     if !blocks::walk(&query.body)
         .into_iter()
-        .any(|item| item.atom().is_some())
+        .any(|item| item.atom().is_some() || matches!(item, BodyItem::Negation(_)))
     {
         return Err(syn::Error::new_spanned(
             query,
@@ -531,10 +527,9 @@ fn check_body(
     };
     let mut forbidden = BTreeSet::new();
     for item in body {
-        // OPTIONAL HW4 — STUDENT 2/6 (WF): add Negation and Aggregate cases.
-        // Negation requires named terms already bound and binds nothing. Sum
-        // keeps its value local, requires correlated terms already bound, and
-        // then binds one fresh result.
+        // OPTIONAL HW4 — STUDENT 2/6 (WF): add Aggregate.
+        // Sum keeps its value local, requires correlated terms already bound,
+        // and then binds one fresh result. Negation is part of core CQ.
         match item {
             BodyItem::Block(block) => {
                 if block.branches.len() < 2
@@ -589,6 +584,35 @@ fn check_body(
                 }
                 body_variables = local;
             }
+            // Formal rule CQ-Neg: Test a declared input using bound query
+            // variables, captured parameters, literals and existential wildcards.
+            BodyItem::Negation(negation) => {
+                let input = check_input_atom(schema, &negation.atom)?;
+                for (argument, column) in negation.atom.args.iter().zip(&input.columns) {
+                    if matches!(argument, syn::Expr::Infer(_)) {
+                        continue;
+                    }
+                    if let Some(variable) = rust::variable(argument) {
+                        let name = symbol_name(variable);
+                        if (logical.contains(&name) || forbidden.contains(&name))
+                            && !body_variables.contains(&name)
+                        {
+                            return Err(syn::Error::new_spanned(
+                                variable,
+                                format!(
+                                    "negation uses logical variable `{name}` before it is bound"
+                                ),
+                            ));
+                        }
+                    } else if !cq_syntax::equality::literal(argument) {
+                        return Err(syn::Error::new_spanned(
+                            argument,
+                            "negation arguments must be bound query variables, bare host parameters, literals, or `_`",
+                        ));
+                    }
+                    cq_syntax::algebra::check_leibniz_type(&column.ty, &column.name)?;
+                }
+            }
             BodyItem::Equality(equality) => {
                 equality.check()?;
                 for variable in equality.variables() {
@@ -630,18 +654,17 @@ fn check_body(
                     format!("extension `{name}!` was not expanded"),
                 ));
             }
-            BodyItem::Negation(_) | BodyItem::Aggregate(_) => {
+            BodyItem::Aggregate(_) => {
                 return Err(syn::Error::new_spanned(
                     item,
-                    "negation and aggregation require the extended CQ semantic contract",
+                    "aggregation requires the optional extended CQ semantic contract",
                 ));
             }
             // Formal rule IF-Environment: Check logical scope; Rust resolves enclosing values.
             BodyItem::Filter(filter) => {
-                if filter.total.is_some()
-                    || !cq_syntax::guard::split(&filter.condition, logical)
-                        .constraints
-                        .is_empty()
+                if !cq_syntax::guard::split(&filter.condition, logical)
+                    .constraints
+                    .is_empty()
                 {
                     return Err(syn::Error::new_spanned(
                         filter,

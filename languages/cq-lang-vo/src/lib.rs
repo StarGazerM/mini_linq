@@ -1,5 +1,5 @@
 //! Valuation plans for `T X = bottom + Set X`.
-//! Relational subatoms, equalities and semijoin reductions commute. They may
+//! Relational subatoms, negations, equalities and semijoin reductions commute. They may
 //! move earlier across opaque Rust lets/guards; the Rust chain retains written
 //! order and all its written relational predecessors. This chain/Before check
 //! is a sufficient refinement condition: a target may panic only on an input
@@ -8,7 +8,7 @@
 //! correlated row has been checked. Rust guards are never reductions.
 //!
 //! ```text
-//! Step ::= Subatom ";" | Constraint ";"
+//! Step ::= Subatom ";" | "!" Atom ";" | Constraint ";"
 //!        | "if" Expr ";" | "let" Pat [":" Type] "=" Expr ";"
 //!        | "reduce" Ident "@" Int "with" Subatom ";"
 //! ```
@@ -76,6 +76,7 @@ pub enum Step {
     Block(blocks::Block, Token![;]),
     Equality(cq::Equality, Token![;]),
     Constraint(cq::Constraint, Token![;]),
+    Negation(cq::Negation, Token![;]),
     Guard(cq_syntax::Filter, Token![;]),
     Let(Box<cq_syntax::Let>, Token![;]),
     For(Box<cq_syntax::For>, Token![;]),
@@ -87,6 +88,8 @@ impl syn::parse::Parse for Step {
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
         Ok(if input.peek(kw::block) {
             Self::Block(input.parse()?, input.parse()?)
+        } else if input.peek(Token![!]) {
+            Self::Negation(input.parse()?, input.parse()?)
         } else if input.peek(Token![if]) {
             Self::Guard(input.parse()?, input.parse()?)
         } else if input.peek(Token![let]) {
@@ -236,6 +239,11 @@ fn analyze_steps(
     let mut dependencies = BTreeMap::new();
     let mut equalities = BTreeMap::new();
     let mut constraints = BTreeMap::new();
+    let mut negations = BTreeMap::new();
+    let logical: BTreeSet<_> = cq::blocks::bound(body)
+        .into_keys()
+        .chain(context.iter().cloned())
+        .collect();
     let mut let_bound = BTreeSet::new();
     for (clause, item) in body.iter().enumerate() {
         match item {
@@ -263,10 +271,14 @@ fn analyze_steps(
                                 .flat_map(cq_syntax::Atom::variables)
                                 .map(symbol_name)
                                 .collect();
+                            let negative_context = cq::blocks::walk(&arm.body).into_iter().any(|item| {
+                                matches!(item, cq::BodyItem::Negation(n)
+                                    if n.atom.variables().any(|v| facts.free.contains_key(&symbol_name(v))))
+                            });
                             facts
                                 .free
                                 .keys()
-                                .filter(|name| !generated.contains(*name))
+                                .filter(|name| negative_context || !generated.contains(*name))
                                 .cloned()
                                 .collect::<Vec<_>>()
                         })
@@ -292,6 +304,9 @@ fn analyze_steps(
             }
             cq::BodyItem::Constraint(c) => {
                 constraints.insert(clause, c);
+            }
+            cq::BodyItem::Negation(negation) => {
+                negations.insert(clause, negation);
             }
             cq::BodyItem::Filter(_) | cq::BodyItem::Let(_) | cq::BodyItem::For(_) => {
                 let step = item.rust_step().expect("Rust step");
@@ -331,6 +346,7 @@ fn analyze_steps(
     let mut complete = BTreeSet::new();
     let mut placed_equalities = BTreeSet::new();
     let mut placed_constraints = BTreeSet::new();
+    let mut placed_negations = BTreeSet::new();
     let mut next_rust = 0;
     for step in steps {
         analysis.bound_before.push(bound.clone());
@@ -372,6 +388,7 @@ fn analyze_steps(
                                 cq::BodyItem::Positive { .. }
                                     | cq::BodyItem::Equality(_)
                                     | cq::BodyItem::Constraint(_)
+                                    | cq::BodyItem::Negation(_)
                                     | cq::BodyItem::Block(_)
                             )
                     })
@@ -539,6 +556,29 @@ fn analyze_steps(
                 complete.insert(clause);
                 analysis.introduces.push(Vec::new());
             }
+            Step::Negation(negation, _) => {
+                let Some((&clause, _)) = negations.iter().find(|(clause, expected)| {
+                    !placed_negations.contains(*clause) && ***expected == *negation
+                }) else {
+                    return error(
+                        negation,
+                        "every relational negation must appear exactly once from the query",
+                    );
+                };
+                if let Some(variable) = negation
+                    .atom
+                    .variables()
+                    .find(|v| logical.contains(&symbol_name(v)) && !bound.contains(&symbol_name(v)))
+                {
+                    return error(
+                        negation,
+                        format!("negation uses `{variable}` before it is bound"),
+                    );
+                }
+                placed_negations.insert(clause);
+                complete.insert(clause);
+                analysis.introduces.push(Vec::new());
+            }
             Step::Guard(_, _) | Step::Let(_, _) | Step::For(_, _) => {
                 let Some(&clause) = rust_chain.get(next_rust) else {
                     return error(step, "more Rust steps than the query has");
@@ -567,6 +607,7 @@ fn analyze_steps(
                         cq::BodyItem::Positive { .. }
                             | cq::BodyItem::Equality(_)
                             | cq::BodyItem::Constraint(_)
+                            | cq::BodyItem::Negation(_)
                             | cq::BodyItem::Block(_)
                     ) && !complete.contains(&earlier)
                     {
@@ -673,6 +714,12 @@ fn analyze_steps(
         .find(|(clause, _)| !placed_constraints.contains(clause))
     {
         return error(*missing, "every relational constraint must be placed");
+    }
+    if let Some((_, missing)) = negations
+        .iter()
+        .find(|(clause, _)| !placed_negations.contains(clause))
+    {
+        return error(*missing, "every relational negation must be placed");
     }
     if next_rust != rust_chain.len() {
         return error(

@@ -1,9 +1,9 @@
-\section{Guards: earned position independence (design)}
+\section{Guards: earned position independence}
 \label{sec:guards-design}
 
-\emph{Status: approved design; implementation in progress.} This section replaces the
-trusted \code{\#[total]} assertion and the type-name allowlist (CQ-Total) by a
-single principle.
+Position independence is a property of the relational language, not an
+assertion attached to arbitrary Rust. The implemented guard contract follows
+a single principle.
 
 \paragraph{Principle.} A guard is position-independent exactly when the
 language itself can see that it is defined on every value of its declared
@@ -27,20 +27,15 @@ it names operators of the relational algebra, never Rust functions or types.
 of a value in a relation is relational, not a Rust call.
 \end{enumerate}
 
-\paragraph{Removed.}
-\begin{itemize}
-\item \code{\#[total] if e}: grammar, the \code{Filter.total} flag, and the
-asserted-totality premise.
-\item The allowlist (\code{total.rs}): method names \code{contains},
-\code{starts\_with}, \code{ends\_with} and type-name kinds. Such guards become
-opaque.
-\item \code{Constraint::Total} and its printed form
-\code{\#[total]\ \{..\}\ (e)} in RA, Physical, Structures and Sequence text,
-since no source produces it any more.
-\end{itemize}
-Every theorem that previously consumed ``total'' (C-Ready, E-Constraint,
-ST-Total, the mask lemma, BK-Dual's total case, BE-Boundary, DL-Delta) then
-holds under premises 1--2 and the purity premises alone.
+\paragraph{No asserted totality.}
+The guard grammar has no \code{\#[total]} annotation, \code{Filter} has no
+totality flag, and relational constraints contain no arbitrary Rust predicate
+variant. Method names and type names do not certify guards.
+The guard-motion obligations in C-Ready, E-Constraint, ST-Total, the mask
+lemma, BK-Dual's total case, BE-Boundary and DL-Delta use recognized
+relational predicates under premises 1--2 and the purity premises; they
+require no asserted-totality premise. Producer and input obligations remain
+separate.
 
 \paragraph{Consequences.}
 \begin{enumerate}
@@ -48,23 +43,21 @@ holds under premises 1--2 and the purity premises alone.
 \code{LIKE}): ordinary Rust, type-checked by rustc and evaluated at their
 written position. Nothing special is recognized; pinning is the normal
 treatment of Rust, not a loss of meaning.
-\item \emph{Datalog negation} is emitted today as
-\code{\#[total] if !K.contains(..)}: an anti-join encoded as a Rust membership
-guard because the CQ contract rejected \code{!R(..)}. It becomes a CQ negation
-(below), elaborated to the existing RA \code{anti}. No Rust guard and no
-assertion remain.
+\item \emph{Datalog negation} is a CQ negated atom \code{!R(..)}, elaborated
+to the existing RA \code{anti}. It is not encoded as a Rust membership
+guard and requires no assertion.
 \item \emph{GPU translation} re-translates relational predicates only; the
 \code{h05} range guard becomes a recognized \code{Between} when written
 without the assertion, which also restores range reads.
 \end{enumerate}
 
 \subsection{Negation in CQ}
-\paragraph{Grammar.} \code{BodyItem ::= ... | "!" Atom} (already parsed).
+\paragraph{Grammar.} \code{BodyItem ::= ... | "!" Atom}.
 Arguments are logical variables, constants (literals, parameters) or
 \code{\_}.
 \paragraph{Contract.}
 \begin{mathpar}
-\Rule{CQ-Neg}{R\text{ a declared input relation}\quad
+\Rule{CQ-Neg}{R\text{ a declared input relation}\quad |args|=|\Sigma(R)|\\
  \mathrm{vars}(args)\subseteq\mathsf{bound\_before}(i)\\
  \text{binds nothing}\quad \text{columns at constants and variables Leibniz}}
  {\mathrm{WF}(\code{!R(args)}\text{ at clause }i)}
@@ -85,20 +78,32 @@ variables are bound.
 \paragraph{Elaboration.}
 \begin{mathpar}
 \Rule{E-Neg}{p\text{ the prefix binding }F=\mathrm{vars}(args)\quad
- s=\pi_{F}(\sigma_{consts}(\mathsf{rename}(R)))}
+ s=\pi_{F}(\sigma_{consts,repeats}(\mathsf{rename}(R)))}
  {\code{!R(args)}\ \leadsto\ \mathsf{anti}_F(p,s)}
 \end{mathpar}
-Constants become selections on $R$, wildcards are projected away, and the
+Constants and repeated-variable equalities become selections on $R$,
+wildcards are projected away, and the
 result is the existing RA anti-join ($\sem{\mathsf{anti}_F(r,s)}=\sem
 r\triangleright_F\sem s$); Physical chooses \code{anti eager|lazy} and the read
 of $s$ (a host membership read when the host supports exact membership) as
 for block fallback anti steps. An all-wildcard atom is an emptiness test of
-$R$ ($F=\emptyset$).
+$R$ ($F=\emptyset$). VO records \code{Step::Negation(cq::Negation, Token![;])}
+as a relational step; it requires its named variables, provides none,
+and is neither a Rust-chain step nor a reduction target or support.
+The implementation elides an existential projection when the anti key itself
+discards the unused columns, preserving a direct host read. Borrowed key sets
+are queried with the borrowed tuple before considering an owned-key read or
+a built fallback. An empty host key uses a first-row witness test rather than
+allocating a membership index.
+Computed prefix values use borrowed native probes too; only an unsupported
+host's retained fallback requires owned keys.
 
 \paragraph{Datalog.} The fork emits \code{!K(args)} against the borrowed,
 completed key-set host of the lower stratum (or \code{!R(args)} against the
 relation), declared like any hole input; the Round checker's negation rule
-compares that atom instead of a Rust guard. Key sets stay built once per
-stratum; the anti read must use the host's membership, never a per-call
-build.
+compares that atom instead of a Rust guard. Key holes apply constant filters
+and repeated-variable equalities before projecting the distinct variables,
+so the emitted atom has distinct arguments (or a unit-column wildcard).
+Key sets stay built once per stratum; the anti read uses the host's membership,
+never a per-call build. The Round checker independently derives these keys.
 

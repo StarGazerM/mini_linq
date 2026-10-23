@@ -139,7 +139,6 @@ fn composite_prefix_ranges_support_expansion_and_shared_witnesses() {
     }
 }
 
-
 #[test]
 fn expansion_rejects_unproven_hosts_and_hashed_bucket_ranges() {
     for provider in [
@@ -148,18 +147,33 @@ fn expansion_rejects_unproven_hosts_and_hashed_bucket_ranges() {
     ] {
         let mut program = resident_expand_program();
         program.structures.entries[2] = provider;
-        let error = structures::contract::check(&program).unwrap_err().to_string();
-        assert!(error.contains("exact resident sorted host range"), "{error}");
+        let error = structures::contract::check(&program)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("exact resident sorted host range"),
+            "{error}"
+        );
     }
     let mut hashed = resident_expand_program();
     hashed.physical.program.definitions[1] =
         syn::parse_quote!(r = let rename R@1 {a -> x,b -> y,c -> z};);
-    hashed.structures.entries[2] =
-        syn::parse_quote!(r = ::cq_gpu_runtime::HashedRun<_,_> [x,y];);
-    hashed.structures.entries.push(syn::parse_quote!(r rows = ::std::vec::Vec<_>;));
-    let error = structures::contract::check(&hashed).unwrap_err().to_string();
-    assert!(error.contains("exact resident sorted host range"), "{error}");
-    hashed.structures.entries.retain(|entry| !matches!(entry.structure, structures::Structure::Stage { .. }));
+    hashed.structures.entries[2] = syn::parse_quote!(r = ::cq_gpu_runtime::HashedRun<_,_> [x,y];);
+    hashed
+        .structures
+        .entries
+        .push(syn::parse_quote!(r rows = ::std::vec::Vec<_>;));
+    let error = structures::contract::check(&hashed)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("exact resident sorted host range"),
+        "{error}"
+    );
+    hashed
+        .structures
+        .entries
+        .retain(|entry| !matches!(entry.structure, structures::Structure::Stage { .. }));
     structures::contract::check(&hashed).unwrap();
 
     let mut mismatch = resident_expand_program();
@@ -377,14 +391,25 @@ fn smallest_expansion_rejects_missing_or_misshaped_candidate_facts() {
     let mut ordinary = smallest_expand_program();
     ordinary.physical.program.definitions[3] =
         syn::parse_quote!(candidate = pipe probe first [b] l,r;);
-    assert!(structures::contract::check(&ordinary).unwrap_err().to_string()
-        .contains("a payload probe must read all built levels"));
+    assert!(
+        structures::contract::check(&ordinary)
+            .unwrap_err()
+            .to_string()
+            .contains("a payload probe must read all built levels")
+    );
     let mut force = smallest_expand_program();
     force.physical.program.definitions[4] =
         syn::parse_quote!(checked = pipe canon probe first [a,c] candidate,s;);
-    force.structures.entries.push(syn::parse_quote!(checked stage = batch 256 expand;));
-    assert!(structures::contract::check(&force).unwrap_err().to_string()
-        .contains("introducing Smallest probe, not its forcing read"));
+    force
+        .structures
+        .entries
+        .push(syn::parse_quote!(checked stage = batch 256 expand;));
+    assert!(
+        structures::contract::check(&force)
+            .unwrap_err()
+            .to_string()
+            .contains("introducing Smallest probe, not its forcing read")
+    );
     let mut second = smallest_expand_program();
     second.structures.entries.pop();
     second
@@ -748,10 +773,10 @@ fn joined_representations_carry_both_bases_without_relaxing_read_lineage() {
 }
 
 #[test]
-fn stages_accept_total_constraints_multiple_boundaries_and_retained_producers() {
+fn stages_accept_relational_constraints_multiple_boundaries_and_retained_producers() {
     let mut program = represented_program();
     program.physical.program.definitions[1] = syn::parse_quote!(
-        s = pipe select r if (#[total] {x = x} (*x >= 0));
+        s = pipe select r if (x >= 0);
     );
     program.structures.entries.extend([
         syn::parse_quote!(r stage = batch 8;),

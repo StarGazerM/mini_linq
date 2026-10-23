@@ -436,7 +436,7 @@ impl<'a> Printer<'a> {
         let expand = self.analysis.expands.contains(name);
         let (lookup, payload, host): (TokenStream, Vec<String>, bool) = match &access {
             Access::Host(access) => (
-                self.host_lookup(&left, access, false),
+                self.host_lookup(&left, access, false, false),
                 access.payload.clone(),
                 false,
             ),
@@ -657,7 +657,7 @@ impl<'a> Printer<'a> {
             test
         } else {
             match self.keyed(&keyed.right, &columns)? {
-                Access::Host(access) => self.host_lookup(&left, &access, true),
+                Access::Host(access) => self.host_lookup(&left, &access, true, negative),
                 Access::Built(structure) => {
                     let levels = self.levels_of(&symbol_name(&keyed.right), &structure);
                     self.chained_contains(&left, &structure, &symbol_name(&keyed.right), &levels)

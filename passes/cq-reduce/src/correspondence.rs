@@ -92,6 +92,7 @@ fn check_steps(
                         Step::Atom(a, _) => format!("clause #{} (`{}`)", a.clause(), a.relation),
                         Step::Equality(_, _) => "relational equality".into(),
                         Step::Constraint(_, _) => "relational constraint".into(),
+                        Step::Negation(_, _) => "relational negation".into(),
                         Step::Guard(_, _) => "guard clause".into(),
                         Step::Let(_, _) => "binding clause".into(),
                         Step::For(_, _) => "generator clause".into(),

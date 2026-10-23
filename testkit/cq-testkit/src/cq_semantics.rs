@@ -1,7 +1,7 @@
 //! Independent active-domain valuation enumeration against original CQ tables.
 //!
-//! Assumes contract-valid positive atoms with variables and integer literals,
-//! finite declared-width integer tables, Set semantics, and total comparison guards.
+//! Assumes contract-valid positive/negative atoms with variables and integer literals,
+//! finite declared-width integer tables, Set semantics, and relational comparison guards.
 //! Exhaustive enumeration is exponential in the number of query variables.
 //! No compiler normalizer, planner, or pass is used. Unsupported clauses panic.
 
@@ -74,6 +74,16 @@ pub fn body(
                 };
                 prefix = prefix.join(&table);
             }
+            cq::BodyItem::Negation(negative) => prefix.rows.retain(|binding| {
+                !database[&symbol_name(&negative.atom.relation)]
+                    .iter()
+                    .any(|row| {
+                        negative.atom.args.iter().zip(row).all(|(argument, value)| {
+                            matches!(cq::rust::unparen(argument), syn::Expr::Infer(_))
+                                || evaluate_integer(argument, binding) == *value
+                        })
+                    })
+            }),
             cq::BodyItem::Equality(e) => prefix.rows.retain(|row| evaluate_equality(e, row)),
             cq::BodyItem::Constraint(c) => prefix.rows.retain(|row| evaluate_constraint(c, row)),
             cq::BodyItem::Filter(f) => prefix

@@ -67,6 +67,7 @@ fn sequence(plan: &valuation::Program) -> Vec<usize> {
     };
     let (mut guards, mut lets, mut equalities, mut constraints) = (0, 0, 0, 0);
     let mut generators = 0;
+    let mut negations = 0;
     plan.valuation
         .steps
         .iter()
@@ -81,6 +82,10 @@ fn sequence(plan: &valuation::Program) -> Vec<usize> {
                 nth(constraints - 1, |item| {
                     matches!(item, BodyItem::Constraint(_))
                 })
+            }
+            valuation::Step::Negation(..) => {
+                negations += 1;
+                nth(negations - 1, |item| matches!(item, BodyItem::Negation(_)))
             }
             valuation::Step::Guard(..) => {
                 guards += 1;
@@ -1025,5 +1030,81 @@ fn filtered_priority_uses_literal_occurrences_without_extra_steps() {
         assert_eq!(target.valuation.steps.len(), 2);
         assert!(matches!(&target.valuation.steps[0],
             valuation::Step::Atom(atom, _) if atom.clause() == 1 && atom.columns.len() == 1));
+    }
+}
+
+#[test]
+fn ready_negation_moves_before_opaque_rust_but_never_before_its_binder() {
+    let source = cq(quote! {
+        struct Negative; relation R(a:i32); relation K(a:i32);
+        answer(x) :- R(x), if opaque(x), !K(x), let y = x;
+    });
+    for heuristic in [
+        Heuristic::Filtered,
+        Heuristic::Prefix(Ranking::Connected),
+        Heuristic::Prefix(Ranking::GreedyWidth),
+        Heuristic::Elimination,
+    ] {
+        for split in [Split::Coarse, Split::Fine] {
+            let planned = plan(&source, heuristic, split);
+            assert_eq!(sequence(&planned), [0, 2, 1, 3], "{heuristic:?}/{split:?}");
+        }
+    }
+    for split in [Split::Coarse, Split::Fine] {
+        let written = plan(&source, Heuristic::Written, split);
+        assert_eq!(sequence(&written), [0, 1, 2, 3]);
+    }
+}
+
+#[test]
+fn negation_retains_earlier_rust_binders_and_all_wildcards_require_none() {
+    let source = cq(quote! {
+        struct Negative; relation R(a:i32); relation K(a:i32,b:i32);
+        answer(x) :- R(x), let y = *x + 1, !K(y,_), if opaque(x), !K(_,_);
+    });
+    for split in [Split::Coarse, Split::Fine] {
+        let planned = plan(&source, Heuristic::Prefix(Ranking::Connected), split);
+        assert!(matches!(
+            planned.valuation.steps[0],
+            valuation::Step::Negation(..)
+        ));
+        let binding = planned
+            .valuation
+            .steps
+            .iter()
+            .position(|s| matches!(s, valuation::Step::Let(..)))
+            .unwrap();
+        let dependent = planned.valuation.steps.iter().position(|s|
+            matches!(s, valuation::Step::Negation(n, _) if n.atom.variables().any(|v| v == "y"))).unwrap();
+        assert!(dependent > binding);
+        let guard = planned
+            .valuation
+            .steps
+            .iter()
+            .position(|s| matches!(s, valuation::Step::Guard(..)))
+            .unwrap();
+        assert!(guard > dependent);
+    }
+}
+
+#[test]
+fn ordering_negation_preserves_reference_answers_for_constants_repeats_and_wildcards() {
+    for args in ["x,x", "x,1", "x,_", "_,_", "1,_"] {
+        let source: cq::Program = syn::parse_str(&format!(
+            "struct Negative; relation R(a:i32); relation K(a:i32,b:i32);
+             answer(x) :- R(x), !K({args});"
+        ))
+        .unwrap();
+        for split in [Split::Coarse, Split::Fine] {
+            let planned = plan(&source, Heuristic::Prefix(Ranking::Connected), split);
+            for seed in 0..16 {
+                let database = databases::binary_database(&source, seed);
+                assert_eq!(
+                    evaluator::evaluate(&planned, &database),
+                    cq_oracle::evaluate_cq(&source, &database),
+                    "{args}/{split:?}/{seed}"
+                );
+            }
+        }
     }
 }

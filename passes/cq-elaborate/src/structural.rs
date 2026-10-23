@@ -26,6 +26,7 @@ pub(super) fn check(
         .map(|d| (symbol_name(&d.name), d))
         .collect();
     let mut schedule = Schedule::default();
+    schedule.occurrence_paths((0..source.cq.query.body.len()).map(vo::syntax::Occurrence::new));
     let mut relations = HashMap::new();
     for (clause, atom) in &analysis.atoms {
         let declaration = declarations[&symbol_name(&atom.relation)];
@@ -47,6 +48,7 @@ pub(super) fn check(
     let mut reductions = Vec::new();
     let mut grouped = HashSet::new();
     let mut local_predicates = HashSet::new();
+    let mut placed_negations = HashSet::new();
     for (step, introduces) in source.valuation.steps.iter().zip(&analysis.introduces) {
         match step {
             vo::Step::Block(..) => unreachable!("block schedule checked separately"),
@@ -186,6 +188,32 @@ pub(super) fn check(
                         constraints: std::iter::once(constraint.clone()).collect(),
                     },
                 ));
+            }
+            vo::Step::Negation(negation, _) => {
+                let clause = source
+                    .cq
+                    .query
+                    .body
+                    .iter()
+                    .enumerate()
+                    .find_map(|(clause, item)| {
+                        (!placed_negations.contains(&clause)
+                            && matches!(item, cq::BodyItem::Negation(n) if n == negation))
+                        .then_some(clause)
+                    })
+                    .expect("VO negation coverage");
+                let bound =
+                    cq::blocks::bound_before(&source.cq.query.body, clause, &Default::default());
+                let input = prefix.unwrap_or_else(|| schedule.unit());
+                prefix = Some(super::negation::obligation(
+                    &mut schedule,
+                    declarations[&symbol_name(&negation.atom.relation)],
+                    negation,
+                    &vo::syntax::Occurrence::new(clause),
+                    &bound,
+                    input,
+                ));
+                placed_negations.insert(clause);
             }
             vo::Step::Guard(filter, _) => {
                 let input = prefix.unwrap_or_else(|| schedule.unit());

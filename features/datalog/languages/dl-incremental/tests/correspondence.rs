@@ -166,19 +166,14 @@ fn rewrites_admit_fresh_delta_names_and_decision_order() {
 }
 
 #[test]
-fn negative_validation_projection_does_not_extend_core_cq() {
+fn negative_validation_projection_uses_core_cq_negation() {
     let program = scheduled();
     contract::check(&program).unwrap();
     let declarations = &program.strata.source.declarations;
     let query = &program.strata.source.rules[2];
     let cq: cq_lang_cq::Program =
         syn::parse2(quote!(struct Check; #(#declarations)* #query)).unwrap();
-    assert!(
-        cq_lang_cq::contract::check(&cq)
-            .unwrap_err()
-            .to_string()
-            .contains("extended CQ")
-    );
+    cq_lang_cq::contract::check(&cq).unwrap();
     assert!(matches!(query.body[1], BodyItem::Negation(_)));
 }
 

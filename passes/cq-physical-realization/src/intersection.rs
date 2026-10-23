@@ -76,7 +76,7 @@ impl Printer<'_> {
         let test = |result: &Ident| -> syn::Result<TokenStream> {
             let right = symbol_name(result);
             Ok(match self.keyed(result, self.heading(&right))? {
-                Access::Host(access) => self.host_lookup(&first_name, &access, true),
+                Access::Host(access) => self.host_lookup(&first_name, &access, true, false),
                 Access::Built(s) => {
                     self.chained_contains(&first_name, &s, &right, &self.levels_of(&right, &s))
                 }

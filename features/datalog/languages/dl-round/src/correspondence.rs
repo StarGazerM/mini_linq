@@ -1,14 +1,19 @@
 use super::*;
-use cq_datalog_support::{Fresh, columns, filters};
+use cq_datalog_support::{Fresh, columns, equalities, filters};
 
-// Independently derive the exact input schema from the hole's positive reads.
+// Independently derive the exact input schema from the hole's relational reads.
 // Do not use the fork producer's declaration builder here.
-fn required_inputs(context: &RoundContext, query: &cq::Query) -> Vec<RelationDecl> {
+fn required_inputs(
+    context: &RoundContext,
+    keys: &[KeySet],
+    query: &cq::Query,
+) -> Vec<RelationDecl> {
     let required: BTreeSet<_> = query
         .body
         .iter()
         .filter_map(|item| match item {
             BodyItem::Positive { atom } => Some(symbol_name(&atom.relation)),
+            BodyItem::Negation(negative) => Some(symbol_name(&negative.atom.relation)),
             _ => None,
         })
         .collect();
@@ -48,6 +53,27 @@ fn required_inputs(context: &RoundContext, query: &cq::Query) -> Vec<RelationDec
             .collect();
         let host = &layout.host;
         declaration.value = Some(syn::parse_quote!(= (&#host)));
+        declarations.push(declaration);
+    }
+    for key in keys {
+        if key.representation != KeyRepresentation::Borrowed
+            || !required.contains(&symbol_name(&key.name))
+        {
+            continue;
+        }
+        let mut declaration = context.relations[key.relation].declaration.clone();
+        declaration.name = key.name.clone();
+        declaration.columns = if key.columns.is_empty() {
+            let column = &declaration.columns[0].name;
+            syn::parse_quote!(#column: ())
+        } else {
+            key.columns
+                .iter()
+                .map(|&i| declaration.columns[i].clone())
+                .collect()
+        };
+        let host = &key.name;
+        declaration.value = Some(syn::parse_quote!(= (#host)));
         declarations.push(declaration);
     }
     declarations
@@ -130,19 +156,19 @@ pub fn use_scan(
     declaration
 }
 
-fn guard(atom: &cq_syntax::Atom, key: &KeySet) -> BodyItem {
+fn negation(atom: &cq_syntax::Atom, key: &KeySet) -> BodyItem {
     let name = &key.name;
     if key.representation == KeyRepresentation::DeviceSetOwned {
         let args = key.columns.iter().map(|&i| &atom.args[i]);
         return syn::parse_quote!(
-            #[total] if !::cq_gpu_runtime::datalog::contains(&#name, &(#(#args,)*))
+            if !::cq_gpu_runtime::datalog::contains(&#name, &(#(#args,)*))
         );
     }
     if key.columns.is_empty() {
-        syn::parse_quote!(#[total] if !#name.contains(&((),)))
+        syn::parse_quote!(!#name(_))
     } else {
         let args = key.columns.iter().map(|&i| &atom.args[i]);
-        syn::parse_quote!(#[total] if !#name.contains(&(#(#args,)*)))
+        syn::parse_quote!(!#name(#(#args),*))
     }
 }
 
@@ -311,7 +337,12 @@ pub(crate) fn check_storage_with_analysis(
                 source,
                 "fork changed negation key representation",
             )?;
-            let projection = (key.relation, key.columns.clone(), key.filters.clone());
+            let projection = (
+                key.relation,
+                key.columns.clone(),
+                key.filters.clone(),
+                key.equalities.clone(),
+            );
             ensure(
                 key.relation < source.incremental.strata.source.declarations.len()
                     && !projections.contains(&projection),
@@ -337,6 +368,18 @@ pub(crate) fn check_storage_with_analysis(
                 source,
                 "fork constant filters must select distinct non-key columns",
             )?;
+            ensure(
+                key.equalities.windows(2).all(|w| w[0].1 < w[1].1)
+                    && key.equalities.iter().all(|&(first, repeated)| {
+                        first < repeated
+                            && repeated < declaration.arity()
+                            && key.columns.contains(&first)
+                            && !key.columns.contains(&repeated)
+                            && !key.filters.iter().any(|(column, _)| *column == repeated)
+                    }),
+                source,
+                "fork repeated columns must refer to distinct projected first occurrences",
+            )?;
             let hole = checked_hole(source, target, key.hole, &mut used_holes)?;
             add_name(&hole.name)?;
             let literal_count = key
@@ -345,9 +388,10 @@ pub(crate) fn check_storage_with_analysis(
                 .filter(|(_, expression)| cq_syntax::equality::literal(rust::unparen(expression)))
                 .count();
             ensure(
-                hole.query.body.len() == 1 + key.filters.len() - literal_count,
+                hole.query.body.len()
+                    == 1 + key.filters.len() - literal_count + key.equalities.len(),
                 source,
-                "key hole must retain literal columns and exactly its nonliteral filters",
+                "key hole must retain its constant and repeated-variable filters",
             )?;
             let BodyItem::Positive { atom } = &hole.query.body[0] else {
                 return Err(syn::Error::new_spanned(
@@ -419,7 +463,7 @@ pub(crate) fn check_storage_with_analysis(
                     })
                     .collect()
             };
-            let mut expected_declarations = required_inputs(context, &hole.query);
+            let mut expected_declarations = required_inputs(context, &[], &hole.query);
             expected_declarations.push(output);
             let name = &hole.name;
             let selections = key.filters.iter().filter_map(|(column, expression)| {
@@ -430,16 +474,21 @@ pub(crate) fn check_storage_with_analysis(
                     Some(quote!(if *#variable == (#expression)))
                 }
             });
+            let repeated = key.equalities.iter().map(|&(first, repeated)| {
+                let first = variables[first].expect("checked key variable");
+                let repeated = variables[repeated].expect("checked repeated variable");
+                quote!(if #first == #repeated)
+            });
             // Parse complete CQ to preserve recognition of authored predicates.
             let expected: CqProgram = syn::parse2(quote! {
                 struct #name;
                 #(#expected_declarations)*
-                #name(#(#expected_args),*) :- #atom #(, #selections)*;
+                #name(#(#expected_args),*) :- #atom #(, #selections)* #(, #repeated)*;
             })?;
             ensure(
                 hole == &expected,
                 source,
-                "key hole changed its schema, projection or constant filters",
+                "key hole changed its schema, projection or filters",
             )?;
         }
         for (delta, rules) in [(false, &stratum.seeds), (true, &stratum.steps)] {
@@ -493,19 +542,12 @@ pub(crate) fn check_storage_with_analysis(
                 } else {
                     None
                 };
-                let mut expected_declarations = required_inputs(context, &query);
-                expected_declarations.extend(scan_declaration);
-                expected_declarations.push(output);
-                ensure(
-                    hole.declarations == expected_declarations,
-                    source,
-                    "fork changed hole declarations",
-                )?;
                 for item in &mut query.body {
                     if let BodyItem::Negation(negative) = item {
                         let relation = analysis.positions[&symbol_name(&negative.atom.relation)];
                         let projection = columns(&negative.atom);
                         let selections = filters(&negative.atom);
+                        let repeated = equalities(&negative.atom);
                         let (index, key) = stratum
                             .keys
                             .iter()
@@ -514,6 +556,7 @@ pub(crate) fn check_storage_with_analysis(
                                 key.relation == relation
                                     && key.columns == projection
                                     && key.filters == selections
+                                    && key.equalities == repeated
                             })
                             .ok_or_else(|| {
                                 syn::Error::new_spanned(
@@ -522,9 +565,17 @@ pub(crate) fn check_storage_with_analysis(
                                 )
                             })?;
                         used_keys.insert(index);
-                        *item = guard(&negative.atom, key);
+                        *item = negation(&negative.atom, key);
                     }
                 }
+                let mut expected_declarations = required_inputs(context, &stratum.keys, &query);
+                expected_declarations.extend(scan_declaration);
+                expected_declarations.push(output);
+                ensure(
+                    hole.declarations == expected_declarations,
+                    source,
+                    "fork changed hole declarations",
+                )?;
                 let name = &hole.name;
                 let expected: CqProgram =
                     syn::parse2(quote!(struct #name; #(#expected_declarations)* #query))?;

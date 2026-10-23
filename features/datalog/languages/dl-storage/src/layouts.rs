@@ -1,5 +1,5 @@
 use crate::{Analysis, BodyItem, Negative, Program};
-use cq_datalog_support::{columns, ensure, filters};
+use cq_datalog_support::{columns, ensure, equalities, filters};
 use cq_syntax::{rust, symbol_name};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -137,6 +137,7 @@ pub(crate) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
                         relation: analysis.positions[&symbol_name(&atom.relation)],
                         columns: columns(atom),
                         filters: filters(atom),
+                        equalities: equalities(atom),
                     };
                     if !negations.contains(&entry) {
                         negations.push(entry);

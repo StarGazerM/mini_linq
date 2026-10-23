@@ -183,9 +183,16 @@
 //! `ret`) or use a legal raw identifier such as `r#type`.
 //!
 //! `!Modifier("abstract", method)` filters the completed input by its constant
-//! columns and projects only the bound variable columns. Identical projections
-//! and filters share one borrowed key set per stratum, outside recursive rounds.
+//! columns and projects only distinct bound variables. Repeated-variable
+//! equalities, as in `!Pair(x,x)`, are checked while preparing the key set, not
+//! at each rule invocation. Identical projections, constant filters and equality
+//! patterns share one borrowed key set per stratum, outside recursive rounds.
 //! Wildcards are omitted; an all-constant/wildcard atom uses an existence key.
+//! Rule holes declare the completed borrowed key set as a CQ input and use
+//! `!K(args)`, lowered to an anti-join with native host membership rather than a
+//! Rust membership guard. An existence key is read as `!K(_)`. No key set or
+//! membership index is rebuilt per hole invocation. Device-owned key sets keep
+//! their ordinary opaque runtime membership guard without a totality assertion.
 //! Closed Rust expressions such as `symbol("abstract")` are also supported;
 //! parenthesize a captured constant name to distinguish it from a logical variable.
 //! Key-hole literals remain in their atom and become occurrence constants.
@@ -205,6 +212,7 @@
 //! cargo run --release --locked -p datalog-oracle --features counters -- counters
 //! cargo run --release --locked -p datalog-oracle -- bench
 //! cargo test --workspace --all-features --locked
+//! cargo test --locked -p cq-datalog --features counters --test counters -- --nocapture
 //! cargo run --release --locked --features counters --example layout_mismatch
 //! ```
 //!

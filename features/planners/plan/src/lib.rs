@@ -466,6 +466,7 @@ fn written_steps(
             }
             cq::BodyItem::Equality(e) => vo::Step::Equality(e.clone(), Default::default()),
             cq::BodyItem::Constraint(c) => vo::Step::Constraint(c.clone(), Default::default()),
+            cq::BodyItem::Negation(n) => vo::Step::Negation(n.clone(), Default::default()),
             cq::BodyItem::Filter(g) => vo::Step::Guard(g.clone(), Default::default()),
             cq::BodyItem::Let(b) => {
                 bound.extend(cq::rust::bindings(&b.pattern).iter().map(cq::symbol_name));

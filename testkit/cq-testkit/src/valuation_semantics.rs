@@ -28,6 +28,7 @@ pub fn evaluate(program: &vo::Program, database: &Database) -> Rows {
         &program.valuation.steps,
         unit,
         &mut tables,
+        database,
     )
     .output(
         &program
@@ -174,6 +175,9 @@ fn used(body: &vo::syntax::CommaList<cq::BodyItem>) -> BTreeSet<String> {
     for item in body {
         match item {
             cq::BodyItem::Positive { atom } => names.extend(atom.variables().map(symbol_name)),
+            cq::BodyItem::Negation(negative) => {
+                names.extend(negative.atom.variables().map(symbol_name));
+            }
             cq::BodyItem::Equality(eq) => names.extend(eq.variables().map(symbol_name)),
             cq::BodyItem::Constraint(c) => names.extend(c.variables().map(symbol_name)),
             cq::BodyItem::Filter(f) => {
@@ -196,6 +200,7 @@ fn derive(
     root: &[vo::Step],
     prefix: Relation,
     tables: &Tables,
+    database: &Database,
 ) -> Relation {
     let source = source_block(body, &block.source.clause.0);
     let context = source_context(body, &block.source.clause.0, BTreeSet::new());
@@ -230,8 +235,15 @@ fn derive(
     };
     let mut originals: Vec<Relation> = Vec::new();
     for arm in &block.branches {
-        let result = execute(&arm.steps, body, root, prefix.clone(), &mut tables.clone())
-            .project(heading.clone());
+        let result = execute(
+            &arm.steps,
+            body,
+            root,
+            prefix.clone(),
+            &mut tables.clone(),
+            database,
+        )
+        .project(heading.clone());
         for row in &result.rows {
             if block.kind == cq::blocks::Kind::Union
                 || !originals.iter().any(|earlier| {
@@ -255,6 +267,7 @@ fn table(
     root: &[vo::Step],
     prefix: &Relation,
     tables: &Tables,
+    database: &Database,
 ) -> Relation {
     if let Some(relation) = tables.get(path) {
         return relation.clone();
@@ -296,6 +309,11 @@ fn table(
                     cq::BodyItem::Constraint(c) => {
                         domain.rows.retain(|row| evaluate_constraint(c, row))
                     }
+                    cq::BodyItem::Negation(negative) => {
+                        domain
+                            .rows
+                            .retain(|binding| !negative_matches(negative, binding, database));
+                    }
                     _ => (),
                 }
             }
@@ -310,7 +328,14 @@ fn table(
         }
         domain
     };
-    derive(block, body, root, domain.project(required), tables)
+    derive(
+        block,
+        body,
+        root,
+        domain.project(required),
+        tables,
+        database,
+    )
 }
 
 fn execute(
@@ -319,11 +344,12 @@ fn execute(
     root: &[vo::Step],
     mut result: Relation,
     tables: &mut Tables,
+    database: &Database,
 ) -> Relation {
     for step in steps {
         match step {
             vo::Step::Block(block, _) => {
-                let relation = table(&block.source.clause, body, root, &result, tables);
+                let relation = table(&block.source.clause, body, root, &result, tables, database);
                 result = result.join(
                     &relation.project(
                         block
@@ -340,6 +366,9 @@ fn execute(
                         .project(atom.variables().map(|(_, v)| symbol_name(v)).collect()),
                 )
             }
+            vo::Step::Negation(negative, _) => result
+                .rows
+                .retain(|binding| !negative_matches(negative, binding, database)),
             vo::Step::Guard(guard, _) => result
                 .rows
                 .retain(|row| evaluate_predicate(&guard.condition, row)),
@@ -350,8 +379,8 @@ fn execute(
             }
             vo::Step::Reduce(reduce, _) => match &reduce.reduction {
                 vo::Reduction::With(_, support) => {
-                    let mut left = table(&reduce.clause, body, root, &result, tables);
-                    let right = table(&support.clause, body, root, &result, tables);
+                    let mut left = table(&reduce.clause, body, root, &result, tables, database);
+                    let right = table(&support.clause, body, root, &result, tables, database);
                     let same = |a: &str, b: &str| {
                         let mut reached = BTreeSet::from([a.to_owned()]);
                         loop {
@@ -388,4 +417,15 @@ fn execute(
         }
     }
     result
+}
+
+fn negative_matches(negative: &cq::Negation, binding: &Binding, database: &Database) -> bool {
+    database[&symbol_name(&negative.atom.relation)]
+        .iter()
+        .any(|row| {
+            negative.atom.args.iter().zip(row).all(|(argument, value)| {
+                matches!(cq::rust::unparen(argument), syn::Expr::Infer(_))
+                    || evaluate_integer(argument, binding) == *value
+            })
+        })
 }

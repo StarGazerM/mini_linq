@@ -46,8 +46,10 @@ model \code{set}), ordered rules, outputs, and an optional observer. Bodies
 contain positive atoms, safe negative atoms, and written-order CQ Rust steps
 including \code{let}, \code{for}, and guards; heads may be computed.
 \paragraph{Contract.} Declared names, arities, types and outputs are consistent;
-head and negative variables are safely bound; signed dependencies are
-stratifiable. Aggregates and nested blocks remain outside this base language.
+head and negative variables are safely bound; negative variables must occur
+in an earlier positive atom, not only a scalar \code{let} or generator.
+Signed dependencies are stratifiable. Aggregates and nested blocks remain
+outside this base language.
 Opaque Rust must not hide reads of evolving IDBs.
 \begin{mathpar}
 \Rule{WF-DL-Source}{\text{source safety, declarations and signed stratifiability}}
@@ -139,9 +141,12 @@ therefore applies with $B$ held fixed:
  q_B\text{ is total and monotone in its positive current-component inputs}}
  {q_B(R\cup\Delta)=q_B(R)\cup\bigcup_i V_{B,i}(R\cup\Delta,\Delta)}
 \end{mathpar}
-Wildcards are existentially projected out of negative membership keys;
-constant filters remain part of key construction. No rule above permits
-negation of a changing current-component relation.
+Wildcards are existentially projected out of negative membership keys.
+Key construction applies constant filters and repeated-variable equalities,
+then projects one column per distinct variable, in first-occurrence order.
+These completed sets are built once per stratum; each emitted \code{!K(args)}
+has distinct named arguments, or one wildcard for the unit-key emptiness case.
+No rule above permits negation of a changing current-component relation.
 
 \paragraph{Partial Rust across rounds.}
 Erasure, body-order preservation and full-valuation coverage do not prove
@@ -167,7 +172,8 @@ records its relation, complete column permutation, key-prefix length,
 opaque concrete map \code{provider} type and \code{maintenance} operation.
 A \code{Read} records the variant, written body position, read kind, structure
 index and column order. A \code{Negative} records its consuming component,
-source relation, projected columns and constant filters.
+source relation, distinct-variable columns, constant filters and positional
+repeated-variable equalities.
 
 \paragraph{Textual records.} Storage and Round use the existing
 \code{record!} grammar, not a second surface language: fields occur in their
@@ -190,8 +196,9 @@ the variables already bound at that written position and its constants.
 The selected structure must belong to the correct relation and version, and
 its key must use only available columns; a recorded bound-column claim is not
 evidence. Require exactly one binding per positive occurrence and no extraneous
-bindings, together with the prescribed frozen negative projection/filter,
-including wildcard treatment. A \code{direct} binding reads the selected
+bindings, together with the independently derived frozen negative projection,
+constant filters and repeated-variable equalities, including wildcard treatment.
+A \code{direct} binding reads the selected
 delta relation in declaration column order; it need not be the first body
 occurrence. Full and delta layouts must serve their respective versions.
 The checker does not whitelist applicable Rust provider types or interpret their
@@ -330,10 +337,11 @@ For example, \code{terminals = [crate::alias::pull => pull];} in
 the registry. Fork serializes the complete typed registry into Round text and
 records the selected terminal's interface in each hole, so a resumed Round
 needs neither the originating configuration nor CQ compilation to check it.
-Each CQ hole declares only the relations, deltas and layouts it reads
-positively, any scan binding, and its output head; negative key sets remain
-predicate captures. The Round checker derives this required declaration set
-independently from the query and recorded reads.
+Each CQ hole declares the relations, deltas and layouts it reads positively,
+its borrowed completed key-set hosts, any scan binding, and its output head.
+Negation is a CQ \code{!K(args)} atom, not a Rust predicate capture.
+The Round checker independently derives the required declarations, host
+bindings, distinct-variable projections and repeated-variable equalities.
 Declaring an alternate path asserts its calling convention and semantic printer
 obligation; it is not Rust alias resolution or a proof of printer equivalence.
 The argument-free \code{own\_push::push!} is not a push-interface terminal:
@@ -390,10 +398,9 @@ Under \textsc{DL-Admit-Owner}, a rule hole records
 the key provider's collection/insertion law. For every positively read host
 $H$ with a valid structural certificate, \textsc{DL-HostCanonical} justifies
 \code{host\_set H discharged}; uncertified hosts receive no such fact.
-Facts refer to the hole's actual declarations
-after any checked scan substitution, not to unused relation names or negative
-key sets captured only by predicates. Key-set hosts are canonical, but a
-predicate capture is not a declared positive host-set argument.
+Facts refer to the hole's actual positive declarations after any checked scan
+substitution, not to unused relation names. A negative key-set declaration is
+canonical but is not a positive host-set argument for these facts.
 
 These typed per-hole facts are part of the checked Round interface.
 Raw CQ entry remains fact-free. Fork records the facts in the selected
@@ -437,13 +444,14 @@ ownership of the set boundary.
 \end{mathpar}
 
 \paragraph{Frozen-key providers.} Each \code{KeySet} records its source relation,
-projected columns, filters, runtime name, construction hole, borrowed
+distinct-variable columns, constant filters, repeated-variable equalities,
+runtime name, construction hole, borrowed
 representation (\code{KeyRepresentation::Borrowed}, text \code{borrowed})
 and opaque Rust \code{provider} type. The default is
 \code{::std::collections::HashSet<\_, Fx>}, with the same unkeyed Fx build
 hasher as Storage; this is not a type whitelist.
 Collection and borrowed membership must implement precisely the recorded
-projection/filter set, with lawful equality and any required hashing or ordering.
+selection/projection set, with lawful equality and any required hashing or ordering.
 The pull realization uses \code{FromIterator}; the push realization initializes
 the provider with \code{Default} and extends it with each singleton row.
 These operations must denote the same set.

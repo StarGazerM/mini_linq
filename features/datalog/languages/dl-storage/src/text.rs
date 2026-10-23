@@ -80,16 +80,16 @@ impl<T: Text> Text for Option<T> {
         quote!([#value])
     }
 }
-impl Text for (usize, syn::Expr) {
+impl<A: Text, B: Text> Text for (A, B) {
     fn parse_text(input: ParseStream<'_>) -> syn::Result<Self> {
-        let column = <usize as Text>::parse_text(input)?;
+        let first = A::parse_text(input)?;
         input.parse::<syn::Token![=>]>()?;
-        Ok((column, input.parse()?))
+        Ok((first, B::parse_text(input)?))
     }
     fn text(&self) -> TokenStream {
-        let column = self.0.text();
-        let value = &self.1;
-        quote!(#column => #value)
+        let first = self.0.text();
+        let second = self.1.text();
+        quote!(#first => #second)
     }
 }
 macro_rules! syntax_text { ($($ty:ty),* $(,)?) => {$ (

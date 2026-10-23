@@ -418,7 +418,10 @@ impl<'a> Emitter<'a> {
                     access.payload,
                 )
             }
-            Access::Host(access) => (context.host_lookup(left, &access, false), access.payload),
+            Access::Host(access) => (
+                context.host_lookup(left, &access, false, false),
+                access.payload,
+            ),
             Access::Built(structure) => {
                 let key = context
                     .stored_key(&right, &columns)

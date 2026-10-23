@@ -169,7 +169,7 @@ Invoking compiler & Fact & Proof obligation of its checker\\
 Datalog Storage & \code{host\_set H discharged} & $H$ is a canonical EDB provider, an IDB \code{all}/\code{delta} fed only through admission, or a layout maintained from them\\
 Datalog Round & \code{consumer canonical} & the hole is listed in exactly one \code{admit R from [..]} with $R$ its head (DL-Admit-Owner)\\
 Recursion extension & both & delta is \code{Answers}; results enter \code{fixpoint\_seen}\\
-Aggregate, negation extensions & \code{consumer canonical} & results enter the extension's own set state\\
+Aggregate extension & \code{consumer canonical} & results enter the extension's own set state\\
 Top-level \code{mini\_linq!} & \code{host\_set R} certified only & \textsc{IF-HostSet}\\
 \bottomrule
 \end{tabular}
@@ -182,9 +182,9 @@ assuming one would let a pass replace the query by a different one, so keys
 are out of scope until a provenance model exists. First-witness consumption is
 a different consumer operation, owned by the lower level's control semantics
 (\code{exists} mode and lawful early stop, \textsc{BK-Dual}); an upper
-compiler requests it by emitting an \code{exists} query. Totality of a Rust
-guard is a property of the term, owned by the CQ language (today the trusted
-\code{\#[total]} annotation, an open design question), not by the context.
+compiler requests it by emitting an \code{exists} query. Position independence
+is earned by CQ's recognized comparisons and relational operators, not by
+context facts or an assertion about arbitrary Rust; opaque guards stay pinned.
 A terminal's canonical return is a guarantee the lower level exports
 (\code{unique(returned)} in the Structures contract), the opposite direction
 of a context fact.

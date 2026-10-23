@@ -1,5 +1,8 @@
 #![cfg(feature = "hw4")]
 
+// OPTIONAL HW4 extends core CQ with aggregation. Relational negation and the
+// existing RA anti operator are supplied, including existential wildcards.
+
 use cq_lang_cq as cq;
 use cq_lang_ra as ra;
 use quote::{ToTokens, quote};
@@ -19,26 +22,17 @@ fn spend_query() -> proc_macro2::TokenStream {
 
 #[test]
 fn ascent_style_body_items_parse_round_trip_and_are_well_formed() {
-    let first: cq::Program = syn::parse2(spend_query())
-        .expect("OPTIONAL HW4: add nominal negation and aggregate body-item syntax");
+    let first: cq::Program =
+        syn::parse2(spend_query()).expect("OPTIONAL HW4: add aggregate body-item semantics");
     cq::contract::check(&first)
-        .expect("OPTIONAL HW4: implement the extended left-to-right CQ contract");
+        .expect("OPTIONAL HW4: implement the aggregate left-to-right CQ contract");
 
     let second: cq::Program = syn::parse2(first.to_token_stream()).unwrap();
     assert_eq!(first, second);
 }
 
 #[test]
-fn unsafe_negation_and_aggregation_are_rejected() {
-    let unsafe_negation: cq::Program = syn::parse2(quote! {
-        struct UnsafeNegation;
-        relation Person(c0: i32);
-        relation Blocked(c0: i32, c1: i32);
-        answer(person) :- !Blocked(person, _), Person(person);
-    })
-    .expect("OPTIONAL HW4: negation syntax should parse before its contract is checked");
-    assert!(cq::contract::check(&unsafe_negation).is_err());
-
+fn unsafe_aggregation_is_rejected() {
     let unsafe_correlation: cq::Program = syn::parse2(quote! {
         struct UnsafeAggregate;
         relation Person(c0: i32);
@@ -148,7 +142,7 @@ fn extended_ras_use_renames_inferred_correlation_and_one_global_unit() {
 
                         r0 = rename Person@0 {c0 -> person};
                         r1 = rename Blocked@1 {c0 -> person, c1 -> blocked_anon0};
-                        r2 = antisemijoin r0 with r1;
+                        r2 = anti [person] r0, r1;
                         r3 = rename Purchase@2 {
                             c0 -> person,
                             c1 -> purchase_anon0,
@@ -166,7 +160,7 @@ fn extended_ras_use_renames_inferred_correlation_and_one_global_unit() {
 
                         r0 = unit;
                         r1 = rename Blocked@0 {c0 -> blocked_anon0};
-                        r2 = antisemijoin r0 with r1;
+                        r2 = anti [] r0, r1;
                         r3 = rename Purchase@1 {c0 -> purchase_anon0, c1 -> amount};
                         r4 = aggregate_apply r2 with r3 value amount using sum into total;
                         r5 = project r4 keep {total};
@@ -177,9 +171,9 @@ fn extended_ras_use_renames_inferred_correlation_and_one_global_unit() {
 
     for tokens in plans {
         let first: ra::Program = syn::parse2(tokens)
-            .expect("OPTIONAL HW4: add AntiSemijoin and AggregateApply to RelationalPlan");
+            .expect("OPTIONAL HW4: add AggregateApply to RelationalPlan; anti is core");
         ra::contract::check(&first)
-            .expect("OPTIONAL HW4: check inferred correlations, headings, and global Unit");
+            .expect("OPTIONAL HW4: check aggregate correlations and headings");
         let second: ra::Program = syn::parse2(first.to_token_stream()).unwrap();
         assert_eq!(first, second);
     }
