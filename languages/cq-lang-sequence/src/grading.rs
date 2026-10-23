@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use cq_lang_structures::physical::{Operator, symbol_name};
+use cq_lang_structures::physical::symbol_name;
 use syn::Ident;
 
 use crate::{
@@ -28,6 +28,7 @@ struct Checker<'a> {
     grades: Vec<usize>,
     definitions: BTreeMap<String, usize>,
     physical: BTreeMap<String, &'a cq_lang_structures::physical::Definition>,
+    physical_facts: &'a cq_lang_structures::physical::Analysis,
     roots: Vec<usize>,
     nodes: Vec<Node<'a>>,
     collectives: Vec<(String, Monoid, Vec<String>)>,
@@ -157,6 +158,7 @@ pub(crate) fn check_grading_in(
         .collect();
     let mut checker = Checker {
         program,
+        physical_facts: &analysis.structures.physical,
         levels,
         grades,
         definitions,
@@ -790,7 +792,7 @@ impl<'a> Checker<'a> {
             let Some(definition) = self.physical.get(&name) else {
                 continue;
             };
-            if matches!(definition.operator, Operator::Bind(_) | Operator::Guard(_)) {
+            if self.physical_facts.opaque(&definition.operator) {
                 return Err(syn::Error::new(
                     result.span(),
                     "BE-Partial: opaque Physical Rust must be evaluated at host before dispatch",

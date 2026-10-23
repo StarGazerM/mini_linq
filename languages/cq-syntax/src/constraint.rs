@@ -8,7 +8,7 @@
 use crate::{CommaList, Equality, EqualityValue, symbol_name};
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use syn::{Ident, Token, parse::ParseStream};
 
 mod kw {
@@ -68,6 +68,23 @@ impl ToTokens for Term {
 }
 
 impl Term {
+    /// Borrow a relational operand; captured parameters may already be borrowed.
+    pub fn reference(&self, parameters: &BTreeMap<String, Ident>) -> TokenStream {
+        match self {
+            Self::Variable(v) => quote!(#v),
+            Self::Parameter(v) => match parameters.get(&symbol_name(v)) {
+                Some(p) => quote!(#p),
+                None => quote!(&#v),
+            },
+            Self::Literal(v) => quote!(&(#v)),
+        }
+    }
+
+    pub fn string_literal(&self) -> bool {
+        matches!(self, Self::Literal(l) if matches!(l.as_ref(),
+            syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(_), .. })))
+    }
+
     pub fn resolve(&mut self, logical: &BTreeSet<String>) {
         if let Self::Variable(v) = self {
             if !logical.contains(&symbol_name(v)) {
@@ -94,6 +111,33 @@ pub enum Comparison {
 impl Comparison {
     pub fn ordered(self) -> bool {
         !matches!(self, Self::Eq(_) | Self::Ne(_))
+    }
+
+    /// Emit the shared Eq/Ord obligations for borrowed relational operands.
+    pub fn expression(self, left: TokenStream, right: TokenStream, string: bool) -> TokenStream {
+        let equality = if string {
+            quote!(::cq_storage::relational_string_eq(#left, #right))
+        } else {
+            quote!(::cq_storage::relational_eq(#left, #right))
+        };
+        match self {
+            Self::Eq(_) => equality,
+            Self::Ne(_) => quote!(!#equality),
+            _ => {
+                let ordering = if string {
+                    quote!(::cq_storage::relational_str_cmp(#left, #right))
+                } else {
+                    quote!(::cq_storage::relational_cmp(#left, #right))
+                };
+                match self {
+                    Self::Lt(_) => quote!(#ordering.is_lt()),
+                    Self::Le(_) => quote!(!#ordering.is_gt()),
+                    Self::Gt(_) => quote!(#ordering.is_gt()),
+                    Self::Ge(_) => quote!(!#ordering.is_lt()),
+                    _ => unreachable!(),
+                }
+            }
+        }
     }
 }
 

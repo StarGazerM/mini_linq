@@ -127,3 +127,44 @@ fn h12_priority_counts_match_duckdb_and_date_guards() {
         assert_answers_equal("DuckDB H12", expected, "grouped H12", actual, true);
     }
 }
+
+#[test]
+#[allow(non_snake_case)]
+fn integer_arithmetic_wraps_in_debug_queries_and_range_guards() {
+    let Input = &[(i64::MAX, 2_i64), (i64::MIN, -1), (10, 3)];
+    let actual: Vec<(i64, i64, i64, i64)> = mini_linq::compile! {
+        pipeline {}
+        struct Query;
+        relation Input(x: i64, y: i64);
+        relation answer(a: i64, b: i64, c: i64, d: i64);
+        answer(a, b, c, d) :- Input(x, y),
+            let a: i64 = *x + *y,
+            let b: i64 = *x - *y,
+            let c: i64 = *x * *y,
+            let d: i64 = *x / -1,
+            if *x + *y == *a;
+    }.collect();
+    let expected = Input.iter().map(|&(x, y)| (
+        x.wrapping_add(y), x.wrapping_sub(y), x.wrapping_mul(y), x.wrapping_div(-1),
+    )).collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(actual.into_iter().collect::<std::collections::BTreeSet<_>>(), expected);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn h06_integer_coefficient_query_is_exact() {
+    let Lineitem = &[(1_i64, 123_i64, 5_i64, 23_i64, 365_i32),
+        (2, 123, 5, 23, 365), (3, 321, 7, 23, 400), (4, 100, 6, 24, 400),
+        (5, 100, 6, 23, 730), (1, 123, 5, 23, 365)];
+    let actual: Vec<(i64,)> = mini_linq::compile! {
+        pipeline {}
+        struct Query;
+        relation Lineitem(id: i64, price: i64, discount: i64, quantity: i64, date: i32);
+        relation answer(revenue: i64);
+        answer(sum(*price * *discount)) :- Lineitem(id, price, discount, quantity, date),
+            if *date >= 365 && *date < 730,
+            if *discount >= 5 && *discount <= 7,
+            if *quantity < 24;
+    }.collect();
+    assert_eq!(actual, vec![(3477,)]);
+}

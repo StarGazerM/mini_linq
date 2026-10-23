@@ -95,7 +95,11 @@ impl Clause<'_> {
 /// Formal rule D-Guard: Guard requires dependencies on the written prefix.
 /// Formal rule D-Bind: Binding provides pattern names and requires RHS prefix dependencies.
 /// Formal rule D-For: Generator provides pattern names and requires RHS prefix dependencies.
-fn clauses<'a>(body: &'a cq::CommaList<BodyItem>, context: &BTreeSet<String>) -> Vec<Clause<'a>> {
+fn clauses<'a>(
+    body: &'a cq::CommaList<BodyItem>,
+    context: &BTreeSet<String>,
+    types: &BTreeMap<String, syn::Type>,
+) -> Vec<Clause<'a>> {
     let mut let_bound = BTreeSet::new();
     let mut written = context.clone();
     for item in body {
@@ -196,7 +200,7 @@ fn clauses<'a>(body: &'a cq::CommaList<BodyItem>, context: &BTreeSet<String>) ->
                     unreachable!("normal form")
                 }
             };
-            let rust = item.rust_step().is_some()
+            let rust = (item.rust_step().is_some() && item.arithmetic(types).is_none())
                 || matches!(item, BodyItem::Block(block) if block.analyze(&prefix).rust);
             let atom = match item {
                 BodyItem::Positive { atom } => Some(atom.clone()),
@@ -237,16 +241,9 @@ fn ready(
     clauses[clause].requires.is_subset(bound)
         && (!clauses[clause].rust
             || (pending.iter().copied().filter(|&c| clauses[c].rust).min() == Some(clause)
-                && !pending.iter().any(|&c| {
-                    c < clause
-                        && (clauses[c].atom.is_some()
-                            || matches!(
-                                clauses[c].item,
-                                BodyItem::Equality(_)
-                                    | BodyItem::Constraint(_)
-                                    | BodyItem::Negation(_)
-                            ))
-                })))
+                && !pending
+                    .iter()
+                    .any(|&c| c < clause && (!clauses[c].rust || clauses[c].atom.is_some()))))
 }
 
 /// A rank orders the ready clauses; the least is placed next. Guards and
@@ -534,7 +531,7 @@ fn fine(
         .collect();
     let let_bound: BTreeSet<&String> = clauses
         .iter()
-        .filter(|c| c.rust)
+        .filter(|c| c.rust || matches!(c.item, BodyItem::Let(_)))
         .flat_map(|c| &c.provides)
         .collect();
     let mut plan = Fine {
@@ -742,7 +739,8 @@ pub fn compile_explicit(
 ) -> syn::Result<valuation::Program> {
     cq::normal::check(source)?;
     let context = BTreeSet::new();
-    let clauses = clauses(&source.query.body, &context);
+    let types = declared_types(source, &source.query.body)?;
+    let clauses = clauses(&source.query.body, &context, &types);
     let mut priorities = BTreeMap::new();
     for (priority, selector) in relations.iter().enumerate() {
         let relation = &selector.relation;
@@ -793,6 +791,14 @@ pub fn compile_explicit(
     Ok(program)
 }
 
+fn declared_types(
+    source: &cq::Program,
+    body: &cq::CommaList<BodyItem>,
+) -> syn::Result<BTreeMap<String, syn::Type>> {
+    let schema = source.inputs().map(|d| (symbol_name(&d.name), d)).collect();
+    cq::blocks::types(&schema, body, &BTreeMap::new())
+}
+
 fn compile_body(
     source: &cq::Program,
     options: &Options,
@@ -800,7 +806,8 @@ fn compile_body(
     parent: Option<(valuation::Occurrence, usize)>,
 ) -> syn::Result<Vec<valuation::Step>> {
     let query = &source.query;
-    let clauses = clauses(&query.body, context);
+    let types = declared_types(source, &query.body)?;
+    let clauses = clauses(&query.body, context, &types);
     let hypergraph = cq::hypergraph::Analysis::of_body(&query.body, context);
     let (sequence, mut variables) = match options.heuristic {
         Heuristic::Filtered => {
@@ -964,6 +971,7 @@ pub fn check(
         ));
     }
     check_steps(
+        source,
         &source.query.body,
         &target.valuation.steps,
         &analysis,
@@ -973,6 +981,7 @@ pub fn check(
 }
 
 fn check_steps(
+    source: &cq::Program,
     body: &cq::CommaList<BodyItem>,
     steps: &[valuation::Step],
     analysis: &valuation::Analysis,
@@ -1075,7 +1084,8 @@ fn check_steps(
                 .flatten()
                 .cloned()
                 .collect();
-            let facts = clauses(body, &context);
+            let types = declared_types(source, body)?;
+            let facts = clauses(body, &context, &types);
             let graph = cq::hypergraph::Analysis::of_body(body, &context);
             let mut filters = cq::hypergraph::filter_ranks(body, &graph);
             if let Some(groups) = join_branches {
@@ -1134,6 +1144,7 @@ fn check_steps(
                     };
                     for (j, arm) in block.branches.iter().enumerate() {
                         check_steps(
+                            source,
                             &written.branches[j].body,
                             &arm.steps,
                             &analysis.branches[&a.clause()][j],

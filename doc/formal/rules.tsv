@@ -122,6 +122,7 @@ PH-Range	implementation	languages/cq-lang-physical/src/lib.rs	// Formal rule PH-
 IF-Parameter	implementation	passes/cq-print/src/lib.rs	// Formal rule IF-Parameter:	Read each capture once outside query loops.
 IF-Range	implementation	passes/cq-print/src/range.rs	/// Formal rule IF-Range:	Ordered leading windows or scan/filter without builds.
 CQ-GuardRecognize	implementation	languages/cq-syntax/src/guard.rs	/// Formal rule CQ-GuardRecognize:	Rust comparison trait operations and pure boolean structure under Eq/Ord premises.
+CQ-Arith	implementation	languages/cq-syntax/src/arithmetic.rs	/// Formal rule CQ-Arith:	Typed fixed-width wrapping addition, subtraction, multiplication and division by a nonzero literal; decimal coefficient projection; Motion and BE-Partial rederive totality.
 CQ-GuardSplit	implementation	languages/cq-syntax/src/guard.rs	/// Formal rule CQ-GuardSplit:	Extract total conjuncts; keep one written-order residual; selecting earlier only shrinks opaque evaluation domains.
 CQ-Neg	implementation	languages/cq-lang-cq/src/lib.rs	fn check_body(	Declared input and arity; bound variables, constants and wildcards; binds nothing and requires Leibniz columns.
 E-Neg	implementation	passes/cq-elaborate/src/lib.rs	/// E-Neg:	Lower negation to the existing anti operator, restricting constants and repeated names and projecting away wildcards; GPU compact inverts the same provider membership probe using retained Anti provenance.

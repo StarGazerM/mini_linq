@@ -1132,3 +1132,27 @@ DuckDB is the exported t24 median (not a new CPU measurement).
 Evidence: `/tmp/canon-h10.json`. The final-publication phase label is the
 suite's `dedup_ms`; intermediate canonicalization runs inside the kernel
 interval, so that column is not an isolated canon benchmark.
+## [15] CQ-Arith: earned arithmetic position independence
+
+CQ defines `+`, `-`, `*`, and integer `/` by a nonzero literal as wrapping
+operations over declared integer types. Decimal arithmetic operates on the
+signed 64-bit coefficient (`Decimal::scaled`); integer-encoded dates retain
+their declared width. Total numeric `if` expressions and explicit lossless
+primitive `T::from` widening close the grammar. Arbitrary calls, lossy casts,
+mixed-width operands and nonliteral divisors remain opaque.
+
+The shared syntax recognizer returns the canonical wrapping expression.
+CQ-GuardRecognize extracts typed total conjuncts without splitting through
+opaque disjunctions or negations. CQ ordering and its independent VO checker
+admit arithmetic clauses when their inputs are available, while preserving
+opaque clauses' written Before domains. Bind/Guard syntax is retained in
+later IRs; Physical type facts rederive totality for planner placement and
+BE-Partial instead of trusting an annotation. Host and GPU row interpreters
+emit the same primitive wrapping operations, with no target placement choices
+inside translators.
+
+Acceptance: recognition/rejection (especially variable or zero divisors),
+overflow and signed-minimum division laws in debug CPU execution, arithmetic
+Motion with opaque-domain rejection, BE-Partial device acceptance/rejection,
+H06 DISTINCT-valuation exactness against DuckDB, and advised H06/H12 SF10
+device exactness with before/after timings.

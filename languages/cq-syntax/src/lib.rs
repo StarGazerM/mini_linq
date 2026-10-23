@@ -74,6 +74,7 @@ pub fn symbol_name(identifier: &Ident) -> String {
 
 pub mod keyed;
 pub use keyed::SupplyKind;
+pub mod arithmetic;
 pub mod constraint;
 pub mod guard;
 pub use constraint::Constraint;

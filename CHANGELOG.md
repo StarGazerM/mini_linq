@@ -20,6 +20,13 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   deduplicate complete rows without truncation, using the existing publication
   count and host decode protocol. All packed publication consumers now decode
   arbitrary-width, cross-lane fields.
+- Add CQ-Arith: declared fixed-width integer/decimal-coefficient arithmetic
+  uses wrapping addition, subtraction and multiplication, plus wrapping integer
+  division by a nonzero literal. Total conditionals and explicit lossless
+  primitive widening close the grammar. Typed arithmetic bindings and guards
+  earn position independence; arbitrary methods, lossy casts, mixed widths and
+  runtime divisors stay opaque. CPU and GPU row interpretation share the checked arithmetic
+  grammar, allowing aggregate arguments to execute below the host boundary.
 - Cleanup after the Sequence cutover and guard redesign: remove the
   test-only `cq_physical_realization::sources`, the uncalled
   `cq_print::Context::row` (and make `borrowed_pattern` private), unread

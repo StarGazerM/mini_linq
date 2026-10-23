@@ -456,7 +456,7 @@ fn partial_rejects_opaque_evaluation_below_host() {
         physical {
             relation R(a:i32);
             r = pipe rename R@0 {a -> a};
-            b = let canon bind r with n:i32 = (1);
+            b = let canon bind r with n:i32 = (1 / *a);
             return b as answer(a,n);
         } structures {
             r host scan = Reader [];
@@ -467,6 +467,25 @@ fn partial_rejects_opaque_evaluation_below_host() {
     grade(&mut p, quote!(a at device;));
     reject_grade(&p, &gpu(), "BE-Partial");
     grade(&mut p, quote!(a at host;));
+    check_grading(&p, &gpu()).unwrap();
+}
+
+#[test]
+fn arithmetic_bind_and_guard_earn_device_placement() {
+    let mut p: Program = syn::parse_quote! {
+        physical {
+            relation R(a:i32);
+            r = pipe rename R@0 {a -> a};
+            b = pipe bind r with n:i32 = (*a * 100 + 1);
+            g = let canon guard b if (*n / -1 != 0);
+            return g as answer(a,n);
+        } structures {
+            r host scan = Reader [];
+            g canon = Canon;
+            g rows = Rows;
+        } sequence { a = store map g rows r; }
+    };
+    grade(&mut p, quote!(a at device;));
     check_grading(&p, &gpu()).unwrap();
 }
 

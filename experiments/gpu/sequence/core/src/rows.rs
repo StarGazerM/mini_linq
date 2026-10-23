@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use cq_lang_sequence::{Analysis, Obligation, Program};
 use cq_lang_structures::physical::{Definition, Operator, symbol_name};
+use cq_lang_structures::syntax as cq_syntax;
 use cq_lang_structures::syntax::{
     EqualityValue,
     algebra::Theta,
@@ -338,11 +339,16 @@ impl Rows {
                 )?;
                 let id = format_ident!("__cq_sequence_uploaded_{name}");
                 let length = format_ident!("__cq_sequence_uploaded_length_{name}");
-                let types = layout.iter().map(|column| &analysis.structures.physical.rows[name].types[column]);
+                let types = layout
+                    .iter()
+                    .map(|column| &analysis.structures.physical.rows[name].types[column]);
                 let upload = if layout.is_empty() {
                     quote!(::cq_gpu_runtime::DeviceColumns::from_rows(
-                        __cq_pool.clone(), &rows,
-                        &mut ::cq_gpu_runtime::Dictionary::default(), &[])?)
+                        __cq_pool.clone(),
+                        &rows,
+                        &mut ::cq_gpu_runtime::Dictionary::default(),
+                        &[]
+                    )?)
                 } else {
                     quote!(::cq_gpu_sequence_runtime::upload_numeric_columns::<(#(#types,)*), _>(
                         __cq_pool.clone(), rows)?)
@@ -969,11 +975,44 @@ impl Rows {
                 | Operator::Merge(_, _) => {
                     // The Sequence Lookup constructor already executed the keyed operation.
                 }
-                Operator::Bind(_) | Operator::Guard(_) => {
-                    return Err(syn::Error::new_spanned(
-                        definition,
-                        "T-Gpu: opaque Rust map is not #[device]-compatible; evaluate it at host before dispatch",
-                    ));
+                Operator::Bind(bind) => {
+                    let input = symbol_name(&bind.input);
+                    let mut expression = cq_syntax::arithmetic::binding(bind, &self.types[&input])
+                        .ok_or_else(|| {
+                            error("T-Gpu: opaque Rust binding requires host evaluation")
+                        })?;
+                    DeviceComparisons.visit_expr_mut(&mut expression);
+                    let dependencies = cq_syntax::rust::free_variables(&bind.expression)
+                        .dependencies(&self.types[&input].keys().cloned().collect());
+                    let bindings = dependencies.iter().map(|column| {
+                        let id = Ident::new(column, proc_macro2::Span::call_site());
+                        let ty = &self.types[&input][column];
+                        let slot = self.columns[column];
+                        quote!(let #id = &(#row[#slot] as #ty);)
+                    });
+                    let names = cq_syntax::rust::bindings(&bind.pattern);
+                    let slot = self.columns[&symbol_name(&names[0])];
+                    output.extend(quote! {
+                        if #live { #(#bindings)* #row[#slot] = (#expression) as i64; }
+                    });
+                }
+                Operator::Guard(guard) => {
+                    let input = symbol_name(&guard.input);
+                    let mut expression =
+                        cq_syntax::arithmetic::predicate(&guard.condition, &self.types[&input])
+                            .ok_or_else(|| {
+                                error("T-Gpu: opaque Rust guard requires host evaluation")
+                            })?;
+                    DeviceComparisons.visit_expr_mut(&mut expression);
+                    let dependencies = cq_syntax::rust::free_variables(&guard.condition)
+                        .dependencies(&self.types[&input].keys().cloned().collect());
+                    let bindings = dependencies.iter().map(|column| {
+                        let id = Ident::new(column, proc_macro2::Span::call_site());
+                        let ty = &self.types[&input][column];
+                        let slot = self.columns[column];
+                        quote!(let #id = &(#row[#slot] as #ty);)
+                    });
+                    output.extend(quote! { if #live { #(#bindings)* #live = #expression; } });
                 }
                 Operator::Group(_) => {
                     return Err(syn::Error::new_spanned(
@@ -1085,7 +1124,8 @@ fn host_rows(
         let rename = matches!(definition.operator, Operator::Rename(_));
         let rows = if let Some(binding) = bindings.get(&result) {
             let values = emitter.context().carried(&result).iter().map(|column| {
-                let index = host_analysis.layouts[&result].iter()
+                let index = host_analysis.layouts[&result]
+                    .iter()
                     .position(|stored| stored == column)
                     .expect("carried column belongs to downloaded layout");
                 let index = syn::Index::from(index);
@@ -1460,32 +1500,60 @@ mod tests {
             }
         };
         let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
-        let definitions = program.structures.physical.program.definitions.iter()
-            .map(|definition| (symbol_name(&definition.name), definition.clone())).collect();
+        let definitions = program
+            .structures
+            .physical
+            .program
+            .definitions
+            .iter()
+            .map(|definition| (symbol_name(&definition.name), definition.clone()))
+            .collect();
         let bindings = BTreeMap::from([("filtered".to_owned(), syn::parse_quote!(downloaded))]);
         let resident_hosts = BTreeSet::from(["Driver".to_owned()]);
         let publication = host_rows(
-            &program, &analysis, "joined", &definitions, &resident_hosts, &bindings, false,
-        ).unwrap();
+            &program,
+            &analysis,
+            "joined",
+            &definitions,
+            &resident_hosts,
+            &bindings,
+            false,
+        )
+        .unwrap();
         syn::parse2::<syn::Expr>(publication.clone()).unwrap();
         let publication = publication.to_string();
         let full_pattern = quote!(|(available,customer_key,customer_nation,order_date,
-            order_key,part_key,supplier_key,supplier_nation,)|).to_string();
+            order_key,part_key,supplier_key,supplier_nation,)|)
+        .to_string();
         assert!(publication.contains(&full_pattern), "{publication}");
         let full_download = quote!(|__cq_bound| (
-            &__cq_bound.0,&__cq_bound.1,&__cq_bound.2,&__cq_bound.3,
-            &__cq_bound.4,&__cq_bound.5,&__cq_bound.6,&__cq_bound.7,
-        )).to_string();
+            &__cq_bound.0,
+            &__cq_bound.1,
+            &__cq_bound.2,
+            &__cq_bound.3,
+            &__cq_bound.4,
+            &__cq_bound.5,
+            &__cq_bound.6,
+            &__cq_bound.7,
+        ))
+        .to_string();
         assert!(publication.contains(&full_download), "{publication}");
 
         // A narrower boundary must select the carried slots from the same
         // stored layout, not hand an eight-field tuple to a three-field probe.
         let projected = host_rows(
-            &program, &analysis, "result", &definitions, &resident_hosts, &bindings, false,
-        ).unwrap().to_string();
-        let projected_download = quote!(|__cq_bound| (
-            &__cq_bound.4,&__cq_bound.5,&__cq_bound.7,
-        )).to_string();
+            &program,
+            &analysis,
+            "result",
+            &definitions,
+            &resident_hosts,
+            &bindings,
+            false,
+        )
+        .unwrap()
+        .to_string();
+        let projected_download =
+            quote!(|__cq_bound| (&__cq_bound.4, &__cq_bound.5, &__cq_bound.7,)).to_string();
         assert!(projected.contains(&projected_download), "{projected}");
     }
 }

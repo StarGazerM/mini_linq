@@ -494,6 +494,24 @@ pub struct Analysis {
     pub modes: BTreeMap<String, ModeKind>,
 }
 
+impl Analysis {
+    /// Rust remains opaque unless CQ's typed arithmetic grammar defines it.
+    pub fn opaque(&self, operator: &Operator) -> bool {
+        match operator {
+            Operator::Bind(bind) => {
+                cq_syntax::arithmetic::binding(bind, &self.rows[&symbol_name(&bind.input)].types)
+                    .is_none()
+            }
+            Operator::Guard(guard) => cq_syntax::arithmetic::predicate(
+                &guard.condition,
+                &self.rows[&symbol_name(&guard.input)].types,
+            )
+            .is_none(),
+            _ => false,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Fused {
     pub prefix: String,

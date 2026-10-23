@@ -783,7 +783,7 @@ fn host_operations(program: &Program, facts: &cq_lang_sequence::Analysis) -> BTr
         .definitions
         .iter()
         .filter(|definition| {
-            matches!(definition.operator, Operator::Bind(_) | Operator::Guard(_))
+            facts.structures.physical.opaque(&definition.operator)
                 || host_predicate(&definition.operator)
                 || string_row(facts, &symbol_name(&definition.name))
                 || match &definition.operator {

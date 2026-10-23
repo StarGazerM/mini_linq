@@ -18,14 +18,44 @@ shrink its evaluation domain.
 constructs whose meaning the CQ language defines:
 \begin{enumerate}
 \item \emph{Comparisons} \code{== != < <= > >=} and the Boolean connectives
-\code{\&\& || !} over query names, parameters and literals (CQ-GuardRecognize,
-unchanged). Totality follows from the Leibniz and Order premises; the printer's
+\code{\&\& || !} over query names, parameters and literals (CQ-GuardRecognize).
+Totality follows from the Leibniz and Order premises; the printer's
 \code{relational\_eq}/\code{relational\_cmp} obligations make rustc check the
-\code{Eq}/\code{Ord} bounds. This is the language's grammar, not an allowlist:
-it names operators of the relational algebra, never Rust functions or types.
+\code{Eq}/\code{Ord} bounds. This is the language's grammar, not an allowlist
+of arbitrary Rust functions or author-supplied type-name promises.
 \item \emph{Relational operators}: atoms, semijoins and anti-joins. Membership
 of a value in a relation is relational, not a Rust call.
+\item \emph{Typed arithmetic} (CQ-Arith): \code{+ - *}, and integer
+\code{/} with a nonzero literal divisor, over declared integer names,
+integer literals and decimal coefficients. Its meaning is wrapping arithmetic,
+not Rust's debug-panicking arithmetic. Date coefficients use their declared
+integer width. A decimal's \code{scaled()} projection denotes its signed
+64-bit coefficient; elaboration uses the canonical \code{cq\_load::Decimal}
+projection, not a promise about an arbitrary Rust method.
 \end{enumerate}
+
+\begin{mathpar}
+\Rule{CQ-Arith}{\Gamma\vdash a,b:\mathbb Z/2^w\mathbb Z\quad
+ op\in\{+,-,*\}\ \lor\ (op=/\land b\text{ a nonzero integer literal})}
+ {\Gamma\vdash a\ op\ b:\mathbb Z/2^w\mathbb Z\quad
+  \mathsf{total}(a\ op\ b)}
+\end{mathpar}
+Addition, subtraction and multiplication reduce the result modulo $2^w$.
+Signed division truncates toward zero; the exceptional minimum-value divided
+by $-1$ returns the minimum value. Literal coefficients use the declared
+integer representation. Host elaboration uses \code{wrapping\_add},
+\code{wrapping\_sub}, \code{wrapping\_mul}, and \code{wrapping\_div};
+device compilation implements the same fixed-width operations natively.
+Operands must agree in declared integer type; no implicit widening, runtime
+divisor proof, captured Rust function, cast or arbitrary method earns totality.
+The grammar is closed under \code{if c \{a\} else \{b\}} when $c$ is a
+recognized total predicate and both branches are total expressions of the
+same declared type. It also admits primitive \code{T::from(a)} exactly when
+the source integer range is contained in the target range; canonical primitive
+UFCS calls enforce that representation. A lossy \code{as} cast remains opaque.
+These expressions may occur in scalar bindings, aggregate arguments and
+recognized comparisons. Their typed grammar is rechecked from row types in
+later IRs, where they retain Bind/Guard syntax rather than an asserted flag.
 
 \paragraph{No asserted totality.}
 The guard grammar has no \code{\#[total]} annotation, \code{Filter} has no
@@ -46,9 +76,12 @@ treatment of Rust, not a loss of meaning.
 \item \emph{Datalog negation} is a CQ negated atom \code{!R(..)}, elaborated
 to the existing RA \code{anti}. It is not encoded as a Rust membership
 guard and requires no assertion.
-\item \emph{GPU translation} re-translates relational predicates only; the
-\code{h05} range guard becomes a recognized \code{Between} when written
-without the assertion, which also restores range reads.
+\item \emph{GPU translation} re-translates relational predicates and CQ-Arith
+expressions only. Motion admits typed arithmetic bindings and guards as soon as
+their query inputs are bound; BE-Partial no longer pins the whole relation to
+host for a price-times-discount aggregate argument. The \code{h05} range guard
+still becomes a recognized \code{Between}, retaining range reads. A nonliteral
+divisor or an unrecognized call remains opaque and must run at host.
 \end{enumerate}
 
 \subsection{Negation in CQ}

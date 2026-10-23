@@ -205,11 +205,18 @@ fn error<T>(
 
 fn analyze(program: &Program) -> syn::Result<Analysis> {
     join_branches::check(program)?;
+    let schema = program
+        .cq
+        .inputs()
+        .map(|d| (symbol_name(&d.name), d))
+        .collect();
     analyze_steps(
         &program.cq.query.body,
         &program.valuation.steps,
         Vec::new(),
         None,
+        &schema,
+        &BTreeMap::new(),
     )
 }
 
@@ -218,7 +225,16 @@ fn analyze_steps(
     steps: &[Step],
     context: Vec<String>,
     parent: Option<(Occurrence, usize)>,
+    schema: &BTreeMap<String, &cq::RelationDecl>,
+    inherited_types: &BTreeMap<String, syn::Type>,
 ) -> syn::Result<Analysis> {
+    let types = cq::blocks::types(schema, body, inherited_types)?;
+    let arithmetic: BTreeSet<_> = body
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| item.arithmetic(&types).is_some())
+        .map(|(clause, _)| clause)
+        .collect();
     for step in steps {
         match step {
             Step::Atom(a, _) => a.clause.check()?,
@@ -313,7 +329,9 @@ fn analyze_steps(
                 dependencies.insert(clause, step.free_variables.dependencies(&written_bound));
                 written_bound.extend(step.bindings.iter().map(symbol_name));
                 let_bound.extend(step.bindings.iter().map(symbol_name));
-                rust_chain.push(clause);
+                if !arithmetic.contains(&clause) {
+                    rust_chain.push(clause);
+                }
             }
             _ => unreachable!("normal form checked"),
         }
@@ -415,6 +433,8 @@ fn analyze_steps(
                         &branch.steps,
                         branch_context.clone(),
                         Some((expected_path.clone(), j)),
+                        schema,
+                        &types,
                     )?);
                 }
                 if let Some(existing) = analysis.branches.get(&clause) {
@@ -580,15 +600,20 @@ fn analyze_steps(
                 analysis.introduces.push(Vec::new());
             }
             Step::Guard(_, _) | Step::Let(_, _) | Step::For(_, _) => {
-                let Some(&clause) = rust_chain.get(next_rust) else {
-                    return error(step, "more Rust steps than the query has");
-                };
-                let identical = match (step, &body[clause]) {
+                let identical = |clause: usize| match (step, &body[clause]) {
                     (Step::Guard(a, _), cq::BodyItem::Filter(b)) => a == b,
                     (Step::Let(a, _), cq::BodyItem::Let(b)) => a == b,
                     (Step::For(a, _), cq::BodyItem::For(b)) => a == b,
                     _ => false,
                 };
+                let total = arithmetic
+                    .iter()
+                    .copied()
+                    .find(|clause| !complete.contains(clause) && identical(*clause));
+                let Some(clause) = total.or_else(|| rust_chain.get(next_rust).copied()) else {
+                    return error(step, "more Rust steps than the query has");
+                };
+                let identical = identical(clause);
                 if !identical {
                     return error(
                         step,
@@ -601,15 +626,17 @@ fn analyze_steps(
                         format!("Rust step uses `{missing}` before it is bound"),
                     );
                 }
-                for earlier in 0..clause {
-                    if matches!(
-                        &body[earlier],
-                        cq::BodyItem::Positive { .. }
-                            | cq::BodyItem::Equality(_)
-                            | cq::BodyItem::Constraint(_)
-                            | cq::BodyItem::Negation(_)
-                            | cq::BodyItem::Block(_)
-                    ) && !complete.contains(&earlier)
+                for earlier in (0..clause).filter(|_| total.is_none()) {
+                    if (arithmetic.contains(&earlier)
+                        || matches!(
+                            &body[earlier],
+                            cq::BodyItem::Positive { .. }
+                                | cq::BodyItem::Equality(_)
+                                | cq::BodyItem::Constraint(_)
+                                | cq::BodyItem::Negation(_)
+                                | cq::BodyItem::Block(_)
+                        ))
+                        && !complete.contains(&earlier)
                     {
                         return error(
                             step,
@@ -628,7 +655,11 @@ fn analyze_steps(
                     .collect::<Vec<_>>();
                 bound.extend(introduced.iter().cloned());
                 analysis.introduces.push(introduced);
-                next_rust += 1;
+                if total.is_none() {
+                    next_rust += 1;
+                } else {
+                    complete.insert(clause);
+                }
             }
             Step::Reduce(reduce, _) => {
                 let clause = reduce.clause();
@@ -720,6 +751,9 @@ fn analyze_steps(
         .find(|(clause, _)| !placed_negations.contains(clause))
     {
         return error(*missing, "every relational negation must be placed");
+    }
+    if let Some(&missing) = arithmetic.iter().find(|clause| !complete.contains(clause)) {
+        return error(&body[missing], "every arithmetic clause must be placed");
     }
     if next_rust != rust_chain.len() {
         return error(
