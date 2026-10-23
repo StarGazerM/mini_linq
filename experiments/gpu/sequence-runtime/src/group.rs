@@ -1,8 +1,8 @@
 //! GPU machine instance of segmented grouped monoid folds.
-use crate::{pointer, release, temporary, Result};
+use crate::{Result, pointer, release, temporary};
 use cq_gpu_runtime::{Buffer, Pool};
 use gpu_device_columns::OutputCount;
-use rccl_thrust::{arithmetic_range, select_flagged, DeviceBufferExt};
+use rccl_thrust::{DeviceBufferExt, arithmetic_range, select_flagged};
 use std::sync::Arc;
 
 /// A checked aggregate's machine representation. Extrema use a separate validity
@@ -75,6 +75,7 @@ impl<F> GroupedRows<F> {
 pub unsafe fn fold(
     pool: Arc<Pool>,
     input: &Buffer<i64>,
+    live: Option<&Buffer<u32>>,
     rows: usize,
     keys: usize,
     aggregates: &[Aggregate],
@@ -87,6 +88,7 @@ pub unsafe fn fold(
         || rows > u32::MAX as usize
         || input.len() < rows.checked_mul(width).ok_or("group size overflow")?
         || !Arc::ptr_eq(input.pool(), &pool)
+        || live.is_some_and(|live| live.len() < rows || !Arc::ptr_eq(live.pool(), &pool))
     {
         return Err("invalid grouped input extent or pool".into());
     }
@@ -97,6 +99,50 @@ pub unsafe fn fold(
     let cub = rccl_cub::cuda::Program::load(pool.context())?;
     let launch = cub.on(stream)?;
     let mut order = temporary::<u32>(stream, rows)?;
+    let rows = if let Some(live) = live {
+        let flags = temporary::<u32>(stream, rows)?;
+        let mut count = temporary::<u64>(stream, 1)?;
+        if rows != 0 {
+            unsafe {
+                cuda_core::memory::memcpy_dtod_async(
+                    flags.cu_deviceptr(),
+                    live.cu_deviceptr(),
+                    rows * std::mem::size_of::<u32>(),
+                    stream.cu_stream(),
+                )?;
+            }
+            select_flagged(
+                &exec,
+                arithmetic_range(0u32, 1, rows),
+                flags.view(),
+                order.view_mut(),
+                &mut count,
+            )?;
+        }
+        let selected = if rows == 0 {
+            0
+        } else {
+            count.to_host_vec(stream)?[0] as usize
+        };
+        let selected_order = temporary::<u32>(stream, selected)?;
+        if selected != 0 {
+            unsafe {
+                cuda_core::memory::memcpy_dtod_async(
+                    selected_order.cu_deviceptr(),
+                    order.cu_deviceptr(),
+                    selected * std::mem::size_of::<u32>(),
+                    stream.cu_stream(),
+                )?;
+            }
+        }
+        release(stream, order)?;
+        release(stream, flags)?;
+        release(stream, count)?;
+        order = selected_order;
+        selected
+    } else {
+        rows
+    };
     let mut alternate_order = temporary::<u32>(stream, rows)?;
     let mut sort_keys = temporary::<u64>(stream, rows)?;
     let mut alternate_keys = temporary::<u64>(stream, rows)?;
@@ -113,12 +159,14 @@ pub unsafe fn fold(
                 u32,
             >(&launch, rows)?)
         };
-        module.identity(
-            stream,
-            &module.prepare_identity(config)?,
-            pointer(&order),
-            rows as u32,
-        )?;
+        if live.is_none() {
+            module.identity(
+                stream,
+                &module.prepare_identity(config)?,
+                pointer(&order),
+                rows as u32,
+            )?;
+        }
         // Stable least-significant-field passes produce lexicographic group order.
         for key in (0..keys).rev() {
             module.gather_key(

@@ -73,6 +73,14 @@ pub fn build(
     })
 }
 
+pub struct GroupInput {
+    pub parameters: Vec<TokenStream>,
+    pub arguments: Vec<TokenStream>,
+    pub load: TokenStream,
+    pub columns: std::collections::BTreeMap<String, TokenStream>,
+    pub length: TokenStream,
+}
+
 /// Lower the machine instance of BE-Group at an already published canonical
 /// valuation boundary. No sorting/canonicalization choices are made here.
 pub fn group(
@@ -82,12 +90,19 @@ pub fn group(
     output_types: &std::collections::BTreeMap<String, syn::Type>,
     input_index: usize,
     kernel: &Ident,
+    direct: Option<GroupInput>,
 ) -> syn::Result<(TokenStream, TokenStream)> {
     use cq_lang_structures::{physical::symbol_name, syntax::algebra::AggregateKind};
     use quote::format_ident;
     let owner = format_ident!("__cq_canonical_{input_index}");
     let fields = format_ident!("__cq_fields_{input_index}");
-    let length = format_ident!("__cq_store_length_{input_index}");
+    let length = direct
+        .as_ref()
+        .map(|input| input.length.clone())
+        .unwrap_or_else(|| {
+            let id = format_ident!("__cq_store_length_{input_index}");
+            quote!(#id)
+        });
     let prepare = format_ident!("prepare_{kernel}");
     let mut columns = group.keys.iter().map(symbol_name).collect::<Vec<_>>();
     let keys = columns.len();
@@ -160,11 +175,24 @@ pub fn group(
         });
     }
     let width = columns.len();
-    let mut params = Vec::new();
-    let mut args = Vec::new();
+    let mut params = direct
+        .as_ref()
+        .map(|input| input.parameters.clone())
+        .unwrap_or_default();
+    let mut args = direct
+        .as_ref()
+        .map(|input| input.arguments.clone())
+        .unwrap_or_default();
     let mut writes = Vec::new();
     for (column, argument) in arguments.iter().enumerate() {
         if let Some(argument) = argument {
+            if let Some(input) = &direct {
+                let value = input.columns.get(argument).ok_or_else(|| {
+                    syn::Error::new_spanned(group, "GPU resident group argument is absent")
+                })?;
+                writes.push(quote!(*values.add(position*#width+#column)=#value as i64;));
+                continue;
+            }
             let field = input_columns
                 .iter()
                 .position(|name| name == argument)
@@ -209,16 +237,42 @@ pub fn group(
             quote!(::cq_gpu_runtime::decode_value::<#ty>(values[#slot], &__cq_dictionary)?)
         });
     }
+    let filtered = direct.is_some();
+    let (load, input_parameters, input_arguments, status, live_argument) =
+        if let Some(input) = direct {
+            (
+                input.load,
+                quote!(live:*mut u32,),
+                quote!(__cq_group_live.ptr(),),
+                quote!(),
+                quote!(Some(&__cq_group_live)),
+            )
+        } else {
+            (
+                quote!(),
+                quote!(packed:*const u64,lanes:usize,),
+                quote!(#owner.keys().ptr(),#owner.lanes(),),
+                quote!(__cq_statuses.push(#owner.metadata().clone());),
+                quote!(None),
+            )
+        };
+    let live_write = filtered.then(|| quote!(*live.add(position)=__live as u32;));
+    let live_buffer = filtered.then(|| quote! {
+        let __cq_group_live=unsafe {::cq_gpu_runtime::Buffer::<u32>::uninitialized(__cq_pool.clone(),#length)?};
+    });
     Ok((
         quote! {
             #[kernel]
             #[launch_bounds(256)]
             #[launch_contract(domain=1,block=(256,1,1))]
-            pub fn #kernel(packed:*const u64,values:*mut i64,length:usize,lanes:usize,#(#params),*) {
+            pub fn #kernel(values:*mut i64,length:usize,#input_parameters #(#params),*) {
                 unsafe {
                     let mut position=::cuda_device::thread::index_1d().get() as usize;
                     while position<length {
-                        #(#writes)*
+                        let mut __live = true;
+                        #load
+                        #live_write
+                        if __live { #(#writes)* }
                         position+=::cuda_device::thread::gridDim_x() as usize*256;
                     }
                 }
@@ -226,13 +280,14 @@ pub fn group(
         },
         quote! {
             let __cq_group_values=unsafe {::cq_gpu_runtime::Buffer::<i64>::uninitialized(__cq_pool.clone(),#length.checked_mul(#width).ok_or("group allocation overflow")?)?};
+            #live_buffer
             if #length!=0 {
                 let prepared=__cq_module.#prepare(::cuda_core::LaunchConfig1D::new(#length.div_ceil(256).min(2272) as u32,256,0))?;
-                __cq_module.#kernel(__cq_pool.stream(),&prepared,#owner.keys().ptr(),__cq_group_values.ptr(),#length,#owner.lanes(),#(#args),*)?;
+                __cq_module.#kernel(__cq_pool.stream(),&prepared,__cq_group_values.ptr(),#length,#input_arguments #(#args),*)?;
             }
-            __cq_statuses.push(#owner.metadata().clone());
+            #status
             let __cq_result=unsafe {::cq_gpu_sequence_runtime::group::fold(
-                __cq_pool.clone(),&__cq_group_values,#length,#keys,&[#(#descriptors),*],__cq_statuses,
+                __cq_pool.clone(),&__cq_group_values,#live_argument,#length,#keys,&[#(#descriptors),*],__cq_statuses,
             )?}.with_decoder(
                 move |values:&[i64],valid:&[u8]| -> ::cq_gpu_sequence_runtime::Result<_> {Ok((#(#decoded,)*))}
             );

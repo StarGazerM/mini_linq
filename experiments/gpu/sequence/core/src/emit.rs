@@ -1343,17 +1343,6 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                     "GPU group requires one canonical valuation publication",
                 ));
             };
-            if !chain.operations.is_empty() {
-                return Err(error(
-                    "GPU group input must be separately published by checked decomposition",
-                ));
-            }
-            let prior = chain
-                .stored
-                .ok_or_else(|| error("GPU group input is not published"))?;
-            let columns = compiler.stored[prior].packed.as_ref().ok_or_else(|| {
-                error("GPU group requires its recorded canonical valuation provider")
-            })?;
             let result = symbol_name(name);
             let physical = program
                 .structures
@@ -1366,6 +1355,114 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
             let Operator::Group(group) = &physical.operator else {
                 return Err(error("GPU group provenance is not a Physical group"));
             };
+            let canonical = chain
+                .stored
+                .and_then(|index| (chain.operations.is_empty()).then_some(index))
+                .and_then(|index| {
+                    compiler.stored[index]
+                        .packed
+                        .as_ref()
+                        .map(|columns| (index, columns))
+                });
+            let direct = if canonical.is_none() {
+                let mut load = TokenStream::new();
+                let length = if let Some(index) = chain.stored {
+                    let stored = &compiler.stored[index];
+                    if stored.packed.is_some() || stored.range.is_some() {
+                        return Err(error(
+                            "GPU group row chain needs a flat resident publication",
+                        ));
+                    }
+                    let rows = format_ident!("__cq_store_rows_{index}");
+                    let width = compiler.rows.width;
+                    for column in &analysis.structures.physical.headings[&stored.result] {
+                        let slot = compiler.slot(column)?;
+                        load.extend(quote!(__row[#slot] = *#rows.add(position * #width + #slot);));
+                    }
+                    let length = format_ident!("__cq_store_length_{index}");
+                    quote!(#length)
+                } else {
+                    load.extend(compiler.rows.source(
+                        &chain.source,
+                        quote!(position),
+                        quote!(__row),
+                    )?);
+                    compiler.rows.source_len(&chain.source)?
+                };
+                let mut used = BTreeSet::new();
+                for key in &group.keys {
+                    used.insert(compiler.slot(&symbol_name(key))?);
+                }
+                for aggregate in &group.aggregates {
+                    if let Some(expression) = &aggregate.expression
+                        && let Some(name) = cq_lang_structures::syntax::rust::variable(expression)
+                    {
+                        used.insert(compiler.slot(&symbol_name(name))?);
+                    }
+                }
+                for operation in &chain.operations {
+                    match operation {
+                        Operation::Map(name, input) => {
+                            let code =
+                                compiler
+                                    .rows
+                                    .map(name, input, quote!(__row), quote!(__live))?;
+                            used.extend(DeviceRow::uses(code.clone())?);
+                            load.extend(code);
+                        }
+                        Operation::Store | Operation::Flatten => {}
+                        _ => {
+                            return Err(error(
+                                "GPU group row chain requires a checked flat publication before expansion",
+                            ));
+                        }
+                    }
+                }
+                let mut row = DeviceRow::default();
+                let mut declarations = TokenStream::new();
+                for slot in used {
+                    let id = format_ident!("__group_code_{slot}");
+                    declarations.extend(quote!(let mut #id = 0i64;));
+                    row.0.insert(slot, quote!(#id));
+                }
+                let load = row.rewrite(load)?;
+                let mut parameters: Vec<_> = compiler
+                    .rows
+                    .parameters
+                    .iter()
+                    .map(|(name, ty, _)| quote!(#name: #ty))
+                    .collect();
+                let mut arguments: Vec<_> = compiler
+                    .rows
+                    .parameters
+                    .iter()
+                    .map(|(_, _, value)| value.clone())
+                    .collect();
+                if let Some(index) = chain.stored {
+                    let rows = format_ident!("__cq_store_rows_{index}");
+                    parameters.push(quote!(#rows: *const i64));
+                    arguments.push(quote!(#rows.ptr()));
+                }
+                Some(crate::reduce::GroupInput {
+                    parameters,
+                    arguments,
+                    length,
+                    load: quote!(#declarations #load),
+                    columns: compiler
+                        .rows
+                        .columns
+                        .iter()
+                        .filter_map(|(name, slot)| {
+                            row.0.get(slot).map(|value| (name.clone(), value.clone()))
+                        })
+                        .collect(),
+                })
+            } else {
+                None
+            };
+            let (prior, columns) = canonical
+                .map(|(index, columns)| (index, columns.as_slice()))
+                .unwrap_or((0, &[]));
             let kernel = format_ident!("__cq_group_arguments_{module_name}");
             let (code, publication) = crate::reduce::group(
                 group,
@@ -1374,6 +1471,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                 &analysis.structures.physical.rows[&result].types,
                 prior,
                 &kernel,
+                direct,
             )?;
             kernels.push(code);
             output = Some(publication);
@@ -2420,9 +2518,11 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
             });
         }
     }
+    launches.push(
+        output.ok_or_else(|| error("checked GPU output has no recorded publication adapter"))?,
+    );
     prune_kernel_parameters(&mut kernels, &mut launches)?;
-    let output =
-        output.ok_or_else(|| error("checked GPU output has no recorded publication adapter"))?;
+    let output = launches.pop().expect("output launch");
     let setup = &compiler.rows.setup;
     let build = &compiler.rows.build;
     syn::parse2(quote!({
@@ -2595,6 +2695,40 @@ mod tests {
             );
             assert!(!generated.contains("__cq_downloaded_"), "{generated}");
         }
+    }
+
+    #[test]
+    fn keyed_group_reads_resident_columns_without_valuation_publication() {
+        let program: Program = syn::parse_quote! {
+            physical {
+                relation R(id:i64,key:i32,value:i64) = (&data.r);
+                r = pipe rename R@0 {id -> id,key -> key,value -> value};
+                valuation = pipe canon project r keep {id,key,value};
+                grouped = pipe group valuation by [key] { total:i64=sum(value); rows:usize=count(); };
+                return grouped as answer(key,total,rows);
+            }
+            structures {
+                r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(i64,i32,i64)> [];
+                valuation canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            }
+            sequence {
+                input = rows r;
+                valuations = map valuation input;
+                groups = store group grouped valuations;
+                output count;
+            }
+            graded gpu { input at host; valuations at host; groups at host; }
+            evidence { R(id) key; }
+        };
+        let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
+        let generated = translate(&program, &analysis)
+            .unwrap()
+            .to_token_stream()
+            .to_string();
+        assert_eq!(generated.matches("group :: fold").count(), 1);
+        assert!(generated.contains("__cq_group_live"));
+        assert!(!generated.contains("packed_columns"));
+        assert!(!generated.contains("__cq_canonical_"));
     }
 
     #[test]

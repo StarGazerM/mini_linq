@@ -264,9 +264,44 @@ fn compile(
             facts: kernel
                 .relations
                 .iter()
-                .map(|relation| cq_lang_sequence::EvidenceFact::Count {
-                    subject: relation.name.clone(),
-                    rows: manifest.relations[&relation.table.to_string()].rows,
+                .flat_map(|relation| {
+                    let table = relation.table.to_string();
+                    let mut facts = vec![cq_lang_sequence::EvidenceFact::Count {
+                        subject: relation.name.clone(),
+                        rows: manifest.relations[&table].rows,
+                    }];
+                    // TPC-H's declared primary keys are assertions about the
+                    // dbgen input, not cardinality estimates. A projected loader
+                    // only carries a key when every key column is present.
+                    let key: &[&str] = match table.as_str() {
+                        "lineitem" => &["l_orderkey", "l_linenumber"],
+                        "orders" => &["o_orderkey"],
+                        "part" => &["p_partkey"],
+                        "partsupp" => &["ps_partkey", "ps_suppkey"],
+                        "supplier" => &["s_suppkey"],
+                        "customer" => &["c_custkey"],
+                        "nation" => &["n_nationkey"],
+                        "region" => &["r_regionkey"],
+                        _ => &[],
+                    };
+                    if !key.is_empty()
+                        && let Some(columns) = key
+                            .iter()
+                            .map(|key| {
+                                relation
+                                    .columns
+                                    .iter()
+                                    .find(|(name, _)| name == key)
+                                    .map(|(name, _)| name.clone())
+                            })
+                            .collect::<Option<Vec<_>>>()
+                    {
+                        facts.push(cq_lang_sequence::EvidenceFact::Key {
+                            subject: relation.name.clone(),
+                            columns,
+                        });
+                    }
+                    facts
                 })
                 .collect(),
         };
