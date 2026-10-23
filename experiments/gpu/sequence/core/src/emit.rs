@@ -1151,7 +1151,8 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                 }
             }
         }
-        let virtual_range = if !final_output && !canonical && chains.len() == 1 {
+        let provider_store = analysis.structures.built.contains_key(&chains[0].result);
+        let virtual_range = if !final_output && !canonical && !provider_store && chains.len() == 1 {
             let ops = &chains[0].operations;
             let last = ops.iter().rposition(|op| {
                 matches!(
@@ -1391,13 +1392,17 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                     .source(&chain.source, quote!(__position), quote!(__row))?
             };
             let tiles = local_tiles(&chain.operations);
-            let tile = dispatch
-                .parts
-                .unwrap_or_else(|| tiles.first().map_or(256, |tile| tile.0));
-            if tile == 0 {
-                return Err(error("zero-width dispatch tile"));
-            }
-            let items = tiles.last().map_or(tile.div_ceil(256), |tile| tile.1);
+            let tile = if let Some(width) = dispatch.parts {
+                if width == 0 {
+                    return Err(error("zero-width dispatch tile"));
+                }
+                quote!(#width)
+            } else {
+                // No distributing tile denotes one whole input part, not an
+                // emitter-selected width or an implicit multi-block schedule.
+                quote!((#domain as u64).max(1))
+            };
+            let items = tiles.last().map_or(1, |tile| tile.1);
             let (outside_declare, partition, outside_finish, whole) = generator.partition_rows(
                 &chain.operations,
                 true,
@@ -1484,7 +1489,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
         let store_length = format_ident!("__cq_store_length_{index}");
         let output_keys = format_ident!("__cq_store_keys_{index}");
         let meta_words = 4 + chains.len();
-        let grid = if virtual_range.is_some() || whole_reduction {
+        let grid = if dispatch.parts.is_none() || virtual_range.is_some() || whole_reduction {
             1u32
         } else {
             2272u32
@@ -1559,6 +1564,20 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                 let #fields=__cq_fields;
                 drop(#output_keys);
             });
+        }
+        if !final_output {
+            launches.push(compiler.rows.publish_provider(
+                analysis,
+                program,
+                &chains[0].result,
+                publication,
+                index,
+                if canonical {
+                    packed_columns.as_deref()
+                } else {
+                    None
+                },
+            )?);
         }
         compiler.stored.push(Stored {
             name: publication.clone(),

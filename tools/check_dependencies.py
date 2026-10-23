@@ -92,6 +92,9 @@ FEATURE_NAMES = {tomllib.loads(p.read_text())["package"]["name"]
     for p in feature_files("Cargo.toml", {"target", ".git", "vendor"})
     if "package" in tomllib.loads(p.read_text())}
 
+# The planner replays the same target-independent library used by the optional
+# rewrite macros. This is a shared compiler API, not a target implementation.
+SHARED_REWRITES = {"cq-sequence-rewrite-passes"}
 def toml(value):
     if isinstance(value, bool): return str(value).lower()
     if isinstance(value, str): return json.dumps(value)
@@ -148,7 +151,8 @@ def check_feature_sources():
     for name, path in CORE.items():
         for source in (ROOT / path / "src").rglob("*.rs"):
             text = source.read_text()
-            violation = forbidden_import(text, FEATURE_NAMES)
+            shared = SHARED_REWRITES if name == "cq-sequence-plan" else set()
+            violation = forbidden_import(text, FEATURE_NAMES - shared)
             if violation or re.search(r"(?:features|extensions|workloads)/", text):
                 raise ValueError(f"{source.relative_to(ROOT)}: core names an optional feature")
             if re.search(r"#\[doc\(hidden\)\][\s\S]{0,150}?\bpub\b", text):
@@ -183,6 +187,8 @@ def check(data, announce=True):
             required = {edge["source"], edge["target"]} - {"rust"}
             if not required <= set(LANGUAGES): raise ValueError(f"pass endpoints are not languages: {name}")
             allowed = required | {"cq-syntax"} | ({"cq-print"} if name == "cq-physical-realization" else set())
+            if name == "cq-sequence-plan":
+                allowed |= SHARED_REWRITES
             if internal & (set(LANGUAGES) - {"cq-syntax"}) != required:
                 raise ValueError(f"pass must depend on exactly its source and target languages: {name}: {internal}")
             if package["features"]:
@@ -195,7 +201,8 @@ def check(data, announce=True):
             allowed = set(packages) - set(TESTKIT)
         for dep in package["dependencies"]:
             target = dep["name"]
-            if target in FEATURE_NAMES or (dep.get("path") and Path(dep["path"]).resolve().is_relative_to(ROOT / "features")):
+            shared_rewrite = name == "cq-sequence-plan" and target in SHARED_REWRITES
+            if not shared_rewrite and (target in FEATURE_NAMES or (dep.get("path") and Path(dep["path"]).resolve().is_relative_to(ROOT / "features"))):
                 raise ValueError(f"core depends on an optional feature: {name} -> {target}")
             if dep["kind"] == "dev" and target in CORE and name in CORE:
                 continue
@@ -203,6 +210,8 @@ def check(data, announce=True):
                 continue
             if "path" not in dep and target not in packages: continue
             expected = Path(packages[target]["manifest_path"]).parent if target in packages else None
+            if shared_rewrite:
+                expected = ROOT / "features/sequence-rewrites/passes"
             permitted = allowed | (set(TESTKIT) if name in CORE and dep["kind"] == "dev" else set())
             if target not in permitted or "path" not in dep or Path(dep["path"]).resolve() != expected:
                 raise ValueError(f"forbidden {dep['kind'] or 'normal'} dependency: {name} -> {target}")

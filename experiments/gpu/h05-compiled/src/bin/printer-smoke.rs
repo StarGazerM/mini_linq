@@ -57,9 +57,7 @@ fn main() {
             actual.len()
         );
     }
-    // TODO(Sequence GPU): restore the i64 duplicate-fanout/fresh-execution
-    // oracle when its recorded range payload is supported. The backend rejects
-    // that original plan with:
-    // "T-Gpu: range payload needs a recorded u32/i32 dense code".
-    // Do not report that legacy oracle as passing or substitute a different plan.
+    // The legacy duplicate-fanout/fresh-execution oracle has not migrated to
+    // authored Sequence coverage. Native i64 payloads are supported; that does
+    // not establish equivalence for the old provider/resume assertions.
 }

@@ -190,6 +190,10 @@ fn advised_clause(
     }
 }
 
+/// In a Sequence decomposition list, `plan(target::plan)` delegates to the
+/// target-owned planner macro after all preceding authored advice. The target
+/// supplies its machine/catalog to the shared planner without a target dependency
+/// in this facade. CQ planning options retain their existing meaning.
 /// CQ → RA′: a left-deep plan in written order with checked reductions.
 /// The first clause of each scope is the outer stream; every other clause is
 /// reduced by its filtered subtrees of the outer-rooted reduction tree before
@@ -201,7 +205,11 @@ fn advised_clause(
 /// Formal rule Plan-Prefix: Normalize, order Written/Coarse, then optionally reduce by outer-rooted masks and advised reductions before IX.
 #[proc_macro]
 pub fn plan(input: TokenStream) -> TokenStream {
-    cq_stage::pass::<cq_lang_cq::Program, cq_lang_ra::Program>(input.into(), |source, args| {
+    let input: proc_macro2::TokenStream = input.into();
+    if sequence_plan_target(&input) {
+        return cq_stage::delegate(input).into();
+    }
+    cq_stage::pass::<cq_lang_cq::Program, cq_lang_ra::Program>(input, |source, args| {
         let args: PlanOptions = syn::parse2(args)?;
         let normal = cq_lang_cq::normal::normalize(source)?;
         let ordering = cq_order::Options {
@@ -345,16 +353,37 @@ pub fn sequence(input: TokenStream) -> TokenStream {
     .into()
 }
 
-fn sequential_machine() -> cq_lang_sequence::Machine {
-    cq_lang_sequence::Machine {
-        name: syn::parse_quote!(sequential),
-        root: cq_lang_sequence::LevelNode {
-            name: syn::parse_quote!(host),
-            collaborative: false,
-            dynamic: false,
-            children: vec![],
-        },
-    }
+fn sequence_plan_target(input: &proc_macro2::TokenStream) -> bool {
+    use syn::parse::Parser;
+    let parser = |input: ParseStream<'_>| -> syn::Result<bool> {
+        let name: syn::Ident = input.parse()?;
+        if name != "arguments" {
+            return Ok(false);
+        }
+        let arguments;
+        syn::braced!(arguments in input);
+        let args: proc_macro2::TokenStream = arguments.parse()?;
+        let _: proc_macro2::TokenStream = input.parse()?;
+        Ok(syn::parse2::<PlanOptions>(args.clone()).is_err()
+            && syn::parse2::<syn::Path>(args).is_ok())
+    };
+    parser.parse2(input.clone()).unwrap_or(false)
+}
+
+/// Fill unauthored Sequence decisions using the Sequential machine and catalog.
+/// Use in `decompose` directly or through `plan(mini_linq::passes::plan_sequential)`.
+#[proc_macro]
+pub fn plan_sequential(input: TokenStream) -> TokenStream {
+    cq_stage::rewrite::<cq_lang_sequence::Program>(input.into(), |source, args| {
+        no_arguments(args)?;
+        Ok(cq_sequence_plan::plan(
+            source,
+            &cq_sequence_pull::machine(),
+            &cq_sequence_pull::catalog(),
+        )?
+        .program)
+    })
+    .into()
 }
 
 /// Validate Sequence placement against the host-only machine without rewriting it.
@@ -362,7 +391,7 @@ fn sequential_machine() -> cq_lang_sequence::Machine {
 pub fn sequential(input: TokenStream) -> TokenStream {
     cq_stage::rewrite::<cq_lang_sequence::Program>(input.into(), |source, args| {
         no_arguments(args)?;
-        cq_lang_sequence::check_grading(source, &sequential_machine())?;
+        cq_lang_sequence::check_grading(source, &cq_sequence_pull::machine())?;
         Ok(source.clone())
     })
     .into()
@@ -373,7 +402,7 @@ pub fn sequential(input: TokenStream) -> TokenStream {
 pub fn translate_pull(input: TokenStream) -> TokenStream {
     cq_stage::pass::<cq_lang_sequence::Program, syn::Expr>(input.into(), |source, args| {
         no_arguments(args)?;
-        let analysis = cq_lang_sequence::check_grading(source, &sequential_machine())?;
+        let analysis = cq_lang_sequence::check_grading(source, &cq_sequence_pull::machine())?;
         let plain = cq_sequence_pull::translate(source, &analysis)?;
         let profile = cq_sequence_pull::translate_profile(source, &analysis)?;
         Ok(syn::parse_quote!(::cq_storage::profile_select! {
@@ -401,6 +430,23 @@ mod tests {
     use super::{PlanOptions, expand_compile, expand_mini_linq};
     use cq_stage::Language;
     use quote::{ToTokens, quote};
+
+    #[test]
+    fn target_plan_dispatch_does_not_change_cq_planning_options() {
+        for arguments in [
+            quote!(),
+            quote!(no_reduce),
+            quote!(reduce(T with S)),
+            quote!(skip(T with S)),
+        ] {
+            assert!(!super::sequence_plan_target(
+                &quote!(arguments { #arguments }; pipeline { next }; source)
+            ));
+        }
+        assert!(super::sequence_plan_target(&quote!(
+            arguments { ::target::plan }; pipeline { next }; source
+        )));
+    }
 
     #[test]
     fn plan_options_reduce_by_default_and_allow_explicit_opt_out() {

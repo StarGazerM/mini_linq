@@ -255,7 +255,10 @@ impl<'pool> PackedCanon<'pool> {
                 )?;
             }
         }
-        Ok(CanonicalKeys { keys, metadata })
+        Ok(CanonicalKeys {
+            keys: Arc::new(keys),
+            metadata,
+        })
     }
 }
 
@@ -286,13 +289,13 @@ impl Drop for PackedCanon<'_> {
 /// Owning, ascending distinct packed keys. Only `[0, *count_ptr())` is live;
 /// capacity is an allocation bound, never the logical cardinality.
 pub struct CanonicalKeys {
-    keys: Buffer<u64>,
+    keys: Arc<Buffer<u64>>,
     metadata: Arc<Buffer<OutputCount>>,
 }
 
 impl CanonicalKeys {
     /// Borrow storage for count-gated generated kernels. The tail is uninitialized.
-    pub fn keys(&self) -> &Buffer<u64> {
+    pub fn keys(&self) -> &Arc<Buffer<u64>> {
         &self.keys
     }
 
@@ -407,7 +410,7 @@ impl PackedColumnsAdapter {
             }],
         )?;
         self.decode_columns(
-            keys,
+            &keys,
             self.metadata.clone(),
             rows,
             fields,
@@ -427,7 +430,7 @@ impl PackedColumnsAdapter {
     ) -> Result<DeviceColumns<'data, Row>> {
         let capacity = keys.capacity();
         self.decode_columns(
-            keys.keys,
+            &keys.keys,
             keys.metadata,
             capacity,
             fields,
@@ -438,7 +441,7 @@ impl PackedColumnsAdapter {
 
     fn decode_columns<'data, Row: RowCodec<'data>>(
         &mut self,
-        keys: Buffer<u64>,
+        keys: &Buffer<u64>,
         metadata: Arc<Buffer<OutputCount>>,
         capacity: usize,
         fields: &[PackedField],

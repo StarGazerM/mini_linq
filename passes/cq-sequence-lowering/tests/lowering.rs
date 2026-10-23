@@ -11,10 +11,12 @@ fn accept(source: &cq_lang_structures::Program) -> Program {
         &target,
         &Machine {
             name: syn::parse_quote!(sequential),
+            items: 1,
             root: LevelNode {
                 name: syn::parse_quote!(host),
                 collaborative: false,
                 dynamic: false,
+                width: None,
                 children: vec![],
             },
         },

@@ -59,6 +59,58 @@ pub struct ColumnView {
 }
 unsafe impl DeviceCopy for ColumnView {}
 
+/// Borrowed gather/build source, including zero-copy row and packed-key projections.
+/// Owners must retain the column storage until all consuming stream work completes.
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct SourceView {
+    pub column: ColumnView,
+    pub stride: u64,
+    pub packed: u32,
+    pub shift: u32,
+    pub mask: u64,
+    pub base: i64,
+}
+unsafe impl DeviceCopy for SourceView {}
+impl From<ColumnView> for SourceView {
+    fn from(column: ColumnView) -> Self {
+        Self {
+            column,
+            stride: 1,
+            packed: 0,
+            shift: 0,
+            mask: u64::MAX,
+            base: 0,
+        }
+    }
+}
+
+#[device]
+#[inline(always)]
+pub unsafe fn decode_source(source: SourceView, row: u64) -> i64 {
+    let value = unsafe { decode(source.column, row * source.stride) };
+    if source.packed != 0 {
+        let offset = if source.mask == 0 {
+            0
+        } else {
+            ((value as u64) >> source.shift) & source.mask
+        };
+        source.base.wrapping_add(offset as i64)
+    } else {
+        value
+    }
+}
+
+#[device]
+#[inline(always)]
+pub unsafe fn decode_source_u32(source: SourceView, row: u64) -> u32 {
+    if source.packed == 0 {
+        unsafe { decode_u32(source.column, row * source.stride) }
+    } else {
+        unsafe { decode_source(source, row) as u32 }
+    }
+}
+
 /// Inverse of the unified transpose in Afroozeh & Boncz, Figure 6:
 /// 0,64,...,960,32,96,...,992,...,63,127,...,1023.
 #[device]
@@ -161,7 +213,8 @@ pub unsafe fn decode_u32(view: ColumnView, row: u64) -> u32 {
         return unsafe { decode(view, row) } as u32;
     }
     let data = unsafe { view.data.add(header.offset as usize) };
-    (header.base as u32).wrapping_add(unsafe { unpack(data, header.width, (row % 1024) as usize) } as u32)
+    (header.base as u32)
+        .wrapping_add(unsafe { unpack(data, header.width, (row % 1024) as usize) } as u32)
 }
 
 #[device]

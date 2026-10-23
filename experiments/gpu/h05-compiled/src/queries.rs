@@ -6,10 +6,11 @@ pub const ASIA: i32 = 2;
 pub type Answer = (u32, u32, u32);
 pub type QueryResult<'a> = Result<DeviceColumns<'a, Answer>, Box<dyn std::error::Error>>;
 
-// TODO(Sequence resident derived providers): A and B retain the LE planner's
-// ASIA-filtered Region r1 and reduced Nation r2 membership runs. r2 is a
-// semijoin result, not a resident-origin range provider. Do not substitute R:
-// Rows::provider rejects it with the exact diagnostic below.
+// A and B retain the LE planner's ASIA-filtered Region r1 and reduced
+// Nation r2 membership runs. The recorded Sequence store publishes the semijoin
+// on device; the explicit Structures choice records r2's [nation] capability.
+// R2 must already be stored when the source contract checks lookup r2: an
+// EXT-SeqStore pipeline rewrite cannot repair an invalid source contract.
 // A traversal: Lineitem(order,supplier), Orders(order,customer,date),
 // 8766 <= date < 9131, Customer(customer,nation), Nation(nation,region),
 // Region(region,2), Supplier(supplier,nation).
@@ -23,32 +24,48 @@ pub type QueryResult<'a> = Result<DeviceColumns<'a, Answer>, Box<dyn std::error:
 // capacity(Lineitem) -> recorded store capacity + output(bounded), not an inferred
 // bound. frontier(8)/directory(rank) have no Sequence rewrite equivalent; do not
 // silently manufacture those choices. No old printer is used as a fallback.
-pub fn plan_a<'a>(_data: &'a Rows) -> QueryResult<'a> {
-    Err("TODO H05 A: T-Gpu: r2 has no recorded resident range layout".into())
-}
-
-pub fn plan_b<'a>(_data: &'a Rows) -> QueryResult<'a> {
-    Err("TODO H05 B: T-Gpu: r2 has no recorded resident range layout".into())
-}
-
-// Compile these independently to exercise the unsupported plans, rather than
-// testing the runtime TODO text or substituting the supported R traversal.
-#[cfg(any(
-    feature = "h05-a-sequence-rejection",
-    feature = "h05-b-sequence-rejection"
-))]
-macro_rules! rejected_le {
-    ($data:ident; physical { $($physical:tt)* }
-        structures { $($structures:tt)* } sequence { $($sequence:tt)* }) => {
+// Both routes share exactly the same Physical and Structures choices. The
+// authored route remains the benchmark reference; planned schedules contain no
+// hand-written Sequence, grade, tile, or output decisions.
+macro_rules! execute {
+    (authored; grade { $($grade:tt)* }
+        physical { $($physical:tt)* } structures { $($structures:tt)* }
+        sequence { $($sequence:tt)* }) => {
         cq_sequence_rewrites::output! {
             arguments { count };
             pipeline {
-                ::cq_sequence_rewrites::grade(gpu,
-                    R1 at host, R2 at host, L at host, O at host,
-                    C at host, S at host, result at device),
+                ::cq_sequence_rewrites::grade(gpu, $($grade)*),
                 ::cq_gpu_sequence::machine_grade,
                 ::cq_gpu_sequence::translate
             };
+            physical { $($physical)* }
+            structures { $($structures)* }
+            sequence { $($sequence)* }
+        }
+    };
+    (planned; grade { $($grade:tt)* }
+        physical { $($physical:tt)* } structures { $($structures:tt)* }
+        sequence { $($sequence:tt)* }) => {
+        mini_linq::passes::sequence! {
+            pipeline {
+                ::cq_gpu_sequence::plan,
+                ::cq_gpu_sequence::machine_grade,
+                ::cq_gpu_sequence::translate
+            };
+            physical { $($physical)* }
+            structures { $($structures)* }
+        }
+    };
+}
+
+macro_rules! compiled_le {
+    ($schedule:ident; $data:ident; physical { $($physical:tt)* }
+        structures { $($structures:tt)* } sequence { $($sequence:tt)* }) => {
+        execute! {
+            $schedule; grade {
+                R1 at host, N at host, R2 at device, L at host, O at host,
+                C at host, S at host, result at device
+            }
             physical {
                 relation Region(r_regionkey:u32,r_name:i32) = (&$data.region);
                 relation Nation(n_nationkey:u32,n_regionkey:u32) = (&$data.nation);
@@ -85,7 +102,8 @@ macro_rules! rejected_le {
             }
             sequence {
                 R1 = store map r1 compact region_selected rows region_base;
-                R2 = store compact r2 lookup r1 [region] rows nation_base;
+                N = store rows nation_base;
+                R2 = store compact r2 lookup r1 [region] flatten tile 256 N;
                 $($sequence)*
                 output count;
             }
@@ -93,64 +111,66 @@ macro_rules! rejected_le {
     };
 }
 
-#[cfg(feature = "h05-a-sequence-rejection")]
-fn reject_plan_a(data: &Rows) {
-    let _ = rejected_le! {
-        data;
-        physical {
-            lo = pipe probe first [order] lineitem,orders;
-            loc = pipe probe first [customer] lo,customer;
-            asia = pipe semi eager [nation] loc,r2;
-            matched = pipe semi eager [nation,supplier] asia,supplier;
-        }
-        structures {
-            lineitem rows = ::cq_gpu_sequence_runtime::RangeProvider;
-            orders = ::cq_gpu_sequence_runtime::RangeProvider [order];
-            customer = ::cq_gpu_sequence_runtime::RangeProvider [customer];
-            supplier = ::cq_gpu_sequence_runtime::RangeProvider [nation,supplier];
-        }
-        sequence {
-            L = store rows lineitem;
-            O = store map orders compact orders_selected rows orders_base;
-            C = store rows customer;
-            S = store rows supplier;
-            result = store canon map answer
-                compact matched lookup supplier [nation,supplier]
-                compact asia lookup r2 [nation]
-                flatten lookup customer [customer]
-                flatten lookup orders [order]
-                flatten tile 256 L;
+macro_rules! le_a {
+    ($data:ident, $schedule:ident) => {
+        compiled_le! {
+            $schedule; $data;
+            physical {
+                lo = pipe probe first [order] lineitem,orders;
+                loc = pipe probe first [customer] lo,customer;
+                asia = pipe semi eager [nation] loc,r2;
+                matched = pipe semi eager [nation,supplier] asia,supplier;
+            }
+            structures {
+                lineitem rows = ::cq_gpu_sequence_runtime::RangeProvider;
+                orders = ::cq_gpu_sequence_runtime::RangeProvider [order];
+                customer = ::cq_gpu_sequence_runtime::RangeProvider [customer];
+                supplier = ::cq_gpu_sequence_runtime::RangeProvider [nation,supplier];
+            }
+            sequence {
+                L = store rows lineitem;
+                O = store map orders compact orders_selected rows orders_base;
+                C = store rows customer;
+                S = store rows supplier;
+                result = store canon map answer
+                    compact matched lookup supplier [nation,supplier]
+                    compact asia lookup r2 [nation]
+                    flatten lookup customer [customer]
+                    flatten lookup orders [order]
+                    flatten tile 256 L;
+            }
         }
     };
 }
 
-#[cfg(feature = "h05-b-sequence-rejection")]
-fn reject_plan_b(data: &Rows) {
-    let _ = rejected_le! {
-        data;
-        physical {
-            asia = pipe semi eager [nation] customer,r2;
-            co = pipe probe first [customer] asia,orders;
-            col = pipe probe first [order] co,lineitem;
-            matched = pipe semi eager [nation,supplier] col,supplier;
-        }
-        structures {
-            customer rows = ::cq_gpu_sequence_runtime::RangeProvider;
-            orders = ::cq_gpu_sequence_runtime::RangeProvider [customer];
-            lineitem = ::cq_gpu_sequence_runtime::RangeProvider [order];
-            supplier = ::cq_gpu_sequence_runtime::RangeProvider [supplier][nation];
-        }
-        sequence {
-            C = store rows customer;
-            O = store map orders compact orders_selected rows orders_base;
-            L = store rows lineitem;
-            S = store rows supplier;
-            result = store canon map answer
-                compact matched lookup supplier [nation,supplier]
-                flatten lookup lineitem [order]
-                flatten lookup orders [customer]
-                compact asia lookup r2 [nation]
-                flatten tile 256 items 4 C;
+macro_rules! le_b {
+    ($data:ident, $schedule:ident) => {
+        compiled_le! {
+            $schedule; $data;
+            physical {
+                asia = pipe semi eager [nation] customer,r2;
+                co = pipe probe first [customer] asia,orders;
+                col = pipe probe first [order] co,lineitem;
+                matched = pipe semi eager [nation,supplier] col,supplier;
+            }
+            structures {
+                customer rows = ::cq_gpu_sequence_runtime::RangeProvider;
+                orders = ::cq_gpu_sequence_runtime::RangeProvider [customer];
+                lineitem = ::cq_gpu_sequence_runtime::RangeProvider [order];
+                supplier = ::cq_gpu_sequence_runtime::RangeProvider [supplier][nation];
+            }
+            sequence {
+                C = store rows customer;
+                O = store map orders compact orders_selected rows orders_base;
+                L = store rows lineitem;
+                S = store rows supplier;
+                result = store canon map answer
+                    compact matched lookup supplier [nation,supplier]
+                    flatten lookup lineitem [order]
+                    flatten lookup orders [customer]
+                    compact asia lookup r2 [nation]
+                    flatten tile 256 items 4 C;
+            }
         }
     };
 }
@@ -163,24 +183,21 @@ fn reject_plan_b(data: &Rows) {
 /// No dynamic choose is recorded: this plan had no size-guarded alternative.
 /// frontier(8)/directory(rank) are unsupported old implementation advice, not
 /// fabricated scheduling facts in this Sequence plan.
-pub fn plan_r<'a>(data: &'a Rows) -> QueryResult<'a> {
-    Ok(cq_sequence_rewrites::output! {
-        arguments { count };
-        pipeline {
-            ::cq_sequence_rewrites::grade(gpu,
-                RegionASIA at host, Nation at host, Customer at host,
-                Orders at host, Lineitem at host, Supplier at host,
-                C at device, result at device),
-            ::cq_gpu_sequence::machine_grade,
-            ::cq_gpu_sequence::translate
-        };
+macro_rules! reference {
+    ($data:ident, $schedule:ident) => {
+    execute! {
+        $schedule; grade {
+            RegionASIA at host, Nation at host, Customer at host,
+            Orders at host, Lineitem at host, Supplier at host,
+            C at device, result at device
+        }
         physical {
-            relation Region(r_regionkey:u32,r_name:i32) = (&data.region);
-            relation Nation(n_nationkey:u32,n_regionkey:u32) = (&data.nation);
-            relation Customer(c_custkey:u32,c_nationkey:u32) = (&data.customer);
-            relation Orders(o_orderkey:u32,o_custkey:u32,o_orderdate:i32) = (&data.orders);
-            relation Lineitem(l_orderkey:u32,l_suppkey:u32) = (&data.lineitem);
-            relation Supplier(s_suppkey:u32,s_nationkey:u32) = (&data.supplier);
+            relation Region(r_regionkey:u32,r_name:i32) = (&$data.region);
+            relation Nation(n_nationkey:u32,n_regionkey:u32) = (&$data.nation);
+            relation Customer(c_custkey:u32,c_nationkey:u32) = (&$data.customer);
+            relation Orders(o_orderkey:u32,o_custkey:u32,o_orderdate:i32) = (&$data.orders);
+            relation Lineitem(l_orderkey:u32,l_suppkey:u32) = (&$data.lineitem);
+            relation Supplier(s_suppkey:u32,s_nationkey:u32) = (&$data.supplier);
             region_base = pipe rename Region@0 {r_regionkey -> region,r_name -> region_name};
             region_selected = pipe select region_base if (region_name = 2);
             region_asia = let project region_selected keep {region};
@@ -231,7 +248,32 @@ pub fn plan_r<'a>(data: &'a Rows) -> QueryResult<'a> {
                 tile 256 C;
             output count;
         }
-    })
+    }
+    };
+}
+
+pub fn plan_a<'a>(data: &'a Rows) -> QueryResult<'a> {
+    Ok(le_a!(data, authored))
+}
+
+pub fn plan_b<'a>(data: &'a Rows) -> QueryResult<'a> {
+    Ok(le_b!(data, authored))
+}
+
+pub fn plan_r<'a>(data: &'a Rows) -> QueryResult<'a> {
+    Ok(reference!(data, authored))
+}
+
+pub fn planned_a<'a>(data: &'a Rows) -> QueryResult<'a> {
+    Ok(le_a!(data, planned))
+}
+
+pub fn planned_b<'a>(data: &'a Rows) -> QueryResult<'a> {
+    Ok(le_b!(data, planned))
+}
+
+pub fn planned_r<'a>(data: &'a Rows) -> QueryResult<'a> {
+    Ok(reference!(data, planned))
 }
 
 /// Consume the resident packed answer without downloading tuples. The identity

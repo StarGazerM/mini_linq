@@ -63,13 +63,15 @@ pub fn compile_with(
 ) -> syn::Result<syn::Expr> {
     let partition = syn::parse2(arguments)?;
     let machine = cq_lang_sequence::Machine {
-        name: syn::parse_quote!(sequential),
-        root: cq_lang_sequence::LevelNode {
-            name: syn::parse_quote!(host),
-            collaborative: false,
-            dynamic: false,
-            children: vec![],
-        },
+     name: syn::parse_quote!(sequential),
+     items: 1,
+     root: cq_lang_sequence::LevelNode {
+      name: syn::parse_quote!(host),
+      collaborative: false,
+      dynamic: false,
+      width: None,
+      children: vec![],
+     },
     };
     let analysis = cq_lang_sequence::check_grading(source, &machine)?;
     let plain = cq_sequence_pull::translate(source, &analysis)?;

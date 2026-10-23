@@ -12,6 +12,135 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::Ident;
 
+/// The native iterator target executes entirely at the host level.
+pub fn machine() -> cq_lang_sequence::Machine {
+    cq_lang_sequence::Machine {
+        name: syn::parse_quote!(sequential),
+        items: 1,
+        root: cq_lang_sequence::LevelNode {
+            name: syn::parse_quote!(host),
+            collaborative: false,
+            dynamic: false,
+            width: None,
+            children: vec![],
+        },
+    }
+}
+
+/// Native provider, value-refinement and canonicalization tokens.
+///
+/// Generic holes describe families of authored types, not a replacement for
+/// their arguments. Rust trait checking retains each token's row-type bounds.
+pub fn catalog() -> cq_lang_sequence::Catalog {
+    use Capability::{Exact, Membership, Ordered, Range};
+    use cq_lang_sequence::{CanonToken, Catalog, CodecToken, ProviderToken};
+
+    let levels = vec![vec!["host".into()]];
+    let providers = [
+        (
+            syn::parse_quote!(::cq_storage::HashIndex<'_, _, _>),
+            vec![Exact, Membership],
+        ),
+        (
+            syn::parse_quote!(::cq_storage::Trie<'_, _, _>),
+            vec![Exact, Membership],
+        ),
+        (
+            syn::parse_quote!(::cq_storage::SortedRun<_, _>),
+            vec![Exact, Range, Membership],
+        ),
+        (
+            syn::parse_quote!(::cq_storage::SortedRun<_, _, _>),
+            vec![Exact, Range, Membership],
+        ),
+        (
+            syn::parse_quote!(::cq_storage::HashSet<_>),
+            vec![Membership],
+        ),
+        (
+            syn::parse_quote!(::std::collections::HashSet<_>),
+            vec![Membership],
+        ),
+        (
+            syn::parse_quote!(::std::collections::HashSet<_, _>),
+            vec![Membership],
+        ),
+        (
+            syn::parse_quote!(::std::collections::BTreeSet<_>),
+            vec![Membership, Ordered],
+        ),
+        (
+            syn::parse_quote!(::std::collections::HashMap<_, ::std::vec::Vec<_>>),
+            vec![Exact, Membership],
+        ),
+        (
+            syn::parse_quote!(::std::collections::HashMap<_, ::std::vec::Vec<_>, _>),
+            vec![Exact, Membership],
+        ),
+        (
+            syn::parse_quote!(::std::collections::BTreeMap<_, ::std::vec::Vec<_>>),
+            vec![Exact, Membership, Ordered],
+        ),
+        (
+            syn::parse_quote!(::cq_storage::GroupedAnswers<_, _>),
+            vec![Exact, Membership],
+        ),
+        (
+            syn::parse_quote!(::cq_storage::SingleGroup<_, _>),
+            vec![Exact, Membership],
+        ),
+        (
+            syn::parse_quote!(::cq_storage::dispatch::KeySet<_>),
+            vec![Membership],
+        ),
+        (
+            syn::parse_quote!(::cq_storage::dispatch::KeySet<_, false>),
+            vec![Membership],
+        ),
+        (
+            syn::parse_quote!(::cq_storage::dispatch::KeySet<_, true>),
+            vec![Membership],
+        ),
+        (
+            syn::parse_quote!(::cq_storage::AdaptiveKeySet<_, _, _>),
+            vec![Membership],
+        ),
+    ]
+    .into_iter()
+    .map(|(ty, capabilities)| ProviderToken {
+        ty,
+        capabilities,
+        levels: levels.clone(),
+    })
+    .collect();
+    Catalog {
+        providers,
+        codecs: [
+            syn::parse_quote!(::cq_storage::sequence::Identity),
+            syn::parse_quote!(::cq_storage::sequence::Dense<_>),
+        ]
+        .into_iter()
+        .map(|ty| CodecToken {
+            ty,
+            ordered: true,
+            levels: levels.clone(),
+        })
+        .collect(),
+        canons: [
+            syn::parse_quote!(::cq_storage::HashSet<_>),
+            syn::parse_quote!(::std::collections::HashSet<_>),
+            syn::parse_quote!(::std::collections::HashSet<_, _>),
+            syn::parse_quote!(::std::collections::BTreeSet<_>),
+        ]
+        .into_iter()
+        .map(|ty| CanonToken {
+            ty,
+            levels: levels.clone(),
+        })
+        .collect(),
+    }
+}
+
 /// A constructor's emitted iterator and its checked row-layout provenance.
 #[derive(Clone)]
 pub struct Value {

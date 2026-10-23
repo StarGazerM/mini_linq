@@ -112,12 +112,11 @@ fn repeated_head_projection() {
     println!("sequence-repeated-head exact=true projection=true duplicates=true");
 }
 
-// TODO(Sequence GPU): restore chained_answers, composite_hash_collisions,
-// leveled_host_reads, and the witness/join-filter expansion oracle only once
-// their original i64 range payloads are supported. Exact translator rejection:
-// "T-Gpu: range payload needs a recorded u32/i32 dense code".
-// These legacy Fused/Compacting/resume/provider-specific assertions are not
-// assertions about PackedCanon or RangeProvider and must not be reported as such.
+// The legacy chained_answers, composite_hash_collisions, leveled_host_reads,
+// and witness/join-filter expansion oracles have not migrated to authored
+// Sequence coverage. Native i64 range payloads are supported, but the legacy
+// Fused/Compacting/resume/provider-specific assertions are not assertions about
+// PackedCanon or RangeProvider and must not be reported as such.
 //
 // TODO(Sequence GPU): restore the original two-column typed range filter:
 // "T-Gpu: recorded range build selection must be a half-open interval on one source column".
@@ -132,7 +131,7 @@ fn repeated_head_projection() {
 
 fn main() {
     if std::env::args().any(|argument| argument == "--leveled") {
-        panic!("TODO(Sequence GPU): leveled_host_reads: T-Gpu: range payload needs a recorded u32/i32 dense code");
+        panic!("leveled_host_reads is a legacy maintained-index oracle, not an authored Sequence program");
     }
     canonical_projection();
     if std::env::args().any(|argument| argument == "--projection") {

@@ -17,6 +17,8 @@ cuda-oracle = []
 cuda-retry-oracle = ["cuda-oracle"]
 
 [dev-dependencies]
+cq-sequence-plan = { path = "../../../passes/cq-sequence-plan" }
+cq-sequence-lowering = { path = "../../../passes/cq-sequence-lowering" }
 cq-gpu-sequence-test-macros = { path = "tests/support/macros" }
 cq-gpu-runtime = { path = "../printer-runtime" }
 cq-gpu-sequence-runtime = { path = "../sequence-runtime" }

@@ -139,6 +139,18 @@ impl Rows {
                     .unwrap_or_else(|| dispatch.outer_store.clone())
             })
             .collect();
+        let device_results: BTreeSet<_> = analysis
+            .dispatches
+            .iter()
+            .flat_map(|dispatch| &dispatch.inner_stores)
+            .filter(|name| {
+                analysis
+                    .levels
+                    .get(*name)
+                    .is_some_and(|level| level.last().is_some_and(|level| level == "device"))
+            })
+            .filter_map(|name| analysis.results.get(name))
+            .collect();
         let definitions: BTreeMap<_, _> = physical
             .program
             .definitions
@@ -281,10 +293,9 @@ impl Rows {
             } else {
                 quote!(None)
             };
-            let built = analysis
-                .structures
-                .built
-                .get(name)
+            let built = (!device_results.contains(name))
+                .then(|| analysis.structures.built.get(name))
+                .flatten()
                 .and_then(|layouts| layouts.first());
             if let Some((levels, _)) = built {
                 if analysis.structures.built[name].len() != 1 {
@@ -336,20 +347,7 @@ impl Rows {
                     let source = &origin.columns[column];
                     let index = fields[source].0;
                     let ty = &analysis.structures.physical.rows[name].types[column];
-                    let kind = match primitive(ty).as_deref() {
-                        Some("u32" | "u16" | "u8" | "bool") => {
-                            quote!(::cq_gpu_sequence_runtime::PayloadKind::U32)
-                        }
-                        Some("i32" | "i16" | "i8") => {
-                            quote!(::cq_gpu_sequence_runtime::PayloadKind::I32)
-                        }
-                        _ => {
-                            return Err(syn::Error::new_spanned(
-                                ty,
-                                "T-Gpu: range payload needs a recorded u32/i32 dense code",
-                            ));
-                        }
-                    };
+                    let kind = payload_kind(ty)?;
                     payload_descriptors.push(quote! {
                         ::cq_gpu_sequence_runtime::PayloadDescriptor {
                             column: unsafe { ::cq_gpu_sequence_runtime::ColumnDescriptor::new(
@@ -564,6 +562,118 @@ impl Rows {
                     "T-Gpu: {name} has no recorded resident range layout"
                 ))
             })
+    }
+    /// Realize the recorded provider only after its device store has published
+    /// its live count. Descriptors borrow the stored layout without transposing
+    /// or copying it before the ordinary radix/lower-bound range build.
+    pub fn publish_provider(
+        &mut self,
+        analysis: &Analysis,
+        program: &Program,
+        result: &str,
+        publication: &str,
+        index: usize,
+        packed: Option<&[String]>,
+    ) -> syn::Result<TokenStream> {
+        let Some(layouts) = analysis.structures.built.get(result) else {
+            return Ok(TokenStream::new());
+        };
+        if layouts.len() != 1 {
+            return Err(error(
+                "T-Gpu: device store requires one recorded provider layout",
+            ));
+        }
+        let (levels, _) = &layouts[0];
+        let keys: Vec<_> = levels.iter().flatten().cloned().collect();
+        let mut payload = cq_print::Context::new(&program.structures, &analysis.structures)
+            .built_payload(result, levels);
+        payload.retain(|column| keys.first() != Some(column));
+        payload.extend(keys.iter().skip(1).cloned());
+        payload.sort();
+        payload.dedup();
+        let length = format_ident!("__cq_store_length_{index}");
+        let rows = format_ident!("__cq_store_rows_{index}");
+        let canonical = format_ident!("__cq_canonical_{index}");
+        let fields = format_ident!("__cq_fields_{index}");
+        let width = self.width;
+        let descriptor = format_ident!("__cq_sequence_descriptor_{result}");
+        let owner = format_ident!("__cq_sequence_provider_{result}");
+        let view = format_ident!("__cq_sequence_provider_view_{result}");
+        let column = |column: &str| -> syn::Result<TokenStream> {
+            let bounds = self.bounds(column)?;
+            Ok(if let Some(packed) = packed {
+                let field = packed
+                    .iter()
+                    .position(|name| name == column)
+                    .ok_or_else(|| error("T-Gpu: provider column absent from stored packed row"))?;
+                quote! {
+                    unsafe { ::cq_gpu_sequence_runtime::ColumnDescriptor::from_packed(
+                        #canonical.keys().clone(), #length, #fields[#field], #bounds)? }
+                }
+            } else {
+                let slot = self.columns[column];
+                quote! {
+                    unsafe { ::cq_gpu_sequence_runtime::ColumnDescriptor::from_rows(
+                        #rows.clone(), #length, #width, #slot, #bounds)? }
+                }
+            })
+        };
+        let mut key_descriptors = Vec::new();
+        for key in &keys {
+            let source = column(key)?;
+            let bounds = self.bounds(key)?;
+            key_descriptors.push(quote! {
+                ::cq_gpu_sequence_runtime::KeyDescriptor {
+                    column: #source,
+                    domain_size: match #bounds {
+                        ::cq_gpu_runtime::Bounds::Empty => 0usize,
+                        ::cq_gpu_runtime::Bounds::Inclusive { min, max } => {
+                            if min < 0 || max > u32::MAX as i64 {
+                                return Err("T-Gpu: range keys require dense nonnegative u32 codes".into());
+                            }
+                            usize::try_from(max)?.checked_add(1).ok_or("T-Gpu: key domain overflow")?
+                        }
+                    },
+                }
+            });
+        }
+        let mut payload_descriptors = Vec::new();
+        for name in &payload {
+            let source = column(name)?;
+            let kind = payload_kind(&analysis.structures.physical.rows[result].types[name])?;
+            payload_descriptors.push(quote! {
+                ::cq_gpu_sequence_runtime::PayloadDescriptor { column: #source, kind: #kind }
+            });
+        }
+        let retain_rows = packed.is_none().then(|| {
+            quote! {
+                let #rows = ::std::sync::Arc::new(#rows);
+            }
+        });
+        self.parameters.push((
+            view.clone(),
+            syn::parse_quote!(::cq_gpu_sequence_runtime::RangeView),
+            quote!(unsafe { #owner.view() }),
+        ));
+        for name in [result, publication] {
+            self.providers.insert(
+                name.to_owned(),
+                Provider {
+                    view: view.clone(),
+                    payload: payload.clone(),
+                    keys: keys.clone(),
+                },
+            );
+        }
+        Ok(quote! {
+            #retain_rows
+            let #descriptor = ::cq_gpu_sequence_runtime::RangeDescriptor {
+                key: vec![#(#key_descriptors),*],
+                selection: None,
+                payload: vec![#(#payload_descriptors),*],
+            };
+            let #owner = __cq_range_builder.build(&#descriptor)?;
+        })
     }
     pub fn bounds(&self, column: &str) -> syn::Result<TokenStream> {
         self.bounds
@@ -873,5 +983,19 @@ impl VisitMut for DeviceComparisons {
             }
         }
         syn::visit_mut::visit_expr_mut(self, expression);
+    }
+}
+
+fn payload_kind(ty: &Type) -> syn::Result<TokenStream> {
+    match primitive(ty).as_deref() {
+        Some("u32" | "u16" | "u8" | "bool") => {
+            Ok(quote!(::cq_gpu_sequence_runtime::PayloadKind::U32))
+        }
+        Some("i32" | "i16" | "i8") => Ok(quote!(::cq_gpu_sequence_runtime::PayloadKind::I32)),
+        Some("i64") => Ok(quote!(::cq_gpu_sequence_runtime::PayloadKind::I64)),
+        _ => Err(syn::Error::new_spanned(
+            ty,
+            "T-Gpu: range payload needs a recorded u32/i32/i64 code",
+        )),
     }
 }

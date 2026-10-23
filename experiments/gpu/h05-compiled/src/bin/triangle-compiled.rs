@@ -1,22 +1,22 @@
-//! Directed i64 triangles: an explicit unsupported Sequence translation fixture.
+#![recursion_limit = "1024"]
+//! Directed i64 triangles over the authored Sequence range providers.
 //!
-//! The resident range provider requires u32/i32 payload codes. Do not silently
-//! narrow arbitrary signed vertex IDs or substitute the handwritten GPU oracle.
-//! `--check` runs the independent CPU reference, not a compiled GPU query.
-//! Enable `triangle-sequence-rejection` to exercise the authored translation.
+//! IDs remain native i64 values through upload, range payload packing and
+//! output decoding. The recorded dense directory still requires nonnegative
+//! u32-range keys, and canonical output fields must fit one packed u64.
+//! `--check` compares the compiled GPU tuples with the independent CPU reference.
 //!
 //! Supported scheduling advice is recorded below: 256 lanes × 4 items becomes
-//! `tile 1024 items 4`, and range enumeration is `flatten lookup`. The old
-//! frontier(8), directory(rank), and output(retry) choices have no corresponding
+//! `tile 1024 items 4`, and range enumeration is `flatten lookup`. Canonical
+//! publication flattens the remaining tile partition before using PackedCanon.
+//! The old frontier(8), directory(rank), and output(retry) choices have no corresponding
 //! Sequence advice; they are not silently reinterpreted as another policy.
-#[cfg(feature = "triangle-sequence-rejection")]
 use cq_gpu_runtime::DeviceColumns;
 use std::{
     error::Error,
     io::{BufRead, BufReader},
+    time::Instant,
 };
-
-const REJECTION: &str = "T-Gpu: range payload needs a recorded u32/i32 dense code";
 
 fn load(path: &str) -> Result<Vec<(i64, i64)>, Box<dyn Error>> {
     let mut rows = Vec::new();
@@ -36,11 +36,7 @@ fn load(path: &str) -> Result<Vec<(i64, i64)>, Box<dyn Error>> {
     Ok(rows)
 }
 
-// TODO: the existing Sequence range provider cannot retain i64 adjacency payloads.
-// This fixture preserves the Smallest triangle and its signed vertex types.
-// The runtime rejection below is sourced from sequence/core/src/rows.rs, not
-// from adapter argument validation. The feature intentionally fails translation.
-#[cfg(feature = "triangle-sequence-rejection")]
+// Preserve the written Smallest triangle and its signed vertex types.
 fn triangles<'a>(edges: &'a DeviceColumns<'_, (i64, i64)>) -> DeviceColumns<'a, (i64, i64, i64)> {
     cq_sequence_rewrites::grade! {
         arguments { gpu, Edges at host, ByB at host, ByA at host, result at device };
@@ -68,7 +64,7 @@ fn triangles<'a>(edges: &'a DeviceColumns<'_, (i64, i64)>) -> DeviceColumns<'a, 
             Edges = store rows l;
             ByB = store rows r;
             ByA = store rows s;
-            result = store canon map checked flatten lookup s [a,c]
+            result = store canon flatten map checked flatten lookup s [a,c]
                 flatten lookup r [b] tile 1024 items 4 Edges;
             output count;
         }
@@ -99,9 +95,104 @@ fn main() -> Result<(), Box<dyn Error>> {
     let check = args.iter().any(|a| a == "--check");
     let rows = load(path)?;
     println!("distinct_edges={}", rows.len());
-    if check {
-        let expected = reference(&rows);
-        println!("cpu_reference_rows={}", expected.len());
+    let pool = cq_gpu_runtime::Pool::new(0, 0, 0)?;
+    let resident = DeviceColumns::from_rows(
+        pool,
+        &rows,
+        &mut cq_gpu_runtime::Dictionary::default(),
+        &[cq_gpu_runtime::Codec::For; 2],
+    )?;
+    let expected = if check {
+        let started = Instant::now();
+        let mut expected = reference(&rows);
+        let cpu_reference_ms = started.elapsed().as_secs_f64() * 1000.0;
+        expected.sort_unstable();
+        println!(
+            "cpu_reference_rows={} cpu_reference_ms={cpu_reference_ms:.6}",
+            expected.len()
+        );
+        Some(expected)
+    } else {
+        None
+    };
+    // Match the H05 timing protocol: one discarded warmup, five measured
+    // resident calls. Upload, answer download, and CPU checking stay outside.
+    let mut samples = [[0.0f64; 5]; 5];
+    for iteration in 0..6 {
+        let started = Instant::now();
+        let answer = triangles(&resident);
+        let wall_ms = started.elapsed().as_secs_f64() * 1000.0;
+        let timing = cq_gpu_runtime::take_last_timings()
+            .ok_or("triangle translator supplied no execution timings")?;
+        let count = answer.checked_len()?;
+        if let Some(expected) = &expected {
+            let mut actual = answer.to_host()?;
+            actual.sort_unstable();
+            assert_eq!(
+                &actual, expected,
+                "compiled i64 triangle differs from CPU reference"
+            );
+        }
+        println!(
+            "iteration={iteration} warmup={} checked={check} gpu_answer_rows={count} build_ms={:.6} kernel_ms={:.6} dedup_ms={:.6} total_ms={:.6} wall_ms={wall_ms:.6}",
+            iteration == 0, timing.build_ms, timing.kernel_ms, timing.dedup_ms, timing.total_ms,
+        );
+        if iteration > 0 {
+            samples[iteration - 1] = [
+                timing.build_ms as f64,
+                timing.kernel_ms as f64,
+                timing.dedup_ms as f64,
+                timing.total_ms as f64,
+                wall_ms,
+            ];
+        }
     }
-    Err(REJECTION.into())
+    let medians: [f64; 5] = std::array::from_fn(|field| {
+        let mut values = samples.map(|sample| sample[field]);
+        values.sort_unstable_by(f64::total_cmp);
+        values[2]
+    });
+    println!(
+        "warmups=1 runs=5 checked={check} median_build_ms={:.6} median_kernel_ms={:.6} median_dedup_ms={:.6} median_total_ms={:.6} median_wall_ms={:.6}",
+        medians[0], medians[1], medians[2], medians[3], medians[4],
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compiled_i64_triangle_preserves_vertex_ids() -> Result<(), Box<dyn Error>> {
+        let pool = cq_gpu_runtime::Pool::new(0, 0, 0)?;
+        for mut rows in [
+            vec![],
+            vec![
+                (0i64, 0),
+                (1, 2),
+                (2, 3),
+                (1, 3),
+                (1, 3),
+                (1_000_000, 1_000_000),
+            ],
+        ] {
+            rows.sort_unstable();
+            rows.dedup();
+            let resident = DeviceColumns::from_rows(
+                pool.clone(),
+                &rows,
+                &mut cq_gpu_runtime::Dictionary::default(),
+                &[cq_gpu_runtime::Codec::For; 2],
+            )?;
+            let answer = triangles(&resident);
+            let mut actual = answer.to_host()?;
+            actual.sort_unstable();
+            let mut expected = reference(&rows);
+            expected.sort_unstable();
+            assert_eq!(answer.checked_len()?, expected.len());
+            assert_eq!(actual, expected);
+        }
+        Ok(())
+    }
 }

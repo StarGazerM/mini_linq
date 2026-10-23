@@ -1,8 +1,8 @@
 //! Executable answer conformance: ignore enumeration order, not multiplicity.
 //!
 //! `assert_answers_equal` is dependency-light and also serves external targets.
-//! Enable `sequence-conformance` for the CPU translation driver. It changes only
-//! machine grading, never Physical, Structures, or Sequence decisions.
+//! Enable `sequence-conformance` for the CPU translation driver. Each target's
+//! machine and catalog drive the shared planner before translation.
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
@@ -51,7 +51,7 @@ pub use cpu::*;
 mod cpu {
     use super::assert_answers_equal;
     use crate::Database;
-    use cq_lang_sequence::{Analysis, Grade, Graded, LevelNode, Machine, Program, Term};
+    use cq_lang_sequence::{Analysis, Catalog, Program, Term};
     use cq_syntax::symbol_name;
     use quote::{ToTokens, quote};
 
@@ -62,52 +62,31 @@ mod cpu {
         Tasks,
     }
 
-    /// Grade identical Sequence terms for a target. Authored Tasks placement is
-    /// retained. Without authored placement, the final publication runs at pool
-    /// and preceding definitions stay at host. Unsupported crossings are errors,
-    /// not repaired by inserting stores or changing the program.
-    pub fn grade(program: &Program, target: Target) -> syn::Result<(Program, Analysis)> {
-        let mut program = program.clone();
-        let machine = match target {
-            Target::Sequential => Machine {
-                name: syn::parse_quote!(sequential),
-                root: LevelNode {
-                    name: syn::parse_quote!(host),
-                    collaborative: false,
-                    dynamic: false,
-                    children: vec![],
-                },
-            },
-            Target::Tasks => cq_sequence_tasks::machine(),
+    /// Plan a Sequence program with the target's exported machine and catalog.
+    /// Authored decomposition is retained; missing decisions come only from the
+    /// shared planner, never from harness-specific store or grading preparation.
+    pub fn plan(program: &Program, target: Target) -> syn::Result<(Program, Analysis)> {
+        plan_with_catalog(program, target, &Catalog::default())
+    }
+
+    /// Plan using the target catalog extended with caller-owned runtime tokens.
+    pub fn plan_with_catalog(
+        program: &Program,
+        target: Target,
+        additions: &Catalog,
+    ) -> syn::Result<(Program, Analysis)> {
+        let (machine, mut catalog) = match target {
+            Target::Sequential => (cq_sequence_pull::machine(), cq_sequence_pull::catalog()),
+            Target::Tasks => (cq_sequence_tasks::machine(), cq_sequence_tasks::catalog()),
         };
-        if target == Target::Sequential {
-            program.graded = None;
-        } else if !program
-            .graded
-            .as_ref()
-            .is_some_and(|graded| graded.machine == machine.name)
-        {
-            let last = program.sequence.definitions.len().checked_sub(1);
-            program.graded = Some(Graded {
-                machine: machine.name.clone(),
-                grades: program
-                    .sequence
-                    .definitions
-                    .iter()
-                    .enumerate()
-                    .map(|(index, definition)| Grade {
-                        name: definition.name.clone(),
-                        level: vec![if Some(index) == last {
-                            syn::parse_quote!(pool)
-                        } else {
-                            syn::parse_quote!(host)
-                        }],
-                    })
-                    .collect(),
-            });
-        }
-        let analysis = cq_lang_sequence::check_grading(&program, &machine)?;
-        Ok((program, analysis))
+        catalog
+            .providers
+            .extend(additions.providers.iter().cloned());
+        catalog.codecs.extend(additions.codecs.iter().cloned());
+        catalog.canons.extend(additions.canons.iter().cloned());
+        let planned = cq_sequence_plan::plan(program, &machine, &catalog)?;
+        let analysis = cq_lang_sequence::check_grading(&planned.program, &machine)?;
+        Ok((planned.program, analysis))
     }
 
     /// Whether the final answer stream has an explicit global canonical boundary.
@@ -253,10 +232,11 @@ mod cpu {
         let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../runtime/cq-storage/src/lib.rs");
         let runtime = crate::rustc::Runtime::new(&source, false);
-        assert_conformant_with_runtime(program, targets, setup, &runtime);
+        assert_conformant_with_runtime(program, targets, setup, &runtime, &Catalog::default());
     }
 
     /// Reuse a rustc driver with the caller's exact linked provider dependencies.
+    /// Caller-owned provider, codec and canon tokens extend each target catalog.
     /// Like `Runtime`, this is a serial driver: do not run simultaneous queries
     /// against one runtime directory.
     pub fn assert_conformant_with_runtime(
@@ -264,6 +244,7 @@ mod cpu {
         targets: &[Target],
         setup: &proc_macro2::TokenStream,
         runtime: &crate::rustc::Runtime,
+        catalog: &Catalog,
     ) {
         assert!(
             targets.len() >= 2,
@@ -271,8 +252,8 @@ mod cpu {
         );
         let mut reference: Option<(Target, Vec<String>)> = None;
         for &target in targets {
-            let (graded, analysis) = grade(program, target)
-                .unwrap_or_else(|error| panic!("{target:?} grading rejected: {error}"));
+            let (graded, analysis) = plan_with_catalog(program, target, catalog)
+                .unwrap_or_else(|error| panic!("{target:?} planning rejected: {error}"));
             let expression = match target {
                 Target::Sequential => cq_sequence_pull::translate(&graded, &analysis),
                 Target::Tasks => cq_sequence_tasks::translate(&graded, &analysis),
@@ -300,7 +281,7 @@ mod cpu {
                     expected.iter(),
                     &format!("{target:?}"),
                     rows.iter(),
-                    output_is_canonical(program, &analysis),
+                    output_is_canonical(&graded, &analysis),
                 );
             } else {
                 reference = Some((target, rows));

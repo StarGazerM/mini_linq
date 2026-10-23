@@ -82,8 +82,19 @@ fn main() -> Result<(), Error> {
             .unwrap_or("/data/tpch-gpu/sf1"),
     );
     let selected = args.get(1).map(String::as_str).unwrap_or("both");
-    if !["A", "B", "R", "both"].contains(&selected) {
-        return Err("usage: gpu-h05-compiled [DATA_DIR] [A|B|R|both] [RESULTS_JSON]".into());
+    if ![
+        "A",
+        "B",
+        "R",
+        "planned-A",
+        "planned-B",
+        "planned-R",
+        "both",
+        "compare",
+    ]
+    .contains(&selected)
+    {
+        return Err("usage: gpu-h05-compiled [DATA_DIR] [A|B|R|planned-A|planned-B|planned-R|both|compare] [RESULTS_JSON]".into());
     }
     let result_path = Path::new(
         args.get(2)
@@ -143,13 +154,19 @@ fn main() -> Result<(), Error> {
     );
     let mut results = Vec::new();
     type Query = Box<dyn for<'a> Fn(&'a Rows) -> queries::QueryResult<'a>>;
-    let plans: [(&str, Query); 3] = [
+    let plans: [(&str, Query); 6] = [
         ("A", Box::new(queries::plan_a)),
         ("B", Box::new(queries::plan_b)),
         ("R", Box::new(queries::plan_r)),
+        ("planned-A", Box::new(queries::planned_a)),
+        ("planned-B", Box::new(queries::planned_b)),
+        ("planned-R", Box::new(queries::planned_r)),
     ];
     for (plan, query) in plans {
-        if selected != "both" && selected != plan {
+        if selected != "compare"
+            && selected != plan
+            && !(selected == "both" && !plan.starts_with("planned-"))
+        {
             continue;
         }
         let mut build = Vec::new();
@@ -239,6 +256,31 @@ fn main() -> Result<(), Error> {
             "calls": calls,
             "samples": {"build_ms": build, "kernel_ms": kernel, "dedup_ms": dedup, "total_ms": total, "wall_ms": wall, "download_ms": downloads}
         }));
+    }
+    // Compare the same loaded resident inputs and identical timing scopes.
+    // Keep both raw runs even when the performance acceptance is not met.
+    if selected == "compare" {
+        for name in ["A", "B", "R"] {
+            let authored = results
+                .iter()
+                .find(|result| result["plan"] == name)
+                .unwrap();
+            let authored_ms = authored["total_ms"]["median"].as_f64().unwrap();
+            let planned_name = format!("planned-{name}");
+            let planned = results
+                .iter_mut()
+                .find(|result| result["plan"] == planned_name)
+                .unwrap();
+            let planned_ms = planned["total_ms"]["median"].as_f64().unwrap();
+            let within_ten_percent = planned_ms <= authored_ms * 1.10;
+            planned["authored_comparison"] = json!({
+                "plan": name,
+                "authored_total_ms": authored_ms,
+                "planned_total_ms": planned_ms,
+                "within_ten_percent": within_ten_percent
+            });
+            println!("sf={sf} plan={name} authored_total_ms={authored_ms:.6} planned_total_ms={planned_ms:.6} within_ten_percent={within_ten_percent}");
+        }
     }
     let mut existing: Vec<Value> = if result_path.exists() {
         serde_json::from_slice(&fs::read(result_path)?)?

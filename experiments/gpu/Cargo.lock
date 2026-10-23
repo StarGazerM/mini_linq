@@ -135,6 +135,8 @@ dependencies = [
  "cq-gpu-sequence-test-macros",
  "cq-lang-sequence",
  "cq-lang-structures",
+ "cq-sequence-lowering",
+ "cq-sequence-plan",
  "cq-storage",
  "cq-testkit",
  "cuda-core",
@@ -165,6 +167,7 @@ version = "0.1.0"
 dependencies = [
  "cq-gpu-sequence-core",
  "cq-lang-sequence",
+ "cq-sequence-plan",
  "cq-stage",
  "proc-macro2",
  "syn 2.0.119",
@@ -192,7 +195,9 @@ version = "0.1.0"
 dependencies = [
  "cq-gpu-sequence",
  "cq-lang-sequence",
+ "cq-lang-structures",
  "cq-sequence-lowering",
+ "cq-sequence-plan",
  "cq-sequence-pull",
  "cq-structure-selection",
  "quote",
@@ -416,6 +421,18 @@ version = "0.1.0"
 dependencies = [
  "cq-lang-sequence",
  "cq-lang-structures",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-sequence-plan"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-sequence",
+ "cq-sequence-rewrite-passes",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
  "syn 2.0.119",
 ]
 
@@ -853,6 +870,7 @@ dependencies = [
  "cq-reduce",
  "cq-represent",
  "cq-sequence-lowering",
+ "cq-sequence-plan",
  "cq-sequence-pull",
  "cq-stage",
  "cq-staging",

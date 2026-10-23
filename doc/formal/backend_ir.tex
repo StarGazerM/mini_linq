@@ -234,6 +234,75 @@ one-part schedule has span proportional to work, a grid-wide one span
 logarithmic. Cost is not meaning; it is what a decomposition pass argues
 with, and lengths in types are what make it computable.
 
+\subsection{Decomposition}
+A planner is an advice generator, not another interpretation of Sequence.
+Its inputs are a Sequence program $t$, a machine $M$, and an ordered catalog
+$K$ of target-supplied provider, codec and canon tokens with capabilities
+and admissible levels. The catalog is data: shared planning and checking
+do not depend on a target implementation. A successful result is a graded
+program together with a replayable trace of the existing Sequence rewrites.
+Let $t_0=t$, $t_i=r_i(t_{i-1})$, and let $A(t)$ record authored choices.
+\begin{mathpar}
+\Rule{PL-Closure}{\mathsf{plan}(t,M,K)=(t', [r_1,\ldots,r_n])}
+ {t'=t_n\quad
+  \forall i.\ \mathsf{check\_rewrite}(t_{i-1},t_i)\quad
+  \mathsf{check\_grading}(t',M)}
+
+\Rule{PL-Precedence}{\mathsf{plan}(t,M,K)=(t',\rho)}
+ {A(t')|_{\mathrm{dom}(A(t))}=A(t)}
+
+\Rule{PL-Det}{(t,M,K)\text{ fixed}\quad
+  \text{candidate and catalog order fixed}}
+ {\mathsf{plan}(t,M,K)\text{ has one result (or one rejection)}}
+
+\Rule{PL-Cost}{C=(c_1,\ldots,c_k)\text{ admissible, preserving }A(t)\quad
+  \kappa(c)=(W(c),S(c),\#\mathsf{stores}(c),\#\mathsf{dispatches}(c))}
+ {c^*=\mathsf{foldl}\bigl(
+   (a,b)\mapsto\text{if }\kappa(b)\prec\kappa(a)\text{ then }b\text{ else }a,
+   c_1,(c_2,\ldots,c_k)\bigr)}
+\end{mathpar}
+PL-Closure inherits its value laws from BE-* and the Sequence extension
+rewrites; it adds no new equality of values. PL-Precedence preserves
+authored grades, tiles, stores, choices, output protocols and codec/canon
+tokens: planning fills missing decisions rather than optimizing them away.
+PL-Det includes rejection when no catalog token satisfies a recorded
+obligation. PL-Cost uses the work and span of the preceding Cost paragraph,
+not a semantic preference. Here $\prec$ is provable strict lexicographic
+symbolic cost dominance: work first, then span, stores and dispatches.
+Bounds and coefficient dominance establish comparisons; unresolved
+comparisons, like equal costs, retain the earlier candidate.
+Unknown lengths remain type-length expressions rather than measured input
+data or invented cardinalities. Work counts evaluated constructor positions;
+aliases, tiles and stores add no evaluation work, with stores a separate
+cost tier. Span follows dependencies, taking the maximum over branches.
+An actual graded distribution introduces a symbolic maximum-part length
+constrained by its driver, rows and machine width, not by multiplying tile
+width by items.
+
+The decision procedure is bounded enumeration. Host rows remain at host;
+publication and stores consumed by lookup or canon use the deepest
+admissible level, while intervening terms inherit producer placement.
+Below host, the first fanout in a flatten chain uses the distributing
+machine level's static width, if available. Bounded enumeration crosses
+plain and segmented decomposition with items from $\{1,M.\mathsf{items}\}$,
+in fixed plain-first order. Further flattens receive offset-retaining
+stores and inner tiles only when required by grading or when PL-Cost
+proves a smaller span; otherwise the fewer-stores tie-break favors plain
+tiling. Where separate
+rewrites cannot express this decomposition, the checked \code{segment}
+rewrite pairs an inner-flatten store with an outer tile, justified by
+BE-Offsets and BE-Partition and exposed through both the library and macro.
+Recorded output protocols, including count inserted by lowering, are preserved. Only absent
+protocols are filled: count when the final length depends only on input
+lengths, otherwise reserve; a bounded protocol requires an authored
+capacity. Reported provider, canon and codec obligations are validated
+against catalog capabilities at their levels. Structures already records
+provider and canon types; planning does not replace them or add selection
+syntax. Codec laws remain abstract runtime premises; planning validates
+catalog support, not those laws. Every proposed rewrite and the resulting
+grade are checked; no emitter decision is introduced.
+
+
 \subsection{Refinement and the emitter}
 \begin{definition}[Sequence refinement]
 A graded Sequence program $t$ over Structures $s$ refines $s$ for machine

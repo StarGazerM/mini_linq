@@ -1,6 +1,9 @@
 #[cuda_device::cuda_module]
 pub(crate) mod codecs {
-    use crate::{decode, load_element, original_position, Codec, ColumnView, VectorHeader};
+    use crate::{
+        decode_source, load_element, original_position, Codec, ColumnView, SourceView,
+        VectorHeader, ELEMENT_I64,
+    };
     use cuda_device::warp;
     use cuda_device::{device, kernel, launch_bounds, launch_contract, thread, DynamicSharedArray};
 
@@ -37,7 +40,9 @@ pub(crate) mod codecs {
                     if codec != Codec::Delta as u32 || i % 64 != 0 {
                         let value = unsafe { load_element(input, element, begin as usize + i) };
                         let value = if codec == Codec::Delta as u32 {
-                            value.wrapping_sub(unsafe { load_element(input, element, begin as usize + i - 1) })
+                            value.wrapping_sub(unsafe {
+                                load_element(input, element, begin as usize + i - 1)
+                            })
                         } else {
                             value
                         };
@@ -85,7 +90,9 @@ pub(crate) mod codecs {
     fn scan_words(value: u64) -> (u64, u64) {
         let lane = thread::threadIdx_x() as usize;
         let shared = DynamicSharedArray::<u8>::get_raw() as *mut u64;
-        unsafe { shared.add(lane).write(value); }
+        unsafe {
+            shared.add(lane).write(value);
+        }
         thread::sync_threads();
         let mut sum = value;
         let mut distance = 1;
@@ -97,7 +104,9 @@ pub(crate) mod codecs {
             };
             thread::sync_threads();
             sum += before;
-            unsafe { shared.add(lane).write(sum); }
+            unsafe {
+                shared.add(lane).write(sum);
+            }
             thread::sync_threads();
             distance *= 2;
         }
@@ -115,7 +124,11 @@ pub(crate) mod codecs {
         count: *const u64,
         totals: *mut u64,
     ) {
-        let len = if count.is_null() { capacity } else { unsafe { count.read() }.min(capacity) };
+        let len = if count.is_null() {
+            capacity
+        } else {
+            unsafe { count.read() }.min(capacity)
+        };
         let live_vectors = len.div_ceil(1024) as usize;
         let blocks = (capacity.div_ceil(1024) as usize).div_ceil(256).max(1);
         let mut block = thread::blockIdx_x() as usize;
@@ -124,16 +137,25 @@ pub(crate) mod codecs {
             let i = block * 256 + lane;
             let words = if i < live_vectors {
                 let h = unsafe { headers.add(i).read() };
-                h.width as u64 * 16 + if h.codec == Codec::Delta as u32 { 16 } else { 0 }
+                h.width as u64 * 16
+                    + if h.codec == Codec::Delta as u32 {
+                        16
+                    } else {
+                        0
+                    }
             } else {
                 0
             };
             let (prefix, total) = scan_words(words);
             if i < live_vectors {
-                unsafe { (*headers.add(i)).offset = prefix; }
+                unsafe {
+                    (*headers.add(i)).offset = prefix;
+                }
             }
             if lane == 0 {
-                unsafe { totals.add(block).write(total); }
+                unsafe {
+                    totals.add(block).write(total);
+                }
             }
             block += thread::gridDim_x() as usize;
         }
@@ -147,13 +169,21 @@ pub(crate) mod codecs {
         let lane = thread::threadIdx_x() as usize;
         while block < len.div_ceil(256) {
             let i = block * 256 + lane;
-            let value = if i < len { unsafe { values.add(i).read() } } else { 0 };
+            let value = if i < len {
+                unsafe { values.add(i).read() }
+            } else {
+                0
+            };
             let (prefix, total) = scan_words(value);
             if i < len {
-                unsafe { values.add(i).write(prefix); }
+                unsafe {
+                    values.add(i).write(prefix);
+                }
             }
             if lane == 0 {
-                unsafe { totals.add(block).write(total); }
+                unsafe {
+                    totals.add(block).write(total);
+                }
             }
             block += thread::gridDim_x() as usize;
         }
@@ -165,7 +195,9 @@ pub(crate) mod codecs {
     pub unsafe fn add_offsets(values: *mut u64, len: usize, prefixes: *const u64) {
         let mut i = thread::index_1d().get();
         while i < len {
-            unsafe { *values.add(i) += prefixes.add(i / 256).read(); }
+            unsafe {
+                *values.add(i) += prefixes.add(i / 256).read();
+            }
             i += thread::gridDim_x() as usize * 256;
         }
     }
@@ -179,11 +211,17 @@ pub(crate) mod codecs {
         count: *const u64,
         prefixes: *const u64,
     ) {
-        let len = if count.is_null() { capacity } else { unsafe { count.read() }.min(capacity) };
+        let len = if count.is_null() {
+            capacity
+        } else {
+            unsafe { count.read() }.min(capacity)
+        };
         let vectors = len.div_ceil(1024) as usize;
         let mut i = thread::index_1d().get();
         while i < vectors {
-            unsafe { (*headers.add(i)).offset += prefixes.add(i / 256).read(); }
+            unsafe {
+                (*headers.add(i)).offset += prefixes.add(i / 256).read();
+            }
             i += thread::gridDim_x() as usize * 256;
         }
     }
@@ -238,7 +276,9 @@ pub(crate) mod codecs {
                     if row < h.rows as usize && (!is_delta || row % 64 != 0) {
                         let value = unsafe { load_element(input, element, vector * 1024 + row) };
                         let value = if is_delta {
-                            value.wrapping_sub(unsafe { load_element(input, element, vector * 1024 + row - 1) })
+                            value.wrapping_sub(unsafe {
+                                load_element(input, element, vector * 1024 + row - 1)
+                            })
                         } else {
                             value
                         };
@@ -268,26 +308,29 @@ pub(crate) mod codecs {
     }
 
     /// Gather `source[order[i]]` into index order and FOR-pack it in one pass.
-    /// One warp per 1024-row vector stages its 32-bit values in shared memory,
+    /// One warp per 1024-row vector stages its native-width values in shared memory,
     /// reduces the vector's extrema, writes its header, and packs it into a
     /// fixed slot of `slot_width` 1024-bit words at `vector * slot_width * 16`.
     /// The vector's own width never exceeds the slot because the caller's
-    /// bounds enclose every value. `signed` selects i32 over u32 values.
+    /// bounds enclose every value. `element` selects u32, i32, or i64 lanes.
     #[kernel]
     #[launch_bounds(256)]
-    #[launch_contract(domain = 1, block = (256, 1, 1), dynamic_shared_range = (32768, 32768))]
+    #[launch_contract(domain = 1, block = (256, 1, 1), dynamic_shared_range = (32768, 65536))]
     pub unsafe fn gather_encode(
-        source: ColumnView,
+        source: SourceView,
         order: *const u32,
         rows: u64,
         slot_width: u32,
-        signed: u32,
+        element: u32,
         headers: *mut VectorHeader,
         output: *mut u64,
     ) {
         let warp_index = thread::threadIdx_x() as usize / 32;
         let lane = thread::threadIdx_x() as usize % 32;
-        let staged = unsafe { (DynamicSharedArray::<u8, 16>::get_raw() as *mut u32).add(warp_index * 1024) };
+        let element_bytes = if element == ELEMENT_I64 { 8 } else { 4 };
+        let staged = unsafe {
+            DynamicSharedArray::<u8, 16>::get_raw().add(warp_index * 1024 * element_bytes)
+        };
         let vectors = rows.div_ceil(1024);
         let mut vector = thread::blockIdx_x() as u64 * 8 + warp_index as u64;
         let stride = thread::gridDim_x() as u64 * 8;
@@ -298,11 +341,17 @@ pub(crate) mod codecs {
             let mut high = i64::MIN;
             let mut i = lane;
             while i < count {
-                let gathered = unsafe { decode(source, order.add(begin as usize + i).read() as u64) };
-                unsafe { staged.add(i).write(gathered as u32) };
-                let widened = if signed != 0 { gathered as i32 as i64 } else { gathered as u32 as i64 };
-                low = low.min(widened);
-                high = high.max(widened);
+                let gathered =
+                    unsafe { decode_source(source, order.add(begin as usize + i).read() as u64) };
+                unsafe {
+                    if element == ELEMENT_I64 {
+                        (staged as *mut i64).add(i).write(gathered);
+                    } else {
+                        (staged as *mut u32).add(i).write(gathered as u32);
+                    }
+                }
+                low = low.min(gathered);
+                high = high.max(gathered);
                 i += 32;
             }
             let mut distance = 16;
@@ -337,8 +386,7 @@ pub(crate) mod codecs {
                 while slot < 64 {
                     let row = original_position(slot * 16 + lane);
                     let residual = if row < count {
-                        let bits = unsafe { staged.add(row).read() };
-                        let value = if signed != 0 { bits as i32 as i64 } else { bits as i64 };
+                        let value = unsafe { load_element(staged, element, row) };
                         (value as u64).wrapping_sub(low as u64)
                     } else {
                         0
@@ -348,7 +396,11 @@ pub(crate) mod codecs {
                         unsafe { data.add(word_index).write(word) };
                         word_index += 16;
                         let consumed = 64 - occupied;
-                        word = if consumed < width { residual >> consumed } else { 0 };
+                        word = if consumed < width {
+                            residual >> consumed
+                        } else {
+                            0
+                        };
                         occupied = occupied + width - 64;
                     } else {
                         occupied += width;

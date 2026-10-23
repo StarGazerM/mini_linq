@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export projected TPC-H Q5 inputs, exact answers, and DuckDB CPU timings.
+"""Export all authored TPC-H CQ inputs, exact answers, and DuckDB CPU timings.
 
 Run: python3 experiments/gpu/compare/export_tpch.py [--sf 1 10]
 Existing databases are reused; exports are replaced deterministically. SF1 is
@@ -8,6 +8,7 @@ uses the complete SELECT DISTINCT, not a count wrapper, in one CLI process per
 thread count with one warmup followed by five samples (DuckDB .timer wall time).
 """
 import argparse
+import hashlib
 import itertools
 import json
 import os
@@ -22,24 +23,36 @@ import numpy as np
 CLI = os.environ.get('DUCKDB', 'duckdb')
 SOURCE_SF1 = Path(os.environ.get('TPCH_SOURCE_SF1',
     str(Path(__file__).resolve().parents[3] / 'features/workloads/target/bench/data/tpch-1/dbgen.duckdb')))
-RELATIONS = {
-    'customer': [('c_custkey', 'i64'), ('c_nationkey', 'i32')],
-    'orders': [('o_orderkey', 'i64'), ('o_custkey', 'i64'), ('o_orderdate', 'i32')],
-    'lineitem': [('l_orderkey', 'i64'), ('l_suppkey', 'i64')],
-    'supplier': [('s_suppkey', 'i64'), ('s_nationkey', 'i32')],
-    'nation': [('n_nationkey', 'i32'), ('n_regionkey', 'i32')],
-    'region': [('r_regionkey', 'i32'), ('r_name', 'i32')],
-}
-QUERY = """SELECT DISTINCT o.o_orderkey, s.s_suppkey, n.n_nationkey
-FROM customer c
-JOIN orders o ON c.c_custkey = o.o_custkey
-JOIN lineitem l ON l.l_orderkey = o.o_orderkey
-JOIN supplier s ON s.s_suppkey = l.l_suppkey AND s.s_nationkey = c.c_nationkey
-JOIN nation n ON n.n_nationkey = s.s_nationkey
-JOIN region r ON r.r_regionkey = n.n_regionkey
-WHERE r.r_name = 'ASIA'
-AND o.o_orderdate >= DATE '1994-01-01'
-AND o.o_orderdate < DATE '1995-01-01'"""
+QUERY_DIR = Path(__file__).resolve().parents[3] / 'features/workloads/src/queries/retail/tpch'
+
+
+def workloads():
+    """Use the authored SQL and relation declarations as the export contract."""
+    relations, queries = {}, {}
+    for path in sorted(QUERY_DIR.glob('*.rs')):
+        source = path.read_text()
+        name = re.search(r'name "([^"]+)"', source).group(1)
+        sql = re.search(r'sql r#"(.*?)"#;', source, re.S).group(1)
+        required = {}
+        for table, fields in re.findall(r'relation \w+ => (\w+)\(([^)]+)\);', source):
+            required[table] = []
+            for column, logical in re.findall(r'(\w+): (\w+)', fields):
+                previous = relations.setdefault(table, {}).setdefault(column, logical)
+                assert previous == logical, (table, column, previous, logical)
+                required[table].append(column)
+        assert required and sql.startswith('SELECT DISTINCT'), path
+        queries[name] = {'sql': sql, 'source': str(path.relative_to(QUERY_DIR.parents[5])),
+                         'required_columns': required}
+    assert queries, QUERY_DIR
+    return relations, queries
+
+
+def checksum(path):
+    digest = hashlib.sha256()
+    with path.open('rb') as source:
+        for block in iter(lambda: source.read(8 * 1024 * 1024), b''):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def sql_string(value):
@@ -56,7 +69,7 @@ def export(sf, base):
     root = base / f'sf{sf}'
     root.mkdir(parents=True, exist_ok=True)
     database = root / 'dbgen.duckdb'
-    # A manifest is published last, so its presence means all exports completed.
+    before = {path.name: checksum(path) for path in sorted(root.glob('*.bin'))}
     (root / 'manifest.json').unlink(missing_ok=True)
     if not database.exists():
         if sf == 1 and SOURCE_SF1.exists():
@@ -68,26 +81,41 @@ def export(sf, base):
             temporary.unlink(missing_ok=True)
             run_sql(temporary, f'SET threads=24; INSTALL tpch; LOAD tpch; CALL dbgen(sf={sf}); CHECKPOINT;\n')
             temporary.replace(database)
-    dates = run_sql(database, "SELECT DATE '1994-01-01' - DATE '1970-01-01', DATE '1995-01-01' - DATE '1970-01-01';\n").strip()
-    assert dates == '8766,9131', dates
-    names = run_sql(database, 'SELECT DISTINCT r_name FROM region ORDER BY r_name;\n').splitlines()
-    (root / 'region.r_name.dict.txt').write_text('\n'.join(names) + '\n')
-    manifest = {'sf': sf, 'relations': {}, 'constants': {
-        'date_start_days': 8766, 'date_end_days': 9131, 'asia_id': names.index('ASIA')}}
-    for relation, columns in RELATIONS.items():
-        expressions = []
-        for column, kind in columns:
-            if column == 'o_orderdate':
-                expressions.append("(o_orderdate - DATE '1970-01-01')::INTEGER AS o_orderdate")
-            elif column == 'r_name':
-                cases = ' '.join(f'WHEN {sql_string(name)} THEN {index}' for index, name in enumerate(names))
-                expressions.append(f'(CASE r_name {cases} END)::INTEGER AS r_name')
-            else:
-                expressions.append(column)
+    relations, queries = workloads()
+    manifest = {'schema_version': 2, 'sf': sf, 'byte_order': 'little',
+                'relations': {}, 'queries': queries, 'constants': {
+                    'date_start_days': 8766, 'date_end_days': 9131}}
+    for relation, columns in relations.items():
+        expressions, metadata, joins = [], [], []
+        for column, logical in columns.items():
+            kind = 'i32' if logical in ('i32', 'Date', 'String') else 'i64'
+            item = {'name': column, 'type': kind, 'logical_type': logical,
+                    'encoding': 'plain', 'file': f'{relation}.{column}.bin'}
+            expression = f't.{column}'
+            if logical == 'Date':
+                expression = f"(t.{column} - DATE '1970-01-01')::INTEGER"
+                item.update(encoding='days_since_epoch', epoch='1970-01-01', unit='day')
+            elif logical == 'Decimal':
+                expression = f'(t.{column} * 100)::BIGINT'
+                item.update(encoding='scaled_integer', scale=2)
+            elif logical == 'String':
+                names = run_sql(database, f"SELECT DISTINCT {column} FROM {relation} ORDER BY {column};\n").splitlines()
+                dictionary = root / f'{relation}.{column}.dict.txt'
+                dictionary.write_text('\n'.join(names) + '\n')
+                alias = f'd{len(joins)}'
+                joins.append(f'JOIN (SELECT {column}, (row_number() OVER (ORDER BY {column}) - 1)::INTEGER AS code FROM (SELECT DISTINCT {column} FROM {relation})) {alias} ON t.{column} = {alias}.{column}')
+                expression = f'{alias}.code'
+                item.update(encoding='dictionary', dictionary=dictionary.name,
+                            dictionary_entries=len(names), dictionary_index_base=0)
+                if column == 'r_name':
+                    manifest['constants']['asia_id'] = names.index('ASIA')
+            expressions.append(f'{expression} AS {column}')
+            metadata.append(item)
         tsv = root / f'{relation}.tsv'
-        run_sql(database, f"SET threads=24; SET preserve_insertion_order=true; COPY (SELECT {', '.join(expressions)} FROM {relation}) TO {sql_string(tsv)} (FORMAT CSV, DELIMITER '\t', HEADER false);\n")
+        # rowid preserves original physical scan order even across dictionary joins.
+        run_sql(database, f"SET threads=24; SET preserve_insertion_order=true; COPY (SELECT {', '.join(expressions)} FROM {relation} t {' '.join(joins)} ORDER BY t.rowid) TO {sql_string(tsv)} (FORMAT CSV, DELIMITER '\t', HEADER false);\n")
         expected = int(run_sql(database, f'SELECT count(*) FROM {relation};\n').strip())
-        files = [root / f'{relation}.{column}.bin' for column, kind in columns]
+        files = [root / item['file'] for item in metadata]
         streams = [path.open('wb') for path in files]
         rows = 0
         try:
@@ -98,41 +126,60 @@ def export(sf, base):
                         break
                     values = np.loadtxt(lines, dtype=np.int64, delimiter='\t', ndmin=2)
                     rows += values.shape[0]
-                    for index, (_, kind) in enumerate(columns):
-                        values[:, index].astype('<i8' if kind == 'i64' else '<i4').tofile(streams[index])
+                    for index, item in enumerate(metadata):
+                        values[:, index].astype('<i8' if item['type'] == 'i64' else '<i4').tofile(streams[index])
         finally:
             for stream in streams:
                 stream.close()
         assert rows == expected, (relation, rows, expected)
-        for path, (_, kind) in zip(files, columns):
-            assert path.stat().st_size == rows * (8 if kind == 'i64' else 4), path
-        manifest['relations'][relation] = {'rows': rows, 'columns': [
-            {'name': column, 'type': kind, 'file': path.name}
-            for (column, kind), path in zip(columns, files)]}
+        for path, item in zip(files, metadata):
+            assert path.stat().st_size == rows * (8 if item['type'] == 'i64' else 4), path
+        manifest['relations'][relation] = {'rows': rows, 'columns': metadata}
+        tsv.unlink()
         print(f'SF{sf} {relation}: {rows} rows; binary sizes verified', flush=True)
-    answer = root / 'answer.tsv'
-    run_sql(database, f"SET threads=24; COPY ({QUERY} ORDER BY 1,2,3) TO {sql_string(answer)} (FORMAT CSV, DELIMITER '\t', HEADER false);\n")
-    with answer.open() as source:
-        count = sum(1 for _ in source)
-    (root / 'answer.count').write_text(f'{count}\n')
-    timings = {'engine': 'DuckDB', 'version': subprocess.check_output([CLI, '--version'], text=True).strip(),
-               'sf': sf, 'query': QUERY, 'units': 'seconds', 'warmup_runs': 1, 'measured_runs': 5,
-               'method': 'CLI .timer real wall time for full SELECT DISTINCT; 1 ms resolution; one process per thread count',
-               'threads': {}}
-    for threads in (1, 24):
-        output = run_sql(database, f'SET threads={threads};\n.timer on\n' + (QUERY + ';\n') * 6)
-        (root / f'duckdb_timing_threads{threads}.log').write_text(output)
-        samples = [float(value) for value in re.findall(r'Run Time \(s\): real ([0-9.]+)', output)]
-        assert len(samples) == 6, samples
-        timings['threads'][str(threads)] = {'warmup_seconds': samples[0], 'samples_seconds': samples[1:],
-                                          'median_seconds': statistics.median(samples[1:])}
-    (root / 'duckdb_timing.json').write_text(json.dumps(timings, indent=2) + '\n')
+    after = {name: checksum(root / name) for name in before}
+    assert before == after, 'Existing binary column checksums changed'
+    (root / 'binary_checksums.json').write_text(json.dumps(
+        {'algorithm': 'sha256', 'before': before, 'after': after, 'identical': True}, indent=2) + '\n')
+    for name, query in queries.items():
+        sql = query['sql']
+        answer = root / f'answer.{name}.tsv'
+        run_sql(database, f"SET threads=24; COPY ({sql} ORDER BY ALL) TO {sql_string(answer)} (FORMAT CSV, DELIMITER '\t', HEADER false);\n")
+        with answer.open() as source:
+            count = sum(1 for _ in source)
+        (root / f'answer.{name}.count').write_text(f'{count}\n')
+        query.update(answer=answer.name, count=count)
+        timings = {'engine': 'DuckDB', 'version': subprocess.check_output([CLI, '--version'], text=True).strip(),
+                   'sf': sf, 'query': sql, 'units': 'seconds', 'warmup_runs': 1, 'measured_runs': 5,
+                   'method': 'CLI .timer real wall time for full SELECT DISTINCT; 1 ms resolution; one process per thread count',
+                   'threads': {}}
+        for threads in (1, 24):
+            log = root / f'duckdb_timing.{name}_threads{threads}.log'
+            with log.open('w') as destination:
+                subprocess.run([CLI, '-batch', '-bail', '-csv', '-noheader', str(database)],
+                               input=f'SET threads={threads};\n.timer on\n' + (sql + ';\n') * 6,
+                               text=True, stdout=destination, stderr=subprocess.PIPE, check=True)
+            with log.open() as source:
+                samples = [float(match.group(1)) for line in source
+                           if (match := re.search(r'Run Time \(s\): real ([0-9.]+)', line))]
+            assert len(samples) == 6, (name, threads, samples)
+            timings['threads'][str(threads)] = {'warmup_seconds': samples[0], 'samples_seconds': samples[1:],
+                                              'median_seconds': statistics.median(samples[1:])}
+        timing_path = root / f'duckdb_timing.{name}.json'
+        timing_path.write_text(json.dumps(timings, indent=2) + '\n')
+        query['timing'] = timing_path.name
+        if name == 'retail_h05':
+            shutil.copyfile(answer, root / 'answer.tsv')
+            shutil.copyfile(root / f'answer.{name}.count', root / 'answer.count')
+            shutil.copyfile(timing_path, root / 'duckdb_timing.json')
+            for threads in (1, 24):
+                shutil.copyfile(root / f'duckdb_timing.{name}_threads{threads}.log',
+                                root / f'duckdb_timing_threads{threads}.log')
+        print(f"SF{sf} {name}: {count} answers; medians " +
+              str({t: v['median_seconds'] for t, v in timings['threads'].items()}), flush=True)
+    manifest['binary_bytes'] = sum(path.stat().st_size for path in root.glob('*.bin'))
     (root / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
-    # Required handoff evidence: full directory metadata, manifest, count, timings.
-    subprocess.run(['ls', '-la', str(root)], check=True)
-    print((root / 'manifest.json').read_text(), flush=True)
-    print(f'SF{sf} answer.count: {count}', flush=True)
-    print((root / 'duckdb_timing.json').read_text(), flush=True)
+    print(f'SF{sf} binary bytes: {manifest["binary_bytes"]}', flush=True)
 
 
 def main():

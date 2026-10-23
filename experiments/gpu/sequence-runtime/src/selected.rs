@@ -45,7 +45,7 @@ impl Drop for SelectedRows {
 /// or building a directory. RCCL flagged selection preserves source order.
 /// One selected-count readback establishes the returned logical length.
 pub fn select(pool: Arc<Pool>, selection: &RangeSelection) -> Result<SelectedRows> {
-    if !Arc::ptr_eq(selection.column.column().pool(), &pool) {
+    if !Arc::ptr_eq(selection.column.pool(), &pool) {
         return Err("selection column must share the execution pool".into());
     }
     let base_rows = selection.column.rows();

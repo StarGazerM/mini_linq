@@ -45,6 +45,7 @@ fn node(name: &str, collaborative: bool, dynamic: bool, children: Vec<LevelNode>
         name: syn::parse_str(name).unwrap(),
         collaborative,
         dynamic,
+        width: (name == "block").then_some(256),
         children,
     }
 }
@@ -52,6 +53,7 @@ fn node(name: &str, collaborative: bool, dynamic: bool, children: Vec<LevelNode>
 fn sequential() -> Machine {
     Machine {
         name: syn::parse_quote!(target),
+        items: 1,
         root: node("host", false, false, vec![]),
     }
 }
@@ -59,6 +61,7 @@ fn sequential() -> Machine {
 fn gpu() -> Machine {
     Machine {
         name: syn::parse_quote!(target),
+        items: 4,
         root: node(
             "host",
             false,
@@ -545,6 +548,7 @@ fn ungraded_programs_default_to_host_only() {
 fn leaf_flatten_is_sequential_but_parent_fold_needs_collaboration() {
     let tasks = Machine {
         name: syn::parse_quote!(target),
+        items: 1,
         root: node(
             "host",
             false,
@@ -755,6 +759,7 @@ fn device_store_publishes_collaborative_flatten() {
         ["host", "device", "block"]
     );
     assert_eq!(analysis.collectives[0].2, ["host", "device", "block"]);
+    assert_eq!(analysis.dispatches[0].parts, None);
 }
 
 #[test]
@@ -769,4 +774,54 @@ fn publication_distributes_once_and_inner_tiles_strip_mine() {
     assert_eq!(analysis.tilings["a"], [Tiling::Strip, Tiling::Strip]);
     grade(&mut p, quote!(a at device.block.lane;));
     reject_grade(&p, &gpu(), "BE-Scope");
+}
+
+#[test]
+fn publication_resolves_named_views_without_changing_tile_order() {
+    let mut p = program(quote! {
+        source = store rows r;
+        view = tile 1024 items 4 tile 256 source;
+        alias = view;
+        result = store alias;
+    });
+    grade(
+        &mut p,
+        quote! {
+            source at host;
+            view at device.block;
+            alias at device.block;
+            result at device;
+        },
+    );
+    let analysis = check_grading(&p, &gpu()).unwrap();
+    assert_eq!(
+        analysis.tilings["view"],
+        [Tiling::Strip, Tiling::Distribute]
+    );
+    assert_eq!(analysis.dispatches.len(), 1);
+    assert_eq!(analysis.dispatches[0].parts, Some(256));
+}
+
+#[test]
+fn publication_tile_resolution_stops_at_named_storage() {
+    let mut p = program(quote! {
+        source = store rows r;
+        first = store flatten tile 32 source;
+        view = tile 256 first;
+        result = store view;
+    });
+    grade(
+        &mut p,
+        quote! {
+            source at host;
+            first at device;
+            view at device.block;
+            result at device;
+        },
+    );
+    let analysis = check_grading(&p, &gpu()).unwrap();
+    assert_eq!(analysis.dispatches.len(), 2);
+    assert_eq!(analysis.dispatches[0].parts, Some(32));
+    assert_eq!(analysis.dispatches[1].parts, Some(256));
+    assert_eq!(analysis.tilings["view"], [Tiling::Distribute]);
 }

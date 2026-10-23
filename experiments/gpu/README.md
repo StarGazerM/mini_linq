@@ -26,7 +26,91 @@ cargo oxide build --arch sm_89 -- --release --workspace
 cargo oxide test --arch sm_89 -- --release --workspace
 ```
 
-TPCH datasets are `/data/tpch-gpu/sf1` and `/data/tpch-gpu/sf10`.
+### TPC-H data
+
+TPC-H datasets are `/data/tpch-gpu/sf1` and `/data/tpch-gpu/sf10` (ignored,
+never committed). Regenerate all authored CQ projections and reference answers
+from each directory's existing `dbgen.duckdb`, from the repository root:
+
+```sh
+python3 experiments/gpu/compare/export_tpch.py --root /data/tpch-gpu --sf 1 10
+```
+
+The exporter reads every `features/workloads/src/queries/retail/tpch/*.rs`
+relation declaration and its exact `sql r#"..."#` reference, including guards.
+These are positive CQ kernels, not the original aggregate TPC-H/TPC-DS queries.
+The required union of columns is:
+
+| Table | Exported columns |
+|---|---|
+| customer | c_custkey, c_nationkey, c_mktsegment |
+| orders | o_orderkey, o_custkey, o_orderdate, o_orderstatus |
+| lineitem | l_orderkey, l_partkey, l_suppkey, l_shipdate, l_quantity, l_receiptdate, l_commitdate |
+| supplier | s_suppkey, s_nationkey |
+| nation | n_nationkey, n_regionkey, n_name |
+| region | r_regionkey, r_name |
+| part | p_partkey, p_brand, p_type, p_name |
+| partsupp | ps_partkey, ps_suppkey, ps_availqty |
+
+`manifest.json` schema version 2 contains `sf`, `byte_order: "little"`,
+`binary_bytes`, `constants` (the original H05 date bounds and ASIA ID),
+`relations`, and `queries`. Each relation has `rows` and a `columns` array;
+each column has `name`, physical `type` (`i32`/`i64`), `logical_type`,
+`encoding`, and `file`. Binary files are headerless aligned columns in original
+database row order. Encodings:
+
+* `plain`: signed integer keys/quantities, with the declared Rust width.
+* `days_since_epoch`: signed i32 dates, `epoch: "1970-01-01"`, `unit: "day"`.
+* `dictionary`: i32 indices into the named UTF-8 `dictionary` (`*.dict.txt`),
+  one lexicographically sorted value per line, `dictionary_index_base: 0`;
+  `dictionary_entries` records cardinality. Dictionaries are per column.
+* `scaled_integer`: i64 decimal values with `scale: 2`; divide by 100 to decode.
+  Thus the D72 `l_quantity > 20.00` guard compares encoded values to 2000.
+
+Every `queries.<query>` entry records source path, exact SQL,
+`required_columns` grouped by table (the complete per-query input inventory),
+answer filename, distinct answer count, and timing filename. Answers are
+`answer.retail_<query>.tsv` plus `.count`, sorted by all output columns.
+`duckdb_timing.retail_<query>.json` retains the original timing schema:
+engine/version, SQL, seconds, one warmup and five measured full SELECT DISTINCT
+runs, and thread-keyed warmup/samples/median at 1 and 24 threads. Raw CLI logs
+are retained per query/thread count; timings include normal result emission,
+not a COUNT wrapper or the separate sorted answer export. H05 additionally
+retains `answer.tsv`, `answer.count`, and `duckdb_timing.json`.
+
+All pre-existing `.bin` files are SHA-256 checked before and after export;
+`binary_checksums.json` records both maps and requires equality, preserving
+the H05 binary inputs byte-for-byte. The manifest is published only after all
+columns, checksums, answers, and timings complete. Temporary projected TSVs
+are removed after conversion.
+
+The completed SF1/SF10 export has the following distinct counts and DuckDB
+median wall times in seconds (five samples after one warmup):
+
+| Query (`retail_` prefix) | SF1 count | SF1 1 thread | SF1 24 threads | SF10 count | SF10 1 thread | SF10 24 threads |
+|---|---:|---:|---:|---:|---:|---:|
+| d19 | 8,962 | 0.086 | 0.096 | 90,015 | 0.600 | 0.204 |
+| d27 | 357 | 0.078 | 0.023 | 3,575 | 0.806 | 0.079 |
+| d72_inner | 5,344 | 0.232 | 0.119 | 53,966 | 1.648 | 0.292 |
+| d85 | 8,962 | 0.058 | 0.035 | 90,015 | 0.655 | 0.191 |
+| h03 | 11,620 | 0.054 | 0.034 | 114,003 | 0.735 | 0.167 |
+| h05 | 7,242 | 0.062 | 0.024 | 72,983 | 0.681 | 0.172 |
+| h07 | 5,501 | 0.064 | 0.030 | 54,142 | 0.724 | 0.137 |
+| h07_block | 5,501 | 0.062 | 0.029 | 54,142 | 0.724 | 0.139 |
+| h08 | 2,603 | 0.069 | 0.018 | 24,254 | 0.918 | 0.116 |
+| h09 | 319,402 | 0.694 | 0.466 | 3,261,612 | 7.327 | 4.472 |
+| h21_positive | 302,284 | 0.514 | 0.418 | 2,930,274 | 5.438 | 3.942 |
+
+| Bytes (logical file sizes) | SF1 | SF10 |
+|---|---:|---:|
+| Binary columns | 325,773,800 | 3,256,586,628 |
+| String dictionaries | 6,753,882 | 67,493,549 |
+| Named query answer TSVs | 12,386,099 | 143,352,887 |
+| Entire directory, including database, logs, and H05 copies | 757,972,236 | 7,876,436,632 |
+
+All 13 pre-existing H05 `.bin` files at each scale passed before/after SHA-256
+equality. The manifest includes all 11 query inventories and all 8 tables.
+
 `h05-reference` remains the independent H05 reference implementation.
 The Sequence H05 example in `sequence/examples/h05.rs` is also available with
 `--features cq-gpu-sequence/cuda-oracle`.
@@ -70,9 +154,9 @@ Historical pre-cutover documentation is in
 
 ## Authored advice and rejection boundaries
 
-The resident H05 R and identity-chain callers author their Sequence programs
-directly, then apply checked output/grade rewrites. They do not infer grades
-from generated temporary names.
+The resident H05 A/B/R and identity-chain callers author their Sequence programs
+directly, then apply checked store/output/grade rewrites. They do not infer
+grades or provider choices from generated temporary names.
 
 | Former decision | Recorded Sequence decision |
 |---|---|
@@ -92,13 +176,74 @@ one-to-one Sequence advice mapping. They are not silently passed to the new
 terminal or asserted to be equivalent to count publication. No size-guarded
 alternative was authored for these callers, so none is invented with `choose`.
 
-H05 A/B retain explicit TODO rejection paths and independently selectable
-rejection fixtures (`h05-a-sequence-rejection`, `h05-b-sequence-rejection`).
-Their reduced Nation provider lacks a recorded resident range layout. The
-compiled triangle keeps its original `i64` relation and a
-`triangle-sequence-rejection` fixture; range payloads require recorded
-`u32`/`i32` dense codes. No narrowed schema, remapping, or alternate plan is
-substituted. These unavailable programs have no Sequence timing claim.
+H05 A/B explicitly publish the reduced Nation semijoin `r2` with an authored
+`R2 = store ...` graded at device (EXT-SeqStore), and a recorded
+`RangeProvider [nation]` Structures choice. The store is present before source
+contract checking; a later rewrite cannot establish scope for an earlier
+`lookup r2`. The provider is built only after that store is published; the
+translator neither chooses the representation nor substitutes R.
+
+Recorded range providers can consume published device row stores or canonical
+packed-key stores, not just base relations. Owning source descriptors project
+row-major fields with a stride and packed fields with their recorded
+base/shift/width; they retain the publication without an intermediate
+row-to-column copy or full unpack. Selection, key sorting, and payload gathering
+read those same views. Store publication must precede provider construction;
+no provider layout or new Sequence term is inferred.
+
+The compiled triangle keeps its original `i64` relation and now translates
+normally, with positive translation and executable tuple-comparison tests in
+place of the rejection fixture. Range payloads support `u32`, `i32`, and full
+signed `i64`, including values outside the 32-bit domain. Their fused gather
+and FOR packing preserves 64-bit extrema and decodes without narrowing.
+`triangle-compiled EDGES --check` uploads native i64 IDs, executes the authored
+Smallest/First plan, and compares actual GPU tuples with its CPU reference.
+It reports one discarded warmup and five measured resident calls, including
+per-call and median GPU build/kernel/dedup/total timings and query wall time.
+`--check` separately times the CPU tuple reference and checks every GPU call.
+Input loading/upload, answer download, and reference checks are excluded from
+the query samples.
+The recorded directory still requires dense nonnegative u32-range keys, and
+canonical output fields must fit one packed u64; no schema narrowing,
+ID remapping, or alternate plan is substituted.
+
+## Device-store and i64 acceptance
+
+On NVIDIA RTX 6000 Ada Generation (driver 580.178.04), the `sm_89` release
+workspace build and test commands pass, including 22 tests and all doc tests.
+The positive tests cover provider construction after device-store publication,
+i64 triangle translation/execution, signed 64-bit payload extrema, and strided
+and packed stored-column descriptors. `python3 doc/formal/check.py` reports
+228 synchronized rules; no new translation decision or rule was introduced.
+
+These H05 measurements use one discarded warmup and five measured resident
+calls. Every A/B/R call and the reference compare complete tuples against
+`answer.tsv`; all are exact. GPU time includes base provider construction,
+dispatches, device-store provider construction, and final canonicalization.
+The latter provider builds occur inside the reported kernel phase, after the
+base-build timing boundary. Upload and answer download are excluded.
+
+| Workload | Exact rows | Sequence GPU ms | Reference GPU ms | Sequence wall ms | Reference wall ms |
+|---|---:|---:|---:|---:|---:|
+| H05 A SF1 | 7,242 | 2.526368 | 1.922624 | 2.587867 | 1.931820 |
+| H05 B SF1 | 7,242 | 1.796928 | 1.922624 | 1.855975 | 1.931820 |
+| H05 R SF1 | 7,242 | 2.129568 | 1.922624 | 2.192349 | 1.931820 |
+| H05 A SF10 | 72,983 | 18.664608 | 9.899072 | 18.731918 | 9.909329 |
+| H05 B SF10 | 72,983 | 10.202752 | 9.899072 | 10.264289 | 9.909329 |
+| H05 R SF10 | 72,983 | 10.323200 | 9.899072 | 10.388337 | 9.909329 |
+
+`triangle-compiled /data/dataset/graph/com-dblp.ungraph.txt --check` retains
+1,049,866 distinct native-i64 edges and produces exactly 2,224,385 tuples,
+equal to its independent CPU reference on every call. One warmup is excluded
+from five GPU samples; the CPU reference is measured once.
+
+| Triangle workload | Build ms | Kernel ms | Dedup ms | GPU total ms | Query wall ms | CPU reference ms |
+|---|---:|---:|---:|---:|---:|---:|
+| DBLP, native i64 | 2.062880 | 3.302496 | 0.627648 | 6.020128 | 6.082209 | 244.443683 |
+
+The H05 samples are retained in
+`compare/gpu_sequence_device_stores.results.json` and
+`compare/gpu_sequence_device_stores.reference.sf{1,10}.json`.
 
 ## Cutover validation
 
@@ -125,14 +270,11 @@ resident projection for empty/sorted/unsorted/duplicate inputs and repeated
 head projection. These do not claim the old runtime certificate, multiword
 key, or resumable-provider coverage.
 
-All three rejection features were compiled independently and rejected by the
-translator, not merely by their runtime TODO wrappers:
-
-| Caller | Exact error |
-|---|---|
-| H05 A | `T-Gpu: r2 has no recorded resident range layout` |
-| H05 B | `T-Gpu: r2 has no recorded resident range layout` |
-| Signed-i64 compiled triangle | `T-Gpu: range payload needs a recorded u32/i32 dense code` |
+Historical cutover validation compiled the then-unsupported H05 A/B and
+signed-i64 triangle rejection fixtures independently. Those fixtures have now
+been removed in favor of positive device-store provider and i64 translation
+tests; the historical rejection results in the archived cutover summary are
+not current support boundaries.
 
 The **legacy** workspace also built independently. Its Datalog oracle passed
 eight scenarios, and its handwritten triangle oracle passed seven cases

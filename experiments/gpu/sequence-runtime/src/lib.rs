@@ -58,15 +58,25 @@ impl<'a> DenseDictionary<'a> {
 /// An owning source column and its known live row prefix.
 #[derive(Clone)]
 pub struct ColumnDescriptor {
-    column: Arc<EncodedColumn>,
+    owner: ColumnOwner,
     rows: usize,
+    bounds: Bounds,
+    source: gpu_device_columns::SourceView,
+}
+#[derive(Clone)]
+enum ColumnOwner {
+    Encoded(Arc<EncodedColumn>),
+    Rows(Arc<Buffer<i64>>),
+    Packed(Arc<Buffer<u64>>),
 }
 impl ColumnDescriptor {
     pub fn from_catalog(catalog: &Catalog, table: &str, column: &str) -> Result<Self> {
-        Ok(Self {
-            column: catalog.column(table, column)?.column.clone(),
-            rows: catalog.rows(table)?,
-        })
+        unsafe {
+            Self::new(
+                catalog.column(table, column)?.column.clone(),
+                catalog.rows(table)?,
+            )
+        }
     }
     /// Describe an explicit resident column without reading its device count.
     ///
@@ -77,16 +87,96 @@ impl ColumnDescriptor {
         if rows > column.capacity() {
             return Err("source rows exceed column capacity".into());
         }
-        Ok(Self { column, rows })
+        Ok(Self {
+            bounds: column.bounds(),
+            source: unsafe { column.view() }.into(),
+            owner: ColumnOwner::Encoded(column),
+            rows,
+        })
     }
-    pub fn column(&self) -> &Arc<EncodedColumn> {
-        &self.column
+    /// Project a field from resident row-major storage without copying.
+    ///
+    /// # Safety
+    /// The first `count` rows must be initialized on the buffer's pool stream,
+    /// remain immutable during the build, and have values enclosed by `bounds`.
+    pub unsafe fn from_rows(
+        rows: Arc<Buffer<i64>>,
+        count: usize,
+        width: usize,
+        slot: usize,
+        bounds: Bounds,
+    ) -> Result<Self> {
+        if slot >= width || count.checked_mul(width).is_none_or(|len| len > rows.len()) {
+            return Err("stored row projection exceeds its buffer".into());
+        }
+        let data = rows
+            .ptr()
+            .wrapping_add(if count == 0 { 0 } else { slot })
+            .cast();
+        let mut source = Self::native_source(data, count);
+        source.stride = width as u64;
+        Ok(Self {
+            owner: ColumnOwner::Rows(rows),
+            rows: count,
+            bounds,
+            source,
+        })
+    }
+    /// Project a recorded canonical-key field without unpacking its column.
+    ///
+    /// # Safety
+    /// The first `count` keys must be initialized on the buffer's pool stream
+    /// and immutable during the build. Decoded values must fit i64 and `bounds`.
+    pub unsafe fn from_packed(
+        keys: Arc<Buffer<u64>>,
+        count: usize,
+        field: canon::PackedField,
+        bounds: Bounds,
+    ) -> Result<Self> {
+        if count > keys.len() || field.shift > 64 || field.bits > 64 - field.shift {
+            return Err("packed source projection exceeds its buffer or key".into());
+        }
+        let mut source = Self::native_source(keys.ptr(), count);
+        source.packed = 1;
+        source.shift = field.shift;
+        source.mask = if field.bits == 64 {
+            u64::MAX
+        } else {
+            (1u64 << field.bits) - 1
+        };
+        source.base = field.base;
+        Ok(Self {
+            owner: ColumnOwner::Packed(keys),
+            rows: count,
+            bounds,
+            source,
+        })
+    }
+    fn native_source(data: *const u64, rows: usize) -> gpu_device_columns::SourceView {
+        ColumnView {
+            headers: std::ptr::null(),
+            data,
+            len: rows as u64,
+            count: std::ptr::null(),
+            codec: Codec::Plain as u32,
+        }
+        .into()
+    }
+    pub fn pool(&self) -> &Arc<Pool> {
+        match &self.owner {
+            ColumnOwner::Encoded(column) => column.pool(),
+            ColumnOwner::Rows(rows) => rows.pool(),
+            ColumnOwner::Packed(keys) => keys.pool(),
+        }
+    }
+    pub fn bounds(&self) -> Bounds {
+        self.bounds
     }
     pub fn rows(&self) -> usize {
         self.rows
     }
-    fn view(&self) -> ColumnView {
-        unsafe { self.column.view() }
+    fn view(&self) -> gpu_device_columns::SourceView {
+        self.source
     }
 }
 
@@ -107,6 +197,7 @@ pub struct RangeSelection {
 pub enum PayloadKind {
     U32,
     I32,
+    I64,
 }
 #[derive(Clone)]
 pub struct PayloadDescriptor {
@@ -415,7 +506,7 @@ impl<'pool> RangeBuilder<'pool> {
             return Err("range provider exceeds the u32 row/column domain".into());
         }
         let check_column = |column: &ColumnDescriptor| -> Result<()> {
-            if column.rows != base_rows || !Arc::ptr_eq(column.column.pool(), &self.pool) {
+            if column.rows != base_rows || !Arc::ptr_eq(column.pool(), &self.pool) {
                 return Err(
                     "range columns must have identical live row counts and share the builder pool"
                         .into(),
@@ -428,7 +519,7 @@ impl<'pool> RangeBuilder<'pool> {
             if key.domain_size >= u32::MAX as usize {
                 return Err("dense key domain must leave u32::MAX available as a sentinel".into());
             }
-            match key.column.column.bounds() {
+            match key.column.bounds() {
                 Bounds::Empty if base_rows == 0 => {}
                 Bounds::Inclusive { min, max }
                     if min >= 0 && max >= min && max < key.domain_size as i64 => {}
@@ -443,8 +534,9 @@ impl<'pool> RangeBuilder<'pool> {
             let (low, high) = match payload.kind {
                 PayloadKind::U32 => (0, u32::MAX as i64),
                 PayloadKind::I32 => (i32::MIN as i64, i32::MAX as i64),
+                PayloadKind::I64 => (i64::MIN, i64::MAX),
             };
-            match payload.column.column.bounds() {
+            match payload.column.bounds() {
                 Bounds::Empty if base_rows == 0 => {}
                 Bounds::Inclusive { min, max } if min >= low && min <= max && max <= high => {}
                 _ => return Err("payload bounds do not fit the declared lane type".into()),
@@ -691,10 +783,10 @@ unsafe fn pack_payload(
     rows: usize,
     count: Arc<Buffer<u64>>,
 ) -> Result<EncodedColumn> {
-    let bounds = payload.column.column.bounds();
+    let bounds = payload.column.bounds();
     match payload.kind {
         PayloadKind::U32 => unsafe {
-            EncodedColumn::from_gather::<_, u32>(
+            EncodedColumn::from_gather_source::<_, u32>(
                 pool.clone(),
                 payload.column.view(),
                 order,
@@ -705,7 +797,18 @@ unsafe fn pack_payload(
             )
         },
         PayloadKind::I32 => unsafe {
-            EncodedColumn::from_gather::<_, i32>(
+            EncodedColumn::from_gather_source::<_, i32>(
+                pool.clone(),
+                payload.column.view(),
+                order,
+                rows,
+                count,
+                0,
+                bounds,
+            )
+        },
+        PayloadKind::I64 => unsafe {
+            EncodedColumn::from_gather_source::<_, i64>(
                 pool.clone(),
                 payload.column.view(),
                 order,
