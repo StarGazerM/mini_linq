@@ -434,3 +434,61 @@ one-time input loading, were A 18.705631 ms authored / 19.290016 ms planned,
 B 10.190016 / 10.626240 ms, and R 10.347200 / 10.878368 ms. Planned B and R
 were respectively 4.28% and 5.13% above their authored references, within the
 10% acceptance bound.
+
+## [11] Lookup & Expand planning, evidence advice, swappable planners
+
+Sources: Birler, Kemper, Neumann, "Robust Join Processing with Diamond
+Hardened Joins" (VLDB 2024); Zhao et al., "Debunking the Myth of Join
+Ordering" (RPT, SIGMOD 2025); Qiao, Boncz, Zhang, "Robust Predicate
+Transfer with Dynamic Execution" (RPT+, VLDB 2026).
+
+Observation: Sequence terms already have L&E semantics. `lookup` yields
+the match range per row (L&E's iterator), `flatten` is Expand,
+`compact(lookup)` is a filtering Lookup, and a `store` of looked-up rows
+with a provider built over it is "a hash table that stores iterators"
+(L&E §3.2, Figure 4). The authored H05 plan R is L&E's two-phase plan;
+the generic path keeps written atom order and expands first (61 ms vs
+10 ms at SF10). No new primitive is needed, only ordering rewrites.
+
+Rewrites (checked by `check_rewrite`; laws Motion, BE-Offsets, BE-Scope):
+1. `lookup_first`: join graph from the Physical program; LargestRoot
+   maximum spanning tree (RPT Lemma 3.2: a join tree is exactly a maximum
+   spanning tree under shared-attribute weights; root = largest relation)
+   with RPT+'s chain tie-break for the forward phase (filter a relation
+   before building on it). Forward phase: for each predicate-bearing
+   relation (a constant or guard; RPT+ §3.6) and each bridge relation, a
+   `store compact(lookup …)` along the chain with a provider over the
+   store. Expand phase: `flatten`s in tree order, each placed at its first
+   consumer (L&E: Expands as late as possible). A Lookup that closes a
+   cycle is placed after the Expand it needs (L&E §4.2); TPC-H Q5 is
+   cyclic (RPT §5.1.3), so H05 takes this path.
+2. `choose` on the published count of a filtered store when no evidence
+   says the filter is selective (RPT+ §5 dynamic pipeline; our BE-Choose).
+3. PL-Cost prefers Lookup-before-Expand (shrinking before growing) at
+   equal work.
+
+Evidence advice: estimation is not part of the query. An `evidence { … }`
+advice block carries facts about data (row counts, keys, foreign keys,
+selectivities, bounds, sortedness), hand-written or generated (build.rs
+from a manifest, DuckDB statistics, a sampling pass). Recorded in the
+Analysis beside obligations. Law PL-Evidence: evidence selects among
+checked candidates and never changes meaning; a wrong fact costs time, not
+answers. Consumers: Lookup order and early Expand placement (L&E §4
+`earlyExpand`), the transfer-tree root (LargestRoot sizes), static
+filter-worthiness (RPT+ threshold) instead of `choose`.
+
+Swappable planner: `cq_sequence_plan::Planner` trait,
+`plan(program, machine, catalog, evidence) -> Planned { program, trace }`;
+the facade phase `plan = ::mini_linq::passes::plan` is the rule-based
+default above; `plan = ::other::dp_plan` swaps in a DP/Cascades search over
+Lookup orders written as an ordinary pass. Any planner is tested by the
+same replayable trace and the conformance harness.
+
+Not covered: Expand3 (worst-case optimal cyclic joins), eager aggregation
+(needs grouped fold), outer joins (not CQ).
+
+Acceptance: generic H05 ≤ authored R at SF10; the GPU TPC-H suite
+re-measured with the generic path; corpus conformance unchanged; formal
+subsection "Lookup and Expand" with the citations; a DP planner stub is
+not required, only the trait and one test that a custom planner pass
+plugs into the facade phase.
