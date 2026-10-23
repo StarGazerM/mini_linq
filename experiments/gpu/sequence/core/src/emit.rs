@@ -168,11 +168,13 @@ impl<'a> Compiler<'a> {
                         condition: quote!(true),
                     }]);
                 }
-                self.fold(
+                let mut chains = self.fold(
                     self.definitions
                         .get(&name)
                         .ok_or_else(|| error("Sequence reference lacks definition"))?,
-                )
+                )?;
+                self.rehead(&name, &mut chains);
+                Ok(chains)
             }
             Term::Union(arms) => {
                 let mut chains = Vec::new();
@@ -199,11 +201,22 @@ impl<'a> Compiler<'a> {
                 // Compact's checked Physical operator consumes existence, even
                 // when the same provider also supplies payloads to another read.
                 // The provider-wide capability is not this constructor's meaning.
-                let Term::Lookup { provider, keys, inner } = inner.as_ref() else {
+                let Term::Lookup {
+                    provider,
+                    keys,
+                    inner,
+                } = inner.as_ref()
+                else {
                     unreachable!()
                 };
                 let result = symbol_name(name);
-                let definition = self.program.structures.physical.program.definitions.iter()
+                let definition = self
+                    .program
+                    .structures
+                    .physical
+                    .program
+                    .definitions
+                    .iter()
                     .find(|definition| symbol_name(&definition.name) == result)
                     .ok_or_else(|| error("compact lacks checked Physical row provenance"))?;
                 let negated = matches!(definition.operator, Operator::Anti(_, _));
@@ -221,6 +234,7 @@ impl<'a> Compiler<'a> {
                 }
                 Ok(chains)
             }
+            Term::Group(_, _) => Err(error("T-Gpu: group is not translated")),
             Term::Map(name, inner) | Term::Compact(name, inner) => {
                 let mut chains = self.fold(inner)?;
                 for chain in &mut chains {
@@ -310,6 +324,17 @@ impl<'a> Compiler<'a> {
                     chain.operations.push(operation.clone());
                 }
                 Ok(chains)
+            }
+        }
+    }
+
+    /// All device carriers use the same attribute-indexed slots. The checker
+    /// may give equivalent choice arms one named result; interpreting that
+    /// provenance changes no slots and must not re-evaluate its Physical union.
+    fn rehead(&self, name: &str, chains: &mut [Chain]) {
+        if let Some(result) = self.analysis.results.get(name) {
+            for chain in chains {
+                chain.result.clone_from(result);
             }
         }
     }
@@ -669,10 +694,16 @@ impl Kernel<'_, '_> {
                 membership,
                 negated,
             } => {
-                let lookup = row.rewrite(self.compiler.lookup(provider, keys, *membership && !*negated)?)?;
+                let lookup = row.rewrite(self.compiler.lookup(
+                    provider,
+                    keys,
+                    *membership && !*negated,
+                )?)?;
                 if *membership {
                     let rest = self.scalar_operations(rest, row)?;
-                    return Ok(quote!(#lookup __live = __live && ((__begin < __end) != #negated); #rest));
+                    return Ok(
+                        quote!(#lookup __live = __live && ((__begin < __end) != #negated); #rest),
+                    );
                 }
                 if self.virtual_range.as_deref() == Some(provider)
                     && rest
@@ -1088,13 +1119,17 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
         let publication = symbol_name(&definition.name);
         let dispatch = analysis.dispatches.iter().find(|dispatch| {
             dispatch.inner_stores.iter().rev().find(|name| {
-                compiler.definitions.get(*name)
+                compiler
+                    .definitions
+                    .get(*name)
                     .is_some_and(|term| matches!(term, Term::Store { .. }))
             }) == Some(&publication)
         });
         let index = compiler.stored.len();
         let Some(dispatch) = dispatch else {
-            if analysis.levels.get(&publication)
+            if analysis
+                .levels
+                .get(&publication)
                 .is_some_and(|level| level.last().is_some_and(|level| level == "host"))
                 && matches!(definition.term, Term::Store { .. })
                 && let Some((arms, canonical)) = host_union(&definition.term, &compiler.definitions)
@@ -1114,10 +1149,14 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                         if !chain.operations.is_empty() {
                             return Err(error("host union operands must be published stores"));
                         }
-                        let prior = chain.stored.ok_or_else(|| error("host union operand has not published"))?;
+                        let prior = chain
+                            .stored
+                            .ok_or_else(|| error("host union operand has not published"))?;
                         let source = &compiler.stored[prior];
                         if source.range.is_some() {
-                            return Err(error("host union operand requires a materialized row publication"));
+                            return Err(error(
+                                "host union operand requires a materialized row publication",
+                            ));
                         }
                         let length = format_ident!("__cq_store_length_{prior}");
                         lengths.push(quote!(#length));
@@ -1126,7 +1165,9 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                             let owner = format_ident!("__cq_canonical_{prior}");
                             let fields = format_ident!("__cq_fields_{prior}");
                             let arm_index = copies.len();
-                            let kernel = format_ident!("__cq_union_decode_{index}_{arm_index}_{module_name}");
+                            let kernel = format_ident!(
+                                "__cq_union_decode_{index}_{arm_index}_{module_name}"
+                            );
                             let prepare = format_ident!("prepare_{kernel}");
                             let mut params = Vec::new();
                             let mut args = Vec::new();
@@ -1136,8 +1177,16 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                                 let base = format_ident!("base_{field}");
                                 let shift = format_ident!("shift_{field}");
                                 let bits = format_ident!("bits_{field}");
-                                params.extend([quote!(#base:i64), quote!(#shift:u32), quote!(#bits:u32)]);
-                                args.extend([quote!(#fields[#field].base), quote!(#fields[#field].shift), quote!(#fields[#field].bits)]);
+                                params.extend([
+                                    quote!(#base:i64),
+                                    quote!(#shift:u32),
+                                    quote!(#bits:u32),
+                                ]);
+                                args.extend([
+                                    quote!(#fields[#field].base),
+                                    quote!(#fields[#field].shift),
+                                    quote!(#fields[#field].bits),
+                                ]);
                                 writes.push(quote! {
                                     let value = if #bits == 0 {0} else {((key >> #shift) as u64) & if #bits == 64 {u64::MAX} else {(1u64 << #bits)-1}};
                                     *rows.add(position * #width + #slot) = #base.wrapping_add(value as i64);
@@ -1217,8 +1266,8 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                             __cq_key_bits = __cq_key_bits.checked_add(bits).ok_or("packed Sequence key width overflow")?;
                             __cq_fields.push(::cq_gpu_sequence_runtime::canon::PackedField {base:#base,shift:#shift,bits});
                         });
-                        params.extend([quote!(#base:i64),quote!(#shift:u32)]);
-                        args.extend([quote!(#base),quote!(#shift)]);
+                        params.extend([quote!(#base:i64), quote!(#shift:u32)]);
+                        args.extend([quote!(#base), quote!(#shift)]);
                         parts.push(quote!(if #shift == 128 {0} else {((*rows.add(position * #width + #slot)).wrapping_sub(#base) as u64 as u128) << #shift}));
                     }
                     let kernel = format_ident!("__cq_union_pack_{index}_{module_name}");
@@ -1275,8 +1324,14 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                     }
                 }
                 if !final_output {
-                    launches.push(compiler.rows.publish_provider(analysis,program,result,&publication,index,
-                        canonical.then_some(packed_columns.as_slice()))?);
+                    launches.push(compiler.rows.publish_provider(
+                        analysis,
+                        program,
+                        result,
+                        &publication,
+                        index,
+                        canonical.then_some(packed_columns.as_slice()),
+                    )?);
                 }
                 compiler.stored.push(Stored {
                     name: publication,
@@ -1314,10 +1369,11 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
             ));
         }
         let final_output = publication == final_name;
-        let chains = compiler.fold(inner)?;
+        let mut chains = compiler.fold(inner)?;
         if chains.is_empty() {
             return Err(error("GPU dispatch has no source"));
         }
+        compiler.rehead(&publication, &mut chains);
         let canonical = chains.iter().all(|chain| {
             chain
                 .operations
@@ -1397,13 +1453,22 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
         // A host union copies published rows, not the deferred lookup-range
         // representation used by a subsequent device consumer.
         let host_union_operand = program.sequence.definitions.iter().any(|definition| {
-            analysis.levels.get(&symbol_name(&definition.name))
+            analysis
+                .levels
+                .get(&symbol_name(&definition.name))
                 .is_some_and(|level| level.last().is_some_and(|level| level == "host"))
                 && host_union(&definition.term, &compiler.definitions).is_some_and(|(arms, _)| {
-                    arms.iter().any(|arm| matches!(arm, Term::Ref(name) if symbol_name(name) == publication))
+                    arms.iter().any(
+                        |arm| matches!(arm, Term::Ref(name) if symbol_name(name) == publication),
+                    )
                 })
         });
-        let virtual_range = if !final_output && !canonical && !provider_store && !host_union_operand && chains.len() == 1 {
+        let virtual_range = if !final_output
+            && !canonical
+            && !provider_store
+            && !host_union_operand
+            && chains.len() == 1
+        {
             let ops = &chains[0].operations;
             let last = ops.iter().rposition(|op| {
                 matches!(

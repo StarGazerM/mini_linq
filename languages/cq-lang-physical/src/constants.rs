@@ -16,6 +16,7 @@ pub(super) fn disjoint(program: &Program) -> BTreeSet<String> {
             Operator::Guard(guard) => LiteralStep::Input(&guard.input),
             Operator::Bind(bind) => LiteralStep::Bind(bind),
             Operator::Project(project) => LiteralStep::Project(project),
+            Operator::Group(_) => LiteralStep::Empty,
             Operator::Union(union) => LiteralStep::Union(&union.operands, union.origin.as_ref()),
         };
         (&definition.name, step)

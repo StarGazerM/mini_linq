@@ -168,7 +168,7 @@ fn compile_in(source: &valuation::Program, relational_hoisting: bool) -> syn::Re
     };
     state.scope_predicates();
     state.run_steps(&source.valuation.steps);
-    let output = state.finish(&source.cq.query.head);
+    let output = state.finish(&source.cq.query);
     let target = ra::Program {
         relational_token: Default::default(),
         relational_brace: Default::default(),
@@ -1102,8 +1102,9 @@ impl<'a> State<'a> {
 
     /// Retain the normalized head variables and name the output.
     /// Formal rule C-Finish: Project the head variables after the complete chain.
-    fn finish(&mut self, head: &cq::Atom) -> ra::Output {
-        let retained: BTreeSet<String> = head.variables().map(symbol_name).collect();
+    fn finish(&mut self, query: &valuation::cq::Query) -> ra::Output {
+        let head = &query.head;
+        let retained: BTreeSet<String> = query.valuation_variables().map(symbol_name).collect();
         let mut bindings = BTreeMap::new();
         for definition in &self.definitions {
             match &definition.operator {
@@ -1124,7 +1125,10 @@ impl<'a> State<'a> {
         }
         let attributes = retained.iter().map(|v| bindings[v].clone()).collect();
         let input = self.prefix_or_unit();
-        let result = self.project(input, attributes);
+        let mut result = self.project(input, attributes);
+        if let Some(group) = &query.group {
+            result = self.emit(ra::Operator::Group(Box::new(group.operator(result))));
+        }
         ra::Output {
             output_token: Default::default(),
             input: result,
@@ -1225,7 +1229,11 @@ fn aliases(source: &valuation::cq::Program) -> BTreeMap<String, Ident> {
         .flat_map(|atom| atom.variables().map(symbol_name))
         .filter(|v| !let_bound.contains(v))
         .collect();
-    let mut protected: BTreeSet<_> = source.query.head.variables().map(symbol_name).collect();
+    let mut protected: BTreeSet<_> = source
+        .query
+        .valuation_variables()
+        .map(symbol_name)
+        .collect();
     for item in &source.query.body {
         let expression = match item {
             BodyItem::Negation(negation) => {

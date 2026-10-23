@@ -1,15 +1,23 @@
 use cq_lang_sequence::{Program, Term};
 use proc_macro2::TokenStream;
 
-use crate::{Tile, checked, definition};
+use crate::{Tile, checked_in, definition};
 
 /// Partition a producer chain at its input storage boundary. The paired
 /// flatten keeps its row shape unchanged, including across named pipe terms.
 /// An existing tile is authored advice and is not replaced.
 pub fn partition(source: &Program, arguments: TokenStream) -> syn::Result<Program> {
+    partition_in(&mut Default::default(), source, arguments)
+}
+
+pub fn partition_in(
+    checker: &mut cq_lang_sequence::contract::Checker,
+    source: &Program,
+    arguments: TokenStream,
+) -> syn::Result<Program> {
     let Tile { name, n, items } = syn::parse2(arguments)?;
     let index = definition(source, &name)?;
-    cq_lang_sequence::contract::check(source)?;
+    checker.check(source)?;
     positive(&name, n, items)?;
     let Some((index, depth)) = boundary(
         source,
@@ -32,13 +40,21 @@ pub fn partition(source: &Program, arguments: TokenStream) -> syn::Result<Progra
         items,
         inner: Box::new(inner),
     }));
-    checked(source, target)
+    checked_in(checker, source, target)
 }
 
 /// Materialize and partition a named flatten level, preserving its row shape.
 /// This records the offsets boundary explicitly rather than hiding it in the
 /// target emitter. Existing stores and tiles are never overwritten.
 pub fn segment(source: &Program, arguments: TokenStream) -> syn::Result<Program> {
+    segment_in(&mut Default::default(), source, arguments)
+}
+
+pub fn segment_in(
+    checker: &mut cq_lang_sequence::contract::Checker,
+    source: &Program,
+    arguments: TokenStream,
+) -> syn::Result<Program> {
     let Tile { name, n, items } = syn::parse2(arguments)?;
     let index = definition(source, &name)?;
     positive(&name, n, items)?;
@@ -59,7 +75,7 @@ pub fn segment(source: &Program, arguments: TokenStream) -> syn::Result<Program>
             inner: Box::new(inner),
         }),
     }));
-    checked(source, target)
+    checked_in(checker, source, target)
 }
 
 fn positive(name: &syn::Ident, n: usize, items: Option<usize>) -> syn::Result<()> {
@@ -97,6 +113,7 @@ fn boundary(
         | Term::Flatten(inner)
         | Term::Lookup { inner, .. }
         | Term::Fold(_, inner)
+        | Term::Group(_, inner)
         | Term::Canon(inner)
         | Term::Store { inner, .. } => boundary(program, index, depth + 1, inner, false),
         Term::Choose(_) | Term::Union(_) => Ok(None),
@@ -110,6 +127,7 @@ fn child_mut(term: &mut Term) -> Option<&mut Term> {
         | Term::Flatten(inner)
         | Term::Lookup { inner, .. }
         | Term::Fold(_, inner)
+        | Term::Group(_, inner)
         | Term::Canon(inner)
         | Term::Tile { inner, .. }
         | Term::Store { inner, .. } => Some(inner),

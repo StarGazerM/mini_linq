@@ -11,7 +11,7 @@ use syn::parse::{Parse, ParseStream};
 use syn::{Ident, LitInt, Token};
 
 mod decomposition;
-pub use decomposition::{partition, segment};
+pub use decomposition::{partition, partition_in, segment, segment_in};
 
 mod selection;
 use selection::Results;
@@ -19,13 +19,32 @@ use selection::Results;
 mod catalog;
 pub use catalog::select_from_catalog;
 
+mod evidence;
+pub use evidence::{evidence, record_evidence, record_evidence_in};
+
+mod adaptive;
+pub use adaptive::{
+    AdaptiveCandidate, adaptive, adaptive_candidates, adaptive_candidates_in, adaptive_choose,
+    adaptive_filter, apply_adaptive, apply_adaptive_in, select_filter,
+};
+
+mod lookup_first;
+pub use lookup_first::{
+    LookupFirst, LookupPlan, lookup_first, lookup_first_advice, lookup_first_advice_in,
+    lookup_first_in, lookup_plan,
+};
+
 mod kw {
     syn::custom_keyword!(items);
     syn::custom_keyword!(at);
 }
 
-fn checked(source: &Program, target: Program) -> syn::Result<Program> {
-    cq_lang_sequence::check_rewrite(source, &target)?;
+fn checked_in(
+    checker: &mut cq_lang_sequence::contract::Checker,
+    source: &Program,
+    target: Program,
+) -> syn::Result<Program> {
+    checker.check_rewrite_in(source, &target)?;
     Ok(target)
 }
 
@@ -43,6 +62,14 @@ fn definition(program: &Program, name: &Ident) -> syn::Result<usize> {
 /// target-specific placement remains the caller's separate grading obligation.
 // Materialization preserves the producer's support (EXT-SeqStore).
 pub fn store(source: &Program, arguments: TokenStream) -> syn::Result<Program> {
+    store_in(&mut Default::default(), source, arguments)
+}
+
+pub fn store_in(
+    checker: &mut cq_lang_sequence::contract::Checker,
+    source: &Program,
+    arguments: TokenStream,
+) -> syn::Result<Program> {
     let name: Ident = syn::parse2(arguments)?;
     let index = definition(source, &name)?;
     let mut target = source.clone();
@@ -53,13 +80,21 @@ pub fn store(source: &Program, arguments: TokenStream) -> syn::Result<Program> {
             inner: Box::new(term.clone()),
         };
     }
-    checked(source, target)
+    checked_in(checker, source, target)
 }
 
 /// Materialize selected flatten definitions. Empty advice or `all` selects all
 /// flatten definitions; named selections must all exist and be flatten terms.
 // Formal rule EXT-SeqStore: Materialize flatten levels or factor named publication producers with unchanged support.
 pub fn store_level(source: &Program, arguments: TokenStream) -> syn::Result<Program> {
+    store_level_in(&mut Default::default(), source, arguments)
+}
+
+pub fn store_level_in(
+    checker: &mut cq_lang_sequence::contract::Checker,
+    source: &Program,
+    arguments: TokenStream,
+) -> syn::Result<Program> {
     let selection = Results::parse(arguments)?;
     let mut target = source.clone();
     let mut matched = BTreeSet::new();
@@ -73,12 +108,21 @@ pub fn store_level(source: &Program, arguments: TokenStream) -> syn::Result<Prog
         }
     }
     selection.require_matches(&matched)?;
-    checked(source, target)
+    checked_in(checker, source, target)
 }
 
 /// Name a store's producer so its execution grade can differ from publication.
 /// Factoring a definition and inserting a store preserve support (EXT-SeqStore).
 pub fn publish(source: &Program, name: &Ident, producer: &Ident) -> syn::Result<Program> {
+    publish_in(&mut Default::default(), source, name, producer)
+}
+
+pub fn publish_in(
+    checker: &mut cq_lang_sequence::contract::Checker,
+    source: &Program,
+    name: &Ident,
+    producer: &Ident,
+) -> syn::Result<Program> {
     let index = definition(source, name)?;
     if source
         .sequence
@@ -110,7 +154,7 @@ pub fn publish(source: &Program, name: &Ident, producer: &Ident) -> syn::Result<
             term: inner,
         },
     );
-    checked(source, target)
+    checked_in(checker, source, target)
 }
 
 struct Tile {
@@ -139,10 +183,18 @@ impl Parse for Tile {
 /// Unknown-length stores require a capacity before they can be tiled.
 // Formal rule EXT-SeqTile: Positive contiguous tiles preserve the covered support.
 pub fn tile(source: &Program, arguments: TokenStream) -> syn::Result<Program> {
+    tile_in(&mut Default::default(), source, arguments)
+}
+
+pub fn tile_in(
+    checker: &mut cq_lang_sequence::contract::Checker,
+    source: &Program,
+    arguments: TokenStream,
+) -> syn::Result<Program> {
     let Tile { name, n, items } = syn::parse2(arguments)?;
     let index = definition(source, &name)?;
     let mut target = source.clone();
-    let analysis = cq_lang_sequence::contract::check(source)?;
+    let analysis = checker.check(source)?;
     if matches!(
         source.sequence.definitions[index].term,
         Term::Store { capacity: None, .. }
@@ -159,7 +211,7 @@ pub fn tile(source: &Program, arguments: TokenStream) -> syn::Result<Program> {
         items,
         inner: Box::new(term.clone()),
     };
-    checked(source, target)
+    checked_in(checker, source, target)
 }
 
 struct Choose {
@@ -196,6 +248,14 @@ impl Parse for Choose {
 /// definitions must denote the same Structures result, not just its heading.
 // Formal rule EXT-SeqChoose: Exhaustive size guards select equal-support constructions.
 pub fn choose(source: &Program, arguments: TokenStream) -> syn::Result<Program> {
+    choose_in(&mut Default::default(), source, arguments)
+}
+
+pub fn choose_in(
+    checker: &mut cq_lang_sequence::contract::Checker,
+    source: &Program,
+    arguments: TokenStream,
+) -> syn::Result<Program> {
     let Choose {
         name,
         guard,
@@ -206,17 +266,25 @@ pub fn choose(source: &Program, arguments: TokenStream) -> syn::Result<Program> 
     let mut target = source.clone();
     target.sequence.definitions[index].term =
         Term::Choose(vec![(guard, Term::Ref(yes)), (Guard::Else, Term::Ref(no))]);
-    checked(source, target)
+    checked_in(checker, source, target)
 }
 
 /// Set `count`, `reserve` or `bounded` on the final store. Bounded output
 /// requires the store's declared capacity; this pass never invents one.
 // Formal rule EXT-SeqOutput: Output protocols change storage interpretation, not support.
 pub fn output(source: &Program, arguments: TokenStream) -> syn::Result<Program> {
+    output_in(&mut Default::default(), source, arguments)
+}
+
+pub fn output_in(
+    checker: &mut cq_lang_sequence::contract::Checker,
+    source: &Program,
+    arguments: TokenStream,
+) -> syn::Result<Program> {
     let protocol: OutputProtocol = syn::parse2(arguments)?;
     let mut target = source.clone();
     target.sequence.output = Some(protocol);
-    checked(source, target)
+    checked_in(checker, source, target)
 }
 
 struct Grades {
@@ -252,6 +320,14 @@ impl Parse for Grades {
 /// grade phase; unknown definitions, duplicate advice and machine changes fail.
 // Formal rule EXT-SeqGrade: Record machine placements without changing the Sequence construction.
 pub fn grade(source: &Program, arguments: TokenStream) -> syn::Result<Program> {
+    grade_in(&mut Default::default(), source, arguments)
+}
+
+pub fn grade_in(
+    checker: &mut cq_lang_sequence::contract::Checker,
+    source: &Program,
+    arguments: TokenStream,
+) -> syn::Result<Program> {
     let Grades { machine, grades } = syn::parse2(arguments)?;
     for grade in &grades {
         definition(source, &grade.name)?;
@@ -278,5 +354,5 @@ pub fn grade(source: &Program, arguments: TokenStream) -> syn::Result<Program> {
             graded.grades.push(grade);
         }
     }
-    checked(source, target)
+    checked_in(checker, source, target)
 }

@@ -36,6 +36,7 @@ pub struct Relation {
 }
 
 pub struct Kernel {
+    pub plan_advice: TokenStream,
     pub setup: syn::Block,
     pub relations: Vec<Relation>,
     pub answer: Vec<(Ident, syn::Type)>,
@@ -59,10 +60,22 @@ impl Parse for Kernel {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         input.parse::<Token![$]>()?;
         input.parse::<Token![;]>()?;
+        let mut plan_advice = TokenStream::new();
         let setup = loop {
             let key: Ident = input.parse()?;
             if key == "setup" {
                 break input.parse()?;
+            }
+            if key == "advise" {
+                let phase: Ident = input.parse()?;
+                if phase != "plan" {
+                    return Err(syn::Error::new_spanned(phase, "expected plan advice"));
+                }
+                let arguments;
+                syn::parenthesized!(arguments in input);
+                plan_advice = arguments.parse()?;
+                input.parse::<Token![;]>()?;
+                continue;
             }
             while !input.peek(Token![;]) {
                 input.parse::<TokenTree>()?;
@@ -103,6 +116,7 @@ impl Parse for Kernel {
         input.parse::<Token![:]>()?;
         input.parse::<Token![-]>()?;
         Ok(Self {
+            plan_advice,
             setup,
             relations,
             answer,
@@ -146,14 +160,35 @@ impl Kernel {
         quote!(struct Query; #(#declarations)* answer(#(#outputs),*) :- #body)
     }
 
+    #[cfg(test)]
     /// Storage adaptation only: types and constants, not order/providers/plans.
     pub fn encoded_query(&self, manifest: &Manifest) -> Result<TokenStream> {
+        self.encoded_query_with_types(manifest, &BTreeMap::new())
+    }
+
+    /// A loader profile may replace stored scalar types; predicates and atom
+    /// order remain the imported source. Dictionary literals use that column's
+    /// manifest dictionary, never an assumed global ID.
+    pub fn encoded_query_with_types(
+        &self,
+        manifest: &Manifest,
+        storage: &BTreeMap<(String, String), syn::Type>,
+    ) -> Result<TokenStream> {
+        let mut relations = self.relations.clone();
+        for relation in &mut relations {
+            for (column, ty) in &mut relation.columns {
+                if let Some(stored) = storage.get(&(relation.table.to_string(), column.to_string()))
+                {
+                    *ty = stored.clone();
+                }
+            }
+        }
         let constants = setup_constants(&self.setup)?;
         let mut variables = BTreeMap::new();
-        collect_variables(self.body.clone(), &self.relations, &mut variables)?;
+        collect_variables(self.body.clone(), &relations, &mut variables)?;
         let body = encode_tokens(
             self.body.clone(),
-            &self.relations,
+            &relations,
             manifest,
             &constants,
             &variables,
@@ -175,7 +210,11 @@ impl Kernel {
                     )
                     .into());
                 }
-                let ty: syn::Type = if declared == "String" {
+                let ty: syn::Type = if let Some(stored) =
+                    storage.get(&(relation.table.to_string(), column.to_string()))
+                {
+                    stored.clone()
+                } else if declared == "String" {
                     logical.clone()
                 } else {
                     syn::parse_str(&metadata.ty)?
@@ -186,6 +225,16 @@ impl Kernel {
         }
         let outputs = self.answer.iter().map(|(name, _)| name);
         Ok(quote!(struct Query; #declarations answer(#(#outputs),*) :- #body))
+    }
+
+    pub fn answer_columns(&self) -> Result<Vec<Option<(String, String)>>> {
+        let mut variables = BTreeMap::new();
+        collect_variables(self.body.clone(), &self.relations, &mut variables)?;
+        Ok(self
+            .answer
+            .iter()
+            .map(|(name, _)| variables.get(&name.to_string()).cloned())
+            .collect())
     }
 }
 
@@ -362,6 +411,19 @@ fn encode_tokens(
 mod tests {
     use super::*;
     #[test]
+    fn imported_plan_hints_are_not_discarded() {
+        let source = SOURCES
+            .iter()
+            .find(|(name, _)| *name == "d72_inner")
+            .unwrap()
+            .1;
+        let kernel = Kernel::import(source).unwrap();
+        assert_eq!(
+            kernel.plan_advice.to_string(),
+            quote!(skip(Lineitem with PartSupp), reduce(PartSupp with Lineitem)).to_string()
+        );
+    }
+    #[test]
     fn every_cpu_query_is_imported_without_a_second_body() {
         assert_eq!(SOURCES.len(), 11);
         for (name, source) in SOURCES {
@@ -378,31 +440,107 @@ mod encoding_tests {
     use super::*;
 
     #[test]
+    fn domain_profile_adapts_the_imported_h05_without_reordering_it() {
+        let source = SOURCES.iter().find(|(name, _)| *name == "h05").unwrap().1;
+        let kernel = Kernel::import(source).unwrap();
+        let schema = gpu_compress::tpch::schema();
+        let mut storage = BTreeMap::new();
+        for (table, columns) in schema.tables {
+            for (column, kind) in columns {
+                storage.insert(
+                    (table.clone(), column),
+                    match kind {
+                        gpu_compress::Kind::Id(_) => syn::parse_quote!(u32),
+                        gpu_compress::Kind::I32 => syn::parse_quote!(i32),
+                    },
+                );
+            }
+        }
+        for sf in [1, 10] {
+            let manifest = Manifest::load(&crate::data_root().join(format!("sf{sf}"))).unwrap();
+            let program: cq_lang_cq::Program = syn::parse2(
+                kernel
+                    .encoded_query_with_types(&manifest, &storage)
+                    .unwrap(),
+            )
+            .unwrap();
+            let atoms: Vec<_> = program
+                .query
+                .body
+                .iter()
+                .filter_map(|item| {
+                    if let cq_lang_cq::BodyItem::Positive { atom } = item {
+                        Some(atom.relation.to_string())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            assert_eq!(
+                atoms,
+                [
+                    "Lineitem", "Orders", "Customer", "Nation", "Region", "Supplier"
+                ]
+            );
+            assert!(
+                program
+                    .declarations
+                    .iter()
+                    .flat_map(|relation| &relation.columns)
+                    .all(|column| matches!(
+                        column.ty.to_token_stream().to_string().as_str(),
+                        "u32" | "i32"
+                    ))
+            );
+            assert!(!program.to_token_stream().to_string().contains("\"ASIA\""));
+        }
+    }
+    #[test]
     fn synthetic_manifest_loads_declared_strings_and_preserves_codes() {
         use crate::manifest::HostValue;
-        use std::{fs, time::{SystemTime, UNIX_EPOCH}};
+        use std::{
+            fs,
+            time::{SystemTime, UNIX_EPOCH},
+        };
         let root = std::env::temp_dir().join(format!(
-            "cq-tpch-loader-{}-{}", std::process::id(),
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+            "cq-tpch-loader-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         fs::create_dir(&root).unwrap();
         struct Fixture(std::path::PathBuf);
         impl Drop for Fixture {
-            fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); }
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
         }
         let _fixture = Fixture(root.clone());
-        fs::write(root.join("name.bin"), [1_i32, 0, 1].into_iter()
-            .flat_map(i32::to_le_bytes).collect::<Vec<_>>()).unwrap();
+        fs::write(
+            root.join("name.bin"),
+            [1_i32, 0, 1]
+                .into_iter()
+                .flat_map(i32::to_le_bytes)
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
         fs::write(root.join("name.dict.txt"), "red\ngreen part\n").unwrap();
-        fs::write(root.join("manifest.json"), serde_json::to_vec(&serde_json::json!({
-            "schema_version": 2, "sf": 1, "byte_order": "little",
-            "relations": {"part": {"rows": 3, "columns": [{
-                "name": "p_name", "type": "i32", "logical_type": "String",
-                "encoding": "dictionary", "file": "name.bin",
-                "dictionary": "name.dict.txt", "dictionary_index_base": 0,
-                "dictionary_entries": 2
-            }]}}
-        })).unwrap()).unwrap();
+        fs::write(
+            root.join("manifest.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 2, "sf": 1, "byte_order": "little",
+                "relations": {"part": {"rows": 3, "columns": [{
+                    "name": "p_name", "type": "i32", "logical_type": "String",
+                    "encoding": "dictionary", "file": "name.bin",
+                    "dictionary": "name.dict.txt", "dictionary_index_base": 0,
+                    "dictionary_entries": 2
+                }]}}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
         let manifest = Manifest::load(&root).unwrap();
         let strings = String::read(&manifest, "part", "p_name").unwrap();
         assert_eq!(strings, ["green part", "red", "green part"]);
@@ -412,19 +550,30 @@ mod encoding_tests {
             let kernel: Kernel = syn::parse_str(&format!(
                 "$; setup {{}} relations {{ relation Part => part(p_name: {ty}); }}
                  answer(name: {ty}) :- Part(name), if name == \"green part\";"
-            )).unwrap();
+            ))
+            .unwrap();
             let encoded = kernel.encoded_query(&manifest).unwrap().to_string();
             assert!(encoded.contains(&format!("p_name : {ty}")), "{encoded}");
-            assert!(encoded.contains(&format!("name == {expected}")), "{encoded}");
+            assert!(
+                encoded.contains(&format!("name == {expected}")),
+                "{encoded}"
+            );
             let literal: Kernel = syn::parse_str(&format!(
                 "$; setup {{}} relations {{ relation Part => part(p_name: {ty}); }}
                  answer() :- Part(\"green part\");"
-            )).unwrap();
+            ))
+            .unwrap();
             let encoded = literal.encoded_query(&manifest).unwrap().to_string();
             assert!(encoded.contains(&format!("Part ({expected})")), "{encoded}");
         }
-        fs::write(root.join("name.bin"), [2_i32, 0, 1].into_iter()
-            .flat_map(i32::to_le_bytes).collect::<Vec<_>>()).unwrap();
+        fs::write(
+            root.join("name.bin"),
+            [2_i32, 0, 1]
+                .into_iter()
+                .flat_map(i32::to_le_bytes)
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
         assert!(String::read(&manifest, "part", "p_name").is_err());
         assert!(i32::read(&manifest, "part", "p_name").is_err());
     }

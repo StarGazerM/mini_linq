@@ -25,7 +25,11 @@ pub(super) fn check_expanded(source: &Schedule, target: &Program) -> bool {
     }) || target.plan.definitions.iter().any(|definition| {
         matches!(
             definition.operator,
-            Operator::Bind(_) | Operator::Guard(_) | Operator::Anti(_) | Operator::Union(_)
+            Operator::Bind(_)
+                | Operator::Guard(_)
+                | Operator::Anti(_)
+                | Operator::Union(_)
+                | Operator::Group(_)
         )
     }) {
         return false;
@@ -87,8 +91,8 @@ fn check_absorption(source: &Program, target: &Program, schedule: &Schedule) -> 
         if matches!(node.kind, Kind::Anti(_)) {
             negative[node.operands[1]] = true;
         }
-        opaque[index] =
-            matches!(node.kind, Kind::Rust(_)) || dependencies(node).any(|input| opaque[input]);
+        opaque[index] = matches!(node.kind, Kind::Rust(_) | Kind::Group(_))
+            || dependencies(node).any(|input| opaque[input]);
     }
     for (index, node) in schedule.nodes.iter().enumerate().rev() {
         if negative[index] {
@@ -162,7 +166,11 @@ fn check_dead_expansion(source: &Program, target: &Program, schedule: &Schedule)
         || source.plan.definitions.iter().any(|definition| {
             matches!(
                 definition.operator,
-                Operator::Bind(_) | Operator::Guard(_) | Operator::Anti(_) | Operator::Union(_)
+                Operator::Bind(_)
+                    | Operator::Guard(_)
+                    | Operator::Anti(_)
+                    | Operator::Union(_)
+                    | Operator::Group(_)
             )
         })
     {
@@ -280,6 +288,10 @@ fn source_demand(source: &Program, schedule: &Schedule) -> Vec<HashSet<String>> 
     for (index, definition) in source.plan.definitions.iter().enumerate().rev() {
         let node = &schedule.nodes[index];
         match &definition.operator {
+            Operator::Group(_) => {
+                let input = node.operands[0];
+                demand[input].extend(schedule.nodes[input].heading.keys().cloned());
+            }
             Operator::Project(project) => {
                 demand[index].extend(project.attributes.iter().map(symbol_name));
             }
@@ -353,6 +365,7 @@ fn apply_rewrite(program: &mut Program, index: usize, rewrite: Rewrite) {
                         replace(&mut join.right);
                     }
                     Operator::Project(project) => replace(&mut project.input),
+                    Operator::Group(group) => replace(&mut group.input),
                     Operator::Select(select) => replace(&mut select.input),
                     _ => {}
                 }
@@ -397,6 +410,9 @@ fn prune_unreachable(program: &mut Program, retained: &HashSet<String>) {
             }
             Operator::Project(project) => {
                 live.insert(symbol_name(&project.input));
+            }
+            Operator::Group(group) => {
+                live.insert(symbol_name(&group.input));
             }
             Operator::Select(select) => {
                 live.insert(symbol_name(&select.input));

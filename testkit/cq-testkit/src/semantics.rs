@@ -136,8 +136,8 @@ pub fn evaluate_plan<'a>(
                     .retain(|row| evaluate_predicate(&guard.condition, row));
                 input
             }
-            ra::Operator::Bind(_) => {
-                panic!("Rust computations are tested by compiled end-to-end tests")
+            ra::Operator::Bind(_) | ra::Operator::Group(_) => {
+                panic!("typed Rust computations and grouped folds use compiled conformance targets")
             }
             ra::Operator::Project(project) => definitions[&symbol_name(&project.input)]
                 .project(project.attributes.iter().map(symbol_name).collect()),

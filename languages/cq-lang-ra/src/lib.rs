@@ -55,10 +55,13 @@
 //! `scope[names] @c.j.k` records a Rust step's lexical inputs and source path.
 //! Prefix Rust reached through a positive semijoin remains outside the arm;
 //! no such context reduction may modify a negated original branch.
+//! Group consumes a set of complete named valuations projected by the frontend,
+//! retaining equal aggregate arguments from distinct rows. Its output heading is
+//! the keys plus fresh typed fold results; empty global input produces identities.
 //!
 pub use cq_syntax::algebra::{
-    Anti, AttributeRename, Bind, BlockOrigin, Correlation, Domain, Environment, Guard,
-    OccurrenceConstants, Project, Rename, Select, Theta, Union, Unit,
+    AggregateBinding, AggregateKind, Anti, AttributeRename, Bind, BlockOrigin, Correlation, Domain,
+    Environment, Group, Guard, OccurrenceConstants, Project, Rename, Select, Theta, Union, Unit,
 };
 pub use cq_syntax::{Equality, EqualityValue};
 
@@ -124,10 +127,12 @@ pub struct Definition {
 /// One logical set operator.
 ///
 /// ```text
-/// Operator ::= Unit | Rename | NaturalJoin | Project | Semijoin | Select | Bind | Guard
+/// Operator ::= Unit | Rename | NaturalJoin | Project | Semijoin | Select | Bind | Guard | Group
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub enum Operator {
+    #[parse(peek = kw::group)]
+    Group(Box<Group>),
     #[parse(peek = kw::union)]
     Union(Box<Union>),
     #[parse(peek = kw::anti)]
@@ -226,7 +231,7 @@ pub struct RelationInfo {
     pub bindings: BTreeMap<String, Ident>,
     pub heading: Heading,
     pub types: BTreeMap<String, syn::Type>,
-    /// Columns introduced by Bind. This records provenance, not the ownership
+    /// Columns introduced by Bind or Group. This records provenance, not the ownership
     /// mode chosen by a realization when subsequent expressions read the column.
     pub computed: BTreeSet<String>,
     operands: Vec<String>,
@@ -248,6 +253,11 @@ fn check_in<'a>(
         .definitions
         .iter()
         .flat_map(|d| match &d.operator {
+            Operator::Group(group) => group
+                .aggregates
+                .iter()
+                .map(|a| symbol_name(&a.name))
+                .collect(),
             Operator::Rename(r) => r.mapping.iter().map(|m| symbol_name(&m.target)).collect(),
             Operator::Bind(e) => cq_syntax::rust::bindings(&e.pattern)
                 .iter()
@@ -284,6 +294,18 @@ fn check_in<'a>(
         // rules for AggregateApply as
         // tests/hw4_optional.rs in the root course package requires.
         let (heading, operands) = match &definition.operator {
+            // Formal rule RA-Group: Fold the same set of complete named valuations for every aggregate.
+            Operator::Group(group) => {
+                let (name, input) = earlier_relation(&group.input, &relations)?;
+                group.check(&input.types)?;
+                let heading = group
+                    .keys
+                    .iter()
+                    .chain(group.aggregates.iter().map(|aggregate| &aggregate.name))
+                    .map(symbol_name)
+                    .collect();
+                (heading, vec![name])
+            }
             Operator::Union(union) => {
                 if union.operands.len() < 2 {
                     return Err(syn::Error::new_spanned(
@@ -541,6 +563,12 @@ fn check_in<'a>(
                 computed.insert(symbol_name(&name));
             }
         }
+        if let Operator::Group(group) = &definition.operator {
+            for aggregate in &group.aggregates {
+                types.insert(symbol_name(&aggregate.name), aggregate.ty.clone());
+                computed.insert(symbol_name(&aggregate.name));
+            }
+        }
         let mut bindings = BTreeMap::new();
         for operand in operands.iter().rev() {
             for (name, id) in &relations[operand].bindings {
@@ -550,6 +578,11 @@ fn check_in<'a>(
             }
         }
         match &definition.operator {
+            Operator::Group(group) => {
+                for aggregate in &group.aggregates {
+                    bindings.insert(symbol_name(&aggregate.name), aggregate.name.clone());
+                }
+            }
             Operator::Rename(r) => {
                 for m in &r.mapping {
                     bindings.insert(symbol_name(&m.target), m.target.clone());

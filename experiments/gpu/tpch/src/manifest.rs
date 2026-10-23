@@ -52,7 +52,9 @@ impl HostValue for i64 {
 
 impl HostValue for i32 {
     fn read(manifest: &Manifest, table: &str, column: &str) -> Result<Vec<Self>> {
-        manifest.read_column(table, column)?.into_iter()
+        manifest
+            .read_column(table, column)?
+            .into_iter()
             .map(|value| i32::try_from(value).map_err(Into::into))
             .collect()
     }
@@ -61,10 +63,15 @@ impl HostValue for i32 {
 impl HostValue for String {
     fn read(manifest: &Manifest, table: &str, column: &str) -> Result<Vec<Self>> {
         let dictionary = manifest.dictionary(manifest.column(table, column)?)?;
-        manifest.read_stored_column(table, column)?.into_iter()
+        manifest
+            .read_stored_column(table, column)?
+            .into_iter()
             .map(|code| {
-                usize::try_from(code).ok().and_then(|index| dictionary.get(index))
-                    .cloned().ok_or_else(|| format!("{table}.{column}: out-of-range dictionary code").into())
+                usize::try_from(code)
+                    .ok()
+                    .and_then(|index| dictionary.get(index))
+                    .cloned()
+                    .ok_or_else(|| format!("{table}.{column}: out-of-range dictionary code").into())
             })
             .collect()
     }

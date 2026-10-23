@@ -3,6 +3,73 @@ use cq_lang_physical as physical;
 use cq_physical_lowering::{check, compile, erase};
 use cq_testkit::{cases, corpus as scenarios, rewrites as authored, semantics as oracle, values};
 #[test]
+fn group_survives_ix_erasure_and_canonicalizes_all_input_valuations() {
+    let (source, target) = lower(
+        "relational {
+            relation R(k:i32,id:i32,v:i32);
+            relation answer(k:i32,n:usize,total:i32,lo:Option<i32>,hi:Option<i32>);
+            r = rename R@0 {k -> k,id -> id,v -> v};
+            valuations = project r keep {k,id,v};
+            grouped = group valuations by [k] {
+                n:usize = count(); total:i32 = sum(v);
+                lo:Option<i32> = min(v); hi:Option<i32> = max(v);
+            };
+            output grouped as answer(k,n,total,lo,hi);
+        } indexes {}",
+    );
+    assert_eq!(erase(&target), source.ra);
+    let indexed = cq_index_policy::compile(&source.ra).unwrap();
+    assert_eq!(indexed, source);
+    let structures = cq_structure_selection::compile(&target).unwrap();
+    let selected = cq_lang_structures::contract::check(&structures).unwrap();
+    assert_eq!(selected.unique["grouped"], ["k"]);
+    assert_eq!(selected.unique["valuations"], ["id", "k", "v"]);
+    assert!(target.program.definitions[1].canon.is_some());
+    assert!(target.program.definitions[2].canon.is_none());
+    assert!(matches!(
+        target.program.definitions[2].operator,
+        physical::Operator::Group(_)
+    ));
+    let facts = physical::contract::check(&target).unwrap();
+    assert_eq!(facts.headings["valuations"], ["id", "k", "v"]);
+    assert_eq!(facts.headings["grouped"], ["hi", "k", "lo", "n", "total"]);
+    assert_eq!(facts.rows["grouped"].types["n"], syn::parse_quote!(usize));
+    assert_eq!(
+        facts.rows["grouped"].types["lo"],
+        syn::parse_quote!(Option<i32>)
+    );
+    let mut broken = target;
+    broken.program.definitions[1].canon = None;
+    assert!(check(&source, &broken).is_err());
+}
+
+#[test]
+fn global_group_preserves_empty_key_and_inherited_input_uniqueness() {
+    let source: ix::Program = syn::parse_quote! {
+        relational {
+            relation R(v:i32); relation answer(n:usize);
+            r = rename R@0 {v -> v};
+            grouped = group r by [] { n:usize = count(); };
+            output grouped as answer(n);
+        } indexes {}
+    };
+    let target =
+        cq_physical_lowering::compile_with(&source, quote::quote!(host_set R discharged)).unwrap();
+    assert!(
+        target
+            .program
+            .definitions
+            .iter()
+            .all(|definition| definition.canon.is_none())
+    );
+    assert_eq!(erase(&target), source.ra);
+    let physical::Operator::Group(group) = &target.program.definitions[1].operator else {
+        panic!("group was not propagated");
+    };
+    assert!(group.keys.is_empty());
+}
+
+#[test]
 fn literal_occurrences_lower_to_retained_sources_without_select_or_guard() {
     let (source, target) = lower(
         "relational { relation R(a:i32,b:i32);

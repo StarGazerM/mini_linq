@@ -21,6 +21,51 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   extension is deleted, goldens byte-identical.
 - Reconcile the GPU TPC-H planner with earned guard position independence:
   host String filtering no longer relies on the removed totality assertion.
+- Author H09's Part predicate immediately after its Part atom, before joins:
+  the opaque guard's written domain is the predicate-bearing leaf. This fixes
+  the query's intended host filtering boundary without restoring `#[total]`
+  or permitting compiler motion of arbitrary Rust guards.
+  Checked guard-result carriers drop dead columns only after predicate evaluation,
+  allowing numeric Part keys to be published without carrying String data.
+- Add nonsemantic Sequence evidence advice for row counts, keys, foreign keys,
+  selectivities, bounds and sortedness. Evidence is parsed and recorded beside
+  analysis obligations; false facts cannot discharge a correctness premise.
+- Expose `cq_sequence_plan::Planner` and a checked `RuleBased` implementation.
+  Complete Sequence input supports a swappable named `plan = path` facade
+  phase; existing CQ-input `plan` remains its join-order phase. Planner advice
+  has one round-trippable token format for generated and author-supplied traces.
+- Add checked `lookup_first` advice: shared-attribute maximum spanning trees,
+  LargestRoot count evidence, ATP chain ties, forward predicate/bridge stores,
+  and deferred Expand placement with cycle-closing keys available first.
+  Join/semijoin reexpression is independently proved under support; it cannot
+  weaken opaque Rust Before domains.
+  Support proofs deduplicate identical atoms and search the most constrained
+  atom first, rejecting incompatible keys before enumerating unrelated matches.
+  A planner-owned contract checker reuses interned support graphs and exact
+  query-pair proofs across checked replay and grading. Canonical renaming,
+  candidate-domain pruning, and live-binding memoization avoid redundant search;
+  exhausted bounded searches reject equivalence rather than hanging.
+  Automatic: opt-in pending box 11b. Facade Sequence `plan` defaults to
+  order-preserving decomposition; `plan(lookup_first)` explicitly enables
+  automatic ordering. All 13 sequence conformance crates use decomposition.
+  GPU suite builds include automatic entries only with
+  `CQ_GPU_TPCH_AUTOMATIC=1`; the default build is advised only.
+  GPU release build dependencies use optimization level 3 because the shared
+  compression catalog brings CUDA kernels into build-script dependencies.
+- Add adaptive transfer advice over published filtered-store counts. Generated
+  alternatives retain their exact joins; static evidence only selects which
+  checked alternative runs.
+  The opt-in rule-based planner replays Lookup-first, freezes and composes every adaptive
+  entry, then decomposes without discarding the ordering trace. Pure streaming
+  prefixes are cloned for independent alternatives; publications and Rust
+  boundaries remain shared and pinned.
+- Pass the advised generic H05 SF10 performance gate: five-run median
+  10.208480 ms versus authored R 10.308352 ms, with exact answers. Authored
+  order and execution advice are serialized in the suite's replay artifact.
+  Suite build reports now record per-query, scale, and mode generation seconds
+  alongside checked compilation outcomes.
+- Refine equal-work PL-Cost ordering to prefer Lookup before Expand, before
+  dependency span and the existing store/dispatch tie-breaks.
 - Make guard motion a relational-language property: remove `#[total]`,
   `Filter.total`, `Constraint::Total`, and the Rust method/type-name allowlist.
   Unrecognized Rust guards remain pinned to their written Rust chain and

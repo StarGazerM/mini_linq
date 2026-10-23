@@ -210,15 +210,15 @@ fn explain_case(case: &QueryCase, through: Stage, repository_root: &Path) -> Res
         cq_sequence_lowering::compile(&staged)
     })?;
     let machine = cq_lang_sequence::Machine {
-     name: syn::parse_quote!(sequential),
-     items: 1,
-     root: cq_lang_sequence::LevelNode {
-      name: syn::parse_quote!(host),
-      collaborative: false,
-      dynamic: false,
-      width: None,
-      children: vec![],
-     },
+        name: syn::parse_quote!(sequential),
+        items: 1,
+        root: cq_lang_sequence::LevelNode {
+            name: syn::parse_quote!(host),
+            collaborative: false,
+            dynamic: false,
+            width: None,
+            children: vec![],
+        },
     };
     let analysis = artifacts.attempt("Sequence host grading", || {
         cq_lang_sequence::check_grading(&sequence, &machine)
@@ -489,6 +489,7 @@ fn format_relational_block(plan: &ra::Plan) -> String {
 
 fn format_relational_operator(operator: &ra::Operator) -> String {
     match operator {
+        ra::Operator::Group(operator) => compact_tokens(operator),
         ra::Operator::Union(operator) => compact_tokens(operator),
         ra::Operator::Anti(operator) => compact_tokens(operator),
         ra::Operator::Unit(_) => "unit".to_owned(),

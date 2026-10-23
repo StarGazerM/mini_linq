@@ -72,6 +72,13 @@ pub fn compile_with(
     fuse_modes(&operations, &operators, &reads, &mut modes);
     let disjoint = ix::ra::disjoint_unions(&source.ra)?;
     let unique = canonical(&info, &operations, &returned, &disjoint, &packet.host_sets);
+    let group_inputs: BTreeSet<_> = operations
+        .iter()
+        .filter_map(|(_, op)| match op {
+            Op::Group(group) => Some(symbol_name(&group.input)),
+            _ => None,
+        })
+        .collect();
     let definitions = operations
         .iter()
         .zip(modes)
@@ -86,7 +93,8 @@ pub fn compile_with(
             } else {
                 mode
             },
-            canon: ((name == &returned && (!consumer_canonical || reads[&symbol_name(name)].count > 1) && !unique.contains(&symbol_name(name)) && !disjoint.contains(&symbol_name(name)))
+            canon: ((group_inputs.contains(&symbol_name(name)) && !unique.contains(&symbol_name(name)))
+                || (name == &returned && (!consumer_canonical || reads[&symbol_name(name)].count > 1) && !unique.contains(&symbol_name(name)) && !disjoint.contains(&symbol_name(name)))
                 || matches!(_op, Op::Union(union) if !disjoint.contains(&symbol_name(name)) && union.origin.as_ref().is_none_or(|o| !o.interface.is_empty())))
                 .then(Default::default),
             operator,
@@ -219,6 +227,10 @@ fn operators(
             Op::Project(p) => {
                 scan(&mut reads, &p.input);
                 physical::Operator::Project(p.clone())
+            }
+            Op::Group(group) => {
+                scan(&mut reads, &group.input);
+                physical::Operator::Group(group.clone())
             }
         };
         operators.push(operator);
@@ -361,6 +373,7 @@ fn canonical(
                 .get(&symbol_name(&p.input))
                 .filter(|key| key.iter().all(|c| heading.contains(c)))
                 .cloned(),
+            Op::Group(group) => Some(group.keys.iter().map(symbol_name).collect()),
         };
         if let Some(key) = key {
             inherited.insert(name.clone());
@@ -422,6 +435,7 @@ pub fn erase(target: &physical::Program) -> ix::ra::Program {
                         physical::Operator::Bind(b) => Op::Bind(b.clone()),
                         physical::Operator::Guard(g) => Op::Guard(g.clone()),
                         physical::Operator::Project(p) => Op::Project(p.clone()),
+                        physical::Operator::Group(group) => Op::Group(group.clone()),
                         physical::Operator::Probe(_, k) | physical::Operator::Merge(_, k) => {
                             Op::NaturalJoin(Box::new(ra::NaturalJoin {
                                 natural_join_token: Default::default(),

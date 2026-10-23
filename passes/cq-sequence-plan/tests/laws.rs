@@ -1,8 +1,9 @@
 use cq_lang_sequence::{
-    Analysis, CanonToken, Capability, Catalog, CodecToken, LevelNode, Machine, OutputProtocol,
-    Program, ProviderToken, check_grading, check_rewrite,
+    Analysis, CanonToken, Capability, Catalog, CodecToken, Guard, Len, LevelNode, Machine,
+    OutputProtocol, Program, ProviderToken, Term, check_grading, check_rewrite,
 };
-use cq_sequence_plan::{Advice, Planned, plan};
+use cq_sequence_plan::{Advice, Planned, decompose, plan};
+use cq_sequence_rewrite_passes::{adaptive_candidates, lookup_first_advice};
 use proc_macro2::TokenStream;
 use quote::quote;
 
@@ -144,6 +145,48 @@ fn join() -> Program {
     }
 }
 
+fn filtered_multi_join() -> Program {
+    let structures = syn::parse_quote! {
+        physical {
+            relation L(a:i32); relation R(a:i32,rtag:i32); relation S(a:i32,stag:i32);
+            l = pipe rename L@0 {a -> a};
+            r = pipe rename R@1 {a -> a,rtag -> rtag};
+            s = pipe rename S@2 {a -> a,stag -> stag};
+            rf = let point select r if (rtag = 7);
+            sf = let point select s if (stag = 9);
+            jr = pipe probe first [a] l,rf;
+            joined = pipe probe first [a] jr,sf;
+            result = pipe canon project joined keep {a};
+            return result as answer(a);
+        }
+        structures {
+            l host scan = Reader []; r host scan = Reader []; s host scan = Reader [];
+            r host rf = Reader [rtag]; s host sf = Reader [stag];
+            rf = Index [a]; sf = Index [a]; result canon = Canonical;
+        }
+    };
+    cq_sequence_lowering::compile(&structures).unwrap()
+}
+
+fn reorderable_multi_join() -> Program {
+    let structures = syn::parse_quote! {
+        physical {
+            relation L(a:i32); relation R(a:i32); relation S(a:i32);
+            l = pipe rename L@0 {a -> a};
+            r = let rename R@1 {a -> a};
+            s = let rename S@2 {a -> a};
+            jr = pipe probe first [a] l,r;
+            result = pipe canon probe first [a] jr,s;
+            return result as answer(a);
+        }
+        structures {
+            l host scan = Reader []; r host scan = Reader []; s host scan = Reader [];
+            r = Index [a]; s = Index [a]; result canon = Canonical;
+        }
+    };
+    cq_sequence_lowering::compile(&structures).unwrap()
+}
+
 fn replay(source: &Program, machine: &Machine, planned: &Planned) -> Analysis {
     let mut current = source.clone();
     for (index, advice) in planned.trace.iter().enumerate() {
@@ -160,6 +203,197 @@ fn replay(source: &Program, machine: &Machine, planned: &Planned) -> Analysis {
     );
     check_rewrite(source, &current).expect("the complete trace preserves the source");
     check_grading(&current, machine).expect("the final replay must satisfy machine grading")
+}
+
+#[test]
+fn plan_replays_lookup_then_every_frozen_adaptive_candidate_then_decomposition() {
+    let source = filtered_multi_join();
+    let before = source.clone();
+    assert!(adaptive_candidates(&source).unwrap().is_empty());
+    let mut common_prefix = None;
+    for machine in machines() {
+        let available = catalog(&machine);
+        let lookup = Advice::LookupFirst(Box::new(
+            lookup_first_advice(&source, &available).unwrap().unwrap(),
+        ));
+        let mut prepared = lookup.apply(&source).unwrap();
+        check_rewrite(&source, &prepared).unwrap();
+        let frozen = adaptive_candidates(&prepared).unwrap();
+        assert_eq!(
+            frozen.len(),
+            2,
+            "both selected providers need adaptive advice"
+        );
+        assert_eq!(
+            frozen
+                .iter()
+                .map(|candidate| candidate.published.to_string())
+                .collect::<Vec<_>>(),
+            ["__lookup_forward", "sf"]
+        );
+        let mut prefix = vec![lookup];
+        for candidate in &frozen {
+            assert_eq!(
+                candidate.select, None,
+                "this fixture needs real runtime branches"
+            );
+            let advice = Advice::Adaptive(candidate.clone());
+            let next = advice.apply(&prepared).unwrap();
+            check_rewrite(&prepared, &next).unwrap();
+            prepared = next;
+            prefix.push(advice);
+            // Re-enumerating after the first rewrite loses the second candidate.
+            assert!(adaptive_candidates(&prepared).unwrap().is_empty());
+        }
+        let guards: std::collections::BTreeSet<_> = prepared
+            .sequence
+            .definitions
+            .iter()
+            .filter_map(|definition| {
+                let Term::Choose(arms) = &definition.term else {
+                    return None;
+                };
+                let Guard::Lt(Len::Input(name), _) = &arms[0].0 else {
+                    return None;
+                };
+                Some(name.as_str())
+            })
+            .collect();
+        assert_eq!(
+            guards,
+            std::collections::BTreeSet::from(["__lookup_forward", "sf"])
+        );
+        if let Some(previous) = &common_prefix {
+            assert_eq!(
+                &prefix, previous,
+                "relational advice is machine independent"
+            );
+        } else {
+            common_prefix = Some(prefix.clone());
+        }
+
+        let decomposed = decompose(&prepared, &machine, &available).unwrap();
+        assert!(
+            !decomposed.trace.is_empty(),
+            "decomposition must follow preparation"
+        );
+        assert!(
+            !decomposed
+                .trace
+                .iter()
+                .any(|advice| { matches!(advice, Advice::LookupFirst(_) | Advice::Adaptive(_)) })
+        );
+        let mut expected_trace = prefix.clone();
+        expected_trace.extend(decomposed.trace);
+        let planned = plan(&source, &machine, &available).unwrap();
+        assert_eq!(&planned.trace[..prefix.len()], prefix.as_slice());
+        assert_eq!(planned.trace, expected_trace);
+        assert_eq!(planned.program, decomposed.program);
+        replay(&source, &machine, &planned);
+        assert_eq!(plan(&source, &machine, &available).unwrap(), planned);
+        assert_eq!(
+            source, before,
+            "planning leaves the lowered source untouched"
+        );
+    }
+}
+
+#[test]
+fn plan_uses_count_evidence_to_freeze_a_different_lookup_root() {
+    let source = reorderable_multi_join();
+    let mut estimated = source.clone();
+    estimated.evidence = syn::parse_quote!(evidence {
+        count L = 1; count R = 10; count S = 900;
+    });
+    for machine in machines() {
+        let available = catalog(&machine);
+        let ordinary = plan(&source, &machine, &available).unwrap();
+        let advised = plan(&estimated, &machine, &available).unwrap();
+        for (planned, expected_order) in [(&ordinary, ["l", "r", "s"]), (&advised, ["s", "r", "l"])]
+        {
+            let Some(Advice::LookupFirst(lookup)) = planned.trace.first() else {
+                panic!("plain lowered joins must start with frozen LookupFirst advice")
+            };
+            assert_eq!(
+                lookup
+                    .order
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>(),
+                expected_order
+            );
+        }
+        assert_ne!(
+            ordinary.program.structures.physical,
+            advised.program.structures.physical
+        );
+        assert_eq!(advised.program.evidence, estimated.evidence);
+        replay(&source, &machine, &ordinary);
+        replay(&estimated, &machine, &advised);
+        assert_eq!(plan(&estimated, &machine, &available).unwrap(), advised);
+    }
+}
+
+#[test]
+fn authored_sequence_and_decompose_preserve_join_order_and_skip_adaptive_preparation() {
+    let source = filtered_multi_join();
+    let authored = Advice::Store(syn::parse_quote!(jr)).apply(&source).unwrap();
+    for machine in machines() {
+        let available = catalog(&machine);
+        assert!(
+            lookup_first_advice(&authored, &available)
+                .unwrap()
+                .is_none()
+        );
+        let planned = plan(&authored, &machine, &available).unwrap();
+        assert_eq!(planned, decompose(&authored, &machine, &available).unwrap());
+        assert_eq!(
+            planned.program.structures.physical,
+            authored.structures.physical
+        );
+        assert!(matches!(
+            planned
+                .program
+                .sequence
+                .definitions
+                .iter()
+                .find(|definition| definition.name == "jr")
+                .unwrap()
+                .term,
+            Term::Store { .. }
+        ));
+        assert!(
+            !planned
+                .trace
+                .iter()
+                .any(|advice| { matches!(advice, Advice::LookupFirst(_) | Advice::Adaptive(_)) })
+        );
+        replay(&authored, &machine, &planned);
+
+        // decompose is also the explicit authored-order entry for plain lowering
+        // and for a caller that supplied its own LookupFirst phase.
+        let reordered = Advice::LookupFirst(Box::new(
+            lookup_first_advice(&source, &available).unwrap().unwrap(),
+        ))
+        .apply(&source)
+        .unwrap();
+        assert_eq!(adaptive_candidates(&reordered).unwrap().len(), 2);
+        for ordered in [&source, &reordered] {
+            let decomposed = decompose(ordered, &machine, &available).unwrap();
+            assert_eq!(
+                decomposed.program.structures.physical,
+                ordered.structures.physical
+            );
+            assert!(
+                !decomposed.trace.iter().any(|advice| {
+                    matches!(advice, Advice::LookupFirst(_) | Advice::Adaptive(_))
+                })
+            );
+            replay(ordered, &machine, &decomposed);
+        }
+    }
 }
 
 #[test]
@@ -575,7 +809,7 @@ fn host_string_filter_uploads_projected_index_before_device_lookups() {
     let facts = cq_lang_sequence::structures::contract::check(&structures).unwrap();
     assert_eq!(facts.layouts["selected"], ["a"]);
     let source = cq_sequence_lowering::compile(&structures).unwrap();
-    let planned = plan(&source, &machine, &available).unwrap();
+    let planned = decompose(&source, &machine, &available).unwrap();
     let analysis = replay(&source, &machine, &planned);
     assert_eq!(analysis.levels["__sequence_host_selected"], ["host"]);
     assert_eq!(analysis.levels["selected"], ["host", "device"]);

@@ -3,6 +3,53 @@ use cq_rewrite_passes::retype;
 use cq_testkit::PassCase;
 use quote::{ToTokens, quote};
 
+#[test]
+fn membership_advice_preserves_a_fully_bound_physical_probe() {
+    let source: ir::Program = syn::parse_quote! { physical {
+        relation L(a:u32,b:u32); relation R(a:u32,b:u32);
+        l = pipe rename L@0 {a -> x,b -> y};
+        r = let rename R@1 {a -> x,b -> y};
+        joined = pipe canon probe first [x,y] l,r;
+        return joined as answer(x,y);
+    } structures {
+        l host scan = ::core::iter::Map<_,_> [];
+        r host scan = ::core::iter::Map<_,_> [];
+        r = ::cq_storage::HashIndex<'_,_,_> [x,y];
+        joined canon = ::cq_storage::HashSet<_>;
+    }};
+    let target = cq_rewrite_passes::membership(&source, quote!(r)).unwrap();
+    assert_eq!(target.physical, source.physical);
+    ir::check_rewrite(&source, &target).unwrap();
+    assert!(
+        ir::contract::check(&target)
+            .unwrap()
+            .membership
+            .contains(&("r".into(), vec!["x".into(), "y".into()]))
+    );
+    assert_eq!(
+        cq_rewrite_passes::membership(&target, quote!(r)).unwrap(),
+        target
+    );
+    assert!(cq_rewrite_passes::membership(&source, quote!(missing)).is_err());
+}
+
+#[test]
+fn membership_advice_cannot_discard_a_demanded_payload() {
+    let source: ir::Program = syn::parse_quote! { physical {
+        relation L(a:u32); relation R(a:u32,b:u32);
+        l = pipe rename L@0 {a -> x};
+        r = let rename R@1 {a -> x,b -> y};
+        joined = pipe canon probe first [x] l,r;
+        return joined as answer(x,y);
+    } structures {
+        l host scan = ::core::iter::Map<_,_> [];
+        r host scan = ::core::iter::Map<_,_> [];
+        r = ::cq_storage::HashIndex<'_,_,_> [x];
+        joined canon = ::cq_storage::HashSet<_>;
+    }};
+    assert!(cq_rewrite_passes::membership(&source, quote!(r)).is_err());
+}
+
 fn smallest_expand_source() -> ir::Program {
     syn::parse_quote! { physical {
         relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);

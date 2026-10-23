@@ -357,7 +357,7 @@ fn authored_sql_files_are_exactly_the_catalog() {
 fn tpch_benchmark_inventory_covers_retail_and_matches_full_query_coverage() {
     use cq_workloads::tpch;
 
-    assert_eq!(tpch::CASES.len(), 13);
+    assert_eq!(tpch::CASES.len(), 18);
     let retail = tpch::CASES
         .iter()
         .filter(|case| case.tpch_query.is_none())
@@ -365,6 +365,13 @@ fn tpch_benchmark_inventory_covers_retail_and_matches_full_query_coverage() {
         .collect::<BTreeSet<_>>();
     let mut expected_retail = RETAIL.iter().map(|case| case.name).collect::<BTreeSet<_>>();
     expected_retail.insert("retail_h07_block");
+    expected_retail.insert("retail_h01");
+    expected_retail.extend([
+        "retail_h04",
+        "retail_h04_not_exists",
+        "retail_h16",
+        "retail_h22",
+    ]);
     assert_eq!(retail, expected_retail);
     let mut names = BTreeSet::new();
     for case in tpch::CASES {
@@ -395,6 +402,33 @@ fn tpch_benchmark_inventory_covers_retail_and_matches_full_query_coverage() {
                     _ => None,
                 })
                 .collect::<Vec<_>>();
+            if declarations.is_empty() {
+                let literal = |name: &str| {
+                    parsed
+                        .items
+                        .iter()
+                        .find_map(|item| match item {
+                            syn::Item::Const(item) if item.ident == name => match &*item.expr {
+                                syn::Expr::Lit(syn::ExprLit {
+                                    lit: syn::Lit::Str(value),
+                                    ..
+                                }) => Some(value.value()),
+                                _ => None,
+                            },
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| {
+                            panic!("{} must author a {name} string constant", case.name)
+                        })
+                };
+                assert_eq!(literal("NAME"), case.name);
+                assert!(
+                    !literal("SQL").trim().is_empty(),
+                    "{} has no authored SQL",
+                    case.name
+                );
+                continue;
+            }
             assert_eq!(declarations.len(), 1);
             let prefix = |input: syn::parse::ParseStream<'_>| -> syn::Result<(String, String)> {
                 input.parse::<syn::Token![$]>()?;

@@ -44,7 +44,14 @@ struct Checker<'a> {
 /// A successful check records a required failure channel; it does not certify an
 /// emitter's implementation of that channel.
 pub fn check_grading(program: &Program, machine: &Machine) -> syn::Result<Analysis> {
-    let mut analysis = crate::contract::check(program)?;
+    crate::contract::Checker::default().check_grading(program, machine)
+}
+
+pub(crate) fn check_grading_in(
+    program: &Program,
+    machine: &Machine,
+    mut analysis: Analysis,
+) -> syn::Result<Analysis> {
     // Formal rule BE-Abort: every below-host dispatch records a channel to the
     // distinguished host root, to be discharged by the target's emitter/runtime.
     if symbol_name(&machine.root.name) != "host" {
@@ -411,6 +418,15 @@ impl<'a> Checker<'a> {
                 kinds.push(kind);
                 inputs.push(self.visit(inner, owner, level, tiled, uniform, false)?);
             }
+            Term::Group(_, inner) => {
+                if level != 0 {
+                    return Err(self.error(
+                        owner,
+                        "BE-Group: grouped folds must execute at the host join",
+                    ));
+                }
+                inputs.push(self.visit(inner, owner, level, tiled, uniform, false)?);
+            }
             Term::Fold(monoid, inner) => {
                 self.collective(owner, level, monoid.clone(), tiled, uniform)?;
                 if level != 0 && !self.levels[level].children.is_empty() {
@@ -537,7 +553,7 @@ impl<'a> Checker<'a> {
         }
         match node.term {
             Term::Store { .. } => false,
-            Term::Fold(_, _) => true,
+            Term::Fold(_, _) | Term::Group(_, _) => true,
             Term::Flatten(inner) if !self.stored_offsets(inner) => true,
             _ => node
                 .inputs
@@ -568,6 +584,7 @@ impl<'a> Checker<'a> {
             | Term::Compact(_, inner)
             | Term::Flatten(inner)
             | Term::Fold(_, inner)
+            | Term::Group(_, inner)
             | Term::Canon(inner)
             | Term::Tile { inner, .. } => self.require_ranges(inner),
             Term::Union(arms) => {
@@ -677,9 +694,10 @@ impl<'a> Checker<'a> {
 
     fn physical_result(&self, term: &Term) -> Option<String> {
         match term {
-            Term::Rows(name) | Term::Map(name, _) | Term::Compact(name, _) => {
-                Some(symbol_name(name))
-            }
+            Term::Rows(name)
+            | Term::Map(name, _)
+            | Term::Compact(name, _)
+            | Term::Group(name, _) => Some(symbol_name(name)),
             Term::Ref(name) => self.results.get(&symbol_name(name)).cloned(),
             Term::Flatten(inner)
             | Term::Fold(_, inner)
@@ -927,6 +945,7 @@ fn outer_tile<'a>(
         | Term::Compact(_, inner)
         | Term::Flatten(inner)
         | Term::Fold(_, inner)
+        | Term::Group(_, inner)
         | Term::Canon(inner)
         | Term::Store { inner, .. }
         | Term::Lookup { inner, .. } => outer_tile(inner, program, definitions),

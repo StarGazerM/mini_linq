@@ -19,6 +19,36 @@ pub const NUMERIC_CONTRACT: &str = include_str!("../tpch/numeric_contract.txt");
 
 pub const CASES: &[Case] = &[
     Case {
+        name: "retail_h01",
+        rust_path: "workloads/src/queries/retail/tpch/retail_h01.rs",
+        sql_path: None,
+        tpch_query: None,
+    },
+    Case {
+        name: "retail_h04",
+        rust_path: "workloads/src/queries/retail/tpch/retail_h04.rs",
+        sql_path: None,
+        tpch_query: None,
+    },
+    Case {
+        name: "retail_h04_not_exists",
+        rust_path: "workloads/src/queries/retail/tpch/retail_h04_not_exists.rs",
+        sql_path: None,
+        tpch_query: None,
+    },
+    Case {
+        name: "retail_h16",
+        rust_path: "workloads/src/queries/retail/tpch/retail_h16.rs",
+        sql_path: None,
+        tpch_query: None,
+    },
+    Case {
+        name: "retail_h22",
+        rust_path: "workloads/src/queries/retail/tpch/retail_h22.rs",
+        sql_path: None,
+        tpch_query: None,
+    },
+    Case {
         name: "retail_h03",
         rust_path: "workloads/src/queries/retail/tpch/retail_h03.rs",
         sql_path: None,

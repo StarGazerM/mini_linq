@@ -20,6 +20,201 @@ pub mod kw {
     syn::custom_keyword!(over);
     syn::custom_keyword!(domain);
     syn::custom_keyword!(scope);
+    syn::custom_keyword!(group);
+    syn::custom_keyword!(by);
+    syn::custom_keyword!(count);
+    syn::custom_keyword!(sum);
+    syn::custom_keyword!(min);
+    syn::custom_keyword!(max);
+}
+
+/// Group a set of complete named valuations; aggregate arguments retain
+/// multiplicity across distinct valuations. An empty global group has one row.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct Group {
+    pub group_token: kw::group,
+    pub input: Ident,
+    pub by_token: kw::by,
+    #[syn(bracketed)]
+    pub bracket_token: token::Bracket,
+    #[syn(in = bracket_token)]
+    #[parse(CommaList::parse_terminated)]
+    pub keys: CommaList<Ident>,
+    #[syn(braced)]
+    pub brace_token: token::Brace,
+    #[syn(in = brace_token)]
+    #[parse(parse_aggregates)]
+    #[to_tokens(|tokens, bindings| quote::TokenStreamExt::append_all(tokens, bindings))]
+    pub aggregates: Vec<AggregateBinding>,
+}
+
+/// A typed fold result; extrema declare `Option<T>`, count declares `usize`.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct AggregateBinding {
+    pub name: Ident,
+    pub colon_token: Token![:],
+    pub ty: syn::Type,
+    pub eq_token: Token![=],
+    pub kind: AggregateKind,
+    #[syn(parenthesized)]
+    pub paren_token: token::Paren,
+    #[syn(in = paren_token)]
+    #[parse(parse_aggregate_expression)]
+    pub expression: Option<syn::Expr>,
+    pub semi_token: Token![;],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AggregateKind {
+    Count,
+    Sum,
+    Min,
+    Max,
+}
+
+impl syn::parse::Parse for AggregateKind {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        if input.peek(kw::count) {
+            input.parse::<kw::count>()?;
+            Ok(Self::Count)
+        } else if input.peek(kw::sum) {
+            input.parse::<kw::sum>()?;
+            Ok(Self::Sum)
+        } else if input.peek(kw::min) {
+            input.parse::<kw::min>()?;
+            Ok(Self::Min)
+        } else if input.peek(kw::max) {
+            input.parse::<kw::max>()?;
+            Ok(Self::Max)
+        } else {
+            Err(input.error("expected count, sum, min, or max"))
+        }
+    }
+}
+
+impl quote::ToTokens for AggregateKind {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        let name = match self {
+            Self::Count => "count",
+            Self::Sum => "sum",
+            Self::Min => "min",
+            Self::Max => "max",
+        };
+        quote::ToTokens::to_tokens(&Ident::new(name, proc_macro2::Span::call_site()), tokens);
+    }
+}
+
+fn parse_aggregates(input: syn::parse::ParseStream<'_>) -> syn::Result<Vec<AggregateBinding>> {
+    let mut aggregates = Vec::new();
+    while !input.is_empty() {
+        aggregates.push(input.parse()?);
+    }
+    Ok(aggregates)
+}
+
+fn parse_aggregate_expression(
+    input: syn::parse::ParseStream<'_>,
+) -> syn::Result<Option<syn::Expr>> {
+    if input.is_empty() {
+        Ok(None)
+    } else {
+        input.parse().map(Some)
+    }
+}
+
+impl AggregateBinding {
+    /// The argument's type, derived from the declared fold result.
+    pub fn value_type(&self) -> syn::Result<&syn::Type> {
+        if matches!(self.kind, AggregateKind::Min | AggregateKind::Max) {
+            if let syn::Type::Path(path) = &self.ty {
+                if let Some(segment) = path.path.segments.last() {
+                    if segment.ident == "Option" {
+                        if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
+                            if args.args.len() == 1 {
+                                if let syn::GenericArgument::Type(ty) = &args.args[0] {
+                                    return Ok(ty);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return Err(syn::Error::new_spanned(
+                &self.ty,
+                "min/max output must declare Option<T>",
+            ));
+        }
+        Ok(&self.ty)
+    }
+}
+
+impl Group {
+    /// Check the complete input valuation schema and typed fold payloads.
+    pub fn check(&self, input: &std::collections::BTreeMap<String, syn::Type>) -> syn::Result<()> {
+        let mut outputs = std::collections::BTreeSet::new();
+        for key in &self.keys {
+            if !input.contains_key(&crate::symbol_name(key))
+                || !outputs.insert(crate::symbol_name(key))
+            {
+                return Err(syn::Error::new_spanned(
+                    key,
+                    "group keys must be distinct input columns",
+                ));
+            }
+        }
+        for (name, ty) in input {
+            check_leibniz_type(ty, &Ident::new(name, proc_macro2::Span::call_site()))?;
+        }
+        if self.aggregates.is_empty() {
+            return Err(syn::Error::new_spanned(self, "group requires an aggregate"));
+        }
+        for aggregate in &self.aggregates {
+            let name = crate::symbol_name(&aggregate.name);
+            if input.contains_key(&name) || !outputs.insert(name) {
+                return Err(syn::Error::new_spanned(
+                    &aggregate.name,
+                    "aggregate outputs must be fresh and distinct",
+                ));
+            }
+            check_leibniz_type(&aggregate.ty, &aggregate.name)?;
+            if aggregate.kind == AggregateKind::Count {
+                if aggregate.expression.is_some() || aggregate.ty != syn::parse_quote!(usize) {
+                    return Err(syn::Error::new_spanned(
+                        aggregate,
+                        "count() requires no argument and a usize output",
+                    ));
+                }
+                continue;
+            }
+            let value_type = aggregate.value_type()?;
+            let variable = aggregate
+                .expression
+                .as_ref()
+                .and_then(crate::rust::variable)
+                .ok_or_else(|| {
+                    syn::Error::new_spanned(
+                        aggregate,
+                        "aggregate argument must be a normalized input variable",
+                    )
+                })?;
+            let ty = input.get(&crate::symbol_name(variable)).ok_or_else(|| {
+                syn::Error::new_spanned(
+                    variable,
+                    "aggregate argument is not in the input valuation",
+                )
+            })?;
+            if !matches!(ty, syn::Type::Infer(_)) && ty != value_type {
+                return Err(syn::Error::new_spanned(
+                    aggregate,
+                    "aggregate argument and declared output types disagree",
+                ));
+            }
+            if matches!(aggregate.kind, AggregateKind::Min | AggregateKind::Max) {
+                check_ord_type(value_type, variable)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Set union of earlier named results with identical headings.

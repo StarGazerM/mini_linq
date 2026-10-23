@@ -86,6 +86,7 @@ macro_rules! retail_kernel {
                 $first:ident : $first_ty:ty $(, $column:ident : $ty:ty)* $(,)?
             );)*
         }
+        $(derived { $($derived:tt)* })?
         answer($($out:ident : $out_ty:ty),+ $(,)?) :- $($body:tt)*
     ) => {
         pub const NAME: &str = $name;
@@ -114,6 +115,7 @@ macro_rules! retail_kernel {
                 query! {
                     struct Query;
                     $(relation $relation($first: $first_ty $(, $column: $ty)*);)*
+                    $($($derived)*)?
                     answer($($out),+) :- $($body)*
                 }.map(|($($out,)+)| ($(::core::clone::Clone::clone($out),)+)).collect()
             }
@@ -131,6 +133,7 @@ macro_rules! retail_kernel {
                 query! {
                     struct Query;
                     $(relation $relation($first: $first_ty $(, $column: $ty)*);)*
+                    $($($derived)*)?
                     answer($($out),+) :- $($body)*
                 }.map(|($($out,)+)| ($(::core::clone::Clone::clone($out),)+)).collect()
             }
@@ -146,6 +149,7 @@ macro_rules! retail_kernel {
                 query! {
                     struct Query;
                     $(relation $relation($first: $first_ty $(, $column: $ty)*);)*
+                    $($($derived)*)?
                     answer($($out),+) :- $($body)*
                 }.map(|($($out,)+)| ($(::core::clone::Clone::clone($out),)+)).collect()
             }
@@ -164,6 +168,7 @@ macro_rules! retail_kernel {
                 query! {
                     struct Query;
                     $(relation $relation($first: $first_ty $(, $column: $ty)*);)*
+                    $($($derived)*)?
                     answer($($out),+) :- $($body)*
                 }.map(|($($out,)+)| ($(::core::clone::Clone::clone($out),)+)).collect()
             }
@@ -177,6 +182,7 @@ macro_rules! retail_kernel {
                 query! {
                     struct Query;
                     $(relation $relation($first: $first_ty $(, $column: $ty)*);)*
+                    $($($derived)*)?
                     answer($($out),+) :- $($body)*
                 }.map(|($($out,)+)| ($(::core::clone::Clone::clone($out),)+)).collect()
             }
@@ -189,6 +195,7 @@ macro_rules! retail_kernel {
                 query! {
                     struct Query;
                     $(relation $relation($first: $first_ty $(, $column: $ty)*);)*
+                    $($($derived)*)?
                     answer($($out),+) :- $($body)*
                 }.map(|($($out,)+)| ($(::core::clone::Clone::clone($out),)+)).collect()
             }
@@ -196,6 +203,7 @@ macro_rules! retail_kernel {
         crate::tpch_runtime::extra_zone!([$($extra)?]; $d;
             setup { $($setup)* }
             relations { $(relation $relation => $table ($first:$first_ty $(,$column:$ty)*);)* }
+            derived { $($($derived)*)? }
             answer($($out),+) :- $($body)*
         );
         pub fn run(data: &Data, config: &str) -> Vec<Answer> {
@@ -267,6 +275,7 @@ macro_rules! extra_zone {
     ([hypergraph]; $d:tt;
      setup { $($setup:tt)* }
      relations { $(relation $relation:ident => $table:ident ($first:ident:$first_ty:ty $(,$column:ident:$ty:ty)*);)* }
+     derived { $($derived:tt)* }
      answer($($out:ident),+) :- $($body:tt)*
     ) => {
         pub struct ZoneData { $(pub $table: ::cq_load::ZoneRows<($first_ty, $($ty,)*), (::cq_load::MinMax<$first_ty>, $(::cq_load::MinMax<$ty>,)*)>,)* }
@@ -288,6 +297,7 @@ macro_rules! extra_zone {
                 $($setup)*
                 query! { struct Query;
                     $(relation $relation($first:$first_ty $(,$column:$ty)*);)*
+                    $($derived)*
                     answer($($out),+) :- $($body)*
                 }.map(|($($out,)+)| ($(::core::clone::Clone::clone($out),)+)).collect()
             }
@@ -303,6 +313,7 @@ macro_rules! extra_zone {
                 $($setup)*
                 query! { struct Query;
                     $(relation $relation($first:$first_ty $(,$column:$ty)*);)*
+                    $($derived)*
                     answer($($out),+) :- $($body)*
                 }.map(|($($out,)+)| ($(::core::clone::Clone::clone($out),)+)).collect()
             }

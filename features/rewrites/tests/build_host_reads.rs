@@ -32,6 +32,26 @@ fn retains_integral_host_without_changing_graph_or_keys() {
 }
 
 #[test]
+fn retains_an_empty_key_cartesian_provider_without_changing_the_join() {
+    let source: ir::Program = syn::parse_quote! { physical {
+        relation L(a:i64); relation R(b:i64);
+        l = pipe rename L@0 {a -> x};
+        r = pipe rename R@1 {b -> y};
+        joined = pipe canon probe first [] l,r;
+        return joined as answer(x,y);
+    }};
+    let target = build_host_reads(&source, quote!(r)).unwrap();
+    assert!(matches!(
+        target.program.definitions[1].mode,
+        ir::Mode::Let(_)
+    ));
+    assert_eq!(target.program.definitions[2], source.program.definitions[2]);
+    ir::check_rewrite(&source, &target).unwrap();
+    let selected = cq_structure_selection::compile(&target).unwrap();
+    cq_testkit::structures::contract::check(&selected).unwrap();
+}
+
+#[test]
 fn skips_non_integral_and_lazy_membership() {
     for source in [
         syn::parse_quote! { physical {

@@ -7,7 +7,7 @@ pub fn disjoint_unions(program: &Program) -> syn::Result<BTreeSet<String>> {
     Ok(cq_syntax::algebra::disjoint_unions(
         program.plan.definitions.iter().map(|definition| {
             let step = match &definition.operator {
-                Operator::Unit(_) | Operator::Rename(_) => LiteralStep::Empty,
+                Operator::Unit(_) | Operator::Rename(_) | Operator::Group(_) => LiteralStep::Empty,
                 Operator::NaturalJoin(join) => LiteralStep::Join(&join.left, &join.right),
                 Operator::Semijoin(join) => LiteralStep::Input(&join.left),
                 Operator::Select(select) => LiteralStep::Select(select),

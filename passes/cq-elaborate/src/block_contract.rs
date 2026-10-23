@@ -53,16 +53,21 @@ pub(super) fn check(source: &vo::Program, target: &Schedule) -> Result<(), Strin
     let input = obligation
         .prefix
         .unwrap_or_else(|| obligation.schedule.unit());
-    let output = obligation.schedule.project(
+    let mut output = obligation.schedule.project(
         input,
         &source
             .cq
             .query
-            .head
-            .variables()
+            .valuation_variables()
             .cloned()
             .collect::<Vec<_>>(),
     );
+    if let Some(group) = &source.cq.query.group {
+        output = obligation.schedule.group(
+            output,
+            &group.operator(source.cq.query.head.relation.clone()),
+        );
+    }
     obligation.schedule.finish(output, &source.cq.query.head);
     schedule.check(target, &[])
 }

@@ -19,6 +19,80 @@ fn normal(tokens: proc_macro2::TokenStream) -> cq::Program {
     cq::normal::normalize(&cq(tokens)).unwrap()
 }
 
+#[test]
+fn explicit_order_rejects_dependency_conflicts_instead_of_ignoring_advice() {
+    let source = normal(quote! {
+        struct Q;
+        relation R(a:i32);
+        relation S(a:i32);
+        answer(x) :- R(x), let y:i32 = *x + 1, S(y);
+    });
+    let error = cq_order::compile_explicit(&source, &[syn::parse_quote!(S), syn::parse_quote!(R)])
+        .unwrap_err();
+    assert!(error.to_string().contains("order advice conflicts"));
+}
+
+#[test]
+fn explicit_order_preserves_source_and_records_authored_traversal() {
+    let source = normal(quote! {
+        struct Q;
+        relation R(a:i32,b:i32);
+        relation S(b:i32,c:i32);
+        relation T(c:i32);
+        answer(a,c) :- R(a,b), S(b,c), T(c);
+    });
+    let order = [
+        syn::parse_quote!(T),
+        syn::parse_quote!(S),
+        syn::parse_quote!(R),
+    ];
+    let planned = cq_order::compile_explicit(&source, &order).unwrap();
+    assert_eq!(planned.cq, source);
+    let atoms: Vec<_> = planned
+        .valuation
+        .steps
+        .iter()
+        .filter_map(|step| {
+            if let valuation::Step::Atom(atom, _) = step {
+                Some(atom.relation.to_string())
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(atoms, ["T", "S", "R"]);
+    assert!(
+        cq_order::compile_explicit(&source, &[syn::parse_quote!(T), syn::parse_quote!(T)]).is_err()
+    );
+    assert!(cq_order::compile_explicit(&source, &[syn::parse_quote!(Missing)]).is_err());
+}
+
+#[test]
+fn explicit_order_does_not_move_opaque_predicates_before_their_domain() {
+    let source = normal(quote! {
+        struct Q;
+        relation Part(k:i32,name:String);
+        relation Keys(k:i32);
+        answer(k) :- Part(k,name), if name.contains("green"), Keys(k);
+    });
+    let planned =
+        cq_order::compile_explicit(&source, &[syn::parse_quote!(Part), syn::parse_quote!(Keys)])
+            .unwrap();
+    let part = planned
+        .valuation
+        .steps
+        .iter()
+        .position(|step| matches!(step, valuation::Step::Atom(atom, _) if atom.relation == "Part"))
+        .unwrap();
+    let guard = planned
+        .valuation
+        .steps
+        .iter()
+        .position(|step| matches!(step, valuation::Step::Guard(..)))
+        .unwrap();
+    assert!(part < guard);
+}
+
 fn triangle() -> cq::Program {
     cq(quote! {
         struct Q;

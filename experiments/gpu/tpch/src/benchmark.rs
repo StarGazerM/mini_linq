@@ -115,20 +115,18 @@ pub fn duckdb(manifest: &Manifest, query: &str) -> Result<Value> {
 
 pub fn table(results: &[Value]) -> String {
     let mut table = String::from(
-        "| query | SF1 exact | SF10 exact | GPU total ms SF10 (build/kernels/dedup) | DuckDB t24 SF10 ms | status |\n|---|---|---|---|---|---|\n",
+        "| query | mode | scale | exact | GPU total ms (build/kernels/dedup) | DuckDB t24 ms | status |\n|---|---|---|---|---|---|---|\n",
     );
-    for sf1 in results.iter().filter(|row| row["sf"] == 1) {
-        let query = sf1["query"].as_str().unwrap();
-        let sf10 = results
-            .iter()
-            .find(|row| row["query"] == query && row["sf"] == 10)
-            .unwrap();
+    for row in results {
+        let query = row["query"].as_str().unwrap();
+        let mode = row["mode"].as_str().unwrap();
+        let sf = row["sf"].as_u64().unwrap();
         let exact = |row: &Value| match row["exact"].as_bool() {
             Some(true) => "yes",
             Some(false) => "NO",
             None => "not run",
         };
-        let timing = &sf10["median_ms"];
+        let timing = &row["median_ms"];
         let gpu = if let Some(total) = timing["total"].as_f64() {
             format!(
                 "{total:.3} ({:.3}/{:.3}/{:.3})",
@@ -139,21 +137,40 @@ pub fn table(results: &[Value]) -> String {
         } else {
             "—".into()
         };
-        let status = if let Some(error) = sf10["error"].as_str() {
+        let status = if let Some(error) = row["error"].as_str() {
             format!(
                 "{}: {}",
-                sf10["status"].as_str().unwrap(),
+                row["status"].as_str().unwrap(),
                 error.replace('|', "\\|").replace('\n', " ")
             )
         } else {
-            sf10["status"].as_str().unwrap().to_owned()
+            row["status"].as_str().unwrap().to_owned()
         };
         table.push_str(&format!(
-            "| {query} | {} | {} | {gpu} | {:.3} | {status} |\n",
-            exact(sf1),
-            exact(sf10),
-            sf10["duckdb"]["t24_median_ms"].as_f64().unwrap()
+            "| {query} | {mode} | SF{sf} | {} | {gpu} | {:.3} | {status} |\n",
+            exact(row),
+            row["duckdb"]["t24_median_ms"].as_f64().unwrap()
         ));
     }
     table
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn filtered_table_keeps_each_mode_and_needs_no_other_scale() {
+        let rows = ["automatic", "advised"].map(|mode| {
+            json!({
+                "query": "h05", "mode": mode, "sf": 10, "status": "ran", "exact": true,
+                "median_ms": {"total": 10.0, "build": 2.0, "kernels": 7.0, "dedup": 1.0},
+                "duckdb": {"t24_median_ms": 172.0}
+            })
+        });
+        let rendered = table(&rows);
+        assert!(rendered.contains("| h05 | automatic | SF10 | yes |"));
+        assert!(rendered.contains("| h05 | advised | SF10 | yes |"));
+        assert!(!rendered.contains("SF1 |"));
+    }
 }

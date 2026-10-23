@@ -26,21 +26,27 @@ cargo oxide build --arch sm_89 -- --release --workspace
 cargo oxide test --arch sm_89 -- --release --workspace
 ```
 
+Release build dependencies also use optimization level 3: the build-time
+compression catalog shares CUDA-containing crates with the runtime, and their
+device address-space lowering requires optimized codegen.
+
 ### Planner-driven 11-query TPC-H suite
 
 `tpch` is one crate with one binary, `cq-gpu-tpch`. It imports the CPU
 `retail_kernel!` invocations directly with `include_str!`; no second query body
-or per-query plan is maintained. Build-time compilation uses the same CQ macro
-substitution, checked default CQ → Physical → Structures passes, generic
-`cq_sequence_plan::select_from_catalog`, Sequence lowering,
-`cq_sequence_plan::plan` with `cq_gpu_sequence::{machine, catalog}`, grading,
-and `cq_gpu_sequence::translate`. These are the programmatic equivalents of
-the facade's `plan(machine)` → `machine_grade!` → `translate!` pipeline.
+is duplicated. Build-time compilation uses the same CQ macro substitution,
+checked CQ → Physical → Structures passes, generic catalog selection, Sequence
+lowering, grading and translation. The default build generates only `advised`
+executors, using explicit pipeline choices followed by decomposition-only
+completion. Automatic is opt-in pending box 11b: build with
+`CQ_GPU_TPCH_AUTOMATIC=1` to also generate `automatic` executors using
+`cq_sequence_plan::plan`. No automatic lookup rewrite is required to compile or
+measure the advised baseline.
 The manifest loader records its integer-only `DeviceColumns` host adapters
 through the checked retype rewrite; relations declaring `String` retain host
 rows. Neither the loader nor translator chooses a plan.
 
-The loader reads only each imported query's declared columns. `String` columns
+The default loader reads only each imported query's declared columns. `String` columns
 are decoded from `.bin` dictionary codes and `.dict.txt` into owned host strings;
 integer/code declarations retain codes, and only their text literals are
 resolved to dictionary IDs. Integer-only relations keep resident device uploads
@@ -57,11 +63,64 @@ are uploaded for subsequent GPU work; host evaluation and upload are included
 in the build timing interval. The synthetic String-guard regression checks
 this boundary against Sequential and explicit expected keys.
 
-The binary accepts repeatable `--query <name>` and `--scale sf1|sf10` filters
-(for example `cq-gpu-tpch --query h09 --scale sf1`). Omitted filters select all
-queries/scales. Filtered runs print JSON measurements for the selected scales
-without writing a results file; only an unfiltered run publishes the complete
-inventory and paired SF1/SF10 table.
+H05 uses the explicit `tpch_domains` loader profile in **both** modes: the shared
+`gpu_compress::tpch::schema`/`Catalog` stores join keys as dense u32 domain IDs
+and the date/Region dictionary code as i32, exactly as the authored benchmark.
+The imported query's types and dictionary literals are adapted to that schema;
+GPU and Sequential outputs are decoded back to source keys before comparison.
+The loader profile is recorded in the pipeline artifact, not selected by the
+planner. H05's advised pipeline records Region → Nation → Customer → Orders →
+Lineitem → Supplier, retains the Customer prefix, and uses the R schedule:
+one 256-row input partition and 1024-row/items-4 segmented Orders and Lineitem
+expansions. Its unchanged fully-bound Supplier probe receives the checked
+one-level `membership(...)` Structures certificate, so Sequence lowers it to a
+filtering lookup without expanding witnesses. It does not call the authored
+H05 implementation. H09 advises Part → Lineitem → PartSupp → Orders → Supplier →
+Nation and retains the filtered Part leaf using its checked numeric carrier;
+the substring predicate remains at its authored source position.
+
+The binary accepts repeatable `--query <name>`, `--scale sf1|sf10`, and
+`--mode automatic|advised` filters. Omitted filters select every query, both
+scales and all built modes (advised only by default). Every run writes its selected inventory to the optional
+positional results path, including filtered runs. `--baseline FILE` retains
+prior per-query best measurements and reports ratios; without it, an existing
+output file is captured before replacement. `--authored FILE` reads the
+`gpu-h05-compiled` R measurements and reports the same-scale comparison.
+Advised H05 performance acceptance requires SF10 total ≤ 10.35 ms and, when
+provided, no slower than the measured authored R. A failed timing gate keeps
+the exactness/timing evidence and exits unsuccessfully.
+
+`TPCH_GPU_ADVICE=/path/advice.json` selects build-time per-query overrides.
+Each entry is a pipeline object, for example:
+
+```json
+{
+  "h03": {
+    "plan": "no_reduce, order(Customer, Orders, Lineitem)",
+    "physical": [],
+    "structures": [],
+    "sequence": []
+  }
+}
+```
+
+`plan` uses the CPU `order(...)`, `no_reduce`, `reduce(T with S)` and
+`skip(T with S)` conventions. Physical advice accepts `retain_streams(...)`,
+`hoist(...)`, `build_host_reads(...)`, `canon_prefixes(...)` and
+`smallest_intersections(...)`; Structures advice accepts `sorted_indexes(...)`,
+`membership(...)`, and `retype(...)`. Sequence entries parse the planner's
+public `Advice` syntax, including `store`, `store_level`, `tile`, `partition`,
+`segment`, `output`, `grade`, and `evidence { ... }`. CPU workload
+`advise plan(...)` hints are imported into the report's `cpu_plan_advice`
+field for explicit selection. They do not automatically replace the measured
+GPU baseline: CPU-specific reduction hints can produce unsupported GPU builds.
+
+Each accepted report includes `sequence_input`, `sequence_trace`,
+`sequence_planned`, symbolic cost, and a resolved `pipeline` object. Copy
+`{ \"query_name\": report.pipeline }` into the override file to replay it;
+`complete: true` means its Sequence trace already records the complete
+schedule and is not replanned. Manifest row counts are recorded as evidence,
+never fabricated selectivities. Replay coverage checks exact program equality.
 
 ```sh
 export CUDA_HOME=/opt/nvidia/hpc_sdk/Linux_x86_64/25.5/cuda/12.9
@@ -79,11 +138,13 @@ answer download, and comparison are outside those event intervals. SF1 also
 compares the GPU answer to independent Sequential translation of the identical
 Physical using `cq_testkit::conformance::assert_answers_equal`, the external
 target API used by H05 (`assert_conformant` itself exposes only CPU targets).
-The eleven named conformance tests print `NOT RUN` with the exact rejection
-and term when compilation does not reach an executable GPU translation.
-`TPCH_GPU_DATA_ROOT` changes the fixture root at build time.
+The eleven conformance tests cover both modes and reject unexpected planning
+failures; H07's existing unsupported opaque country disjunction remains an
+explicit reported rejection. `TPCH_GPU_DATA_ROOT` changes the fixture root at
+build time. The new advised acceptance results must be measured; the schedules
+and timing ceilings above are requirements, not claimed measurements.
 
-Observed inventory: all eleven queries are rejected at both scales, so **no GPU
+Historical initial inventory, before the subsequent translation fixes: all eleven queries were rejected at both scales, so **no GPU
 exactness, conformance agreement, or timing is claimed**. The release build and
 13 tests passed (two source/encoding tests plus eleven explicit rejection
 reports). No compiler gap was patched around. The table abbreviates only the

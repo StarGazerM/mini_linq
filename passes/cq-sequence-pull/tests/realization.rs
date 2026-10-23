@@ -63,6 +63,61 @@ fn zero_heading_exists_can_be_scanned_and_probed_against_itself() {
 }
 
 #[test]
+fn equal_support_choice_reheads_before_a_downstream_projection() {
+    let physical = syn::parse_quote!(physical {
+        relation keys(a:i32); relation values(a:i32,b:i32);
+        r = let rename keys@0 {a -> a};
+        s = let rename values@1 {a -> a,b -> b};
+        filtered = pipe semi eager [a] r,s;
+        yes = pipe probe first [a] filtered,s;
+        no = pipe probe first [a] r,s;
+        combined = pipe union yes,no;
+        observed = pipe guard combined if ({ visits.set(visits.get() + 1); true });
+        out = pipe canon project observed keep {b};
+        return out as answer(b);
+    });
+    let selected = cq_structure_selection::compile(&physical).unwrap();
+    let source = cq_sequence_lowering::compile(&selected).unwrap();
+    let mut target = source.clone();
+    target
+        .sequence
+        .definitions
+        .iter_mut()
+        .find(|d| d.name == "combined")
+        .unwrap()
+        .term = cq_lang_sequence::Term::Choose(vec![
+        (
+            cq_lang_sequence::Guard::Lt(cq_lang_sequence::Len::Input("s".into()), 2),
+            cq_lang_sequence::Term::Ref(syn::parse_quote!(yes)),
+        ),
+        (
+            cq_lang_sequence::Guard::Else,
+            cq_lang_sequence::Term::Ref(syn::parse_quote!(no)),
+        ),
+    ]);
+    cq_lang_sequence::check_rewrite(&source, &target).unwrap();
+    let analysis = cq_lang_sequence::contract::check(&target).unwrap();
+    assert_eq!(analysis.results["combined"], "combined");
+    let expression = cq_sequence_pull::translate(&target, &analysis).unwrap();
+    let source = quote!(
+        fn main() {
+            let keys = &[(1i32,), (2,)][..];
+            let values = &[(1i32, 10i32), (2, 20)][..];
+            let visits = &::std::cell::Cell::new(0usize);
+            let mut actual: Vec<(i32,)> = (#expression).map(|(b,)| (*b,)).collect();
+            actual.sort();
+            // Canonical output cannot expose duplicate evaluation, so count the
+            // pinned downstream guard as well as checking the projected values.
+            assert_eq!(visits.get(), 2);
+            assert_eq!(actual, vec![(10,), (20,)]);
+        }
+    );
+    let runtime = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../runtime/cq-storage/src/lib.rs");
+    cq_testkit::rustc::Runtime::new(&runtime, false).run(&source.to_string());
+}
+
+#[test]
 fn recorded_hash_types_print_verbatim_including_explicit_standard_hashers() {
     use structures::Structure;
     use syn::visit_mut::VisitMut;
@@ -701,4 +756,59 @@ fn canonical_consumer_omits_local_answer_state_for_every_head_shape() {
         assert!(!printed.contains("__cq_seen"), "{printed}");
         assert!(!printed.contains("HashSet"), "{printed}");
     }
+}
+
+#[test]
+fn grouped_folds_share_full_named_valuations_and_empty_identities() {
+    let prefix = quote! {
+        relation rows(k:i32, witness:i32, value:i64, anonymous:i32);
+        raw = pipe rename rows@0 {k -> k, witness -> witness, value -> value, anonymous -> anonymous};
+        valuations = pipe canon project raw keep {k, witness, value};
+    };
+    let aggregates = quote! {
+        n: usize = count();
+        total: i64 = sum(value);
+        low: Option<i64> = min(value);
+        high: Option<i64> = max(value);
+    };
+    let keyed = syn::parse2(quote! { physical {
+        #prefix
+        grouped = pipe group valuations by [k] { #aggregates };
+        return grouped as answer(k,n,total,low,high);
+    }})
+    .unwrap();
+    let global = syn::parse2(quote! { physical {
+        #prefix
+        grouped = pipe group valuations by [] { #aggregates };
+        return grouped as answer(n,total,low,high);
+    }})
+    .unwrap();
+    let keyed = sequence_rows(&cq_structure_selection::compile(&keyed).unwrap()).unwrap();
+    let global = sequence_rows(&cq_structure_selection::compile(&global).unwrap()).unwrap();
+    let source = quote! {
+        fn main() {
+            let populated: &[(i32,i32,i64,i32)] = &[
+                (1,10,7,100), (1,10,7,100), (1,10,7,200),
+                (1,11,7,100), (1,12,-2,100), (2,20,5,100),
+            ];
+            for rows in [populated, &[][..]] {
+                let mut keyed: Vec<(i32,usize,i64,Option<i64>,Option<i64>)> =
+                    (#keyed).map(|(k,n,total,low,high)| (*k,n,total,low,high)).collect();
+                keyed.sort();
+                let global: Vec<(usize,i64,Option<i64>,Option<i64>)> = (#global).collect();
+                if rows.is_empty() {
+                    assert!(keyed.is_empty());
+                    assert_eq!(global, vec![(0,0,None,None)]);
+                } else {
+                    // Two witnesses with value 7 contribute twice; wildcard
+                    // differences and repeated host rows contribute only once.
+                    assert_eq!(keyed, vec![(1,3,12,Some(-2),Some(7)), (2,1,5,Some(5),Some(5))]);
+                    assert_eq!(global, vec![(4,17,Some(-2),Some(7))]);
+                }
+            }
+        }
+    };
+    let runtime = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../runtime/cq-storage/src/lib.rs");
+    cq_testkit::rustc::Runtime::new(&runtime, false).run(&source.to_string());
 }

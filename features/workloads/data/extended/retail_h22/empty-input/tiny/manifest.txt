@@ -1,0 +1,10 @@
+mini-linq-dataset	2
+suite	extended
+case	retail_h22
+scenario	empty-input
+scale	tiny
+seed	10299991093495707037
+generator-version	2
+relations	2
+relation	Customer	1	0	0
+relation	Orders	2	4	3

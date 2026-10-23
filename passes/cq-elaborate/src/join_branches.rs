@@ -148,6 +148,7 @@ pub(super) fn check(source: &valuation::Program, target: &ra::Program) -> syn::R
             continue;
         }
         let inputs: Vec<_> = match &definition.operator {
+            ra::Operator::Group(group) => vec![&group.input],
             ra::Operator::NaturalJoin(j) => vec![&j.left, &j.right],
             ra::Operator::Semijoin(j) => vec![&j.left, &j.right],
             ra::Operator::Anti(j) => vec![&j.left, &j.right],

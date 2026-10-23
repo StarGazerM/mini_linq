@@ -46,7 +46,7 @@ fn planning_uses_target_catalogs_and_preserves_authored_decisions() {
         };
         assert_eq!(
             planned,
-            cq_sequence_plan::plan(&original, &machine, &catalog)
+            cq_sequence_plan::decompose(&original, &machine, &catalog)
                 .unwrap()
                 .program,
         );

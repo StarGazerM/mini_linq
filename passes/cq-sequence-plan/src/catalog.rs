@@ -122,6 +122,7 @@ fn reads_provider(term: &Term, provider: &str) -> bool {
         | Term::Compact(_, inner)
         | Term::Flatten(inner)
         | Term::Fold(_, inner)
+        | Term::Group(_, inner)
         | Term::Canon(inner)
         | Term::Store { inner, .. }
         | Term::Tile { inner, .. } => reads_provider(inner, provider),

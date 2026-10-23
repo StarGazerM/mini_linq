@@ -74,24 +74,26 @@ pub(crate) fn boundaries(
             .expect("checked result");
         if !facts.structures.filtered.contains_key(result)
             && !physical.operator.operands().iter().any(|input| {
-                program.structures.physical.program.definitions.iter().any(|source| {
-                    source.name == **input && matches!(source.operator, Operator::Guard(_))
-                })
+                program
+                    .structures
+                    .physical
+                    .program
+                    .definitions
+                    .iter()
+                    .any(|source| {
+                        source.name == **input && matches!(source.operator, Operator::Guard(_))
+                    })
             })
         {
             continue;
         }
         if !host_predicate(&physical.operator)
-            && !physical
-                .operator
-                .operands()
-                .iter()
-                .any(|input| {
-                    facts.structures.physical.rows[&symbol_name(input)]
-                        .types
-                        .values()
-                        .any(string_type)
-                })
+            && !physical.operator.operands().iter().any(|input| {
+                facts.structures.physical.rows[&symbol_name(input)]
+                    .types
+                    .values()
+                    .any(string_type)
+            })
         {
             continue;
         }
@@ -345,6 +347,7 @@ fn has_lookup(
         | Term::Compact(_, t)
         | Term::Flatten(t)
         | Term::Fold(_, t)
+        | Term::Group(_, t)
         | Term::Canon(t)
         | Term::Tile { inner: t, .. }
         | Term::Store { inner: t, .. } => has_lookup(t, definitions, indices, seen),
@@ -359,6 +362,7 @@ fn has_lookup(
 
 fn requires_host(term: &Term, opaque: &BTreeSet<String>) -> bool {
     match term {
+        Term::Group(_, _) => true,
         Term::Map(name, inner) | Term::Compact(name, inner) => {
             opaque.contains(&symbol_name(name)) || requires_host(inner, opaque)
         }
@@ -384,6 +388,7 @@ fn references<'a>(term: &'a Term, result: &mut Vec<&'a Ident>) {
         | Term::Compact(_, t)
         | Term::Flatten(t)
         | Term::Fold(_, t)
+        | Term::Group(_, t)
         | Term::Canon(t)
         | Term::Tile { inner: t, .. }
         | Term::Store { inner: t, .. }
@@ -423,6 +428,7 @@ fn driver_domains(
         | Term::Compact(_, inner)
         | Term::Flatten(inner)
         | Term::Fold(_, inner)
+        | Term::Group(_, inner)
         | Term::Canon(inner)
         | Term::Tile { inner, .. }
         | Term::Store { inner, .. }

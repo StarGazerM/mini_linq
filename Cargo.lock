@@ -358,10 +358,13 @@ dependencies = [
  "cq-lang-ix",
  "cq-lang-physical",
  "cq-lang-ra",
+ "cq-lang-sequence",
  "cq-lang-structures",
  "cq-order",
  "cq-physical-lowering",
  "cq-reduce",
+ "cq-sequence-plan",
+ "cq-sequence-pull",
  "cq-stage",
  "cq-structure-selection",
  "cq-testkit",
@@ -569,9 +572,11 @@ dependencies = [
 name = "cq-physical-lowering"
 version = "0.1.0"
 dependencies = [
+ "cq-index-policy",
  "cq-lang-ix",
  "cq-lang-physical",
  "cq-lang-structures",
+ "cq-structure-selection",
  "cq-syntax",
  "cq-testkit",
  "proc-macro2",
@@ -736,6 +741,7 @@ version = "0.1.0"
 dependencies = [
  "cq-lang-sequence",
  "cq-rewrite-passes",
+ "cq-sequence-lowering",
  "cq-syntax",
  "proc-macro2",
  "quote",

@@ -249,10 +249,8 @@ pub fn build_host_reads(source: &ir::Program, arguments: TokenStream) -> syn::Re
             .collect::<Vec<_>>();
         if reads.is_empty()
             || !reads.iter().all(|(_, keys, _)| {
-                !keys.is_empty()
-                    && keys.iter().all(|key| {
-                        crate::indexes::sorted_key(&facts.rows[&name].types[key])
-                    })
+                keys.iter()
+                    .all(|key| crate::indexes::sorted_key(&facts.rows[&name].types[key]))
             })
         {
             continue;
@@ -308,6 +306,64 @@ pub fn retain_streams(source: &ir::Program, arguments: TokenStream) -> syn::Resu
         matched.insert(symbol_name(&definition.name));
     }
     selected.require_matches(&matched)?;
+    ir::check_rewrite(source, &target)?;
+    Ok(target)
+}
+
+/// Hoist explicitly selected relational producers and their dependency closure
+/// before the remaining definitions. The stable partition preserves topology;
+/// opaque Rust producers cannot be hoisted. The public correspondence checker
+/// owns branch scopes and Rust Before obligations.
+pub fn hoist(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
+    ir::contract::check(source)?;
+    let selected = Results::parse(arguments)?;
+    if matches!(selected, Results::All) {
+        return Err(syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "hoist requires explicit result names",
+        ));
+    }
+    let definitions = &source.program.definitions;
+    let mut closure = BTreeSet::new();
+    let mut matched = BTreeSet::new();
+    for definition in definitions {
+        if selected.includes(&definition.name) {
+            let name = symbol_name(&definition.name);
+            closure.insert(name.clone());
+            matched.insert(name);
+        }
+    }
+    selected.require_matches(&matched)?;
+    // Source order is topological, so one reverse traversal closes all inputs.
+    for definition in definitions.iter().rev() {
+        if !closure.contains(&symbol_name(&definition.name)) {
+            continue;
+        }
+        if matches!(definition.operator, Operator::Bind(_) | Operator::Guard(_)) {
+            return Err(syn::Error::new_spanned(
+                &definition.name,
+                "hoist cannot move an opaque Rust dependency",
+            ));
+        }
+        if let Some(input) = definition.operator.input() {
+            closure.insert(symbol_name(input));
+        }
+        match &definition.operator {
+            Operator::Probe(_, key)
+            | Operator::Merge(_, key)
+            | Operator::Semi(_, key)
+            | Operator::Anti(_, key) => {
+                closure.insert(symbol_name(&key.right));
+            }
+            Operator::Union(union) => closure.extend(union.operands.iter().map(symbol_name)),
+            _ => {}
+        }
+    }
+    let mut target = source.clone();
+    target
+        .program
+        .definitions
+        .sort_by_key(|definition| !closure.contains(&symbol_name(&definition.name)));
     ir::check_rewrite(source, &target)?;
     Ok(target)
 }

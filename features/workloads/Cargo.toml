@@ -107,6 +107,10 @@ cq-lang-physical.workspace = true
 cq-lang-structures.workspace = true
 
 
+[dev-dependencies]
+cq-testkit = { workspace = true, features = ["duckdb"] }
+cq-load = { workspace = true, features = ["parquet"] }
+
 [features]
 default = []
 counters = ["cq-storage/counters"]

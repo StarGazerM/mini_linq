@@ -230,9 +230,15 @@ pub(super) fn check(
         }
         heading.extend(introduces.iter().cloned());
     }
-    let attributes: Vec<Ident> = source.cq.query.head.variables().cloned().collect();
+    let attributes: Vec<Ident> = source.cq.query.valuation_variables().cloned().collect();
     let input = prefix.unwrap_or_else(|| schedule.unit());
-    let output = schedule.project(input, &attributes);
+    let mut output = schedule.project(input, &attributes);
+    if let Some(group) = &source.cq.query.group {
+        output = schedule.group(
+            output,
+            &group.operator(source.cq.query.head.relation.clone()),
+        );
+    }
     schedule.finish(output, &source.cq.query.head);
     schedule.check(target, &reductions).or_else(|message| {
         // An under-canon certificate may recover a primary expansion witness

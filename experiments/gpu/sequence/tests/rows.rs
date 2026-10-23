@@ -16,8 +16,8 @@ fn filtered_probe(condition: proc_macro2::TokenStream) -> Program {
             return result as answer(a, value, payload);
         }
         structures {
-            driver host scan = Reader [];
-            provider host scan = Reader [];
+            driver host scan = ::cq_gpu_runtime::DeviceColumns [];
+            provider host scan = ::cq_gpu_runtime::DeviceColumns [];
             provider = ::cq_gpu_sequence_runtime::RangeProvider [a];
             result canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
         }
@@ -40,7 +40,8 @@ fn filtered_probe(condition: proc_macro2::TokenStream) -> Program {
             joined_rows at host.device.block;
             output_rows at host.device;
         }
-    }).unwrap()
+    })
+    .unwrap()
 }
 
 fn translate(program: &Program) -> String {

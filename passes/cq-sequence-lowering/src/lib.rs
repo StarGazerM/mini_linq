@@ -65,6 +65,9 @@ pub fn compile(source: &cq_lang_structures::Program) -> syn::Result<Program> {
                         Term::Flatten(lookup)
                     }
                 }
+                Operator::Group(group) => {
+                    Term::Group(name.clone(), Box::new(Term::Ref(group.input.clone())))
+                }
                 Operator::Select(select) => {
                     Term::Compact(name.clone(), Box::new(Term::Ref(select.input.clone())))
                 }
@@ -112,6 +115,7 @@ pub fn compile(source: &cq_lang_structures::Program) -> syn::Result<Program> {
             output: Some(OutputProtocol::Count),
         },
         graded: None,
+        evidence: Default::default(),
     };
     cq_lang_sequence::contract::check(&program)?;
     Ok(program)

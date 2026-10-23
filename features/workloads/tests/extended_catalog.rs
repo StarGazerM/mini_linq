@@ -48,6 +48,7 @@ fn authored_cases_schemas_and_sql_cover_all_families() {
         );
         let operator = match case.family {
             "surface" => "SELECT DISTINCT",
+            "retail" => "SELECT DISTINCT",
             "union" | "stacked" => "UNION",
             "negation" => "NOT EXISTS",
             "aggregate" => "GROUP BY",
@@ -76,7 +77,8 @@ fn authored_cases_schemas_and_sql_cover_all_families() {
             ("aggregate", 3),
             ("recursion", 3),
             ("correlated", 3),
-            ("stacked", 2)
+            ("stacked", 2),
+            ("retail", 4),
         ])
     );
 }
@@ -110,5 +112,55 @@ fn tiny_fixtures_and_goldens_have_exact_provenance_and_shapes() {
             scenarios += 1;
         }
     }
-    assert_eq!(scenarios, 87);
+    assert_eq!(scenarios, 99);
+}
+
+#[test]
+fn retail_goldens_match_independent_existential_semantics() {
+    for name in [
+        "retail_h04",
+        "retail_h04_not_exists",
+        "retail_h16",
+        "retail_h22",
+    ] {
+        let case = cq_workloads::extended::case(name).unwrap();
+        for scenario in Scenario::ALL {
+            let data = case.generate(scenario).unwrap();
+            let rows = |index: usize| &data.relations[index].rows;
+            let mut expected = BTreeSet::new();
+            for left in rows(0) {
+                match name {
+                    "retail_h04" | "retail_h04_not_exists" => {
+                        let exists = rows(1).iter().any(|right| right[0] == left[0]);
+                        if exists == (name == "retail_h04") {
+                            expected.insert(vec![left[0]]);
+                        }
+                    }
+                    "retail_h16" => {
+                        for ps in rows(1).iter().filter(|ps| ps[0] == left[0]) {
+                            if !rows(2).iter().any(|bad| bad[0] == ps[1]) {
+                                expected.insert(vec![left[0], ps[1]]);
+                            }
+                        }
+                    }
+                    "retail_h22" => {
+                        if !rows(1).iter().any(|order| order[1] == left[0]) {
+                            expected.insert(vec![left[0]]);
+                        }
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            let golden = cq_workloads::dataset::read_result_rows(
+                case.path("golden").join(scenario.as_str()).join("tiny.csv"),
+                case.arity,
+            )
+            .unwrap();
+            assert_eq!(
+                golden,
+                expected.into_iter().collect::<Vec<_>>(),
+                "{name}/{scenario:?}"
+            );
+        }
+    }
 }

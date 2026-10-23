@@ -139,6 +139,16 @@ pub fn body(
 
 /// Enumerate satisfying valuations and project in authored output order.
 pub fn evaluate_cq(program: &cq::Program, database: &Database) -> Rows {
+    assert!(
+        program.query.group.is_none()
+            && program
+                .query
+                .head
+                .args
+                .iter()
+                .all(|argument| cq::rust::variable(argument).is_some()),
+        "computed and aggregate heads use compiled conformance targets"
+    );
     valuations(program, database).output(
         &program
             .query

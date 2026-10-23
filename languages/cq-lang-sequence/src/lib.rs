@@ -2,8 +2,10 @@
 //!
 //! A program appends `sequence { name = term; ... }` and an optional
 //! `graded machine { name at level.path; ... }` to a complete Structures program.
+//! Optional `evidence { ... }` records untrusted estimates for checked planning,
+//! never premises for correctness; see [`Evidence`] and [`EvidenceFact`].
 //! Terms are prefix forms: `rows`, `map`, `flatten`, `compact`, `tile`, `lookup`,
-//! `fold`, `canon`, `store`, `union` and `choose`, or references to earlier definitions.
+//! `fold`, `group`, `canon`, `store`, `union` and `choose`, or references to earlier definitions.
 //! Constructor names are also valid references when followed by a term boundary.
 //! A store may declare `store capacity N term`; the optional final sequence
 //! statement `output count;`, `output reserve;` or `output bounded;` selects the
@@ -19,10 +21,12 @@ use syn::punctuated::Punctuated;
 use syn::{Ident, LitInt, Token, braced, bracketed};
 
 pub mod contract;
+mod evidence;
 mod grading;
 
 pub use contract::check_rewrite;
 pub use cq_lang_structures as structures;
+pub use evidence::{Evidence, EvidenceFact, Selectivity};
 pub use grading::check_grading;
 
 mod kw {
@@ -37,6 +41,7 @@ mod kw {
     syn::custom_keyword!(items);
     syn::custom_keyword!(lookup);
     syn::custom_keyword!(fold);
+    syn::custom_keyword!(group);
     syn::custom_keyword!(canon);
     syn::custom_keyword!(store);
     syn::custom_keyword!(capacity);
@@ -56,6 +61,7 @@ pub struct Program {
     pub structures: cq_lang_structures::Program,
     pub sequence: Sequence,
     pub graded: Option<Graded>,
+    pub evidence: Evidence,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -87,6 +93,8 @@ pub enum Term {
         inner: Box<Term>,
     },
     Fold(Monoid, Box<Term>),
+    /// Host segmented fold over the complete distinct Physical input valuation.
+    Group(Ident, Box<Term>),
     Canon(Box<Term>),
     Store {
         capacity: Option<usize>,
@@ -278,6 +286,8 @@ pub struct Analysis {
     pub collectives: Vec<(String, Monoid, Vec<String>)>,
     pub output: Option<(String, OutputProtocol)>,
     pub obligations: Vec<Obligation>,
+    /// Untrusted planning advice, separate from checked facts and obligations.
+    pub evidence: Evidence,
 }
 
 impl Parse for Program {
@@ -290,6 +300,11 @@ impl Parse for Program {
             } else {
                 None
             },
+            evidence: if input.peek(evidence::kw::evidence) {
+                input.parse()?
+            } else {
+                Evidence::default()
+            },
         })
     }
 }
@@ -300,8 +315,10 @@ impl ToTokens for Program {
             structures,
             sequence,
             graded,
+            evidence,
         } = self;
-        tokens.extend(quote! { #structures #sequence #graded });
+        let evidence = (!evidence.facts.is_empty()).then_some(evidence);
+        tokens.extend(quote! { #structures #sequence #graded #evidence });
     }
 }
 
@@ -423,6 +440,9 @@ impl Parse for Term {
         } else if input.peek(kw::fold) {
             input.parse::<kw::fold>()?;
             Ok(Self::Fold(input.parse()?, input.parse()?))
+        } else if input.peek(kw::group) {
+            input.parse::<kw::group>()?;
+            Ok(Self::Group(input.parse()?, input.parse()?))
         } else if input.peek(kw::canon) {
             input.parse::<kw::canon>()?;
             Ok(Self::Canon(input.parse()?))
@@ -483,6 +503,7 @@ impl ToTokens for Term {
                 quote! { lookup #provider [#(#keys),*] #inner }
             }
             Self::Fold(monoid, inner) => quote! { fold #monoid #inner },
+            Self::Group(name, inner) => quote! { group #name #inner },
             Self::Canon(inner) => quote! { canon #inner },
             Self::Store { capacity, inner } => {
                 let capacity = capacity.map(|n| {

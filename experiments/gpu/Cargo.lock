@@ -218,6 +218,7 @@ dependencies = [
  "cq-lang-physical",
  "cq-lang-sequence",
  "cq-lang-structures",
+ "cq-lang-vo",
  "cq-load",
  "cq-order",
  "cq-physical-lowering",
@@ -232,6 +233,7 @@ dependencies = [
  "cuda-core",
  "cuda-device",
  "cuda-host",
+ "gpu-compress",
  "gpu-device-columns",
  "proc-macro2",
  "quote",
@@ -499,6 +501,7 @@ version = "0.1.0"
 dependencies = [
  "cq-lang-sequence",
  "cq-rewrite-passes",
+ "cq-sequence-lowering",
  "cq-syntax",
  "proc-macro2",
  "quote",

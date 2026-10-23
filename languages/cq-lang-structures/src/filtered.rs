@@ -60,6 +60,17 @@ pub fn required_columns(
                 );
             }
             Operator::Project(p) => require(&p.input, columns),
+            Operator::Group(group) => {
+                // Multiplicity is over complete valuations, including columns
+                // unused by any aggregate argument or output key.
+                require(
+                    &group.input,
+                    facts.headings[&symbol_name(&group.input)]
+                        .iter()
+                        .cloned()
+                        .collect(),
+                );
+            }
             Operator::Guard(g) => {
                 require(
                     &g.input,
@@ -319,6 +330,12 @@ pub(super) fn layouts(program: &Program, analysis: &Analysis) -> BTreeMap<String
             _ => analysis.physical.headings[&name].clone(),
         };
         columns.retain(|c| analysis.physical.headings[&name].contains(c));
+        // Opaque predicates observe their complete required input, but dead
+        // columns need not cross their output boundary. This is carrier
+        // projection after evaluation, not predicate motion or a totality fact.
+        if matches!(definition.operator, Operator::Guard(_)) {
+            columns.retain(|column| required[&name].contains(column));
+        }
         if let Some(filtered) = analysis.filtered.get(&name) {
             columns.retain(|column| {
                 filtered
@@ -338,4 +355,34 @@ pub(super) fn layouts(program: &Program, analysis: &Analysis) -> BTreeMap<String
         layouts.insert(name, columns);
     }
     layouts
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn guard_output_drops_dead_columns_without_changing_its_input_domain() {
+        let source: Program = syn::parse_quote! {
+            physical {
+                relation R(a:i32, label:String);
+                r = pipe rename R@0 { a -> a, label -> label };
+                selected = let guard r if (label.contains("green"));
+                projected = pipe canon project selected keep {a};
+                return projected as answer(a);
+            }
+            structures {
+                r host scan = Reader [];
+                selected rows = Rows;
+                projected canon = Canon;
+            }
+        };
+        let facts = crate::contract::check(&source).unwrap();
+        assert_eq!(facts.layouts["r"], ["a", "label"]);
+        assert_eq!(facts.layouts["selected"], ["a"]);
+        assert_eq!(facts.physical.headings["selected"], ["a", "label"]);
+        let needed = required_columns(&source.physical, &facts.physical);
+        assert!(needed["r"].contains("label"));
+        assert!(!needed["selected"].contains("label"));
+    }
 }

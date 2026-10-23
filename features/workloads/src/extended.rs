@@ -201,6 +201,78 @@ const HIDDEN_X_Y: Relation = Relation {
 
 pub const CASES: &[Case] = &[
     Case {
+        name: "retail_h04",
+        family: "retail",
+        relations: &[
+            Relation {
+                name: "Orders",
+                columns: &[("order_key", I32)],
+            },
+            Relation {
+                name: "LateLineitem",
+                columns: &[("order_key", I32)],
+            },
+        ],
+        rust_path: "src/queries/extended/retail_h04.rs",
+        arity: 1,
+        sql: include_str!("../sql/extended/retail_h04.sql"),
+    },
+    Case {
+        name: "retail_h04_not_exists",
+        family: "retail",
+        relations: &[
+            Relation {
+                name: "Orders",
+                columns: &[("order_key", I32)],
+            },
+            Relation {
+                name: "LateLineitem",
+                columns: &[("order_key", I32)],
+            },
+        ],
+        rust_path: "src/queries/extended/retail_h04_not_exists.rs",
+        arity: 1,
+        sql: include_str!("../sql/extended/retail_h04_not_exists.sql"),
+    },
+    Case {
+        name: "retail_h16",
+        family: "retail",
+        relations: &[
+            Relation {
+                name: "Part",
+                columns: &[("part_key", I32)],
+            },
+            Relation {
+                name: "Partsupp",
+                columns: &[("part_key", I32), ("suppkey", I32)],
+            },
+            Relation {
+                name: "BadSupplier",
+                columns: &[("suppkey", I32)],
+            },
+        ],
+        rust_path: "src/queries/extended/retail_h16.rs",
+        arity: 2,
+        sql: include_str!("../sql/extended/retail_h16.sql"),
+    },
+    Case {
+        name: "retail_h22",
+        family: "retail",
+        relations: &[
+            Relation {
+                name: "Customer",
+                columns: &[("custkey", I32)],
+            },
+            Relation {
+                name: "Orders",
+                columns: &[("order_key", I32), ("custkey", I32)],
+            },
+        ],
+        rust_path: "src/queries/extended/retail_h22.rs",
+        arity: 1,
+        sql: include_str!("../sql/extended/retail_h22.sql"),
+    },
+    Case {
         name: "surface_constant",
         family: "surface",
         relations: &[R_X_TAG],
@@ -443,6 +515,29 @@ fn fixture(name: &str, scenario: Scenario) -> Vec<Vec<Vec<i32>>> {
     // All coverage fixtures retain duplicates and deliberately unsorted rows.
     // No-match keeps every input nonempty. Empty-input empties only input 0.
     match (name, no_match) {
+        ("retail_h04", false) | ("retail_h04_not_exists", false) => vec![
+            vec![vec![3], vec![1], vec![2], vec![1]],
+            vec![vec![1], vec![1], vec![9]],
+        ],
+        ("retail_h04", true) => vec![vec![vec![1]], vec![vec![9]]],
+        ("retail_h04_not_exists", true) => vec![vec![vec![1]], vec![vec![1]]],
+        ("retail_h16", false) => vec![
+            vec![vec![2], vec![1], vec![1]],
+            vec![
+                vec![1, 10],
+                vec![1, 11],
+                vec![2, 10],
+                vec![2, 12],
+                vec![1, 11],
+            ],
+            vec![vec![10], vec![10], vec![99]],
+        ],
+        ("retail_h16", true) => vec![vec![vec![1]], vec![vec![1, 10]], vec![vec![10]]],
+        ("retail_h22", false) => vec![
+            vec![vec![3], vec![1], vec![2], vec![3]],
+            vec![vec![10, 1], vec![11, 1], vec![10, 1], vec![90, 9]],
+        ],
+        ("retail_h22", true) => vec![vec![vec![1]], vec![vec![10, 1]]],
         ("surface_constant", false) => vec![vec![vec![3, 7], vec![-1, 7], vec![3, 8], vec![3, 7]]],
         ("surface_constant", true) => vec![vec![vec![3, 8]]],
         ("surface_negative_constant", false) => {

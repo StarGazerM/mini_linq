@@ -61,9 +61,10 @@
 //! | `host_sets(E, ...)` | Records `host_set E;` and removes canon implied by full-heading keys | Names used host relations. Every printer checks exact input distinctness before execution and fails on duplicates; this is not an unchecked promise. Dropping a key still needs canon. |
 //! | `smallest_intersections` | Hoists independent relational definitions and records `probe smallest` | The public Physical `binary_intersection` predicate accepts the probe/check pair, and every interposed definition can move before the probe without moving Rust or breaking dependencies. |
 //! | `lazy_semijoins` | `semi eager` becomes `semi lazy` | The right input is a reusable host and all readers sharing its key are lazy membership reads after the rewrite. Named selections must include every eager peer. |
-//! | `build_host_reads` | Reusable host rename becomes retained `let` | Has nonempty integral (`i32`/`i64`) keyed stream reads and no lazy membership reader. Keys and relational predicates are unchanged; selection records providers afterwards. Const-only point/range scans remain host scans. |
+//! | `build_host_reads` | Reusable host rename becomes retained `let` | Has integral (`i32`/`i64`) keyed stream reads, including an empty Cartesian key, and no lazy membership reader. Keys and predicates are unchanged; selection records providers afterwards. Const-only point/range scans remain host scans. |
+//! | `hoist(r, ...)` | Moves selected relational producers and their dependency closure before other definitions | Explicit names only; stable dependency order; opaque Rust dependencies reject; Physical correspondence checks branch scope and Before obligations. |
 //!
-//! Except for `build_host_reads`' explicit retention decision, these passes
+//! Except for `build_host_reads` and `retain_streams`' explicit retention decisions, these passes
 //! preserve the operator graph, declarations, keys, modes, return head, and
 //! opaque Rust expressions. `smallest_intersections` moves interposed
 //! relational definitions earlier, preserving their dependency order, to make
@@ -71,7 +72,9 @@
 //! renames and retained relational chains. Bind/guard nodes stay at their original
 //! positions with the same payloads. An interposed Rust node or a consumer of the
 //! candidate blocks the rewrite; an explicit named selection then reports an
-//! inadmissible result. Other passes preserve definition order.
+//! inadmissible result. `hoist` moves only the selected relational dependency
+//! closure; the remaining definitions retain their relative order. Other passes
+//! preserve definition order.
 //! `smallest_intersections` currently has Set semantics. For future bag/K-relation
 //! semantics, discarding candidate multiplicity additionally requires the checked
 //! `host_set` fact (or a derived uniqueness key); bag gating is not implicit here.
@@ -242,6 +245,15 @@ physical_rewrite!(lazy_semijoins);
 physical_rewrite!(build_host_reads);
 physical_rewrite!(host_sets);
 physical_rewrite!(retain_streams);
+physical_rewrite!(hoist);
+
+/// Certify a fully-bound probe as an existential read using checked Structures
+/// membership storage; the Physical operator and query remain unchanged.
+#[proc_macro]
+pub fn membership(input: TokenStream) -> TokenStream {
+    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), cq_rewrite_passes::membership)
+        .into()
+}
 
 /// Change only the representation types matched by `selector => RustType`.
 #[proc_macro]

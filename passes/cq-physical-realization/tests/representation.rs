@@ -10,6 +10,77 @@ fn source_tokens(module: &cq_lang_structures::Program) -> syn::Result<proc_macro
 }
 
 #[test]
+fn grouped_adapter_emits_one_typed_hash_fold_over_complete_valuations() {
+    let physical = syn::parse_quote! { physical {
+        relation R(k:i32,id:i32,v:i32);
+        relation answer(k:i32,n:usize,total:i32,lo:Option<i32>,hi:Option<i32>);
+        r = pipe canon rename R@0 {k -> k,id -> id,v -> v};
+        grouped = pipe group r by [k] {
+            n:usize = count(); total:i32 = sum(v);
+            lo:Option<i32> = min(v); hi:Option<i32> = max(v);
+        };
+        return grouped as answer(k,n,total,lo,hi);
+    }};
+    let selected = cq_structure_selection::compile(&physical).unwrap();
+    let facts = cq_lang_structures::contract::check(&selected).unwrap();
+    let mut context = cq_print::Context::new(&selected, &facts);
+    context.register("r");
+    context.register("grouped");
+    assert_eq!(context.carried("r"), ["id", "k", "v"]);
+    let mut emitter = cq_physical_realization::RowEmitter::new(context);
+    let rows = emitter
+        .operator("grouped", Some(("r".into(), quote!(__canonical_rows))))
+        .unwrap();
+    syn::parse2::<syn::Expr>(rows.clone()).unwrap();
+    let printed = rows.to_string();
+    assert_eq!(printed.matches("for ").count(), 1, "{printed}");
+    assert!(printed.contains("HashMap"), "{printed}");
+    assert!(
+        printed.contains("usize , i32 , Option < i32 > , Option < i32 >"),
+        "{printed}"
+    );
+    assert!(printed.contains("or_insert_with"), "{printed}");
+    assert!(printed.contains("Option :: Some"), "{printed}");
+    assert!(printed.contains("< __cq_previous"), "{printed}");
+    assert!(printed.contains("> __cq_previous"), "{printed}");
+    let complete = source_tokens(&selected).unwrap();
+    syn::parse2::<syn::Expr>(quote!({ #complete })).unwrap();
+}
+
+#[test]
+fn global_group_emits_an_identity_row_even_when_the_input_loop_is_empty() {
+    let physical = syn::parse_quote! { physical {
+        relation R(v:i32);
+        relation answer(n:usize,total:i32,lo:Option<i32>,hi:Option<i32>);
+        r = pipe canon rename R@0 {v -> v};
+        grouped = pipe group r by [] {
+            n:usize = count(); total:i32 = sum(v);
+            lo:Option<i32> = min(v); hi:Option<i32> = max(v);
+        };
+        return grouped as answer(n,total,lo,hi);
+    }};
+    let selected = cq_structure_selection::compile(&physical).unwrap();
+    let facts = cq_lang_structures::contract::check(&selected).unwrap();
+    let mut context = cq_print::Context::new(&selected, &facts);
+    context.register("r");
+    context.register("grouped");
+    let mut emitter = cq_physical_realization::RowEmitter::new(context);
+    let rows = emitter
+        .operator(
+            "grouped",
+            Some(("r".into(), quote!(::core::iter::empty::<(&i32,)>()))),
+        )
+        .unwrap();
+    syn::parse2::<syn::Expr>(rows.clone()).unwrap();
+    let printed = rows.to_string();
+    assert!(!printed.contains("HashMap"), "{printed}");
+    assert!(printed.contains("0usize"), "{printed}");
+    assert!(printed.contains("default"), "{printed}");
+    assert_eq!(printed.matches("Option :: None").count(), 2, "{printed}");
+    assert!(printed.contains("iter :: once"), "{printed}");
+}
+
+#[test]
 fn positions_print_fetches_and_tuple_boundaries_after_probes() {
     let physical = syn::parse_quote! {
         physical {

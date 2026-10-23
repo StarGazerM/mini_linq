@@ -198,3 +198,47 @@ fn every_pass_checks_the_source_contract() {
         assert!(pass(&invalid, advice).is_err());
     }
 }
+
+#[test]
+fn evidence_advice_is_checked_replayable_metadata() {
+    let source = program(quote!(out = store rows r;));
+    let target = apply(
+        cq_sequence_rewrite_passes::evidence,
+        &source,
+        quote!(evidence {
+            count R = 0;
+            key R [a];
+            foreign_key R [a] -> r [a];
+            selectivity out = 0 / 1;
+            bounds R.a = 42 ..= -42;
+            sorted R [a];
+        }),
+    );
+    assert_eq!(target.sequence, source.sequence);
+    assert_eq!(target.structures, source.structures);
+    assert_eq!(target.graded, source.graded);
+    assert_eq!(target.evidence.count("R"), Some(0));
+    assert_eq!(contract::check(&target).unwrap().evidence, target.evidence);
+    assert_eq!(
+        cq_sequence_rewrite_passes::record_evidence(&target, &target.evidence).unwrap(),
+        target
+    );
+    let extended = apply(
+        cq_sequence_rewrite_passes::evidence,
+        &target,
+        quote!(evidence { count R = 123; }),
+    );
+    assert_eq!(
+        &extended.evidence.facts[..target.evidence.facts.len()],
+        &target.evidence.facts
+    );
+    assert_eq!(extended.evidence.count("R"), Some(123));
+    assert!(
+        cq_sequence_rewrite_passes::evidence(&source, quote!(evidence { count absent = 1; }))
+            .is_err()
+    );
+    assert!(
+        cq_sequence_rewrite_passes::evidence(&source, quote!(evidence { sorted R [absent]; }))
+            .is_err()
+    );
+}

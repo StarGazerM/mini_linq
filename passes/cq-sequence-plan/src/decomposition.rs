@@ -6,6 +6,7 @@ use crate::Advice;
 /// named: the shared rewrite follows their references without fusing them.
 /// Existing tiles are authored scheduling choices, including their item counts.
 pub(crate) fn advise(
+    checker: &mut cq_lang_sequence::contract::Checker,
     program: &Program,
     machine: &Machine,
     items: usize,
@@ -61,7 +62,7 @@ pub(crate) fn advise(
         }
         if let Some(name) = unstored_input(&current, &definition.term) {
             let step = Advice::Store(name);
-            current = step.apply(&current)?;
+            current = step.apply_in(checker, &current)?;
             advice.push(step);
         }
         let step = Advice::Partition {
@@ -69,7 +70,7 @@ pub(crate) fn advise(
             n: width,
             items: (items > 1 && expands(&current, &definition.term)).then_some(items),
         };
-        let next = step.apply(&current)?;
+        let next = step.apply_in(checker, &current)?;
         if next != current {
             advice.push(step);
             current = next;
@@ -111,7 +112,7 @@ pub(crate) fn advise(
             n: inner_width,
             items: (items > 1).then_some(items),
         };
-        current = step.apply(&current)?;
+        current = step.apply_in(checker, &current)?;
         advice.push(step);
     }
     Ok(advice)
@@ -135,6 +136,7 @@ fn unstored_input(program: &Program, term: &Term) -> Option<syn::Ident> {
         | Term::Compact(_, inner)
         | Term::Lookup { inner, .. }
         | Term::Fold(_, inner)
+        | Term::Group(_, inner)
         | Term::Canon(inner)
         | Term::Store { inner, .. } => unstored_input(program, inner),
         Term::Tile { .. } | Term::Union(_) | Term::Choose(_) | Term::Rows(_) => None,
@@ -160,6 +162,7 @@ fn has_tile(program: &Program, term: &Term) -> bool {
         | Term::Compact(_, inner)
         | Term::Lookup { inner, .. }
         | Term::Fold(_, inner)
+        | Term::Group(_, inner)
         | Term::Canon(inner)
         | Term::Store { inner, .. } => has_tile(program, inner),
         Term::Union(arms) => arms.iter().any(|term| has_tile(program, term)),
@@ -178,6 +181,7 @@ fn expands(program: &Program, term: &Term) -> bool {
         | Term::Compact(_, inner)
         | Term::Lookup { inner, .. }
         | Term::Fold(_, inner)
+        | Term::Group(_, inner)
         | Term::Canon(inner)
         | Term::Tile { inner, .. }
         | Term::Store { inner, .. } => expands(program, inner),

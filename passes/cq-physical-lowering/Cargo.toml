@@ -17,6 +17,8 @@ syn.workspace = true
 cq-testkit.workspace = true
 cq-lang-structures.workspace = true
 cq-syntax.workspace = true
+cq-index-policy.workspace = true
+cq-structure-selection.workspace = true
 
 
 [package.metadata.cq]

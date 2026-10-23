@@ -1,0 +1,10 @@
+mini-linq-dataset	2
+suite	extended
+case	retail_h04_not_exists
+scenario	empty-input
+scale	tiny
+seed	7274206080383030832
+generator-version	2
+relations	2
+relation	Orders	1	0	0
+relation	LateLineitem	1	3	2

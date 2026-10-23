@@ -1,0 +1,140 @@
+//! The author-facing serialization of the planner's checked trace.
+use proc_macro2::TokenStream;
+use quote::{ToTokens, quote};
+use syn::parse::{Parse, ParseStream};
+use syn::{Ident, LitInt, Token, parenthesized};
+
+use crate::Advice;
+
+impl Parse for Advice {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let fork = input.fork();
+        let kind: Ident = fork.parse()?;
+        if kind == "evidence" {
+            return input.parse().map(Self::Evidence);
+        }
+        let kind: Ident = input.parse()?;
+        let arguments;
+        parenthesized!(arguments in input);
+        let result = match kind.to_string().as_str() {
+            "store" => Self::Store(arguments.parse()?),
+            "lookup_first" => Self::LookupFirst(Box::new(arguments.parse()?)),
+            "adaptive" => Self::Adaptive(arguments.parse()?),
+            "store_level" => Self::StoreLevel(arguments.parse()?),
+            "publish" => {
+                let name = arguments.parse()?;
+                arguments.parse::<Token![,]>()?;
+                Self::Publish {
+                    name,
+                    producer: arguments.parse()?,
+                }
+            }
+            "tile" | "partition" | "segment" => {
+                let name = arguments.parse()?;
+                arguments.parse::<Token![,]>()?;
+                let n = arguments.parse::<LitInt>()?.base10_parse()?;
+                let items = if arguments.peek(Token![,]) {
+                    arguments.parse::<Token![,]>()?;
+                    let keyword: Ident = arguments.parse()?;
+                    if keyword != "items" {
+                        return Err(syn::Error::new(keyword.span(), "expected items"));
+                    }
+                    Some(arguments.parse::<LitInt>()?.base10_parse()?)
+                } else {
+                    None
+                };
+                match kind.to_string().as_str() {
+                    "tile" => Self::Tile { name, n, items },
+                    "partition" => Self::Partition { name, n, items },
+                    _ => Self::Segment { name, n, items },
+                }
+            }
+            "output" => Self::Output(arguments.parse()?),
+            "grade" => {
+                let machine = arguments.parse()?;
+                arguments.parse::<Token![,]>()?;
+                let name = arguments.parse()?;
+                let keyword: Ident = arguments.parse()?;
+                if keyword != "at" {
+                    return Err(syn::Error::new(keyword.span(), "expected at"));
+                }
+                let level = arguments
+                    .parse_terminated(Ident::parse, Token![.])?
+                    .into_iter()
+                    .collect();
+                Self::Grade {
+                    name,
+                    level,
+                    machine,
+                }
+            }
+            _ => return Err(syn::Error::new(kind.span(), "unknown Sequence advice")),
+        };
+        if !arguments.is_empty() {
+            return Err(arguments.error("unexpected advice argument"));
+        }
+        Ok(result)
+    }
+}
+
+impl ToTokens for Advice {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        let invocation = match self {
+            Self::Evidence(evidence) => quote!(#evidence),
+            Self::LookupFirst(arguments) => quote!(lookup_first(#arguments)),
+            Self::Store(name) => quote!(store(#name)),
+            Self::StoreLevel(name) => quote!(store_level(#name)),
+            Self::Adaptive(arguments) => quote!(adaptive(#arguments)),
+            Self::Publish { name, producer } => quote!(publish(#name, #producer)),
+            Self::Tile { name, n, items }
+            | Self::Partition { name, n, items }
+            | Self::Segment { name, n, items } => {
+                let kind = match self {
+                    Self::Tile { .. } => "tile",
+                    Self::Partition { .. } => "partition",
+                    _ => "segment",
+                };
+                let kind = Ident::new(kind, name.span());
+                let n = LitInt::new(&n.to_string(), name.span());
+                let items = items.map(|items| {
+                    let items = LitInt::new(&items.to_string(), name.span());
+                    quote!(, items #items)
+                });
+                quote!(#kind(#name, #n #items))
+            }
+            Self::Output(protocol) => quote!(output(#protocol)),
+            Self::Grade {
+                name,
+                level,
+                machine,
+            } => quote!(grade(#machine, #name at #(#level).*)),
+        };
+        tokens.extend(invocation);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn authored_advice_is_the_serialized_planner_trace() {
+        for invocation in [
+            "store(result)",
+            "store_level(joined)",
+            "publish(result, producer)",
+            "tile(result, 256)",
+            "partition(result, 256, items 4)",
+            "segment(result, 1024, items 4)",
+            "output(reserve)",
+            "grade(gpu, result at host.device)",
+            "evidence { count R = 42; }",
+            "lookup_first(using Index, order [r,s,t], transfer [s], early [t])",
+            "adaptive(filtered, published, 100000)",
+            "adaptive(filtered, published, 100000, select false)",
+        ] {
+            let advice: Advice = syn::parse_str(invocation).unwrap();
+            assert_eq!(advice, syn::parse2(advice.to_token_stream()).unwrap());
+        }
+    }
+}

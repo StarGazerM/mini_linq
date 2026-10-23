@@ -1,0 +1,10 @@
+mini-linq-dataset	2
+suite	extended
+case	retail_h04
+scenario	coverage
+scale	tiny
+seed	10298000977449023577
+generator-version	2
+relations	2
+relation	Orders	1	4	3
+relation	LateLineitem	1	3	2
