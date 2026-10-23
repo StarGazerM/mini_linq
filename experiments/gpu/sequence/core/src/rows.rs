@@ -42,6 +42,23 @@ struct Provider {
 pub struct DeviceRow(pub BTreeMap<usize, TokenStream>);
 
 impl DeviceRow {
+    pub fn writes(tokens: TokenStream) -> syn::Result<BTreeSet<usize>> {
+        struct Writes(BTreeSet<usize>);
+        impl VisitMut for Writes {
+            fn visit_expr_mut(&mut self, expression: &mut syn::Expr) {
+                if let syn::Expr::Assign(assign) = expression
+                    && let Some(slot) = row_slot(&assign.left)
+                {
+                    self.0.insert(slot);
+                }
+                syn::visit_mut::visit_expr_mut(self, expression);
+            }
+        }
+        let mut block: syn::Block = syn::parse2(quote!({#tokens}))?;
+        let mut writes = Writes(BTreeSet::new());
+        writes.visit_block_mut(&mut block);
+        Ok(writes.0)
+    }
     pub fn uses(tokens: TokenStream) -> syn::Result<BTreeSet<usize>> {
         struct Uses(BTreeSet<usize>);
         impl VisitMut for Uses {

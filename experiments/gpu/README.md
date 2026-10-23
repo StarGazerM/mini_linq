@@ -16,6 +16,10 @@ and `grade` records machine placements. Canonicalization remains a Sequence
 `canon` term with its recorded implementation. Translator rejection is not a
 license to substitute another query or plan.
 
+Computed CQ-Arith bindings in segmented maps are lane-local scalar codes.
+Sibling lanes may read parent-owned codes through their owner index, but map
+assignments never write those shared parent slots.
+
 ## Build and run
 
 From this directory, with the pinned cuda-oxide backend:

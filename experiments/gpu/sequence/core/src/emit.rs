@@ -797,14 +797,23 @@ impl Kernel<'_, '_> {
         };
         match operation {
             Operation::Map(name, input) => {
-                let map = row.rewrite(self.compiler.rows.map(
-                    name,
-                    input,
-                    quote!(__row),
-                    quote!(__live),
-                )?)?;
-                let rest = self.scalar_operations(rest, row)?;
-                Ok(quote!(#map #rest))
+                let map = self
+                    .compiler
+                    .rows
+                    .map(name, input, quote!(__row), quote!(__live))?;
+                // A child may read parent-owned shared codes, but its computed
+                // bindings must be lane-local: siblings can share one owner.
+                let mut local = row.clone();
+                let mut declarations = TokenStream::new();
+                for slot in DeviceRow::writes(map.clone())? {
+                    let id = format_ident!("__map_code_{slot}");
+                    let ty = self.code_type(slot);
+                    declarations.extend(quote!(let mut #id: #ty = 0;));
+                    local.0.insert(slot, quote!(#id));
+                }
+                let map = local.rewrite(map)?;
+                let rest = self.scalar_operations(rest, &local)?;
+                Ok(quote! { { #declarations #map #rest } })
             }
             Operation::Lookup {
                 provider,
@@ -1043,27 +1052,31 @@ impl Kernel<'_, '_> {
     fn output_write(&self) -> syn::Result<TokenStream> {
         let width = self.compiler.rows.width;
         let write = if let Some(columns) = &self.packed_columns {
-            let parts=columns.iter().enumerate().map(|(i,column)| {
-                let slot=self.compiler.slot(column)?;
-                let base=format_ident!("__cq_pack_base_{i}");
-                let shift=format_ident!("__cq_pack_shift_{i}");
-                let value = if self.compiler.rows.dense.contains(&slot) && !self.scalar_output {
-                    quote!((__row[#slot] as u32).wrapping_sub(#base as u32) as u64)
-                } else {
-                    quote!(__row[#slot].wrapping_sub(#base) as u64)
-                };
-                Ok(quote! {
-                    let value = #value;
-                    let lane = (#shift / 64) as usize;
-                    let local = #shift % 64;
-                    if lane < __cq_key_lanes {
-                        *__packed.add(lane) |= value << local;
-                        if local != 0 && lane + 1 < __cq_key_lanes {
-                            *__packed.add(lane + 1) |= value >> (64 - local);
+            let parts = columns
+                .iter()
+                .enumerate()
+                .map(|(i, column)| {
+                    let slot = self.compiler.slot(column)?;
+                    let base = format_ident!("__cq_pack_base_{i}");
+                    let shift = format_ident!("__cq_pack_shift_{i}");
+                    let value = if self.compiler.rows.dense.contains(&slot) && !self.scalar_output {
+                        quote!((__row[#slot] as u32).wrapping_sub(#base as u32) as u64)
+                    } else {
+                        quote!(__row[#slot].wrapping_sub(#base) as u64)
+                    };
+                    Ok(quote! {
+                        let value = #value;
+                        let lane = (#shift / 64) as usize;
+                        let local = #shift % 64;
+                        if lane < __cq_key_lanes {
+                            *__packed.add(lane) |= value << local;
+                            if local != 0 && lane + 1 < __cq_key_lanes {
+                                *__packed.add(lane + 1) |= value >> (64 - local);
+                            }
                         }
-                    }
+                    })
                 })
-            }).collect::<syn::Result<Vec<_>>>()?;
+                .collect::<syn::Result<Vec<_>>>()?;
             quote! {
                 let __packed = __output_keys.add(__destination as usize * __cq_key_lanes);
                 for lane in 0..__cq_key_lanes { *__packed.add(lane) = 0; }
@@ -1547,7 +1560,13 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                                     quote!(#fields[#field].shift),
                                     quote!(#fields[#field].bits),
                                 ]);
-                                let offset = packed_offset(quote!(keys), quote!(position), quote!(lanes), quote!(#shift), quote!(#bits));
+                                let offset = packed_offset(
+                                    quote!(keys),
+                                    quote!(position),
+                                    quote!(lanes),
+                                    quote!(#shift),
+                                    quote!(#bits),
+                                );
                                 writes.push(quote! {
                                     let value = #offset;
                                     *rows.add(position * #width + #slot) = #base.wrapping_add(value as i64);
@@ -1607,7 +1626,9 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                     analysis.structures.physical.headings[result].clone()
                 };
                 if canonical || final_output {
-                    let provider = canonical.then(|| canon_type(analysis, &publication)).transpose()?;
+                    let provider = canonical
+                        .then(|| canon_type(analysis, &publication))
+                        .transpose()?;
                     let mut fields = Vec::new();
                     let mut params = Vec::new();
                     let mut args = Vec::new();
@@ -1761,7 +1782,13 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                                     .ok_or_else(|| {
                                         error("host consumer column absent from packed publication")
                                     })?;
-                                let offset = packed_offset(quote!(__cq_downloaded_codes.as_ptr()), quote!(__position), quote!(__lanes), quote!(field.shift), quote!(field.bits));
+                                let offset = packed_offset(
+                                    quote!(__cq_downloaded_codes.as_ptr()),
+                                    quote!(__position),
+                                    quote!(__lanes),
+                                    quote!(field.shift),
+                                    quote!(field.bits),
+                                );
                                 quote! {{
                                     let field = #fields[#field];
                                     let offset = #offset;
@@ -1844,7 +1871,9 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                 .iter()
                 .any(|op| matches!(op, Operation::Canon))
         });
-        let provider = canonical.then(|| canon_type(analysis, &publication)).transpose()?;
+        let provider = canonical
+            .then(|| canon_type(analysis, &publication))
+            .transpose()?;
         if !canonical
             && chains.iter().any(|chain| {
                 chain
@@ -2145,7 +2174,13 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                         let base = format_ident!("__cq_stored_base_{prior}_{field}");
                         let shift = format_ident!("__cq_stored_shift_{prior}_{field}");
                         let bits = format_ident!("__cq_stored_bits_{prior}_{field}");
-                        let offset = packed_offset(quote!(#keys), quote!(__position as usize), quote!(#lanes), quote!(#shift), quote!(#bits));
+                        let offset = packed_offset(
+                            quote!(#keys),
+                            quote!(__position as usize),
+                            quote!(#lanes),
+                            quote!(#shift),
+                            quote!(#bits),
+                        );
                         unpack.extend(quote! {
                             let __offset = #offset;
                             __row[#slot]=#base.wrapping_add(__offset as i64);
@@ -2403,7 +2438,9 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
             .definitions
             .get(final_name)
             .is_some_and(|term| canonical_publication(term, &compiler.definitions));
-        let provider = canonical.then(|| canon_type(analysis, final_name)).transpose()?;
+        let provider = canonical
+            .then(|| canon_type(analysis, final_name))
+            .transpose()?;
         // A checked host publication may be the complete result. Its transfer
         // to the device is a storage adapter, not an additional row dispatch.
         let mut name = final_name;

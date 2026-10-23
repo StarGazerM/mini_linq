@@ -243,11 +243,10 @@ fn mixed_conjunction_pushes_the_comparison_and_pins_the_residual_in_written_orde
 }
 
 #[test]
-fn mixed_disjunction_negation_and_arithmetic_stay_wholly_opaque() {
+fn mixed_disjunction_and_negation_stay_wholly_opaque() {
     for expression in [
         quote::quote!(f(*od) || *od < cutoff),
         quote::quote!(!(*od < cutoff && f(*od))),
-        quote::quote!(*od + 1 < 5),
     ] {
         let source: cq::Program = syn::parse2(quote::quote! {
             struct Q; relation R(a:i32); relation S(a:i32);

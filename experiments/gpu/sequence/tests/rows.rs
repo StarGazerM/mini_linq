@@ -194,3 +194,53 @@ fn planned_retained_provider_filter_evaluates_row_columns_before_build() {
     assert!(!generated.contains("RangeSelection"));
     assert!(!generated.contains("__row"));
 }
+
+#[test]
+fn segmented_arithmetic_bindings_are_lane_local() {
+    let program: Program = syn::parse_quote! {
+        physical {
+            relation Driver(a:i32) = (&data.driver);
+            relation Provider(a:i32, value:i32) = (&data.provider);
+            driver = pipe rename Driver@0 {a -> a};
+            provider = let rename Provider@1 {a -> a, value -> value};
+            joined = pipe probe first [a] driver, provider;
+            computed = pipe bind joined with doubled:i32 = (*value * 2);
+            result = pipe canon project computed keep {a, doubled};
+            return result as answer(a, doubled);
+        }
+        structures {
+            driver host scan = ::cq_gpu_runtime::DeviceColumns [];
+            provider host scan = ::cq_gpu_runtime::DeviceColumns [];
+            provider = ::cq_gpu_sequence_runtime::RangeProvider [a];
+            result canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+        }
+        sequence {
+            input = store rows driver;
+            index = store rows provider;
+            joined_rows = flatten lookup provider [a] flatten tile 256 input;
+            computed_rows = map computed joined_rows;
+            output_rows = store canon map result computed_rows;
+            output count;
+        }
+        graded gpu {
+            input at host;
+            index at host;
+            joined_rows at host.device.block;
+            computed_rows at host.device.block;
+            output_rows at host.device;
+        }
+    };
+    let generated = translate(&program);
+    assert!(generated.contains("__child_position"), "{generated}");
+    assert!(generated.contains("let mut __map_code_"), "{generated}");
+    assert!(generated.contains("wrapping_mul (* value , 2)"), "{generated}");
+    // Parent slots can be read by sibling lanes, never assigned by a map.
+    for statement in generated.split(';') {
+        if let Some((left, _)) = statement.split_once(" = ") {
+            assert!(
+                !(left.contains("* __parent_") && left.contains("__owner")),
+                "{statement}"
+            );
+        }
+    }
+}
