@@ -650,6 +650,7 @@ pub fn compile(source: &cq::Program, options: &Options) -> syn::Result<valuation
 
 /// A top-level positive atom selected by relation, optionally qualified by its
 /// zero-based normal-body clause index (the same occurrence used by `R@0` in RA).
+/// `block@i` selects a whole top-level block without reordering its branches.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OrderAtom {
     pub relation: syn::Ident,
@@ -672,8 +673,9 @@ impl syn::parse::Parse for OrderAtom {
 /// Author a coarse top-level relation order without rewriting the query.
 /// Unqualified relations must occur exactly once; `R@i` selects the positive
 /// atom named R at normal-body clause i, including non-atom clauses in the
-/// numbering. Unnamed clauses retain written priority after named atoms.
-/// Opaque Rust still obeys readiness and Before; nested blocks keep their order.
+/// numbering. `block@i` selects a block as a unit. Unnamed clauses retain
+/// written priority after named atoms/blocks. Opaque Rust still obeys readiness
+/// and Before; nested blocks keep their internal order.
 pub fn compile_explicit(
     source: &cq::Program,
     relations: &[OrderAtom],
@@ -685,12 +687,19 @@ pub fn compile_explicit(
     for (priority, selector) in relations.iter().enumerate() {
         let relation = &selector.relation;
         let occurrence = if let Some(index) = selector.occurrence {
-            if !matches!(source.query.body.get(index),
-                Some(BodyItem::Positive { atom }) if atom.relation == *relation)
-            {
+            let matches = match source.query.body.get(index) {
+                Some(BodyItem::Positive { atom }) => atom.relation == *relation,
+                Some(BodyItem::Block(_)) => relation == "block",
+                _ => false,
+            };
+            if !matches {
                 return Err(syn::Error::new_spanned(
                     relation,
-                    format!("order advice {relation}@{index} does not name that top-level positive atom"),
+                    if relation == "block" {
+                        format!("order advice block@{index} does not name a top-level block")
+                    } else {
+                        format!("order advice {relation}@{index} does not name that top-level positive atom")
+                    },
                 ));
             }
             index

@@ -124,6 +124,46 @@ fn occurrence_qualified_order_uses_normal_body_positions() {
     }
 }
 
+#[test]
+fn explicit_block_order_preserves_branches_and_checks_dependencies() {
+    let source = normal(quote! {
+        struct Q;
+        relation R(a:i32,b:i32);
+        relation S(a:i32);
+        answer(x) :- S(x), { R(x,1) } | { R(x,2) };
+    });
+    let selector: cq_order::OrderAtom = syn::parse_quote!(block@1);
+    assert_eq!(selector.relation, "block");
+    assert_eq!(selector.occurrence, Some(1));
+    let planned = cq_order::compile_explicit(
+        &source, &[selector.clone(), syn::parse_quote!(S)],
+    ).unwrap();
+    assert_eq!(planned.cq, source);
+    assert!(matches!(&planned.valuation.steps[0],
+        valuation::Step::Block(block, _) if block.source.clause() == 1));
+    for order in [
+        vec![syn::parse_quote!(block@0)],
+        vec![syn::parse_quote!(block@99)],
+        vec![syn::parse_quote!(R@1)],
+        vec![selector.clone(), selector],
+    ] {
+        assert!(cq_order::compile_explicit(&source, &order).is_err());
+    }
+    assert!(syn::parse_str::<cq_order::OrderAtom>("block@").is_err());
+    assert!(syn::parse_str::<cq_order::OrderAtom>("block@-1").is_err());
+    let opaque = normal(quote! {
+        struct Q;
+        relation R(a:i32);
+        relation S(a:i32);
+        answer(x,y) :- R(x), { let y:i32 = *x + 1, S(y) }
+            | { let y:i32 = *x + 2, S(y) };
+    });
+    let error = cq_order::compile_explicit(
+        &opaque, &[syn::parse_quote!(block@1), syn::parse_quote!(R)],
+    ).unwrap_err();
+    assert!(error.to_string().contains("order advice conflicts"));
+}
+
 fn triangle() -> cq::Program {
     cq(quote! {
         struct Q;
