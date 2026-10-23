@@ -36,23 +36,57 @@ struct Checked<'a> {
     program: &'a Program,
     analysis: Analysis,
     facts: BTreeMap<String, Fact>,
+    physical: BTreeMap<String, usize>,
     support: &'a lookup_semantics::Context,
     queries: std::cell::OnceCell<std::rc::Rc<lookup_semantics::Queries>>,
+}
+
+struct CheckedProof {
+    program: Program,
+    analysis: Analysis,
+    facts: BTreeMap<String, Fact>,
 }
 
 /// Proof context shared by every checked rewrite in a planning invocation.
 #[derive(Default)]
 pub struct Checker {
     support: lookup_semantics::Context,
+    structures:
+        std::cell::RefCell<Vec<(cq_lang_structures::Program, cq_lang_structures::Analysis)>>,
+    proofs: std::cell::RefCell<Vec<std::rc::Rc<CheckedProof>>>,
 }
 
 impl Checker {
+    fn structures(
+        &self,
+        program: &cq_lang_structures::Program,
+    ) -> syn::Result<cq_lang_structures::Analysis> {
+        if let Some((_, analysis)) = self
+            .structures
+            .borrow()
+            .iter()
+            .rev()
+            .find(|(checked, _)| checked == program)
+        {
+            return Ok(analysis.clone());
+        }
+        let analysis = cq_lang_structures::contract::check(program)?;
+        let mut cache = self.structures.borrow_mut();
+        // Reexpression checks both prefixes; decomposition changes neither.
+        // Keep those two proofs without retaining every explored candidate.
+        if cache.len() == 2 {
+            cache.remove(0);
+        }
+        cache.push((program.clone(), analysis.clone()));
+        Ok(analysis)
+    }
+
     pub fn check(&mut self, program: &Program) -> syn::Result<Analysis> {
-        analyze(program, &self.support).map(|checked| checked.analysis)
+        analyze(program, self).map(|checked| checked.analysis.clone())
     }
 
     pub fn check_rewrite_in(&mut self, source: &Program, target: &Program) -> syn::Result<()> {
-        check_rewrite_in(source, target, &self.support)
+        check_rewrite_in(source, target, self)
     }
 
     pub fn check_grading(
@@ -74,11 +108,15 @@ pub fn check(program: &Program) -> syn::Result<Analysis> {
     Checker::default().check(program)
 }
 
-fn analyze<'a>(
-    program: &'a Program,
-    support: &'a lookup_semantics::Context,
-) -> syn::Result<Checked<'a>> {
-    let structures = cq_lang_structures::contract::check(&program.structures)?;
+fn analyze(program: &Program, context: &Checker) -> syn::Result<std::rc::Rc<CheckedProof>> {
+    if let Some(proof) = context.proofs.borrow().iter().rev().find(|proof| {
+        proof.program.sequence == program.sequence
+            && proof.program.evidence == program.evidence
+            && proof.program.structures == program.structures
+    }) {
+        return Ok(proof.clone());
+    }
+    let structures = context.structures(&program.structures)?;
     let mut checker = Checked {
         program,
         analysis: Analysis {
@@ -93,12 +131,22 @@ fn analyze<'a>(
             capabilities: BTreeMap::new(),
             levels: BTreeMap::new(),
             dispatches: Vec::new(),
+            resources: BTreeMap::new(),
             collectives: Vec::new(),
             output: None,
             obligations: Vec::new(),
         },
         facts: BTreeMap::new(),
-        support,
+        physical: program
+            .structures
+            .physical
+            .program
+            .definitions
+            .iter()
+            .enumerate()
+            .map(|(i, definition)| (symbol_name(&definition.name), i))
+            .collect(),
+        support: &context.support,
         queries: std::cell::OnceCell::new(),
     };
     for definition in &program.sequence.definitions {
@@ -175,7 +223,17 @@ fn analyze<'a>(
         );
     }
     program.evidence.check(program, &checker.analysis)?;
-    Ok(checker)
+    let mut proofs = context.proofs.borrow_mut();
+    if proofs.len() == 2 {
+        proofs.remove(0);
+    }
+    let proof = std::rc::Rc::new(CheckedProof {
+        program: program.clone(),
+        analysis: checker.analysis,
+        facts: checker.facts,
+    });
+    proofs.push(proof.clone());
+    Ok(proof)
 }
 
 fn has_capacity(term: &Term) -> bool {
@@ -222,13 +280,9 @@ impl Checked<'_> {
         Ok(())
     }
     fn physical(&self, name: &Ident) -> syn::Result<&physical::Definition> {
-        self.program
-            .structures
-            .physical
-            .program
-            .definitions
-            .iter()
-            .find(|definition| symbol_name(&definition.name) == symbol_name(name))
+        self.physical
+            .get(&symbol_name(name))
+            .map(|&index| &self.program.structures.physical.program.definitions[index])
             .ok_or_else(|| syn::Error::new_spanned(name, "BE-Alpha: unknown Physical result"))
     }
 
@@ -1024,16 +1078,28 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
     Checker::default().check_rewrite_in(source, target)
 }
 
-fn check_rewrite_in(
-    source: &Program,
-    target: &Program,
-    support: &lookup_semantics::Context,
-) -> syn::Result<()> {
-    let source_facts = analyze(source, support)?;
-    let target_facts = analyze(target, support)?;
-    let unchanged = source.structures == target.structures
-        && source.structures.to_token_stream().to_string()
-            == target.structures.to_token_stream().to_string();
+fn check_rewrite_in(source: &Program, target: &Program, context: &Checker) -> syn::Result<()> {
+    // Grade-only advice has identical structural obligations and final meaning.
+    // Reuse the complete proof without cloning its analysis for each grade.
+    if std::ptr::eq(source, target)
+        || (source.sequence == target.sequence
+            && source.evidence == target.evidence
+            && source.structures == target.structures)
+    {
+        let checked = context.proofs.borrow().iter().rev().any(|proof| {
+            proof.program.sequence == source.sequence
+                && proof.program.evidence == source.evidence
+                && proof.program.structures == source.structures
+        });
+        if !checked {
+            analyze(source, context)?;
+        }
+        return Ok(());
+    }
+    let source_facts = analyze(source, context)?;
+    let target_facts = analyze(target, context)?;
+    let support = &context.support;
+    let unchanged = source.structures == target.structures;
     let preserves_adapters = unchanged
         || source.structures.structures.entries.iter().all(|entry| {
             use cq_lang_structures::Structure;
@@ -1076,7 +1142,7 @@ fn check_rewrite_in(
             "Structures change lacks a checked join reexpression",
         );
     }
-    let final_meaning = |program: &Program, facts: &Checked<'_>| {
+    let final_meaning = |program: &Program, facts: &CheckedProof| {
         program
             .sequence
             .definitions

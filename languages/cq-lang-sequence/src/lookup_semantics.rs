@@ -5,16 +5,15 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use cq_lang_structures::physical::{self, Operator};
 use cq_syntax::symbol_name;
-use quote::ToTokens;
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(super) struct Query {
-    head: BTreeMap<String, usize>,
-    atoms: Vec<(String, Vec<usize>)>,
+    head: BTreeMap<u32, usize>,
+    atoms: Vec<(u32, Vec<usize>)>,
     variables: usize,
 }
 
-pub(super) type Queries = BTreeMap<String, Query>;
+pub(super) type Queries = BTreeMap<u32, Query>;
 #[derive(PartialEq, Eq, Hash)]
 enum NodeKey {
     Join {
@@ -23,7 +22,11 @@ enum NodeKey {
         right: u32,
         columns: Vec<u32>,
     },
-    Union(Vec<u32>),
+    Union {
+        operands: Vec<u32>,
+        columns: Vec<u32>,
+    },
+    Alias(u32),
     Opaque(Vec<u32>),
 }
 type ProgramKey = Vec<(u32, NodeKey)>;
@@ -66,13 +69,25 @@ impl Context {
                             .map(|column| self.intern(&symbol_name(column)))
                             .collect(),
                     },
-                    Operator::Union(union) => NodeKey::Union(
-                        union
+                    Operator::Union(union) => NodeKey::Union {
+                        operands: union
                             .operands
                             .iter()
                             .map(|name| self.intern(&symbol_name(name)))
                             .collect(),
-                    ),
+                        columns: analysis.headings[&name]
+                            .iter()
+                            .map(|column| self.intern(column))
+                            .collect(),
+                    },
+                    Operator::Project(project)
+                        if analysis.headings[&name]
+                            == analysis.headings[&symbol_name(&project.input)] =>
+                    {
+                        // Keeping the complete checked heading is identity,
+                        // including a separately named provider's retained rows.
+                        NodeKey::Alias(self.intern(&symbol_name(&project.input)))
+                    }
                     _ => NodeKey::Opaque(
                         analysis.headings[&name]
                             .iter()
@@ -94,15 +109,15 @@ impl Context {
         if let Some(queries) = self.programs.borrow().get(&key) {
             return queries.clone();
         }
-        let queries = std::rc::Rc::new(queries(program, analysis, self));
+        let queries = std::rc::Rc::new(queries(&key, self));
         self.programs.borrow_mut().insert(key, queries.clone());
         queries
     }
 
     pub(super) fn equal_in(&self, queries: &Queries, left: &str, right: &str) -> bool {
         queries
-            .get(left)
-            .zip(queries.get(right))
+            .get(&self.intern(left))
+            .zip(queries.get(&self.intern(right)))
             .is_some_and(|(left, right)| equal(left, right, self))
     }
 
@@ -118,71 +133,68 @@ impl Context {
         let source = self.queries(source, source_analysis);
         let target = self.queries(target, target_analysis);
         source
-            .get(left)
-            .zip(target.get(right))
+            .get(&self.intern(left))
+            .zip(target.get(&self.intern(right)))
             .is_some_and(|(left, right)| equal(left, right, self))
     }
 }
 
-fn queries(
-    program: &physical::Program,
-    analysis: &physical::Analysis,
-    context: &Context,
-) -> BTreeMap<String, Query> {
-    let mut queries: BTreeMap<String, Query> = BTreeMap::new();
-    for definition in &program.program.definitions {
-        let name = symbol_name(&definition.name);
-        let mut query = match &definition.operator {
-            Operator::Probe(_, keyed) | Operator::Merge(_, keyed) | Operator::Semi(_, keyed) => {
-                let mut left = queries[&symbol_name(&keyed.left)].clone();
-                let right = &queries[&symbol_name(&keyed.right)];
-                let mut variables: Vec<_> =
-                    (left.variables..left.variables + right.variables).collect();
-                for column in &keyed.columns {
-                    let column = symbol_name(column);
-                    variables[right.head[&column]] = left.head[&column];
+fn queries(program: &ProgramKey, context: &Context) -> Queries {
+    let mut queries: Queries = BTreeMap::new();
+    for (name, operator) in program {
+        let mut query =
+            match operator {
+                NodeKey::Alias(input) => queries[input].clone(),
+                NodeKey::Join {
+                    semi,
+                    left,
+                    right,
+                    columns,
+                } => {
+                    let mut left = queries[left].clone();
+                    let right = &queries[right];
+                    let mut variables: Vec<_> =
+                        (left.variables..left.variables + right.variables).collect();
+                    for column in columns {
+                        variables[right.head[column]] = left.head[column];
+                    }
+                    left.variables += right.variables;
+                    left.atoms.extend(right.atoms.iter().map(|(atom, args)| {
+                        (*atom, args.iter().map(|id| variables[*id]).collect())
+                    }));
+                    if !semi {
+                        left.head.extend(
+                            right
+                                .head
+                                .iter()
+                                .map(|(column, id)| (*column, variables[*id])),
+                        );
+                    }
+                    left
                 }
-                left.variables += right.variables;
-                left.atoms.extend(right.atoms.iter().map(|(atom, args)| {
-                    (atom.clone(), args.iter().map(|id| variables[*id]).collect())
-                }));
-                if !matches!(definition.operator, Operator::Semi(..)) {
-                    left.head.extend(
-                        right
-                            .head
+                NodeKey::Union { operands, .. }
+                    if operands.first().is_some_and(|first| {
+                        let first = &queries[first];
+                        operands
                             .iter()
-                            .map(|(column, id)| (column.clone(), variables[*id])),
-                    );
+                            .all(|arm| equal(first, &queries[arm], context))
+                    }) =>
+                {
+                    queries[operands.first().expect("nonempty union")].clone()
                 }
-                left
-            }
-            Operator::Union(union)
-                if union.operands.first().is_some_and(|first| {
-                    let first = &queries[&symbol_name(first)];
-                    union
-                        .operands
-                        .iter()
-                        .all(|arm| equal(first, &queries[&symbol_name(arm)], context))
-                }) =>
-            {
-                queries[&symbol_name(union.operands.first().expect("nonempty union"))].clone()
-            }
-            _ => {
-                let columns = &analysis.headings[&name];
-                Query {
+                NodeKey::Opaque(columns) | NodeKey::Union { columns, .. } => Query {
                     head: columns
                         .iter()
                         .enumerate()
-                        .map(|(i, column)| (column.clone(), i))
+                        .map(|(i, column)| (*column, i))
                         .collect(),
-                    atoms: vec![(name.clone(), (0..columns.len()).collect())],
+                    atoms: vec![(*name, (0..columns.len()).collect())],
                     variables: columns.len(),
-                }
-            }
-        };
+                },
+            };
         query.atoms.sort_unstable();
         query.atoms.dedup();
-        queries.insert(name, query);
+        queries.insert(*name, query);
     }
     queries
 }
@@ -203,15 +215,15 @@ fn maps_into(from: &Query, into: &Query) -> bool {
     for (column, variable) in &from.head {
         substitution[*variable] = Some(into.head[column]);
     }
-    let mut relations: HashMap<&str, Vec<&[usize]>> = HashMap::new();
+    let mut relations: HashMap<u32, Vec<&[usize]>> = HashMap::new();
     for (name, arguments) in &into.atoms {
-        relations.entry(name).or_default().push(arguments);
+        relations.entry(*name).or_default().push(arguments);
     }
     let mut candidates: Vec<Vec<&[usize]>> = from
         .atoms
         .iter()
         .map(|(name, arguments)| {
-            relations[name.as_str()]
+            relations[name]
                 .iter()
                 .copied()
                 .filter(|candidate| {
@@ -377,7 +389,7 @@ fn maps_into(from: &Query, into: &Query) -> bool {
     )
 }
 
-fn canonical(query: &Query) -> (Vec<usize>, Vec<(&str, Vec<usize>)>) {
+fn canonical(query: &Query) -> (Vec<usize>, Vec<(u32, Vec<usize>)>) {
     let mut variables = BTreeMap::new();
     let mut rename = |variable| {
         let next = variables.len();
@@ -387,12 +399,7 @@ fn canonical(query: &Query) -> (Vec<usize>, Vec<(&str, Vec<usize>)>) {
     let atoms = query
         .atoms
         .iter()
-        .map(|(name, arguments)| {
-            (
-                name.as_str(),
-                arguments.iter().copied().map(&mut rename).collect(),
-            )
-        })
+        .map(|(name, arguments)| (*name, arguments.iter().copied().map(&mut rename).collect()))
         .collect();
     (head, atoms)
 }
@@ -422,18 +429,19 @@ fn equal(left: &Query, right: &Query, context: &Context) -> bool {
 
 fn opaque<'a>(
     program: &'a physical::Program,
-    queries: &BTreeMap<String, Query>,
-) -> BTreeMap<String, &'a physical::Definition> {
+    queries: &Queries,
+    context: &Context,
+) -> BTreeMap<u32, &'a physical::Definition> {
     program
         .program
         .definitions
         .iter()
         .filter(|definition| {
-            let name = symbol_name(&definition.name);
+            let name = context.intern(&symbol_name(&definition.name));
             let query = &queries[&name];
             query.atoms.len() == 1 && query.atoms[0].0 == name
         })
-        .map(|d| (symbol_name(&d.name), d))
+        .map(|d| (context.intern(&symbol_name(&d.name)), d))
         .collect()
 }
 
@@ -475,8 +483,8 @@ pub(super) fn reexpression(
     }
     let left = context.queries(source, source_analysis);
     let right = context.queries(target, target_analysis);
-    let old = opaque(source, &left);
-    let new = opaque(target, &right);
+    let old = opaque(source, &left, context);
+    let new = opaque(target, &right, context);
     if old.keys().ne(new.keys()) {
         return false;
     }
@@ -486,10 +494,13 @@ pub(super) fn reexpression(
         let old_inputs = definition.operator.operands();
         let new_inputs = operator.operands();
         if old_inputs.len() != new_inputs.len()
-            || old_inputs
-                .iter()
-                .zip(&new_inputs)
-                .any(|(a, b)| !equal(&left[&symbol_name(a)], &right[&symbol_name(b)], context))
+            || old_inputs.iter().zip(&new_inputs).any(|(a, b)| {
+                !equal(
+                    &left[&context.intern(&symbol_name(a))],
+                    &right[&context.intern(&symbol_name(b))],
+                    context,
+                )
+            })
         {
             return false;
         }
@@ -499,16 +510,13 @@ pub(super) fn reexpression(
             (Operator::Select(a), Operator::Select(b)) => b.input = a.input.clone(),
             _ => {}
         }
-        if definition.operator != operator
-            || definition.operator.to_token_stream().to_string()
-                != operator.to_token_stream().to_string()
-        {
+        if definition.operator != operator {
             return false;
         }
     }
     equal(
-        &left[&symbol_name(&a.returned)],
-        &right[&symbol_name(&b.returned)],
+        &left[&context.intern(&symbol_name(&a.returned))],
+        &right[&context.intern(&symbol_name(&b.returned))],
         context,
     )
 }
@@ -521,47 +529,65 @@ mod tests {
     fn independent_witnesses_do_not_multiply_an_unsatisfiable_suffix() {
         let mut from = Query {
             head: BTreeMap::new(),
-            atoms: (0..30)
-                .map(|i| ("R".into(), vec![2 * i, 2 * i + 1]))
-                .collect(),
+            atoms: (0..30).map(|i| (0, vec![2 * i, 2 * i + 1])).collect(),
             variables: 63,
         };
-        from.atoms.extend([
-            ("R".into(), vec![60, 61]),
-            ("R".into(), vec![61, 62]),
-            ("R".into(), vec![62, 60]),
-        ]);
+        from.atoms
+            .extend([(0, vec![60, 61]), (0, vec![61, 62]), (0, vec![62, 60])]);
         let into = Query {
             head: BTreeMap::new(),
-            atoms: vec![("R".into(), vec![0, 1]), ("R".into(), vec![1, 0])],
+            atoms: vec![(0, vec![0, 1]), (0, vec![1, 0])],
             variables: 2,
         };
         assert!(!maps_into(&from, &into));
         from.atoms.pop();
         assert!(maps_into(&from, &into));
-        from.atoms.push(("R".into(), vec![62, 62]));
+        from.atoms.push((0, vec![62, 62]));
         assert!(!maps_into(&from, &into));
     }
 
     #[test]
     fn missing_atom_rejects_before_enumerating_repeated_relation_assignments() {
         let mut from = Query {
-            head: BTreeMap::from([("a".into(), 0)]),
-            atoms: (1..40)
-                .map(|variable| ("R".into(), vec![0, variable]))
-                .collect(),
+            head: BTreeMap::from([(1, 0)]),
+            atoms: (1..40).map(|variable| (0, vec![0, variable])).collect(),
             variables: 40,
         };
         let into = Query {
-            head: BTreeMap::from([("a".into(), 0)]),
-            atoms: vec![("R".into(), vec![0, 1]), ("R".into(), vec![0, 2])],
+            head: BTreeMap::from([(1, 0)]),
+            atoms: vec![(0, vec![0, 1]), (0, vec![0, 2])],
             variables: 3,
         };
         assert!(maps_into(&from, &into));
-        from.atoms.push(("R".into(), vec![39, 0]));
+        from.atoms.push((0, vec![39, 0]));
         assert!(!maps_into(&from, &into));
         from.atoms.pop();
-        from.atoms.push(("missing".into(), vec![0]));
+        from.atoms.push((2, vec![0]));
         assert!(!maps_into(&from, &into));
+    }
+
+    #[test]
+    fn interned_union_graph_retains_opaque_heading_and_equal_arm_support() {
+        let context = Context::default();
+        let mut graph = vec![
+            (0, NodeKey::Opaque(vec![3])),
+            (1, NodeKey::Opaque(vec![3])),
+            (
+                2,
+                NodeKey::Union {
+                    operands: vec![0, 1],
+                    columns: vec![3],
+                },
+            ),
+        ];
+        let distinct = queries(&graph, &context);
+        assert_eq!(distinct[&2].head, BTreeMap::from([(3, 0)]));
+        assert_eq!(distinct[&2].atoms, vec![(2, vec![0])]);
+        graph[2].1 = NodeKey::Union {
+            operands: vec![0, 0],
+            columns: vec![3],
+        };
+        let repeated = queries(&graph, &context);
+        assert!(equal(&repeated[&0], &repeated[&2], &context));
     }
 }

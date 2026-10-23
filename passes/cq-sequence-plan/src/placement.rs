@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use cq_lang_sequence::structures::physical::Operator;
-use cq_lang_sequence::{Machine, Program, Term};
+use cq_lang_sequence::{Definition, Guard, Len, Machine, Program, Term};
 use cq_syntax::symbol_name;
 use syn::Ident;
 
@@ -11,6 +11,7 @@ pub(crate) fn boundaries(
     program: &Program,
     machine: &Machine,
     facts: &cq_lang_sequence::Analysis,
+    catalog: &cq_lang_sequence::Catalog,
 ) -> Vec<Advice> {
     let Some(child) = machine.root.children.first() else {
         return Vec::new();
@@ -30,7 +31,7 @@ pub(crate) fn boundaries(
     let mut host_feeds = BTreeSet::new();
     for definition in definitions {
         let mut refs = Vec::new();
-        references(&definition.term, &mut refs);
+        references(&definition.term, definitions, &indices, &mut refs);
         if requires_host(&definition.term, &host_operations)
             || refs.iter().any(|name| {
                 host_feeds.contains(&symbol_name(name))
@@ -87,13 +88,8 @@ pub(crate) fn boundaries(
         {
             continue;
         }
-        if !host_predicate(&physical.operator)
-            && !physical.operator.operands().iter().any(|input| {
-                facts.structures.physical.rows[&symbol_name(input)]
-                    .types
-                    .values()
-                    .any(string_type)
-            })
+        if !host_feeds.contains(&symbol_name(&definition.name))
+            || !reads_at(&definition.term, Some(result), facts, catalog, &host, &host)
         {
             continue;
         }
@@ -179,6 +175,8 @@ pub(crate) fn advise(
     machine: &Machine,
     parallel: bool,
     facts: &cq_lang_sequence::Analysis,
+    source: &Program,
+    catalog: &cq_lang_sequence::Catalog,
 ) -> Vec<Advice> {
     let host = vec![machine.root.name.clone()];
     let publication = if parallel {
@@ -210,7 +208,7 @@ pub(crate) fn advise(
         .enumerate()
         .map(|(i, d)| (symbol_name(&d.name), i))
         .collect();
-    let authored: BTreeMap<_, _> = program
+    let recorded: BTreeMap<_, _> = program
         .graded
         .as_ref()
         .into_iter()
@@ -226,15 +224,36 @@ pub(crate) fn advise(
             (symbol_name(&g.name), level)
         })
         .collect();
+    let authored: BTreeSet<_> = source
+        .graded
+        .iter()
+        .flat_map(|graded| &graded.grades)
+        .map(|grade| symbol_name(&grade.name))
+        .collect();
     let opaque = host_operations(program, facts);
+    let row_predicates: BTreeSet<_> = program
+        .structures
+        .physical
+        .program
+        .definitions
+        .iter()
+        .filter(|definition| row_predicate(&definition.operator))
+        .map(|definition| symbol_name(&definition.name))
+        .collect();
     let mut stores = BTreeSet::new();
     let mut levels: Vec<Option<Vec<Ident>>> = definitions
         .iter()
-        .map(|d| authored.get(&symbol_name(&d.name)).cloned())
+        .map(|d| recorded.get(&symbol_name(&d.name)).cloned())
         .collect();
     let mut advice = Vec::new();
     for (i, d) in definitions.iter().enumerate() {
-        let at_host = matches!(d.term, Term::Rows(_)) || requires_host(&d.term, &opaque);
+        let result = facts.results.get(&symbol_name(&d.name)).map(String::as_str);
+        let host_reads = reads_at(&d.term, result, facts, catalog, &host, &host);
+        let descendant_reads = reads_at(&d.term, result, facts, catalog, &producer, &publication)
+            || reads_at(&d.term, result, facts, catalog, &publication, &publication);
+        let at_host = matches!(d.term, Term::Rows(_))
+            || requires_host(&d.term, &opaque)
+            || (host_reads && !descendant_reads);
         if at_host && levels[i].is_none() {
             levels[i] = Some(host.clone());
         }
@@ -250,10 +269,10 @@ pub(crate) fn advise(
             continue;
         }
         let mut refs = Vec::new();
-        references(&definitions[i].term, &mut refs);
+        references(&definitions[i].term, definitions, &indices, &mut refs);
         for name in refs {
             if let Some(&source) = indices.get(&symbol_name(name))
-                && !authored.contains_key(&symbol_name(name))
+                && !recorded.contains_key(&symbol_name(name))
                 && !matches!(definitions[source].term, Term::Store { .. })
                 && !stores.contains(&source)
             {
@@ -265,9 +284,15 @@ pub(crate) fn advise(
         let d = &definitions[i];
         let stored = matches!(d.term, Term::Store { .. }) || stores.contains(&i);
         if levels[i].is_none() {
-            levels[i] = Some(if stored {
+            let preferred = if stored {
                 if i + 1 == definitions.len()
-                    || has_lookup(&d.term, definitions, &indices, &mut BTreeSet::new())
+                    || has_row_work(
+                        &d.term,
+                        definitions,
+                        &indices,
+                        &row_predicates,
+                        &mut BTreeSet::new(),
+                    )
                 {
                     publication.clone()
                 } else {
@@ -275,6 +300,24 @@ pub(crate) fn advise(
                 }
             } else {
                 producer.clone()
+            };
+            let result = facts.results.get(&symbol_name(&d.name)).map(String::as_str);
+            let selected = [&preferred, &publication, &producer, &host]
+                .into_iter()
+                .position(|level| {
+                    let read_level = if stored && level == &publication && publication != host {
+                        &producer
+                    } else {
+                        level
+                    };
+                    reads_at(&d.term, result, facts, catalog, read_level, level)
+                });
+            // Keep an impossible candidate visible to the catalog checker.
+            levels[i] = Some(match selected {
+                Some(1) => publication.clone(),
+                Some(2) => producer.clone(),
+                Some(3) => host.clone(),
+                _ => preferred,
             });
         }
         let level = levels[i].as_ref().unwrap().clone();
@@ -284,7 +327,7 @@ pub(crate) fn advise(
             level
         };
         let mut refs = Vec::new();
-        references(&d.term, &mut refs);
+        references(&d.term, definitions, &indices, &mut refs);
         for name in refs {
             if let Some(&source) = indices.get(&symbol_name(name))
                 && levels[source].is_none()
@@ -295,18 +338,67 @@ pub(crate) fn advise(
             }
         }
     }
+    // BE-Scope: a retained descendant result still cannot be read directly by
+    // a host operation. Publish its completed producer at host, rather than
+    // pulling the lookup pipeline (or an opaque consumer) across its boundary.
+    // A bare host `store producer` already expresses that transfer.
+    let mut names: BTreeSet<_> = indices.keys().cloned().collect();
+    let mut host_publications = BTreeMap::new();
+    for (i, definition) in definitions.iter().enumerate() {
+        if levels[i].as_ref() != Some(&host)
+            || matches!(&definition.term, Term::Store { inner, .. } if matches!(inner.as_ref(), Term::Ref(_)))
+        {
+            continue;
+        }
+        let mut refs = Vec::new();
+        references(&definition.term, definitions, &indices, &mut refs);
+        for name in refs {
+            let source = indices[&symbol_name(name)];
+            if levels[source].as_ref() == Some(&host)
+                || authored.contains(&symbol_name(name))
+                || !matches!(definitions[source].term, Term::Store { .. })
+                || host_publications.contains_key(&source)
+            {
+                continue;
+            }
+            let mut fresh = format!("__sequence_publish_{}", symbol_name(name));
+            while !names.insert(fresh.clone()) {
+                fresh.push('_');
+            }
+            let published_producer = Ident::new(&fresh, name.span());
+            let level = levels[source].as_ref().unwrap();
+            let producer_level = if *level == publication {
+                producer.clone()
+            } else {
+                level.clone()
+            };
+            host_publications.insert(source, producer_level.clone());
+            advice.push(Advice::Publish {
+                name: name.clone(),
+                producer: published_producer.clone(),
+            });
+            advice.push(Advice::Grade {
+                name: published_producer,
+                level: producer_level,
+                machine: machine.name.clone(),
+            });
+            levels[source] = Some(host.clone());
+        }
+    }
     // A host view stays a view when its retained consumer is also at host.
     // Materialize only actual crossings into a descendant execution extent.
     for (i, definition) in definitions.iter().enumerate() {
         let level = levels[i].as_ref().unwrap();
         let stored = matches!(definition.term, Term::Store { .. }) || stores.contains(&i);
-        let read_level = if stored && *level == publication && publication != host {
+        let read_level = if let Some(producer_level) = host_publications.get(&i) {
+            producer_level
+        } else if stored && *level == publication && publication != host {
             &producer
         } else {
             level
         };
         let mut refs = Vec::new();
-        references(&definition.term, &mut refs);
+        references(&definition.term, definitions, &indices, &mut refs);
         for name in refs {
             if let Some(&source) = indices.get(&symbol_name(name))
                 && let Some(source_level) = &levels[source]
@@ -320,7 +412,9 @@ pub(crate) fn advise(
         }
     }
     for (d, level) in definitions.iter().zip(levels) {
-        if !authored.contains_key(&symbol_name(&d.name)) {
+        if !authored.contains(&symbol_name(&d.name))
+            && recorded.get(&symbol_name(&d.name)) != level.as_ref()
+        {
             advice.push(Advice::Grade {
                 name: d.name.clone(),
                 level: level.unwrap_or_else(|| host.clone()),
@@ -331,32 +425,44 @@ pub(crate) fn advise(
     advice
 }
 
-fn has_lookup(
+fn has_row_work(
     term: &Term,
     definitions: &[cq_lang_sequence::Definition],
     indices: &BTreeMap<String, usize>,
+    row_predicates: &BTreeSet<String>,
     seen: &mut BTreeSet<usize>,
 ) -> bool {
     match term {
         Term::Lookup { .. } => true,
         Term::Ref(name) => indices.get(&symbol_name(name)).is_some_and(|&i| {
-            seen.insert(i) && has_lookup(&definitions[i].term, definitions, indices, seen)
+            seen.insert(i)
+                && has_row_work(
+                    &definitions[i].term,
+                    definitions,
+                    indices,
+                    row_predicates,
+                    seen,
+                )
         }),
         Term::Rows(_) => false,
-        Term::Map(_, t)
-        | Term::Compact(_, t)
-        | Term::Flatten(t)
+        Term::Map(name, t) | Term::Compact(name, t) => {
+            row_predicates.contains(&symbol_name(name))
+                || has_row_work(t, definitions, indices, row_predicates, seen)
+        }
+        Term::Flatten(t)
         | Term::Fold(_, t)
         | Term::Group(_, t)
         | Term::Canon(t)
         | Term::Tile { inner: t, .. }
-        | Term::Store { inner: t, .. } => has_lookup(t, definitions, indices, seen),
+        | Term::Store { inner: t, .. } => {
+            has_row_work(t, definitions, indices, row_predicates, seen)
+        }
         Term::Union(terms) => terms
             .iter()
-            .any(|t| has_lookup(t, definitions, indices, seen)),
+            .any(|t| has_row_work(t, definitions, indices, row_predicates, seen)),
         Term::Choose(arms) => arms
             .iter()
-            .any(|(_, t)| has_lookup(t, definitions, indices, seen)),
+            .any(|(_, t)| has_row_work(t, definitions, indices, row_predicates, seen)),
     }
 }
 
@@ -380,7 +486,99 @@ fn requires_host(term: &Term, opaque: &BTreeSet<String>) -> bool {
     }
 }
 
-fn references<'a>(term: &'a Term, result: &mut Vec<&'a Ident>) {
+// Provider levels describe where a read executes, independently of where its
+// index was constructed. This also keeps authored grades untouched: impossible
+// authored reads are rejected by the final catalog check, not silently moved.
+fn reads_at(
+    term: &Term,
+    result: Option<&str>,
+    facts: &cq_lang_sequence::Analysis,
+    catalog: &cq_lang_sequence::Catalog,
+    level: &[Ident],
+    canon_level: &[Ident],
+) -> bool {
+    use cq_lang_sequence::Obligation;
+    let at = |registered: &[String], level: &[Ident]| {
+        registered.len() == level.len()
+            && registered
+                .iter()
+                .zip(level)
+                .all(|(name, ident)| ident == name.as_str())
+    };
+    match term {
+        Term::Lookup {
+            provider, inner, ..
+        } => {
+            let provider = symbol_name(provider);
+            facts.obligations.iter().all(|obligation| {
+                let Obligation::Provider {
+                    provider: name,
+                    capability,
+                    ty,
+                    ..
+                } = obligation
+                else {
+                    return true;
+                };
+                if *name != provider {
+                    return true;
+                }
+                catalog.providers.iter().any(|token| {
+                    crate::catalog::matches_type(&token.ty, ty)
+                        && token.capabilities.contains(capability)
+                        && token.levels.iter().any(|registered| at(registered, level))
+                        && token.elements.as_ref().is_none_or(|accepted| {
+                            facts.structures.layouts[&provider].iter().all(|column| {
+                                accepted.iter().any(|ty| {
+                                    crate::catalog::matches_type(
+                                        ty,
+                                        &facts.structures.physical.rows[&provider].types[column],
+                                    )
+                                })
+                            })
+                        })
+                })
+            }) && reads_at(inner, result, facts, catalog, level, canon_level)
+        }
+        Term::Canon(inner) => {
+            facts.obligations.iter().all(|obligation| {
+                let Obligation::Canon { result: name, ty } = obligation else {
+                    return true;
+                };
+                result != Some(name.as_str())
+                    || catalog.canons.iter().any(|token| {
+                        ty.as_ref()
+                            .is_none_or(|ty| crate::catalog::matches_type(&token.ty, ty))
+                            && token
+                                .levels
+                                .iter()
+                                .any(|registered| at(registered, canon_level))
+                    })
+            }) && reads_at(inner, result, facts, catalog, level, canon_level)
+        }
+        Term::Map(_, inner)
+        | Term::Compact(_, inner)
+        | Term::Flatten(inner)
+        | Term::Fold(_, inner)
+        | Term::Group(_, inner)
+        | Term::Store { inner, .. }
+        | Term::Tile { inner, .. } => reads_at(inner, result, facts, catalog, level, canon_level),
+        Term::Union(arms) => arms
+            .iter()
+            .all(|term| reads_at(term, result, facts, catalog, level, canon_level)),
+        Term::Choose(arms) => arms
+            .iter()
+            .all(|(_, term)| reads_at(term, result, facts, catalog, level, canon_level)),
+        Term::Ref(_) | Term::Rows(_) => true,
+    }
+}
+
+fn references<'a>(
+    term: &'a Term,
+    definitions: &'a [Definition],
+    indices: &BTreeMap<String, usize>,
+    result: &mut Vec<&'a Ident>,
+) {
     match term {
         Term::Ref(name) => result.push(name),
         Term::Rows(_) => {}
@@ -392,17 +590,43 @@ fn references<'a>(term: &'a Term, result: &mut Vec<&'a Ident>) {
         | Term::Canon(t)
         | Term::Tile { inner: t, .. }
         | Term::Store { inner: t, .. }
-        | Term::Lookup { inner: t, .. } => references(t, result),
+        | Term::Lookup { inner: t, .. } => references(t, definitions, indices, result),
         Term::Union(terms) => {
             for t in terms {
-                references(t, result);
+                references(t, definitions, indices, result);
             }
         }
         Term::Choose(arms) => {
-            for (_, t) in arms {
-                references(t, result);
+            for (guard, t) in arms {
+                // BE-Choose reads a published count at the choice's own grade.
+                // It is a scope dependency even when neither arm reads its rows.
+                if let Guard::Lt(length, _) | Guard::Ge(length, _) = guard {
+                    length_references(length, definitions, indices, result);
+                }
+                references(t, definitions, indices, result);
             }
         }
+    }
+}
+
+fn length_references<'a>(
+    length: &Len,
+    definitions: &'a [Definition],
+    indices: &BTreeMap<String, usize>,
+    result: &mut Vec<&'a Ident>,
+) {
+    match length {
+        Len::Input(name) | Len::Scan(name) => {
+            if let Some(&index) = indices.get(name) {
+                result.push(&definitions[index].name);
+            }
+        }
+        Len::CeilDiv(inner, _) => length_references(inner, definitions, indices, result),
+        Len::Add(left, right) => {
+            length_references(left, definitions, indices, result);
+            length_references(right, definitions, indices, result);
+        }
+        Len::Lit(_) | Len::Unknown(_) => {}
     }
 }
 
@@ -443,6 +667,39 @@ fn driver_domains(
                 driver_domains(arm, definitions, indices, domains);
             }
         }
+    }
+}
+
+// Row-to-row predicates require a producer over actual rows, not a host
+// descriptor whose interval bounds are constants or host parameters.
+fn row_predicate(operator: &Operator) -> bool {
+    use cq_syntax::EqualityValue;
+    use cq_syntax::constraint::{Constraint, Term as Scalar};
+
+    fn constraint(predicate: &Constraint) -> bool {
+        match predicate {
+            Constraint::Compare { left, right, .. } => {
+                matches!(left, Scalar::Variable(_)) && matches!(right, Scalar::Variable(_))
+            }
+            Constraint::Between { term, low, high } => {
+                matches!(term, Scalar::Variable(_))
+                    && (matches!(low, Scalar::Variable(_)) || matches!(high, Scalar::Variable(_)))
+            }
+            Constraint::Or(arms) => arms.iter().flatten().any(constraint),
+            Constraint::In { .. } => false,
+        }
+    }
+
+    match operator {
+        Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) => {
+            select
+                .condition
+                .equalities
+                .iter()
+                .any(|equality| matches!(equality.right, EqualityValue::Variable(_)))
+                || select.condition.constraints.iter().any(constraint)
+        }
+        _ => false,
     }
 }
 
@@ -494,12 +751,161 @@ fn host_operations(program: &Program, facts: &cq_lang_sequence::Analysis) -> BTr
             matches!(definition.operator, Operator::Bind(_) | Operator::Guard(_))
                 || host_predicate(&definition.operator)
                 || string_row(facts, &symbol_name(&definition.name))
-                || definition
-                    .operator
-                    .operands()
-                    .iter()
-                    .any(|input| string_row(facts, &symbol_name(input)))
+                || match &definition.operator {
+                    // Membership consumes only right-hand keys, not its opaque
+                    // payload. Projected integer indexes may therefore execute
+                    // below host even when their original relation has strings.
+                    Operator::Semi(_, keyed) | Operator::Anti(_, keyed) => {
+                        string_row(facts, &symbol_name(&keyed.left))
+                            || keyed.columns.iter().any(|column| {
+                                string_type(
+                                    &facts.structures.physical.rows[&symbol_name(&keyed.right)]
+                                        .types[&symbol_name(column)],
+                                )
+                            })
+                    }
+                    operator => operator
+                        .operands()
+                        .iter()
+                        .any(|input| string_row(facts, &symbol_name(input))),
+                }
         })
         .map(|definition| symbol_name(&definition.name))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cq_lang_sequence::{Capability, Catalog, LevelNode, ProviderToken};
+
+    fn machine() -> Machine {
+        fn node(name: &str, children: Vec<LevelNode>) -> LevelNode {
+            LevelNode {
+                name: syn::parse_str(name).unwrap(),
+                collaborative: name == "block",
+                dynamic: name == "device",
+                width: (name == "block").then_some(32),
+                shared_bytes: None,
+                children,
+            }
+        }
+        Machine {
+            name: syn::parse_quote!(gpu),
+            items: 1,
+            layout: None,
+            root: node("host", vec![node("device", vec![node("block", vec![])])]),
+        }
+    }
+
+    fn membership() -> Program {
+        let structures = syn::parse_quote! {
+            physical {
+                relation L(a:i32); relation R(a:i32,s:String);
+                l = pipe rename L@0 {a -> a};
+                r = let rename R@1 {a -> a,s -> s};
+                answer = let canon semi eager [a] l,r;
+                return answer as answer(a);
+            }
+            structures {
+                l host scan = Reader []; r host scan = Reader [];
+                r = Index [a]; answer rows = ::std::vec::Vec<_>; answer canon = Canon;
+            }
+        };
+        cq_sequence_lowering::compile(&structures).unwrap()
+    }
+
+    fn catalog(levels: Vec<Vec<String>>) -> Catalog {
+        Catalog {
+            providers: vec![ProviderToken {
+                ty: syn::parse_quote!(Index),
+                capabilities: vec![Capability::Exact, Capability::Membership],
+                levels,
+                elements: None,
+            }],
+            canons: vec![cq_lang_sequence::CanonToken {
+                ty: syn::parse_quote!(Canon),
+                levels: vec![
+                    vec!["host".into()],
+                    vec!["host".into(), "device".into()],
+                    vec!["host".into(), "device".into(), "block".into()],
+                ],
+                max_packed_bits: None,
+            }],
+            codecs: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn membership_uses_keys_not_opaque_right_payload_for_host_placement() {
+        let source = membership();
+        let facts = cq_lang_sequence::contract::check(&source).unwrap();
+        let target = machine();
+        let available = catalog(vec![
+            vec!["host".into(), "device".into()],
+            vec!["host".into(), "device".into(), "block".into()],
+        ]);
+        assert!(!host_operations(&source, &facts).contains("answer"));
+        assert!(host_operations(&source, &facts).contains("r"));
+        assert!(
+            !boundaries(&source, &target, &facts, &available)
+                .iter()
+                .any(|advice| matches!(advice, Advice::Publish { name, .. } if name == "answer"))
+        );
+        let advice = advise(&source, &target, true, &facts, &source, &available);
+        assert!(advice.iter().any(|advice| matches!(advice,
+            Advice::Grade { name, level, .. }
+                if name == "answer" && level.iter().map(symbol_name).collect::<Vec<_>>()
+                    == ["host", "device"])));
+    }
+
+    #[test]
+    fn host_only_provider_reads_keep_integer_membership_at_host() {
+        let source = membership();
+        let facts = cq_lang_sequence::contract::check(&source).unwrap();
+        let advice = advise(
+            &source,
+            &machine(),
+            true,
+            &facts,
+            &source,
+            &catalog(vec![vec!["host".into()]]),
+        );
+        assert!(advice.iter().any(|advice| matches!(advice,
+            Advice::Grade { name, level, .. }
+                if name == "answer" && level.iter().map(symbol_name).collect::<Vec<_>>()
+                    == ["host"])));
+    }
+
+    #[test]
+    fn unsupported_authored_provider_read_grade_is_not_replaced() {
+        let source =
+            cq_sequence_rewrite_passes::grade(&membership(), quote::quote!(gpu, answer at host))
+                .unwrap();
+        let facts = cq_lang_sequence::contract::check(&source).unwrap();
+        let available = catalog(vec![
+            vec!["host".into(), "device".into()],
+            vec!["host".into(), "device".into(), "block".into()],
+        ]);
+        let advice = advise(&source, &machine(), true, &facts, &source, &available);
+        assert!(
+            !advice
+                .iter()
+                .any(|advice| matches!(advice, Advice::Grade { name, .. } if name == "answer"))
+        );
+        assert!(!reads_at(
+            &source
+                .sequence
+                .definitions
+                .iter()
+                .find(|definition| definition.name == "answer")
+                .unwrap()
+                .term,
+            Some("answer"),
+            &facts,
+            &available,
+            &[syn::parse_quote!(host)],
+            &[syn::parse_quote!(host)],
+        ));
+    }
 }

@@ -97,3 +97,88 @@ fn published_row_bound_filter_is_not_rebuilt_as_a_host_interval() {
     assert!(!generated.contains("RangeSelection"));
     assert!(!generated.contains("__row"));
 }
+
+#[test]
+fn negative_membership_inverts_the_provider_probe_without_expanding_witnesses() {
+    for (operator, negated) in [(quote!(semi), false), (quote!(anti), true)] {
+        let program: Program = syn::parse2(quote! {
+            physical {
+                relation Driver(a:i32, b:i32) = (&data.driver);
+                relation Provider(a:i32, b:i32) = (&data.provider);
+                driver = pipe rename Driver@0 {a -> a, b -> b};
+                provider = let rename Provider@1 {a -> a, b -> b};
+                present = pipe #operator eager [a, b] driver, provider;
+                result = pipe canon project present keep {a, b};
+                return result as answer(a, b);
+            }
+            structures {
+                driver host scan = ::cq_gpu_runtime::DeviceColumns [];
+                provider host scan = ::cq_gpu_runtime::DeviceColumns [];
+                provider = ::cq_gpu_sequence_runtime::RangeProvider [a, b];
+                result canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            }
+            sequence {
+                input = store rows driver;
+                index = store rows provider;
+                present_rows = compact present lookup provider [a, b] flatten tile 256 input;
+                output_rows = store canon map result present_rows;
+                output count;
+            }
+            graded gpu {
+                input at host;
+                index at host;
+                present_rows at host.device.block;
+                output_rows at host.device;
+            }
+        })
+        .unwrap();
+        let generated = translate(&program);
+        assert!(generated.contains("device :: contains_u32"), "{generated}");
+        assert!(
+            generated.contains(&format!("__member_found != {negated}")),
+            "{generated}"
+        );
+        assert!(!generated.contains("__child_position"), "{generated}");
+    }
+}
+
+#[test]
+fn planned_retained_provider_filter_evaluates_row_columns_before_build() {
+    let source: Program = syn::parse_quote! {
+        physical {
+            relation Driver(a:i32) = (&data.driver);
+            relation Provider(a:i32,value:i32,bound:i32) = (&data.provider);
+            driver = pipe rename Driver@0 {a -> a};
+            provider = pipe rename Provider@1 {a -> a,value -> value,bound -> bound};
+            selected = let select provider if (value < bound);
+            present = pipe semi eager [a] driver,selected;
+            result = pipe canon project present keep {a};
+            return result as answer(a);
+        }
+        structures {
+            driver host scan = ::cq_gpu_runtime::DeviceColumns [];
+            provider host scan = ::cq_gpu_runtime::DeviceColumns [];
+            selected = ::cq_gpu_sequence_runtime::RangeProvider [a];
+            result canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+        }
+        sequence {
+            input = rows driver;
+            provider_input = rows provider;
+            index = store compact selected provider_input;
+            present_rows = compact present lookup selected [a] input;
+            output_rows = store canon map result present_rows;
+            output count;
+        }
+    };
+    let machine = cq_gpu_sequence::machine();
+    let planned = cq_sequence_plan::plan(&source, &machine, &cq_gpu_sequence::catalog()).unwrap();
+    let analysis = check_grading(&planned.program, &machine).unwrap();
+    assert_eq!(analysis.levels["index"], ["host", "device"]);
+    let generated = translate(&planned.program);
+    assert!(generated.contains("let value = &"));
+    assert!(generated.contains("let bound = &"));
+    assert!(generated.contains("* value < * bound"));
+    assert!(generated.contains("ColumnDescriptor :: from_rows"));
+    assert!(!generated.contains("RangeSelection"));
+    assert!(!generated.contains("__row"));
+}

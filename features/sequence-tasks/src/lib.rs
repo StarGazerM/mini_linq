@@ -15,19 +15,23 @@ use quote::quote;
 /// The host owns a separated dynamic pool of sequential tasks.
 pub fn machine() -> Machine {
     Machine {
+        layout: None,
         name: syn::parse_quote!(tasks),
         items: 1,
         root: LevelNode {
+            shared_bytes: None,
             name: syn::parse_quote!(host),
             collaborative: false,
             dynamic: false,
             width: None,
             children: vec![LevelNode {
+                shared_bytes: None,
                 name: syn::parse_quote!(pool),
                 collaborative: false,
                 dynamic: true,
                 width: None,
                 children: vec![LevelNode {
+                    shared_bytes: None,
                     name: syn::parse_quote!(task),
                     collaborative: false,
                     dynamic: false,

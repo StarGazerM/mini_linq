@@ -37,6 +37,7 @@ cq-gpu-sequence = { path = "../sequence" }
 cq-rewrite-passes = { path = "../../../features/rewrites/passes" }
 cq-load = { path = "../../../runtime/cq-load", default-features = false }
 proc-macro2 = "1"
+prettyplease = "0.2"
 quote = "1"
 syn = { version = "2", features = ["full", "visit-mut", "extra-traits"] }
 serde.workspace = true

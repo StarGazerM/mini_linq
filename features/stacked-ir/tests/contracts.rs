@@ -53,15 +53,17 @@ fn corpus_passes_have_exact_fixtures_correspondence_and_set_answers() {
 #[test]
 fn all_corpus_rust_expressions_are_unchanged() {
     let machine = cq_lang_sequence::Machine {
-     name: syn::parse_quote!(sequential),
-     items: 1,
-     root: cq_lang_sequence::LevelNode {
-      name: syn::parse_quote!(host),
-      collaborative: false,
-      dynamic: false,
-      width: None,
-      children: vec![],
-     },
+        layout: None,
+        name: syn::parse_quote!(sequential),
+        items: 1,
+        root: cq_lang_sequence::LevelNode {
+            shared_bytes: None,
+            name: syn::parse_quote!(host),
+            collaborative: false,
+            dynamic: false,
+            width: None,
+            children: vec![],
+        },
     };
     for scenario in SCENARIOS {
         let source = scenario.parse_physical().unwrap();

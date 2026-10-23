@@ -22,6 +22,14 @@
 //! Named `store_level` selections must all be flatten terms; `all` and empty
 //! advice skip other definitions. The other passes require their stated advice.
 //!
+//! Lookup-first preserves live smallest-intersection candidate and membership
+//! adapters, removing them only when their intersection is reexpressed. Movable
+//! full-row providers with distinct key layouts use separate identity-projection
+//! stores over shared retained rows, following Structures' full-key-before-prefix
+//! selection rule. Rust prefixes, candidate-pair identities and authored projected
+//! union representations remain pinned. Translators consume these recorded
+//! decisions; they do not choose an index layout or a new join order.
+//!
 //! The macro protocol is `arguments { advice }; pipeline { next, ... };` followed
 //! by a complete Sequence program. Core dependencies are public packaged APIs;
 //! this workspace does not depend on storage, target translations or test hooks.

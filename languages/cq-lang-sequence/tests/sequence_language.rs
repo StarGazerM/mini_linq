@@ -42,6 +42,7 @@ fn reject(program: &Program, rule: &str) {
 
 fn node(name: &str, collaborative: bool, dynamic: bool, children: Vec<LevelNode>) -> LevelNode {
     LevelNode {
+        shared_bytes: None,
         name: syn::parse_str(name).unwrap(),
         collaborative,
         dynamic,
@@ -52,6 +53,7 @@ fn node(name: &str, collaborative: bool, dynamic: bool, children: Vec<LevelNode>
 
 fn sequential() -> Machine {
     Machine {
+        layout: None,
         name: syn::parse_quote!(target),
         items: 1,
         root: node("host", false, false, vec![]),
@@ -60,6 +62,7 @@ fn sequential() -> Machine {
 
 fn gpu() -> Machine {
     Machine {
+        layout: None,
         name: syn::parse_quote!(target),
         items: 4,
         root: node(
@@ -548,6 +551,7 @@ fn ungraded_programs_default_to_host_only() {
 #[test]
 fn leaf_flatten_is_sequential_but_parent_fold_needs_collaboration() {
     let tasks = Machine {
+        layout: None,
         name: syn::parse_quote!(target),
         items: 1,
         root: node(
@@ -1009,4 +1013,68 @@ fn grouped_fold_cannot_move_into_a_separated_or_leaf_execution_level() {
         grade(&mut program, quote!(r at host; groups at #level;));
         reject_grade(&program, &gpu(), "BE-Group");
     }
+}
+
+#[test]
+fn shared_checker_invalidates_changed_terms_structures_and_evidence() {
+    let source = lookup_program(quote! {
+        sr = store rows r;
+        out = store canon flatten lookup r [a] rows l;
+    });
+    let mut checker = contract::Checker::default();
+    let first = checker.check(&source).unwrap();
+    assert_eq!(checker.check(&source).unwrap().shapes, first.shapes);
+
+    let mut changed = source.clone();
+    changed.sequence.definitions.last_mut().unwrap().term = syn::parse_quote!(store rows missing);
+    assert!(checker.check(&changed).is_err());
+
+    let mut changed = source.clone();
+    changed.structures.structures.entries.clear();
+    assert!(checker.check(&changed).is_err());
+
+    let mut changed = source.clone();
+    changed.evidence = syn::parse_quote!(evidence { count missing = 10; });
+    assert!(checker.check(&changed).is_err());
+    assert_eq!(checker.check(&source).unwrap().shapes, first.shapes);
+}
+
+#[test]
+fn shared_structural_proof_does_not_cache_machine_grading() {
+    let mut source = program(quote!(out = store rows r;));
+    grade(&mut source, quote!(out at host;));
+    let mut checker = contract::Checker::default();
+    checker.check_grading(&source, &gpu()).unwrap();
+    let original = source.clone();
+    grade(&mut source, quote!(out at unknown;));
+    checker.check_rewrite_in(&original, &source).unwrap();
+    assert!(checker.check_grading(&source, &gpu()).is_err());
+    let invalid = program(quote!(out = store rows missing;));
+    assert!(checker.check_rewrite_in(&invalid, &invalid).is_err());
+}
+
+#[test]
+fn resource_rejects_oversized_authored_dispatches_before_translation() {
+    let mut p = lookup_program(quote! {
+        sr = store rows r;
+        out = store flatten lookup r [a] tile 256 rows l;
+    });
+    grade(&mut p, quote!(sr at host; out at device;));
+    let mut machine = gpu();
+    machine.root.children[0].children[0].shared_bytes = Some(64);
+    machine.layout = Some(|_| Ok(65));
+    let error = check_grading(&p, &machine).unwrap_err().to_string();
+    assert!(error.contains("BE-Resource"), "{error}");
+    assert!(error.contains("65 shared bytes"), "{error}");
+    assert!(error.contains("capacity is 64"), "{error}");
+    machine.root.children[0].children[0].shared_bytes = Some(65);
+    let analysis = check_grading(&p, &machine).unwrap();
+    assert_eq!(analysis.resources["out"].required_bytes, 65);
+    machine.layout = None;
+    assert!(
+        check_grading(&p, &machine)
+            .unwrap_err()
+            .to_string()
+            .contains("BE-Resource")
+    );
 }

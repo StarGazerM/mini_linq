@@ -15,9 +15,11 @@ use syn::Ident;
 /// The native iterator target executes entirely at the host level.
 pub fn machine() -> cq_lang_sequence::Machine {
     cq_lang_sequence::Machine {
+        layout: None,
         name: syn::parse_quote!(sequential),
         items: 1,
         root: cq_lang_sequence::LevelNode {
+            shared_bytes: None,
             name: syn::parse_quote!(host),
             collaborative: false,
             dynamic: false,
@@ -265,7 +267,7 @@ impl<'a> Emitter<'a> {
         Ok(output)
     }
 
-    fn map(&mut self, name: &Ident, mut input: Value) -> syn::Result<Value> {
+    fn map(&mut self, name: &Ident, mut input: Value, expand: bool) -> syn::Result<Value> {
         let result = symbol_name(name);
         if input.result.as_ref() == Some(&result) {
             input.stored = false;
@@ -273,10 +275,11 @@ impl<'a> Emitter<'a> {
         }
         self.register(&result);
         if let Some(rows) = self.adapters.intersection(&result)? {
-            let nested = matches!(
-                self.context().physical[&result].operator,
-                Operator::Probe(..)
-            );
+            let nested = expand
+                && matches!(
+                    self.context().physical[&result].operator,
+                    Operator::Probe(..)
+                );
             return Ok(Value {
                 rows: if nested {
                     quote!(::core::iter::once(#rows))
@@ -311,7 +314,7 @@ impl<'a> Emitter<'a> {
         let operand = if let Some(parent) = definition.operator.input() {
             let parent_name = symbol_name(parent);
             if input.result.as_deref() != Some(&parent_name) {
-                input = self.map(parent, input)?;
+                input = self.map(parent, input, expand)?;
             }
             let positional = self.analysis.structures.reads.contains_key(&result)
                 && matches!(
@@ -338,11 +341,13 @@ impl<'a> Emitter<'a> {
         let rows = self.adapters.operator(&result, operand)?;
         let rows = self.context().profile_stream(&result, rows);
         // Physical fan-out adapters already flatten their row iterator. Rewrap
-        // it as one part so the explicit Sequence flatten remains structural.
-        let nested = matches!(
-            definition.operator,
-            Operator::Probe(..) | Operator::Merge(..)
-        );
+        // only an expanding constructor: Compact consumes membership directly,
+        // including a Probe whose recorded provider is a membership projection.
+        let nested = expand
+            && matches!(
+                definition.operator,
+                Operator::Probe(..) | Operator::Merge(..)
+            );
         Ok(Value {
             rows: if nested {
                 quote!(::core::iter::once(#rows))
@@ -356,7 +361,7 @@ impl<'a> Emitter<'a> {
     }
 
     fn compact(&mut self, name: &Ident, input: Value) -> syn::Result<Value> {
-        self.map(name, input)
+        self.map(name, input, false)
     }
 
     fn flatten(&self, mut input: Value) -> Value {
@@ -505,7 +510,7 @@ impl<'a> Emitter<'a> {
                     syn::Error::new_spanned(provider, "ordered lookup lacks a result fact")
                 })?
                 .clone();
-            return self.map(&Ident::new(&result, provider.span()), input);
+            return self.map(&Ident::new(&result, provider.span()), input, true);
         }
         let result = self
             .analysis
@@ -543,7 +548,7 @@ impl<'a> Emitter<'a> {
             .is_some()
             || self.analysis.structures.stages.contains_key(&result)
         {
-            return self.map(&Ident::new(&result, provider.span()), input);
+            return self.map(&Ident::new(&result, provider.span()), input, true);
         }
         self.register(&result);
         let context = self.context();
@@ -594,7 +599,7 @@ impl<'a> Emitter<'a> {
                 )
             }
             Access::Prefix(..) => {
-                return self.map(&Ident::new(&result, provider.span()), input);
+                return self.map(&Ident::new(&result, provider.span()), input, true);
             }
         };
         let pattern = context.pattern(left);
@@ -940,7 +945,7 @@ fn translate_with_profile(
             Term::Rows(name) => emitter.rows(name)?,
             Term::Ref(name) => emitter.reference(name)?,
             Term::Map(name, _) => emitter.lift(input(), input().depth, &mut |emitter, rows| {
-                emitter.map(name, rows)
+                emitter.map(name, rows, true)
             })?,
             Term::Compact(name, _) => {
                 emitter.lift(input(), input().depth, &mut |emitter, rows| {

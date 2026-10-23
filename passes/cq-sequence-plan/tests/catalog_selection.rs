@@ -9,7 +9,7 @@ fn h05() -> structures::Program {
 // Target tokens are data, not a dependency on a GPU implementation. These are
 // the provider/canon tokens exported by the GPU Sequence target's catalog.
 fn gpu_catalog() -> Catalog {
-    let levels = vec![vec!["host".into()], vec!["host".into(), "device".into()]];
+    let levels = vec![vec!["host".into(), "device".into()]];
     Catalog {
         providers: vec![ProviderToken {
             ty: syn::parse_quote!(::cq_gpu_sequence_runtime::RangeProvider),
@@ -79,7 +79,7 @@ fn selection_is_deterministic_and_uses_first_satisfying_token() {
     let mut catalog = gpu_catalog();
     let mut wrong_level = catalog.providers[0].clone();
     wrong_level.ty = syn::parse_quote!(WrongLevel);
-    wrong_level.levels = vec![vec!["host".into(), "device".into()]];
+    wrong_level.levels.clear();
     let mut membership = catalog.providers[0].clone();
     membership.ty = syn::parse_quote!(MembershipOnly);
     membership.capabilities = vec![Capability::Membership];
@@ -118,7 +118,7 @@ fn selection_is_deterministic_and_uses_first_satisfying_token() {
 }
 
 #[test]
-fn rejection_names_structure_capability_and_level() {
+fn rejection_names_structure_and_catalog_read_obligation() {
     let source = cq_structure_selection::compile(&h05().physical).unwrap();
     let mut catalog = gpu_catalog();
     catalog.providers[0].capabilities.clear();
@@ -127,7 +127,7 @@ fn rejection_names_structure_capability_and_level() {
         .to_string();
     assert!(error.contains("nation_index"), "{error}");
     assert!(error.contains("Exact"), "{error}");
-    assert!(error.contains("host"), "{error}");
+    assert!(error.contains("read obligation"), "{error}");
     assert_eq!(
         error,
         select_from_catalog(&source, &catalog)
@@ -141,7 +141,7 @@ fn rejection_names_structure_capability_and_level() {
         .unwrap_err()
         .to_string();
     assert!(
-        error.contains("answer") && error.contains("canon") && error.contains("host"),
+        error.contains("answer") && error.contains("canon") && error.contains("read obligation"),
         "{error}"
     );
 }

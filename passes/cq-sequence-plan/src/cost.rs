@@ -796,9 +796,11 @@ mod tests {
 
     fn sequential() -> Machine {
         Machine {
+            layout: None,
             name: syn::parse_quote!(target),
             items: 1,
             root: LevelNode {
+                shared_bytes: None,
                 name: syn::parse_quote!(host),
                 collaborative: false,
                 dynamic: false,
@@ -922,16 +924,19 @@ mod tests {
         let mut machine = sequential();
         machine.items = 4;
         machine.root.children.push(LevelNode {
+            shared_bytes: None,
             name: syn::parse_quote!(device),
             collaborative: false,
             dynamic: true,
             width: None,
             children: vec![LevelNode {
+                shared_bytes: None,
                 name: syn::parse_quote!(block),
                 collaborative: true,
                 dynamic: false,
                 width: Some(8),
                 children: vec![LevelNode {
+                    shared_bytes: None,
                     name: syn::parse_quote!(lane),
                     collaborative: false,
                     dynamic: false,

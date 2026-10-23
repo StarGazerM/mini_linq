@@ -51,15 +51,17 @@ fn realize(ra: &cq_lang_ra::Program, decisions: &str) -> TokenStream {
     let sequence = cq_sequence_lowering::compile(&structures).unwrap();
     cq_sequence_lowering::check(&structures, &sequence).unwrap();
     let machine = cq_lang_sequence::Machine {
-     name: syn::parse_quote!(sequential),
-     items: 1,
-     root: cq_lang_sequence::LevelNode {
-      name: syn::parse_quote!(host),
-      collaborative: false,
-      dynamic: false,
-      width: None,
-      children: vec![],
-     },
+        layout: None,
+        name: syn::parse_quote!(sequential),
+        items: 1,
+        root: cq_lang_sequence::LevelNode {
+            shared_bytes: None,
+            name: syn::parse_quote!(host),
+            collaborative: false,
+            dynamic: false,
+            width: None,
+            children: vec![],
+        },
     };
     let analysis = cq_lang_sequence::check_grading(&sequence, &machine).unwrap();
     let expression = cq_sequence_pull::translate(&sequence, &analysis).unwrap();

@@ -676,3 +676,118 @@ golden changes confined to the four new cases; SF1/SF10 answer counts
 reported by the exporter.
 
 GPU translation: pending.
+
+### Box 11b proof reuse and automatic conformance
+
+The invocation-local checker reuses successful Structures and structural
+Sequence proofs under complete syntax equality, retaining at most two prefixes
+and two Sequence proofs. Grading is always rechecked against the requested
+machine. Physical definition lookup is indexed once per structural proof;
+Lookup/Expand support graphs, headings, and query atoms use interned `u32`
+identities. Original syntax retains spans and opaque Rust equality, without
+rendering tokens to compare proofs. `symbol_name` formats each identifier once,
+stripping a raw prefix in the resulting buffer.
+
+The CPU conformance driver now explicitly calls the automatic planner for both
+Sequential and Tasks. This selects automatic mode for the 13 corpus conformance
+targets without changing the facade's gated default. Passing conformance and
+performance results must still be recorded before that default changes.
+
+### Box 12b GPU machine interpretation
+
+The grouped GPU boundary consumes a separately published canonical valuation
+store, retaining the provider recorded by Structures. Stable radix key ordering
+and adjacent boundary selection construct owner offsets; collaborative kernels
+fold typed count/sum/min/max per segment. Result publication retains logical
+count, arithmetic/ancestor statuses, and independent value/validity columns.
+`GroupedRows::to_host` decodes typed tuples including `Option<i64>` extrema.
+An empty global key has one identity owner, whereas keyed empty input has none.
+These are machine instances of BE-Group, not new planner decisions or laws.
+
+Acceptance commands (release CUDA build, serialized with other oxide builds):
+`cargo oxide test --arch sm_89 -- --release -p cq-gpu-sequence-runtime --test grouped_runtime`
+and `cargo oxide test --arch sm_89 -- --release -p cq-gpu-sequence --test group --test grouped_h01 -- --nocapture`.
+H01 reads the local exported dbgen databases and computes its independent
+DuckDB DISTINCT-valuation oracle inside the test; no precomputed golden is used.
+
+### Box 13b GPU negation acceptance
+
+The pending GPU item above is implemented: the retained Physical Anti node
+supplies negative polarity to `compact(lookup)`, and GPU translation uses the
+same provider membership probe with an inverted keep bit (E-Neg/RA-Anti).
+Inspection of all four suite lowering artifacts found the required polarity;
+default lowering is unchanged. H04 is the positive membership control, while
+H04-not-exists, H16 and H22 retain `anti eager`.
+
+All four run exactly at SF1 and SF10 in advised mode, with one warmup and five
+measured runs and additional Sequential conformance at SF1. Full counts,
+phase medians, DuckDB t24 comparisons, timing-boundary caveats and the command
+are in `experiments/gpu/README.md` under "Negation GPU acceptance";
+machine-readable evidence is `/data/tpch-gpu/box13b-negation.json`.
+Derived inputs reuse their original CPU setup expressions during loading;
+the suite does not duplicate query predicates or choose plans in translators.
+The release `cq-gpu-sequence --test rows` target passes all four tests,
+including the two-key semi/anti translation regression asserting the same
+membership primitive, opposite polarity and no witness expansion.
+
+### Box 12b measured acceptance
+
+The release CUDA tests passed: one runtime test (keyed/global empty identities,
+count/sum/min/max, u32-width and i64 overflow); two translation/execution tests
+(including duplicate physical rows and equal-valued distinct valuations); and
+the H01 real-data test on both scales. H01 produced four exact groups at SF1
+and four at SF10 against freshly computed DuckDB DISTINCT-valuation queries.
+
+| Scale | GPU invocation wall ms | DuckDB t24 wall ms | GPU / DuckDB |
+|---|---:|---:|---:|
+| SF1 | 2352.269 | 1241.677 | 1.894 |
+| SF10 | 682.524 | 11406.724 | 0.060 |
+
+These are single invocation wall measurements, not warmed medians. GPU timing
+excludes source loading/upload and includes invocation/module setup; SF1 is
+the first query in the process. DuckDB timing includes the CLI invocation and
+full oracle query. The existing `duckdb_timing.json` describes H05, so the test
+correctly measured H01 rather than reusing that unrelated baseline.
+
+### Box 11b machine resource and catalog contracts
+
+The machine API additionally records `LevelNode.shared_bytes: Option<usize>`
+and `Machine.layout: Option<fn(&DispatchShape) -> syn::Result<usize>>`.
+`DispatchShape` describes ordered per-chain payload/fold demands, live-column
+types and codec facts, tile and item counts; it contains no GPU byte constants.
+`Analysis.resources` records checked shape, required bytes and capacity per
+publication. BE-Resource rejects oversized authored or generated dispatches.
+
+The planner first considers its ordinary tile/item candidates. If none is legal
+for the target, it prepares one checked publication alternative between named
+expansions and choices, then grades/costs its tile/item candidates. It neither
+discards alternatives nor hides resource failure inside translation.
+
+Catalog level lists govern reads. Host construction alone does not require or
+establish host read capability. Generated Lookup-first stores select replayable
+provider overrides using their actual live layouts; authored tokens and grades
+retain precedence.
+
+### Box 11b integration timing acceptance
+
+Compare H05 SF10 advised and authored R in the same session using interleaved
+authored/advised/authored/advised invocations, each with one warmup and five
+measured iterations. Report all four medians; a relative difference within 1%
+counts as equal for the advised ≤ authored acceptance gate. This comparison
+band accounts for run-to-run timing variation without changing query plans.
+
+The integration run measured the following SF10 medians (all 72,983 rows exact):
+
+| Order | Implementation | Total ms |
+|---|---|---:|
+| A1 | Authored R | 10.531 |
+| B1 | Advised | 10.234 |
+| A2 | Authored R | 10.318 |
+| B2 | Advised | 10.269 |
+
+Both advised measurements are no slower than their preceding authored run;
+the second pair is equal within the 1% band. The initial all-query suite
+measurement was 10.374 ms versus a separate authored 10.310 ms, also within
+that band, although the suite's existing fixed 10.35 ms ceiling returned a
+failure exit status. The interleaved comparison leaves that original evidence
+intact and changes neither the implementation nor the fixed-ceiling check.

@@ -16,6 +16,7 @@ fn node(
     children: Vec<LevelNode>,
 ) -> LevelNode {
     LevelNode {
+        shared_bytes: None,
         name: syn::parse_str(name).unwrap(),
         collaborative,
         dynamic,
@@ -27,11 +28,13 @@ fn node(
 fn machines() -> Vec<Machine> {
     vec![
         Machine {
+            layout: None,
             name: syn::parse_quote!(sequential),
             items: 1,
             root: node("host", false, false, None, vec![]),
         },
         Machine {
+            layout: None,
             name: syn::parse_quote!(tasks),
             items: 1,
             root: node(
@@ -49,6 +52,7 @@ fn machines() -> Vec<Machine> {
             ),
         },
         Machine {
+            layout: None,
             name: syn::parse_quote!(gpu),
             items: 4,
             root: node(
@@ -619,14 +623,25 @@ fn catalog_provider_scope_is_the_read_level_not_the_host_store() {
     let source = join();
     let mut available = catalog(&machine);
     available.providers[0].levels = vec![vec!["host".into()]];
-    let error = plan(&source, &machine, &available).unwrap_err().to_string();
+    let planned = plan(&source, &machine, &available).unwrap();
+    let analysis = replay(&source, &machine, &planned);
+    assert_eq!(analysis.levels["result"], ["host"]);
+    // An unauthored read can move to host; an explicitly authored descendant
+    // read remains a catalog error rather than silently changing its grade.
+    let authored =
+        cq_sequence_rewrite_passes::grade(&source, quote!(gpu, result at device)).unwrap();
+    let error = plan(&authored, &machine, &available)
+        .unwrap_err()
+        .to_string();
     assert!(
         error.contains("unmet catalog obligation Provider"),
         "{error}"
     );
     available.providers[0].levels = vec![vec!["host".into(), "device".into(), "block".into()]];
     let planned = plan(&source, &machine, &available).unwrap();
-    replay(&source, &machine, &planned);
+    let analysis = replay(&source, &machine, &planned);
+    assert_eq!(analysis.levels["provider"], ["host"]);
+    assert!(!analysis.dispatches.is_empty());
 }
 
 #[test]
@@ -825,5 +840,264 @@ fn host_string_filter_uploads_projected_index_before_device_lookups() {
             .dispatches
             .iter()
             .any(|dispatch| dispatch.members.iter().any(|name| name == "joined"))
+    );
+}
+
+#[test]
+fn automatic_h09_keeps_retained_dependencies_in_their_read_extent() {
+    // The GPU suite imports this shape: Part's opaque predicate is written
+    // before Orders and the composite Lineitem/PartSupp join, not moved there.
+    let physical = syn::parse_quote! {
+        physical {
+            relation Part(part_key:i32,part_name:String);
+            relation Orders(order_key:i32);
+            relation Lineitem(order_key:i32,part_key:i32,supplier_key:i32);
+            relation PartSupp(part_key:i32,supplier_key:i32);
+            relation Supplier(supplier_key:i32,nation_key:i32);
+            relation Nation(nation_key:i32);
+            p = pipe rename Part@0 {part_key -> part_key,part_name -> part_name};
+            green = pipe guard p if (part_name.contains("green"));
+            o = let rename Orders@2 {order_key -> order_key};
+            po = pipe probe first [] green,o;
+            l = let rename Lineitem@3 {
+                order_key -> order_key,part_key -> part_key,supplier_key -> supplier_key
+            };
+            pol = pipe probe first [order_key,part_key] po,l;
+            ps = let rename PartSupp@4 {part_key -> part_key,supplier_key -> supplier_key};
+            valid = pipe probe first [part_key,supplier_key] pol,ps;
+            s = let rename Supplier@5 {supplier_key -> supplier_key,nation_key -> nation_key};
+            supplied = pipe probe first [supplier_key] valid,s;
+            n = let rename Nation@6 {nation_key -> nation_key};
+            joined = pipe probe first [nation_key] supplied,n;
+            answer = pipe canon project joined keep {order_key,part_key,supplier_key};
+            return answer as answer(order_key,part_key,supplier_key);
+        }
+    };
+    let machine = machines().pop().unwrap();
+    let mut available = catalog(&machine);
+    available.providers[0].elements = Some(vec![syn::parse_quote!(i32)]);
+    let structures = cq_structure_selection::compile(&physical).unwrap();
+    let structures = cq_sequence_plan::select_from_catalog(&structures, &available).unwrap();
+    let mut source = cq_sequence_lowering::compile(&structures).unwrap();
+    source.evidence = syn::parse_quote!(evidence {
+        count Part = 200000; count Orders = 1500000; count Lineitem = 6001215;
+        count PartSupp = 800000; count Supplier = 10000; count Nation = 25;
+    });
+    let planned = plan(&source, &machine, &available).unwrap();
+    assert!(matches!(
+        planned.trace.first(),
+        Some(Advice::LookupFirst(_))
+    ));
+    let analysis = replay(&source, &machine, &planned);
+    assert_eq!(analysis.levels["p"], ["host"]);
+    assert_eq!(analysis.levels["green"], ["host"]);
+    assert!(!analysis.dispatches.is_empty());
+}
+
+#[test]
+fn host_predicate_publishes_a_retained_lookup_without_moving_its_producer() {
+    let source: Program = syn::parse_quote! {
+        physical {
+            relation L(a:i32); relation R(a:i32,b:i32);
+            l = pipe rename L@0 {a -> a};
+            r = let rename R@1 {a -> a,b -> b};
+            joined = let probe first [a] l,r;
+            selected = pipe guard joined if (opaque(b));
+            answer = pipe canon project selected keep {a,b};
+            return answer as answer(a,b);
+        }
+        structures {
+            l host scan = Reader []; r host scan = Reader [];
+            r = Index [a]; joined rows = Index; answer canon = Canonical;
+        }
+        sequence {
+            l = rows l; r = store rows r;
+            joined = store flatten lookup r [a] l;
+            selected = map selected joined;
+            result = store canon map answer selected;
+        }
+    };
+    let machine = machines().pop().unwrap();
+    let planned = decompose(&source, &machine, &catalog(&machine)).unwrap();
+    let analysis = replay(&source, &machine, &planned);
+    assert_eq!(analysis.levels["joined"], ["host"]);
+    assert_eq!(analysis.levels["selected"], ["host"]);
+    assert_eq!(
+        analysis.levels["__sequence_publish_joined"],
+        ["host", "device", "block"]
+    );
+    assert!(
+        planned
+            .trace
+            .iter()
+            .any(|advice| matches!(advice, Advice::Publish { name, .. } if name == "joined"))
+    );
+    assert!(
+        planned
+            .trace
+            .iter()
+            .any(|advice| matches!(advice, Advice::Store(name) if name == "l"))
+    );
+}
+
+#[test]
+fn host_choice_publishes_counts_even_when_arms_do_not_read_the_counted_rows() {
+    let machine = machines().pop().unwrap();
+    for length in [
+        Len::Input("counted".into()),
+        Len::Add(
+            Box::new(Len::Input("counted".into())),
+            Box::new(Len::Add(
+                Box::new(Len::Input("counted".into())),
+                Box::new(Len::Lit(1)),
+            )),
+        ),
+    ] {
+        let mut source = join();
+        let mut counted = source.sequence.definitions.last().unwrap().clone();
+        counted.name = syn::parse_quote!(counted);
+        source.sequence.definitions.insert(2, counted);
+        let Term::Store { inner, .. } = &mut source.sequence.definitions.last_mut().unwrap().term
+        else {
+            unreachable!()
+        };
+        **inner = Term::Choose(vec![
+            (Guard::Lt(length, 10), *inner.clone()),
+            (Guard::Else, *inner.clone()),
+        ]);
+        source.graded = Some(syn::parse_quote!(graded gpu { result at host; }));
+        let planned = decompose(&source, &machine, &catalog(&machine)).unwrap();
+        let analysis = replay(&source, &machine, &planned);
+        assert_eq!(analysis.levels["result"], ["host"]);
+        assert_eq!(analysis.levels["counted"], ["host"]);
+        assert_eq!(
+            analysis.levels["__sequence_publish_counted"],
+            ["host", "device", "block"]
+        );
+        assert!(
+            planned
+                .trace
+                .iter()
+                .any(|advice| matches!(advice, Advice::Publish { name, .. } if name == "counted"))
+        );
+    }
+}
+
+#[test]
+fn retained_row_comparisons_publish_before_provider_lookup() {
+    let machine = machines().pop().unwrap();
+    for (condition, row_bound) in [
+        (quote!(value < bound), true),
+        (quote!(value = bound), true),
+        (quote!(value < 10), false),
+    ] {
+        let source: Program = syn::parse2(quote! {
+            physical {
+                relation Driver(a:i32);
+                relation Provider(a:i32,value:i32,bound:i32);
+                driver = pipe rename Driver@0 {a -> a};
+                provider = pipe rename Provider@1 {a -> a,value -> value,bound -> bound};
+                selected = let select provider if (#condition);
+                present = pipe semi eager [a] driver,selected;
+                answer = pipe canon project present keep {a};
+                return answer as answer(a);
+            }
+            structures {
+                driver host scan = Reader [];
+                provider host scan = Reader [];
+                selected = Index [a];
+                answer canon = Canonical;
+            }
+            sequence {
+                input = rows driver;
+                provider_input = rows provider;
+                index = store compact selected provider_input;
+                present = compact present lookup selected [a] input;
+                result = store canon map answer present;
+            }
+        })
+        .unwrap();
+        let planned = decompose(&source, &machine, &catalog(&machine)).unwrap();
+        let analysis = replay(&source, &machine, &planned);
+        assert_eq!(analysis.levels["provider_input"], ["host"]);
+        if row_bound {
+            assert_eq!(analysis.levels["index"], ["host", "device"]);
+            // outer_store names the input domain; the retained result is a
+            // publication in inner_stores, not the dispatch's source.
+            assert!(
+                analysis
+                    .dispatches
+                    .iter()
+                    .any(|dispatch| { dispatch.inner_stores.iter().any(|store| store == "index") })
+            );
+            assert!(
+                planned
+                    .trace
+                    .iter()
+                    .any(|advice| matches!(advice, Advice::Grade { name, level, .. }
+                    if name == "index" && level.len() == 2))
+            );
+        } else {
+            assert_eq!(analysis.levels["index"], ["host"]);
+        }
+    }
+}
+
+#[test]
+fn resource_bounded_planning_separates_expanding_stages_with_checked_stores() {
+    let source: Program = syn::parse_quote! {
+        physical {
+            relation L(a:i32); relation R(a:i32,b:i32);
+            relation S(b:i32,c:i32); relation T(c:i32,d:i32);
+            l = pipe rename L@0 {a -> a};
+            r = let rename R@1 {a -> a,b -> b};
+            s = let rename S@2 {b -> b,c -> c};
+            t = let rename T@3 {c -> c,d -> d};
+            j = pipe probe first [a] l,r;
+            k = pipe probe first [b] j,s;
+            m = pipe canon probe first [c] k,t;
+            return m as answer(a,b,c,d);
+        } structures {
+            l host scan = Reader []; r host scan = Reader [];
+            s host scan = Reader []; t host scan = Reader [];
+            r = Index [a]; s = Index [b]; t = Index [c];
+            m canon = Canonical;
+        } sequence {
+            l = rows l; r = store rows r; s = store rows s; t = store rows t;
+            j = flatten lookup r [a] l;
+            k = flatten lookup s [b] j;
+            m = canon flatten lookup t [c] k;
+            out = store m;
+        }
+    };
+    let mut machine = machines().pop().unwrap();
+    machine.root.children[0].children[0].shared_bytes = Some(1);
+    machine.layout = Some(|shape| {
+        Ok(shape
+            .chains
+            .iter()
+            .flatten()
+            .filter(|allocation| {
+                matches!(
+                    allocation,
+                    cq_lang_sequence::ResourceAllocation::Payload { .. }
+                )
+            })
+            .count())
+    });
+    let planned = decompose(&source, &machine, &catalog(&machine)).unwrap();
+    let analysis = replay(&source, &machine, &planned);
+    assert!(
+        planned
+            .trace
+            .iter()
+            .any(|advice| matches!(advice, Advice::Store(name) if name == "j"))
+    );
+    assert!(!analysis.resources.is_empty());
+    assert!(
+        analysis
+            .resources
+            .values()
+            .all(|resource| resource.required_bytes <= 1)
     );
 }

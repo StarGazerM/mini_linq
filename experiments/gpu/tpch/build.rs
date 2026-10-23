@@ -189,6 +189,13 @@ fn compile(
                 .iter()
                 .find(|r| r.name == host.as_str())
                 .unwrap();
+            if kernel
+                .derived
+                .iter()
+                .any(|(name, _)| *name == relation.name)
+            {
+                continue;
+            }
             if relation
                 .columns
                 .iter()
@@ -325,7 +332,12 @@ fn compile(
         cq_sequence_pull::translate(&cpu_plan.program, &cpu_analysis),
     )?;
 
-    let fields: Vec<_> = kernel.relations.iter().map(|r| &r.name).collect();
+    let fields: Vec<_> = kernel
+        .relations
+        .iter()
+        .map(|r| &r.name)
+        .chain(kernel.derived.iter().map(|(name, _)| name))
+        .collect();
     let tables: Vec<_> = kernel
         .relations
         .iter()
@@ -350,7 +362,12 @@ fn compile(
     let mut input_types = Vec::new();
     let mut bindings = Vec::new();
     let mut sequential_bindings = Vec::new();
-    for (index, relation) in cq.declarations.iter().enumerate() {
+    for (index, relation) in cq
+        .declarations
+        .iter()
+        .take(kernel.relations.len())
+        .enumerate()
+    {
         let field = fields[index];
         let table = &tables[index];
         let names = &column_names[index];
@@ -389,6 +406,29 @@ fn compile(
             });
             sequential_bindings.push(quote!(let #field = data.#field.to_host()?;));
         }
+    }
+    for (index, (name, _)) in kernel.derived.iter().enumerate() {
+        let row = &row_types[kernel.relations.len() + index];
+        let (initializer, dependencies) = kernel.derived_input(name).map_err(|error| Rejected {
+            phase: "derived input loader",
+            error: error.to_string(),
+            term: cpu_source.to_string(),
+        })?;
+        let host_inputs = dependencies.iter().map(|relation| {
+            let input = &relation.name;
+            if relation
+                .columns
+                .iter()
+                .any(|(_, ty)| ty.to_token_stream().to_string() == "String")
+            {
+                quote!(let #input = &#input;)
+            } else {
+                quote!(let #input = #input.to_host()?;)
+            }
+        });
+        input_types.push(quote!(Vec<#row>));
+        bindings.push(quote!({ #(#host_inputs)* #initializer }));
+        sequential_bindings.push(quote!(let #name = &data.#name;));
     }
     let answer_columns = kernel.answer_columns().map_err(|error| Rejected {
         phase: "loader output domains",
@@ -440,7 +480,8 @@ fn compile(
             fn load(manifest: &crate::manifest::Manifest) -> crate::manifest::Result<Inputs> {
                 let pool = cq_gpu_runtime::Pool::new(0, 0, 0)?;
                 #load_setup
-                Ok(Inputs { #(#fields: #bindings,)* #catalog_init })
+                #(let #fields: #input_types = #bindings;)*
+                Ok(Inputs { #(#fields,)* #catalog_init })
             }
             fn gpu(data: &Inputs) -> cq_gpu_runtime::DeviceColumns<'_, Answer> {
                 #(let #fields = &data.#fields;)*
@@ -596,6 +637,8 @@ fn main() -> Result<()> {
                     advice::Pipeline::h05()
                 } else if name == "h09" {
                     advice::Pipeline::h09()
+                } else if matches!(name, "h04" | "h04_not_exists" | "h16" | "h22") {
+                    advice::Pipeline::negation(name)
                 } else {
                     // CPU hints remain available explicitly, but an unmeasured CPU
                     // choice must not replace the existing accepted GPU baseline.
@@ -664,7 +707,10 @@ fn main() -> Result<()> {
     generated.extend(executor);
     let out = PathBuf::from(env::var_os("OUT_DIR").ok_or("OUT_DIR missing")?);
     generated.extend(string_guard_regression(&out)?);
-    fs::write(out.join("queries.rs"), generated.to_string())?;
+    // Keep source-map lookups bounded by ordinary Rust line lengths, rather
+    // than repeatedly scanning a multi-megabyte TokenStream display line.
+    let generated: syn::File = syn::parse2(generated)?;
+    fs::write(out.join("queries.rs"), prettyplease::unparse(&generated))?;
     fs::write(out.join("plans.json"), serde_json::to_vec_pretty(&reports)?)?;
     // Keep the same canonical path available to the runner, rather than silently
     // measuring a different fixture after constants were encoded at build time.

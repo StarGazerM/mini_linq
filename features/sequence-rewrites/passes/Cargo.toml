@@ -19,3 +19,7 @@ quote.workspace = true
 proc-macro2.workspace = true
 syn.workspace = true
 
+[dev-dependencies]
+cq-structure-selection = { path = "../../../passes/cq-structure-selection" }
+cq-workloads = { path = "../../workloads" }
+

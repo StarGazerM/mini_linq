@@ -23,6 +23,7 @@ use syn::{Ident, LitInt, Token, braced, bracketed};
 pub mod contract;
 mod evidence;
 mod grading;
+mod resources;
 
 pub use contract::check_rewrite;
 pub use cq_lang_structures as structures;
@@ -144,12 +145,15 @@ pub struct Grade {
 }
 
 /// A target-supplied machine tree, not an additional language construct.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct Machine {
     pub name: Ident,
     /// Preferred per-lane item count; the planner also considers one item.
     pub items: usize,
     pub root: LevelNode,
+    /// Target-owned storage layout for one checked dispatch's resource demands.
+    /// The language derives the shape; the machine alone assigns byte sizes.
+    pub layout: Option<fn(&DispatchShape) -> syn::Result<usize>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -159,7 +163,43 @@ pub struct LevelNode {
     pub dynamic: bool,
     /// Fixed distributing width, or `None` for dynamically sized levels.
     pub width: Option<usize>,
+    /// Available shared bytes for a collective at this level, if bounded.
+    pub shared_bytes: Option<usize>,
     pub children: Vec<LevelNode>,
+}
+
+/// Checked column facts supplied to a target's resource layout model.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResourceColumn {
+    pub name: String,
+    pub types: Vec<syn::Type>,
+    pub coded: bool,
+}
+
+/// Ordered lifetime demands, without a target's alignment or byte constants.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ResourceAllocation {
+    Payload { parents: Vec<ResourceColumn> },
+    Fold,
+}
+
+/// Resource-relevant structure of one checked dispatch, including every arm.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DispatchShape {
+    pub publication: String,
+    pub level: Vec<String>,
+    pub width: Option<usize>,
+    pub tile: Option<usize>,
+    pub items: usize,
+    pub chains: Vec<Vec<ResourceAllocation>>,
+}
+
+/// A resource obligation discharged against the target-supplied layout model.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResourceUsage {
+    pub shape: DispatchShape,
+    pub required_bytes: usize,
+    pub capacity_bytes: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -174,7 +214,8 @@ pub enum Capability {
 ///
 /// Catalogs contain syntax and capabilities only, never target implementations.
 /// Candidate order breaks ties. Levels are explicit absolute machine paths;
-/// an empty level list permits no execution level.
+/// an empty level list permits no read. Provider levels govern consumption,
+/// not construction: building from host rows does not license host reads.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Catalog {
     pub providers: Vec<ProviderToken>,
@@ -182,7 +223,7 @@ pub struct Catalog {
     pub canons: Vec<CanonToken>,
 }
 
-/// An authored provider type supported at the listed execution levels.
+/// An authored provider type whose reads are supported at the listed levels.
 ///
 /// In token patterns, `_` matches any type or const argument and `'_` any lifetime.
 /// Matching never replaces the author's provider type.
@@ -283,6 +324,7 @@ pub struct Analysis {
     pub capabilities: BTreeMap<(String, Vec<String>), Capability>,
     pub levels: BTreeMap<String, Vec<String>>,
     pub dispatches: Vec<Dispatch>,
+    pub resources: BTreeMap<String, ResourceUsage>,
     pub collectives: Vec<(String, Monoid, Vec<String>)>,
     pub output: Option<(String, OutputProtocol)>,
     pub obligations: Vec<Obligation>,

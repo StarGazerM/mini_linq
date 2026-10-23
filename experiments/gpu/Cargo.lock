@@ -238,6 +238,7 @@ dependencies = [
  "gpu-compress",
  "gpu-compress-host",
  "gpu-device-columns",
+ "prettyplease",
  "proc-macro2",
  "quote",
  "serde",

@@ -62,9 +62,9 @@ mod cpu {
         Tasks,
     }
 
-    /// Plan a Sequence program with the target's exported machine and catalog.
-    /// Authored decomposition is retained; missing decisions come only from the
-    /// shared planner, never from harness-specific store or grading preparation.
+    /// Automatically plan a Sequence program with the target's machine and catalog.
+    /// Authored decomposition is retained; missing order and placement decisions
+    /// come only from the shared planner, never from harness-specific preparation.
     pub fn plan(program: &Program, target: Target) -> syn::Result<(Program, Analysis)> {
         plan_with_catalog(program, target, &Catalog::default())
     }
@@ -84,7 +84,7 @@ mod cpu {
             .extend(additions.providers.iter().cloned());
         catalog.codecs.extend(additions.codecs.iter().cloned());
         catalog.canons.extend(additions.canons.iter().cloned());
-        let planned = cq_sequence_plan::decompose(program, &machine, &catalog)?;
+        let planned = cq_sequence_plan::plan(program, &machine, &catalog)?;
         let analysis = cq_lang_sequence::check_grading(&planned.program, &machine)?;
         Ok((planned.program, analysis))
     }

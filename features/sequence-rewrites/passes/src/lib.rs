@@ -329,30 +329,47 @@ pub fn grade_in(
     arguments: TokenStream,
 ) -> syn::Result<Program> {
     let Grades { machine, grades } = syn::parse2(arguments)?;
-    for grade in &grades {
+    let mut target = source.clone();
+    grade_definitions_in(checker, &mut target, &machine, &grades)?;
+    Ok(target)
+}
+
+/// Apply typed grade advice without copying unchanged syntax or rendering tokens.
+/// Only the nonsemantic grading field is borrowed mutably after its complete
+/// structural proof succeeds; machine grading remains a separate obligation.
+pub fn grade_definitions_in(
+    checker: &mut cq_lang_sequence::contract::Checker,
+    source: &mut Program,
+    machine: &Ident,
+    grades: &[Grade],
+) -> syn::Result<()> {
+    for grade in grades {
         definition(source, &grade.name)?;
     }
-    let mut target = source.clone();
-    let graded = target.graded.get_or_insert_with(|| Graded {
-        machine: machine.clone(),
-        grades: Vec::new(),
-    });
-    if symbol_name(&graded.machine) != symbol_name(&machine) {
+    if let Some(graded) = &source.graded
+        && symbol_name(&graded.machine) != symbol_name(machine)
+    {
         return Err(syn::Error::new_spanned(
             machine,
             "cannot extend a different graded machine",
         ));
     }
+    checker.check_rewrite_in(source, source)?;
+    let graded = source.graded.get_or_insert_with(|| Graded {
+        machine: machine.clone(),
+        grades: Vec::new(),
+    });
     for grade in grades {
+        let name = symbol_name(&grade.name);
         if let Some(existing) = graded
             .grades
             .iter_mut()
-            .find(|existing| symbol_name(&existing.name) == symbol_name(&grade.name))
+            .find(|existing| symbol_name(&existing.name) == name)
         {
-            *existing = grade;
+            existing.clone_from(grade);
         } else {
-            graded.grades.push(grade);
+            graded.grades.push(grade.clone());
         }
     }
-    checked_in(checker, source, target)
+    Ok(())
 }

@@ -196,7 +196,20 @@ GPU instance of the grade.
 
 \Rule{BE-Abort}{\bot\text{ raised below }\mathsf{host}}
  {\text{a once-set flag on the failure channel, mapped to }\bot\text{ at the next host boundary; no truncated success}}
+
+\Rule{BE-Resource}{d\text{ a checked dispatch at }\ell\quad
+ \mathsf{layout}_M(\mathsf{shape}(d))\le\mathsf{capacity}_M(\ell)}
+ {\text{the dispatch fits the bounded resource of its machine level}}
 \end{mathpar}
+The resource shape records every branch, payload lookup, live parent column
+with its checked type and codec facts, fold, tile and item count. Byte layout
+and alignment belong to the target-supplied machine, not to the language.
+An unbounded level imposes no capacity premise. A bounded level without a
+layout model, arithmetic overflow, or an oversized layout is rejected before
+translation, including for explicitly advised programs. The planner may add
+checked publication boundaries between expanding stages and alternatives,
+then compares only resource-legal candidates by PL-Cost.
+
 The laws mention only labels of the machine parameter. A term that uses a
 collective at a level the target marks separated is rejected for that
 target, not reinterpreted. BE-Boundary derives kernels (GPU) and tasks
@@ -272,7 +285,7 @@ Let $t_0=t$, $t_i=r_i(t_{i-1})$, and let $A(t)$ record authored choices.
 \Rule{PL-Select}{s'=\mathsf{retainUnsupportedHostReads}(s,K)\quad
  e\in\mathsf{Structures}(s')\quad
  k=\mathsf{first}\{k\in K\mid \mathsf{needs}(e)\subseteq\mathsf{caps}(k),
- \ \mathsf{host}\in\mathsf{levels}(k),\
+ \ \mathsf{levels}(k)\ne\varnothing,\
  \mathsf{elements}(e)\subseteq\mathsf{acceptedElements}(k)\}}
  {\mathsf{select}(s,K):\
  e.\mathsf{type}\gets k.\mathsf{type}\quad\text{by checked retention, index construction and retype}}
@@ -283,6 +296,11 @@ Let $t_0=t$, $t_i=r_i(t_{i-1})$, and let $A(t)$ record authored choices.
    (a,b)\mapsto\text{if }\kappa(b)\prec\kappa(a)\text{ then }b\text{ else }a,
    c_1,(c_2,\ldots,c_k)\bigr)}
 \end{mathpar}
+Catalog levels describe where a provider may be read, not where its owner is
+constructed. Building an index from host rows does not certify a host read.
+Placement must select a supported read level; authored unsupported grades are
+rejected rather than silently reinterpreted.
+
 PL-Closure inherits its value laws from BE-* and the Sequence extension
 rewrites; it adds no new equality of values. PL-Precedence preserves
 authored grades, tiles, stores, choices, output protocols and codec/canon
@@ -295,6 +313,16 @@ span, stores and dispatches. An inversion is a Lookup evaluated after an
 upstream Expand in the same pipeline; retained references begin new pipelines.
 Bounds and coefficient dominance establish comparisons; unresolved
 comparisons, like equal costs, retain the earlier candidate.
+
+A planning invocation may reuse a structural proof only for an equal complete
+Structures prefix and equal Sequence and evidence syntax. Machine grading is
+checked separately for every requested grade. The join-support certificate
+interns relation and column names into invocation-local integer identities;
+its cache keys retain the complete ordered graph, headings and query atoms.
+Neither a hash collision nor evidence establishes an equality. Syntax trees
+remain the source of spans and opaque Rust equality; proof comparison does
+not require rendering those trees to token strings.
+
 PL-Select is an explicit Structures selection operation before decomposition,
 not an implicit override by PL-Precedence. It visits built indexes, sets,
 row buffers and canon providers in recorded entry order, selecting the first
@@ -474,6 +502,12 @@ subjoins satisfy the SafeSubjoin criterion
 \cite[Section~3.2]{paper-rpt}. Evidence may prefer early Expand or a
 different Lookup order but is never used to delete a required join.
 Opaque Rust nodes remain pinned to their written Before domains.
+A provider requiring another key layout may name a fresh retained identity
+projection after that pinned prefix. Keeping the complete checked input
+heading preserves support and positions; the support certificate treats only
+such full-heading projections as transparent aliases. Other projections
+remain opaque certificate nodes. Each provider name then has one recorded
+layout, without requiring an interpreter to choose among layouts.
 In particular, a predicate-bearing leaf is authored by putting its
 predicate after that atom, not by a planner asserting the predicate total.
 
@@ -566,6 +600,25 @@ BE-Length and BE-Abort; bounded output retries rather than publishing a
 truncated result. No target-side join order, uniqueness or tile choice is
 inferred by the translation.
 
+The CUDA machine bounds block shared storage by 101,376 bytes. Its single
+layout implementation starts with 48 bytes, records each materialized lookup's
+256 begins and 257 offsets as four-byte entries, and stores each live parent
+column for 256 members using its target carrier width (four-byte certified
+narrow codes, otherwise eight bytes). A fold reserves 256 eight-byte values.
+Every allocation retains its alignment and every choice arm is represented;
+the final size is aligned to sixteen bytes. The same layout implementation
+supplies BE-Resource and emitted offsets, so resource failure cannot select
+an alternative algorithm inside the interpreter.
+
+For the GPU instance of E-Neg (and RA-Anti), the checked Physical provenance
+of \code{compact(lookup)} records the negative polarity. Let
+$m(\rho)$ be the provider's membership result on the recorded key columns.
+The lane keep bit is $\mathsf{live}(\rho)\land\neg m(\rho)$ for anti,
+and $\mathsf{live}(\rho)\land m(\rho)$ for semi. Both polarities use the
+same membership probe; neither expands witnesses. Empty provider ranges,
+absent directory keys, and existential wildcard columns follow the same
+equation. The translator reads this polarity, rather than choosing it.
+
 
 \subsection{Grouped folds}
 \label{sec:grouped-fold}
@@ -608,6 +661,22 @@ fold; its input canonicalization is over $V$, never over aggregate values.
 The host hash-grouped implementation fuses store construction and segment
 fold without changing this equation. The Tasks interpretation performs this
 operation at the host join, not as a collective at the separated pool.
+
+\paragraph{GPU machine instance of BE-Group.}
+The recorded canonical provider publishes the distinct complete valuations
+before the grouped boundary. Stable radix ordering of their key codes gives
+a permutation $\pi$; adjacent unequal keys mark owner offsets. Thus each
+half-open segment of $\pi$ enumerates exactly $D_k$, and the same BE-Group
+equation applies, without a new rewrite or a translator-selected plan.
+Each owner is reduced collaboratively using the declared integer monoid:
+count and sum have zero identity; extrema carry a separate validity bit
+and retain the full-width value, including both signed endpoints.
+Codec widths constrain the result (in particular unsigned 32-bit sums
+cannot silently become signed 64-bit sums). Arithmetic failure is published
+as bottom through the output status, together with ancestor failures.
+Empty keyed input publishes zero owners; an empty global key publishes one
+owner with count/sum zero and invalid extrema. Values, validity, and logical
+output count remain resident until the explicit typed host decode.
 
 \subsection{The H05 reference as a term}
 The hand-written kernels (\code{experiments/gpu/h05-reference}) are

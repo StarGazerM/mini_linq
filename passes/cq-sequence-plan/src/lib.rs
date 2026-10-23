@@ -96,7 +96,19 @@ impl Advice {
                 name,
                 level,
                 machine,
-            } => rewrites::grade_in(checker, source, quote!(#machine, #name at #(#level).*)),
+            } => {
+                let mut target = source.clone();
+                rewrites::grade_definitions_in(
+                    checker,
+                    &mut target,
+                    machine,
+                    &[cq_lang_sequence::Grade {
+                        name: name.clone(),
+                        level: level.clone(),
+                    }],
+                )
+                .map(|()| target)
+            }
         };
         result.map_err(|error| {
             syn::Error::new(
@@ -174,23 +186,55 @@ fn decompose_in(
     }
     // Formal rule PL-Det: Fixed candidate order and stable ties depend only on the three inputs.
     let parallel = !machine.root.children.is_empty();
-    let mut choices = vec![(1, false)];
+    let mut choices = vec![(1, false, false)];
     if parallel && decomposition::width(&machine.root).is_some() {
         if machine.items != 1 {
-            choices.push((machine.items, false));
+            choices.push((machine.items, false, false));
         }
-        choices.push((1, true));
+        choices.push((1, true, false));
         if machine.items != 1 {
-            choices.push((machine.items, true));
+            choices.push((machine.items, true, false));
         }
+    }
+    if parallel && machine.layout.is_some() {
+        let staged = choices
+            .iter()
+            .map(|&(items, segmented, _)| (items, segmented, true))
+            .collect::<Vec<_>>();
+        choices.extend(staged);
     }
     let mut best: Option<(Cost, Planned)> = None;
     let mut error = None;
-    for (items, segmented) in choices {
-        match candidate(
-            checker, program, machine, catalog, parallel, items, segmented,
-        ) {
-            Ok((analysis, planned)) => {
+    let mut unstaged_legal = false;
+    let mut staged: Option<Planned> = None;
+    for (items, segmented, resource_staged) in choices {
+        if resource_staged && unstaged_legal {
+            continue;
+        }
+        if resource_staged && staged.is_none() {
+            staged = Some(resource_stages(checker, program)?);
+        }
+        let input = if resource_staged {
+            &staged
+                .as_ref()
+                .expect("prepared resource candidate")
+                .program
+        } else {
+            program
+        };
+        match candidate(checker, input, machine, catalog, parallel, items, segmented) {
+            Ok((analysis, mut planned)) => {
+                if resource_staged {
+                    let mut trace = staged
+                        .as_ref()
+                        .expect("prepared resource candidate")
+                        .trace
+                        .clone();
+                    trace.append(&mut planned.trace);
+                    planned.trace = trace;
+                } else {
+                    unstaged_legal = true;
+                }
                 let cost = Cost::from_analysis(&planned.program, machine, &analysis)?;
                 if best
                     .as_ref()
@@ -215,6 +259,35 @@ fn decompose_in(
     })
 }
 
+fn resource_stages(
+    checker: &mut cq_lang_sequence::contract::Checker,
+    source: &Program,
+) -> syn::Result<Planned> {
+    let mut planned = Planned {
+        program: source.clone(),
+        trace: Vec::new(),
+    };
+    // Prepare the checked publication alternative once, only when the
+    // unstaged schedules cannot satisfy this machine's obligations.
+    for definition in &source.sequence.definitions {
+        if (matches!(&definition.term, Term::Flatten(inner) if matches!(inner.as_ref(), Term::Lookup { .. }))
+            || matches!(&definition.term, Term::Choose(_)))
+            && !source
+                .graded
+                .iter()
+                .flat_map(|graded| &graded.grades)
+                .any(|grade| grade.name == definition.name)
+        {
+            push(
+                checker,
+                &mut planned,
+                Advice::Store(definition.name.clone()),
+            )?;
+        }
+    }
+    Ok(planned)
+}
+
 fn candidate(
     checker: &mut cq_lang_sequence::contract::Checker,
     source: &Program,
@@ -228,12 +301,12 @@ fn candidate(
         program: source.clone(),
         trace: Vec::new(),
     };
-    let source_facts = checker.check(source)?;
-    for advice in placement::boundaries(source, machine, &source_facts) {
+    let source_facts = checker.check(&planned.program)?;
+    for advice in placement::boundaries(&planned.program, machine, &source_facts, catalog) {
         push(checker, &mut planned, advice)?;
     }
     let facts = checker.check(&planned.program)?;
-    for advice in placement::advise(&planned.program, machine, parallel, &facts) {
+    for advice in placement::advise(&planned.program, machine, parallel, &facts, source, catalog) {
         push(checker, &mut planned, advice)?;
     }
     if parallel {
@@ -273,7 +346,30 @@ fn push(
     planned: &mut Planned,
     advice: Advice,
 ) -> syn::Result<()> {
-    planned.program = advice.apply_in(checker, &planned.program)?;
+    if let Advice::Grade {
+        name,
+        level,
+        machine,
+    } = &advice
+    {
+        cq_sequence_rewrite_passes::grade_definitions_in(
+            checker,
+            &mut planned.program,
+            machine,
+            &[cq_lang_sequence::Grade {
+                name: name.clone(),
+                level: level.clone(),
+            }],
+        )
+        .map_err(|error| {
+            syn::Error::new(
+                error.span(),
+                format!("P-Decompose {}: {error}", quote!(#advice)),
+            )
+        })?;
+    } else {
+        planned.program = advice.apply_in(checker, &planned.program)?;
+    }
     planned.trace.push(advice);
     Ok(())
 }

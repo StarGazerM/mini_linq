@@ -21,6 +21,8 @@
 //! ```
 //! Membership reads use `compact result lookup provider [keys] input`;
 //! the named Physical semi/anti operator supplies the predicate's polarity.
+//! A Probe with a recorded membership projection uses the same flat Compact
+//! shape. Only payload-enumerating lookups introduce an explicit Flatten.
 
 use cq_lang_sequence::{Definition, OutputProtocol, Program, Sequence, Term};
 use cq_lang_structures::physical::{ModeKind, Operator, symbol_name};

@@ -2,6 +2,7 @@
 //! recorded key order, selection and payload; this crate makes no plan choices.
 pub mod canon;
 pub mod device;
+pub mod group;
 mod kernels;
 pub mod selected;
 pub use selected::{select, SelectedRows};
@@ -135,9 +136,12 @@ impl ColumnDescriptor {
         field: canon::PackedField,
         bounds: Bounds,
     ) -> Result<Self> {
-        if !(1..=2).contains(&lanes) || count > keys.len() / lanes
-            || field.bits > 64 || field.shift > lanes as u32 * 64
-            || field.bits > lanes as u32 * 64 - field.shift {
+        if !(1..=2).contains(&lanes)
+            || count > keys.len() / lanes
+            || field.bits > 64
+            || field.shift > lanes as u32 * 64
+            || field.bits > lanes as u32 * 64 - field.shift
+        {
             return Err("packed source projection exceeds its buffer or key".into());
         }
         let mut source = Self::native_source(keys.ptr(), count);
@@ -219,7 +223,9 @@ pub struct RangeDescriptor {
 
 impl RangeDescriptor {
     fn base_rows(&self) -> Result<usize> {
-        self.key.first().map(|key| &key.column)
+        self.key
+            .first()
+            .map(|key| &key.column)
             .or_else(|| self.payload.first().map(|payload| &payload.column))
             .or_else(|| self.selection.as_ref().map(|selection| &selection.column))
             .map(|column| column.rows)
@@ -227,7 +233,9 @@ impl RangeDescriptor {
     }
 
     fn directory_entries(&self) -> Option<usize> {
-        self.key.first().map_or(Some(0), |key| key.domain_size.checked_add(1))
+        self.key
+            .first()
+            .map_or(Some(0), |key| key.domain_size.checked_add(1))
     }
 }
 
@@ -444,12 +452,11 @@ pub struct RangeWorkspace {
 impl RangeWorkspace {
     pub fn new(pool: Arc<Pool>, descriptor: &RangeDescriptor) -> Result<Self> {
         let rows = descriptor.base_rows()?;
-        let entries = descriptor.directory_entries().ok_or("range domain overflow")?;
+        let entries = descriptor
+            .directory_entries()
+            .ok_or("range domain overflow")?;
         Ok(Self {
-            row_count: Arc::new(Buffer::from_host(
-                pool.clone(),
-                &[rows as u64],
-            )?),
+            row_count: Arc::new(Buffer::from_host(pool.clone(), &[rows as u64])?),
             offset_count: Arc::new(Buffer::from_host(pool.clone(), &[entries as u64])?),
             payload_views: Arc::new(unsafe {
                 Buffer::uninitialized(pool, descriptor.payload.len())?
@@ -597,14 +604,26 @@ impl<'pool> RangeBuilder<'pool> {
         let row_count = workspace.row_count.clone();
         let offset_count = workspace.offset_count.clone();
         if descriptor.key.is_empty() {
-            let source = selected.as_ref()
+            let source = selected
+                .as_ref()
                 .map_or(std::ptr::null(), |selected| pointer(selected) as *const u32);
-            let payload = descriptor.payload.iter()
-                .map(|payload| unsafe { pack_payload(pool, payload, source, rows, row_count.clone()) })
+            let payload = descriptor
+                .payload
+                .iter()
+                .map(|payload| unsafe {
+                    pack_payload(pool, payload, source, rows, row_count.clone())
+                })
                 .collect::<Result<Vec<_>>>()?;
             let offsets = unsafe {
-                EncodedColumn::from_device(pool.clone(), std::ptr::null::<i64>(), 0,
-                    offset_count, 0, Codec::For, Bounds::Empty)?
+                EncodedColumn::from_device(
+                    pool.clone(),
+                    std::ptr::null::<i64>(),
+                    0,
+                    offset_count,
+                    0,
+                    Codec::For,
+                    Bounds::Empty,
+                )?
             };
             if let Some(selected) = selected {
                 release(stream, selected)?;

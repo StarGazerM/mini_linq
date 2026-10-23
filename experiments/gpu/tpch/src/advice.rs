@@ -55,6 +55,20 @@ impl Pipeline {
             ..Self::baseline()
         }
     }
+
+    pub fn negation(query: &str) -> Self {
+        let order = match query {
+            "h04" => "Lineitem, Orders",
+            "h04_not_exists" => "Orders",
+            "h16" => "Part, Partsupp",
+            "h22" => "Customer",
+            _ => unreachable!("negation advice requires a registered negation core"),
+        };
+        Self {
+            plan: format!("no_reduce, order({order})"),
+            ..Self::baseline()
+        }
+    }
 }
 
 #[derive(Default)]

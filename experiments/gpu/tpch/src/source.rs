@@ -16,11 +16,15 @@ macro_rules! sources {
 }
 sources!(
     "h03",
+    "h04",
+    "h04_not_exists",
     "h05",
     "h07",
     "h07_block",
     "h08",
     "h09",
+    "h16",
+    "h22",
     "h21_positive",
     "d19",
     "d27",
@@ -40,6 +44,7 @@ pub struct Kernel {
     pub setup: syn::Block,
     pub relations: Vec<Relation>,
     pub answer: Vec<(Ident, syn::Type)>,
+    pub derived: Vec<(Ident, Vec<(Ident, syn::Type)>)>,
     pub body: TokenStream,
 }
 
@@ -106,7 +111,24 @@ impl Parse for Kernel {
             });
             declarations.parse::<Token![;]>()?;
         }
-        let key: Ident = input.parse()?;
+        let mut key: Ident = input.parse()?;
+        let mut derived = Vec::new();
+        if key == "derived" {
+            let declarations;
+            syn::braced!(declarations in input);
+            while !declarations.is_empty() {
+                let keyword: Ident = declarations.parse()?;
+                if keyword != "relation" {
+                    return Err(syn::Error::new_spanned(keyword, "expected relation"));
+                }
+                let name = declarations.parse()?;
+                let fields;
+                syn::parenthesized!(fields in declarations);
+                derived.push((name, columns(&fields)?));
+                declarations.parse::<Token![;]>()?;
+            }
+            key = input.parse()?;
+        }
         if key != "answer" {
             return Err(syn::Error::new_spanned(key, "expected answer"));
         }
@@ -119,6 +141,7 @@ impl Parse for Kernel {
             plan_advice,
             setup,
             relations,
+            derived,
             answer,
             body: input.parse()?,
         })
@@ -126,6 +149,42 @@ impl Parse for Kernel {
 }
 
 impl Kernel {
+    /// Reuse the authored one-time input preprocessing, not a second predicate.
+    pub fn derived_input(&self, name: &Ident) -> Result<(&syn::Expr, Vec<&Relation>)> {
+        let expression = self
+            .setup
+            .stmts
+            .iter()
+            .find_map(|statement| {
+                let syn::Stmt::Local(local) = statement else {
+                    return None;
+                };
+                let syn::Pat::Type(typed) = &local.pat else {
+                    return None;
+                };
+                let syn::Pat::Ident(binding) = typed.pat.as_ref() else {
+                    return None;
+                };
+                (binding.ident == *name)
+                    .then(|| local.init.as_ref().map(|init| init.expr.as_ref()))
+                    .flatten()
+            })
+            .ok_or_else(|| format!("derived relation {name} lacks an authored initializer"))?;
+        fn mentions(tokens: TokenStream, name: &Ident) -> bool {
+            tokens.into_iter().any(|token| match token {
+                TokenTree::Ident(ident) => ident == *name,
+                TokenTree::Group(group) => mentions(group.stream(), name),
+                _ => false,
+            })
+        }
+        let inputs = self
+            .relations
+            .iter()
+            .filter(|relation| mentions(expression.to_token_stream(), &relation.name))
+            .collect();
+        Ok((expression, inputs))
+    }
+
     pub fn import(source: &str) -> Result<Self> {
         let file = syn::parse_file(source)?;
         let invocation = file
@@ -156,8 +215,12 @@ impl Kernel {
             quote!(relation #name(#(#fields),*);)
         });
         let outputs = self.answer.iter().map(|(name, _)| name);
+        let derived = self.derived.iter().map(|(name, columns)| {
+            let fields = columns.iter().map(|(column, ty)| quote!(#column: #ty));
+            quote!(relation #name(#(#fields),*);)
+        });
         let body = &self.body;
-        quote!(struct Query; #(#declarations)* answer(#(#outputs),*) :- #body)
+        quote!(struct Query; #(#declarations)* #(#derived)* answer(#(#outputs),*) :- #body)
     }
 
     #[cfg(test)]
@@ -183,7 +246,7 @@ impl Kernel {
                 }
             }
         }
-        let constants = setup_constants(&self.setup)?;
+        let constants = setup_constants(&self.setup, &self.derived)?;
         let mut variables = BTreeMap::new();
         collect_variables(self.body.clone(), &relations, &mut variables)?;
         let body = encode_tokens(
@@ -223,6 +286,10 @@ impl Kernel {
             }
             declarations.extend(quote!(relation #name(#(#fields),*);));
         }
+        for (name, columns) in &self.derived {
+            let fields = columns.iter().map(|(column, ty)| quote!(#column: #ty));
+            declarations.extend(quote!(relation #name(#(#fields),*);));
+        }
         let outputs = self.answer.iter().map(|(name, _)| name);
         Ok(quote!(struct Query; #declarations answer(#(#outputs),*) :- #body))
     }
@@ -238,12 +305,21 @@ impl Kernel {
     }
 }
 
-fn setup_constants(setup: &syn::Block) -> Result<BTreeMap<String, TokenStream>> {
+fn setup_constants(
+    setup: &syn::Block,
+    derived: &[(Ident, Vec<(Ident, syn::Type)>)],
+) -> Result<BTreeMap<String, TokenStream>> {
     let mut constants = BTreeMap::new();
     for statement in &setup.stmts {
         let syn::Stmt::Local(local) = statement else {
             return Err("unsupported workload setup statement".into());
         };
+        if let syn::Pat::Type(typed) = &local.pat
+            && let syn::Pat::Ident(name) = typed.pat.as_ref()
+            && derived.iter().any(|(relation, _)| *relation == name.ident)
+        {
+            continue;
+        }
         let syn::Pat::Ident(name) = &local.pat else {
             return Err("unsupported workload setup pattern".into());
         };
@@ -425,12 +501,47 @@ mod tests {
     }
     #[test]
     fn every_cpu_query_is_imported_without_a_second_body() {
-        assert_eq!(SOURCES.len(), 11);
+        assert_eq!(SOURCES.len(), 15);
         for (name, source) in SOURCES {
             let kernel = Kernel::import(source).unwrap();
             let query: cq_lang_cq::Program = syn::parse2(kernel.cpu_query()).unwrap();
-            assert_eq!(query.declarations.len(), kernel.relations.len(), "{name}");
+            assert_eq!(
+                query.declarations.len(),
+                kernel.relations.len() + kernel.derived.len(),
+                "{name}"
+            );
             assert!(!kernel.body.is_empty(), "{name}");
+        }
+    }
+
+    #[test]
+    fn negation_import_retains_authored_preprocessing_and_polarity() {
+        let manifest = Manifest::load(&crate::data_root().join("sf1")).unwrap();
+        for (query, derived, dependency, negatives) in [
+            ("h04", None, None, 0),
+            ("h04_not_exists", Some("LateLineitem"), Some("Lineitem"), 1),
+            ("h16", Some("BadSupplier"), Some("Supplier"), 1),
+            ("h22", None, None, 1),
+        ] {
+            let source = SOURCES.iter().find(|(name, _)| *name == query).unwrap().1;
+            let kernel = Kernel::import(source).unwrap();
+            let encoded: cq_lang_cq::Program =
+                syn::parse2(kernel.encoded_query(&manifest).unwrap()).unwrap();
+            assert_eq!(
+                encoded
+                    .query
+                    .body
+                    .iter()
+                    .filter(|item| matches!(item, cq_lang_cq::BodyItem::Negation(_)))
+                    .count(),
+                negatives
+            );
+            if let Some(derived) = derived {
+                let name = syn::parse_str(derived).unwrap();
+                let (_, inputs) = kernel.derived_input(&name).unwrap();
+                assert_eq!(inputs.len(), 1);
+                assert_eq!(inputs[0].name.to_string(), dependency.unwrap());
+            }
         }
     }
 }
@@ -586,7 +697,11 @@ mod encoding_tests {
                 let kernel = Kernel::import(source).unwrap();
                 let encoded = kernel.encoded_query(&manifest).unwrap();
                 let program: cq_lang_cq::Program = syn::parse2(encoded.clone()).unwrap();
-                assert_eq!(program.declarations.len(), kernel.relations.len(), "{name}");
+                assert_eq!(
+                    program.declarations.len(),
+                    kernel.relations.len() + kernel.derived.len(),
+                    "{name}"
+                );
                 for relation in &program.declarations {
                     for column in &relation.columns {
                         assert!(matches!(

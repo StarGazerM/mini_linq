@@ -1,6 +1,10 @@
 //! Lookup-before-Expand scheduling (Birler et al. §3.2–3.4, §4.2), with
 //! LargestRoot (Zhao et al. Lemma 3.2) and ATP's deepest-parent tie break
 //! (Qiao et al. §3). Cardinality advice chooses plans, never proof premises.
+//! Retained join leaves replace their keyed fallbacks; live smallest
+//! intersections keep both their candidate and full-key membership adapters.
+//! Distinct full-row index layouts receive separate identity-projection stores;
+//! their consumers name a provider explicitly while sharing retained source rows.
 use std::collections::{BTreeMap, BTreeSet};
 
 use cq_lang_sequence::{Capability, Catalog, Program, structures};
@@ -16,6 +20,7 @@ mod kw {
     syn::custom_keyword!(order);
     syn::custom_keyword!(transfer);
     syn::custom_keyword!(early);
+    syn::custom_keyword!(providers);
 }
 
 /// Concrete, replayable decisions. `parents[i]` indexes `order`, not Physical
@@ -350,9 +355,12 @@ pub fn lookup_plan(source: &Program) -> syn::Result<Option<LookupPlan>> {
 
 /// Author-visible, serializable Lookup/Expand decisions. Omitting a list asks
 /// the same deterministic evidence consumer used by `lookup_first_advice`.
+/// Provider overrides apply only to newly built layouts; authored types remain
+/// unchanged. Their order is the deterministic order of generated index builds.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LookupFirst {
     pub ty: syn::Type,
+    pub providers: Vec<(Ident, Vec<Ident>, syn::Type)>,
     pub order: Option<Vec<Ident>>,
     pub transfer: Option<Vec<Ident>>,
     pub early: Option<Vec<Ident>>,
@@ -373,12 +381,34 @@ impl Parse for LookupFirst {
         let ty = input.parse()?;
         let mut advice = Self {
             ty,
+            providers: Vec::new(),
             order: None,
             transfer: None,
             early: None,
         };
+        let mut providers_seen = false;
         while !input.is_empty() {
             input.parse::<Token![,]>()?;
+            if input.peek(kw::providers) {
+                input.parse::<kw::providers>()?;
+                if providers_seen {
+                    return Err(input.error("duplicate lookup_first providers"));
+                }
+                providers_seen = true;
+                let content;
+                syn::bracketed!(content in input);
+                while !content.is_empty() {
+                    let name = content.parse()?;
+                    let keys = identifiers(&content)?;
+                    content.parse::<Token![=]>()?;
+                    let ty = content.parse()?;
+                    advice.providers.push((name, keys, ty));
+                    if !content.is_empty() {
+                        content.parse::<Token![,]>()?;
+                    }
+                }
+                continue;
+            }
             let slot = if input.peek(kw::order) {
                 input.parse::<kw::order>()?;
                 &mut advice.order
@@ -402,6 +432,13 @@ impl ToTokens for LookupFirst {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let ty = &self.ty;
         tokens.extend(quote!(using #ty));
+        if !self.providers.is_empty() {
+            let providers = self
+                .providers
+                .iter()
+                .map(|(name, keys, ty)| quote!(#name [#(#keys),*] = #ty));
+            tokens.extend(quote!(, providers [#(#providers),*]));
+        }
         if let Some(order) = &self.order {
             tokens.extend(quote!(, order [#(#order),*]));
         }
@@ -443,29 +480,58 @@ pub fn lookup_first_advice_in(
     if !plain(source)? {
         return Ok(None);
     }
-    let analysis = checker.check(source)?;
-    let provider = catalog.providers.iter().find(|provider| {
-        [Capability::Exact, Capability::Membership].iter().all(|required| provider.capabilities.contains(required))
-            && provider.elements.as_ref().is_none_or(|accepted| graph.leaves.iter().all(|leaf| {
-                let name = symbol_name(leaf);
-                analysis.structures.layouts[&name].iter().all(|column| {
-                    let actual = &analysis.structures.physical.rows[&name].types[column];
-                    accepted.iter().any(|ty| matches!(ty, syn::Type::Infer(_)) || ty == actual)
-                })
-            }))
-    }).ok_or_else(|| syn::Error::new_spanned(&graph.root, "lookup_first requires a catalog provider with Exact and Membership for the join rows"))?;
+    let capable = |provider: &&cq_lang_sequence::ProviderToken| {
+        [Capability::Exact, Capability::Membership]
+            .iter()
+            .all(|required| provider.capabilities.contains(required))
+            && !provider.levels.is_empty()
+    };
+    let provider = catalog.providers.iter().find(capable).ok_or_else(|| {
+        syn::Error::new_spanned(
+            &graph.root,
+            "lookup_first requires a catalog provider with Exact and Membership at a legal read level",
+        )
+    })?;
     let LookupPlan {
         order,
         transfer,
         early,
         ..
     } = plan(source, &graph);
-    Ok(Some(LookupFirst {
+    let mut advice = LookupFirst {
         ty: provider.ty.clone(),
+        providers: Vec::new(),
         order: Some(order),
         transfer: Some(transfer),
         early: Some(early),
-    }))
+    };
+    let mut providers = Vec::new();
+    // Inspect the actual generated store, not all leaves of the join. A host
+    // string leaf must not force its index representation onto integer forwards.
+    // Levels constrain reads, not construction. The shared builder checks the
+    // rewrite; decomposition checks read placement, and replay uses frozen tokens.
+    lookup_first_with(checker, source, &advice, |name, keys, analysis| {
+        let result = symbol_name(name);
+        let provider = catalog.providers.iter().filter(capable).find(|provider| {
+            provider.elements.as_ref().is_none_or(|accepted| {
+                analysis.layouts[&result].iter().all(|column| {
+                    let actual = &analysis.physical.rows[&result].types[column];
+                    accepted.iter().any(|ty| matches!(ty, syn::Type::Infer(_)) || ty == actual)
+                })
+            })
+        }).ok_or_else(|| syn::Error::new_spanned(
+            name,
+            "lookup_first generated layout requires a catalog provider with Exact and Membership for its row types at a legal read level",
+        ))?;
+        providers.push((
+            name.clone(),
+            columns(keys, name.span()),
+            provider.ty.clone(),
+        ));
+        Ok(provider.ty.clone())
+    })?;
+    advice.providers = providers;
+    Ok(Some(advice))
 }
 
 fn fresh(used: &mut BTreeSet<String>, kind: &str, span: proc_macro2::Span) -> Ident {
@@ -485,6 +551,145 @@ fn provider(entries: &mut Vec<structures::Entry>, name: &Ident, keys: &[String],
     entries.push(syn::parse_quote!(#name = #ty [#(#keys),*];));
 }
 
+// One retained row source may serve several unrelated keys. Give the additional
+// layouts explicit identity-projection stores so every consumer names its own
+// provider rather than asking a translator to choose a layout. The source's
+// existing row retention is shared; the aliases build indexes, not extra rows.
+fn separate_provider_layouts(
+    target: &mut structures::Program,
+    physical: &physical::Analysis,
+    used: &mut BTreeSet<String>,
+) {
+    let definitions = &target.physical.program.definitions;
+    let positions: BTreeMap<_, _> = definitions
+        .iter()
+        .enumerate()
+        .map(|(index, definition)| (symbol_name(&definition.name), index))
+        .collect();
+    let barrier = definitions.iter().rposition(|definition| {
+        matches!(definition.operator, Operator::Bind(_) | Operator::Guard(_))
+    });
+    let candidates: BTreeSet<_> = physical::candidate_prefixes(&target.physical, physical)
+        .into_iter()
+        .flat_map(|candidate| candidate.sides.map(|(name, _)| name))
+        .collect();
+    let mut built = BTreeMap::<String, Vec<usize>>::new();
+    for (index, entry) in target.structures.entries.iter().enumerate() {
+        if matches!(entry.structure, structures::Structure::Built { .. }) {
+            built
+                .entry(symbol_name(&entry.name))
+                .or_default()
+                .push(index);
+        }
+    }
+    let mut aliases = BTreeMap::new();
+    let mut insertions = BTreeMap::<usize, Vec<physical::Definition>>::new();
+    let mut obsolete = BTreeSet::new();
+    for (name, entries) in built {
+        if entries.len() < 2
+            || candidates.contains(&name)
+            || entries.iter().any(|&index| {
+                matches!(&target.structures.entries[index].structure,
+                    structures::Structure::Built { keyed, .. } if keyed.filtered.is_some())
+            })
+        {
+            // Keep authored candidate-pair identities and projected union
+            // representations: neither is an ordinary full-row provider alias.
+            continue;
+        }
+        let layouts: Vec<_> = entries
+            .iter()
+            .map(|&index| {
+                let structures::Structure::Built { keyed, .. } =
+                    &target.structures.entries[index].structure
+                else {
+                    unreachable!()
+                };
+                (index, keyed.level_names())
+            })
+            .collect();
+        let reads: Vec<_> = physical.keyed_reads[&name]
+            .iter()
+            .filter_map(|(reader, keys, _)| {
+                layouts
+                    .iter()
+                    .filter_map(|(index, levels)| {
+                        structures::prefix_depth(levels, keys)
+                            .map(|depth| (*index, levels.len() != depth, levels.len()))
+                    })
+                    // Match Structures::built_on: full keys precede prefixes.
+                    .min_by_key(|(_, prefix, levels)| (*prefix, *levels))
+                    .map(|(index, _, _)| (reader, keys, index))
+            })
+            .collect();
+        let mut pinned: BTreeSet<_> = reads
+            .iter()
+            .filter(|(reader, _, _)| barrier.is_some_and(|end| positions[*reader] <= end))
+            .map(|(_, _, index)| *index)
+            .collect();
+        if pinned.is_empty() {
+            pinned.extend(reads.iter().map(|(_, _, index)| *index).min());
+        }
+        let source = &definitions[positions[&name]].name;
+        let columns = columns(&physical.headings[&name], source.span());
+        let at = positions[&name].max(barrier.unwrap_or(0));
+        for index in entries {
+            if !reads.iter().any(|(_, _, selected)| *selected == index) {
+                obsolete.insert(index);
+                continue;
+            }
+            if pinned.contains(&index) {
+                continue;
+            }
+            let alias = fresh(used, "provider", source.span());
+            insertions.entry(at).or_default().push(syn::parse_quote!(
+                #alias = let project #source keep {#(#columns),*};
+            ));
+            target.structures.entries[index].name = alias.clone();
+            for (_, keys, selected) in &reads {
+                if *selected == index {
+                    aliases.insert((name.clone(), (*keys).clone()), alias.clone());
+                }
+            }
+        }
+    }
+    let mut index = 0;
+    target.structures.entries.retain(|_| {
+        let keep = !obsolete.contains(&index);
+        index += 1;
+        keep
+    });
+    if aliases.is_empty() {
+        return;
+    }
+    let mut definitions = Vec::new();
+    for (index, mut definition) in std::mem::take(&mut target.physical.program.definitions)
+        .into_iter()
+        .enumerate()
+    {
+        let ordered = matches!(definition.operator, Operator::Merge(..));
+        if let Operator::Probe(_, keyed)
+        | Operator::Merge(_, keyed)
+        | Operator::Semi(_, keyed)
+        | Operator::Anti(_, keyed) = &mut definition.operator
+        {
+            let mut keys: Vec<_> = keyed.columns.iter().map(symbol_name).collect();
+            keys.sort();
+            if let Some(alias) = aliases.get(&(symbol_name(&keyed.right), keys.clone())) {
+                keyed.right = alias.clone();
+            }
+            if ordered && let Some(alias) = aliases.get(&(symbol_name(&keyed.left), keys)) {
+                keyed.left = alias.clone();
+            }
+        }
+        definitions.push(definition);
+        if let Some(mut providers) = insertions.remove(&index) {
+            definitions.append(&mut providers);
+        }
+    }
+    target.physical.program.definitions = definitions;
+}
+
 /// `using Provider [, order [...]] [, transfer [...]] [, early [...]]`.
 /// The explicit family rejects authored schedules rather than silently erasing
 /// them; automatic callers receive `None` from `lookup_first_advice` instead.
@@ -499,6 +704,40 @@ pub fn lookup_first_in(
     arguments: TokenStream,
 ) -> syn::Result<Program> {
     let advice: LookupFirst = syn::parse2(arguments)?;
+    let mut providers = BTreeMap::new();
+    for (name, keys, ty) in &advice.providers {
+        let key = (
+            symbol_name(name),
+            keys.iter().map(symbol_name).collect::<Vec<_>>(),
+        );
+        if providers.insert(key, ty).is_some() {
+            return Err(syn::Error::new_spanned(
+                name,
+                "duplicate lookup_first provider layout",
+            ));
+        }
+    }
+    let result = lookup_first_with(checker, source, &advice, |name, keys, _| {
+        Ok(providers
+            .remove(&(symbol_name(name), keys.to_vec()))
+            .unwrap_or(&advice.ty)
+            .clone())
+    })?;
+    if !providers.is_empty() {
+        return Err(syn::Error::new_spanned(
+            source,
+            "lookup_first providers must name newly built layouts, not authored providers",
+        ));
+    }
+    Ok(result)
+}
+
+fn lookup_first_with(
+    checker: &mut cq_lang_sequence::contract::Checker,
+    source: &Program,
+    advice: &LookupFirst,
+    mut choose_provider: impl FnMut(&Ident, &[String], &structures::Analysis) -> syn::Result<syn::Type>,
+) -> syn::Result<Program> {
     let Some(graph) = graph(checker, source)? else {
         return Err(syn::Error::new_spanned(
             source,
@@ -512,7 +751,7 @@ pub fn lookup_first_in(
         ));
     }
     let mut decisions = plan(source, &graph);
-    if let Some(order) = advice.order {
+    if let Some(order) = &advice.order {
         let actual: BTreeSet<_> = order.iter().map(symbol_name).collect();
         let expected: BTreeSet<_> = graph.leaves.iter().map(symbol_name).collect();
         if actual != expected || actual.len() != order.len() {
@@ -521,7 +760,7 @@ pub fn lookup_first_in(
                 "lookup_first order must name every join leaf exactly once",
             ));
         }
-        decisions.order = order;
+        decisions.order = order.clone();
         let mut depths = vec![0usize; decisions.order.len()];
         decisions.parents = vec![None; decisions.order.len()];
         for child in 1..decisions.order.len() {
@@ -551,11 +790,11 @@ pub fn lookup_first_in(
             "lookup_first root needs a row scan, not a projected keyed index",
         ));
     }
-    if let Some(transfer) = advice.transfer {
-        decisions.transfer = transfer;
+    if let Some(transfer) = &advice.transfer {
+        decisions.transfer = transfer.clone();
     }
-    if let Some(early) = advice.early {
-        decisions.early = early;
+    if let Some(early) = &advice.early {
+        decisions.early = early.clone();
     }
     for names in [&decisions.transfer, &decisions.early] {
         let selected: BTreeSet<_> = names.iter().map(symbol_name).collect();
@@ -756,6 +995,17 @@ pub fn lookup_first_in(
     // Existing leaf read adapters remain; generated exact indexes supersede
     // keyed fallbacks without changing their opaque implementation laws.
     let physical = physical::contract::check(&target.physical)?;
+    let intersection_reads: BTreeSet<_> = physical::candidate_prefixes(&target.physical, &physical)
+        .into_iter()
+        .flat_map(|candidate| candidate.sides)
+        .flat_map(|(name, prefix)| {
+            let full = physical.headings[&name].clone();
+            [
+                (name.clone(), "candidates", prefix),
+                (name, "membership", full),
+            ]
+        })
+        .collect();
     target.structures.entries.retain(|entry| {
         let name = symbol_name(&entry.name);
         if graph.joins.contains(&name) {
@@ -770,15 +1020,15 @@ pub fn lookup_first_in(
                     })
                 })
             }
-            structures::Structure::Host { reader, .. } => {
+            structures::Structure::Host { reader, keyed, .. } => {
+                let mut keys = keyed.level_names().concat();
+                keys.sort();
+                let reader_name = symbol_name(reader);
                 reader == "scan"
                     || (physical.modes[&name] == physical::ModeKind::Pipe
-                        && target
-                            .physical
-                            .program
-                            .definitions
-                            .iter()
-                            .any(|d| d.name == *reader))
+                        && (physical.keyed_reads.get(&name).into_iter().flatten().any(
+                            |(consumer, columns, _)| *consumer == reader_name && *columns == keys,
+                        ) || intersection_reads.contains(&(name, reader_name.as_str(), keys))))
             }
             _ => true,
         }
@@ -796,6 +1046,7 @@ pub fn lookup_first_in(
                 .or_insert_with(|| definition.name.clone());
         }
     }
+    let mut generated_providers = Vec::new();
     for ((name, keys), result) in builds {
         let covered = target.structures.entries.iter().any(|entry| {
             symbol_name(&entry.name) == name
@@ -804,6 +1055,7 @@ pub fn lookup_first_in(
                 if structures::prefix_depth(&keyed.level_names(), &keys).is_some())
         });
         if !covered {
+            generated_providers.push((target.structures.entries.len(), keys.clone()));
             provider(&mut target.structures.entries, &result, &keys, &advice.ty);
         }
     }
@@ -839,6 +1091,19 @@ pub fn lookup_first_in(
                 .push(syn::parse_quote!(#name rows = ::std::vec::Vec<_>;));
         }
     }
+    // Liveness and projected layouts belong to Structures, not to Physical's
+    // full relation headings. Freeze types only after every retained store and
+    // its consumers are present, before provider aliases rename those entries.
+    let layouts = structures::contract::check(&target)?;
+    for (index, keys) in generated_providers {
+        let entry = &mut target.structures.entries[index];
+        let ty = choose_provider(&entry.name, &keys, &layouts)?;
+        let structures::Structure::Built { keyed, .. } = &mut entry.structure else {
+            unreachable!("generated index entry")
+        };
+        keyed.ty = ty;
+    }
+    separate_provider_layouts(&mut target, &physical, &mut used);
     // Every retained atom can be read by both a forward filter and an Expand;
     // generated forward stores already have let mode. Reused host atoms retain
     // their scan adapters while the new provider supplies all keyed reads.

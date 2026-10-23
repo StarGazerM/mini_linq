@@ -3,6 +3,7 @@
 pub mod benchmark;
 pub mod loader;
 pub mod manifest;
+#[allow(warnings)]
 mod generated {
     include!(concat!(env!("OUT_DIR"), "/queries.rs"));
 }

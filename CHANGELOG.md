@@ -545,3 +545,40 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 - `7cb9da6`, `c25ffdd` Formal paper rewritten: one section per IR, one per
   pass, every rule tied to code (`doc/formal`).
+
+## GPU negation
+
+- GPU Sequence translates anti membership with the same provider probe as
+  positive membership and an inverted keep bit, preserving inactive lanes.
+  The retained Physical Anti node supplies polarity (E-Neg); lowering is unchanged.
+- The GPU TPC-H suite imports H04, H04-not-exists, H16, and H22 directly from
+  the CPU workload sources. Derived input initializers are reused once during
+  loading, and advised ordering remains ordinary checked pipeline advice.
+
+## GPU grouped folds
+
+- Add the GPU machine interpretation of BE-Group: recorded canonical valuations,
+  radix-ordered keyed owner segments, typed count/sum/min/max reductions, and
+  empty-global identities. Nullable extrema use validity columns, not sentinels.
+- Add checked grouped translation, synthetic runtime coverage, and an SF1/SF10
+  H01 acceptance test that computes its DuckDB DISTINCT-valuation oracle and
+  reports the t24 timing comparison in-process.
+
+## Checked automatic Sequence planning
+
+- Reuse invocation-local structural proofs and intern Lookup/Expand support
+  graphs, avoiding repeated token rendering and deep analysis copies.
+- Preserve live intersection fallbacks, interpret membership compact rows
+  without extra iterator nesting, and name distinct provider layouts explicitly.
+- Make catalog levels read permissions, separate from host construction;
+  retain opaque predicate order and publish required count dependencies.
+- Resolve canonicalization catalog permissions at the owning Sequence definition,
+  rather than comparing its name with unrelated Physical result names.
+- Add BE-Resource: target-independent dispatch demands checked against a
+  machine-owned layout and bounded level capacity. GPU grading checks the
+  101,376-byte block limit before translation; planner candidates add explicit
+  stores between expansions and alternatives when unstaged schedules are illegal.
+- Pretty-print generated GPU suite source and scope generated-code warnings to
+  its module, avoiding pathological source-map work on multi-megabyte lines.
+- Exercise automatic ordering explicitly in the CPU conformance harness.
+  The facade's automatic-default release gate remains unchanged until acceptance.

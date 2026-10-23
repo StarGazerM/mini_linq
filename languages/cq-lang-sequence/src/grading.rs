@@ -213,6 +213,50 @@ pub(crate) fn check_grading_in(
             channel: unit.failure_channel.clone(),
         });
     }
+    // Formal rule BE-Resource: each dispatch's target layout fits its level's resource capacity.
+    for dispatch in &analysis.dispatches {
+        let Some(level) = checker
+            .levels
+            .iter()
+            .filter(|level| dispatch.producer_level.starts_with(&level.path))
+            .filter(|level| level.model.shared_bytes.is_some())
+            .max_by_key(|level| level.path.len())
+        else {
+            continue;
+        };
+        let capacity_bytes = level.model.shared_bytes.expect("bounded resource");
+        let layout = machine.layout.ok_or_else(|| {
+            syn::Error::new(
+                level.model.name.span(),
+                "BE-Resource: a bounded machine resource needs a target layout model",
+            )
+        })?;
+        let shape = crate::resources::dispatch_shape(program, &analysis, dispatch, machine)?;
+        let required_bytes = layout(&shape).map_err(|error| {
+            syn::Error::new(
+                level.model.name.span(),
+                format!("BE-Resource: dispatch `{}`: {error}", shape.publication),
+            )
+        })?;
+        if required_bytes > capacity_bytes {
+            return Err(syn::Error::new(
+                level.model.name.span(),
+                format!(
+                    "BE-Resource: dispatch `{}` at {} requires {required_bytes} shared bytes; capacity is {capacity_bytes}",
+                    shape.publication,
+                    level.path.join("."),
+                ),
+            ));
+        }
+        analysis.resources.insert(
+            shape.publication.clone(),
+            crate::ResourceUsage {
+                shape,
+                required_bytes,
+                capacity_bytes,
+            },
+        );
+    }
     Ok(analysis)
 }
 
@@ -280,7 +324,15 @@ impl<'a> Checker<'a> {
             } else {
                 "BE-Scope: a descendant's value is outside this read's extent"
             };
-            return Err(syn::Error::new(name.span(), message));
+            return Err(syn::Error::new(
+                name.span(),
+                format!(
+                    "{message}: `{name}` at {} is read by `{}` at {}",
+                    source_path.join("."),
+                    self.name(owner),
+                    read_path.join("."),
+                ),
+            ));
         }
         if source_level != level
             && !self.is_stored(self.roots[source])
