@@ -16,8 +16,7 @@ use cq_syntax::rust;
 use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, format_ident, quote};
 pub use round::{
-    Execution, Hole, HoleInterface, InputSource, KeyRepresentation, Layout, Program, RoundContext,
-    RuleHole, Stratum,
+    Execution, Hole, HoleInterface, InputSource, Layout, Program, RoundContext, RuleHole, Stratum,
 };
 use std::collections::BTreeSet;
 use syn::Ident;
@@ -105,11 +104,6 @@ fn splice_admitted(
     program: &Program,
     mut expand: impl FnMut(&Hole) -> syn::Result<TokenStream>,
 ) -> syn::Result<Vec<TokenStream>> {
-    ensure(
-        program.storage.policy.insertion == "all_columns",
-        program,
-        "CPU Datalog printer requires all_columns insertion",
-    )?;
     program.holes.iter().map(&mut expand).collect()
 }
 pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
@@ -176,11 +170,6 @@ fn render_admitted(
     mut publish: impl FnMut(&RoundContext, &Stratum) -> Vec<TokenStream>,
 ) -> syn::Result<syn::Expr> {
     ensure(
-        program.storage.policy.insertion == "all_columns",
-        program,
-        "CPU Datalog printer requires all_columns insertion",
-    )?;
-    ensure(
         holes.len() == program.holes.len(),
         program,
         "hole splice coverage changed",
@@ -204,12 +193,7 @@ fn render_admitted(
                 invocation,
                 quote!(#provider),
             );
-            match key.representation {
-                KeyRepresentation::Borrowed => quote!(let #name = &#collection;),
-                KeyRepresentation::DeviceSetOwned => {
-                    unreachable!("CPU printer rejects device policy")
-                }
-            }
+            quote!(let #name = &#collection;)
         });
         let seeds = evaluator(&stratum.seeds, context, holes, &program.execution)?;
         let steps = evaluator(&stratum.steps, context, holes, &program.execution)?;

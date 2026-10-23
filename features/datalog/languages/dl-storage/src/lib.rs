@@ -326,9 +326,7 @@ pub mod contract {
         layouts::check(program, &analysis)?;
         let p = &program.policy;
         ensure(
-            (p.insertion == "all_columns" && p.negation_keys == "borrowed")
-                || (p.insertion == "device_set_all_columns"
-                    && p.negation_keys == "device_set_owned"),
+            p.insertion == "all_columns" && p.negation_keys == "borrowed",
             program,
             "unsupported storage insertion or negation semantics",
         )?;

@@ -145,9 +145,7 @@ fn hole(program: &Program, index: usize, fresh: &mut Fresh) -> syn::Result<Token
         .strata
         .iter()
         .flat_map(|stratum| &stratum.keys)
-        .filter(|key| {
-            key.representation == round::KeyRepresentation::Borrowed && !key.columns.is_empty()
-        })
+        .filter(|key| !key.columns.is_empty())
         .map(|key| symbol_name(&key.name))
         .collect::<Vec<_>>();
     let types = output.columns.iter().map(|column| &column.ty);

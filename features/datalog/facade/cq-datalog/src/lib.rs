@@ -191,8 +191,7 @@
 //! Rule holes declare the completed borrowed key set as a CQ input and use
 //! `!K(args)`, lowered to an anti-join with native host membership rather than a
 //! Rust membership guard. An existence key is read as `!K(_)`. No key set or
-//! membership index is rebuilt per hole invocation. Device-owned key sets keep
-//! their ordinary opaque runtime membership guard without a totality assertion.
+//! membership index is rebuilt per hole invocation.
 //! Closed Rust expressions such as `symbol("abstract")` are also supported;
 //! parenthesize a captured constant name to distinguish it from a logical variable.
 //! Key-hole literals remain in their atom and become occurrence constants.

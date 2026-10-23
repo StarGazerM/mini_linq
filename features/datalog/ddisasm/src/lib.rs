@@ -8,6 +8,8 @@
 //! Prepared CSV columns are interned identities (including offsets), represented
 //! losslessly as i64, not arithmetic values. Dataset constants come from str2num.
 //! BlockLastInstr is loaded to honor the 28-input contract although no rule uses it.
+//! Workspace tests compare all outputs with sequential Ascent on empty inputs
+//! and a recursive register-liveness fixture with blocked and unblocked negation.
 #![recursion_limit = "2048"]
 #![allow(non_snake_case, unused_variables)]
 pub mod ascent_engine;
@@ -20,6 +22,8 @@ pub struct Meta {
     pub pc_relative: i64,
     pub store: i64,
 }
+pub type StackLiveVarUse = (i64, i64, i64, i64, i64, i64, i64, i64);
+pub type RegisterArithmeticDefs = (i64, i64, i64, i64, i64, i64, i64, i64);
 #[derive(Clone, Default)]
 pub struct Facts {
     pub meta: Meta,
@@ -47,7 +51,7 @@ pub struct Facts {
     pub StackDefUseRefInBlock: Vec<(i64, i64, i64)>,
     pub StackDefUseUsedInBlock: Vec<(i64, i64, i64, i64, i64)>,
     pub StackDefUseUsed: Vec<(i64, i64, i64, i64)>,
-    pub StackDefUseLiveVarUsedEDB: Vec<(i64, i64, i64, i64, i64, i64, i64, i64)>,
+    pub StackDefUseLiveVarUsedEDB: Vec<StackLiveVarUse>,
     pub JumpTableStart: Vec<(i64, i64, i64, i64, i64)>,
     pub DefUsedForAddressEDB: Vec<(i64, i64, i64)>,
     pub StackDefUseBlockLastDef: Vec<(i64, i64, i64, i64)>,
@@ -60,7 +64,7 @@ pub struct Results {
     pub RegDefUseLiveVarUsed: Vec<(i64, i64, i64, i64)>,
     pub RegDefUseLiveVarAtPriorUsed: Vec<(i64, i64, i64)>,
     pub RegDefUseLiveVarAtBlockEnd: Vec<(i64, i64, i64)>,
-    pub RegRegArithOpDefs: Vec<(i64, i64, i64, i64, i64, i64, i64, i64)>,
+    pub RegRegArithOpDefs: Vec<RegisterArithmeticDefs>,
     pub DefUsedForAddress: Vec<(i64, i64, i64)>,
     pub StackDefUseDefUsed: Vec<(i64, i64, i64, i64, i64, i64)>,
     pub StackDefUseLiveVarAtBlockEnd: Vec<(i64, i64, i64, i64)>,
@@ -190,5 +194,36 @@ impl Results {
             self.StackDefUseLiveVarAtPriorUsed, other.StackDefUseLiveVarAtPriorUsed,
             "StackDefUseLiveVarAtPriorUsed"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_inputs_match_ascent() {
+        let mut actual = mini_engine::run(Facts::default());
+        actual.check(&mut ascent_engine::run(Facts::default()));
+        assert!(actual.counts().values().all(|&count| count == 0));
+    }
+
+    #[test]
+    fn recursive_liveness_and_negation_match_ascent() {
+        let facts = Facts {
+            BlockNext: vec![(1, 10, 2), (2, 20, 3)],
+            RegDefUseUsedInBlock: vec![(3, 30, 7, 0), (3, 31, 8, 1)],
+            RegDefUseBlockLastDef: vec![(31, 25, 8)],
+            RegDefUseUsed: vec![(31, 8, 1), (31, 8, 1)],
+            JumpTableStart: vec![(40, 4, 50, 0, 0)],
+            RelJumpTableEntryCandidate: vec![(0, 50, 4, 0, 60, 0, 0)],
+            ..Facts::default()
+        };
+        let mut actual = mini_engine::run(facts.clone());
+        actual.check(&mut ascent_engine::run(facts));
+        assert_eq!(actual.RegDefUseLiveVarUsed, vec![(3, 7, 30, 0)]);
+        assert_eq!(actual.RegDefUseLiveVarAtBlockEnd, vec![(1, 3, 7), (2, 3, 7)]);
+        assert_eq!(actual.RegDefUseDefUsed, vec![(25, 8, 31, 1)]);
+        assert_eq!(actual.JumpTableTarget, vec![(40, 60)]);
     }
 }
