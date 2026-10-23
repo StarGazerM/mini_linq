@@ -1,5 +1,5 @@
-//! Measured extension execution. Setup and independent path/set oracles are
-//! outside the timed region. Guard visits witness anti-membership checks;
+//! Measured recursion-extension and core-negation execution. Setup and independent
+//! path/set oracles are outside the timed region. Guard visits witness anti-membership checks;
 //! the recursion observer counts nonempty delta rounds and delta rows.
 //! Snapshot covers core storage/distinct operations; the internal hashing of
 //! `Answers`/`GroupedAnswers` is not included in its hash counter.
@@ -69,9 +69,10 @@ recursion! {
     };
     counters::reset();
     let start = Instant::now();
-    let actual: BTreeSet<_> = ::mini_linq::compile! { pipeline { surface = [::cq_ext_negation::negation]; }
+    let actual: BTreeSet<_> = ::mini_linq::compile! {
+        pipeline {}
         struct Anti; relation candidates(x:i32); relation blocked(x:i32,y:i32); relation answer(x:i32);
-        answer(*x) :- candidates(x), if observe(x), neg!{blocked(x,_)};
+        answer(*x) :- candidates(x), if observe(x), !blocked(x,_);
     }.collect();
     let elapsed = start.elapsed();
     let counts = counters::snapshot();

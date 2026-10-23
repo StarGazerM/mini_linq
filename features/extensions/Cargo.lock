@@ -61,20 +61,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-ext-negation"
-version = "0.1.0"
-dependencies = [
- "cq-ext-support",
- "cq-lang-cq",
- "cq-stage",
- "cq-syntax",
- "cq-testkit",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "cq-ext-recursion"
 version = "0.1.0"
 dependencies = [
@@ -119,7 +105,6 @@ version = "0.1.0"
 dependencies = [
  "cq-ext-aggregate",
  "cq-ext-correlated",
- "cq-ext-negation",
  "cq-ext-recursion",
  "cq-ext-test-passes",
  "cq-storage",
@@ -296,6 +281,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-sequence-plan"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-sequence",
+ "cq-sequence-rewrite-passes",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "cq-sequence-pull"
 version = "0.1.0"
 dependencies = [
@@ -305,6 +302,16 @@ dependencies = [
  "cq-print",
  "proc-macro2",
  "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-sequence-rewrite-passes"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-sequence",
+ "cq-syntax",
+ "proc-macro2",
  "syn 2.0.119",
 ]
 
@@ -421,6 +428,7 @@ dependencies = [
  "cq-reduce",
  "cq-represent",
  "cq-sequence-lowering",
+ "cq-sequence-plan",
  "cq-sequence-pull",
  "cq-stage",
  "cq-staging",

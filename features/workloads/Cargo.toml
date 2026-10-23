@@ -48,7 +48,6 @@ cq-workload-passes = { path = "pipeline-passes" }
 cq-rewrite-passes = { path = "../rewrites/passes" }
 own-push = { path = "../own-dialect/printer" }
 cq-ext-support = { path = "../extensions/cq-ext-support" }
-cq-ext-negation = { path = "../extensions/cq-ext-negation" }
 cq-ext-aggregate = { path = "../extensions/cq-ext-aggregate" }
 cq-ext-recursion = { path = "../extensions/cq-ext-recursion" }
 cq-ext-correlated = { path = "../extensions/cq-ext-correlated" }
@@ -91,7 +90,6 @@ mini-linq.workspace = true
 syn.workspace = true
 proc-macro2.workspace = true
 quote.workspace = true
-cq-ext-negation.workspace = true
 cq-ext-recursion.workspace = true
 cq-ext-aggregate.workspace = true
 cq-ext-correlated.workspace = true

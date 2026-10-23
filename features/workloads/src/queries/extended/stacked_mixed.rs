@@ -11,7 +11,6 @@ pub fn check(scenario: Scenario) {
 
     let result = mini_linq::compile! {
         pipeline {
-            surface = [cq_ext_negation::negation];
             select = mini_linq::passes::select(positional(A, B, Blocked, Hidden));
         }
         struct StackedMixed;
@@ -20,8 +19,8 @@ pub fn check(scenario: Scenario) {
         relation Blocked(x: i32, y: i32);
         relation Hidden(x: i32, y: i32);
         relation answer(x: i32);
-        answer(*x) :- A(x), neg!{ Blocked(x, _) }, neg!{ Hidden(x, _) };
-        answer(*x) :- B(x), neg!{ Hidden(x, _) };
+        answer(*x) :- A(x), !Blocked(x, _), !Hidden(x, _);
+        answer(*x) :- B(x), !Hidden(x, _);
     };
     let actual = result.map(|(column_0,)| vec![column_0]).collect();
     case.check(scenario, actual);

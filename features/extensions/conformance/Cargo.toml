@@ -7,7 +7,6 @@ license.workspace = true
 publish = false
 
 [dev-dependencies]
-cq-ext-negation = { version = "0.1.0", path = "../cq-ext-negation" }
 cq-ext-aggregate = { version = "0.1.0", path = "../cq-ext-aggregate" }
 cq-ext-recursion = { version = "0.1.0", path = "../cq-ext-recursion" }
 cq-ext-correlated = { version = "0.1.0", path = "../cq-ext-correlated" }

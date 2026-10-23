@@ -37,7 +37,6 @@ pub(super) fn build_in(
         "cq-join-filters",
         "cq-ext-aggregate",
         "cq-ext-correlated",
-        "cq-ext-negation",
     ])?);
     manifest.push_str("cq-load = { version = \"0.1.0\" }\n");
     // Add Parquet to the resolved public cq-load dependency, retaining its source.
