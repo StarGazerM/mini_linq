@@ -86,7 +86,11 @@ fn gpu_grouped_counts_sums_extrema_and_canonical_valuations() -> Result<()> {
 #[test]
 fn gpu_keyed_group_reads_resident_columns_and_filters_before_folding() -> Result<()> {
     let pool = Pool::new(0, 0, 0)?;
-    for raw in [vec![(1u32, 1u32, 5i64), (1, 2, 5), (2, 1, -7)], vec![]] {
+    for raw in [
+        vec![(1u32, 1u32, 5i64), (1, 2, 5), (2, 1, -7)],
+        vec![(2, 1, -7)],
+        vec![],
+    ] {
         let data = DeviceColumns::from_rows(
             pool.clone(),
             &raw,
@@ -121,7 +125,7 @@ fn gpu_keyed_group_reads_resident_columns_and_filters_before_folding() -> Result
         let actual: Vec<(u32, usize, i64, Option<i64>, Option<i64>)> = result.to_host()?;
         assert_eq!(
             actual,
-            if raw.is_empty() {
+            if raw.iter().all(|row| row.2 <= 0) {
                 vec![]
             } else {
                 vec![(1, 2, 10, Some(5), Some(5))]

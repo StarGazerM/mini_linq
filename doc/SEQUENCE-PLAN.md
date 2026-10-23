@@ -633,6 +633,14 @@ accumulator (and uses one scalar accumulator for global grouping); Tasks
 performs the same host fold rather than inventing a collective at its
 separated pool. Existing whole-sequence folds are unchanged.
 
+Acceptance: cq-testkit conformance including duplicate input, equal-valued
+distinct matches, empty keyed/global input, count/sum/min/max, and triangle
+count through a head aggregate; a TPC-H H01-style lineitem sum/count query
+checked against DuckDB's DISTINCT-join oracle; root and workloads suites,
+unchanged unrelated goldens, formal inventory and scoped API snapshots.
+GPU translation is outside this box: it will need keyed grouping, stable
+owner-offset construction, segment-local monoid reduction and publication.
+
 ### Box 12d key-aware grouped fold
 
 `evidence { Lineitem(l_orderkey, l_linenumber) key; }` asserts that no two
@@ -652,14 +660,24 @@ successful rewrites in its replay trace. GPU groups can then read resident
 columns directly, evaluating group arguments without materializing complete
 named valuations. With no key advice the existing canonical path is unchanged.
 
+Measured SF10 acceptance (advised suite, one warmup and five measured runs;
+before: baseline suite, after: key-aware grouping plus CQ-Arith):
 
-Acceptance: cq-testkit conformance including duplicate input, equal-valued
-distinct matches, empty keyed/global input, count/sum/min/max, and triangle
-count through a head aggregate; a TPC-H H01-style lineitem sum/count query
-checked against DuckDB's DISTINCT-join oracle; root and workloads suites,
-unchanged unrelated goldens, formal inventory and scoped API snapshots.
-GPU translation is outside this box: it will need keyed grouping, stable
-owner-offset construction, segment-local monoid reduction and publication.
+| Query | Before total ms | After total ms | Speedup | After wall ms | Exact rows |
+|---|---:|---:|---:|---:|---:|
+| H01 | 9,107.255 | 590.690 | 15.42× | 595.870 | 4 |
+| H06 | 3,310.908 | 11.776 | 281.15× | 16.895 | 1 |
+| H12 | 44.427 | 25.930 | 1.71× | 25.939 | 2 |
+
+All answers match the independent DISTINCT-valuation oracle. H01 and H06
+have no canonical-valuation publication or Sequence dispatch; their group
+argument kernels read resident input columns. H12 keeps its checked join
+publication and removes the later valuation canon. The suite's historical
+`dedup` timing bucket includes grouped argument evaluation, key ordering and
+folding; it does not imply valuation dedup remains.
+The unchanged CPU grouped corpus passed all eight tests. Evidence artifacts:
+`/tmp/sweep3.json` (baseline), `/tmp/groupkeys-h01-sf10.json`,
+`/tmp/groupkeys-h06-sf10.json`, `/tmp/groupkeys-h12-sf10.json`.
 
 ## [13] Negation in the corpus and on the GPU
 

@@ -32,6 +32,9 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   TPC-H loaders assert declared keys only when their projections retain them.
   Key-covered groups consume resident columns and only materialize aggregate
   arguments, not complete named valuations; unadvised groups retain canon.
+  With CQ-Arith, exact advised SF10 medians improve H01 from 9,107.255 to
+  590.690 ms, H06 from 3,310.908 to 11.776 ms, and H12 from 44.427 to 25.930 ms;
+  the unchanged CPU grouped corpus passes all eight tests.
 - Cleanup after the Sequence cutover and guard redesign: remove the
   test-only `cq_physical_realization::sources`, the uncalled
   `cq_print::Context::row` (and make `borrowed_pattern` private), unread
