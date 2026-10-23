@@ -62,9 +62,9 @@ mod cpu {
         Tasks,
     }
 
-    /// Plan a Sequence program with the target's exported machine and catalog.
-    /// Authored decomposition is retained; missing decisions come only from the
-    /// shared planner, never from harness-specific store or grading preparation.
+    /// Automatically plan a Sequence program with the target's machine and catalog.
+    /// Authored decomposition is retained; missing order and placement decisions
+    /// come only from the shared planner, never from harness-specific preparation.
     pub fn plan(program: &Program, target: Target) -> syn::Result<(Program, Analysis)> {
         plan_with_catalog(program, target, &Catalog::default())
     }

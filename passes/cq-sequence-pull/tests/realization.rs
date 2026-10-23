@@ -14,9 +14,11 @@ fn sequence_rows(module: &structures::Program) -> syn::Result<syn::Expr> {
     let analysis = cq_lang_sequence::check_grading(
         &program,
         &cq_lang_sequence::Machine {
+            layout: None,
             name: syn::parse_quote!(sequential),
             items: 1,
             root: cq_lang_sequence::LevelNode {
+                shared_bytes: None,
                 name: syn::parse_quote!(host),
                 collaborative: false,
                 dynamic: false,
@@ -57,6 +59,161 @@ fn zero_heading_exists_can_be_scanned_and_probed_against_itself() {
             }
         }
     );
+    let runtime = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../runtime/cq-storage/src/lib.rs");
+    cq_testkit::rustc::Runtime::new(&runtime, false).run(&source.to_string());
+}
+
+#[test]
+fn equal_support_choice_reheads_before_a_downstream_projection() {
+    let physical = syn::parse_quote!(physical {
+        relation keys(a:i32); relation values(a:i32,b:i32);
+        r = let rename keys@0 {a -> a};
+        s = let rename values@1 {a -> a,b -> b};
+        filtered = pipe semi eager [a] r,s;
+        yes = pipe probe first [a] filtered,s;
+        no = pipe probe first [a] r,s;
+        combined = pipe union yes,no;
+        observed = pipe guard combined if ({ visits.set(visits.get() + 1); true });
+        out = pipe canon project observed keep {b};
+        return out as answer(b);
+    });
+    let selected = cq_structure_selection::compile(&physical).unwrap();
+    let source = cq_sequence_lowering::compile(&selected).unwrap();
+    let mut target = source.clone();
+    target
+        .sequence
+        .definitions
+        .iter_mut()
+        .find(|d| d.name == "combined")
+        .unwrap()
+        .term = cq_lang_sequence::Term::Choose(vec![
+        (
+            cq_lang_sequence::Guard::Lt(cq_lang_sequence::Len::Input("s".into()), 2),
+            cq_lang_sequence::Term::Ref(syn::parse_quote!(yes)),
+        ),
+        (
+            cq_lang_sequence::Guard::Else,
+            cq_lang_sequence::Term::Ref(syn::parse_quote!(no)),
+        ),
+    ]);
+    cq_lang_sequence::check_rewrite(&source, &target).unwrap();
+    let analysis = cq_lang_sequence::contract::check(&target).unwrap();
+    assert_eq!(analysis.results["combined"], "combined");
+    let expression = cq_sequence_pull::translate(&target, &analysis).unwrap();
+    let source = quote!(
+        fn main() {
+            let keys = &[(1i32,), (2,)][..];
+            let values = &[(1i32, 10i32), (2, 20)][..];
+            let visits = &::std::cell::Cell::new(0usize);
+            let mut actual: Vec<(i32,)> = (#expression).map(|(b,)| (*b,)).collect();
+            actual.sort();
+            // Canonical output cannot expose duplicate evaluation, so count the
+            // pinned downstream guard as well as checking the projected values.
+            assert_eq!(visits.get(), 2);
+            assert_eq!(actual, vec![(10,), (20,)]);
+        }
+    );
+    let runtime = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../runtime/cq-storage/src/lib.rs");
+    cq_testkit::rustc::Runtime::new(&runtime, false).run(&source.to_string());
+}
+
+#[test]
+fn projected_membership_probes_keep_flat_rows_inside_outer_tiles() {
+    use cq_lang_sequence::Term;
+    let mut checks = Vec::new();
+    for (producer, selected) in [
+        (
+            quote!(r = let rename right@1 {a -> a,unused -> unused};),
+            false,
+        ),
+        (
+            quote!(
+                raw = pipe rename right@1 {a -> a,unused -> unused};
+                r = let select raw if (unused = 7);
+            ),
+            true,
+        ),
+        (
+            quote!(
+                first = pipe rename right@1 {a -> a,unused -> unused};
+                second = pipe rename more@2 {a -> a,unused -> unused};
+                r = let union first,second;
+            ),
+            false,
+        ),
+    ] {
+        for tiled in [false, true] {
+            let physical = syn::parse_quote! {
+                physical {
+                    relation left(a:i32,b:i32); relation right(a:i32,unused:i32);
+                    relation more(a:i32,unused:i32); relation payload(b:i32,c:i32);
+                    l = pipe rename left@0 {a -> a,b -> b};
+                    #producer
+                    t = let rename payload@3 {b -> b,c -> c};
+                    member = pipe probe first [a] l,r;
+                    expanded = pipe probe first [b] member,t;
+                    out = pipe canon project expanded keep {a,b,c};
+                    return out as answer(a,b,c);
+                }
+            };
+            let mut structures = cq_structure_selection::compile(&physical).unwrap();
+            if tiled {
+                // The explicit outer tile materializes expansion offsets.
+                // Record a range-capable provider before lowering that shape.
+                for entry in &mut structures.structures.entries {
+                    if entry.name == "t"
+                        && let structures::Structure::Built { keyed, .. } = &mut entry.structure
+                    {
+                        keyed.ty = syn::parse_quote!(::cq_storage::SortedRun<_, _>);
+                    }
+                }
+            }
+            let mut program = cq_sequence_lowering::compile(&structures).unwrap();
+            if tiled {
+                program.sequence.definitions[0].term = syn::parse_quote!(tile 2 rows l);
+            }
+            let analysis =
+                cq_lang_sequence::check_grading(&program, &cq_sequence_pull::machine()).unwrap();
+            assert!(
+                analysis
+                    .structures
+                    .membership
+                    .contains(&("r".into(), vec!["a".into()]))
+            );
+            let expression = cq_sequence_pull::translate_with(
+                &program,
+                &analysis,
+                |term, _, input, output, _, _| {
+                    if matches!(term, Term::Compact(name, _) if name == "member") {
+                        assert_eq!(output.depth, input.unwrap().depth);
+                    }
+                    Ok(())
+                },
+            )
+            .unwrap();
+            checks.push(quote! {
+                for empty in [false, true] {
+                    let left: &[(i32,i32)] = &[(1,10),(1,10),(2,20),(3,30),(4,40)];
+                    let right: &[(i32,i32)] = if empty { &[] } else { &[(1,7),(1,7),(2,8),(3,7)] };
+                    let more: &[(i32,i32)] = if empty { &[] } else { &[(2,9),(5,7)] };
+                    let payload: &[(i32,i32)] = &[(10,100),(20,200),(30,300),(40,400)];
+                    let actual: ::std::collections::BTreeSet<_> = (#expression)
+                        .into_iter().map(|(a,b,c)| (*a,*b,*c)).collect();
+                    let expected = if empty {
+                        vec![]
+                    } else if #selected {
+                        vec![(1,10,100),(3,30,300)]
+                    } else {
+                        vec![(1,10,100),(2,20,200),(3,30,300)]
+                    };
+                    assert_eq!(actual, expected.into_iter().collect());
+                }
+            });
+        }
+    }
+    let source = quote!(fn main() { #(#checks)* });
     let runtime = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../runtime/cq-storage/src/lib.rs");
     cq_testkit::rustc::Runtime::new(&runtime, false).run(&source.to_string());
@@ -701,4 +858,59 @@ fn canonical_consumer_omits_local_answer_state_for_every_head_shape() {
         assert!(!printed.contains("__cq_seen"), "{printed}");
         assert!(!printed.contains("HashSet"), "{printed}");
     }
+}
+
+#[test]
+fn grouped_folds_share_full_named_valuations_and_empty_identities() {
+    let prefix = quote! {
+        relation rows(k:i32, witness:i32, value:i64, anonymous:i32);
+        raw = pipe rename rows@0 {k -> k, witness -> witness, value -> value, anonymous -> anonymous};
+        valuations = pipe canon project raw keep {k, witness, value};
+    };
+    let aggregates = quote! {
+        n: usize = count();
+        total: i64 = sum(value);
+        low: Option<i64> = min(value);
+        high: Option<i64> = max(value);
+    };
+    let keyed = syn::parse2(quote! { physical {
+        #prefix
+        grouped = pipe group valuations by [k] { #aggregates };
+        return grouped as answer(k,n,total,low,high);
+    }})
+    .unwrap();
+    let global = syn::parse2(quote! { physical {
+        #prefix
+        grouped = pipe group valuations by [] { #aggregates };
+        return grouped as answer(n,total,low,high);
+    }})
+    .unwrap();
+    let keyed = sequence_rows(&cq_structure_selection::compile(&keyed).unwrap()).unwrap();
+    let global = sequence_rows(&cq_structure_selection::compile(&global).unwrap()).unwrap();
+    let source = quote! {
+        fn main() {
+            let populated: &[(i32,i32,i64,i32)] = &[
+                (1,10,7,100), (1,10,7,100), (1,10,7,200),
+                (1,11,7,100), (1,12,-2,100), (2,20,5,100),
+            ];
+            for rows in [populated, &[][..]] {
+                let mut keyed: Vec<(i32,usize,i64,Option<i64>,Option<i64>)> =
+                    (#keyed).map(|(k,n,total,low,high)| (*k,n,total,low,high)).collect();
+                keyed.sort();
+                let global: Vec<(usize,i64,Option<i64>,Option<i64>)> = (#global).collect();
+                if rows.is_empty() {
+                    assert!(keyed.is_empty());
+                    assert_eq!(global, vec![(0,0,None,None)]);
+                } else {
+                    // Two witnesses with value 7 contribute twice; wildcard
+                    // differences and repeated host rows contribute only once.
+                    assert_eq!(keyed, vec![(1,3,12,Some(-2),Some(7)), (2,1,5,Some(5),Some(5))]);
+                    assert_eq!(global, vec![(4,17,Some(-2),Some(7))]);
+                }
+            }
+        }
+    };
+    let runtime = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../runtime/cq-storage/src/lib.rs");
+    cq_testkit::rustc::Runtime::new(&runtime, false).run(&source.to_string());
 }

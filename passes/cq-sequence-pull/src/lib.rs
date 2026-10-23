@@ -15,9 +15,11 @@ use syn::Ident;
 /// The native iterator target executes entirely at the host level.
 pub fn machine() -> cq_lang_sequence::Machine {
     cq_lang_sequence::Machine {
+        layout: None,
         name: syn::parse_quote!(sequential),
         items: 1,
         root: cq_lang_sequence::LevelNode {
+            shared_bytes: None,
             name: syn::parse_quote!(host),
             collaborative: false,
             dynamic: false,
@@ -265,7 +267,7 @@ impl<'a> Emitter<'a> {
         Ok(output)
     }
 
-    fn map(&mut self, name: &Ident, mut input: Value) -> syn::Result<Value> {
+    fn map(&mut self, name: &Ident, mut input: Value, expand: bool) -> syn::Result<Value> {
         let result = symbol_name(name);
         if input.result.as_ref() == Some(&result) {
             input.stored = false;
@@ -273,10 +275,11 @@ impl<'a> Emitter<'a> {
         }
         self.register(&result);
         if let Some(rows) = self.adapters.intersection(&result)? {
-            let nested = matches!(
-                self.context().physical[&result].operator,
-                Operator::Probe(..)
-            );
+            let nested = expand
+                && matches!(
+                    self.context().physical[&result].operator,
+                    Operator::Probe(..)
+                );
             return Ok(Value {
                 rows: if nested {
                     quote!(::core::iter::once(#rows))
@@ -311,7 +314,7 @@ impl<'a> Emitter<'a> {
         let operand = if let Some(parent) = definition.operator.input() {
             let parent_name = symbol_name(parent);
             if input.result.as_deref() != Some(&parent_name) {
-                input = self.map(parent, input)?;
+                input = self.map(parent, input, expand)?;
             }
             let positional = self.analysis.structures.reads.contains_key(&result)
                 && matches!(
@@ -338,11 +341,13 @@ impl<'a> Emitter<'a> {
         let rows = self.adapters.operator(&result, operand)?;
         let rows = self.context().profile_stream(&result, rows);
         // Physical fan-out adapters already flatten their row iterator. Rewrap
-        // it as one part so the explicit Sequence flatten remains structural.
-        let nested = matches!(
-            definition.operator,
-            Operator::Probe(..) | Operator::Merge(..)
-        );
+        // only an expanding constructor: Compact consumes membership directly,
+        // including a Probe whose recorded provider is a membership projection.
+        let nested = expand
+            && matches!(
+                definition.operator,
+                Operator::Probe(..) | Operator::Merge(..)
+            );
         Ok(Value {
             rows: if nested {
                 quote!(::core::iter::once(#rows))
@@ -356,7 +361,7 @@ impl<'a> Emitter<'a> {
     }
 
     fn compact(&mut self, name: &Ident, input: Value) -> syn::Result<Value> {
-        self.map(name, input)
+        self.map(name, input, false)
     }
 
     fn flatten(&self, mut input: Value) -> Value {
@@ -382,6 +387,37 @@ impl<'a> Emitter<'a> {
         input.depth += 1;
         input.stored = false;
         input
+    }
+
+    // Row-layout conversion is shared by union injection and checked
+    // equivalent-result aliases. It changes carriers, never query decisions.
+    fn rehead(&mut self, result: &str, mut input: Value) -> syn::Result<Value> {
+        let source = input.result.as_ref().ok_or_else(|| {
+            syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "row alias lacks checked provenance",
+            )
+        })?;
+        if source == result {
+            return Ok(input);
+        }
+        self.register(result);
+        let context = self.context();
+        let pattern = context.bind_columns(source, context.carried(result), false);
+        let row = context.carrier(result, |column| {
+            let value = context.access(source, column);
+            if context.infos[result].computed.contains(column)
+                && !context.infos[source].computed.contains(column)
+            {
+                quote!(::core::clone::Clone::clone(#value))
+            } else {
+                value
+            }
+        });
+        let rows = input.rows;
+        input.rows = quote!(::core::iter::Iterator::map(#rows, move |#pattern| #row));
+        input.result = Some(result.to_owned());
+        Ok(input)
     }
 
     fn union(&mut self, arms: Vec<Value>) -> syn::Result<Value> {
@@ -414,26 +450,7 @@ impl<'a> Emitter<'a> {
         }
         let mut chain = None;
         for arm in arms {
-            let input = arm.result.as_ref().ok_or_else(|| {
-                syn::Error::new(
-                    proc_macro2::Span::call_site(),
-                    "union arm lacks a row layout",
-                )
-            })?;
-            let context = self.context();
-            let pattern = context.bind_columns(input, context.carried(&result), false);
-            let row = context.carrier(&result, |column| {
-                let value = context.access(input, column);
-                if context.infos[&result].computed.contains(column)
-                    && !context.infos[input].computed.contains(column)
-                {
-                    quote!(::core::clone::Clone::clone(#value))
-                } else {
-                    value
-                }
-            });
-            let rows = arm.rows;
-            let rows = quote!(::core::iter::Iterator::map(#rows, move |#pattern| #row));
+            let rows = self.rehead(&result, arm)?.rows;
             chain = Some(match chain {
                 None => rows,
                 Some(previous) => quote!(::core::iter::Iterator::chain(#previous, #rows)),
@@ -493,7 +510,7 @@ impl<'a> Emitter<'a> {
                     syn::Error::new_spanned(provider, "ordered lookup lacks a result fact")
                 })?
                 .clone();
-            return self.map(&Ident::new(&result, provider.span()), input);
+            return self.map(&Ident::new(&result, provider.span()), input, true);
         }
         let result = self
             .analysis
@@ -531,7 +548,7 @@ impl<'a> Emitter<'a> {
             .is_some()
             || self.analysis.structures.stages.contains_key(&result)
         {
-            return self.map(&Ident::new(&result, provider.span()), input);
+            return self.map(&Ident::new(&result, provider.span()), input, true);
         }
         self.register(&result);
         let context = self.context();
@@ -582,7 +599,7 @@ impl<'a> Emitter<'a> {
                 )
             }
             Access::Prefix(..) => {
-                return self.map(&Ident::new(&result, provider.span()), input);
+                return self.map(&Ident::new(&result, provider.span()), input, true);
             }
         };
         let pattern = context.pattern(left);
@@ -612,6 +629,28 @@ impl<'a> Emitter<'a> {
             }),
             result: Some(result),
             depth: 1,
+            stored: false,
+        })
+    }
+
+    fn group(&mut self, name: &Ident, input: Value) -> syn::Result<Value> {
+        let result = symbol_name(name);
+        self.register(&result);
+        let Operator::Group(group) = &self.context().physical[&result].operator else {
+            return Err(syn::Error::new_spanned(
+                name,
+                "group lacks Physical group provenance",
+            ));
+        };
+        let operand = symbol_name(&group.input);
+        let rows = self
+            .adapters
+            .operator(&result, Some((operand, input.rows)))?;
+        let rows = self.context().profile_stream(&result, rows);
+        Ok(Value {
+            rows,
+            result: Some(result),
+            depth: 0,
             stored: false,
         })
     }
@@ -694,6 +733,14 @@ impl<'a> Emitter<'a> {
     }
 
     fn publish(&mut self, name: &Ident, mut value: Value) -> syn::Result<Value> {
+        if let Some(result) = self.analysis.results.get(&symbol_name(name)).cloned()
+            && value.result.as_ref() != Some(&result)
+        {
+            let depth = value.depth;
+            value = self.lift(value, depth, &mut |emitter, rows| {
+                emitter.rehead(&result, rows)
+            })?;
+        }
         if value.stored {
             let physical_store = value
                 .result
@@ -886,6 +933,7 @@ fn translate_with_profile(
             Term::Map(_, inner)
             | Term::Flatten(inner)
             | Term::Fold(_, inner)
+            | Term::Group(_, inner)
             | Term::Canon(inner)
             | Term::Store { inner, .. }
             | Term::Lookup { inner, .. } => Some(term(emitter, inner, owner, tiles, false, hook)?),
@@ -897,7 +945,7 @@ fn translate_with_profile(
             Term::Rows(name) => emitter.rows(name)?,
             Term::Ref(name) => emitter.reference(name)?,
             Term::Map(name, _) => emitter.lift(input(), input().depth, &mut |emitter, rows| {
-                emitter.map(name, rows)
+                emitter.map(name, rows, true)
             })?,
             Term::Compact(name, _) => {
                 emitter.lift(input(), input().depth, &mut |emitter, rows| {
@@ -919,6 +967,7 @@ fn translate_with_profile(
                     emitter.lookup(provider, keys, rows, membership)
                 })?
             }
+            Term::Group(name, _) => emitter.group(name, input())?,
             Term::Fold(monoid, _) => {
                 emitter.lift(input(), input().depth, &mut |emitter, rows| {
                     emitter.fold(monoid, rows)

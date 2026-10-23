@@ -12,12 +12,23 @@
 //! | `choose` | `d, len x < k => a, else => b` | Select earlier equal-Structures-result definitions (BE-Choose). |
 //! | `output` | `count`, `reserve`, or `bounded` | Set the final store protocol; bounded requires declared capacity. |
 //! | `grade` | `machine, d at host.device, ...` | Add/update placements; preserve other grades on the same machine. |
+//! | `evidence` | `evidence { ... }` | Record checked estimation advice; facts never justify answer changes. |
+//! | `lookup_first` | `using Provider, order [...], transfer [...], early [...]` | Checked LargestRoot/ATP Lookup-before-Expand family; every decision is replayable. |
+//! | `adaptive` | selected filter plus published-count decision | Choose checked optional-filter and exact-join alternatives from the same family. |
 //!
 //! Every pass checks the source, target and construction-based support equality.
 //! Grading records advice only: it neither resolves the machine nor certifies
 //! placements. The facade's grade phase checks those against the target model.
 //! Named `store_level` selections must all be flatten terms; `all` and empty
 //! advice skip other definitions. The other passes require their stated advice.
+//!
+//! Lookup-first preserves live smallest-intersection candidate and membership
+//! adapters, removing them only when their intersection is reexpressed. Movable
+//! full-row providers with distinct key layouts use separate identity-projection
+//! stores over shared retained rows, following Structures' full-key-before-prefix
+//! selection rule. Rust prefixes, candidate-pair identities and authored projected
+//! union representations remain pinned. Translators consume these recorded
+//! decisions; they do not choose an index layout or a new join order.
 //!
 //! The macro protocol is `arguments { advice }; pipeline { next, ... };` followed
 //! by a complete Sequence program. Core dependencies are public packaged APIs;
@@ -64,3 +75,6 @@ sequence_rewrite!(segment, missing, 0);
 sequence_rewrite!(choose, b, len r < 4 => a, else => missing);
 sequence_rewrite!(output, bounded);
 sequence_rewrite!(grade, custom, missing at host);
+sequence_rewrite!(evidence, evidence { count missing = 1; });
+sequence_rewrite!(lookup_first, missing);
+sequence_rewrite!(adaptive, missing);

@@ -9,14 +9,20 @@ use syn::Ident;
 mod catalog;
 pub mod cost;
 pub use cost::{Cost, cost};
+mod advice;
 mod decomposition;
 mod placement;
+mod planner;
+pub use planner::{Planner, RuleBased};
 
 pub use cq_sequence_rewrite_passes::select_from_catalog;
 
 /// One invocation of the same checked library function exposed by a rewrite macro.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Advice {
+    Evidence(cq_lang_sequence::Evidence),
+    LookupFirst(Box<cq_sequence_rewrite_passes::LookupFirst>),
+    Adaptive(cq_sequence_rewrite_passes::AdaptiveCandidate),
     Store(Ident),
     StoreLevel(Ident),
     Publish {
@@ -49,11 +55,26 @@ pub enum Advice {
 impl Advice {
     /// Replay a checked rewrite; this never bypasses its construction checker.
     pub fn apply(&self, source: &Program) -> syn::Result<Program> {
+        self.apply_in(&mut Default::default(), source)
+    }
+
+    pub fn apply_in(
+        &self,
+        checker: &mut cq_lang_sequence::contract::Checker,
+        source: &Program,
+    ) -> syn::Result<Program> {
         use cq_sequence_rewrite_passes as rewrites;
         let result = match self {
-            Self::Store(name) => rewrites::store(source, quote!(#name)),
-            Self::StoreLevel(name) => rewrites::store_level(source, quote!(#name)),
-            Self::Publish { name, producer } => rewrites::publish(source, name, producer),
+            Self::Evidence(evidence) => rewrites::record_evidence_in(checker, source, evidence),
+            Self::LookupFirst(arguments) => {
+                rewrites::lookup_first_in(checker, source, quote!(#arguments))
+            }
+            Self::Adaptive(arguments) => rewrites::apply_adaptive_in(checker, source, arguments),
+            Self::Store(name) => rewrites::store_in(checker, source, quote!(#name)),
+            Self::StoreLevel(name) => rewrites::store_level_in(checker, source, quote!(#name)),
+            Self::Publish { name, producer } => {
+                rewrites::publish_in(checker, source, name, producer)
+            }
             Self::Tile { name, n, items }
             | Self::Partition { name, n, items }
             | Self::Segment { name, n, items } => {
@@ -65,20 +86,35 @@ impl Advice {
                     quote!(#name, #n)
                 };
                 match self {
-                    Self::Tile { .. } => rewrites::tile(source, arguments),
-                    Self::Partition { .. } => rewrites::partition(source, arguments),
-                    _ => rewrites::segment(source, arguments),
+                    Self::Tile { .. } => rewrites::tile_in(checker, source, arguments),
+                    Self::Partition { .. } => rewrites::partition_in(checker, source, arguments),
+                    _ => rewrites::segment_in(checker, source, arguments),
                 }
             }
-            Self::Output(protocol) => rewrites::output(source, quote!(#protocol)),
+            Self::Output(protocol) => rewrites::output_in(checker, source, quote!(#protocol)),
             Self::Grade {
                 name,
                 level,
                 machine,
-            } => rewrites::grade(source, quote!(#machine, #name at #(#level).*)),
+            } => {
+                let mut target = source.clone();
+                rewrites::grade_definitions_in(
+                    checker,
+                    &mut target,
+                    machine,
+                    &[cq_lang_sequence::Grade {
+                        name: name.clone(),
+                        level: level.clone(),
+                    }],
+                )
+                .map(|()| target)
+            }
         };
         result.map_err(|error| {
-            syn::Error::new(error.span(), format!("P-Decompose {self:?}: {error}"))
+            syn::Error::new(
+                error.span(),
+                format!("P-Decompose {}: {error}", quote!(#self)),
+            )
         })
     }
 }
@@ -91,7 +127,49 @@ pub struct Planned {
 
 /// Fill unauthored scheduling decisions, returning the checked result and its proof trace.
 pub fn plan(program: &Program, machine: &Machine, catalog: &Catalog) -> syn::Result<Planned> {
-    cq_lang_sequence::contract::check(program)?;
+    let started = std::env::var_os("CQ_SEQUENCE_PLAN_TIMING").map(|_| std::time::Instant::now());
+    let checker = &mut cq_lang_sequence::contract::Checker::default();
+    let mut prepared = Planned {
+        program: program.clone(),
+        trace: Vec::new(),
+    };
+    if let Some(advice) =
+        cq_sequence_rewrite_passes::lookup_first_advice_in(checker, program, catalog)?
+    {
+        push(
+            checker,
+            &mut prepared,
+            Advice::LookupFirst(Box::new(advice)),
+        )?;
+    }
+    // Freeze every decision before the first choice changes the candidate graph.
+    let adaptive = cq_sequence_rewrite_passes::adaptive_candidates_in(checker, &prepared.program)?;
+    for advice in adaptive {
+        push(checker, &mut prepared, Advice::Adaptive(advice))?;
+    }
+    let mut planned = decompose_in(checker, &prepared.program, machine, catalog)?;
+    prepared.trace.append(&mut planned.trace);
+    planned.trace = prepared.trace;
+    if let Some(started) = started {
+        eprintln!("Sequence plan: {:.6}s", started.elapsed().as_secs_f64());
+    }
+    Ok(planned)
+}
+
+/// Fill only execution decomposition, preserving an explicitly authored join order.
+/// Callers with an order-advice phase use this entry rather than selecting another
+/// relational order. Its result has the same checked replay and grading contract.
+pub fn decompose(program: &Program, machine: &Machine, catalog: &Catalog) -> syn::Result<Planned> {
+    decompose_in(&mut Default::default(), program, machine, catalog)
+}
+
+fn decompose_in(
+    checker: &mut cq_lang_sequence::contract::Checker,
+    program: &Program,
+    machine: &Machine,
+    catalog: &Catalog,
+) -> syn::Result<Planned> {
+    checker.check(program)?;
     if machine.items == 0 {
         return Err(syn::Error::new(
             machine.name.span(),
@@ -108,21 +186,55 @@ pub fn plan(program: &Program, machine: &Machine, catalog: &Catalog) -> syn::Res
     }
     // Formal rule PL-Det: Fixed candidate order and stable ties depend only on the three inputs.
     let parallel = !machine.root.children.is_empty();
-    let mut choices = vec![(1, false)];
+    let mut choices = vec![(1, false, false)];
     if parallel && decomposition::width(&machine.root).is_some() {
         if machine.items != 1 {
-            choices.push((machine.items, false));
+            choices.push((machine.items, false, false));
         }
-        choices.push((1, true));
+        choices.push((1, true, false));
         if machine.items != 1 {
-            choices.push((machine.items, true));
+            choices.push((machine.items, true, false));
         }
+    }
+    if parallel && machine.layout.is_some() {
+        let staged = choices
+            .iter()
+            .map(|&(items, segmented, _)| (items, segmented, true))
+            .collect::<Vec<_>>();
+        choices.extend(staged);
     }
     let mut best: Option<(Cost, Planned)> = None;
     let mut error = None;
-    for (items, segmented) in choices {
-        match candidate(program, machine, catalog, parallel, items, segmented) {
-            Ok((analysis, planned)) => {
+    let mut unstaged_legal = false;
+    let mut staged: Option<Planned> = None;
+    for (items, segmented, resource_staged) in choices {
+        if resource_staged && unstaged_legal {
+            continue;
+        }
+        if resource_staged && staged.is_none() {
+            staged = Some(resource_stages(checker, program)?);
+        }
+        let input = if resource_staged {
+            &staged
+                .as_ref()
+                .expect("prepared resource candidate")
+                .program
+        } else {
+            program
+        };
+        match candidate(checker, input, machine, catalog, parallel, items, segmented) {
+            Ok((analysis, mut planned)) => {
+                if resource_staged {
+                    let mut trace = staged
+                        .as_ref()
+                        .expect("prepared resource candidate")
+                        .trace
+                        .clone();
+                    trace.append(&mut planned.trace);
+                    planned.trace = trace;
+                } else {
+                    unstaged_legal = true;
+                }
                 let cost = Cost::from_analysis(&planned.program, machine, &analysis)?;
                 if best
                     .as_ref()
@@ -147,7 +259,37 @@ pub fn plan(program: &Program, machine: &Machine, catalog: &Catalog) -> syn::Res
     })
 }
 
+fn resource_stages(
+    checker: &mut cq_lang_sequence::contract::Checker,
+    source: &Program,
+) -> syn::Result<Planned> {
+    let mut planned = Planned {
+        program: source.clone(),
+        trace: Vec::new(),
+    };
+    // Prepare the checked publication alternative once, only when the
+    // unstaged schedules cannot satisfy this machine's obligations.
+    for definition in &source.sequence.definitions {
+        if (matches!(&definition.term, Term::Flatten(inner) if matches!(inner.as_ref(), Term::Lookup { .. }))
+            || matches!(&definition.term, Term::Choose(_)))
+            && !source
+                .graded
+                .iter()
+                .flat_map(|graded| &graded.grades)
+                .any(|grade| grade.name == definition.name)
+        {
+            push(
+                checker,
+                &mut planned,
+                Advice::Store(definition.name.clone()),
+            )?;
+        }
+    }
+    Ok(planned)
+}
+
 fn candidate(
+    checker: &mut cq_lang_sequence::contract::Checker,
     source: &Program,
     machine: &Machine,
     catalog: &Catalog,
@@ -159,17 +301,17 @@ fn candidate(
         program: source.clone(),
         trace: Vec::new(),
     };
-    let source_facts = cq_lang_sequence::contract::check(source)?;
-    for advice in placement::boundaries(source, machine, &source_facts) {
-        push(&mut planned, advice)?;
+    let source_facts = checker.check(&planned.program)?;
+    for advice in placement::boundaries(&planned.program, machine, &source_facts, catalog) {
+        push(checker, &mut planned, advice)?;
     }
-    let facts = cq_lang_sequence::contract::check(&planned.program)?;
-    for advice in placement::advise(&planned.program, machine, parallel, &facts) {
-        push(&mut planned, advice)?;
+    let facts = checker.check(&planned.program)?;
+    for advice in placement::advise(&planned.program, machine, parallel, &facts, source, catalog) {
+        push(checker, &mut planned, advice)?;
     }
     if parallel {
-        for advice in decomposition::advise(&planned.program, machine, items, segmented)? {
-            push(&mut planned, advice)?;
+        for advice in decomposition::advise(checker, &planned.program, machine, items, segmented)? {
+            push(checker, &mut planned, advice)?;
         }
     }
     // Formal rule PL-Precedence: Recorded grades, tiles and output are never replaced by generated advice.
@@ -191,16 +333,43 @@ fn candidate(
         } else {
             OutputProtocol::Count
         };
-        push(&mut planned, Advice::Output(protocol))?;
+        push(checker, &mut planned, Advice::Output(protocol))?;
     }
     // Formal rule PL-Closure: Each step uses a checked public rewrite; the completed trace satisfies machine grading.
-    let analysis = cq_lang_sequence::check_grading(&planned.program, machine)?;
+    let analysis = checker.check_grading(&planned.program, machine)?;
     catalog::check(&planned.program, &analysis, catalog)?;
     Ok((analysis, planned))
 }
 
-fn push(planned: &mut Planned, advice: Advice) -> syn::Result<()> {
-    planned.program = advice.apply(&planned.program)?;
+fn push(
+    checker: &mut cq_lang_sequence::contract::Checker,
+    planned: &mut Planned,
+    advice: Advice,
+) -> syn::Result<()> {
+    if let Advice::Grade {
+        name,
+        level,
+        machine,
+    } = &advice
+    {
+        cq_sequence_rewrite_passes::grade_definitions_in(
+            checker,
+            &mut planned.program,
+            machine,
+            &[cq_lang_sequence::Grade {
+                name: name.clone(),
+                level: level.clone(),
+            }],
+        )
+        .map_err(|error| {
+            syn::Error::new(
+                error.span(),
+                format!("P-Decompose {}: {error}", quote!(#advice)),
+            )
+        })?;
+    } else {
+        planned.program = advice.apply_in(checker, &planned.program)?;
+    }
     planned.trace.push(advice);
     Ok(())
 }
@@ -218,6 +387,7 @@ fn variable_output(term: &Term, program: &Program) -> bool {
         Term::Map(_, t)
         | Term::Flatten(t)
         | Term::Fold(_, t)
+        | Term::Group(_, t)
         | Term::Tile { inner: t, .. }
         | Term::Store { inner: t, .. }
         | Term::Lookup { inner: t, .. } => variable_output(t, program),

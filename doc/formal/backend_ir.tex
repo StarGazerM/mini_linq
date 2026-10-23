@@ -113,7 +113,7 @@ one part; a separated store publishes the concatenation of its outer parts.
  \mathsf{enc}\text{ monotone on }c}
  {\text{equality, hashing and canon on }K\text{, and order reads on }c\text{, act on codes}}
 
-\Rule{BE-Choose}{t_1,\ldots,t_n\text{ equal under BE-Partition}\quad
+\Rule{BE-Choose}{t_1,\ldots,t_n\text{ have checked equal support}\quad
  \text{guards }g_i\text{ over lengths, exhaustive}}
  {\mathsf{choose}\,[g_i\Rightarrow t_i]\text{ denotes any }t_i\text{; which runs is free}}
 \end{mathpar}
@@ -196,7 +196,20 @@ GPU instance of the grade.
 
 \Rule{BE-Abort}{\bot\text{ raised below }\mathsf{host}}
  {\text{a once-set flag on the failure channel, mapped to }\bot\text{ at the next host boundary; no truncated success}}
+
+\Rule{BE-Resource}{d\text{ a checked dispatch at }\ell\quad
+ \mathsf{layout}_M(\mathsf{shape}(d))\le\mathsf{capacity}_M(\ell)}
+ {\text{the dispatch fits the bounded resource of its machine level}}
 \end{mathpar}
+The resource shape records every branch, payload lookup, live parent column
+with its checked type and codec facts, fold, tile and item count. Byte layout
+and alignment belong to the target-supplied machine, not to the language.
+An unbounded level imposes no capacity premise. A bounded level without a
+layout model, arithmetic overflow, or an oversized layout is rejected before
+translation, including for explicitly advised programs. The planner may add
+checked publication boundaries between expanding stages and alternatives,
+then compares only resource-legal candidates by PL-Cost.
+
 The laws mention only labels of the machine parameter. A term that uses a
 collective at a level the target marks separated is rejected for that
 target, not reinterpreted. BE-Boundary derives kernels (GPU) and tasks
@@ -272,17 +285,22 @@ Let $t_0=t$, $t_i=r_i(t_{i-1})$, and let $A(t)$ record authored choices.
 \Rule{PL-Select}{s'=\mathsf{retainUnsupportedHostReads}(s,K)\quad
  e\in\mathsf{Structures}(s')\quad
  k=\mathsf{first}\{k\in K\mid \mathsf{needs}(e)\subseteq\mathsf{caps}(k),
- \ \mathsf{host}\in\mathsf{levels}(k),\
+ \ \mathsf{levels}(k)\ne\varnothing,\
  \mathsf{elements}(e)\subseteq\mathsf{acceptedElements}(k)\}}
  {\mathsf{select}(s,K):\
  e.\mathsf{type}\gets k.\mathsf{type}\quad\text{by checked retention, index construction and retype}}
 
 \Rule{PL-Cost}{C=(c_1,\ldots,c_k)\text{ admissible, preserving }A(t)\quad
-  \kappa(c)=(W(c),S(c),\#\mathsf{stores}(c),\#\mathsf{dispatches}(c))}
+  \kappa(c)=(W(c),I(c),S(c),\#\mathsf{stores}(c),\#\mathsf{dispatches}(c))}
  {c^*=\mathsf{foldl}\bigl(
    (a,b)\mapsto\text{if }\kappa(b)\prec\kappa(a)\text{ then }b\text{ else }a,
    c_1,(c_2,\ldots,c_k)\bigr)}
 \end{mathpar}
+Catalog levels describe where a provider may be read, not where its owner is
+constructed. Building an index from host rows does not certify a host read.
+Placement must select a supported read level; authored unsupported grades are
+rejected rather than silently reinterpreted.
+
 PL-Closure inherits its value laws from BE-* and the Sequence extension
 rewrites; it adds no new equality of values. PL-Precedence preserves
 authored grades, tiles, stores, choices, output protocols and codec/canon
@@ -290,9 +308,21 @@ tokens: planning fills missing decisions rather than optimizing them away.
 PL-Det includes rejection when no catalog token satisfies a recorded
 obligation. PL-Cost uses the work and span of the preceding Cost paragraph,
 not a semantic preference. Here $\prec$ is provable strict lexicographic
-symbolic cost dominance: work first, then span, stores and dispatches.
+symbolic cost dominance: work first, then Lookup/Expand inversions $I$,
+span, stores and dispatches. An inversion is a Lookup evaluated after an
+upstream Expand in the same pipeline; retained references begin new pipelines.
 Bounds and coefficient dominance establish comparisons; unresolved
 comparisons, like equal costs, retain the earlier candidate.
+
+A planning invocation may reuse a structural proof only for an equal complete
+Structures prefix and equal Sequence and evidence syntax. Machine grading is
+checked separately for every requested grade. The join-support certificate
+interns relation and column names into invocation-local integer identities;
+its cache keys retain the complete ordered graph, headings and query atoms.
+Neither a hash collision nor evidence establishes an equality. Syntax trees
+remain the source of spans and opaque Rust equality; proof comparison does
+not require rendering those trees to token strings.
+
 PL-Select is an explicit Structures selection operation before decomposition,
 not an implicit override by PL-Precedence. It visits built indexes, sets,
 row buffers and canon providers in recorded entry order, selecting the first
@@ -323,6 +353,10 @@ weakens BE-Partial or BE-Boundary.
 An already-checked Sequence store cuts opaque Physical provenance, including
 for lookup providers: descendant reads consume the materialized rows rather
 than re-evaluating the host guard. This requires no asserted totality marker.
+Guard-result carriers project away columns absent from the checked downstream
+required-column set. The guard still receives its complete required input;
+this representation projection happens after evaluation and does not change
+its written domain or assert totality.
 Unknown lengths remain type-length expressions rather than measured input
 data or invented cardinalities. Work counts evaluated constructor positions;
 aliases, tiles and stores add no evaluation work, with stores a separate
@@ -430,7 +464,7 @@ construction-based support equality:
 
 \Rule{EXT-SeqTile}{n>0\quad d\text{ not an unbounded unknown-length store}}{d:=\mathsf{tile}_n\,d\quad\text{(BE-Partition)}}
 
-\Rule{EXT-SeqChoose}{a,b\text{ have one Structures result}\quad\text{guards exhaustive}}{d:=\mathsf{choose}[g\Rightarrow a,\ \mathsf{else}\Rightarrow b]\quad\text{(BE-Choose)}}
+\Rule{EXT-SeqChoose}{a,b\text{ have checked equal support}\quad\text{guards exhaustive}}{d:=\mathsf{choose}[g\Rightarrow a,\ \mathsf{else}\Rightarrow b]\quad\text{(BE-Choose)}}
 
 \Rule{EXT-SeqOutput}{p\in\{\mathsf{count},\mathsf{reserve},\mathsf{bounded}\}\quad p=\mathsf{bounded}\Rightarrow\text{capacity declared}}{\mathsf{output}:=p}
 
@@ -438,6 +472,78 @@ construction-based support equality:
 \end{mathpar}
 \code{grade} records advice only: the facade's grading phase checks the
 machine and BE-Scope through BE-Abort.
+
+\subsection{Lookup and Expand}
+\label{sec:lookup-expand}
+Lookup and Expand separate the shrinking and growing parts of a join
+\cite[Sections~3.2--3.4 and~4]{paper-diamond}.
+Sequence already supplies both: a \code{lookup} names matching positions,
+\code{compact(lookup)} tests their existence, and \code{flatten} expands
+them. A stored filtered relation with an indexed provider carries the
+forward phase across a publication boundary. No additional Sequence
+constructor is introduced.
+
+The join graph is extracted from checked Physical dependencies, using
+shared attribute equivalence classes as edge weights. LargestRoot constructs
+a maximum-weight spanning tree, rooted at the largest relation according to
+available count evidence \cite[Section~3.1, Lemma~3.2]{paper-rpt}.
+Unknown sizes retain deterministic syntax order, not invented cardinalities.
+Among equally weighted parents the deepest parent wins, the chaining
+forward-tree tie-break of ATP \cite[Section~3]{paper-rpt-plus}.
+The forward phase retains predicate-bearing relations and bridge relations,
+filtering before building the next provider. This restricted transfer
+heuristic does not claim full semijoin reduction without its premises.
+
+Expands are placed at the first consumer requiring the payload.
+Cycle-closing lookups wait for the Expands that supply their keys
+\cite[Section~4.2]{paper-diamond}; a spanning tree of a cyclic graph is
+not asserted to be a join tree. In the acyclic case, tree-connected
+subjoins satisfy the SafeSubjoin criterion
+\cite[Section~3.2]{paper-rpt}. Evidence may prefer early Expand or a
+different Lookup order but is never used to delete a required join.
+Opaque Rust nodes remain pinned to their written Before domains.
+A provider requiring another key layout may name a fresh retained identity
+projection after that pinned prefix. Keeping the complete checked input
+heading preserves support and positions; the support certificate treats only
+such full-heading projections as transparent aliases. Other projections
+remain opaque certificate nodes. Each provider name then has one recorded
+layout, without requiring an interpreter to choose among layouts.
+In particular, a predicate-bearing leaf is authored by putting its
+predicate after that atom, not by a planner asserting the predicate total.
+
+\begin{mathpar}
+\Rule{EXT-SeqLookup}{t,t'\text{ checked}\quad
+ \text{join/semijoin constructions have equal support}\quad
+ \text{Rust Before domains preserved}}
+ {t\rightsquigarrow_{\mathsf{lookup\_first}}t'
+  \quad\text{(Motion, BE-Offsets, BE-Scope)}}
+
+\Rule{EXT-SeqAdaptive}{s\text{ is a published filtered store}\quad
+ \mathrm{supp}(\alpha(a))=\mathrm{supp}(\alpha(b))\quad k\text{ is advice}}
+ {d:=\mathsf{choose}[
+   \mathsf{len}(s)<k\Rightarrow a,\ \mathsf{else}\Rightarrow b]}
+
+\Rule{PL-Evidence}{E\text{ is syntactically well-formed advice}\quad
+ (t',\rho)=\mathsf{plan}(t,M,K,E)}
+ {\mathrm{supp}(\alpha(t'))=\mathrm{supp}(\alpha(t))\quad
+  \rho\text{ satisfies PL-Closure independently of the truth of }E}
+\end{mathpar}
+
+Evidence records row counts, keys, foreign keys, selectivities, bounds and
+sortedness beside the analysis obligations, not as correctness premises.
+Its consumers select the root, Lookup order, early Expand, and whether a
+transfer filter is worth its cost. The RPT+ selective-filter heuristic
+\cite[Sections~3.6 and~5]{paper-rpt-plus} uses static selectivity evidence
+when present; otherwise a \code{choose} reads an already-published count.
+The alternatives retain the exact joins, so even false evidence changes
+execution time only. This is a boundary-count adaptation, not a claim to
+implement RPT+'s in-flight sampling or cancellation.
+
+The \code{Planner} interface accepts $(t,M,K,E)$ and returns a program and
+replayable advice trace. Serialized author advice and generated advice use
+the same checked operations. The facade's Sequence-input \code{plan = path}
+phase may replace the rule-based implementation with an ordinary custom
+pass; PL-Closure and the conformance harness remain unchanged.
 
 \subsection{The three machines as interpretations}
 \begin{center}
@@ -494,6 +600,83 @@ BE-Length and BE-Abort; bounded output retries rather than publishing a
 truncated result. No target-side join order, uniqueness or tile choice is
 inferred by the translation.
 
+The CUDA machine bounds block shared storage by 101,376 bytes. Its single
+layout implementation starts with 48 bytes, records each materialized lookup's
+256 begins and 257 offsets as four-byte entries, and stores each live parent
+column for 256 members using its target carrier width (four-byte certified
+narrow codes, otherwise eight bytes). A fold reserves 256 eight-byte values.
+Every allocation retains its alignment and every choice arm is represented;
+the final size is aligned to sixteen bytes. The same layout implementation
+supplies BE-Resource and emitted offsets, so resource failure cannot select
+an alternative algorithm inside the interpreter.
+
+For the GPU instance of E-Neg (and RA-Anti), the checked Physical provenance
+of \code{compact(lookup)} records the negative polarity. Let
+$m(\rho)$ be the provider's membership result on the recorded key columns.
+The lane keep bit is $\mathsf{live}(\rho)\land\neg m(\rho)$ for anti,
+and $\mathsf{live}(\rho)\land m(\rho)$ for semi. Both polarities use the
+same membership probe; neither expands witnesses. Empty provider ranges,
+absent directory keys, and existential wildcard columns follow the same
+equation. The translator reads this polarity, rather than choosing it.
+
+
+\subsection{Grouped folds}
+\label{sec:grouped-fold}
+A rule head may contain \code{count()}, \code{sum(e)}, \code{min(e)}, and
+\code{max(e)}. Its remaining variables form the ordered key $K$. Let $V$
+contain every named body variable, excluding anonymous wildcard witnesses,
+and let $D=\delta(\pi_V\llbracket B\rrbracket)$ be the set of body valuations.
+All aggregates consume this same domain. For $k\in\pi_K D$, write
+$D_k=\{\rho\in D\mid\rho|_K=k\}$ and let
+$[e(\rho)\mid\rho\in D_k]$ be a \emph{bag}: distinct valuations with equal
+expression values contribute separately. This is SQL grouping over
+\code{SELECT DISTINCT} of all named body columns, not an aggregate with
+\code{DISTINCT} applied to its argument.
+\begin{mathpar}
+\Rule{RA-Group}{D=\delta(\pi_V\llbracket B\rrbracket)
+ \qquad G=\pi_KD\text{ if }K\ne\varnothing,\quad G=\{()\}\text{ otherwise}}
+ {\mathsf{group}_{K;(e_i,M_i)_i}(D)
+  =\{(k,(\bigoplus_{M_i,\rho\in D_k}e_i(\rho))_i)\mid k\in G\}}
+\end{mathpar}
+Count uses $(\mathbb N,+,0)$ and $e(\rho)=1$; sum uses the declared additive
+commutative monoid. Min and max use the option lifting of the declared
+total order, with \code{None} as identity and \code{Some} as injection.
+Thus empty keyed input has no answer, while empty global input has one
+answer containing zero counts/sums and absent extrema. These laws assume
+the declared operations satisfy their monoid premises; an expression
+failure propagates the single $\bot$ before any result is published.
+
+Let $S$ be a store of distinct valuations, partitioned by key, and let
+$o_k,o_{k+1}$ be the owner offsets of key $k$ in the grouped store.
+\begin{mathpar}
+\Rule{BE-Group}{\alpha(S)=D\qquad
+ S[o_k:o_{k+1}]\text{ enumerates }D_k\text{ exactly once}}
+ {\mathsf{segfold}_{K;(e_i,M_i)_i}(S)
+  =[(k,(\mathsf{fold}_{M_i}(\mathsf{map}_{e_i}
+       S[o_k:o_{k+1}]))_i)\mid k\in G]}
+\end{mathpar}
+Existing whole-sequence fold cannot introduce a data-dependent partition.
+A segmented-fold term therefore records the keyed store and its per-owner
+fold; its input canonicalization is over $V$, never over aggregate values.
+The host hash-grouped implementation fuses store construction and segment
+fold without changing this equation. The Tasks interpretation performs this
+operation at the host join, not as a collective at the separated pool.
+
+\paragraph{GPU machine instance of BE-Group.}
+The recorded canonical provider publishes the distinct complete valuations
+before the grouped boundary. Stable radix ordering of their key codes gives
+a permutation $\pi$; adjacent unequal keys mark owner offsets. Thus each
+half-open segment of $\pi$ enumerates exactly $D_k$, and the same BE-Group
+equation applies, without a new rewrite or a translator-selected plan.
+Each owner is reduced collaboratively using the declared integer monoid:
+count and sum have zero identity; extrema carry a separate validity bit
+and retain the full-width value, including both signed endpoints.
+Codec widths constrain the result (in particular unsigned 32-bit sums
+cannot silently become signed 64-bit sums). Arithmetic failure is published
+as bottom through the output status, together with ancestor failures.
+Empty keyed input publishes zero owners; an empty global key publishes one
+owner with count/sum zero and invalid extrema. Values, validity, and logical
+output count remain resident until the explicit typed host decode.
 
 \subsection{The H05 reference as a term}
 The hand-written kernels (\code{experiments/gpu/h05-reference}) are

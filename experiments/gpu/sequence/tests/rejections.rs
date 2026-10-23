@@ -62,7 +62,10 @@ fn scalar_fold_host_code_parses() {
                 r = pipe canon rename R@0 {a -> a};
                 return r as answer(a);
             }
-            structures { r host scan = Reader []; r canon = Canon; }
+            structures {
+                r host scan = ::cq_gpu_runtime::DeviceColumns [];
+                r canon = Canon;
+            }
             sequence {
                 input = store rows r;
                 result = store capacity 1024 #operation;

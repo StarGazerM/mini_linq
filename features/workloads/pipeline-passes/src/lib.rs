@@ -166,9 +166,7 @@ pub fn sequence_targets(input: proc_macro::TokenStream) -> proc_macro::TokenStre
         let bindings: Vec<_> = sequence
             .structures
             .physical
-            .program
-            .declarations
-            .iter()
+            .inputs()
             .map(|input| {
                 let ident = &input.name;
                 let name = ident.to_string();

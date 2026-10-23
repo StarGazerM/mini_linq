@@ -15,6 +15,10 @@ type Tables = BTreeMap<Occurrence, Relation>;
 
 /// Execute a contract-valid valuation program over finite integer tables.
 pub fn evaluate(program: &vo::Program, database: &Database) -> Rows {
+    assert!(
+        program.cq.query.group.is_none(),
+        "grouped folds use compiled conformance targets"
+    );
     crate::cq_semantics::validate_database(&program.cq, database);
     let mut tables = Tables::new();
     collect(&program.cq.query.body, None, database, &mut tables);

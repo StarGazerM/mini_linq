@@ -38,7 +38,6 @@
 //! its existing recognition. Only differing literals on one interface column
 //! prove union arms disjoint; no data keys or constraints are assumed.
 //!
-use syn::ext::IdentExt;
 use syn::{Ident, Index, Token, Type, token};
 
 pub mod kw {
@@ -66,7 +65,11 @@ pub type Column = Index;
 ///
 /// In particular, `x` and the Rust raw spelling `r#x` return the same name.
 pub fn symbol_name(identifier: &Ident) -> String {
-    identifier.unraw().to_string()
+    let mut name = identifier.to_string();
+    if name.starts_with("r#") {
+        name.drain(..2);
+    }
+    name
 }
 
 pub mod keyed;

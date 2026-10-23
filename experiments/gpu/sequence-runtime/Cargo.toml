@@ -9,6 +9,7 @@ cuda-device.workspace = true
 cuda-host.workspace = true
 cq-gpu-runtime = { path = "../printer-runtime" }
 gpu-compress = { path = "../compress" }
+gpu-compress-host = { path = "../compress-host" }
 gpu-device-columns = { path = "../device-columns" }
 gpu-tiles = { path = "../tiles" }
 rccl-cub.workspace = true

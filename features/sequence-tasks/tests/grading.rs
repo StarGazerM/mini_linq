@@ -94,3 +94,97 @@ fn pool_tile_and_store_emit_indexed_parallel_buffers() {
     assert!(expression.contains("par_chunks (3usize)"), "{expression}");
     assert!(expression.contains("into_par_iter"), "{expression}");
 }
+
+fn grouped_program(global: bool) -> Program {
+    let keys = if global {
+        quote::quote!()
+    } else {
+        quote::quote!(k)
+    };
+    let head_keys = if global {
+        quote::quote!()
+    } else {
+        quote::quote!(k,)
+    };
+    let physical = syn::parse2(quote::quote! {
+        physical {
+            relation rows(k:i32, witness:i32, value:i64);
+            r = pipe canon rename rows@0 {k -> k, witness -> witness, value -> value};
+            grouped = pipe group r by [#keys] {
+                n: usize = count();
+                total: i64 = sum(value);
+                low: Option<i64> = min(value);
+                high: Option<i64> = max(value);
+            };
+            return grouped as answer(#head_keys n,total,low,high);
+        }
+    })
+    .unwrap();
+    let structures = cq_structure_selection::compile(&physical).unwrap();
+    syn::parse2(quote::quote! {
+        #structures
+        sequence {
+            r = store canon rows r;
+            groups = group grouped r;
+            output_rows = store groups;
+        }
+        graded tasks { r at host; groups at host; output_rows at host; }
+    })
+    .unwrap()
+}
+
+#[test]
+fn grouped_fold_requires_host_even_at_a_sequential_task_leaf() {
+    for level in [quote::quote!(pool), quote::quote!(pool.task)] {
+        let mut program = grouped_program(false);
+        program.graded = Some(
+            syn::parse2(quote::quote! {
+                graded tasks { r at host; groups at #level; output_rows at host; }
+            })
+            .unwrap(),
+        );
+        let error = check_grading(&program, &machine()).unwrap_err();
+        assert!(error.to_string().contains("BE-Group"), "{error}");
+    }
+}
+
+#[test]
+fn host_grouped_tasks_and_pull_execute_the_same_valuation_fold() {
+    let keyed = grouped_program(false);
+    let global = grouped_program(true);
+    let keyed_facts = check_grading(&keyed, &machine()).unwrap();
+    let global_facts = check_grading(&global, &machine()).unwrap();
+    let keyed_tasks = translate(&keyed, &keyed_facts).unwrap();
+    let global_tasks = translate(&global, &global_facts).unwrap();
+    let keyed_pull = cq_sequence_pull::translate(&keyed, &keyed_facts).unwrap();
+    let global_pull = cq_sequence_pull::translate(&global, &global_facts).unwrap();
+    assert!(!keyed_tasks.to_token_stream().to_string().contains("rayon"));
+    let source = quote::quote! {
+        fn main() {
+            let populated: &[(i32,i32,i64)] = &[(1,10,7),(1,10,7),(1,11,7),(2,20,-2)];
+            for rows in [populated, &[][..]] {
+                let mut tasks: Vec<(i32,usize,i64,Option<i64>,Option<i64>)> =
+                    (#keyed_tasks).into_iter().map(|(k,n,s,l,h)| (*k,n,s,l,h)).collect();
+                let mut pull: Vec<_> =
+                    (#keyed_pull).into_iter().map(|(k,n,s,l,h)| (*k,n,s,l,h)).collect();
+                tasks.sort();
+                pull.sort();
+                assert_eq!(tasks, pull);
+                let tasks_global: Vec<(usize,i64,Option<i64>,Option<i64>)> =
+                    (#global_tasks).into_iter().collect();
+                let pull_global: Vec<_> = (#global_pull).into_iter().collect();
+                assert_eq!(tasks_global, pull_global);
+                if rows.is_empty() {
+                    assert!(tasks.is_empty());
+                    assert_eq!(tasks_global, vec![(0,0,None,None)]);
+                } else {
+                    assert_eq!(tasks, vec![(1,2,14,Some(7),Some(7)), (2,1,-2,Some(-2),Some(-2))]);
+                    assert_eq!(tasks_global, vec![(3,12,Some(-2),Some(7))]);
+                }
+            }
+        }
+    };
+    let runtime = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../runtime/cq-storage/src/lib.rs");
+    cq_testkit::rustc::Runtime::new(&runtime, false).run(&source.to_string());
+}

@@ -1,6 +1,8 @@
 // TPC-H-derived positive Q9 join core with the composite partsupp key.
 // The canonical '%green%' pattern is exactly the literal substring predicate;
 // profit arithmetic, grouping, and ordering remain outside this inspired core.
+// The author evaluates the opaque string predicate on Part before the joins;
+// its written Before domain is Part alone, not a joined prefix.
 
 crate::tpch_runtime::retail_kernel! { $;
     name "retail_h09";
@@ -22,8 +24,8 @@ WHERE p.p_name LIKE '%green%'"#;
         relation Nation => nation(n_nationkey: i32);
     }
     answer(order_key: i64, part_key: i64, supplier_key: i64) :-
+        Part(part_key, part_name), if part_name.contains("green"),
         Orders(order_key),
         Lineitem(order_key, part_key, supplier_key), PartSupp(part_key, supplier_key),
-        Part(part_key, part_name), if part_name.contains("green"),
         Supplier(supplier_key, nation_key), Nation(nation_key);
 }

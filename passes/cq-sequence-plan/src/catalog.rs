@@ -64,7 +64,8 @@ fn result_levels(
     let mut levels = Vec::new();
     for definition in &program.sequence.definitions {
         let name = symbol_name(&definition.name);
-        if analysis.results.get(&name).is_some_and(|r| r == result)
+        // Canon obligations name the owning Sequence definition, not its Physical result.
+        if name == result
             && let Some(level) = analysis.levels.get(&name)
         {
             let level = if canonical {
@@ -90,7 +91,9 @@ fn result_levels(
 fn provider_levels(program: &Program, analysis: &Analysis, provider: &str) -> Vec<Vec<String>> {
     let mut levels = Vec::new();
     for definition in &program.sequence.definitions {
-        if reads_provider(&definition.term, provider) {
+        if reads_provider(&definition.term, provider)
+            || map_reads_provider(&definition.term, provider, program, analysis)
+        {
             let name = symbol_name(&definition.name);
             if let Some(level) = analysis.levels.get(&name) {
                 let level = analysis
@@ -104,11 +107,7 @@ fn provider_levels(program: &Program, analysis: &Analysis, provider: &str) -> Ve
             }
         }
     }
-    if levels.is_empty() {
-        result_levels(program, analysis, provider, false)
-    } else {
-        levels
-    }
+    levels
 }
 
 fn reads_provider(term: &Term, provider: &str) -> bool {
@@ -122,6 +121,7 @@ fn reads_provider(term: &Term, provider: &str) -> bool {
         | Term::Compact(_, inner)
         | Term::Flatten(inner)
         | Term::Fold(_, inner)
+        | Term::Group(_, inner)
         | Term::Canon(inner)
         | Term::Store { inner, .. }
         | Term::Tile { inner, .. } => reads_provider(inner, provider),
@@ -131,7 +131,62 @@ fn reads_provider(term: &Term, provider: &str) -> bool {
     }
 }
 
-fn matches_type(pattern: &Type, actual: &Type) -> bool {
+fn map_reads_provider(term: &Term, provider: &str, program: &Program, analysis: &Analysis) -> bool {
+    use cq_lang_sequence::structures::physical::Operator;
+    if let Term::Map(result, inner) = term {
+        let stop = match inner.as_ref() {
+            Term::Ref(name) => analysis.results.get(&symbol_name(name)).cloned(),
+            Term::Rows(name) | Term::Map(name, _) | Term::Compact(name, _) => {
+                Some(symbol_name(name))
+            }
+            _ => None,
+        };
+        let mut current = symbol_name(result);
+        while stop.as_ref() != Some(&current) {
+            let Some(definition) = program
+                .structures
+                .physical
+                .program
+                .definitions
+                .iter()
+                .find(|definition| symbol_name(&definition.name) == current)
+            else {
+                break;
+            };
+            if matches!(&definition.operator,
+                Operator::Probe(_, keyed) | Operator::Merge(_, keyed)
+                | Operator::Semi(_, keyed) | Operator::Anti(_, keyed)
+                if symbol_name(&keyed.right) == provider)
+            {
+                return true;
+            }
+            let Some(input) = definition.operator.input() else {
+                break;
+            };
+            current = symbol_name(input);
+        }
+    }
+    match term {
+        Term::Map(_, inner)
+        | Term::Compact(_, inner)
+        | Term::Flatten(inner)
+        | Term::Fold(_, inner)
+        | Term::Group(_, inner)
+        | Term::Canon(inner)
+        | Term::Store { inner, .. }
+        | Term::Tile { inner, .. }
+        | Term::Lookup { inner, .. } => map_reads_provider(inner, provider, program, analysis),
+        Term::Union(arms) => arms
+            .iter()
+            .any(|arm| map_reads_provider(arm, provider, program, analysis)),
+        Term::Choose(arms) => arms
+            .iter()
+            .any(|(_, arm)| map_reads_provider(arm, provider, program, analysis)),
+        _ => false,
+    }
+}
+
+pub(crate) fn matches_type(pattern: &Type, actual: &Type) -> bool {
     match (pattern, actual) {
         (Type::Infer(_), _) => true,
         (Type::Path(pattern), Type::Path(actual)) if pattern.qself == actual.qself => {

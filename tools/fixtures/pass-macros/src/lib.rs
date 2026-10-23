@@ -196,3 +196,74 @@ pub fn identity_structures(input: TokenStream) -> TokenStream {
     cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), |source, _| Ok(source.clone()))
         .into()
 }
+
+/// A real alternative policy: prefer reserve when no output protocol is authored.
+/// Every other decision is left to the shared rule-based planner.
+struct ReservePlanner;
+
+impl cq_sequence_plan::Planner for ReservePlanner {
+    fn plan(
+        &self,
+        source: &cq_lang_sequence::Program,
+        machine: &cq_lang_sequence::Machine,
+        catalog: &cq_lang_sequence::Catalog,
+        evidence: &cq_lang_sequence::Evidence,
+    ) -> syn::Result<cq_sequence_plan::Planned> {
+        if source.sequence.output.is_some() {
+            return cq_sequence_plan::Planner::plan(
+                &cq_sequence_plan::RuleBased,
+                source,
+                machine,
+                catalog,
+                evidence,
+            );
+        }
+        let advice = cq_sequence_plan::Advice::Output(cq_lang_sequence::OutputProtocol::Reserve);
+        let advised = advice.apply(source)?;
+        let mut planned = cq_sequence_plan::Planner::plan(
+            &cq_sequence_plan::RuleBased,
+            &advised,
+            machine,
+            catalog,
+            evidence,
+        )?;
+        planned.trace.insert(0, advice);
+        Ok(planned)
+    }
+}
+
+/// Ordinary external checked pass, selected by the facade's named plan phase.
+#[proc_macro]
+pub fn plan_reserve(input: TokenStream) -> TokenStream {
+    cq_stage::rewrite::<cq_lang_sequence::Program>(input.into(), |source, args| {
+        if args.to_string() != "expected" {
+            return Err(syn::Error::new_spanned(
+                args,
+                "planner arguments were not forwarded",
+            ));
+        }
+        let machine = cq_sequence_pull::machine();
+        let planned = cq_sequence_plan::Planner::plan(
+            &ReservePlanner,
+            source,
+            &machine,
+            &cq_sequence_pull::catalog(),
+            &source.evidence,
+        )?;
+        let mut replayed = source.clone();
+        for advice in &planned.trace {
+            let next = advice.apply(&replayed)?;
+            cq_lang_sequence::check_rewrite(&replayed, &next)?;
+            replayed = next;
+        }
+        if replayed != planned.program {
+            return Err(syn::Error::new_spanned(
+                source,
+                "planner trace did not replay",
+            ));
+        }
+        cq_lang_sequence::check_grading(&planned.program, &machine)?;
+        Ok(planned.program)
+    })
+    .into()
+}

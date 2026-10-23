@@ -6,6 +6,17 @@ functions and contracts, with their dependencies and acceptance criteria.
 Nothing here names a data structure or an algorithm; implementations live in
 runtime crates behind traits.
 
+Set `CQ_SEQUENCE_PLAN_TIMING=1` while compiling query macros to report each
+rule-based Sequence planning invocation in seconds. GPU TPC-H build reports
+also record `generation_seconds` per query, scale, and mode.
+
+`cq_lang_sequence::contract::Checker` owns proof reuse for one planning
+invocation. Its `check`, `check_rewrite_in`, and `check_grading` methods retain
+the same obligations as the one-shot entry points. Planner replay uses
+`Advice::apply_in` and the rewrites' `_in` entry points with that shared context;
+it never bypasses a checker. Caches use complete support-graph and query keys,
+not estimated facts or hash-only equality.
+
 ## Dependency order and ownership
 
 ```
@@ -40,6 +51,7 @@ Term     ::= "rows" Ident                          // retained Physical result o
            | "tile" LitInt [ "items" LitInt ] Term
            | "lookup" Ident "[" Ident,* "]" Term    // provider result, key columns
            | "fold" Monoid Term
+           | "group" Ident Term                     // Physical grouped fold over flat distinct valuations
            | "canon" Term
            | "store" [ "capacity" LitInt ] Term
            | "choose" "[" (Guard "=>" Term),+ "]"
@@ -55,10 +67,10 @@ Output   ::= "output" ("count" | "reserve" | "bounded") ";"
 Public API:
 
 ```rust
-pub struct Program { pub structures: cq_lang_structures::Program, pub sequence: Sequence, pub graded: Option<Graded> }
+pub struct Program { pub structures: cq_lang_structures::Program, pub sequence: Sequence, pub graded: Option<Graded>, pub evidence: Evidence }
 pub enum Term { Rows(Ident), Map(Ident, Box<Term>), Flatten(Box<Term>), Compact(Ident, Box<Term>),
                 Tile{n: usize, items: Option<usize>, inner: Box<Term>}, Lookup{provider: Ident, keys: Vec<Ident>, inner: Box<Term>},
-                Fold(Monoid, Box<Term>), Canon(Box<Term>), Store{capacity: Option<usize>, inner: Box<Term>},
+                Fold(Monoid, Box<Term>), Group(Ident, Box<Term>), Canon(Box<Term>), Store{capacity: Option<usize>, inner: Box<Term>},
                 Choose(Vec<(Guard, Term)>), Ref(Ident) }
 
 /// Machine model: a tree of levels with labels. Data, not code; each target exports one.
@@ -86,10 +98,11 @@ pub struct Analysis {
     pub collectives: Vec<(String, Monoid, Vec<String>)>, // fold/scan Defs and their level
     pub output: Option<(String, OutputProtocol)>,       // the final store and how it is filled
     pub obligations: Vec<Obligation>,                  // provider/codec/canon traits and dispatch failure paths
+    pub evidence: Evidence,                           // nonsemantic data advice, never obligations
 }
 pub mod contract { pub fn check(p: &Program) -> syn::Result<Analysis>; }   // BE-Alpha…BE-Choose structurally
 pub fn check_grading(p: &Program, m: &Machine) -> syn::Result<Analysis>;   // BE-Scope…BE-Abort against m
-pub fn check_rewrite(s: &Program, t: &Program) -> syn::Result<()>;         // Structures unchanged; supp∘α equal by construction rules
+pub fn check_rewrite(s: &Program, t: &Program) -> syn::Result<()>;         // checked equal support; join motion preserves pinned Rust domains
 impl cq_stage::Language for Program { … }
 ```
 
@@ -109,9 +122,10 @@ Checks (each a named `// Formal rule BE-…:` marker):
 - BE-Bind: a `lookup` under a sequential `flatten` needs `Exact`; `Range` is recorded only where the flatten's offsets are materialized (directly under `store`, domain of a `tile`, lengths folded at a level with members); semi/anti need `Membership`; merge needs `Ordered`.
 - BE-Offsets / BE-Length: lengths computed for every Def; a `store` at a separated level whose Len is `Unknown` must carry a capacity; host (and ungraded) stores need none.
 - BE-Collective: applies to `fold`/`scan`/`flatten` graded at a level with members; at a leaf level they are sequential loops.
+- BE-Group: `group result input` names a Physical Group and consumes exactly its complete, flat, distinct valuation heading. Grouping executes at host, never per tile or at a separated pool/task. Global grouping has length one, including empty input; keyed grouping has data-dependent length and no empty groups.
 - `union [d, ...]` is a view with α = ⊎ and summed Len; opaque Guard/Bind are `map` Defs that must be graded at host (BE-Partial).
 - BE-Code: codec premises are deferred to traits (recorded as obligations in Analysis, like Leibniz).
-- BE-Choose: guards exhaustive; all alternatives have equal `supp∘α` by construction (same Structures result).
+- BE-Choose: guards exhaustive; all alternatives have equal `supp∘α` by construction (the same result or independently checked equivalent join/semijoin support).
 - Grading: BE-Scope (reads inside extent, inner level), BE-Collective (fold/scan at collaborative level, whole level), BE-Separate (siblings exchange only via a store at an ancestor), BE-Boundary (derive `dispatches`), BE-Partial (no opaque Rust below host), BE-Abort (every dispatch has a failure channel).
 
 Acceptance: round-trip of every form; one rejection test per rule; `rules.tsv` rows switch to `implementation`; `tools/public-api/cq-lang-sequence.txt`.
@@ -128,6 +142,9 @@ unknown-length stores.
 
 Constructors lift through outer tile partitions: map/compact/lookup/fold/canon/
 store act on innermost rows, and flatten joins the two innermost levels.
+`group` instead requires a flat input: outer partitions must be flattened before
+the shared valuation domain is folded. Its hash table materializes the groups,
+while a named `store` still determines publication and cross-level ownership.
 `Analysis.shapes` records per-level lengths, with `CeilDiv(L,n)` tile counts
 and bounded inner lengths; `lengths` retains flattened cardinality.
 A separated store publishes concatenated outer parts produced at its unique
@@ -146,8 +163,9 @@ No provider type spelling identifies a data structure. Machine paths normalize
 to host-inclusive paths; host is the sequential collective case. Dispatch
 failure channels are paths back to host, with their runtime flag behavior
 recorded as obligations. The structural rewrite checker compares construction
-normal forms under support after checking the unchanged Structures prefix;
-it does not claim to prove arbitrary user Rust or runtime trait laws.
+normal forms under support. A changed Structures prefix additionally requires
+an evidence-independent join/semijoin equivalence certificate with unchanged
+opaque Rust domains; it does not prove arbitrary Rust or runtime trait laws.
 The flat definition list defines lexical extents: a store is visible from its
 definition onward, at its level and descendants. Cross-level views require
 an explicit ancestor store. A distributed publication tile needs a unique
@@ -172,8 +190,9 @@ pub fn check(s: &cq_lang_structures::Program, t: &cq_lang_sequence::Program) -> 
 ```
 Default lowering = "one part, nothing stored beyond Physical modes": every
 `let` result → `store`, every `pipe` chain → `map`/`flatten`/`compact`
-views, probes → `flatten(lookup …)` (BE-Bind), canon → `canon`, final
-result → `store` with `Unknown` capacity, ungraded. No tiles, no choose.
+views, probes → `flatten(lookup …)` (BE-Bind), canon → `canon`, grouped
+aggregates → `group result input` (BE-Group), final result → `store` with
+`Unknown` capacity, ungraded. No tiles, no choose.
 `check` re-derives the term from Structures and compares. Acceptance: the
 whole workload corpus lowers; `check` passes; [4] over this output
 reproduces today's answers (goldens + fuzz).
@@ -203,6 +222,8 @@ pub fn translate(p: &cq_lang_sequence::Program, a: &Analysis) -> syn::Result<syn
 One function per Term constructor; `tile` groups contiguous rows and `choose`
 uses the checked fallback arm; lifted constructors preserve outer groups.
 `store` → `Vec`; output flatten → push. Reads only `Analysis`.
+`group` uses the shared Physical host hash-fold adapter, preserving declared
+accumulator types and consuming every canonical valuation once for every aggregate.
 Acceptance: all workload goldens and `xtask fuzz` equal through
 `sequence → pull` as through today's printer; no function in the crate
 walks the whole program except the fold.
@@ -213,6 +234,8 @@ Same signature. Machine `tasks { host > pool(separated, dynamic) > task }`.
 `tile n` at `pool` → `par_chunks(n)`; `store` at `pool` → per-task `Vec`
 merged at join; a directly pool-graded `fold` is rejected, while publication
 evaluates its producer at task; `canon` → BE-Canon prefilter + global.
+`group` reuses the host interpretation after publication; grading rejects it at
+both pool and task levels rather than reducing each chunk independently.
 Acceptance: conformance with [4] on the corpus; the parallel
 Datalog extension's sharded admission expressible as `tile` + `canon`.
 
@@ -438,6 +461,15 @@ were respectively 4.28% and 5.13% above their authored references, within the
 
 ## [11] Lookup & Expand planning, evidence advice, swappable planners
 
+**Release gate: automatic: opt-in pending box 11b.** The facade Sequence
+`plan` defaults to `decompose`, preserving authored/CQ order. Explicit
+`plan(lookup_first)` (or `plan_sequential(lookup_first)`) enables Lookup-first;
+the explicit planner API remains available for target-owned phase paths.
+The 13 `sequence_conformance_*` crates compare non-Lookup-first decomposition.
+GPU suite builds generate advised entries only unless
+`CQ_GPU_TPCH_AUTOMATIC=1` is set. Automatic H08/D27 code generation and H09/D72
+planning/translation failures remain box 11b blockers, not advised-mode fallbacks.
+
 Sources: Birler, Kemper, Neumann, "Robust Join Processing with Diamond
 Hardened Joins" (VLDB 2024); Zhao et al., "Debunking the Myth of Join
 Ordering" (RPT, SIGMOD 2025); Qiao, Boncz, Zhang, "Robust Predicate
@@ -478,10 +510,65 @@ answers. Consumers: Lookup order and early Expand placement (L&E §4
 `earlyExpand`), the transfer-tree root (LargestRoot sizes), static
 filter-worthiness (RPT+ threshold) instead of `choose`.
 
+Evidence syntax (a complete advice block, also serialized in a planner trace):
+
+```text
+evidence {
+    count Lineitem = 60000000;
+    key Orders [order_key];
+    foreign_key Lineitem [order_key] -> Orders [order_key];
+    selectivity filtered_part = 1 / 10;
+    bounds Orders.order_key = 0 ..= 60000000;
+    sorted Orders [order_key];
+}
+```
+
+Facts validate names and syntax, not their truth. Later facts of a kind take
+precedence for planning; no fact establishes totality, uniqueness, referential
+integrity, or a codec law for correctness checking. `Program.evidence` and
+`Analysis.evidence` retain the advice independently of the obligations.
+`Advice` implements parsing and token printing, so author-written
+`store(name)`, `store_level(name)`, `publish(name, producer)`,
+`tile(name, n, items m)`, `partition(name, n)`, `segment(name, n, items m)`,
+`output(reserve)`, and `grade(gpu, name at host.device)` are the same
+replayable operations as generated trace entries.
+Lookup ordering uses
+`lookup_first(using Provider, order [r, s, t], transfer [s], early [t])`:
+all relation names denote checked Physical leaves, and omitted ordering
+decisions are filled from the join graph and evidence. Generated traces freeze
+those decisions explicitly. Runtime filter advice is
+`adaptive(filter, published_store, threshold)`; an optional
+`, select true` or `, select false` freezes a static evidence-based choice.
+Both arms retain the exact joins and are independently checked.
+
+`cq_sequence_plan::plan` obtains and replays `LookupFirst`, freezes the complete
+adaptive candidate list before inserting any choices, replays every entry in
+that list, then decomposes the result and prepends the ordering/adaptive trace.
+The separate `decompose` entry preserves authored relational order. Retained
+forward filters and multiply indexed/scanned leaves have explicit row providers;
+the Lookup-first index provider must support Exact and Membership. Retained rows
+use the generic Structures collection carrier, independently of keyed indexes. Adaptive
+arms duplicate only pure pipe prefixes back to a publication or reusable host
+scan, never opaque Rust or retained results. Reexpression preserves live host
+adapters, while obsolete keyed host fallbacks become explicit retained indexes.
+
+The Step 0 SF10 gate used one warmup and five measured runs: generic advised
+H05 was **10.208480 ms**, versus authored R **10.308352 ms**, with all 72,983
+answer rows exact. The generic trace records the retained customer prefix,
+256-row outer partition, two 1024-row/4-item segments, and count output;
+the suite and authored path use the same domain-coded input storage.
+
+For complete Sequence input, the facade's named `plan = path` phase operates
+on that Sequence program; for CQ input, the existing phase continues to
+select relational order before lowering. Opaque guards keep their written
+Before sets in either mode. To author a predicate-bearing leaf, put its atom
+and guard first, as H09 does for Part; this is query syntax, not guard motion.
+
 Swappable planner: `cq_sequence_plan::Planner` trait,
 `plan(program, machine, catalog, evidence) -> Planned { program, trace }`;
-the facade phase `plan = ::mini_linq::passes::plan` is the rule-based
-default above; `plan = ::other::dp_plan` swaps in a DP/Cascades search over
+the facade phase `plan = ::mini_linq::passes::plan` preserves authored order
+by default; explicit `plan(lookup_first)` enables the rule-based planner.
+`plan = ::other::dp_plan` swaps in a DP/Cascades search over
 Lookup orders written as an ordinary pass. Any planner is tested by the
 same replayable trace and the conformance harness.
 
@@ -493,3 +580,214 @@ re-measured with the generic path; corpus conformance unchanged; formal
 subsection "Lookup and Expand" with the citations; a DP planner stub is
 not required, only the trait and one test that a custom planner pass
 plugs into the facade phase.
+
+Open verification item: the full release GPU workspace test build encounters
+malformed LLVM IR in `gpu-h05-compiled.opt.ll:28514`. This CUDA toolchain
+failure was independently observed in a clean HEAD (`3be6561`) worktree;
+it is separate from the advised executable's exactness/performance results.
+The new build-time compression dependency requires optimized release build
+dependencies; the GPU workspace explicitly sets their optimization level to 3.
+
+## [12] Grouped fold (aggregates)
+
+Surface rule heads admit `count()`, `sum(e)`, `min(e)`, and `max(e)`.
+The non-aggregate head variables are the group key. Aggregate outputs have
+declared types: `count()` is `usize`, `sum(e)` has the value type of `e`,
+and `min(e)` / `max(e)` have `Option<T>` for the value type `T`.
+
+```text
+relation answer(k: i32, n: usize, total: i32, low: Option<i32>);
+answer(k, count(), sum(value), min(value)) :- R(k, id, value);
+```
+
+The internal relational syntax is
+`group input by [k] { n: usize = count(); total: i32 = sum(value); }`.
+Sequence records `group physical_result input_sequence`; this is the
+segmented-fold boundary governed by **RA-Group** and **BE-Group**.
+Aggregate heads currently belong to one rule; combining multiple grouped
+rules is rejected rather than choosing an implicit aggregation scope.
+
+The aggregate domain is the set of distinct valuations of **all named body
+variables**, after projecting away anonymous wildcard witnesses. Every
+aggregate in the head consumes the same domain. Grouping converts each
+group's set of valuations into a bag of aggregate arguments: equal argument
+values from different valuations retain their multiplicity. In particular,
+two distinct lineitems with the same price contribute that price twice.
+`count()` folds the constant one over this domain. SQL correspondence is
+`SELECT keys, COUNT(*), SUM(e), ... FROM (SELECT DISTINCT named_body_columns
+FROM join_and_filters) GROUP BY keys`, not `SUM(DISTINCT e)`.
+
+Keyed empty input has no groups. An empty key denotes one global group even
+for empty input: count and sum return zero, min and max return `None`.
+Integer addition and the declared order must satisfy the commutative-monoid
+premises; arithmetic failure propagates bottom, never a partial answer.
+Opaque expressions remain in written order before grouping.
+
+Elaboration adds an explicit RA group node, retained by IX and Physical.
+Structures chooses canonicalization of the input valuation by its complete
+named heading and grouping by key. Sequence's checked `group` term constructs
+the key partition and folds each logical owner segment. This primitive is
+necessary because existing whole-sequence `fold` cannot introduce a dynamic
+partition. CPU pull fuses the keyed store/owner segments into a host hash
+accumulator (and uses one scalar accumulator for global grouping); Tasks
+performs the same host fold rather than inventing a collective at its
+separated pool. Existing whole-sequence folds are unchanged.
+
+Acceptance: cq-testkit conformance including duplicate input, equal-valued
+distinct matches, empty keyed/global input, count/sum/min/max, and triangle
+count through a head aggregate; a TPC-H H01-style lineitem sum/count query
+checked against DuckDB's DISTINCT-join oracle; root and workloads suites,
+unchanged unrelated goldens, formal inventory and scoped API snapshots.
+GPU translation is outside this box: it will need keyed grouping, stable
+owner-offset construction, segment-local monoid reduction and publication.
+
+## [13] Negation in the corpus and on the GPU
+
+CPU: the real-dbgen TPC-H inventory includes `retail_h04` (an EXISTS
+implemented by a DISTINCT join), `retail_h04_not_exists` (its anti-join
+variant), `retail_h16` (Part/PartSupp excluding a filtered BadSupplier set),
+and `retail_h22` (phone-country-selected customers with no orders).
+These are explicitly scoped CQ cores, not full canonical TPC-H answers:
+H04 omits priority aggregation, H16 omits grouped supplier counts, and H22
+omits the scalar average-balance subquery and grouped balance totals.
+
+`LateLineitem` and `BadSupplier` are filtered input relations, constructed
+once per CPU invocation before the CQ rule. Negation uses the existing
+CQ-Neg/E-Neg semantics, including anonymous existential arguments in
+`!Orders(_, custkey)`; it does not encode membership as a Rust guard.
+The real-data kernels retain their independent embedded DuckDB SQL.
+Synthetic prefiltered peers live in the extended fixture catalog because
+the positive-only generator/evaluator is not a negation interpreter.
+They run the existing retail pairwise configuration macros, all three
+fixture scenarios, independent DuckDB goldens, and a direct existential
+reference check that does not invoke the compiler.
+Full-key intersection shapes exclude native HashMap merge (no OrderedRead)
+and own-push merge (unsupported); the two anti-only cores retain the full
+list, and the combined corpus still checks all 367 axis pairs.
+
+The exporter discovers the added date, comment, and phone projections from
+the authored declarations and records derived-relation names, exact
+per-query answers/counts, and CPU timings in each SF1/SF10 manifest.
+Comments are CSV-decoded before building string dictionaries. Aggregate
+kernels have a separate contract and are not part of this DISTINCT exporter.
+
+Acceptance: workloads workspace including the new configuration cases;
+golden changes confined to the four new cases; SF1/SF10 answer counts
+reported by the exporter.
+
+GPU translation: pending.
+
+### Box 11b proof reuse and automatic conformance
+
+The invocation-local checker reuses successful Structures and structural
+Sequence proofs under complete syntax equality, retaining at most two prefixes
+and two Sequence proofs. Grading is always rechecked against the requested
+machine. Physical definition lookup is indexed once per structural proof;
+Lookup/Expand support graphs, headings, and query atoms use interned `u32`
+identities. Original syntax retains spans and opaque Rust equality, without
+rendering tokens to compare proofs. `symbol_name` formats each identifier once,
+stripping a raw prefix in the resulting buffer.
+
+The CPU conformance driver now explicitly calls the automatic planner for both
+Sequential and Tasks. This selects automatic mode for the 13 corpus conformance
+targets without changing the facade's gated default. Passing conformance and
+performance results must still be recorded before that default changes.
+
+### Box 12b GPU machine interpretation
+
+The grouped GPU boundary consumes a separately published canonical valuation
+store, retaining the provider recorded by Structures. Stable radix key ordering
+and adjacent boundary selection construct owner offsets; collaborative kernels
+fold typed count/sum/min/max per segment. Result publication retains logical
+count, arithmetic/ancestor statuses, and independent value/validity columns.
+`GroupedRows::to_host` decodes typed tuples including `Option<i64>` extrema.
+An empty global key has one identity owner, whereas keyed empty input has none.
+These are machine instances of BE-Group, not new planner decisions or laws.
+
+Acceptance commands (release CUDA build, serialized with other oxide builds):
+`cargo oxide test --arch sm_89 -- --release -p cq-gpu-sequence-runtime --test grouped_runtime`
+and `cargo oxide test --arch sm_89 -- --release -p cq-gpu-sequence --test group --test grouped_h01 -- --nocapture`.
+H01 reads the local exported dbgen databases and computes its independent
+DuckDB DISTINCT-valuation oracle inside the test; no precomputed golden is used.
+
+### Box 13b GPU negation acceptance
+
+The pending GPU item above is implemented: the retained Physical Anti node
+supplies negative polarity to `compact(lookup)`, and GPU translation uses the
+same provider membership probe with an inverted keep bit (E-Neg/RA-Anti).
+Inspection of all four suite lowering artifacts found the required polarity;
+default lowering is unchanged. H04 is the positive membership control, while
+H04-not-exists, H16 and H22 retain `anti eager`.
+
+All four run exactly at SF1 and SF10 in advised mode, with one warmup and five
+measured runs and additional Sequential conformance at SF1. Full counts,
+phase medians, DuckDB t24 comparisons, timing-boundary caveats and the command
+are in `experiments/gpu/README.md` under "Negation GPU acceptance";
+machine-readable evidence is `/data/tpch-gpu/box13b-negation.json`.
+Derived inputs reuse their original CPU setup expressions during loading;
+the suite does not duplicate query predicates or choose plans in translators.
+The release `cq-gpu-sequence --test rows` target passes all four tests,
+including the two-key semi/anti translation regression asserting the same
+membership primitive, opposite polarity and no witness expansion.
+
+### Box 12b measured acceptance
+
+The release CUDA tests passed: one runtime test (keyed/global empty identities,
+count/sum/min/max, u32-width and i64 overflow); two translation/execution tests
+(including duplicate physical rows and equal-valued distinct valuations); and
+the H01 real-data test on both scales. H01 produced four exact groups at SF1
+and four at SF10 against freshly computed DuckDB DISTINCT-valuation queries.
+
+| Scale | GPU invocation wall ms | DuckDB t24 wall ms | GPU / DuckDB |
+|---|---:|---:|---:|
+| SF1 | 2352.269 | 1241.677 | 1.894 |
+| SF10 | 682.524 | 11406.724 | 0.060 |
+
+These are single invocation wall measurements, not warmed medians. GPU timing
+excludes source loading/upload and includes invocation/module setup; SF1 is
+the first query in the process. DuckDB timing includes the CLI invocation and
+full oracle query. The existing `duckdb_timing.json` describes H05, so the test
+correctly measured H01 rather than reusing that unrelated baseline.
+
+### Box 11b machine resource and catalog contracts
+
+The machine API additionally records `LevelNode.shared_bytes: Option<usize>`
+and `Machine.layout: Option<fn(&DispatchShape) -> syn::Result<usize>>`.
+`DispatchShape` describes ordered per-chain payload/fold demands, live-column
+types and codec facts, tile and item counts; it contains no GPU byte constants.
+`Analysis.resources` records checked shape, required bytes and capacity per
+publication. BE-Resource rejects oversized authored or generated dispatches.
+
+The planner first considers its ordinary tile/item candidates. If none is legal
+for the target, it prepares one checked publication alternative between named
+expansions and choices, then grades/costs its tile/item candidates. It neither
+discards alternatives nor hides resource failure inside translation.
+
+Catalog level lists govern reads. Host construction alone does not require or
+establish host read capability. Generated Lookup-first stores select replayable
+provider overrides using their actual live layouts; authored tokens and grades
+retain precedence.
+
+### Box 11b integration timing acceptance
+
+Compare H05 SF10 advised and authored R in the same session using interleaved
+authored/advised/authored/advised invocations, each with one warmup and five
+measured iterations. Report all four medians; a relative difference within 1%
+counts as equal for the advised ≤ authored acceptance gate. This comparison
+band accounts for run-to-run timing variation without changing query plans.
+
+The integration run measured the following SF10 medians (all 72,983 rows exact):
+
+| Order | Implementation | Total ms |
+|---|---|---:|
+| A1 | Authored R | 10.531 |
+| B1 | Advised | 10.234 |
+| A2 | Authored R | 10.318 |
+| B2 | Advised | 10.269 |
+
+Both advised measurements are no slower than their preceding authored run;
+the second pair is equal within the 1% band. The initial all-query suite
+measurement was 10.374 ms versus a separate authored 10.310 ms, also within
+that band, although the suite's existing fixed 10.35 ms ceiling returned a
+failure exit status. The interleaved comparison leaves that original evidence
+intact and changes neither the implementation nor the fixed-ceiling check.

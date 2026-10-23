@@ -11,7 +11,7 @@
 //! Fact ::= "host_set" Ident ["discharged"] ";" | "consumer" "canonical" ";"
 //! Definition ::= Ident "=" Mode ["canon"] Operator ";"
 //! Mode ::= "pipe" | "let"
-//! Operator ::= Unit | Rename | Select | Point | Range | Bind | Guard | Project
+//! Operator ::= Unit | Rename | Select | Point | Range | Bind | Guard | Project | Group
 //!            | "probe" "[" Ident,* "]" Ident "," Ident
 //!            | "merge" "[" Ident,* "]" Ident "," Ident
 //!            | "semi" "[" Ident,* "]" Ident "," Ident
@@ -326,6 +326,8 @@ pub enum Operator {
     Guard(Box<cq_syntax::algebra::Guard>),
     #[parse(peek = kw::project)]
     Project(Box<cq_syntax::algebra::Project>),
+    #[parse(peek = kw::group)]
+    Group(Box<cq_syntax::algebra::Group>),
     #[parse(peek = kw::probe)]
     Probe(kw::probe, Keyed),
     #[parse(peek = kw::merge)]
@@ -442,6 +444,7 @@ impl Operator {
             Self::Bind(b) => Some(&b.input),
             Self::Guard(g) => Some(&g.input),
             Self::Project(p) => Some(&p.input),
+            Self::Group(g) => Some(&g.input),
             _ => None,
         }
     }
@@ -583,6 +586,11 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                 .into_iter()
                 .map(|i| symbol_name(&i))
                 .collect(),
+            Operator::Group(group) => group
+                .aggregates
+                .iter()
+                .map(|aggregate| symbol_name(&aggregate.name))
+                .collect(),
             _ => Vec::new(),
         })
         .collect();
@@ -598,6 +606,7 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
     };
     let mut readers: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut operands: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut unique: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut chains: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut written_chain = Vec::new();
     for definition in &program.definitions {
@@ -915,6 +924,32 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                 deps.push(symbol_name(&b.input));
                 row
             }
+            Operator::Group(group) => {
+                let input = of(&group.input)?;
+                group.check(&input.types)?;
+                if !unique.contains_key(&symbol_name(&group.input)) {
+                    return error(group, "group requires canonical complete input valuations");
+                }
+                let mut row = Row::default();
+                for key in &group.keys {
+                    let column = symbol_name(key);
+                    row.bindings
+                        .insert(column.clone(), input.bindings[&column].clone());
+                    row.types
+                        .insert(column.clone(), input.types[&column].clone());
+                    if input.computed.contains(&column) {
+                        row.computed.insert(column);
+                    }
+                }
+                for aggregate in &group.aggregates {
+                    let column = symbol_name(&aggregate.name);
+                    row.bindings.insert(column.clone(), aggregate.name.clone());
+                    row.types.insert(column.clone(), aggregate.ty.clone());
+                    row.computed.insert(column);
+                }
+                deps.push(symbol_name(&group.input));
+                row
+            }
             Operator::Project(p) => {
                 let mut row = of(&p.input)?;
                 let mut kept = BTreeSet::new();
@@ -980,6 +1015,15 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
             .headings
             .insert(name.clone(), row.bindings.keys().cloned().collect());
         analysis.rows.insert(name.clone(), row);
+        let heading = &analysis.headings[&name];
+        if let Some(key) =
+            inherited_key(&definition.operator, heading, &program.host_sets, |input| {
+                unique.get(&symbol_name(input)).cloned()
+            })
+            .or_else(|| definition.canon.is_some().then(|| heading.clone()))
+        {
+            unique.insert(name.clone(), key);
+        }
         operands.insert(name.clone(), deps.clone());
         for input in deps {
             readers.entry(input).or_default().push(name.clone());
@@ -1334,6 +1378,11 @@ pub fn inherited_key(
         Operator::Bind(_) => None,
         Operator::Guard(g) => key(&g.input),
         Operator::Project(p) => key(&p.input).filter(|key| key.iter().all(|k| heading.contains(k))),
+        Operator::Group(group) => {
+            let mut keys: Vec<_> = group.keys.iter().map(symbol_name).collect();
+            keys.sort();
+            Some(keys)
+        }
     }
 }
 
@@ -1532,6 +1581,7 @@ fn same_logical_operator(source: &Operator, target: &Operator) -> bool {
         (Operator::Bind(s), Operator::Bind(t)) => s == t,
         (Operator::Guard(s), Operator::Guard(t)) => s == t,
         (Operator::Project(s), Operator::Project(t)) => s == t,
+        (Operator::Group(s), Operator::Group(t)) => s == t,
         (
             Operator::Probe(_, s) | Operator::Merge(_, s),
             Operator::Probe(_, t) | Operator::Merge(_, t),

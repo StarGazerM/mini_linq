@@ -14,6 +14,7 @@ cq-gpu-runtime = { path = "../printer-runtime" }
 cq-storage = { path = "../../../runtime/cq-storage" }
 cuda-core.workspace = true
 gpu-compress = { path = "../compress" }
+gpu-compress-host = { path = "../compress-host" }
 cuda-device.workspace = true
 cuda-host.workspace = true
 serde_json.workspace = true

@@ -1,6 +1,34 @@
 use cq_workloads::{Scenario, queries::extended};
 
 #[test]
+fn retail_h04() {
+    for scenario in Scenario::ALL {
+        extended::retail_h04::check(scenario);
+    }
+}
+
+#[test]
+fn retail_h04_not_exists() {
+    for scenario in Scenario::ALL {
+        extended::retail_h04_not_exists::check(scenario);
+    }
+}
+
+#[test]
+fn retail_h16() {
+    for scenario in Scenario::ALL {
+        extended::retail_h16::check(scenario);
+    }
+}
+
+#[test]
+fn retail_h22() {
+    for scenario in Scenario::ALL {
+        extended::retail_h22::check(scenario);
+    }
+}
+
+#[test]
 fn aggregate_join() {
     for scenario in Scenario::ALL {
         extended::aggregate_join::check(scenario);

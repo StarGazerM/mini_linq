@@ -28,6 +28,7 @@ cuda-device.workspace = true
 cuda-core.workspace = true
 cuda-host.workspace = true
 gpu-compress = { path = "../compress" }
+gpu-compress-host = { path = "../compress-host" }
 serde_json.workspace = true
 
 [[example]]

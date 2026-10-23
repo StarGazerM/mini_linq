@@ -42,6 +42,7 @@ fn reject(program: &Program, rule: &str) {
 
 fn node(name: &str, collaborative: bool, dynamic: bool, children: Vec<LevelNode>) -> LevelNode {
     LevelNode {
+        shared_bytes: None,
         name: syn::parse_str(name).unwrap(),
         collaborative,
         dynamic,
@@ -52,6 +53,7 @@ fn node(name: &str, collaborative: bool, dynamic: bool, children: Vec<LevelNode>
 
 fn sequential() -> Machine {
     Machine {
+        layout: None,
         name: syn::parse_quote!(target),
         items: 1,
         root: node("host", false, false, vec![]),
@@ -60,6 +62,7 @@ fn sequential() -> Machine {
 
 fn gpu() -> Machine {
     Machine {
+        layout: None,
         name: syn::parse_quote!(target),
         items: 4,
         root: node(
@@ -101,6 +104,7 @@ fn every_grammar_form_round_trips() {
         f = fold count a;
         g = fold or a;
         h = fold sum a a;
+        grouped = group aggregate_result a;
         i = canon store a;
         j = choose [len a + 2 + len b < 7 => tile 2 a, len a + 2 + len b >= 7 => tile 4 a, else => tile 8 a];
         k = store capacity 42 flatten e;
@@ -129,8 +133,8 @@ fn every_grammar_form_round_trips() {
 #[test]
 fn constructor_names_remain_definition_names_and_references() {
     for spelling in [
-        "rows", "map", "flatten", "compact", "tile", "lookup", "fold", "canon", "store", "union",
-        "choose", "capacity", "output",
+        "rows", "map", "flatten", "compact", "tile", "lookup", "fold", "group", "canon", "store",
+        "union", "choose", "capacity", "output",
     ] {
         let name: syn::Ident = syn::parse_str(spelling).unwrap();
         let sequence: Sequence = syn::parse2(quote! {
@@ -547,6 +551,7 @@ fn ungraded_programs_default_to_host_only() {
 #[test]
 fn leaf_flatten_is_sequential_but_parent_fold_needs_collaboration() {
     let tasks = Machine {
+        layout: None,
         name: syn::parse_quote!(target),
         items: 1,
         root: node(
@@ -824,4 +829,252 @@ fn publication_tile_resolution_stops_at_named_storage() {
     assert_eq!(analysis.dispatches[0].parts, Some(32));
     assert_eq!(analysis.dispatches[1].parts, Some(256));
     assert_eq!(analysis.tilings["view"], [Tiling::Distribute]);
+}
+
+#[test]
+fn evidence_forms_round_trip_without_becoming_checked_facts() {
+    let source = lookup_program(quote! {
+        left = rows l;
+        expanded = flatten lookup r [a] left;
+        answer = store canon expanded;
+    });
+    let mut target = source.clone();
+    target.evidence = syn::parse_quote! {
+        evidence {
+            count R = 0;
+            count R = 999;
+            key R [a];
+            foreign_key L [a] -> R [b];
+            selectivity answer = 0 / 1;
+            bounds R.b = 12 ..= -3;
+            sorted R [b, a];
+            key answer [a, b];
+        }
+    };
+    let evidence = &target.evidence;
+    assert_eq!(
+        syn::parse2::<Evidence>(evidence.to_token_stream()).unwrap(),
+        *evidence
+    );
+    assert_eq!(
+        syn::parse2::<Program>(target.to_token_stream()).unwrap(),
+        target
+    );
+    assert_eq!(evidence.count("R"), Some(999));
+    assert_eq!(evidence.count("missing"), None);
+    assert_eq!(
+        evidence.selectivity("answer"),
+        Some(Selectivity {
+            numerator: 0,
+            denominator: 1
+        })
+    );
+    assert!(evidence.has_key("answer", &["b".into(), "a".into()]));
+    assert!(!evidence.has_key("R", &["b".into()]));
+    let before = contract::check(&source).unwrap();
+    let after = contract::check(&target).unwrap();
+    assert_eq!(after.evidence, target.evidence);
+    assert_eq!(before.lengths, after.lengths);
+    assert_eq!(before.shapes, after.shapes);
+    assert_eq!(before.capabilities, after.capabilities);
+    assert_eq!(before.obligations, after.obligations);
+    assert_eq!(
+        before.structures.physical.discharged_host_sets,
+        after.structures.physical.discharged_host_sets
+    );
+    check_rewrite(&source, &target).unwrap();
+}
+
+#[test]
+fn evidence_rejects_bad_syntax_and_references_not_false_claims() {
+    for syntax in [
+        quote!(evidence { selectivity r = 1 / 0; }),
+        quote!(evidence { count r = -1; }),
+        quote!(evidence { foreign_key R [a] -> R []; }),
+        quote!(evidence { bounds R.a = 1; }),
+        quote!(evidence { unknown R = 1; }),
+    ] {
+        assert!(syn::parse2::<Evidence>(syntax).is_err());
+    }
+    for syntax in [
+        quote!(evidence { count missing = 1; }),
+        quote!(evidence { key R [missing]; }),
+        quote!(evidence { key R [a, a]; }),
+        quote!(evidence { foreign_key R [a] -> missing [a]; }),
+        quote!(evidence { foreign_key R [a] -> r [missing]; }),
+        quote!(evidence { bounds R.missing = 0 ..= 10; }),
+        quote!(evidence { sorted r [missing]; }),
+    ] {
+        let mut target = program(quote!(out = store rows r;));
+        target.evidence = syn::parse2(syntax).unwrap();
+        reject(&target, "evidence:");
+    }
+}
+
+#[test]
+fn evidence_bounds_cover_the_signed_integer_domain_and_empty_metadata() {
+    let evidence: Evidence = syn::parse_quote! {
+        evidence {
+            bounds R.a = -170141183460469231731687303715884105728 ..= 170141183460469231731687303715884105727;
+        }
+    };
+    assert_eq!(
+        syn::parse2::<Evidence>(evidence.to_token_stream()).unwrap(),
+        evidence
+    );
+    let source = program(quote!(out = store rows r;));
+    let parsed: Program = syn::parse2(quote!(#source evidence {})).unwrap();
+    assert_eq!(parsed, source);
+}
+
+fn grouped_program(keys: proc_macro2::TokenStream, body: proc_macro2::TokenStream) -> Program {
+    let head_keys = if keys.is_empty() {
+        quote!()
+    } else {
+        quote!(#keys,)
+    };
+    syn::parse2(quote! {
+        physical {
+            relation R(k:i32, witness:i32, value:i64);
+            r = pipe canon rename R@0 {k -> k, witness -> witness, value -> value};
+            grouped = pipe group r by [#keys] {
+                n: usize = count();
+                total: i64 = sum(value);
+                low: Option<i64> = min(value);
+                high: Option<i64> = max(value);
+            };
+            return grouped as answer(#head_keys n, total, low, high);
+        }
+        structures {
+            r host scan = Reader [];
+            r canon = Canon;
+        }
+        sequence { #body }
+    })
+    .unwrap()
+}
+
+#[test]
+fn grouped_fold_records_result_cardinality_and_store_owner() {
+    for (keys, global) in [(quote!(k), false), (quote!(), true)] {
+        let program = grouped_program(
+            keys,
+            quote! {
+                r = canon rows r;
+                groups = group grouped r;
+                output_rows = store groups;
+            },
+        );
+        assert_eq!(
+            syn::parse2::<Program>(program.to_token_stream()).unwrap(),
+            program
+        );
+        let analysis = check_grading(&program, &sequential()).unwrap();
+        assert_eq!(analysis.results["groups"], "grouped");
+        assert!(!analysis.views.contains("groups"));
+        assert_eq!(analysis.stores["output_rows"], analysis.lengths["groups"]);
+        assert_eq!(analysis.shapes["groups"].len(), 1);
+        if global {
+            assert_eq!(analysis.lengths["groups"], Len::Lit(1));
+        } else {
+            assert_eq!(analysis.lengths["groups"], Len::Scan("groups".into()));
+        }
+    }
+}
+
+#[test]
+fn grouped_fold_requires_complete_distinct_flat_valuations() {
+    for body in [
+        quote!(r = rows r; groups = group grouped r;),
+        quote!(r = canon rows r; groups = map grouped r;),
+        quote!(r = canon rows r; groups = group r r;),
+        quote!(r = canon rows r; groups = group grouped tile 2 r;),
+        quote!(r = canon rows r; groups = group grouped fold count r;),
+        quote!(r = flatten canon tile 2 rows r; groups = group grouped r;),
+    ] {
+        reject(&grouped_program(quote!(k), body), "BE-Group");
+    }
+}
+
+#[test]
+fn grouped_fold_cannot_move_into_a_separated_or_leaf_execution_level() {
+    for level in [
+        quote!(device),
+        quote!(device.block),
+        quote!(device.block.lane),
+    ] {
+        let mut program = grouped_program(
+            quote!(k),
+            quote! {
+                r = store canon rows r;
+                groups = group grouped r;
+            },
+        );
+        grade(&mut program, quote!(r at host; groups at #level;));
+        reject_grade(&program, &gpu(), "BE-Group");
+    }
+}
+
+#[test]
+fn shared_checker_invalidates_changed_terms_structures_and_evidence() {
+    let source = lookup_program(quote! {
+        sr = store rows r;
+        out = store canon flatten lookup r [a] rows l;
+    });
+    let mut checker = contract::Checker::default();
+    let first = checker.check(&source).unwrap();
+    assert_eq!(checker.check(&source).unwrap().shapes, first.shapes);
+
+    let mut changed = source.clone();
+    changed.sequence.definitions.last_mut().unwrap().term = syn::parse_quote!(store rows missing);
+    assert!(checker.check(&changed).is_err());
+
+    let mut changed = source.clone();
+    changed.structures.structures.entries.clear();
+    assert!(checker.check(&changed).is_err());
+
+    let mut changed = source.clone();
+    changed.evidence = syn::parse_quote!(evidence { count missing = 10; });
+    assert!(checker.check(&changed).is_err());
+    assert_eq!(checker.check(&source).unwrap().shapes, first.shapes);
+}
+
+#[test]
+fn shared_structural_proof_does_not_cache_machine_grading() {
+    let mut source = program(quote!(out = store rows r;));
+    grade(&mut source, quote!(out at host;));
+    let mut checker = contract::Checker::default();
+    checker.check_grading(&source, &gpu()).unwrap();
+    let original = source.clone();
+    grade(&mut source, quote!(out at unknown;));
+    checker.check_rewrite_in(&original, &source).unwrap();
+    assert!(checker.check_grading(&source, &gpu()).is_err());
+    let invalid = program(quote!(out = store rows missing;));
+    assert!(checker.check_rewrite_in(&invalid, &invalid).is_err());
+}
+
+#[test]
+fn resource_rejects_oversized_authored_dispatches_before_translation() {
+    let mut p = lookup_program(quote! {
+        sr = store rows r;
+        out = store flatten lookup r [a] tile 256 rows l;
+    });
+    grade(&mut p, quote!(sr at host; out at device;));
+    let mut machine = gpu();
+    machine.root.children[0].children[0].shared_bytes = Some(64);
+    machine.layout = Some(|_| Ok(65));
+    let error = check_grading(&p, &machine).unwrap_err().to_string();
+    assert!(error.contains("BE-Resource"), "{error}");
+    assert!(error.contains("65 shared bytes"), "{error}");
+    assert!(error.contains("capacity is 64"), "{error}");
+    machine.root.children[0].children[0].shared_bytes = Some(65);
+    let analysis = check_grading(&p, &machine).unwrap();
+    assert_eq!(analysis.resources["out"].required_bytes, 65);
+    machine.layout = None;
+    assert!(
+        check_grading(&p, &machine)
+            .unwrap_err()
+            .to_string()
+            .contains("BE-Resource")
+    );
 }

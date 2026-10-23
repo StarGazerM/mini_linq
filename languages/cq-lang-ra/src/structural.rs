@@ -12,6 +12,7 @@ enum Column {
     Context(String, String),
     Negative(String, String),
     Bind(usize, String),
+    Aggregate(String),
 }
 
 type Heading = HashMap<String, Column>;
@@ -35,6 +36,7 @@ enum Kind {
     Union(bool, String),
     Anti(Vec<String>),
     Negative(String),
+    Group(String),
 }
 
 #[derive(Default, Clone)]
@@ -274,6 +276,42 @@ impl Schedule {
             },
         );
         node
+    }
+
+    /// Fold the distinct input heading, not merely the aggregate arguments.
+    /// No row ownership or reduction lineage survives this semantic barrier.
+    pub fn group(&mut self, input: usize, group: &cq_syntax::algebra::Group) -> usize {
+        let mut keys: Vec<_> = group.keys.iter().map(symbol_name).collect();
+        keys.sort();
+        let mut aggregates: Vec<_> = group
+            .aggregates
+            .iter()
+            .map(|aggregate| aggregate.to_token_stream().to_string())
+            .collect();
+        aggregates.sort();
+        let mut heading: Heading = group
+            .keys
+            .iter()
+            .map(|key| {
+                let name = symbol_name(key);
+                (name.clone(), self.nodes[input].heading[&name].clone())
+            })
+            .collect();
+        for aggregate in &group.aggregates {
+            let name = symbol_name(&aggregate.name);
+            heading.insert(name.clone(), Column::Aggregate(name));
+        }
+        let origins = heading
+            .iter()
+            .map(|(name, column)| (name.clone(), HashSet::from([column.clone()])))
+            .collect();
+        self.push(Node {
+            kind: Kind::Group(format!("{keys:?} {aggregates:?}")),
+            heading,
+            origins,
+            operands: vec![input],
+            ..Node::default()
+        })
     }
 
     pub fn project(&mut self, input: usize, attributes: &[Ident]) -> usize {
@@ -779,6 +817,9 @@ impl Schedule {
                         .collect::<Vec<_>>(),
                     r.constants.as_ref(),
                 ),
+                Operator::Group(group) => {
+                    schedule.group(results[&symbol_name(&group.input)], group)
+                }
                 Operator::Project(p) => schedule.project(
                     results[&symbol_name(&p.input)],
                     &p.attributes.iter().cloned().collect::<Vec<_>>(),
@@ -1345,6 +1386,58 @@ fn native_antis(
         .collect()
 }
 
+/// A terminal fold observes the entire distinct valuation relation. Compare
+/// that relation independently so ordinary set rewrites remain valid below
+/// the barrier, without letting final output demand erase valuation columns.
+/// General DAGs containing folds retain exact wiring (modulo local set laws);
+/// the positive-CQ equality closure cannot prove laws across a fold.
+fn compare_groups(source: &Schedule, target: &Schedule) -> Result<(), String> {
+    let source_output = source.output.ok_or("source schedule has no output")?;
+    let target_output = target.output.ok_or("target schedule has no output")?;
+    let (s, t) = (&source.nodes[source_output], &target.nodes[target_output]);
+    let terminal = |schedule: &Schedule, output: usize| {
+        matches!(schedule.nodes[output].kind, Kind::Group(_))
+            && output + 1 == schedule.nodes.len()
+            && schedule
+                .nodes
+                .iter()
+                .filter(|node| matches!(node.kind, Kind::Group(_)))
+                .count()
+                == 1
+    };
+    if terminal(source, source_output) && terminal(target, target_output) {
+        if s.kind != t.kind {
+            return Err("grouping keys or aggregate bindings differ from source".into());
+        }
+        let prefix = |schedule: &Schedule, output: usize| {
+            let mut prefix = schedule.clone();
+            prefix.output = Some(schedule.nodes[output].operands[0]);
+            prefix.nodes.truncate(output);
+            prefix.head = "distinct named group valuations".into();
+            prefix
+        };
+        return compare(
+            &prefix(source, source_output),
+            &prefix(target, target_output),
+        )
+        .map_err(|error| format!("group valuation domain differs: {error}"));
+    }
+    if source.chain.len() != target.chain.len()
+        || source
+            .chain
+            .iter()
+            .zip(&target.chain)
+            .any(|(s, t)| s.payload != t.payload)
+    {
+        return Err("Rust chain differs across group barriers".into());
+    }
+    let mut intern = HashMap::new();
+    if wiring(source, &mut intern)? != wiring(target, &mut intern)? {
+        return Err("group barrier, aggregate bindings or valuation domain differs".into());
+    }
+    Ok(())
+}
+
 fn compare(source: &Schedule, target: &Schedule) -> Result<(), String> {
     if source.head != target.head {
         return Err("output head differs from source".into());
@@ -1359,6 +1452,14 @@ fn compare(source: &Schedule, target: &Schedule) -> Result<(), String> {
         })
     {
         return Err("atom occurrence multiset differs from source".into());
+    }
+    if source
+        .nodes
+        .iter()
+        .chain(&target.nodes)
+        .any(|node| matches!(node.kind, Kind::Group(_)))
+    {
+        return compare_groups(source, target);
     }
     if source
         .nodes
@@ -1612,4 +1713,115 @@ pub(super) fn check_reduction_rewrite(
     schedule: &Schedule,
 ) -> bool {
     reductions::check(source, target, schedule)
+}
+
+#[cfg(test)]
+mod group_tests {
+    use super::*;
+
+    fn grouped(valuation: &[&str], group: cq_syntax::algebra::Group) -> Schedule {
+        let mut schedule = Schedule::default();
+        let input = schedule.atom(
+            0,
+            &syn::parse_quote!(R),
+            &[
+                (syn::parse_quote!(a), syn::parse_quote!(key)),
+                (syn::parse_quote!(b), syn::parse_quote!(value)),
+                (syn::parse_quote!(c), syn::parse_quote!(witness)),
+            ],
+            None,
+        );
+        let attributes: Vec<Ident> = valuation
+            .iter()
+            .map(|name| Ident::new(name, proc_macro2::Span::call_site()))
+            .collect();
+        let input = schedule.project(input, &attributes);
+        let output = schedule.group(input, &group);
+        schedule.finish(output, &syn::parse_quote!(Out(key, total)));
+        schedule
+    }
+
+    #[test]
+    fn unchanged_group_retains_complete_distinct_valuation() {
+        let source = grouped(
+            &["key", "value", "witness"],
+            syn::parse_quote!(group input by [key] { total: i32 = sum(value); }),
+        );
+        assert!(source.check(&source, &[]).is_ok());
+        let projected = grouped(
+            &["key", "value"],
+            syn::parse_quote!(group input by [key] { total: i32 = sum(value); }),
+        );
+        assert!(source.check(&projected, &[]).is_err());
+        assert!(projected.check(&source, &[]).is_err());
+    }
+
+    #[test]
+    fn group_rejects_changed_keys_kind_argument_or_type() {
+        let source = grouped(
+            &["key", "value", "witness"],
+            syn::parse_quote!(group input by [key] { total: i32 = sum(value); }),
+        );
+        for group in [
+            syn::parse_quote!(group input by [] { total: i32 = sum(value); }),
+            syn::parse_quote!(group input by [key] { total: usize = count(); }),
+            syn::parse_quote!(group input by [key] { total: i32 = sum(witness); }),
+            syn::parse_quote!(group input by [key] { total: i64 = sum(value); }),
+        ] {
+            let target = grouped(&["key", "value", "witness"], group);
+            assert!(source.check(&target, &[]).is_err());
+        }
+    }
+
+    #[test]
+    fn group_accepts_equivalent_set_reordering_below_barrier() {
+        let mut source = Schedule::default();
+        let left = source.atom(
+            0,
+            &syn::parse_quote!(R),
+            &[(syn::parse_quote!(a), syn::parse_quote!(key))],
+            None,
+        );
+        let right = source.atom(
+            1,
+            &syn::parse_quote!(S),
+            &[(syn::parse_quote!(b), syn::parse_quote!(value))],
+            None,
+        );
+        let mut target = source.clone();
+        let source_input = source.join(left, right, false);
+        let target_input = target.join(right, left, false);
+        let group = syn::parse_quote!(group input by [key] { total: i32 = sum(value); });
+        let source_output = source.group(source_input, &group);
+        let target_output = target.group(target_input, &group);
+        source.finish(source_output, &syn::parse_quote!(Out(key, total)));
+        target.finish(target_output, &syn::parse_quote!(Out(key, total)));
+        assert!(source.check(&target, &[]).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod global_group_tests {
+    use super::*;
+
+    #[test]
+    fn global_count_is_not_a_projection_or_a_count_of_arguments() {
+        let mut source = Schedule::default();
+        let input = source.atom(
+            0,
+            &syn::parse_quote!(R),
+            &[(syn::parse_quote!(a), syn::parse_quote!(value))],
+            None,
+        );
+        let mut target = source.clone();
+        let group = syn::parse_quote!(group input by [] { total: usize = count(); });
+        let output = source.group(input, &group);
+        source.finish(output, &syn::parse_quote!(Out(total)));
+        assert!(source.check(&source, &[]).is_ok());
+
+        let projected = target.project(input, &[]);
+        let output = target.group(projected, &group);
+        target.finish(output, &syn::parse_quote!(Out(total)));
+        assert!(source.check(&target, &[]).is_err());
+    }
 }

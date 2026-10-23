@@ -13,6 +13,8 @@
 
 //! IX preserves union/anti and block paths.
 //! Anti requests membership on its exact F heading, while union streams each operand without adding an index demand.
+//! Group retains the complete RA valuation domain and introduces no index demand;
+//! its canonical input and key-unique output are realized by Physical.
 //!
 //! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
 //! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free

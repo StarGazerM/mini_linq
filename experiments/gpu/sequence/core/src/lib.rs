@@ -3,6 +3,7 @@
 use cq_lang_sequence::{LevelNode, Machine};
 
 mod emit;
+pub mod layout;
 mod reduce;
 mod rows;
 
@@ -14,26 +15,31 @@ pub fn machine() -> Machine {
     Machine {
         name: syn::parse_quote!(gpu),
         items: 4,
+        layout: Some(layout::shared_bytes),
         root: LevelNode {
             name: syn::parse_quote!(host),
             collaborative: false,
             dynamic: false,
             width: None,
+            shared_bytes: None,
             children: vec![LevelNode {
                 name: syn::parse_quote!(device),
                 collaborative: false,
                 dynamic: true,
                 width: None,
+                shared_bytes: None,
                 children: vec![LevelNode {
                     name: syn::parse_quote!(block),
                     collaborative: true,
                     dynamic: false,
                     width: Some(256),
+                    shared_bytes: Some(101_376),
                     children: vec![LevelNode {
                         name: syn::parse_quote!(lane),
                         collaborative: false,
                         dynamic: false,
                         width: None,
+                        shared_bytes: None,
                         children: vec![],
                     }],
                 }],
@@ -51,7 +57,6 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
     use cq_lang_sequence::{CanonToken, Capability, Catalog, CodecToken, ProviderToken};
 
     let levels = vec![
-        vec!["host".into()],
         vec!["host".into(), "device".into()],
         vec!["host".into(), "device".into(), "block".into()],
         vec![
@@ -67,9 +72,14 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
                 ty: syn::parse_quote!(::cq_gpu_sequence_runtime::RangeProvider),
                 capabilities: vec![Capability::Exact, Capability::Range, Capability::Membership],
                 elements: Some(vec![
-                    syn::parse_quote!(i8), syn::parse_quote!(i16), syn::parse_quote!(i32),
-                    syn::parse_quote!(i64), syn::parse_quote!(u8), syn::parse_quote!(u16),
-                    syn::parse_quote!(u32), syn::parse_quote!(bool),
+                    syn::parse_quote!(i8),
+                    syn::parse_quote!(i16),
+                    syn::parse_quote!(i32),
+                    syn::parse_quote!(i64),
+                    syn::parse_quote!(u8),
+                    syn::parse_quote!(u16),
+                    syn::parse_quote!(u32),
+                    syn::parse_quote!(bool),
                 ]),
                 levels: levels.clone(),
             },
@@ -88,12 +98,14 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
         .map(|ty| CodecToken {
             ty,
             ordered: true,
-            levels: levels.clone(),
+            levels: std::iter::once(vec!["host".into()])
+                .chain(levels.iter().cloned())
+                .collect(),
         })
         .collect(),
         canons: vec![CanonToken {
             ty: syn::parse_quote!(::cq_gpu_sequence_runtime::canon::PackedCanon),
-            levels: levels[..2].to_vec(),
+            levels: levels.clone(),
             max_packed_bits: Some(128),
         }],
     }

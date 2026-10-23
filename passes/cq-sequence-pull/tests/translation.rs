@@ -90,6 +90,49 @@ fn run(source: TokenStream) {
     runtime.run(&source.to_string());
 }
 
+#[test]
+fn deliberately_false_evidence_preserves_generated_code_and_answers() {
+    let structures = pipeline(quote! {
+        struct Query;
+        relation R(a:i32,b:i32);
+        relation S(a:i32);
+        answer(a,b) :- R(a,b), S(a);
+    });
+    let source = cq_sequence_lowering::compile(&structures).unwrap();
+    let mut advised = source.clone();
+    advised.evidence = syn::parse_quote! {
+        evidence {
+            count R = 0;
+            key R [a];
+            foreign_key R [a] -> S [a];
+            selectivity R = 0 / 1;
+            bounds R.a = 100 ..= 200;
+            sorted R [a];
+        }
+    };
+    cq_lang_sequence::check_rewrite(&source, &advised).unwrap();
+    let original =
+        cq_sequence_pull::translate(&source, &contract::check(&source).unwrap()).unwrap();
+    let estimated =
+        cq_sequence_pull::translate(&advised, &contract::check(&advised).unwrap()).unwrap();
+    assert_eq!(
+        original, estimated,
+        "evidence must not alter execution premises"
+    );
+    run(quote! {
+        fn main() {
+            let R = vec![(2i32, 20i32), (1, 10), (1, 11), (9, 90), (1, 10)];
+            let S = vec![(1i32,), (2,)];
+            let original: ::std::collections::BTreeSet<_> = (#original).into_iter().collect();
+            let estimated: ::std::collections::BTreeSet<_> = (#estimated).into_iter().collect();
+            let expected: ::std::collections::BTreeSet<_> =
+                [(&1i32, &10i32), (&1, &11), (&2, &20)].into_iter().collect();
+            assert_eq!(original, expected);
+            assert_eq!(estimated, expected);
+        }
+    });
+}
+
 fn simple(body: TokenStream) -> Program {
     let physical = syn::parse_quote! {
         physical {
@@ -102,6 +145,7 @@ fn simple(body: TokenStream) -> Program {
         structures: cq_structure_selection::compile(&physical).unwrap(),
         sequence: syn::parse2(quote!(sequence { #body })).unwrap(),
         graded: None,
+        evidence: Default::default(),
     }
 }
 
@@ -188,6 +232,7 @@ fn stored_row_lookup_uses_exact_buckets_without_range_cursor() {
             out = store canon expanded;
         }),
         graded: None,
+        evidence: Default::default(),
     };
     let analysis = contract::check(&program).unwrap();
     assert_eq!(

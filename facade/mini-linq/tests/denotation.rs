@@ -4,15 +4,17 @@ use quote::quote;
 #[test]
 fn every_planner_keeps_partial_steps_in_their_written_domain() {
     let machine = cq_lang_sequence::Machine {
-     name: syn::parse_quote!(sequential),
-     items: 1,
-     root: cq_lang_sequence::LevelNode {
-      name: syn::parse_quote!(host),
-      collaborative: false,
-      dynamic: false,
-      width: None,
-      children: vec![],
-     },
+        layout: None,
+        name: syn::parse_quote!(sequential),
+        items: 1,
+        root: cq_lang_sequence::LevelNode {
+            shared_bytes: None,
+            name: syn::parse_quote!(host),
+            collaborative: false,
+            dynamic: false,
+            width: None,
+            children: vec![],
+        },
     };
     let queries: [(&str, proc_macro2::TokenStream); 3] = [
         (

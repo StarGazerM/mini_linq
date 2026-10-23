@@ -42,7 +42,17 @@
 //! its existing recognition. Only differing literals on one interface column
 //! prove union arms disjoint; no data keys or constraints are assumed.
 //!
+//! A single rule head may use `count()`, `sum(e)`, `min(e)` or `max(e)`.
+//! Other head variables are ordered group keys. Result declarations are
+//! required: count is `usize`, sum is `T`, and extrema are `Option<T>`.
+//! Normalization records `group [valuation] by [keys] { name: Type = fold(e); }`
+//! before the rule terminator and replaces head folds with fresh result names.
+//! The valuation retains every named body binder, not anonymous witnesses;
+//! argument lets remain at the end of the written Rust chain. All folds consume
+//! that same DISTINCT valuation set, preserving equal-valued argument multiplicity.
+//!
 pub mod blocks;
+pub mod group;
 pub mod hypergraph;
 pub mod normal;
 pub use blocks::{Block, Branch};
@@ -83,6 +93,23 @@ impl syn::parse::Parse for Program {
             queries.push(input.parse()?);
         }
         if queries.len() > 1 {
+            for query in &queries {
+                if query.group.is_some()
+                    || query
+                        .head
+                        .args
+                        .iter()
+                        .map(group::aggregate)
+                        .collect::<syn::Result<Vec<_>>>()?
+                        .iter()
+                        .any(Option::is_some)
+                {
+                    return Err(syn::Error::new_spanned(
+                        &query.head,
+                        "grouped heads require a single rule; aggregate scope across multiple rules is not defined",
+                    ));
+                }
+            }
             sugar::combine(&mut program, queries)?;
         }
         Ok(program)
@@ -140,6 +167,7 @@ pub struct Query {
     pub colon_token: Token![:],
     pub minus_token: Token![-],
     pub body: CommaList<BodyItem>,
+    pub group: Option<group::HeadGroup>,
     pub semi_token: Token![;],
 }
 
@@ -150,6 +178,11 @@ impl syn::parse::Parse for Query {
             colon_token: input.parse()?,
             minus_token: input.parse()?,
             body: CommaList::parse_separated_nonempty(input)?,
+            group: if input.peek(cq_syntax::algebra::kw::group) {
+                Some(input.parse()?)
+            } else {
+                None
+            },
             semi_token: input.parse()?,
         };
         // Scope is determined by binders, never by identifiers in predicates.
@@ -162,6 +195,13 @@ impl syn::parse::Parse for Query {
 }
 
 impl Query {
+    /// Columns whose complete valuations must survive logical planning.
+    pub fn valuation_variables(&self) -> impl Iterator<Item = &Ident> {
+        self.group
+            .iter()
+            .flat_map(|group| group.valuation.iter())
+            .chain(self.head.variables().filter(move |_| self.group.is_none()))
+    }
     /// The positive, distinct-variable/literal fragment accepted by the basic route.
     pub fn is_basic(&self) -> bool {
         let bound: BTreeSet<_> = self
@@ -171,7 +211,8 @@ impl Query {
             .flat_map(Atom::variables)
             .map(symbol_name)
             .collect();
-        self.head.is_normalized()
+        self.group.is_none()
+            && self.head.is_normalized()
             && self.head.variables().count() == self.head.args.len()
             && self
                 .head
@@ -256,7 +297,11 @@ impl syn::parse::Parse for BodyItem {
                 "an atom, `if` Rust guard, `let` binding, `for` generator, or extension",
             ));
         };
-        if !input.is_empty() && !input.peek(Token![,]) && !input.peek(Token![;]) {
+        if !input.is_empty()
+            && !input.peek(Token![,])
+            && !input.peek(Token![;])
+            && !input.peek(cq_syntax::algebra::kw::group)
+        {
             return Err(cq_syntax::constraint::unexpected(
                 input,
                 "`,` or `;` after a CQ body item",
@@ -420,6 +465,34 @@ fn check_program(program: &Program) -> syn::Result<()> {
         }
     }
     check_query(&schema, &program.query, program.output().is_some())?;
+    if let Some(group) = &program.query.group {
+        group.check(program)?;
+    } else {
+        let mut grouped = false;
+        for expression in &program.query.head.args {
+            grouped |= group::aggregate(expression)?.is_some();
+        }
+        if grouped {
+            if program.output().is_none() {
+                return Err(syn::Error::new_spanned(
+                    &program.query.head,
+                    "aggregated output requires a result declaration",
+                ));
+            }
+            let bound = blocks::bound(&program.query.body);
+            for expression in &program.query.head.args {
+                if group::aggregate(expression)?.is_none()
+                    && !rust::variable(expression)
+                        .is_some_and(|v| bound.contains_key(&symbol_name(v)))
+                {
+                    return Err(syn::Error::new_spanned(
+                        expression,
+                        "group keys must be named body variables",
+                    ));
+                }
+            }
+        }
+    }
     if program.output().is_none() {
         let types = blocks::types(&schema, &program.query.body, &BTreeMap::new())?;
         for arg in &program.query.head.args {

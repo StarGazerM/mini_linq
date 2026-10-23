@@ -648,6 +648,81 @@ pub fn compile(source: &cq::Program, options: &Options) -> syn::Result<valuation
     Ok(program)
 }
 
+/// Author a coarse top-level relation order without rewriting the query.
+/// Every named relation must occur exactly once at this level. Unnamed clauses
+/// retain written priority after the named relations; opaque Rust still obeys
+/// the ordinary readiness and Before contract. Nested blocks keep written order.
+pub fn compile_explicit(
+    source: &cq::Program,
+    relations: &[syn::Ident],
+) -> syn::Result<valuation::Program> {
+    cq::normal::check(source)?;
+    let context = BTreeSet::new();
+    let clauses = clauses(&source.query.body, &context);
+    let mut priorities = BTreeMap::new();
+    for (priority, relation) in relations.iter().enumerate() {
+        let occurrences: Vec<_> = source
+            .query
+            .body
+            .iter()
+            .enumerate()
+            .filter_map(|(i, item)| {
+                matches!(item, BodyItem::Positive { atom } if atom.relation == *relation)
+                    .then_some(i)
+            })
+            .collect();
+        if occurrences.len() != 1 {
+            return Err(syn::Error::new_spanned(
+                relation,
+                "order advice needs one top-level occurrence",
+            ));
+        }
+        if priorities.insert(occurrences[0], priority).is_some() {
+            return Err(syn::Error::new_spanned(
+                relation,
+                "duplicate relation in order advice",
+            ));
+        }
+    }
+    let sequence = schedule(&source.query, &clauses, &context, |clause, _| {
+        (
+            clauses[clause].is_atom(),
+            false,
+            priorities
+                .get(&clause)
+                .copied()
+                .unwrap_or(relations.len() + clause),
+            clause,
+        )
+    })?;
+    if !sequence
+        .iter()
+        .filter_map(|clause| priorities.get(clause).copied())
+        .eq(0..relations.len())
+    {
+        return Err(syn::Error::new_spanned(
+            &source.query,
+            "order advice conflicts with clause dependencies",
+        ));
+    }
+    let mut program = compile(source, &Options::default())?;
+    // Coarse emits exactly one step per source clause, including block steps.
+    let mut steps: Vec<_> = program.valuation.steps.into_iter().map(Some).collect();
+    program.valuation.steps = sequence
+        .into_iter()
+        .map(|i| steps[i].take().unwrap())
+        .collect();
+    check(
+        source,
+        &program,
+        &Options {
+            heuristic: Heuristic::Prefix(Ranking::Connected),
+            split: Split::Coarse,
+        },
+    )?;
+    Ok(program)
+}
+
 fn compile_body(
     source: &cq::Program,
     options: &Options,

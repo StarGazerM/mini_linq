@@ -197,7 +197,7 @@ pub fn representation_bases(program: &Program, facts: &Analysis) -> BTreeMap<Str
             Operator::Bind(bind) => of(&bind.input),
             Operator::Guard(guard) => of(&guard.input),
             Operator::Anti(_, keyed) => of(&keyed.left),
-            Operator::Unit(_) | Operator::Union(_) => Vec::new(),
+            Operator::Unit(_) | Operator::Union(_) | Operator::Group(_) => Vec::new(),
         };
         for origin in &mut origins {
             origin.columns.retain(|column, _| {

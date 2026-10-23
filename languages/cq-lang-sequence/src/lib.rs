@@ -2,8 +2,10 @@
 //!
 //! A program appends `sequence { name = term; ... }` and an optional
 //! `graded machine { name at level.path; ... }` to a complete Structures program.
+//! Optional `evidence { ... }` records untrusted estimates for checked planning,
+//! never premises for correctness; see [`Evidence`] and [`EvidenceFact`].
 //! Terms are prefix forms: `rows`, `map`, `flatten`, `compact`, `tile`, `lookup`,
-//! `fold`, `canon`, `store`, `union` and `choose`, or references to earlier definitions.
+//! `fold`, `group`, `canon`, `store`, `union` and `choose`, or references to earlier definitions.
 //! Constructor names are also valid references when followed by a term boundary.
 //! A store may declare `store capacity N term`; the optional final sequence
 //! statement `output count;`, `output reserve;` or `output bounded;` selects the
@@ -19,10 +21,13 @@ use syn::punctuated::Punctuated;
 use syn::{Ident, LitInt, Token, braced, bracketed};
 
 pub mod contract;
+mod evidence;
 mod grading;
+mod resources;
 
 pub use contract::check_rewrite;
 pub use cq_lang_structures as structures;
+pub use evidence::{Evidence, EvidenceFact, Selectivity};
 pub use grading::check_grading;
 
 mod kw {
@@ -37,6 +42,7 @@ mod kw {
     syn::custom_keyword!(items);
     syn::custom_keyword!(lookup);
     syn::custom_keyword!(fold);
+    syn::custom_keyword!(group);
     syn::custom_keyword!(canon);
     syn::custom_keyword!(store);
     syn::custom_keyword!(capacity);
@@ -56,6 +62,7 @@ pub struct Program {
     pub structures: cq_lang_structures::Program,
     pub sequence: Sequence,
     pub graded: Option<Graded>,
+    pub evidence: Evidence,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -87,6 +94,8 @@ pub enum Term {
         inner: Box<Term>,
     },
     Fold(Monoid, Box<Term>),
+    /// Host segmented fold over the complete distinct Physical input valuation.
+    Group(Ident, Box<Term>),
     Canon(Box<Term>),
     Store {
         capacity: Option<usize>,
@@ -136,12 +145,15 @@ pub struct Grade {
 }
 
 /// A target-supplied machine tree, not an additional language construct.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct Machine {
     pub name: Ident,
     /// Preferred per-lane item count; the planner also considers one item.
     pub items: usize,
     pub root: LevelNode,
+    /// Target-owned storage layout for one checked dispatch's resource demands.
+    /// The language derives the shape; the machine alone assigns byte sizes.
+    pub layout: Option<fn(&DispatchShape) -> syn::Result<usize>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -151,7 +163,43 @@ pub struct LevelNode {
     pub dynamic: bool,
     /// Fixed distributing width, or `None` for dynamically sized levels.
     pub width: Option<usize>,
+    /// Available shared bytes for a collective at this level, if bounded.
+    pub shared_bytes: Option<usize>,
     pub children: Vec<LevelNode>,
+}
+
+/// Checked column facts supplied to a target's resource layout model.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResourceColumn {
+    pub name: String,
+    pub types: Vec<syn::Type>,
+    pub coded: bool,
+}
+
+/// Ordered lifetime demands, without a target's alignment or byte constants.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ResourceAllocation {
+    Payload { parents: Vec<ResourceColumn> },
+    Fold,
+}
+
+/// Resource-relevant structure of one checked dispatch, including every arm.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DispatchShape {
+    pub publication: String,
+    pub level: Vec<String>,
+    pub width: Option<usize>,
+    pub tile: Option<usize>,
+    pub items: usize,
+    pub chains: Vec<Vec<ResourceAllocation>>,
+}
+
+/// A resource obligation discharged against the target-supplied layout model.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResourceUsage {
+    pub shape: DispatchShape,
+    pub required_bytes: usize,
+    pub capacity_bytes: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -166,7 +214,8 @@ pub enum Capability {
 ///
 /// Catalogs contain syntax and capabilities only, never target implementations.
 /// Candidate order breaks ties. Levels are explicit absolute machine paths;
-/// an empty level list permits no execution level.
+/// an empty level list permits no read. Provider levels govern consumption,
+/// not construction: building from host rows does not license host reads.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Catalog {
     pub providers: Vec<ProviderToken>,
@@ -174,7 +223,7 @@ pub struct Catalog {
     pub canons: Vec<CanonToken>,
 }
 
-/// An authored provider type supported at the listed execution levels.
+/// An authored provider type whose reads are supported at the listed levels.
 ///
 /// In token patterns, `_` matches any type or const argument and `'_` any lifetime.
 /// Matching never replaces the author's provider type.
@@ -275,9 +324,12 @@ pub struct Analysis {
     pub capabilities: BTreeMap<(String, Vec<String>), Capability>,
     pub levels: BTreeMap<String, Vec<String>>,
     pub dispatches: Vec<Dispatch>,
+    pub resources: BTreeMap<String, ResourceUsage>,
     pub collectives: Vec<(String, Monoid, Vec<String>)>,
     pub output: Option<(String, OutputProtocol)>,
     pub obligations: Vec<Obligation>,
+    /// Untrusted planning advice, separate from checked facts and obligations.
+    pub evidence: Evidence,
 }
 
 impl Parse for Program {
@@ -290,6 +342,11 @@ impl Parse for Program {
             } else {
                 None
             },
+            evidence: if input.peek(evidence::kw::evidence) {
+                input.parse()?
+            } else {
+                Evidence::default()
+            },
         })
     }
 }
@@ -300,8 +357,10 @@ impl ToTokens for Program {
             structures,
             sequence,
             graded,
+            evidence,
         } = self;
-        tokens.extend(quote! { #structures #sequence #graded });
+        let evidence = (!evidence.facts.is_empty()).then_some(evidence);
+        tokens.extend(quote! { #structures #sequence #graded #evidence });
     }
 }
 
@@ -423,6 +482,9 @@ impl Parse for Term {
         } else if input.peek(kw::fold) {
             input.parse::<kw::fold>()?;
             Ok(Self::Fold(input.parse()?, input.parse()?))
+        } else if input.peek(kw::group) {
+            input.parse::<kw::group>()?;
+            Ok(Self::Group(input.parse()?, input.parse()?))
         } else if input.peek(kw::canon) {
             input.parse::<kw::canon>()?;
             Ok(Self::Canon(input.parse()?))
@@ -483,6 +545,7 @@ impl ToTokens for Term {
                 quote! { lookup #provider [#(#keys),*] #inner }
             }
             Self::Fold(monoid, inner) => quote! { fold #monoid #inner },
+            Self::Group(name, inner) => quote! { group #name #inner },
             Self::Canon(inner) => quote! { canon #inner },
             Self::Store { capacity, inner } => {
                 let capacity = capacity.map(|n| {

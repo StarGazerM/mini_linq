@@ -128,6 +128,13 @@ pub(super) fn carried_columns(
                 used.get_mut(&symbol_name(&k.right)).unwrap().extend(keys);
             }
             Operator::Project(p) => demand(&p.input, BTreeSet::new()),
+            Operator::Group(group) => demand(
+                &group.input,
+                analysis.layouts[&symbol_name(&group.input)]
+                    .iter()
+                    .cloned()
+                    .collect(),
+            ),
             Operator::Union(u) => {
                 for operand in &u.operands {
                     demand(operand, BTreeSet::new());

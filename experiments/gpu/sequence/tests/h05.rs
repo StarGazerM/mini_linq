@@ -180,7 +180,15 @@ impl<'ast> Visit<'ast> for NoQueryConstants {
                 | syn::BinOp::Le(_)
                 | syn::BinOp::Gt(_)
                 | syn::BinOp::Ge(_)
-        ) {
+        ) && ![&*expression.left, &*expression.right]
+            .iter()
+            .any(|operand| {
+                // Generated runtime parameters describe provider plumbing, not
+                // query predicates (for example key lanes and packing shifts).
+                matches!(operand, syn::Expr::Path(path)
+                    if path.path.get_ident().is_some_and(|ident| ident.to_string().starts_with("__cq_")))
+            })
+        {
             for operand in [&*expression.left, &*expression.right] {
                 if let syn::Expr::Lit(syn::ExprLit {
                     lit: syn::Lit::Int(literal),

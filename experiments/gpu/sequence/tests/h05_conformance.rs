@@ -5,7 +5,8 @@
 
 use cq_gpu_runtime::{DeviceColumns, Pool};
 use cq_testkit::conformance::assert_answers_equal;
-use gpu_compress::{Catalog, Source, tpch::schema};
+use gpu_compress::{Catalog, Source};
+use gpu_compress_host::tpch::schema;
 use std::{error::Error, path::Path};
 
 #[allow(dead_code)]

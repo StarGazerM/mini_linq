@@ -655,6 +655,7 @@ version = "0.1.0"
 dependencies = [
  "cq-lang-sequence",
  "cq-rewrite-passes",
+ "cq-sequence-lowering",
  "cq-syntax",
  "proc-macro2",
  "quote",

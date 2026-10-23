@@ -20,6 +20,24 @@
 //! `mini_linq::passes::plan(target::plan)` (for Sequential, the target is
 //! `mini_linq::passes::plan_sequential`). Earlier advice retains precedence;
 //! the target-owned macro supplies its exported machine and catalog.
+//! With a complete Sequence program as input, `compile!` starts at Sequence
+//! planning instead: `plan = ::mini_linq::passes::plan` preserves authored order
+//! with Sequential decomposition, while `plan = ::other::custom_plan` selects an ordinary
+//! checked Sequence pass implementing `cq_sequence_plan::Planner`. That pass
+//! supplies its machine/catalog and returns a program with a replayable advice
+//! trace; evidence is planning advice, never a semantic premise. `decompose`
+//! advice runs before planning, then `grade` and `print` consume the result.
+//! Earlier lowering phases are rejected for complete Sequence input.
+//! With CQ input, `plan` retains its CQ-to-RA ordering/reduction meaning;
+//! `plan(order(R, S), no_reduce)` selects an explicit checked relation order.
+//! `plan(target::plan)` remains available in either Sequence planning position.
+//! The CQ default pipeline performs no automatic Sequence planning, so a named
+//! CQ ordering pass retains its authored order. Explicit Sequence planning also
+//! preserves that order by default. `plan(lookup_first)` or
+//! `plan_sequential(lookup_first)` opts into automatic Lookup-first ordering,
+//! pending box 11b. Target adapters use
+//! `cq_sequence_plan::decompose(program, machine, catalog)` to preserve order;
+//! the explicit `cq_sequence_plan::plan` API opts into relational ordering.
 //! An explicit Structures printer such as `own_push::push` replaces the default
 //! Sequence target; custom Sequence terminals select `sequence` and `grade` too.
 //! ```
@@ -48,8 +66,8 @@ pub use mini_linq_macros::{compile, mini_linq, relation_loaders, workload_query}
 /// Core default passes. Customization is an external pass or an authored IR.
 pub mod passes {
     pub use mini_linq_macros::{
-        index_demands, lower, plan, plan_sequential, represent, select, sequence, sequential, stage,
-        translate_pull,
+        index_demands, lower, plan, plan_sequential, represent, select, sequence, sequential,
+        stage, translate_pull,
     };
 }
 

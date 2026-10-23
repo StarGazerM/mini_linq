@@ -3,6 +3,145 @@
 use super::*;
 
 impl<'a> Printer<'a> {
+    /// Consume every canonical valuation before publishing any group result.
+    /// Equal argument values from different valuations contribute separately.
+    fn group(&mut self, name: &str, group: &cq::algebra::Group) -> syn::Result<TokenStream> {
+        use cq::algebra::AggregateKind;
+        let input = self.scan(&group.input)?;
+        let input_name = symbol_name(&group.input);
+        let pattern = self.bind_columns(&input_name, self.carried(&input_name), false);
+        let state = format_ident!("__cq_group_state", span = proc_macro2::Span::mixed_site());
+        let table = format_ident!("__cq_groups", span = proc_macro2::Span::mixed_site());
+        let keys = format_ident!("__cq_group_keys", span = proc_macro2::Span::mixed_site());
+        let key_values: Vec<_> = group
+            .keys
+            .iter()
+            .map(|key| self.access(&input_name, &symbol_name(key)))
+            .collect();
+        let types: Vec<_> = group
+            .aggregates
+            .iter()
+            .map(|aggregate| &aggregate.ty)
+            .collect();
+        let identities: Vec<_> = group
+            .aggregates
+            .iter()
+            .map(|aggregate| match aggregate.kind {
+                AggregateKind::Count => quote!(0usize),
+                AggregateKind::Sum => {
+                    let ty = &aggregate.ty;
+                    quote!(<#ty as ::core::default::Default>::default())
+                }
+                AggregateKind::Min | AggregateKind::Max => quote!(::core::option::Option::None),
+            })
+            .collect();
+        let mut arguments = Vec::new();
+        let mut updates = Vec::new();
+        for (i, aggregate) in group.aggregates.iter().enumerate() {
+            let field = syn::Index::from(i);
+            if aggregate.kind == AggregateKind::Count {
+                updates.push(quote!(#state.#field += 1usize;));
+                continue;
+            }
+            let expression = aggregate
+                .expression
+                .as_ref()
+                .expect("checked aggregate argument");
+            let syn::Expr::Path(path) = expression else {
+                return error(
+                    expression,
+                    "aggregate argument must be a normalized variable",
+                );
+            };
+            let column = symbol_name(path.path.get_ident().expect("checked variable"));
+            let value = self.access(&input_name, &column);
+            let borrowed = !self.infos[&input_name].computed.contains(&column);
+            let reused = group.keys.iter().any(|key| symbol_name(key) == column)
+                || group.aggregates[i + 1..].iter().any(|later| {
+                    later
+                        .expression
+                        .as_ref()
+                        .and_then(cq::rust::variable)
+                        .is_some_and(|variable| symbol_name(variable) == column)
+                });
+            let value = if !borrowed && reused {
+                quote!(::core::clone::Clone::clone(&#value))
+            } else {
+                value
+            };
+            let argument = format_ident!(
+                "__cq_group_argument_{}",
+                i,
+                span = proc_macro2::Span::mixed_site()
+            );
+            arguments.push(quote!(let #argument = #value;));
+            let owned = if borrowed {
+                quote!(::core::clone::Clone::clone(#argument))
+            } else {
+                quote!(#argument)
+            };
+            updates.push(match aggregate.kind {
+                AggregateKind::Sum => quote!(#state.#field += #owned;),
+                AggregateKind::Min | AggregateKind::Max => {
+                    let previous = if borrowed {
+                        quote!(__cq_previous)
+                    } else {
+                        quote!(*__cq_previous)
+                    };
+                    let comparison = if aggregate.kind == AggregateKind::Min {
+                        quote!(#argument < #previous)
+                    } else {
+                        quote!(#argument > #previous)
+                    };
+                    quote! {
+                        if #state.#field.as_ref().is_none_or(|__cq_previous| #comparison) {
+                            #state.#field = ::core::option::Option::Some(#owned);
+                        }
+                    }
+                }
+                AggregateKind::Count => unreachable!(),
+            });
+        }
+        let row = self.carrier(name, |column| {
+            if let Some(i) = group.keys.iter().position(|key| symbol_name(key) == column) {
+                let field = syn::Index::from(i);
+                quote!(#keys.#field)
+            } else {
+                let field = syn::Index::from(
+                    group
+                        .aggregates
+                        .iter()
+                        .position(|aggregate| symbol_name(&aggregate.name) == column)
+                        .expect("checked group output"),
+                );
+                quote!(#state.#field)
+            }
+        });
+        if group.keys.is_empty() {
+            return Ok(quote!({
+                let mut #state: (#(#types,)*) = (#(#identities,)*);
+                for #pattern in #input {
+                    #(#arguments)*
+                    #(#updates)*
+                }
+                ::core::iter::once(#row)
+            }));
+        }
+        Ok(quote!({
+            let mut #table: ::std::collections::HashMap<_, (#(#types,)*)> =
+                ::std::collections::HashMap::new();
+            for #pattern in #input {
+                #(#arguments)*
+                let #state = #table.entry((#(#key_values,)*))
+                    .or_insert_with(|| (#(#identities,)*));
+                #(#updates)*
+            }
+            ::core::iter::Iterator::map(
+                ::core::iter::IntoIterator::into_iter(#table),
+                |(#keys, #state)| #row,
+            )
+        }))
+    }
     fn arm_row(&self, name: &str, operand: &str) -> TokenStream {
         self.carrier(name, |column| {
             let value = self.access(operand, column);
@@ -262,6 +401,7 @@ impl<'a> Printer<'a> {
             Operator::Union(union) => self.union(name, union),
             Operator::Anti(_, keyed) => self.membership(keyed, true),
             Operator::Unit(_) => Ok(quote!(::core::iter::once(()))),
+            Operator::Group(group) => self.group(name, group),
             Operator::Rename(_) => Ok(self.host_scan(name)),
             Operator::Select(select) => {
                 let input = self.scan(&select.input)?;

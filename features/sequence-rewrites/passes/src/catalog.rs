@@ -6,12 +6,12 @@ use structures::{Structure, physical::Operator};
 /// Replace built provider types with the first catalog token satisfying all of
 /// their read obligations. Entry order and catalog order are significant.
 ///
-/// Structures has no machine grading: its publication level is `host`. Later
-/// Sequence planning checks the selected types at every actual execution level.
+/// Catalog levels constrain reads, not construction. Structures has no machine
+/// grading; Sequence planning checks each selected type at its actual read levels.
 /// Host scan adapters are preserved. Unsupported keyed host reads are retained
 /// through `build_host_reads`; built indexes replace their keyed fallbacks.
 /// Unlike `plan`, this operation explicitly replaces recorded provider types.
-// Formal rule PL-Select: Retain unsupported host stream reads and select the first host-capable token satisfying every entry obligation through checked rewrites.
+// Formal rule PL-Select: Retain unsupported host stream reads and select the first token with legal read levels satisfying every entry obligation through checked rewrites.
 pub fn select_from_catalog(
     source: &structures::Program,
     catalog: &Catalog,
@@ -105,16 +105,16 @@ pub fn select_from_catalog(
             | Structure::Share { .. } => continue,
         };
         let ty = if kind == "canon" {
-            catalog.canons.iter().find(|token| at_host(&token.levels)).map(|token| &token.ty)
+            catalog.canons.iter().find(|token| !token.levels.is_empty()).map(|token| &token.ty)
         } else {
             catalog.providers.iter().find(|token| {
-                at_host(&token.levels)
+                !token.levels.is_empty()
                     && accepts_elements(token, &analysis, &name)
                     && required.iter().all(|capability| token.capabilities.contains(capability))
             }).map(|token| &token.ty)
         }.ok_or_else(|| syn::Error::new(
             entry.name.span(),
-            format!("PL-Select: structure `{name}` entry {index} ({kind}) has unmet catalog obligation {required:?} at host"),
+            format!("PL-Select: structure `{name}` entry {index} ({kind}) has unmet catalog read obligation {required:?}"),
         ))?;
         let index = syn::LitInt::new(&index.to_string(), entry.name.span());
         target =
@@ -200,7 +200,7 @@ fn retain_host_indexes(
             })).then(|| needed[&name].iter().cloned().collect::<Vec<_>>());
         if catalog.providers.iter().any(|token| {
             token.ty == keyed.ty
-                && at_host(&token.levels)
+                && !token.levels.is_empty()
                 && accepts_elements(token, &analysis, &name)
                 && required
                     .iter()
@@ -209,12 +209,12 @@ fn retain_host_indexes(
             continue;
         }
         let token = catalog.providers.iter().find(|token| {
-            at_host(&token.levels)
+            !token.levels.is_empty()
                 && accepts_columns(token, &analysis, &name, projected.as_deref().unwrap_or(&analysis.layouts[&name]))
                 && required.iter().all(|capability| token.capabilities.contains(capability))
         }).ok_or_else(|| syn::Error::new(
             entry.name.span(),
-            format!("PL-Select: structure `{name}` host read `{reader_name}` has unmet catalog obligation {required:?} at host"),
+            format!("PL-Select: structure `{name}` host adapter `{reader_name}` has unmet catalog read obligation {required:?}"),
         ))?;
         let build = &entry.name;
         if retained.insert(name.clone()) {
@@ -270,10 +270,4 @@ fn accepts_columns(
                 .any(|ty| matches!(ty, syn::Type::Infer(_)) || ty == actual)
         })
     })
-}
-
-fn at_host(levels: &[Vec<String>]) -> bool {
-    levels
-        .iter()
-        .any(|level| level.len() == 1 && level[0] == "host")
 }

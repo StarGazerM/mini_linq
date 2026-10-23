@@ -422,6 +422,10 @@ impl Push<'_> {
             return self.staged(result, self.analysis.stages[result], sink);
         }
         match &definition.operator {
+            Operator::Group(_) => error(
+                &definition.name,
+                "own_push: grouped folds require the Sequence pull or Tasks translation",
+            ),
             Operator::Union(union) => {
                 let mut body = Tokens::new();
                 for operand in &union.operands {

@@ -33,6 +33,9 @@
 //! The fused-block adapter executes arms from one prefix row for Sequence pull realization.
 //! Union chains arms lazily; fallback evaluates the next arm only when the earlier result is empty.
 //! Anti uses the recorded eager/lazy membership route and canon uses the recorded set provider.
+//! Group consumes canonical complete named valuations once into a host hash
+//! table, with one typed accumulator tuple per key. Global groups use a single
+//! accumulator without a table, so empty input still publishes the identities.
 //!
 //! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
 //! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free

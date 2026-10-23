@@ -582,3 +582,80 @@ fn cq_constant_only_negation_tests_matching_rows_not_global_emptiness() {
     .collect();
     assert!(present.is_empty());
 }
+
+#[test]
+fn named_sequence_planner_swaps_checked_policy_and_preserves_target_delegation() {
+    macro_rules! planned {
+        ($($planner:ident)::+ $(($($args:tt)*))?; $($output:tt)*) => {
+            mini_linq::compile! {
+                pipeline {
+                    plan = $($planner)::+ $(($($args)*))?;
+                    print = capture_plan;
+                }
+                physical {
+                    relation rows(x:i32);
+                    r = pipe canon rename rows@0 {x -> x};
+                    return r as answer(x);
+                }
+                structures {
+                    r host scan = ::core::iter::Map<_, _> [];
+                    r canon = ::std::collections::HashSet<_>;
+                }
+                sequence { result = store rows r; $($output)* }
+            }
+        };
+    }
+    let default: cq_lang_sequence::Program =
+        syn::parse_str(planned!(mini_linq::passes::plan;)).unwrap();
+    let custom: cq_lang_sequence::Program =
+        syn::parse_str(planned!(core_pass_fixtures::plan_reserve(expected);)).unwrap();
+    assert_eq!(
+        default.sequence.output,
+        Some(cq_lang_sequence::OutputProtocol::Count)
+    );
+    assert_eq!(
+        custom.sequence.output,
+        Some(cq_lang_sequence::OutputProtocol::Reserve)
+    );
+    cq_lang_sequence::check_rewrite(&default, &custom).unwrap();
+    cq_lang_sequence::check_grading(&custom, &cq_sequence_pull::machine()).unwrap();
+    let authored: cq_lang_sequence::Program =
+        syn::parse_str(planned!(core_pass_fixtures::plan_reserve(expected); output count;))
+            .unwrap();
+    assert_eq!(
+        authored.sequence.output,
+        Some(cq_lang_sequence::OutputProtocol::Count)
+    );
+    let delegated: cq_lang_sequence::Program =
+        syn::parse_str(planned!(mini_linq::passes::plan(mini_linq::passes::plan_sequential);))
+            .unwrap();
+    assert_eq!(delegated, default);
+    let preserved: cq_lang_sequence::Program =
+        syn::parse_str(planned!(mini_linq::passes::plan_sequential(preserve_order);)).unwrap();
+    assert_eq!(preserved, default);
+    let automatic: cq_lang_sequence::Program =
+        syn::parse_str(planned!(mini_linq::passes::plan(lookup_first);)).unwrap();
+    cq_lang_sequence::check_rewrite(&default, &automatic).unwrap();
+    cq_lang_sequence::check_grading(&automatic, &cq_sequence_pull::machine()).unwrap();
+
+    let rows = [(1,), (1,), (2,)];
+    let custom: Vec<_> = mini_linq::compile! {
+        pipeline { plan = core_pass_fixtures::plan_reserve(expected); }
+        physical {
+            relation rows(x:i32);
+            r = pipe canon rename rows@0 {x -> x};
+            return r as answer(x);
+        }
+        structures {
+            r host scan = ::core::iter::Map<_, _> [];
+            r canon = ::std::collections::HashSet<_>;
+        }
+        sequence { result = store canon rows r; }
+    }
+    .collect();
+    let default: Vec<_> = mini_linq::mini_linq! {
+        struct Q; relation rows(x:i32); answer(x) :- rows(x);
+    }
+    .collect();
+    assert_eq!(custom, default);
+}

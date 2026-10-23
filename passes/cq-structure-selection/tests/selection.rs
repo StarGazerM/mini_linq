@@ -5,6 +5,70 @@ use cq_testkit::corpus as scenarios;
 use quote::ToTokens;
 
 #[test]
+fn grouped_folds_keep_complete_valuations_and_infer_only_the_group_key() {
+    let source: physical::Program = syn::parse_quote! { physical {
+        relation R(k:i32,id:i32,v:i32);
+        relation answer(k:i32,n:usize,total:i32,lo:Option<i32>,hi:Option<i32>);
+        r = pipe rename R@0 {k -> k,id -> id,v -> v};
+        valuations = pipe canon project r keep {k,id,v};
+        grouped = pipe group valuations by [k] {
+            n:usize = count();
+            total:i32 = sum(v);
+            lo:Option<i32> = min(v);
+            hi:Option<i32> = max(v);
+        };
+        return grouped as answer(k,n,total,lo,hi);
+    }};
+    let target = compile(&source).unwrap();
+    check(&source, &target).unwrap();
+    let facts = structures::contract::check(&target).unwrap();
+    assert_eq!(facts.unique["valuations"], ["id", "k", "v"]);
+    assert_eq!(facts.unique["grouped"], ["k"]);
+    assert!(facts.dedup.contains_key("valuations"));
+    assert!(!facts.dedup.contains_key("grouped"));
+    assert_eq!(facts.layouts["valuations"], ["id", "k", "v"]);
+    assert_eq!(
+        facts.physical.rows["grouped"]
+            .computed
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        ["hi", "lo", "n", "total"]
+    );
+    assert!(!facts.lineage.contains_key("grouped"));
+    assert_eq!(
+        syn::parse2::<structures::Program>(target.to_token_stream()).unwrap(),
+        target
+    );
+
+    let mut noncanonical = source;
+    noncanonical.program.definitions[1].canon = None;
+    assert!(
+        compile(&noncanonical)
+            .unwrap_err()
+            .to_string()
+            .contains("canonical complete input")
+    );
+}
+
+#[test]
+fn global_group_is_unique_by_the_empty_key() {
+    let source: physical::Program = syn::parse_quote! { physical {
+        relation R(v:i32); relation answer(n:usize,total:i32,lo:Option<i32>,hi:Option<i32>);
+        r = pipe canon rename R@0 {v -> v};
+        grouped = pipe group r by [] {
+            n:usize = count(); total:i32 = sum(v);
+            lo:Option<i32> = min(v); hi:Option<i32> = max(v);
+        };
+        return grouped as answer(n,total,lo,hi);
+    }};
+    let target = compile(&source).unwrap();
+    let facts = structures::contract::check(&target).unwrap();
+    assert!(facts.unique["grouped"].is_empty());
+    assert!(!facts.dedup.contains_key("grouped"));
+}
+
+#[test]
 fn literal_occurrences_select_ordinary_rows_or_shared_indices() {
     let scanned: physical::Program = syn::parse_quote! { physical {
         relation R(a:i32,b:i32);

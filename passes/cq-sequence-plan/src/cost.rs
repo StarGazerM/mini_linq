@@ -18,6 +18,8 @@ use cq_syntax::symbol_name;
 pub struct Cost {
     work: Sum,
     span: Sum,
+    /// Shrinking lookups evaluated after an upstream Expand in the same pipeline.
+    pub lookup_after_expand: usize,
     pub stores: usize,
     pub dispatches: usize,
 }
@@ -42,6 +44,7 @@ impl Cost {
         let mut work = Sum::default();
         let mut ends = Vec::new();
         let mut stores = 0usize;
+        let mut lookup_after_expand = 0usize;
         for definition in &program.sequence.definitions {
             let name = symbol_name(&definition.name);
             let mut level = &machine.root;
@@ -55,7 +58,10 @@ impl Cost {
                     })?;
             }
             let mut tile = 0;
-            let fact = evaluator.term(&definition.term, &name, level, &mut tile)?;
+            let mut fact = evaluator.term(&definition.term, &name, level, &mut tile)?;
+            if let Some(result) = analysis.results.get(&name) {
+                fact.result.clone_from(result);
+            }
             stores = stores
                 .checked_add(count_stores(&definition.term)?)
                 .ok_or_else(overflow)?;
@@ -68,6 +74,9 @@ impl Cost {
                     .is_some_and(|last| last.name == definition.name)
             {
                 work.add(&fact.work)?;
+                lookup_after_expand = lookup_after_expand
+                    .checked_add(fact.lookup_after_expand)
+                    .ok_or_else(overflow)?;
                 ends.push(fact.span.clone());
             }
             evaluator.facts.insert(name, fact);
@@ -90,6 +99,7 @@ impl Cost {
         Ok(Self {
             work,
             span: Sum::maximum(ends),
+            lookup_after_expand,
             stores,
             dispatches: analysis.dispatches.len(),
         })
@@ -110,13 +120,16 @@ impl Cost {
 }
 
 impl PartialOrd for Cost {
-    // Formal rule PL-Cost: Compare evaluated-position work, longest dependency span, stores, then dispatches; unresolved symbolic comparisons retain enumeration order.
+    // Formal rule PL-Cost: Compare work, Lookup-before-Expand, dependency span, stores, then dispatches; unresolved work comparisons retain enumeration order.
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.work.compare(&other.work)? {
-            Ordering::Equal => match self.span.compare(&other.span)? {
-                Ordering::Equal => {
-                    Some((self.stores, self.dispatches).cmp(&(other.stores, other.dispatches)))
-                }
+            Ordering::Equal => match self.lookup_after_expand.cmp(&other.lookup_after_expand) {
+                Ordering::Equal => match self.span.compare(&other.span)? {
+                    Ordering::Equal => {
+                        Some((self.stores, self.dispatches).cmp(&(other.stores, other.dispatches)))
+                    }
+                    ordering => Some(ordering),
+                },
                 ordering => Some(ordering),
             },
             ordering => Some(ordering),
@@ -128,8 +141,8 @@ impl fmt::Display for Cost {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "(work={}, span={}, stores={}, dispatches={})",
-            self.work, self.span, self.stores, self.dispatches
+            "(work={}, lookup_after_expand={}, span={}, stores={}, dispatches={})",
+            self.work, self.lookup_after_expand, self.span, self.stores, self.dispatches
         )
     }
 }
@@ -378,6 +391,8 @@ struct Fact {
     work: Sum,
     span: Sum,
     local_span: Sum,
+    expands: usize,
+    lookup_after_expand: usize,
 }
 
 impl Fact {
@@ -458,6 +473,8 @@ impl Evaluator<'_> {
                     work: Sum::default(),
                     span: Sum::default(),
                     local_span: Sum::default(),
+                    expands: 0,
+                    lookup_after_expand: 0,
                 };
                 fact.evaluate(&size, level, false)?;
                 Ok(fact)
@@ -469,6 +486,8 @@ impl Evaluator<'_> {
                 }) {
                     fact.work = Sum::default();
                     fact.local_span = Sum::default();
+                    fact.expands = 0;
+                    fact.lookup_after_expand = 0;
                 }
                 Ok(fact)
             }
@@ -513,6 +532,10 @@ impl Evaluator<'_> {
                 inner,
             } => {
                 let mut fact = self.term(inner, owner, level, tile)?;
+                fact.lookup_after_expand = fact
+                    .lookup_after_expand
+                    .checked_add(fact.expands)
+                    .ok_or_else(overflow)?;
                 let size = fact.size.clone();
                 fact.evaluate(&size, level, false)?;
                 let mut keys: Vec<_> = keys.iter().map(symbol_name).collect();
@@ -532,6 +555,8 @@ impl Evaluator<'_> {
             Term::Map(name, inner) | Term::Compact(name, inner) => {
                 // A membership lookup tests one parent position; it does not
                 // enumerate (or guess the cardinality of) the matching bucket.
+                let filtering_lookup = matches!(term, Term::Compact(_, inner)
+                    if matches!(inner.as_ref(), Term::Lookup { .. }));
                 let inner = if matches!(term, Term::Compact(_, _)) {
                     if let Term::Lookup { inner, .. } = inner.as_ref() {
                         inner.as_ref()
@@ -542,6 +567,12 @@ impl Evaluator<'_> {
                     inner.as_ref()
                 };
                 let mut fact = self.term(inner, owner, level, tile)?;
+                if filtering_lookup {
+                    fact.lookup_after_expand = fact
+                        .lookup_after_expand
+                        .checked_add(fact.expands)
+                        .ok_or_else(overflow)?;
+                }
                 let size = fact.size.clone();
                 fact.evaluate(&size, level, false)?;
                 let result = symbol_name(name);
@@ -585,6 +616,7 @@ impl Evaluator<'_> {
             Term::Flatten(inner) => {
                 let mut fact = self.term(inner, owner, level, tile)?;
                 if let Some(Layer::Bucket { parents }) = fact.layers.pop() {
+                    fact.expands = fact.expands.checked_add(1).ok_or_else(overflow)?;
                     // Offsets scan one length per parent; enumeration evaluates
                     // the resulting payload positions. Neither is output count.
                     fact.evaluate(&parents, level, true)?;
@@ -595,6 +627,14 @@ impl Evaluator<'_> {
                     fact.evaluate(&size, level, false)?;
                 }
                 // Flattening a tile is only a view: no new row evaluations.
+                Ok(fact)
+            }
+            Term::Group(name, inner) => {
+                let mut fact = self.term(inner, owner, level, tile)?;
+                let size = fact.size.clone();
+                fact.evaluate(&size, level, true)?;
+                fact.result = symbol_name(name);
+                fact.size = Size::Scan(format!("group({})", fact.result));
                 Ok(fact)
             }
             Term::Fold(_, inner) | Term::Canon(inner) => {
@@ -620,6 +660,11 @@ impl Evaluator<'_> {
                 let mut local_spans = vec![fact.local_span.clone()];
                 for next in facts {
                     let next = next?;
+                    fact.expands = fact.expands.max(next.expands);
+                    fact.lookup_after_expand = fact
+                        .lookup_after_expand
+                        .checked_add(next.lookup_after_expand)
+                        .ok_or_else(overflow)?;
                     fact.size = Size::Add(Box::new(fact.size), Box::new(next.size));
                     fact.work.add(&next.work)?;
                     spans.push(next.span);
@@ -640,6 +685,9 @@ impl Evaluator<'_> {
                 let mut local_spans = vec![fact.local_span.clone()];
                 for next in facts {
                     let next = next?;
+                    fact.expands = fact.expands.max(next.expands);
+                    fact.lookup_after_expand =
+                        fact.lookup_after_expand.max(next.lookup_after_expand);
                     works.push(next.work);
                     spans.push(next.span);
                     local_spans.push(next.local_span);
@@ -666,6 +714,7 @@ fn count_stores(term: &Term) -> syn::Result<usize> {
         | Term::Compact(_, inner)
         | Term::Flatten(inner)
         | Term::Fold(_, inner)
+        | Term::Group(_, inner)
         | Term::Canon(inner)
         | Term::Tile { inner, .. }
         | Term::Lookup { inner, .. } => count_stores(inner),
@@ -747,9 +796,11 @@ mod tests {
 
     fn sequential() -> Machine {
         Machine {
+            layout: None,
             name: syn::parse_quote!(target),
             items: 1,
             root: LevelNode {
+                shared_bytes: None,
                 name: syn::parse_quote!(host),
                 collaborative: false,
                 dynamic: false,
@@ -770,6 +821,42 @@ mod tests {
             sequence { #body }
         })
         .unwrap()
+    }
+
+    #[test]
+    fn only_growing_flattens_contribute_lookup_inversions() {
+        let source = program(quote!(input = rows r;));
+        let analysis = cq_lang_sequence::contract::check(&source).unwrap();
+        let evaluator = Evaluator {
+            program: &source,
+            analysis: &analysis,
+            facts: BTreeMap::new(),
+        };
+        let level = sequential().root;
+        let delayed: Term = syn::parse_quote!(flatten lookup r [a] flatten lookup r [a] rows r);
+        let early: Term = syn::parse_quote!(flatten flatten lookup r [a] lookup r [a] rows r);
+        let partition: Term = syn::parse_quote!(flatten lookup r [a] flatten tile 8 rows r);
+        assert_eq!(
+            evaluator
+                .term(&delayed, "test", &level, &mut 0)
+                .unwrap()
+                .lookup_after_expand,
+            1
+        );
+        assert_eq!(
+            evaluator
+                .term(&early, "test", &level, &mut 0)
+                .unwrap()
+                .lookup_after_expand,
+            0
+        );
+        assert_eq!(
+            evaluator
+                .term(&partition, "test", &level, &mut 0)
+                .unwrap()
+                .lookup_after_expand,
+            0
+        );
     }
 
     #[test]
@@ -837,16 +924,19 @@ mod tests {
         let mut machine = sequential();
         machine.items = 4;
         machine.root.children.push(LevelNode {
+            shared_bytes: None,
             name: syn::parse_quote!(device),
             collaborative: false,
             dynamic: true,
             width: None,
             children: vec![LevelNode {
+                shared_bytes: None,
                 name: syn::parse_quote!(block),
                 collaborative: true,
                 dynamic: false,
                 width: Some(8),
                 children: vec![LevelNode {
+                    shared_bytes: None,
                     name: syn::parse_quote!(lane),
                     collaborative: false,
                     dynamic: false,
@@ -982,12 +1072,14 @@ mod tests {
         let a = Cost {
             work: a,
             span: Sum::default(),
+            lookup_after_expand: 0,
             stores: 0,
             dispatches: 0,
         };
         let b = Cost {
             work: b,
             span: Sum::default(),
+            lookup_after_expand: 0,
             stores: 0,
             dispatches: 0,
         };
@@ -1032,6 +1124,7 @@ mod tests {
         let base = Cost {
             work: Sum::default(),
             span: Sum::default(),
+            lookup_after_expand: 0,
             stores: 1,
             dispatches: 1,
         };
@@ -1045,6 +1138,11 @@ mod tests {
         later = base.clone();
         later.span = Sum::atom(Atom::One, 1);
         later.stores = 0;
+        assert!(base.better_than(&later));
+        later = base.clone();
+        later.lookup_after_expand = 1;
+        later.stores = 0;
+        later.dispatches = 0;
         assert!(base.better_than(&later));
         assert!(base.leq(&base));
         assert!(!base.better_than(&base));

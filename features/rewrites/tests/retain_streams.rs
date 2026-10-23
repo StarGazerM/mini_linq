@@ -31,6 +31,41 @@ fn retains_only_named_streams_and_rejects_hosts_lets_and_unnamed() {
 }
 
 #[test]
+fn hoisting_relational_builds_preserves_the_checked_graph() {
+    let source = chain();
+    let actual = cq_rewrite_passes::hoist(&source, quote!(c)).unwrap();
+    assert_eq!(actual.program.definitions[0].name, "c");
+    ir::check_rewrite(&source, &actual).unwrap();
+    assert_eq!(
+        cq_rewrite_passes::hoist(&actual, quote!(c)).unwrap(),
+        actual
+    );
+    assert!(cq_rewrite_passes::hoist(&source, quote!(missing)).is_err());
+    assert!(cq_rewrite_passes::hoist(&source, TokenStream::new()).is_err());
+}
+
+#[test]
+fn hoisting_closes_dependencies_without_dropping_operators() {
+    let source = chain();
+    let actual = cq_rewrite_passes::hoist(&source, quote!(q)).unwrap();
+    assert_eq!(actual, source);
+    ir::check_rewrite(&source, &actual).unwrap();
+}
+
+#[test]
+fn hoisting_refuses_an_opaque_dependency() {
+    let source: ir::Program = syn::parse_quote! { physical {
+        relation R(a:i32);
+        r = pipe rename R@0 {a -> x};
+        guarded = pipe guard r if (opaque(x));
+        projected = pipe canon project guarded keep {x};
+        return projected as answer(x);
+    }};
+    let error = cq_rewrite_passes::hoist(&source, quote!(projected)).unwrap_err();
+    assert!(error.to_string().contains("opaque Rust dependency"));
+}
+
+#[test]
 fn retained_prefix_preserves_answers_and_duplicates_until_canon() {
     let a = [(1i64,), (2,), (1,)];
     let b = [(1i64, 10i64), (1, 11), (2, 20), (3, 30)];

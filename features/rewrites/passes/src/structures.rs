@@ -8,6 +8,44 @@ pub use retain_lookups::retain_lookups;
 mod expand_lookups;
 pub use expand_lookups::expand_lookups;
 
+/// Record the existing full-key existential-storage certificate. The
+/// Structures checker proves that no reader observes a non-key payload and
+/// that the projected build satisfies the filtered-storage contract.
+pub fn membership(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
+    let name: Ident = syn::parse2(arguments)?;
+    ir::contract::check(source)?;
+    let mut target = source.clone();
+    let mut matched = 0;
+    for entry in &mut target.structures.entries {
+        if entry.name != name {
+            continue;
+        }
+        let Structure::Built { keyed, .. } = &mut entry.structure else {
+            continue;
+        };
+        if keyed.levels.len() != 1 {
+            return Err(syn::Error::new_spanned(
+                &name,
+                "membership advice requires one full-key level",
+            ));
+        }
+        if keyed.filtered.is_none() {
+            let columns = &keyed.levels[0].columns;
+            keyed.filtered = Some(syn::parse_quote!(payload [#columns] constants {}));
+        }
+        keyed.membership = Some(Default::default());
+        matched += 1;
+    }
+    if matched != 1 {
+        return Err(syn::Error::new_spanned(
+            name,
+            "membership advice requires one built provider",
+        ));
+    }
+    ir::check_rewrite(source, &target)?;
+    Ok(target)
+}
+
 #[derive(Clone, Copy)]
 enum Kind {
     Payload,

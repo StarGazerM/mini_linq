@@ -93,7 +93,11 @@ fn interface_with(
         .iter()
         .flat_map(|i| atoms[i].iter().cloned())
         .collect();
-    let mut needed: BTreeSet<_> = program.query.head.variables().map(symbol_name).collect();
+    let mut needed: BTreeSet<_> = program
+        .query
+        .valuation_variables()
+        .map(symbol_name)
+        .collect();
     for (i, variables) in atoms {
         if !members.contains(i) {
             needed.extend(variables.iter().cloned());

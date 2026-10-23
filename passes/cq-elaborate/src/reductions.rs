@@ -27,8 +27,10 @@ pub(super) fn simplify(source: &ra::Program) -> syn::Result<ra::Program> {
         if let Operator::Anti(anti) = &definition.operator {
             negative[indices[&symbol_name(&anti.right)]] = true;
         }
-        opaque[index] = matches!(definition.operator, Operator::Bind(_) | Operator::Guard(_))
-            || dependencies[index].iter().any(|input| opaque[*input]);
+        opaque[index] = matches!(
+            definition.operator,
+            Operator::Bind(_) | Operator::Guard(_) | Operator::Group(_)
+        ) || dependencies[index].iter().any(|input| opaque[*input]);
     }
     for index in (0..definitions.len()).rev() {
         if negative[index] {
@@ -173,7 +175,11 @@ pub(super) fn eliminate_expansions(mut source: ra::Program) -> syn::Result<ra::P
     if source.plan.definitions.iter().any(|definition| {
         matches!(
             definition.operator,
-            Operator::Bind(_) | Operator::Guard(_) | Operator::Anti(_) | Operator::Union(_)
+            Operator::Bind(_)
+                | Operator::Guard(_)
+                | Operator::Anti(_)
+                | Operator::Union(_)
+                | Operator::Group(_)
         )
     }) {
         return Ok(source);
@@ -351,6 +357,7 @@ fn replace_operand(operator: &mut Operator, old: &Ident, new: &Ident) {
             replace(&mut join.right);
         }
         Operator::Project(project) => replace(&mut project.input),
+        Operator::Group(group) => replace(&mut group.input),
         Operator::Select(select) => replace(&mut select.input),
         Operator::Unit(_) | Operator::Rename(_) => {}
         _ => unreachable!("opaque and block operators excluded"),
@@ -375,6 +382,7 @@ fn operands(operator: &Operator, mut visit: impl FnMut(&Ident)) {
             visit(&anti.right);
         }
         Operator::Project(project) => visit(&project.input),
+        Operator::Group(group) => visit(&group.input),
         Operator::Select(select) => visit(&select.input),
         Operator::Bind(bind) => visit(&bind.input),
         Operator::Guard(guard) => visit(&guard.input),

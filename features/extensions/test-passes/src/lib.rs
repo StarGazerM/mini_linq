@@ -16,15 +16,17 @@ pub fn repeated(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         let analysis = cq_lang_sequence::check_grading(
             source,
             &cq_lang_sequence::Machine {
-             name: syn::parse_quote!(sequential),
-             items: 1,
-             root: cq_lang_sequence::LevelNode {
-              name: syn::parse_quote!(host),
-              collaborative: false,
-              dynamic: false,
-              width: None,
-              children: vec![],
-             },
+                layout: None,
+                name: syn::parse_quote!(sequential),
+                items: 1,
+                root: cq_lang_sequence::LevelNode {
+                    shared_bytes: None,
+                    name: syn::parse_quote!(host),
+                    collaborative: false,
+                    dynamic: false,
+                    width: None,
+                    children: vec![],
+                },
             },
         )?;
         let printed = cq_sequence_pull::translate(source, &analysis)?;

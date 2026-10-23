@@ -80,7 +80,46 @@ fn check_entry(tokens: &proc_macro2::TokenStream) -> syn::Result<()> {
 fn expand_compile(input: proc_macro2::TokenStream) -> syn::Result<proc_macro2::TokenStream> {
     let source: Source = syn::parse2(input)?;
     check_entry(&source.tokens)?;
+    if syn::parse2::<cq_lang_sequence::Program>(source.tokens.clone()).is_ok() {
+        return sequence_pipeline(source.config)?.start(source.tokens);
+    }
     source.config.resolve(defaults())?.start(source.tokens)
+}
+
+/// Complete Sequence input starts at planning, not at the CQ ordering phase.
+fn sequence_pipeline(config: cq_stage::Configuration) -> syn::Result<cq_stage::Pipeline> {
+    if config.ix.is_some()
+        || config.lower.is_some()
+        || !config.physical.is_empty()
+        || config.select.is_some()
+        || !config.structures.is_empty()
+        || config.represent.is_some()
+        || config.stage.is_some()
+        || config.sequence.is_some()
+        || !config.surface.is_empty()
+    {
+        return Err(syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "complete Sequence input accepts only plan, decompose, grade and print phases",
+        ));
+    }
+    let mut passes = config.decompose;
+    passes.push(
+        config
+            .plan
+            .unwrap_or_else(|| syn::parse_quote!(::mini_linq::passes::plan)),
+    );
+    passes.push(
+        config
+            .grade
+            .unwrap_or_else(|| syn::parse_quote!(::mini_linq::passes::sequential)),
+    );
+    passes.push(
+        config
+            .print
+            .unwrap_or_else(|| syn::parse_quote!(::mini_linq::passes::translate_pull)),
+    );
+    Ok(cq_stage::Pipeline { passes })
 }
 
 fn expand_mini_linq(input: proc_macro2::TokenStream) -> syn::Result<proc_macro2::TokenStream> {
@@ -120,6 +159,8 @@ fn no_arguments(arguments: proc_macro2::TokenStream) -> syn::Result<()> {
 
 #[derive(Default)]
 struct PlanOptions {
+    /// An explicit relation order, checked by the ordinary ordering pass.
+    order: Option<Vec<syn::Ident>>,
     no_reduce: bool,
     /// `(target, support)` relation names to add, in advice order.
     reduce: Vec<(syn::Ident, syn::Ident)>,
@@ -127,14 +168,23 @@ struct PlanOptions {
     skip: Vec<(syn::Ident, syn::Ident)>,
 }
 impl Parse for PlanOptions {
-    /// `no_reduce`, or any number of `reduce(Target with Support)` and
-    /// `skip(Target with Support)`, comma separated.
+    /// Optional `order(Relation, ...)` plus `no_reduce`, or any number of
+    /// `reduce(Target with Support)` and `skip(Target with Support)`, comma separated.
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let mut options = Self::default();
         while !input.is_empty() {
             let option: syn::Ident = input.parse()?;
             let advised = !options.reduce.is_empty() || !options.skip.is_empty();
-            if option == "no_reduce" && !options.no_reduce && !advised {
+            if option == "order" && options.order.is_none() {
+                let content;
+                syn::parenthesized!(content in input);
+                options.order = Some(
+                    content
+                        .parse_terminated(syn::Ident::parse, syn::Token![,])?
+                        .into_iter()
+                        .collect(),
+                );
+            } else if option == "no_reduce" && !options.no_reduce && !advised {
                 options.no_reduce = true;
             } else if (option == "reduce" || option == "skip") && !options.no_reduce {
                 let content;
@@ -156,7 +206,7 @@ impl Parse for PlanOptions {
             } else {
                 return Err(syn::Error::new_spanned(
                     option,
-                    "expected no_reduce, or reduce/skip(Target with Support), not both",
+                    "expected order(Relation, ...), and no_reduce or reduce/skip(Target with Support)",
                 ));
             }
             if !input.is_empty() {
@@ -209,6 +259,9 @@ pub fn plan(input: TokenStream) -> TokenStream {
     if sequence_plan_target(&input) {
         return cq_stage::delegate(input).into();
     }
+    if sequence_plan_source(&input) {
+        return plan_sequential(input.into());
+    }
     cq_stage::pass::<cq_lang_cq::Program, cq_lang_ra::Program>(input, |source, args| {
         let args: PlanOptions = syn::parse2(args)?;
         let normal = cq_lang_cq::normal::normalize(source)?;
@@ -216,8 +269,13 @@ pub fn plan(input: TokenStream) -> TokenStream {
             heuristic: cq_order::Heuristic::Written,
             split: cq_order::Split::Coarse,
         };
-        let plan = cq_order::compile(&normal, &ordering)?;
-        cq_order::check(&normal, &plan, &ordering)?;
+        let plan = if let Some(relations) = &args.order {
+            cq_order::compile_explicit(&normal, relations)?
+        } else {
+            let plan = cq_order::compile(&normal, &ordering)?;
+            cq_order::check(&normal, &plan, &ordering)?;
+            plan
+        };
         let options = cq_reduce::Options {
             semijoins: if args.no_reduce {
                 cq_reduce::Reductions::None
@@ -364,24 +422,69 @@ fn sequence_plan_target(input: &proc_macro2::TokenStream) -> bool {
         syn::braced!(arguments in input);
         let args: proc_macro2::TokenStream = arguments.parse()?;
         let _: proc_macro2::TokenStream = input.parse()?;
-        Ok(syn::parse2::<PlanOptions>(args.clone()).is_err()
+        Ok(args.to_string() != "lookup_first"
+            && syn::parse2::<PlanOptions>(args.clone()).is_err()
             && syn::parse2::<syn::Path>(args).is_ok())
+    };
+    parser.parse2(input.clone()).unwrap_or(false)
+}
+
+fn sequence_plan_source(input: &proc_macro2::TokenStream) -> bool {
+    use syn::parse::Parser;
+    let parser = |input: ParseStream<'_>| -> syn::Result<bool> {
+        // The checked protocol owns validation of these envelopes. Inspect only
+        // enough of the packet to select the input language for this adapter.
+        while input.peek(syn::Ident) {
+            let name: syn::Ident = input.fork().parse()?;
+            if name != "arguments" && name != "context" {
+                break;
+            }
+            input.parse::<syn::Ident>()?;
+            let content;
+            syn::braced!(content in input);
+            let _: proc_macro2::TokenStream = content.parse()?;
+            input.parse::<syn::Token![;]>()?;
+        }
+        input.parse::<cq_stage::Pipeline>()?;
+        input.parse::<syn::Token![;]>()?;
+        input.parse::<cq_lang_sequence::Program>()?;
+        Ok(true)
     };
     parser.parse2(input.clone()).unwrap_or(false)
 }
 
 /// Fill unauthored Sequence decisions using the Sequential machine and catalog.
 /// Use in `decompose` directly or through `plan(mini_linq::passes::plan_sequential)`.
+/// Authored order is preserved by default; `lookup_first` explicitly opts into reordering.
 #[proc_macro]
 pub fn plan_sequential(input: TokenStream) -> TokenStream {
     cq_stage::rewrite::<cq_lang_sequence::Program>(input.into(), |source, args| {
-        no_arguments(args)?;
-        Ok(cq_sequence_plan::plan(
-            source,
-            &cq_sequence_pull::machine(),
-            &cq_sequence_pull::catalog(),
-        )?
-        .program)
+        let machine = cq_sequence_pull::machine();
+        let catalog = cq_sequence_pull::catalog();
+        let lookup_first = if args.is_empty() {
+            false
+        } else {
+            let option: syn::Ident = syn::parse2(args)?;
+            if option != "lookup_first" && option != "preserve_order" {
+                return Err(syn::Error::new_spanned(
+                    option,
+                    "expected lookup_first or preserve_order",
+                ));
+            }
+            option == "lookup_first"
+        };
+        let planned = if lookup_first {
+            cq_sequence_plan::Planner::plan(
+                &cq_sequence_plan::RuleBased,
+                source,
+                &machine,
+                &catalog,
+                &source.evidence,
+            )?
+        } else {
+            cq_sequence_plan::decompose(source, &machine, &catalog)?
+        };
+        Ok(planned.program)
     })
     .into()
 }
@@ -438,6 +541,7 @@ mod tests {
             quote!(no_reduce),
             quote!(reduce(T with S)),
             quote!(skip(T with S)),
+            quote!(order(R, S)),
         ] {
             assert!(!super::sequence_plan_target(
                 &quote!(arguments { #arguments }; pipeline { next }; source)
@@ -455,6 +559,41 @@ mod tests {
             syn::parse2::<PlanOptions>(quote!(no_reduce))
                 .unwrap()
                 .no_reduce
+        );
+    }
+
+    #[test]
+    fn explicit_order_combines_with_existing_reduction_options() {
+        let options: PlanOptions = syn::parse2(quote!(order(R, S), no_reduce)).unwrap();
+        assert!(options.no_reduce);
+        let expected: Vec<syn::Ident> = vec![syn::parse_quote!(R), syn::parse_quote!(S)];
+        assert_eq!(options.order.unwrap(), expected);
+        assert!(syn::parse2::<PlanOptions>(quote!(order(R), order(S))).is_err());
+        assert!(syn::parse2::<PlanOptions>(quote!(order(R S))).is_err());
+    }
+
+    #[test]
+    fn sequence_entry_rejects_inapplicable_lowering_phases() {
+        let config = syn::parse_quote!(pipeline { lower = custom; });
+        assert!(super::sequence_pipeline(config).is_err());
+    }
+
+    #[test]
+    fn sequence_entry_runs_authored_advice_before_the_selected_planner() {
+        let config = syn::parse_quote!(pipeline {
+            plan = custom(expected);
+            decompose = [authored];
+        });
+        let pipeline = super::sequence_pipeline(config).unwrap();
+        assert_eq!(
+            pipeline.to_token_stream().to_string(),
+            quote!(pipeline {
+                authored,
+                custom(expected),
+                ::mini_linq::passes::sequential,
+                ::mini_linq::passes::translate_pull
+            })
+            .to_string(),
         );
     }
 

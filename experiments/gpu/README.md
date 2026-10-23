@@ -26,21 +26,27 @@ cargo oxide build --arch sm_89 -- --release --workspace
 cargo oxide test --arch sm_89 -- --release --workspace
 ```
 
+Release build dependencies also use optimization level 3: the build-time
+compression catalog shares CUDA-containing crates with the runtime, and their
+device address-space lowering requires optimized codegen.
+
 ### Planner-driven 11-query TPC-H suite
 
 `tpch` is one crate with one binary, `cq-gpu-tpch`. It imports the CPU
 `retail_kernel!` invocations directly with `include_str!`; no second query body
-or per-query plan is maintained. Build-time compilation uses the same CQ macro
-substitution, checked default CQ → Physical → Structures passes, generic
-`cq_sequence_plan::select_from_catalog`, Sequence lowering,
-`cq_sequence_plan::plan` with `cq_gpu_sequence::{machine, catalog}`, grading,
-and `cq_gpu_sequence::translate`. These are the programmatic equivalents of
-the facade's `plan(machine)` → `machine_grade!` → `translate!` pipeline.
+is duplicated. Build-time compilation uses the same CQ macro substitution,
+checked CQ → Physical → Structures passes, generic catalog selection, Sequence
+lowering, grading and translation. The default build generates only `advised`
+executors, using explicit pipeline choices followed by decomposition-only
+completion. Automatic is opt-in pending box 11b: build with
+`CQ_GPU_TPCH_AUTOMATIC=1` to also generate `automatic` executors using
+`cq_sequence_plan::plan`. No automatic lookup rewrite is required to compile or
+measure the advised baseline.
 The manifest loader records its integer-only `DeviceColumns` host adapters
 through the checked retype rewrite; relations declaring `String` retain host
 rows. Neither the loader nor translator chooses a plan.
 
-The loader reads only each imported query's declared columns. `String` columns
+The default loader reads only each imported query's declared columns. `String` columns
 are decoded from `.bin` dictionary codes and `.dict.txt` into owned host strings;
 integer/code declarations retain codes, and only their text literals are
 resolved to dictionary IDs. Integer-only relations keep resident device uploads
@@ -57,11 +63,64 @@ are uploaded for subsequent GPU work; host evaluation and upload are included
 in the build timing interval. The synthetic String-guard regression checks
 this boundary against Sequential and explicit expected keys.
 
-The binary accepts repeatable `--query <name>` and `--scale sf1|sf10` filters
-(for example `cq-gpu-tpch --query h09 --scale sf1`). Omitted filters select all
-queries/scales. Filtered runs print JSON measurements for the selected scales
-without writing a results file; only an unfiltered run publishes the complete
-inventory and paired SF1/SF10 table.
+H05 uses the explicit `tpch_domains` loader profile in **both** modes: the shared
+`gpu_compress_host::tpch::schema`/`gpu_compress::Catalog` stores join keys as dense u32 domain IDs
+and the date/Region dictionary code as i32, exactly as the authored benchmark.
+The imported query's types and dictionary literals are adapted to that schema;
+GPU and Sequential outputs are decoded back to source keys before comparison.
+The loader profile is recorded in the pipeline artifact, not selected by the
+planner. H05's advised pipeline records Region → Nation → Customer → Orders →
+Lineitem → Supplier, retains the Customer prefix, and uses the R schedule:
+one 256-row input partition and 1024-row/items-4 segmented Orders and Lineitem
+expansions. Its unchanged fully-bound Supplier probe receives the checked
+one-level `membership(...)` Structures certificate, so Sequence lowers it to a
+filtering lookup without expanding witnesses. It does not call the authored
+H05 implementation. H09 advises Part → Lineitem → PartSupp → Orders → Supplier →
+Nation and retains the filtered Part leaf using its checked numeric carrier;
+the substring predicate remains at its authored source position.
+
+The binary accepts repeatable `--query <name>`, `--scale sf1|sf10`, and
+`--mode automatic|advised` filters. Omitted filters select every query, both
+scales and all built modes (advised only by default). Every run writes its selected inventory to the optional
+positional results path, including filtered runs. `--baseline FILE` retains
+prior per-query best measurements and reports ratios; without it, an existing
+output file is captured before replacement. `--authored FILE` reads the
+`gpu-h05-compiled` R measurements and reports the same-scale comparison.
+Advised H05 performance acceptance requires SF10 total ≤ 10.35 ms and, when
+provided, no slower than the measured authored R. A failed timing gate keeps
+the exactness/timing evidence and exits unsuccessfully.
+
+`TPCH_GPU_ADVICE=/path/advice.json` selects build-time per-query overrides.
+Each entry is a pipeline object, for example:
+
+```json
+{
+  "h03": {
+    "plan": "no_reduce, order(Customer, Orders, Lineitem)",
+    "physical": [],
+    "structures": [],
+    "sequence": []
+  }
+}
+```
+
+`plan` uses the CPU `order(...)`, `no_reduce`, `reduce(T with S)` and
+`skip(T with S)` conventions. Physical advice accepts `retain_streams(...)`,
+`hoist(...)`, `build_host_reads(...)`, `canon_prefixes(...)` and
+`smallest_intersections(...)`; Structures advice accepts `sorted_indexes(...)`,
+`membership(...)`, and `retype(...)`. Sequence entries parse the planner's
+public `Advice` syntax, including `store`, `store_level`, `tile`, `partition`,
+`segment`, `output`, `grade`, and `evidence { ... }`. CPU workload
+`advise plan(...)` hints are imported into the report's `cpu_plan_advice`
+field for explicit selection. They do not automatically replace the measured
+GPU baseline: CPU-specific reduction hints can produce unsupported GPU builds.
+
+Each accepted report includes `sequence_input`, `sequence_trace`,
+`sequence_planned`, symbolic cost, and a resolved `pipeline` object. Copy
+`{ \"query_name\": report.pipeline }` into the override file to replay it;
+`complete: true` means its Sequence trace already records the complete
+schedule and is not replanned. Manifest row counts are recorded as evidence,
+never fabricated selectivities. Replay coverage checks exact program equality.
 
 ```sh
 export CUDA_HOME=/opt/nvidia/hpc_sdk/Linux_x86_64/25.5/cuda/12.9
@@ -79,11 +138,13 @@ answer download, and comparison are outside those event intervals. SF1 also
 compares the GPU answer to independent Sequential translation of the identical
 Physical using `cq_testkit::conformance::assert_answers_equal`, the external
 target API used by H05 (`assert_conformant` itself exposes only CPU targets).
-The eleven named conformance tests print `NOT RUN` with the exact rejection
-and term when compilation does not reach an executable GPU translation.
-`TPCH_GPU_DATA_ROOT` changes the fixture root at build time.
+The eleven conformance tests cover both modes and reject unexpected planning
+failures; H07's existing unsupported opaque country disjunction remains an
+explicit reported rejection. `TPCH_GPU_DATA_ROOT` changes the fixture root at
+build time. The new advised acceptance results must be measured; the schedules
+and timing ceilings above are requirements, not claimed measurements.
 
-Observed inventory: all eleven queries are rejected at both scales, so **no GPU
+Historical initial inventory, before the subsequent translation fixes: all eleven queries were rejected at both scales, so **no GPU
 exactness, conformance agreement, or timing is claimed**. The release build and
 13 tests passed (two source/encoding tests plus eleven explicit rejection
 reports). No compiler gap was patched around. The table abbreviates only the
@@ -382,3 +443,83 @@ Machine-readable evidence:
 [`SF10 reference samples`](compare/gpu_sequence_cutover.reference.sf10.json).
 SF1 reference medians/samples were captured from reference stdout in the
 summary; its single-object output file was overwritten by the SF10 invocation.
+
+## Grouped GPU folds
+
+`group` consumes an explicitly published canonical valuation store: `canon`
+deduplicates every named body column, not the aggregate arguments. Its host
+boundary orchestrates resident radix key ordering, adjacent-key owner offsets,
+and collaborative segment-local count/sum/min/max kernels. Integer sum widths
+follow the declared codec; overflow publishes failure rather than a partial
+answer. Empty keyed input has no owners; empty global input has one identity.
+
+Grouped results expose `checked_len()` and `to_host()` through `GroupedRows`.
+They retain separate value/validity columns, preserving every i64 value while
+decoding empty extrema as `Option::None`, and retain ancestor output statuses.
+The translator does not add publication or canonicalization decisions.
+
+The `group` integration test covers checked translation and duplicate-valued
+distinct valuations. Runtime tests cover extrema, empty groups and arithmetic
+failure. `grouped_h01` computes the CPU corpus's DISTINCT-valuation SQL oracle
+against `/data/tpch-gpu/sf{1,10}/dbgen.duckdb`, compares exact aggregate tuples,
+and reports GPU and DuckDB t24 wall times. A saved `duckdb_timing.json` is reused
+only when its SQL matches H01; the normal H05 timing is not substituted.
+
+## Negation GPU acceptance
+
+The suite now imports 15 CPU workload sources, including H04, H04-not-exists,
+H16 and H22. The latter three retain Physical `anti eager` provenance and
+lower to `compact result lookup provider [keys] input`; H04 retains positive
+membership. No lowering change was needed. E-Neg's GPU instance uses the
+same provider membership probe in either polarity and inverts only the keep
+bit for anti. Wildcard order keys in H22 remain existential witnesses.
+
+Advised order is `Lineitem, Orders` for H04, `Orders` for H04-not-exists,
+`Part, Partsupp` for H16, and `Customer` for H22, with `no_reduce`.
+The importer executes the original `LateLineitem` and `BadSupplier` setup
+initializers once while loading. These derived-input construction costs,
+manifest loading, and initial base-column uploads are outside the reported
+query interval. Provider construction and uploads from retained host rows,
+including string predicate evaluation, are inside `build`.
+DuckDB's existing t24 measurements execute the complete independent SQL;
+these are not identical end-to-end timing boundaries.
+
+Release sm_89 run, one warmup and five measured iterations, all eight answers
+exact against exported TSVs; SF1 also agrees with Sequential:
+
+| query | scale | rows | GPU total ms (build / kernels / dedup) | DuckDB t24 ms |
+|---|---|---:|---:|---:|
+| h04 | SF1 | 52,523 | 1.158 (0.511 / 0.519 / 0.126) | 33 |
+| h04_not_exists | SF1 | 4,695 | 37.901 (37.653 / 0.135 / 0.110) | 15 |
+| h16 | SF1 | 118,274 | 1.549 (1.304 / 0.090 / 0.150) | 111 |
+| h22 | SF1 | 14,086 | 1.072 (0.927 / 0.043 / 0.102) | 21 |
+| h04 | SF10 | 526,040 | 10.363 (5.039 / 5.033 / 0.291) | 311 |
+| h04_not_exists | SF10 | 47,631 | 380.482 (379.280 / 1.053 / 0.148) | 92 |
+| h16 | SF10 | 1,186,602 | 10.217 (9.752 / 0.155 / 0.307) | 1,047 |
+| h22 | SF10 | 140,489 | 7.490 (7.298 / 0.060 / 0.131) | 132 |
+
+Evidence: `/data/tpch-gpu/box13b-negation.json`, generated by
+`./target/release/cq-gpu-tpch /data/tpch-gpu/box13b-negation.json --mode advised --query h04 --query h04_not_exists --query h16 --query h22`.
+H04-not-exists is slower than DuckDB at both scales; its measured build cost
+dominates, rather than the inverted membership kernel.
+
+## Static shared-memory and generated-source contracts
+
+`machine()` records a 101,376-byte block shared-memory capacity. BE-Resource
+derives target-independent dispatch demands, including every choice arm and
+the checked live-column type/codec facts. `core::layout` owns the byte/alignment
+formula used both by grading and by the emitter. An advised plan exceeding the
+capacity is rejected before translation, with its publication, required bytes
+and capacity. Automatic planning considers explicit publication boundaries
+between expanding stages and choices; the emitter never chooses a fallback.
+
+Catalog `levels` describe provider reads, not construction. Resident
+`RangeProvider` and `PackedCanon` tokens are device/block/lane tokens;
+host-only row providers remain host-only even when their inputs are built there.
+
+The TPC-H build script parses its generated module as a `syn::File` and writes
+`prettyplease::unparse` output. Generated-code warnings are scoped out at the
+module boundary; ordinary handwritten code retains its diagnostics. The measured
+automatic-suite library compile fell from an interrupted run exceeding 54 minutes
+to 398.31 seconds after this source-format change (482.87 seconds for that whole
+release build). These are compilation measurements, not query execution timings.

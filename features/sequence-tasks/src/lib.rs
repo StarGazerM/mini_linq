@@ -5,6 +5,8 @@
 //! analysis. Host and task-local constructors reuse the sequential interpreter.
 //! Pool chunks own their buffers and publish in chunk order at the join. Rayon
 //! propagates a task panic to that join rather than publishing partial output.
+//! Grouped folds reuse the host hash fold after publication; no task-pool
+//! collective or per-chunk grouping may replace that global valuation domain.
 
 use cq_lang_sequence::{Analysis, LevelNode, Machine, Program, Term, Tiling};
 use cq_sequence_pull::{Emitter, Value};
@@ -13,19 +15,23 @@ use quote::quote;
 /// The host owns a separated dynamic pool of sequential tasks.
 pub fn machine() -> Machine {
     Machine {
+        layout: None,
         name: syn::parse_quote!(tasks),
         items: 1,
         root: LevelNode {
+            shared_bytes: None,
             name: syn::parse_quote!(host),
             collaborative: false,
             dynamic: false,
             width: None,
             children: vec![LevelNode {
+                shared_bytes: None,
                 name: syn::parse_quote!(pool),
                 collaborative: false,
                 dynamic: true,
                 width: None,
                 children: vec![LevelNode {
+                    shared_bytes: None,
                     name: syn::parse_quote!(task),
                     collaborative: false,
                     dynamic: false,
@@ -93,6 +99,14 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                     .map(|dispatch| &dispatch.producer_level)
                     .or_else(|| analysis.levels.get(definition))
             };
+            if matches!(term, Term::Group(_, _))
+                && level.is_some_and(|path| path.as_slice() != ["host"])
+            {
+                return Err(syn::Error::new_spanned(
+                    program,
+                    "BE-Group: grouped folds must execute at the host join",
+                ));
+            }
             let active = if matches!(term, Term::Tile { .. }) {
                 tiles
                     .get(&node)
@@ -191,6 +205,7 @@ fn tile_nodes(term: &Term, output: &mut Vec<*const Term>) {
         | Term::Compact(_, inner)
         | Term::Flatten(inner)
         | Term::Fold(_, inner)
+        | Term::Group(_, inner)
         | Term::Canon(inner)
         | Term::Store { inner, .. }
         | Term::Tile { inner, .. }

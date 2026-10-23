@@ -56,9 +56,17 @@ pub fn check(module: &Program) -> syn::Result<()> {
             "normal form: output arguments are variables",
         ));
     }
-    let bound: BTreeSet<_> = super::blocks::bound(&module.query.body)
+    let mut bound: BTreeSet<_> = super::blocks::bound(&module.query.body)
         .into_keys()
         .collect();
+    if let Some(group) = &module.query.group {
+        bound.extend(
+            group
+                .aggregates
+                .iter()
+                .map(|aggregate| symbol_name(&aggregate.name)),
+        );
+    }
     if let Some(variable) = module
         .query
         .head
@@ -81,11 +89,76 @@ pub fn check(module: &Program) -> syn::Result<()> {
 /// Formal rule A-Local: Place a dependent binding and relational equality after its atom.
 pub fn normalize(module: &Program) -> syn::Result<Program> {
     super::contract::check(module)?;
+    if module.query.group.is_some() {
+        check(module)?;
+        return Ok(module.clone());
+    }
     let declarations: BTreeMap<_, _> = module.inputs().map(|d| (symbol_name(&d.name), d)).collect();
     let mut names = reserved(module);
     let mut bound = BTreeSet::new();
     let mut body = normalize_body(&module.query.body, &declarations, &mut names, &mut bound)?;
     let mut normal = module.clone();
+    let grouped = module
+        .query
+        .head
+        .args
+        .iter()
+        .map(super::group::aggregate)
+        .collect::<syn::Result<Vec<_>>>()?
+        .iter()
+        .any(Option::is_some);
+    if grouped {
+        let mut valuation: BTreeMap<_, _> = super::blocks::bound(&module.query.body);
+        let mut keys = Vec::new();
+        let mut key_names = BTreeSet::new();
+        let mut aggregates = Vec::new();
+        for (position, argument) in normal.query.head.args.iter_mut().enumerate() {
+            let Some((kind, expression)) = super::group::aggregate(argument)? else {
+                let variable = rust::variable(argument).expect("group key checked");
+                if key_names.insert(symbol_name(variable)) {
+                    keys.push(variable.clone());
+                }
+                continue;
+            };
+            let name = fresh(&mut names, module.query.body.len(), position);
+            let ty = module.output().expect("aggregate output checked").columns[position]
+                .ty
+                .clone();
+            let mut aggregate = super::syntax::algebra::AggregateBinding {
+                name: name.clone(),
+                colon_token: Default::default(),
+                ty,
+                eq_token: Default::default(),
+                kind,
+                paren_token: Default::default(),
+                expression: expression.cloned(),
+                semi_token: Default::default(),
+            };
+            if let Some(expression) = &aggregate.expression {
+                if !rust::variable(expression).is_some_and(|v| bound.contains(&symbol_name(v))) {
+                    let value = fresh(&mut names, module.query.body.len(), position);
+                    body.push(binding(&value, aggregate.value_type()?, expression.clone()));
+                    valuation.insert(symbol_name(&value), value.clone());
+                    aggregate.expression = Some(path(&value));
+                }
+            }
+            aggregates.push(aggregate);
+            *argument = path(&name);
+        }
+        normal.query.group = Some(super::group::HeadGroup {
+            group_token: Default::default(),
+            valuation_bracket: Default::default(),
+            valuation: valuation.into_values().collect(),
+            by_token: Default::default(),
+            keys_bracket: Default::default(),
+            keys: keys.into_iter().collect(),
+            brace_token: Default::default(),
+            aggregates,
+        });
+        normal.query.body = body.into_iter().collect();
+        check(&normal)?;
+        return Ok(normal);
+    }
     for (position, argument) in normal.query.head.args.iter_mut().enumerate() {
         if rust::variable(argument).is_some_and(|variable| bound.contains(&symbol_name(variable))) {
             continue;

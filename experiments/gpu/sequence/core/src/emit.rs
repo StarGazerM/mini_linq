@@ -168,11 +168,13 @@ impl<'a> Compiler<'a> {
                         condition: quote!(true),
                     }]);
                 }
-                self.fold(
+                let mut chains = self.fold(
                     self.definitions
                         .get(&name)
                         .ok_or_else(|| error("Sequence reference lacks definition"))?,
-                )
+                )?;
+                self.rehead(&name, &mut chains);
+                Ok(chains)
             }
             Term::Union(arms) => {
                 let mut chains = Vec::new();
@@ -199,11 +201,22 @@ impl<'a> Compiler<'a> {
                 // Compact's checked Physical operator consumes existence, even
                 // when the same provider also supplies payloads to another read.
                 // The provider-wide capability is not this constructor's meaning.
-                let Term::Lookup { provider, keys, inner } = inner.as_ref() else {
+                let Term::Lookup {
+                    provider,
+                    keys,
+                    inner,
+                } = inner.as_ref()
+                else {
                     unreachable!()
                 };
                 let result = symbol_name(name);
-                let definition = self.program.structures.physical.program.definitions.iter()
+                let definition = self
+                    .program
+                    .structures
+                    .physical
+                    .program
+                    .definitions
+                    .iter()
                     .find(|definition| symbol_name(&definition.name) == result)
                     .ok_or_else(|| error("compact lacks checked Physical row provenance"))?;
                 let negated = matches!(definition.operator, Operator::Anti(_, _));
@@ -221,6 +234,9 @@ impl<'a> Compiler<'a> {
                 }
                 Ok(chains)
             }
+            Term::Group(_, _) => Err(error(
+                "T-Gpu: group requires an explicit host publication boundary",
+            )),
             Term::Map(name, inner) | Term::Compact(name, inner) => {
                 let mut chains = self.fold(inner)?;
                 for chain in &mut chains {
@@ -314,6 +330,17 @@ impl<'a> Compiler<'a> {
         }
     }
 
+    /// All device carriers use the same attribute-indexed slots. The checker
+    /// may give equivalent choice arms one named result; interpreting that
+    /// provenance changes no slots and must not re-evaluate its Physical union.
+    fn rehead(&self, name: &str, chains: &mut [Chain]) {
+        if let Some(result) = self.analysis.results.get(name) {
+            for chain in chains {
+                chain.result.clone_from(result);
+            }
+        }
+    }
+
     fn length(&self, len: &Len) -> syn::Result<TokenStream> {
         Ok(match len {
             Len::Lit(n) => quote!(#n),
@@ -326,6 +353,22 @@ impl<'a> Compiler<'a> {
                 {
                     let count = format_ident!("__cq_store_length_{index}");
                     quote!(#count)
+                } else if self.analysis.stores.contains_key(name)
+                    && self
+                        .analysis
+                        .levels
+                        .get(name)
+                        .is_some_and(|level| level.last().is_some_and(|level| level == "host"))
+                {
+                    // Host stores have the same checked Physical provenance as
+                    // their uploaded source, but need not share its spelling.
+                    // Read the published count, not a pre-publication estimate.
+                    let result = self
+                        .analysis
+                        .results
+                        .get(name)
+                        .ok_or_else(|| error("host store lacks checked row provenance"))?;
+                    self.rows.source_len(result)?
                 } else if let Some(len) = self.analysis.lengths.get(name).filter(|l| *l != len) {
                     self.length(len)?
                 } else {
@@ -380,7 +423,10 @@ impl<'a> Compiler<'a> {
     ) -> syn::Result<TokenStream> {
         let (view, payload, order) = self.rows.provider(provider)?;
         if order.is_empty() && keys.is_empty() {
-            return Ok(quote! { let (mut __begin, mut __end) = (0u32, #view.len); });
+            return Ok(quote! {
+                let (mut __begin, mut __end) = (0u32, #view.len);
+                let __member_found = __begin < __end;
+            });
         }
         let first = order
             .first()
@@ -403,7 +449,7 @@ impl<'a> Compiler<'a> {
             let slot = self.slot(key)?;
             if membership && depth + 1 == keys.len() {
                 membership_checks.extend(quote! {
-                    __live=__live && ::cq_gpu_sequence_runtime::device::contains_u32(
+                    __member_found = ::cq_gpu_sequence_runtime::device::contains_u32(
                         *#view.payload.add(#index),__begin,__end,__row[#slot] as u32);
                 });
             } else {
@@ -430,9 +476,11 @@ impl<'a> Compiler<'a> {
             }
         }
         Ok(quote! {
+            let mut __member_found = false;
             let (mut __begin, mut __end) = (0u32, 0u32);
             if __live && (__row[#slot] as i64) >= 0 && (__row[#slot] as u64) < #view.domain as u64 {
                 (__begin, __end) = ::cq_gpu_sequence_runtime::device::range(#view.offsets, __row[#slot] as u32);
+                __member_found = __begin < __end;
             }
             #membership_checks
         })
@@ -451,7 +499,7 @@ impl<'a> Compiler<'a> {
 
 struct Kernel<'c, 'p> {
     compiler: &'c Compiler<'p>,
-    shared_bytes: usize,
+    shared: crate::layout::SharedLayout,
     virtual_range: Option<String>,
     packed_columns: Option<Vec<String>>,
     publication_columns: BTreeSet<usize>,
@@ -467,13 +515,6 @@ struct StripeInput {
 }
 
 impl Kernel<'_, '_> {
-    fn allocate(&mut self, bytes: usize, align: usize) -> usize {
-        self.shared_bytes = self.shared_bytes.div_ceil(align) * align;
-        let at = self.shared_bytes;
-        self.shared_bytes += bytes;
-        at
-    }
-
     fn output_slots(&self) -> syn::Result<BTreeSet<usize>> {
         if let Some(columns) = &self.packed_columns {
             columns
@@ -669,10 +710,14 @@ impl Kernel<'_, '_> {
                 membership,
                 negated,
             } => {
-                let lookup = row.rewrite(self.compiler.lookup(provider, keys, *membership && !*negated)?)?;
+                let lookup = row.rewrite(self.compiler.lookup(provider, keys, *membership)?)?;
                 if *membership {
                     let rest = self.scalar_operations(rest, row)?;
-                    return Ok(quote!(#lookup __live = __live && ((__begin < __end) != #negated); #rest));
+                    // Formal rule E-Neg: anti membership keeps precisely the rows
+                    // whose provider probe finds no witness; dead lanes stay dead.
+                    return Ok(
+                        quote!(#lookup __live = __live && (__member_found != #negated); #rest),
+                    );
                 }
                 if self.virtual_range.as_deref() == Some(provider)
                     && rest
@@ -695,8 +740,7 @@ impl Kernel<'_, '_> {
                     .iter()
                     .map(|column| self.compiler.slot(column))
                     .collect::<syn::Result<BTreeSet<_>>>()?;
-                let begin_offset = self.allocate(256 * 4, 4);
-                let offsets_offset = self.allocate(257 * 4, 4);
+                let (begin_offset, offsets_offset) = self.shared.payload()?;
                 let begins = format_ident!("__begins_{begin_offset}");
                 let offsets = format_ident!("__offsets_{offsets_offset}");
                 let owner = format_ident!("__owner_{begin_offset}");
@@ -709,7 +753,7 @@ impl Kernel<'_, '_> {
                     } else {
                         8
                     };
-                    let at = self.allocate(256 * bytes, bytes);
+                    let at = self.shared.parent(bytes)?;
                     let id = format_ident!("__parent_{at}");
                     let value = row
                         .0
@@ -826,7 +870,7 @@ impl Kernel<'_, '_> {
         let Operation::Fold(monoid) = &operations[at] else {
             unreachable!()
         };
-        let offset = self.allocate(256 * 8, 8);
+        let offset = self.shared.fold()?;
         let accumulator = format_ident!("__cq_fold_accumulator_{offset}");
         let input = match monoid {
             Monoid::Sum(column) => Some(self.compiler.slot(&symbol_name(column))?),
@@ -966,6 +1010,18 @@ fn host_union<'a>(
     }
 }
 
+fn grouped_boundary<'a>(
+    term: &'a Term,
+    definitions: &BTreeMap<String, &'a Term>,
+) -> Option<(&'a syn::Ident, &'a Term)> {
+    match term {
+        Term::Group(name, input) => Some((name, input)),
+        Term::Store { inner, .. } | Term::Canon(inner) => grouped_boundary(inner, definitions),
+        Term::Ref(name) => grouped_boundary(definitions.get(&symbol_name(name))?, definitions),
+        _ => None,
+    }
+}
+
 /// Translate only checked scheduling facts; no planner is consulted here.
 // Formal rule T-Gpu: Interpret checked Sequence constructors at their recorded GPU grades.
 pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Expr> {
@@ -1001,6 +1057,24 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
     let mut kernels = Vec::new();
     let mut launches = Vec::new();
     let mut output = None;
+    let mut host_downloads = BTreeMap::<usize, syn::Ident>::new();
+    let mut host_consumed_results = BTreeSet::new();
+    for definition in &program.sequence.definitions {
+        let name = symbol_name(&definition.name);
+        if matches!(definition.term, Term::Store { .. })
+            && analysis
+                .levels
+                .get(&name)
+                .is_some_and(|level| level.last().is_some_and(|level| level == "host"))
+            && !analysis
+                .dispatches
+                .iter()
+                .any(|dispatch| dispatch.inner_stores.contains(&name))
+            && let Some(result) = analysis.results.get(&name)
+        {
+            host_consumed_results.extend(compiler.rows.host_dependencies(result));
+        }
+    }
     let final_name = analysis
         .output
         .as_ref()
@@ -1045,8 +1119,18 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
             "GPU scalar fold publication requires one output column",
         ));
     }
+    let final_group = compiler
+        .definitions
+        .get(final_name)
+        .and_then(|term| grouped_boundary(term, &compiler.definitions));
     let mut packing = Vec::new();
-    for (i, column) in compiler.rows.output_columns.iter().enumerate() {
+    for (i, column) in compiler
+        .rows
+        .output_columns
+        .iter()
+        .enumerate()
+        .filter(|_| final_group.is_none())
+    {
         let bounds = match final_fold {
             Some(Monoid::Count) => quote!(::cq_gpu_runtime::Bounds::Inclusive {
                 min: 0,
@@ -1086,15 +1170,64 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
     );
     for definition in &program.sequence.definitions {
         let publication = symbol_name(&definition.name);
+        if publication == final_name
+            && let Some((name, input)) = grouped_boundary(&definition.term, &compiler.definitions)
+        {
+            let chains = compiler.fold(input)?;
+            let [chain] = chains.as_slice() else {
+                return Err(error(
+                    "GPU group requires one canonical valuation publication",
+                ));
+            };
+            if !chain.operations.is_empty() {
+                return Err(error(
+                    "GPU group input must be separately published by checked decomposition",
+                ));
+            }
+            let prior = chain
+                .stored
+                .ok_or_else(|| error("GPU group input is not published"))?;
+            let columns = compiler.stored[prior].packed.as_ref().ok_or_else(|| {
+                error("GPU group requires its recorded canonical valuation provider")
+            })?;
+            let result = symbol_name(name);
+            let physical = program
+                .structures
+                .physical
+                .program
+                .definitions
+                .iter()
+                .find(|definition| symbol_name(&definition.name) == result)
+                .ok_or_else(|| error("GPU group lacks checked Physical provenance"))?;
+            let Operator::Group(group) = &physical.operator else {
+                return Err(error("GPU group provenance is not a Physical group"));
+            };
+            let kernel = format_ident!("__cq_group_arguments_{module_name}");
+            let (code, publication) = crate::reduce::group(
+                group,
+                columns,
+                &compiler.rows.output_columns,
+                &analysis.structures.physical.rows[&result].types,
+                prior,
+                &kernel,
+            )?;
+            kernels.push(code);
+            output = Some(publication);
+            continue;
+        }
         let dispatch = analysis.dispatches.iter().find(|dispatch| {
             dispatch.inner_stores.iter().rev().find(|name| {
-                compiler.definitions.get(*name)
+                compiler
+                    .definitions
+                    .get(*name)
                     .is_some_and(|term| matches!(term, Term::Store { .. }))
             }) == Some(&publication)
         });
         let index = compiler.stored.len();
         let Some(dispatch) = dispatch else {
-            if analysis.levels.get(&publication)
+            if analysis
+                .levels
+                .get(&publication)
                 .is_some_and(|level| level.last().is_some_and(|level| level == "host"))
                 && matches!(definition.term, Term::Store { .. })
                 && let Some((arms, canonical)) = host_union(&definition.term, &compiler.definitions)
@@ -1114,10 +1247,14 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                         if !chain.operations.is_empty() {
                             return Err(error("host union operands must be published stores"));
                         }
-                        let prior = chain.stored.ok_or_else(|| error("host union operand has not published"))?;
+                        let prior = chain
+                            .stored
+                            .ok_or_else(|| error("host union operand has not published"))?;
                         let source = &compiler.stored[prior];
                         if source.range.is_some() {
-                            return Err(error("host union operand requires a materialized row publication"));
+                            return Err(error(
+                                "host union operand requires a materialized row publication",
+                            ));
                         }
                         let length = format_ident!("__cq_store_length_{prior}");
                         lengths.push(quote!(#length));
@@ -1126,7 +1263,9 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                             let owner = format_ident!("__cq_canonical_{prior}");
                             let fields = format_ident!("__cq_fields_{prior}");
                             let arm_index = copies.len();
-                            let kernel = format_ident!("__cq_union_decode_{index}_{arm_index}_{module_name}");
+                            let kernel = format_ident!(
+                                "__cq_union_decode_{index}_{arm_index}_{module_name}"
+                            );
                             let prepare = format_ident!("prepare_{kernel}");
                             let mut params = Vec::new();
                             let mut args = Vec::new();
@@ -1136,8 +1275,16 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                                 let base = format_ident!("base_{field}");
                                 let shift = format_ident!("shift_{field}");
                                 let bits = format_ident!("bits_{field}");
-                                params.extend([quote!(#base:i64), quote!(#shift:u32), quote!(#bits:u32)]);
-                                args.extend([quote!(#fields[#field].base), quote!(#fields[#field].shift), quote!(#fields[#field].bits)]);
+                                params.extend([
+                                    quote!(#base:i64),
+                                    quote!(#shift:u32),
+                                    quote!(#bits:u32),
+                                ]);
+                                args.extend([
+                                    quote!(#fields[#field].base),
+                                    quote!(#fields[#field].shift),
+                                    quote!(#fields[#field].bits),
+                                ]);
                                 writes.push(quote! {
                                     let value = if #bits == 0 {0} else {((key >> #shift) as u64) & if #bits == 64 {u64::MAX} else {(1u64 << #bits)-1}};
                                     *rows.add(position * #width + #slot) = #base.wrapping_add(value as i64);
@@ -1217,8 +1364,8 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                             __cq_key_bits = __cq_key_bits.checked_add(bits).ok_or("packed Sequence key width overflow")?;
                             __cq_fields.push(::cq_gpu_sequence_runtime::canon::PackedField {base:#base,shift:#shift,bits});
                         });
-                        params.extend([quote!(#base:i64),quote!(#shift:u32)]);
-                        args.extend([quote!(#base),quote!(#shift)]);
+                        params.extend([quote!(#base:i64), quote!(#shift:u32)]);
+                        args.extend([quote!(#base), quote!(#shift)]);
                         parts.push(quote!(if #shift == 128 {0} else {((*rows.add(position * #width + #slot)).wrapping_sub(#base) as u64 as u128) << #shift}));
                     }
                     let kernel = format_ident!("__cq_union_pack_{index}_{module_name}");
@@ -1275,8 +1422,14 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                     }
                 }
                 if !final_output {
-                    launches.push(compiler.rows.publish_provider(analysis,program,result,&publication,index,
-                        canonical.then_some(packed_columns.as_slice()))?);
+                    launches.push(compiler.rows.publish_provider(
+                        analysis,
+                        program,
+                        result,
+                        &publication,
+                        index,
+                        canonical.then_some(packed_columns.as_slice()),
+                    )?);
                 }
                 compiler.stored.push(Stored {
                     name: publication,
@@ -1284,6 +1437,104 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                     range: None,
                     packed: canonical.then_some(packed_columns),
                 });
+            } else if matches!(definition.term, Term::Store { .. })
+                && analysis
+                    .levels
+                    .get(&publication)
+                    .is_some_and(|level| level.last().is_some_and(|level| level == "host"))
+                && let Some(result) = analysis.results.get(&publication)
+                && !compiler.rows.has_source(result)
+            {
+                let bindings: BTreeMap<_, _> = compiler
+                    .stored
+                    .iter()
+                    .enumerate()
+                    .map(|(prior, stored)| {
+                        (
+                            stored.result.clone(),
+                            format_ident!("__cq_downloaded_{prior}"),
+                        )
+                    })
+                    .collect();
+                let dependencies = compiler.rows.bound_host_dependencies(result, &bindings);
+                for (prior, stored) in compiler.stored.iter().enumerate() {
+                    if !dependencies.contains(&stored.result)
+                        || bindings[&stored.result] != format_ident!("__cq_downloaded_{prior}")
+                    {
+                        continue;
+                    }
+                    if stored.range.is_some() {
+                        return Err(error(
+                            "host consumer requires a materialized row publication",
+                        ));
+                    }
+                    let downloaded = format_ident!("__cq_downloaded_{prior}");
+                    if let std::collections::btree_map::Entry::Vacant(entry) =
+                        host_downloads.entry(prior)
+                    {
+                        let length = format_ident!("__cq_store_length_{prior}");
+                        let rows = format_ident!("__cq_store_rows_{prior}");
+                        let owner = format_ident!("__cq_canonical_{prior}");
+                        let fields = format_ident!("__cq_fields_{prior}");
+                        let mut values = Vec::new();
+                        let mut types = Vec::new();
+                        for column in &analysis.structures.layouts[&stored.result] {
+                            let ty =
+                                &analysis.structures.physical.rows[&stored.result].types[column];
+                            types.push(ty);
+                            let code = if let Some(columns) = &stored.packed {
+                                let field = columns
+                                    .iter()
+                                    .position(|name| name == column)
+                                    .ok_or_else(|| {
+                                        error("host consumer column absent from packed publication")
+                                    })?;
+                                quote! {{
+                                    let field = #fields[#field];
+                                    let offset = if field.bits == 0 { 0 } else {
+                                        ((__key >> field.shift) as u64)
+                                            & if field.bits == 64 { u64::MAX } else { (1u64 << field.bits) - 1 }
+                                    };
+                                    field.base.wrapping_add(offset as i64)
+                                }}
+                            } else {
+                                let width = compiler.rows.width;
+                                let slot = compiler.slot(column)?;
+                                quote!(__cq_downloaded_codes[__position * #width + #slot])
+                            };
+                            values.push(quote!(::cq_gpu_runtime::decode_value::<#ty>(#code, &__cq_dictionary)?));
+                        }
+                        let (download, key) = if stored.packed.is_some() {
+                            (
+                                quote!(#owner.keys().to_host()?),
+                                quote! {
+                                    let __lanes = #owner.lanes();
+                                    let __key = __cq_downloaded_codes[__position * __lanes] as u128
+                                        | if __lanes == 2 { ( __cq_downloaded_codes[__position * 2 + 1] as u128) << 64 } else { 0 };
+                                },
+                            )
+                        } else {
+                            (quote!(#rows.to_host()?), TokenStream::new())
+                        };
+                        launches.push(quote! {
+                            let #downloaded: ::std::vec::Vec<(#(#types,)*)> = {
+                                let __cq_downloaded_codes = #download;
+                                let mut rows = ::std::vec::Vec::with_capacity(#length);
+                                for __position in 0..#length {
+                                    #key
+                                    rows.push((#(#values,)*));
+                                }
+                                rows
+                            };
+                        });
+                        entry.insert(downloaded.clone());
+                    }
+                }
+                launches.push(
+                    compiler
+                        .rows
+                        .publish_host(program, analysis, result, &bindings)?,
+                );
             }
             continue;
         };
@@ -1314,10 +1565,11 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
             ));
         }
         let final_output = publication == final_name;
-        let chains = compiler.fold(inner)?;
+        let mut chains = compiler.fold(inner)?;
         if chains.is_empty() {
             return Err(error("GPU dispatch has no source"));
         }
+        compiler.rehead(&publication, &mut chains);
         let canonical = chains.iter().all(|chain| {
             chain
                 .operations
@@ -1397,13 +1649,23 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
         // A host union copies published rows, not the deferred lookup-range
         // representation used by a subsequent device consumer.
         let host_union_operand = program.sequence.definitions.iter().any(|definition| {
-            analysis.levels.get(&symbol_name(&definition.name))
+            analysis
+                .levels
+                .get(&symbol_name(&definition.name))
                 .is_some_and(|level| level.last().is_some_and(|level| level == "host"))
                 && host_union(&definition.term, &compiler.definitions).is_some_and(|(arms, _)| {
-                    arms.iter().any(|arm| matches!(arm, Term::Ref(name) if symbol_name(name) == publication))
+                    arms.iter().any(
+                        |arm| matches!(arm, Term::Ref(name) if symbol_name(name) == publication),
+                    )
                 })
         });
-        let virtual_range = if !final_output && !canonical && !provider_store && !host_union_operand && chains.len() == 1 {
+        let virtual_range = if !final_output
+            && !canonical
+            && !provider_store
+            && !host_union_operand
+            && !host_consumed_results.contains(&chains[0].result)
+            && chains.len() == 1
+        {
             let ops = &chains[0].operations;
             let last = ops.iter().rposition(|op| {
                 matches!(
@@ -1551,7 +1813,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
         arguments.push(quote!(__cq_key_lanes));
         let mut generator = Kernel {
             compiler: &compiler,
-            shared_bytes: 48,
+            shared: crate::layout::SharedLayout::new(),
             virtual_range: virtual_range.clone(),
             packed_columns: packed_columns.clone(),
             publication_columns: chains
@@ -1720,7 +1982,15 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
         } else {
             TokenStream::new()
         };
-        let shared = generator.shared_bytes.div_ceil(16) * 16;
+        let shared = generator.shared.bytes()?;
+        if let Some(resource) = analysis.resources.get(&publication)
+            && shared != resource.required_bytes
+        {
+            return Err(error(format!(
+                "T-Gpu: publication {publication} shared layout differs from BE-Resource: emitted {shared} bytes, checked {} bytes",
+                resource.required_bytes
+            )));
+        }
         let shared_u32 =
             u32::try_from(shared).map_err(|_| error("Sequence shared memory exceeds u32"))?;
         kernels.push(quote! {
@@ -1851,8 +2121,137 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
             },
         });
     }
+    if output.is_none() {
+        fn canonical_publication(term: &Term, definitions: &BTreeMap<String, &Term>) -> bool {
+            match term {
+                Term::Canon(_) => true,
+                Term::Store { inner, .. } => canonical_publication(inner, definitions),
+                Term::Ref(name) => definitions
+                    .get(&symbol_name(name))
+                    .is_some_and(|term| canonical_publication(term, definitions)),
+                _ => false,
+            }
+        }
+        let canonical = compiler
+            .definitions
+            .get(final_name)
+            .is_some_and(|term| canonical_publication(term, &compiler.definitions));
+        // A checked host publication may be the complete result. Its transfer
+        // to the device is a storage adapter, not an additional row dispatch.
+        let mut name = final_name;
+        let source = loop {
+            if analysis.stores.contains_key(name)
+                && analysis
+                    .levels
+                    .get(name)
+                    .is_some_and(|level| level.last().is_some_and(|level| level == "host"))
+            {
+                break analysis.results.get(name).map(String::as_str);
+            }
+            let Some(Term::Store { inner, .. }) = compiler.definitions.get(name).copied() else {
+                break None;
+            };
+            let Term::Ref(parent) = inner.as_ref() else {
+                break None;
+            };
+            let Some((parent, _)) = compiler.definitions.get_key_value(&symbol_name(parent)) else {
+                break None;
+            };
+            name = parent;
+        };
+        if let Some(source) = source {
+            let length = compiler.rows.source_len(source)?;
+            let load = compiler
+                .rows
+                .source(source, quote!(__position), quote!(__row))?;
+            let mut row = DeviceRow::default();
+            let mut declarations = TokenStream::new();
+            for column in &compiler.rows.output_columns {
+                let slot = compiler.slot(column)?;
+                let code = format_ident!("__code_{slot}");
+                declarations.extend(quote!(let mut #code = 0i64;));
+                row.0.insert(slot, quote!(#code));
+            }
+            let load = row.rewrite(load)?;
+            let mut parameters = Vec::new();
+            let mut arguments = Vec::new();
+            for (name, ty, value) in &compiler.rows.parameters {
+                parameters.push(quote!(#name:#ty));
+                arguments.push(value.clone());
+            }
+            for i in 0..compiler.rows.output_columns.len() {
+                let base = format_ident!("__cq_pack_base_{i}");
+                let shift = format_ident!("__cq_pack_shift_{i}");
+                parameters.extend([quote!(#base:i64), quote!(#shift:u32)]);
+                arguments.extend([quote!(#base), quote!(#shift)]);
+            }
+            let generator = Kernel {
+                compiler: &compiler,
+                shared: crate::layout::SharedLayout::new(),
+                virtual_range: None,
+                packed_columns: Some(compiler.rows.output_columns.clone()),
+                publication_columns: BTreeSet::new(),
+                sink: None,
+                scalar_output: false,
+            };
+            let write = row.rewrite(generator.output_write()?)?;
+            let kernel = format_ident!("__cq_host_output_{module_name}");
+            let prepare = format_ident!("prepare_{kernel}");
+            kernels.push(quote! {
+                #[kernel]
+                #[launch_bounds(256)]
+                #[launch_contract(domain=1,block=(256,1,1))]
+                pub fn #kernel(#(#parameters,)* __output_keys:*mut u64,
+                    __length:usize,__cq_key_lanes:usize)
+                {
+                    unsafe {
+                        let __position = ::cuda_device::thread::index_1d().get() as usize;
+                        if __position < __length {
+                            #declarations
+                            #load
+                            let __destination = __position;
+                            #write
+                        }
+                    }
+                }
+            });
+            launches.push(quote! {
+                let __cq_host_output_length = #length;
+                let mut __cq_key_bits = 0u32;
+                let mut __cq_fields = ::std::vec::Vec::new();
+                #(#packing)*
+                let __cq_key_lanes = ::cq_gpu_sequence_runtime::canon::PackedCanon::key_lanes(__cq_key_bits)?;
+                let __cq_host_output_keys = unsafe {
+                    ::cq_gpu_runtime::Buffer::<u64>::uninitialized(__cq_pool.clone(),
+                        __cq_host_output_length.checked_mul(__cq_key_lanes).ok_or("Sequence output allocation overflow")?)?
+                };
+                if __cq_host_output_length != 0 {
+                    let grid = u32::try_from(__cq_host_output_length.div_ceil(256))
+                        .map_err(|_| "Sequence output exceeds CUDA grid")?;
+                    let prepared = __cq_module.#prepare(::cuda_core::LaunchConfig1D::new(grid,256,0))?;
+                    __cq_module.#kernel(__cq_pool.stream(), &prepared, #(#arguments,)*
+                        __cq_host_output_keys.ptr(),__cq_host_output_length,__cq_key_lanes)?;
+                }
+            });
+            output = Some(if canonical {
+                quote! {
+                    let mut canon = ::cq_gpu_sequence_runtime::canon::PackedCanon::new(
+                        &__cq_pool,__cq_host_output_length)?;
+                    let keys = unsafe { canon.canonicalize(
+                        &__cq_host_output_keys,__cq_host_output_length,__cq_key_bits)? };
+                    let __cq_result = __cq_output_adapter.borrow_mut().unpack_columns(
+                        keys,&__cq_fields,__cq_dictionary,__cq_statuses)?;
+                }
+            } else {
+                quote! {
+                    let __cq_result = __cq_output_adapter.borrow_mut().packed_columns(
+                        __cq_host_output_keys,__cq_host_output_length,&__cq_fields,__cq_dictionary,__cq_statuses)?;
+                }
+            });
+        }
+    }
     let output =
-        output.ok_or_else(|| error("checked GPU output is not published by a dispatch"))?;
+        output.ok_or_else(|| error("checked GPU output has no recorded publication adapter"))?;
     let setup = &compiler.rows.setup;
     let build = &compiler.rows.build;
     syn::parse2(quote!({
@@ -1908,6 +2307,251 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
 mod tests {
     use super::*;
 
+    fn uploaded_host_program(canonical: bool) -> Program {
+        let canon = canonical.then(|| quote!(canon));
+        syn::parse_quote! {
+            physical {
+                relation Resident(a:i64) = (&data.resident);
+                relation Host(a:i64) = (&data.host);
+                resident = let rename Resident@0 {a -> a};
+                host_input = pipe rename Host@1 {a -> a};
+                host = pipe canon semi eager [a] host_input,resident;
+                return host as answer(a);
+            }
+            structures {
+                resident host scan = ::cq_gpu_runtime::DeviceColumns<'static,(i64,)> [];
+                host_input host scan = ::core::iter::Map<_,_> [];
+                resident = ::cq_storage::SortedRun<_,_> [a];
+                host canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            }
+            sequence {
+                resident_rows = store rows resident;
+                host_rows = rows host_input;
+                published_host = store #canon compact host lookup resident [a] host_rows;
+                result = store published_host;
+                output count;
+            }
+            graded gpu {
+                resident_rows at host;
+                host_rows at host;
+                published_host at host;
+                result at host.device;
+            }
+        }
+    }
+
+    #[test]
+    fn host_guard_lengths_use_the_uploaded_publication_count() {
+        let program = uploaded_host_program(false);
+        let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
+        let mut compiler = Compiler {
+            program: &program,
+            analysis: &analysis,
+            rows: Rows::new(&program, &analysis).unwrap(),
+            stored: Vec::new(),
+            definitions: BTreeMap::new(),
+        };
+        for length in [
+            Len::Input("published_host".into()),
+            Len::Scan("published_host".into()),
+        ] {
+            assert_eq!(
+                compiler.length(&length).unwrap().to_string(),
+                "__cq_sequence_uploaded_length_host"
+            );
+        }
+        compiler.stored.push(Stored {
+            name: "published_host".into(),
+            result: "host".into(),
+            range: None,
+            packed: None,
+        });
+        assert_eq!(
+            compiler
+                .length(&Len::Scan("published_host".into()))
+                .unwrap()
+                .to_string(),
+            "__cq_store_length_0"
+        );
+    }
+
+    #[test]
+    fn host_output_transfer_publishes_without_a_row_dispatch() {
+        for canonical in [false, true] {
+            let program = uploaded_host_program(canonical);
+            let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
+            assert!(analysis.dispatches.is_empty());
+            let expression = translate(&program, &analysis).unwrap();
+            let generated = quote!(#expression).to_string();
+            assert!(generated.contains("__cq_sequence_uploaded_length_host"));
+            assert!(generated.contains("let __cq_host_output_length"));
+            assert!(generated.contains("__cq_host_output_"));
+            assert!(!generated.contains("__cq_sequence_dispatch_"));
+            assert_eq!(generated.contains("canon . canonicalize"), canonical);
+            assert!(!generated.contains("__row"));
+        }
+    }
+
+    #[test]
+    fn host_read_of_a_device_only_provider_requires_a_checked_placement_change() {
+        let program: Program = syn::parse_quote! {
+            physical {
+                relation R(a:i64) = (&data.r);
+                relation P(a:i64) = (&data.p);
+                r = pipe rename R@0 {a -> a};
+                p = let rename P@1 {a -> a};
+                present = let canon semi eager [a] r,p;
+                return present as answer(a);
+            }
+            structures {
+                r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(i64,)> [];
+                p host scan = ::core::iter::Map<_,_> [];
+                p = ::cq_gpu_sequence_runtime::RangeProvider [a];
+                present rows = ::std::vec::Vec<_>;
+                present canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            }
+            sequence {
+                input = store rows r;
+                index = store rows p;
+                host_rows = store canon compact present lookup p [a] input;
+                result = store host_rows;
+                output count;
+            }
+            graded gpu {
+                input at host;
+                index at host;
+                host_rows at host;
+                result at host.device;
+            }
+        };
+        let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
+        let error = translate(&program, &analysis).unwrap_err().to_string();
+        assert!(
+            error.contains("host publication present reads device-only provider p"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn deferred_host_map_reads_the_published_rows_not_the_original_producer() {
+        for canonical in [false, true] {
+            let canon = canonical.then(|| quote!(canon));
+            let canon_provider = canonical.then(|| {
+                quote!(
+                    filtered canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                )
+            });
+            let program: Program = syn::parse2(quote! {
+                physical {
+                    relation R(a:i64) = (&data.r);
+                    r = pipe rename R@0 {a -> a};
+                    filtered = let #canon select r if (a > 0);
+                    guarded = pipe canon guard filtered if (a % 2 == 0);
+                    return guarded as answer(a);
+                }
+                structures {
+                    r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(i64,)> [];
+                    filtered rows = ::std::vec::Vec<_>;
+                    guarded canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                    #canon_provider
+                }
+                sequence {
+                    input = store rows r;
+                    feed = #canon compact filtered flatten tile 256 input;
+                    device_rows = store feed;
+                    host_rows = store canon map guarded device_rows;
+                    result = store host_rows;
+                    output count;
+                }
+                graded gpu {
+                    input at host;
+                    feed at host.device.block;
+                    device_rows at host;
+                    host_rows at host;
+                    result at host.device;
+                }
+            })
+            .unwrap();
+            let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
+            let expression = translate(&program, &analysis).unwrap();
+            let generated = quote!(#expression).to_string();
+            let publication = generated.find("let (__cq_store_rows_0").unwrap();
+            let download = generated.find("let __cq_downloaded_0").unwrap();
+            let upload = generated
+                .find("let __cq_sequence_uploaded_guarded")
+                .unwrap();
+            assert!(publication < download && download < upload);
+            assert!(generated.contains("__cq_downloaded_0 . iter"));
+            assert!(!generated.contains("__cq_leaf_0 . to_host"));
+            assert!(generated.contains("__cq_host_output_length"));
+        }
+    }
+
+    #[test]
+    fn emitter_rejects_drift_from_the_checked_shared_layout() {
+        let program: Program = syn::parse_quote! {
+            physical {
+                relation R(a:i64) = (&data.r);
+                r = pipe canon rename R@0 {a -> a};
+                return r as answer(a);
+            }
+            structures {
+                r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(i64,)> [];
+                r canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            }
+            sequence {
+                input = store rows r;
+                feed = flatten tile 256 input;
+                result = store canon feed;
+                output count;
+            }
+            graded gpu {
+                input at host;
+                feed at host.device.block;
+                result at host.device;
+            }
+        };
+        let mut analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
+        analysis.resources.get_mut("result").unwrap().required_bytes += 16;
+        let error = translate(&program, &analysis).unwrap_err().to_string();
+        assert!(
+            error.contains("shared layout differs from BE-Resource"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn checked_shared_layout_accounts_for_every_choice_chain() {
+        for chains in [1, 64, 128] {
+            let shape = cq_lang_sequence::DispatchShape {
+                publication: "result".into(),
+                level: vec!["host".into(), "device".into(), "block".into()],
+                width: Some(256),
+                tile: Some(256),
+                items: 1,
+                chains: (0..chains)
+                    .map(|_| vec![cq_lang_sequence::ResourceAllocation::Fold])
+                    .collect(),
+            };
+            let bytes = crate::layout::shared_bytes(&shape).unwrap();
+            assert_eq!(bytes, 48 + chains * 256 * 8);
+            assert_eq!(bytes > 101376, chains > 1);
+        }
+    }
+
+    #[test]
+    fn shared_layout_keeps_payload_alignment_and_codec_widths() {
+        let mut layout = crate::layout::SharedLayout::new();
+        assert_eq!(layout.payload().unwrap(), (48, 1072));
+        assert_eq!(layout.parent(4).unwrap(), 2100);
+        assert_eq!(layout.parent(8).unwrap(), 3128);
+        assert_eq!(layout.fold().unwrap(), 5176);
+        assert_eq!(layout.bytes().unwrap(), 7232);
+        assert_eq!(crate::layout::code_bytes(&syn::parse_quote!(u32), true), 4);
+        assert_eq!(crate::layout::code_bytes(&syn::parse_quote!(u32), false), 8);
+        assert_eq!(crate::layout::code_bytes(&syn::parse_quote!(i32), true), 8);
+    }
+
     #[test]
     fn reduction_templates_keep_the_recorded_scope_and_wide_results() {
         for ty in [syn::parse_quote!(i64), syn::parse_quote!(u32)] {
@@ -1942,7 +2586,7 @@ mod tests {
                     operations.push(Operation::Fold(monoid.clone()));
                     let mut kernel = Kernel {
                         compiler: &compiler,
-                        shared_bytes: 48,
+                        shared: crate::layout::SharedLayout::new(),
                         virtual_range: None,
                         packed_columns: Some(vec!["a".into()]),
                         publication_columns: BTreeSet::new(),

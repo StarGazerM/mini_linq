@@ -8,8 +8,10 @@ uses the complete SELECT DISTINCT, not a count wrapper, in one CLI process per
 thread count with one warmup followed by five samples (DuckDB .timer wall time).
 """
 import argparse
+import csv
 import hashlib
 import itertools
+import io
 import json
 import os
 from pathlib import Path
@@ -31,6 +33,9 @@ def workloads():
     relations, queries = {}, {}
     for path in sorted(QUERY_DIR.glob('*.rs')):
         source = path.read_text()
+        # Standalone aggregate kernels have a different export contract.
+        if 'retail_kernel!' not in source:
+            continue
         name = re.search(r'name "([^"]+)"', source).group(1)
         sql = re.search(r'sql r#"(.*?)"#;', source, re.S).group(1)
         required = {}
@@ -42,7 +47,9 @@ def workloads():
                 required[table].append(column)
         assert required and sql.startswith('SELECT DISTINCT'), path
         queries[name] = {'sql': sql, 'source': str(path.relative_to(QUERY_DIR.parents[5])),
-                         'required_columns': required}
+                         'required_columns': required,
+                         'derived_relations': re.findall(
+                             r'derived\s*\{\s*relation\s+(\w+)\(', source)}
     assert queries, QUERY_DIR
     return relations, queries
 
@@ -99,7 +106,10 @@ def export(sf, base):
                 expression = f'(t.{column} * 100)::BIGINT'
                 item.update(encoding='scaled_integer', scale=2)
             elif logical == 'String':
-                names = run_sql(database, f"SELECT DISTINCT {column} FROM {relation} ORDER BY {column};\n").splitlines()
+                # Comments/phone strings must be decoded from CSV, not retained
+                # with CLI quoting (supplier comments can contain commas).
+                names = [row[0] for row in csv.reader(io.StringIO(run_sql(
+                    database, f"SELECT DISTINCT {column} FROM {relation} ORDER BY {column};\n")))]
                 dictionary = root / f'{relation}.{column}.dict.txt'
                 dictionary.write_text('\n'.join(names) + '\n')
                 alias = f'd{len(joins)}'
