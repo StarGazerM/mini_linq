@@ -235,11 +235,11 @@ impl ColumnDescriptor {
         field: canon::PackedField,
         bounds: Bounds,
     ) -> Result<Self> {
-        if !(1..=2).contains(&lanes)
+        if lanes == 0
             || count > keys.len() / lanes
             || field.bits > 64
-            || field.shift > lanes as u32 * 64
-            || field.bits > lanes as u32 * 64 - field.shift
+            || field.shift as usize > lanes.saturating_mul(64)
+            || field.bits as usize > lanes.saturating_mul(64) - field.shift as usize
         {
             return Err("packed source projection exceeds its buffer or key".into());
         }

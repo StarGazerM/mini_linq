@@ -108,7 +108,27 @@ pub fn select_from_catalog(
             | Structure::Share { .. } => continue,
         };
         let ty = if kind == "canon" {
-            catalog.canons.iter().find(|token| !token.levels.is_empty()).map(|token| &token.ty)
+            let columns = &analysis.physical.headings[&name];
+            // The declared scalar domains are conservative codec bounds. Setup
+            // may pack fewer bits, but evidence never narrows this obligation.
+            let bits = columns.iter().try_fold(0u32, |sum, column| {
+                let ty = &analysis.physical.rows[&name].types[column];
+                let width = match ty {
+                    syn::Type::Path(path) => match path.path.get_ident().map(ToString::to_string).as_deref() {
+                        Some("bool") => 1,
+                        Some("u8" | "i8") => 8,
+                        Some("u16" | "i16") => 16,
+                        Some("u32" | "i32") => 32,
+                        Some("u64" | "i64" | "usize" | "isize") => 64,
+                        _ => return None,
+                    },
+                    _ => return None,
+                };
+                sum.checked_add(width)
+            });
+            catalog.canons.iter().find(|token| {
+                !token.levels.is_empty() && token.max_packed_bits.is_none_or(|maximum| bits.is_some_and(|bits| bits <= maximum))
+            }).map(|token| &token.ty)
         } else {
             catalog.providers.iter().find(|token| {
                 !token.levels.is_empty()

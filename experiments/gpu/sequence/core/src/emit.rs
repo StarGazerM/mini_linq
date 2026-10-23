@@ -1047,18 +1047,27 @@ impl Kernel<'_, '_> {
                 let slot=self.compiler.slot(column)?;
                 let base=format_ident!("__cq_pack_base_{i}");
                 let shift=format_ident!("__cq_pack_shift_{i}");
-                if self.compiler.rows.dense.contains(&slot) && !self.scalar_output {
-                    Ok(quote!((if #shift==128 {0u128} else {((__row[#slot] as u32).wrapping_sub(#base as u32) as u128) << #shift})))
+                let value = if self.compiler.rows.dense.contains(&slot) && !self.scalar_output {
+                    quote!((__row[#slot] as u32).wrapping_sub(#base as u32) as u64)
                 } else {
-                    Ok(quote!((if #shift==128 {0u128} else {(__row[#slot].wrapping_sub(#base) as u64 as u128) << #shift})))
-                }
+                    quote!(__row[#slot].wrapping_sub(#base) as u64)
+                };
+                Ok(quote! {
+                    let value = #value;
+                    let lane = (#shift / 64) as usize;
+                    let local = #shift % 64;
+                    if lane < __cq_key_lanes {
+                        *__packed.add(lane) |= value << local;
+                        if local != 0 && lane + 1 < __cq_key_lanes {
+                            *__packed.add(lane + 1) |= value >> (64 - local);
+                        }
+                    }
+                })
             }).collect::<syn::Result<Vec<_>>>()?;
             quote! {
-                let __key = 0u128 #(| #parts)*;
-                *__output_keys.add(__destination as usize * __cq_key_lanes) = __key as u64;
-                if __cq_key_lanes == 2 {
-                    *__output_keys.add(__destination as usize * 2 + 1) = (__key >> 64) as u64;
-                }
+                let __packed = __output_keys.add(__destination as usize * __cq_key_lanes);
+                for lane in 0..__cq_key_lanes { *__packed.add(lane) = 0; }
+                #(#parts)*
             }
         } else {
             let range = if self.virtual_range.is_some() {
@@ -1122,6 +1131,40 @@ fn grouped_boundary<'a>(
         Term::Ref(name) => grouped_boundary(definitions.get(&symbol_name(name))?, definitions),
         _ => None,
     }
+}
+
+pub(crate) fn packed_offset(
+    keys: TokenStream,
+    row: TokenStream,
+    lanes: TokenStream,
+    shift: TokenStream,
+    bits: TokenStream,
+) -> TokenStream {
+    quote! {{
+        if #bits == 0 { 0u64 } else {
+            let index = (#row) * (#lanes) + (#shift / 64) as usize;
+            let local = #shift % 64;
+            let mut value = unsafe { *(#keys).add(index) } >> local;
+            if local + #bits > 64 {
+                value |= unsafe { *(#keys).add(index + 1) } << (64 - local);
+            }
+            value & if #bits == 64 { u64::MAX } else { (1u64 << #bits) - 1 }
+        }
+    }}
+}
+
+fn canon_type<'a>(analysis: &'a Analysis, publication: &str) -> syn::Result<&'a syn::Type> {
+    analysis
+        .obligations
+        .iter()
+        .find_map(|obligation| match obligation {
+            cq_lang_sequence::Obligation::Canon {
+                result,
+                ty: Some(ty),
+            } if result == publication => Some(ty),
+            _ => None,
+        })
+        .ok_or_else(|| error("GPU canon publication requires its recorded provider type"))
 }
 
 /// Translate only checked scheduling facts; no planner is consulted here.
@@ -1400,8 +1443,9 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                                     quote!(#fields[#field].shift),
                                     quote!(#fields[#field].bits),
                                 ]);
+                                let offset = packed_offset(quote!(keys), quote!(position), quote!(lanes), quote!(#shift), quote!(#bits));
                                 writes.push(quote! {
-                                    let value = if #bits == 0 {0} else {((key >> #shift) as u64) & if #bits == 64 {u64::MAX} else {(1u64 << #bits)-1}};
+                                    let value = #offset;
                                     *rows.add(position * #width + #slot) = #base.wrapping_add(value as i64);
                                 });
                             }
@@ -1413,8 +1457,6 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                                     unsafe {
                                         let mut position = ::cuda_device::thread::index_1d().get() as usize;
                                         while position < length {
-                                            let key = *keys.add(position * lanes) as u128
-                                                | if lanes == 2 { (*keys.add(position * 2 + 1) as u128) << 64 } else { 0 };
                                             #(#writes)*
                                             position += ::cuda_device::thread::gridDim_x() as usize * 256;
                                         }
@@ -1461,6 +1503,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                     analysis.structures.physical.headings[result].clone()
                 };
                 if canonical || final_output {
+                    let provider = canonical.then(|| canon_type(analysis, &publication)).transpose()?;
                     let mut fields = Vec::new();
                     let mut params = Vec::new();
                     let mut args = Vec::new();
@@ -1481,7 +1524,17 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                         });
                         params.extend([quote!(#base:i64), quote!(#shift:u32)]);
                         args.extend([quote!(#base), quote!(#shift)]);
-                        parts.push(quote!(if #shift == 128 {0} else {((*rows.add(position * #width + #slot)).wrapping_sub(#base) as u64 as u128) << #shift}));
+                        parts.push(quote! {
+                            let value = (*rows.add(position * #width + #slot)).wrapping_sub(#base) as u64;
+                            let lane = (#shift / 64) as usize;
+                            let local = #shift % 64;
+                            if lane < lanes {
+                                *packed.add(lane) |= value << local;
+                                if local != 0 && lane + 1 < lanes {
+                                    *packed.add(lane + 1) |= value >> (64 - local);
+                                }
+                            }
+                        });
                     }
                     let kernel = format_ident!("__cq_union_pack_{index}_{module_name}");
                     let prepare = format_ident!("prepare_{kernel}");
@@ -1494,9 +1547,9 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                             unsafe {
                                 let mut position = ::cuda_device::thread::index_1d().get() as usize;
                                 while position < length {
-                                    let key = 0u128 #(| (#parts))*;
-                                    *keys.add(position * lanes) = key as u64;
-                                    if lanes == 2 { *keys.add(position * 2 + 1) = (key >> 64) as u64; }
+                                    let packed = keys.add(position * lanes);
+                                    for lane in 0..lanes { *packed.add(lane) = 0; }
+                                    #(#parts)*
                                     position += ::cuda_device::thread::gridDim_x() as usize * 256;
                                 }
                             }
@@ -1506,7 +1559,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                         let mut __cq_key_bits = 0u32;
                         let mut __cq_fields = ::std::vec::Vec::new();
                         #(#fields)*
-                        let __cq_key_lanes = ::cq_gpu_sequence_runtime::canon::PackedCanon::key_lanes(__cq_key_bits)?;
+                        let __cq_key_lanes = ::cq_gpu_sequence_runtime::canon::WideCanon::key_lanes(__cq_key_bits)?;
                         let #keys = unsafe { ::cq_gpu_runtime::Buffer::<u64>::uninitialized(__cq_pool.clone(),#store_length * __cq_key_lanes)? };
                         if #store_length != 0 {
                             let prepared = __cq_module.#prepare(::cuda_core::LaunchConfig1D::new(#store_length.div_ceil(256) as u32,256,0))?;
@@ -1516,7 +1569,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                     let owner = format_ident!("__cq_canonical_{index}");
                     let saved_fields = format_ident!("__cq_fields_{index}");
                     let canonicalize = quote! {
-                        let mut canon = ::cq_gpu_sequence_runtime::canon::PackedCanon::new(&__cq_pool,#store_length)?;
+                        let mut canon = <#provider>::new(&__cq_pool,#store_length)?;
                         let #owner = unsafe { canon.canonicalize(&#keys,#store_length,__cq_key_bits)? };
                     };
                     if final_output {
@@ -1604,12 +1657,10 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                                     .ok_or_else(|| {
                                         error("host consumer column absent from packed publication")
                                     })?;
+                                let offset = packed_offset(quote!(__cq_downloaded_codes.as_ptr()), quote!(__position), quote!(__lanes), quote!(field.shift), quote!(field.bits));
                                 quote! {{
                                     let field = #fields[#field];
-                                    let offset = if field.bits == 0 { 0 } else {
-                                        ((__key >> field.shift) as u64)
-                                            & if field.bits == 64 { u64::MAX } else { (1u64 << field.bits) - 1 }
-                                    };
+                                    let offset = #offset;
                                     field.base.wrapping_add(offset as i64)
                                 }}
                             } else {
@@ -1624,8 +1675,6 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                                 quote!(#owner.keys().to_host()?),
                                 quote! {
                                     let __lanes = #owner.lanes();
-                                    let __key = __cq_downloaded_codes[__position * __lanes] as u128
-                                        | if __lanes == 2 { ( __cq_downloaded_codes[__position * 2 + 1] as u128) << 64 } else { 0 };
                                 },
                             )
                         } else {
@@ -1691,6 +1740,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                 .iter()
                 .any(|op| matches!(op, Operation::Canon))
         });
+        let provider = canonical.then(|| canon_type(analysis, &publication)).transpose()?;
         if !canonical
             && chains.iter().any(|chain| {
                 chain
@@ -1991,15 +2041,13 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                         let base = format_ident!("__cq_stored_base_{prior}_{field}");
                         let shift = format_ident!("__cq_stored_shift_{prior}_{field}");
                         let bits = format_ident!("__cq_stored_bits_{prior}_{field}");
+                        let offset = packed_offset(quote!(#keys), quote!(__position as usize), quote!(#lanes), quote!(#shift), quote!(#bits));
                         unpack.extend(quote! {
-                            let __mask=if #bits==64 {u64::MAX} else {(1u64<<#bits)-1};
-                            let __offset=if #bits==0 {0} else {((__key>>#shift) as u64)&__mask};
+                            let __offset = #offset;
                             __row[#slot]=#base.wrapping_add(__offset as i64);
                         });
                     }
                     quote! {
-                        let __key=*#keys.add(__position as usize * #lanes) as u128
-                            | if #lanes == 2 { (*#keys.add(__position as usize * 2 + 1) as u128) << 64 } else { 0 };
                         #unpack
                     }
                 } else if let Some(provider) = &compiler.stored[prior].range {
@@ -2160,7 +2208,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
             let mut __cq_key_bits=0u32;
             let mut __cq_fields=::std::vec::Vec::<::cq_gpu_sequence_runtime::canon::PackedField>::new();
             #(#local_packing)*
-            let __cq_key_lanes=::cq_gpu_sequence_runtime::canon::PackedCanon::key_lanes(__cq_key_bits)?;
+            let __cq_key_lanes=::cq_gpu_sequence_runtime::canon::WideCanon::key_lanes(__cq_key_bits)?;
             #(#host_domains)*
             let __cq_prepared=__cq_module.#prepare_name(::cuda_core::LaunchConfig1D::new(#grid,256,#shared_u32))?;
             let mut __cq_capacity=#initial;
@@ -2189,7 +2237,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
         if final_output {
             output = Some(if canonical {
                 quote! {
-                    let mut __cq_canon=::cq_gpu_sequence_runtime::canon::PackedCanon::new(&__cq_pool,#store_length)?;
+                    let mut __cq_canon=<#provider>::new(&__cq_pool,#store_length)?;
                     let __cq_keys=unsafe {__cq_canon.canonicalize(&#output_keys,#store_length,__cq_key_bits)?};
                     let __cq_result=__cq_output_adapter.borrow_mut().unpack_columns(__cq_keys,&__cq_fields,__cq_dictionary,__cq_statuses)?;
                 }
@@ -2204,7 +2252,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
             let canonical_owner = format_ident!("__cq_canonical_{index}");
             let fields = format_ident!("__cq_fields_{index}");
             launches.push(quote! {
-                let mut __cq_canon=::cq_gpu_sequence_runtime::canon::PackedCanon::new(&__cq_pool,#store_length)?;
+                let mut __cq_canon=<#provider>::new(&__cq_pool,#store_length)?;
                 let #canonical_owner=unsafe {__cq_canon.canonicalize(&#output_keys,#store_length,__cq_key_bits)?};
                 let #store_length=#canonical_owner.logical_count()?;
                 let #fields=__cq_fields;
@@ -2251,6 +2299,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
             .definitions
             .get(final_name)
             .is_some_and(|term| canonical_publication(term, &compiler.definitions));
+        let provider = canonical.then(|| canon_type(analysis, final_name)).transpose()?;
         // A checked host publication may be the complete result. Its transfer
         // to the device is a storage adapter, not an additional row dispatch.
         let mut name = final_name;
@@ -2335,7 +2384,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                 let mut __cq_key_bits = 0u32;
                 let mut __cq_fields = ::std::vec::Vec::new();
                 #(#packing)*
-                let __cq_key_lanes = ::cq_gpu_sequence_runtime::canon::PackedCanon::key_lanes(__cq_key_bits)?;
+                let __cq_key_lanes = ::cq_gpu_sequence_runtime::canon::WideCanon::key_lanes(__cq_key_bits)?;
                 let __cq_host_output_keys = unsafe {
                     ::cq_gpu_runtime::Buffer::<u64>::uninitialized(__cq_pool.clone(),
                         __cq_host_output_length.checked_mul(__cq_key_lanes).ok_or("Sequence output allocation overflow")?)?
@@ -2350,7 +2399,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
             });
             output = Some(if canonical {
                 quote! {
-                    let mut canon = ::cq_gpu_sequence_runtime::canon::PackedCanon::new(
+                    let mut canon = <#provider>::new(
                         &__cq_pool,__cq_host_output_length)?;
                     let keys = unsafe { canon.canonicalize(
                         &__cq_host_output_keys,__cq_host_output_length,__cq_key_bits)? };
