@@ -71,11 +71,12 @@ impl<F> GroupedRows<F> {
 ///
 /// # Safety
 /// The initialized row-major input must be canonical over complete valuations,
-/// not merely over aggregate arguments, and ready on `pool`'s stream.
+/// not merely over aggregate arguments. Optional 0/1 flags and all live rows
+/// must be initialized on the same device and ready on `pool`'s stream.
 pub unsafe fn fold(
     pool: Arc<Pool>,
     input: &Buffer<i64>,
-    live: Option<&Buffer<u32>>,
+    live: Option<&cuda_core::DeviceBuffer<u32>>,
     rows: usize,
     keys: usize,
     aggregates: &[Aggregate],
@@ -88,7 +89,7 @@ pub unsafe fn fold(
         || rows > u32::MAX as usize
         || input.len() < rows.checked_mul(width).ok_or("group size overflow")?
         || !Arc::ptr_eq(input.pool(), &pool)
-        || live.is_some_and(|live| live.len() < rows || !Arc::ptr_eq(live.pool(), &pool))
+        || live.is_some_and(|live| live.len() < rows)
     {
         return Err("invalid grouped input extent or pool".into());
     }
@@ -100,21 +101,12 @@ pub unsafe fn fold(
     let launch = cub.on(stream)?;
     let mut order = temporary::<u32>(stream, rows)?;
     let rows = if let Some(live) = live {
-        let flags = temporary::<u32>(stream, rows)?;
         let mut count = temporary::<u64>(stream, 1)?;
         if rows != 0 {
-            unsafe {
-                cuda_core::memory::memcpy_dtod_async(
-                    flags.cu_deviceptr(),
-                    live.cu_deviceptr(),
-                    rows * std::mem::size_of::<u32>(),
-                    stream.cu_stream(),
-                )?;
-            }
             select_flagged(
                 &exec,
                 arithmetic_range(0u32, 1, rows),
-                flags.view(),
+                live.view(),
                 order.view_mut(),
                 &mut count,
             )?;
@@ -136,7 +128,6 @@ pub unsafe fn fold(
             }
         }
         release(stream, order)?;
-        release(stream, flags)?;
         release(stream, count)?;
         order = selected_order;
         selected

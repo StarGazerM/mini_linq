@@ -29,7 +29,7 @@ fn segmented_integer_monoids_and_empty_global_identity() -> Result<()> {
             (vec![2, 1, -7, -7, -7], vec![1; 5])
         ]
     );
-    let live = Buffer::from_host(pool.clone(), &[0u32, 1, 0])?;
+    let live = cuda_core::DeviceBuffer::from_host(pool.stream(), &[0u32, 1, 0])?;
     let selected =
         unsafe { group::fold(pool.clone(), &data, Some(&live), 3, 1, &aggregates, vec![])? }
             .with_decoder(|v: &[i64], _: &[u8]| -> Result<_> { Ok(v.to_vec()) });

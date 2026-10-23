@@ -428,7 +428,7 @@ impl Checked<'_> {
                                     equality.left == **column
                                         && matches!(
                                             equality.right,
-                                            physical::syntax::algebra::EqualityValue::Literal(_)
+                                            cq_syntax::EqualityValue::Literal(_)
                                         )
                                 })
                             })

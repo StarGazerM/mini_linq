@@ -243,7 +243,7 @@ pub fn group(
             (
                 input.load,
                 quote!(live:*mut u32,),
-                quote!(__cq_group_live.ptr(),),
+                quote!(__cq_group_live.cu_deviceptr() as *mut u32,),
                 quote!(),
                 quote!(Some(&__cq_group_live)),
             )
@@ -258,7 +258,12 @@ pub fn group(
         };
     let live_write = filtered.then(|| quote!(*live.add(position)=__live as u32;));
     let live_buffer = filtered.then(|| quote! {
-        let __cq_group_live=unsafe {::cq_gpu_runtime::Buffer::<u32>::uninitialized(__cq_pool.clone(),#length)?};
+        let __cq_group_live=unsafe {::cuda_core::DeviceBuffer::<u32>::uninitialized_async(__cq_pool.stream(),#length)?};
+    });
+    let release_live = filtered.then(|| {
+        quote!(unsafe {
+            __cq_group_live.drop_async(__cq_pool.stream())?;
+        })
     });
     Ok((
         quote! {
@@ -291,6 +296,7 @@ pub fn group(
             )?}.with_decoder(
                 move |values:&[i64],valid:&[u8]| -> ::cq_gpu_sequence_runtime::Result<_> {Ok((#(#decoded,)*))}
             );
+            #release_live
         },
     ))
 }
