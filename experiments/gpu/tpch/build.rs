@@ -610,7 +610,7 @@ fn compile_stage(
                 quote!(Vec<#row>)
             }
         }).collect();
-        let cpu_names: Vec<_> = (0..answer_types.len()).map(|i| syn::Index::from(i)).collect();
+        let cpu_names: Vec<_> = (0..answer_types.len()).map(syn::Index::from).collect();
         let own_row = {
             let fields = answer_types.iter().zip(&cpu_names).map(|(ty, index)| {
                 quote!(<#ty as ::core::clone::Clone>::clone(
@@ -949,7 +949,8 @@ fn main() -> Result<()> {
                 };
                 let generation_started = std::time::Instant::now();
                 let compiled = if let Some(staged) = &staged {
-                    build_stages::compile(staged, &manifest, mode, overrides.get(name))
+                    build_stages::compile(staged, &manifest, mode,
+                        if mode == "advised" { overrides.get(name) } else { None })
                 } else {
                     compile(kernel.as_ref().unwrap(), &manifest, &pipeline, profile)
                 };

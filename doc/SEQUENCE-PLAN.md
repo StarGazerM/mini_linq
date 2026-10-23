@@ -1228,3 +1228,47 @@ The generic canonical-publication path additionally needs declared primitive
 bounds for computed columns: wrapping expressions may cross either endpoint,
 so source codec bounds cannot be reused. WideCanon supplies complete keys when
 those full declared ranges exceed 128 bits.
+## [14] Staged programs in the GPU suite
+
+The importer retains the authored compile! graph, not merely its final rule:
+H02/H18/H20 have two nodes, H15 has three, H11 has four, and H13 has two
+independent terminal branches. H13 also retains its authored one-time
+QualifiedOrders preprocessing and counts/zeros iterator composition. Each node
+has a separately checked/advised plan and replay artifact. Resident numeric
+publications retain count, input key codec bounds, output column order and
+ancestor statuses; nullable or host-planned publications use host rows.
+Explicit caller advice is not discarded when device planning fails.
+
+The advised correctness gate passes at SF1 and SF10, including exact comparison
+against every exported answer TSV and same-Physical Sequential graph conformance
+at SF1. Times below are milliseconds: one warmup, median of five per-run sums
+of stage times, including inter-stage host publication when required.
+
+| Query | SF1 rows | SF10 rows | SF1 staged / DuckDB t24 | SF10 staged / DuckDB t24 | Exact both |
+|---|---:|---:|---:|---:|---|
+| H02 | 460 | 4,667 | 22.600 / 11 | 496.737 / 42 | yes |
+| H11 | 1,048 | 0 | 33.102 / 6 | 521.764 / 15 | yes |
+| H13 | 150,000 | 1,500,000 | 15.164 / 184 | 157.185 / 1,588 | yes |
+| H15 | 1 | 1 | 664.863 / 11 | 33,827.704 / 65 | yes |
+| H18 | 57 | 624 | 493.079 / 87 | 5,393.855 / 771 | yes |
+| H20 | 186 | 1,804 | 399.399 / 21 | 4,219.653 / 128 | yes |
+
+These measurements include WideCanon but precede CQ-Arith/GroupKeys integration;
+they are not claims of fully device execution or performance acceptance. H02
+publishes its GPU minimum on the host because it is nullable; its final stage,
+all H11 stages, H15's anti-dominance stage and H18's final stage are host-planned.
+H20 retains its authored host predicates within GPU-planned stages. In
+particular, H15's unchanged quadratic anti-dominance stage costs about 30 seconds
+at SF10. The report records each host stage's device-planning diagnostic rather
+than treating it as an unreported GPU execution.
+
+Evidence: `/data/tpch-gpu/box14-stages-final-sf1.json` and the six
+`/data/tpch-gpu/box14-h{02,11,13,15,18,20}-final-sf10.json` reports.
+
+The release importer/encoding tests (9), stage-plan replay test (1), and resident
+group publication regression (1) passed. The latter covers column order,
+inherited key bounds, row count and ancestor failure propagation. Formal rule
+inventory (241) and formatting of the new staged helper modules passed.
+Scoped clippy checks the runtime with warnings, but the suite lint gate reports
+44 `clippy::erasing_op` errors in generated zero-width CUDA allocations
+(`capacity * 0`); no translator change or lint suppression is included here.
