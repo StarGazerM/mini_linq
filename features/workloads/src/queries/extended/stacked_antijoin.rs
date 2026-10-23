@@ -10,7 +10,6 @@ pub fn check(scenario: Scenario) {
 
     let result = mini_linq::compile! {
         pipeline {
-            surface = [cq_ext_negation::negation];
             select = mini_linq::passes::select(positional(A, B, Blocked));
         }
         struct StackedAntijoin;
@@ -18,8 +17,8 @@ pub fn check(scenario: Scenario) {
         relation B(x: i32);
         relation Blocked(x: i32, y: i32);
         relation answer(x: i32);
-        answer(*x) :- A(x), neg!{ Blocked(x, _) };
-        answer(*x) :- B(x), neg!{ Blocked(x, _) };
+        answer(*x) :- A(x), !Blocked(x, _);
+        answer(*x) :- B(x), !Blocked(x, _);
     };
     let actual = result.map(|(column_0,)| vec![column_0]).collect();
     case.check(scenario, actual);

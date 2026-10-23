@@ -17,7 +17,7 @@ live in doop/engines/{mini,mini-keyed,ascent}
 The parallel CLI reuses this same cache and shared crate. Its default features
 enable all six engines; --check requires
 mini,mini-keyed,ascent,mini-par,mini-par-keyed,ascent-par.
-mini/mini-par use Fx by default; their -keyed alternatives use keyed aHash.
+mini/mini-par use Fx by default; their -keyed alternatives use keyed cq_storage providers.
 phase-timing instruments enabled engines without enabling others.
 """
 

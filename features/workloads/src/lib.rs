@@ -2,7 +2,9 @@
 //!
 //! This standalone workspace consumes public core APIs and sibling planner,
 //! rewrite, dialect and surface-pass packages. The primary corpus has 20 queries;
-//! the extended corpus adds 29 authored pairs, including 17 extension queries.
+//! the extended corpus adds 29 authored pairs spanning core and extension queries.
+//! Anti-join workloads use core `!R(..)` clauses without a negation surface pass;
+//! borrowed positive bindings are dereferenced in their negative lookup arguments.
 //! Five typed pairs run on both CSV and Parquet. The complete golden inventory
 //! is 151 files; xtask uses cq-testkit for independent SQL evaluation, strict
 //! byte comparisons and seeded abstract fuzz queries.

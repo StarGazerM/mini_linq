@@ -88,9 +88,11 @@ fn emit_ranked(program: &source::Program, ranks: &[usize]) -> syn::Result<TokenS
                 &rule.body.iter().collect::<Vec<_>>(),
                 &rule.head.args.iter().collect::<Vec<_>>(),
                 &candidates[&head],
-                &state,
-                &analysis.positions,
-                &[],
+                Inputs {
+                    state: &state,
+                    positions: &analysis.positions,
+                    borrowed_negative_inputs: &[],
+                },
                 BTreeMap::new(),
                 &mut fresh,
             )?);
@@ -162,12 +164,21 @@ pub(crate) fn emit_query(
         &query.body.iter().collect::<Vec<_>>(),
         &heads.iter().collect::<Vec<_>>(),
         candidates,
-        state,
-        positions,
-        borrowed_negative_inputs,
+        Inputs {
+            state,
+            positions,
+            borrowed_negative_inputs,
+        },
         BTreeMap::new(),
         fresh,
     )
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct Inputs<'a> {
+    pub state: &'a syn::Ident,
+    pub positions: &'a BTreeMap<String, usize>,
+    pub borrowed_negative_inputs: &'a [String],
 }
 
 // Scope values record borrowed atom/generator columns (true) versus native
@@ -176,12 +187,15 @@ pub(crate) fn body(
     items: &[&BodyItem],
     heads: &[&syn::Expr],
     candidates: &syn::Ident,
-    state: &syn::Ident,
-    positions: &BTreeMap<String, usize>,
-    borrowed_negative_inputs: &[String],
+    inputs: Inputs<'_>,
     mut scope: BTreeMap<String, bool>,
     fresh: &mut Fresh,
 ) -> syn::Result<TokenStream> {
+    let Inputs {
+        state,
+        positions,
+        borrowed_negative_inputs,
+    } = inputs;
     let Some((item, rest)) = items.split_first() else {
         let values = heads.iter().map(|value| {
             if rust::variable(value).is_some_and(|v| scope.get(&symbol_name(v)) == Some(&true)) {
@@ -223,9 +237,7 @@ pub(crate) fn body(
                 rest,
                 heads,
                 candidates,
-                state,
-                positions,
-                borrowed_negative_inputs,
+                inputs,
                 scope,
                 fresh,
             )?;
@@ -265,9 +277,7 @@ pub(crate) fn body(
                 rest,
                 heads,
                 candidates,
-                state,
-                positions,
-                borrowed_negative_inputs,
+                inputs,
                 scope,
                 fresh,
             )?;
@@ -279,9 +289,7 @@ pub(crate) fn body(
                 rest,
                 heads,
                 candidates,
-                state,
-                positions,
-                borrowed_negative_inputs,
+                inputs,
                 scope,
                 fresh,
             )?;
@@ -295,9 +303,7 @@ pub(crate) fn body(
                 rest,
                 heads,
                 candidates,
-                state,
-                positions,
-                borrowed_negative_inputs,
+                inputs,
                 scope,
                 fresh,
             )?;
@@ -314,9 +320,7 @@ pub(crate) fn body(
                 rest,
                 heads,
                 candidates,
-                state,
-                positions,
-                borrowed_negative_inputs,
+                inputs,
                 scope,
                 fresh,
             )?;
@@ -331,9 +335,7 @@ pub(crate) fn body(
                 rest,
                 heads,
                 candidates,
-                state,
-                positions,
-                borrowed_negative_inputs,
+                inputs,
                 scope,
                 fresh,
             )?;
@@ -345,9 +347,7 @@ pub(crate) fn body(
                 rest,
                 heads,
                 candidates,
-                state,
-                positions,
-                borrowed_negative_inputs,
+                inputs,
                 scope,
                 fresh,
             )?;

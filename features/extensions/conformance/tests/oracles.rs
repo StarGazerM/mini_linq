@@ -18,9 +18,9 @@ fn anti_membership_matches_an_independent_projection_oracle() {
         },
         || {
             mini_linq::compile! {
-                pipeline { surface = [cq_ext_negation::negation]; }
+                pipeline {}
                 struct N; relation A(x:i32); relation S(x:i32,y:i32);
-                answer(x) :- A(x), neg!{S(x,_)};
+                answer(x) :- A(x), !S(x,_);
             }
             .map(|(x,)| vec![*x])
             .collect::<Rows>()
@@ -211,16 +211,16 @@ fn scalar_refines_the_written_cardinality_check_and_default() {
 }
 
 #[test]
-fn stacked_union_then_negation_from_separate_crates_matches_authored_answers() {
+fn stacked_surfaces_forward_core_union_and_negation_matching_authored_answers() {
     let A = [(1,), (2,), (2,)];
     let B = [(2,), (3,)];
     let S = [(2,)];
     let result = check_refinement(
         || A.iter().chain(&B).filter(|(x,)| !S.contains(&(*x,))).map(|&(x,)| vec![x]).collect::<Rows>(),
         || mini_linq::compile! {
-            pipeline { surface = [cq_ext_aggregate::aggregate, cq_ext_recursion::recursion, cq_ext_negation::negation, cq_ext_correlated::correlated]; }
+            pipeline { surface = [cq_ext_aggregate::aggregate, cq_ext_recursion::recursion, cq_ext_correlated::correlated]; }
             struct Stack; relation A(x:i32); relation B(x:i32); relation S(x:i32);
-                answer(x) :- { A(x) } | { B(x) }, neg!{S(x)};
+                answer(x) :- { A(x) } | { B(x) }, !S(x);
         }.map(|(x,)| vec![*x]).collect::<Rows>(),
     ).unwrap();
     assert_eq!(

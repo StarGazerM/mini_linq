@@ -45,7 +45,6 @@ cq-planners	manifest-target-test	elimination_cost	features/planners/Cargo.toml
 cq-planners-test-driver	manifest-target-test	refinement	features/planners/Cargo.toml
 cq-rewrites	manifest-test	rewrites	features/rewrites/Cargo.toml
 cq-ext-support	manifest-test	interfaces	features/extensions/cq-ext-support/Cargo.toml
-cq-ext-negation	manifest-test	correspondence	features/extensions/cq-ext-negation/Cargo.toml
 cq-ext-aggregate	manifest-test	correspondence	features/extensions/cq-ext-aggregate/Cargo.toml
 cq-ext-recursion	manifest-test	correspondence	features/extensions/cq-ext-recursion/Cargo.toml
 cq-ext-correlated	manifest-test	correspondence	features/extensions/cq-ext-correlated/Cargo.toml
@@ -88,6 +87,19 @@ datalog-doop	manifest-test	doop	features/datalog/doop/Cargo.toml
 doop-shared	manifest-test	doop-shared	features/datalog/doop/shared/Cargo.toml
 datalog-oracle	manifest-test	oracles	features/datalog/oracle/Cargo.toml
 oracle-shared	manifest-test	oracle-shared	features/datalog/oracle/shared/Cargo.toml
+cq-datalog-hasher	manifest-test	correspondence	features/datalog/passes/hasher/Cargo.toml
+cq-datalog-parallel-runtime	manifest-test	runtime	features/datalog-parallel/runtime/Cargo.toml
+doop-mini	manifest-test	engine	features/datalog/doop/engines/mini/Cargo.toml
+doop-mini-keyed	manifest-test	engine	features/datalog/doop/engines/mini-keyed/Cargo.toml
+doop-ascent	manifest-test	engine	features/datalog/doop/engines/ascent/Cargo.toml
+oracle-mini	manifest-test	engine	features/datalog/oracle/engines/mini/Cargo.toml
+oracle-mini-keyed	manifest-test	engine	features/datalog/oracle/engines/mini-keyed/Cargo.toml
+oracle-ascent	manifest-test	engine	features/datalog/oracle/engines/ascent/Cargo.toml
+doop-mini-par	manifest-test	engine	features/datalog-parallel/doop/engines/mini-par/Cargo.toml
+doop-mini-par-keyed	manifest-test	engine	features/datalog-parallel/doop/engines/mini-par-keyed/Cargo.toml
+doop-ascent-par	manifest-test	engine	features/datalog-parallel/doop/engines/ascent-par/Cargo.toml
+oracle-mini-par	manifest-test	engine	features/datalog-parallel/oracle/engines/mini-par/Cargo.toml
+oracle-ascent-par	manifest-test	engine	features/datalog-parallel/oracle/engines/ascent-par/Cargo.toml
 cq-workloads	scenario	growth	features/workloads/check_growth.py
 cq-xtask	manifest-test	restored	features/workloads/xtask/Cargo.toml
 cq-xtask	oracle-test	oracle-unit	features/workloads/xtask/Cargo.toml

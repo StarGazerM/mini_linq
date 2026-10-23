@@ -6,23 +6,26 @@ use std::{cell::Cell, collections::BTreeSet};
 fn negative_projection_handles_global_absence_repeated_keys_and_empty_inner() {
     let A = [(1,), (2,)];
     let S = [(1, 1), (2, 3)];
-    let absent: Vec<_> = mini_linq::compile! { pipeline { surface = [cq_ext_negation::negation]; }
+    let absent: Vec<_> = mini_linq::compile! {
+       pipeline {}
        struct Repeated; relation A(x:i32); relation S(x:i32,y:i32); relation answer(x:i32);
-       answer(*x) :- A(x), neg!{S(x,x)};
+       answer(*x) :- A(x), !S(x,x);
     }
     .collect();
     assert_eq!(absent, [(2,)]);
-    let result: Vec<_> = mini_linq::compile! { pipeline { surface = [cq_ext_negation::negation]; }
+    let result: Vec<_> = mini_linq::compile! {
+       pipeline {}
        struct Global; relation A(x:i32); relation S(x:i32,y:i32); relation answer(x:i32);
-       answer(*x) :- A(x), neg!{S(_,_)};
+       answer(*x) :- A(x), !S(_,_);
     }
     .collect();
     assert!(result.is_empty());
     let S: [(i32, i32); 0] = [];
     let result: BTreeSet<_> =
-        mini_linq::compile! { pipeline { surface = [cq_ext_negation::negation]; }
+        mini_linq::compile! {
+           pipeline {}
            struct GlobalEmpty; relation A(x:i32); relation S(x:i32,y:i32); relation answer(x:i32);
-           answer(*x) :- A(x), neg!{S(_,_)};
+           answer(*x) :- A(x), !S(_,_);
         }
         .collect();
     assert_eq!(result, [(1,), (2,)].into());
@@ -32,9 +35,10 @@ fn negative_projection_handles_global_absence_repeated_keys_and_empty_inner() {
 fn negative_and_correlated_computed_heads_retain_set_semantics() {
     let A = [(1, 10), (1, 11), (2, 20)];
     let S = [(2, 99)];
-    let negative: Vec<_> = mini_linq::compile! { pipeline { surface = [cq_ext_negation::negation]; }
+    let negative: Vec<_> = mini_linq::compile! {
+        pipeline {}
         struct Projection; relation A(x:i32,payload:i32); relation S(x:i32,y:i32); relation answer(x:i32);
-        answer(*x) :- A(x,payload), neg!{S(x,_)};
+        answer(*x) :- A(x,payload), !S(x,_);
      }.collect();
     assert_eq!(negative, [(1,)]);
     let correlated: Vec<_> =
@@ -47,13 +51,14 @@ fn negative_and_correlated_computed_heads_retain_set_semantics() {
 }
 
 #[test]
-fn negation_shares_once_evaluated_leaves_with_its_nested_query() {
+fn core_negation_evaluates_each_leaf_once() {
     let calls = Cell::new(0);
-    let result: Vec<_> = mini_linq::compile! { pipeline { surface = [cq_ext_negation::negation]; }
+    let result: Vec<_> = mini_linq::compile! {
+       pipeline {}
        struct Leaves;
        relation A(x:i32) = ({calls.set(calls.get()+1);[(1,),(2,)]});
        relation S(x:i32,y:i32) = ({calls.set(calls.get()+1);[(1,10)]});
-       relation answer(x:i32); answer(*x) :- A(x), neg!{S(x,_)};
+       relation answer(x:i32); answer(*x) :- A(x), !S(x,_);
     }
     .collect();
     assert_eq!(result, [(2,)]);
@@ -118,13 +123,6 @@ fn raw_identifiers_preserve_logical_symbols_across_extension_boundaries() {
         }
         .collect();
     assert_eq!(correlated, [(1,)]);
-    let negative: Vec<_> =
-        mini_linq::compile! { pipeline { surface = [cq_ext_negation::negation]; }
-           struct Raw; relation r#A(x:i32); relation r#S(a:i32,b:i32); relation r#answer(x:i32);
-           answer(*x) :- A(x), neg!{S(r#x,x)};
-        }
-        .collect();
-    assert_eq!(negative, [(2,)]);
     let Sale = [(1, 3), (1, 7), (2, 9)];
     let grouped = mini_linq::compile! { pipeline { surface = [cq_ext_aggregate::aggregate]; } aggregate! {
        by(r#d); total=sum(r#a); struct Raw; relation Sale(d:i32,a:i32); rows(d,a) :- Sale(d,a);

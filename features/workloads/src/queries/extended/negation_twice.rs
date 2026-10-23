@@ -10,7 +10,6 @@ pub fn check(scenario: Scenario) {
 
     let result = mini_linq::compile! {
         pipeline {
-            surface = [cq_ext_negation::negation];
             select = mini_linq::passes::select(positional(A, B, C));
         }
         struct NegationTwice;
@@ -18,7 +17,7 @@ pub fn check(scenario: Scenario) {
         relation B(x: i32, y: i32);
         relation C(x: i32, y: i32);
         relation answer(x: i32);
-        answer(*x) :- A(x), neg!{ B(x, _) }, neg!{ C(x, _) };
+        answer(*x) :- A(x), !B(x, _), !C(x, _);
     };
     let actual = result.map(|(column_0,)| vec![column_0]).collect();
     case.check(scenario, actual);

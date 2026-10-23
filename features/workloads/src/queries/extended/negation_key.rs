@@ -9,14 +9,13 @@ pub fn check(scenario: Scenario) {
 
     let result = mini_linq::compile! {
         pipeline {
-            surface = [cq_ext_negation::negation];
             select = mini_linq::passes::select(positional(A, S));
         }
         struct NegationKey;
         relation A(x: i32, payload: i32);
         relation S(x: i32, y: i32);
         relation answer(x: i32);
-        answer(*x) :- A(x, payload), neg!{ S(x, _) };
+        answer(*x) :- A(x, payload), !S(x, _);
     };
     let actual = result.map(|(column_0,)| vec![column_0]).collect();
     case.check(scenario, actual);

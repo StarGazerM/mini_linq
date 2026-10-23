@@ -8,7 +8,7 @@ fn all_other_surfaces_forward_nested_core_blocks() {
     let B = [(2_i32,), (3,)];
     let C = [(4_i32,)];
     let rows: Rows = mini_linq::compile! {
-        pipeline { surface = [cq_ext_aggregate::aggregate, cq_ext_recursion::recursion, cq_ext_negation::negation, cq_ext_correlated::correlated]; }
+        pipeline { surface = [cq_ext_aggregate::aggregate, cq_ext_recursion::recursion, cq_ext_correlated::correlated]; }
         struct Q; relation A(x:i32); relation B(x:i32); relation C(x:i32);
         answer(x) :- {{A(x)} | {B(x)}} else {C(x)};
     }.map(|(x,)|vec![*x]).collect();
@@ -20,7 +20,7 @@ fn every_surface_forwards_plain_cq_and_parameters() {
     let A = [(1,), (2,), (3,)];
     let limit = 1;
     let rows: Rows = mini_linq::compile! {
-        pipeline { surface = [cq_ext_aggregate::aggregate, cq_ext_recursion::recursion, cq_ext_negation::negation, cq_ext_correlated::correlated]; }
+        pipeline { surface = [cq_ext_aggregate::aggregate, cq_ext_recursion::recursion, cq_ext_correlated::correlated]; }
         struct Plain; relation A(x:i32); answer(x) :- A(x), if *x > limit;
     }.map(|(x,)| vec![*x]).collect();
     assert_eq!(rows, [vec![2], vec![3]].into());
@@ -31,7 +31,7 @@ fn direct_surface_packet_carries_arguments_through_stacked_union_negation() {
     let A = [(1,), (2,)];
     let B = [(2,), (3,)];
     let S = [(2,)];
-    let rows: Vec<_> = cq_ext_negation::negation! {
+    let rows: Vec<_> = cq_ext_correlated::correlated! {
         pipeline {
             mini_linq::passes::plan,
             mini_linq::passes::index_demands,
@@ -41,11 +41,12 @@ fn direct_surface_packet_carries_arguments_through_stacked_union_negation() {
             cq_ext_test_passes::repeated(twice)
         };
         struct Direct; relation A(x:i32); relation B(x:i32); relation S(x:i32);
-            answer(x) :- { A(x) } | { B(x) }, neg!{S(x)};
+            answer(x) :- { A(x) } | { B(x) }, !S(x);
     }
     .map(|(x,)| *x)
     .collect();
-    assert_eq!(rows.len(), 2);
+    // Core negation streams into the caller's terminal, which repeats each answer.
+    assert_eq!(rows.len(), 4);
     assert_eq!(
         rows.into_iter().collect::<std::collections::BTreeSet<_>>(),
         [1, 3].into()
@@ -57,7 +58,7 @@ fn aggregate_nested_query_uses_the_callers_printer_and_deduplicates_its_witnesse
     let Sale = [(1, 1, 10), (1, 2, 10)];
     let groups = mini_linq::compile! {
         pipeline {
-            surface = [cq_ext_negation::negation, cq_ext_aggregate::aggregate];
+            surface = [cq_ext_aggregate::aggregate];
             sequence = mini_linq::passes::sequence;
             grade = mini_linq::passes::sequential;
             print = cq_ext_test_passes::repeated(twice);

@@ -289,28 +289,3 @@ fn independent_hole_choices_reject_identical_missing_and_key_holes() {
     let rule = component.seeds[0].hole;
     assert!(per_hole_pipeline(&round, quote!(#key, #rule)).is_err());
 }
-
-#[test]
-fn partitioning_requires_registration_and_retains_pull_interfaces() {
-    use cq_lang_datalog_round::{HoleInterface, Terminal};
-    let mut source = pipeline_fixture();
-    assert!(partition_holes(&source).is_err());
-    source.terminals.0.push(Terminal {
-        path: syn::parse_quote!(::cq_datalog::passes::print_hole),
-        interface: HoleInterface::Pull,
-    });
-    let target = partition_holes(&source).unwrap();
-    assert_eq!(source.terminals, target.terminals);
-    for (index, hole) in target.holes.iter().enumerate() {
-        assert_eq!(hole.interface, HoleInterface::Pull);
-        let terminal = hole.pipeline.passes.last().unwrap();
-        let expected: syn::Path = syn::parse_quote!(::cq_datalog::passes::print_hole);
-        assert_eq!(terminal.path, expected);
-        let partition = index % 16;
-        assert_eq!(
-            terminal.arguments.to_string(),
-            quote!(partition(#partition)).to_string()
-        );
-    }
-    cq_lang_datalog_round::check_rewrite(&source, &target).unwrap();
-}

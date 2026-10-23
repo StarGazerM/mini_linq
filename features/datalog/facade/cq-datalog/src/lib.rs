@@ -33,9 +33,9 @@
 //! Select the embedded CQ compiler with `cq = pipeline { plan = pass; ... };`
 //! inside that configuration. Its resolved queue is recorded on each hole.
 //! Embedded holes default to `sequence`, `sequential`, and `translate_pull`
-//! after Structures representation and staging. Custom Sequence terminals,
-//! including `print_hole`, explicitly select `sequence` and `grade` in their
-//! CQ configuration; terminal-only custom choices retain Structures input.
+//! after Structures representation and staging. Custom Sequence terminals
+//! explicitly select `sequence` and `grade` in their CQ configuration;
+//! terminal-only custom choices retain Structures input.
 //! [`DatalogConfiguration`] exposes the same resolution to Rust callers.
 //!
 //! Each rule hole records `consumer canonical`: its result belongs to exactly
@@ -271,7 +271,6 @@ pub use cq_lang_datalog_round as round;
 pub use cq_lang_datalog_source as source;
 pub use cq_lang_datalog_storage as storage;
 pub use cq_lang_datalog_strata as strata;
-pub use cq_rewrites;
 pub use rustc_hash;
 
 /// Codegen partitioning helpers used by the terminal printer.
@@ -313,7 +312,7 @@ pub mod __codegen {
 /// Direct checked entries, each consuming its source IR and a continuation.
 pub mod passes {
     pub use cq_datalog_macros::{
-        fork, incremental, print_hole, print_rounds, storage, stratify, surface_if_let,
+        fork, incremental, print_rounds, storage, stratify, surface_if_let,
     };
     pub use own_push::push_into as print_push;
 }

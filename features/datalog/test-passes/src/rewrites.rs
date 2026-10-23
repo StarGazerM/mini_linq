@@ -205,29 +205,5 @@ pub fn per_hole_pipeline(
     Ok(target)
 }
 
-/// The adapter must already be declared in the immutable terminal registry.
-pub fn partition_holes(
-    source: &cq_lang_datalog_round::Program,
-) -> syn::Result<cq_lang_datalog_round::Program> {
-    use cq_lang_datalog_round::{HoleInterface, contract};
-    contract::check(source)?;
-    let mut target = source.clone();
-    for (index, hole) in target.holes.iter_mut().enumerate() {
-        if hole.interface != HoleInterface::Pull {
-            return Err(syn::Error::new_spanned(
-                &hole.cq,
-                "partition_holes requires pull holes",
-            ));
-        }
-        let partition = index % 16;
-        *hole.pipeline.passes.last_mut().expect("checked terminal") = syn::parse_quote!(
-            ::cq_datalog::passes::print_hole(partition(#partition))
-        );
-    }
-    contract::check(&target)?;
-    cq_lang_datalog_round::check_rewrite(source, &target)?;
-    Ok(target)
-}
-
 #[cfg(test)]
 mod tests;

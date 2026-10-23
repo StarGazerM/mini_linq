@@ -37,8 +37,7 @@ macro_rules! configuration {
                         $($stages)*
                         select = ::mini_linq::passes::select(positional($d($d host),*));
                         structures = [$($extra,)* ::cq_rewrites::retype(dedup => crate::tpch_runtime::Dedup<_>)];
-                        surface = [::cq_ext_aggregate::aggregate, ::cq_ext_correlated::correlated,
-                            ::cq_ext_negation::negation];
+                        surface = [::cq_ext_aggregate::aggregate, ::cq_ext_correlated::correlated];
                     }
                     $d($d tokens)*
                 } };
@@ -46,8 +45,7 @@ macro_rules! configuration {
                     pipeline {
                         $($stages)*
                         structures = [$($extra,)* ::cq_rewrites::retype(dedup => crate::tpch_runtime::Dedup<_>)];
-                        surface = [::cq_ext_aggregate::aggregate, ::cq_ext_correlated::correlated,
-                            ::cq_ext_negation::negation];
+                        surface = [::cq_ext_aggregate::aggregate, ::cq_ext_correlated::correlated];
                     }
                     $d($d tokens)*
                 } };
