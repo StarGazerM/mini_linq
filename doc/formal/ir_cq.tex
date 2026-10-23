@@ -9,9 +9,10 @@ token trees~\cite{host-synmacro}.
 Program ::= struct Name; Decl* Rule+
 Decl    ::= relation R(c: Type, ...) [= (Expr)];
 Rule    ::= h(Expr, ...) :- Clause, ... ;
-Clause  ::= R(Arg, ...) | Guard | let Pat [: Type] = Expr
+Clause  ::= R(Arg, ...) | !R(NegArg, ...) | Guard | let Pat [: Type] = Expr
           | for Pat in Expr | Block
-Guard   ::= ["#[total]"] "if" Expr
+Guard   ::= "if" Expr
+NegArg  ::= bound-variable | literal | parameter | _
 Arg     ::= x | _ | Expr
 Block   ::= { Body } ( | { Body } )+  |  { Body } ( else { Body } )+
 \end{lstlisting}
@@ -126,8 +127,8 @@ them only under the premises.
    \sqsupseteq\sem{\mathsf{if}\ e}}
 \end{mathpar}
 Recognized comparisons are total, so short-circuit \code{\&\&}, \code{||} and
-\code{!} mean classical connectives on them. Except for CQ-Total below,
-arithmetic, calls, methods, casts, indexing, blocks, macros, qualified paths
+\code{!} mean classical connectives on them.
+Arithmetic, calls, methods, casts, indexing, blocks, macros, qualified paths
 and field access are opaque; a mixed \code{||} or \code{!} is one opaque leaf;
 only the top-level conjunction splits.
 Parameters print as \code{@name} in later languages and are borrowed once outside
@@ -142,37 +143,19 @@ the same opaque leaves in the same order. A disjunction or negation lacks this
 argument and is never split.
 \end{proof}
 
-\paragraph{Total Rust predicates.}
-\[
-\Rule{CQ-Total}{e\text{ is allowlisted over declared primitive types, or explicitly asserted total}\\
- F=\uses(e,B)}
- {[\code{\#[total]}]\ \mathsf{if}\ e\rightsquigarrow
-  \mathsf{constraint}\ \code{\#[total]}\{x=x\mid x\in F\}(e)}
-\]
-The allowlist admits standard \code{str}/\code{String}
-\code{contains}, \code{starts_with}, and \code{ends_with} with literal or
-declared string arguments, primitive comparisons, Boolean literals, and
-\code{\&\&}/\code{||} compositions. Unknown column types, calls, arithmetic,
-mutable references, attributes and macros are not inferred total.
-Transparent macro-forwarding groups preserve the declared-type proof, and
-lexical predicate bindings retain the original identifier hygiene.
-\code{\#[total] if e} is a trusted user premise that $e$ cannot diverge or panic,
-in addition to the existing pure functional Rust premise. Hidden macro uses
-conservatively retain the complete logical environment.
-The normalized predicate retains the original Rust expression and explicit
-lexical-to-relational bindings; aliases change bindings, not Rust tokens.
-Its totality permits ordinary selection motion; unrecognized guards still
-belong to the exact Rust chain. No data statistics or key assumptions enter
-this classification.
-The marker is an outer guard attribute, not a reserved identifier:
-\code{total} remains available as a query variable, let binding and Boolean
-guard operand. Normalized predicates also use the attribute-prefixed wire
-form, so a relational comparison such as \code{total > 0} is unambiguous.
+\paragraph{Opaque Rust predicates.}
+Arithmetic, calls and methods, including \code{contains}, \code{starts_with}
+and \code{ends_with}, remain opaque regardless of declared type names.
+They retain their lexical bindings and the written Rust chain and Before
+facts. There is no guard attribute that asserts position independence.
+Only recognized relational comparisons and relational operators can move
+independently of that chain (Section~\ref{sec:guards-design}).
 
 \paragraph{Normal form.}
-CQ$_{\rm NF}$ restricts the same \code{cq::Program}: every atom argument is a
-distinct bare variable or a literal, every head argument a variable. Shared names
-across atoms are natural-join variables. Literals remain in their atom: they
+CQ$_{\rm NF}$ restricts the same \code{cq::Program}: every positive atom argument is a
+distinct bare variable or a literal, every head argument a variable. Negated
+atoms retain bound variables, constants and wildcards and never bind names.
+Shared names across atoms are natural-join variables. Literals remain in their atom: they
 restrict the corresponding declared columns and drop those columns from the
 occurrence's heading. They bind no variable and are not guards. Repeats within
 an occurrence become relational identities at the atom's position; computed
@@ -186,13 +169,14 @@ $\mathsf{CQScope}(s)$ is the scope rules plus:
 (4)~a declaration named by the head is the result: matching arity, no host value;
 without it, head arguments are bound bare variables of known type;
 (5)~blocks have equal interface types and no escaped local names;
-(6)~negation, aggregation and unexpanded \code{name!\{..\}} clauses are rejected;
+(6)~negated atoms obey CQ-Neg (Section~\ref{sec:guards-design}); aggregation
+and unexpanded \code{name!\{..\}} clauses are rejected;
 (7)~comparison terms are bound names, literals or captured identifiers; known
 Eq/Ord failures are rejected; a recognizable unsplit guard is rejected.
 \begin{mathpar}
 \Rule{WF-CQ}{\mathsf{CQScope}(s)}{\mathsf{WF}_{CQ}(s)\Downarrow\ok}
 
-\Rule{WF-NF}{\mathsf{WF}_{CQ}(s)\quad\text{every nested atom has distinct variables or literals}\\
+\Rule{WF-NF}{\mathsf{WF}_{CQ}(s)\quad\text{every nested positive atom has distinct variables or literals}\\
  \text{head arguments are bound variables; known inadmissible types rejected}}
  {\mathsf{WF}_{NF}(s)\Downarrow\ok}
 \end{mathpar}

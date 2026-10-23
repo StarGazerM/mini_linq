@@ -123,7 +123,8 @@ IF-Parameter	implementation	passes/cq-print/src/lib.rs	// Formal rule IF-Paramet
 IF-Range	implementation	passes/cq-print/src/range.rs	/// Formal rule IF-Range:	Ordered leading windows or scan/filter without builds.
 CQ-GuardRecognize	implementation	languages/cq-syntax/src/guard.rs	/// Formal rule CQ-GuardRecognize:	Rust comparison trait operations and pure boolean structure under Eq/Ord premises.
 CQ-GuardSplit	implementation	languages/cq-syntax/src/guard.rs	/// Formal rule CQ-GuardSplit:	Extract total conjuncts; keep one written-order residual; selecting earlier only shrinks opaque evaluation domains.
-CQ-Total	implementation	languages/cq-lang-cq/src/total.rs	/// Formal rule CQ-Total:	Typed allowlisted standard operations or explicit #[total] guard assertions become relational predicates with lexical bindings.
+CQ-Neg	implementation	languages/cq-lang-cq/src/lib.rs	fn check_body(	Declared input and arity; bound variables, constants and wildcards; binds nothing and requires Leibniz columns.
+E-Neg	implementation	passes/cq-elaborate/src/lib.rs	/// E-Neg:	Lower negation to the existing anti operator, restricting constants and repeated names and projecting away wildcards.
 E-Domain	implementation	languages/cq-syntax/src/constraint.rs	/// Formal rule E-Domain:	Project every disjunct's literal restrictions onto each commonly constrained variable and retain the exact predicate.
 Block-Union	abstract	-	-	Bottom plus Set union; permutation and witness short circuit are refinements.
 Block-Else	abstract	-	-	Ordered first nonempty branch with lazy later Rust.
@@ -227,5 +228,3 @@ CK-Return	implementation	passes/cq-physical-lowering/src/correspondence.rs	/// F
 CTX-Certify	implementation	passes/cq-print/src/lib.rs	/// Formal rule CTX-Certify:	A certified host_set fact is established by the executing program (IF-HostSet); discharged facts emit no local certificate.
 CTX-Discharge	implementation	languages/cq-lang-physical/src/lib.rs	/// Formal rule CTX-Discharge:	Record facts supplied by the invoking compiler's argument packet; its checker must prove them.
 CTX-Entry	implementation	facade/cq-stage/src/lib.rs	/// Formal rule CTX-Entry:	Require an explicit context envelope exactly equal to restricted source facts; argument packets do not authorize factful reentry, and only lower/select introduce facts.
-CQ-Neg	abstract	-	-	A negated atom names a declared input, uses only variables bound earlier, binds nothing, and is total.
-E-Neg	abstract	-	-	A CQ negation elaborates to an RA anti-join of the prefix against the constant-selected, projected relation.

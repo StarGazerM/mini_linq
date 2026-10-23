@@ -260,13 +260,6 @@ pub(crate) fn split_guards(body: &mut CommaList<BodyItem>, logical: &BTreeSet<St
                 prefix.extend(rust::bindings(&binding.pattern).iter().map(symbol_name))
             }
             BodyItem::Filter(filter) => {
-                if filter.total.is_some() {
-                    result.push(BodyItem::Constraint(crate::Constraint::total(
-                        filter.condition.clone(),
-                        logical,
-                    )));
-                    continue;
-                }
                 let names = logical.union(&forbidden).cloned().collect();
                 let split = cq_syntax::guard::split(&filter.condition, &names);
                 for c in split.constraints {

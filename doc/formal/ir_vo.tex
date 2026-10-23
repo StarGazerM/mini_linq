@@ -5,7 +5,7 @@
 \begin{lstlisting}
 VO   ::= CQProgram valuation [branches { JoinBranch* }] { Step* }
 JoinBranch ::= branch [clause, ...] (interface, ...);
-Step ::= R@path(x, _, ...); | x = y; | Constraint;
+Step ::= R@path(x, _, ...); | !R(Arg, ...); | x = y; | Constraint;
        | if Expr; | let Pat [: Type] = Expr;
        | for Pat in Expr;
        | reduce R@path with S@path(...);
@@ -20,8 +20,8 @@ Equalities and constraints are internal relational syntax.
 \paragraph{Contract.} $\mathsf{Schedule}(t,A)$ checks:
 (1)~each subatom names its relation, clause, arity and original columns; dropped
 columns are unbound; every atom's full correlated row is eventually checked;
-(2)~each identity and constraint appears exactly once, after its variables bind,
-and binds nothing;
+(2)~each identity, constraint and negation appears exactly once, after its
+variables bind, and binds nothing; negation preserves its source atom;
 (3)~Rust lets, generators and guards form the written chain (a tree under blocks, union
 siblings unordered, fallback siblings ordered); each is preceded by its
 free-variable binders and every source Before fact;
@@ -29,7 +29,7 @@ free-variable binders and every source Before fact;
 exactly the shared equality classes at its support's column positions; it
 precedes the target's first subatom, except that a target already read to
 supply a finite block domain restricts the retained prefix instead;
-no Rust guard, scalar bind or generator is a reduction target or support;
+no Rust guard, scalar bind, generator or negation is a reduction target or support;
 the reduction graph need not be acyclic;
 (5)~blocks recursively check kind, paths, interface coverage and arm schedules;
 (6)~independent join branches are disjoint connected groups of at least two
@@ -54,7 +54,8 @@ only other members, so a branch cannot depend on its future fact-side probe.
 
 \paragraph{Meaning.} Compose the steps in schedule order under
 Section~\ref{sec:denotation}: a subatom extends valuations with matching
-projected rows, a reduction is a relational semijoin on its target, and Rust
+projected rows, a reduction is a relational semijoin on its target, negation
+keeps a valuation exactly when no input row matches (CQ-Neg, E-Neg), and Rust
 steps are as in CQ. By invariants (1)--(4) a schedule refines its CQ under the premises of
 Section~\ref{sec:premises}, including the totality of every constraint placed
 ahead of its written position (Motion lemma, Section~\ref{sec:premises}): relational

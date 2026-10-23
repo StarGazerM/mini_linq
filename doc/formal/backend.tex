@@ -86,8 +86,8 @@ within its producer and consumption boundaries. The total Physical kernels
 are \code{unit}, \code{rename}, \code{project}, relational
 \code{select}/\code{point}/\code{range}, and
 \code{probe}/\code{semi}/\code{anti}/\code{merge} over admissible keys.
-Guards certified by \code{Constraint::Total} have already become relational
-\code{select} predicates; a Physical \code{guard} is always opaque.
+Recognized comparison guards have already become relational \code{select}
+predicates; a Physical \code{guard} is always opaque.
 The Order premise makes comparisons total; an arbitrary Rust \code{Ord}
 implementation is not a proof. An opaque \code{guard} or \code{bind} is partial
 and ends the preceding stage. Totality of a kernel does not assert totality

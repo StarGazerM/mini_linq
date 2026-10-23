@@ -74,8 +74,8 @@ introduction. Missing or inexact envelopes and unauthorized introductions
 are rejected as \textsc{CTX-Entry} failures.
 
 Optional features are standalone workspaces under \code{features/} that depend
-on the packaged core only: planners, rewrites, surface extensions (negation,
-aggregation, correlated subqueries, recursion as Rust contexts around checked
+on the packaged core only: planners, rewrites, surface extensions (aggregation,
+correlated subqueries, recursion as Rust contexts around checked
 core invocations), a push printer, a stacked IR, a diverged RA surface,
 composition, inspection and workloads. \code{tools/check_external.py} packages
 the core and builds and tests each feature outside the repository, and rejects a

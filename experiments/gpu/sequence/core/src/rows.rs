@@ -603,7 +603,6 @@ impl Rows {
                 Operator::Select(select)
                 | Operator::Point(_, select)
                 | Operator::Range(_, select) => {
-                    validate_theta(&select.condition)?;
                     let input = symbol_name(&select.input);
                     let tokens = cq_print::expressions::relational_condition_with(
                         &select.condition,
@@ -803,22 +802,6 @@ fn intervals(
                     "le",
                 )?;
             }
-            Constraint::Total {
-                expression,
-                bindings,
-            } => {
-                validate_device(expression)?;
-                let aliases = bindings
-                    .iter()
-                    .filter_map(|(name, term)| match term {
-                        Term::Variable(column) => {
-                            Some((symbol_name(name), columns[&symbol_name(column)].clone()))
-                        }
-                        _ => None,
-                    })
-                    .collect();
-                expression_intervals(expression, &aliases, target)?;
-            }
             _ => {
                 return Err(error(
                     "T-Gpu: provider predicate requires a recorded contiguous range selection",
@@ -842,70 +825,6 @@ fn ungroup(expression: &syn::Expr) -> &syn::Expr {
         syn::Expr::Paren(e) => ungroup(&e.expr),
         syn::Expr::Group(e) => ungroup(&e.expr),
         _ => expression,
-    }
-}
-fn expression_intervals(
-    expression: &syn::Expr,
-    aliases: &BTreeMap<String, String>,
-    target: &mut Option<Interval>,
-) -> syn::Result<()> {
-    let syn::Expr::Binary(binary) = ungroup(expression) else {
-        return Err(error(
-            "T-Gpu: provider total predicate must be a conjunction of code bounds",
-        ));
-    };
-    if matches!(binary.op, syn::BinOp::And(_)) {
-        expression_intervals(&binary.left, aliases, target)?;
-        return expression_intervals(&binary.right, aliases, target);
-    }
-    let left = match ungroup(&binary.left) {
-        syn::Expr::Unary(unary) if matches!(unary.op, syn::UnOp::Deref(_)) => ungroup(&unary.expr),
-        other => other,
-    };
-    let syn::Expr::Path(path) = left else {
-        return Err(error("T-Gpu: provider bound must address one code column"));
-    };
-    let column = path
-        .path
-        .get_ident()
-        .and_then(|id| aliases.get(&symbol_name(id)))
-        .ok_or_else(|| error("T-Gpu: provider bound column is not a checked binding"))?;
-    let op = match binary.op {
-        syn::BinOp::Eq(_) => "eq",
-        syn::BinOp::Ge(_) => "ge",
-        syn::BinOp::Gt(_) => "gt",
-        syn::BinOp::Lt(_) => "lt",
-        syn::BinOp::Le(_) => "le",
-        _ => "other",
-    };
-    let value = &binary.right;
-    interval(target, column.clone(), quote!((#value) as i64), op)
-}
-fn validate_theta(theta: &Theta) -> syn::Result<()> {
-    for constraint in &theta.constraints {
-        if let Constraint::Total { expression, .. } = constraint {
-            validate_device(expression)?;
-        }
-    }
-    Ok(())
-}
-fn validate_device(expression: &syn::Expr) -> syn::Result<()> {
-    match expression {
-        syn::Expr::Binary(e) => {
-            validate_device(&e.left)?;
-            validate_device(&e.right)
-        }
-        syn::Expr::Unary(e) => validate_device(&e.expr),
-        syn::Expr::Paren(e) => validate_device(&e.expr),
-        syn::Expr::Group(e) => validate_device(&e.expr),
-        syn::Expr::Cast(e) => validate_device(&e.expr),
-        syn::Expr::Reference(e) => validate_device(&e.expr),
-        syn::Expr::Path(_) => Ok(()),
-        syn::Expr::Lit(e) if matches!(e.lit, syn::Lit::Int(_) | syn::Lit::Bool(_)) => Ok(()),
-        _ => Err(syn::Error::new_spanned(
-            expression,
-            "T-Gpu: Rust map is not #[device]-compatible; only total scalar code expressions are supported below host",
-        )),
     }
 }
 

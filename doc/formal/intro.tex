@@ -36,9 +36,10 @@ An unmet domain premise is diagnosed. A pass may not invent a missing demand
 or substitute another source version. Each pass has a separately callable
 $\mathsf{check}_f(s,t,\chi)$ that never reruns $f$.
 
-\paragraph{Out of scope.} Negation, aggregation, correlated subqueries and
-recursion are external surface consumers composed from checked core
-invocations, not core operators. General cost-based physical search,
+\paragraph{Out of scope.} Aggregation, correlated subqueries and recursion
+are external surface consumers composed from checked core invocations, not
+core operators. Safe negated atoms are core CQ and lower to RA anti-joins.
+General cost-based physical search,
 cardinality estimation and a worst-case-optimal-join complexity guarantee are
 not implemented. Rust resolution, ownership and the runtime trait laws for
 arbitrary user types are proof obligations supported by tests, not theorems

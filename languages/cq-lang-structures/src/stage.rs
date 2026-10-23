@@ -2,7 +2,7 @@
 use super::*;
 
 fn total(operator: &Operator) -> bool {
-    // ST-Total: Relational constraints, including Constraint::Total, are total;
+    // ST-Total: Relational constraints are total under the Eq/Ord premises;
     // opaque Rust binds and guards and branch scopes are not stage steps.
     matches!(
         operator,
@@ -73,8 +73,16 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
     // HashedRun bucket is only a candidate superset, so it cannot prove this
     // obligation even though its bucket length is available.
     let candidates = physical::candidate_prefixes(&program.physical, &facts.physical);
-    let smallest_forces: BTreeSet<_> = program.physical.program.definitions.windows(2)
-        .filter(|pair| candidates.iter().any(|candidate| candidate.reader == &pair[0].name))
+    let smallest_forces: BTreeSet<_> = program
+        .physical
+        .program
+        .definitions
+        .windows(2)
+        .filter(|pair| {
+            candidates
+                .iter()
+                .any(|candidate| candidate.reader == &pair[0].name)
+        })
         .map(|pair| symbol_name(&pair[1].name))
         .collect();
     for name in &expands {
@@ -83,8 +91,10 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
             return error(definition, "expand requires a probe");
         };
         if smallest_forces.contains(name) {
-            return error(definition,
-                "expand boundary must be on the introducing Smallest probe, not its forcing read");
+            return error(
+                definition,
+                "expand boundary must be on the introducing Smallest probe, not its forcing read",
+            );
         }
         if matches!(probe.choice, Some(physical::Choice::Smallest(_))) {
             let range = candidates.iter().find(|candidate| candidate.reader == &definition.name)
@@ -125,8 +135,10 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
                     && levels.iter().all(|level| !level.is_empty())
             });
             if !built_range && !resident_range {
-                return error(definition,
-                    "expand requires a SortedRun or PrefixRun range-cursor build or an exact resident sorted host range");
+                return error(
+                    definition,
+                    "expand requires a SortedRun or PrefixRun range-cursor build or an exact resident sorted host range",
+                );
             }
         }
     }

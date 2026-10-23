@@ -23,10 +23,11 @@ panic from any reached valuation. A relational atom extends a valuation, a
 guard retains or discards it, and the head projects or maps it.
 Commutativity of the \emph{total} set/bag fragment does not establish
 commutativity of arbitrary partial computations: an empty earlier relation
-can prevent a later panic. Total guards still require their binders and pure value-based behavior; given
-those, they move like relational selections (CQ-Total, C-Ready, E-Constraint),
-which is legal exactly because they are total (Motion lemma,
-Section~\ref{sec:premises}). Opaque guards keep the Rust chain.
+can prevent a later panic. Recognized comparisons and negated atoms still
+require their binders and pure value-based behavior; given those, they move
+like relational selections (CQ-GuardRecognize, CQ-Neg, C-Ready, E-Constraint,
+E-Neg). Their definedness justifies motion (Motion lemma,
+Section~\ref{sec:premises}); opaque guards keep the Rust chain.
 
 An iterator supplies an ordered, demand-driven operational sequence, not a
 bag by definition. For a finite successful exhaustive traversal, forgetting
@@ -312,10 +313,12 @@ implement \textsc{STR-RunRead}; sorted compaction implements
 \textsc{STR-RunSnapshot}. No logical timestamp compaction is claimed.
 Output device relations remain owned and resident until explicitly read.
 
-Core negation is lowered to a total membership guard over a key set built
-once at the consuming stratum boundary, after its negative inputs are complete.
-Wildcards are omitted from the key. These guards introduce no bindings and do
-not turn a negative dependency into a positive recursive edge.
+Datalog emits a CQ negated atom against a key set built once at the consuming
+stratum boundary, after its negative inputs are complete. E-Neg lowers that
+atom to the existing RA anti-join; an exact host membership read uses the
+borrowed key set without rebuilding it per call. Wildcards are omitted from
+the key. Negated atoms introduce no bindings and do not turn a negative
+dependency into a positive recursive edge.
 
 \paragraph{Partial Rust is a separate obligation.}
 Final-valuation coverage does not prove equality of panics: a guard may

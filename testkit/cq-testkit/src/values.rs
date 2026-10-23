@@ -129,18 +129,6 @@ pub fn evaluate_constraint(c: &cq_syntax::Constraint, row: &Binding) -> bool {
         Term::Literal(l) => evaluate_integer(l, row),
     };
     match c {
-        Constraint::Total {
-            expression,
-            bindings,
-        } => {
-            let mut environment = row.clone();
-            environment.extend(
-                bindings
-                    .iter()
-                    .map(|(name, term)| (symbol_name(name), value(term))),
-            );
-            evaluate_predicate(expression, &environment)
-        }
         Constraint::Compare {
             left,
             comparison,
