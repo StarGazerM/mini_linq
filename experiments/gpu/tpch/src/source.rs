@@ -214,7 +214,12 @@ impl Kernel {
         let mut file = syn::parse_file(source)?;
         for item in &file.items {
             if let syn::Item::Macro(item) = item
-                && item.mac.path.segments.last().is_some_and(|s| s.ident == "retail_kernel")
+                && item
+                    .mac
+                    .path
+                    .segments
+                    .last()
+                    .is_some_and(|s| s.ident == "retail_kernel")
             {
                 return Ok(syn::parse2(item.mac.tokens.clone())?);
             }
@@ -227,16 +232,25 @@ impl Kernel {
         struct Compiles(Vec<TokenStream>);
         impl VisitMut for Compiles {
             fn visit_macro_mut(&mut self, mac: &mut syn::Macro) {
-                if mac.path.segments.last().is_some_and(|s| s.ident == "compile") {
+                if mac
+                    .path
+                    .segments
+                    .last()
+                    .is_some_and(|s| s.ident == "compile")
+                {
                     self.0.push(mac.tokens.clone());
                 }
             }
         }
         let mut compiles = Compiles(Vec::new());
-        let run = file.items.iter_mut().find_map(|item| match item {
-            syn::Item::Fn(function) if function.sig.ident == "run" => Some(function),
-            _ => None,
-        }).ok_or("standalone CPU source has no run function")?;
+        let run = file
+            .items
+            .iter_mut()
+            .find_map(|item| match item {
+                syn::Item::Fn(function) if function.sig.ident == "run" => Some(function),
+                _ => None,
+            })
+            .ok_or("standalone CPU source has no run function")?;
         compiles.visit_block_mut(&mut run.block);
         if compiles.0.len() != 1 {
             return Err(format!(
@@ -254,7 +268,8 @@ impl Kernel {
                 let pipeline;
                 syn::braced!(pipeline in input);
                 if !pipeline.is_empty() {
-                    return Err(pipeline.error("standalone importer requires the authored default pipeline"));
+                    return Err(pipeline
+                        .error("standalone importer requires the authored default pipeline"));
                 }
                 Ok(Self(input.parse()?))
             }
@@ -268,10 +283,14 @@ impl Kernel {
         program: cq_lang_cq::Program,
         publications: &BTreeMap<String, Vec<(Ident, syn::Type)>>,
     ) -> Result<Self> {
-        let run = file.items.iter().find_map(|item| match item {
-            syn::Item::Fn(function) if function.sig.ident == "run" => Some(function),
-            _ => None,
-        }).ok_or("standalone CPU source has no run function")?;
+        let run = file
+            .items
+            .iter()
+            .find_map(|item| match item {
+                syn::Item::Fn(function) if function.sig.ident == "run" => Some(function),
+                _ => None,
+            })
+            .ok_or("standalone CPU source has no run function")?;
         let body = program.query.body.to_token_stream();
         let mut setup: syn::Block = syn::parse_quote!({});
         for statement in &run.block.stmts {
@@ -292,10 +311,14 @@ impl Kernel {
                 }
             }
         }
-        let exports = file.items.iter().find_map(|item| match item {
-            syn::Item::Const(item) if item.ident == "EXPORTS" => Some(item.expr.as_ref()),
-            _ => None,
-        }).ok_or("standalone CPU source has no EXPORTS")?;
+        let exports = file
+            .items
+            .iter()
+            .find_map(|item| match item {
+                syn::Item::Const(item) if item.ident == "EXPORTS" => Some(item.expr.as_ref()),
+                _ => None,
+            })
+            .ok_or("standalone CPU source has no EXPORTS")?;
         let syn::Expr::Reference(exports) = exports else {
             return Err("EXPORTS must be a literal slice".into());
         };
@@ -307,14 +330,27 @@ impl Kernel {
             let syn::Expr::Tuple(pair) = export else {
                 return Err("EXPORTS entries must be table/projection pairs".into());
             };
-            let strings = pair.elems.iter().map(|value| match value {
-                syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(value), .. }) => Ok(value.value()),
-                _ => Err("EXPORTS table/projection must be literals"),
-            }).collect::<std::result::Result<Vec<_>, _>>()?;
+            let strings = pair
+                .elems
+                .iter()
+                .map(|value| match value {
+                    syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Str(value),
+                        ..
+                    }) => Ok(value.value()),
+                    _ => Err("EXPORTS table/projection must be literals"),
+                })
+                .collect::<std::result::Result<Vec<_>, _>>()?;
             if strings.len() != 2 {
                 return Err("EXPORTS entries must have two fields".into());
             }
-            tables.push((strings[0].clone(), strings[1].split(',').map(|s| s.trim().to_owned()).collect::<Vec<_>>()));
+            tables.push((
+                strings[0].clone(),
+                strings[1]
+                    .split(',')
+                    .map(|s| s.trim().to_owned())
+                    .collect::<Vec<_>>(),
+            ));
         }
         let mut relations = Vec::new();
         let mut published = Vec::new();
@@ -327,22 +363,48 @@ impl Kernel {
                 });
                 continue;
             }
-            let projection: Vec<_> = input.columns.iter().map(|column| column.name.to_string()).collect();
-            let matches: Vec<_> = tables.iter().filter(|(_, columns)| *columns == projection).collect();
+            let projection: Vec<_> = input
+                .columns
+                .iter()
+                .map(|column| column.name.to_string())
+                .collect();
+            let matches: Vec<_> = tables
+                .iter()
+                .filter(|(_, columns)| *columns == projection)
+                .collect();
             if matches.len() != 1 {
-                return Err(format!("standalone input {} requires exactly one matching EXPORTS projection", input.name).into());
+                return Err(format!(
+                    "standalone input {} requires exactly one matching EXPORTS projection",
+                    input.name
+                )
+                .into());
             }
             relations.push(Relation {
                 name: input.name.clone(),
                 table: syn::parse_str(&matches[0].0)?,
-                columns: input.columns.iter().map(|column| (column.name.clone(), column.ty.clone())).collect(),
+                columns: input
+                    .columns
+                    .iter()
+                    .map(|column| (column.name.clone(), column.ty.clone()))
+                    .collect(),
             });
         }
-        let answer = program.output().ok_or("standalone program requires an answer declaration")?
-            .columns.iter().map(|column| (column.name.clone(), column.ty.clone())).collect();
+        let answer = program
+            .output()
+            .ok_or("standalone program requires an answer declaration")?
+            .columns
+            .iter()
+            .map(|column| (column.name.clone(), column.ty.clone()))
+            .collect();
         Ok(Self {
-            plan_advice: TokenStream::new(), setup, relations, answer,
-            derived: Vec::new(), published, body, program: Some(program),
+            plan_advice: TokenStream::new(),
+            setup,
+            relations,
+            answer,
+            derived: Vec::new(),
+            published,
+            body,
+            program: Some(program),
         })
     }
 
@@ -402,9 +464,11 @@ impl Kernel {
                                 && uses_method(self.body.clone(), variable)
                         });
                     if !keep_string {
-                        *ty = syn::parse_str(&manifest.column(
-                            &relation.table.to_string(), &column.to_string(),
-                        )?.ty)?;
+                        *ty = syn::parse_str(
+                            &manifest
+                                .column(&relation.table.to_string(), &column.to_string())?
+                                .ty,
+                        )?;
                     }
                 }
             }
@@ -426,8 +490,11 @@ impl Kernel {
             for (column, logical) in &relation.columns {
                 let metadata = manifest.column(&relation.table.to_string(), &column.to_string())?;
                 let declared = logical.to_token_stream().to_string();
-                if metadata.logical_type != declared && metadata.ty != declared
-                    && !(self.is_standalone() && declared == "i64" && metadata.logical_type == "Integer")
+                if metadata.logical_type != declared
+                    && metadata.ty != declared
+                    && !(self.is_standalone()
+                        && declared == "i64"
+                        && metadata.logical_type == "Integer")
                 {
                     return Err(format!(
                         "{}.{}: CPU type {} differs from manifest logical type {}",
@@ -438,10 +505,18 @@ impl Kernel {
                     )
                     .into());
                 }
-                let ty = &relations.iter().find(|encoded| encoded.name == relation.name)
-                    .expect("cloned input relation").columns.iter()
-                    .find(|(name, _)| name == column).expect("cloned input column").1;
-                let ty: syn::Type = if self.is_standalone() || storage.contains_key(&(relation.table.to_string(), column.to_string())) {
+                let ty = &relations
+                    .iter()
+                    .find(|encoded| encoded.name == relation.name)
+                    .expect("cloned input relation")
+                    .columns
+                    .iter()
+                    .find(|(name, _)| name == column)
+                    .expect("cloned input column")
+                    .1;
+                let ty: syn::Type = if self.is_standalone()
+                    || storage.contains_key(&(relation.table.to_string(), column.to_string()))
+                {
                     ty.clone()
                 } else if declared == "String" {
                     logical.clone()
@@ -458,22 +533,41 @@ impl Kernel {
         }
         for relation in &self.published {
             let name = &relation.name;
-            let fields = relation.columns.iter().map(|(column, ty)| quote!(#column: #ty));
+            let fields = relation
+                .columns
+                .iter()
+                .map(|(column, ty)| quote!(#column: #ty));
             declarations.extend(quote!(relation #name(#(#fields),*);));
         }
         if let Some(program) = &self.program {
             let head = &program.query.head;
             let answer_name = &head.relation;
             let origins = self.answer_columns()?;
-            let fields = self.answer.iter().zip(origins).map(|((name, logical), origin)| {
-                let ty = origin.as_ref().and_then(|(table, column)| {
-                    relations.iter().find(|relation| relation.table == table.as_str())
-                        .and_then(|relation| relation.columns.iter().find(|(name, _)| name == column.as_str()))
-                        .map(|(_, ty)| ty)
-                }).unwrap_or(logical);
-                quote!(#name: #ty)
-            });
-            return Ok(quote!(struct Query; #declarations relation #answer_name(#(#fields),*); #head :- #body;));
+            let fields = self
+                .answer
+                .iter()
+                .zip(origins)
+                .map(|((name, logical), origin)| {
+                    let ty = origin
+                        .as_ref()
+                        .and_then(|(table, column)| {
+                            relations
+                                .iter()
+                                .find(|relation| relation.table == table.as_str())
+                                .and_then(|relation| {
+                                    relation
+                                        .columns
+                                        .iter()
+                                        .find(|(name, _)| name == column.as_str())
+                                })
+                                .map(|(_, ty)| ty)
+                        })
+                        .unwrap_or(logical);
+                    quote!(#name: #ty)
+                });
+            return Ok(
+                quote!(struct Query; #declarations relation #answer_name(#(#fields),*); #head :- #body;),
+            );
         }
         let outputs = self.answer.iter().map(|(name, _)| name);
         Ok(quote!(struct Query; #declarations answer(#(#outputs),*) :- #body))
@@ -482,13 +576,23 @@ impl Kernel {
     pub fn answer_columns(&self) -> Result<Vec<Option<(String, String)>>> {
         let mut variables = BTreeMap::new();
         collect_variables(self.body.clone(), &self.relations, &mut variables)?;
-        Ok(self.cpu_program()?.query.head.args.iter().map(|argument| {
-            if let syn::Expr::Path(path) = argument {
-                path.path.get_ident().and_then(|name| variables.get(&name.to_string())).cloned()
-            } else {
-                None
-            }
-        }).collect())
+        Ok(self
+            .cpu_program()?
+            .query
+            .head
+            .args
+            .iter()
+            .map(|argument| {
+                if let syn::Expr::Path(path) = argument {
+                    path.path
+                        .get_ident()
+                        .and_then(|name| variables.get(&name.to_string()))
+                        .cloned()
+                } else {
+                    None
+                }
+            })
+            .collect())
     }
 }
 
@@ -502,11 +606,13 @@ fn mentions(tokens: TokenStream, name: &Ident) -> bool {
 
 fn uses_method(tokens: TokenStream, variable: &str) -> bool {
     let tokens: Vec<_> = tokens.into_iter().collect();
-    tokens.windows(3).any(|tokens| matches!(
-        (&tokens[0], &tokens[1], &tokens[2]),
-        (TokenTree::Ident(name), TokenTree::Punct(dot), TokenTree::Ident(_))
-            if name == variable && dot.as_char() == '.'
-    )) || tokens.iter().any(|token| match token {
+    tokens.windows(3).any(|tokens| {
+        matches!(
+            (&tokens[0], &tokens[1], &tokens[2]),
+            (TokenTree::Ident(name), TokenTree::Punct(dot), TokenTree::Ident(_))
+                if name == variable && dot.as_char() == '.'
+        )
+    }) || tokens.iter().any(|token| match token {
         TokenTree::Group(group) => uses_method(group.stream(), variable),
         _ => false,
     })
@@ -557,7 +663,11 @@ fn setup_constants(
                     return Err("unsupported setup initializer".into());
                 };
                 if call.func.to_token_stream().to_string() == "Date :: load" {
-                    let Some(syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(date), .. })) = call.args.first() else {
+                    let Some(syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Str(date),
+                        ..
+                    })) = call.args.first()
+                    else {
                         return Err("Date::load needs an ISO literal".into());
                     };
                     let days = date.value().parse::<cq_load::Date>()?.days_since_epoch();
@@ -641,8 +751,16 @@ fn encode_tokens(
         if let TokenTree::Ident(name) = token
             && let Some((table, column)) = variables.get(&name.to_string())
             && manifest.column(table, column)?.logical_type == "Decimal"
-            && let Some([TokenTree::Punct(dot), TokenTree::Ident(method), TokenTree::Group(args)]) = tokens.get(index + 1..index + 4)
-            && dot.as_char() == '.' && method == "scaled" && args.stream().is_empty()
+            && let Some(
+                [
+                    TokenTree::Punct(dot),
+                    TokenTree::Ident(method),
+                    TokenTree::Group(args),
+                ],
+            ) = tokens.get(index + 1..index + 4)
+            && dot.as_char() == '.'
+            && method == "scaled"
+            && args.stream().is_empty()
         {
             encoded.extend(quote!((*#name)));
             skip_until = index + 4;
@@ -651,8 +769,15 @@ fn encode_tokens(
         if let TokenTree::Ident(name) = token
             && let Some((table, column)) = variables.get(&name.to_string())
             && manifest.column(table, column)?.logical_type == "String"
-            && relations.iter().find(|relation| relation.table == table.as_str())
-                .and_then(|relation| relation.columns.iter().find(|(name, _)| name == column.as_str()))
+            && relations
+                .iter()
+                .find(|relation| relation.table == table.as_str())
+                .and_then(|relation| {
+                    relation
+                        .columns
+                        .iter()
+                        .find(|(name, _)| name == column.as_str())
+                })
                 .is_some_and(|(_, ty)| ty.to_token_stream().to_string() != "String")
             && matches!(tokens.get(index + 1..index + 3),
                 Some([TokenTree::Punct(a), TokenTree::Punct(b)])
@@ -717,8 +842,15 @@ fn encode_tokens(
                         syn::parse_str::<syn::LitStr>(&literal.to_string()),
                     )
                     && let Some((table, column)) = variables.get(&name.to_string())
-                    && relations.iter().find(|relation| relation.table == table.as_str())
-                        .and_then(|relation| relation.columns.iter().find(|(name, _)| name == column.as_str()))
+                    && relations
+                        .iter()
+                        .find(|relation| relation.table == table.as_str())
+                        .and_then(|relation| {
+                            relation
+                                .columns
+                                .iter()
+                                .find(|(name, _)| name == column.as_str())
+                        })
                         .is_some_and(|(_, ty)| ty.to_token_stream().to_string() != "String")
                 {
                     let id = manifest.text_id(table, column, &text.value())?;
@@ -775,9 +907,14 @@ mod tests {
             assert!(kernel.is_standalone());
             let program = kernel.cpu_program().unwrap();
             assert_eq!(program.output().unwrap().columns.len(), kernel.answer.len());
-            assert!(program.query.head.args.iter().any(|argument| {
-                cq_lang_cq::group::aggregate(argument).unwrap().is_some()
-            }));
+            assert!(
+                program
+                    .query
+                    .head
+                    .args
+                    .iter()
+                    .any(|argument| { cq_lang_cq::group::aggregate(argument).unwrap().is_some() })
+            );
             let normal = cq_lang_cq::normal::normalize(&program).unwrap();
             assert!(normal.query.group.is_some(), "{name}");
         }
@@ -786,8 +923,12 @@ mod tests {
     #[test]
     fn staged_programs_retain_every_compiled_node_and_composition() {
         for (name, count, terminals) in [
-            ("h02", 2, vec![1]), ("h11", 4, vec![3]), ("h13", 2, vec![0, 1]),
-            ("h15", 3, vec![2]), ("h18", 2, vec![1]), ("h20", 2, vec![1]),
+            ("h02", 2, vec![1]),
+            ("h11", 4, vec![3]),
+            ("h13", 2, vec![0, 1]),
+            ("h15", 3, vec![2]),
+            ("h18", 2, vec![1]),
+            ("h20", 2, vec![1]),
         ] {
             let source = SOURCES.iter().find(|(query, _)| *query == name).unwrap().1;
             let program = crate::stages::Program::import(source).unwrap().unwrap();
@@ -797,15 +938,24 @@ mod tests {
                 let mut publications = BTreeMap::new();
                 for input in stage.program.inputs() {
                     if program.aliases.contains_key(&input.name.to_string()) {
-                        publications.insert(input.name.to_string(), input.columns.iter()
-                            .map(|column| (column.name.clone(), column.ty.clone())).collect());
+                        publications.insert(
+                            input.name.to_string(),
+                            input
+                                .columns
+                                .iter()
+                                .map(|column| (column.name.clone(), column.ty.clone()))
+                                .collect(),
+                        );
                     }
                 }
                 for preprocess in &program.preprocessing {
                     publications.insert(preprocess.name.to_string(), preprocess.columns.clone());
                 }
                 let kernel = program.kernel(index, &publications).unwrap();
-                assert_eq!(kernel.relations.len() + kernel.published.len(), stage.program.inputs().count());
+                assert_eq!(
+                    kernel.relations.len() + kernel.published.len(),
+                    stage.program.inputs().count()
+                );
             }
             if name == "h11" {
                 assert_eq!(program.aliases["Stock"], 0);
@@ -815,8 +965,19 @@ mod tests {
             if name == "h13" {
                 assert_eq!(program.preprocessing.len(), 1);
                 assert_eq!(program.preprocessing[0].name, "QualifiedOrders");
-                assert!(program.preprocessing[0].expression.to_token_stream().to_string().contains("split_once"));
-                assert!(program.preprocessing_tokens().to_string().contains("split_once"));
+                assert!(
+                    program.preprocessing[0]
+                        .expression
+                        .to_token_stream()
+                        .to_string()
+                        .contains("split_once")
+                );
+                assert!(
+                    program
+                        .preprocessing_tokens()
+                        .to_string()
+                        .contains("split_once")
+                );
                 assert_eq!(program.preprocessing[0].relations[0].table, "orders");
             }
         }
@@ -875,14 +1036,23 @@ mod encoding_tests {
             assert!(normal.query.group.is_some(), "{name}");
             if name == "h01" {
                 assert!(spelling.contains("10471i32"));
-                let types: Vec<_> = program.output().unwrap().columns.iter()
-                    .map(|column| column.ty.to_token_stream().to_string()).collect();
+                let types: Vec<_> = program
+                    .output()
+                    .unwrap()
+                    .columns
+                    .iter()
+                    .map(|column| column.ty.to_token_stream().to_string())
+                    .collect();
                 assert_eq!(types, ["i32", "i32", "i64", "i64", "usize"]);
             }
             if name == "h14" {
                 assert!(spelling.contains("starts_with"));
-                assert!(program.inputs().flat_map(|input| &input.columns)
-                    .any(|column| column.ty.to_token_stream().to_string() == "String"));
+                assert!(
+                    program
+                        .inputs()
+                        .flat_map(|input| &input.columns)
+                        .any(|column| column.ty.to_token_stream().to_string() == "String")
+                );
             }
         }
     }
