@@ -20,9 +20,11 @@
 //! [`harness`] supplies engine descriptors to the shared harness, which owns
 //! CLI parsing, full-set checks, loading, timing and process high-water RSS.
 //!
-//! `codegen-evidence.json` and `engine-crates-evidence.json` retain historical
-//! pre-cutover measurements and engine names: `mini` meant keyed aHash and
-//! `mini-fx` meant opt-in Fx. They do not measure today's Fx-default/keyed engines.
+//! `codegen-evidence.json` and `../oracle/hasher-summary.tsv` retain
+//! historical pre-cutover measurements and engine names: `mini` meant keyed
+//! aHash and `mini-fx` meant opt-in Fx. They do not measure today's Fx-default
+//! engines or keyed `cq_storage` providers. The optional partitioned hole
+//! terminal measured in the codegen evidence has since been removed.
 pub mod harness;
 
 #[cfg(all(test, feature = "mini", feature = "ascent"))]

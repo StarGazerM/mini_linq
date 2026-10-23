@@ -21,7 +21,6 @@ cq-lang-datalog-incremental.workspace = true
 cq-lang-datalog-storage.workspace = true
 cq-lang-datalog-round.workspace = true
 cq-storage.workspace = true
-cq-rewrites.workspace = true
 rustc-hash.workspace = true
 own-push.workspace = true
 

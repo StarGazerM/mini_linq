@@ -94,7 +94,6 @@ dependencies = [
  "cq-lang-datalog-source",
  "cq-lang-datalog-storage",
  "cq-lang-datalog-strata",
- "cq-rewrites",
  "cq-stage",
  "cq-storage",
  "mini-linq",
@@ -178,7 +177,6 @@ dependencies = [
  "cq-datalog-configuration",
  "cq-datalog-fork",
  "cq-datalog-incremental",
- "cq-datalog-print-hole",
  "cq-datalog-print-rounds",
  "cq-datalog-storage",
  "cq-datalog-stratify",
@@ -188,7 +186,6 @@ dependencies = [
  "cq-lang-datalog-source",
  "cq-lang-datalog-storage",
  "cq-lang-datalog-strata",
- "cq-lang-sequence",
  "cq-stage",
  "proc-macro2",
  "quote",
@@ -210,20 +207,6 @@ dependencies = [
  "cq-physical-lowering",
  "cq-stage",
  "cq-syntax",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "cq-datalog-print-hole"
-version = "0.0.0"
-dependencies = [
- "cq-lang-sequence",
- "cq-lang-structures",
- "cq-sequence-lowering",
- "cq-sequence-pull",
- "cq-stage",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -555,26 +538,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
-]
-
-[[package]]
-name = "cq-rewrite-passes"
-version = "0.1.0"
-dependencies = [
- "cq-lang-physical",
- "cq-lang-structures",
- "proc-macro2",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "cq-rewrites"
-version = "0.1.0"
-dependencies = [
- "cq-lang-physical",
- "cq-lang-structures",
- "cq-rewrite-passes",
- "cq-stage",
 ]
 
 [[package]]

@@ -57,9 +57,11 @@ pub fn emit(program: &incremental::Program) -> syn::Result<TokenStream> {
                 &variant.query.body.iter().collect::<Vec<_>>(),
                 &variant.query.head.args.iter().collect::<Vec<_>>(),
                 &candidates[&head],
-                &state,
-                &positions,
-                &[],
+                super::reference::Inputs {
+                    state: &state,
+                    positions: &positions,
+                    borrowed_negative_inputs: &[],
+                },
                 BTreeMap::new(),
                 &mut fresh,
             )?;

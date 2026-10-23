@@ -5,7 +5,7 @@
 //! `doop-parallel FACTS --check --threads N` compares all 26 full tuple sets.
 //! `--engine mini|mini-keyed|mini-par|mini-par-keyed|ascent|ascent-par` isolates
 //! timing and RSS. `mini` and `mini-par` use Fx storage and canonical consumers;
-//! the `-keyed` alternatives use keyed aHash. Default CLI execution runs `mini`
+//! the `-keyed` alternatives use keyed `cq_storage` providers. Default CLI execution runs `mini`
 //! and `ascent`; Cargo enables all six engines.
 //! For 15 workers, use
 //! `doop-parallel /tmp/doop-data/cassandra --engine mini-par --threads 15`;

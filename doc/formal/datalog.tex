@@ -534,20 +534,12 @@ the same operations; codegen partitioning changes their Rust calling convention,
 not their order. The printer
 still has a refinement obligation to implement each operation correctly:
 structural record checks are not an independent Rust equivalence proof.
-\paragraph{Nested CQ codegen boundary.} The optional Datalog-owned
-\code{print\_hole(partition(N))} terminal delegates checked Sequence translation
-to the same public pull translation API as \code{translate\_pull}, then wraps the resulting
-expression in a separately monomorphized facade dispatch helper. It does not
-alter the CQ, collect the iterator, or clone its rows. Partition numbers select
-codegen homes, not execution threads or query partitions. This is an explicit
-terminal choice; promoting it to the default requires measured crate-only
-compile time, codegen-unit distribution and unchanged sequential/parallel
-runtime, rather than an assumption that an outer wrapper redistributes every
-nested iterator monomorphization.
-The measured trial against \code{49d0ebd} did not meet this gate:
+\paragraph{Nested CQ codegen trial (historical).} The measured trial of a
+partitioned pull terminal against \code{49d0ebd} did not meet the adoption gate:
 the largest preoptimization CGU share remained above $51\%$, compile wall/CPU
-time increased, and unchanged runtime was not established. Consequently the
-ordinary pull terminal remains the default; full measurements are recorded in
+time increased, and unchanged runtime was not established. The experimental
+terminal was removed; the ordinary pull terminal remains the default.
+Full measurements are recorded in
 \code{features/datalog/doop/codegen-evidence.json}.
 \paragraph{Rewrite check.} Check both contracts and preserve Storage exactly.
 The target may change checked execution records, frozen-key provider types,
@@ -677,8 +669,8 @@ Refinement requires the stated $\alpha$ laws for the selected providers.
 \subsection{Fork: Storage to Round}
 Construct bound CQ holes and explicit operational records, copying provider
 types, initializers and layout maintenance exactly. Carry a sub-pipeline and
-typed interface for each hole and the configuration's complete pull-printer
-allowlist. Independently check variant-to-hole correspondence, frozen-key
+typed interface for each hole and the configuration's complete typed terminal
+registry. Independently check variant-to-hole correspondence, frozen-key
 construction, storage preservation, terminal declarations, publication
 dependencies and coverage, termination and output references. Alternative
 publication permutations or loop forms need not equal Fork's default output.
@@ -786,8 +778,8 @@ No MiniLinq core defaults are changed. The facade reexports
 \code{rustc\_hash}, so default consumers need no new direct dependency for Fx.
 The public \code{cq-datalog-hasher} plug-in retains explicit
 \code{hasher(fx)} and \code{hasher\_round(fx)} selections.
-For adversarial inputs, \code{hasher(keyed)} selects random-seeded aHash for
-Storage and \code{hasher\_round(keyed)} does so for Round. These two Datalog
+For adversarial inputs, \code{hasher(keyed)} selects keyed \code{cq\_storage}
+providers for Storage and \code{hasher\_round(keyed)} does so for Round. These two Datalog
 boundaries replace the former three-part selection: no CQ dedup override is
 needed or admitted for the discharged default holes.
 These rewrites are parallel-agnostic and are not installed in the default queue.
@@ -817,7 +809,7 @@ so each chunk remains duplicate-free. The extension preserves the per-hole
 consumer and discharged-host facts under this checked renaming, along with
 their exact CQ context envelopes and all authored pass arguments.
 For rule holes only, partition may replace the exact registered standard
-\code{::mini\_linq::passes::print\_pull} terminal with empty arguments by
+\code{::mini\_linq::passes::translate\_pull} terminal with empty arguments by
 the registered \code{::cq\_datalog::passes::print\_push} terminal and change
 the interface from Pull to Push. The registry itself is unchanged. A missing
 push registration, custom terminal path or authored terminal arguments preserve
@@ -1045,12 +1037,13 @@ matching lazy fallbacks; no counters were enabled to estimate their dynamic
 share. Core-internal \code{Answers}, trie, adaptive-membership and candidate
 dedup sets remain unchanged, but none is selected in these DOOP expansions.
 
-Recommendation: adopt Fx as the Datalog default in a future, separately
-reviewed Storage/default-hole-queue change for trusted analytical inputs,
-retaining an explicit keyed-aHash choice for adversarial inputs. Every DOOP
-configuration improved here; this is not evidence that Fx is appropriate for
-untrusted keys or every machine. This experiment leaves the base default
-unchanged. Against commit \code{7a041ec}, the default reach example,
+Historical recommendation: adopt Fx as the Datalog default for trusted
+analytical inputs, retaining explicit keyed providers for adversarial inputs.
+That recommendation has since been implemented: Fx is now the Datalog default.
+Every DOOP configuration improved in this trial; this is not evidence that Fx
+is appropriate for untrusted keys or every machine. The historical experiment
+itself left the base default unchanged. Against commit \code{7a041ec},
+the default reach example,
 execution-test expansion and DOOP engine expansion are byte-identical
 (13\,364, 835\,398 and 5\,128\,081 bytes respectively).
 

@@ -45,7 +45,7 @@ def main():
     (output / "environment.txt").write_text(
         f"platform={platform.platform()}\nbinary={binary}\ncache={cache}\n"
         "repetitions=3\norder=AB,BA,AB\nthreads=1,15\n"
-        "engines=mini:fx,mini-keyed:ahash,mini-par:fx,mini-par-keyed:ahash\n"
+        "engines=mini:fx,mini-keyed:keyed cq_storage providers,mini-par:fx,mini-par-keyed:keyed cq_storage providers\n"
         "affinity=OS scheduled; no pinning\nfeatures=no counters or phase/hole timing\n")
     environment = dict(os.environ, RAYON_NUM_THREADS="15")
 
