@@ -354,13 +354,8 @@ impl<'a> Context<'a> {
         self.bind_columns(result, self.carried(result), false)
     }
 
-    /// Build a carrier (compatibility helper for external printers).
-    pub fn row(&self, result: &str, expression: impl Fn(&str) -> TokenStream) -> TokenStream {
-        self.carrier(result, expression)
-    }
-
-    /// Borrow the carried columns (compatibility helper for external printers).
-    pub fn borrowed_pattern(&self, result: &str) -> TokenStream {
+    /// Borrow the carried columns.
+    fn borrowed_pattern(&self, result: &str) -> TokenStream {
         self.bind_columns(result, self.carried(result), true)
     }
 

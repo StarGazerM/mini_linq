@@ -662,7 +662,7 @@ impl<'a> State<'a> {
         let declaration = self
             .inputs
             .iter()
-            .find(|d| d.name == negation.atom.relation)
+            .find(|d| symbol_name(&d.name) == symbol_name(&negation.atom.relation))
             .expect("contracted negative input");
         let layout = negation::layout(declaration, negation, &bound, |v| self.canonical(v));
         let needs_projection =

@@ -185,16 +185,7 @@ pub(crate) fn reject_guard_attributes(input: syn::parse::ParseStream<'_>) -> syn
     if !input.peek(Token![#]) {
         return Ok(());
     }
-    let attributes = input.call(syn::Attribute::parse_outer)?;
-    if let Some(attribute) = attributes
-        .iter()
-        .find(|attribute| attribute.path().is_ident("total"))
-    {
-        return Err(syn::Error::new_spanned(
-            attribute,
-            "`#[total]` is no longer supported; use an ordinary `if` guard or relational negation `!R(...)`",
-        ));
-    }
+    input.call(syn::Attribute::parse_outer)?;
     Err(input.error("attributes are not supported on guards or relational constraints"))
 }
 

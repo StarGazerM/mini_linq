@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""Regression coverage for offline feature-lock dependency alignment."""
+"""Regression coverage for dependency boundaries and offline lock alignment."""
 import contextlib
+import copy
 import io
+import json
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -59,6 +62,35 @@ class FeatureLocks(unittest.TestCase):
                     self.check(root_packages, [("hashbrown", "0.14.4", SOURCE)], feature)
         with self.assertRaisesRegex(SystemExit, "hashbrown 0.14.5"):
             self.check(root_packages, feature_packages)
+
+
+class SequenceDependencies(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.data = json.loads(subprocess.check_output(
+            ["cargo", "metadata", "--no-deps", "--format-version=1", "--locked"],
+            cwd=check_dependencies.ROOT,
+        ))
+
+    def check_package(self, name, production_only=False):
+        data = copy.deepcopy(self.data)
+        if production_only:
+            for package in data["packages"]:
+                package["dependencies"] = [
+                    dep for dep in package["dependencies"] if dep["kind"] != "dev"
+                ]
+        with patch.object(check_dependencies, "PATHS", {name: check_dependencies.PATHS[name]}):
+            check_dependencies.check(data, announce=False)
+
+    def test_pull_adapters_are_permitted(self):
+        self.check_package("cq-sequence-pull", production_only=True)
+
+    def test_core_feature_edges_remain_forbidden(self):
+        for name in ("cq-sequence-lowering", "cq-sequence-plan", "cq-sequence-pull"):
+            with self.subTest(package=name), self.assertRaisesRegex(
+                ValueError, "core depends on an optional feature"
+            ):
+                self.check_package(name)
 
 
 if __name__ == "__main__":

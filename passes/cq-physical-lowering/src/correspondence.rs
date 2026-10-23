@@ -1,8 +1,8 @@
 //! Logical erasure and admissibility obligations, independent of lowering decisions.
 
 use cq_lang_ix as ix;
-use cq_lang_physical::{self as physical, Operator, syntax::symbol_name};
-use std::collections::{BTreeMap, BTreeSet};
+use cq_lang_physical::{self as physical, syntax::symbol_name};
+use std::collections::BTreeMap;
 
 /// Check source/target contracts, logical erasure, IX demands, and recorded decisions.
 /// Materialization is free whenever the language premises hold.
@@ -28,36 +28,18 @@ pub fn check(source: &ix::Program, target: &physical::Program) -> syn::Result<()
         ));
     }
     super::check_demands(source, target)?;
-    let mut keys: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut keys: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for definition in &target.program.definitions {
         let name = symbol_name(&definition.name);
-        let heading: BTreeSet<String> = facts.headings[&name].iter().cloned().collect();
-        let inherited = match &definition.operator {
-            Operator::Union(_) => None,
-            Operator::Anti(_, k) => keys.get(&symbol_name(&k.left)).cloned(),
-            Operator::Unit(_) => Some(BTreeSet::new()),
-            Operator::Rename(rename) => target
-                .program
-                .host_is_set(&rename.relation)
-                .then(|| heading.clone()),
-            Operator::Probe(_, k) | Operator::Merge(_, k) => keys
-                .get(&symbol_name(&k.left))
-                .zip(keys.get(&symbol_name(&k.right)))
-                .map(|(l, r)| l.union(r).cloned().collect()),
-            Operator::Semi(_, k) => keys.get(&symbol_name(&k.left)).cloned(),
-            Operator::Select(s) => keys.get(&symbol_name(&s.input)).cloned(),
-            Operator::Point(_, s) | Operator::Range(_, s) => {
-                keys.get(&symbol_name(&s.input)).cloned()
-            }
-            Operator::Bind(b) if b.for_token.is_none() => keys.get(&symbol_name(&b.input)).cloned(),
-            Operator::Bind(_) => None,
-            Operator::Guard(g) => keys.get(&symbol_name(&g.input)).cloned(),
-            Operator::Project(p) => keys
-                .get(&symbol_name(&p.input))
-                .filter(|k| k.is_subset(&heading))
-                .cloned(),
-        };
-        if let Some(key) = inherited.or_else(|| definition.canon.is_some().then_some(heading)) {
+        let heading = &facts.headings[&name];
+        let inherited = physical::inherited_key(
+            &definition.operator,
+            heading,
+            &target.program.host_sets,
+            |input| keys.get(&symbol_name(input)).cloned(),
+        );
+        if let Some(key) = inherited.or_else(|| definition.canon.is_some().then(|| heading.clone()))
+        {
             keys.insert(name, key);
         }
     }

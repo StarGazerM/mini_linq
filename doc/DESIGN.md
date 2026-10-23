@@ -121,10 +121,14 @@ erasure, refinement, demand, or representation obligations without rerunning
 Rust semantic checker: rustc trait checks, expansion fixtures, and executed
 oracle agreement supply distinct evidence.
 
-Folder boundaries enforce this ownership. Languages depend on shared syntax,
-the pass protocol, and their base language; passes depend on their endpoints.
+Folder boundaries constrain language dependencies to shared syntax, the pass
+protocol, and their base language. Passes depend on their endpoints, with explicit
+adapter dependencies for `cq-physical-realization` and `cq-sequence-pull`.
 Runtime crates have no compiler dependencies. Language, pass, and facade crates
-have no Cargo features. The isolation gate tests declared dependency closures.
+have no Cargo features. The dependency gate still reports the core-to-feature
+edges from `cq-sequence-lowering` and `cq-sequence-pull` test dependencies and
+`cq-sequence-plan` to `features/sequence-rewrites/passes`; these are not permitted exceptions.
+The isolation gate tests declared dependency closures.
 
 ## Extending
 

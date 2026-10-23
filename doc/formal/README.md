@@ -10,8 +10,13 @@ refinement statement). Build `build/compiler.pdf` with the command below.
 | Scope and pass obligation | [intro.tex](intro.tex) |
 | Denotation, premises, blocks | [denotation.tex](denotation.tex) |
 | Languages | [ir_cq.tex](ir_cq.tex), [ir_vo.tex](ir_vo.tex), [ir_ra.tex](ir_ra.tex), [ir_ix.tex](ir_ix.tex), [ir_physical.tex](ir_physical.tex), [ir_structures.tex](ir_structures.tex) |
+| Sequence backend and machine grading | [backend.tex](backend.tex), [backend_ir.tex](backend_ir.tex) |
 | Passes and their checks | [passes.tex](passes.tex) |
 | Pass protocol and features | [composition.tex](composition.tex) |
+| Context and representation changes | [context.tex](context.tex) |
+| Guards and relational negation | [guards.tex](guards.tex) |
+| Incremental execution | [incremental.tex](incremental.tex) |
+| Datalog and parallel rounds | [datalog.tex](datalog.tex) |
 | Validation | [validation.tex](validation.tex) |
 | Rule classification and implementing source markers | [rules.tsv](rules.tsv) |
 
@@ -63,7 +68,7 @@ trait guards and expansion fixtures are covered by the crate tests listed in
 [validation.tex](validation.tex); realization has no source/target
 correspondence `check`.
 
-The manuscript describes source revision `241f37c`. Its exact written reference
+The manuscript describes source revision `3b21e5d`. Its exact written reference
 is desugared CQ-NF with Written/Coarse and `cq_elaborate::compile_written`;
 the default `plan` uses optimizing elaboration. Core blocks and
 multi-rule union sugar require no surface union extension.
