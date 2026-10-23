@@ -155,3 +155,32 @@ fn decimal_coefficients_use_the_canonical_projection_not_a_method_promise() {
         .is_none()
     );
 }
+
+#[test]
+fn typed_splitting_preserves_let_chain_shadowing() {
+    let e = syn::parse_quote!(let Some(price) = captured && *price * 2 > 0);
+    let (total, residual) = cq_syntax::guard::split_arithmetic(&e, &types());
+    assert!(total.is_empty());
+    assert_eq!(residual, Some(e));
+}
+
+#[test]
+fn unannotated_reference_binding_is_not_a_numeric_projection() {
+    let binding = syn::parse_quote!(bind input with output = (price));
+    assert!(cq_syntax::arithmetic::binding(&binding, &types()).is_none());
+    let binding = syn::parse_quote!(bind input with output: i64 = (*price));
+    assert!(cq_syntax::arithmetic::binding(&binding, &types()).is_some());
+}
+
+#[test]
+fn conditional_comparisons_keep_relational_trait_obligations() {
+    let lowered = expression(
+        &syn::parse_quote!(if text == "high" { 1 } else { 0 }),
+        &types(),
+        Some(&syn::parse_quote!(i64)),
+    )
+    .unwrap()
+    .to_token_stream()
+    .to_string();
+    assert!(lowered.contains("relational_string_eq"));
+}

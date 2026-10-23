@@ -579,6 +579,21 @@ impl Rows {
                 })
             });
         }
+        // Computed CQ-Arith values have their declared primitive range, not
+        // the source codec's range: wrapping can cross either signed endpoint.
+        for row in analysis.structures.physical.rows.values() {
+            for column in &row.computed {
+                let ty = &row.types[column];
+                if matches!(primitive(ty).as_deref(),
+                    Some("i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32")) {
+                    bounds.entry(column.clone()).or_insert_with(|| quote! {
+                        ::cq_gpu_runtime::Bounds::Inclusive {
+                            min: <#ty>::MIN as i64, max: <#ty>::MAX as i64,
+                        }
+                    });
+                }
+            }
+        }
         build.extend(quote! {
             let __cq_timing_built = __cq_pool.stream().record_event(
                 Some(::cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
@@ -1410,6 +1425,7 @@ impl VisitMut for DeviceComparisons {
                         };
                         if let Some(tokens) = replacement {
                             *expression = syn::parse2(tokens).expect("comparison expression");
+                            syn::visit_mut::visit_expr_mut(self, expression);
                             return;
                         }
                     }
@@ -1428,6 +1444,7 @@ impl VisitMut for DeviceComparisons {
                     let left = &call.args[0];
                     let right = &call.args[1];
                     *expression = syn::parse_quote!(*#left == *#right);
+                    syn::visit_mut::visit_expr_mut(self, expression);
                     return;
                 }
             }
@@ -1453,6 +1470,21 @@ fn payload_kind(ty: &Type) -> syn::Result<TokenStream> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn arithmetic_conditionals_use_native_comparisons_at_every_depth() {
+        let types = [("x".into(), syn::parse_quote!(i64))].into();
+        let mut expression = cq_syntax::arithmetic::predicate(
+            &syn::parse_quote!((if *x > 0 { *x * 2 } else { *x / -1 }) == 3),
+            &types,
+        )
+        .unwrap();
+        DeviceComparisons.visit_expr_mut(&mut expression);
+        let tokens = quote!(#expression).to_string();
+        assert!(!tokens.contains("cq_storage"), "{tokens}");
+        assert!(tokens.contains("wrapping_mul"), "{tokens}");
+        assert!(tokens.contains("wrapping_div"), "{tokens}");
+    }
 
     #[test]
     fn downloaded_probe_carriers_preserve_the_host_publication_demand() {

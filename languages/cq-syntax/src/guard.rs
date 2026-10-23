@@ -1,5 +1,5 @@
-//! Recognize Rust's comparison trait operations under the Eq/Ord premises.
-//! All other expressions remain opaque. Only a top-level conjunction may be
+//! Recognize comparisons under Eq/Ord and the typed CQ-Arith extension.
+//! Other expressions remain opaque. Only a top-level conjunction may be
 //! split: its relational conjuncts restrict the domain of its residual guard.
 use crate::{
     Constraint,
@@ -75,8 +75,11 @@ pub fn split_arithmetic(
                 return;
             }
         }
-        if crate::rust::free_variables(e).dependencies(locals).is_empty()
-            && crate::arithmetic::predicate(e, types).is_some() {
+        if crate::rust::free_variables(e)
+            .dependencies(locals)
+            .is_empty()
+            && crate::arithmetic::predicate(e, types).is_some()
+        {
             recognized.push(e.clone());
         } else {
             *residual = Some(match residual.take() {
@@ -89,7 +92,13 @@ pub fn split_arithmetic(
         }
     }
     let (mut recognized, mut residual) = (Vec::new(), None);
-    collect(expression, types, &mut BTreeSet::new(), &mut recognized, &mut residual);
+    collect(
+        expression,
+        types,
+        &mut BTreeSet::new(),
+        &mut recognized,
+        &mut residual,
+    );
     if recognized.is_empty() {
         residual = Some(expression.clone());
     }

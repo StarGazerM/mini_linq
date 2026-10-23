@@ -265,11 +265,7 @@ pub fn binding(bind: &Bind, types: &BTreeMap<String, Type>) -> Option<Expr> {
     if bind.for_token.is_some() || !matches!(bind.pattern, syn::Pat::Ident(_)) {
         return None;
     }
-    expression(
-        &bind.expression,
-        types,
-        Some(&bind.annotation.as_ref()?.ty),
-    )
+    expression(&bind.expression, types, Some(&bind.annotation.as_ref()?.ty))
 }
 
 /// The arithmetic extension of CQ-GuardRecognize. Both Boolean branches must
@@ -312,7 +308,8 @@ pub fn predicate(e: &Expr, types: &BTreeMap<String, Type>) -> Option<Expr> {
             expression(&b.left, types, Some(&ty)),
             expression(&b.right, types, Some(&ty)),
         ) {
-            return syn::parse2(comparison.expression(quote!(&(#left)), quote!(&(#right)), false)).ok();
+            return syn::parse2(comparison.expression(quote!(&(#left)), quote!(&(#right)), false))
+                .ok();
         }
     }
     let names = types.keys().cloned().collect();
@@ -320,7 +317,9 @@ pub fn predicate(e: &Expr, types: &BTreeMap<String, Type>) -> Option<Expr> {
     let right = crate::guard::term(&b.right, &names, &BTreeSet::new())?;
     let parameters = BTreeMap::new();
     syn::parse2(comparison.expression(
-        left.reference(&parameters), right.reference(&parameters),
+        left.reference(&parameters),
+        right.reference(&parameters),
         left.string_literal() || right.string_literal(),
-    )).ok()
+    ))
+    .ok()
 }

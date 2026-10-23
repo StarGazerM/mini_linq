@@ -716,8 +716,8 @@ pub struct Select {
     pub condition: Theta,
 }
 
-/// Opaque partial Rust computation at its position in the ancestry chain.
-/// Its meaning is a function of free variables to a value or whole-query abort.
+/// Scalar computation: total when CQ-Arith recognizes its declared types;
+/// otherwise an opaque function from free variables to a value or query abort.
 /// I/O, mutation and evaluation counts are outside this meaning.
 /// With `for`, unnest a finite pure iterator instead of binding one scalar.
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -756,7 +756,7 @@ impl Bind {
     }
 }
 
-/// Opaque partial Rust predicate at its position in the ancestry chain.
+/// Predicate: typed CQ-Arith is total; other Rust retains its ancestry position.
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Guard {
     pub guard_token: kw::guard,

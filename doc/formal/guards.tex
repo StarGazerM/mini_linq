@@ -53,6 +53,9 @@ recognized total predicate and both branches are total expressions of the
 same declared type. It also admits primitive \code{T::from(a)} exactly when
 the source integer range is contained in the target range; canonical primitive
 UFCS calls enforce that representation. A lossy \code{as} cast remains opaque.
+Scalar bindings require a declared numeric result type (aggregate elaboration
+supplies it); an unannotated Rust \code{let y = x} retains its reference-valued
+meaning and is not silently changed into a numeric projection.
 These expressions may occur in scalar bindings, aggregate arguments and
 recognized comparisons. Their typed grammar is rechecked from row types in
 later IRs, where they retain Bind/Guard syntax rather than an asserted flag.

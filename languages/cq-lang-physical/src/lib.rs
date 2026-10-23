@@ -20,8 +20,8 @@
 //! Point/Range ::= ("point" | "range") Select
 //! Unit, Rename, Select, Bind, Guard and Project are shared syntax.
 //! Meaning is Kleisli over bottom + Set: bottom aborts the whole evaluation.
-//! Bind/guard expressions are opaque partial functions. Their ancestry chain
-//! preserves written order; only relational steps may move earlier across it.
+//! Bind/guard expressions outside typed CQ-Arith are opaque partial functions.
+//! Their ancestry chain preserves written order; total steps may move earlier.
 //! Other effects and evaluation counts are outside this meaning.
 //!
 //! Relational equality is Leibniz identity, decided by admissible column `==`.
