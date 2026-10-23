@@ -612,13 +612,10 @@ fn compile_stage(
         }).collect();
         let cpu_names: Vec<_> = (0..answer_types.len()).map(|i| syn::Index::from(i)).collect();
         let own_row = {
-            let head = &cq.query.head;
-            let fields = head.args.iter().zip(&cpu_names).map(|(arg, index)| {
-                if matches!(arg, syn::Expr::Path(_)) {
-                    quote!((*row.#index).clone())
-                } else {
-                    quote!(row.#index.clone())
-                }
+            let fields = answer_types.iter().zip(&cpu_names).map(|(ty, index)| {
+                quote!(<#ty as ::core::clone::Clone>::clone(
+                    ::core::borrow::Borrow::<#ty>::borrow(&row.#index)
+                ))
             });
             quote!((#(#fields,)*))
         };

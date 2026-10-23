@@ -53,6 +53,9 @@ pub fn compile(
         let (code, mut artifact) = match compile_stage(&kernel, manifest, &pipeline, mode, Some(&publications), false) {
             Ok(compiled) => compiled,
             Err(device_rejection) => {
+                if override_pipeline.is_some() {
+                    return Err(device_rejection);
+                }
                 // A stage that cannot be device-graded is independently planned
                 // on the sequential machine. The rejection remains in its trace;
                 // this is a host publication, never a fake device success.
@@ -138,6 +141,9 @@ pub fn compile(
 
 fn terminal_map(stage: &stages::Stage, width: usize) -> crate::manifest::Result<TokenStream> {
     let Some(map) = &stage.map else { return Ok(quote!(rows)); };
+    if stages::check_identity_map(map).is_ok() {
+        return Ok(quote!(rows));
+    }
     let map = stages::owned_map(map);
     let body = if let syn::Expr::Block(block) = map.body.as_ref() {
         match block.block.stmts.last() {
@@ -146,14 +152,28 @@ fn terminal_map(stage: &stages::Stage, width: usize) -> crate::manifest::Result<
         }
     } else { map.body.as_ref() };
     let syn::Expr::Tuple(tuple) = body else { return Err("terminal ownership map must return a tuple".into()); };
-    let outputs = (0..tuple.elems.len()).map(syn::Index::from);
-    let fields: Vec<_> = (0..width).map(|i| format_ident!("field_{i}")).collect();
-    Ok(quote! {
-        rows.into_iter().map(|row| {
-            let mut row = row.into_iter();
-            #(let #fields = row.next().expect("declared output width");)*
-            let mapped = (#map)((#(#fields,)*));
-            vec![#(mapped.#outputs.to_string()),*]
-        })
-    })
+    let Some(syn::Pat::Tuple(pattern)) = map.inputs.first() else {
+        return Err("terminal ownership map must destructure its row".into());
+    };
+    if pattern.elems.len() != width {
+        return Err("terminal ownership map input width differs".into());
+    }
+    let mut outputs = Vec::new();
+    let mut used = std::collections::BTreeSet::new();
+    for expression in &tuple.elems {
+        match expression {
+            syn::Expr::Path(path) => {
+                let slot = pattern.elems.iter().position(|pat| matches!(pat,
+                    syn::Pat::Ident(name) if path.path.is_ident(&name.ident)
+                )).ok_or("terminal map references an unbound field")?;
+                if !used.insert(slot) {
+                    return Err("terminal map repeats a field".into());
+                }
+                outputs.push(quote!(::std::mem::take(&mut row[#slot])));
+            }
+            syn::Expr::Lit(literal) => outputs.push(quote!((#literal).to_string())),
+            _ => return Err("terminal map must be an ownership projection or literal extension".into()),
+        }
+    }
+    Ok(quote!(rows.into_iter().map(|mut row| vec![#(#outputs),*])))
 }

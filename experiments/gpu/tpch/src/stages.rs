@@ -250,7 +250,7 @@ pub fn owned_map(map: &syn::ExprClosure) -> syn::ExprClosure {
     map
 }
 
-fn check_identity_map(map: &syn::ExprClosure) -> Result<()> {
+pub fn check_identity_map(map: &syn::ExprClosure) -> Result<()> {
     let map = owned_map(map);
     let Some(syn::Pat::Tuple(pattern)) = map.inputs.first() else {
         return Err("published ownership map must destructure its row".into());
