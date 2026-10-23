@@ -648,39 +648,70 @@ pub fn compile(source: &cq::Program, options: &Options) -> syn::Result<valuation
     Ok(program)
 }
 
+/// A top-level positive atom selected by relation, optionally qualified by its
+/// zero-based normal-body clause index (the same occurrence used by `R@0` in RA).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OrderAtom {
+    pub relation: syn::Ident,
+    pub occurrence: Option<usize>,
+}
+
+impl syn::parse::Parse for OrderAtom {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let relation = input.parse()?;
+        let occurrence = if input.peek(syn::Token![@]) {
+            input.parse::<syn::Token![@]>()?;
+            Some(input.parse::<LitInt>()?.base10_parse()?)
+        } else {
+            None
+        };
+        Ok(Self { relation, occurrence })
+    }
+}
+
 /// Author a coarse top-level relation order without rewriting the query.
-/// Every named relation must occur exactly once at this level. Unnamed clauses
-/// retain written priority after the named relations; opaque Rust still obeys
-/// the ordinary readiness and Before contract. Nested blocks keep written order.
+/// Unqualified relations must occur exactly once; `R@i` selects the positive
+/// atom named R at normal-body clause i, including non-atom clauses in the
+/// numbering. Unnamed clauses retain written priority after named atoms.
+/// Opaque Rust still obeys readiness and Before; nested blocks keep their order.
 pub fn compile_explicit(
     source: &cq::Program,
-    relations: &[syn::Ident],
+    relations: &[OrderAtom],
 ) -> syn::Result<valuation::Program> {
     cq::normal::check(source)?;
     let context = BTreeSet::new();
     let clauses = clauses(&source.query.body, &context);
     let mut priorities = BTreeMap::new();
-    for (priority, relation) in relations.iter().enumerate() {
-        let occurrences: Vec<_> = source
-            .query
-            .body
-            .iter()
-            .enumerate()
-            .filter_map(|(i, item)| {
+    for (priority, selector) in relations.iter().enumerate() {
+        let relation = &selector.relation;
+        let occurrence = if let Some(index) = selector.occurrence {
+            if !matches!(source.query.body.get(index),
+                Some(BodyItem::Positive { atom }) if atom.relation == *relation)
+            {
+                return Err(syn::Error::new_spanned(
+                    relation,
+                    format!("order advice {relation}@{index} does not name that top-level positive atom"),
+                ));
+            }
+            index
+        } else {
+            let mut occurrences = source.query.body.iter().enumerate().filter_map(|(i, item)| {
                 matches!(item, BodyItem::Positive { atom } if atom.relation == *relation)
                     .then_some(i)
-            })
-            .collect();
-        if occurrences.len() != 1 {
+            });
+            let first = occurrences.next();
+            if first.is_none() || occurrences.next().is_some() {
+                return Err(syn::Error::new_spanned(
+                    relation,
+                    "order advice needs one top-level occurrence; qualify repeated relations as Relation@clause",
+                ));
+            }
+            first.unwrap()
+        };
+        if priorities.insert(occurrence, priority).is_some() {
             return Err(syn::Error::new_spanned(
                 relation,
-                "order advice needs one top-level occurrence",
-            ));
-        }
-        if priorities.insert(occurrences[0], priority).is_some() {
-            return Err(syn::Error::new_spanned(
-                relation,
-                "duplicate relation in order advice",
+                "duplicate atom occurrence in order advice",
             ));
         }
     }

@@ -88,7 +88,7 @@ impl Pipeline {
 #[derive(Default)]
 pub struct Plan {
     no_reduce: bool,
-    order: Vec<Ident>,
+    order: Vec<cq_order::OrderAtom>,
     reduce: Vec<(Ident, Ident)>,
     skip: Vec<(Ident, Ident)>,
 }
@@ -105,7 +105,7 @@ impl Parse for Plan {
                 syn::parenthesized!(arguments in input);
                 if key == "order" {
                     plan.order = arguments
-                        .parse_terminated(Ident::parse, Token![,])?
+                        .parse_terminated(cq_order::OrderAtom::parse, Token![,])?
                         .into_iter()
                         .collect();
                 } else if key == "reduce" || key == "skip" {
