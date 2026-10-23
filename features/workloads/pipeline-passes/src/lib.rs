@@ -70,15 +70,16 @@ pub fn ordered_dedup(input: proc_macro::TokenStream) -> proc_macro::TokenStream 
     .into()
 }
 
-/// Compile an existing authored corpus query through its exact configured
-/// pipeline, replacing only the terminal with a serialized Sequence program.
+/// Compile both CPU targets for an authored corpus configuration into the test
+/// binary. The returned functions bind the same caller-owned fixture inputs.
 #[proc_macro]
-pub fn conformance_program(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+pub fn conformance_targets(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     use quote::{ToTokens, quote};
     use syn::parse::{Parse, ParseStream};
     struct Request {
         case: syn::Ident,
         positional: bool,
+        loader: syn::Ident,
         pipeline: proc_macro2::TokenStream,
     }
     impl Parse for Request {
@@ -90,11 +91,14 @@ pub fn conformance_program(input: proc_macro::TokenStream) -> proc_macro::TokenS
             let positional = !advice.is_empty();
             let _: proc_macro2::TokenStream = advice.parse()?;
             input.parse::<syn::Token![,]>()?;
+            let loader = input.parse()?;
+            input.parse::<syn::Token![,]>()?;
             let pipeline;
             syn::braced!(pipeline in input);
             Ok(Self {
                 case,
                 positional,
+                loader,
                 pipeline: pipeline.parse()?,
             })
         }
@@ -113,6 +117,7 @@ pub fn conformance_program(input: proc_macro::TokenStream) -> proc_macro::TokenS
         let names: Vec<_> = source.inputs().map(|input| &input.name).collect();
         let advice = request.positional.then(|| quote!(positional(#(#names),*)));
         let pipeline = request.pipeline;
+        let loader = request.loader;
         let source = source.to_token_stream();
         let path = path.to_string_lossy();
         Ok(quote!({
@@ -121,7 +126,7 @@ pub fn conformance_program(input: proc_macro::TokenStream) -> proc_macro::TokenS
                 pipeline {
                     #pipeline
                     select = ::mini_linq::passes::select(#advice);
-                    print = ::cq_workload_passes::sequence_literal;
+                    print = ::cq_workload_passes::sequence_targets(#loader);
                 }
                 #source
             }
@@ -130,15 +135,66 @@ pub fn conformance_program(input: proc_macro::TokenStream) -> proc_macro::TokenS
     result.unwrap_or_else(syn::Error::into_compile_error).into()
 }
 
-/// Preserve the complete selected construction for runtime target conformance.
+/// Plan and emit both target functions after the configured Structures pipeline.
 #[proc_macro]
-pub fn sequence_literal(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    use quote::ToTokens;
-    cq_stage::pass::<cq_lang_structures::Program, syn::Expr>(input.into(), |source, _| {
+pub fn sequence_targets(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    use cq_testkit::conformance::{Target, translate_with_catalog};
+    use quote::quote;
+    cq_stage::pass::<cq_lang_structures::Program, syn::Expr>(input.into(), |source, arguments| {
+        let loader: syn::Ident = syn::parse2(arguments)?;
         let sequence = cq_sequence_lowering::compile(source)?;
         cq_sequence_lowering::check(source, &sequence)?;
-        let source = sequence.to_token_stream().to_string();
-        Ok(syn::parse_quote!(::syn::parse_str::<::cq_lang_sequence::Program>(#source).unwrap()))
+        // This provider belongs to the workload, not to either target crate.
+        let catalog = cq_lang_sequence::Catalog {
+            providers: vec![cq_lang_sequence::ProviderToken {
+                ty: syn::parse_quote!(::cq_workloads::SortedIndex<_, _>),
+                elements: None,
+                capabilities: vec![
+                    cq_lang_sequence::Capability::Exact,
+                    cq_lang_sequence::Capability::Membership,
+                ],
+                levels: vec![
+                    vec!["host".into()],
+                    vec!["host".into(), "pool".into()],
+                    vec!["host".into(), "pool".into(), "task".into()],
+                ],
+            }],
+            ..Default::default()
+        };
+        let (sequential, _) = translate_with_catalog(&sequence, Target::Sequential, &catalog)?;
+        let (tasks, canonical) = translate_with_catalog(&sequence, Target::Tasks, &catalog)?;
+        let bindings: Vec<_> = sequence
+            .structures
+            .physical
+            .program
+            .declarations
+            .iter()
+            .map(|input| {
+                let ident = &input.name;
+                let name = ident.to_string();
+                let types = input.columns.iter().map(|column| &column.ty);
+                if loader == "take" {
+                    quote!(let #ident = &inputs.#loader::<(#(#types,)*)>(#name)[..];)
+                } else {
+                    quote!(let #ident = &inputs.#loader::<(#(#types,)*)>(#name);)
+                }
+            })
+            .collect();
+        Ok(syn::parse_quote!({
+            #[allow(non_snake_case, unused_variables)]
+            fn sequential(inputs: &mut ::cq_workloads::schema::Inputs) -> Vec<String> {
+                #(#bindings)*
+                (#sequential).into_iter().map(|row| format!("{row:?}")).collect()
+            }
+            #[allow(non_snake_case, unused_variables)]
+            fn tasks(inputs: &mut ::cq_workloads::schema::Inputs) -> Vec<String> {
+                #(#bindings)*
+                (#tasks).into_iter().map(|row| format!("{row:?}")).collect()
+            }
+            (sequential as fn(&mut ::cq_workloads::schema::Inputs) -> Vec<String>,
+             tasks as fn(&mut ::cq_workloads::schema::Inputs) -> Vec<String>,
+             #canonical)
+        }))
     })
     .into()
 }

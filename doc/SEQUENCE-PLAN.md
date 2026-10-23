@@ -271,17 +271,43 @@ The first divergence names both targets and the differing row multiplicities.
 The default driver uses deterministic binary-domain databases; authored corpus
 inputs and raw duplicate-preserving `Case::inputs` use the same execution path.
 
-The workload corpus runner sends each unmodified Sequence program through
-the shared planner with each target's exported machine and catalog. Caller-owned
-runtime providers extend those catalogs through `plan_with_catalog` and the
-catalog argument to `assert_conformant_with_runtime`; the corpus registers its
-own `SortedIndex` rather than introducing a workload dependency in a target.
-There is no private store-wrapping or grading preparation. The tasks spot
-fixtures use the same shared harness. Catalog planning is checked before the
-executable cases; translation and execution failures are collected before the
-runner fails. Failures are never counted as agreement or skipped. Capability inference is shared across
-machines: host row stores need exact buckets, while segmented flattening and
-distributed execution require ranges in their actual read context.
+The workload corpus expands each configured Sequence program into Sequential
+and Tasks functions in the test binary through `conformance_targets!` and its
+`sequence_targets` terminal. `translate_with_catalog` runs the same shared
+planner, grading, translation and canonical-output check during macro expansion
+that the generated-source spot-test driver uses at runtime. Caller-owned
+providers extend each target's catalog; the corpus registers its own
+`SortedIndex` rather than introducing a workload dependency in a target.
+The test invokes both functions in-process on the same scenario and loader
+bindings and compares their answer rows, without spawning rustc or a generated
+executable. Planning and translation errors fail the build; execution and answer
+failures are collected with configuration/scenario labels and differing row
+multiplicities before the runner fails. Failures are never counted as agreement
+or skipped. There is no private store-wrapping or grading preparation.
+The per-program `assert_conformant*` APIs remain available for generated-source
+spot tests. Capability inference is shared across machines: host row stores need
+exact buckets, while segmented flattening and distributed execution require
+ranges in their actual read context.
+
+The `sequence_conformance_*` integration tests mirror the executable corpus's
+13 partitions: classic, retail, and eleven full-kernel planner families. They
+reuse the existing configuration lists and share registration, comparison, and
+reporting through `tests/support/sequence_conformance.rs`, with one summary
+test per file. Separate crates let Cargo compile the partitions in parallel
+instead of serializing all 3,436 configurations in one rustc invocation; the
+10,272 scenario comparisons and answer comparator are unchanged. Run them from
+`features/workloads` with
+`cargo test -p cq-workload-corpus --test 'sequence_conformance*' -- --nocapture`
+to see each partition's configuration and agreement counts.
+After `cargo clean -p cq-workload-corpus` (dependencies retained), the split
+build took 4m58s versus the supplied 28-minute monolithic baseline; the timed
+test command took 316.69s including all thirteen passing tests. Classic reported
+274 configurations / 786 agreements, retail 314 / 942, each of the seven
+coarse/hypergraph/LE kernel files 224 / 672, and each of the four fine kernel
+files 320 / 960: 3,436 / 10,272 total with no failures.
+`cargo clippy -p cq-workload-corpus --tests --no-deps` then completed in 221.94s;
+it reported existing unused-macro warnings in `support/le_configurations.rs`
+and needless-range-loop warnings in `matrix.rs`, with none in the new files.
 
 Box [9] acceptance before the planner cutover exercised 3,436 configurations and 10,272 applicable scenarios:
 10,272 agreed, zero grading skips, zero execution failures. The workload

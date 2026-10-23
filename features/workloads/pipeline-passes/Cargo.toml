@@ -17,3 +17,4 @@ cq-sequence-lowering.workspace = true
 cq-workload-authored = { path = "../authored" }
 quote.workspace = true
 proc-macro2.workspace = true
+cq-testkit = { workspace = true, features = ["sequence-conformance"] }

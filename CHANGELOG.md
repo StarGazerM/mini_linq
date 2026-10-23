@@ -19,6 +19,11 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   Completed keys apply constants and repeated-variable equalities once per
   stratum, then project distinct variables; rule calls use borrowed host
   membership (or an empty-key witness test) without rebuilding negation indexes.
+- Split CPU Sequence corpus conformance into thirteen integration-test crates,
+  mirroring classic, retail, and the eleven kernel planner families. Reuse the
+  existing configuration lists and share the comparison/reporting loop under
+  `tests/support`; preserve all 3,436 configurations and 10,272 comparisons
+  while allowing Cargo to compile the partitions in parallel.
 - Add `experiments/gpu/tpch`, a single-crate/single-binary planner-driven inventory
   of all eleven CPU CQ-shaped retail TPC-H kernels at SF1 and SF10. Query bodies
   are imported directly from the CPU workload files, not maintained as GPU

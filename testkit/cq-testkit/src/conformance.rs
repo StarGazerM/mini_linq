@@ -89,6 +89,33 @@ mod cpu {
         Ok((planned.program, analysis))
     }
 
+    /// Plan and translate with the target's catalog plus caller-owned tokens.
+    /// The boolean selects set rather than multiset answer comparison. This is
+    /// also usable during macro expansion, without compiling generated sources.
+    pub fn translate_with_catalog(
+        program: &Program,
+        target: Target,
+        catalog: &Catalog,
+    ) -> syn::Result<(syn::Expr, bool)> {
+        let (graded, analysis) = plan_with_catalog(program, target, catalog).map_err(|error| {
+            syn::Error::new(
+                error.span(),
+                format!("{target:?} planning rejected: {error}"),
+            )
+        })?;
+        let expression = match target {
+            Target::Sequential => cq_sequence_pull::translate(&graded, &analysis),
+            Target::Tasks => cq_sequence_tasks::translate(&graded, &analysis),
+        }
+        .map_err(|error| {
+            syn::Error::new(
+                error.span(),
+                format!("{target:?} translation failed: {error}"),
+            )
+        })?;
+        Ok((expression, output_is_canonical(&graded, &analysis)))
+    }
+
     /// Whether the final answer stream has an explicit global canonical boundary.
     /// Partition-local canonicalization does not establish global uniqueness.
     fn output_is_canonical(program: &Program, analysis: &Analysis) -> bool {
@@ -252,13 +279,8 @@ mod cpu {
         );
         let mut reference: Option<(Target, Vec<String>)> = None;
         for &target in targets {
-            let (graded, analysis) = plan_with_catalog(program, target, catalog)
-                .unwrap_or_else(|error| panic!("{target:?} planning rejected: {error}"));
-            let expression = match target {
-                Target::Sequential => cq_sequence_pull::translate(&graded, &analysis),
-                Target::Tasks => cq_sequence_tasks::translate(&graded, &analysis),
-            }
-            .unwrap_or_else(|error| panic!("{target:?} translation failed: {error}"));
+            let (expression, canonical) = translate_with_catalog(program, target, catalog)
+                .unwrap_or_else(|error| panic!("{error}"));
             let generated = quote! {
                 #![allow(non_snake_case, unused_variables)]
                 fn main() {
@@ -281,7 +303,7 @@ mod cpu {
                     expected.iter(),
                     &format!("{target:?}"),
                     rows.iter(),
-                    output_is_canonical(&graded, &analysis),
+                    canonical,
                 );
             } else {
                 reference = Some((target, rows));
