@@ -615,6 +615,39 @@ impl Rows {
                 }
             }
         }
+        // A dereference-only binding copies a code without arithmetic. Preserve
+        // its codec bounds across publication rather than widening an identity
+        // projection to the entire primitive domain.
+        for definition in &physical.program.definitions {
+            let Operator::Bind(bind) = &definition.operator else {
+                continue;
+            };
+            let syn::Expr::Unary(copy) = ungroup(&bind.expression) else {
+                continue;
+            };
+            if !matches!(copy.op, syn::UnOp::Deref(_)) {
+                continue;
+            }
+            let syn::Expr::Path(source) = ungroup(&copy.expr) else {
+                continue;
+            };
+            let Some(source) = source.path.get_ident() else {
+                continue;
+            };
+            let names = cq_syntax::rust::bindings(&bind.pattern);
+            let [target] = names.as_slice() else {
+                continue;
+            };
+            let source = symbol_name(source);
+            let target = symbol_name(target);
+            let input = &analysis.structures.physical.rows[&symbol_name(&bind.input)];
+            let output = &analysis.structures.physical.rows[&symbol_name(&definition.name)];
+            if input.types.get(&source) == output.types.get(&target)
+                && let Some(inherited) = bounds.get(&source).cloned()
+            {
+                bounds.insert(target, inherited);
+            }
+        }
         build.extend(quote! {
             let __cq_timing_built = __cq_pool.stream().record_event(
                 Some(::cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;

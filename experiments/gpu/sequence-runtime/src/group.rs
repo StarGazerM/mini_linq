@@ -63,10 +63,14 @@ impl<F> GroupedRows<F> {
         slots: &[usize],
         bounds: &[gpu_device_columns::Bounds],
     ) -> Result<cq_gpu_runtime::DeviceColumns<'static, Row>> {
-        use gpu_device_columns::{Codec, ColumnView, DeviceColumns, Dictionary,
-            EncodedColumn, SourceView, Table};
+        use gpu_device_columns::{
+            Codec, ColumnView, DeviceColumns, Dictionary, EncodedColumn, SourceView, Table,
+        };
         let output = self.output;
-        if Row::WIDTH != slots.len() || bounds.len() != slots.len() || slots.iter().any(|&slot| slot >= output.width) {
+        if Row::WIDTH != slots.len()
+            || bounds.len() != slots.len()
+            || slots.iter().any(|&slot| slot >= output.width)
+        {
             return Err("grouped publication schema width mismatch".into());
         }
         let pool = output.values.pool().clone();
@@ -77,7 +81,11 @@ impl<F> GroupedRows<F> {
         for (&slot, &bounds) in slots.iter().zip(bounds) {
             let mut source = SourceView::from(ColumnView {
                 headers: std::ptr::null(),
-                data: output.values.ptr().wrapping_add(if rows == 0 { 0 } else { slot }).cast(),
+                data: output
+                    .values
+                    .ptr()
+                    .wrapping_add(if rows == 0 { 0 } else { slot })
+                    .cast(),
                 len: output.values.len() as u64,
                 count: std::ptr::null(),
                 codec: Codec::Plain as u32,
@@ -85,12 +93,20 @@ impl<F> GroupedRows<F> {
             source.stride = output.width as u64;
             columns.push(Arc::new(unsafe {
                 EncodedColumn::from_gather_source::<_, i64>(
-                    pool.clone(), source, std::ptr::null(), rows,
-                    output.metadata.clone(), 0, bounds,
+                    pool.clone(),
+                    source,
+                    std::ptr::null(),
+                    rows,
+                    output.metadata.clone(),
+                    0,
+                    bounds,
                 )?
             }));
         }
-        let views: Vec<_> = columns.iter().map(|column| unsafe { column.view() }).collect();
+        let views: Vec<_> = columns
+            .iter()
+            .map(|column| unsafe { column.view() })
+            .collect();
         let table = Table {
             columns,
             views: Arc::new(Buffer::from_host(pool.clone(), &views)?),
@@ -476,20 +492,39 @@ mod publication_tests {
     fn resident_group_publication_preserves_values_count_and_failure() -> Result<()> {
         let pool = Pool::new(0, 0, 0)?;
         let input = Buffer::from_host(pool.clone(), &[1i64, 3, 1, 7, 2, 5])?;
-        let aggregate = Aggregate { kind: 1, min: i64::MIN, max: i64::MAX };
+        let aggregate = Aggregate {
+            kind: 1,
+            min: i64::MIN,
+            max: i64::MAX,
+        };
         for error in [0, 1] {
-            let status = Arc::new(Buffer::from_host(pool.clone(), &[OutputCount {
-                rows: 3, error, padding: 0,
-            }])?);
-            let grouped = unsafe { fold(pool.clone(), &input, 3, 1, &[aggregate], vec![status])? };
+            let status = Arc::new(Buffer::from_host(
+                pool.clone(),
+                &[OutputCount {
+                    rows: 3,
+                    error,
+                    padding: 0,
+                }],
+            )?);
+            let grouped =
+                unsafe { fold(pool.clone(), &input, None, 3, 1, &[aggregate], vec![status])? };
             let published = unsafe {
-                grouped.with_decoder(()).into_columns::<(i64, i64)>(&[1, 0], &[
-                    gpu_device_columns::Bounds::Inclusive { min: i64::MIN, max: i64::MAX },
-                    gpu_device_columns::Bounds::Inclusive { min: 1, max: 2 },
-                ])?
+                grouped.with_decoder(()).into_columns::<(i64, i64)>(
+                    &[1, 0],
+                    &[
+                        gpu_device_columns::Bounds::Inclusive {
+                            min: i64::MIN,
+                            max: i64::MAX,
+                        },
+                        gpu_device_columns::Bounds::Inclusive { min: 1, max: 2 },
+                    ],
+                )?
             };
             assert_eq!(published.capacity(), 2);
-            assert_eq!(published.storage().bounds[1], gpu_device_columns::Bounds::Inclusive { min: 1, max: 2 });
+            assert_eq!(
+                published.storage().bounds[1],
+                gpu_device_columns::Bounds::Inclusive { min: 1, max: 2 }
+            );
             if error == 0 {
                 assert_eq!(published.to_host()?, [(10, 1), (5, 2)]);
             } else {

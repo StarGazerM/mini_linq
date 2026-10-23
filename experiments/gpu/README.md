@@ -19,6 +19,9 @@ license to substitute another query or plan.
 Computed CQ-Arith bindings in segmented maps are lane-local scalar codes.
 Sibling lanes may read parent-owned codes through their owner index, but map
 assignments never write those shared parent slots.
+Identity bindings preserve inherited codec bounds through publication; arithmetic
+bindings retain their full declared primitive bounds because wrapping can cross
+either endpoint.
 
 ## Build and run
 

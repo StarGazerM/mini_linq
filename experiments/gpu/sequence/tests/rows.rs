@@ -195,16 +195,15 @@ fn planned_retained_provider_filter_evaluates_row_columns_before_build() {
     assert!(!generated.contains("__row"));
 }
 
-#[test]
-fn segmented_arithmetic_bindings_are_lane_local() {
-    let program: Program = syn::parse_quote! {
+fn segmented_binding(expression: proc_macro2::TokenStream) -> Program {
+    syn::parse_quote! {
         physical {
             relation Driver(a:i32) = (&data.driver);
             relation Provider(a:i32, value:i32) = (&data.provider);
             driver = pipe rename Driver@0 {a -> a};
             provider = let rename Provider@1 {a -> a, value -> value};
             joined = pipe probe first [a] driver, provider;
-            computed = pipe bind joined with doubled:i32 = (*value * 2);
+            computed = pipe bind joined with doubled:i32 = (#expression);
             result = pipe canon project computed keep {a, doubled};
             return result as answer(a, doubled);
         }
@@ -229,11 +228,30 @@ fn segmented_arithmetic_bindings_are_lane_local() {
             computed_rows at host.device.block;
             output_rows at host.device;
         }
-    };
-    let generated = translate(&program);
+    }
+}
+
+#[test]
+fn identity_bindings_preserve_source_codec_bounds_in_publications() {
+    let generated = translate(&segmented_binding(quote!(*value)));
+    assert!(
+        generated.contains("__cq_sequence_host_Provider . storage () . bounds [1usize]"),
+        "{generated}"
+    );
+    assert!(!generated.contains("< i32 > :: MIN"), "{generated}");
+    let arithmetic = translate(&segmented_binding(quote!(*value * 2)));
+    assert!(arithmetic.contains("< i32 > :: MIN"), "{arithmetic}");
+}
+
+#[test]
+fn segmented_arithmetic_bindings_are_lane_local() {
+    let generated = translate(&segmented_binding(quote!(*value * 2)));
     assert!(generated.contains("__child_position"), "{generated}");
     assert!(generated.contains("let mut __map_code_"), "{generated}");
-    assert!(generated.contains("wrapping_mul (* value , 2)"), "{generated}");
+    assert!(
+        generated.contains("wrapping_mul (* value , 2)"),
+        "{generated}"
+    );
     // Parent slots can be read by sibling lanes, never assigned by a map.
     for statement in generated.split(';') {
         if let Some((left, _)) = statement.split_once(" = ") {

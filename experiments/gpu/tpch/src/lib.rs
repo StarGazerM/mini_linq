@@ -217,18 +217,19 @@ mod tests {
         {
             let mode = report["mode"].as_str().unwrap();
             if report["status"] != "accepted" {
-                // These opaque String predicates retain a valuation that the
-                // current PackedCanon catalog cannot canonicalize.
-                assert!(
-                    matches!(query, "h07" | "h14" | "h19"),
-                    "{query} {mode}: {}; term: {}",
-                    report["error"], report["term"]
-                );
-                assert!(
-                    report["error"].as_str().unwrap().contains("unmet catalog obligation Canon"),
-                    "{query} {mode}: {}",
-                    report["error"]
-                );
+                let error = report["error"].as_str().unwrap();
+                match query {
+                    "h07" => assert!(error.contains("unmet catalog obligation Canon"), "{error}"),
+                    "h14" => assert_eq!(
+                        error,
+                        "T-Gpu: host publication r3 needs recorded device-representable code columns"
+                    ),
+                    "h19" => assert_eq!(
+                        error,
+                        "T-Gpu: host publication r4 needs recorded device-representable code columns"
+                    ),
+                    _ => panic!("{query} {mode}: {error}; term: {}", report["term"]),
+                }
                 continue;
             }
             let manifest = Manifest::load(&data_root().join("sf1"))?;
@@ -275,7 +276,10 @@ mod tests {
     fn accepted_schedule_artifacts_replay_exactly() -> Result<()> {
         let reports = plans()?;
         let mut artifacts = Vec::new();
-        for report in reports.iter().filter(|report| report["status"] == "accepted") {
+        for report in reports
+            .iter()
+            .filter(|report| report["status"] == "accepted")
+        {
             if let Some(stages) = report["stages"].as_array() {
                 artifacts.extend(stages);
             } else {
