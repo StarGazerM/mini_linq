@@ -1,6 +1,5 @@
 //! TPC-H Q15's maximum-revenue suppliers, without final ordering.
-//! Supplier revenue is the only aggregate. A positive self-join identifies
-//! strictly dominated suppliers; native negation retains every tied maximum.
+//! Per-supplier revenue feeds a global maximum; equality retains every tie.
 //! Revenue is an exact scale-four coefficient, with line identities preserved.
 use cq_load::{Date, Decimal, Load};
 
@@ -66,24 +65,25 @@ pub fn run(data: &Data, config: &str) -> Vec<Answer> {
             let revenue_units: i64 = price.scaled() * (100 - discount.scaled());
     }.map(|(supplier, revenue)| (*supplier, revenue)).collect();
     let Revenue = Revenue.as_slice();
-    let Dominated: Vec<(i64,)> = mini_linq::compile! {
+    let Maximum: Vec<(Option<i64>,)> = mini_linq::compile! {
         pipeline {}
-        struct DominatedSuppliers;
+        struct MaximumRevenue;
         relation Revenue(supplier_key: i64, revenue: i64);
-        relation answer(supplier_key: i64);
-        answer(*supplier_key) :- Revenue(supplier_key, revenue), Revenue(_, greater_revenue),
-            if *greater_revenue > *revenue;
-    }.collect();
-    let Dominated = Dominated.as_slice();
+        relation answer(maximum: Option<i64>);
+        answer(max(revenue)) :- Revenue(supplier_key, revenue);
+    }
+    .collect();
+    let Maximum = Maximum.as_slice();
     mini_linq::compile! {
         pipeline {}
         struct Query;
         relation Supplier(s_suppkey: i64, s_name: String, s_address: String, s_phone: String);
         relation Revenue(supplier_key: i64, revenue: i64);
-        relation Dominated(supplier_key: i64);
+        relation Maximum(maximum: Option<i64>);
         relation answer(supplier_key: i64, name: String, address: String, phone: String, revenue: i64);
         answer(supplier_key, name, address, phone, revenue) :-
-            Revenue(supplier_key, revenue), !Dominated(supplier_key),
+            Revenue(supplier_key, revenue), Maximum(maximum),
+            if Some(*revenue) == *maximum,
             Supplier(supplier_key, name, address, phone);
     }.map(|(supplier, name, address, phone, revenue)| {
         (*supplier, name.clone(), address.clone(), phone.clone(), *revenue)

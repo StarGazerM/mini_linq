@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 
 pub fn compile(
     program: &stages::Program,
+    query: &str,
     manifest: &Manifest,
     mode: &str,
     override_pipeline: Option<&advice::Pipeline>,
@@ -60,14 +61,18 @@ pub fn compile(
         } else if mode == "automatic" {
             advice::Pipeline::baseline()
         } else {
-            advice::Pipeline::grouped(&kernel.cpu_query())
-                .map_err(|error| reject(Box::new(error)))?
+            advice::Pipeline::staged(query, index)
+        };
+        let profile = if mode == "advised" && override_pipeline.is_none() {
+            format!("{query}.{index}")
+        } else {
+            mode.to_owned()
         };
         let (code, mut artifact) = match compile_stage(
             &kernel,
             manifest,
             &pipeline,
-            mode,
+            &profile,
             Some(&publications),
             false,
         ) {

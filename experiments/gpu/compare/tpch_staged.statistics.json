@@ -1,0 +1,126 @@
+{
+  "method": "DuckDB 1.5.6; read-only /data/tpch-gpu/sf{1,10}/dbgen.duckdb; SET threads=4",
+  "sql": {
+    "h02.minimum": "WITH r AS (SELECT * FROM region WHERE r_name='EUROPE'), n AS (SELECT nation.* FROM nation JOIN r ON n_regionkey=r_regionkey), s AS (SELECT supplier.* FROM supplier JOIN n ON s_nationkey=n_nationkey), ps AS (SELECT partsupp.* FROM partsupp JOIN s ON ps_suppkey=s_suppkey) SELECT (SELECT count(*) FROM r) region, (SELECT count(*) FROM n) nation, (SELECT count(*) FROM s) supplier, count(*) partsupp, count(DISTINCT ps_partkey) output_groups FROM ps",
+    "h02.final": "WITH p AS (SELECT * FROM part WHERE p_size=15 AND p_type LIKE '%BRASS'), ps AS (SELECT partsupp.* FROM partsupp JOIN p ON ps_partkey=p_partkey), e AS (SELECT ps.* FROM ps JOIN supplier ON ps_suppkey=s_suppkey JOIN nation ON s_nationkey=n_nationkey JOIN region ON n_regionkey=r_regionkey WHERE r_name='EUROPE') SELECT (SELECT count(*) FROM p) part, (SELECT count(*) FROM ps) partsupp, count(*) europe FROM e",
+    "h11.stock": "WITH n AS (SELECT * FROM nation WHERE n_name='GERMANY'), s AS (SELECT supplier.* FROM supplier JOIN n ON s_nationkey=n_nationkey), ps AS (SELECT partsupp.* FROM partsupp JOIN s ON ps_suppkey=s_suppkey) SELECT (SELECT count(*) FROM n) nation, (SELECT count(*) FROM s) supplier, count(*) stock, count(DISTINCT ps_partkey) part_groups, 1 total_groups FROM ps",
+    "h13": "WITH q AS (SELECT * FROM orders WHERE o_comment NOT LIKE '%special%requests%'), f AS (SELECT o_custkey,count(*) n FROM q GROUP BY o_custkey) SELECT (SELECT count(*) FROM customer) customers, (SELECT count(*) FROM q) qualified_orders, count(*) output_groups, max(n) max_fanout, avg(n) matched_mean FROM f",
+    "h15": "WITH l AS (SELECT * FROM lineitem WHERE l_shipdate>=DATE '1996-01-01' AND l_shipdate<DATE '1996-04-01'), r AS (SELECT l_suppkey,sum(l_extendedprice*(1-l_discount)) revenue FROM l GROUP BY l_suppkey) SELECT (SELECT count(*) FROM l) selected_lines,count(*) revenue_groups,1 max_groups,(SELECT count(*) FROM r WHERE revenue=(SELECT max(revenue) FROM r)) winners FROM r",
+    "h18": "WITH q AS (SELECT l_orderkey,sum(l_quantity) quantity FROM lineitem GROUP BY l_orderkey) SELECT (SELECT count(*) FROM lineitem) lines,count(*) quantity_groups,count(*) FILTER (WHERE quantity>300) selected_orders FROM q",
+    "h20.shipped": "WITH l AS (SELECT * FROM lineitem WHERE l_shipdate>=DATE '1994-01-01' AND l_shipdate<DATE '1995-01-01') SELECT count(*) selected_lines,count(DISTINCT (l_partkey,l_suppkey)) shipped_groups FROM l",
+    "h20.final": "WITH p AS (SELECT * FROM part WHERE p_name LIKE 'forest%'), ps AS (SELECT partsupp.* FROM partsupp JOIN p ON ps_partkey=p_partkey), s AS (SELECT supplier.* FROM supplier JOIN nation ON s_nationkey=n_nationkey WHERE n_name='CANADA'), sp AS (SELECT partsupp.* FROM partsupp JOIN s ON ps_suppkey=s_suppkey) SELECT (SELECT count(*) FROM p) parts,(SELECT count(*) FROM ps) part_partsupp,(SELECT count(*) FROM s) suppliers,(SELECT count(*) FROM sp) supplier_partsupp,(SELECT count(*) FROM ps JOIN s ON ps_suppkey=s_suppkey) selected_partsupp",
+    "h20.prefixes": "WITH p AS (SELECT * FROM part WHERE p_name LIKE 'forest%'), ps AS (SELECT partsupp.* FROM partsupp JOIN p ON ps_partkey=p_partkey), sh AS (SELECT l_partkey,l_suppkey,sum(l_quantity)*100 quantity FROM lineitem WHERE l_shipdate>=DATE '1994-01-01' AND l_shipdate<DATE '1995-01-01' GROUP BY l_partkey,l_suppkey), j AS (SELECT ps.* FROM ps JOIN sh ON ps_partkey=l_partkey AND ps_suppkey=l_suppkey), v AS (SELECT ps.* FROM ps JOIN sh ON ps_partkey=l_partkey AND ps_suppkey=l_suppkey WHERE ps_availqty*200>quantity) SELECT (SELECT count(*) FROM j) shipped_matches,(SELECT count(*) FROM v) threshold_matches,(SELECT count(*) FROM v JOIN supplier ON ps_suppkey=s_suppkey JOIN nation ON s_nationkey=n_nationkey WHERE n_name='CANADA') canada_matches"
+  },
+  "measurements": {
+    "1": {
+      "h02.minimum": {
+        "region": 1,
+        "nation": 5,
+        "supplier": 1987,
+        "partsupp": 158960,
+        "output_groups": 117422
+      },
+      "h02.final": {
+        "part": 747,
+        "partsupp": 2988,
+        "europe": 642
+      },
+      "h11.stock": {
+        "nation": 1,
+        "supplier": 396,
+        "stock": 31680,
+        "part_groups": 29818,
+        "total_groups": 1
+      },
+      "h13": {
+        "customers": 150000,
+        "qualified_orders": 1484298,
+        "output_groups": 99996,
+        "max_fanout": 41,
+        "matched_mean": 14.843573742949719
+      },
+      "h15": {
+        "selected_lines": 225954,
+        "revenue_groups": 10000,
+        "max_groups": 1,
+        "winners": 1
+      },
+      "h18": {
+        "lines": 6001215,
+        "quantity_groups": 1500000,
+        "selected_orders": 57
+      },
+      "h20.shipped": {
+        "selected_lines": 909455,
+        "shipped_groups": 543210
+      },
+      "h20.final": {
+        "parts": 2127,
+        "part_partsupp": 8508,
+        "suppliers": 412,
+        "supplier_partsupp": 32960,
+        "selected_partsupp": 366
+      },
+      "h20.prefixes": {
+        "shipped_matches": 5843,
+        "threshold_matches": 5833,
+        "canada_matches": 263
+      }
+    },
+    "10": {
+      "h02.minimum": {
+        "region": 1,
+        "nation": 5,
+        "supplier": 20033,
+        "partsupp": 1602640,
+        "output_groups": 1183098
+      },
+      "h02.final": {
+        "part": 7854,
+        "partsupp": 31416,
+        "europe": 6351
+      },
+      "h11.stock": {
+        "nation": 1,
+        "supplier": 4049,
+        "stock": 323920,
+        "part_groups": 304774,
+        "total_groups": 1
+      },
+      "h13": {
+        "customers": 1500000,
+        "qualified_orders": 14845369,
+        "output_groups": 999981,
+        "max_fanout": 46,
+        "matched_mean": 14.84565106737028
+      },
+      "h15": {
+        "selected_lines": 2265714,
+        "revenue_groups": 100000,
+        "max_groups": 1,
+        "winners": 1
+      },
+      "h18": {
+        "lines": 59986052,
+        "quantity_groups": 15000000,
+        "selected_orders": 624
+      },
+      "h20.shipped": {
+        "selected_lines": 9099165,
+        "shipped_groups": 5441669
+      },
+      "h20.final": {
+        "parts": 21551,
+        "part_partsupp": 86204,
+        "suppliers": 4054,
+        "supplier_partsupp": 324320,
+        "selected_partsupp": 3517
+      },
+      "h20.prefixes": {
+        "shipped_matches": 58782,
+        "threshold_matches": 58655,
+        "canada_matches": 2377
+      }
+    }
+  }
+}

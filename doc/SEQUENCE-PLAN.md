@@ -1272,3 +1272,41 @@ inventory (241) and formatting of the new staged helper modules passed.
 Scoped clippy checks the runtime with warnings, but the suite lint gate reports
 44 `clippy::erasing_op` errors in generated zero-width CUDA allocations
 (`capacity * 0`); no translator change or lint suppression is included here.
+
+### Box 14b: arithmetic/key-aware staged replanning
+
+H15 now computes per-supplier revenue, a global grouped `max()`, and an equality
+join retaining every tied supplier. The nullable maximum preserves empty-input
+semantics and removes the quadratic anti-dominance stage. Its independent
+DuckDB oracle SQL is unchanged.
+
+Every H02/H11/H13/H15/H18/H20 stage has a statistics-derived order and checked
+schedule in `tpch/src/advice.rs`; raw DuckDB measurements, stage-by-stage
+cardinalities, segmentation decisions, placement and exact compiler rejections
+are recorded in `experiments/gpu/compare/tpch_statistics.md` (Box 14b).
+All eight grouped stages use checked key evidence to remove valuation canon.
+H11 arithmetic, H18's final guard/bind and H20's availability guard run on
+device; resident grouped argument kernels evaluate the scan arithmetic.
+H02 and H15 retain nullable host publications and host final stages, with their
+device translator rejections retained rather than patched.
+
+One warmup and five exact runs at each scale, using the same timing contract
+as the preceding acceptance table:
+
+| Query | SF1 before → after ms | SF10 before → after ms | DuckDB t24 SF1 / SF10 ms | Exact both |
+|---|---:|---:|---:|---|
+| H02 | 22.600 → 25.566 | 496.737 → 400.515 | 11 / 42 | yes |
+| H11 | 33.102 → 15.872 | 521.764 → 41.827 | 6 / 15 | yes |
+| H13 | 15.164 → 14.597 | 157.185 → 116.182 | 184 / 1,588 | yes |
+| H15 | 664.863 → 12.177 | 33,827.704 → 18.305 | 11 / 65 | yes |
+| H18 | 493.079 → 22.890 | 5,393.855 → 172.927 | 87 / 771 | yes |
+| H20 | 399.399 → 16.097 | 4,219.653 → 97.352 | 21 / 128 | yes |
+
+All six SF1 same-Physical Sequential comparisons also pass. H02's SF1
+regression is reported rather than hidden. Evidence is
+`experiments/gpu/compare/tpch_staged.results.json`; the rejected extra-segment
+candidate measurements are retained in `tpch_staged.initial.json`, and exact
+statistics SQL/results in `tpch_staged.statistics.json` alongside it.
+The four release grouped integration suites (14 tests) and workloads catalog
+suite (nine tests) pass, including H15's exact tied/empty/boundary DuckDB oracle.
+Changed Rust ranges were formatted; existing unrelated warnings remain.

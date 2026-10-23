@@ -65,6 +65,66 @@ impl Pipeline {
         })
     }
 
+    /// Stage-local orders measured with DuckDB; see the Box 14b tables in
+    /// compare/tpch_statistics.md. Publications are ordinary relation inputs.
+    pub fn staged(query: &str, stage: usize) -> Self {
+        let order = match (query, stage) {
+            ("h02", 0) => "Region, Nation, Supplier, Partsupp",
+            ("h02", 1) => "Part, Partsupp, MinimumCost, Supplier, Nation, Region",
+            ("h11", 0) => "Nation, Supplier, Partsupp",
+            ("h11", 1 | 2) => "Stock",
+            ("h11", 3) => "TotalValue, PartValue",
+            ("h13", 0) => "Customer, QualifiedOrders",
+            ("h13", 1) => "Customer",
+            ("h15", 0) | ("h18", 0) | ("h20", 0) => "Lineitem",
+            ("h15", 1) => "Revenue",
+            ("h15", 2) => "Maximum, Revenue, Supplier",
+            ("h18", 1) => "Quantity, Orders, Customer",
+            ("h20", 1) => "Part, Partsupp, Shipped, Supplier, Nation",
+            _ => unreachable!("unregistered staged query"),
+        };
+        // These are semantic keys: grouped publications have one row per
+        // group; Stock preserves dbgen's Partsupp key, and QualifiedOrders
+        // filters/project the declared Orders key. Counts are not key proofs.
+        let key: Option<(&str, &[&str])> = match (query, stage) {
+            ("h02", 1) => Some(("MinimumCost", &["part_key"])),
+            ("h11", 1 | 2) => Some(("Stock", &["part_key", "supplier_key"])),
+            ("h11", 3) => Some(("PartValue", &["part_key"])),
+            ("h13", _) => Some(("QualifiedOrders", &["order_key"])),
+            ("h15", 1 | 2) => Some(("Revenue", &["supplier_key"])),
+            ("h18", 1) => Some(("Quantity", &["order_key"])),
+            ("h20", 1) => Some(("Shipped", &["part_key", "supplier_key"])),
+            _ => None,
+        };
+        let sequence = key
+            .into_iter()
+            .map(|(relation, columns)| {
+                let evidence = cq_lang_sequence::Evidence {
+                    facts: vec![cq_lang_sequence::EvidenceFact::Key {
+                        subject: quote::format_ident!("{relation}"),
+                        columns: columns
+                            .iter()
+                            .map(|column| quote::format_ident!("{column}"))
+                            .collect(),
+                    }],
+                };
+                cq_sequence_plan::Advice::Evidence(evidence)
+                    .to_token_stream()
+                    .to_string()
+            })
+            .collect();
+        Self {
+            plan: format!("no_reduce, order({order})"),
+            storage: if matches!(query, "h11" | "h15" | "h18") {
+                "tpch_dictionary".into()
+            } else {
+                String::new()
+            },
+            sequence,
+            ..Self::baseline()
+        }
+    }
+
     // ASIA/date prefixes SF1: 1,5,30183,46008,184082,7243; SF10:
     // 1,5,300270,456771,1825856,72985. This beats Orders-root prefix sums
     // 920124 / 9183369. Preserve authored R's compressed IDs, customer store,
@@ -686,9 +746,23 @@ pub fn hand_schedule(
         &cq_gpu_sequence::machine(),
         &cq_gpu_sequence::catalog(),
     )?;
-    // Grouped valuations contain opaque exact arithmetic, not expanding joins.
-    // Keep the checked host/device publication boundary; no join segment exists.
-    if matches!(query, "h01" | "h06" | "h12" | "h04") {
+    // Keep checked group-input publication boundaries. Group extraction can
+    // consume a flatten, so it must not subsequently receive join segmentation.
+    if matches!(
+        query,
+        "h01"
+            | "h06"
+            | "h12"
+            | "h04"
+            | "h02.0"
+            | "h13.0"
+            | "h11.1"
+            | "h11.2"
+            | "h15.0"
+            | "h15.1"
+            | "h18.0"
+            | "h20.0"
+    ) {
         return Ok(suggested);
     }
     let mut planned = cq_sequence_plan::Planned {
@@ -804,6 +878,7 @@ pub fn hand_schedule(
         "h09" | "h08" | "d27" | "d19" | "d85" => &["Lineitem"],
         "h03" | "h07_block" => &["Orders"],
         "h21_positive" | "d72_inner" => &["Supplier", "Lineitem"],
+        "h11.0" => &["Supplier", "Partsupp"],
         _ => &[],
     };
     for definition in &source.structures.physical.program.definitions {

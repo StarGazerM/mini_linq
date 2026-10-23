@@ -160,7 +160,7 @@ fn h20_preserves_line_identity_date_bounds_and_absent_group_null_semantics() {
 }
 
 #[test]
-fn h15_anti_dominance_preserves_all_maximum_ties_and_quarter_boundaries() {
+fn h15_grouped_max_preserves_all_maximum_ties_and_quarter_boundaries() {
     // Supplier 1 has two distinct equal-valued lines; supplier 2 ties their
     // combined scale-four revenue exactly. Supplier 3 is strictly dominated.
     let rows = vec![vec![1, 1, 1, 101, 11, 0], vec![1, 1, 1, 101, 11, 0],
@@ -198,6 +198,6 @@ fn h15_anti_dominance_preserves_all_maximum_ties_and_quarter_boundaries() {
             .map(|(supplier, name, address, phone, revenue)| {
                 vec![integer(supplier), code(&name), code(&address), code(&phone), integer(revenue)]
             }).collect::<Vec<_>>();
-        assert_answers_equal("DuckDB H15 MAX oracle", expected, "anti-dominance H15", actual, true);
+        assert_answers_equal("DuckDB H15 MAX oracle", expected, "grouped MAX H15", actual, true);
     }
 }

@@ -949,7 +949,7 @@ fn main() -> Result<()> {
                 };
                 let generation_started = std::time::Instant::now();
                 let compiled = if let Some(staged) = &staged {
-                    build_stages::compile(staged, &manifest, mode,
+                    build_stages::compile(staged, name, &manifest, mode,
                         if mode == "advised" { overrides.get(name) } else { None })
                 } else {
                     compile(kernel.as_ref().unwrap(), &manifest, &pipeline, profile)

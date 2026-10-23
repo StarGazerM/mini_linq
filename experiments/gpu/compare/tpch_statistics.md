@@ -1098,3 +1098,115 @@ cargo oxide build --arch sm_89 -- --release -p cq-gpu-tpch
 
 Only one GPU measurement process should run at a time. The default advice lives in `tpch/src/advice.rs`; the JSON override remains available for replay. Query sources and translator semantics are unchanged. The explicit-selector API was extended, with checked rejection tests, for `Relation@clause`, `block@clause`, and occurrence-qualified reduce/skip endpoints.
 
+## Box 14b: statistics-driven staged plans
+
+The following measurements use the same read-only DuckDB 1.5.6 databases and
+`SET threads=4` method as above. Exact SQL and raw results are retained in
+[`tpch_staged.statistics.json`](tpch_staged.statistics.json). The historical
+Box 14 before measurements include WideCanon but not CQ-Arith/key-aware grouping.
+Stage numbers below are zero-based; order names are the authored relations,
+not guessed physical operator identifiers.
+
+| Query/stage | Measured SF1 positions → output | Measured SF10 positions → output | Selected order and segmentation |
+|---|---|---|---|
+| H02/0 minimum | 1 → 5 → 1,987 → 158,960 → 117,422 groups | 1 → 5 → 20,033 → 1,602,640 → 1,183,098 groups | Region → Nation → Supplier → Partsupp. Region-first avoids starting at 800,000/8,000,000 Partsupp rows. Retain the checked grouped-input publication schedule: a separate 1,024/items-4 join-segment attempt was rejected after group extraction consumed the flatten. |
+| H02/1 final | 747 Parts → 2,988 Partsupp → 642 European matches | 7,854 → 31,416 → 6,351 | Part → Partsupp → MinimumCost → Supplier → Nation → Region. The four-row Partsupp fanout needs no >4 boundary; Europe-first starts with 158,960/1,602,640 rows instead. Nullable minimum and string methods remain subject to checked placement. |
+| H11/0 Stock | 1 Nation → 396 Suppliers → 31,680 Stock | 1 → 4,049 → 323,920 | Nation → Supplier → Partsupp; segment both expanding lookups, rather than scanning all Partsupp. |
+| H11/1 PartValue | 31,680 → 29,818 groups | 323,920 → 304,774 | Stock scan and grouped multiplication/sum; no join boundary. |
+| H11/2 TotalValue | 31,680 → 1 | 323,920 → 1 | Stock scan and global multiplication/sum; no join boundary. |
+| H11/3 final | 1 total × 29,818 parts | 1 × 304,774 | TotalValue → PartValue, with checked widened arithmetic guard; partition output, no keyed fanout. |
+| H13/0 counts | 150,000 Customers → 1,484,298 qualified orders → 99,996 groups | 1,500,000 → 14,845,369 → 999,981 | Customer → QualifiedOrders; expanding mean per customer 9.895/9.897, matched mean 14.844/14.846, max 41/46. Retain the checked grouped-input publication schedule; post-extraction join segmentation was rejected. Reverse order requires an extra unique Customer probe for every qualified order. |
+| H13/1 zeros | 150,000 Customers → 50,004 | 1,500,000 → 500,019 | Customer root with anti-membership, not expansion. Preserve the one-time authored comment preprocessing and terminal union. |
+| H15/0 Revenue | 225,954 quarter lines → 10,000 suppliers | 2,265,714 → 100,000 | Lineitem scan, date guard and exact revenue arithmetic into keyed sum; no join boundary. |
+| H15/1 Maximum | 10,000 revenues → 1 nullable maximum | 100,000 → 1 | Revenue scan and global `max`, replacing quadratic anti-dominance. |
+| H15/2 final | 1 maximum × 10,000 revenues → 1 winner | 1 × 100,000 → 1 | Maximum → Revenue → Supplier. Compare maximum before supplier lookup, preserving all ties and empty-input semantics. |
+| H18/0 Quantity | 6,001,215 lines → 1,500,000 orders | 59,986,052 → 15,000,000 | Key-covered line scan and grouped exact quantity sum; no join boundary. |
+| H18/1 final | 57 selected quantities → 57 Orders → 57 Customers | 624 → 624 → 624 | Quantity guard first, then unique Orders/Customer lookups; do not expand all customers/orders. |
+| H20/0 Shipped | 909,455 dated lines → 543,210 part/supplier groups | 9,099,165 → 5,441,669 | Key-covered Lineitem scan and quantity sum; no join boundary. |
+| H20/1 final | 2,127 forest Parts → 8,508 Partsupp → 5,843 shipped → 5,833 threshold → 263 Canadian matches | 21,551 → 86,204 → 58,782 → 58,655 → 2,377 | Part → Partsupp → Shipped → Supplier → Nation; four-row fanout, no >4 segment. Canada-root would enumerate 32,960/324,320 Partsupp before Part selection, versus 8,508/86,204. Final DISTINCT suppliers are 186/1,804. |
+
+Semantic key assertions are separate from these statistics. Grouped
+MinimumCost/PartValue/Revenue/Quantity/Shipped publications have their group
+keys. Stock preserves the dbgen Partsupp composite key, and QualifiedOrders
+preserves Orders' key through filtering/projection. These premises are supplied
+as ordinary checked Sequence evidence, not inferred from sampled uniqueness.
+The H15 CPU oracle SQL is unchanged; duplicate lines, equal-valued distinct
+lines, tied maxima, zero revenue, empty input and quarter boundaries remain
+covered by its exact DuckDB fixture.
+
+### Placement, rejected candidates, and exact measurements
+
+The accepted H02/0 and H13/0 grouped-input publications use
+`partition(r7, 256, items 4)` and `partition(r2, 256, items 4)`, respectively.
+H11/0 uses `segment(r3, 1024, items 4)` and
+`segment(r6, 1024, items 4)`. Other non-grouped device terminal stages use
+256-row output partitions. No arbitrary fanout limit is introduced.
+
+All eight grouped nodes remove their valuation canon with checked key evidence.
+H11/1–2, H15/0–1, H18/0 and H20/0 use resident group-argument kernels:
+the group orchestrator and source placeholders have host grades, while numeric
+argument formation, date filtering, key ordering and folding execute through
+the existing GPU group implementation. This is not a claim that every trace
+entry is device-graded. H11/0's scaled-cost bind and H11/3's widened threshold
+guard, H18/1's quantity guard/price bind, and H20/1's widened availability guard
+are explicitly graded `host.device.block`. H13's comment preprocessing and
+H20's `starts_with` remain authored host work.
+
+H02's minimum and H15's maximum are GPU-computed but nullable publications are
+downloaded to host rows. Their final stages remain host-planned because the
+existing translator refuses those nullable inputs. No compiler or translator
+was patched, no rejection suppressed, and no host stage is labeled device-only.
+
+| Candidate | Scale | Phase | Exact rejection |
+|---|---|---|---|
+| H02/0 extra post-extraction segment | SF1, SF10 | plan(machine) | `P-Decompose segment (r7 , 1024 , items 4): segment requires a named flatten level` |
+| H13/0 extra post-extraction segment | SF1, SF10 | plan(machine) | `P-Decompose segment (r2 , 1024 , items 4): segment requires a named flatten level` |
+| H02/1 device final stage | SF1, SF10 | translate | `T-Gpu: host publication r5 needs recorded device-representable code columns` |
+| H15/2 device final stage | SF1, SF10 | translate | `T-Gpu: host publication r0 needs recorded device-representable code columns` |
+
+The first two rejected candidates and their exact fallback measurements remain
+in [`tpch_staged.initial.json`](tpch_staged.initial.json). The selected plans,
+full replay traces, nullable-input rejections, five samples, independent DuckDB
+t24 timing provenance, and exact row counts are in
+[`tpch_staged.results.json`](tpch_staged.results.json).
+
+**12/12 selected query/scale entries are exact**: one warmup and five measured
+runs each compare the complete answer against the exported DuckDB oracle.
+All six SF1 entries also pass same-Physical Sequential conformance. Timing is
+the median of per-run sums of stage phase times, exactly as in Box 14; initial
+loading, answer comparison and the authored one-time H13 preprocessing are
+outside that interval. Group argument/reduction work is in the historical
+`dedup` timing bucket even when valuation canon is removed. GPU runs were
+exclusive; CPU compilation/testing did not overlap the final measurement.
+
+| Query | Scale | Box 14 before ms | Box 14b after ms | Speedup | DuckDB t24 ms | Exact rows |
+|---|---|---:|---:|---:|---:|---:|
+| H02 | SF1 | 22.600 | 25.566 | 0.88× | 11 | 460 |
+| H11 | SF1 | 33.102 | 15.872 | 2.09× | 6 | 1,048 |
+| H13 | SF1 | 15.164 | 14.597 | 1.04× | 184 | 150,000 |
+| H15 | SF1 | 664.863 | 12.177 | 54.60× | 11 | 1 |
+| H18 | SF1 | 493.079 | 22.890 | 21.54× | 87 | 57 |
+| H20 | SF1 | 399.399 | 16.097 | 24.81× | 21 | 186 |
+| H02 | SF10 | 496.737 | 400.515 | 1.24× | 42 | 4,667 |
+| H11 | SF10 | 521.764 | 41.827 | 12.47× | 15 | 0 |
+| H13 | SF10 | 157.185 | 116.182 | 1.35× | 1,588 | 1,500,000 |
+| H15 | SF10 | 33,827.704 | 18.305 | 1847.96× | 65 | 1 |
+| H18 | SF10 | 5,393.855 | 172.927 | 31.19× | 771 | 624 |
+| H20 | SF10 | 4,219.653 | 97.352 | 43.34× | 128 | 1,804 |
+
+H02's SF1 regression is retained, not replaced by an automatic-mode minimum.
+The same statistics-derived plan is used at both scales, and its SF10 minimum
+publication remains dominated by a large nullable host boundary. The table
+does not claim universal GPU-only execution or a globally optimal plan.
+
+Reproduce from `experiments/gpu` with the CUDA_HOME and CARGO_BUILD_JOBS values
+above, `CQ_GPU_TPCH_QUERIES=h02,h11,h13,h15,h18,h20`, then
+`cargo oxide build --arch sm_89 -- --release -p cq-gpu-tpch` and
+`./target/release/cq-gpu-tpch compare/tpch_staged.reproduced.json --mode advised --scale sf1 --scale sf10`.
+
+Verification: the restricted release CUDA build passed, followed by the
+12-entry exact benchmark above. In `features/workloads`,
+`CARGO_BUILD_JOBS=1 cargo test --release -p cq-workloads --test grouped_h01 --test grouped_h02_h11_h13_h20 --test grouped_h06_h10_h12 --test grouped_h14_h18_h19 --test catalog`
+passed **23 tests**: 14 grouped tests (including the unchanged exact H15 MAX
+oracle cases) and nine catalog tests. Rustfmt was scoped to changed Rust ranges.
+Existing unused-variable/exported-inline warnings were not suppressed.
