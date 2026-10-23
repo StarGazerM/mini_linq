@@ -584,11 +584,15 @@ impl Rows {
         for row in analysis.structures.physical.rows.values() {
             for column in &row.computed {
                 let ty = &row.types[column];
-                if matches!(primitive(ty).as_deref(),
-                    Some("i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32")) {
-                    bounds.entry(column.clone()).or_insert_with(|| quote! {
-                        ::cq_gpu_runtime::Bounds::Inclusive {
-                            min: <#ty>::MIN as i64, max: <#ty>::MAX as i64,
+                if matches!(
+                    primitive(ty).as_deref(),
+                    Some("i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32")
+                ) {
+                    bounds.entry(column.clone()).or_insert_with(|| {
+                        quote! {
+                            ::cq_gpu_runtime::Bounds::Inclusive {
+                                min: <#ty>::MIN as i64, max: <#ty>::MAX as i64,
+                            }
                         }
                     });
                 }

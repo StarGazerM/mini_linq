@@ -1156,3 +1156,25 @@ overflow and signed-minimum division laws in debug CPU execution, arithmetic
 Motion with opaque-domain rejection, BE-Partial device acceptance/rejection,
 H06 DISTINCT-valuation exactness against DuckDB, and advised H06/H12 SF10
 device exactness with before/after timings.
+
+Observed acceptance: 124 syntax/VO/order/planner tests, 55 Sequence language
+tests, 13 GPU row/core tests, and all five H06/H10/H12 CPU tests passed.
+The CPU cases include debug-overflow laws, signed-minimum division by -1 and
+H06's independent DuckDB DISTINCT-valuation oracle. Scoped library clippy
+passed; the three changed public API snapshots were regenerated.
+
+The combined CQ-Arith + key-covered GPU grouping path was measured with one
+warmup and five exact runs per query at SF10:
+
+| Query | Exact answer rows | Baseline median ms | Combined median ms |
+|---|---:|---:|---:|
+| H06 | 1 | 3310.908 | 11.776 |
+| H12 | 2 | 44.427 | 25.930 |
+
+These are integrated results, not an isolated arithmetic-only speedup.
+Baseline evidence is `/tmp/sweep3.json`; combined evidence is
+`/tmp/groupkeys-h06-sf10.json` and `/tmp/groupkeys-h12-sf10.json`.
+The generic canonical-publication path additionally needs declared primitive
+bounds for computed columns: wrapping expressions may cross either endpoint,
+so source codec bounds cannot be reused. WideCanon supplies complete keys when
+those full declared ranges exceed 128 bits.
