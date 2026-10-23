@@ -488,6 +488,36 @@ fn cq_negation_respects_repeated_variables() {
 }
 
 #[test]
+fn cq_negation_normalizes_raw_relations_and_repeated_variables() {
+    let rows = [(1,), (2,), (3,), (4,), (4,)];
+    let blocked = [(1, 2, 7, 9), (2, 2, 7, 8), (3, 3, 8, 9)];
+    let expected: std::collections::BTreeSet<_> = rows
+        .iter()
+        .filter(|(x,)| {
+            !blocked
+                .iter()
+                .any(|(a, b, kind, _)| a == x && b == x && *kind == 7)
+        })
+        .copied()
+        .collect();
+    macro_rules! query {
+        ($relation:ident, $first:ident, $second:ident) => {
+            mini_linq::compile! {
+                pipeline {}
+                struct Raw;
+                relation r#A(x:i32) = (rows);
+                relation r#S(a:i32,b:i32,kind:i32,payload:i32) = (blocked);
+                relation r#answer(x:i32);
+                answer(*x) :- A(x), !$relation($first,$second,7,_);
+            }
+            .collect::<std::collections::BTreeSet<_>>()
+        };
+    }
+    assert_eq!(query!(S, r#x, x), expected);
+    assert_eq!(query!(r#S, x, r#x), expected);
+}
+
+#[test]
 fn cq_negation_of_an_empty_relation_retains_every_key() {
     let rows = [(1,), (2,), (2,)];
     let blocked: [(i32,); 0] = [];

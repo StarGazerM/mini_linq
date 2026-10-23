@@ -1,4 +1,5 @@
 //! E-Neg's positional relation, shared by lowering and structural obligations.
+//! Raw and ordinary identifier spellings share relation and uniqueness-key identities.
 use std::collections::BTreeSet;
 
 use cq_lang_ra as ra;
@@ -38,7 +39,7 @@ pub(super) fn layout(
             }
         });
         if let Some(Term::Variable(v)) = &term {
-            if !keys.contains(v) {
+            if !keys.iter().any(|key| symbol_name(key) == symbol_name(v)) {
                 keys.push(v.clone());
                 mapping.push((column.name.clone(), v.clone()));
                 continue;

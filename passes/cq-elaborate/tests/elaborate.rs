@@ -1699,6 +1699,49 @@ fn negative_constants_repeats_and_wildcards_match_reference_semantics() {
 }
 
 #[test]
+fn raw_negation_names_match_reference_semantics() {
+    for relation in ["K", "r#K"] {
+        for args in ["r#x,x", "x,r#x", "r#x,1", "1,r#x", "r#x,_", "_,r#x"] {
+            for body in [
+                format!("R(x), !{relation}({args})"),
+                format!("R(x), {{ !{relation}({args}) }} | {{ !{relation}({args}) }}"),
+            ] {
+                let source: cq::Program = syn::parse_str(&format!(
+                    "struct Raw; relation r#R(a:i32); relation r#K(a:i32,b:i32);
+                     answer(x) :- {body};"
+                ))
+                .unwrap();
+                let normal = cq::normal::normalize(&source).unwrap();
+                let written = cq_order::compile(
+                    &normal,
+                    &cq_order::Options {
+                        heuristic: cq_order::Heuristic::Written,
+                        split: cq_order::Split::Coarse,
+                    },
+                )
+                .unwrap();
+                let target = compile(&written).unwrap();
+                let reference = cq_elaborate::compile_written(&written).unwrap();
+                for seed in 0..32 {
+                    let database = databases::binary_database(&source, seed);
+                    let expected = cq_oracle::evaluate_cq(&source, &database);
+                    assert_eq!(
+                        oracle::evaluate_ra(&target, &database).output,
+                        expected,
+                        "{body}, {seed}"
+                    );
+                    assert_eq!(
+                        oracle::evaluate_ra(&reference, &database).output,
+                        expected,
+                        "{body}, {seed}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn parameter_negation_selects_a_capture_without_binding_it() {
     let source = cq(quote! {
         struct Negative; relation R(a:i32); relation K(a:i32,b:i32);

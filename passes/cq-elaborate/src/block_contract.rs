@@ -103,7 +103,7 @@ impl Body<'_, '_> {
                 let declaration = self
                     .source
                     .inputs()
-                    .find(|d| d.name == atom.relation)
+                    .find(|d| symbol_name(&d.name) == symbol_name(&atom.relation))
                     .expect("contracted atom");
                 let mapping = declaration
                     .columns
@@ -373,7 +373,7 @@ impl Body<'_, '_> {
                     let declaration = self
                         .source
                         .inputs()
-                        .find(|d| d.name == negation.atom.relation)
+                        .find(|d| symbol_name(&d.name) == symbol_name(&negation.atom.relation))
                         .expect("contracted negative input");
                     let bound = cq::blocks::bound_before(self.body, clause, &self.context);
                     let path = self.path(clause);
