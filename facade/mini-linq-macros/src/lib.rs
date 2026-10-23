@@ -89,8 +89,9 @@ fn expand_compile(input: proc_macro2::TokenStream) -> syn::Result<proc_macro2::T
         || !source.config.physical.is_empty()
         || !source.config.structures.is_empty()
     {
-        defaults.decompose =
-            vec![syn::parse_quote!(::mini_linq::passes::plan_sequential(preserve_order))];
+        defaults.decompose = vec![syn::parse_quote!(::mini_linq::passes::plan_sequential(
+            preserve_order
+        ))];
     }
     source.config.resolve(defaults)?.start(source.tokens)
 }
@@ -171,10 +172,10 @@ struct PlanOptions {
     /// An explicit relation order, checked by the ordinary ordering pass.
     order: Option<Vec<cq_order::OrderAtom>>,
     no_reduce: bool,
-    /// `(target, support)` relation names to add, in advice order.
-    reduce: Vec<(syn::Ident, syn::Ident)>,
-    /// `(target, support)` relation names whose Masks reduction is dropped.
-    skip: Vec<(syn::Ident, syn::Ident)>,
+    /// `(target, support)` atom selectors to add, in advice order.
+    reduce: Vec<(cq_order::OrderAtom, cq_order::OrderAtom)>,
+    /// `(target, support)` atom selectors whose Masks reduction is dropped.
+    skip: Vec<(cq_order::OrderAtom, cq_order::OrderAtom)>,
 }
 impl Parse for PlanOptions {
     /// Optional `order(Relation, Relation@clause, ...)` plus `no_reduce`, or any number of
@@ -198,12 +199,12 @@ impl Parse for PlanOptions {
             } else if (option == "reduce" || option == "skip") && !options.no_reduce {
                 let content;
                 syn::parenthesized!(content in input);
-                let target: syn::Ident = content.parse()?;
+                let target: cq_order::OrderAtom = content.parse()?;
                 let with: syn::Ident = content.parse()?;
                 if with != "with" {
                     return Err(syn::Error::new_spanned(with, "expected `with`"));
                 }
-                let support: syn::Ident = content.parse()?;
+                let support: cq_order::OrderAtom = content.parse()?;
                 if !content.is_empty() {
                     return Err(content.error("expected (Target with Support)"));
                 }
@@ -226,26 +227,6 @@ impl Parse for PlanOptions {
             }
         }
         Ok(options)
-    }
-}
-
-/// The written atom clause of the stream scope reading `relation`; advice must
-/// name a relation read exactly once there.
-fn advised_clause(
-    body: &cq_lang_cq::CommaList<cq_lang_cq::BodyItem>,
-    relation: &syn::Ident,
-) -> syn::Result<usize> {
-    let mut clauses = body
-        .iter()
-        .enumerate()
-        .filter(|(_, item)| item.atom().is_some_and(|atom| atom.relation == *relation))
-        .map(|(clause, _)| clause);
-    match (clauses.next(), clauses.next()) {
-        (Some(clause), None) => Ok(clause),
-        _ => Err(syn::Error::new_spanned(
-            relation,
-            "reduce advice names a relation read by exactly one top-level atom",
-        )),
     }
 }
 
@@ -298,15 +279,16 @@ pub fn plan(input: TokenStream) -> TokenStream {
             // Formal rule R-Advice: Advised semijoins of two top-level atoms sharing a variable run after the Masks reductions, before the stream; skipped ones are removed.
             let analysis = cq_lang_vo::contract::check(&reduced)?;
             let graph = cq_lang_cq::hypergraph::Analysis::of(&reduced.cq);
-            let body = &reduced.cq.query.body;
-            let pair = |target: &syn::Ident, support: &syn::Ident| -> syn::Result<(usize, usize)> {
+            let pair = |target: &cq_order::OrderAtom,
+                        support: &cq_order::OrderAtom|
+             -> syn::Result<(usize, usize)> {
                 let (t, s) = (
-                    advised_clause(body, target)?,
-                    advised_clause(body, support)?,
+                    target.positive_clause(&reduced.cq)?,
+                    support.positive_clause(&reduced.cq)?,
                 );
                 if t == s || graph.shared(t, s).is_empty() {
                     return Err(syn::Error::new_spanned(
-                        support,
+                        &support.relation,
                         "reduce advice needs two atoms sharing a variable",
                     ));
                 }
@@ -318,7 +300,7 @@ pub fn plan(input: TokenStream) -> TokenStream {
                 let step = cq_reduce::semijoin(&analysis, &graph, t, s);
                 if !reduced.valuation.steps.contains(&step) {
                     return Err(syn::Error::new_spanned(
-                        target,
+                        &target.relation,
                         "skip advice names no Masks reduction",
                     ));
                 }
@@ -431,9 +413,11 @@ fn sequence_plan_target(input: &proc_macro2::TokenStream) -> bool {
         syn::braced!(arguments in input);
         let args: proc_macro2::TokenStream = arguments.parse()?;
         let _: proc_macro2::TokenStream = input.parse()?;
-        Ok(!matches!(args.to_string().as_str(), "lookup_first" | "preserve_order")
-            && syn::parse2::<PlanOptions>(args.clone()).is_err()
-            && syn::parse2::<syn::Path>(args).is_ok())
+        Ok(
+            !matches!(args.to_string().as_str(), "lookup_first" | "preserve_order")
+                && syn::parse2::<PlanOptions>(args.clone()).is_err()
+                && syn::parse2::<syn::Path>(args).is_ok(),
+        )
     };
     parser.parse2(input.clone()).unwrap_or(false)
 }
@@ -580,10 +564,38 @@ mod tests {
         assert!(syn::parse2::<PlanOptions>(quote!(order(R), order(S))).is_err());
         assert!(syn::parse2::<PlanOptions>(quote!(order(R S))).is_err());
         let qualified: PlanOptions =
-            syn::parse2(quote!(order(R@2, R@0, S), no_reduce)).unwrap();
+            syn::parse2(quote!(order(R @ 2, R @ 0, S), no_reduce)).unwrap();
         assert_eq!(qualified.order.unwrap()[0].occurrence, Some(2));
         assert!(syn::parse2::<PlanOptions>(quote!(order(R@))).is_err());
-        assert!(syn::parse2::<PlanOptions>(quote!(order(R@-1))).is_err());
+        assert!(syn::parse2::<PlanOptions>(quote!(order(R @ -1))).is_err());
+    }
+
+    #[test]
+    fn reduction_selectors_share_occurrence_resolution_and_reject_blocks() {
+        let options: PlanOptions = syn::parse2(quote!(
+            reduce(R@2 with S@1), skip(R@0 with S@1)
+        ))
+        .unwrap();
+        let source: cq_lang_cq::Program = syn::parse_quote! {
+            struct Q;
+            relation R(a:i32);
+            relation S(a:i32);
+            answer(x) :- R(x), S(x), R(x), { S(x) } | { S(x) };
+        };
+        let source = cq_lang_cq::normal::normalize(&source).unwrap();
+        assert_eq!(options.reduce[0].0.positive_clause(&source).unwrap(), 2);
+        assert_eq!(options.reduce[0].1.positive_clause(&source).unwrap(), 1);
+        assert_eq!(options.skip[0].0.positive_clause(&source).unwrap(), 0);
+        for selector in ["R", "R@1", "R@99", "block@3"] {
+            assert!(
+                syn::parse_str::<cq_order::OrderAtom>(selector)
+                    .unwrap()
+                    .positive_clause(&source)
+                    .is_err()
+            );
+        }
+        assert!(syn::parse2::<PlanOptions>(quote!(reduce(R@ with S))).is_err());
+        assert!(syn::parse2::<PlanOptions>(quote!(skip(R with S@-1))).is_err());
     }
 
     #[test]
@@ -599,12 +611,16 @@ mod tests {
         let advised = expand_compile(quote! {
             pipeline { plan = custom_order; }
             #source
-        }).unwrap().to_string();
+        })
+        .unwrap()
+        .to_string();
         assert!(advised.contains("plan_sequential (preserve_order)"));
         let manual = expand_compile(quote! {
             pipeline { decompose = [authored_schedule]; }
             #source
-        }).unwrap().to_string();
+        })
+        .unwrap()
+        .to_string();
         assert!(manual.contains("authored_schedule"));
         assert!(!manual.contains("plan_sequential"));
     }

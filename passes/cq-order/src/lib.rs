@@ -666,7 +666,67 @@ impl syn::parse::Parse for OrderAtom {
         } else {
             None
         };
-        Ok(Self { relation, occurrence })
+        Ok(Self {
+            relation,
+            occurrence,
+        })
+    }
+}
+
+impl OrderAtom {
+    /// Resolve the selector in an already normalized top-level body.
+    pub fn resolve(&self, source: &cq::Program) -> syn::Result<usize> {
+        let relation = &self.relation;
+        if let Some(index) = self.occurrence {
+            let matches = match source.query.body.get(index) {
+                Some(BodyItem::Positive { atom }) => atom.relation == *relation,
+                Some(BodyItem::Block(_)) => relation == "block",
+                _ => false,
+            };
+            if !matches {
+                return Err(syn::Error::new_spanned(
+                    relation,
+                    if relation == "block" {
+                        format!("advice selector block@{index} does not name a top-level block")
+                    } else {
+                        format!(
+                            "advice selector {relation}@{index} does not name that top-level positive atom"
+                        )
+                    },
+                ));
+            }
+            Ok(index)
+        } else {
+            let mut occurrences = source
+                .query
+                .body
+                .iter()
+                .enumerate()
+                .filter_map(|(i, item)| {
+                    matches!(item, BodyItem::Positive { atom } if atom.relation == *relation)
+                        .then_some(i)
+                });
+            let first = occurrences.next();
+            if first.is_none() || occurrences.next().is_some() {
+                return Err(syn::Error::new_spanned(
+                    relation,
+                    "advice needs one top-level occurrence; qualify repeated relations as Relation@clause",
+                ));
+            }
+            Ok(first.unwrap())
+        }
+    }
+
+    /// Reduction endpoints are positive atoms, not whole block frontiers.
+    pub fn positive_clause(&self, source: &cq::Program) -> syn::Result<usize> {
+        let clause = self.resolve(source)?;
+        if !matches!(source.query.body[clause], BodyItem::Positive { .. }) {
+            return Err(syn::Error::new_spanned(
+                &self.relation,
+                "reduction advice requires a top-level positive atom, not a block",
+            ));
+        }
+        Ok(clause)
     }
 }
 
@@ -686,37 +746,7 @@ pub fn compile_explicit(
     let mut priorities = BTreeMap::new();
     for (priority, selector) in relations.iter().enumerate() {
         let relation = &selector.relation;
-        let occurrence = if let Some(index) = selector.occurrence {
-            let matches = match source.query.body.get(index) {
-                Some(BodyItem::Positive { atom }) => atom.relation == *relation,
-                Some(BodyItem::Block(_)) => relation == "block",
-                _ => false,
-            };
-            if !matches {
-                return Err(syn::Error::new_spanned(
-                    relation,
-                    if relation == "block" {
-                        format!("order advice block@{index} does not name a top-level block")
-                    } else {
-                        format!("order advice {relation}@{index} does not name that top-level positive atom")
-                    },
-                ));
-            }
-            index
-        } else {
-            let mut occurrences = source.query.body.iter().enumerate().filter_map(|(i, item)| {
-                matches!(item, BodyItem::Positive { atom } if atom.relation == *relation)
-                    .then_some(i)
-            });
-            let first = occurrences.next();
-            if first.is_none() || occurrences.next().is_some() {
-                return Err(syn::Error::new_spanned(
-                    relation,
-                    "order advice needs one top-level occurrence; qualify repeated relations as Relation@clause",
-                ));
-            }
-            first.unwrap()
-        };
+        let occurrence = selector.resolve(source)?;
         if priorities.insert(occurrence, priority).is_some() {
             return Err(syn::Error::new_spanned(
                 relation,

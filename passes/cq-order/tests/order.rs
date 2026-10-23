@@ -101,26 +101,55 @@ fn occurrence_qualified_order_uses_normal_body_positions() {
         relation S(a:i32);
         answer(a,b,c) :- R(a,b), if b > 0, R(a,c), S(a);
     });
-    let order = [syn::parse_quote!(S), syn::parse_quote!(R@2), syn::parse_quote!(R@0)];
+    let order = [
+        syn::parse_quote!(S),
+        syn::parse_quote!(R@2),
+        syn::parse_quote!(R@0),
+    ];
     let planned = cq_order::compile_explicit(&source, &order).unwrap();
     assert_eq!(planned.cq, source);
-    let atoms: Vec<_> = planned.valuation.steps.iter().filter_map(|step| {
-        if let valuation::Step::Atom(atom, _) = step {
-            Some(atom.clause())
-        } else {
-            None
-        }
-    }).collect();
+    let atoms: Vec<_> = planned
+        .valuation
+        .steps
+        .iter()
+        .filter_map(|step| {
+            if let valuation::Step::Atom(atom, _) = step {
+                Some(atom.clause())
+            } else {
+                None
+            }
+        })
+        .collect();
     assert_eq!(atoms, [3, 2, 0]);
     for (order, message) in [
         (vec![syn::parse_quote!(R)], "needs one top-level occurrence"),
-        (vec![syn::parse_quote!(R@1)], "does not name that top-level positive atom"),
-        (vec![syn::parse_quote!(R@3)], "does not name that top-level positive atom"),
-        (vec![syn::parse_quote!(R@99)], "does not name that top-level positive atom"),
-        (vec![syn::parse_quote!(R@0), syn::parse_quote!(R@0)], "duplicate atom occurrence"),
-        (vec![syn::parse_quote!(S), syn::parse_quote!(S@3)], "duplicate atom occurrence"),
+        (
+            vec![syn::parse_quote!(R@1)],
+            "does not name that top-level positive atom",
+        ),
+        (
+            vec![syn::parse_quote!(R@3)],
+            "does not name that top-level positive atom",
+        ),
+        (
+            vec![syn::parse_quote!(R@99)],
+            "does not name that top-level positive atom",
+        ),
+        (
+            vec![syn::parse_quote!(R@0), syn::parse_quote!(R@0)],
+            "duplicate atom occurrence",
+        ),
+        (
+            vec![syn::parse_quote!(S), syn::parse_quote!(S@3)],
+            "duplicate atom occurrence",
+        ),
     ] {
-        assert!(cq_order::compile_explicit(&source, &order).unwrap_err().to_string().contains(message));
+        assert!(
+            cq_order::compile_explicit(&source, &order)
+                .unwrap_err()
+                .to_string()
+                .contains(message)
+        );
     }
 }
 
@@ -135,9 +164,8 @@ fn explicit_block_order_preserves_branches_and_checks_dependencies() {
     let selector: cq_order::OrderAtom = syn::parse_quote!(block@1);
     assert_eq!(selector.relation, "block");
     assert_eq!(selector.occurrence, Some(1));
-    let planned = cq_order::compile_explicit(
-        &source, &[selector.clone(), syn::parse_quote!(S)],
-    ).unwrap();
+    let planned =
+        cq_order::compile_explicit(&source, &[selector.clone(), syn::parse_quote!(S)]).unwrap();
     assert_eq!(planned.cq, source);
     assert!(matches!(&planned.valuation.steps[0],
         valuation::Step::Block(block, _) if block.source.clause() == 1));
@@ -158,9 +186,9 @@ fn explicit_block_order_preserves_branches_and_checks_dependencies() {
         answer(x,y) :- R(x), { let y:i32 = *x + 1, S(y) }
             | { let y:i32 = *x + 2, S(y) };
     });
-    let error = cq_order::compile_explicit(
-        &opaque, &[syn::parse_quote!(block@1), syn::parse_quote!(R)],
-    ).unwrap_err();
+    let error =
+        cq_order::compile_explicit(&opaque, &[syn::parse_quote!(block@1), syn::parse_quote!(R)])
+            .unwrap_err();
     assert!(error.to_string().contains("order advice conflicts"));
 }
 
