@@ -80,12 +80,17 @@ Every feature is a standalone Cargo workspace and must build and test outside
 the repository against Cargo-packaged core crates.
 
 - `composition`: explicit pass composition over heterogeneous borrowed hosts.
+- `datalog`: checked recursive Datalog compilation and execution.
+- `datalog-parallel`: parallel Datalog execution with checked round planning.
 - `diverged-ra`: an external theta language enters at IX and uses probe/merge routes.
 - `extensions`: surface passes for negation, aggregation, recursion, and correlation.
 - `inspection`: public CQ parsing and Rust free-variable inspection.
+- `join-filters`: checked join-filter planning and runtime providers.
 - `own-dialect`: a push printer that preserves recorded Structures decisions.
 - `planners`: nine checked CQ-to-RA′ planning choices.
 - `rewrites`: checked Physical rewrites and Structures type replacement.
+- `sequence-rewrites`: checked Sequence rewrites and planning passes.
+- `sequence-tasks`: a parallel task-based Sequence terminal.
 - `stacked-ir`: an external Trace language inserted and erased through checked passes.
 - `workloads`: pipeline matrix, deterministic datasets, SQL goldens, fuzzing, and benchmarks.
 
@@ -106,6 +111,7 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 cargo test --manifest-path features/datalog/Cargo.toml --workspace --locked
+cargo test --manifest-path features/datalog-parallel/Cargo.toml --workspace --locked
 cargo test --manifest-path features/workloads/Cargo.toml --workspace --locked
 bash tools/test_regressions.sh
 python3 tools/check_dependencies.py --isolate --frontends --consumers

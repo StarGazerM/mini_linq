@@ -7,17 +7,17 @@
 //! Relational `==` decides Leibniz identity. `Eq` and the selected storage's
 //! `Hash` or `Ord` bounds are necessary checks, not a proof of admissibility.
 //!
-//! This pass has no independent Rust semantic checker. Its obligations are
+//! This adapter library has no independent Rust semantic checker. Its obligations are
 //! SemanticAgreement against oracle answers and rustc's generated trait
 //! guards; authored expansion fixtures separately pin the emitted syntax.
 //!
-//! The printer preserves the physical operator graph and storage choices. It
-//! chooses Rust control flow and layout. When Physical records `probe smallest`,
-//! supported adjacent probe/check pairs enumerate the smaller runtime candidate
+//! Sequence and explicit push printers use these adapters to preserve the physical
+//! operator graph and storage choices while choosing Rust control flow and layout.
+//! When Physical records `probe smallest`, supported adjacent probe/check pairs enumerate the smaller runtime candidate
 //! set without changing RA/VO order.
 //!
 //! Rows borrow declared host columns and retain owned computed columns. The
-//! printer binds hosts once and dispatches reusable host reads by type. Only
+//! adapters bind hosts once and dispatch reusable host reads by type. Only
 //! leading declaration prefixes are eligible for native keyed reads; other
 //! reads use one lazy fallback. Built lets use their recorded Rust types.
 //! Canon boundaries use the recorded dedup type before materialization
@@ -30,7 +30,7 @@
 //! projection whenever free variables remain; see the premises in
 //! `cq-syntax`.
 
-//! Pull realization executes fused block arms from one prefix row.
+//! The fused-block adapter executes arms from one prefix row for Sequence pull realization.
 //! Union chains arms lazily; fallback evaluates the next arm only when the earlier result is empty.
 //! Anti uses the recorded eager/lazy membership route and canon uses the recorded set provider.
 //!
@@ -60,22 +60,12 @@ mod stage;
 use cq_print::access::{Access, Side};
 use cq_print::{Context, Repr, error, index, sorted};
 
-/// Prepare row sources and recorded storage for a checked Structures program.
-/// Alternative emitters can share index construction without staging rows in
-/// a second buffer. `analysis` must be the contract result for `module`.
-/// Opted-in host-set facts are certified eagerly over complete declared rows
-/// before any prepared operator can rely on their uniqueness.
-pub fn sources<'a>(
-    module: &'a structures::Program,
-    analysis: &'a structures::Analysis,
-) -> syn::Result<Context<'a>> {
-    sources_with(module, analysis, |_, _| {})
-}
-
 /// Prepare sources while exposing each representation before its pipe is consumed.
 /// Alternative printers can retain the emitted positional stream for fusion into
 /// their own sinks. This observes compiler tokens, never traverses runtime rows.
 /// `analysis` must be the contract result for `module`.
+/// Opted-in host-set facts are certified eagerly over complete declared rows
+/// before any prepared operator can rely on their uniqueness.
 pub fn sources_with<'a>(
     module: &'a structures::Program,
     analysis: &'a structures::Analysis,

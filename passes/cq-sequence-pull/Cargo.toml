@@ -29,4 +29,3 @@ cq-workloads = { path = "../../features/workloads" }
 [package.metadata.cq]
 source = "cq-lang-sequence"
 target = "rust"
-printer = true

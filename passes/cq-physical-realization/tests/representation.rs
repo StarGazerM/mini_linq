@@ -2,7 +2,7 @@ use quote::{ToTokens, quote};
 
 fn source_tokens(module: &cq_lang_structures::Program) -> syn::Result<proc_macro2::TokenStream> {
     let analysis = cq_lang_structures::contract::check(module)?;
-    let context = cq_physical_realization::sources(module, &analysis)?;
+    let context = cq_physical_realization::sources_with(module, &analysis, |_, _| {})?;
     let mut emitter = cq_physical_realization::RowEmitter::new(context);
     let rows = emitter.scan(&module.physical.program.returned)?;
     let statements = &emitter.context().statements;

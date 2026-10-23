@@ -125,7 +125,7 @@ def main():
     for package in packages:
         with (logdir/(package+".log")).open("w") as log:
             subprocess.run(["cargo","rustdoc","-p",package,"--lib","--all-features","--locked","--","-Z","unstable-options","--output-format","json"],cwd=ROOT,env=env,stdout=log,stderr=subprocess.STDOUT,check=True)
-        current=snapshot(json.loads((ROOT/"target/doc"/(package.replace("-","_")+".json")).read_text()))
+        current=snapshot(json.loads((Path(data["target_directory"])/"doc"/(package.replace("-","_")+".json")).read_text()))
         path=SNAPSHOTS/(package+".txt");expected.add(path.name)
         if args.update:SNAPSHOTS.mkdir(parents=True,exist_ok=True);path.write_text(current)
         elif not path.exists() or path.read_text()!=current:

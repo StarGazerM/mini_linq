@@ -354,7 +354,7 @@ blocks with Rust run per row over the prefix. The written reference
 (\code{compile_written}) disables all hoisting.
 The E-Domain closure is recomputed independently while checking both schedules;
 unjustified added selections and removal of the original disjunction are
-rejected. Total Rust predicates are selections with exact expression and
+rejected. Recognized relational predicates are selections with exact expression and
 binding payloads; an opaque source guard cannot be replaced by one because
 the Rust-chain obligation would fail. Domain derivation uses only literal
 equalities, comparisons, inclusive ranges and literal membership, never

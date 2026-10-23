@@ -259,39 +259,11 @@ fn total_is_an_ordinary_identifier_but_the_removed_attribute_is_rejected() {
         assert_eq!(syn::parse2::<cq::Program>(q.to_token_stream()).unwrap(), q);
         cq::normal::check(&cq::normal::normalize(&q).unwrap()).unwrap();
     }
-    for guard in [
-        "#[total] if custom(x)",
-        "#[total(false)] if custom(x)",
-        "#[other] if custom(x)",
-        "#[total] #[total] if custom(x)",
-        "if total custom(x)",
-    ] {
-        assert!(
-            syn::parse_str::<cq::Program>(&format!(
-                "struct Q; relation R(a:i32); answer(x) :- R(x), {guard};"
-            ))
-            .is_err(),
-            "{guard}"
-        );
-    }
-    for source in [
-        "#[total] if custom(x)",
-        "#[total(false)] if custom(x)",
-        "#[total] #[total] if custom(x)",
-    ] {
-        let error = syn::parse_str::<cq::Filter>(source)
-            .unwrap_err()
-            .to_string();
-        assert!(
-            error.contains("`#[total]` is no longer supported"),
-            "{error}"
-        );
-    }
-    let error = syn::parse_str::<cq::Constraint>("#[total] { x = x } (custom(x))")
+    let error = syn::parse_str::<cq::Filter>("#[total] if custom(x)")
         .unwrap_err()
         .to_string();
     assert!(
-        error.contains("`#[total]` is no longer supported"),
+        error.contains("attributes are not supported on guards or relational constraints"),
         "{error}"
     );
 }

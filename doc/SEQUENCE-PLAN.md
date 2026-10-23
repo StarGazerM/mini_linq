@@ -255,7 +255,8 @@ and device-columns; selected sources do not invent an unused index key.
 print = passes::translate_pull`. `compile!`/`mini_linq!` retain their entry
 syntax. `translate_pull` supports profile counters. The direct Structures
 pull macro and `cq_physical_realization::{compile, compile_profile}` are
-removed. Shared `RowEmitter` and source helpers remain for `own_push`.
+removed. Shared `RowEmitter` adapters serve `cq-sequence-pull`; `sources_with`
+prepares sources for explicit push printers such as `own_push`.
 An explicit Structures terminal with no authored sequence, grade, or
 decompose phases bypasses the default Sequence phases. Custom Sequence
 terminal paths require explicit sequence and grade.
