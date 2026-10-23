@@ -169,7 +169,7 @@ fn no_arguments(arguments: proc_macro2::TokenStream) -> syn::Result<()> {
 #[derive(Default)]
 struct PlanOptions {
     /// An explicit relation order, checked by the ordinary ordering pass.
-    order: Option<Vec<syn::Ident>>,
+    order: Option<Vec<cq_order::OrderAtom>>,
     no_reduce: bool,
     /// `(target, support)` relation names to add, in advice order.
     reduce: Vec<(syn::Ident, syn::Ident)>,
@@ -177,7 +177,7 @@ struct PlanOptions {
     skip: Vec<(syn::Ident, syn::Ident)>,
 }
 impl Parse for PlanOptions {
-    /// Optional `order(Relation, ...)` plus `no_reduce`, or any number of
+    /// Optional `order(Relation, Relation@clause, ...)` plus `no_reduce`, or any number of
     /// `reduce(Target with Support)` and `skip(Target with Support)`, comma separated.
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let mut options = Self::default();
@@ -189,7 +189,7 @@ impl Parse for PlanOptions {
                 syn::parenthesized!(content in input);
                 options.order = Some(
                     content
-                        .parse_terminated(syn::Ident::parse, syn::Token![,])?
+                        .parse_terminated(cq_order::OrderAtom::parse, syn::Token![,])?
                         .into_iter()
                         .collect(),
                 );
@@ -575,10 +575,15 @@ mod tests {
     fn explicit_order_combines_with_existing_reduction_options() {
         let options: PlanOptions = syn::parse2(quote!(order(R, S), no_reduce)).unwrap();
         assert!(options.no_reduce);
-        let expected: Vec<syn::Ident> = vec![syn::parse_quote!(R), syn::parse_quote!(S)];
+        let expected: Vec<cq_order::OrderAtom> = vec![syn::parse_quote!(R), syn::parse_quote!(S)];
         assert_eq!(options.order.unwrap(), expected);
         assert!(syn::parse2::<PlanOptions>(quote!(order(R), order(S))).is_err());
         assert!(syn::parse2::<PlanOptions>(quote!(order(R S))).is_err());
+        let qualified: PlanOptions =
+            syn::parse2(quote!(order(R@2, R@0, S), no_reduce)).unwrap();
+        assert_eq!(qualified.order.unwrap()[0].occurrence, Some(2));
+        assert!(syn::parse2::<PlanOptions>(quote!(order(R@))).is_err());
+        assert!(syn::parse2::<PlanOptions>(quote!(order(R@-1))).is_err());
     }
 
     #[test]

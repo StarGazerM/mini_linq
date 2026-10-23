@@ -93,6 +93,37 @@ fn explicit_order_does_not_move_opaque_predicates_before_their_domain() {
     assert!(part < guard);
 }
 
+#[test]
+fn occurrence_qualified_order_uses_normal_body_positions() {
+    let source = normal(quote! {
+        struct Q;
+        relation R(a:i32,b:i32);
+        relation S(a:i32);
+        answer(a,b,c) :- R(a,b), if b > 0, R(a,c), S(a);
+    });
+    let order = [syn::parse_quote!(S), syn::parse_quote!(R@2), syn::parse_quote!(R@0)];
+    let planned = cq_order::compile_explicit(&source, &order).unwrap();
+    assert_eq!(planned.cq, source);
+    let atoms: Vec<_> = planned.valuation.steps.iter().filter_map(|step| {
+        if let valuation::Step::Atom(atom, _) = step {
+            Some(atom.clause())
+        } else {
+            None
+        }
+    }).collect();
+    assert_eq!(atoms, [3, 2, 0]);
+    for (order, message) in [
+        (vec![syn::parse_quote!(R)], "needs one top-level occurrence"),
+        (vec![syn::parse_quote!(R@1)], "does not name that top-level positive atom"),
+        (vec![syn::parse_quote!(R@3)], "does not name that top-level positive atom"),
+        (vec![syn::parse_quote!(R@99)], "does not name that top-level positive atom"),
+        (vec![syn::parse_quote!(R@0), syn::parse_quote!(R@0)], "duplicate atom occurrence"),
+        (vec![syn::parse_quote!(S), syn::parse_quote!(S@3)], "duplicate atom occurrence"),
+    ] {
+        assert!(cq_order::compile_explicit(&source, &order).unwrap_err().to_string().contains(message));
+    }
+}
+
 fn triangle() -> cq::Program {
     cq(quote! {
         struct Q;
