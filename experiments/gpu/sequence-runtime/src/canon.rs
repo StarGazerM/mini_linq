@@ -1,6 +1,6 @@
-//! Exact canonicalization of explicitly packed u64 keys using RCCL radix sort
-//! followed by adjacent unique. No query layout or scheduling decision lives
-//! here: callers provide the live input length and the complete key bit width.
+//! Exact canonicalization of one- or two-lane packed keys. Narrow keys use
+//! RCCL radix sort; wide keys use exact row ordering followed by adjacent unique.
+//! Recorded codec bounds determine the lane count before dispatch.
 
 use crate::Result;
 use cq_gpu_runtime::{Bounds, Buffer, DeviceColumns, Dictionary, EncodedColumn, Pool, RowCodec};
@@ -37,6 +37,7 @@ struct CanonScratch {
     selected: Option<DeviceBuffer<u64>>,
     first: Option<DeviceBuffer<u64>>,
     alternate: Option<DeviceBuffer<u64>>,
+    wide: Option<DeviceBuffer<u128>>,
     capacity: usize,
 }
 
@@ -80,6 +81,9 @@ impl Drop for CanonScratch {
                 let _ = unsafe { buffer.drop_async(self.pool.stream()) };
             }
         }
+        if let Some(buffer) = self.wide.take() {
+            let _ = unsafe { buffer.drop_async(self.pool.stream()) };
+        }
     }
 }
 
@@ -96,8 +100,9 @@ pub struct PackedField {
 
 impl PackedField {
     fn bounds(self) -> Result<Bounds> {
-        if self.bits > 64 || self.shift > 64 || self.bits > 64 - self.shift {
-            return Err("packed field exceeds the u64 key".into());
+        if self.bits > 64 || self.shift > PackedCanon::MAX_PACKED_BITS
+            || self.bits > PackedCanon::MAX_PACKED_BITS - self.shift {
+            return Err("packed field exceeds the provider key capability".into());
         }
         let maximum = self.base as i128 + ((1_i128 << self.bits) - 1);
         let max =
@@ -123,6 +128,24 @@ pub struct PackedCanon<'pool> {
 }
 
 impl<'pool> PackedCanon<'pool> {
+    pub const MAX_PACKED_BITS: u32 = 128;
+
+    /// Select the physical width during setup, before allocating or packing keys.
+    pub fn key_lanes(key_bits: u32) -> Result<usize> {
+        if key_bits > Self::MAX_PACKED_BITS {
+            return Err("packed canon key exceeds its 128-bit capability".into());
+        }
+        Ok(if key_bits > 64 { 2 } else { 1 })
+    }
+
+    pub fn field_lanes(fields: &[PackedField]) -> Result<usize> {
+        let mut bits = 0;
+        for field in fields {
+            field.bounds()?;
+            bits = bits.max(field.shift + field.bits);
+        }
+        Self::key_lanes(bits)
+    }
     pub fn new(pool: &'pool Arc<Pool>, capacity: usize) -> Result<Self> {
         if capacity > u32::MAX as usize {
             return Err("packed canon capacity exceeds u32::MAX".into());
@@ -148,6 +171,7 @@ impl<'pool> PackedCanon<'pool> {
                     selected: None,
                     first: None,
                     alternate: None,
+                    wide: None,
                     capacity,
                 };
                 scratch.selected =
@@ -179,10 +203,11 @@ impl<'pool> PackedCanon<'pool> {
     /// the runtime pool, and all work is ordered on that pool's stream.
     ///
     /// # Safety
-    /// `input[0..rows]` must be initialized on the pool stream and remain
-    /// immutable until the submitted work completes. Every key must fit in
-    /// `key_bits` low bits (zero bits means all keys are zero). The packing must
-    /// encode the entire equality key without collisions. Unused capacity is
+    /// `input[0..rows * key_lanes(key_bits)]` must be initialized on the pool
+    /// stream and remain immutable until the submitted work completes. Each
+    /// row stores its low lane first, followed by its high lane for wide keys.
+    /// Every key must fit in `key_bits` low bits (zero bits means all keys are zero).
+    /// Packing must encode the entire equality key without collisions. Unused capacity is
     /// never read. Input and provider must share the identical pool.
     pub unsafe fn canonicalize(
         &mut self,
@@ -193,15 +218,44 @@ impl<'pool> PackedCanon<'pool> {
         if !Arc::ptr_eq(&self.pool, input.pool()) {
             return Err("packed canon input must share the provider pool and stream".into());
         }
-        if rows > input.len() || rows > self.capacity {
+        let lanes = Self::key_lanes(key_bits)?;
+        if rows > input.len() / lanes || rows > self.capacity {
             return Err("packed canon live length exceeds input or provider capacity".into());
         }
-        if key_bits > 64 {
-            return Err("packed canon key width exceeds 64 bits".into());
-        }
-        let keys = unsafe { Buffer::<u64>::uninitialized(self.pool.clone(), rows)? };
+        let keys = unsafe { Buffer::<u64>::uninitialized(self.pool.clone(), rows * lanes)? };
         let metadata = Arc::new(Buffer::<OutputCount>::zeroed(self.pool.clone(), 1)?);
-        if rows != 0 {
+        if rows != 0 && lanes == 2 {
+            let scratch = self.scratch.as_mut().expect("live packed canon scratch");
+            if scratch.wide.as_ref().is_none_or(|buffer| buffer.len() != rows) {
+                let replacement = unsafe { DeviceBuffer::<u128>::uninitialized_async(self.pool.stream(), rows)? };
+                if let Some(previous) = scratch.wide.replace(replacement) {
+                    unsafe { previous.drop_async(self.pool.stream())? };
+                }
+            }
+            let wide = scratch.wide.as_mut().expect("wide canon scratch");
+            let selected = scratch.selected.as_mut().expect("packed canon count scratch");
+            unsafe {
+                cuda_core::memory::memcpy_dtod_async(wide.cu_deviceptr(), input.cu_deviceptr(),
+                    rows * std::mem::size_of::<u128>(), self.pool.stream().cu_stream())?;
+            }
+            let execution = self.thrust.par_in(self.pool.stream(), self.pool.resource())?;
+            wide.sort_unstable_by(&execution, |a: &u128, b: &u128| a.cmp(b))?;
+            let output = keys.ptr();
+            rccl_thrust::unique_copy_by(
+                &execution,
+                wide.view(),
+                rccl_thrust::indexed_output(rows, move |index, value: u128| unsafe {
+                    output.add(index * 2).write(value as u64);
+                    output.add(index * 2 + 1).write((value >> 64) as u64);
+                }),
+                selected,
+                |a: u128, b: u128| a == b,
+            )?;
+            unsafe {
+                cuda_core::memory::memcpy_dtod_async(metadata.cu_deviceptr(), selected.cu_deviceptr(),
+                    std::mem::size_of::<u64>(), self.pool.stream().cu_stream())?;
+            }
+        } else if rows != 0 {
             let scratch = self.scratch.as_mut().expect("live packed canon scratch");
             scratch.prepare_keys(rows)?;
             let selected = scratch
@@ -258,6 +312,7 @@ impl<'pool> PackedCanon<'pool> {
         Ok(CanonicalKeys {
             keys: Arc::new(keys),
             metadata,
+            lanes,
         })
     }
 }
@@ -286,11 +341,12 @@ impl Drop for PackedCanon<'_> {
     }
 }
 
-/// Owning, ascending distinct packed keys. Only `[0, *count_ptr())` is live;
-/// capacity is an allocation bound, never the logical cardinality.
+/// Owning, ascending distinct packed keys in row-major, low-lane-first storage.
+/// Only the first `*count_ptr()` rows are live; capacity is an allocation bound.
 pub struct CanonicalKeys {
     keys: Arc<Buffer<u64>>,
     metadata: Arc<Buffer<OutputCount>>,
+    lanes: usize,
 }
 
 impl CanonicalKeys {
@@ -300,9 +356,13 @@ impl CanonicalKeys {
     }
 
     pub fn capacity(&self) -> usize {
-        self.keys.len()
+        self.keys.len() / self.lanes
     }
 
+
+    pub fn lanes(&self) -> usize {
+        self.lanes
+    }
     pub fn count_ptr(&self) -> *const u64 {
         self.metadata.ptr().cast()
     }
@@ -395,7 +455,8 @@ impl PackedColumnsAdapter {
         dictionary: Arc<Dictionary<'data>>,
         statuses: Vec<Arc<Buffer<OutputCount>>>,
     ) -> Result<DeviceColumns<'data, Row>> {
-        if rows > keys.len() {
+        let lanes = PackedCanon::field_lanes(fields)?;
+        if rows > keys.len() / lanes {
             return Err("packed output live length exceeds key capacity".into());
         }
         if !Arc::ptr_eq(keys.pool(), &self.pool) {
@@ -411,6 +472,7 @@ impl PackedColumnsAdapter {
         )?;
         self.decode_columns(
             &keys,
+            lanes,
             self.metadata.clone(),
             rows,
             fields,
@@ -431,6 +493,7 @@ impl PackedColumnsAdapter {
         let capacity = keys.capacity();
         self.decode_columns(
             &keys.keys,
+            keys.lanes,
             keys.metadata,
             capacity,
             fields,
@@ -442,6 +505,7 @@ impl PackedColumnsAdapter {
     fn decode_columns<'data, Row: RowCodec<'data>>(
         &mut self,
         keys: &Buffer<u64>,
+        lanes: usize,
         metadata: Arc<Buffer<OutputCount>>,
         capacity: usize,
         fields: &[PackedField],
@@ -464,6 +528,9 @@ impl PackedColumnsAdapter {
             .iter()
             .map(|field| field.bounds())
             .collect::<Result<Vec<_>>>()?;
+        if fields.iter().any(|field| field.shift + field.bits > lanes as u32 * 64) {
+            return Err("packed field exceeds the stored key width".into());
+        }
         let mut columns = Vec::with_capacity(fields.len());
         for (field, &bound) in fields.iter().zip(&bounds) {
             let column = unsafe { Buffer::<i64>::uninitialized(self.pool.clone(), capacity)? };
@@ -474,6 +541,7 @@ impl PackedColumnsAdapter {
                     self.pool.stream(),
                     &self.module.prepare_unpack_field(launch)?,
                     keys.ptr(),
+                    lanes as u32,
                     metadata.ptr().cast(),
                     capacity as u64,
                     field.shift,
@@ -528,6 +596,7 @@ mod canon_kernels {
     #[launch_contract(domain = 1, block = (256, 1, 1))]
     pub fn unpack_field(
         keys: *const u64,
+        lanes: u32,
         count: *const u64,
         capacity: u64,
         shift: u32,
@@ -547,7 +616,13 @@ mod canon_kernels {
             let offset = if bits == 0 {
                 0
             } else {
-                (unsafe { *keys.add(row as usize) } >> shift) & mask
+                let index = row as usize * lanes as usize + (shift / 64) as usize;
+                let local = shift % 64;
+                let mut value = unsafe { *keys.add(index) } >> local;
+                if local + bits > 64 {
+                    value |= unsafe { *keys.add(index + 1) } << (64 - local);
+                }
+                value & mask
             };
             // Host validation proves base + offset fits i64. Wrapping also
             // handles a full-width unsigned offset above i64::MAX correctly.

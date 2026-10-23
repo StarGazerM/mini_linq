@@ -374,13 +374,21 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
             continue;
         }
         let select = match &definition.operator {
-            Operator::Point(_, select) | Operator::Range(_, select)
+            Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select)
                 if built.len() == 1
                     && matches!(&selected.entries[built[0]].structure,structures::Structure::Built {keyed,..} if keyed.levels.len()==1) =>
             {
                 Some(Some(select))
             }
             Operator::Union(_) => Some(None),
+            Operator::Rename(rename)
+                if rename.constants.is_none()
+                    && built.len() == 1
+                    && required[&name].len() < analysis.headings[&name].len()
+                    && matches!(&selected.entries[built[0]].structure, structures::Structure::Built { keyed, .. } if keyed.levels.len() == 1) =>
+            {
+                Some(None)
+            }
             _ => None,
         };
         if let Some(select) = select {

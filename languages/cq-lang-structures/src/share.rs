@@ -31,10 +31,17 @@ pub fn leveled_host_read<'a>(
     keys: &[String],
 ) -> Option<&'a syn::Type> {
     program.structures.entries.iter().find_map(|entry| {
-        let Structure::Host { keyed, reader: demand, .. } = &entry.structure else {
+        let Structure::Host {
+            keyed,
+            reader: demand,
+            ..
+        } = &entry.structure
+        else {
             return None;
         };
-        let syn::Type::Path(path) = &keyed.ty else { return None; };
+        let syn::Type::Path(path) = &keyed.ty else {
+            return None;
+        };
         let mut recorded = keyed.columns().map(symbol_name).collect::<Vec<_>>();
         recorded.sort();
         (symbol_name(&entry.name) == build
@@ -91,7 +98,12 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
             return Err(fail());
         };
         let leveled = leveled_host_read(program, &share.build, &share.first, &share.keys)
-            .zip(leveled_host_read(program, &share.build, &share.force, &share.keys))
+            .zip(leveled_host_read(
+                program,
+                &share.build,
+                &share.force,
+                &share.keys,
+            ))
             .is_some_and(|(first, force)| first == force)
             && matches!(definitions[b].operator, Operator::Rename(_));
         if name != share.first

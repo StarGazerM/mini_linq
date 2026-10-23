@@ -130,14 +130,18 @@ impl ColumnDescriptor {
     pub unsafe fn from_packed(
         keys: Arc<Buffer<u64>>,
         count: usize,
+        lanes: usize,
         field: canon::PackedField,
         bounds: Bounds,
     ) -> Result<Self> {
-        if count > keys.len() || field.shift > 64 || field.bits > 64 - field.shift {
+        if !(1..=2).contains(&lanes) || count > keys.len() / lanes
+            || field.bits > 64 || field.shift > lanes as u32 * 64
+            || field.bits > lanes as u32 * 64 - field.shift {
             return Err("packed source projection exceeds its buffer or key".into());
         }
         let mut source = Self::native_source(keys.ptr(), count);
         source.packed = 1;
+        source.stride = lanes as u64;
         source.shift = field.shift;
         source.mask = if field.bits == 64 {
             u64::MAX
@@ -210,6 +214,20 @@ pub struct RangeDescriptor {
     /// A half-open predicate applied before sorting, not a post-build filter.
     pub selection: Option<RangeSelection>,
     pub payload: Vec<PayloadDescriptor>,
+}
+
+impl RangeDescriptor {
+    fn base_rows(&self) -> Result<usize> {
+        self.key.first().map(|key| &key.column)
+            .or_else(|| self.payload.first().map(|payload| &payload.column))
+            .or_else(|| self.selection.as_ref().map(|selection| &selection.column))
+            .map(|column| column.rows)
+            .ok_or_else(|| "range descriptor needs a column establishing its live row count".into())
+    }
+
+    fn directory_entries(&self) -> Option<usize> {
+        self.key.first().map_or(Some(0), |key| key.domain_size.checked_add(1))
+    }
 }
 
 /// Catalog names are relative to `table`; dictionary sizes remain explicit.
@@ -292,8 +310,8 @@ pub struct RangeView {
     pub len: u32,
 }
 
-/// An immutable, duplicate-preserving sorted range index. No uniqueness of
-/// keys is assumed: lookup is always [offsets[key], offsets[key+1]).
+/// An immutable, duplicate-preserving sorted range index. A keyed lookup is
+/// [offsets[key], offsets[key+1]); an empty key denotes [0,len) without a directory.
 pub struct RangeProvider {
     offsets: EncodedColumn,
     payload: Vec<EncodedColumn>,
@@ -424,35 +442,27 @@ pub struct RangeWorkspace {
 }
 impl RangeWorkspace {
     pub fn new(pool: Arc<Pool>, descriptor: &RangeDescriptor) -> Result<Self> {
-        let first = descriptor
-            .key
-            .first()
-            .ok_or("range provider needs at least one key")?;
-        let entries = first
-            .domain_size
-            .checked_add(1)
-            .ok_or("range domain overflow")?;
+        let rows = descriptor.base_rows()?;
+        let entries = descriptor.directory_entries().ok_or("range domain overflow")?;
         Ok(Self {
             row_count: Arc::new(Buffer::from_host(
                 pool.clone(),
-                &[first.column.rows as u64],
+                &[rows as u64],
             )?),
             offset_count: Arc::new(Buffer::from_host(pool.clone(), &[entries as u64])?),
             payload_views: Arc::new(unsafe {
                 Buffer::uninitialized(pool, descriptor.payload.len())?
             }),
             host_views: Vec::with_capacity(descriptor.payload.len()),
-            row_value: first.column.rows,
-            base_rows: first.column.rows,
+            row_value: rows,
+            base_rows: rows,
             entries,
         })
     }
     pub fn matches(&self, pool: &Arc<Pool>, descriptor: &RangeDescriptor) -> bool {
         Arc::ptr_eq(self.row_count.pool(), pool)
-            && descriptor.key.first().is_some_and(|first| {
-                first.column.rows == self.base_rows
-                    && first.domain_size.checked_add(1) == Some(self.entries)
-            })
+            && descriptor.base_rows().ok() == Some(self.base_rows)
+            && descriptor.directory_entries() == Some(self.entries)
             && descriptor.payload.len() == self.payload_views.len()
     }
 }
@@ -497,11 +507,7 @@ impl<'pool> RangeBuilder<'pool> {
         if !workspace.matches(self.pool, descriptor) {
             return Err("range workspace does not match the provider descriptor".into());
         }
-        let first = descriptor
-            .key
-            .first()
-            .ok_or("range provider needs at least one key")?;
-        let base_rows = first.column.rows;
+        let base_rows = descriptor.base_rows()?;
         if base_rows > u32::MAX as usize || descriptor.payload.len() > u32::MAX as usize {
             return Err("range provider exceeds the u32 row/column domain".into());
         }
@@ -575,7 +581,7 @@ impl<'pool> RangeBuilder<'pool> {
             }
             _ => (base_rows, None),
         };
-        let entries = first.domain_size + 1;
+        let entries = workspace.entries;
         if rows != workspace.row_value {
             if Arc::strong_count(&workspace.row_count) != 1 {
                 workspace.row_count =
@@ -589,6 +595,22 @@ impl<'pool> RangeBuilder<'pool> {
         }
         let row_count = workspace.row_count.clone();
         let offset_count = workspace.offset_count.clone();
+        if descriptor.key.is_empty() {
+            let source = selected.as_ref()
+                .map_or(std::ptr::null(), |selected| pointer(selected) as *const u32);
+            let payload = descriptor.payload.iter()
+                .map(|payload| unsafe { pack_payload(pool, payload, source, rows, row_count.clone()) })
+                .collect::<Result<Vec<_>>>()?;
+            let offsets = unsafe {
+                EncodedColumn::from_device(pool.clone(), std::ptr::null::<i64>(), 0,
+                    offset_count, 0, Codec::For, Bounds::Empty)?
+            };
+            if let Some(selected) = selected {
+                release(stream, selected)?;
+            }
+            return finish(offsets, payload, 0, rows, workspace);
+        }
+        let first = &descriptor.key[0];
         // Empty selections still own a complete all-zero directory.
         if rows == 0 {
             let zeros = Buffer::<i64>::zeroed(pool.clone(), entries)?;

@@ -25,6 +25,18 @@ fn smallest_expand_source() -> ir::Program {
 }
 
 #[test]
+fn entry_retype_changes_only_one_provider_and_checks_the_result() {
+    let source = smallest_expand_source();
+    let target = retype(&source, quote!(entry(4) => DeviceColumns)).unwrap();
+    let mut expected = source.clone();
+    expected.structures.entries[4] = syn::parse_quote!(s host scan = DeviceColumns [];);
+    assert_eq!(target, expected);
+    ir::check_rewrite(&source, &target).unwrap();
+    assert!(retype(&source, quote!(entry(100) => DeviceColumns)).is_err());
+    assert!(retype(&source, quote!(entry(4, 5) => DeviceColumns)).is_err());
+}
+
+#[test]
 fn expand_lookups_records_only_the_first_prefix_run_smallest_probe() {
     let source = smallest_expand_source();
     let target = cq_rewrite_passes::expand_lookups(&source, quote!(256)).unwrap();

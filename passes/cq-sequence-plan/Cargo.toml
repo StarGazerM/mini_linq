@@ -15,6 +15,7 @@ syn.workspace = true
 
 [dev-dependencies]
 cq-sequence-lowering.workspace = true
+cq-structure-selection.workspace = true
 
 [package.metadata.cq]
 source = "cq-lang-sequence"

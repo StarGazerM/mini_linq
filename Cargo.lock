@@ -713,6 +713,7 @@ dependencies = [
  "cq-lang-sequence",
  "cq-sequence-lowering",
  "cq-sequence-rewrite-passes",
+ "cq-structure-selection",
  "cq-syntax",
  "proc-macro2",
  "quote",
@@ -747,8 +748,10 @@ name = "cq-sequence-rewrite-passes"
 version = "0.1.0"
 dependencies = [
  "cq-lang-sequence",
+ "cq-rewrite-passes",
  "cq-syntax",
  "proc-macro2",
+ "quote",
  "syn 2.0.119",
 ]
 
@@ -858,6 +861,7 @@ dependencies = [
  "cq-lang-structures",
  "cq-sequence-lowering",
  "cq-stage",
+ "cq-testkit",
  "cq-workload-authored",
  "proc-macro2",
  "quote",

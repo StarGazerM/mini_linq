@@ -26,6 +26,85 @@ cargo oxide build --arch sm_89 -- --release --workspace
 cargo oxide test --arch sm_89 -- --release --workspace
 ```
 
+### Planner-driven 11-query TPC-H suite
+
+`tpch` is one crate with one binary, `cq-gpu-tpch`. It imports the CPU
+`retail_kernel!` invocations directly with `include_str!`; no second query body
+or per-query plan is maintained. Build-time compilation uses the same CQ macro
+substitution, checked default CQ → Physical → Structures passes, generic
+`cq_sequence_plan::select_from_catalog`, Sequence lowering,
+`cq_sequence_plan::plan` with `cq_gpu_sequence::{machine, catalog}`, grading,
+and `cq_gpu_sequence::translate`. These are the programmatic equivalents of
+the facade's `plan(machine)` → `machine_grade!` → `translate!` pipeline.
+The manifest loader records its integer-only `DeviceColumns` host adapters
+through the checked retype rewrite; relations declaring `String` retain host
+rows. Neither the loader nor translator chooses a plan.
+
+The loader reads only each imported query's declared columns. `String` columns
+are decoded from `.bin` dictionary codes and `.dict.txt` into owned host strings;
+integer/code declarations retain codes, and only their text literals are
+resolved to dictionary IDs. Integer-only relations keep resident device uploads
+and share columns between aliases. Dates use i32 epoch days and decimals use
+scale-2 integers. Substring predicates receive real strings, not dictionary IDs.
+This affects H03 (`c_mktsegment`), H05 (`r_name`), H07/H07-block (`n_name`),
+H08 (`p_type`, `r_name`), H09 (`p_name`), H21-positive (`o_orderstatus`, `n_name`),
+D19/D85 (`n_name`), and D27 (`p_brand`, `n_name`); D72-inner has no string columns.
+Catalog provider tokens declare their accepted element types: resident range
+providers accept scalar codes, while host providers retain unsupported rows.
+String literal equality and opaque string predicates execute through the shared
+host row printer. Once a host projection drops the strings, its numeric rows
+are uploaded for subsequent GPU work; host evaluation and upload are included
+in the build timing interval. The synthetic String-guard regression checks
+this boundary against Sequential and explicit expected keys.
+
+The binary accepts repeatable `--query <name>` and `--scale sf1|sf10` filters
+(for example `cq-gpu-tpch --query h09 --scale sf1`). Omitted filters select all
+queries/scales. Filtered runs print JSON measurements for the selected scales
+without writing a results file; only an unfiltered run publishes the complete
+inventory and paired SF1/SF10 table.
+
+```sh
+export CUDA_HOME=/opt/nvidia/hpc_sdk/Linux_x86_64/25.5/cuda/12.9
+cargo oxide build --arch sm_89 -- --release -p cq-gpu-tpch
+cargo oxide test --arch sm_89 -- --release -p cq-gpu-tpch -- --nocapture
+./target/release/cq-gpu-tpch
+```
+
+The binary visits both SF1 and SF10 and writes
+[`compare/gpu_tpch.results.json`](compare/gpu_tpch.results.json). For accepted
+translations it performs one warmup plus five measured iterations, checks every
+iteration exactly against `answer.retail_<query>.tsv` and its `.count`, and
+reports median CUDA-event total/build/kernels/dedup milliseconds. Input loading,
+answer download, and comparison are outside those event intervals. SF1 also
+compares the GPU answer to independent Sequential translation of the identical
+Physical using `cq_testkit::conformance::assert_answers_equal`, the external
+target API used by H05 (`assert_conformant` itself exposes only CPU targets).
+The eleven named conformance tests print `NOT RUN` with the exact rejection
+and term when compilation does not reach an executable GPU translation.
+`TPCH_GPU_DATA_ROOT` changes the fixture root at build time.
+
+Observed inventory: all eleven queries are rejected at both scales, so **no GPU
+exactness, conformance agreement, or timing is claimed**. The release build and
+13 tests passed (two source/encoding tests plus eleven explicit rejection
+reports). No compiler gap was patched around. The table abbreviates only the
+large `syn::Type` debug payload in catalog errors; the JSON preserves each full
+error, failed phase, complete term, and imported CPU query. DuckDB values are
+the existing per-query t24 medians, converted from seconds to milliseconds.
+
+| query | SF1 exact | SF10 exact | GPU total ms SF10 (build/kernels/dedup) | DuckDB t24 SF10 ms | status |
+|---|---|---|---|---|---|
+| h03 | not run | not run | — | 167 | translate rejected: Sequence lookup lacks checked Physical row provenance |
+| h05 | not run | not run | — | 172 | planner rejected: P-Decompose: unmet catalog obligation Provider; `r13`, `[nation_key, supplier_key]`, Range, `DeviceColumns` |
+| h07 | not run | not run | — | 137 | translate rejected: T-Gpu: provider predicate requires a recorded contiguous range selection |
+| h07_block | not run | not run | — | 139 | planner rejected: BE-Boundary: a dispatch must have one unambiguous outer stored space (definition `r3`) |
+| h08 | not run | not run | — | 116 | planner rejected: P-Decompose: unmet catalog obligation Provider; `r11`, `[supplier_key]`, Range, `DeviceColumns` |
+| h09 | not run | not run | — | 4472 | planner rejected: BE-Partial: opaque Physical Rust must be evaluated at host before dispatch |
+| h21_positive | not run | not run | — | 3942 | translate rejected: T-Gpu: provider bound must be a constant or host parameter |
+| d19 | not run | not run | — | 204 | planner rejected: P-Decompose: unmet catalog obligation Provider; `r8`, `[part_key]`, Range, `DeviceColumns` |
+| d27 | not run | not run | — | 79 | translate rejected: Sequence lookup lacks checked Physical row provenance |
+| d72_inner | not run | not run | — | 292 | planner rejected: P-Decompose: unmet catalog obligation Provider; `r9`, `[supplier_key]`, Range, `DeviceColumns` |
+| d85 | not run | not run | — | 191 | planner rejected: P-Decompose: unmet catalog obligation Provider; `r14`, `[part_key]`, Range, `DeviceColumns` |
+
 ### TPC-H data
 
 TPC-H datasets are `/data/tpch-gpu/sf1` and `/data/tpch-gpu/sf10` (ignored,
@@ -191,6 +270,13 @@ row-to-column copy or full unpack. Selection, key sorting, and payload gathering
 read those same views. Store publication must precede provider construction;
 no provider layout or new Sequence term is inferred.
 
+Checked `compact` membership reads retain their Physical row provenance through
+later maps, projections, and payload lookups, even when one provider serves
+both existence and payload reads. Row-valued bounds in a recorded device
+`compact` are evaluated in each lane against that lane's row; they are not
+converted into host provider-build intervals. Host provider selections still
+require the recorded contiguous range supported by their adapter.
+
 The compiled triangle keeps its original `i64` relation and now translates
 normally, with positive translation and executable tuple-comparison tests in
 place of the rejection fixture. Range payloads support `u32`, `i32`, and full
@@ -203,9 +289,15 @@ per-call and median GPU build/kernel/dedup/total timings and query wall time.
 `--check` separately times the CPU tuple reference and checks every GPU call.
 Input loading/upload, answer download, and reference checks are excluded from
 the query samples.
-The recorded directory still requires dense nonnegative u32-range keys, and
-canonical output fields must fit one packed u64; no schema narrowing,
-ID remapping, or alternate plan is substituted.
+The recorded directory still requires dense nonnegative u32-range keys.
+`PackedCanon` advertises a 128-bit packed-key capability. At setup, the sum
+of the recorded codec-bound widths selects one u64 lane (up to 64 bits) or
+two lanes (up to 128 bits); larger headings return a setup error before
+packing or dispatch. Narrow keys retain radix sorting, while wide keys use
+exact row sorting and adjacent deduplication. Cross-lane fields remain
+zero-copy projections for later providers. This is provider-internal storage
+selection, not a translator or planner choice; no schema narrowing, ID
+remapping, or alternate query plan is substituted.
 
 ## Device-store and i64 acceptance
 

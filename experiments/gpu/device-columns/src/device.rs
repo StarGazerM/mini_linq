@@ -88,16 +88,21 @@ impl From<ColumnView> for SourceView {
 #[device]
 #[inline(always)]
 pub unsafe fn decode_source(source: SourceView, row: u64) -> i64 {
-    let value = unsafe { decode(source.column, row * source.stride) };
     if source.packed != 0 {
         let offset = if source.mask == 0 {
             0
         } else {
-            ((value as u64) >> source.shift) & source.mask
+            let index = row * source.stride + (source.shift / 64) as u64;
+            let shift = source.shift % 64;
+            let mut value = unsafe { source.column.data.add(index as usize).read() } >> shift;
+            if shift != 0 && source.mask > (u64::MAX >> shift) {
+                value |= unsafe { source.column.data.add(index as usize + 1).read() } << (64 - shift);
+            }
+            value & source.mask
         };
         source.base.wrapping_add(offset as i64)
     } else {
-        value
+        unsafe { decode(source.column, row * source.stride) }
     }
 }
 

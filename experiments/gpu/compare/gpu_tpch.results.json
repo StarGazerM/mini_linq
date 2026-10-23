@@ -1,0 +1,1957 @@
+{
+  "data_root": "/data/tpch-gpu",
+  "measured_runs": 5,
+  "results": [
+    {
+      "answer_rows": 11620,
+      "conformance": {
+        "api": "cq_testkit::conformance::assert_answers_equal",
+        "sf": 1,
+        "status": "passed"
+      },
+      "cpu_query": "struct Query ; relation Customer (c_custkey : i64 , c_mktsegment : String) ; relation Orders (o_orderkey : i64 , o_custkey : i64 , o_orderdate : Date) ; relation Lineitem (l_orderkey : i64 , l_shipdate : Date) ; answer (order_key , customer_key) : - Lineitem (order_key , ship_date) , if * ship_date > cutoff , Orders (order_key , customer_key , order_date) , if * order_date < cutoff , Customer (customer_key , \"BUILDING\") ;",
+      "duckdb": {
+        "measurement": {
+          "engine": "DuckDB",
+          "measured_runs": 5,
+          "method": "CLI .timer real wall time for full SELECT DISTINCT; 1 ms resolution; one process per thread count",
+          "query": "SELECT DISTINCT o.o_orderkey, c.c_custkey\nFROM customer c JOIN orders o ON o.o_custkey = c.c_custkey\nJOIN lineitem l ON l.l_orderkey = o.o_orderkey\nWHERE c.c_mktsegment = 'BUILDING' AND o.o_orderdate < DATE '1995-03-15'\nAND l.l_shipdate > DATE '1995-03-15'",
+          "sf": 1,
+          "threads": {
+            "1": {
+              "median_seconds": 0.054,
+              "samples_seconds": [
+                0.06,
+                0.056,
+                0.054,
+                0.053,
+                0.054
+              ],
+              "warmup_seconds": 0.101
+            },
+            "24": {
+              "median_seconds": 0.034,
+              "samples_seconds": [
+                0.033,
+                0.036,
+                0.035,
+                0.034,
+                0.03
+              ],
+              "warmup_seconds": 0.06
+            }
+          },
+          "units": "seconds",
+          "version": "v1.4.4 (Andium) 6ddac802ff",
+          "warmup_runs": 1
+        },
+        "source": "/data/tpch-gpu/sf1/duckdb_timing.retail_h03.json",
+        "t24_median_ms": 34.0
+      },
+      "exact": true,
+      "median_ms": {
+        "build": 0.5581439733505249,
+        "dedup": 0.16755199432373047,
+        "kernels": 1.3171839714050293,
+        "total": 2.043168067932129
+      },
+      "query": "h03",
+      "samples": [
+        {
+          "build_ms": 0.8170560002326965,
+          "dedup_ms": 0.16864000260829926,
+          "kernels_ms": 1.3171839714050293,
+          "total_ms": 2.302880048751831,
+          "wall_ms": 2.31151
+        },
+        {
+          "build_ms": 0.6019520163536072,
+          "dedup_ms": 0.16755199432373047,
+          "kernels_ms": 1.3223680257797241,
+          "total_ms": 2.091871976852417,
+          "wall_ms": 2.1091819999999997
+        },
+        {
+          "build_ms": 0.5531520247459412,
+          "dedup_ms": 0.1674560010433197,
+          "kernels_ms": 1.3050559759140015,
+          "total_ms": 2.0256640911102295,
+          "wall_ms": 2.033928
+        },
+        {
+          "build_ms": 0.5581439733505249,
+          "dedup_ms": 0.16672000288963318,
+          "kernels_ms": 1.3119360208511353,
+          "total_ms": 2.036799907684326,
+          "wall_ms": 2.045189
+        },
+        {
+          "build_ms": 0.5563200116157532,
+          "dedup_ms": 0.16764800250530243,
+          "kernels_ms": 1.319200038909912,
+          "total_ms": 2.043168067932129,
+          "wall_ms": 2.0507899999999997
+        }
+      ],
+      "sf": 1,
+      "status": "ran"
+    },
+    {
+      "answer_rows": 7242,
+      "conformance": {
+        "api": "cq_testkit::conformance::assert_answers_equal",
+        "sf": 1,
+        "status": "passed"
+      },
+      "cpu_query": "struct Query ; relation Customer (c_custkey : i64 , c_nationkey : i32) ; relation Orders (o_orderkey : i64 , o_custkey : i64 , o_orderdate : Date) ; relation Lineitem (l_orderkey : i64 , l_suppkey : i64) ; relation Supplier (s_suppkey : i64 , s_nationkey : i32) ; relation Nation (n_nationkey : i32 , n_regionkey : i32) ; relation Region (r_regionkey : i32 , r_name : String) ; answer (order_key , supplier_key , nation_key) : - Lineitem (order_key , supplier_key) , Orders (order_key , customer_key , order_date) , if * order_date >= start && * order_date < end , Customer (customer_key , nation_key) , Nation (nation_key , region_key) , Region (region_key , \"ASIA\") , Supplier (supplier_key , nation_key) ;",
+      "duckdb": {
+        "measurement": {
+          "engine": "DuckDB",
+          "measured_runs": 5,
+          "method": "CLI .timer real wall time for full SELECT DISTINCT; 1 ms resolution; one process per thread count",
+          "query": "SELECT DISTINCT o.o_orderkey, s.s_suppkey, n.n_nationkey\nFROM customer c JOIN orders o ON c.c_custkey = o.o_custkey\nJOIN lineitem l ON l.l_orderkey = o.o_orderkey\nJOIN supplier s ON s.s_suppkey = l.l_suppkey AND s.s_nationkey = c.c_nationkey\nJOIN nation n ON n.n_nationkey = s.s_nationkey\nJOIN region r ON r.r_regionkey = n.n_regionkey\nWHERE r.r_name = 'ASIA' AND o.o_orderdate >= DATE '1994-01-01'\nAND o.o_orderdate < DATE '1995-01-01'",
+          "sf": 1,
+          "threads": {
+            "1": {
+              "median_seconds": 0.062,
+              "samples_seconds": [
+                0.101,
+                0.06,
+                0.061,
+                0.063,
+                0.062
+              ],
+              "warmup_seconds": 0.118
+            },
+            "24": {
+              "median_seconds": 0.024,
+              "samples_seconds": [
+                0.025,
+                0.024,
+                0.024,
+                0.022,
+                0.023
+              ],
+              "warmup_seconds": 0.056
+            }
+          },
+          "units": "seconds",
+          "version": "v1.4.4 (Andium) 6ddac802ff",
+          "warmup_runs": 1
+        },
+        "source": "/data/tpch-gpu/sf1/duckdb_timing.retail_h05.json",
+        "t24_median_ms": 24.0
+      },
+      "exact": true,
+      "median_ms": {
+        "build": 0.2906560003757477,
+        "dedup": 0.1547199934720993,
+        "kernels": 5.6943678855896,
+        "total": 6.140768051147461
+      },
+      "query": "h05",
+      "samples": [
+        {
+          "build_ms": 0.2924480140209198,
+          "dedup_ms": 0.15571199357509613,
+          "kernels_ms": 5.7005438804626465,
+          "total_ms": 6.1487040519714355,
+          "wall_ms": 6.15734
+        },
+        {
+          "build_ms": 0.2970559895038605,
+          "dedup_ms": 0.1547199934720993,
+          "kernels_ms": 5.6943678855896,
+          "total_ms": 6.146143913269043,
+          "wall_ms": 6.154564000000001
+        },
+        {
+          "build_ms": 0.28860801458358765,
+          "dedup_ms": 0.15647999942302704,
+          "kernels_ms": 5.695680141448975,
+          "total_ms": 6.140768051147461,
+          "wall_ms": 6.1487240000000005
+        },
+        {
+          "build_ms": 0.2906560003757477,
+          "dedup_ms": 0.15401600301265717,
+          "kernels_ms": 5.693024158477783,
+          "total_ms": 6.137695789337158,
+          "wall_ms": 6.145867999999999
+        },
+        {
+          "build_ms": 0.28777599334716797,
+          "dedup_ms": 0.15296000242233276,
+          "kernels_ms": 5.693056106567383,
+          "total_ms": 6.133791923522949,
+          "wall_ms": 6.141859999999999
+        }
+      ],
+      "sf": 1,
+      "status": "ran"
+    },
+    {
+      "conformance": {
+        "error": "checked GPU output is not published by a dispatch",
+        "reason": "translate rejected",
+        "status": "not run"
+      },
+      "cpu_query": "struct Query ; relation Supplier (s_suppkey : i64 , s_nationkey : i32) ; relation Lineitem (l_orderkey : i64 , l_suppkey : i64 , l_shipdate : Date) ; relation Orders (o_orderkey : i64 , o_custkey : i64) ; relation Customer (c_custkey : i64 , c_nationkey : i32) ; relation Nation (n_nationkey : i32 , n_name : String) ; answer (order_key , supplier_nation , customer_nation) : - Lineitem (order_key , supplier_key , ship_date) , if * ship_date >= start && * ship_date <= end , Supplier (supplier_key , supplier_nation) , Orders (order_key , customer_key) , Customer (customer_key , customer_nation) , Nation (supplier_nation , supplier_name) , Nation (customer_nation , customer_name) , if (supplier_name == \"FRANCE\" && customer_name == \"GERMANY\") || (supplier_name == \"GERMANY\" && customer_name == \"FRANCE\") ;",
+      "duckdb": {
+        "measurement": {
+          "engine": "DuckDB",
+          "measured_runs": 5,
+          "method": "CLI .timer real wall time for full SELECT DISTINCT; 1 ms resolution; one process per thread count",
+          "query": "SELECT DISTINCT o.o_orderkey, ns.n_nationkey, nc.n_nationkey\nFROM supplier s JOIN lineitem l ON s.s_suppkey = l.l_suppkey\nJOIN orders o ON l.l_orderkey = o.o_orderkey\nJOIN customer c ON c.c_custkey = o.o_custkey\nJOIN nation ns ON s.s_nationkey = ns.n_nationkey\nJOIN nation nc ON c.c_nationkey = nc.n_nationkey\nWHERE ((ns.n_name = 'FRANCE' AND nc.n_name = 'GERMANY')\nOR (ns.n_name = 'GERMANY' AND nc.n_name = 'FRANCE'))\nAND l.l_shipdate >= DATE '1995-01-01' AND l.l_shipdate <= DATE '1996-12-31'",
+          "sf": 1,
+          "threads": {
+            "1": {
+              "median_seconds": 0.064,
+              "samples_seconds": [
+                0.066,
+                0.064,
+                0.063,
+                0.064,
+                0.065
+              ],
+              "warmup_seconds": 0.115
+            },
+            "24": {
+              "median_seconds": 0.03,
+              "samples_seconds": [
+                0.033,
+                0.031,
+                0.03,
+                0.03,
+                0.03
+              ],
+              "warmup_seconds": 0.08
+            }
+          },
+          "units": "seconds",
+          "version": "v1.4.4 (Andium) 6ddac802ff",
+          "warmup_runs": 1
+        },
+        "source": "/data/tpch-gpu/sf1/duckdb_timing.retail_h07.json",
+        "t24_median_ms": 30.0
+      },
+      "error": "checked GPU output is not published by a dispatch",
+      "exact": null,
+      "phase": "translate",
+      "query": "h07",
+      "sf": 1,
+      "status": "translate rejected",
+      "term": "physical { relation Supplier (s_suppkey : i64 , s_nationkey : i32) ; relation Lineitem (l_orderkey : i64 , l_suppkey : i64 , l_shipdate : i32) ; relation Orders (o_orderkey : i64 , o_custkey : i64) ; relation Customer (c_custkey : i64 , c_nationkey : i32) ; relation Nation (n_nationkey : i32 , n_name : String) ; r0 = pipe rename Supplier @ 2 { s_suppkey - > supplier_key , s_nationkey - > supplier_nation } ; r1 = pipe rename Nation @ 5 { n_nationkey - > supplier_nation , n_name - > supplier_name } ; r2 = let select r1 if ((supplier_name = \"FRANCE\") or (supplier_name = \"GERMANY\")) ; r3 = let semi eager [supplier_nation] r0 , r2 ; r4 = pipe rename Customer @ 4 { c_custkey - > customer_key , c_nationkey - > customer_nation } ; r5 = pipe rename Nation @ 6 { n_nationkey - > customer_nation , n_name - > customer_name } ; r6 = let select r5 if ((customer_name = \"GERMANY\") or (customer_name = \"FRANCE\")) ; r7 = let semi eager [customer_nation] r4 , r6 ; r8 = pipe rename Orders @ 3 { o_orderkey - > order_key , o_custkey - > customer_key } ; r9 = let semi eager [customer_key] r8 , r7 ; r10 = pipe rename Lineitem @ 0 { l_orderkey - > order_key , l_suppkey - > supplier_key , l_shipdate - > ship_date } ; r11 = pipe range select r10 if (ship_date between 9131i32 and 9861i32) ; r12 = pipe probe first [supplier_key] r11 , r3 ; r13 = pipe probe first [order_key] r12 , r9 ; r14 = pipe probe first [customer_key] r13 , r7 ; r15 = pipe probe first [supplier_nation] r14 , r2 ; r16 = pipe probe first [customer_nation] r15 , r6 ; r17 = pipe select r16 if ((supplier_name = \"FRANCE\" and customer_name = \"GERMANY\") or (supplier_name = \"GERMANY\" and customer_name = \"FRANCE\")) ; r18 = pipe canon project r17 keep { customer_nation , order_key , supplier_nation } ; return r18 as answer (order_key , supplier_nation , customer_nation) ; } structures { r2 = :: cq_storage :: SortedRun < _ , _ > [supplier_nation] payload [supplier_name , supplier_nation] constants { } ; r3 = :: cq_gpu_sequence_runtime :: RangeProvider [supplier_key] ; r6 = :: cq_storage :: SortedRun < _ , _ > [customer_nation] payload [customer_name , customer_nation] constants { } ; r7 = :: cq_gpu_sequence_runtime :: RangeProvider [customer_key] ; r9 = :: cq_gpu_sequence_runtime :: RangeProvider [order_key] ; r0 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i32 ,) , :: cq_gpu_runtime :: For > [] ; r1 host scan = :: core :: iter :: Map < _ , _ > [] ; r4 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i32 ,) , :: cq_gpu_runtime :: For > [] ; r5 host scan = :: core :: iter :: Map < _ , _ > [] ; r8 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i64 ,) , :: cq_gpu_runtime :: For > [] ; r10 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i64 , i32 ,) , :: cq_gpu_runtime :: For > [] ; r10 host r11 = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i64 , i32 ,) , :: cq_gpu_runtime :: For > [ship_date] ; r18 canon = :: cq_gpu_sequence_runtime :: canon :: PackedCanon ; } sequence { r0 = rows r0 ; r1 = rows r1 ; r2 = store compact r2 r1 ; r3 = store compact r3 lookup r2 [supplier_nation] r0 ; r4 = rows r4 ; r5 = rows r5 ; r6 = store compact r6 r5 ; r7 = store compact r7 lookup r6 [customer_nation] r4 ; r8 = store rows r8 ; r9 = store compact r9 lookup r7 [customer_key] flatten tile 256 r8 ; r10 = rows r10 ; r11 = map r11 r10 ; r12 = flatten lookup r3 [supplier_key] r11 ; r13 = flatten lookup r9 [order_key] r12 ; r14 = flatten lookup r7 [customer_key] r13 ; r15 = flatten lookup r2 [supplier_nation] r14 ; r16 = flatten lookup r6 [customer_nation] r15 ; r17 = compact r17 r16 ; r18 = store canon map r18 r17 ; __sequence_output = store r18 ; output count ; } graded gpu { r0 at host ; r1 at host ; r2 at host ; r3 at host ; r4 at host ; r5 at host ; r6 at host ; r7 at host ; r8 at host ; r9 at host . device ; r10 at host ; r11 at host ; r12 at host ; r13 at host ; r14 at host ; r15 at host ; r16 at host ; r17 at host ; r18 at host ; __sequence_output at host . device ; }"
+    },
+    {
+      "answer_rows": 5501,
+      "conformance": {
+        "api": "cq_testkit::conformance::assert_answers_equal",
+        "sf": 1,
+        "status": "passed"
+      },
+      "cpu_query": "struct Query ; relation Supplier (s_suppkey : i64 , s_nationkey : i32) ; relation Lineitem (l_orderkey : i64 , l_suppkey : i64 , l_shipdate : Date) ; relation Orders (o_orderkey : i64 , o_custkey : i64) ; relation Customer (c_custkey : i64 , c_nationkey : i32) ; relation Nation (n_nationkey : i32 , n_name : String) ; answer (order_key , supplier_nation , customer_nation) : - Lineitem (order_key , supplier_key , ship_date) , if * ship_date >= start && * ship_date <= end , Supplier (supplier_key , supplier_nation) , Orders (order_key , customer_key) , Customer (customer_key , customer_nation) , { Nation (supplier_nation , \"FRANCE\") , Nation (customer_nation , \"GERMANY\") } | { Nation (supplier_nation , \"GERMANY\") , Nation (customer_nation , \"FRANCE\") } ;",
+      "duckdb": {
+        "measurement": {
+          "engine": "DuckDB",
+          "measured_runs": 5,
+          "method": "CLI .timer real wall time for full SELECT DISTINCT; 1 ms resolution; one process per thread count",
+          "query": "SELECT DISTINCT o.o_orderkey, ns.n_nationkey, nc.n_nationkey\nFROM supplier s JOIN lineitem l ON s.s_suppkey = l.l_suppkey\nJOIN orders o ON l.l_orderkey = o.o_orderkey\nJOIN customer c ON c.c_custkey = o.o_custkey\nJOIN nation ns ON s.s_nationkey = ns.n_nationkey\nJOIN nation nc ON c.c_nationkey = nc.n_nationkey\nWHERE ((ns.n_name = 'FRANCE' AND nc.n_name = 'GERMANY')\nOR (ns.n_name = 'GERMANY' AND nc.n_name = 'FRANCE'))\nAND l.l_shipdate >= DATE '1995-01-01' AND l.l_shipdate <= DATE '1996-12-31'",
+          "sf": 1,
+          "threads": {
+            "1": {
+              "median_seconds": 0.062,
+              "samples_seconds": [
+                0.065,
+                0.084,
+                0.062,
+                0.062,
+                0.062
+              ],
+              "warmup_seconds": 0.147
+            },
+            "24": {
+              "median_seconds": 0.029,
+              "samples_seconds": [
+                0.031,
+                0.028,
+                0.029,
+                0.03,
+                0.028
+              ],
+              "warmup_seconds": 0.073
+            }
+          },
+          "units": "seconds",
+          "version": "v1.4.4 (Andium) 6ddac802ff",
+          "warmup_runs": 1
+        },
+        "source": "/data/tpch-gpu/sf1/duckdb_timing.retail_h07_block.json",
+        "t24_median_ms": 29.0
+      },
+      "exact": true,
+      "median_ms": {
+        "build": 0.20892800390720367,
+        "dedup": 0.13545599579811096,
+        "kernels": 2.960416078567505,
+        "total": 3.302432060241699
+      },
+      "query": "h07_block",
+      "samples": [
+        {
+          "build_ms": 0.2223680019378662,
+          "dedup_ms": 0.1353919953107834,
+          "kernels_ms": 2.970400094985962,
+          "total_ms": 3.328160047531128,
+          "wall_ms": 3.336113
+        },
+        {
+          "build_ms": 0.21510399878025055,
+          "dedup_ms": 0.13545599579811096,
+          "kernels_ms": 2.9652159214019775,
+          "total_ms": 3.3157761096954346,
+          "wall_ms": 3.323469
+        },
+        {
+          "build_ms": 0.20185600221157074,
+          "dedup_ms": 0.13545599579811096,
+          "kernels_ms": 2.9590721130371094,
+          "total_ms": 3.29638409614563,
+          "wall_ms": 3.3041519999999998
+        },
+        {
+          "build_ms": 0.20822399854660034,
+          "dedup_ms": 0.13574400544166565,
+          "kernels_ms": 2.9567360877990723,
+          "total_ms": 3.300704002380371,
+          "wall_ms": 3.308541
+        },
+        {
+          "build_ms": 0.20892800390720367,
+          "dedup_ms": 0.13308799266815186,
+          "kernels_ms": 2.960416078567505,
+          "total_ms": 3.302432060241699,
+          "wall_ms": 3.310605
+        }
+      ],
+      "sf": 1,
+      "status": "ran"
+    },
+    {
+      "answer_rows": 2603,
+      "conformance": {
+        "api": "cq_testkit::conformance::assert_answers_equal",
+        "sf": 1,
+        "status": "passed"
+      },
+      "cpu_query": "struct Query ; relation Lineitem (l_orderkey : i64 , l_partkey : i64 , l_suppkey : i64) ; relation Part (p_partkey : i64 , p_type : String) ; relation Supplier (s_suppkey : i64 , s_nationkey : i32) ; relation Orders (o_orderkey : i64 , o_custkey : i64 , o_orderdate : Date) ; relation Customer (c_custkey : i64 , c_nationkey : i32) ; relation Nation (n_nationkey : i32 , n_regionkey : i32) ; relation Region (r_regionkey : i32 , r_name : String) ; answer (order_key , part_key , supplier_key) : - Lineitem (order_key , part_key , supplier_key) , Part (part_key , \"ECONOMY ANODIZED STEEL\") , Supplier (supplier_key , supplier_nation) , Orders (order_key , customer_key , order_date) , if * order_date >= start && * order_date <= end , Customer (customer_key , customer_nation) , Nation (customer_nation , customer_region) , Region (customer_region , \"AMERICA\") , Nation (supplier_nation , _supplier_region) ;",
+      "duckdb": {
+        "measurement": {
+          "engine": "DuckDB",
+          "measured_runs": 5,
+          "method": "CLI .timer real wall time for full SELECT DISTINCT; 1 ms resolution; one process per thread count",
+          "query": "SELECT DISTINCT o.o_orderkey, p.p_partkey, s.s_suppkey\nFROM lineitem l JOIN part p ON l.l_partkey = p.p_partkey\nJOIN supplier s ON l.l_suppkey = s.s_suppkey\nJOIN orders o ON l.l_orderkey = o.o_orderkey\nJOIN customer c ON o.o_custkey = c.c_custkey\nJOIN nation nc ON c.c_nationkey = nc.n_nationkey\nJOIN region r ON nc.n_regionkey = r.r_regionkey\nJOIN nation ns ON s.s_nationkey = ns.n_nationkey\nWHERE r.r_name = 'AMERICA' AND p.p_type = 'ECONOMY ANODIZED STEEL'\nAND o.o_orderdate >= DATE '1995-01-01' AND o.o_orderdate <= DATE '1996-12-31'",
+          "sf": 1,
+          "threads": {
+            "1": {
+              "median_seconds": 0.069,
+              "samples_seconds": [
+                0.071,
+                0.07,
+                0.069,
+                0.067,
+                0.066
+              ],
+              "warmup_seconds": 0.116
+            },
+            "24": {
+              "median_seconds": 0.018,
+              "samples_seconds": [
+                0.019,
+                0.019,
+                0.018,
+                0.018,
+                0.018
+              ],
+              "warmup_seconds": 0.042
+            }
+          },
+          "units": "seconds",
+          "version": "v1.4.4 (Andium) 6ddac802ff",
+          "warmup_runs": 1
+        },
+        "source": "/data/tpch-gpu/sf1/duckdb_timing.retail_h08.json",
+        "t24_median_ms": 18.0
+      },
+      "exact": true,
+      "median_ms": {
+        "build": 0.7445120215415955,
+        "dedup": 0.15984000265598297,
+        "kernels": 6.171616077423096,
+        "total": 7.0840959548950195
+      },
+      "query": "h08",
+      "samples": [
+        {
+          "build_ms": 0.9768959879875183,
+          "dedup_ms": 0.15984000265598297,
+          "kernels_ms": 6.168479919433594,
+          "total_ms": 7.305215835571289,
+          "wall_ms": 7.313575999999999
+        },
+        {
+          "build_ms": 0.7703040242195129,
+          "dedup_ms": 0.16009600460529327,
+          "kernels_ms": 6.171296119689941,
+          "total_ms": 7.101696014404297,
+          "wall_ms": 7.109495000000001
+        },
+        {
+          "build_ms": 0.7445120215415955,
+          "dedup_ms": 0.15987199544906616,
+          "kernels_ms": 6.172544002532959,
+          "total_ms": 7.07692813873291,
+          "wall_ms": 7.0849779999999996
+        },
+        {
+          "build_ms": 0.744159996509552,
+          "dedup_ms": 0.1597760021686554,
+          "kernels_ms": 6.171616077423096,
+          "total_ms": 7.075551986694336,
+          "wall_ms": 7.083145
+        },
+        {
+          "build_ms": 0.7445120215415955,
+          "dedup_ms": 0.15904000401496887,
+          "kernels_ms": 6.180543899536133,
+          "total_ms": 7.0840959548950195,
+          "wall_ms": 7.092121
+        }
+      ],
+      "sf": 1,
+      "status": "ran"
+    },
+    {
+      "answer_rows": 319402,
+      "conformance": {
+        "api": "cq_testkit::conformance::assert_answers_equal",
+        "sf": 1,
+        "status": "passed"
+      },
+      "cpu_query": "struct Query ; relation Lineitem (l_orderkey : i64 , l_partkey : i64 , l_suppkey : i64) ; relation PartSupp (ps_partkey : i64 , ps_suppkey : i64) ; relation Part (p_partkey : i64 , p_name : String) ; relation Supplier (s_suppkey : i64 , s_nationkey : i32) ; relation Orders (o_orderkey : i64) ; relation Nation (n_nationkey : i32) ; answer (order_key , part_key , supplier_key) : - Orders (order_key) , Lineitem (order_key , part_key , supplier_key) , PartSupp (part_key , supplier_key) , Part (part_key , part_name) , if part_name . contains (\"green\") , Supplier (supplier_key , nation_key) , Nation (nation_key) ;",
+      "duckdb": {
+        "measurement": {
+          "engine": "DuckDB",
+          "measured_runs": 5,
+          "method": "CLI .timer real wall time for full SELECT DISTINCT; 1 ms resolution; one process per thread count",
+          "query": "SELECT DISTINCT o.o_orderkey, p.p_partkey, s.s_suppkey\nFROM lineitem l JOIN partsupp ps ON l.l_partkey = ps.ps_partkey AND l.l_suppkey = ps.ps_suppkey\nJOIN part p ON p.p_partkey = l.l_partkey\nJOIN supplier s ON s.s_suppkey = l.l_suppkey\nJOIN orders o ON o.o_orderkey = l.l_orderkey\nJOIN nation n ON n.n_nationkey = s.s_nationkey\nWHERE p.p_name LIKE '%green%'",
+          "sf": 1,
+          "threads": {
+            "1": {
+              "median_seconds": 0.694,
+              "samples_seconds": [
+                1.116,
+                0.816,
+                0.694,
+                0.609,
+                0.603
+              ],
+              "warmup_seconds": 1.129
+            },
+            "24": {
+              "median_seconds": 0.466,
+              "samples_seconds": [
+                0.466,
+                0.455,
+                0.467,
+                0.459,
+                0.478
+              ],
+              "warmup_seconds": 0.511
+            }
+          },
+          "units": "seconds",
+          "version": "v1.4.4 (Andium) 6ddac802ff",
+          "warmup_runs": 1
+        },
+        "source": "/data/tpch-gpu/sf1/duckdb_timing.retail_h09.json",
+        "t24_median_ms": 466.0
+      },
+      "exact": true,
+      "median_ms": {
+        "build": 1.2657920122146606,
+        "dedup": 0.25516799092292786,
+        "kernels": 2.955967903137207,
+        "total": 4.468736171722412
+      },
+      "query": "h09",
+      "samples": [
+        {
+          "build_ms": 1.3156800270080566,
+          "dedup_ms": 0.256415992975235,
+          "kernels_ms": 2.9712319374084473,
+          "total_ms": 4.543327808380127,
+          "wall_ms": 4.556583000000001
+        },
+        {
+          "build_ms": 1.2749760150909424,
+          "dedup_ms": 0.2563199996948242,
+          "kernels_ms": 2.955967903137207,
+          "total_ms": 4.487264156341553,
+          "wall_ms": 4.499372
+        },
+        {
+          "build_ms": 1.2657920122146606,
+          "dedup_ms": 0.2540479898452759,
+          "kernels_ms": 2.9316160678863525,
+          "total_ms": 4.451456069946289,
+          "wall_ms": 4.46188
+        },
+        {
+          "build_ms": 1.2533760070800781,
+          "dedup_ms": 0.25516799092292786,
+          "kernels_ms": 2.9601919651031494,
+          "total_ms": 4.468736171722412,
+          "wall_ms": 4.479324
+        },
+        {
+          "build_ms": 1.254431962966919,
+          "dedup_ms": 0.2534399926662445,
+          "kernels_ms": 2.950655937194824,
+          "total_ms": 4.4585280418396,
+          "wall_ms": 4.4693950000000005
+        }
+      ],
+      "sf": 1,
+      "status": "ran"
+    },
+    {
+      "answer_rows": 302284,
+      "conformance": {
+        "api": "cq_testkit::conformance::assert_answers_equal",
+        "sf": 1,
+        "status": "passed"
+      },
+      "cpu_query": "struct Query ; relation Supplier (s_suppkey : i64 , s_nationkey : i32) ; relation Lineitem (l_orderkey : i64 , l_suppkey : i64 , l_receiptdate : Date , l_commitdate : Date) ; relation Orders (o_orderkey : i64 , o_orderstatus : String) ; relation Nation (n_nationkey : i32 , n_name : String) ; answer (order_key , waiting_supplier , other_supplier) : - Lineitem (order_key , other_supplier , _other_receipt , _other_commit) , Lineitem (order_key , waiting_supplier , receipt_date , commit_date) , if receipt_date > commit_date , Supplier (waiting_supplier , nation_key) , Nation (nation_key , \"SAUDI ARABIA\") , Orders (order_key , \"F\") , if waiting_supplier != other_supplier ;",
+      "duckdb": {
+        "measurement": {
+          "engine": "DuckDB",
+          "measured_runs": 5,
+          "method": "CLI .timer real wall time for full SELECT DISTINCT; 1 ms resolution; one process per thread count",
+          "query": "SELECT DISTINCT l1.l_orderkey, s.s_suppkey, l2.l_suppkey\nFROM supplier s JOIN lineitem l1 ON s.s_suppkey = l1.l_suppkey\nJOIN orders o ON o.o_orderkey = l1.l_orderkey\nJOIN nation n ON n.n_nationkey = s.s_nationkey\nJOIN lineitem l2 ON l1.l_orderkey = l2.l_orderkey\nWHERE n.n_name = 'SAUDI ARABIA' AND o.o_orderstatus = 'F'\nAND l1.l_receiptdate > l1.l_commitdate AND l2.l_suppkey <> l1.l_suppkey",
+          "sf": 1,
+          "threads": {
+            "1": {
+              "median_seconds": 0.514,
+              "samples_seconds": [
+                0.554,
+                0.504,
+                0.514,
+                0.549,
+                0.512
+              ],
+              "warmup_seconds": 0.554
+            },
+            "24": {
+              "median_seconds": 0.418,
+              "samples_seconds": [
+                0.418,
+                0.413,
+                0.415,
+                0.421,
+                0.419
+              ],
+              "warmup_seconds": 0.509
+            }
+          },
+          "units": "seconds",
+          "version": "v1.4.4 (Andium) 6ddac802ff",
+          "warmup_runs": 1
+        },
+        "source": "/data/tpch-gpu/sf1/duckdb_timing.retail_h21_positive.json",
+        "t24_median_ms": 418.0
+      },
+      "exact": true,
+      "median_ms": {
+        "build": 7.510528087615967,
+        "dedup": 0.25203201174736023,
+        "kernels": 3.5355520248413086,
+        "total": 11.302399635314941
+      },
+      "query": "h21_positive",
+      "samples": [
+        {
+          "build_ms": 7.319519996643066,
+          "dedup_ms": 0.2540479898452759,
+          "kernels_ms": 3.5388479232788086,
+          "total_ms": 11.11241626739502,
+          "wall_ms": 11.125501
+        },
+        {
+          "build_ms": 7.5186238288879395,
+          "dedup_ms": 0.2523519992828369,
+          "kernels_ms": 3.5323519706726074,
+          "total_ms": 11.303327560424805,
+          "wall_ms": 11.315976000000001
+        },
+        {
+          "build_ms": 7.858208179473877,
+          "dedup_ms": 0.25119999051094055,
+          "kernels_ms": 3.5355520248413086,
+          "total_ms": 11.644960403442383,
+          "wall_ms": 11.657020000000001
+        },
+        {
+          "build_ms": 7.4311041831970215,
+          "dedup_ms": 0.2502079904079437,
+          "kernels_ms": 3.5242559909820557,
+          "total_ms": 11.205568313598633,
+          "wall_ms": 11.216976
+        },
+        {
+          "build_ms": 7.510528087615967,
+          "dedup_ms": 0.25203201174736023,
+          "kernels_ms": 3.53983998298645,
+          "total_ms": 11.302399635314941,
+          "wall_ms": 11.313842
+        }
+      ],
+      "sf": 1,
+      "status": "ran"
+    },
+    {
+      "answer_rows": 8962,
+      "conformance": {
+        "api": "cq_testkit::conformance::assert_answers_equal",
+        "sf": 1,
+        "status": "passed"
+      },
+      "cpu_query": "struct Query ; relation Lineitem (l_orderkey : i64 , l_partkey : i64 , l_suppkey : i64) ; relation Orders (o_orderkey : i64 , o_custkey : i64 , o_orderdate : Date) ; relation Part (p_partkey : i64) ; relation Customer (c_custkey : i64 , c_nationkey : i32) ; relation Nation (n_nationkey : i32 , n_name : String) ; relation Supplier (s_suppkey : i64) ; answer (order_key , part_key , customer_key , supplier_key) : - Lineitem (order_key , part_key , supplier_key) , Orders (order_key , customer_key , order_date) , if * order_date >= start && * order_date < end , Part (part_key) , Customer (customer_key , nation_key) , Nation (nation_key , \"UNITED STATES\") , Supplier (supplier_key) ;",
+      "duckdb": {
+        "measurement": {
+          "engine": "DuckDB",
+          "measured_runs": 5,
+          "method": "CLI .timer real wall time for full SELECT DISTINCT; 1 ms resolution; one process per thread count",
+          "query": "SELECT DISTINCT o.o_orderkey, p.p_partkey, c.c_custkey, s.s_suppkey\nFROM lineitem l JOIN orders o ON l.l_orderkey = o.o_orderkey\nJOIN part p ON l.l_partkey = p.p_partkey\nJOIN customer c ON o.o_custkey = c.c_custkey\nJOIN nation n ON c.c_nationkey = n.n_nationkey\nJOIN supplier s ON l.l_suppkey = s.s_suppkey\nWHERE o.o_orderdate >= DATE '1995-01-01' AND o.o_orderdate < DATE '1995-04-01'\nAND n.n_name = 'UNITED STATES'",
+          "sf": 1,
+          "threads": {
+            "1": {
+              "median_seconds": 0.086,
+              "samples_seconds": [
+                0.089,
+                0.085,
+                0.086,
+                0.086,
+                0.089
+              ],
+              "warmup_seconds": 0.137
+            },
+            "24": {
+              "median_seconds": 0.096,
+              "samples_seconds": [
+                0.057,
+                0.056,
+                0.096,
+                0.098,
+                0.098
+              ],
+              "warmup_seconds": 0.129
+            }
+          },
+          "units": "seconds",
+          "version": "v1.4.4 (Andium) 6ddac802ff",
+          "warmup_runs": 1
+        },
+        "source": "/data/tpch-gpu/sf1/duckdb_timing.retail_d19.json",
+        "t24_median_ms": 96.0
+      },
+      "exact": true,
+      "median_ms": {
+        "build": 0.39318400621414185,
+        "dedup": 0.14179199934005737,
+        "kernels": 1.9870400428771973,
+        "total": 2.521183967590332
+      },
+      "query": "d19",
+      "samples": [
+        {
+          "build_ms": 0.40137600898742676,
+          "dedup_ms": 0.14390400052070618,
+          "kernels_ms": 1.9901119470596313,
+          "total_ms": 2.5353920459747314,
+          "wall_ms": 2.5437350000000003
+        },
+        {
+          "build_ms": 0.39318400621414185,
+          "dedup_ms": 0.14188799262046814,
+          "kernels_ms": 1.987007975578308,
+          "total_ms": 2.5220799446105957,
+          "wall_ms": 2.530379
+        },
+        {
+          "build_ms": 0.39180800318717957,
+          "dedup_ms": 0.14176000654697418,
+          "kernels_ms": 1.9871360063552856,
+          "total_ms": 2.5207040309906006,
+          "wall_ms": 2.528696
+        },
+        {
+          "build_ms": 0.3924480080604553,
+          "dedup_ms": 0.14179199934005737,
+          "kernels_ms": 1.9850560426712036,
+          "total_ms": 2.5192959308624268,
+          "wall_ms": 2.527273
+        },
+        {
+          "build_ms": 0.393312007188797,
+          "dedup_ms": 0.14083200693130493,
+          "kernels_ms": 1.9870400428771973,
+          "total_ms": 2.521183967590332,
+          "wall_ms": 2.529187
+        }
+      ],
+      "sf": 1,
+      "status": "ran"
+    },
+    {
+      "answer_rows": 357,
+      "conformance": {
+        "api": "cq_testkit::conformance::assert_answers_equal",
+        "sf": 1,
+        "status": "passed"
+      },
+      "cpu_query": "struct Query ; relation Lineitem (l_orderkey : i64 , l_partkey : i64 , l_suppkey : i64) ; relation Orders (o_orderkey : i64 , o_orderdate : Date) ; relation Part (p_partkey : i64 , p_brand : String) ; relation Supplier (s_suppkey : i64 , s_nationkey : i32) ; relation Nation (n_nationkey : i32 , n_name : String) ; answer (order_key , part_key , supplier_key) : - Lineitem (order_key , part_key , supplier_key) , Orders (order_key , order_date) , if * order_date >= start && * order_date < end , Part (part_key , \"Brand#12\") , Supplier (supplier_key , nation_key) , Nation (nation_key , \"UNITED STATES\") ;",
+      "duckdb": {
+        "measurement": {
+          "engine": "DuckDB",
+          "measured_runs": 5,
+          "method": "CLI .timer real wall time for full SELECT DISTINCT; 1 ms resolution; one process per thread count",
+          "query": "SELECT DISTINCT o.o_orderkey, p.p_partkey, s.s_suppkey\nFROM lineitem l JOIN orders o ON l.l_orderkey = o.o_orderkey\nJOIN part p ON l.l_partkey = p.p_partkey\nJOIN supplier s ON l.l_suppkey = s.s_suppkey\nJOIN nation n ON s.s_nationkey = n.n_nationkey\nWHERE o.o_orderdate >= DATE '1995-01-01' AND o.o_orderdate < DATE '1995-04-01'\nAND p.p_brand = 'Brand#12' AND n.n_name = 'UNITED STATES'",
+          "sf": 1,
+          "threads": {
+            "1": {
+              "median_seconds": 0.078,
+              "samples_seconds": [
+                0.078,
+                0.077,
+                0.078,
+                0.082,
+                0.078
+              ],
+              "warmup_seconds": 0.121
+            },
+            "24": {
+              "median_seconds": 0.023,
+              "samples_seconds": [
+                0.033,
+                0.031,
+                0.021,
+                0.023,
+                0.02
+              ],
+              "warmup_seconds": 0.112
+            }
+          },
+          "units": "seconds",
+          "version": "v1.4.4 (Andium) 6ddac802ff",
+          "warmup_runs": 1
+        },
+        "source": "/data/tpch-gpu/sf1/duckdb_timing.retail_d27.json",
+        "t24_median_ms": 23.0
+      },
+      "exact": true,
+      "median_ms": {
+        "build": 0.8815039992332458,
+        "dedup": 0.08511999994516373,
+        "kernels": 1.2460800409317017,
+        "total": 2.216576099395752
+      },
+      "query": "d27",
+      "samples": [
+        {
+          "build_ms": 1.0259519815444946,
+          "dedup_ms": 0.08511999994516373,
+          "kernels_ms": 1.2460800409317017,
+          "total_ms": 2.357151985168457,
+          "wall_ms": 2.365373
+        },
+        {
+          "build_ms": 0.8930240273475647,
+          "dedup_ms": 0.08364800363779068,
+          "kernels_ms": 1.248576045036316,
+          "total_ms": 2.225248098373413,
+          "wall_ms": 2.23326
+        },
+        {
+          "build_ms": 0.8751360177993774,
+          "dedup_ms": 0.08985599875450134,
+          "kernels_ms": 1.2515840530395508,
+          "total_ms": 2.216576099395752,
+          "wall_ms": 2.224864
+        },
+        {
+          "build_ms": 0.8815039992332458,
+          "dedup_ms": 0.08371199667453766,
+          "kernels_ms": 1.2454400062561035,
+          "total_ms": 2.210655927658081,
+          "wall_ms": 2.219033
+        },
+        {
+          "build_ms": 0.8780800104141235,
+          "dedup_ms": 0.08665599673986435,
+          "kernels_ms": 1.245568037033081,
+          "total_ms": 2.210304021835327,
+          "wall_ms": 2.2176600000000004
+        }
+      ],
+      "sf": 1,
+      "status": "ran"
+    },
+    {
+      "answer_rows": 5344,
+      "conformance": {
+        "api": "cq_testkit::conformance::assert_answers_equal",
+        "sf": 1,
+        "status": "passed"
+      },
+      "cpu_query": "struct Query ; relation Lineitem (l_orderkey : i64 , l_partkey : i64 , l_suppkey : i64 , l_shipdate : Date , l_quantity : Decimal) ; relation Orders (o_orderkey : i64 , o_custkey : i64) ; relation PartSupp (ps_partkey : i64 , ps_suppkey : i64 , ps_availqty : i64) ; relation Supplier (s_suppkey : i64 , s_nationkey : i32) ; relation Part (p_partkey : i64) ; relation Customer (c_custkey : i64 , c_nationkey : i32) ; relation Nation (n_nationkey : i32) ; answer (order_key , part_key , supplier_key , nation_key) : - Orders (order_key , customer_key) , Lineitem (order_key , part_key , supplier_key , ship_date , quantity) , if * ship_date >= start && * ship_date < end , if * quantity > minimum , PartSupp (part_key , supplier_key , available) , if * available > 0 , Supplier (supplier_key , nation_key) , Part (part_key) , Customer (customer_key , nation_key) , Nation (nation_key) ;",
+      "duckdb": {
+        "measurement": {
+          "engine": "DuckDB",
+          "measured_runs": 5,
+          "method": "CLI .timer real wall time for full SELECT DISTINCT; 1 ms resolution; one process per thread count",
+          "query": "SELECT DISTINCT o.o_orderkey, p.p_partkey, s.s_suppkey, n.n_nationkey\nFROM lineitem l JOIN orders o ON l.l_orderkey = o.o_orderkey\nJOIN partsupp ps ON l.l_partkey = ps.ps_partkey AND l.l_suppkey = ps.ps_suppkey\nJOIN supplier s ON ps.ps_suppkey = s.s_suppkey\nJOIN part p ON ps.ps_partkey = p.p_partkey\nJOIN customer c ON o.o_custkey = c.c_custkey AND c.c_nationkey = s.s_nationkey\nJOIN nation n ON c.c_nationkey = n.n_nationkey\nWHERE l.l_shipdate >= DATE '1995-01-01' AND l.l_shipdate < DATE '1995-04-01'\nAND l.l_quantity > 20.00 AND ps.ps_availqty > 0",
+          "sf": 1,
+          "threads": {
+            "1": {
+              "median_seconds": 0.232,
+              "samples_seconds": [
+                0.24,
+                0.279,
+                0.205,
+                0.232,
+                0.22
+              ],
+              "warmup_seconds": 0.293
+            },
+            "24": {
+              "median_seconds": 0.119,
+              "samples_seconds": [
+                0.142,
+                0.121,
+                0.09,
+                0.119,
+                0.116
+              ],
+              "warmup_seconds": 0.217
+            }
+          },
+          "units": "seconds",
+          "version": "v1.4.4 (Andium) 6ddac802ff",
+          "warmup_runs": 1
+        },
+        "source": "/data/tpch-gpu/sf1/duckdb_timing.retail_d72_inner.json",
+        "t24_median_ms": 119.0
+      },
+      "exact": true,
+      "median_ms": {
+        "build": 1.160159945487976,
+        "dedup": 0.1847040057182312,
+        "kernels": 4.223616123199463,
+        "total": 5.567872047424316
+      },
+      "query": "d72_inner",
+      "samples": [
+        {
+          "build_ms": 1.1625920534133911,
+          "dedup_ms": 0.18556800484657288,
+          "kernels_ms": 4.229919910430908,
+          "total_ms": 5.578080177307129,
+          "wall_ms": 5.586215999999999
+        },
+        {
+          "build_ms": 1.15939199924469,
+          "dedup_ms": 0.18563200533390045,
+          "kernels_ms": 4.229856014251709,
+          "total_ms": 5.574880123138428,
+          "wall_ms": 5.582629000000001
+        },
+        {
+          "build_ms": 1.1599680185317993,
+          "dedup_ms": 0.18464000523090363,
+          "kernels_ms": 4.215487957000732,
+          "total_ms": 5.56009578704834,
+          "wall_ms": 5.568562
+        },
+        {
+          "build_ms": 1.160159945487976,
+          "dedup_ms": 0.1847040057182312,
+          "kernels_ms": 4.215424060821533,
+          "total_ms": 5.560287952423096,
+          "wall_ms": 5.56801
+        },
+        {
+          "build_ms": 1.1605759859085083,
+          "dedup_ms": 0.18367999792099,
+          "kernels_ms": 4.223616123199463,
+          "total_ms": 5.567872047424316,
+          "wall_ms": 5.576608
+        }
+      ],
+      "sf": 1,
+      "status": "ran"
+    },
+    {
+      "answer_rows": 8962,
+      "conformance": {
+        "api": "cq_testkit::conformance::assert_answers_equal",
+        "sf": 1,
+        "status": "passed"
+      },
+      "cpu_query": "struct Query ; relation Lineitem (l_orderkey : i64 , l_partkey : i64 , l_suppkey : i64) ; relation PartSupp (ps_partkey : i64 , ps_suppkey : i64 , ps_availqty : i64) ; relation Part (p_partkey : i64) ; relation Orders (o_orderkey : i64 , o_custkey : i64 , o_orderdate : Date) ; relation Customer (c_custkey : i64 , c_nationkey : i32) ; relation Supplier (s_suppkey : i64 , s_nationkey : i32) ; relation Nation (n_nationkey : i32 , n_name : String) ; answer (order_key , part_key , supplier_nation) : - PartSupp (part_key , supplier_key , available) , if * available > 0 , Lineitem (order_key , part_key , supplier_key) , Orders (order_key , customer_key , order_date) , if * order_date >= start && * order_date < end , Customer (customer_key , customer_nation) , Nation (customer_nation , \"UNITED STATES\") , Part (part_key) , Supplier (supplier_key , supplier_nation) , Nation (supplier_nation , _supplier_name) ;",
+      "duckdb": {
+        "measurement": {
+          "engine": "DuckDB",
+          "measured_runs": 5,
+          "method": "CLI .timer real wall time for full SELECT DISTINCT; 1 ms resolution; one process per thread count",
+          "query": "SELECT DISTINCT o.o_orderkey, p.p_partkey, ns.n_nationkey\nFROM lineitem l JOIN partsupp ps ON l.l_partkey = ps.ps_partkey AND l.l_suppkey = ps.ps_suppkey\nJOIN part p ON p.p_partkey = l.l_partkey\nJOIN orders o ON o.o_orderkey = l.l_orderkey\nJOIN customer c ON c.c_custkey = o.o_custkey\nJOIN supplier s ON s.s_suppkey = ps.ps_suppkey\nJOIN nation nc ON nc.n_nationkey = c.c_nationkey\nJOIN nation ns ON ns.n_nationkey = s.s_nationkey\nWHERE o.o_orderdate >= DATE '1995-01-01' AND o.o_orderdate < DATE '1995-04-01'\nAND nc.n_name = 'UNITED STATES' AND ps.ps_availqty > 0",
+          "sf": 1,
+          "threads": {
+            "1": {
+              "median_seconds": 0.058,
+              "samples_seconds": [
+                0.059,
+                0.058,
+                0.058,
+                0.057,
+                0.058
+              ],
+              "warmup_seconds": 0.105
+            },
+            "24": {
+              "median_seconds": 0.035,
+              "samples_seconds": [
+                0.035,
+                0.029,
+                0.028,
+                0.038,
+                0.039
+              ],
+              "warmup_seconds": 0.062
+            }
+          },
+          "units": "seconds",
+          "version": "v1.4.4 (Andium) 6ddac802ff",
+          "warmup_runs": 1
+        },
+        "source": "/data/tpch-gpu/sf1/duckdb_timing.retail_d85.json",
+        "t24_median_ms": 35.0
+      },
+      "exact": true,
+      "median_ms": {
+        "build": 0.5560960173606873,
+        "dedup": 0.15507200360298157,
+        "kernels": 2.9068479537963867,
+        "total": 3.6219520568847656
+      },
+      "query": "d85",
+      "samples": [
+        {
+          "build_ms": 0.5592960119247437,
+          "dedup_ms": 0.15692800283432007,
+          "kernels_ms": 2.910975933074951,
+          "total_ms": 3.62719988822937,
+          "wall_ms": 3.635458
+        },
+        {
+          "build_ms": 0.5601599812507629,
+          "dedup_ms": 0.15593600273132324,
+          "kernels_ms": 2.9068479537963867,
+          "total_ms": 3.6229441165924072,
+          "wall_ms": 3.631729
+        },
+        {
+          "build_ms": 0.5546879768371582,
+          "dedup_ms": 0.155008003115654,
+          "kernels_ms": 2.9047040939331055,
+          "total_ms": 3.6143999099731445,
+          "wall_ms": 3.623003
+        },
+        {
+          "build_ms": 0.5530239939689636,
+          "dedup_ms": 0.155008003115654,
+          "kernels_ms": 2.9139199256896973,
+          "total_ms": 3.6219520568847656,
+          "wall_ms": 3.6303669999999997
+        },
+        {
+          "build_ms": 0.5560960173606873,
+          "dedup_ms": 0.15507200360298157,
+          "kernels_ms": 2.904639959335327,
+          "total_ms": 3.6158080101013184,
+          "wall_ms": 3.6241149999999998
+        }
+      ],
+      "sf": 1,
+      "status": "ran"
+    },
+    {
+      "answer_rows": 114003,
+      "conformance": null,
+      "cpu_query": "struct Query ; relation Customer (c_custkey : i64 , c_mktsegment : String) ; relation Orders (o_orderkey : i64 , o_custkey : i64 , o_orderdate : Date) ; relation Lineitem (l_orderkey : i64 , l_shipdate : Date) ; answer (order_key , customer_key) : - Lineitem (order_key , ship_date) , if * ship_date > cutoff , Orders (order_key , customer_key , order_date) , if * order_date < cutoff , Customer (customer_key , \"BUILDING\") ;",
+      "duckdb": {
+        "measurement": {
+          "engine": "DuckDB",
+          "measured_runs": 5,
+          "method": "CLI .timer real wall time for full SELECT DISTINCT; 1 ms resolution; one process per thread count",
+          "query": "SELECT DISTINCT o.o_orderkey, c.c_custkey\nFROM customer c JOIN orders o ON o.o_custkey = c.c_custkey\nJOIN lineitem l ON l.l_orderkey = o.o_orderkey\nWHERE c.c_mktsegment = 'BUILDING' AND o.o_orderdate < DATE '1995-03-15'\nAND l.l_shipdate > DATE '1995-03-15'",
+          "sf": 10,
+          "threads": {
+            "1": {
+              "median_seconds": 0.735,
+              "samples_seconds": [
+                0.719,
+                0.756,
+                0.735,
+                0.734,
+                0.774
+              ],
+              "warmup_seconds": 1.044
+            },
+            "24": {
+              "median_seconds": 0.167,
+              "samples_seconds": [
+                0.167,
+                0.162,
+                0.159,
+                0.176,
+                0.18
+              ],
+              "warmup_seconds": 0.259
+            }
+          },
+          "units": "seconds",
+          "version": "v1.4.4 (Andium) 6ddac802ff",
+          "warmup_runs": 1
+        },
+        "source": "/data/tpch-gpu/sf10/duckdb_timing.retail_h03.json",
+        "t24_median_ms": 167.0
+      },
+      "exact": true,
+      "median_ms": {
+        "build": 5.493216037750244,
+        "dedup": 0.22144000232219696,
+        "kernels": 12.412896156311035,
+        "total": 18.12646484375
+      },
+      "query": "h03",
+      "samples": [
+        {
+          "build_ms": 5.7218241691589355,
+          "dedup_ms": 0.22383999824523926,
+          "kernels_ms": 12.419487953186035,
+          "total_ms": 18.36515235900879,
+          "wall_ms": 18.375114
+        },
+        {
+          "build_ms": 5.808832168579102,
+          "dedup_ms": 0.2253119945526123,
+          "kernels_ms": 12.412896156311035,
+          "total_ms": 18.447040557861328,
+          "wall_ms": 18.456861
+        },
+        {
+          "build_ms": 5.493216037750244,
+          "dedup_ms": 0.22144000232219696,
+          "kernels_ms": 12.382975578308105,
+          "total_ms": 18.097631454467773,
+          "wall_ms": 18.105999
+        },
+        {
+          "build_ms": 5.48415994644165,
+          "dedup_ms": 0.2202560007572174,
+          "kernels_ms": 12.42204761505127,
+          "total_ms": 18.12646484375,
+          "wall_ms": 18.135074
+        },
+        {
+          "build_ms": 5.448063850402832,
+          "dedup_ms": 0.21779200434684753,
+          "kernels_ms": 12.377408027648926,
+          "total_ms": 18.043264389038086,
+          "wall_ms": 18.052274999999998
+        }
+      ],
+      "sf": 10,
+      "status": "ran"
+    },
+    {
+      "answer_rows": 72983,
+      "conformance": null,
+      "cpu_query": "struct Query ; relation Customer (c_custkey : i64 , c_nationkey : i32) ; relation Orders (o_orderkey : i64 , o_custkey : i64 , o_orderdate : Date) ; relation Lineitem (l_orderkey : i64 , l_suppkey : i64) ; relation Supplier (s_suppkey : i64 , s_nationkey : i32) ; relation Nation (n_nationkey : i32 , n_regionkey : i32) ; relation Region (r_regionkey : i32 , r_name : String) ; answer (order_key , supplier_key , nation_key) : - Lineitem (order_key , supplier_key) , Orders (order_key , customer_key , order_date) , if * order_date >= start && * order_date < end , Customer (customer_key , nation_key) , Nation (nation_key , region_key) , Region (region_key , \"ASIA\") , Supplier (supplier_key , nation_key) ;",
+      "duckdb": {
+        "measurement": {
+          "engine": "DuckDB",
+          "measured_runs": 5,
+          "method": "CLI .timer real wall time for full SELECT DISTINCT; 1 ms resolution; one process per thread count",
+          "query": "SELECT DISTINCT o.o_orderkey, s.s_suppkey, n.n_nationkey\nFROM customer c JOIN orders o ON c.c_custkey = o.o_custkey\nJOIN lineitem l ON l.l_orderkey = o.o_orderkey\nJOIN supplier s ON s.s_suppkey = l.l_suppkey AND s.s_nationkey = c.c_nationkey\nJOIN nation n ON n.n_nationkey = s.s_nationkey\nJOIN region r ON r.r_regionkey = n.n_regionkey\nWHERE r.r_name = 'ASIA' AND o.o_orderdate >= DATE '1994-01-01'\nAND o.o_orderdate < DATE '1995-01-01'",
+          "sf": 10,
+          "threads": {
+            "1": {
+              "median_seconds": 0.681,
+              "samples_seconds": [
+                0.694,
+                0.672,
+                0.681,
+                0.672,
+                0.692
+              ],
+              "warmup_seconds": 1.065
+            },
+            "24": {
+              "median_seconds": 0.172,
+              "samples_seconds": [
+                0.187,
+                0.158,
+                0.158,
+                0.172,
+                0.195
+              ],
+              "warmup_seconds": 0.296
+            }
+          },
+          "units": "seconds",
+          "version": "v1.4.4 (Andium) 6ddac802ff",
+          "warmup_runs": 1
+        },
+        "source": "/data/tpch-gpu/sf10/duckdb_timing.retail_h05.json",
+        "t24_median_ms": 172.0
+      },
+      "exact": true,
+      "median_ms": {
+        "build": 0.33801600337028503,
+        "dedup": 0.1873600035905838,
+        "kernels": 60.41263961791992,
+        "total": 60.934879302978516
+      },
+      "query": "h05",
+      "samples": [
+        {
+          "build_ms": 0.33846399188041687,
+          "dedup_ms": 0.18716800212860107,
+          "kernels_ms": 60.39574432373047,
+          "total_ms": 60.9213752746582,
+          "wall_ms": 60.930207
+        },
+        {
+          "build_ms": 0.342303991317749,
+          "dedup_ms": 0.18991999328136444,
+          "kernels_ms": 60.45033645629883,
+          "total_ms": 60.98255920410156,
+          "wall_ms": 60.991966000000005
+        },
+        {
+          "build_ms": 0.33660799264907837,
+          "dedup_ms": 0.18563200533390045,
+          "kernels_ms": 60.41263961791992,
+          "total_ms": 60.934879302978516,
+          "wall_ms": 60.943703
+        },
+        {
+          "build_ms": 0.3372800052165985,
+          "dedup_ms": 0.18751999735832214,
+          "kernels_ms": 60.425086975097656,
+          "total_ms": 60.949886322021484,
+          "wall_ms": 60.958591999999996
+        },
+        {
+          "build_ms": 0.33801600337028503,
+          "dedup_ms": 0.1873600035905838,
+          "kernels_ms": 60.3812141418457,
+          "total_ms": 60.906593322753906,
+          "wall_ms": 60.915669
+        }
+      ],
+      "sf": 10,
+      "status": "ran"
+    },
+    {
+      "conformance": {
+        "error": "checked GPU output is not published by a dispatch",
+        "reason": "translate rejected",
+        "status": "not run"
+      },
+      "cpu_query": "struct Query ; relation Supplier (s_suppkey : i64 , s_nationkey : i32) ; relation Lineitem (l_orderkey : i64 , l_suppkey : i64 , l_shipdate : Date) ; relation Orders (o_orderkey : i64 , o_custkey : i64) ; relation Customer (c_custkey : i64 , c_nationkey : i32) ; relation Nation (n_nationkey : i32 , n_name : String) ; answer (order_key , supplier_nation , customer_nation) : - Lineitem (order_key , supplier_key , ship_date) , if * ship_date >= start && * ship_date <= end , Supplier (supplier_key , supplier_nation) , Orders (order_key , customer_key) , Customer (customer_key , customer_nation) , Nation (supplier_nation , supplier_name) , Nation (customer_nation , customer_name) , if (supplier_name == \"FRANCE\" && customer_name == \"GERMANY\") || (supplier_name == \"GERMANY\" && customer_name == \"FRANCE\") ;",
+      "duckdb": {
+        "measurement": {
+          "engine": "DuckDB",
+          "measured_runs": 5,
+          "method": "CLI .timer real wall time for full SELECT DISTINCT; 1 ms resolution; one process per thread count",
+          "query": "SELECT DISTINCT o.o_orderkey, ns.n_nationkey, nc.n_nationkey\nFROM supplier s JOIN lineitem l ON s.s_suppkey = l.l_suppkey\nJOIN orders o ON l.l_orderkey = o.o_orderkey\nJOIN customer c ON c.c_custkey = o.o_custkey\nJOIN nation ns ON s.s_nationkey = ns.n_nationkey\nJOIN nation nc ON c.c_nationkey = nc.n_nationkey\nWHERE ((ns.n_name = 'FRANCE' AND nc.n_name = 'GERMANY')\nOR (ns.n_name = 'GERMANY' AND nc.n_name = 'FRANCE'))\nAND l.l_shipdate >= DATE '1995-01-01' AND l.l_shipdate <= DATE '1996-12-31'",
+          "sf": 10,
+          "threads": {
+            "1": {
+              "median_seconds": 0.724,
+              "samples_seconds": [
+                0.724,
+                0.792,
+                0.7,
+                0.717,
+                0.752
+              ],
+              "warmup_seconds": 1.148
+            },
+            "24": {
+              "median_seconds": 0.137,
+              "samples_seconds": [
+                0.149,
+                0.141,
+                0.137,
+                0.134,
+                0.136
+              ],
+              "warmup_seconds": 0.257
+            }
+          },
+          "units": "seconds",
+          "version": "v1.4.4 (Andium) 6ddac802ff",
+          "warmup_runs": 1
+        },
+        "source": "/data/tpch-gpu/sf10/duckdb_timing.retail_h07.json",
+        "t24_median_ms": 137.0
+      },
+      "error": "checked GPU output is not published by a dispatch",
+      "exact": null,
+      "phase": "translate",
+      "query": "h07",
+      "sf": 10,
+      "status": "translate rejected",
+      "term": "physical { relation Supplier (s_suppkey : i64 , s_nationkey : i32) ; relation Lineitem (l_orderkey : i64 , l_suppkey : i64 , l_shipdate : i32) ; relation Orders (o_orderkey : i64 , o_custkey : i64) ; relation Customer (c_custkey : i64 , c_nationkey : i32) ; relation Nation (n_nationkey : i32 , n_name : String) ; r0 = pipe rename Supplier @ 2 { s_suppkey - > supplier_key , s_nationkey - > supplier_nation } ; r1 = pipe rename Nation @ 5 { n_nationkey - > supplier_nation , n_name - > supplier_name } ; r2 = let select r1 if ((supplier_name = \"FRANCE\") or (supplier_name = \"GERMANY\")) ; r3 = let semi eager [supplier_nation] r0 , r2 ; r4 = pipe rename Customer @ 4 { c_custkey - > customer_key , c_nationkey - > customer_nation } ; r5 = pipe rename Nation @ 6 { n_nationkey - > customer_nation , n_name - > customer_name } ; r6 = let select r5 if ((customer_name = \"GERMANY\") or (customer_name = \"FRANCE\")) ; r7 = let semi eager [customer_nation] r4 , r6 ; r8 = pipe rename Orders @ 3 { o_orderkey - > order_key , o_custkey - > customer_key } ; r9 = let semi eager [customer_key] r8 , r7 ; r10 = pipe rename Lineitem @ 0 { l_orderkey - > order_key , l_suppkey - > supplier_key , l_shipdate - > ship_date } ; r11 = pipe range select r10 if (ship_date between 9131i32 and 9861i32) ; r12 = pipe probe first [supplier_key] r11 , r3 ; r13 = pipe probe first [order_key] r12 , r9 ; r14 = pipe probe first [customer_key] r13 , r7 ; r15 = pipe probe first [supplier_nation] r14 , r2 ; r16 = pipe probe first [customer_nation] r15 , r6 ; r17 = pipe select r16 if ((supplier_name = \"FRANCE\" and customer_name = \"GERMANY\") or (supplier_name = \"GERMANY\" and customer_name = \"FRANCE\")) ; r18 = pipe canon project r17 keep { customer_nation , order_key , supplier_nation } ; return r18 as answer (order_key , supplier_nation , customer_nation) ; } structures { r2 = :: cq_storage :: SortedRun < _ , _ > [supplier_nation] payload [supplier_name , supplier_nation] constants { } ; r3 = :: cq_gpu_sequence_runtime :: RangeProvider [supplier_key] ; r6 = :: cq_storage :: SortedRun < _ , _ > [customer_nation] payload [customer_name , customer_nation] constants { } ; r7 = :: cq_gpu_sequence_runtime :: RangeProvider [customer_key] ; r9 = :: cq_gpu_sequence_runtime :: RangeProvider [order_key] ; r0 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i32 ,) , :: cq_gpu_runtime :: For > [] ; r1 host scan = :: core :: iter :: Map < _ , _ > [] ; r4 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i32 ,) , :: cq_gpu_runtime :: For > [] ; r5 host scan = :: core :: iter :: Map < _ , _ > [] ; r8 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i64 ,) , :: cq_gpu_runtime :: For > [] ; r10 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i64 , i32 ,) , :: cq_gpu_runtime :: For > [] ; r10 host r11 = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i64 , i32 ,) , :: cq_gpu_runtime :: For > [ship_date] ; r18 canon = :: cq_gpu_sequence_runtime :: canon :: PackedCanon ; } sequence { r0 = rows r0 ; r1 = rows r1 ; r2 = store compact r2 r1 ; r3 = store compact r3 lookup r2 [supplier_nation] r0 ; r4 = rows r4 ; r5 = rows r5 ; r6 = store compact r6 r5 ; r7 = store compact r7 lookup r6 [customer_nation] r4 ; r8 = store rows r8 ; r9 = store compact r9 lookup r7 [customer_key] flatten tile 256 r8 ; r10 = rows r10 ; r11 = map r11 r10 ; r12 = flatten lookup r3 [supplier_key] r11 ; r13 = flatten lookup r9 [order_key] r12 ; r14 = flatten lookup r7 [customer_key] r13 ; r15 = flatten lookup r2 [supplier_nation] r14 ; r16 = flatten lookup r6 [customer_nation] r15 ; r17 = compact r17 r16 ; r18 = store canon map r18 r17 ; __sequence_output = store r18 ; output count ; } graded gpu { r0 at host ; r1 at host ; r2 at host ; r3 at host ; r4 at host ; r5 at host ; r6 at host ; r7 at host ; r8 at host ; r9 at host . device ; r10 at host ; r11 at host ; r12 at host ; r13 at host ; r14 at host ; r15 at host ; r16 at host ; r17 at host ; r18 at host ; __sequence_output at host . device ; }"
+    },
+    {
+      "answer_rows": 54142,
+      "conformance": null,
+      "cpu_query": "struct Query ; relation Supplier (s_suppkey : i64 , s_nationkey : i32) ; relation Lineitem (l_orderkey : i64 , l_suppkey : i64 , l_shipdate : Date) ; relation Orders (o_orderkey : i64 , o_custkey : i64) ; relation Customer (c_custkey : i64 , c_nationkey : i32) ; relation Nation (n_nationkey : i32 , n_name : String) ; answer (order_key , supplier_nation , customer_nation) : - Lineitem (order_key , supplier_key , ship_date) , if * ship_date >= start && * ship_date <= end , Supplier (supplier_key , supplier_nation) , Orders (order_key , customer_key) , Customer (customer_key , customer_nation) , { Nation (supplier_nation , \"FRANCE\") , Nation (customer_nation , \"GERMANY\") } | { Nation (supplier_nation , \"GERMANY\") , Nation (customer_nation , \"FRANCE\") } ;",
+      "duckdb": {
+        "measurement": {
+          "engine": "DuckDB",
+          "measured_runs": 5,
+          "method": "CLI .timer real wall time for full SELECT DISTINCT; 1 ms resolution; one process per thread count",
+          "query": "SELECT DISTINCT o.o_orderkey, ns.n_nationkey, nc.n_nationkey\nFROM supplier s JOIN lineitem l ON s.s_suppkey = l.l_suppkey\nJOIN orders o ON l.l_orderkey = o.o_orderkey\nJOIN customer c ON c.c_custkey = o.o_custkey\nJOIN nation ns ON s.s_nationkey = ns.n_nationkey\nJOIN nation nc ON c.c_nationkey = nc.n_nationkey\nWHERE ((ns.n_name = 'FRANCE' AND nc.n_name = 'GERMANY')\nOR (ns.n_name = 'GERMANY' AND nc.n_name = 'FRANCE'))\nAND l.l_shipdate >= DATE '1995-01-01' AND l.l_shipdate <= DATE '1996-12-31'",
+          "sf": 10,
+          "threads": {
+            "1": {
+              "median_seconds": 0.724,
+              "samples_seconds": [
+                0.712,
+                0.711,
+                0.724,
+                0.742,
+                0.724
+              ],
+              "warmup_seconds": 1.155
+            },
+            "24": {
+              "median_seconds": 0.139,
+              "samples_seconds": [
+                0.132,
+                0.137,
+                0.177,
+                0.14,
+                0.139
+              ],
+              "warmup_seconds": 0.252
+            }
+          },
+          "units": "seconds",
+          "version": "v1.4.4 (Andium) 6ddac802ff",
+          "warmup_runs": 1
+        },
+        "source": "/data/tpch-gpu/sf10/duckdb_timing.retail_h07_block.json",
+        "t24_median_ms": 139.0
+      },
+      "exact": true,
+      "median_ms": {
+        "build": 0.21350400149822235,
+        "dedup": 0.1586879938840866,
+        "kernels": 23.534944534301758,
+        "total": 23.943391799926758
+      },
+      "query": "h07_block",
+      "samples": [
+        {
+          "build_ms": 0.21423999965190887,
+          "dedup_ms": 0.15849600732326508,
+          "kernels_ms": 23.570655822753906,
+          "total_ms": 23.943391799926758,
+          "wall_ms": 23.952092
+        },
+        {
+          "build_ms": 0.21116800606250763,
+          "dedup_ms": 0.1586879938840866,
+          "kernels_ms": 23.528480529785156,
+          "total_ms": 23.89833641052246,
+          "wall_ms": 23.907425999999997
+        },
+        {
+          "build_ms": 0.21350400149822235,
+          "dedup_ms": 0.15875199437141418,
+          "kernels_ms": 23.469024658203125,
+          "total_ms": 23.841279983520508,
+          "wall_ms": 23.850587
+        },
+        {
+          "build_ms": 0.21199999749660492,
+          "dedup_ms": 0.2566719949245453,
+          "kernels_ms": 23.534944534301758,
+          "total_ms": 24.003616333007812,
+          "wall_ms": 24.014612
+        },
+        {
+          "build_ms": 0.22944000363349915,
+          "dedup_ms": 0.1586879938840866,
+          "kernels_ms": 23.62371253967285,
+          "total_ms": 24.0118408203125,
+          "wall_ms": 24.020272
+        }
+      ],
+      "sf": 10,
+      "status": "ran"
+    },
+    {
+      "answer_rows": 24254,
+      "conformance": null,
+      "cpu_query": "struct Query ; relation Lineitem (l_orderkey : i64 , l_partkey : i64 , l_suppkey : i64) ; relation Part (p_partkey : i64 , p_type : String) ; relation Supplier (s_suppkey : i64 , s_nationkey : i32) ; relation Orders (o_orderkey : i64 , o_custkey : i64 , o_orderdate : Date) ; relation Customer (c_custkey : i64 , c_nationkey : i32) ; relation Nation (n_nationkey : i32 , n_regionkey : i32) ; relation Region (r_regionkey : i32 , r_name : String) ; answer (order_key , part_key , supplier_key) : - Lineitem (order_key , part_key , supplier_key) , Part (part_key , \"ECONOMY ANODIZED STEEL\") , Supplier (supplier_key , supplier_nation) , Orders (order_key , customer_key , order_date) , if * order_date >= start && * order_date <= end , Customer (customer_key , customer_nation) , Nation (customer_nation , customer_region) , Region (customer_region , \"AMERICA\") , Nation (supplier_nation , _supplier_region) ;",
+      "duckdb": {
+        "measurement": {
+          "engine": "DuckDB",
+          "measured_runs": 5,
+          "method": "CLI .timer real wall time for full SELECT DISTINCT; 1 ms resolution; one process per thread count",
+          "query": "SELECT DISTINCT o.o_orderkey, p.p_partkey, s.s_suppkey\nFROM lineitem l JOIN part p ON l.l_partkey = p.p_partkey\nJOIN supplier s ON l.l_suppkey = s.s_suppkey\nJOIN orders o ON l.l_orderkey = o.o_orderkey\nJOIN customer c ON o.o_custkey = c.c_custkey\nJOIN nation nc ON c.c_nationkey = nc.n_nationkey\nJOIN region r ON nc.n_regionkey = r.r_regionkey\nJOIN nation ns ON s.s_nationkey = ns.n_nationkey\nWHERE r.r_name = 'AMERICA' AND p.p_type = 'ECONOMY ANODIZED STEEL'\nAND o.o_orderdate >= DATE '1995-01-01' AND o.o_orderdate <= DATE '1996-12-31'",
+          "sf": 10,
+          "threads": {
+            "1": {
+              "median_seconds": 0.918,
+              "samples_seconds": [
+                0.918,
+                0.915,
+                0.911,
+                0.92,
+                0.919
+              ],
+              "warmup_seconds": 1.388
+            },
+            "24": {
+              "median_seconds": 0.116,
+              "samples_seconds": [
+                0.129,
+                0.114,
+                0.114,
+                0.116,
+                0.122
+              ],
+              "warmup_seconds": 0.243
+            }
+          },
+          "units": "seconds",
+          "version": "v1.4.4 (Andium) 6ddac802ff",
+          "warmup_runs": 1
+        },
+        "source": "/data/tpch-gpu/sf10/duckdb_timing.retail_h08.json",
+        "t24_median_ms": 116.0
+      },
+      "exact": true,
+      "median_ms": {
+        "build": 6.9339518547058105,
+        "dedup": 0.2178560048341751,
+        "kernels": 60.42156982421875,
+        "total": 67.55830383300781
+      },
+      "query": "h08",
+      "samples": [
+        {
+          "build_ms": 7.141695976257324,
+          "dedup_ms": 0.2255679965019226,
+          "kernels_ms": 60.41059112548828,
+          "total_ms": 67.7778549194336,
+          "wall_ms": 67.78674799999999
+        },
+        {
+          "build_ms": 6.831647872924805,
+          "dedup_ms": 0.22246399521827698,
+          "kernels_ms": 60.46796798706055,
+          "total_ms": 67.52207946777344,
+          "wall_ms": 67.532039
+        },
+        {
+          "build_ms": 6.961855888366699,
+          "dedup_ms": 0.21743999421596527,
+          "kernels_ms": 60.477088928222656,
+          "total_ms": 67.65638732910156,
+          "wall_ms": 67.66530399999999
+        },
+        {
+          "build_ms": 6.9339518547058105,
+          "dedup_ms": 0.2178560048341751,
+          "kernels_ms": 60.36403274536133,
+          "total_ms": 67.51583862304688,
+          "wall_ms": 67.525467
+        },
+        {
+          "build_ms": 6.922143936157227,
+          "dedup_ms": 0.21459199488162994,
+          "kernels_ms": 60.42156982421875,
+          "total_ms": 67.55830383300781,
+          "wall_ms": 67.567216
+        }
+      ],
+      "sf": 10,
+      "status": "ran"
+    },
+    {
+      "answer_rows": 3261612,
+      "conformance": null,
+      "cpu_query": "struct Query ; relation Lineitem (l_orderkey : i64 , l_partkey : i64 , l_suppkey : i64) ; relation PartSupp (ps_partkey : i64 , ps_suppkey : i64) ; relation Part (p_partkey : i64 , p_name : String) ; relation Supplier (s_suppkey : i64 , s_nationkey : i32) ; relation Orders (o_orderkey : i64) ; relation Nation (n_nationkey : i32) ; answer (order_key , part_key , supplier_key) : - Orders (order_key) , Lineitem (order_key , part_key , supplier_key) , PartSupp (part_key , supplier_key) , Part (part_key , part_name) , if part_name . contains (\"green\") , Supplier (supplier_key , nation_key) , Nation (nation_key) ;",
+      "duckdb": {
+        "measurement": {
+          "engine": "DuckDB",
+          "measured_runs": 5,
+          "method": "CLI .timer real wall time for full SELECT DISTINCT; 1 ms resolution; one process per thread count",
+          "query": "SELECT DISTINCT o.o_orderkey, p.p_partkey, s.s_suppkey\nFROM lineitem l JOIN partsupp ps ON l.l_partkey = ps.ps_partkey AND l.l_suppkey = ps.ps_suppkey\nJOIN part p ON p.p_partkey = l.l_partkey\nJOIN supplier s ON s.s_suppkey = l.l_suppkey\nJOIN orders o ON o.o_orderkey = l.l_orderkey\nJOIN nation n ON n.n_nationkey = s.s_nationkey\nWHERE p.p_name LIKE '%green%'",
+          "sf": 10,
+          "threads": {
+            "1": {
+              "median_seconds": 7.327,
+              "samples_seconds": [
+                7.675,
+                7.316,
+                7.356,
+                7.327,
+                7.279
+              ],
+              "warmup_seconds": 7.829
+            },
+            "24": {
+              "median_seconds": 4.472,
+              "samples_seconds": [
+                4.472,
+                4.456,
+                4.472,
+                4.551,
+                4.58
+              ],
+              "warmup_seconds": 4.652
+            }
+          },
+          "units": "seconds",
+          "version": "v1.4.4 (Andium) 6ddac802ff",
+          "warmup_runs": 1
+        },
+        "source": "/data/tpch-gpu/sf10/duckdb_timing.retail_h09.json",
+        "t24_median_ms": 4472.0
+      },
+      "exact": true,
+      "median_ms": {
+        "build": 249.0248260498047,
+        "dedup": 0.8447039723396301,
+        "kernels": 27.303424835205078,
+        "total": 277.13568115234375
+      },
+      "query": "h09",
+      "samples": [
+        {
+          "build_ms": 9.482848167419434,
+          "dedup_ms": 0.8447039723396301,
+          "kernels_ms": 27.291744232177734,
+          "total_ms": 37.61929702758789,
+          "wall_ms": 37.632408999999996
+        },
+        {
+          "build_ms": 245.25514221191406,
+          "dedup_ms": 0.845088005065918,
+          "kernels_ms": 27.326175689697266,
+          "total_ms": 273.4263916015625,
+          "wall_ms": 273.442199
+        },
+        {
+          "build_ms": 251.10986328125,
+          "dedup_ms": 0.8453119993209839,
+          "kernels_ms": 27.303424835205078,
+          "total_ms": 279.25860595703125,
+          "wall_ms": 279.275097
+        },
+        {
+          "build_ms": 249.2539520263672,
+          "dedup_ms": 0.8446400165557861,
+          "kernels_ms": 27.356319427490234,
+          "total_ms": 277.4549255371094,
+          "wall_ms": 277.471701
+        },
+        {
+          "build_ms": 249.0248260498047,
+          "dedup_ms": 0.8434240221977234,
+          "kernels_ms": 27.267423629760742,
+          "total_ms": 277.13568115234375,
+          "wall_ms": 277.15259
+        }
+      ],
+      "sf": 10,
+      "status": "ran"
+    },
+    {
+      "answer_rows": 2930274,
+      "conformance": null,
+      "cpu_query": "struct Query ; relation Supplier (s_suppkey : i64 , s_nationkey : i32) ; relation Lineitem (l_orderkey : i64 , l_suppkey : i64 , l_receiptdate : Date , l_commitdate : Date) ; relation Orders (o_orderkey : i64 , o_orderstatus : String) ; relation Nation (n_nationkey : i32 , n_name : String) ; answer (order_key , waiting_supplier , other_supplier) : - Lineitem (order_key , other_supplier , _other_receipt , _other_commit) , Lineitem (order_key , waiting_supplier , receipt_date , commit_date) , if receipt_date > commit_date , Supplier (waiting_supplier , nation_key) , Nation (nation_key , \"SAUDI ARABIA\") , Orders (order_key , \"F\") , if waiting_supplier != other_supplier ;",
+      "duckdb": {
+        "measurement": {
+          "engine": "DuckDB",
+          "measured_runs": 5,
+          "method": "CLI .timer real wall time for full SELECT DISTINCT; 1 ms resolution; one process per thread count",
+          "query": "SELECT DISTINCT l1.l_orderkey, s.s_suppkey, l2.l_suppkey\nFROM supplier s JOIN lineitem l1 ON s.s_suppkey = l1.l_suppkey\nJOIN orders o ON o.o_orderkey = l1.l_orderkey\nJOIN nation n ON n.n_nationkey = s.s_nationkey\nJOIN lineitem l2 ON l1.l_orderkey = l2.l_orderkey\nWHERE n.n_name = 'SAUDI ARABIA' AND o.o_orderstatus = 'F'\nAND l1.l_receiptdate > l1.l_commitdate AND l2.l_suppkey <> l1.l_suppkey",
+          "sf": 10,
+          "threads": {
+            "1": {
+              "median_seconds": 5.438,
+              "samples_seconds": [
+                5.411,
+                5.477,
+                5.413,
+                5.438,
+                5.474
+              ],
+              "warmup_seconds": 5.818
+            },
+            "24": {
+              "median_seconds": 3.942,
+              "samples_seconds": [
+                3.929,
+                4.088,
+                3.942,
+                4.008,
+                3.915
+              ],
+              "warmup_seconds": 3.997
+            }
+          },
+          "units": "seconds",
+          "version": "v1.4.4 (Andium) 6ddac802ff",
+          "warmup_runs": 1
+        },
+        "source": "/data/tpch-gpu/sf10/duckdb_timing.retail_h21_positive.json",
+        "t24_median_ms": 3942.0
+      },
+      "exact": true,
+      "median_ms": {
+        "build": 364.37860107421875,
+        "dedup": 0.7672960162162781,
+        "kernels": 35.13558578491211,
+        "total": 400.30255126953125
+      },
+      "query": "h21_positive",
+      "samples": [
+        {
+          "build_ms": 132.48092651367188,
+          "dedup_ms": 0.7666559815406799,
+          "kernels_ms": 35.19929504394531,
+          "total_ms": 168.44688415527344,
+          "wall_ms": 168.460711
+        },
+        {
+          "build_ms": 360.0140380859375,
+          "dedup_ms": 0.7672960162162781,
+          "kernels_ms": 35.116737365722656,
+          "total_ms": 395.8980712890625,
+          "wall_ms": 395.91521
+        },
+        {
+          "build_ms": 378.71051025390625,
+          "dedup_ms": 0.7666879892349243,
+          "kernels_ms": 35.11222457885742,
+          "total_ms": 414.58941650390625,
+          "wall_ms": 414.607513
+        },
+        {
+          "build_ms": 364.37860107421875,
+          "dedup_ms": 0.769760012626648,
+          "kernels_ms": 35.15420913696289,
+          "total_ms": 400.30255126953125,
+          "wall_ms": 400.321255
+        },
+        {
+          "build_ms": 364.6315612792969,
+          "dedup_ms": 0.7699519991874695,
+          "kernels_ms": 35.13558578491211,
+          "total_ms": 400.5370788574219,
+          "wall_ms": 400.554242
+        }
+      ],
+      "sf": 10,
+      "status": "ran"
+    },
+    {
+      "answer_rows": 90015,
+      "conformance": null,
+      "cpu_query": "struct Query ; relation Lineitem (l_orderkey : i64 , l_partkey : i64 , l_suppkey : i64) ; relation Orders (o_orderkey : i64 , o_custkey : i64 , o_orderdate : Date) ; relation Part (p_partkey : i64) ; relation Customer (c_custkey : i64 , c_nationkey : i32) ; relation Nation (n_nationkey : i32 , n_name : String) ; relation Supplier (s_suppkey : i64) ; answer (order_key , part_key , customer_key , supplier_key) : - Lineitem (order_key , part_key , supplier_key) , Orders (order_key , customer_key , order_date) , if * order_date >= start && * order_date < end , Part (part_key) , Customer (customer_key , nation_key) , Nation (nation_key , \"UNITED STATES\") , Supplier (supplier_key) ;",
+      "duckdb": {
+        "measurement": {
+          "engine": "DuckDB",
+          "measured_runs": 5,
+          "method": "CLI .timer real wall time for full SELECT DISTINCT; 1 ms resolution; one process per thread count",
+          "query": "SELECT DISTINCT o.o_orderkey, p.p_partkey, c.c_custkey, s.s_suppkey\nFROM lineitem l JOIN orders o ON l.l_orderkey = o.o_orderkey\nJOIN part p ON l.l_partkey = p.p_partkey\nJOIN customer c ON o.o_custkey = c.c_custkey\nJOIN nation n ON c.c_nationkey = n.n_nationkey\nJOIN supplier s ON l.l_suppkey = s.s_suppkey\nWHERE o.o_orderdate >= DATE '1995-01-01' AND o.o_orderdate < DATE '1995-04-01'\nAND n.n_name = 'UNITED STATES'",
+          "sf": 10,
+          "threads": {
+            "1": {
+              "median_seconds": 0.6,
+              "samples_seconds": [
+                0.738,
+                0.578,
+                0.572,
+                0.602,
+                0.6
+              ],
+              "warmup_seconds": 1.149
+            },
+            "24": {
+              "median_seconds": 0.204,
+              "samples_seconds": [
+                0.2,
+                0.202,
+                0.204,
+                0.209,
+                0.234
+              ],
+              "warmup_seconds": 0.293
+            }
+          },
+          "units": "seconds",
+          "version": "v1.4.4 (Andium) 6ddac802ff",
+          "warmup_runs": 1
+        },
+        "source": "/data/tpch-gpu/sf10/duckdb_timing.retail_d19.json",
+        "t24_median_ms": 204.0
+      },
+      "exact": true,
+      "median_ms": {
+        "build": 0.6330879926681519,
+        "dedup": 0.2141759991645813,
+        "kernels": 18.085920333862305,
+        "total": 18.933887481689453
+      },
+      "query": "d19",
+      "samples": [
+        {
+          "build_ms": 0.6330879926681519,
+          "dedup_ms": 0.21526400744915009,
+          "kernels_ms": 18.093856811523438,
+          "total_ms": 18.94220733642578,
+          "wall_ms": 18.951309
+        },
+        {
+          "build_ms": 0.6335359811782837,
+          "dedup_ms": 0.2141759991645813,
+          "kernels_ms": 18.09187126159668,
+          "total_ms": 18.939584732055664,
+          "wall_ms": 18.948694
+        },
+        {
+          "build_ms": 0.6329600214958191,
+          "dedup_ms": 0.21500800549983978,
+          "kernels_ms": 18.085920333862305,
+          "total_ms": 18.933887481689453,
+          "wall_ms": 18.942662
+        },
+        {
+          "build_ms": 0.6343680024147034,
+          "dedup_ms": 0.21216000616550446,
+          "kernels_ms": 18.077503204345703,
+          "total_ms": 18.92403221130371,
+          "wall_ms": 18.932643
+        },
+        {
+          "build_ms": 0.6316480040550232,
+          "dedup_ms": 0.21321600675582886,
+          "kernels_ms": 18.06928062438965,
+          "total_ms": 18.91414451599121,
+          "wall_ms": 18.923265
+        }
+      ],
+      "sf": 10,
+      "status": "ran"
+    },
+    {
+      "answer_rows": 3575,
+      "conformance": null,
+      "cpu_query": "struct Query ; relation Lineitem (l_orderkey : i64 , l_partkey : i64 , l_suppkey : i64) ; relation Orders (o_orderkey : i64 , o_orderdate : Date) ; relation Part (p_partkey : i64 , p_brand : String) ; relation Supplier (s_suppkey : i64 , s_nationkey : i32) ; relation Nation (n_nationkey : i32 , n_name : String) ; answer (order_key , part_key , supplier_key) : - Lineitem (order_key , part_key , supplier_key) , Orders (order_key , order_date) , if * order_date >= start && * order_date < end , Part (part_key , \"Brand#12\") , Supplier (supplier_key , nation_key) , Nation (nation_key , \"UNITED STATES\") ;",
+      "duckdb": {
+        "measurement": {
+          "engine": "DuckDB",
+          "measured_runs": 5,
+          "method": "CLI .timer real wall time for full SELECT DISTINCT; 1 ms resolution; one process per thread count",
+          "query": "SELECT DISTINCT o.o_orderkey, p.p_partkey, s.s_suppkey\nFROM lineitem l JOIN orders o ON l.l_orderkey = o.o_orderkey\nJOIN part p ON l.l_partkey = p.p_partkey\nJOIN supplier s ON l.l_suppkey = s.s_suppkey\nJOIN nation n ON s.s_nationkey = n.n_nationkey\nWHERE o.o_orderdate >= DATE '1995-01-01' AND o.o_orderdate < DATE '1995-04-01'\nAND p.p_brand = 'Brand#12' AND n.n_name = 'UNITED STATES'",
+          "sf": 10,
+          "threads": {
+            "1": {
+              "median_seconds": 0.806,
+              "samples_seconds": [
+                0.842,
+                0.83,
+                0.789,
+                0.796,
+                0.806
+              ],
+              "warmup_seconds": 1.269
+            },
+            "24": {
+              "median_seconds": 0.079,
+              "samples_seconds": [
+                0.078,
+                0.089,
+                0.079,
+                0.097,
+                0.077
+              ],
+              "warmup_seconds": 0.166
+            }
+          },
+          "units": "seconds",
+          "version": "v1.4.4 (Andium) 6ddac802ff",
+          "warmup_runs": 1
+        },
+        "source": "/data/tpch-gpu/sf10/duckdb_timing.retail_d27.json",
+        "t24_median_ms": 79.0
+      },
+      "exact": true,
+      "median_ms": {
+        "build": 6.987775802612305,
+        "dedup": 0.18252800405025482,
+        "kernels": 11.354880332946777,
+        "total": 18.525184631347656
+      },
+      "query": "d27",
+      "samples": [
+        {
+          "build_ms": 7.122079849243164,
+          "dedup_ms": 0.182559996843338,
+          "kernels_ms": 11.36508846282959,
+          "total_ms": 18.669727325439453,
+          "wall_ms": 18.678716
+        },
+        {
+          "build_ms": 6.937024116516113,
+          "dedup_ms": 0.18246400356292725,
+          "kernels_ms": 11.36620807647705,
+          "total_ms": 18.48569679260254,
+          "wall_ms": 18.494323
+        },
+        {
+          "build_ms": 6.923488140106201,
+          "dedup_ms": 0.18252800405025482,
+          "kernels_ms": 11.354880332946777,
+          "total_ms": 18.460895538330078,
+          "wall_ms": 18.469877
+        },
+        {
+          "build_ms": 6.987775802612305,
+          "dedup_ms": 0.18355199694633484,
+          "kernels_ms": 11.353856086730957,
+          "total_ms": 18.525184631347656,
+          "wall_ms": 18.533909
+        },
+        {
+          "build_ms": 7.155392169952393,
+          "dedup_ms": 0.18249599635601044,
+          "kernels_ms": 11.353887557983398,
+          "total_ms": 18.691776275634766,
+          "wall_ms": 18.700387999999997
+        }
+      ],
+      "sf": 10,
+      "status": "ran"
+    },
+    {
+      "answer_rows": 53966,
+      "conformance": null,
+      "cpu_query": "struct Query ; relation Lineitem (l_orderkey : i64 , l_partkey : i64 , l_suppkey : i64 , l_shipdate : Date , l_quantity : Decimal) ; relation Orders (o_orderkey : i64 , o_custkey : i64) ; relation PartSupp (ps_partkey : i64 , ps_suppkey : i64 , ps_availqty : i64) ; relation Supplier (s_suppkey : i64 , s_nationkey : i32) ; relation Part (p_partkey : i64) ; relation Customer (c_custkey : i64 , c_nationkey : i32) ; relation Nation (n_nationkey : i32) ; answer (order_key , part_key , supplier_key , nation_key) : - Orders (order_key , customer_key) , Lineitem (order_key , part_key , supplier_key , ship_date , quantity) , if * ship_date >= start && * ship_date < end , if * quantity > minimum , PartSupp (part_key , supplier_key , available) , if * available > 0 , Supplier (supplier_key , nation_key) , Part (part_key) , Customer (customer_key , nation_key) , Nation (nation_key) ;",
+      "duckdb": {
+        "measurement": {
+          "engine": "DuckDB",
+          "measured_runs": 5,
+          "method": "CLI .timer real wall time for full SELECT DISTINCT; 1 ms resolution; one process per thread count",
+          "query": "SELECT DISTINCT o.o_orderkey, p.p_partkey, s.s_suppkey, n.n_nationkey\nFROM lineitem l JOIN orders o ON l.l_orderkey = o.o_orderkey\nJOIN partsupp ps ON l.l_partkey = ps.ps_partkey AND l.l_suppkey = ps.ps_suppkey\nJOIN supplier s ON ps.ps_suppkey = s.s_suppkey\nJOIN part p ON ps.ps_partkey = p.p_partkey\nJOIN customer c ON o.o_custkey = c.c_custkey AND c.c_nationkey = s.s_nationkey\nJOIN nation n ON c.c_nationkey = n.n_nationkey\nWHERE l.l_shipdate >= DATE '1995-01-01' AND l.l_shipdate < DATE '1995-04-01'\nAND l.l_quantity > 20.00 AND ps.ps_availqty > 0",
+          "sf": 10,
+          "threads": {
+            "1": {
+              "median_seconds": 1.648,
+              "samples_seconds": [
+                1.648,
+                1.687,
+                1.767,
+                1.622,
+                1.604
+              ],
+              "warmup_seconds": 2.274
+            },
+            "24": {
+              "median_seconds": 0.292,
+              "samples_seconds": [
+                0.268,
+                0.292,
+                0.298,
+                0.311,
+                0.271
+              ],
+              "warmup_seconds": 0.364
+            }
+          },
+          "units": "seconds",
+          "version": "v1.4.4 (Andium) 6ddac802ff",
+          "warmup_runs": 1
+        },
+        "source": "/data/tpch-gpu/sf10/duckdb_timing.retail_d72_inner.json",
+        "t24_median_ms": 292.0
+      },
+      "exact": true,
+      "median_ms": {
+        "build": 5.312384128570557,
+        "dedup": 0.1903039962053299,
+        "kernels": 42.200225830078125,
+        "total": 47.70915222167969
+      },
+      "query": "d72_inner",
+      "samples": [
+        {
+          "build_ms": 5.32092809677124,
+          "dedup_ms": 0.19062399864196777,
+          "kernels_ms": 42.19887924194336,
+          "total_ms": 47.71043014526367,
+          "wall_ms": 47.720683
+        },
+        {
+          "build_ms": 5.312384128570557,
+          "dedup_ms": 0.19065600633621216,
+          "kernels_ms": 42.161983489990234,
+          "total_ms": 47.66502380371094,
+          "wall_ms": 47.676268
+        },
+        {
+          "build_ms": 5.302495956420898,
+          "dedup_ms": 0.1881600022315979,
+          "kernels_ms": 42.22284698486328,
+          "total_ms": 47.713504791259766,
+          "wall_ms": 47.72299700000001
+        },
+        {
+          "build_ms": 5.318624019622803,
+          "dedup_ms": 0.1903039962053299,
+          "kernels_ms": 42.200225830078125,
+          "total_ms": 47.70915222167969,
+          "wall_ms": 47.717155999999996
+        },
+        {
+          "build_ms": 5.307136058807373,
+          "dedup_ms": 0.18838399648666382,
+          "kernels_ms": 42.20521545410156,
+          "total_ms": 47.70073699951172,
+          "wall_ms": 47.709202
+        }
+      ],
+      "sf": 10,
+      "status": "ran"
+    },
+    {
+      "answer_rows": 90015,
+      "conformance": null,
+      "cpu_query": "struct Query ; relation Lineitem (l_orderkey : i64 , l_partkey : i64 , l_suppkey : i64) ; relation PartSupp (ps_partkey : i64 , ps_suppkey : i64 , ps_availqty : i64) ; relation Part (p_partkey : i64) ; relation Orders (o_orderkey : i64 , o_custkey : i64 , o_orderdate : Date) ; relation Customer (c_custkey : i64 , c_nationkey : i32) ; relation Supplier (s_suppkey : i64 , s_nationkey : i32) ; relation Nation (n_nationkey : i32 , n_name : String) ; answer (order_key , part_key , supplier_nation) : - PartSupp (part_key , supplier_key , available) , if * available > 0 , Lineitem (order_key , part_key , supplier_key) , Orders (order_key , customer_key , order_date) , if * order_date >= start && * order_date < end , Customer (customer_key , customer_nation) , Nation (customer_nation , \"UNITED STATES\") , Part (part_key) , Supplier (supplier_key , supplier_nation) , Nation (supplier_nation , _supplier_name) ;",
+      "duckdb": {
+        "measurement": {
+          "engine": "DuckDB",
+          "measured_runs": 5,
+          "method": "CLI .timer real wall time for full SELECT DISTINCT; 1 ms resolution; one process per thread count",
+          "query": "SELECT DISTINCT o.o_orderkey, p.p_partkey, ns.n_nationkey\nFROM lineitem l JOIN partsupp ps ON l.l_partkey = ps.ps_partkey AND l.l_suppkey = ps.ps_suppkey\nJOIN part p ON p.p_partkey = l.l_partkey\nJOIN orders o ON o.o_orderkey = l.l_orderkey\nJOIN customer c ON c.c_custkey = o.o_custkey\nJOIN supplier s ON s.s_suppkey = ps.ps_suppkey\nJOIN nation nc ON nc.n_nationkey = c.c_nationkey\nJOIN nation ns ON ns.n_nationkey = s.s_nationkey\nWHERE o.o_orderdate >= DATE '1995-01-01' AND o.o_orderdate < DATE '1995-04-01'\nAND nc.n_name = 'UNITED STATES' AND ps.ps_availqty > 0",
+          "sf": 10,
+          "threads": {
+            "1": {
+              "median_seconds": 0.655,
+              "samples_seconds": [
+                0.638,
+                0.655,
+                0.662,
+                0.651,
+                0.682
+              ],
+              "warmup_seconds": 1.197
+            },
+            "24": {
+              "median_seconds": 0.191,
+              "samples_seconds": [
+                0.181,
+                0.193,
+                0.222,
+                0.177,
+                0.191
+              ],
+              "warmup_seconds": 0.284
+            }
+          },
+          "units": "seconds",
+          "version": "v1.4.4 (Andium) 6ddac802ff",
+          "warmup_runs": 1
+        },
+        "source": "/data/tpch-gpu/sf10/duckdb_timing.retail_d85.json",
+        "t24_median_ms": 191.0
+      },
+      "exact": true,
+      "median_ms": {
+        "build": 0.7955840229988098,
+        "dedup": 0.2091200053691864,
+        "kernels": 23.612192153930664,
+        "total": 24.616832733154297
+      },
+      "query": "d85",
+      "samples": [
+        {
+          "build_ms": 0.7971199750900269,
+          "dedup_ms": 0.21024000644683838,
+          "kernels_ms": 23.63052749633789,
+          "total_ms": 24.637887954711914,
+          "wall_ms": 24.646343
+        },
+        {
+          "build_ms": 0.7955840229988098,
+          "dedup_ms": 0.20892800390720367,
+          "kernels_ms": 23.617504119873047,
+          "total_ms": 24.62201690673828,
+          "wall_ms": 24.630753
+        },
+        {
+          "build_ms": 0.7950080037117004,
+          "dedup_ms": 0.2091200053691864,
+          "kernels_ms": 23.612192153930664,
+          "total_ms": 24.61631965637207,
+          "wall_ms": 24.625133
+        },
+        {
+          "build_ms": 0.795520007610321,
+          "dedup_ms": 0.2091519981622696,
+          "kernels_ms": 23.612159729003906,
+          "total_ms": 24.616832733154297,
+          "wall_ms": 24.625002
+        },
+        {
+          "build_ms": 0.7958400249481201,
+          "dedup_ms": 0.20800000429153442,
+          "kernels_ms": 23.602048873901367,
+          "total_ms": 24.60588836669922,
+          "wall_ms": 24.614752
+        }
+      ],
+      "sf": 10,
+      "status": "ran"
+    }
+  ],
+  "schema_version": 1,
+  "source": "CPU retail_kernel invocations imported verbatim with include_str; only manifest storage types/literals adapted",
+  "table_markdown": "| query | SF1 exact | SF10 exact | GPU total ms SF10 (build/kernels/dedup) | DuckDB t24 SF10 ms | status |\n|---|---|---|---|---|---|\n| h03 | yes | yes | 18.126 (5.493/12.413/0.221) | 167.000 | ran |\n| h05 | yes | yes | 60.935 (0.338/60.413/0.187) | 172.000 | ran |\n| h07 | not run | not run | — | 137.000 | translate rejected: checked GPU output is not published by a dispatch |\n| h07_block | yes | yes | 23.943 (0.214/23.535/0.159) | 139.000 | ran |\n| h08 | yes | yes | 67.558 (6.934/60.422/0.218) | 116.000 | ran |\n| h09 | yes | yes | 277.136 (249.025/27.303/0.845) | 4472.000 | ran |\n| h21_positive | yes | yes | 400.303 (364.379/35.136/0.767) | 3942.000 | ran |\n| d19 | yes | yes | 18.934 (0.633/18.086/0.214) | 204.000 | ran |\n| d27 | yes | yes | 18.525 (6.988/11.355/0.183) | 79.000 | ran |\n| d72_inner | yes | yes | 47.709 (5.312/42.200/0.190) | 292.000 | ran |\n| d85 | yes | yes | 24.617 (0.796/23.612/0.209) | 191.000 | ran |\n",
+  "timing": "CUDA event medians; host evaluation/upload + provider build + kernels + final dedup; initial input loading, answer download and comparison excluded",
+  "warmup_runs": 1
+}

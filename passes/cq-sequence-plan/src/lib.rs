@@ -12,11 +12,17 @@ pub use cost::{Cost, cost};
 mod decomposition;
 mod placement;
 
+pub use cq_sequence_rewrite_passes::select_from_catalog;
+
 /// One invocation of the same checked library function exposed by a rewrite macro.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Advice {
     Store(Ident),
     StoreLevel(Ident),
+    Publish {
+        name: Ident,
+        producer: Ident,
+    },
     Tile {
         name: Ident,
         n: usize,
@@ -47,6 +53,7 @@ impl Advice {
         let result = match self {
             Self::Store(name) => rewrites::store(source, quote!(#name)),
             Self::StoreLevel(name) => rewrites::store_level(source, quote!(#name)),
+            Self::Publish { name, producer } => rewrites::publish(source, name, producer),
             Self::Tile { name, n, items }
             | Self::Partition { name, n, items }
             | Self::Segment { name, n, items } => {
@@ -152,7 +159,12 @@ fn candidate(
         program: source.clone(),
         trace: Vec::new(),
     };
-    for advice in placement::advise(source, machine, parallel) {
+    let source_facts = cq_lang_sequence::contract::check(source)?;
+    for advice in placement::boundaries(source, machine, &source_facts) {
+        push(&mut planned, advice)?;
+    }
+    let facts = cq_lang_sequence::contract::check(&planned.program)?;
+    for advice in placement::advise(&planned.program, machine, parallel, &facts) {
         push(&mut planned, advice)?;
     }
     if parallel {

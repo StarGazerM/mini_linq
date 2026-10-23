@@ -28,8 +28,33 @@ pub(crate) fn advise(
         }) else {
             continue;
         };
+        if grade.level.len() > 1
+            && let Term::Store { inner, .. } = &definition.term
+            && let Term::Ref(producer) = inner.as_ref()
+            && program.graded.as_ref().is_some_and(|graded| {
+                graded
+                    .grades
+                    .iter()
+                    .any(|grade| grade.name == *producer && grade.level.len() == 1)
+            })
+        {
+            continue; // A host-produced upload is not a device computation.
+        }
         if grade.level.len() == 1 && grade.level[0] == machine.root.name {
-            continue;
+            let Term::Store { inner, .. } = &definition.term else {
+                unreachable!()
+            };
+            let Term::Ref(producer) = inner.as_ref() else {
+                continue;
+            };
+            if !program.graded.as_ref().is_some_and(|graded| {
+                graded
+                    .grades
+                    .iter()
+                    .any(|grade| grade.name == *producer && grade.level.len() > 1)
+            }) {
+                continue;
+            }
         }
         if has_tile(&current, &definition.term) {
             continue;

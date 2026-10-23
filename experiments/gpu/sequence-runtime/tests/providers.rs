@@ -18,6 +18,74 @@ fn column(pool: &Arc<Pool>, values: &[u32]) -> Result<ColumnDescriptor> {
 }
 
 #[test]
+fn packed_canon_selects_lanes_from_recorded_heading() -> Result<()> {
+    assert_eq!(PackedCanon::MAX_PACKED_BITS, 128);
+    for bits in [0, 1, 63, 64] {
+        assert_eq!(PackedCanon::key_lanes(bits)?, 1);
+    }
+    for bits in [65, 80, 127, 128] {
+        assert_eq!(PackedCanon::key_lanes(bits)?, 2);
+    }
+    assert!(PackedCanon::key_lanes(129).is_err());
+    let heading = [
+        PackedField { shift: 0, bits: 40, base: 0 },
+        PackedField { shift: 40, bits: 40, base: 0 },
+    ];
+    assert_eq!(PackedCanon::field_lanes(&heading)?, 2);
+    Ok(())
+}
+
+#[test]
+fn packed_canon_deduplicates_wide_keys_and_cross_lane_fields() -> Result<()> {
+    let pool = Pool::new(0, 1 << 20, 128 << 20)?;
+    let rows = [(7i64, 1i64 << 35), (7, 3), (7, 1 << 35), (9, 3)];
+    let lanes = rows.iter().flat_map(|&(a, b)| {
+        let key = (a as u128) | ((b as u128) << 40);
+        [key as u64, (key >> 64) as u64]
+    }).collect::<Vec<_>>();
+    let input = Buffer::from_host(pool.clone(), &lanes)?;
+    let fields = [
+        PackedField { shift: 0, bits: 40, base: 0 },
+        PackedField { shift: 40, bits: 40, base: 0 },
+    ];
+    let mut canon = PackedCanon::new(&pool, rows.len())?;
+    let keys = unsafe { canon.canonicalize(&input, rows.len(), 80)? };
+    assert_eq!(keys.lanes(), 2);
+    assert_eq!(keys.capacity(), rows.len());
+    assert_eq!(keys.logical_count()?, 3);
+    let source = unsafe {
+        ColumnDescriptor::from_packed(keys.keys().clone(), 3, 2, fields[1],
+            Bounds::Inclusive { min: 0, max: (1i64 << 40) - 1 })?
+    };
+    let constant = unsafe {
+        ColumnDescriptor::from_packed(keys.keys().clone(), 3, 2,
+            PackedField { shift: 80, bits: 0, base: 0 }, Bounds::singleton(0))?
+    };
+    let gathered = RangeBuilder::new(&pool)?.build(&RangeDescriptor {
+        key: vec![KeyDescriptor { column: constant, domain_size: 1 }],
+        selection: None,
+        payload: vec![PayloadDescriptor { column: source, kind: PayloadKind::I64 }],
+    })?;
+    assert_eq!(gathered.payload()[0].to_host()?, [3, 3, 1i64 << 35]);
+    let dictionary = Arc::new(cq_gpu_runtime::Dictionary::default());
+    let output = keys.into_columns::<(i64, i64)>(&fields, dictionary.clone(), vec![])?;
+    assert_eq!(output.to_host()?, [(7, 3), (9, 3), (7, 1 << 35)]);
+    let output = packed_columns::<(i64, i64)>(input, rows.len(), &fields, dictionary.clone(), vec![])?;
+    assert_eq!(output.to_host()?, rows);
+
+    // Both lanes participate in equality, including the most significant bit.
+    let input = Buffer::from_host(pool.clone(), &[0u64, 0, 0, 1u64 << 63, 0, 0, u64::MAX, u64::MAX])?;
+    let keys = unsafe { canon.canonicalize(&input, 4, 128)? };
+    let fields = [
+        PackedField { shift: 0, bits: 64, base: i64::MIN },
+        PackedField { shift: 64, bits: 64, base: i64::MIN },
+    ];
+    let output = keys.into_columns::<(i64, i64)>(&fields, dictionary, vec![])?;
+    assert_eq!(output.to_host()?, [(i64::MIN, i64::MIN), (i64::MIN, 0), (i64::MAX, i64::MAX)]);
+    Ok(())
+}
+
+#[test]
 fn providers_preserve_ranges_duplicate_rows_and_canonical_support() -> Result<()> {
     let pool = Pool::new(0, 1 << 20, 128 << 20)?;
     let outer = column(&pool, &[1, 0, 1, 0, 1])?;
@@ -252,6 +320,7 @@ fn stored_sources_retain_strided_rows_and_packed_fields() -> Result<()> {
         ColumnDescriptor::from_packed(
             keys.clone(),
             4,
+            1,
             PackedField {
                 shift: 64,
                 bits: 0,
@@ -264,6 +333,7 @@ fn stored_sources_retain_strided_rows_and_packed_fields() -> Result<()> {
         ColumnDescriptor::from_packed(
             keys.clone(),
             4,
+            1,
             PackedField {
                 shift: 0,
                 bits: 64,
@@ -307,6 +377,7 @@ fn stored_sources_retain_strided_rows_and_packed_fields() -> Result<()> {
         ColumnDescriptor::from_packed(
             keys.clone(),
             4,
+            1,
             PackedField {
                 shift: 42,
                 bits: 1,
@@ -319,6 +390,7 @@ fn stored_sources_retain_strided_rows_and_packed_fields() -> Result<()> {
         ColumnDescriptor::from_packed(
             keys.clone(),
             4,
+            1,
             PackedField {
                 shift: 2,
                 bits: 40,
@@ -347,5 +419,37 @@ fn stored_sources_retain_strided_rows_and_packed_fields() -> Result<()> {
         shifted.payload()[0].to_host()?,
         [-base - 1, base + 1, base, 0]
     );
+    Ok(())
+}
+
+#[test]
+fn keyless_provider_preserves_one_complete_segment() -> Result<()> {
+    let pool = Pool::new(0, 1 << 20, 128 << 20)?;
+    let values = column(&pool, &[7, 2, 7, 4])?;
+    let mut descriptor = RangeDescriptor {
+        key: vec![],
+        selection: None,
+        payload: vec![PayloadDescriptor {
+            column: values.clone(),
+            kind: PayloadKind::U32,
+        }],
+    };
+    let builder = RangeBuilder::new(&pool)?;
+    let mut workspace = RangeWorkspace::new(pool.clone(), &descriptor)?;
+    let complete = builder.build_with_workspace(&descriptor, &mut workspace)?;
+    assert_eq!(complete.len(), 4);
+    assert_eq!(complete.domain_size(), 0);
+    assert!(complete.offsets().to_host()?.is_empty());
+    assert_eq!(complete.payload()[0].to_host()?, [7, 2, 7, 4]);
+    descriptor.selection = Some(RangeSelection { column: values, start: 4, end: 8 });
+    let selected = builder.build_with_workspace(&descriptor, &mut workspace)?;
+    assert_eq!(selected.payload()[0].to_host()?, [7, 7, 4]);
+    descriptor.selection.as_mut().unwrap().start = 9;
+    descriptor.selection.as_mut().unwrap().end = 10;
+    let empty = builder.build_with_workspace(&descriptor, &mut workspace)?;
+    assert!(empty.is_empty());
+    assert!(empty.offsets().to_host()?.is_empty());
+    assert!(empty.payload()[0].to_host()?.is_empty());
+    assert_eq!(complete.payload()[0].to_host()?, [7, 2, 7, 4]);
     Ok(())
 }

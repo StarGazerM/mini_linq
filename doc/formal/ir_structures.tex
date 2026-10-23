@@ -31,13 +31,17 @@ storage; unfiltered host renames record scan and keyed-reader fallbacks;
 (4)~every definition canon has a dedup entry; \code{return canon} has a head
 dedup entry; computed heads that may collapse valuations have one too unless
 \code{consumer canonical} assigns that returned boundary to the consumer;
-(5)~filtered entries (point/range selections or unions only) record one shared
+(5)~filtered entries (ordinary renames without literal bindings, declarative
+selections including trusted-total predicates, or unions) record one shared
 projection; their readers are stream \code{probe first}, semi or anti on a level
 prefix; payload plus the singleton constants proved by the selection cover all
 downstream keys, predicates, Rust free variables and answers. Constant columns
 are reconstructed, not stored. Literal-bearing renames instead have ordinary
 \code{let} storage entries, with no filtered payload annotation: their source
 filters and drops literal columns before ordinary row retention and index builds.
+The recorded layout of the retained result itself is this projection, as are
+the layouts seen by its keyed readers; projection occurs after evaluating the
+predicate, before publication or upload.
 Eligible leading literal keys use the host's native point read; otherwise the
 build source scans and filters. GPU retained occurrence tables are produced in
 the build phase, not filtered inside the query stream kernel;
