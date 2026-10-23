@@ -443,15 +443,15 @@ mod encoding_tests {
     fn domain_profile_adapts_the_imported_h05_without_reordering_it() {
         let source = SOURCES.iter().find(|(name, _)| *name == "h05").unwrap().1;
         let kernel = Kernel::import(source).unwrap();
-        let schema = gpu_compress::tpch::schema();
+        let schema = gpu_compress_host::tpch::schema();
         let mut storage = BTreeMap::new();
         for (table, columns) in schema.tables {
             for (column, kind) in columns {
                 storage.insert(
                     (table.clone(), column),
                     match kind {
-                        gpu_compress::Kind::Id(_) => syn::parse_quote!(u32),
-                        gpu_compress::Kind::I32 => syn::parse_quote!(i32),
+                        gpu_compress_host::Kind::Id(_) => syn::parse_quote!(u32),
+                        gpu_compress_host::Kind::I32 => syn::parse_quote!(i32),
                     },
                 );
             }

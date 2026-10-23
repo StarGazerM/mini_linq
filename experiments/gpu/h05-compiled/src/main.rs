@@ -1,7 +1,8 @@
 #![recursion_limit = "1024"]
 mod queries;
 use cq_gpu_runtime::{DeviceColumns, For, Pool};
-use gpu_compress::{tpch::schema, Catalog, Source};
+use gpu_compress::{Catalog, Source};
+use gpu_compress_host::tpch::schema;
 use serde_json::{json, Value};
 use std::{fs, path::Path, sync::Arc, time::Instant};
 

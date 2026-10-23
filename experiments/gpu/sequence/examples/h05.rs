@@ -10,7 +10,8 @@
 
 use cq_gpu_runtime::{DeviceColumns, Pool};
 use cq_gpu_sequence_runtime::DenseDictionary;
-use gpu_compress::{Catalog, Source, tpch::schema};
+use gpu_compress::{Catalog, Source};
+use gpu_compress_host::tpch::schema;
 use serde_json::{Value, json};
 use std::{error::Error, fs, path::Path, sync::Arc, time::Instant};
 

@@ -44,7 +44,7 @@ fn compile(
     let cpu_source = kernel.cpu_query();
     let storage_schema = match pipeline.storage.as_str() {
         "" => None,
-        "tpch_domains" => Some(gpu_compress::tpch::schema()),
+        "tpch_domains" => Some(gpu_compress_host::tpch::schema()),
         other => {
             return Err(Rejected {
                 phase: "loader profile",
@@ -82,11 +82,11 @@ fn compile(
             for (column, kind) in columns {
                 let key = (relation.table.to_string(), column.clone());
                 let ty = match kind {
-                    gpu_compress::Kind::Id(domain) => {
+                    gpu_compress_host::Kind::Id(domain) => {
                         domains.insert(key.clone(), domain.clone());
                         syn::parse_quote!(u32)
                     }
-                    gpu_compress::Kind::I32 => syn::parse_quote!(i32),
+                    gpu_compress_host::Kind::I32 => syn::parse_quote!(i32),
                 };
                 stored_types.insert(key, ty);
             }
@@ -423,7 +423,7 @@ fn compile(
             quote!(catalog,),
             quote! {
                 let source = gpu_compress::Source::load_manifest(&manifest.root)?;
-                let catalog = gpu_compress::Catalog::compress(&pool, &source, &gpu_compress::tpch::schema())?;
+                let catalog = gpu_compress::Catalog::compress(&pool, &source, &gpu_compress_host::tpch::schema())?;
             },
         )
     } else {

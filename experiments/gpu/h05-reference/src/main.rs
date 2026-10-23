@@ -17,7 +17,8 @@
 mod kernels;
 
 use cuda_core::{CudaStream, DeviceBuffer, DeviceCopy, LaunchConfig1D};
-use gpu_compress::{tpch::schema, Catalog, Domain, Source};
+use gpu_compress::{Catalog, Domain, Source};
+use gpu_compress_host::tpch::schema;
 use gpu_device_columns::{Bounds, Buffer, Codec, ColumnView, EncodedColumn, MemoryResource, Pool};
 use kernels::*;
 use rccl_cub::{cuda::Launch, DeviceRadixSortBufferWorkspace, DoubleBuffer};

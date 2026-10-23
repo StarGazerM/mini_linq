@@ -12,13 +12,14 @@
 //! i32), value bounds, row count and the resident `EncodedColumn` whose device
 //! row access (`decode_u32` / `decode`) the generated kernels call. Per domain:
 //! its size, ID width and inverse map.
+//!
+//! Build scripts use the dependency-free `gpu-compress-host` schema crate.
+use gpu_compress_host::{Kind, Schema};
 use gpu_device_columns::{
     Bounds, Buffer, Codec, ColumnView, DeviceColumns, Dictionary, EncodedColumn, OutputCount, Pool, Table,
 };
 use serde_json::Value;
 use std::{collections::BTreeMap, error::Error, fs, path::Path, sync::Arc};
-
-pub mod tpch;
 
 pub type Result<T, E = Box<dyn Error>> = std::result::Result<T, E>;
 
@@ -135,23 +136,6 @@ impl Domain {
     fn ids(&self, column: &[i64]) -> Vec<u32> {
         column.iter().map(|v| self.values.binary_search(v).expect("value in its domain") as u32).collect()
     }
-}
-
-/// Stored kind of one column.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Kind {
-    /// Dense u32 ID of the named domain.
-    Id(String),
-    /// Declared 32-bit integer, stored at that type.
-    I32,
-}
-
-/// Which source columns share a domain, and every stored table's columns.
-pub struct Schema {
-    /// Domain name -> member source columns (`table.column`).
-    pub domains: Vec<(String, Vec<String>)>,
-    /// Table -> (column, kind), in stored column order.
-    pub tables: Vec<(String, Vec<(String, Kind)>)>,
 }
 
 pub struct CompressedColumn {

@@ -5,4 +5,5 @@ edition.workspace = true
 
 [dependencies]
 gpu-device-columns = { path = "../device-columns" }
+gpu-compress-host = { path = "../compress-host" }
 serde_json.workspace = true

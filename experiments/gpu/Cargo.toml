@@ -1,5 +1,5 @@
 [workspace]
-members = ["tiles", "compress", "h05-reference", "printer-runtime", "h05-compiled", "device-columns", "device-columns-oracle", "sequence", "sequence-runtime", "tpch"]
+members = ["tiles", "compress", "compress-host", "h05-reference", "printer-runtime", "h05-compiled", "device-columns", "device-columns-oracle", "sequence", "sequence-runtime", "tpch"]
 exclude = ["legacy-datalog"]
 resolver = "2"
 
@@ -19,11 +19,6 @@ serde_json = "1"
 [profile.release]
 lto = false
 codegen-units = 1
-
-# TPCH's schema build dependency reaches gpu-device-columns through gpu-compress.
-# CUDA dynamic shared-memory code requires optimization even in build dependencies.
-[profile.release.build-override]
-opt-level = 3
 
 # RCCL 6e30ca6 (local branch mini-linq/dynamic-lookback-scan) removes the u32
 # lookback scan's static `__shared_mem_0`, which collided in merged PTX.

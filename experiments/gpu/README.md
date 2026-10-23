@@ -64,7 +64,7 @@ in the build timing interval. The synthetic String-guard regression checks
 this boundary against Sequential and explicit expected keys.
 
 H05 uses the explicit `tpch_domains` loader profile in **both** modes: the shared
-`gpu_compress::tpch::schema`/`Catalog` stores join keys as dense u32 domain IDs
+`gpu_compress_host::tpch::schema`/`gpu_compress::Catalog` stores join keys as dense u32 domain IDs
 and the date/Region dictionary code as i32, exactly as the authored benchmark.
 The imported query's types and dictionary literals are adapted to that schema;
 GPU and Sequential outputs are decoded back to source keys before comparison.

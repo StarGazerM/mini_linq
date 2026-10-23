@@ -143,6 +143,7 @@ dependencies = [
  "cuda-device",
  "cuda-host",
  "gpu-compress",
+ "gpu-compress-host",
  "proc-macro2",
  "quote",
  "serde_json",
@@ -183,6 +184,7 @@ dependencies = [
  "cuda-device",
  "cuda-host",
  "gpu-compress",
+ "gpu-compress-host",
  "gpu-device-columns",
  "gpu-tiles",
  "rccl-cub",
@@ -234,6 +236,7 @@ dependencies = [
  "cuda-device",
  "cuda-host",
  "gpu-compress",
+ "gpu-compress-host",
  "gpu-device-columns",
  "proc-macro2",
  "quote",
@@ -761,9 +764,14 @@ dependencies = [
 name = "gpu-compress"
 version = "0.1.0"
 dependencies = [
+ "gpu-compress-host",
  "gpu-device-columns",
  "serde_json",
 ]
+
+[[package]]
+name = "gpu-compress-host"
+version = "0.1.0"
 
 [[package]]
 name = "gpu-device-columns"
@@ -797,6 +805,7 @@ dependencies = [
  "cuda-device",
  "cuda-host",
  "gpu-compress",
+ "gpu-compress-host",
  "mini-linq",
  "serde_json",
  "trybuild",
@@ -810,6 +819,7 @@ dependencies = [
  "cuda-device",
  "cuda-host",
  "gpu-compress",
+ "gpu-compress-host",
  "gpu-device-columns",
  "gpu-tiles",
  "rccl-cub",

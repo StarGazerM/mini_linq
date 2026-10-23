@@ -50,8 +50,9 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   automatic ordering. All 13 sequence conformance crates use decomposition.
   GPU suite builds include automatic entries only with
   `CQ_GPU_TPCH_AUTOMATIC=1`; the default build is advised only.
-  GPU release build dependencies use optimization level 3 because the shared
-  compression catalog brings CUDA kernels into build-script dependencies.
+  GPU build scripts use the dependency-free `gpu-compress-host` schema crate,
+  keeping CUDA kernels out of build dependencies and avoiding embedded PTX
+  collisions between host-build and device-runtime artifacts.
 - Add adaptive transfer advice over published filtered-store counts. Generated
   alternatives retain their exact joins; static evidence only selects which
   checked alternative runs.
