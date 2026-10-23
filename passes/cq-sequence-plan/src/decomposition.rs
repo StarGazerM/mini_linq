@@ -1,6 +1,6 @@
 use cq_lang_sequence::{LevelNode, Machine, Program, Term};
 
-use crate::Advice;
+use crate::{Advice, Planned};
 
 /// Enumerate paired partitions in definition order. Named pipe producers remain
 /// named: the shared rewrite follows their references without fusing them.
@@ -9,14 +9,17 @@ pub(crate) fn advise(
     checker: &mut cq_lang_sequence::contract::Checker,
     program: &Program,
     machine: &Machine,
+    width: Option<usize>,
     items: usize,
     segmented: bool,
-) -> syn::Result<Vec<Advice>> {
-    let Some(width) = width(&machine.root) else {
-        return Ok(Vec::new());
+) -> syn::Result<Planned> {
+    let mut planned = Planned {
+        program: program.clone(),
+        trace: Vec::new(),
     };
-    let mut current = program.clone();
-    let mut advice = Vec::new();
+    let Some(width) = width else {
+        return Ok(planned);
+    };
     for definition in &program.sequence.definitions {
         if !matches!(definition.term, Term::Store { .. }) {
             continue;
@@ -57,27 +60,21 @@ pub(crate) fn advise(
                 continue;
             }
         }
-        if has_tile(&current, &definition.term) {
+        if has_tile(&planned.program, &definition.term) {
             continue;
         }
-        if let Some(name) = unstored_input(&current, &definition.term) {
-            let step = Advice::Store(name);
-            current = step.apply_in(checker, &current)?;
-            advice.push(step);
+        if let Some(name) = unstored_input(&planned.program, &definition.term) {
+            crate::push(checker, &mut planned, Advice::Store(name))?;
         }
         let step = Advice::Partition {
             name: definition.name.clone(),
             n: width,
-            items: (items > 1 && expands(&current, &definition.term)).then_some(items),
+            items: (items > 1 && expands(&planned.program, &definition.term)).then_some(items),
         };
-        let next = step.apply_in(checker, &current)?;
-        if next != current {
-            advice.push(step);
-            current = next;
-        }
+        crate::push(checker, &mut planned, step)?;
     }
     if !segmented {
-        return Ok(advice);
+        return Ok(planned);
     }
     // The first partition distributes the input. Every named expansion after
     // that partition publishes offsets before another contiguous partition.
@@ -112,16 +109,28 @@ pub(crate) fn advise(
             n: inner_width,
             items: (items > 1).then_some(items),
         };
-        current = step.apply_in(checker, &current)?;
-        advice.push(step);
+        crate::push(checker, &mut planned, step)?;
     }
-    Ok(advice)
+    Ok(planned)
 }
 
 pub(crate) fn width(level: &LevelNode) -> Option<usize> {
     level
         .width
         .or_else(|| level.children.iter().find_map(width))
+}
+
+/// Descending strip widths derived only from the machine's distributing width.
+/// Halving retains a bounded logarithmic search, including non-power-of-two widths.
+pub(crate) fn widths(level: &LevelNode) -> Vec<usize> {
+    let mut widths = Vec::new();
+    if let Some(mut n) = width(level) {
+        while n > 0 {
+            widths.push(n);
+            n /= 2;
+        }
+    }
+    widths
 }
 
 fn unstored_input(program: &Program, term: &Term) -> Option<syn::Ident> {

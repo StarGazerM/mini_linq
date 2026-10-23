@@ -40,6 +40,7 @@ struct Graph {
     headings: BTreeMap<String, Vec<String>>,
     predicate: BTreeSet<String>,
     filtered: BTreeSet<String>,
+    scan_roots: BTreeSet<String>,
     hosts: BTreeMap<String, String>,
     renames: BTreeMap<String, BTreeMap<String, String>>,
 }
@@ -55,7 +56,7 @@ fn graph(
     checker: &mut cq_lang_sequence::contract::Checker,
     source: &Program,
 ) -> syn::Result<Option<Graph>> {
-    let facts = checker.check(source)?;
+    let facts = checker.check_shared(source)?;
     let physical = &source.structures.physical.program;
     let definitions: BTreeMap<_, _> = physical
         .definitions
@@ -155,10 +156,35 @@ fn graph(
         return Ok(None);
     }
     let filtered: BTreeSet<_> = facts.structures.filtered.keys().cloned().collect();
-    if leaves
+    // A projected index is not itself enumerable. Its original pure producer
+    // can nevertheless become the scan root when replacing this join region
+    // removes every consumer of that index. Reuse the producer and its scan
+    // adapters, not the provider's truncated payload. Shared and frozen
+    // providers retain their authored representation.
+    let scan_roots: BTreeSet<_> = leaves
         .iter()
-        .all(|leaf| filtered.contains(&symbol_name(leaf)))
-    {
+        .map(symbol_name)
+        .filter(|name| {
+            !filtered.contains(name)
+                || (!frozen.contains(name)
+                    && matches!(
+                        definitions[name].operator,
+                        Operator::Rename(_)
+                            | Operator::Select(_)
+                            | Operator::Point(_, _)
+                            | Operator::Range(_, _)
+                    )
+                    && physical.definitions.iter().all(|definition| {
+                        joins.contains(&symbol_name(&definition.name))
+                            || definition
+                                .operator
+                                .operands()
+                                .iter()
+                                .all(|input| symbol_name(input) != *name)
+                    }))
+        })
+        .collect();
+    if scan_roots.is_empty() {
         return Ok(None);
     }
     let mut predicate = BTreeSet::new();
@@ -189,9 +215,10 @@ fn graph(
         joins,
         predicate,
         filtered,
-        headings: facts.structures.physical.headings,
-        hosts: facts.structures.physical.hosts,
-        renames: facts.structures.physical.renames,
+        scan_roots,
+        headings: facts.structures.physical.headings.clone(),
+        hosts: facts.structures.physical.hosts.clone(),
+        renames: facts.structures.physical.renames.clone(),
     }))
 }
 
@@ -247,10 +274,10 @@ fn plan(source: &Program, graph: &Graph) -> LookupPlan {
     let mut root = graph
         .leaves
         .iter()
-        .position(|leaf| !graph.filtered.contains(&symbol_name(leaf)))
+        .position(|leaf| graph.scan_roots.contains(&symbol_name(leaf)))
         .expect("scan-compatible root checked");
     for i in 0..graph.leaves.len() {
-        if !graph.filtered.contains(&symbol_name(&graph.leaves[i]))
+        if graph.scan_roots.contains(&symbol_name(&graph.leaves[i]))
             && count(source, &graph.leaves[i]) > count(source, &graph.leaves[root])
         {
             root = i;
@@ -506,19 +533,23 @@ pub fn lookup_first_advice_in(
         early: Some(early),
     };
     let mut providers = Vec::new();
+    let needed = std::cell::OnceCell::new();
     // Inspect the actual generated store, not all leaves of the join. A host
     // string leaf must not force its index representation onto integer forwards.
     // Levels constrain reads, not construction. The shared builder checks the
     // rewrite; decomposition checks read placement, and replay uses frozen tokens.
-    lookup_first_with(checker, source, &advice, |name, keys, analysis| {
+    lookup_first_with(checker, source, &advice, |name, keys, target, analysis| {
         let result = symbol_name(name);
+        let levels = [keys.to_vec()];
+        let needed = needed
+            .get_or_init(|| structures::required_columns(&target.physical, &analysis.physical));
         let provider = catalog.providers.iter().filter(capable).find(|provider| {
             provider.elements.as_ref().is_none_or(|accepted| {
                 analysis.layouts[&result].iter().all(|column| {
                     let actual = &analysis.physical.rows[&result].types[column];
                     accepted.iter().any(|ty| matches!(ty, syn::Type::Infer(_)) || ty == actual)
                 })
-            })
+            }) && crate::catalog::accepts_read_levels(provider, target, analysis, &result, &levels, needed)
         }).ok_or_else(|| syn::Error::new_spanned(
             name,
             "lookup_first generated layout requires a catalog provider with Exact and Membership for its row types at a legal read level",
@@ -540,6 +571,39 @@ fn fresh(used: &mut BTreeSet<String>, kind: &str, span: proc_macro2::Span) -> Id
         name.push('_');
     }
     Ident::new(&name, span)
+}
+
+// A positive left spine preserves its input columns and witnesses every exact
+// right-hand lookup it has already performed. Do not publish or probe the same
+// membership again. Opaque operators and changed provider names stop this
+// deliberately narrow certificate; estimates never establish a witness.
+fn witnessed_lookup<'a>(
+    source: &'a [physical::Definition],
+    generated: &'a [physical::Definition],
+    mut left: &'a Ident,
+    right: &Ident,
+    keys: &[String],
+) -> bool {
+    while let Some(definition) = generated
+        .iter()
+        .chain(source)
+        .find(|definition| definition.name == *left)
+    {
+        match &definition.operator {
+            Operator::Semi(_, join) | Operator::Probe(_, join) | Operator::Merge(_, join) => {
+                if join.right == *right
+                    && keys
+                        .iter()
+                        .all(|key| join.columns.iter().any(|column| column == key.as_str()))
+                {
+                    return true;
+                }
+                left = &join.left;
+            }
+            _ => break,
+        }
+    }
+    false
 }
 
 fn columns(keys: &[String], span: proc_macro2::Span) -> Vec<Ident> {
@@ -717,7 +781,7 @@ pub fn lookup_first_in(
             ));
         }
     }
-    let result = lookup_first_with(checker, source, &advice, |name, keys, _| {
+    let result = lookup_first_with(checker, source, &advice, |name, keys, _, _| {
         Ok(providers
             .remove(&(symbol_name(name), keys.to_vec()))
             .unwrap_or(&advice.ty)
@@ -736,7 +800,12 @@ fn lookup_first_with(
     checker: &mut cq_lang_sequence::contract::Checker,
     source: &Program,
     advice: &LookupFirst,
-    mut choose_provider: impl FnMut(&Ident, &[String], &structures::Analysis) -> syn::Result<syn::Type>,
+    mut choose_provider: impl FnMut(
+        &Ident,
+        &[String],
+        &structures::Program,
+        &structures::Analysis,
+    ) -> syn::Result<syn::Type>,
 ) -> syn::Result<Program> {
     let Some(graph) = graph(checker, source)? else {
         return Err(syn::Error::new_spanned(
@@ -784,12 +853,13 @@ fn lookup_first_with(
             }
         }
     }
-    if graph.filtered.contains(&symbol_name(&decisions.order[0])) {
+    if !graph.scan_roots.contains(&symbol_name(&decisions.order[0])) {
         return Err(syn::Error::new_spanned(
             &decisions.order[0],
-            "lookup_first root needs a row scan, not a projected keyed index",
+            "lookup_first root needs a row scan or an exclusively consumed pure index producer",
         ));
     }
+    let recover_root = graph.filtered.contains(&symbol_name(&decisions.order[0]));
     if let Some(transfer) = &advice.transfer {
         decisions.transfer = transfer.clone();
     }
@@ -838,12 +908,13 @@ fn lookup_first_with(
         let Some(parent) = decisions.parents[child] else {
             continue;
         };
-        // A projected index is not a row scan. Its local predicate may still
-        // transfer upward, but no unrepresentable full-row bridge is invented.
+        // Projected bridge providers cannot be scanned. The recovered root is
+        // different: its original pure producer supplies full rows directly.
         if !active[child]
-            || graph
+            || (graph
                 .filtered
                 .contains(&symbol_name(&decisions.order[parent]))
+                && !(parent == 0 && recover_root))
         {
             continue;
         }
@@ -853,12 +924,28 @@ fn lookup_first_with(
         );
         let left = &retained[parent];
         let right = &retained[child];
+        active[parent] = true;
+        if witnessed_lookup(
+            &source.structures.physical.program.definitions,
+            &generated,
+            left,
+            right,
+            &keys,
+        ) {
+            continue;
+        }
         build(right, &keys);
         let name = fresh(&mut used, "forward", graph.root.span());
         let columns = columns(&keys, graph.root.span());
-        generated.push(syn::parse_quote!(#name = let semi eager [#(#columns),*] #left, #right;));
+        // The root forward has one streaming consumer and is never a keyed
+        // child build. Only nonroot forwards need retained rows for providers.
+        let mode = if parent == 0 {
+            quote!(pipe)
+        } else {
+            quote!(let)
+        };
+        generated.push(syn::parse_quote!(#name = #mode semi eager [#(#columns),*] #left, #right;));
         retained[parent] = name;
-        active[parent] = true;
     }
     let mut current = retained[0].clone();
     let mut heading = graph.headings[&symbol_name(&decisions.order[0])].clone();
@@ -900,6 +987,15 @@ fn lookup_first_with(
                 let keys =
                     intersection(&heading, &graph.headings[&symbol_name(&decisions.order[i])]);
                 if !probed.insert((i, keys.clone())) {
+                    continue;
+                }
+                if witnessed_lookup(
+                    &source.structures.physical.program.definitions,
+                    &generated,
+                    &current,
+                    &retained[i],
+                    &keys,
+                ) {
                     continue;
                 }
                 build(&retained[i], &keys);
@@ -978,10 +1074,19 @@ fn lookup_first_with(
         .iter()
         .rposition(|d| graph.joins.contains(&symbol_name(&d.name)))
         .expect("join root exists");
+    // Only keyed consumers require the scan root to become a retained leaf.
+    // Otherwise preserve its authored streaming mode: a forward filter can
+    // consume it directly rather than first publishing its unfiltered rows.
+    let root_name = symbol_name(&decisions.order[0]);
+    let retain_root = builds.keys().any(|(name, _)| *name == root_name);
     let mut definitions = Vec::new();
     for (i, mut definition) in target.physical.program.definitions.into_iter().enumerate() {
         if !graph.joins.contains(&symbol_name(&definition.name)) {
-            if decisions.order.contains(&definition.name) {
+            if definition.name == decisions.order[0] && recover_root {
+                definition.mode = physical::Mode::Pipe(Default::default());
+            } else if decisions.order.contains(&definition.name)
+                && (definition.name != decisions.order[0] || retain_root)
+            {
                 definition.mode = physical::Mode::Let(Default::default());
             }
             definitions.push(definition);
@@ -991,6 +1096,13 @@ fn lookup_first_with(
         }
     }
     target.physical.program.definitions = definitions;
+    // Witness elimination can leave an already ordered join unchanged. In
+    // that case this pass has no relational rewrite to justify replacing its
+    // representation: preserve the complete checked source, including any
+    // authored provider entries, rather than performing Structures-only cleanup.
+    if target.physical == source.structures.physical {
+        return Ok(source.clone());
+    }
     // Entries tied to deleted joins no longer describe an executable result.
     // Existing leaf read adapters remain; generated exact indexes supersede
     // keyed fallbacks without changing their opaque implementation laws.
@@ -1096,17 +1208,22 @@ fn lookup_first_with(
     // its consumers are present, before provider aliases rename those entries.
     let layouts = structures::contract::check(&target)?;
     for (index, keys) in generated_providers {
+        let ty = choose_provider(
+            &target.structures.entries[index].name,
+            &keys,
+            &target,
+            &layouts,
+        )?;
         let entry = &mut target.structures.entries[index];
-        let ty = choose_provider(&entry.name, &keys, &layouts)?;
         let structures::Structure::Built { keyed, .. } = &mut entry.structure else {
             unreachable!("generated index entry")
         };
         keyed.ty = ty;
     }
     separate_provider_layouts(&mut target, &physical, &mut used);
-    // Every retained atom can be read by both a forward filter and an Expand;
-    // generated forward stores already have let mode. Reused host atoms retain
-    // their scan adapters while the new provider supplies all keyed reads.
+    // Nonroot forwards and keyed atoms retain rows for their provider reads.
+    // The scan root and its forwards remain a single-consumer pipeline;
+    // decomposition may introduce a checked publication when resources require it.
     let mut result = cq_sequence_lowering::compile(&target)?;
     result.evidence = source.evidence.clone();
     result.sequence.output = source.sequence.output.clone();

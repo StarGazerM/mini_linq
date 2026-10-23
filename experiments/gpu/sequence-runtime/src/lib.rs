@@ -21,6 +21,105 @@ use std::{cell::RefCell, sync::Arc};
 
 pub type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
 
+thread_local! {
+    // Scratch capacity only: every invocation repopulates every live lane.
+    static NUMERIC_UPLOAD_SCRATCH: RefCell<Vec<Vec<i64>>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Upload primitive numeric columns emitted by a host Sequence boundary.
+/// The translator supplies one i64 lane per declared field, in layout order.
+/// This avoids re-encoding primitive tuples through a dictionary and scratch
+/// row vector. Scratch capacities are reused, never relation contents, and all
+/// realization and upload work remains inside the provider's build timing.
+#[doc(hidden)]
+pub fn upload_numeric_columns<Row: cq_gpu_runtime::OwnedRowCodec, F>(
+    pool: Arc<Pool>,
+    fill: F,
+) -> Result<DeviceColumns<'static, Row>>
+where
+    F: FnOnce(&mut [Vec<i64>]) -> Result<()>,
+{
+    // Check out the scratch rather than holding a RefCell borrow across host
+    // evaluation: an opaque host expression may invoke another query.
+    let mut raw = NUMERIC_UPLOAD_SCRATCH.with(|cache| std::mem::take(&mut *cache.borrow_mut()));
+    raw.resize_with(Row::WIDTH, Vec::new);
+    let result = (|| {
+        fill(&mut raw)?;
+        upload_numeric_lanes(pool, &raw)
+    })();
+    for column in &mut raw {
+        column.clear();
+    }
+    NUMERIC_UPLOAD_SCRATCH.with(|cache| *cache.borrow_mut() = raw);
+    result
+}
+
+fn upload_numeric_lanes<Row: cq_gpu_runtime::OwnedRowCodec>(
+    pool: Arc<Pool>,
+    raw: &[Vec<i64>],
+) -> Result<DeviceColumns<'static, Row>> {
+    let rows = raw.first().ok_or("numeric upload needs a column")?.len();
+    if raw.len() != Row::WIDTH || raw.iter().any(|column| column.len() != rows) {
+        return Err("numeric upload columns must match the row layout".into());
+    }
+    if rows > u32::MAX as usize {
+        return Err("numeric upload exceeds the u32 row domain".into());
+    }
+    let metadata = Arc::new(Buffer::from_host(pool.clone(), &[gpu_device_columns::OutputCount {
+        rows: rows as u64,
+        error: 0,
+        padding: 0,
+    }])?);
+    let columns = raw
+        .iter()
+        .map(|values| {
+            let input = Buffer::from_host(pool.clone(), values)?;
+            let bounds = if rows == 0 {
+                Bounds::Empty
+            } else {
+                let blocks = rows.div_ceil(256).min(568);
+                let partial = unsafe { Buffer::<i64>::uninitialized(pool.clone(), blocks * 16)? };
+                let module = build_module(&pool)?;
+                module.numeric_bounds(
+                    pool.stream(),
+                    &module.prepare_numeric_bounds(LaunchConfig1D::new(blocks as u32, 256, 0))?,
+                    input.ptr(),
+                    rows as u32,
+                    partial.ptr(),
+                )?;
+                let partial = partial.to_host()?;
+                let (min, max) = partial.chunks_exact(2).fold(
+                    (i64::MAX, i64::MIN),
+                    |(min, max), pair| (min.min(pair[0]), max.max(pair[1])),
+                );
+                Bounds::Inclusive { min, max }
+            };
+            // This upload initialized the complete prefix. The immutable
+            // metadata retains its exact count; no compact-extent readback
+            // is needed in a timed provider build.
+            unsafe {
+                EncodedColumn::from_device(
+                    pool.clone(), input.ptr(), rows, metadata.clone(), 0, Codec::For, bounds,
+                ).map(Arc::new)
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let bounds = columns.iter().map(|column| column.bounds()).collect();
+    let host_views: Vec<_> = columns.iter().map(|column| unsafe { column.view() }).collect();
+    let views = Arc::new(Buffer::from_host(pool.clone(), &host_views)?);
+    // Columns are initialized on this pool's stream; the table retains every
+    // owner and its exact row count. Primitive lanes need no dictionary IDs.
+    Ok(unsafe {
+        DeviceColumns::from_parts(
+            gpu_device_columns::Table {
+                columns, views, metadata, capacity: rows, bounds, statuses: Vec::new(),
+            },
+            Arc::new(cq_gpu_runtime::Dictionary::default()),
+            pool,
+        )
+    })
+}
+
 /// Host codec for the catalog's shared, order-preserving dense ID domain.
 /// Missing constants stay absent rather than aliasing any stored ID.
 #[derive(Clone, Copy)]

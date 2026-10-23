@@ -357,7 +357,7 @@ fn authored_sql_files_are_exactly_the_catalog() {
 fn tpch_benchmark_inventory_covers_retail_and_matches_full_query_coverage() {
     use cq_workloads::tpch;
 
-    assert_eq!(tpch::CASES.len(), 18);
+    assert_eq!(tpch::CASES.len(), 29);
     let retail = tpch::CASES
         .iter()
         .filter(|case| case.tpch_query.is_none())
@@ -369,6 +369,17 @@ fn tpch_benchmark_inventory_covers_retail_and_matches_full_query_coverage() {
     expected_retail.extend([
         "retail_h04",
         "retail_h04_not_exists",
+        "retail_h02",
+        "retail_h11",
+        "retail_h15",
+        "retail_h20",
+        "retail_h06",
+        "retail_h10",
+        "retail_h12",
+        "retail_h13",
+        "retail_h14",
+        "retail_h18",
+        "retail_h19",
         "retail_h16",
         "retail_h22",
     ]);

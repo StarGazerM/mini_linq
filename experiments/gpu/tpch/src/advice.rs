@@ -38,6 +38,20 @@ impl Pipeline {
         }
     }
 
+    /// Group valuations retain the authored atom order; reductions are left
+    /// explicit rather than introducing CPU-oriented choices into this route.
+    pub fn grouped(source: &TokenStream) -> syn::Result<Self> {
+        let program: cq_lang_cq::Program = syn::parse2(source.clone())?;
+        let order = program.query.body.iter().filter_map(|item| match item {
+            cq_lang_cq::BodyItem::Positive { atom } => Some(atom.relation.to_string()),
+            _ => None,
+        }).collect::<Vec<_>>().join(", ");
+        Ok(Self {
+            plan: format!("no_reduce, order({order})"),
+            ..Self::baseline()
+        })
+    }
+
     pub fn h05() -> Self {
         Self {
             storage: "tpch_domains".into(),

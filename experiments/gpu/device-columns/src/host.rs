@@ -27,6 +27,7 @@ impl Representation for DictionaryCodec {
     const CODEC: Codec = Codec::Dictionary;
 }
 
+/// Scalar tuples through sixteen columns preserve complete query valuations.
 pub trait RowCodec<'data>: Sized {
     const WIDTH: usize;
     fn encode(&'data self, dictionary: &mut Dictionary<'data>, output: &mut [i64]) -> Result<()>;
@@ -94,6 +95,7 @@ impl OwnedEncodeValue for &str {
         dictionary.intern_owned(self)
     }
 }
+/// Owned scalar tuples through sixteen columns use the same lane order as RowCodec.
 pub trait OwnedRowCodec {
     const WIDTH: usize;
     fn encode_owned(&self, dictionary: &mut Dictionary<'static>, output: &mut [i64]) -> Result<()>;
@@ -127,6 +129,14 @@ owned_tuple!(A:0,B:1,C:2,D:3,E:4,F:5,G:6,H:7,I:8,J:9);
 owned_tuple!(A:0,B:1,C:2,D:3,E:4,F:5,G:6,H:7,I:8,J:9,K:10);
 owned_tuple!(A:0,B:1,C:2,D:3,E:4,F:5,G:6,H:7,I:8,J:9,K:10,L:11);
 tuple_codec!(A:0,B:1,C:2,D:3,E:4,F:5,G:6,H:7,I:8,J:9,K:10,L:11);
+owned_tuple!(A:0,B:1,C:2,D:3,E:4,F:5,G:6,H:7,I:8,J:9,K:10,L:11,M:12);
+tuple_codec!(A:0,B:1,C:2,D:3,E:4,F:5,G:6,H:7,I:8,J:9,K:10,L:11,M:12);
+owned_tuple!(A:0,B:1,C:2,D:3,E:4,F:5,G:6,H:7,I:8,J:9,K:10,L:11,M:12,N:13);
+tuple_codec!(A:0,B:1,C:2,D:3,E:4,F:5,G:6,H:7,I:8,J:9,K:10,L:11,M:12,N:13);
+owned_tuple!(A:0,B:1,C:2,D:3,E:4,F:5,G:6,H:7,I:8,J:9,K:10,L:11,M:12,N:13,O:14);
+tuple_codec!(A:0,B:1,C:2,D:3,E:4,F:5,G:6,H:7,I:8,J:9,K:10,L:11,M:12,N:13,O:14);
+owned_tuple!(A:0,B:1,C:2,D:3,E:4,F:5,G:6,H:7,I:8,J:9,K:10,L:11,M:12,N:13,O:14,P:15);
+tuple_codec!(A:0,B:1,C:2,D:3,E:4,F:5,G:6,H:7,I:8,J:9,K:10,L:11,M:12,N:13,O:14,P:15);
 
 #[doc(hidden)]
 #[derive(Clone, Copy, Default)]
@@ -368,4 +378,38 @@ pub fn checked_count(table: &Table) -> Result<usize> {
         ));
     }
     Ok(count as usize)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn roundtrip<Row: OwnedRowCodec + for<'data> RowCodec<'data>>(row: Row, expected: &[i64]) {
+        assert_eq!(<Row as OwnedRowCodec>::WIDTH, expected.len());
+        assert_eq!(<Row as RowCodec<'_>>::WIDTH, expected.len());
+        let mut values = vec![0; expected.len()];
+        row.encode_owned(&mut Dictionary::default(), &mut values).unwrap();
+        assert_eq!(values, expected);
+        let dictionary = Dictionary::default();
+        let decoded = <Row as RowCodec<'_>>::decode(&values, &dictionary).unwrap();
+        let mut encoded = vec![0; expected.len()];
+        decoded.encode_owned(&mut Dictionary::default(), &mut encoded).unwrap();
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn fifteen_column_valuation_roundtrips() {
+        roundtrip(
+            (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, i64::MIN, i64::MAX),
+            &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, i64::MIN, i64::MAX],
+        );
+    }
+
+    #[test]
+    fn sixteen_column_valuation_roundtrips() {
+        roundtrip(
+            (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, i64::MIN, i64::MAX),
+            &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, i64::MIN, i64::MAX],
+        );
+    }
 }

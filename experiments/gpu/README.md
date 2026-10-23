@@ -513,6 +513,14 @@ capacity is rejected before translation, with its publication, required bytes
 and capacity. Automatic planning considers explicit publication boundaries
 between expanding stages and choices; the emitter never chooses a fallback.
 
+Kernel signatures and their launch arguments retain only parameters referenced
+by each generated body, preserving declaration order. This includes column and
+provider views, prior stores, packing fields, domains, enables, and output
+pointers. The translator checks the aligned NVPTX64 parameter ABI after pruning:
+a live signature of 4096 bytes or more is rejected as `BE-Resource`, naming the
+kernel, byte demand, and live parameter count. It does not silently move
+parameters into device memory or change the recorded plan.
+
 Catalog `levels` describe provider reads, not construction. Resident
 `RangeProvider` and `PackedCanon` tokens are device/block/lane tokens;
 host-only row providers remain host-only even when their inputs are built there.

@@ -110,11 +110,20 @@ impl Advice {
                 .map(|()| target)
             }
         };
-        result.map_err(|error| {
-            syn::Error::new(
-                error.span(),
-                format!("P-Decompose {}: {error}", quote!(#self)),
-            )
+        result.map_err(|errors| {
+            let mut annotated = None;
+            for error in errors {
+                let error = syn::Error::new(
+                    error.span(),
+                    format!("P-Decompose {}: {error}", quote!(#self)),
+                );
+                if let Some(previous) = &mut annotated {
+                    syn::Error::combine(previous, error);
+                } else {
+                    annotated = Some(error);
+                }
+            }
+            annotated.expect("syn::Error contains at least one diagnostic")
         })
     }
 }
@@ -128,7 +137,7 @@ pub struct Planned {
 /// Fill unauthored scheduling decisions, returning the checked result and its proof trace.
 pub fn plan(program: &Program, machine: &Machine, catalog: &Catalog) -> syn::Result<Planned> {
     let started = std::env::var_os("CQ_SEQUENCE_PLAN_TIMING").map(|_| std::time::Instant::now());
-    let checker = &mut cq_lang_sequence::contract::Checker::default();
+    let checker = &mut cq_lang_sequence::contract::Checker::new(program)?;
     let mut prepared = Planned {
         program: program.clone(),
         trace: Vec::new(),
@@ -142,16 +151,28 @@ pub fn plan(program: &Program, machine: &Machine, catalog: &Catalog) -> syn::Res
             Advice::LookupFirst(Box::new(advice)),
         )?;
     }
+    let ordering_elapsed = started.map(|started| started.elapsed());
     // Freeze every decision before the first choice changes the candidate graph.
     let adaptive = cq_sequence_rewrite_passes::adaptive_candidates_in(checker, &prepared.program)?;
     for advice in adaptive {
         push(checker, &mut prepared, Advice::Adaptive(advice))?;
     }
+    let adaptive_elapsed = started.map(|started| started.elapsed());
     let mut planned = decompose_in(checker, &prepared.program, machine, catalog)?;
     prepared.trace.append(&mut planned.trace);
     planned.trace = prepared.trace;
     if let Some(started) = started {
         eprintln!("Sequence plan: {:.6}s", started.elapsed().as_secs_f64());
+        let ordering = ordering_elapsed.expect("timing enabled").as_secs_f64();
+        let adaptive = adaptive_elapsed.expect("timing enabled").as_secs_f64();
+        eprintln!(
+            "Sequence phases: ordering {ordering:.6}s, adaptive {:.6}s, decomposition {:.6}s",
+            adaptive - ordering,
+            started.elapsed().as_secs_f64() - adaptive,
+        );
+        if started.elapsed() >= std::time::Duration::from_millis(100) {
+            eprintln!("Sequence slow input: {}", quote!(#program));
+        }
     }
     Ok(planned)
 }
@@ -169,7 +190,7 @@ fn decompose_in(
     machine: &Machine,
     catalog: &Catalog,
 ) -> syn::Result<Planned> {
-    checker.check(program)?;
+    checker.check_shared(program)?;
     if machine.items == 0 {
         return Err(syn::Error::new(
             machine.name.span(),
@@ -184,84 +205,135 @@ fn decompose_in(
             "PL-Precedence: cannot replace an authored machine",
         ));
     }
-    // Formal rule PL-Det: Fixed candidate order and stable ties depend only on the three inputs.
+    // Formal rule PL-Det: Preserve preferred geometry while first trying nested
+    // flatten segmentation. Reduce items, then strip width; split dispatches only
+    // if no single-dispatch schedule fits. PL-Cost compares legal schedules.
     let parallel = !machine.root.children.is_empty();
-    let mut choices = vec![(1, false, false)];
-    if parallel && decomposition::width(&machine.root).is_some() {
-        if machine.items != 1 {
-            choices.push((machine.items, false, false));
-        }
-        choices.push((1, true, false));
-        if machine.items != 1 {
-            choices.push((machine.items, true, false));
-        }
+    let widths = decomposition::widths(&machine.root);
+    let width = widths.first().copied();
+    let mut schedules = vec![(width, machine.items)];
+    let mut items = machine.items;
+    while items > 1 {
+        items = (items / 2).max(1);
+        schedules.push((width, items));
     }
-    if parallel && machine.layout.is_some() {
-        let staged = choices
-            .iter()
-            .map(|&(items, segmented, _)| (items, segmented, true))
-            .collect::<Vec<_>>();
-        choices.extend(staged);
-    }
-    let mut best: Option<(Cost, Planned)> = None;
+    schedules.extend(widths.iter().skip(1).map(|&width| (Some(width), 1)));
     let mut error = None;
-    let mut unstaged_legal = false;
-    let mut staged: Option<Planned> = None;
-    for (items, segmented, resource_staged) in choices {
-        if resource_staged && unstaged_legal {
-            continue;
+    let cuts = if parallel && machine.layout.is_some() {
+        program.sequence.definitions.iter().filter(|definition| {
+            matches!(definition.term, Term::Flatten(_) | Term::Choose(_) | Term::Union(_))
+                && !program.graded.iter().flat_map(|graded| &graded.grades)
+                    .any(|grade| grade.name == definition.name)
+        }).map(|definition| definition.name.clone()).collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    let stages = if parallel && machine.layout.is_some() { cuts.len() + 3 } else { 1 };
+    let mut split_best: Option<(Cost, Planned)> = None;
+    for stage in 0..stages {
+        if stage == cuts.len() + 1
+            && let Some((_, planned)) = split_best.take()
+        {
+            return Ok(planned);
         }
-        if resource_staged && staged.is_none() {
-            staged = Some(resource_stages(checker, program)?);
-        }
-        let input = if resource_staged {
-            &staged
-                .as_ref()
-                .expect("prepared resource candidate")
-                .program
-        } else {
-            program
-        };
-        match candidate(checker, input, machine, catalog, parallel, items, segmented) {
-            Ok((analysis, mut planned)) => {
-                if resource_staged {
-                    let mut trace = staged
-                        .as_ref()
-                        .expect("prepared resource candidate")
-                        .trace
-                        .clone();
-                    trace.append(&mut planned.trace);
-                    planned.trace = trace;
-                } else {
-                    unstaged_legal = true;
+        let prepared = (|| {
+            let mut stores = if stage == 0 {
+                Planned {
+                    program: program.clone(),
+                    trace: Vec::new(),
                 }
-                let cost = Cost::from_analysis(&planned.program, machine, &analysis)?;
-                if best
-                    .as_ref()
-                    .is_none_or(|(current, _)| cost.better_than(current))
-                {
-                    best = Some((cost, planned));
+            } else {
+                let single = stage.checked_sub(1).and_then(|index| cuts.get(index));
+                resource_stages(checker, program, single.is_some() || stage == cuts.len() + 2, single)?
+            };
+            let mut placed = prepare(checker, &stores.program, machine, catalog, parallel)?;
+            stores.trace.append(&mut placed.trace);
+            placed.trace = stores.trace;
+            Ok::<_, syn::Error>(placed)
+        })();
+        let prepared = match prepared {
+            Ok(prepared) => prepared,
+            Err(failure) => {
+                candidate_error(&mut error, stage, None, None, None, failure);
+                continue;
+            }
+        };
+        let segmentable = prepared.program.sequence.definitions.iter().any(|definition| {
+            matches!(&definition.term, Term::Flatten(inner) if matches!(inner.as_ref(), Term::Lookup { .. }))
+        });
+        for &(width, items) in &schedules {
+            let mut best: Option<(Cost, Planned)> = None;
+            for segmented in [true, false] {
+                if segmented && (!parallel || width.is_none() || !segmentable) {
+                    continue;
+                }
+                match candidate(checker, &prepared, machine, catalog, width, items, segmented) {
+                    Ok((analysis, planned)) => {
+                        let cost = Cost::from_analysis(&planned.program, machine, &analysis)?;
+                        if best
+                            .as_ref()
+                            .is_none_or(|(current, _)| cost.better_than(current))
+                        {
+                            best = Some((cost, planned));
+                        }
+                    }
+                    Err(failure) => {
+                        candidate_error(
+                            &mut error,
+                            stage,
+                            width,
+                            Some(items),
+                            Some(segmented),
+                            failure,
+                        );
+                    }
                 }
             }
-            Err(failure) => {
-                if let Some(error) = &mut error {
-                    syn::Error::combine(error, failure);
-                } else {
-                    error = Some(failure);
+            if let Some((cost, planned)) = best {
+                if stage > 0 && stage <= cuts.len() {
+                    if split_best.as_ref().is_none_or(|(current, _)| cost.better_than(current)) {
+                        split_best = Some((cost, planned));
+                    }
+                    break;
                 }
+                return Ok(planned);
             }
         }
     }
-    best.map(|(_, planned)| planned).ok_or_else(|| {
-        error.unwrap_or_else(|| {
-            syn::Error::new(machine.name.span(), "P-Decompose: no legal candidate")
-        })
-    })
+    Err(error
+        .unwrap_or_else(|| syn::Error::new(machine.name.span(), "P-Decompose: no legal candidate")))
+}
+
+fn candidate_error(
+    errors: &mut Option<syn::Error>,
+    stage: usize,
+    width: Option<usize>,
+    items: Option<usize>,
+    segmented: Option<bool>,
+    failure: syn::Error,
+) {
+    // Preserve every component: syn::Error's Display intentionally prints only
+    // its first diagnostic, including when a checked rewrite combined failures.
+    for failure in failure {
+        let failure = syn::Error::new(
+            failure.span(),
+            format!(
+                "P-Decompose candidate stage={stage} tile={width:?} items={items:?} segmented={segmented:?}: {failure}"
+            ),
+        );
+        if let Some(errors) = errors {
+            errors.combine(failure);
+        } else {
+            *errors = Some(failure);
+        }
+    }
 }
 
 fn resource_stages(
     checker: &mut cq_lang_sequence::contract::Checker,
     source: &Program,
+    split_choices: bool,
+    single: Option<&Ident>,
 ) -> syn::Result<Planned> {
     let mut planned = Planned {
         program: source.clone(),
@@ -270,8 +342,9 @@ fn resource_stages(
     // Prepare the checked publication alternative once, only when the
     // unstaged schedules cannot satisfy this machine's obligations.
     for definition in &source.sequence.definitions {
-        if (matches!(&definition.term, Term::Flatten(inner) if matches!(inner.as_ref(), Term::Lookup { .. }))
-            || matches!(&definition.term, Term::Choose(_)))
+        if (matches!(&definition.term, Term::Flatten(_))
+            || (split_choices && matches!(&definition.term, Term::Choose(_) | Term::Union(_))))
+            && single.is_none_or(|name| definition.name == *name)
             && !source
                 .graded
                 .iter()
@@ -281,41 +354,55 @@ fn resource_stages(
             push(
                 checker,
                 &mut planned,
-                Advice::Store(definition.name.clone()),
+                if matches!(definition.term, Term::Flatten(_)) {
+                    Advice::StoreLevel(definition.name.clone())
+                } else {
+                    Advice::Store(definition.name.clone())
+                },
             )?;
         }
     }
     Ok(planned)
 }
 
-fn candidate(
+fn prepare(
     checker: &mut cq_lang_sequence::contract::Checker,
     source: &Program,
     machine: &Machine,
     catalog: &Catalog,
     parallel: bool,
-    items: usize,
-    segmented: bool,
-) -> syn::Result<(Analysis, Planned)> {
+) -> syn::Result<Planned> {
     let mut planned = Planned {
         program: source.clone(),
         trace: Vec::new(),
     };
-    let source_facts = checker.check(&planned.program)?;
-    for advice in placement::boundaries(&planned.program, machine, &source_facts, catalog) {
-        push(checker, &mut planned, advice)?;
-    }
-    let facts = checker.check(&planned.program)?;
-    for advice in placement::advise(&planned.program, machine, parallel, &facts, source, catalog) {
-        push(checker, &mut planned, advice)?;
-    }
-    if parallel {
-        for advice in decomposition::advise(checker, &planned.program, machine, items, segmented)? {
-            push(checker, &mut planned, advice)?;
-        }
+    let source_facts = checker.check_shared(&planned.program)?;
+    let boundaries = placement::boundaries(&planned.program, machine, &source_facts, catalog);
+    push_all(checker, &mut planned, boundaries)?;
+    let facts = checker.check_shared(&planned.program)?;
+    let placement = placement::advise(&planned.program, machine, parallel, &facts, source, catalog);
+    push_all(checker, &mut planned, placement)?;
+    Ok(planned)
+}
+
+fn candidate(
+    checker: &mut cq_lang_sequence::contract::Checker,
+    source: &Planned,
+    machine: &Machine,
+    catalog: &Catalog,
+    width: Option<usize>,
+    items: usize,
+    segmented: bool,
+) -> syn::Result<(Analysis, Planned)> {
+    let mut planned = source.clone();
+    if !machine.root.children.is_empty() {
+        let mut decomposed =
+            decomposition::advise(checker, &planned.program, machine, width, items, segmented)?;
+        planned.trace.append(&mut decomposed.trace);
+        planned.program = decomposed.program;
     }
     // Formal rule PL-Precedence: Recorded grades, tiles and output are never replaced by generated advice.
-    if source.sequence.output.is_none() {
+    if source.program.sequence.output.is_none() {
         let last =
             planned.program.sequence.definitions.last().ok_or_else(|| {
                 syn::Error::new(machine.name.span(), "P-Decompose: empty Sequence")
@@ -339,6 +426,54 @@ fn candidate(
     let analysis = checker.check_grading(&planned.program, machine)?;
     catalog::check(&planned.program, &analysis, catalog)?;
     Ok((analysis, planned))
+}
+
+fn push_all(
+    checker: &mut cq_lang_sequence::contract::Checker,
+    planned: &mut Planned,
+    advice: Vec<Advice>,
+) -> syn::Result<()> {
+    let mut advice = advice.into_iter().peekable();
+    while let Some(step) = advice.next() {
+        let Advice::Grade {
+            name,
+            level,
+            machine,
+        } = &step
+        else {
+            push(checker, planned, step)?;
+            continue;
+        };
+        let mut grades = vec![cq_lang_sequence::Grade {
+            name: name.clone(),
+            level: level.clone(),
+        }];
+        let mut trace = vec![step.clone()];
+        while let Some(Advice::Grade { machine: next, .. }) = advice.peek() {
+            if next != machine {
+                break;
+            }
+            let next = advice.next().expect("peeked grade");
+            let Advice::Grade { name, level, .. } = &next else {
+                unreachable!()
+            };
+            grades.push(cq_lang_sequence::Grade {
+                name: name.clone(),
+                level: level.clone(),
+            });
+            trace.push(next);
+        }
+        // Grades are nonsemantic; the typed checked rewrite validates the
+        // complete batch once while the replay trace retains individual steps.
+        cq_sequence_rewrite_passes::grade_definitions_in(
+            checker,
+            &mut planned.program,
+            machine,
+            &grades,
+        )?;
+        planned.trace.extend(trace);
+    }
+    Ok(())
 }
 
 fn push(

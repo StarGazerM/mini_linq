@@ -322,6 +322,9 @@ pub struct Analysis {
     pub views: BTreeSet<String>,
     pub stores: BTreeMap<String, Len>,
     pub capabilities: BTreeMap<(String, Vec<String>), Capability>,
+    /// Providers evaluated directly by each named definition, excluding Ref
+    /// dependencies and support-equal Map reheadings.
+    pub provider_reads: BTreeMap<String, BTreeSet<String>>,
     pub levels: BTreeMap<String, Vec<String>>,
     pub dispatches: Vec<Dispatch>,
     pub resources: BTreeMap<String, ResourceUsage>,

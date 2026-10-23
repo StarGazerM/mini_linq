@@ -232,11 +232,20 @@ pub(crate) fn check_grading_in(
             )
         })?;
         let shape = crate::resources::dispatch_shape(program, &analysis, dispatch, machine)?;
-        let required_bytes = layout(&shape).map_err(|error| {
-            syn::Error::new(
-                level.model.name.span(),
-                format!("BE-Resource: dispatch `{}`: {error}", shape.publication),
-            )
+        let required_bytes = layout(&shape).map_err(|errors| {
+            let mut annotated = None;
+            for error in errors {
+                let error = syn::Error::new(
+                    error.span(),
+                    format!("BE-Resource: dispatch `{}`: {error}", shape.publication),
+                );
+                if let Some(previous) = &mut annotated {
+                    syn::Error::combine(previous, error);
+                } else {
+                    annotated = Some(error);
+                }
+            }
+            annotated.expect("syn::Error contains at least one diagnostic")
         })?;
         if required_bytes > capacity_bytes {
             return Err(syn::Error::new(

@@ -93,10 +93,124 @@ fn largest_root_uses_evidence_and_deepest_parent_ties() {
     assert_eq!(largest.parents, [None, Some(0), Some(1)]);
 }
 
+fn projected_join() -> Program {
+    let structures = syn::parse_quote! {
+        physical {
+            relation R(a:i32); relation S(a:i32,b:i32);
+            r = pipe rename R@0 {a -> a};
+            s = let rename S@1 {a -> a,b -> b};
+            joined = pipe probe first [a] r,s;
+            answer = pipe canon project joined keep {a};
+            return answer as result(a);
+        }
+        structures {
+            r host scan = Reader []; s host scan = Reader [];
+            s = Index [a] membership payload [a] constants {};
+            answer canon = Canon;
+        }
+    };
+    let mut source = cq_sequence_lowering::compile(&structures).unwrap();
+    source.evidence = syn::parse_quote!(evidence { count R = 1; count S = 100; });
+    source
+}
+
+#[test]
+fn largest_root_recovers_exclusively_consumed_projected_producer() {
+    let source = projected_join();
+    assert_eq!(lookup_plan(&source).unwrap().unwrap().order[0], "s");
+    let advice = lookup_first_advice(&source, &catalog()).unwrap().unwrap();
+    let target = lookup_first(&source, advice.to_token_stream()).unwrap();
+    assert!(
+        target
+            .structures
+            .physical
+            .program
+            .definitions
+            .iter()
+            .any(|definition| {
+                definition.name == "s"
+                    && matches!(definition.mode, structures::physical::Mode::Pipe(_))
+            })
+    );
+    assert!(!target.structures.structures.entries.iter().any(|entry| {
+        entry.name == "s" && matches!(entry.structure, structures::Structure::Built { .. })
+    }));
+    assert!(target.structures.structures.entries.iter().any(|entry| {
+        entry.name == "r" && matches!(entry.structure, structures::Structure::Built { .. })
+    }));
+    let inputs = BTreeMap::from([
+        ("r".into(), vec![row(&[("a", 1)]), row(&[("a", 1)])]),
+        (
+            "s".into(),
+            vec![
+                row(&[("a", 1), ("b", 2)]),
+                row(&[("a", 1), ("b", 3)]),
+                row(&[("a", 4), ("b", 5)]),
+            ],
+        ),
+    ]);
+    assert_eq!(evaluate(&target, &inputs), evaluate(&source, &inputs));
+    let mut empty = inputs.clone();
+    empty.insert("r".into(), Vec::new());
+    assert_eq!(evaluate(&target, &empty), evaluate(&source, &empty));
+    check_rewrite(&source, &target).unwrap();
+    assert_eq!(
+        target,
+        lookup_first(&source, advice.to_token_stream()).unwrap()
+    );
+}
+
+#[test]
+fn projected_selection_recovers_its_original_scan_and_predicate() {
+    let mut structures = projected_join().structures;
+    structures.physical.program.definitions[1] =
+        syn::parse_quote!(raw = pipe rename S@1 {a -> a,b -> b};);
+    structures
+        .physical
+        .program
+        .definitions
+        .insert(2, syn::parse_quote!(s = let select raw if (b > 0);));
+    structures.structures.entries[1] = syn::parse_quote!(raw host scan = Reader [];);
+    let mut source = cq_sequence_lowering::compile(&structures).unwrap();
+    source.evidence = syn::parse_quote!(evidence { count R = 1; count S = 100; });
+    let advice = lookup_first_advice(&source, &catalog()).unwrap().unwrap();
+    assert_eq!(advice.order.as_ref().unwrap()[0], "s");
+    let target = lookup_first(&source, advice.to_token_stream()).unwrap();
+    assert_eq!(
+        source.structures.physical.program.definitions[2].operator,
+        target.structures.physical.program.definitions[2].operator,
+    );
+    assert!(target.structures.structures.entries.iter().any(|entry| {
+        entry.name == "raw"
+            && matches!(&entry.structure, structures::Structure::Host { reader, .. } if reader == "scan")
+    }));
+    check_rewrite(&source, &target).unwrap();
+}
+
+#[test]
+fn independently_consumed_projected_index_cannot_become_scan_root() {
+    let mut structures = projected_join().structures;
+    structures
+        .physical
+        .program
+        .definitions
+        .insert(2, syn::parse_quote!(filtered = let semi eager [a] r,s;));
+    structures.physical.program.definitions[3] =
+        syn::parse_quote!(joined = pipe probe first [a] filtered,s;);
+    structures
+        .structures
+        .entries
+        .push(syn::parse_quote!(filtered rows = ::std::vec::Vec<_>;));
+    let mut source = cq_sequence_lowering::compile(&structures).unwrap();
+    source.evidence = syn::parse_quote!(evidence { count R = 1; count S = 100; });
+    assert_ne!(lookup_plan(&source).unwrap().unwrap().order[0], "s");
+    assert!(lookup_first(&source, quote!(using Index, order [s,filtered])).is_err());
+}
+
 #[test]
 fn bridge_forward_store_and_provider_precede_expansion() {
     let source = chain();
-    let target = lookup_first(&source, quote!(using Index)).unwrap();
+    let target = lookup_first(&source, quote!(using Index, transfer [s,t])).unwrap();
     check_rewrite(&source, &target).unwrap();
     let mut changed_adapter = target.clone();
     let adapter = changed_adapter
@@ -241,6 +355,198 @@ fn predicate_transfer_filters_before_building_bridge_provider() {
             .any(|entry| entry.name == first.name
                 && matches!(entry.structure, structures::Structure::Built { .. }))
     );
+}
+
+#[test]
+fn existing_membership_skips_duplicate_forward_and_lookup_without_retaining_scan_root() {
+    let structures = syn::parse_quote! {
+        physical {
+            relation L(b:i32); relation R(a:i32,b:i32); relation S(a:i32);
+            l = pipe rename L@0 {b -> b};
+            raw = pipe rename R@1 {a -> a,b -> b};
+            s = let rename S@2 {a -> a};
+            r = let semi eager [a] raw,s;
+            lr = pipe probe first [b] l,r;
+            answer = pipe canon probe first [a] lr,s;
+            return answer as result(a,b);
+        }
+        structures {
+            l host scan = Reader []; raw host scan = Reader []; s host scan = Reader [];
+            r = Index [b]; s = Index [a]; answer canon = Canon;
+        }
+    };
+    let source = cq_sequence_lowering::compile(&structures).unwrap();
+    let advice = quote!(using Index, order [l,r,s], transfer [r,s], early []);
+    let target = lookup_first(&source, advice.clone()).unwrap();
+    check_rewrite(&source, &target).unwrap();
+    let definitions = &target.structures.physical.program.definitions;
+    let forwards: Vec<_> = definitions
+        .iter()
+        .filter(|definition| definition.name.to_string().starts_with("__lookup_forward"))
+        .collect();
+    assert_eq!(forwards.len(), 1);
+    assert!(matches!(&forwards[0].operator, Operator::Semi(_, join)
+        if join.left == "l" && join.right == "r"));
+    assert!(matches!(
+        forwards[0].mode,
+        structures::physical::Mode::Pipe(_)
+    ));
+    assert!(!target.structures.structures.entries.iter().any(|entry| {
+        entry.name == forwards[0].name
+            && matches!(entry.structure, structures::Structure::Rows { .. })
+    }));
+    assert!(!definitions.iter().any(|definition| {
+        definition.name.to_string().starts_with("__lookup_lookup")
+            && matches!(&definition.operator, Operator::Semi(_, join) if join.right == "r")
+    }));
+    assert_eq!(
+        target
+            .sequence
+            .definitions
+            .iter()
+            .find(|definition| definition.name == "l")
+            .unwrap()
+            .term,
+        source
+            .sequence
+            .definitions
+            .iter()
+            .find(|definition| definition.name == "l")
+            .unwrap()
+            .term,
+    );
+    assert!(!target.structures.structures.entries.iter().any(|entry| {
+        entry.name == "l" && matches!(entry.structure, structures::Structure::Rows { .. })
+    }));
+    let inputs = BTreeMap::from([
+        (
+            "l".into(),
+            vec![row(&[("b", 1)]), row(&[("b", 2)]), row(&[("b", 9)])],
+        ),
+        (
+            "raw".into(),
+            vec![
+                row(&[("a", 1), ("b", 1)]),
+                row(&[("a", 1), ("b", 1)]),
+                row(&[("a", 2), ("b", 2)]),
+            ],
+        ),
+        ("s".into(), vec![row(&[("a", 1)]), row(&[("a", 1)])]),
+    ]);
+    assert_eq!(evaluate(&target, &inputs), evaluate(&source, &inputs));
+    let mut empty = inputs.clone();
+    empty.insert("s".into(), Vec::new());
+    assert_eq!(evaluate(&target, &empty), evaluate(&source, &empty));
+    let mut estimated = source.clone();
+    estimated.evidence = syn::parse_quote!(evidence { key R [b]; count S = 0; });
+    let estimated = lookup_first(&estimated, advice).unwrap();
+    assert_eq!(estimated.structures, target.structures);
+}
+
+#[test]
+fn unchanged_unary_intersection_preserves_authored_provider_entries() {
+    let structures = syn::parse_quote! {
+        physical {
+            relation Left(c0:i32); relation Right(c0:i32);
+            raw = pipe rename Left@0 {c0 -> x};
+            right = let rename Right@1 {c0 -> x};
+            left = let semi eager [x] raw,right;
+            answer = pipe canon probe first [x] left,right;
+            return answer as intersection(x);
+        }
+        structures {
+            raw host scan = Reader []; right host scan = Reader [];
+            left rows = ::std::vec::Vec<_>;
+            left = Authored [x]; right = Index [x]; answer canon = Canon;
+        }
+    };
+    let source = cq_sequence_lowering::compile(&structures).unwrap();
+    let advice = lookup_first_advice(&source, &catalog()).unwrap().unwrap();
+    assert!(advice.providers.is_empty());
+    let target = lookup_first(&source, advice.to_token_stream()).unwrap();
+    // The existing left semijoin witnesses the sole Lookup. The final Expand
+    // already has the requested order, so even an unused authored index stays.
+    assert_eq!(target, source);
+    check_rewrite(&source, &target).unwrap();
+}
+
+#[test]
+fn unary_intersection_corpus_orderings_preserve_checked_representations() {
+    let query = cq_workloads::case("intersection")
+        .unwrap()
+        .module()
+        .unwrap();
+    for plan in 0..cq_workloads::pipelines::Planner::ALL.len() {
+        let physical = cq_workloads::pipelines::Pipeline {
+            plan,
+            ..Default::default()
+        }
+        .physical(&query)
+        .unwrap();
+        for positional in [false, true] {
+            let selection = if positional {
+                quote!(positional(Left, Right))
+            } else {
+                Default::default()
+            };
+            let structures = cq_structure_selection::compile_with(&physical, selection).unwrap();
+            let source = cq_sequence_lowering::compile(&structures).unwrap();
+            let advice = lookup_first_advice(&source, &catalog()).unwrap_or_else(|error| {
+                panic!("intersection {plan} positional={positional}: {error}")
+            });
+            if let Some(advice) = advice {
+                let target = lookup_first(&source, advice.to_token_stream()).unwrap();
+                check_rewrite(&source, &target).unwrap();
+            }
+        }
+    }
+}
+
+#[test]
+fn narrower_membership_does_not_witness_a_later_full_key_lookup() {
+    let structures = syn::parse_quote! {
+        physical {
+            relation R(a:i32); relation S(a:i32,b:i32); relation T(a:i32,b:i32);
+            raw = pipe rename R@0 {a -> a};
+            s = let rename S@1 {a -> a,b -> b};
+            t = let rename T@2 {a -> a,b -> b};
+            r = pipe semi eager [a] raw,s;
+            rt = pipe probe first [a] r,t;
+            answer = pipe canon probe first [a,b] rt,s;
+            return answer as result(a,b);
+        }
+        structures {
+            raw host scan = Reader []; s host scan = Reader []; t host scan = Reader [];
+            s = Index [a][b]; t = Index [a]; answer canon = Canon;
+        }
+    };
+    let source = cq_sequence_lowering::compile(&structures).unwrap();
+    let target = lookup_first(
+        &source,
+        quote!(using Index, order [r,t,s], transfer [], early []),
+    )
+    .unwrap();
+    assert!(
+        target
+            .structures
+            .physical
+            .program
+            .definitions
+            .iter()
+            .any(|definition| {
+                definition.name.to_string().starts_with("__lookup_lookup")
+                    && matches!(&definition.operator, Operator::Semi(_, join)
+                if join.right == "s" && join.columns.len() == 2)
+            })
+    );
+    let inputs = BTreeMap::from([
+        ("raw".into(), vec![row(&[("a", 1)])]),
+        ("t".into(), vec![row(&[("a", 1), ("b", 2)])]),
+        ("s".into(), vec![row(&[("a", 1), ("b", 3)])]),
+    ]);
+    assert!(evaluate(&source, &inputs).is_empty());
+    assert_eq!(evaluate(&target, &inputs), evaluate(&source, &inputs));
+    check_rewrite(&source, &target).unwrap();
 }
 
 #[test]

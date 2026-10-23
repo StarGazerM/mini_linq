@@ -153,18 +153,23 @@ fn filtered_multi_join() -> Program {
     let structures = syn::parse_quote! {
         physical {
             relation L(a:i32); relation R(a:i32,rtag:i32); relation S(a:i32,stag:i32);
+            relation Q(a:i32,qtag:i32);
             l = pipe rename L@0 {a -> a};
             r = pipe rename R@1 {a -> a,rtag -> rtag};
             s = pipe rename S@2 {a -> a,stag -> stag};
+            q = pipe rename Q@3 {a -> a,qtag -> qtag};
+            qf = let point select q if (qtag = 5);
             rf = let point select r if (rtag = 7);
             sf = let point select s if (stag = 9);
-            jr = pipe probe first [a] l,rf;
+            jq = pipe probe first [a] l,qf;
+            jr = pipe probe first [a] jq,rf;
             joined = pipe probe first [a] jr,sf;
             result = pipe canon project joined keep {a};
             return result as answer(a);
         }
         structures {
             l host scan = Reader []; r host scan = Reader []; s host scan = Reader [];
+            q host scan = Reader []; q host qf = Reader [qtag]; qf = Index [a];
             r host rf = Reader [rtag]; s host sf = Reader [stag];
             rf = Index [a]; sf = Index [a]; result canon = Canonical;
         }
@@ -1043,9 +1048,8 @@ fn retained_row_comparisons_publish_before_provider_lookup() {
     }
 }
 
-#[test]
-fn resource_bounded_planning_separates_expanding_stages_with_checked_stores() {
-    let source: Program = syn::parse_quote! {
+fn expanding_resource_fixture() -> Program {
+    syn::parse_quote! {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32);
             relation S(b:i32,c:i32); relation T(c:i32,d:i32);
@@ -1069,7 +1073,12 @@ fn resource_bounded_planning_separates_expanding_stages_with_checked_stores() {
             m = canon flatten lookup t [c] k;
             out = store m;
         }
-    };
+    }
+}
+
+#[test]
+fn resource_bounded_planning_separates_expanding_stages_with_checked_stores() {
+    let source = expanding_resource_fixture();
     let mut machine = machines().pop().unwrap();
     machine.root.children[0].children[0].shared_bytes = Some(1);
     machine.layout = Some(|shape| {
@@ -1091,7 +1100,7 @@ fn resource_bounded_planning_separates_expanding_stages_with_checked_stores() {
         planned
             .trace
             .iter()
-            .any(|advice| matches!(advice, Advice::Store(name) if name == "j"))
+            .any(|advice| matches!(advice, Advice::StoreLevel(name) if name == "j" || name == "k"))
     );
     assert!(!analysis.resources.is_empty());
     assert!(
@@ -1100,4 +1109,140 @@ fn resource_bounded_planning_separates_expanding_stages_with_checked_stores() {
             .values()
             .all(|resource| resource.required_bytes <= 1)
     );
+}
+
+#[test]
+fn resource_recovery_prefers_smaller_items_before_smaller_tiles() {
+    let source = expanding_resource_fixture();
+    let mut machine = machines().pop().unwrap();
+    machine.root.children[0].children[0].shared_bytes = Some(1);
+    machine.layout = Some(|shape| Ok(shape.items));
+    let planned = decompose(&source, &machine, &catalog(&machine)).unwrap();
+    let analysis = replay(&source, &machine, &planned);
+    assert!(
+        analysis
+            .resources
+            .values()
+            .all(|resource| resource.shape.items == 1)
+    );
+    assert!(planned.trace.iter().any(|step| matches!(
+        step,
+        Advice::Partition {
+            n: 32,
+            items: None,
+            ..
+        }
+    )));
+    assert!(
+        !planned
+            .trace
+            .iter()
+            .any(|step| matches!(step, Advice::StoreLevel(_)))
+    );
+}
+
+#[test]
+fn resource_recovery_uses_smaller_machine_derived_tiles() {
+    let source = expanding_resource_fixture();
+    let mut machine = machines().pop().unwrap();
+    machine.root.children[0].children[0].shared_bytes = Some(16);
+    machine.layout = Some(|shape| Ok(shape.tile.unwrap_or(1)));
+    let planned = decompose(&source, &machine, &catalog(&machine)).unwrap();
+    replay(&source, &machine, &planned);
+    assert!(planned.trace.iter().any(|step| matches!(
+        step,
+        Advice::Partition {
+            n: 16,
+            items: None,
+            ..
+        }
+    )));
+    assert!(
+        !planned
+            .trace
+            .iter()
+            .any(|step| matches!(step, Advice::StoreLevel(_)))
+    );
+}
+
+#[test]
+fn resource_rejection_reports_every_candidate_and_nested_diagnostic() {
+    let source = expanding_resource_fixture();
+    let mut machine = machines().pop().unwrap();
+    machine.root.children[0].children[0].shared_bytes = Some(1);
+    machine.layout = Some(|_| {
+        let mut errors = syn::Error::new(proc_macro2::Span::call_site(), "first layout failure");
+        errors.combine(syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "second layout failure",
+        ));
+        Err(errors)
+    });
+    let errors = decompose(&source, &machine, &catalog(&machine))
+        .unwrap_err()
+        .into_iter()
+        .map(|error| error.to_string())
+        .collect::<Vec<_>>();
+    assert!(errors[0].contains("stage=0 tile=Some(32) items=Some(4)"));
+    assert!(errors[1].contains("second layout failure"));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("stage=0 tile=Some(32) items=Some(1)"))
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("stage=0 tile=Some(16) items=Some(1)"))
+    );
+    assert!(errors.iter().any(|error| error.contains("stage=1")));
+    assert!(errors.iter().any(|error| error.contains("stage=2")));
+}
+
+#[test]
+fn resource_recovery_publishes_growing_adaptive_choices_at_host() {
+    let source = filtered_multi_join();
+    let mut machine = machines().pop().unwrap();
+    machine.root.children[0].children[0].shared_bytes = Some(1);
+    machine.layout = Some(|shape| {
+        Ok(shape
+            .chains
+            .iter()
+            .flatten()
+            .filter(|allocation| {
+                matches!(
+                    allocation,
+                    cq_lang_sequence::ResourceAllocation::Payload { .. }
+                )
+            })
+            .count())
+    });
+    let planned = plan(&source, &machine, &catalog(&machine)).unwrap();
+    let analysis = replay(&source, &machine, &planned);
+    let growing = analysis
+        .stores
+        .iter()
+        .filter(|(_, length)| matches!(length, Len::Unknown(None)))
+        .map(|(name, _)| name)
+        .collect::<Vec<_>>();
+    assert!(!growing.is_empty());
+    for name in growing {
+        assert_eq!(analysis.levels[name], ["host"]);
+    }
+}
+
+#[test]
+fn resource_recovery_splits_only_one_boundary_when_two_dispatches_fit() {
+    let source = expanding_resource_fixture();
+    let mut machine = machines().pop().unwrap();
+    machine.root.children[0].children[0].shared_bytes = Some(2);
+    machine.layout = Some(|shape| {
+        Ok(shape.chains.iter().flatten().filter(|allocation| matches!(
+            allocation, cq_lang_sequence::ResourceAllocation::Payload { .. }
+        )).count())
+    });
+    let planned = decompose(&source, &machine, &catalog(&machine)).unwrap();
+    let analysis = replay(&source, &machine, &planned);
+    assert_eq!(planned.trace.iter().filter(|step| matches!(step, Advice::StoreLevel(_))).count(), 1);
+    assert!(analysis.resources.values().all(|usage| usage.required_bytes <= 2));
 }

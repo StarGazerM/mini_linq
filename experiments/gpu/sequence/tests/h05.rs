@@ -42,6 +42,83 @@ fn repeated_translations_have_distinct_cuda_exports() {
 }
 
 #[test]
+fn later_dispatch_omits_unreferenced_earlier_store_parameters() {
+    let mut program = h05_program::program();
+    program.graded.as_mut().unwrap().grades[0] = syn::parse_quote!(RegionASIA at device;);
+    let analysis = cq_lang_sequence::check_grading(&program, &cq_gpu_sequence::machine()).unwrap();
+    let expression = cq_gpu_sequence::translate(&program, &analysis).unwrap();
+    let mut functions = Functions::default();
+    functions.visit_expr(&expression);
+    assert_eq!(functions.queries.len(), 3);
+    let later = functions.queries[2];
+    for name in [
+        "__cq_store_rows_0",
+        "__cq_store_begin_0",
+        "__cq_store_offsets_0",
+    ] {
+        assert!(!later.block.to_token_stream().to_string().contains(name));
+        assert!(
+            !later
+                .sig
+                .inputs
+                .to_token_stream()
+                .to_string()
+                .contains(name)
+        );
+    }
+}
+
+#[test]
+fn every_generated_kernel_fits_the_parameter_area() {
+    struct ParameterBytes;
+    impl<'ast> Visit<'ast> for ParameterBytes {
+        fn visit_item_fn(&mut self, function: &'ast syn::ItemFn) {
+            if function
+                .attrs
+                .iter()
+                .any(|attribute| attribute.path().is_ident("kernel"))
+            {
+                let mut bytes = 0usize;
+                for input in &function.sig.inputs {
+                    let syn::FnArg::Typed(input) = input else {
+                        panic!("kernel receiver")
+                    };
+                    let (size, align) = match &*input.ty {
+                        syn::Type::Ptr(_) => (8, 8),
+                        syn::Type::Path(path) => match path
+                            .path
+                            .segments
+                            .last()
+                            .unwrap()
+                            .ident
+                            .to_string()
+                            .as_str()
+                        {
+                            "bool" => (1, 1),
+                            "u32" => (4, 4),
+                            "usize" | "i64" => (8, 8),
+                            "ColumnView" => (40, 8),
+                            "RangeView" => (64, 8),
+                            other => panic!("unknown emitted ABI type {other}"),
+                        },
+                        other => panic!("unknown emitted ABI type {}", other.to_token_stream()),
+                    };
+                    bytes = bytes.next_multiple_of(align) + size;
+                }
+                assert!(
+                    bytes < 4096,
+                    "{} has {bytes} parameter bytes",
+                    function.sig.ident
+                );
+            }
+            visit::visit_item_fn(self, function);
+        }
+    }
+    let (program, analysis) = checked();
+    ParameterBytes.visit_expr(&cq_gpu_sequence::translate(&program, &analysis).unwrap());
+}
+
+#[test]
 fn physical_and_sequence_contracts_preserve_the_written_join_chain() {
     let program = h05_program::program();
     let analysis = cq_lang_sequence::contract::check(&program).unwrap();

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Export all authored TPC-H CQ inputs, exact answers, and DuckDB CPU timings.
+"""Export authored TPC-H inputs, exact answers, and DuckDB CPU timings.
 
 Run: python3 experiments/gpu/compare/export_tpch.py [--sf 1 10]
 Existing databases are reused; exports are replaced deterministically. SF1 is
 copied from the original benchmark database, never modified in place. Timing
-uses the complete SELECT DISTINCT, not a count wrapper, in one CLI process per
-thread count with one warmup followed by five samples (DuckDB .timer wall time).
+uses the complete authored SELECT, including grouped folds, not a count wrapper,
+with one warmup followed by five samples (DuckDB .timer wall time).
 """
 import argparse
 import csv
@@ -33,19 +33,28 @@ def workloads():
     relations, queries = {}, {}
     for path in sorted(QUERY_DIR.glob('*.rs')):
         source = path.read_text()
-        # Standalone aggregate kernels have a different export contract.
-        if 'retail_kernel!' not in source:
-            continue
-        name = re.search(r'name "([^"]+)"', source).group(1)
-        sql = re.search(r'sql r#"(.*?)"#;', source, re.S).group(1)
+        if 'retail_kernel!' in source:
+            name = re.search(r'name "([^"]+)"', source).group(1)
+            sql = re.search(r'sql r#"(.*?)"#;', source, re.S).group(1)
+            declarations = re.findall(r'relation \w+ => (\w+)\(([^)]+)\);', source)
+        else:
+            name_match = re.search(r'pub const NAME: &str = "([^"]+)"', source)
+            sql_match = re.search(r'pub const SQL: &str = r#"(.*?)"#;', source, re.S)
+            if not name_match or not sql_match:
+                continue
+            name, sql = name_match.group(1), sql_match.group(1)
+            loaders = re.search(r'relation_loaders!\s*\{(.*?)\n\}', source, re.S)
+            assert loaders, path
+            declarations = [(relation.lower(), fields) for relation, fields in
+                            re.findall(r'relation (\w+)\(([^)]+)\);', loaders.group(1))]
         required = {}
-        for table, fields in re.findall(r'relation \w+ => (\w+)\(([^)]+)\);', source):
+        for table, fields in declarations:
             required[table] = []
-            for column, logical in re.findall(r'(\w+): (\w+)', fields):
+            for column, logical in re.findall(r'(\w+):\s*(\w+)', fields):
                 previous = relations.setdefault(table, {}).setdefault(column, logical)
                 assert previous == logical, (table, column, previous, logical)
                 required[table].append(column)
-        assert required and sql.startswith('SELECT DISTINCT'), path
+        assert required and sql.startswith(('SELECT', 'WITH')), path
         queries[name] = {'sql': sql, 'source': str(path.relative_to(QUERY_DIR.parents[5])),
                          'required_columns': required,
                          'derived_relations': re.findall(
@@ -161,7 +170,7 @@ def export(sf, base):
         query.update(answer=answer.name, count=count)
         timings = {'engine': 'DuckDB', 'version': subprocess.check_output([CLI, '--version'], text=True).strip(),
                    'sf': sf, 'query': sql, 'units': 'seconds', 'warmup_runs': 1, 'measured_runs': 5,
-                   'method': 'CLI .timer real wall time for full SELECT DISTINCT; 1 ms resolution; one process per thread count',
+                   'method': 'CLI .timer real wall time for complete authored SELECT; 1 ms resolution; one process per thread count',
                    'threads': {}}
         for threads in (1, 24):
             log = root / f'duckdb_timing.{name}_threads{threads}.log'

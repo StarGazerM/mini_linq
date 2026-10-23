@@ -334,16 +334,23 @@ impl Rows {
                     &definitions,
                     &resident_hosts,
                     &BTreeMap::new(),
+                    !layout.is_empty(),
                 )?;
                 let id = format_ident!("__cq_sequence_uploaded_{name}");
                 let length = format_ident!("__cq_sequence_uploaded_length_{name}");
-                let codecs = layout.iter().map(|_| quote!(::cq_gpu_runtime::Codec::For));
+                let types = layout.iter().map(|column| &analysis.structures.physical.rows[name].types[column]);
+                let upload = if layout.is_empty() {
+                    quote!(::cq_gpu_runtime::DeviceColumns::from_rows(
+                        __cq_pool.clone(), &rows,
+                        &mut ::cq_gpu_runtime::Dictionary::default(), &[])?)
+                } else {
+                    quote!(::cq_gpu_sequence_runtime::upload_numeric_columns::<(#(#types,)*), _>(
+                        __cq_pool.clone(), rows)?)
+                };
                 build.extend(quote! {
                     let #id = {
                         let rows = #rows;
-                        ::cq_gpu_runtime::DeviceColumns::from_rows(
-                            __cq_pool.clone(), &rows,
-                            &mut ::cq_gpu_runtime::Dictionary::default(), &[#(#codecs),*])?
+                        #upload
                     };
                     let #length = #id.checked_len()?;
                     __cq_statuses.push(#id.storage().metadata.clone());
@@ -654,6 +661,7 @@ impl Rows {
             &self.definitions,
             &self.resident_hosts,
             bindings,
+            false,
         )?;
         let layout = &analysis.structures.layouts[name];
         if layout.iter().any(|column| {
@@ -1006,6 +1014,7 @@ fn host_rows(
     definitions: &BTreeMap<String, Definition>,
     resident_hosts: &BTreeSet<String>,
     bindings: &BTreeMap<String, Ident>,
+    columnar: bool,
 ) -> syn::Result<TokenStream> {
     let dependencies = host_dependencies_from(name, definitions, bindings);
     for result in &dependencies {
@@ -1048,6 +1057,10 @@ fn host_rows(
     cq_lang_structures::check_rewrite(&program.structures, &host_structures)?;
     let host_analysis = cq_lang_structures::contract::check(&host_structures)?;
     let mut context = cq_print::Context::new(&host_structures, &host_analysis);
+    // This host/device boundary publishes its complete checked layout, even
+    // when the final answer projects columns away. Seed that demand before
+    // RowEmitter prunes carriers through the producer's probes and guards.
+    context.demand_columns(&host_structures, name, &analysis.structures.layouts[name])?;
     let needed_hosts: BTreeSet<_> = dependencies
         .iter()
         .filter(|result| !bindings.contains_key(*result))
@@ -1071,18 +1084,17 @@ fn host_rows(
         emitter.context_mut().register(&result);
         let rename = matches!(definition.operator, Operator::Rename(_));
         let rows = if let Some(binding) = bindings.get(&result) {
-            let values =
-                host_analysis.layouts[&result]
-                    .iter()
-                    .enumerate()
-                    .map(|(index, column)| {
-                        let index = syn::Index::from(index);
-                        if emitter.context().infos[&result].computed.contains(column) {
-                            quote!(::core::clone::Clone::clone(&__cq_bound.#index))
-                        } else {
-                            quote!(&__cq_bound.#index)
-                        }
-                    });
+            let values = emitter.context().carried(&result).iter().map(|column| {
+                let index = host_analysis.layouts[&result].iter()
+                    .position(|stored| stored == column)
+                    .expect("carried column belongs to downloaded layout");
+                let index = syn::Index::from(index);
+                if emitter.context().infos[&result].computed.contains(column) {
+                    quote!(::core::clone::Clone::clone(&__cq_bound.#index))
+                } else {
+                    quote!(&__cq_bound.#index)
+                }
+            });
             quote!(::core::iter::Iterator::map(#binding.iter(), |__cq_bound| (#(#values,)*)))
         } else if rename {
             emitter
@@ -1111,10 +1123,38 @@ fn host_rows(
     let rows = output.ok_or_else(|| error("T-Gpu: missing host boundary"))?;
     let context = emitter.context();
     let pattern = context.pattern(name);
-    let values = analysis.structures.layouts[name]
+    let values: Vec<_> = analysis.structures.layouts[name]
         .iter()
-        .map(|column| context.key_field(name, column, true));
+        .map(|column| context.key_field(name, column, true))
+        .collect();
     let statements = &context.statements;
+    if columnar {
+        // Numeric host boundaries already have their final lane types. Emit
+        // columns directly, without a tuple copy followed by dynamic row
+        // encoding and a second transpose through a scratch value vector.
+        let columns: Vec<_> = (0..values.len())
+            .map(|index| format_ident!("__cq_host_column_{index}"))
+            .collect();
+        if let [value] = values.as_slice() {
+            return Ok(quote!(|__cq_columns: &mut [::std::vec::Vec<i64>]| {
+                #(#statements)*
+                __cq_columns[0].extend(
+                    ::core::iter::Iterator::map(#rows, |#pattern| #value as i64));
+                Ok(())
+            }));
+        }
+        return Ok(quote!(|__cq_columns: &mut [::std::vec::Vec<i64>]| {
+            #(#statements)*
+            let rows = #rows;
+            let capacity = ::core::iter::Iterator::size_hint(&rows).0;
+            let [#(#columns),*] = __cq_columns else { unreachable!() };
+            #(#columns.reserve(capacity);)*
+            for #pattern in rows {
+                #(#columns.push(#values as i64);)*
+            }
+            Ok(())
+        }));
+    }
     Ok(quote!({
         #(#statements)*
         ::core::iter::Iterator::map(#rows, |#pattern| (#(#values,)*))
@@ -1367,5 +1407,85 @@ fn payload_kind(ty: &Type) -> syn::Result<TokenStream> {
             ty,
             "T-Gpu: range payload needs a recorded u32/i32/i64 code",
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn downloaded_probe_carriers_preserve_the_host_publication_demand() {
+        // D72 shape: eight columns cross a device publication, a host probe
+        // publishes all eight, but the final answer keeps only three.
+        let program: Program = syn::parse_quote! {
+            physical {
+                relation Driver(available:i64,customer_key:i64,customer_nation:i64,
+                    order_date:i64,order_key:i64,part_key:i64,supplier_key:i64,supplier_nation:i64) = (&data.driver);
+                relation Nation(supplier_nation:i64) = (&data.nation);
+                driver = pipe rename Driver@0 {available -> available,customer_key -> customer_key,
+                    customer_nation -> customer_nation,order_date -> order_date,order_key -> order_key,
+                    part_key -> part_key,supplier_key -> supplier_key,supplier_nation -> supplier_nation};
+                nation = let rename Nation@1 {supplier_nation -> supplier_nation};
+                filtered = let select driver if (order_key > 0);
+                joined = pipe probe first [supplier_nation] filtered,nation;
+                result = pipe canon project joined keep {order_key,part_key,supplier_nation};
+                return result as answer(order_key,part_key,supplier_nation);
+            }
+            structures {
+                driver host scan = ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64,i64,i64,i64,i64,i64,i64)> [];
+                nation host scan = ::core::iter::Map<_,_> [];
+                nation = ::cq_storage::SortedRun<_,_> [supplier_nation];
+                filtered rows = ::std::vec::Vec<_>;
+                result canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            }
+            sequence {
+                input = store rows driver;
+                index = store rows nation;
+                feed = compact filtered flatten tile 256 input;
+                device_rows = store feed;
+                host_rows = store flatten lookup nation [supplier_nation] device_rows;
+                projected = canon map result host_rows;
+                output_rows = store projected;
+                output count;
+            }
+            graded gpu {
+                input at host;
+                index at host;
+                feed at host.device.block;
+                device_rows at host;
+                host_rows at host;
+                projected at host;
+                output_rows at host.device;
+            }
+        };
+        let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
+        let definitions = program.structures.physical.program.definitions.iter()
+            .map(|definition| (symbol_name(&definition.name), definition.clone())).collect();
+        let bindings = BTreeMap::from([("filtered".to_owned(), syn::parse_quote!(downloaded))]);
+        let resident_hosts = BTreeSet::from(["Driver".to_owned()]);
+        let publication = host_rows(
+            &program, &analysis, "joined", &definitions, &resident_hosts, &bindings, false,
+        ).unwrap();
+        syn::parse2::<syn::Expr>(publication.clone()).unwrap();
+        let publication = publication.to_string();
+        let full_pattern = quote!(|(available,customer_key,customer_nation,order_date,
+            order_key,part_key,supplier_key,supplier_nation,)|).to_string();
+        assert!(publication.contains(&full_pattern), "{publication}");
+        let full_download = quote!(|__cq_bound| (
+            &__cq_bound.0,&__cq_bound.1,&__cq_bound.2,&__cq_bound.3,
+            &__cq_bound.4,&__cq_bound.5,&__cq_bound.6,&__cq_bound.7,
+        )).to_string();
+        assert!(publication.contains(&full_download), "{publication}");
+
+        // A narrower boundary must select the carried slots from the same
+        // stored layout, not hand an eight-field tuple to a three-field probe.
+        let projected = host_rows(
+            &program, &analysis, "result", &definitions, &resident_hosts, &bindings, false,
+        ).unwrap().to_string();
+        let projected_download = quote!(|__cq_bound| (
+            &__cq_bound.4,&__cq_bound.5,&__cq_bound.7,
+        )).to_string();
+        assert!(projected.contains(&projected_download), "{projected}");
     }
 }

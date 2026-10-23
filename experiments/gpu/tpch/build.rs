@@ -30,7 +30,11 @@ fn checked<T>(
 ) -> CompileResult<T> {
     result.map_err(|error| Rejected {
         phase,
-        error: error.to_string(),
+        error: error
+            .into_iter()
+            .map(|error| error.to_string())
+            .collect::<Vec<_>>()
+            .join("\n"),
         term: term.to_token_stream().to_string(),
     })
 }
@@ -352,8 +356,7 @@ fn compile(
         })
         .collect();
     let row_types: Vec<_> = cq
-        .declarations
-        .iter()
+        .inputs()
         .map(|r| {
             let types = r.columns.iter().map(|c| &c.ty);
             quote!((#(#types,)*))
@@ -363,8 +366,7 @@ fn compile(
     let mut bindings = Vec::new();
     let mut sequential_bindings = Vec::new();
     for (index, relation) in cq
-        .declarations
-        .iter()
+        .inputs()
         .take(kernel.relations.len())
         .enumerate()
     {
@@ -441,20 +443,27 @@ fn compile(
     let mut owned_outputs = Vec::new();
     for (index, ((_, ty), column)) in kernel.answer.iter().zip(&answer_columns).enumerate() {
         let output = syn::Index::from(index);
-        answer_types.push(
-            column
-                .as_ref()
-                .and_then(|column| stored_types.get(column))
-                .unwrap_or(ty),
-        );
+        answer_types.push(if let Some(output) = cq.output() {
+            &output.columns[index].ty
+        } else {
+            column.as_ref().and_then(|column| stored_types.get(column)).unwrap_or(ty)
+        });
         if let Some(domain) = column.as_ref().and_then(|column| domains.get(column)) {
             let decoder = format_ident!("domain_{index}");
             decode_bindings.push(quote!(let #decoder = data.catalog.domain(#domain)?;));
-            borrowed_outputs.push(quote!(#decoder.value(*row.#output)));
-            owned_outputs.push(quote!(#decoder.value(row.#output)));
+            borrowed_outputs.push(quote!(#decoder.value(*row.#output).to_string()));
+            owned_outputs.push(quote!(#decoder.value(row.#output).to_string()));
+        } else if kernel.is_standalone() && ty.to_token_stream().to_string() == "String"
+            && answer_types.last().unwrap().to_token_stream().to_string() != "String"
+        {
+            let (table, column) = column.as_ref().expect("encoded string output has an input domain");
+            let decoder = format_ident!("dictionary_{index}");
+            decode_bindings.push(quote!(let #decoder = manifest.dictionary(manifest.column(#table, #column)?)?;));
+            borrowed_outputs.push(quote!(#decoder[*row.#output as usize].clone()));
+            owned_outputs.push(quote!(#decoder[row.#output as usize].clone()));
         } else {
-            borrowed_outputs.push(quote!(*row.#output as i64));
-            owned_outputs.push(quote!(row.#output as i64));
+            borrowed_outputs.push(quote!(row.#output.to_string()));
+            owned_outputs.push(quote!(row.#output.to_string()));
         }
     }
     let (catalog_field, catalog_init, load_setup) = if storage_schema.is_some() {
@@ -483,23 +492,24 @@ fn compile(
                 #(let #fields: #input_types = #bindings;)*
                 Ok(Inputs { #(#fields,)* #catalog_init })
             }
-            fn gpu(data: &Inputs) -> cq_gpu_runtime::DeviceColumns<'_, Answer> {
+            fn gpu(data: &Inputs) -> crate::manifest::Result<Vec<Answer>> {
                 #(let #fields = &data.#fields;)*
-                #gpu
+                let output = #gpu;
+                Ok(output.to_host()?)
             }
-            fn sequential(data: &Inputs) -> crate::manifest::Result<Vec<Vec<i64>>> {
+            fn sequential(data: &Inputs, manifest: &crate::manifest::Manifest) -> crate::manifest::Result<Vec<Vec<String>>> {
                 #(#decode_bindings)*
                 #(#sequential_bindings)*
                 Ok((#cpu).map(|row| vec![#(#borrowed_outputs),*]).collect())
             }
-            fn download(data: &Inputs) -> crate::manifest::Result<Vec<Vec<i64>>> {
+            fn download(data: &Inputs, manifest: &crate::manifest::Manifest) -> crate::manifest::Result<Vec<Vec<String>>> {
                 #(#decode_bindings)*
-                Ok(gpu(data).to_host()?.into_iter().map(|row| vec![#(#owned_outputs),*]).collect())
+                Ok(gpu(data)?.into_iter().map(|row| vec![#(#owned_outputs),*]).collect())
             }
             pub(super) fn run(manifest: &crate::manifest::Manifest, query: &str, conformance_only: bool) -> crate::manifest::Result<Value> {
                 let data = load(manifest)?;
-                let reference = if manifest.sf == 1 { Some(sequential(&data)?) } else { None };
-                crate::benchmark::run(manifest, query, || download(&data), reference, conformance_only)
+                let reference = if manifest.sf == 1 { Some(sequential(&data, manifest)?) } else { None };
+                crate::benchmark::run(manifest, query, || download(&data, manifest), reference, conformance_only)
             }
         },
         artifact,
@@ -564,10 +574,10 @@ fn string_guard_regression(out: &Path) -> Result<TokenStream> {
                 assert_eq!(data.Part, vec![
                     (1, "green part".to_owned()), (2, "red".to_owned()), (3, "green part".to_owned())
                 ]);
-                let mut actual = download(&data).unwrap();
+                let mut actual = download(&data, &manifest).unwrap();
                 actual.sort();
-                assert_eq!(actual, vec![vec![1], vec![3]]);
-                let mut reference = sequential(&data).unwrap();
+                assert_eq!(actual, vec![vec!["1".to_owned()], vec!["3".to_owned()]]);
+                let mut reference = sequential(&data, &manifest).unwrap();
                 reference.sort();
                 assert_eq!(actual, reference);
             }
@@ -579,7 +589,25 @@ fn main() -> Result<()> {
     println!("cargo:rerun-if-env-changed=TPCH_GPU_DATA_ROOT");
     println!("cargo:rerun-if-env-changed=TPCH_GPU_ADVICE");
     println!("cargo:rerun-if-env-changed=CQ_GPU_TPCH_AUTOMATIC");
-    let automatic = env::var("CQ_GPU_TPCH_AUTOMATIC").is_ok_and(|value| value == "1");
+    println!("cargo:rerun-if-env-changed=CQ_GPU_TPCH_QUERIES");
+    // An unset/empty filter retains the full suite. Comma-separated names
+    // isolate compilation itself, unlike the runner's execution-only filter.
+    let queries: std::collections::BTreeSet<String> = env::var("CQ_GPU_TPCH_QUERIES")
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .collect();
+    for name in &queries {
+        if !source::SOURCES.iter().any(|(query, _)| query == name) {
+            if let Some((_, reason)) = source::UNSUPPORTED.iter().find(|(query, _)| query == name) {
+                return Err(format!("unsupported build query {name}: {reason}").into());
+            }
+            return Err(format!("unknown build query: {name}").into());
+        }
+    }
+    let automatic = env::var("CQ_GPU_TPCH_AUTOMATIC").map_or(true, |value| value == "1");
     let overrides: std::collections::BTreeMap<String, advice::Pipeline> =
         if let Some(path) = env::var_os("TPCH_GPU_ADVICE") {
             let path = PathBuf::from(path);
@@ -598,6 +626,9 @@ fn main() -> Result<()> {
     let mut generated = TokenStream::new();
     let mut dispatch = Vec::new();
     let mut reports = Vec::new();
+    let unsupported: Vec<_> = source::UNSUPPORTED.iter().map(|(query, reason)| {
+        json!({"query": query, "status": "unsupported staged source", "reason": reason})
+    }).collect();
     for sf in [1, 10] {
         let directory = root.join(format!("sf{sf}"));
         println!(
@@ -619,6 +650,9 @@ fn main() -> Result<()> {
             }
         }
         for &(name, source) in source::SOURCES {
+            if !queries.is_empty() && !queries.contains(name) {
+                continue;
+            }
             println!(
                 "cargo:rerun-if-changed=../../../features/workloads/src/queries/retail/tpch/retail_{name}.rs"
             );
@@ -639,6 +673,8 @@ fn main() -> Result<()> {
                     advice::Pipeline::h09()
                 } else if matches!(name, "h04" | "h04_not_exists" | "h16" | "h22") {
                     advice::Pipeline::negation(name)
+                } else if kernel.is_standalone() {
+                    advice::Pipeline::grouped(&kernel.cpu_query())?
                 } else {
                     // CPU hints remain available explicitly, but an unmeasured CPU
                     // choice must not replace the existing accepted GPU baseline.
@@ -712,6 +748,7 @@ fn main() -> Result<()> {
     let generated: syn::File = syn::parse2(generated)?;
     fs::write(out.join("queries.rs"), prettyplease::unparse(&generated))?;
     fs::write(out.join("plans.json"), serde_json::to_vec_pretty(&reports)?)?;
+    fs::write(out.join("unsupported.json"), serde_json::to_vec_pretty(&unsupported)?)?;
     // Keep the same canonical path available to the runner, rather than silently
     // measuring a different fixture after constants were encoded at build time.
     println!(

@@ -346,6 +346,26 @@ fn arm_materialization_stays_beneath_its_runtime_guard() {
     check_rewrite(&source, &target).unwrap();
 }
 
+#[test]
+fn direct_choice_checks_each_arm_against_source_support() {
+    let source = program();
+    let (filtered, _) = alternatives();
+    let unrelated: Term = syn::parse_quote!(rows l);
+    for (yes, no) in [(filtered.clone(), unrelated.clone()), (unrelated, filtered)] {
+        assert!(
+            adaptive_choose(
+                &source,
+                &syn::parse_quote!(out),
+                &syn::parse_quote!(published),
+                36,
+                yes,
+                no,
+            )
+            .is_err()
+        );
+    }
+}
+
 fn automatic_source() -> Program {
     let structures = syn::parse_quote! {
         physical {

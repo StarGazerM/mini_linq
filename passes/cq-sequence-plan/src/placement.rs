@@ -251,9 +251,17 @@ pub(crate) fn advise(
         let host_reads = reads_at(&d.term, result, facts, catalog, &host, &host);
         let descendant_reads = reads_at(&d.term, result, facts, catalog, &producer, &publication)
             || reads_at(&d.term, result, facts, catalog, &publication, &publication);
+        // BE-Length permits a growing publication at host, not at a separated
+        // level. In particular, equal-support choice arms may have different
+        // lengths; do not invent a capacity to make their split dispatch fit.
+        let growing_store = matches!(d.term, Term::Store { capacity: None, .. })
+            && matches!(
+                facts.lengths.get(&symbol_name(&d.name)),
+                Some(Len::Unknown(None))
+            );
         let at_host = matches!(d.term, Term::Rows(_))
             || requires_host(&d.term, &opaque)
-            || (host_reads && !descendant_reads);
+            || (host_reads && (!descendant_reads || growing_store));
         if at_host && levels[i].is_none() {
             levels[i] = Some(host.clone());
         }
@@ -262,8 +270,9 @@ pub(crate) fn advise(
             stores.insert(i);
         }
     }
-    // Host-only evaluation wins before descendant consumers propagate their
-    // preferred grades. Follow all unstored feeds back to the host boundary.
+    // Host-only evaluation stops at a checked numeric publication boundary.
+    // Pulling a descendant-only lookup through that boundary would invalidate
+    // its recorded provider token even though its rows can be published at host.
     for i in (0..definitions.len()).rev() {
         if levels[i].as_ref() != Some(&host) {
             continue;
@@ -276,6 +285,31 @@ pub(crate) fn advise(
                 && !matches!(definitions[source].term, Term::Store { .. })
                 && !stores.contains(&source)
             {
+                let definition = &definitions[source];
+                let result = facts.results.get(&symbol_name(name)).map(String::as_str);
+                if !requires_host(&definition.term, &opaque)
+                    && result.is_some_and(|result| !string_row(facts, result))
+                    && !reads_at(&definition.term, result, facts, catalog, &host, &host)
+                    && (reads_at(
+                        &definition.term,
+                        result,
+                        facts,
+                        catalog,
+                        &producer,
+                        &publication,
+                    ) || reads_at(
+                        &definition.term,
+                        result,
+                        facts,
+                        catalog,
+                        &publication,
+                        &publication,
+                    ))
+                {
+                    advice.push(Advice::Store(name.clone()));
+                    stores.insert(source);
+                    continue;
+                }
                 levels[source] = Some(host.clone());
             }
         }
@@ -356,7 +390,8 @@ pub(crate) fn advise(
             let source = indices[&symbol_name(name)];
             if levels[source].as_ref() == Some(&host)
                 || authored.contains(&symbol_name(name))
-                || !matches!(definitions[source].term, Term::Store { .. })
+                || (!matches!(definitions[source].term, Term::Store { .. })
+                    && !stores.contains(&source))
                 || host_publications.contains_key(&source)
             {
                 continue;

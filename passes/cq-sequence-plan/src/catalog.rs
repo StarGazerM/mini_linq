@@ -1,4 +1,4 @@
-use cq_lang_sequence::{Analysis, Catalog, Obligation, Program, Term};
+use cq_lang_sequence::{Analysis, Catalog, Obligation, Program};
 use cq_syntax::symbol_name;
 use quote::ToTokens;
 use syn::{GenericArgument, PathArguments, Type};
@@ -12,7 +12,7 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, catalog: &Catalog) -
                 ty,
                 ..
             } => {
-                let levels = provider_levels(program, analysis, provider);
+                let levels = provider_levels(analysis, provider);
                 catalog.providers.iter().any(|token| {
                     matches_type(&token.ty, ty)
                         && token.elements.as_ref().is_none_or(|accepted| {
@@ -46,9 +46,20 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, catalog: &Catalog) -
             Obligation::Failure { .. } => true,
         };
         if !available {
+            let reads = if let Obligation::Provider { provider, .. } = obligation {
+                analysis
+                    .provider_reads
+                    .iter()
+                    .filter(|(_, providers)| providers.contains(provider))
+                    .map(|(name, _)| format!("{name}@{}", analysis.levels[name].join(".")))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            } else {
+                String::new()
+            };
             return Err(syn::Error::new(
                 program.structures.physical.program.returned.span(),
-                format!("P-Decompose: unmet catalog obligation {obligation:?}"),
+                format!("P-Decompose: unmet catalog obligation {obligation:?}; reads [{reads}]"),
             ));
         }
     }
@@ -88,18 +99,15 @@ fn result_levels(
     levels
 }
 
-fn provider_levels(program: &Program, analysis: &Analysis, provider: &str) -> Vec<Vec<String>> {
+fn provider_levels(analysis: &Analysis, provider: &str) -> Vec<Vec<String>> {
     let mut levels = Vec::new();
-    for definition in &program.sequence.definitions {
-        if reads_provider(&definition.term, provider)
-            || map_reads_provider(&definition.term, provider, program, analysis)
-        {
-            let name = symbol_name(&definition.name);
-            if let Some(level) = analysis.levels.get(&name) {
+    for (name, providers) in &analysis.provider_reads {
+        if providers.contains(provider) {
+            if let Some(level) = analysis.levels.get(name) {
                 let level = analysis
                     .dispatches
                     .iter()
-                    .find(|dispatch| dispatch.inner_stores.contains(&name))
+                    .find(|dispatch| dispatch.inner_stores.contains(name))
                     .map_or(level, |dispatch| &dispatch.producer_level);
                 if !levels.contains(level) {
                     levels.push(level.clone());
@@ -108,82 +116,6 @@ fn provider_levels(program: &Program, analysis: &Analysis, provider: &str) -> Ve
         }
     }
     levels
-}
-
-fn reads_provider(term: &Term, provider: &str) -> bool {
-    match term {
-        Term::Lookup {
-            provider: name,
-            inner,
-            ..
-        } => symbol_name(name) == provider || reads_provider(inner, provider),
-        Term::Map(_, inner)
-        | Term::Compact(_, inner)
-        | Term::Flatten(inner)
-        | Term::Fold(_, inner)
-        | Term::Group(_, inner)
-        | Term::Canon(inner)
-        | Term::Store { inner, .. }
-        | Term::Tile { inner, .. } => reads_provider(inner, provider),
-        Term::Union(arms) => arms.iter().any(|term| reads_provider(term, provider)),
-        Term::Choose(arms) => arms.iter().any(|(_, term)| reads_provider(term, provider)),
-        _ => false,
-    }
-}
-
-fn map_reads_provider(term: &Term, provider: &str, program: &Program, analysis: &Analysis) -> bool {
-    use cq_lang_sequence::structures::physical::Operator;
-    if let Term::Map(result, inner) = term {
-        let stop = match inner.as_ref() {
-            Term::Ref(name) => analysis.results.get(&symbol_name(name)).cloned(),
-            Term::Rows(name) | Term::Map(name, _) | Term::Compact(name, _) => {
-                Some(symbol_name(name))
-            }
-            _ => None,
-        };
-        let mut current = symbol_name(result);
-        while stop.as_ref() != Some(&current) {
-            let Some(definition) = program
-                .structures
-                .physical
-                .program
-                .definitions
-                .iter()
-                .find(|definition| symbol_name(&definition.name) == current)
-            else {
-                break;
-            };
-            if matches!(&definition.operator,
-                Operator::Probe(_, keyed) | Operator::Merge(_, keyed)
-                | Operator::Semi(_, keyed) | Operator::Anti(_, keyed)
-                if symbol_name(&keyed.right) == provider)
-            {
-                return true;
-            }
-            let Some(input) = definition.operator.input() else {
-                break;
-            };
-            current = symbol_name(input);
-        }
-    }
-    match term {
-        Term::Map(_, inner)
-        | Term::Compact(_, inner)
-        | Term::Flatten(inner)
-        | Term::Fold(_, inner)
-        | Term::Group(_, inner)
-        | Term::Canon(inner)
-        | Term::Store { inner, .. }
-        | Term::Tile { inner, .. }
-        | Term::Lookup { inner, .. } => map_reads_provider(inner, provider, program, analysis),
-        Term::Union(arms) => arms
-            .iter()
-            .any(|arm| map_reads_provider(arm, provider, program, analysis)),
-        Term::Choose(arms) => arms
-            .iter()
-            .any(|(_, arm)| map_reads_provider(arm, provider, program, analysis)),
-        _ => false,
-    }
 }
 
 pub(crate) fn matches_type(pattern: &Type, actual: &Type) -> bool {

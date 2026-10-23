@@ -83,6 +83,14 @@ pub(super) fn carried_columns(
     for (name, key) in analysis.keysets.keys() {
         used.get_mut(name).unwrap().extend(key.iter().cloned());
     }
+    propagate_columns(module, analysis, used)
+}
+
+fn propagate_columns(
+    module: &structures::Program,
+    analysis: &structures::Analysis,
+    mut used: BTreeMap<String, BTreeSet<String>>,
+) -> BTreeMap<String, Vec<String>> {
     for definition in module.physical.program.definitions.iter().rev() {
         let name = symbol_name(&definition.name);
         let output = used[&name].clone();
@@ -191,6 +199,33 @@ pub(super) fn carried_witnesses(
 }
 
 impl Context<'_> {
+    /// Demand an intermediate publication's columns in addition to final-answer
+    /// columns. Propagate them through the same checked DAG rules before any
+    /// row templates are emitted, so producer and consumer carriers agree.
+    pub fn demand_columns(
+        &mut self,
+        module: &structures::Program,
+        result: &str,
+        columns: &[String],
+    ) -> syn::Result<()> {
+        let heading = self.analysis.layouts.get(result).ok_or_else(|| {
+            syn::Error::new(proc_macro2::Span::call_site(), "unknown publication demand")
+        })?;
+        if columns.iter().any(|column| !heading.contains(column)) {
+            return Err(syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "publication demand contains a column outside its checked heading",
+            ));
+        }
+        let mut used: BTreeMap<_, BTreeSet<_>> = self.carried_columns.iter()
+            .map(|(name, columns)| (name.clone(), columns.iter().cloned().collect()))
+            .collect();
+        used.get_mut(result).expect("checked publication demand")
+            .extend(columns.iter().cloned());
+        self.carried_columns = propagate_columns(module, self.analysis, used);
+        Ok(())
+    }
+
     /// Stable non-column binding for a retained lookup cursor.
     pub fn witness_ident(&self, origin: &str) -> Ident {
         format_ident!(

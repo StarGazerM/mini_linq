@@ -1040,6 +1040,69 @@ fn shared_checker_invalidates_changed_terms_structures_and_evidence() {
 }
 
 #[test]
+fn shared_checker_retains_source_analysis_across_candidate_exploration() {
+    let source = program(quote!(out = store rows r;));
+    let mut checker = contract::Checker::new(&source).unwrap();
+    let original = checker.check_shared(&source).unwrap();
+    assert!(std::rc::Rc::ptr_eq(
+        &original,
+        &checker.check_shared(&source.clone()).unwrap(),
+    ));
+    for width in 1..8 {
+        let mut candidate = source.clone();
+        candidate.sequence.definitions[0].term =
+            syn::parse2(quote!(store flatten tile #width rows r)).unwrap();
+        checker.check_rewrite_in(&source, &candidate).unwrap();
+        checker.check_shared(&candidate).unwrap();
+    }
+    assert!(std::rc::Rc::ptr_eq(
+        &original,
+        &checker.check_shared(&source).unwrap(),
+    ));
+
+    let mut output = source.clone();
+    output.sequence.output = Some(OutputProtocol::Reserve);
+    let reserved = checker.check_shared(&output).unwrap();
+    assert!(!std::rc::Rc::ptr_eq(&original, &reserved));
+    assert_eq!(
+        reserved.output,
+        Some(("out".into(), OutputProtocol::Reserve))
+    );
+    output.sequence.output = Some(OutputProtocol::Bounded);
+    assert!(checker.check_shared(&output).is_err());
+}
+
+#[test]
+fn shared_checker_rechecks_evidence_and_complete_opaque_prefix_syntax() {
+    let mut source = program(quote!(out = store rows r;));
+    source.structures.structures = syn::parse_quote!(structures {
+        r host scan = Reader<{ opaque!(left) }> [];
+        r canon = Canon;
+    });
+    let mut checker = contract::Checker::new(&source).unwrap();
+    let original = checker.check_shared(&source).unwrap();
+
+    let mut advice = source.clone();
+    advice.evidence = syn::parse_quote!(evidence { count R = 10; });
+    let advised = checker.check_shared(&advice).unwrap();
+    assert_eq!(advised.evidence.count("R"), Some(10));
+    assert_eq!(advised.obligations, original.obligations);
+    advice.evidence = syn::parse_quote!(evidence { count missing = 10; });
+    assert!(checker.check_shared(&advice).is_err());
+
+    let mut changed = source.clone();
+    changed.structures.structures = syn::parse_quote!(structures {
+        r host scan = Reader<{ opaque!(right) }> [];
+        r canon = Canon;
+    });
+    assert!(!std::rc::Rc::ptr_eq(
+        &original,
+        &checker.check_shared(&changed).unwrap(),
+    ));
+    assert!(checker.check_rewrite_in(&source, &changed).is_err());
+}
+
+#[test]
 fn shared_structural_proof_does_not_cache_machine_grading() {
     let mut source = program(quote!(out = store rows r;));
     grade(&mut source, quote!(out at host;));
@@ -1077,4 +1140,32 @@ fn resource_rejects_oversized_authored_dispatches_before_translation() {
             .to_string()
             .contains("BE-Resource")
     );
+}
+
+#[test]
+fn shared_choices_reuse_provider_obligations_without_repeating_reads() {
+    let mut source = lookup_program(quote! {
+        l = rows l;
+        r = store rows r;
+        joined = canon flatten lookup r [a] l;
+    });
+    let mut previous: syn::Ident = syn::parse_quote!(joined);
+    for index in 0..12 {
+        let name = syn::Ident::new(&format!("choice_{index}"), previous.span());
+        source.sequence.definitions.push(syn::parse_quote!(
+            #name = choose [len l < 1 => #previous, else => #previous];
+        ));
+        previous = name;
+    }
+    source
+        .sequence
+        .definitions
+        .push(syn::parse_quote!(out = store #previous;));
+    let facts = contract::check(&source).unwrap();
+    assert_eq!(facts.provider_reads.len(), 1);
+    assert!(facts.provider_reads["joined"].contains("r"));
+    assert_eq!(facts.obligations.iter().filter(|obligation|
+        matches!(obligation, Obligation::Provider { provider, .. } if provider == "r")
+    ).count(), 1);
+    assert!(facts.obligations.len() <= 5, "{:?}", facts.obligations);
 }

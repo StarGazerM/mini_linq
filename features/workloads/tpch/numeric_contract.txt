@@ -40,3 +40,34 @@ All 22 canonical SQL peers were inspected from the official DuckDB repository;
 per-query source URLs are recorded in coverage.tsv. The authored Q6/Q19 SQL
 uses the same constants and semantics. These are TPC-H-derived measurements,
 not certified benchmark submissions.
+
+Grouped retail cores:
+retail_h01 retains its existing single corpus entry. The standalone grouped
+retail kernels use the language's count()/sum()/min()/max() heads, not the
+older aggregate extension used by tpch_q06/tpch_q19. Inputs are scale-two
+Decimal coefficients and epoch-day Date values. Discounted price products
+are exact i64 coefficients at scale four; quantity and undiscounted price
+sums remain scale two. Global empty sums are zero (the grouped-fold identity),
+and their SQL oracles explicitly COALESCE SUM to zero.
+All lineitem aggregations retain order key and line number in the valuation,
+so equal-valued different lines contribute independently.
+
+These retail cores return unordered answers, without canonical ORDER BY/LIMIT.
+H14 returns exact promo-revenue and total-revenue coefficients, not the
+canonical floating ratio. H13 returns the per-customer order counts including
+zero, not the second-level distribution of those counts. H18 materializes
+the per-order quantity sum and uses a second CQ rule for the threshold and
+customer/order join: there is no HAVING syntax, and different intermediate
+head relations cannot be declared in one compile! invocation.
+H02 materializes keyed European minimum costs and joins them back, preserving
+ties. H11 computes independent per-part and global sums over base rows before
+its exact threshold guard; neither aggregate consumes the other's output.
+H20 materializes shipment sums before the stock threshold and supplier join.
+H15 computes supplier revenue once, then excludes suppliers dominated by a
+strictly greater revenue through native negation; it does not aggregate an
+aggregate. H17 is not included: the outer price sum depends on a filter using
+per-part average quantities, requiring an aggregate-dependent outer aggregate.
+Its canonical final division also has the floating-result limitation above.
+The authored H11 threshold factor remains 0.0001 at every exported scale;
+it is not retuned by dbgen scale. Consequently its SF10 oracle has zero rows.
+H18 serializes its returned order date as epoch days, like input date columns.
