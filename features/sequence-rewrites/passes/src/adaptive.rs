@@ -4,15 +4,15 @@
 //! exact join in the unfiltered arm. Both are checked independently of evidence.
 //! This pass does not estimate cardinalities or move decisions into translators.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use cq_lang_sequence::structures::physical::Operator;
-use cq_lang_sequence::{Definition, Evidence, Program, Term};
+use cq_lang_sequence::{Definition, Evidence, Guard, Len, Program, Term};
 use cq_syntax::symbol_name;
-use quote::{format_ident, quote};
+use quote::format_ident;
 use syn::Ident;
 
-use crate::{checked_in, choose_in, definition};
+use crate::{checked_in, definition};
 
 #[path = "adaptive_candidates.rs"]
 mod candidates;
@@ -60,8 +60,8 @@ pub fn adaptive_filter(
 ///
 /// Alternatives are inlined beneath the choice, so a store in one arm cannot
 /// become an eager, unconditional publication merely by naming that arm.
-/// The existing `choose` rewrite checks exhaustiveness and arm equivalence; every
-/// staging step also passes `check_rewrite`. No Structures entry is modified.
+/// Every arm and the final construction pass `check_rewrite`. The final choice
+/// is checked directly, without manufacturing and replaying temporary programs.
 // Formal rule EXT-SeqAdaptive: Published counts select independently checked equal-support filter constructions.
 pub fn adaptive_choose(
     source: &Program,
@@ -91,7 +91,7 @@ fn adaptive_choose_in(
     filtered: Term,
     unfiltered: Term,
 ) -> syn::Result<Program> {
-    let analysis = checker.check(source)?;
+    let analysis = checker.check_shared(source)?;
     let index = definition(source, name)?;
     let count_index = definition(source, published)?;
     if count_index >= index
@@ -124,7 +124,7 @@ fn adaptive_choose_in(
     // other candidate. Evidence and the guard cannot supply a correctness fact.
     replace_producer(checker, source, index, filtered.clone())?;
     replace_producer(checker, source, index, unfiltered.clone())?;
-    if expand_refs(source, &filtered) == expand_refs(source, &unfiltered) {
+    if same_work(source, &filtered, &unfiltered) {
         return Err(syn::Error::new_spanned(
             name,
             "adaptive choose requires different work in its alternatives",
@@ -146,51 +146,26 @@ fn adaptive_choose_in(
                 .map(|definition| symbol_name(&definition.name)),
         )
         .collect();
-    let yes = fresh(name, "filtered", &mut occupied);
-    let no = fresh(name, "unfiltered", &mut occupied);
     let decision = fresh(name, "adaptive", &mut occupied);
-    let original = match &source.sequence.definitions[index].term {
-        Term::Store { inner, .. } => inner.as_ref().clone(),
-        term => term.clone(),
-    };
-    let mut staged = source.clone();
-    staged.sequence.definitions.splice(
-        index..index,
-        [
-            Definition {
-                name: yes.clone(),
-                term: filtered,
-            },
-            Definition {
-                name: no.clone(),
-                term: unfiltered,
-            },
-            Definition {
-                name: decision.clone(),
-                term: original,
-            },
-        ],
+    let mut target = source.clone();
+    let producer = Term::Ref(decision.clone());
+    match &mut target.sequence.definitions[index].term {
+        Term::Store { inner, .. } => **inner = producer,
+        term => *term = producer,
+    }
+    target.sequence.definitions.insert(
+        index,
+        Definition {
+            name: decision,
+            term: Term::Choose(vec![
+                (
+                    Guard::Lt(Len::Input(symbol_name(published)), threshold),
+                    filtered,
+                ),
+                (Guard::Else, unfiltered),
+            ]),
+        },
     );
-    let staged = checked_in(checker, source, staged)?;
-    let threshold = syn::LitInt::new(&threshold.to_string(), name.span());
-    let selected = choose_in(
-        checker,
-        &staged,
-        quote!(#decision, len #published < #threshold => #yes, else => #no),
-    )?;
-    // `choose` accepts named arms. Inline those temporary definitions afterwards
-    // so translators cannot execute an arm's publication before its guard.
-    let mut inlined = selected.clone();
-    let yes = inlined.sequence.definitions.remove(index).term;
-    let no = inlined.sequence.definitions.remove(index).term;
-    let Term::Choose(arms) = &mut inlined.sequence.definitions[index].term else {
-        unreachable!("the existing choose rewrite constructs a choice")
-    };
-    arms[0].1 = yes;
-    arms[1].1 = no;
-    let inlined = checked_in(checker, &selected, inlined)?;
-    let target_index = definition(&inlined, name)?;
-    let target = replace_producer(checker, &inlined, target_index, Term::Ref(decision))?;
     checked_in(checker, source, target)
 }
 
@@ -253,47 +228,160 @@ fn fresh(owner: &Ident, suffix: &str, occupied: &mut BTreeSet<String>) -> Ident 
     unreachable!("finite programs leave an available identifier")
 }
 
-// Resolve aliases before rejecting placebo arms. Checked programs only contain
-// backwards references, so this walk terminates without a separate cycle policy.
-fn expand_refs(program: &Program, term: &Term) -> Term {
-    let mut expanded = term.clone();
-    match &mut expanded {
-        Term::Ref(name) => {
-            if let Some(definition) = program
+// Compare the named DAG without expanding it into a potentially exponential
+// tree. Checked programs only contain backwards references. Publications remain
+// boundaries: reading a store differs from recomputing its producer.
+fn same_work(program: &Program, left: &Term, right: &Term) -> bool {
+    fn resolve<'a>(mut term: &'a Term, definitions: &BTreeMap<String, &'a Term>) -> &'a Term {
+        while let Term::Ref(name) = term {
+            let Some(&producer) = definitions.get(&symbol_name(name)) else {
+                break;
+            };
+            if matches!(producer, Term::Store { .. }) {
+                break;
+            }
+            term = producer;
+        }
+        term
+    }
+
+    fn equal<'a>(
+        left: &'a Term,
+        right: &'a Term,
+        definitions: &BTreeMap<String, &'a Term>,
+        memo: &mut HashMap<(*const Term, *const Term), bool>,
+    ) -> bool {
+        let left = resolve(left, definitions);
+        let right = resolve(right, definitions);
+        if std::ptr::eq(left, right) {
+            return true;
+        }
+        let key = (std::ptr::from_ref(left), std::ptr::from_ref(right));
+        if let Some(&same) = memo.get(&key) {
+            return same;
+        }
+        let same = match (left, right) {
+            (Term::Ref(a), Term::Ref(b)) | (Term::Rows(a), Term::Rows(b)) => a == b,
+            (Term::Map(a, l), Term::Map(b, r))
+            | (Term::Compact(a, l), Term::Compact(b, r))
+            | (Term::Group(a, l), Term::Group(b, r)) => a == b && equal(l, r, definitions, memo),
+            (Term::Flatten(l), Term::Flatten(r)) | (Term::Canon(l), Term::Canon(r)) => {
+                equal(l, r, definitions, memo)
+            }
+            (Term::Fold(a, l), Term::Fold(b, r)) => a == b && equal(l, r, definitions, memo),
+            (
+                Term::Lookup {
+                    provider: a,
+                    keys: ka,
+                    inner: l,
+                },
+                Term::Lookup {
+                    provider: b,
+                    keys: kb,
+                    inner: r,
+                },
+            ) => a == b && ka == kb && equal(l, r, definitions, memo),
+            (
+                Term::Tile {
+                    n: a,
+                    items: ia,
+                    inner: l,
+                },
+                Term::Tile {
+                    n: b,
+                    items: ib,
+                    inner: r,
+                },
+            ) => a == b && ia == ib && equal(l, r, definitions, memo),
+            (
+                Term::Store {
+                    capacity: a,
+                    inner: l,
+                },
+                Term::Store {
+                    capacity: b,
+                    inner: r,
+                },
+            ) => a == b && equal(l, r, definitions, memo),
+            (Term::Union(a), Term::Union(b)) => {
+                a.len() == b.len() && a.iter().zip(b).all(|(l, r)| equal(l, r, definitions, memo))
+            }
+            (Term::Choose(a), Term::Choose(b)) => {
+                a.len() == b.len()
+                    && a.iter()
+                        .zip(b)
+                        .all(|((ga, l), (gb, r))| ga == gb && equal(l, r, definitions, memo))
+            }
+            _ => false,
+        };
+        memo.insert(key, same);
+        same
+    }
+
+    let definitions = program
+        .sequence
+        .definitions
+        .iter()
+        .map(|definition| (symbol_name(&definition.name), &definition.term))
+        .collect();
+    equal(left, right, &definitions, &mut HashMap::new())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn source() -> Program {
+        syn::parse_quote! {
+            physical {
+                relation R(a:i32);
+                r = pipe rename R@0 {a -> a};
+                return r as answer(a);
+            }
+            structures { r host scan = Reader []; }
+            sequence { left = rows r; right = rows r; }
+        }
+    }
+
+    #[test]
+    fn shared_alias_dags_are_compared_without_expanding_all_paths() {
+        let mut program = source();
+        let mut left: Ident = syn::parse_quote!(left);
+        let mut right: Ident = syn::parse_quote!(right);
+        for index in 0..48 {
+            let next_left = format_ident!("left_{index}");
+            let next_right = format_ident!("right_{index}");
+            program
                 .sequence
                 .definitions
-                .iter()
-                .find(|definition| definition.name == *name)
-            {
-                // A named publication is a real boundary; do not confuse reading
-                // it with recomputing its producer or adding a second store.
-                if !matches!(definition.term, Term::Store { .. }) {
-                    return expand_refs(program, &definition.term);
-                }
-            }
+                .push(syn::parse_quote!(#next_left = union [#left, #left];));
+            program
+                .sequence
+                .definitions
+                .push(syn::parse_quote!(#next_right = union [#right, #right];));
+            left = next_left;
+            right = next_right;
         }
-        Term::Map(_, inner)
-        | Term::Compact(_, inner)
-        | Term::Flatten(inner)
-        | Term::Lookup { inner, .. }
-        | Term::Fold(_, inner)
-        | Term::Group(_, inner)
-        | Term::Canon(inner)
-        | Term::Tile { inner, .. }
-        | Term::Store { inner, .. } => {
-            **inner = expand_refs(program, inner);
-        }
-        Term::Union(arms) => {
-            for arm in arms {
-                *arm = expand_refs(program, arm);
-            }
-        }
-        Term::Choose(arms) => {
-            for (_, arm) in arms {
-                *arm = expand_refs(program, arm);
-            }
-        }
-        Term::Rows(_) => {}
+        let left = Term::Ref(left);
+        let right = Term::Ref(right);
+        assert!(same_work(&program, &left, &right));
+        program.sequence.definitions[1].term = syn::parse_quote!(canon rows r);
+        assert!(!same_work(&program, &left, &right));
     }
-    expanded
+
+    #[test]
+    fn alias_comparison_preserves_publication_and_guard_boundaries() {
+        let mut program = source();
+        program.sequence.definitions[0].term = syn::parse_quote!(store rows r);
+        assert!(!same_work(
+            &program,
+            &syn::parse_quote!(left),
+            &syn::parse_quote!(store rows r),
+        ));
+        assert!(!same_work(
+            &program,
+            &syn::parse_quote!(choose [len r < 2 => left, else => right]),
+            &syn::parse_quote!(choose [len r < 3 => left, else => right]),
+        ));
+    }
 }

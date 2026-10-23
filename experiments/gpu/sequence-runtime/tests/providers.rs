@@ -18,6 +18,40 @@ fn column(pool: &Arc<Pool>, values: &[u32]) -> Result<ColumnDescriptor> {
 }
 
 #[test]
+fn numeric_host_columns_preserve_values_duplicates_and_empty_rows() -> Result<()> {
+    use cq_gpu_sequence_runtime::upload_numeric_columns;
+    let pool = Pool::new(0, 1 << 20, 128 << 20)?;
+    let values = upload_numeric_columns::<(i64, u32, bool), _>(pool.clone(), |columns| {
+        columns[0].extend([i64::MIN, 7, 7]);
+        columns[1].extend([u32::MAX as i64, 3, 3]);
+        columns[2].extend([0, 1, 1]);
+        Ok(())
+    })?;
+    assert_eq!(values.to_host()?, [(i64::MIN, u32::MAX, false), (7, 3, true), (7, 3, true)]);
+    // Reusing capacity must not reuse old rows, even when the new input is empty.
+    assert!(upload_numeric_columns::<(i64,), _>(pool.clone(), |_| Ok(()))?.to_host()?.is_empty());
+    let changed = upload_numeric_columns::<(i64,), _>(pool.clone(), |columns| {
+        columns[0].push(-9);
+        Ok(())
+    })?;
+    assert_eq!(changed.to_host()?, [(-9,)]);
+    let large = upload_numeric_columns::<(i64,), _>(pool.clone(), |columns| {
+        columns[0].resize(300_003, 1);
+        columns[0][200_001] = i64::MIN;
+        columns[0][300_002] = i64::MAX;
+        Ok(())
+    })?;
+    assert_eq!(large.storage().columns[0].bounds(), Bounds::Inclusive { min: i64::MIN, max: i64::MAX });
+    assert_eq!(large.to_host()?[300_002], (i64::MAX,));
+    assert!(upload_numeric_columns::<(), _>(pool.clone(), |_| Ok(())).is_err());
+    assert!(upload_numeric_columns::<(i64, i64), _>(pool, |columns| {
+        columns[0].push(1);
+        Ok(())
+    }).is_err());
+    Ok(())
+}
+
+#[test]
 fn packed_canon_selects_lanes_from_recorded_heading() -> Result<()> {
     assert_eq!(PackedCanon::MAX_PACKED_BITS, 128);
     for bits in [0, 1, 63, 64] {

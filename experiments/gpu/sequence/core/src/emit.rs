@@ -13,6 +13,108 @@ fn error(message: impl std::fmt::Display) -> syn::Error {
     syn::Error::new(Span::call_site(), message)
 }
 
+// NVPTX64 kernel ABI layouts. Aggregate entries mirror the repr(C) device views.
+fn parameter_layout(ty: &syn::Type) -> syn::Result<(usize, usize)> {
+    if matches!(ty, syn::Type::Ptr(_)) {
+        return Ok((8, 8));
+    }
+    if let syn::Type::Path(path) = ty {
+        match path
+            .path
+            .segments
+            .last()
+            .unwrap()
+            .ident
+            .to_string()
+            .as_str()
+        {
+            "bool" | "u8" | "i8" => return Ok((1, 1)),
+            "u16" | "i16" => return Ok((2, 2)),
+            "u32" | "i32" | "f32" => return Ok((4, 4)),
+            "usize" | "isize" | "u64" | "i64" | "f64" => return Ok((8, 8)),
+            "ColumnView" => return Ok((40, 8)),
+            "RangeView" => return Ok((64, 8)),
+            _ => {}
+        }
+    }
+    Err(error(format!(
+        "BE-Resource: unknown kernel parameter ABI: {}",
+        quote!(#ty)
+    )))
+}
+
+fn prune_kernel_parameters(
+    kernels: &mut [TokenStream],
+    launches: &mut [TokenStream],
+) -> syn::Result<()> {
+    use syn::visit::Visit;
+    use syn::visit_mut::VisitMut;
+    struct Uses(BTreeSet<String>);
+    impl<'ast> Visit<'ast> for Uses {
+        fn visit_expr_path(&mut self, path: &'ast syn::ExprPath) {
+            if let Some(name) = path.path.get_ident() {
+                self.0.insert(name.to_string());
+            }
+            syn::visit::visit_expr_path(self, path);
+        }
+    }
+    let mut live = BTreeMap::new();
+    for tokens in kernels {
+        let mut kernel: syn::ItemFn = syn::parse2(tokens.clone())?;
+        let mut uses = Uses(BTreeSet::new());
+        uses.visit_block(&kernel.block);
+        let mut keep = Vec::new();
+        let mut bytes = 0usize;
+        let mut inputs = syn::punctuated::Punctuated::new();
+        for input in kernel.sig.inputs {
+            let syn::FnArg::Typed(argument) = &input else {
+                return Err(error("generated kernel has a receiver"));
+            };
+            let syn::Pat::Ident(name) = &*argument.pat else {
+                return Err(error("generated kernel parameter is not an identifier"));
+            };
+            let used = uses.0.contains(&name.ident.to_string());
+            keep.push(used);
+            if used {
+                let (size, alignment) = parameter_layout(&argument.ty)?;
+                bytes = bytes.next_multiple_of(alignment) + size;
+                inputs.push(input);
+            }
+        }
+        if bytes >= 4096 {
+            return Err(error(format!(
+                "BE-Resource: kernel {} requires {bytes} parameter bytes ({} live parameters); parameter area must be below 4096 bytes",
+                kernel.sig.ident,
+                inputs.len()
+            )));
+        }
+        live.insert(kernel.sig.ident.to_string(), keep);
+        kernel.sig.inputs = inputs;
+        *tokens = quote!(#kernel);
+    }
+    struct Launches<'a>(&'a BTreeMap<String, Vec<bool>>);
+    impl VisitMut for Launches<'_> {
+        fn visit_expr_method_call_mut(&mut self, call: &mut syn::ExprMethodCall) {
+            syn::visit_mut::visit_expr_method_call_mut(self, call);
+            if let Some(keep) = self.0.get(&call.method.to_string()) {
+                // The loaded-module ABI prepends stream and prepared launch.
+                call.args = std::mem::take(&mut call.args)
+                    .into_iter()
+                    .enumerate()
+                    .filter_map(|(index, arg)| (index < 2 || keep[index - 2]).then_some(arg))
+                    .collect();
+            }
+        }
+    }
+    for tokens in launches {
+        let mut block: syn::Block = syn::parse2(quote!({#tokens}))?;
+        Launches(&live).visit_block_mut(&mut block);
+        let statements = block.stmts;
+        *tokens = quote!(#(#statements)*);
+    }
+    Ok(())
+}
+
 #[derive(Clone)]
 enum Operation {
     Map(String, String),
@@ -1170,6 +1272,19 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
     );
     for definition in &program.sequence.definitions {
         let publication = symbol_name(&definition.name);
+        // Lowering can give the terminal group its own store, followed by a
+        // final store alias. Both name the same grouped publication, which is
+        // realized by the collective below, not a CPU group/download/reupload.
+        // Only transparent wrappers around that terminal group are deferred;
+        // ordinary host publications still follow their recorded boundaries.
+        if publication != final_name
+            && final_group.is_some_and(|(final_group, _)| {
+                grouped_boundary(&definition.term, &compiler.definitions)
+                    .is_some_and(|(group, _)| group == final_group)
+            })
+        {
+            continue;
+        }
         if publication == final_name
             && let Some((name, input)) = grouped_boundary(&definition.term, &compiler.definitions)
         {
@@ -2250,6 +2365,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
             });
         }
     }
+    prune_kernel_parameters(&mut kernels, &mut launches)?;
     let output =
         output.ok_or_else(|| error("checked GPU output has no recorded publication adapter"))?;
     let setup = &compiler.rows.setup;
@@ -2306,6 +2422,42 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
 #[cfg(test)]
 mod tests {
     use super::*;
+    use quote::ToTokens;
+
+    #[test]
+    fn rejects_a_legitimately_oversized_live_signature() {
+        let names: Vec<_> = (0..513).map(|index| format_ident!("p{index}")).collect();
+        let mut kernels = vec![quote! {
+            fn oversized(#(#names: *const u64),*) {
+                #(let _ = #names;)*
+            }
+        }];
+        let message = prune_kernel_parameters(&mut kernels, &mut [])
+            .unwrap_err()
+            .to_string();
+        assert!(message.contains("BE-Resource"));
+        assert!(message.contains("4104 parameter bytes (513 live parameters)"));
+        assert!(message.contains("oversized"));
+    }
+
+    #[test]
+    fn pruning_preserves_signature_and_launch_order() {
+        let mut kernels = vec![quote! {
+            fn kernel(unused: u32, a: u32, b: *const i64) { let _ = (b, a); }
+        }];
+        let mut launches =
+            vec![quote! { module.kernel(stream, prepared, unused(), first(), second())?; }];
+        prune_kernel_parameters(&mut kernels, &mut launches).unwrap();
+        let function: syn::ItemFn = syn::parse2(kernels[0].clone()).unwrap();
+        assert_eq!(
+            function.sig.inputs.to_token_stream().to_string(),
+            quote!(a: u32, b: *const i64).to_string()
+        );
+        assert_eq!(
+            launches[0].to_string(),
+            quote!(module.kernel(stream, prepared, first(), second())?;).to_string()
+        );
+    }
 
     fn uploaded_host_program(canonical: bool) -> Program {
         let canon = canonical.then(|| quote!(canon));
@@ -2337,6 +2489,56 @@ mod tests {
                 published_host at host;
                 result at host.device;
             }
+        }
+    }
+
+    #[test]
+    fn terminal_group_store_alias_emits_one_collective_without_host_reupload() {
+        for keyed in [false, true] {
+            let keys = keyed.then(|| quote!(key));
+            let output_key = keyed.then(|| quote!(key,));
+            let program: Program = syn::parse2(quote! {
+                physical {
+                    relation R(id:i64,key:i32,value:i64) = (&data.r);
+                    r = pipe rename R@0 {id -> id,key -> key,value -> value};
+                    valuation = pipe canon project r keep {id,key,value};
+                    grouped = pipe group valuation by [#keys] {
+                        total:i64=sum(value); rows:usize=count();
+                    };
+                    return grouped as answer(#output_key total,rows);
+                }
+                structures {
+                    r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(i64,i32,i64)> [];
+                    valuation canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                }
+                sequence {
+                    input = store rows r;
+                    feed = canon map valuation flatten tile 256 input;
+                    valuations = store feed;
+                    groups = store group grouped valuations;
+                    result = store groups;
+                    output count;
+                }
+                graded gpu {
+                    input at host;
+                    feed at host.device.block;
+                    valuations at host;
+                    groups at host;
+                    result at host.device;
+                }
+            })
+            .unwrap();
+            let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
+            let generated = translate(&program, &analysis)
+                .unwrap()
+                .to_token_stream()
+                .to_string();
+            assert_eq!(generated.matches("group :: fold").count(), 1, "{generated}");
+            assert!(
+                !generated.contains("__cq_sequence_uploaded_grouped"),
+                "{generated}"
+            );
+            assert!(!generated.contains("__cq_downloaded_"), "{generated}");
         }
     }
 

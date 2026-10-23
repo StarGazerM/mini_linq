@@ -1,4 +1,11 @@
-//! Import the CPU retail_kernel invocations themselves, never a second query body.
+//! Import authored CPU queries, including standalone grouped compile! programs.
+//! Standalone sources retain aggregate heads and result declarations. Their
+//! EXPORTS projections identify loader tables; scale-two Decimal::scaled()
+//! reads and ISO date captures use the manifest's coefficient/day encodings.
+//! Dictionary-coded group keys are decoded only at the comparison boundary.
+//! String methods retain their authored host representation and remain subject
+//! to checked planning/translation. Multi-stage sources are listed separately:
+//! importing one stage would discard materialization and change the query.
 use crate::manifest::{Manifest, Result};
 use proc_macro2::{Group, TokenStream, TokenTree};
 use quote::{ToTokens, quote};
@@ -15,6 +22,12 @@ macro_rules! sources {
     )*]; };
 }
 sources!(
+    "h01",
+    "h06",
+    "h10",
+    "h12",
+    "h14",
+    "h19",
     "h03",
     "h04",
     "h04_not_exists",
@@ -32,6 +45,16 @@ sources!(
     "d85"
 );
 
+/// Authored staged queries are inventoried, not falsely registered as one CQ.
+pub const UNSUPPORTED: &[(&str, &str)] = &[
+    ("h02", "keyed minimum materialization followed by joins requires a staged GPU executor"),
+    ("h11", "per-part and global sums followed by a threshold join require a staged GPU executor"),
+    ("h13", "multiple compile! stages and zero-count iterator composition require a staged GPU executor"),
+    ("h15", "supplier sums followed by anti-dominance and supplier joins require a staged GPU executor"),
+    ("h18", "grouped quantity materialization followed by joins requires a staged GPU executor"),
+    ("h20", "keyed shipped-quantity materialization followed by joins requires a staged GPU executor"),
+];
+
 #[derive(Clone)]
 pub struct Relation {
     pub name: Ident,
@@ -46,6 +69,8 @@ pub struct Kernel {
     pub answer: Vec<(Ident, syn::Type)>,
     pub derived: Vec<(Ident, Vec<(Ident, syn::Type)>)>,
     pub body: TokenStream,
+    /// Standalone programs retain their declared output and aggregate head.
+    program: Option<cq_lang_cq::Program>,
 }
 
 fn columns(input: ParseStream<'_>) -> syn::Result<Vec<(Ident, syn::Type)>> {
@@ -143,6 +168,7 @@ impl Parse for Kernel {
             relations,
             derived,
             answer,
+            program: None,
             body: input.parse()?,
         })
     }
@@ -186,29 +212,133 @@ impl Kernel {
     }
 
     pub fn import(source: &str) -> Result<Self> {
-        let file = syn::parse_file(source)?;
-        let invocation = file
-            .items
-            .into_iter()
-            .find_map(|item| match item {
-                syn::Item::Macro(item)
-                    if item
-                        .mac
-                        .path
-                        .segments
-                        .last()
-                        .is_some_and(|s| s.ident == "retail_kernel") =>
-                {
-                    Some(item.mac.tokens)
+        let mut file = syn::parse_file(source)?;
+        for item in &file.items {
+            if let syn::Item::Macro(item) = item
+                && item.mac.path.segments.last().is_some_and(|s| s.ident == "retail_kernel")
+            {
+                return Ok(syn::parse2(item.mac.tokens.clone())?);
+            }
+        }
+        Self::standalone(&mut file)
+    }
+
+    fn standalone(file: &mut syn::File) -> Result<Self> {
+        use syn::visit_mut::VisitMut;
+        struct Compiles(Vec<TokenStream>);
+        impl VisitMut for Compiles {
+            fn visit_macro_mut(&mut self, mac: &mut syn::Macro) {
+                if mac.path.segments.last().is_some_and(|s| s.ident == "compile") {
+                    self.0.push(mac.tokens.clone());
                 }
-                _ => None,
-            })
-            .ok_or("CPU source has no retail_kernel invocation")?;
-        Ok(syn::parse2(invocation)?)
+            }
+        }
+        let mut compiles = Compiles(Vec::new());
+        let run = file.items.iter_mut().find_map(|item| match item {
+            syn::Item::Fn(function) if function.sig.ident == "run" => Some(function),
+            _ => None,
+        }).ok_or("standalone CPU source has no run function")?;
+        compiles.visit_block_mut(&mut run.block);
+        if compiles.0.len() != 1 {
+            return Err(format!(
+                "standalone run contains {} compile! stages; GPU suite requires one CQ program and cannot discard materialization or iterator composition",
+                compiles.0.len()
+            ).into());
+        }
+        struct Compile(cq_lang_cq::Program);
+        impl Parse for Compile {
+            fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+                let keyword: Ident = input.parse()?;
+                if keyword != "pipeline" {
+                    return Err(syn::Error::new_spanned(keyword, "expected pipeline"));
+                }
+                let pipeline;
+                syn::braced!(pipeline in input);
+                if !pipeline.is_empty() {
+                    return Err(pipeline.error("standalone importer requires the authored default pipeline"));
+                }
+                Ok(Self(input.parse()?))
+            }
+        }
+        let program = syn::parse2::<Compile>(compiles.0.remove(0))?.0;
+        let body = program.query.body.to_token_stream();
+        let mut setup: syn::Block = syn::parse_quote!({});
+        for statement in &run.block.stmts {
+            if let syn::Stmt::Local(local) = statement {
+                let name = match &local.pat {
+                    syn::Pat::Ident(name) => Some(&name.ident),
+                    syn::Pat::Type(typed) => match typed.pat.as_ref() {
+                        syn::Pat::Ident(name) => Some(&name.ident),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if let Some(name) = name
+                    && !program.inputs().any(|input| input.name == *name)
+                    && mentions(body.clone(), name)
+                {
+                    setup.stmts.push(statement.clone());
+                }
+            }
+        }
+        let exports = file.items.iter().find_map(|item| match item {
+            syn::Item::Const(item) if item.ident == "EXPORTS" => Some(item.expr.as_ref()),
+            _ => None,
+        }).ok_or("standalone CPU source has no EXPORTS")?;
+        let syn::Expr::Reference(exports) = exports else {
+            return Err("EXPORTS must be a literal slice".into());
+        };
+        let syn::Expr::Array(exports) = exports.expr.as_ref() else {
+            return Err("EXPORTS must be a literal slice".into());
+        };
+        let mut tables = Vec::new();
+        for export in &exports.elems {
+            let syn::Expr::Tuple(pair) = export else {
+                return Err("EXPORTS entries must be table/projection pairs".into());
+            };
+            let strings = pair.elems.iter().map(|value| match value {
+                syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(value), .. }) => Ok(value.value()),
+                _ => Err("EXPORTS table/projection must be literals"),
+            }).collect::<std::result::Result<Vec<_>, _>>()?;
+            if strings.len() != 2 {
+                return Err("EXPORTS entries must have two fields".into());
+            }
+            tables.push((strings[0].clone(), strings[1].split(',').map(|s| s.trim().to_owned()).collect::<Vec<_>>()));
+        }
+        let mut relations = Vec::new();
+        for input in program.inputs() {
+            let projection: Vec<_> = input.columns.iter().map(|column| column.name.to_string()).collect();
+            let matches: Vec<_> = tables.iter().filter(|(_, columns)| *columns == projection).collect();
+            if matches.len() != 1 {
+                return Err(format!("standalone input {} requires exactly one matching EXPORTS projection", input.name).into());
+            }
+            relations.push(Relation {
+                name: input.name.clone(),
+                table: syn::parse_str(&matches[0].0)?,
+                columns: input.columns.iter().map(|column| (column.name.clone(), column.ty.clone())).collect(),
+            });
+        }
+        let answer = program.output().ok_or("standalone program requires an answer declaration")?
+            .columns.iter().map(|column| (column.name.clone(), column.ty.clone())).collect();
+        Ok(Self {
+            plan_advice: TokenStream::new(), setup, relations, answer,
+            derived: Vec::new(), body, program: Some(program),
+        })
+    }
+
+    pub fn is_standalone(&self) -> bool {
+        self.program.is_some()
+    }
+
+    fn cpu_program(&self) -> Result<cq_lang_cq::Program> {
+        Ok(syn::parse2(self.cpu_query())?)
     }
 
     /// The exact macro substitution made by tpch_runtime::retail_kernel.
     pub fn cpu_query(&self) -> TokenStream {
+        if let Some(program) = &self.program {
+            return program.to_token_stream();
+        }
         let declarations = self.relations.iter().map(|relation| {
             let name = &relation.name;
             let fields = relation.columns.iter().map(|(name, ty)| quote!(#name: #ty));
@@ -238,11 +368,24 @@ impl Kernel {
         storage: &BTreeMap<(String, String), syn::Type>,
     ) -> Result<TokenStream> {
         let mut relations = self.relations.clone();
+        let mut logical_variables = BTreeMap::new();
+        collect_variables(self.body.clone(), &relations, &mut logical_variables)?;
         for relation in &mut relations {
             for (column, ty) in &mut relation.columns {
                 if let Some(stored) = storage.get(&(relation.table.to_string(), column.to_string()))
                 {
                     *ty = stored.clone();
+                } else if self.is_standalone() {
+                    let keep_string = ty.to_token_stream().to_string() == "String"
+                        && logical_variables.iter().any(|(variable, origin)| {
+                            *origin == (relation.table.to_string(), column.to_string())
+                                && uses_method(self.body.clone(), variable)
+                        });
+                    if !keep_string {
+                        *ty = syn::parse_str(&manifest.column(
+                            &relation.table.to_string(), &column.to_string(),
+                        )?.ty)?;
+                    }
                 }
             }
         }
@@ -263,7 +406,9 @@ impl Kernel {
             for (column, logical) in &relation.columns {
                 let metadata = manifest.column(&relation.table.to_string(), &column.to_string())?;
                 let declared = logical.to_token_stream().to_string();
-                if metadata.logical_type != declared && metadata.ty != declared {
+                if metadata.logical_type != declared && metadata.ty != declared
+                    && !(self.is_standalone() && declared == "i64" && metadata.logical_type == "Integer")
+                {
                     return Err(format!(
                         "{}.{}: CPU type {} differs from manifest logical type {}",
                         relation.table,
@@ -273,10 +418,11 @@ impl Kernel {
                     )
                     .into());
                 }
-                let ty: syn::Type = if let Some(stored) =
-                    storage.get(&(relation.table.to_string(), column.to_string()))
-                {
-                    stored.clone()
+                let ty = &relations.iter().find(|encoded| encoded.name == relation.name)
+                    .expect("cloned input relation").columns.iter()
+                    .find(|(name, _)| name == column).expect("cloned input column").1;
+                let ty: syn::Type = if self.is_standalone() || storage.contains_key(&(relation.table.to_string(), column.to_string())) {
+                    ty.clone()
                 } else if declared == "String" {
                     logical.clone()
                 } else {
@@ -290,6 +436,20 @@ impl Kernel {
             let fields = columns.iter().map(|(column, ty)| quote!(#column: #ty));
             declarations.extend(quote!(relation #name(#(#fields),*);));
         }
+        if let Some(program) = &self.program {
+            let head = &program.query.head;
+            let answer_name = &head.relation;
+            let origins = self.answer_columns()?;
+            let fields = self.answer.iter().zip(origins).map(|((name, logical), origin)| {
+                let ty = origin.as_ref().and_then(|(table, column)| {
+                    relations.iter().find(|relation| relation.table == table.as_str())
+                        .and_then(|relation| relation.columns.iter().find(|(name, _)| name == column.as_str()))
+                        .map(|(_, ty)| ty)
+                }).unwrap_or(logical);
+                quote!(#name: #ty)
+            });
+            return Ok(quote!(struct Query; #declarations relation #answer_name(#(#fields),*); #head :- #body;));
+        }
         let outputs = self.answer.iter().map(|(name, _)| name);
         Ok(quote!(struct Query; #declarations answer(#(#outputs),*) :- #body))
     }
@@ -297,12 +457,34 @@ impl Kernel {
     pub fn answer_columns(&self) -> Result<Vec<Option<(String, String)>>> {
         let mut variables = BTreeMap::new();
         collect_variables(self.body.clone(), &self.relations, &mut variables)?;
-        Ok(self
-            .answer
-            .iter()
-            .map(|(name, _)| variables.get(&name.to_string()).cloned())
-            .collect())
+        Ok(self.cpu_program()?.query.head.args.iter().map(|argument| {
+            if let syn::Expr::Path(path) = argument {
+                path.path.get_ident().and_then(|name| variables.get(&name.to_string())).cloned()
+            } else {
+                None
+            }
+        }).collect())
     }
+}
+
+fn mentions(tokens: TokenStream, name: &Ident) -> bool {
+    tokens.into_iter().any(|token| match token {
+        TokenTree::Ident(ident) => ident == *name,
+        TokenTree::Group(group) => mentions(group.stream(), name),
+        _ => false,
+    })
+}
+
+fn uses_method(tokens: TokenStream, variable: &str) -> bool {
+    let tokens: Vec<_> = tokens.into_iter().collect();
+    tokens.windows(3).any(|tokens| matches!(
+        (&tokens[0], &tokens[1], &tokens[2]),
+        (TokenTree::Ident(name), TokenTree::Punct(dot), TokenTree::Ident(_))
+            if name == variable && dot.as_char() == '.'
+    )) || tokens.iter().any(|token| match token {
+        TokenTree::Group(group) => uses_method(group.stream(), variable),
+        _ => false,
+    })
 }
 
 fn setup_constants(
@@ -320,8 +502,13 @@ fn setup_constants(
         {
             continue;
         }
-        let syn::Pat::Ident(name) = &local.pat else {
-            return Err("unsupported workload setup pattern".into());
+        let name = match &local.pat {
+            syn::Pat::Ident(name) => name,
+            syn::Pat::Type(typed) => match typed.pat.as_ref() {
+                syn::Pat::Ident(name) => name,
+                _ => return Err("unsupported workload setup pattern".into()),
+            },
+            _ => return Err("unsupported workload setup pattern".into()),
         };
         let expression = &local
             .init
@@ -344,6 +531,14 @@ fn setup_constants(
                 let syn::Expr::Call(call) = method.receiver.as_ref() else {
                     return Err("unsupported setup initializer".into());
                 };
+                if call.func.to_token_stream().to_string() == "Date :: load" {
+                    let Some(syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(date), .. })) = call.args.first() else {
+                        return Err("Date::load needs an ISO literal".into());
+                    };
+                    let days = date.value().parse::<cq_load::Date>()?.days_since_epoch();
+                    constants.insert(name.ident.to_string(), quote!(#days));
+                    continue;
+                }
                 if call.func.to_token_stream().to_string() != "Decimal :: from_scaled" {
                     return Err("unsupported setup initializer".into());
                 }
@@ -357,6 +552,7 @@ fn setup_constants(
                 let value = number.base10_parse::<i64>()?;
                 quote!(#value)
             }
+            syn::Expr::Lit(_) => expression.to_token_stream(),
             _ => {
                 return Err(format!(
                     "unsupported setup initializer: {}",
@@ -386,10 +582,7 @@ fn collect_variables(
             if let Some(TokenTree::Ident(name)) = index.checked_sub(1).and_then(|i| tokens.get(i))
                 && let Some(relation) = relations.iter().find(|r| r.name == *name)
             {
-                for (argument, (column, ty)) in arguments(group)?.iter().zip(&relation.columns) {
-                    if ty.to_token_stream().to_string() == "String" {
-                        continue;
-                    }
+                for (argument, (column, _)) in arguments(group)?.iter().zip(&relation.columns) {
                     if let syn::Expr::Path(path) = argument
                         && let Some(name) = path.path.get_ident()
                     {
@@ -415,7 +608,36 @@ fn encode_tokens(
 ) -> Result<TokenStream> {
     let tokens: Vec<_> = tokens.into_iter().collect();
     let mut encoded = TokenStream::new();
+    let mut skip_until = 0;
     for (index, token) in tokens.iter().enumerate() {
+        if index < skip_until {
+            continue;
+        }
+        if let TokenTree::Ident(name) = token
+            && let Some((table, column)) = variables.get(&name.to_string())
+            && manifest.column(table, column)?.logical_type == "Decimal"
+            && let Some([TokenTree::Punct(dot), TokenTree::Ident(method), TokenTree::Group(args)]) = tokens.get(index + 1..index + 4)
+            && dot.as_char() == '.' && method == "scaled" && args.stream().is_empty()
+        {
+            encoded.extend(quote!((*#name)));
+            skip_until = index + 4;
+            continue;
+        }
+        if let TokenTree::Ident(name) = token
+            && let Some((table, column)) = variables.get(&name.to_string())
+            && manifest.column(table, column)?.logical_type == "String"
+            && relations.iter().find(|relation| relation.table == table.as_str())
+                .and_then(|relation| relation.columns.iter().find(|(name, _)| name == column.as_str()))
+                .is_some_and(|(_, ty)| ty.to_token_stream().to_string() != "String")
+            && matches!(tokens.get(index + 1..index + 3),
+                Some([TokenTree::Punct(a), TokenTree::Punct(b)])
+                    if matches!(a.as_char(), '=' | '!') && b.as_char() == '=')
+            && !matches!(index.checked_sub(1).and_then(|index| tokens.get(index)),
+                Some(TokenTree::Punct(punct)) if punct.as_char() == '*')
+        {
+            encoded.extend(quote!(*#name));
+            continue;
+        }
         match token {
             TokenTree::Ident(name) if constants.contains_key(&name.to_string()) => {
                 encoded.extend(constants[&name.to_string()].clone())
@@ -470,6 +692,9 @@ fn encode_tokens(
                         syn::parse_str::<syn::LitStr>(&literal.to_string()),
                     )
                     && let Some((table, column)) = variables.get(&name.to_string())
+                    && relations.iter().find(|relation| relation.table == table.as_str())
+                        .and_then(|relation| relation.columns.iter().find(|(name, _)| name == column.as_str()))
+                        .is_some_and(|(_, ty)| ty.to_token_stream().to_string() != "String")
                 {
                     let id = manifest.text_id(table, column, &text.value())?;
                     encoded.extend(quote!(#id));
@@ -501,16 +726,49 @@ mod tests {
     }
     #[test]
     fn every_cpu_query_is_imported_without_a_second_body() {
-        assert_eq!(SOURCES.len(), 15);
+        assert_eq!(SOURCES.len(), 21);
         for (name, source) in SOURCES {
             let kernel = Kernel::import(source).unwrap();
             let query: cq_lang_cq::Program = syn::parse2(kernel.cpu_query()).unwrap();
             assert_eq!(
-                query.declarations.len(),
+                query.inputs().count(),
                 kernel.relations.len() + kernel.derived.len(),
                 "{name}"
             );
             assert!(!kernel.body.is_empty(), "{name}");
+        }
+    }
+
+    #[test]
+    fn standalone_import_retains_aggregate_heads_and_output_types() {
+        for name in ["h01", "h06", "h10", "h12", "h14", "h19"] {
+            let source = SOURCES.iter().find(|(query, _)| *query == name).unwrap().1;
+            let kernel = Kernel::import(source).unwrap();
+            assert!(kernel.is_standalone());
+            let program = kernel.cpu_program().unwrap();
+            assert_eq!(program.output().unwrap().columns.len(), kernel.answer.len());
+            assert!(program.query.head.args.iter().any(|argument| {
+                cq_lang_cq::group::aggregate(argument).unwrap().is_some()
+            }));
+            let normal = cq_lang_cq::normal::normalize(&program).unwrap();
+            assert!(normal.query.group.is_some(), "{name}");
+        }
+    }
+
+    #[test]
+    fn staged_programs_are_explicitly_unsupported() {
+        for (name, source) in [
+            ("h02", include_str!("../../../../features/workloads/src/queries/retail/tpch/retail_h02.rs")),
+            ("h11", include_str!("../../../../features/workloads/src/queries/retail/tpch/retail_h11.rs")),
+            ("h13", include_str!("../../../../features/workloads/src/queries/retail/tpch/retail_h13.rs")),
+            ("h15", include_str!("../../../../features/workloads/src/queries/retail/tpch/retail_h15.rs")),
+            ("h18", include_str!("../../../../features/workloads/src/queries/retail/tpch/retail_h18.rs")),
+            ("h20", include_str!("../../../../features/workloads/src/queries/retail/tpch/retail_h20.rs")),
+        ] {
+            let error = Kernel::import(source).err().expect("staged source cannot be one query");
+            assert!(error.to_string().contains("compile! stages"), "{error}");
+            assert!(UNSUPPORTED.iter().any(|(query, _)| *query == name));
+            assert!(!SOURCES.iter().any(|(query, _)| *query == name));
         }
     }
 
@@ -549,6 +807,35 @@ mod tests {
 #[cfg(test)]
 mod encoding_tests {
     use super::*;
+
+    #[test]
+    fn grouped_storage_adaptation_preserves_folds_and_scalar_encodings() {
+        let manifest = Manifest::load(&crate::data_root().join("sf1")).unwrap();
+        for name in ["h01", "h06", "h10", "h12", "h14", "h19"] {
+            let source = SOURCES.iter().find(|(query, _)| *query == name).unwrap().1;
+            let kernel = Kernel::import(source).unwrap();
+            let encoded = kernel.encoded_query(&manifest).unwrap();
+            let spelling = encoded.to_string();
+            assert!(!spelling.contains("scaled"), "{name}: {spelling}");
+            assert!(!spelling.contains("Date"), "{name}: {spelling}");
+            assert!(!spelling.contains("Decimal"), "{name}: {spelling}");
+            let program: cq_lang_cq::Program = syn::parse2(encoded).unwrap();
+            assert_eq!(program.query.head, kernel.cpu_program().unwrap().query.head);
+            let normal = cq_lang_cq::normal::normalize(&program).unwrap();
+            assert!(normal.query.group.is_some(), "{name}");
+            if name == "h01" {
+                assert!(spelling.contains("10471i32"));
+                let types: Vec<_> = program.output().unwrap().columns.iter()
+                    .map(|column| column.ty.to_token_stream().to_string()).collect();
+                assert_eq!(types, ["i32", "i32", "i64", "i64", "usize"]);
+            }
+            if name == "h14" {
+                assert!(spelling.contains("starts_with"));
+                assert!(program.inputs().flat_map(|input| &input.columns)
+                    .any(|column| column.ty.to_token_stream().to_string() == "String"));
+            }
+        }
+    }
 
     #[test]
     fn domain_profile_adapts_the_imported_h05_without_reordering_it() {
@@ -698,7 +985,7 @@ mod encoding_tests {
                 let encoded = kernel.encoded_query(&manifest).unwrap();
                 let program: cq_lang_cq::Program = syn::parse2(encoded.clone()).unwrap();
                 assert_eq!(
-                    program.declarations.len(),
+                    program.inputs().count(),
                     kernel.relations.len() + kernel.derived.len(),
                     "{name}"
                 );
@@ -706,7 +993,7 @@ mod encoding_tests {
                     for column in &relation.columns {
                         assert!(matches!(
                             column.ty.to_token_stream().to_string().as_str(),
-                            "i32" | "i64" | "String"
+                            "i32" | "i64" | "String" | "usize"
                         ));
                     }
                 }

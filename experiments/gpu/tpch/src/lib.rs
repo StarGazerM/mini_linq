@@ -22,6 +22,14 @@ pub fn plans() -> Result<Vec<Value>> {
     )))?)
 }
 
+/// Authored queries requiring staged execution are not executable registrations.
+pub fn unsupported() -> Result<Vec<Value>> {
+    Ok(serde_json::from_str(include_str!(concat!(
+        env!("OUT_DIR"),
+        "/unsupported.json"
+    )))?)
+}
+
 pub fn data_root() -> PathBuf {
     PathBuf::from(env!("TPCH_GPU_COMPILED_ROOT"))
 }
@@ -55,11 +63,15 @@ pub fn run(
     } else {
         Vec::new()
     };
+    let unsupported_sources = unsupported()?;
     for query in queries {
         if !results
             .iter()
             .any(|result| result["query"].as_str() == Some(query.as_str()))
         {
+            if let Some(source) = unsupported_sources.iter().find(|source| source["query"] == *query) {
+                return Err(format!("unsupported query {query}: {}", source["reason"].as_str().unwrap()).into());
+            }
             return Err(format!("unknown query: {query}").into());
         }
     }
@@ -191,8 +203,9 @@ pub fn run(
             "warmup_runs": benchmark::WARMUP_RUNS,
             "measured_runs": benchmark::MEASURED_RUNS,
             "timing": "CUDA event medians; host evaluation/upload + provider build + kernels + final dedup; initial input loading, answer download and comparison excluded",
-            "source": "CPU retail_kernel invocations imported verbatim with include_str; only manifest storage types/literals adapted",
+            "source": "CPU retail_kernel and standalone compile! CQ ASTs imported with include_str; only manifest storage types, date/decimal encodings and dictionary literals adapted",
             "results": results,
+            "unsupported_sources": unsupported_sources,
             "table_markdown": table,
         }))?,
     )?;
@@ -215,11 +228,17 @@ mod tests {
         {
             let mode = report["mode"].as_str().unwrap();
             if report["status"] != "accepted" {
-                // The opaque H07 country disjunction remains a reported rejection.
-                assert_eq!(
-                    query, "h07",
+                // These opaque String predicates retain a valuation that the
+                // current PackedCanon catalog cannot canonicalize.
+                assert!(
+                    matches!(query, "h07" | "h14" | "h19"),
                     "{query} {mode}: {}; term: {}",
                     report["error"], report["term"]
+                );
+                assert!(
+                    report["error"].as_str().unwrap().contains("unmet catalog obligation Canon"),
+                    "{query} {mode}: {}",
+                    report["error"]
                 );
                 continue;
             }
@@ -238,6 +257,12 @@ mod tests {
         )* };
     }
     conformance!(
+        h01,
+        h06,
+        h10,
+        h12,
+        h14,
+        h19,
         h03,
         h05,
         h07,

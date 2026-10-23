@@ -13,16 +13,16 @@
 //! `represent`. Representations remain tuples unless `represent(positions)` is
 //! requested. Staging preserves built-probe lookahead by default;
 //! `stage(batch(64))` also batches total scan predicates before partial Rust.
-//! Sequence lowering runs after `stage`, followed by optional `decompose`
-//! rewrites, `sequential` grading, and `translate_pull`. This host-only path
-//! returns a pull iterator with optional runtime profiling counters.
+//! Sequence lowering runs after `stage`, followed by robust Lookup/Expand
+//! planning, `sequential` grading, and `translate_pull`. Authored `decompose`
+//! advice replaces that default; this host-only path returns a pull iterator.
 //! To fill unauthored Sequence decisions, end `decompose` with
 //! `mini_linq::passes::plan(target::plan)` (for Sequential, the target is
 //! `mini_linq::passes::plan_sequential`). Earlier advice retains precedence;
 //! the target-owned macro supplies its exported machine and catalog.
 //! With a complete Sequence program as input, `compile!` starts at Sequence
-//! planning instead: `plan = ::mini_linq::passes::plan` preserves authored order
-//! with Sequential decomposition, while `plan = ::other::custom_plan` selects an ordinary
+//! planning instead: `plan = ::mini_linq::passes::plan` uses the robust
+//! Lookup/Expand default, while `plan = ::other::custom_plan` selects an ordinary
 //! checked Sequence pass implementing `cq_sequence_plan::Planner`. That pass
 //! supplies its machine/catalog and returns a program with a replayable advice
 //! trace; evidence is planning advice, never a semantic premise. `decompose`
@@ -31,13 +31,12 @@
 //! With CQ input, `plan` retains its CQ-to-RA ordering/reduction meaning;
 //! `plan(order(R, S), no_reduce)` selects an explicit checked relation order.
 //! `plan(target::plan)` remains available in either Sequence planning position.
-//! The CQ default pipeline performs no automatic Sequence planning, so a named
-//! CQ ordering pass retains its authored order. Explicit Sequence planning also
-//! preserves that order by default. `plan(lookup_first)` or
-//! `plan_sequential(lookup_first)` opts into automatic Lookup-first ordering,
-//! pending box 11b. Target adapters use
-//! `cq_sequence_plan::decompose(program, machine, catalog)` to preserve order;
-//! the explicit `cq_sequence_plan::plan` API opts into relational ordering.
+//! Automatic is the robust default (no CE); performance plans are authored
+//! through the advisory. Explicit CQ plan, Physical and Structures advice
+//! retain order through Sequential decomposition. `plan(preserve_order)` or
+//! `plan_sequential(preserve_order)` explicitly requests that policy.
+//! Target adapters use `cq_sequence_plan::decompose` to preserve order and
+//! `cq_sequence_plan::plan` for the robust two-phase Lookup/Expand rule.
 //! An explicit Structures printer such as `own_push::push` replaces the default
 //! Sequence target; custom Sequence terminals select `sequence` and `grade` too.
 //! ```

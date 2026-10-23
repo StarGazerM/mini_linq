@@ -206,9 +206,14 @@ with its checked type and codec facts, fold, tile and item count. Byte layout
 and alignment belong to the target-supplied machine, not to the language.
 An unbounded level imposes no capacity premise. A bounded level without a
 layout model, arithmetic overflow, or an oversized layout is rejected before
-translation, including for explicitly advised programs. The planner may add
-checked publication boundaries between expanding stages and alternatives,
-then compares only resource-legal candidates by PL-Cost.
+translation, including for explicitly advised programs. Resource recovery
+enumerates checked alternatives in fixed order: nested inner-flatten
+segmentation at preferred geometry, smaller item counts, then smaller strips
+derived by halving the machine width. Only after these fail may it add
+dispatch-splitting publications. Every candidate satisfies all grading and
+catalog premises, including BE-Resource; PL-Cost compares the legal segmented
+and plain schedules at the first feasible geometry. If none fits, rejection
+retains all diagnostics from every attempted candidate.
 
 The laws mention only labels of the machine parameter. A term that uses a
 collective at a level the target marks separated is rejected for that
@@ -313,6 +318,12 @@ span, stores and dispatches. An inversion is a Lookup evaluated after an
 upstream Expand in the same pipeline; retained references begin new pipelines.
 Bounds and coefficient dominance establish comparisons; unresolved
 comparisons, like equal costs, retain the earlier candidate.
+Resource recovery first preserves the machine's preferred item count and
+distributing width, trying nested segmentation before reducing either.
+At each geometry PL-Cost compares admissible segmented and plain candidates;
+strict improvement replaces the earlier candidate, preserving stable ties.
+Dispatch splitting is a last resort, never a substitute for an admissible
+single-dispatch segmentation. All tiers retain authored tiles, grades and stores.
 
 A planning invocation may reuse a structural proof only for an equal complete
 Structures prefix and equal Sequence and evidence syntax. Machine grading is
@@ -369,12 +380,11 @@ The decision procedure is bounded enumeration. Host rows remain at host;
 publication and stores consumed by lookup or canon use the deepest
 admissible level, while intervening terms inherit producer placement.
 Below host, the first fanout in a flatten chain uses the distributing
-machine level's static width, if available. Bounded enumeration crosses
-plain and segmented decomposition with items from $\{1,M.\mathsf{items}\}$,
-in fixed plain-first order. Further flattens receive offset-retaining
-stores and inner tiles only when required by grading or when PL-Cost
-proves a smaller span; otherwise the fewer-stores tie-break favors plain
-tiling. Where separate
+machine level's static width, if available. It first tries nested stores and
+inner tiles with preferred items, then plain tiling at the same geometry.
+Only if neither fits does it halve items to one, then halve the machine-derived
+strip width to one. If every geometry fails, named publication boundaries
+split dispatches, with choice/union publications as the last tier. Where separate
 rewrites cannot express this decomposition, the checked \code{segment}
 rewrite pairs an inner-flatten store with an outer tile, justified by
 BE-Offsets and BE-Partition and exposed through both the library and macro.
@@ -488,11 +498,37 @@ shared attribute equivalence classes as edge weights. LargestRoot constructs
 a maximum-weight spanning tree, rooted at the largest relation according to
 available count evidence \cite[Section~3.1, Lemma~3.2]{paper-rpt}.
 Unknown sizes retain deterministic syntax order, not invented cardinalities.
+A projected index need not forbid its relation from becoming this root.
+When its unfrozen Physical producer is a rename or a selection (including
+point and range), and every consumer belongs to the replaced join region,
+the rewrite can recover that producer's full-row stream using its existing
+scan adapters. It removes the now-unread projected index and rebuilds any
+opposite-side provider through the same catalog selection. It does not scan
+or reinterpret the projected payload. Independently consumed, frozen and
+union index producers retain their representation and remain ineligible for
+this recovery. Structures liveness and the full support certificate are
+checked again after the orientation change.
 Among equally weighted parents the deepest parent wins, the chaining
 forward-tree tie-break of ATP \cite[Section~3]{paper-rpt-plus}.
 The forward phase retains predicate-bearing relations and bridge relations,
 filtering before building the next provider. This restricted transfer
 heuristic does not claim full semijoin reduction without its premises.
+The scan root retains its authored streaming mode unless a keyed consumer
+requires its retention. Root forward filters also stream: each has exactly
+one consumer and never supplies a keyed child provider. Nonroot forward
+filters remain retained for those provider builds. Resource decomposition
+may subsequently introduce checked publications. Along a positive left spine, an existing
+join or semijoin against the same named provider on all requested keys already
+witnesses membership. The scheduler omits a repeated forward or Lookup filter
+there, without dropping the later Expand. This local optimization stops at
+opaque operators and never uses estimated keys, counts or selectivities as
+proof. The complete rewritten construction still satisfies
+\textsc{EXT-SeqLookup}.
+If eliminating witnessed Lookups leaves the complete Physical program
+unchanged, this ordering pass returns the original checked Sequence and
+Structures verbatim. It does not use a no-op ordering decision to prune or
+replace authored provider entries: representation-only rewrites remain
+outside the join-reexpression certificate.
 
 Expands are placed at the first consumer requiring the payload.
 Cycle-closing lookups wait for the Expands that supply their keys
@@ -731,3 +767,20 @@ denotation with a canonical boundary (BE-Alpha, BE-Canon), joins as
 flattens of lookups into indexes built in a prior phase (BE-Bind), and a
 partial host fragment with written-order meaning above a total device
 fragment.
+
+\paragraph{Invocation-local proof reuse.}
+Planner enumeration may share a checked Structures prefix, its support graph,
+and immutable structural analysis between candidates. Cache hits require
+complete syntax equality; interned proof identities are introduced only after
+that comparison. Evidence changes revalidate evidence obligations, and grading
+is always checked against the requested machine. Preparing common placement
+once and batching nonsemantic grades therefore preserves PL-Closure and PL-Det;
+the replay trace still contains the individual checked decisions.
+
+Catalog read-level premises apply to the consuming row layout as well as the
+indexed payload. A host-only row cannot acquire a descendant-only read token
+merely because its lookup key is numeric. A checked publication of numeric
+rows before a host consumer is an alternative under BE-Scope and PL-Precedence,
+not an exception to the catalog premise. Resource-rejected dispatches may
+instead publish named inner flatten levels using EXT-SeqStore; every resulting
+tile/item candidate still satisfies BE-Resource before PL-Cost selection.

@@ -30,6 +30,7 @@ fn defaults() -> cq_stage::Configuration {
         represent = ::mini_linq::passes::represent;
         stage = ::mini_linq::passes::stage;
         sequence = ::mini_linq::passes::sequence;
+        decompose = [::mini_linq::passes::plan_sequential];
         grade = ::mini_linq::passes::sequential;
         print = ::mini_linq::passes::translate_pull;
     } }
@@ -83,7 +84,15 @@ fn expand_compile(input: proc_macro2::TokenStream) -> syn::Result<proc_macro2::T
     if syn::parse2::<cq_lang_sequence::Program>(source.tokens.clone()).is_ok() {
         return sequence_pipeline(source.config)?.start(source.tokens);
     }
-    source.config.resolve(defaults())?.start(source.tokens)
+    let mut defaults = defaults();
+    if source.config.plan.is_some()
+        || !source.config.physical.is_empty()
+        || !source.config.structures.is_empty()
+    {
+        defaults.decompose =
+            vec![syn::parse_quote!(::mini_linq::passes::plan_sequential(preserve_order))];
+    }
+    source.config.resolve(defaults)?.start(source.tokens)
 }
 
 /// Complete Sequence input starts at planning, not at the CQ ordering phase.
@@ -422,7 +431,7 @@ fn sequence_plan_target(input: &proc_macro2::TokenStream) -> bool {
         syn::braced!(arguments in input);
         let args: proc_macro2::TokenStream = arguments.parse()?;
         let _: proc_macro2::TokenStream = input.parse()?;
-        Ok(args.to_string() != "lookup_first"
+        Ok(!matches!(args.to_string().as_str(), "lookup_first" | "preserve_order")
             && syn::parse2::<PlanOptions>(args.clone()).is_err()
             && syn::parse2::<syn::Path>(args).is_ok())
     };
@@ -455,14 +464,14 @@ fn sequence_plan_source(input: &proc_macro2::TokenStream) -> bool {
 
 /// Fill unauthored Sequence decisions using the Sequential machine and catalog.
 /// Use in `decompose` directly or through `plan(mini_linq::passes::plan_sequential)`.
-/// Authored order is preserved by default; `lookup_first` explicitly opts into reordering.
+/// The unadvised default is robust Lookup/Expand; `preserve_order` keeps an authored order.
 #[proc_macro]
 pub fn plan_sequential(input: TokenStream) -> TokenStream {
     cq_stage::rewrite::<cq_lang_sequence::Program>(input.into(), |source, args| {
         let machine = cq_sequence_pull::machine();
         let catalog = cq_sequence_pull::catalog();
         let lookup_first = if args.is_empty() {
-            false
+            true
         } else {
             let option: syn::Ident = syn::parse2(args)?;
             if option != "lookup_first" && option != "preserve_order" {
@@ -570,6 +579,29 @@ mod tests {
         assert_eq!(options.order.unwrap(), expected);
         assert!(syn::parse2::<PlanOptions>(quote!(order(R), order(S))).is_err());
         assert!(syn::parse2::<PlanOptions>(quote!(order(R S))).is_err());
+    }
+
+    #[test]
+    fn robust_sequence_default_keeps_authored_cq_advisory_precedence() {
+        let source = quote! {
+            struct Query;
+            relation R(x:i32);
+            answer(x) :- R(x);
+        };
+        let automatic = expand_compile(source.clone()).unwrap().to_string();
+        assert!(automatic.contains("plan_sequential"));
+        assert!(!automatic.contains("preserve_order"));
+        let advised = expand_compile(quote! {
+            pipeline { plan = custom_order; }
+            #source
+        }).unwrap().to_string();
+        assert!(advised.contains("plan_sequential (preserve_order)"));
+        let manual = expand_compile(quote! {
+            pipeline { decompose = [authored_schedule]; }
+            #source
+        }).unwrap().to_string();
+        assert!(manual.contains("authored_schedule"));
+        assert!(!manual.contains("plan_sequential"));
     }
 
     #[test]

@@ -53,6 +53,18 @@ fn translate(program: &Program) -> String {
 }
 
 #[test]
+fn primitive_host_provider_uploads_columns_without_tuple_reencoding() {
+    let mut program = filtered_probe(quote!(value > 0));
+    program.structures.structures.entries[1] =
+        syn::parse_quote!(provider host scan = ::core::iter::Map<_, _> [];);
+    let generated = translate(&program);
+    assert!(generated.contains("upload_numeric_columns"));
+    assert!(generated.contains("__cq_host_column_0"));
+    assert!(generated.contains("__cq_host_column_1"));
+    assert!(!generated.contains("DeviceColumns :: from_rows"));
+}
+
+#[test]
 fn compact_and_project_preserve_probe_row_provenance() {
     // The same provider is consumed first for membership and then for payload.
     // Its aggregate Exact capability must not turn Compact into a payload read.
