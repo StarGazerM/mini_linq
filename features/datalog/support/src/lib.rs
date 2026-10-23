@@ -64,12 +64,35 @@ impl Fresh {
     }
 }
 
-/// Variable columns of an atom, in written order.
+/// First column of each distinct variable, in written order.
 pub fn columns(atom: &Atom) -> Vec<usize> {
+    let mut seen = BTreeSet::new();
     atom.args
         .iter()
         .enumerate()
-        .filter_map(|(i, arg)| rust::variable(arg).map(|_| i))
+        .filter_map(|(i, arg)| {
+            let variable = rust::variable(arg)?;
+            seen.insert(symbol_name(variable)).then_some(i)
+        })
+        .collect()
+}
+
+/// Repeated variable columns paired with their first occurrence, in repeat order.
+pub fn equalities(atom: &Atom) -> Vec<(usize, usize)> {
+    let mut first = BTreeMap::new();
+    atom.args
+        .iter()
+        .enumerate()
+        .filter_map(|(i, arg)| {
+            let variable = rust::variable(arg)?;
+            match first.entry(symbol_name(variable)) {
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert(i);
+                    None
+                }
+                std::collections::btree_map::Entry::Occupied(entry) => Some((*entry.get(), i)),
+            }
+        })
         .collect()
 }
 
@@ -146,7 +169,8 @@ mod tests {
     #[test]
     fn bound_and_constant_columns_keep_written_order() {
         let atom: Atom = syn::parse_quote!(R(x, 7, y, _, r#x, (8 + 1), (_)));
-        assert_eq!(columns(&atom), vec![0, 2, 4]);
+        assert_eq!(columns(&atom), vec![0, 2]);
+        assert_eq!(equalities(&atom), vec![(0, 4)]);
         assert_eq!(
             filters(&atom),
             vec![(1, syn::parse_quote!(7)), (5, syn::parse_quote!((8 + 1)))]

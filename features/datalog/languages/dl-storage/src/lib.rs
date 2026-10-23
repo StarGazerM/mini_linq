@@ -5,9 +5,11 @@
 //! relation-kind fields retain checked defaults; delta and next share a move type.
 //! Optional per-host certificates record canonical-wrapper/admission roots,
 //! complete maintained layout permutations, and set-valued negation projections.
+//! Negative projections record first variable columns, repeated-column equality
+//! pairs and constant filters; their key sets are prepared once per component.
 //! Uncertified hosts remain valid storage but cannot discharge CQ host facts.
 //! See doc/formal/datalog.tex for the storage refinement obligations.
-use cq_datalog_support::{columns, ensure, filters, key_columns};
+use cq_datalog_support::{columns, ensure, equalities, filters, key_columns};
 pub use cq_lang_datalog_incremental as incremental;
 use cq_syntax::symbol_name;
 pub use incremental::strata::source::{BodyItem, Query};
@@ -63,6 +65,7 @@ pub struct Negative {
     pub relation: usize,
     pub columns: Vec<usize>,
     pub filters: Vec<(usize, Expr)>,
+    pub equalities: Vec<(usize, usize)>,
 }
 /// Structural provenance of a canonical host, indexed in its storage vector.
 /// Opaque collection implementations still owe their declared collection laws.
@@ -92,7 +95,7 @@ record!(Providers {
 });
 record!(Layout { relation: Ident, columns: Vec<usize>, key: usize, provider: Type, maintenance: Ident });
 record!(Read { variant: usize, position: usize, kind: Ident, index: usize, columns: Vec<usize> });
-record!(Negative { component: usize, relation: usize, columns: Vec<usize>, filters: Vec<(usize, Expr)> });
+record!(Negative { component: usize, relation: usize, columns: Vec<usize>, filters: Vec<(usize, Expr)>, equalities: Vec<(usize, usize)> });
 record!(HostCanonical { kind: Ident, index: usize, source: Ident, columns: Vec<usize> });
 record!(Policy {
     insertion: Ident,
@@ -176,6 +179,7 @@ pub fn read_plan(
                         relation: analysis.positions[&symbol_name(&atom.relation)],
                         columns: columns(atom),
                         filters: filters(atom),
+                        equalities: equalities(atom),
                     };
                     if !negations.contains(&entry) {
                         negations.push(entry);

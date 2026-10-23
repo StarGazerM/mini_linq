@@ -8,6 +8,20 @@
 //! queue, lowering ordinal, discharged facts and terminal registry exactly.
 //! Custom Sequence lowering, grading, rewrites or arguments remain untouched,
 //! as do frozen-key holes and already-authored Structures push pipelines.
+//! Negated atoms read completed borrowed key sets through CQ anti-joins. Key
+//! sets are built once per stratum and shared by tasks, never rebuilt per call.
+//!
+//! # Validation commands
+//!
+//! Run from `features/datalog-parallel`, one command at a time:
+//!
+//! ```text
+//! cargo test --workspace --locked
+//! cargo test --workspace --all-features --locked
+//! cargo test --locked -p cq-datalog-parallel --features counters --test counters -- --nocapture
+//! cargo run --release --locked -p datalog-parallel-oracle -- golden
+//! cargo run --release --locked -p datalog-parallel-oracle --no-default-features --features mini-par,counters -- counters
+//! ```
 //!
 //! # DOOP engine features
 //!

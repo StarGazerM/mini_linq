@@ -59,6 +59,7 @@ pub fn emit(program: &incremental::Program) -> syn::Result<TokenStream> {
                 &candidates[&head],
                 &state,
                 &positions,
+                &[],
                 BTreeMap::new(),
                 &mut fresh,
             )?;

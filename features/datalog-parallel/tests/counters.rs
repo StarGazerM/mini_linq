@@ -45,3 +45,50 @@ fn parallel_holes_reuse_full_and_delta_layouts_without_fallback_builds() {
         assert!(costs.iter().map(|cost| cost.rows_enumerated).sum::<u64>() > 0);
     });
 }
+
+#[test]
+fn parallel_negative_keys_are_shared_native_membership_hosts() {
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(4)
+        .build()
+        .unwrap();
+    pool.install(|| {
+        let domain: Vec<_> = (0..2048_i32).map(|id| (id, format!("key-{id}"))).collect();
+        let blocked: Vec<_> = (0..2048_i32)
+            .map(|id| {
+                let left = format!("key-{id}");
+                let right = if id % 3 == 0 {
+                    left.clone()
+                } else {
+                    format!("other-{id}")
+                };
+                (left, right)
+            })
+            .collect();
+        pool.broadcast(|_| cq_storage::counters::reset());
+        let rows: std::collections::BTreeSet<_> = cq_datalog::datalog! {
+            pipeline {
+                storage_rewrites = [cq_datalog_parallel::shard_storage];
+                round = [cq_datalog_parallel::partition(threshold = 1, grain = 64)];
+                print = cq_datalog_parallel::print_rounds;
+            }
+            struct NegativeParallel;
+            relation Domain(id:i32,key:String) = (&domain);
+            relation Blocked(left:String,right:String) = (&blocked);
+            relation Allowed(id:i32);
+            output Allowed;
+            Allowed(*id) :- Domain(id,key), !Blocked(key,key);
+        }
+        .collect();
+        let costs = pool.broadcast(|_| cq_storage::counters::snapshot());
+        assert_eq!(
+            rows,
+            (0..2048).filter(|id| id % 3 != 0).map(|id| (id,)).collect()
+        );
+        assert_eq!(costs.iter().map(|cost| cost.index_builds).sum::<u64>(), 0);
+        assert_eq!(
+            costs.iter().map(|cost| cost.lookups).sum::<u64>(),
+            domain.len() as u64
+        );
+    });
+}

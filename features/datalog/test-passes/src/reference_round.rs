@@ -138,11 +138,30 @@ fn hole(program: &Program, index: usize, fresh: &mut Fresh) -> syn::Result<Token
         .iter()
         .map(|column| key_hole && matches!(&column.ty, syn::Type::Reference(_)))
         .collect::<Vec<_>>();
+    // CPU key rows store column references, while their CQ input schemas describe
+    // the referents. Keep the reference evaluator's comparisons at logical depth.
+    let borrowed_negative_inputs = program
+        .context
+        .strata
+        .iter()
+        .flat_map(|stratum| &stratum.keys)
+        .filter(|key| {
+            key.representation == round::KeyRepresentation::Borrowed && !key.columns.is_empty()
+        })
+        .map(|key| symbol_name(&key.name))
+        .collect::<Vec<_>>();
     let types = output.columns.iter().map(|column| &column.ty);
     let state = fresh.id("round_hole_inputs");
     let candidates = fresh.id("round_hole_rows");
-    let evaluation =
-        crate::reference::emit_query(&cq.query, &state, &positions, &candidates, &borrowed, fresh)?;
+    let evaluation = crate::reference::emit_query(
+        &cq.query,
+        &state,
+        &positions,
+        &candidates,
+        &borrowed,
+        &borrowed_negative_inputs,
+        fresh,
+    )?;
     Ok(quote!({
         let #state = (#(#values,)*);
         let mut #candidates = ::std::collections::HashSet::<(#(#types,)*)>::new();

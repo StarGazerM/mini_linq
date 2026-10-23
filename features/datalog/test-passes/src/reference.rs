@@ -90,6 +90,7 @@ fn emit_ranked(program: &source::Program, ranks: &[usize]) -> syn::Result<TokenS
                 &candidates[&head],
                 &state,
                 &analysis.positions,
+                &[],
                 BTreeMap::new(),
                 &mut fresh,
             )?);
@@ -141,6 +142,7 @@ pub(crate) fn emit_query(
     positions: &BTreeMap<String, usize>,
     candidates: &syn::Ident,
     borrowed_heads: &[bool],
+    borrowed_negative_inputs: &[String],
     fresh: &mut Fresh,
 ) -> syn::Result<TokenStream> {
     let heads = query
@@ -162,6 +164,7 @@ pub(crate) fn emit_query(
         candidates,
         state,
         positions,
+        borrowed_negative_inputs,
         BTreeMap::new(),
         fresh,
     )
@@ -175,6 +178,7 @@ pub(crate) fn body(
     candidates: &syn::Ident,
     state: &syn::Ident,
     positions: &BTreeMap<String, usize>,
+    borrowed_negative_inputs: &[String],
     mut scope: BTreeMap<String, bool>,
     fresh: &mut Fresh,
 ) -> syn::Result<TokenStream> {
@@ -215,13 +219,23 @@ pub(crate) fn body(
                     prefix.push(quote!(if #row.#column != (#argument) { continue; }));
                 }
             }
-            let next = body(rest, heads, candidates, state, positions, scope, fresh)?;
+            let next = body(
+                rest,
+                heads,
+                candidates,
+                state,
+                positions,
+                borrowed_negative_inputs,
+                scope,
+                fresh,
+            )?;
             Ok(quote!(for #row in #state.#field.iter() { #(#prefix)* #next }))
         }
         BodyItem::Negation(negative) => {
             let atom = &negative.atom;
             let field = syn::Index::from(positions[&symbol_name(&atom.relation)]);
             let row = fresh.id("reference_negative");
+            let borrowed = borrowed_negative_inputs.contains(&symbol_name(&atom.relation));
             let conditions = atom
                 .args
                 .iter()
@@ -231,30 +245,62 @@ pub(crate) fn body(
                         return None;
                     }
                     let column = syn::Index::from(column);
+                    let value = if borrowed {
+                        quote!(*#row.#column)
+                    } else {
+                        quote!(#row.#column)
+                    };
                     Some(
                         if rust::variable(argument)
                             .is_some_and(|v| scope.get(&symbol_name(v)) == Some(&true))
                         {
-                            quote!(&#row.#column == #argument)
+                            quote!(&(#value) == #argument)
                         } else {
-                            quote!(#row.#column == (#argument))
+                            quote!((#value) == (#argument))
                         },
                     )
                 })
                 .collect::<Vec<_>>();
-            let next = body(rest, heads, candidates, state, positions, scope, fresh)?;
+            let next = body(
+                rest,
+                heads,
+                candidates,
+                state,
+                positions,
+                borrowed_negative_inputs,
+                scope,
+                fresh,
+            )?;
             Ok(quote!(if !#state.#field.iter().any(|#row| true #(&& (#conditions))*) { #next }))
         }
         BodyItem::Filter(filter) => {
             let condition = &filter.condition;
-            let next = body(rest, heads, candidates, state, positions, scope, fresh)?;
+            let next = body(
+                rest,
+                heads,
+                candidates,
+                state,
+                positions,
+                borrowed_negative_inputs,
+                scope,
+                fresh,
+            )?;
             Ok(quote!(if #condition { #next }))
         }
         BodyItem::Let(binding) => {
             for name in rust::bindings(&binding.pattern) {
                 scope.insert(symbol_name(&name), false);
             }
-            let next = body(rest, heads, candidates, state, positions, scope, fresh)?;
+            let next = body(
+                rest,
+                heads,
+                candidates,
+                state,
+                positions,
+                borrowed_negative_inputs,
+                scope,
+                fresh,
+            )?;
             Ok(quote!({ #binding; #next }))
         }
         BodyItem::For(generator) => {
@@ -264,7 +310,16 @@ pub(crate) fn body(
             let value = fresh.id("reference_generated");
             let expression = &generator.expression;
             let pattern = &generator.pattern;
-            let next = body(rest, heads, candidates, state, positions, scope, fresh)?;
+            let next = body(
+                rest,
+                heads,
+                candidates,
+                state,
+                positions,
+                borrowed_negative_inputs,
+                scope,
+                fresh,
+            )?;
             Ok(quote!(for #value in #expression {
                 let #pattern = &#value;
                 #next
@@ -272,12 +327,30 @@ pub(crate) fn body(
         }
         BodyItem::Equality(equality) => {
             let condition = constraint(&cq_syntax::Constraint::from_equality(equality), &scope);
-            let next = body(rest, heads, candidates, state, positions, scope, fresh)?;
+            let next = body(
+                rest,
+                heads,
+                candidates,
+                state,
+                positions,
+                borrowed_negative_inputs,
+                scope,
+                fresh,
+            )?;
             Ok(quote!(if #condition { #next }))
         }
         BodyItem::Constraint(constraint) => {
             let condition = self::constraint(constraint, &scope);
-            let next = body(rest, heads, candidates, state, positions, scope, fresh)?;
+            let next = body(
+                rest,
+                heads,
+                candidates,
+                state,
+                positions,
+                borrowed_negative_inputs,
+                scope,
+                fresh,
+            )?;
             Ok(quote!(if #condition { #next }))
         }
         _ => Err(syn::Error::new_spanned(
@@ -287,7 +360,7 @@ pub(crate) fn body(
     }
 }
 
-// Query parsing recognizes total guards and strips reference syntax from their
+// Query parsing recognizes relational guards and strips reference syntax from their
 // relational terms. Restore a uniform borrowed comparison here, rather than
 // treating cq_tokens() (the logical wire spelling) as executable Rust.
 fn constraint(value: &cq_syntax::Constraint, scope: &BTreeMap<String, bool>) -> TokenStream {
@@ -336,6 +409,5 @@ fn constraint(value: &cq_syntax::Constraint, scope: &BTreeMap<String, bool>) -> 
             });
             quote!(false #(|| (#branches))*)
         }
-        Constraint::Total { expression, .. } => quote!(#expression),
     }
 }
