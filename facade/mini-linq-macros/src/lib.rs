@@ -461,7 +461,7 @@ fn sequence_plan_source(input: &proc_macro2::TokenStream) -> bool {
 
 /// Fill unauthored Sequence decisions using the Sequential machine and catalog.
 /// Use in `decompose` directly or through `plan(mini_linq::passes::plan_sequential)`.
-/// The unadvised default is robust Lookup/Expand; `preserve_order` keeps an authored order.
+/// The unadvised default keeps the written order; `lookup_first` opts into Lookup/Expand ordering.
 #[proc_macro]
 pub fn plan_sequential(input: TokenStream) -> TokenStream {
     cq_stage::rewrite::<cq_lang_sequence::Program>(input.into(), |source, args| {
