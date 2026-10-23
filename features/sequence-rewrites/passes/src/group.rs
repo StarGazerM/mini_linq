@@ -36,6 +36,20 @@ pub fn group_without_canon_in(
             _ => false,
         }
     }
+    fn expanding(term: &Term, source: &Program) -> bool {
+        match term {
+            Term::Lookup { .. } => true,
+            Term::Ref(name) => super::definition(source, name)
+                .ok()
+                .is_some_and(|index| expanding(&source.sequence.definitions[index].term, source)),
+            Term::Canon(inner)
+            | Term::Map(_, inner)
+            | Term::Compact(_, inner)
+            | Term::Flatten(inner)
+            | Term::Tile { inner, .. } => expanding(inner, source),
+            _ => false,
+        }
+    }
     fn strip(term: &mut Term, pending: &mut Vec<Ident>, source: &Program) {
         match term {
             Term::Ref(name) => pending.push(name.clone()),
@@ -43,7 +57,7 @@ pub fn group_without_canon_in(
                 *term = *inner.clone();
                 strip(term, pending, source);
             }
-            Term::Store { inner, .. } if canonical(inner, source) => {
+            Term::Store { inner, .. } if canonical(inner, source) && !expanding(inner, source) => {
                 *term = *inner.clone();
                 strip(term, pending, source);
             }

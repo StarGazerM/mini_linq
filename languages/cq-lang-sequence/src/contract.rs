@@ -422,6 +422,17 @@ impl Checked<'_> {
                     && *subject == rename.relation
                     && let Some(key) = columns
                         .iter()
+                        .filter(|column| {
+                            !rename.constants.as_ref().is_some_and(|constants| {
+                                constants.equalities.iter().any(|equality| {
+                                    equality.left == **column
+                                        && matches!(
+                                            equality.right,
+                                            physical::syntax::algebra::EqualityValue::Literal(_)
+                                        )
+                                })
+                            })
+                        })
                         .map(|column| {
                             rename
                                 .mapping

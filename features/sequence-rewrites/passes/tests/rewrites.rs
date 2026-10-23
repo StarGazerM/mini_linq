@@ -281,3 +281,34 @@ fn grouped_key_premises_remove_only_proven_valuation_canon() {
     }
     assert!(cq_sequence_rewrite_passes::group_without_canon(&projected, quote!(answer)).is_err());
 }
+
+#[test]
+fn grouped_join_requires_keys_for_every_enumerated_atom() {
+    let mut source: Program = syn::parse_quote! {
+        physical {
+            relation L(id:i64, a:i64); relation R(a:i64,b:i64);
+            l = pipe rename L@0 {id -> id,a -> a};
+            r = let rename R@1 {a -> a,b -> b};
+            j = let canon probe first [a] l,r;
+            grouped = let group j by [] { total:i64=sum(b); };
+            return grouped as answer(total);
+        }
+        structures {
+            l host scan = Reader []; r host scan = Reader [];
+            r = Provider [a]; j rows = Rows; j canon = Canon; grouped rows = Rows;
+        }
+        sequence {
+            l = rows l; r = store rows r;
+            j = store canon flatten lookup r [a] l;
+            result = store group grouped j;
+        }
+        evidence { L(id) key; }
+    };
+    assert!(cq_sequence_rewrite_passes::group_without_canon(&source, quote!(result)).is_err());
+    source.evidence = syn::parse_quote!(evidence { L(id) key; R(a,b) key; });
+    let target = cq_sequence_rewrite_passes::group_without_canon(&source, quote!(result)).unwrap();
+    let Term::Store { inner, .. } = &target.sequence.definitions[2].term else {
+        panic!("expanding input keeps its flat publication");
+    };
+    assert!(matches!(inner.as_ref(), Term::Flatten(_)));
+}
