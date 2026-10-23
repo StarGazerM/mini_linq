@@ -46,8 +46,10 @@ fn compile(
     profile: &str,
 ) -> CompileResult<(TokenStream, serde_json::Value)> {
     let cpu_source = kernel.cpu_query();
+    // Registration passes a query name only for an authored hand profile.
+    let hand_profile = !matches!(profile, "automatic" | "advised" | "h05");
     let storage_schema = match pipeline.storage.as_str() {
-        "" => None,
+        "" | "tpch_dictionary" => None,
         "tpch_domains" => Some(gpu_compress_host::tpch::schema()),
         other => {
             return Err(Rejected {
@@ -59,6 +61,21 @@ fn compile(
     };
     let mut stored_types = std::collections::BTreeMap::new();
     let mut domains = std::collections::BTreeMap::new();
+    if pipeline.storage == "tpch_dictionary" {
+        // Authored constant-only string queries use the manifest's existing
+        // column-local i32 dictionaries. The source adapter resolves literals;
+        // this does not change predicates or teach the GPU to execute Rust.
+        for relation in &kernel.relations {
+            for (column, logical) in &relation.columns {
+                if logical.to_token_stream().to_string() == "String" {
+                    stored_types.insert(
+                        (relation.table.to_string(), column.to_string()),
+                        syn::parse_quote!(i32),
+                    );
+                }
+            }
+        }
+    }
     if let Some(schema) = &storage_schema {
         for relation in &kernel.relations {
             let columns = schema
@@ -146,6 +163,13 @@ fn compile(
                 .insert(0, quote!(retain_streams(#leaf)).to_string());
         }
     }
+    if hand_profile {
+        checked(
+            "hand Physical choices",
+            &physical,
+            advice::hand_physical(&physical, profile, &mut pipeline),
+        )?;
+    }
     let physical = checked(
         "Physical advice",
         &physical,
@@ -165,6 +189,13 @@ fn compile(
                 advice::provider_layout(&physical, "Supplier"),
             )?,
         );
+    }
+    if hand_profile && profile != "h04" {
+        pipeline.structures.extend(checked(
+            "hand membership layout",
+            &default_structures,
+            advice::hand_membership(&default_structures),
+        )?);
     }
     let selected = checked(
         "Structures advice",
@@ -261,6 +292,8 @@ fn compile(
             })
         } else if profile == "h05" {
             advice::h05_schedule(&authored.program)
+        } else if hand_profile {
+            advice::hand_schedule(&authored.program, profile)
         } else if profile == "automatic" {
             cq_sequence_plan::plan(
                 &authored.program,
@@ -365,11 +398,7 @@ fn compile(
     let mut input_types = Vec::new();
     let mut bindings = Vec::new();
     let mut sequential_bindings = Vec::new();
-    for (index, relation) in cq
-        .inputs()
-        .take(kernel.relations.len())
-        .enumerate()
-    {
+    for (index, relation) in cq.inputs().take(kernel.relations.len()).enumerate() {
         let field = fields[index];
         let table = &tables[index];
         let names = &column_names[index];
@@ -446,19 +475,27 @@ fn compile(
         answer_types.push(if let Some(output) = cq.output() {
             &output.columns[index].ty
         } else {
-            column.as_ref().and_then(|column| stored_types.get(column)).unwrap_or(ty)
+            column
+                .as_ref()
+                .and_then(|column| stored_types.get(column))
+                .unwrap_or(ty)
         });
         if let Some(domain) = column.as_ref().and_then(|column| domains.get(column)) {
             let decoder = format_ident!("domain_{index}");
             decode_bindings.push(quote!(let #decoder = data.catalog.domain(#domain)?;));
             borrowed_outputs.push(quote!(#decoder.value(*row.#output).to_string()));
             owned_outputs.push(quote!(#decoder.value(row.#output).to_string()));
-        } else if kernel.is_standalone() && ty.to_token_stream().to_string() == "String"
+        } else if kernel.is_standalone()
+            && ty.to_token_stream().to_string() == "String"
             && answer_types.last().unwrap().to_token_stream().to_string() != "String"
         {
-            let (table, column) = column.as_ref().expect("encoded string output has an input domain");
+            let (table, column) = column
+                .as_ref()
+                .expect("encoded string output has an input domain");
             let decoder = format_ident!("dictionary_{index}");
-            decode_bindings.push(quote!(let #decoder = manifest.dictionary(manifest.column(#table, #column)?)?;));
+            decode_bindings.push(
+                quote!(let #decoder = manifest.dictionary(manifest.column(#table, #column)?)?;),
+            );
             borrowed_outputs.push(quote!(#decoder[*row.#output as usize].clone()));
             owned_outputs.push(quote!(#decoder[row.#output as usize].clone()));
         } else {
@@ -663,16 +700,20 @@ fn main() -> Result<()> {
                 }
                 let default_h05 =
                     mode == "advised" && name == "h05" && !overrides.contains_key(name);
+                let hand = if mode == "advised" && !overrides.contains_key(name) {
+                    advice::Pipeline::hand(name)
+                } else {
+                    None
+                };
+                let hand_profile = hand.is_some();
                 let mut pipeline = if mode == "automatic" {
                     advice::Pipeline::baseline()
                 } else if let Some(pipeline) = overrides.get(name) {
                     pipeline.clone()
                 } else if default_h05 {
                     advice::Pipeline::h05()
-                } else if name == "h09" {
-                    advice::Pipeline::h09()
-                } else if matches!(name, "h04" | "h04_not_exists" | "h16" | "h22") {
-                    advice::Pipeline::negation(name)
+                } else if let Some(hand) = hand {
+                    hand
                 } else if kernel.is_standalone() {
                     advice::Pipeline::grouped(&kernel.cpu_query())?
                 } else {
@@ -687,8 +728,8 @@ fn main() -> Result<()> {
                 let mut report = json!({"query": name, "sf": sf, "mode": mode, "cpu_query": kernel.cpu_query().to_string(), "cpu_plan_advice": kernel.plan_advice.to_string(), "pipeline": pipeline});
                 let profile = if default_h05 {
                     "h05"
-                } else if mode == "advised" && name == "h09" && !overrides.contains_key(name) {
-                    "h09"
+                } else if hand_profile {
+                    name
                 } else {
                     mode
                 };
@@ -748,7 +789,10 @@ fn main() -> Result<()> {
     let generated: syn::File = syn::parse2(generated)?;
     fs::write(out.join("queries.rs"), prettyplease::unparse(&generated))?;
     fs::write(out.join("plans.json"), serde_json::to_vec_pretty(&reports)?)?;
-    fs::write(out.join("unsupported.json"), serde_json::to_vec_pretty(&unsupported)?)?;
+    fs::write(
+        out.join("unsupported.json"),
+        serde_json::to_vec_pretty(&unsupported)?,
+    )?;
     // Keep the same canonical path available to the runner, rather than silently
     // measuring a different fixture after constants were encoded at build time.
     println!(
