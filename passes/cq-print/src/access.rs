@@ -409,13 +409,46 @@ impl<'a> Context<'a> {
             })
     }
 
-    pub fn host_lookup(&self, left: &str, access: &HostAccess, contains: bool) -> TokenStream {
+    pub fn host_lookup(
+        &self,
+        left: &str,
+        access: &HostAccess,
+        contains: bool,
+        negative: bool,
+    ) -> TokenStream {
         let value = &access.value;
+        if negative && access.key.is_empty() {
+            // An empty anti key asks only whether the host has a witness.
+            // No keyed storage is needed, even for hosts without membership.
+            return quote!(::core::iter::Iterator::next(
+                &mut ::cq_storage::rows::Rows::rows(#value)
+            ).is_some());
+        }
         let fallback = &access.fallback;
-        let key = self.host_key(left, access);
         let types = self.host_key_types(left, access);
         let types: Vec<_> = types.collect();
-        let receiver = if access.prefix && !access.owned_key {
+        if negative && access.owned_key {
+            let fields = access.key.iter().zip(&types).map(|(column, ty)| {
+                let value = self.access(left, column);
+                // Pull filters borrow computed fields; push sinks own them.
+                // Borrow fixes one logical reference in either representation.
+                quote!(::core::borrow::Borrow::<#ty>::borrow(&#value))
+            });
+            let key = quote!(&(#(#fields,)*));
+            let receiver = if access.prefix {
+                quote!(&&&::cq_storage::dispatch::Host::<_, (#(#types,)*), _, _>::new(#value, &#fallback))
+            } else {
+                quote!(&::cq_storage::dispatch::Host::<_, (#(#types,)*), _, _>::new(#value, &#fallback))
+            };
+            return quote!({
+                use ::cq_storage::dispatch::ContainsOwned as _;
+                (#receiver).contains_owned(#key)
+            });
+        }
+        let key = self.host_key(left, access);
+        let receiver = if access.prefix && !access.owned_key && negative {
+            quote!(&&&::cq_storage::dispatch::Host::<_, (#(#types,)*), _, _>::new(#value, &#fallback))
+        } else if access.prefix && !access.owned_key {
             quote!(&&::cq_storage::dispatch::Host::<_, (#(#types,)*), _, _>::new(#value, &#fallback))
         } else {
             quote!(&::cq_storage::dispatch::Host::<_, (#(#types,)*), _, _>::new(#value, &#fallback))

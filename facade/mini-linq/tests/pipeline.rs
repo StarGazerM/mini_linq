@@ -360,7 +360,7 @@ fn default_reduces_cyclic_block_scopes_and_preserves_answers() {
 }
 
 #[test]
-fn total_string_filters_and_derived_country_domains_execute_exactly() {
+fn opaque_string_filters_and_derived_country_domains_execute_exactly() {
     let parts = [
         (1, "green brass".to_owned()),
         (2, "blue".to_owned()),
@@ -377,13 +377,13 @@ fn total_string_filters_and_derived_country_domains_execute_exactly() {
     fn green(name: &str) -> bool {
         name.contains("green")
     }
-    let asserted: std::collections::BTreeSet<_> = mini_linq::mini_linq! {
+    let custom: std::collections::BTreeSet<_> = mini_linq::mini_linq! {
         struct Q; relation parts(key:i32,name:String); relation lines(part:i32);
-        answer(key) :- lines(key), parts(key,name), #[total] if green(name);
+        answer(key) :- lines(key), parts(key,name), if green(name);
     }
     .map(|(key,)| *key)
     .collect();
-    assert_eq!(asserted, actual);
+    assert_eq!(custom, actual);
     let countries = [
         (1, "FRANCE".to_owned()),
         (2, "GERMANY".to_owned()),
@@ -414,7 +414,7 @@ fn unrecognized_partial_string_guard_does_not_run_on_dangling_parts() {
 }
 
 #[test]
-fn total_allowlist_preserves_macro_forwarded_type_and_name_hygiene() {
+fn opaque_guard_preserves_macro_forwarded_type_and_name_hygiene() {
     macro_rules! filtered {
         ($ty:ty; $rows:ident; $name:ident) => {
             mini_linq::mini_linq! {
@@ -450,9 +450,105 @@ fn total_identifier_remains_available_in_let_bindings_and_guards() {
     assert_eq!(actual, [2, -2]);
     let actual: Vec<_> = mini_linq::mini_linq! {
         struct Q; relation rows(x:i32,y:i32);
-        answer(total) :- rows(total,_), #[total] if total.is_positive();
+        answer(total) :- rows(total,_), if total.is_positive();
     }
     .map(|(total,)| *total)
     .collect();
     assert_eq!(actual, [2]);
+}
+
+#[test]
+fn cq_negation_excludes_matching_keys_with_constants_and_wildcards() {
+    let rows = [(1,), (2,), (3,), (4,), (4,)];
+    let blocked = [(1, 7, 10), (1, 7, 11), (2, 8, 10), (3, 7, 12)];
+    let actual: std::collections::BTreeSet<_> = mini_linq::mini_linq! {
+        struct Q;
+        relation rows(key:i32);
+        relation blocked(key:i32,kind:i32,payload:i32);
+        answer(key) :- rows(key), !blocked(key,7,_);
+    }
+    .map(|(key,)| *key)
+    .collect();
+    assert_eq!(actual, [2, 4].into());
+}
+
+#[test]
+fn cq_negation_respects_repeated_variables() {
+    let rows = [(1,), (2,), (3,)];
+    let blocked = [(1, 2), (2, 2), (3, 1)];
+    let actual: std::collections::BTreeSet<_> = mini_linq::mini_linq! {
+        struct Q;
+        relation rows(key:i32);
+        relation blocked(left:i32,right:i32);
+        answer(key) :- rows(key), !blocked(key,key);
+    }
+    .map(|(key,)| *key)
+    .collect();
+    assert_eq!(actual, [1, 3].into());
+}
+
+#[test]
+fn cq_negation_of_an_empty_relation_retains_every_key() {
+    let rows = [(1,), (2,), (2,)];
+    let blocked: [(i32,); 0] = [];
+    let actual: std::collections::BTreeSet<_> = mini_linq::mini_linq! {
+        struct Q; relation rows(key:i32); relation blocked(key:i32);
+        answer(key) :- rows(key), !blocked(key);
+    }
+    .map(|(key,)| *key)
+    .collect();
+    assert_eq!(actual, [1, 2].into());
+}
+
+#[test]
+fn cq_all_wildcard_negation_tests_relation_emptiness_without_binding() {
+    let rows = [(1,), (2,)];
+    for (blocked, expected) in [
+        (
+            Vec::<(i32, i32)>::new(),
+            std::collections::BTreeSet::from([1, 2]),
+        ),
+        (vec![(9, 10)], std::collections::BTreeSet::new()),
+    ] {
+        let actual: std::collections::BTreeSet<_> = mini_linq::mini_linq! {
+            struct Q; relation rows(key:i32); relation blocked(left:i32,right:i32);
+            answer(key) :- rows(key), !blocked(_,_);
+        }
+        .map(|(key,)| *key)
+        .collect();
+        assert_eq!(actual, expected);
+        let existence: Vec<_> = mini_linq::mini_linq! {
+            struct Q; relation blocked(left:i32,right:i32);
+            relation answer(unit:());
+            answer(()) :- !blocked(_,_);
+        }
+        .collect();
+        assert_eq!(
+            existence,
+            if blocked.is_empty() {
+                vec![((),)]
+            } else {
+                vec![]
+            }
+        );
+    }
+}
+
+#[test]
+fn cq_constant_only_negation_tests_matching_rows_not_global_emptiness() {
+    let blocked = [(1, 7), (2, 8)];
+    let absent: Vec<_> = mini_linq::mini_linq! {
+        struct Q; relation blocked(key:i32,kind:i32);
+        relation answer(unit:());
+        answer(()) :- !blocked(1,8);
+    }
+    .collect();
+    assert_eq!(absent, [((),)]);
+    let present: Vec<_> = mini_linq::mini_linq! {
+        struct Q; relation blocked(key:i32,kind:i32);
+        relation answer(unit:());
+        answer(()) :- !blocked(1,7);
+    }
+    .collect();
+    assert!(present.is_empty());
 }

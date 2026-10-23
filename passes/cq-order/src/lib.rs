@@ -165,6 +165,15 @@ fn clauses<'a>(body: &'a cq::CommaList<BodyItem>, context: &BTreeSet<String>) ->
                 }
                 // Formal rule D-Constraint: A central constraint requires only its query variables.
                 BodyItem::Constraint(c) => (Vec::new(), c.variables().map(symbol_name).collect()),
+                BodyItem::Negation(negation) => (
+                    Vec::new(),
+                    negation
+                        .atom
+                        .variables()
+                        .map(symbol_name)
+                        .filter(|name| prefix.contains(name))
+                        .collect(),
+                ),
                 BodyItem::Filter(filter) => (
                     Vec::new(),
                     rust::free_variables(&filter.condition).dependencies(&prefix),
@@ -183,7 +192,7 @@ fn clauses<'a>(body: &'a cq::CommaList<BodyItem>, context: &BTreeSet<String>) ->
                         .collect(),
                     rust::free_variables(&binding.expression).dependencies(&prefix),
                 ),
-                BodyItem::Negation(_) | BodyItem::Aggregate(_) | BodyItem::Extension { .. } => {
+                BodyItem::Aggregate(_) | BodyItem::Extension { .. } => {
                     unreachable!("normal form")
                 }
             };
@@ -233,7 +242,9 @@ fn ready(
                         && (clauses[c].atom.is_some()
                             || matches!(
                                 clauses[c].item,
-                                BodyItem::Equality(_) | BodyItem::Constraint(_)
+                                BodyItem::Equality(_)
+                                    | BodyItem::Constraint(_)
+                                    | BodyItem::Negation(_)
                             ))
                 })))
 }
@@ -280,7 +291,10 @@ fn prefix_rank<'a>(
     move |clause, bound| {
         let facts = &clauses[clause];
         if !facts.is_atom() {
-            let priority = usize::from(!matches!(facts.item, BodyItem::Constraint(_)));
+            let priority = usize::from(!matches!(
+                facts.item,
+                BodyItem::Constraint(_) | BodyItem::Negation(_)
+            ));
             return (false, false, priority, clause);
         }
         let canonical = |name: &String| canonical_names.get(name).unwrap_or(name).clone();
@@ -307,7 +321,10 @@ fn filtered_rank<'a>(
             return (
                 false,
                 false,
-                usize::from(!matches!(facts.item, BodyItem::Constraint(_))),
+                usize::from(!matches!(
+                    facts.item,
+                    BodyItem::Constraint(_) | BodyItem::Negation(_)
+                )),
                 clause,
             );
         }
@@ -351,7 +368,10 @@ fn elimination(
             (
                 false,
                 false,
-                usize::from(!matches!(clauses[clause].item, BodyItem::Constraint(_))),
+                usize::from(!matches!(
+                    clauses[clause].item,
+                    BodyItem::Constraint(_) | BodyItem::Negation(_)
+                )),
                 clause,
             )
         }
@@ -409,10 +429,11 @@ fn coarse(clauses: &[Clause<'_>], sequence: &[usize]) -> Vec<valuation::Step> {
                 valuation::Step::Equality(equality.clone(), Default::default())
             }
             BodyItem::Constraint(c) => valuation::Step::Constraint(c.clone(), Default::default()),
+            BodyItem::Negation(n) => valuation::Step::Negation(n.clone(), Default::default()),
             BodyItem::Filter(filter) => valuation::Step::Guard(filter.clone(), Default::default()),
             BodyItem::Let(binding) => valuation::Step::Let(binding.clone(), Default::default()),
             BodyItem::For(binding) => valuation::Step::For(binding.clone(), Default::default()),
-            BodyItem::Negation(_) | BodyItem::Aggregate(_) | BodyItem::Extension { .. } => {
+            BodyItem::Aggregate(_) | BodyItem::Extension { .. } => {
                 unreachable!("normal form")
             }
         })
@@ -446,7 +467,10 @@ impl Fine<'_> {
                 .filter(|&c| ready(self.clauses, &pending, &self.bound, c))
                 .min_by_key(|&c| {
                     (
-                        usize::from(!matches!(self.clauses[c].item, BodyItem::Constraint(_))),
+                        usize::from(!matches!(
+                            self.clauses[c].item,
+                            BodyItem::Constraint(_) | BodyItem::Negation(_)
+                        )),
                         c,
                     )
                 })
@@ -463,6 +487,7 @@ impl Fine<'_> {
                 BodyItem::Constraint(c) => {
                     valuation::Step::Constraint(c.clone(), Default::default())
                 }
+                BodyItem::Negation(n) => valuation::Step::Negation(n.clone(), Default::default()),
                 BodyItem::Filter(filter) => {
                     valuation::Step::Guard(filter.clone(), Default::default())
                 }
@@ -835,6 +860,13 @@ fn check_steps(
                     written.push(position);
                     previous_atom = None;
                 }
+                valuation::Step::Negation(negation, _) => {
+                    let position = body.iter().enumerate().find(|(i, item)|
+                        !written.contains(i) && matches!(item, BodyItem::Negation(expected) if expected == negation)
+                    ).map(|(i, _)| i).expect("VO negation correspondence");
+                    written.push(position);
+                    previous_atom = None;
+                }
                 valuation::Step::Guard(filter, _) => {
                     let position = body
                         .iter()
@@ -1001,6 +1033,7 @@ fn check_steps(
             }
             valuation::Step::Equality(..)
             | valuation::Step::Constraint(..)
+            | valuation::Step::Negation(..)
             | valuation::Step::Guard(..)
             | valuation::Step::Let(..)
             | valuation::Step::For(..) => {}

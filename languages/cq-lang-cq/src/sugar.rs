@@ -242,6 +242,11 @@ fn rename_body(
                 }
                 bound = local;
             }
+            BodyItem::Negation(negation) => {
+                for argument in &mut negation.atom.args {
+                    rename_expression(argument, names, &bound);
+                }
+            }
             BodyItem::Let(binding) => {
                 rename_expression(&mut binding.expression, names, &bound);
                 let bindings = rust::bindings(&binding.pattern);

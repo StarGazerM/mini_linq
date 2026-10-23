@@ -111,6 +111,19 @@ pub fn smallest(input: TokenStream) -> TokenStream {
     .into()
 }
 #[proc_macro]
+pub fn lazy_anti(input: TokenStream) -> TokenStream {
+    cq_stage::rewrite::<physical::Program>(input.into(), |source, _| {
+        let mut target = source.clone();
+        for definition in &mut target.program.definitions {
+            if let physical::Operator::Anti(_, keyed) = &mut definition.operator {
+                keyed.choice = Some(physical::Choice::Lazy(Default::default()));
+            }
+        }
+        Ok(target)
+    })
+    .into()
+}
+#[proc_macro]
 pub fn ordered_dedup(input: TokenStream) -> TokenStream {
     cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), |source, _| {
         cq_testkit::rewrites::ordered_dedup(source)

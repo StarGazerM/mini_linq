@@ -629,3 +629,40 @@ fn reductions_keep_literal_occurrences_without_literal_columns() {
         valuation::contract::check(&target).unwrap();
     }
 }
+
+#[test]
+fn negation_is_preserved_but_never_used_as_reduction_support_or_target() {
+    let source = schedule(
+        "struct Negative; relation R(a:i32,b:i32); relation S(b:i32,c:i32);
+         relation K(a:i32); answer(x,z) :- R(x,y), S(y,z), !K(x);",
+        "R@0(x,y); S@1(y,z); !K(x);",
+    );
+    for semijoins in [Reductions::None, Reductions::Tree, Reductions::Hypergraph] {
+        let options = Options { semijoins };
+        let target = compile(&source, &options).unwrap();
+        check(&source, &target, &options).unwrap();
+        assert_eq!(
+            target
+                .valuation
+                .steps
+                .iter()
+                .filter(|s| matches!(s, valuation::Step::Negation(..)))
+                .count(),
+            1
+        );
+        for step in &target.valuation.steps {
+            if let valuation::Step::Reduce(r, _) = step {
+                let valuation::Reduction::With(_, support) = &r.reduction;
+                assert_ne!(r.clause(), 2);
+                assert_ne!(support.clause(), 2);
+            }
+        }
+        for seed in 0..16 {
+            let database = databases::binary_database(&source.cq, seed);
+            assert_eq!(
+                evaluator::evaluate(&source, &database),
+                evaluator::evaluate(&target, &database)
+            );
+        }
+    }
+}

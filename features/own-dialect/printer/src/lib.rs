@@ -529,9 +529,10 @@ impl Push<'_> {
                 let right = symbol_name(&keyed.right);
                 let columns = sorted(&keyed.columns);
                 let (lookup, payload) = match self.keyed(&keyed.right, &columns)? {
-                    Access::Host(access) => {
-                        (self.host_lookup(&left, &access, false), access.payload)
-                    }
+                    Access::Host(access) => (
+                        self.host_lookup(&left, &access, false, false),
+                        access.payload,
+                    ),
                     Access::Built(structure) => (
                         self.chained_lookup(&left, &structure, &right, &columns),
                         self.built_payload(&right, &self.levels_of(&right, &structure)),
@@ -659,7 +660,7 @@ impl Push<'_> {
             test
         } else {
             match self.keyed(&keyed.right, &columns)? {
-                Access::Host(access) => self.host_lookup(&left, &access, true),
+                Access::Host(access) => self.host_lookup(&left, &access, true, negative),
                 Access::Built(structure) => self.chained_contains(
                     &left,
                     &structure,

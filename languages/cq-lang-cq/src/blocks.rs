@@ -112,6 +112,10 @@ impl Block {
                         .variables()
                         .map(|id| (symbol_name(id), id.clone()))
                         .collect(),
+                    BodyItem::Negation(negation) => negation
+                        .variables(prefix)
+                        .map(|id| (symbol_name(id), id.clone()))
+                        .collect(),
                     BodyItem::Equality(e) => e
                         .variables()
                         .map(|id| (symbol_name(id), id.clone()))

@@ -35,6 +35,8 @@
 //! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
 //! its existing recognition. Only differing literals on one interface column
 //! prove union arms disjoint; no data keys or constraints are assumed.
+//! CQ negations bind nothing and lower to anti joins over constant-selected,
+//! existentially projected input relations, reusing the block anti machinery.
 //!
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -105,6 +107,7 @@ pub fn compile_written(source: &valuation::Program) -> syn::Result<ra::Program> 
                         }
                         (BodyItem::Equality(a), valuation::Step::Equality(b, _)) => a == b,
                         (BodyItem::Constraint(a), valuation::Step::Constraint(b, _)) => a == b,
+                        (BodyItem::Negation(a), valuation::Step::Negation(b, _)) => a == b,
                         (BodyItem::Filter(a), valuation::Step::Guard(b, _)) => a == b,
                         (BodyItem::Let(a), valuation::Step::Let(b, _)) => a == b,
                         (BodyItem::For(a), valuation::Step::For(b, _)) => a == b,
@@ -181,6 +184,7 @@ fn compile_in(source: &valuation::Program, relational_hoisting: bool) -> syn::Re
 
 mod block_contract;
 mod join_branches;
+mod negation;
 mod reductions;
 mod structural;
 
@@ -414,6 +418,7 @@ impl<'a> State<'a> {
                     self.read_clauses.insert(subatom.clause());
                 }
                 valuation::Step::Reduce(reduce, _) => self.reduce(reduce),
+                valuation::Step::Negation(negation, _) => self.negation(negation),
                 valuation::Step::Guard(filter, _) => {
                     let input = self.prefix_or_unit();
                     self.prefix = Some(self.guard(input, filter));
@@ -638,6 +643,63 @@ impl<'a> State<'a> {
         }
         self.relations.insert(clause, result.clone());
         result
+    }
+
+    /// E-Neg: constants and repeated columns select the negative relation;
+    /// existential columns are projected away before the anti join.
+    fn negation(&mut self, negation: &valuation::cq::Negation) {
+        let clause = self
+            .body
+            .iter()
+            .enumerate()
+            .find_map(|(clause, item)| {
+                (!self.read_clauses.contains(&clause)
+                    && matches!(item, valuation::cq::BodyItem::Negation(n) if n == negation))
+                .then_some(clause)
+            })
+            .expect("VO negation coverage");
+        let bound = valuation::cq::blocks::bound_before(self.body, clause, &self.context);
+        let declaration = self
+            .inputs
+            .iter()
+            .find(|d| d.name == negation.atom.relation)
+            .expect("contracted negative input");
+        let layout = negation::layout(declaration, negation, &bound, |v| self.canonical(v));
+        let needs_projection =
+            layout.keys.len() != layout.mapping.len() && !layout.condition.constraints.is_empty();
+        let mut right = self.emit(ra::Operator::Rename(Box::new(ra::Rename {
+            rename_token: Default::default(),
+            relation: negation.atom.relation.clone(),
+            at: Default::default(),
+            occurrence: self.path.as_ref().map_or_else(
+                || cq::Occurrence::new(clause),
+                |(path, branch)| path.child(*branch, clause),
+            ),
+            mapping_brace: Default::default(),
+            mapping: layout
+                .mapping
+                .into_iter()
+                .map(|(source, target)| ra::AttributeRename {
+                    source,
+                    minus_token: Default::default(),
+                    gt_token: Default::default(),
+                    target,
+                })
+                .collect(),
+            constants: None,
+        })));
+        if !layout.condition.constraints.is_empty() {
+            right =
+                self.select_constraints(right, layout.condition.constraints.into_iter().collect());
+        }
+        // Anti observes only its keys: wildcards stay existential without
+        // wrapping a direct host read in a materialized projection.
+        if needs_projection {
+            right = self.project(right, layout.keys.iter().cloned().collect());
+        }
+        let left = self.prefix_or_unit();
+        self.prefix = Some(self.anti(left, right, layout.keys.into_iter().collect()));
+        self.read_clauses.insert(clause);
     }
     fn anti(&mut self, left: Ident, right: Ident, columns: cq::CommaList<Ident>) -> Ident {
         self.emit(ra::Operator::Anti(Box::new(ra::Anti {
@@ -1124,6 +1186,12 @@ fn needs_domain(
             .map(symbol_name)
             .collect();
         facts.free.keys().any(|name| !generated.contains(name))
+            || valuation::cq::blocks::walk(&branch.body)
+                .into_iter()
+                .any(|item| {
+                    matches!(item, valuation::cq::BodyItem::Negation(n)
+                    if n.atom.variables().any(|v| facts.free.contains_key(&symbol_name(v))))
+                })
     })
 }
 
@@ -1160,6 +1228,12 @@ fn aliases(source: &valuation::cq::Program) -> BTreeMap<String, Ident> {
     let mut protected: BTreeSet<_> = source.query.head.variables().map(symbol_name).collect();
     for item in &source.query.body {
         let expression = match item {
+            BodyItem::Negation(negation) => {
+                // Negative operand identities retain their exact source key
+                // names; solve positive aliases without rewriting that input.
+                protected.extend(negation.atom.variables().map(symbol_name));
+                continue;
+            }
             BodyItem::Filter(filter) => &filter.condition,
             BodyItem::Let(binding) => {
                 protected.extend(cq::rust::bindings(&binding.pattern).iter().map(symbol_name));

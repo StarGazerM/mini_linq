@@ -39,6 +39,7 @@ fn coarse(source: &cq::Program) -> valuation::Program {
             cq::BodyItem::For(binding) => quote!(#binding;),
             cq::BodyItem::Equality(equality) => quote!(#equality;),
             cq::BodyItem::Constraint(c) => quote!(#c;),
+            cq::BodyItem::Negation(n) => quote!(#n;),
             _ => unreachable!("normal form"),
         });
     vo(source, quote!(#(#steps)*))
@@ -1311,19 +1312,19 @@ fn derived_domains_filter_binders_but_preserve_the_exact_disjunction() {
 }
 
 #[test]
-fn total_guards_push_into_scans_while_partial_guards_keep_their_prefix() {
-    for guard in ["if name.contains(\"green\")", "#[total] if custom(name)"] {
+fn opaque_method_and_function_guards_keep_their_written_prefix() {
+    for guard in ["if name.contains(\"green\")", "if custom(name)"] {
         let source: cq::Program = syn::parse_str(&format!(
             "struct Q; relation R(a:i32); relation P(k:i32,n:String); answer(x,name) :- R(x), P(x,name), {guard};"
         )).unwrap();
         let vo = coarse(&source);
         let target = compile(&vo).unwrap();
-        let select = target
+        let guard = target
             .plan
             .definitions
             .iter()
             .find_map(|d| match &d.operator {
-                ra::Operator::Select(s) => Some(s),
+                ra::Operator::Guard(g) => Some(g),
                 _ => None,
             })
             .unwrap();
@@ -1332,15 +1333,15 @@ fn total_guards_push_into_scans_while_partial_guards_keep_their_prefix() {
                 .plan
                 .definitions
                 .iter()
-                .any(|d| d.result == select.input
-                    && matches!(&d.operator, ra::Operator::Rename(r) if r.relation == "P"))
+                .any(|d| d.result == guard.input
+                    && matches!(d.operator, ra::Operator::NaturalJoin(_)))
         );
         assert!(
             !target
                 .plan
                 .definitions
                 .iter()
-                .any(|d| matches!(d.operator, ra::Operator::Guard(_)))
+                .any(|d| matches!(d.operator, ra::Operator::Select(_)))
         );
         assert_eq!(
             syn::parse2::<ra::Program>(target.to_token_stream()).unwrap(),
@@ -1376,19 +1377,19 @@ fn total_guards_push_into_scans_while_partial_guards_keep_their_prefix() {
         .find(|d| matches!(d.operator, ra::Operator::Guard(_)))
         .unwrap();
     let input = &guard.input;
-    step.operator = syn::parse_quote!(select #input if (#[total] { x = x } (10 / *x > 1)));
+    step.operator = syn::parse_quote!(select #input if (x > 1));
     ra::contract::check(&forged).unwrap();
     assert!(
         check(&coarse(&source), &forged).is_err(),
-        "a target cannot invent a totality assertion for a partial source guard"
+        "a target cannot replace an opaque Rust guard with a relational predicate"
     );
 }
 
 #[test]
-fn total_multi_atom_guard_moves_to_first_bound_prefix() {
+fn opaque_multi_atom_guard_retains_every_written_relational_predecessor() {
     let source = cq(quote! {
         struct Q; relation R(a:i32); relation S(b:i32); relation T(c:i32);
-        answer(x,y,z) :- R(x), S(y), T(z), #[total] if compatible(x,y);
+        answer(x,y,z) :- R(x), S(y), T(z), if compatible(x,y);
     });
     let planned = cq_order::compile(
         &source,
@@ -1402,16 +1403,11 @@ fn total_multi_atom_guard_moves_to_first_bound_prefix() {
         .valuation
         .steps
         .iter()
-        .position(|step| {
-            matches!(
-                step,
-                valuation::Step::Constraint(cq::Constraint::Total { .. }, _)
-            )
-        })
+        .position(|step| matches!(step, valuation::Step::Guard(..)))
         .unwrap();
-    assert_eq!(position, 2);
+    assert_eq!(position, 3);
     assert!(
-        matches!(&planned.valuation.steps[3], valuation::Step::Atom(atom, _) if atom.relation == "T")
+        matches!(&planned.valuation.steps[2], valuation::Step::Atom(atom, _) if atom.relation == "T")
     );
     let target = compile(&planned).unwrap();
     let select = target
@@ -1419,7 +1415,7 @@ fn total_multi_atom_guard_moves_to_first_bound_prefix() {
         .definitions
         .iter()
         .find_map(|d| match &d.operator {
-            ra::Operator::Select(s) => Some(s),
+            ra::Operator::Guard(s) => Some(s),
             _ => None,
         })
         .unwrap();
@@ -1618,4 +1614,259 @@ fn literal_occurrences_drop_exact_source_positions_and_reject_changed_values() {
         .find(|definition| matches!(definition.operator, ra::Operator::Rename(_)))
         .unwrap();
     assert!(rows[&occurrence.result.to_string()].heading.is_empty());
+}
+
+#[test]
+fn negation_elaborates_direct_host_keys_without_redundant_projection() {
+    let source = cq(quote! {
+        struct Negative; relation R(a:i32,b:i32); relation K(a:i32,b:i32);
+        answer(x,y) :- R(x,y), !K(x,y);
+    });
+    let target = compile(&coarse(&source)).unwrap();
+    assert_plan(
+        &target,
+        quote! {
+            r0 = rename R@0 { a -> x, b -> y };
+            r1 = rename K@1 { a -> x, b -> y };
+            r2 = anti [x,y] r0, r1;
+            r3 = project r2 keep { x,y };
+            output r3 as answer(x,y);
+        },
+    );
+}
+
+#[test]
+fn negative_constants_repeats_and_wildcards_match_reference_semantics() {
+    for args in ["x,x", "x,1", "1,x", "x,_", "_,_", "1,_"] {
+        let source: cq::Program = syn::parse_str(&format!(
+            "struct Negative; relation R(a:i32); relation K(a:i32,b:i32);
+             answer(x) :- R(x), !K({args});"
+        ))
+        .unwrap();
+        let written = coarse(&source);
+        let target = compile(&written).unwrap();
+        let reference = cq_elaborate::compile_written(&written).unwrap();
+        let anti = target
+            .plan
+            .definitions
+            .iter()
+            .find_map(|d| match &d.operator {
+                ra::Operator::Anti(a) => Some(a),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(anti.columns.len(), usize::from(args.contains('x')));
+        let right = &target
+            .plan
+            .definitions
+            .iter()
+            .find(|d| d.result == anti.right)
+            .unwrap()
+            .operator;
+        if matches!(args, "x,_" | "_,_") {
+            assert!(matches!(right, ra::Operator::Rename(_)), "{args}");
+        } else {
+            assert!(matches!(right, ra::Operator::Project(_)), "{args}");
+        }
+        for seed in 0..32 {
+            let database = databases::binary_database(&source, seed);
+            let expected = cq_oracle::evaluate_cq(&source, &database);
+            assert_eq!(
+                oracle::evaluate_ra(&target, &database).output,
+                expected,
+                "{args}, {seed}"
+            );
+            assert_eq!(
+                oracle::evaluate_ra(&reference, &database).output,
+                expected,
+                "{args}, {seed}"
+            );
+        }
+        let mut changed = target.clone();
+        let step = changed
+            .plan
+            .definitions
+            .iter_mut()
+            .find(|d| matches!(d.operator, ra::Operator::Anti(_)))
+            .unwrap();
+        let ra::Operator::Anti(anti) = &step.operator else {
+            unreachable!()
+        };
+        let input = &anti.left;
+        step.operator = syn::parse_quote!(project #input keep {x});
+        assert!(check(&written, &changed).is_err(), "{args}");
+    }
+}
+
+#[test]
+fn parameter_negation_selects_a_capture_without_binding_it() {
+    let source = cq(quote! {
+        struct Negative; relation R(a:i32); relation K(a:i32,b:i32);
+        answer(x) :- R(x), !K(x, cutoff);
+    });
+    let target = compile(&coarse(&source)).unwrap();
+    let selection = target
+        .plan
+        .definitions
+        .iter()
+        .find_map(|d| match &d.operator {
+            ra::Operator::Select(s) => Some(s),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        selection.condition.constraints[0],
+        syn::parse_quote!(__cq_neg_1 = @cutoff)
+    );
+}
+
+#[test]
+fn all_wildcard_negation_can_seed_an_empty_heading() {
+    let source = cq(quote! {
+        struct Empty; relation K(a:i32,b:i32); relation Seed(x:i32);
+        answer(x) :- !K(_,_), Seed(x);
+    });
+    let target = compile(&coarse(&source)).unwrap();
+    for rows in [std::collections::BTreeSet::new(), [vec![1, 2]].into()] {
+        let database: oracle::Database =
+            [("K".into(), rows), ("Seed".into(), [vec![1]].into())].into();
+        assert_eq!(
+            oracle::evaluate_ra(&target, &database).output,
+            cq_oracle::evaluate_cq(&source, &database)
+        );
+    }
+}
+
+#[test]
+fn native_anti_obligations_reject_changed_keys_inputs_filters_and_polarity() {
+    let source = cq(quote! {
+        struct Negative; relation R(a:i32); relation K(a:i32,b:i32); relation Other(a:i32,b:i32);
+        answer(x) :- R(x), !K(x,1);
+    });
+    let written = coarse(&source);
+    let target = compile(&written).unwrap();
+    for mutation in 0..5 {
+        let mut changed = target.clone();
+        match mutation {
+            0 => {
+                let anti = changed
+                    .plan
+                    .definitions
+                    .iter_mut()
+                    .find_map(|d| match &mut d.operator {
+                        ra::Operator::Anti(a) => Some(a),
+                        _ => None,
+                    })
+                    .unwrap();
+                anti.columns.clear();
+            }
+            1 => {
+                let rename = changed
+                    .plan
+                    .definitions
+                    .iter_mut()
+                    .find_map(|d| match &mut d.operator {
+                        ra::Operator::Rename(r) if r.relation == "K" => Some(r),
+                        _ => None,
+                    })
+                    .unwrap();
+                rename.relation = syn::parse_quote!(Other);
+            }
+            2 => {
+                let selection = changed
+                    .plan
+                    .definitions
+                    .iter_mut()
+                    .find_map(|d| match &mut d.operator {
+                        ra::Operator::Select(s) => Some(s),
+                        _ => None,
+                    })
+                    .unwrap();
+                selection.condition.constraints[0] = syn::parse_quote!(__cq_neg_1 = 2);
+            }
+            _ => {
+                let step = changed
+                    .plan
+                    .definitions
+                    .iter_mut()
+                    .find(|d| matches!(d.operator, ra::Operator::Anti(_)))
+                    .unwrap();
+                let ra::Operator::Anti(anti) = &step.operator else {
+                    unreachable!()
+                };
+                let (left, right) = (&anti.left, &anti.right);
+                step.operator = if mutation == 3 {
+                    syn::parse_quote!(semijoin #left with #right)
+                } else {
+                    syn::parse_quote!(project #left keep {x})
+                };
+            }
+        }
+        if mutation == 4 {
+            let mut live =
+                std::collections::BTreeSet::from([changed.plan.output.input.to_string()]);
+            for definition in changed.plan.definitions.iter().rev() {
+                if live.contains(&definition.result.to_string()) {
+                    match &definition.operator {
+                        ra::Operator::Project(project) => {
+                            live.insert(project.input.to_string());
+                        }
+                        ra::Operator::Rename(_) => {}
+                        _ => unreachable!("removing the anti leaves only its positive input"),
+                    }
+                }
+            }
+            changed
+                .plan
+                .definitions
+                .retain(|definition| live.contains(&definition.result.to_string()));
+        }
+        ra::contract::check(&changed).unwrap();
+        assert!(check(&written, &changed).is_err(), "mutation {mutation}");
+    }
+}
+
+#[test]
+fn native_anti_proof_allows_positive_join_reordering_but_preserves_before() {
+    let source = cq(quote! {
+        struct Negative; relation R(a:i32); relation S(b:i32); relation K(a:i32);
+        answer(x,y) :- R(x), S(y), !K(x), if opaque(x);
+    });
+    let written = coarse(&source);
+    let reordered = vo(
+        &source,
+        quote! {
+            S@1(y); R@0(x); !K(x); if opaque(x);
+        },
+    );
+    let target = compile(&reordered).unwrap();
+    check(&written, &target).unwrap();
+    let mut delayed = target.clone();
+    let guard_position = delayed
+        .plan
+        .definitions
+        .iter()
+        .position(|d| matches!(d.operator, ra::Operator::Guard(_)))
+        .unwrap();
+    let anti_position = delayed
+        .plan
+        .definitions
+        .iter()
+        .position(|d| matches!(d.operator, ra::Operator::Anti(_)))
+        .unwrap();
+    let ra::Operator::Anti(anti) = &delayed.plan.definitions[anti_position].operator else {
+        unreachable!()
+    };
+    let (left, right, keys) = (anti.left.clone(), anti.right.clone(), anti.columns.clone());
+    let ra::Operator::Guard(guard) = &delayed.plan.definitions[guard_position].operator else {
+        unreachable!()
+    };
+    let mut guard = guard.clone();
+    guard.input = left;
+    let earlier = delayed.plan.definitions[anti_position].result.clone();
+    delayed.plan.definitions[anti_position].operator = ra::Operator::Guard(guard);
+    delayed.plan.definitions[guard_position].operator =
+        syn::parse_quote!(anti [#keys] #earlier, #right);
+    ra::contract::check(&delayed).unwrap();
+    assert!(check(&written, &delayed).is_err());
 }

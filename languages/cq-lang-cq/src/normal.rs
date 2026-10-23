@@ -1,6 +1,8 @@
 //! CQ normal form for `T X = bottom + Set X`.
 //!
-//! Atoms contain distinct variables and literals. Relational equality is Leibniz identity,
+//! Positive atoms contain distinct variables and literals. Negated atoms retain
+//! bound variables, captured parameters, literals and existential wildcards.
+//! Relational equality is Leibniz identity,
 //! decided by an admissible column's `==`. Residual Rust lets and guards are opaque
 //! partial functions under functional extensionality. The reference is
 //! written order. Preserving the Rust chain and including every source
@@ -32,11 +34,12 @@ pub fn check(module: &Program) -> syn::Result<()> {
             }
             BodyItem::Equality(equality) => equality.check()?,
             BodyItem::Constraint(constraint) => constraint.check()?,
+            BodyItem::Negation(_) => {}
             BodyItem::Filter(_) | BodyItem::Let(_) | BodyItem::For(_) | BodyItem::Block(_) => {}
-            BodyItem::Negation(_) | BodyItem::Aggregate(_) | BodyItem::Extension { .. } => {
+            BodyItem::Aggregate(_) | BodyItem::Extension { .. } => {
                 return Err(syn::Error::new_spanned(
                     item,
-                    "normal form covers positive queries with relational equalities, guards and bindings",
+                    "normal form covers relational atoms and negation, guards and bindings",
                 ));
             }
         }
@@ -177,9 +180,10 @@ fn normalize_body(
                 });
                 body.extend(after);
             }
-            BodyItem::Equality(_) | BodyItem::Constraint(_) | BodyItem::Filter(_) => {
-                body.push(item.clone())
-            }
+            BodyItem::Equality(_)
+            | BodyItem::Constraint(_)
+            | BodyItem::Filter(_)
+            | BodyItem::Negation(_) => body.push(item.clone()),
             BodyItem::Let(binding) => {
                 bound.extend(rust::bindings(&binding.pattern).iter().map(symbol_name));
                 body.push(item.clone());
@@ -188,10 +192,10 @@ fn normalize_body(
                 bound.extend(rust::bindings(&binding.pattern).iter().map(symbol_name));
                 body.push(item.clone());
             }
-            BodyItem::Negation(_) | BodyItem::Aggregate(_) | BodyItem::Extension { .. } => {
+            BodyItem::Aggregate(_) | BodyItem::Extension { .. } => {
                 return Err(syn::Error::new_spanned(
                     item,
-                    "normal form covers positive queries with relational equalities, guards and bindings",
+                    "normal form covers relational atoms and negation, guards and bindings",
                 ));
             }
         }
@@ -235,6 +239,17 @@ fn check_leibniz_types(module: &Program) -> syn::Result<()> {
     let mut columns: BTreeMap<String, Vec<(&syn::Type, String)>> = BTreeMap::new();
     let mut required = BTreeSet::new();
     let mut let_bound = BTreeSet::new();
+    let logical = super::blocks::walk(&module.query.body)
+        .into_iter()
+        .flat_map(|item| match item {
+            BodyItem::Positive { atom } => atom.variables().cloned().collect(),
+            _ => item
+                .rust_step()
+                .map(|step| step.bindings)
+                .unwrap_or_default(),
+        })
+        .map(|id| symbol_name(&id))
+        .collect();
     for item in super::blocks::walk(&module.query.body) {
         match item {
             BodyItem::Positive { atom } => {
@@ -256,6 +271,9 @@ fn check_leibniz_types(module: &Program) -> syn::Result<()> {
                     }
                     entries.push((&column.ty, format!("{}.{}", atom.relation, column.name)));
                 }
+            }
+            BodyItem::Negation(negation) => {
+                required.extend(negation.variables(&logical).map(symbol_name));
             }
             BodyItem::Equality(equality) => required.extend(equality.variables().map(symbol_name)),
             BodyItem::Constraint(constraint) => {

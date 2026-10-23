@@ -133,7 +133,7 @@ pub enum Operator {
     #[parse(peek = kw::anti)]
     Anti(Box<Anti>),
     // Unit is supplied for global optional-HW4 clauses. OPTIONAL HW4 —
-    // STUDENT 3/6 (LOGICAL): add AntiSemijoin and AggregateApply as
+    // STUDENT 3/6 (LOGICAL): add AggregateApply as
     // tests/hw4_optional.rs in the root course package requires.
     #[parse(peek = kw::unit)]
     Unit(Unit),
@@ -281,7 +281,7 @@ fn check_in<'a>(
         }
 
         // OPTIONAL HW4 — STUDENT 3/6 (LOGICAL): extend the local heading
-        // rules for AntiSemijoin and AggregateApply as
+        // rules for AggregateApply as
         // tests/hw4_optional.rs in the root course package requires.
         let (heading, operands) = match &definition.operator {
             Operator::Union(union) => {

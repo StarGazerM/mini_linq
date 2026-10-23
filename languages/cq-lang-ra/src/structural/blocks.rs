@@ -311,7 +311,10 @@ fn originals(
         let mut node = *operand;
         loop {
             let n = &schedule.nodes[node];
-            if (fallback && frame.correlation.is_none() && matches!(n.kind, Kind::Anti(_)))
+            if (fallback
+                && frame.correlation.is_none()
+                && matches!(n.kind, Kind::Anti(_))
+                && roots.contains(&n.operands[1]))
                 || allowed.is_some_and(|a| foreign_semi(schedule, node, a, &frame.heading))
             {
                 node = n.operands[0];
@@ -551,12 +554,10 @@ impl<'a> View<'a> {
         let mut operands = Vec::new();
         let mut negative = None;
         for (j, operand) in original.operands.iter().enumerate() {
-            if j == 1 && matches!(original.kind, Kind::Anti(_)) {
-                let label = self
-                    .negatives
-                    .get(operand)
-                    .ok_or("negative operand must reference the original named branch result")?
-                    .clone();
+            if j == 1
+                && matches!(original.kind, Kind::Anti(_))
+                && let Some(label) = self.negatives.get(operand).cloned()
+            {
                 negative = Some(label.clone());
                 let heading = self.original.nodes[*operand]
                     .heading
@@ -568,6 +569,9 @@ impl<'a> View<'a> {
                     heading,
                     ..Node::default()
                 }));
+                // Only fallback originals become symbolic branch references.
+                // A CQ negation retains its actual negative relation; the
+                // ordinary schedule proof checks its exact RHS and key facts.
             } else {
                 operands.push(self.node(*operand)?);
             }

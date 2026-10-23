@@ -295,6 +295,10 @@ pub(super) fn compile(source: &vo::Program) -> syn::Result<vo::Program> {
                 vo::Step::Constraint(c, _) => {
                     state.demand(&c.variables().map(symbol_name).collect())
                 }
+                vo::Step::Negation(n, _) => {
+                    let environment = analysis.bound_before[index].iter().cloned().collect();
+                    state.demand(&n.variables(&environment).map(symbol_name).collect());
+                }
                 vo::Step::Guard(_, _) | vo::Step::Let(_, _) | vo::Step::For(_, _) => {
                     let (clause, rust) = body
                         .iter()

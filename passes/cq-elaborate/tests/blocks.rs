@@ -441,3 +441,58 @@ fn branch_literal_constants_are_local_filters_not_disjoint_interface_values() {
     cq_lang_ra::contract::check(&changed).unwrap();
     assert!(check(&vo, &changed).is_err());
 }
+
+#[test]
+fn negation_in_hoisted_arms_has_its_free_prefix_domain_before_early_checks() {
+    use cq_testkit::{cq_semantics, databases, semantics};
+    for operator in ["|", "else"] {
+        let source: cq::Program = syn::parse_str(&format!(
+            "struct Negative; relation R(a:i32); relation S(a:i32,b:i32); relation K(a:i32,b:i32);
+             answer(x,y) :- R(x), {{ S(x,y), !K(x,_) }} {operator} {{ S(x,y), !K(_,y) }};"
+        ))
+        .unwrap();
+        let normal = cq::normal::normalize(&source).unwrap();
+        for split in [cq_order::Split::Coarse, cq_order::Split::Fine] {
+            let ordered = cq_order::compile(
+                &normal,
+                &cq_order::Options {
+                    heuristic: cq_order::Heuristic::Prefix(cq_order::Ranking::Connected),
+                    split,
+                },
+            )
+            .unwrap();
+            let ra = compile(&ordered).unwrap();
+            check(&ordered, &ra).unwrap();
+            let mut changed = ra.clone();
+            let negative = changed
+                .plan
+                .definitions
+                .iter()
+                .find_map(|d| match &d.operator {
+                    cq_lang_ra::Operator::Rename(r) if r.relation == "K" => Some(d.result.clone()),
+                    _ => None,
+                })
+                .unwrap();
+            let anti = changed
+                .plan
+                .definitions
+                .iter_mut()
+                .find_map(|d| match &mut d.operator {
+                    cq_lang_ra::Operator::Anti(a) if a.right == negative => Some(a),
+                    _ => None,
+                })
+                .unwrap();
+            anti.columns.clear();
+            cq_lang_ra::contract::check(&changed).unwrap();
+            assert!(check(&ordered, &changed).is_err(), "{operator}/{split:?}");
+            for seed in 0..16 {
+                let database = databases::binary_database(&source, seed);
+                assert_eq!(
+                    semantics::evaluate_ra(&ra, &database).output,
+                    cq_semantics::evaluate_cq(&source, &database),
+                    "{operator}/{split:?}/{seed}"
+                );
+            }
+        }
+    }
+}

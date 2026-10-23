@@ -335,6 +335,19 @@ pub struct Negation {
     pub atom: Atom,
 }
 
+impl Negation {
+    /// Query variables are names with query binders; other bare names capture
+    /// host parameters, just as in relational guards. Negation binds nothing.
+    pub fn variables<'a>(
+        &'a self,
+        logical: &'a BTreeSet<String>,
+    ) -> impl Iterator<Item = &'a Ident> + 'a {
+        self.atom
+            .variables()
+            .filter(move |id| logical.contains(&symbol_name(id)))
+    }
+}
+
 /// The names in `arguments` are aggregate-local binders, as in Ascent.
 /// Rust expressions occur in the aggregator and the input atom's arguments.
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -411,7 +424,7 @@ pub mod contract {
     }
 }
 
-/// Formal rule WF-CQ: Check CQ declarations, positive scope, output arity and symbolic type availability.
+/// Formal rule WF-CQ: Check CQ declarations, written scope, output arity and symbolic type availability.
 fn check_program(program: &Program) -> syn::Result<()> {
     let mut schema = check_input_declarations(&program.declarations)?;
     if let Some(output) = schema.remove(&symbol_name(&program.query.head.relation)) {
@@ -500,7 +513,7 @@ fn check_query(
     }
     if !blocks::walk(&query.body)
         .into_iter()
-        .any(|item| item.atom().is_some())
+        .any(|item| item.atom().is_some() || matches!(item, BodyItem::Negation(_)))
     {
         return Err(syn::Error::new_spanned(
             query,
@@ -531,10 +544,9 @@ fn check_body(
     };
     let mut forbidden = BTreeSet::new();
     for item in body {
-        // OPTIONAL HW4 — STUDENT 2/6 (WF): add Negation and Aggregate cases.
-        // Negation requires named terms already bound and binds nothing. Sum
-        // keeps its value local, requires correlated terms already bound, and
-        // then binds one fresh result.
+        // OPTIONAL HW4 — STUDENT 2/6 (WF): add Aggregate.
+        // Sum keeps its value local, requires correlated terms already bound,
+        // and then binds one fresh result. Negation is part of core CQ.
         match item {
             BodyItem::Block(block) => {
                 if block.branches.len() < 2
@@ -589,6 +601,35 @@ fn check_body(
                 }
                 body_variables = local;
             }
+            // Formal rule CQ-Neg: Test a declared input using bound query
+            // variables, captured parameters, literals and existential wildcards.
+            BodyItem::Negation(negation) => {
+                let input = check_input_atom(schema, &negation.atom)?;
+                for (argument, column) in negation.atom.args.iter().zip(&input.columns) {
+                    if matches!(argument, syn::Expr::Infer(_)) {
+                        continue;
+                    }
+                    if let Some(variable) = rust::variable(argument) {
+                        let name = symbol_name(variable);
+                        if (logical.contains(&name) || forbidden.contains(&name))
+                            && !body_variables.contains(&name)
+                        {
+                            return Err(syn::Error::new_spanned(
+                                variable,
+                                format!(
+                                    "negation uses logical variable `{name}` before it is bound"
+                                ),
+                            ));
+                        }
+                    } else if !cq_syntax::equality::literal(argument) {
+                        return Err(syn::Error::new_spanned(
+                            argument,
+                            "negation arguments must be bound query variables, bare host parameters, literals, or `_`",
+                        ));
+                    }
+                    cq_syntax::algebra::check_leibniz_type(&column.ty, &column.name)?;
+                }
+            }
             BodyItem::Equality(equality) => {
                 equality.check()?;
                 for variable in equality.variables() {
@@ -630,10 +671,10 @@ fn check_body(
                     format!("extension `{name}!` was not expanded"),
                 ));
             }
-            BodyItem::Negation(_) | BodyItem::Aggregate(_) => {
+            BodyItem::Aggregate(_) => {
                 return Err(syn::Error::new_spanned(
                     item,
-                    "negation and aggregation require the extended CQ semantic contract",
+                    "aggregation requires the optional extended CQ semantic contract",
                 ));
             }
             // Formal rule IF-Environment: Check logical scope; Rust resolves enclosing values.
