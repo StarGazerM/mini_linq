@@ -32,8 +32,8 @@
 //! `plan(order(R, S), no_reduce)` selects an explicit checked relation order.
 //! `plan(target::plan)` remains available in either Sequence planning position.
 //! Automatic is the robust default (no CE); performance plans are authored
-//! through the advisory. Explicit CQ plan, Physical and Structures advice
-//! retain order through Sequential decomposition. `plan(preserve_order)` or
+//! through the advisory. Explicit ordering, selection, Physical/Structures,
+//! realization and staging advice retain order. `plan(preserve_order)` or
 //! `plan_sequential(preserve_order)` explicitly requests that policy.
 //! Target adapters use `cq_sequence_plan::decompose` to preserve order and
 //! `cq_sequence_plan::plan` for the robust two-phase Lookup/Expand rule.

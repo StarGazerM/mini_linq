@@ -1074,11 +1074,17 @@ fn lookup_first_with(
         .iter()
         .rposition(|d| graph.joins.contains(&symbol_name(&d.name)))
         .expect("join root exists");
-    // Only keyed consumers require the scan root to become a retained leaf.
-    // Otherwise preserve its authored streaming mode: a forward filter can
-    // consume it directly rather than first publishing its unfiltered rows.
+    // Preserve a scan-only root's streaming mode unless a keyed build or an
+    // authored host adapter requires retention. In particular, replacing a
+    // merge under the same consumer name displaces its left ordered reader:
+    // record the row-store transition before removing that keyed adapter.
     let root_name = symbol_name(&decisions.order[0]);
-    let retain_root = builds.keys().any(|(name, _)| *name == root_name);
+    let retain_root = builds.keys().any(|(name, _)| *name == root_name)
+        || source.structures.structures.entries.iter().any(|entry| {
+            entry.name == decisions.order[0]
+                && matches!(&entry.structure, structures::Structure::Host { reader, .. }
+                    if reader != "scan" && *reader == graph.root)
+        });
     let mut definitions = Vec::new();
     for (i, mut definition) in target.physical.program.definitions.into_iter().enumerate() {
         if !graph.joins.contains(&symbol_name(&definition.name)) {
@@ -1127,8 +1133,9 @@ fn lookup_first_with(
         match &entry.structure {
             structures::Structure::Built { keyed, .. } => {
                 physical.keyed_reads.get(&name).is_some_and(|reads| {
-                    reads.iter().any(|(_, keys, _)| {
-                        structures::prefix_depth(&keyed.level_names(), keys).is_some()
+                    reads.iter().any(|(_, keys, supply)| {
+                        *supply == cq_syntax::SupplyKind::Stream
+                            && structures::prefix_depth(&keyed.level_names(), keys).is_some()
                     })
                 })
             }
@@ -1146,13 +1153,17 @@ fn lookup_first_with(
         }
     });
     // Retention also changes existing consumers of a shared leaf, not just the
-    // newly emitted Lookup/Expand chain. Replace every displaced host lookup.
+    // newly emitted Lookup/Expand chain. Replace displaced stream lookups only;
+    // constant and range reads retain their direct or scan/filter row path.
     for definition in &target.physical.program.definitions {
         let name = symbol_name(&definition.name);
         if physical.modes[&name] == physical::ModeKind::Pipe {
             continue;
         }
-        for (_, keys, _) in physical.keyed_reads.get(&name).into_iter().flatten() {
+        for (_, keys, supply) in physical.keyed_reads.get(&name).into_iter().flatten() {
+            if *supply != cq_syntax::SupplyKind::Stream {
+                continue;
+            }
             builds
                 .entry((name.clone(), keys.clone()))
                 .or_insert_with(|| definition.name.clone());

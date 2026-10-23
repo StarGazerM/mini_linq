@@ -220,15 +220,30 @@ fn decompose_in(
     schedules.extend(widths.iter().skip(1).map(|&width| (Some(width), 1)));
     let mut error = None;
     let cuts = if parallel && machine.layout.is_some() {
-        program.sequence.definitions.iter().filter(|definition| {
-            matches!(definition.term, Term::Flatten(_) | Term::Choose(_) | Term::Union(_))
-                && !program.graded.iter().flat_map(|graded| &graded.grades)
+        program
+            .sequence
+            .definitions
+            .iter()
+            .filter(|definition| {
+                matches!(
+                    definition.term,
+                    Term::Flatten(_) | Term::Choose(_) | Term::Union(_)
+                ) && !program
+                    .graded
+                    .iter()
+                    .flat_map(|graded| &graded.grades)
                     .any(|grade| grade.name == definition.name)
-        }).map(|definition| definition.name.clone()).collect::<Vec<_>>()
+            })
+            .map(|definition| definition.name.clone())
+            .collect::<Vec<_>>()
     } else {
         Vec::new()
     };
-    let stages = if parallel && machine.layout.is_some() { cuts.len() + 3 } else { 1 };
+    let stages = if parallel && machine.layout.is_some() {
+        cuts.len() + 3
+    } else {
+        1
+    };
     let mut split_best: Option<(Cost, Planned)> = None;
     for stage in 0..stages {
         if stage == cuts.len() + 1
@@ -244,7 +259,12 @@ fn decompose_in(
                 }
             } else {
                 let single = stage.checked_sub(1).and_then(|index| cuts.get(index));
-                resource_stages(checker, program, single.is_some() || stage == cuts.len() + 2, single)?
+                resource_stages(
+                    checker,
+                    program,
+                    single.is_some() || stage == cuts.len() + 2,
+                    single,
+                )?
             };
             let mut placed = prepare(checker, &stores.program, machine, catalog, parallel)?;
             stores.trace.append(&mut placed.trace);
@@ -267,7 +287,9 @@ fn decompose_in(
                 if segmented && (!parallel || width.is_none() || !segmentable) {
                     continue;
                 }
-                match candidate(checker, &prepared, machine, catalog, width, items, segmented) {
+                match candidate(
+                    checker, &prepared, machine, catalog, width, items, segmented,
+                ) {
                     Ok((analysis, planned)) => {
                         let cost = Cost::from_analysis(&planned.program, machine, &analysis)?;
                         if best
@@ -291,7 +313,10 @@ fn decompose_in(
             }
             if let Some((cost, planned)) = best {
                 if stage > 0 && stage <= cuts.len() {
-                    if split_best.as_ref().is_none_or(|(current, _)| cost.better_than(current)) {
+                    if split_best
+                        .as_ref()
+                        .is_none_or(|(current, _)| cost.better_than(current))
+                    {
                         split_best = Some((cost, planned));
                     }
                     break;

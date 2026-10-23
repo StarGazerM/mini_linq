@@ -607,7 +607,7 @@ fn main() -> Result<()> {
             return Err(format!("unknown build query: {name}").into());
         }
     }
-    let automatic = env::var("CQ_GPU_TPCH_AUTOMATIC").map_or(true, |value| value == "1");
+    let automatic = env::var("CQ_GPU_TPCH_AUTOMATIC").is_ok_and(|value| value == "1");
     let overrides: std::collections::BTreeMap<String, advice::Pipeline> =
         if let Some(path) = env::var_os("TPCH_GPU_ADVICE") {
             let path = PathBuf::from(path);
