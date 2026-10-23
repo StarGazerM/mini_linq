@@ -261,6 +261,10 @@ fn grouped_key_premises_remove_only_proven_valuation_canon() {
     let target = cq_sequence_rewrite_passes::group_without_canon(&keyed, quote!(answer)).unwrap();
     assert!(matches!(target.sequence.definitions[0].term, Term::Rows(_)));
     contract::check_rewrite(&keyed, &target).unwrap();
+    assert!(
+        contract::check_rewrite(&source, &target).is_err(),
+        "the rewrite cannot invent an unasserted key"
+    );
     let mut checker = cq_lang_sequence::contract::Checker::new(&target).unwrap();
     let mut missing = target.clone();
     missing.evidence.facts.clear();

@@ -1222,6 +1222,17 @@ fn check_rewrite_in(source: &Program, target: &Program, context: &Checker) -> sy
     if unchanged && source.sequence == target.sequence && source.evidence == target.evidence {
         return Ok(());
     }
+    if (!unchanged || source.sequence != target.sequence)
+        && target.evidence.facts.iter().any(|fact| {
+            matches!(fact, crate::EvidenceFact::Key { .. }) && !source.evidence.facts.contains(fact)
+        })
+    {
+        return fail(
+            target,
+            "PL-Evidence",
+            "a structural rewrite cannot invent key premises; record author evidence first",
+        );
+    }
     let target_facts = analyze_in(target, context, target_prefix)?;
     let support = &context.support;
     let preserves_adapters = unchanged
