@@ -190,25 +190,13 @@ fn analyze_in(
         .iter()
         .rev()
         .find(|proof| {
-            std::rc::Rc::ptr_eq(&proof.prefix, &prefix) && proof.sequence == program.sequence
+            std::rc::Rc::ptr_eq(&proof.prefix, &prefix)
+                && proof.sequence == program.sequence
+                && proof.evidence == program.evidence
         })
         .cloned();
     if let Some(proof) = previous {
-        if proof.evidence == program.evidence {
-            return Ok(proof);
-        }
-        // Evidence is advice, not a structural premise. Recheck its complete
-        // obligations while retaining the already proved terms and meanings.
-        let mut analysis = (*proof.analysis).clone();
-        analysis.evidence = program.evidence.clone();
-        program.evidence.check(program, &analysis)?;
-        return Ok(context.remember(CheckedProof {
-            prefix,
-            sequence: program.sequence.clone(),
-            evidence: program.evidence.clone(),
-            analysis: std::rc::Rc::new(analysis),
-            facts: proof.facts.clone(),
-        }));
+        return Ok(proof);
     }
     let mut checker = Checked {
         program,
@@ -427,6 +415,26 @@ impl Checked<'_> {
     }
     fn inferred_key(&self, name: &Ident, input: Option<&Fact>) -> Option<Vec<String>> {
         let definition = self.physical(name).ok()?;
+        // Formal rule BE-GroupKey: Asserted relation keys survive renaming and inherited-key transfer.
+        if let Operator::Rename(rename) = &definition.operator {
+            for fact in &self.program.evidence.facts {
+                if let crate::EvidenceFact::Key { subject, columns } = fact
+                    && *subject == rename.relation
+                    && let Some(key) = columns
+                        .iter()
+                        .map(|column| {
+                            rename
+                                .mapping
+                                .iter()
+                                .find(|mapping| mapping.source == *column)
+                                .map(|mapping| symbol_name(&mapping.target))
+                        })
+                        .collect::<Option<Vec<_>>>()
+                {
+                    return Some(key);
+                }
+            }
+        }
         physical::inherited_key(
             &definition.operator,
             &self.analysis.structures.physical.headings[&symbol_name(name)],

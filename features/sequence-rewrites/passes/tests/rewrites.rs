@@ -242,3 +242,42 @@ fn evidence_advice_is_checked_replayable_metadata() {
             .is_err()
     );
 }
+
+#[test]
+fn grouped_key_premises_remove_only_proven_valuation_canon() {
+    let source: Program = syn::parse_quote! {
+        physical {
+            relation R(id:i64, value:i64);
+            r = pipe canon rename R@0 {id -> id, value -> value};
+            grouped = let group r by [] { total: i64 = sum(value); };
+            return grouped as answer(total);
+        }
+        structures { r host scan = Reader []; r canon = Canon; grouped rows = Rows; }
+        sequence { values = store canon rows r; answer = store group grouped values; }
+    };
+    assert!(cq_sequence_rewrite_passes::group_without_canon(&source, quote!(answer)).is_err());
+    let mut keyed = source.clone();
+    keyed.evidence = syn::parse_quote!(evidence { R(id) key; });
+    let target = cq_sequence_rewrite_passes::group_without_canon(&keyed, quote!(answer)).unwrap();
+    assert!(matches!(target.sequence.definitions[0].term, Term::Rows(_)));
+    contract::check_rewrite(&keyed, &target).unwrap();
+    let mut checker = cq_lang_sequence::contract::Checker::new(&target).unwrap();
+    let mut missing = target.clone();
+    missing.evidence.facts.clear();
+    assert!(
+        checker.check(&missing).is_err(),
+        "cached proofs must retain key premises"
+    );
+    let mut projected = keyed.clone();
+    if let cq_lang_sequence::structures::physical::Operator::Rename(rename) =
+        &mut projected.structures.physical.program.definitions[0].operator
+    {
+        rename.mapping = rename
+            .mapping
+            .iter()
+            .filter(|mapping| mapping.source != "id")
+            .cloned()
+            .collect();
+    }
+    assert!(cq_sequence_rewrite_passes::group_without_canon(&projected, quote!(answer)).is_err());
+}

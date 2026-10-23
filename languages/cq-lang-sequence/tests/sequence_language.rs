@@ -851,7 +851,7 @@ fn publication_tile_resolution_stops_at_named_storage() {
 }
 
 #[test]
-fn evidence_forms_round_trip_without_becoming_checked_facts() {
+fn evidence_forms_round_trip_without_changing_lengths_or_capabilities() {
     let source = lookup_program(quote! {
         left = rows l;
         expanded = flatten lookup r [a] left;
@@ -862,7 +862,7 @@ fn evidence_forms_round_trip_without_becoming_checked_facts() {
         evidence {
             count R = 0;
             count R = 999;
-            key R [a];
+            R(a) key;
             foreign_key L [a] -> R [b];
             selectivity answer = 0 / 1;
             bounds R.b = 12 ..= -3;

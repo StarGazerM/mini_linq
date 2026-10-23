@@ -23,6 +23,7 @@ pub enum Advice {
     Evidence(cq_lang_sequence::Evidence),
     LookupFirst(Box<cq_sequence_rewrite_passes::LookupFirst>),
     Adaptive(cq_sequence_rewrite_passes::AdaptiveCandidate),
+    GroupWithoutCanon(Ident),
     Store(Ident),
     StoreLevel(Ident),
     Publish {
@@ -70,6 +71,9 @@ impl Advice {
                 rewrites::lookup_first_in(checker, source, quote!(#arguments))
             }
             Self::Adaptive(arguments) => rewrites::apply_adaptive_in(checker, source, arguments),
+            Self::GroupWithoutCanon(name) => {
+                rewrites::group_without_canon_in(checker, source, quote!(#name))
+            }
             Self::Store(name) => rewrites::store_in(checker, source, quote!(#name)),
             Self::StoreLevel(name) => rewrites::store_level_in(checker, source, quote!(#name)),
             Self::Publish { name, producer } => {
@@ -191,6 +195,35 @@ fn decompose_in(
     catalog: &Catalog,
 ) -> syn::Result<Planned> {
     checker.check_shared(program)?;
+    let mut prepared = Planned {
+        program: program.clone(),
+        trace: Vec::new(),
+    };
+    fn has_group(term: &Term) -> bool {
+        match term {
+            Term::Group(_, _) => true,
+            Term::Store { inner, .. } | Term::Canon(inner) => has_group(inner),
+            _ => false,
+        }
+    }
+    let groups: Vec<_> = program
+        .sequence
+        .definitions
+        .iter()
+        .filter(|definition| has_group(&definition.term))
+        .map(|definition| definition.name.clone())
+        .collect();
+    for name in groups {
+        let advice = Advice::GroupWithoutCanon(name);
+        if let Ok(target) = advice.apply_in(checker, &prepared.program)
+            && target != prepared.program
+        {
+            prepared.program = target;
+            prepared.trace.push(advice);
+        }
+    }
+    let program = &prepared.program;
+    let prefix_trace = prepared.trace.clone();
     if machine.items == 0 {
         return Err(syn::Error::new(
             machine.name.span(),
@@ -266,6 +299,7 @@ fn decompose_in(
                     single,
                 )?
             };
+            stores.trace.splice(0..0, prefix_trace.iter().cloned());
             let mut placed = prepare(checker, &stores.program, machine, catalog, parallel)?;
             stores.trace.append(&mut placed.trace);
             placed.trace = stores.trace;

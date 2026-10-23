@@ -98,7 +98,7 @@ pub struct Analysis {
     pub collectives: Vec<(String, Monoid, Vec<String>)>, // fold/scan Defs and their level
     pub output: Option<(String, OutputProtocol)>,       // the final store and how it is filled
     pub obligations: Vec<Obligation>,                  // provider/codec/canon traits and dispatch failure paths
-    pub evidence: Evidence,                           // nonsemantic data advice, never obligations
+    pub evidence: Evidence,                           // estimates and author-asserted key premises
 }
 pub mod contract { pub fn check(p: &Program) -> syn::Result<Analysis>; }   // BE-Alpha…BE-Choose structurally
 pub fn check_grading(p: &Program, m: &Machine) -> syn::Result<Analysis>;   // BE-Scope…BE-Abort against m
@@ -504,9 +504,9 @@ Evidence advice: estimation is not part of the query. An `evidence { … }`
 advice block carries facts about data (row counts, keys, foreign keys,
 selectivities, bounds, sortedness), hand-written or generated (build.rs
 from a manifest, DuckDB statistics, a sampling pass). Recorded in the
-Analysis beside obligations. Law PL-Evidence: evidence selects among
-checked candidates and never changes meaning; a wrong fact costs time, not
-answers. Consumers: Lookup order and early Expand placement (L&E §4
+Analysis beside obligations. Law PL-Evidence: estimates select among checked
+candidates; a wrong estimate costs time, not answers. Keys are explicit author
+assertions: false keys can change answers through BE-GroupKey. Consumers: Lookup order and early Expand placement (L&E §4
 `earlyExpand`), the transfer-tree root (LargestRoot sizes), static
 filter-worthiness (RPT+ threshold) instead of `choose`.
 
@@ -632,6 +632,26 @@ partition. CPU pull fuses the keyed store/owner segments into a host hash
 accumulator (and uses one scalar accumulator for global grouping); Tasks
 performs the same host fold rather than inventing a collective at its
 separated pool. Existing whole-sequence folds are unchanged.
+
+### Box 12d key-aware grouped fold
+
+`evidence { Lineitem(l_orderkey, l_linenumber) key; }` asserts that no two
+physical input rows have the same key. The prefix spelling
+`key Lineitem [l_orderkey, l_linenumber];` denotes the same premise.
+These assertions are not inferred from counts, bounds or sampled statistics.
+Unlike estimates, a false key can change answers: the author is responsible
+for its truth. The manifest-driven TPC-H suite asserts dbgen's declared keys
+only when a loader projection carries every key column.
+
+`group_without_canon(grouped_definition)` is checked by BE-GroupKey and
+BE-Group: the rewritten input must retain positional uniqueness after every
+valuation canonicalizer is removed. Keys transfer through renaming, filters,
+scalar binds and joins; projections must preserve them. Missing keys, unions
+and expanding Rust binds do not supply a certificate. The planner records
+successful rewrites in its replay trace. GPU groups can then read resident
+columns directly, evaluating group arguments without materializing complete
+named valuations. With no key advice the existing canonical path is unchanged.
+
 
 Acceptance: cq-testkit conformance including duplicate input, equal-valued
 distinct matches, empty keyed/global input, count/sum/min/max, and triangle

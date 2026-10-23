@@ -330,7 +330,7 @@ Structures prefix and equal Sequence and evidence syntax. Machine grading is
 checked separately for every requested grade. The join-support certificate
 interns relation and column names into invocation-local integer identities;
 its cache keys retain the complete ordered graph, headings and query atoms.
-Neither a hash collision nor evidence establishes an equality. Syntax trees
+Neither a hash collision nor an estimate establishes an equality. Syntax trees
 remain the source of spans and opaque Rust equality; proof comparison does
 not require rendering those trees to token strings.
 
@@ -567,20 +567,22 @@ predicate after that atom, not by a planner asserting the predicate total.
    \mathsf{len}(s)<k\Rightarrow a,\ \mathsf{else}\Rightarrow b]}
 
 \Rule{PL-Evidence}{E\text{ is syntactically well-formed advice}\quad
- (t',\rho)=\mathsf{plan}(t,M,K,E)}
+ E_{\rm key}\text{ holds}\quad (t',\rho)=\mathsf{plan}(t,M,K,E)}
  {\mathrm{supp}(\alpha(t'))=\mathrm{supp}(\alpha(t))\quad
-  \rho\text{ satisfies PL-Closure independently of the truth of }E}
+  \rho\text{ satisfies PL-Closure under }E_{\rm key}}
 \end{mathpar}
 
 Evidence records row counts, keys, foreign keys, selectivities, bounds and
-sortedness beside the analysis obligations, not as correctness premises.
-Its consumers select the root, Lookup order, early Expand, and whether a
+sortedness beside analysis obligations. Keys are explicit author assertions
+of physical uniqueness, not estimates; a false key can change grouped answers.
+All other facts remain nonsemantic estimates. Their consumers select the root,
+Lookup order, early Expand, and whether a
 transfer filter is worth its cost. The RPT+ selective-filter heuristic
 \cite[Sections~3.6 and~5]{paper-rpt-plus} uses static selectivity evidence
 when present; otherwise a \code{choose} reads an already-published count.
-The alternatives retain the exact joins, so even false evidence changes
-execution time only. This is a boundary-count adaptation, not a claim to
-implement RPT+'s in-flight sampling or cancellation.
+The alternatives retain the exact joins, so false estimates change execution
+time only. This is a boundary-count adaptation, not a claim to implement
+RPT+'s in-flight sampling or cancellation.
 
 The \code{Planner} interface accepts $(t,M,K,E)$ and returns a program and
 replayable advice trace. Serialized author advice and generated advice use
@@ -721,6 +723,23 @@ fold; its input canonicalization is over $V$, never over aggregate values.
 The host hash-grouped implementation fuses store construction and segment
 fold without changing this equation. The Tasks interpretation performs this
 operation at the host join, not as a collective at the separated pool.
+
+\paragraph{Key-aware grouped fold.}
+\begin{mathpar}
+\Rule{BE-GroupKey}{E_{\rm key}\models K_R\to R\ \text{with unique physical keys for every positive atom }R
+ \quad V\text{ determines every }K_R}
+ {\mathsf{canon}(\mathsf{valuations}_V)=\mathsf{valuations}_V}
+\end{mathpar}
+Under these asserted premises, each complete named valuation identifies at
+most one physical witness combination. RA-Group therefore folds the same bag
+without the canonical-valuation store. Renames translate keys, joins combine
+them, scalar binds and filters preserve them, and projection must retain a key.
+Expanding Rust binds and unions supply no such certificate. The checked
+\code{group\_without\_canon} rewrite removes canonicalizers only if the resulting
+group input still has proven positional uniqueness. Proof caches include
+evidence, so removing an assertion cannot reuse its proof. GPU interpretation
+may read resident columns directly and evaluate only the group arguments;
+it does not decide whether a key premise holds.
 
 \paragraph{GPU machine instance of BE-Group.}
 The recorded canonical provider publishes the distinct complete valuations

@@ -27,6 +27,11 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   earn position independence; arbitrary methods, lossy casts, mixed widths and
   runtime divisors stay opaque. CPU and GPU row interpretation share the checked arithmetic
   grammar, allowing aggregate arguments to execute below the host boundary.
+- Box 12d: add `R(a,b) key` evidence syntax and checked
+  `group_without_canon` advice, with complete-evidence proof cache identity.
+  TPC-H loaders assert declared keys only when their projections retain them.
+  Key-covered groups consume resident columns and only materialize aggregate
+  arguments, not complete named valuations; unadvised groups retain canon.
 - Cleanup after the Sequence cutover and guard redesign: remove the
   test-only `cq_physical_realization::sources`, the uncalled
   `cq_print::Context::row` (and make `borrowed_pattern` private), unread
@@ -47,9 +52,10 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   or permitting compiler motion of arbitrary Rust guards.
   Checked guard-result carriers drop dead columns only after predicate evaluation,
   allowing numeric Part keys to be published without carrying String data.
-- Add nonsemantic Sequence evidence advice for row counts, keys, foreign keys,
-  selectivities, bounds and sortedness. Evidence is parsed and recorded beside
-  analysis obligations; false facts cannot discharge a correctness premise.
+- Add Sequence evidence advice for row counts, keys, foreign keys,
+  selectivities, bounds and sortedness. Estimates rank checked plans.
+  Keys are author-asserted physical uniqueness premises; false keys can
+  change grouped answers through checked canonicalization elimination.
 - Expose `cq_sequence_plan::Planner` and a checked `RuleBased` implementation.
   Complete Sequence input supports a swappable named `plan = path` facade
   phase; existing CQ-input `plan` remains its join-order phase. Planner advice

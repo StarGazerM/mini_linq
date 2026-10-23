@@ -22,6 +22,9 @@ pub use catalog::select_from_catalog;
 mod evidence;
 pub use evidence::{evidence, record_evidence, record_evidence_in};
 
+mod group;
+pub use group::{group_without_canon, group_without_canon_in};
+
 mod adaptive;
 pub use adaptive::{
     AdaptiveCandidate, adaptive, adaptive_candidates, adaptive_candidates_in, adaptive_choose,
