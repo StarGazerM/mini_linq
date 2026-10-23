@@ -1163,17 +1163,21 @@ The CPU cases include debug-overflow laws, signed-minimum division by -1 and
 H06's independent DuckDB DISTINCT-valuation oracle. Scoped library clippy
 passed; the three changed public API snapshots were regenerated.
 
-The combined CQ-Arith + key-covered GPU grouping path was measured with one
-warmup and five exact runs per query at SF10:
+Both the generic CQ-Arith + WideCanon path and the combined key-covered GPU
+grouping path were measured with one warmup and five exact runs at SF10:
 
-| Query | Exact answer rows | Baseline median ms | Combined median ms |
-|---|---:|---:|---:|
-| H06 | 1 | 3310.908 | 11.776 |
-| H12 | 2 | 44.427 | 25.930 |
+| Query | Exact answer rows | Baseline median ms | CQ-Arith + WideCanon ms | With key-covered grouping ms |
+|---|---:|---:|---:|---:|
+| H06 | 1 | 3310.908 | 16.893 | 11.776 |
+| H12 | 2 | 44.427 | 30.955 | 25.930 |
 
-These are integrated results, not an isolated arithmetic-only speedup.
-Baseline evidence is `/tmp/sweep3.json`; combined evidence is
-`/tmp/groupkeys-h06-sf10.json` and `/tmp/groupkeys-h12-sf10.json`.
+The generic path grades H06's range guards and multiplication (`r1`--`r4`)
+at `host.device.block`; H12's guards, join and numeric conditionals
+(`r1`--`r4`, `r6`--`r8`) likewise run there. The final column includes the
+separate grouped-input optimization, not just arithmetic recognition.
+Baseline evidence is `/tmp/sweep3.json`; generic-path evidence is
+`/tmp/arith-h06-sf10.json` and `/tmp/arith-h12-sf10.json`; combined evidence
+is `/tmp/groupkeys-h06-sf10.json` and `/tmp/groupkeys-h12-sf10.json`.
 The generic canonical-publication path additionally needs declared primitive
 bounds for computed columns: wrapping expressions may cross either endpoint,
 so source codec bounds cannot be reused. WideCanon supplies complete keys when
