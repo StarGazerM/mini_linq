@@ -4,8 +4,8 @@
 //! reads and ISO date captures use the manifest's coefficient/day encodings.
 //! Dictionary-coded group keys are decoded only at the comparison boundary.
 //! String methods retain their authored host representation and remain subject
-//! to checked planning/translation. Multi-stage sources are listed separately:
-//! importing one stage would discard materialization and change the query.
+//! to checked planning/translation. Staged sources retain every compiled rule,
+//! materialized dependency and final iterator composition.
 use crate::manifest::{Manifest, Result};
 use proc_macro2::{Group, TokenStream, TokenTree};
 use quote::{ToTokens, quote};
@@ -23,7 +23,13 @@ macro_rules! sources {
 }
 sources!(
     "h01",
+    "h02",
     "h06",
+    "h11",
+    "h13",
+    "h15",
+    "h18",
+    "h20",
     "h10",
     "h12",
     "h14",
@@ -45,16 +51,6 @@ sources!(
     "d85"
 );
 
-/// Authored staged queries are inventoried, not falsely registered as one CQ.
-pub const UNSUPPORTED: &[(&str, &str)] = &[
-    ("h02", "keyed minimum materialization followed by joins requires a staged GPU executor"),
-    ("h11", "per-part and global sums followed by a threshold join require a staged GPU executor"),
-    ("h13", "multiple compile! stages and zero-count iterator composition require a staged GPU executor"),
-    ("h15", "supplier sums followed by anti-dominance and supplier joins require a staged GPU executor"),
-    ("h18", "grouped quantity materialization followed by joins requires a staged GPU executor"),
-    ("h20", "keyed shipped-quantity materialization followed by joins requires a staged GPU executor"),
-];
-
 #[derive(Clone)]
 pub struct Relation {
     pub name: Ident,
@@ -68,6 +64,8 @@ pub struct Kernel {
     pub relations: Vec<Relation>,
     pub answer: Vec<(Ident, syn::Type)>,
     pub derived: Vec<(Ident, Vec<(Ident, syn::Type)>)>,
+    /// Inputs published by preceding stages, in declaration order.
+    pub published: Vec<Relation>,
     pub body: TokenStream,
     /// Standalone programs retain their declared output and aggregate head.
     program: Option<cq_lang_cq::Program>,
@@ -167,6 +165,7 @@ impl Parse for Kernel {
             setup,
             relations,
             derived,
+            published: Vec::new(),
             answer,
             program: None,
             body: input.parse()?,
@@ -261,6 +260,18 @@ impl Kernel {
             }
         }
         let program = syn::parse2::<Compile>(compiles.0.remove(0))?.0;
+        Self::standalone_program(file, program, &BTreeMap::new())
+    }
+
+    pub fn standalone_program(
+        file: &syn::File,
+        program: cq_lang_cq::Program,
+        publications: &BTreeMap<String, Vec<(Ident, syn::Type)>>,
+    ) -> Result<Self> {
+        let run = file.items.iter().find_map(|item| match item {
+            syn::Item::Fn(function) if function.sig.ident == "run" => Some(function),
+            _ => None,
+        }).ok_or("standalone CPU source has no run function")?;
         let body = program.query.body.to_token_stream();
         let mut setup: syn::Block = syn::parse_quote!({});
         for statement in &run.block.stmts {
@@ -306,7 +317,16 @@ impl Kernel {
             tables.push((strings[0].clone(), strings[1].split(',').map(|s| s.trim().to_owned()).collect::<Vec<_>>()));
         }
         let mut relations = Vec::new();
+        let mut published = Vec::new();
         for input in program.inputs() {
+            if let Some(columns) = publications.get(&input.name.to_string()) {
+                published.push(Relation {
+                    name: input.name.clone(),
+                    table: input.name.clone(),
+                    columns: columns.clone(),
+                });
+                continue;
+            }
             let projection: Vec<_> = input.columns.iter().map(|column| column.name.to_string()).collect();
             let matches: Vec<_> = tables.iter().filter(|(_, columns)| *columns == projection).collect();
             if matches.len() != 1 {
@@ -322,7 +342,7 @@ impl Kernel {
             .columns.iter().map(|column| (column.name.clone(), column.ty.clone())).collect();
         Ok(Self {
             plan_advice: TokenStream::new(), setup, relations, answer,
-            derived: Vec::new(), body, program: Some(program),
+            derived: Vec::new(), published, body, program: Some(program),
         })
     }
 
@@ -434,6 +454,11 @@ impl Kernel {
         }
         for (name, columns) in &self.derived {
             let fields = columns.iter().map(|(column, ty)| quote!(#column: #ty));
+            declarations.extend(quote!(relation #name(#(#fields),*);));
+        }
+        for relation in &self.published {
+            let name = &relation.name;
+            let fields = relation.columns.iter().map(|(column, ty)| quote!(#column: #ty));
             declarations.extend(quote!(relation #name(#(#fields),*);));
         }
         if let Some(program) = &self.program {
@@ -726,8 +751,11 @@ mod tests {
     }
     #[test]
     fn every_cpu_query_is_imported_without_a_second_body() {
-        assert_eq!(SOURCES.len(), 21);
+        assert_eq!(SOURCES.len(), 27);
         for (name, source) in SOURCES {
+            if crate::stages::Program::import(source).unwrap().is_some() {
+                continue;
+            }
             let kernel = Kernel::import(source).unwrap();
             let query: cq_lang_cq::Program = syn::parse2(kernel.cpu_query()).unwrap();
             assert_eq!(
@@ -756,19 +784,25 @@ mod tests {
     }
 
     #[test]
-    fn staged_programs_are_explicitly_unsupported() {
-        for (name, source) in [
-            ("h02", include_str!("../../../../features/workloads/src/queries/retail/tpch/retail_h02.rs")),
-            ("h11", include_str!("../../../../features/workloads/src/queries/retail/tpch/retail_h11.rs")),
-            ("h13", include_str!("../../../../features/workloads/src/queries/retail/tpch/retail_h13.rs")),
-            ("h15", include_str!("../../../../features/workloads/src/queries/retail/tpch/retail_h15.rs")),
-            ("h18", include_str!("../../../../features/workloads/src/queries/retail/tpch/retail_h18.rs")),
-            ("h20", include_str!("../../../../features/workloads/src/queries/retail/tpch/retail_h20.rs")),
+    fn staged_programs_retain_every_compiled_node_and_composition() {
+        for (name, count, terminals) in [
+            ("h02", 2, vec![1]), ("h11", 4, vec![3]), ("h13", 2, vec![0, 1]),
+            ("h15", 3, vec![2]), ("h18", 2, vec![1]), ("h20", 2, vec![1]),
         ] {
-            let error = Kernel::import(source).err().expect("staged source cannot be one query");
-            assert!(error.to_string().contains("compile! stages"), "{error}");
-            assert!(UNSUPPORTED.iter().any(|(query, _)| *query == name));
-            assert!(!SOURCES.iter().any(|(query, _)| *query == name));
+            let source = SOURCES.iter().find(|(query, _)| *query == name).unwrap().1;
+            let program = crate::stages::Program::import(source).unwrap().unwrap();
+            assert_eq!(program.stages.len(), count, "{name}");
+            assert_eq!(program.terminal, terminals, "{name}");
+            if name == "h11" {
+                assert_eq!(program.aliases["Stock"], 0);
+                assert_eq!(program.aliases["PartValue"], 1);
+                assert_eq!(program.aliases["TotalValue"], 2);
+            }
+            if name == "h13" {
+                assert_eq!(program.preprocessing.len(), 1);
+                assert_eq!(program.preprocessing[0].name, "QualifiedOrders");
+                assert!(program.preprocessing[0].expression.to_token_stream().to_string().contains("split_once"));
+            }
         }
     }
 
@@ -981,6 +1015,9 @@ mod encoding_tests {
         for sf in [1, 10] {
             let manifest = Manifest::load(&crate::data_root().join(format!("sf{sf}"))).unwrap();
             for &(name, source) in SOURCES {
+                if crate::stages::Program::import(source).unwrap().is_some() {
+                    continue;
+                }
                 let kernel = Kernel::import(source).unwrap();
                 let encoded = kernel.encoded_query(&manifest).unwrap();
                 let program: cq_lang_cq::Program = syn::parse2(encoded.clone()).unwrap();

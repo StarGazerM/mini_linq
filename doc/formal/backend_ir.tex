@@ -248,6 +248,20 @@ the write, and the projected rows are transferred into the descendant store.
 This downward publication is an upload, not a GPU query dispatch; subsequent
 lookup execution uses the stored layout without re-evaluating its predicate.
 
+\paragraph{Composition of complete programs.}
+A materialized result may bind a relation of a subsequent complete program.
+This is ordinary substitution of the published store's $\alpha$ into that
+relation, not inlining of either program or a new query rewrite. Each stage
+is checked and graded independently. A resident binding retains its complete
+row schema, logical count, stream ordering, and ancestor failure channels;
+changing a row-major publication to column views preserves every row and
+does not download the relation. Nullable publications require a representation
+that retains validity, or explicit host publication. Host-only stages use the
+host interpretation and publish their completed rows. Independent terminal
+branches retain the author's union/composition rather than selecting only the
+last compiled rule. Conformance substitutes independently selected Sequential
+interpretations of the same Physical stages through the identical graph.
+
 \paragraph{Output.} The final \code{flatten} into one stored sequence of
 unknown length is one term with several interpretations, equal under
 $\alpha$: lengths computed first by a count pass (purity, premise~3,

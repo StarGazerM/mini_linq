@@ -5,6 +5,9 @@ mod advice;
 mod manifest;
 #[path = "src/source.rs"]
 mod source;
+#[path = "src/stages.rs"]
+mod stages;
+mod build_stages;
 
 use manifest::{Manifest, Result};
 use proc_macro2::TokenStream;
@@ -45,6 +48,17 @@ fn compile(
     pipeline: &advice::Pipeline,
     profile: &str,
 ) -> CompileResult<(TokenStream, serde_json::Value)> {
+    compile_stage(kernel, manifest, pipeline, profile, None, false)
+}
+
+fn compile_stage(
+    kernel: &source::Kernel,
+    manifest: &Manifest,
+    pipeline: &advice::Pipeline,
+    profile: &str,
+    publications: Option<&std::collections::BTreeMap<String, bool>>,
+    host: bool,
+) -> CompileResult<(TokenStream, serde_json::Value)> {
     let cpu_source = kernel.cpu_query();
     // Registration passes a query name only for an authored hand profile.
     let hand_profile = !matches!(profile, "automatic" | "advised" | "h05");
@@ -61,6 +75,19 @@ fn compile(
     };
     let mut stored_types = std::collections::BTreeMap::new();
     let mut domains = std::collections::BTreeMap::new();
+    if publications.is_some() {
+        // Stages exchange authored integer domains, not narrowed manifest
+        // storage lanes. In particular Stock.quantity remains i64 for H11.
+        for relation in &kernel.relations {
+            for (column, logical) in &relation.columns {
+                if logical.to_token_stream().to_string() == "i64" {
+                    stored_types.insert(
+                        (relation.table.to_string(), column.to_string()), logical.clone(),
+                    );
+                }
+            }
+        }
+    }
     if pipeline.storage == "tpch_dictionary" {
         // Authored constant-only string queries use the manifest's existing
         // column-local i32 dictionaries. The source adapter resolves literals;
@@ -202,10 +229,12 @@ fn compile(
         &default_structures,
         advice::structures(&default_structures, &pipeline.structures),
     )?;
+    let catalog = if host { cq_sequence_pull::catalog() } else { cq_gpu_sequence::catalog() };
+    let machine = if host { cq_sequence_pull::machine() } else { cq_gpu_sequence::machine() };
     let mut structures = checked(
         "catalog selection",
         &selected,
-        cq_sequence_plan::select_from_catalog(&selected, &cq_gpu_sequence::catalog()),
+        cq_sequence_plan::select_from_catalog(&selected, &catalog),
     )?;
     let facts = checked(
         "Structures check",
@@ -216,7 +245,7 @@ fn compile(
     // Record its uniform DeviceColumns adapter with the checked retype rewrite.
     for index in 0..structures.structures.entries.len() {
         let entry = &structures.structures.entries[index];
-        if matches!(entry.structure, cq_lang_structures::Structure::Host { .. }) {
+        if !host && matches!(entry.structure, cq_lang_structures::Structure::Host { .. }) {
             let host = &facts.physical.hosts[&entry.name.to_string()];
             let relation = physical
                 .program
@@ -224,6 +253,9 @@ fn compile(
                 .iter()
                 .find(|r| r.name == host.as_str())
                 .unwrap();
+            if publications.is_some_and(|inputs| inputs.get(&relation.name.to_string()) == Some(&false)) {
+                continue;
+            }
             if kernel
                 .derived
                 .iter()
@@ -244,7 +276,11 @@ fn compile(
                 &structures,
                 cq_rewrite_passes::retype(
                     &structures,
-                    quote!(entry(#index) => ::cq_gpu_runtime::DeviceColumns<'static, (#(#types,)*), ::cq_gpu_runtime::For>),
+                    if kernel.published.iter().any(|input| input.name == relation.name) {
+                        quote!(entry(#index) => ::cq_gpu_runtime::DeviceColumns<'static, (#(#types,)*)>)
+                    } else {
+                        quote!(entry(#index) => ::cq_gpu_runtime::DeviceColumns<'static, (#(#types,)*), ::cq_gpu_runtime::For>)
+                    },
                 ),
             )?;
         }
@@ -325,6 +361,8 @@ fn compile(
                 program: authored.program.clone(),
                 trace: Vec::new(),
             })
+        } else if host {
+            cq_sequence_plan::decompose(&authored.program, &machine, &catalog)
         } else if profile == "h05" {
             advice::h05_schedule(&authored.program)
         } else if hand_profile {
@@ -357,18 +395,20 @@ fn compile(
         "sequence_trace": trace,
         "sequence_planned": planned.program.to_token_stream().to_string(),
         "cost": checked("PL-Cost", &planned.program,
-            cq_sequence_plan::cost(&planned.program, &cq_gpu_sequence::machine()))?.to_string(),
+            cq_sequence_plan::cost(&planned.program, &machine))?.to_string(),
     });
     let analysis = checked(
         "machine_grade",
         &planned.program,
-        cq_lang_sequence::check_grading(&planned.program, &cq_gpu_sequence::machine()),
+        cq_lang_sequence::check_grading(&planned.program, &machine),
     )?;
-    let gpu = checked(
-        "translate",
-        &planned.program,
-        cq_gpu_sequence::translate(&planned.program, &analysis),
-    )?;
+    let gpu = if host {
+        checked("host translate", &planned.program,
+            cq_sequence_pull::translate(&planned.program, &analysis))?
+    } else {
+        checked("translate", &planned.program,
+            cq_gpu_sequence::translate(&planned.program, &analysis))?
+    };
 
     // Independently select/lower Sequential from the identical Physical. No GPU
     // schedule, provider, partition, or canonicalization advice is copied over.
@@ -438,7 +478,7 @@ fn compile(
         let table = &tables[index];
         let names = &column_names[index];
         let row = &row_types[index];
-        if relation
+        if host || relation
             .columns
             .iter()
             .any(|column| column.ty.to_token_stream().to_string() == "String")
@@ -533,6 +573,9 @@ fn compile(
             );
             borrowed_outputs.push(quote!(#decoder[*row.#output as usize].clone()));
             owned_outputs.push(quote!(#decoder[row.#output as usize].clone()));
+        } else if ty.to_token_stream().to_string().starts_with("Option") {
+            borrowed_outputs.push(quote!(format!("{:?}", row.#output)));
+            owned_outputs.push(quote!(format!("{:?}", row.#output)));
         } else {
             borrowed_outputs.push(quote!(row.#output.to_string()));
             owned_outputs.push(quote!(row.#output.to_string()));
@@ -551,9 +594,112 @@ fn compile(
         (
             quote!(),
             quote!(),
-            quote!(let mut loader = crate::loader::Loader::new(manifest, pool);),
+            quote!(let mut loader = crate::loader::Loader::new(manifest, pool.clone());),
         )
     };
+    if let Some(publications) = publications {
+        let names: Vec<_> = kernel.published.iter().map(|r| &r.name).collect();
+        let rows: Vec<_> = kernel.published.iter().map(|r| {
+            let types = r.columns.iter().map(|(_, ty)| ty);
+            quote!((#(#types,)*))
+        }).collect();
+        let inputs: Vec<_> = names.iter().zip(&rows).map(|(name, row)| {
+            if publications[&name.to_string()] {
+                quote!(cq_gpu_runtime::DeviceColumns<'static, #row>)
+            } else {
+                quote!(Vec<#row>)
+            }
+        }).collect();
+        let cpu_names: Vec<_> = (0..answer_types.len()).map(|i| syn::Index::from(i)).collect();
+        let own_row = {
+            let head = &cq.query.head;
+            let fields = head.args.iter().zip(&cpu_names).map(|(arg, index)| {
+                if matches!(arg, syn::Expr::Path(_)) {
+                    quote!((*row.#index).clone())
+                } else {
+                    quote!(row.#index.clone())
+                }
+            });
+            quote!((#(#fields,)*))
+        };
+        let host_inputs: Vec<_> = names.iter().filter(|name| publications[&name.to_string()])
+            .map(|name| quote!(let #name = #name.to_host()?;)).collect();
+        let nullable = answer_types.iter().any(|ty| ty.to_token_stream().to_string().starts_with("Option"));
+        let resident = !host && !nullable;
+        let output_type = if resident {
+            quote!(cq_gpu_runtime::DeviceColumns<'static, Answer>)
+        } else {
+            quote!(Vec<Answer>)
+        };
+        let execute = if host {
+            quote! {
+                let started = ::std::time::Instant::now();
+                #(#sequential_bindings)*
+                #(#host_inputs)*
+                let result = (#gpu).map(|row| #own_row).collect();
+                let elapsed = started.elapsed().as_secs_f64() * 1000.0;
+                cq_gpu_runtime::publish_timings(cq_gpu_runtime::Timings {
+                    build_ms: elapsed, total_ms: elapsed, wall_ms: elapsed, ..Default::default()
+                });
+                Ok(result)
+            }
+        } else {
+            let publish = if nullable {
+                quote!(output.to_host()?)
+            } else if let Some(group) = &normal.query.group {
+                let columns: Vec<_> = group.keys.iter().chain(group.aggregates.iter().map(|a| &a.name)).collect();
+                let slots: Vec<_> = normal.query.head.args.iter().map(|argument| {
+                    let syn::Expr::Path(path) = argument else { unreachable!("checked normalized group head"); };
+                    columns.iter().position(|name| path.path.is_ident(*name)).expect("checked grouped output")
+                }).collect();
+                quote!({
+                    let started = ::std::time::Instant::now();
+                    let start = data.pool.stream().record_event(Some(::cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
+                    let result = unsafe { output.into_columns::<Answer>(&[#(#slots),*])? };
+                    let end = data.pool.stream().record_event(Some(::cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
+                    data.pool.stream().synchronize()?;
+                    let elapsed = start.elapsed_ms(&end)? as f64;
+                    let mut timing = cq_gpu_runtime::take_last_timings().ok_or("group stage published no timings")?;
+                    timing.dedup_ms += elapsed;
+                    timing.total_ms += elapsed;
+                    timing.wall_ms += started.elapsed().as_secs_f64() * 1000.0;
+                    cq_gpu_runtime::publish_timings(timing);
+                    result
+                })
+            } else {
+                quote!(output)
+            };
+            quote! {
+                #(let #fields = &data.#fields;)*
+                let output = #gpu;
+                Ok(#publish)
+            }
+        };
+        let mut artifact = artifact;
+        artifact["publication"] = json!(if resident { "device" } else { "host" });
+        artifact["answer_types"] = json!(answer_types.iter().map(|ty| ty.to_token_stream().to_string()).collect::<Vec<_>>());
+        return Ok((quote! {
+            pub(super) type Answer = (#(#answer_types,)*);
+            pub(super) type Output = #output_type;
+            pub(super) struct Inputs { #(#fields: #input_types,)* #catalog_field pool: ::std::sync::Arc<cq_gpu_runtime::Pool> }
+            pub(super) fn load(manifest: &crate::manifest::Manifest, pool: ::std::sync::Arc<cq_gpu_runtime::Pool>) -> crate::manifest::Result<Inputs> {
+                #load_setup
+                #(let #fields: #input_types = #bindings;)*
+                Ok(Inputs { #(#fields,)* #catalog_init pool })
+            }
+            pub(super) fn execute(data: &Inputs, #(#names: &#inputs),*) -> crate::manifest::Result<Output> {
+                #execute
+            }
+            pub(super) fn sequential(data: &Inputs, #(#names: &Vec<#rows>),*) -> crate::manifest::Result<Vec<Answer>> {
+                #(#sequential_bindings)*
+                Ok((#cpu).map(|row| #own_row).collect())
+            }
+            pub(super) fn decode(data: &Inputs, manifest: &crate::manifest::Manifest, rows: Vec<Answer>) -> crate::manifest::Result<Vec<Vec<String>>> {
+                #(#decode_bindings)*
+                Ok(rows.into_iter().map(|row| vec![#(#owned_outputs),*]).collect())
+            }
+        }, artifact));
+    }
     Ok((
         quote! {
             type Answer = (#(#answer_types,)*);
@@ -673,9 +819,6 @@ fn main() -> Result<()> {
         .collect();
     for name in &queries {
         if !source::SOURCES.iter().any(|(query, _)| query == name) {
-            if let Some((_, reason)) = source::UNSUPPORTED.iter().find(|(query, _)| query == name) {
-                return Err(format!("unsupported build query {name}: {reason}").into());
-            }
             return Err(format!("unknown build query: {name}").into());
         }
     }
@@ -698,9 +841,6 @@ fn main() -> Result<()> {
     let mut generated = TokenStream::new();
     let mut dispatch = Vec::new();
     let mut reports = Vec::new();
-    let unsupported: Vec<_> = source::UNSUPPORTED.iter().map(|(query, reason)| {
-        json!({"query": query, "status": "unsupported staged source", "reason": reason})
-    }).collect();
     for sf in [1, 10] {
         let directory = root.join(format!("sf{sf}"));
         println!(
@@ -728,7 +868,8 @@ fn main() -> Result<()> {
             println!(
                 "cargo:rerun-if-changed=../../../features/workloads/src/queries/retail/tpch/retail_{name}.rs"
             );
-            let kernel = source::Kernel::import(source)?;
+            let staged = stages::Program::import(source)?;
+            let kernel = if staged.is_none() { Some(source::Kernel::import(source)?) } else { None };
             for mode in ["automatic", "advised"] {
                 if mode == "automatic" && !automatic {
                     continue;
@@ -749,8 +890,8 @@ fn main() -> Result<()> {
                     advice::Pipeline::h05()
                 } else if let Some(hand) = hand {
                     hand
-                } else if kernel.is_standalone() {
-                    advice::Pipeline::grouped(&kernel.cpu_query())?
+                } else if kernel.as_ref().is_some_and(source::Kernel::is_standalone) {
+                    advice::Pipeline::grouped(&kernel.as_ref().unwrap().cpu_query())?
                 } else {
                     // CPU hints remain available explicitly, but an unmeasured CPU
                     // choice must not replace the existing accepted GPU baseline.
@@ -760,7 +901,7 @@ fn main() -> Result<()> {
                 if name == "h05" && pipeline.storage.is_empty() {
                     pipeline.storage = "tpch_domains".into();
                 }
-                let mut report = json!({"query": name, "sf": sf, "mode": mode, "cpu_query": kernel.cpu_query().to_string(), "cpu_plan_advice": kernel.plan_advice.to_string(), "pipeline": pipeline});
+                let mut report = json!({"query": name, "sf": sf, "mode": mode, "cpu_query": kernel.as_ref().map(|k| k.cpu_query().to_string()), "cpu_plan_advice": kernel.as_ref().map(|k| k.plan_advice.to_string()), "pipeline": pipeline});
                 let profile = if default_h05 {
                     "h05"
                 } else if hand_profile {
@@ -769,7 +910,12 @@ fn main() -> Result<()> {
                     mode
                 };
                 let generation_started = std::time::Instant::now();
-                match compile(&kernel, &manifest, &pipeline, profile) {
+                let compiled = if let Some(staged) = &staged {
+                    build_stages::compile(staged, &manifest, mode, overrides.get(name))
+                } else {
+                    compile(kernel.as_ref().unwrap(), &manifest, &pipeline, profile)
+                };
+                match compiled {
                     Ok((code, artifact)) => {
                         let module = format_ident!("{name}_sf{sf}_{mode}");
                         generated.extend(quote! { #[allow(non_snake_case)] mod #module { use serde_json::Value; #code } });
@@ -824,10 +970,6 @@ fn main() -> Result<()> {
     let generated: syn::File = syn::parse2(generated)?;
     fs::write(out.join("queries.rs"), prettyplease::unparse(&generated))?;
     fs::write(out.join("plans.json"), serde_json::to_vec_pretty(&reports)?)?;
-    fs::write(
-        out.join("unsupported.json"),
-        serde_json::to_vec_pretty(&unsupported)?,
-    )?;
     // Keep the same canonical path available to the runner, rather than silently
     // measuring a different fixture after constants were encoded at build time.
     println!(

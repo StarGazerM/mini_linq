@@ -50,6 +50,55 @@ impl<F> GroupedRows<F> {
     pub fn checked_len(&self) -> Result<usize> {
         self.output.checked_len()
     }
+    /// Publish a nonnullable grouped result as resident input columns.
+    ///
+    /// # Safety
+    /// `slots` must describe `Row` in the physical key/aggregate column layout
+    /// and select no nullable aggregate. The decoder is not applied: the grouped
+    /// machine values must already be the row codec's integer representation.
+    pub unsafe fn into_columns<Row: gpu_device_columns::RowCodec<'static>>(
+        self,
+        slots: &[usize],
+    ) -> Result<cq_gpu_runtime::DeviceColumns<'static, Row>> {
+        use gpu_device_columns::{Bounds, Codec, ColumnView, DeviceColumns, Dictionary,
+            EncodedColumn, SourceView, Table};
+        let output = self.output;
+        if Row::WIDTH != slots.len() || slots.iter().any(|&slot| slot >= output.width) {
+            return Err("grouped publication schema width mismatch".into());
+        }
+        let pool = output.values.pool().clone();
+        // fold allocates exactly one row per group; metadata retains the same
+        // count plus arithmetic failures. Neither values nor count are read back.
+        let rows = output.values.len() / output.width;
+        let bounds = Bounds::Inclusive { min: i64::MIN, max: i64::MAX };
+        let mut columns = Vec::with_capacity(slots.len());
+        for &slot in slots {
+            let mut source = SourceView::from(ColumnView {
+                headers: std::ptr::null(),
+                data: output.values.ptr().wrapping_add(if rows == 0 { 0 } else { slot }).cast(),
+                len: output.values.len() as u64,
+                count: std::ptr::null(),
+                codec: Codec::Plain as u32,
+            });
+            source.stride = output.width as u64;
+            columns.push(Arc::new(unsafe {
+                EncodedColumn::from_gather_source::<_, i64>(
+                    pool.clone(), source, std::ptr::null(), rows,
+                    output.metadata.clone(), 0, bounds,
+                )?
+            }));
+        }
+        let views: Vec<_> = columns.iter().map(|column| unsafe { column.view() }).collect();
+        let table = Table {
+            columns,
+            views: Arc::new(Buffer::from_host(pool.clone(), &views)?),
+            metadata: output.metadata,
+            capacity: rows,
+            bounds: vec![bounds; slots.len()],
+            statuses: output.statuses,
+        };
+        Ok(unsafe { DeviceColumns::from_parts(table, Arc::new(Dictionary::default()), pool) })
+    }
     pub fn to_host<Row>(&self) -> Result<Vec<Row>>
     where
         F: Fn(&[i64], &[u8]) -> Result<Row>,
@@ -414,5 +463,33 @@ mod group_kernels {
                 *valid.add(group * width + column) = present as u8;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod publication_tests {
+    use super::*;
+
+    #[test]
+    fn resident_group_publication_preserves_values_count_and_failure() -> Result<()> {
+        let pool = Pool::new(0, 0, 0)?;
+        let input = Buffer::from_host(pool.clone(), &[1i64, 3, 1, 7, 2, 5])?;
+        let aggregate = Aggregate { kind: 1, min: i64::MIN, max: i64::MAX };
+        for error in [0, 1] {
+            let status = Arc::new(Buffer::from_host(pool.clone(), &[OutputCount {
+                rows: 3, error, padding: 0,
+            }])?);
+            let grouped = unsafe { fold(pool.clone(), &input, 3, 1, &[aggregate], vec![status])? };
+            let published = unsafe {
+                grouped.with_decoder(()).into_columns::<(i64, i64)>(&[1, 0])?
+            };
+            assert_eq!(published.capacity(), 2);
+            if error == 0 {
+                assert_eq!(published.to_host()?, [(10, 1), (5, 2)]);
+            } else {
+                assert!(published.to_host().is_err());
+            }
+        }
+        Ok(())
     }
 }

@@ -1023,11 +1023,18 @@ sum remains outside the requested nonnested-aggregate inventory.
 
 The GPU suite imports single-program grouped heads from their authored Rust,
 preserves complete valuation domains, and decodes dictionary-valued answers.
-Staged H02/H11/H13/H15/H18/H20 are explicitly reported as unsupported by the
-single-program GPU executor. H14/H19 retain opaque String-valued witnesses and
-are rejected when opaque values lack a supported device encoding. The
-`WideCanon` catalog provider removes H10's former 128-bit complete-valuation
-limit; no witness projection or truncated equality key is substituted.
+Staged H02/H11/H13/H15/H18/H20 retain every authored compile! node and its
+materialization dependencies in the suite. Each node has its own checked plan,
+replay artifact and publication grade. Numeric grouped device publications are
+adapted to resident DeviceColumns without downloading rows or their count;
+nullable and host-graded publications retain host rows. H13's authored host
+preprocessing and terminal counts/zeros union are preserved. Stage timings are
+summed, and the same-Physical Sequential reference executes the complete graph.
+Device-planning failures remain explicit on host-planned stage artifacts.
+H14/H19 retain opaque String-valued witnesses and are rejected when opaque values
+lack a supported device encoding. The `WideCanon` catalog provider removes H10's
+former 128-bit complete-valuation limit; no witness projection or truncated
+equality key is substituted.
 
 Host row codecs now support sixteen columns (H10 requires fifteen). Downloaded
 host publications map their carried layout to the downstream consumer's demand;

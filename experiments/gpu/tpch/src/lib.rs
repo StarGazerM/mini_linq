@@ -22,14 +22,6 @@ pub fn plans() -> Result<Vec<Value>> {
     )))?)
 }
 
-/// Authored queries requiring staged execution are not executable registrations.
-pub fn unsupported() -> Result<Vec<Value>> {
-    Ok(serde_json::from_str(include_str!(concat!(
-        env!("OUT_DIR"),
-        "/unsupported.json"
-    )))?)
-}
-
 pub fn data_root() -> PathBuf {
     PathBuf::from(env!("TPCH_GPU_COMPILED_ROOT"))
 }
@@ -63,15 +55,11 @@ pub fn run(
     } else {
         Vec::new()
     };
-    let unsupported_sources = unsupported()?;
     for query in queries {
         if !results
             .iter()
             .any(|result| result["query"].as_str() == Some(query.as_str()))
         {
-            if let Some(source) = unsupported_sources.iter().find(|source| source["query"] == *query) {
-                return Err(format!("unsupported query {query}: {}", source["reason"].as_str().unwrap()).into());
-            }
             return Err(format!("unknown query: {query}").into());
         }
     }
@@ -205,7 +193,6 @@ pub fn run(
             "timing": "CUDA event medians; host evaluation/upload + provider build + kernels + final dedup; initial input loading, answer download and comparison excluded",
             "source": "CPU retail_kernel and standalone compile! CQ ASTs imported with include_str; only manifest storage types, date/decimal encodings and dictionary literals adapted",
             "results": results,
-            "unsupported_sources": unsupported_sources,
             "table_markdown": table,
         }))?,
     )?;
@@ -215,6 +202,8 @@ pub fn run(
 #[cfg(test)]
 #[path = "source.rs"]
 mod source;
+#[cfg(test)]
+mod stages;
 
 #[cfg(test)]
 mod tests {
@@ -258,6 +247,12 @@ mod tests {
     }
     conformance!(
         h01,
+        h02,
+        h11,
+        h13,
+        h15,
+        h18,
+        h20,
         h06,
         h10,
         h12,
@@ -278,10 +273,16 @@ mod tests {
 
     #[test]
     fn accepted_schedule_artifacts_replay_exactly() -> Result<()> {
-        for report in plans()?
-            .iter()
-            .filter(|report| report["status"] == "accepted")
-        {
+        let reports = plans()?;
+        let mut artifacts = Vec::new();
+        for report in reports.iter().filter(|report| report["status"] == "accepted") {
+            if let Some(stages) = report["stages"].as_array() {
+                artifacts.extend(stages);
+            } else {
+                artifacts.push(report);
+            }
+        }
+        for report in artifacts {
             let mut current: cq_lang_sequence::Program =
                 syn::parse_str(report["sequence_input"].as_str().unwrap())?;
             for invocation in report["pipeline"]["sequence"].as_array().unwrap() {
