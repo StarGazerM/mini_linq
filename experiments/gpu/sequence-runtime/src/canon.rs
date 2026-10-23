@@ -1,5 +1,5 @@
-//! Exact canonicalization of one- or two-lane packed keys. Narrow keys use
-//! RCCL radix sort; wide keys use exact row ordering followed by adjacent unique.
+//! Exact canonicalization of packed keys. `PackedCanon` handles up to two
+//! lanes; `WideCanon` stably radix-sorts arbitrary-width rows lane by lane.
 //! Recorded codec bounds determine the lane count before dispatch.
 
 use crate::Result;
@@ -38,6 +38,9 @@ struct CanonScratch {
     first: Option<DeviceBuffer<u64>>,
     alternate: Option<DeviceBuffer<u64>>,
     wide: Option<DeviceBuffer<u128>>,
+    pair_sort: Option<DeviceRadixSortBufferWorkspace>,
+    indices: Option<DeviceBuffer<u32>>,
+    alternate_indices: Option<DeviceBuffer<u32>>,
     capacity: usize,
 }
 
@@ -73,6 +76,17 @@ impl Drop for CanonScratch {
         release(&self.pool, bins);
         release(&self.pool, lookback);
         release(&self.pool, counters);
+        if let Some(sort) = self.pair_sort.as_mut() {
+            let (bins, lookback, counters) = sort.__parts_mut();
+            release(&self.pool, bins);
+            release(&self.pool, lookback);
+            release(&self.pool, counters);
+        }
+        for buffer in [&mut self.indices, &mut self.alternate_indices] {
+            if let Some(buffer) = buffer.take() {
+                let _ = unsafe { buffer.drop_async(self.pool.stream()) };
+            }
+        }
         if let Some(selected) = self.selected.take() {
             let _ = unsafe { selected.drop_async(self.pool.stream()) };
         }
@@ -100,9 +114,8 @@ pub struct PackedField {
 
 impl PackedField {
     fn bounds(self) -> Result<Bounds> {
-        if self.bits > 64 || self.shift > PackedCanon::MAX_PACKED_BITS
-            || self.bits > PackedCanon::MAX_PACKED_BITS - self.shift {
-            return Err("packed field exceeds the provider key capability".into());
+        if self.bits > 64 || self.shift.checked_add(self.bits).is_none() {
+            return Err("packed field width overflows".into());
         }
         let maximum = self.base as i128 + ((1_i128 << self.bits) - 1);
         let max =
@@ -172,6 +185,9 @@ impl<'pool> PackedCanon<'pool> {
                     first: None,
                     alternate: None,
                     wide: None,
+                    pair_sort: None,
+                    indices: None,
+                    alternate_indices: None,
                     capacity,
                 };
                 scratch.selected =
@@ -341,6 +357,139 @@ impl Drop for PackedCanon<'_> {
     }
 }
 
+/// Arbitrary-width instance of the canon law, using stable least-significant
+/// lane radix passes over row indices and full-row adjacent equality.
+pub struct WideCanon<'pool> {
+    inner: PackedCanon<'pool>,
+}
+
+impl<'pool> WideCanon<'pool> {
+    pub fn key_lanes(key_bits: u32) -> Result<usize> {
+        Ok((key_bits as usize).div_ceil(64).max(1))
+    }
+
+    pub fn field_lanes(fields: &[PackedField]) -> Result<usize> {
+        let mut bits = 0;
+        for field in fields {
+            field.bounds()?;
+            bits = bits.max(field.shift + field.bits);
+        }
+        Self::key_lanes(bits)
+    }
+
+    pub fn new(pool: &'pool Arc<Pool>, capacity: usize) -> Result<Self> {
+        Ok(Self {
+            inner: PackedCanon::new(pool, capacity)?,
+        })
+    }
+
+    /// Sort complete rows into ascending packed-key order, retaining one copy.
+    ///
+    /// # Safety
+    /// The same initialized-prefix, encoding and stream requirements as
+    /// `PackedCanon::canonicalize` apply, with `WideCanon::key_lanes`.
+    // Formal rule GPU-WideCanon: Stable radix passes preserve complete packed-row equality, an instance of BE-Canon.
+    pub unsafe fn canonicalize(
+        &mut self,
+        input: &Buffer<u64>,
+        rows: usize,
+        key_bits: u32,
+    ) -> Result<CanonicalKeys> {
+        let pool = self.inner.pool;
+        let lanes = Self::key_lanes(key_bits)?;
+        if !Arc::ptr_eq(pool, input.pool()) {
+            return Err("wide canon input must share the provider pool and stream".into());
+        }
+        if rows > input.len() / lanes || rows > self.inner.capacity {
+            return Err("wide canon live length exceeds input or provider capacity".into());
+        }
+        let keys = Arc::new(unsafe { Buffer::<u64>::uninitialized(pool.clone(), rows * lanes)? });
+        let metadata = Arc::new(Buffer::<OutputCount>::zeroed(pool.clone(), 1)?);
+        if rows != 0 {
+            let scratch = self.inner.scratch.as_mut().expect("live canon scratch");
+            scratch.prepare_keys(rows)?;
+            for buffer in [&mut scratch.indices, &mut scratch.alternate_indices] {
+                if buffer.as_ref().is_none_or(|buffer| buffer.len() != rows) {
+                    let replacement =
+                        unsafe { DeviceBuffer::uninitialized_async(pool.stream(), rows)? };
+                    if let Some(previous) = buffer.replace(replacement) {
+                        unsafe { previous.drop_async(pool.stream())? };
+                    }
+                }
+            }
+            let launch = self.inner.cub.on(pool.stream())?;
+            if scratch.pair_sort.is_none() {
+                scratch.pair_sort = Some(rccl_cub::device_radix_sort_pairs_buffer_workspace::<
+                    u64,
+                    u32,
+                >(&launch, scratch.capacity)?);
+            }
+            let workspace = scratch.pair_sort.as_mut().expect("wide radix controls");
+            let first = scratch.first.as_mut().expect("first lane scratch");
+            let second = scratch.alternate.as_mut().expect("alternate lane scratch");
+            let indices = scratch.indices.as_mut().expect("first row scratch");
+            let alternate = scratch
+                .alternate_indices
+                .as_mut()
+                .expect("alternate row scratch");
+            let mut buffers = DoubleBuffer::paired((first, indices), (second, alternate))
+                .ok_or("wide canon radix buffer extents differ")?;
+            let module = module(pool)?;
+            let config = LaunchConfig1D::new(rows.div_ceil(256).clamp(1, 2272) as u32, 256, 0);
+            let prepared = module.prepare_gather_lane(config)?;
+            for lane in 0..lanes {
+                let (values, order) = buffers.current_mut();
+                module.gather_lane(
+                    pool.stream(),
+                    &prepared,
+                    input.ptr(),
+                    values.cu_deviceptr() as *mut u64,
+                    order.cu_deviceptr() as *mut u32,
+                    rows as u32,
+                    lanes as u32,
+                    lane as u32,
+                )?;
+                rccl_cub::device_radix_sort_pairs_buffer(&launch, &mut buffers, 0..64, workspace)?;
+            }
+            let execution = self.inner.thrust.par_in(pool.stream(), pool.resource())?;
+            let selected = scratch.selected.as_mut().expect("canon count scratch");
+            let source = input.ptr();
+            let output = keys.ptr();
+            rccl_thrust::unique_copy_by(
+                &execution,
+                buffers.current().1.view(),
+                rccl_thrust::indexed_output(rows, move |index, row: u32| unsafe {
+                    for lane in 0..lanes {
+                        output
+                            .add(index * lanes + lane)
+                            .write(*source.add(row as usize * lanes + lane));
+                    }
+                }),
+                selected,
+                move |a: u32, b: u32| unsafe {
+                    (0..lanes).all(|lane| {
+                        *source.add(a as usize * lanes + lane)
+                            == *source.add(b as usize * lanes + lane)
+                    })
+                },
+            )?;
+            unsafe {
+                cuda_core::memory::memcpy_dtod_async(
+                    metadata.cu_deviceptr(),
+                    selected.cu_deviceptr(),
+                    std::mem::size_of::<u64>(),
+                    pool.stream().cu_stream(),
+                )?;
+            }
+        }
+        Ok(CanonicalKeys {
+            keys,
+            metadata,
+            lanes,
+        })
+    }
+}
+
 /// Owning, ascending distinct packed keys in row-major, low-lane-first storage.
 /// Only the first `*count_ptr()` rows are live; capacity is an allocation bound.
 pub struct CanonicalKeys {
@@ -455,7 +604,7 @@ impl PackedColumnsAdapter {
         dictionary: Arc<Dictionary<'data>>,
         statuses: Vec<Arc<Buffer<OutputCount>>>,
     ) -> Result<DeviceColumns<'data, Row>> {
-        let lanes = PackedCanon::field_lanes(fields)?;
+        let lanes = WideCanon::field_lanes(fields)?;
         if rows > keys.len() / lanes {
             return Err("packed output live length exceeds key capacity".into());
         }
@@ -528,7 +677,7 @@ impl PackedColumnsAdapter {
             .iter()
             .map(|field| field.bounds())
             .collect::<Result<Vec<_>>>()?;
-        if fields.iter().any(|field| field.shift + field.bits > lanes as u32 * 64) {
+        if fields.iter().any(|field| (field.shift + field.bits) as usize > lanes * 64) {
             return Err("packed field exceeds the stored key width".into());
         }
         let mut columns = Vec::with_capacity(fields.len());
@@ -589,6 +738,31 @@ fn upload_unique<T: DeviceCopy>(slot: &mut Arc<Buffer<T>>, values: &[T]) -> Resu
 #[cuda_device::cuda_module]
 mod canon_kernels {
     use cuda_device::{kernel, launch_bounds, launch_contract, thread};
+
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub fn gather_lane(
+        input: *const u64,
+        values: *mut u64,
+        order: *mut u32,
+        rows: u32,
+        lanes: u32,
+        lane: u32,
+    ) {
+        let mut index = thread::index_1d().get() as usize;
+        let stride = thread::gridDim_x() as usize * 256;
+        while index < rows as usize {
+            unsafe {
+                if lane == 0 {
+                    *order.add(index) = index as u32;
+                }
+                *values.add(index) =
+                    *input.add(*order.add(index) as usize * lanes as usize + lane as usize);
+            }
+            index += stride;
+        }
+    }
 
     /// Unpack only initialized packed rows, leaving spare capacity unread.
     #[kernel]

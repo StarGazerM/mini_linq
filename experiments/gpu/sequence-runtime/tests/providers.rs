@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use cq_gpu_sequence_runtime::canon::{
-    packed_columns, PackedCanon, PackedColumnsAdapter, PackedField,
+    packed_columns, PackedCanon, PackedColumnsAdapter, PackedField, WideCanon,
 };
 use cq_gpu_sequence_runtime::{
     Bounds, Buffer, Codec, ColumnDescriptor, EncodedColumn, KeyDescriptor, PayloadDescriptor,
@@ -116,6 +116,55 @@ fn packed_canon_deduplicates_wide_keys_and_cross_lane_fields() -> Result<()> {
     ];
     let output = keys.into_columns::<(i64, i64)>(&fields, dictionary, vec![])?;
     assert_eq!(output.to_host()?, [(i64::MIN, i64::MIN), (i64::MIN, 0), (i64::MAX, i64::MAX)]);
+    Ok(())
+}
+
+#[test]
+fn wide_canon_deduplicates_three_lane_keys_with_stable_order() -> Result<()> {
+    let pool = Pool::new(0, 1 << 20, 128 << 20)?;
+    let rows = [
+        [7u64, 3, 9],
+        [7, 3, 1],
+        [7, 3, 9],
+        [8, 3, 1],
+        [7, 4, 1],
+        [7, 3, 1],
+    ];
+    let input = Buffer::from_host(pool.clone(), &rows.concat())?;
+    let fields = [
+        PackedField {
+            shift: 0,
+            bits: 64,
+            base: i64::MIN,
+        },
+        PackedField {
+            shift: 64,
+            bits: 64,
+            base: i64::MIN,
+        },
+        PackedField {
+            shift: 128,
+            bits: 64,
+            base: i64::MIN,
+        },
+    ];
+    assert_eq!(WideCanon::field_lanes(&fields)?, 3);
+    let mut canon = WideCanon::new(&pool, rows.len())?;
+    for _ in 0..2 {
+        let keys = unsafe { canon.canonicalize(&input, rows.len(), 192)? };
+        assert_eq!(keys.logical_count()?, 4);
+        assert_eq!(keys.lanes(), 3);
+        let output = keys.into_columns::<(i64, i64, i64)>(
+            &fields,
+            Arc::new(cq_gpu_runtime::Dictionary::default()),
+            vec![],
+        )?;
+        let expected = [[7, 3, 1], [8, 3, 1], [7, 4, 1], [7, 3, 9]]
+            .map(|[a, b, c]| (i64::MIN + a, i64::MIN + b, i64::MIN + c));
+        assert_eq!(output.to_host()?, expected);
+    }
+    let empty = unsafe { canon.canonicalize(&input, 0, 192)? };
+    assert_eq!(empty.logical_count()?, 0);
     Ok(())
 }
 

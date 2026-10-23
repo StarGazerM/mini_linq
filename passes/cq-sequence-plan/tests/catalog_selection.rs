@@ -19,8 +19,12 @@ fn gpu_catalog() -> Catalog {
         }],
         canons: vec![CanonToken {
             ty: syn::parse_quote!(::cq_gpu_sequence_runtime::canon::PackedCanon),
-            levels,
+            levels: levels.clone(),
             max_packed_bits: Some(128),
+        }, CanonToken {
+            ty: syn::parse_quote!(::cq_gpu_sequence_runtime::canon::WideCanon),
+            levels,
+            max_packed_bits: None,
         }],
         codecs: vec![],
     }
@@ -136,7 +140,9 @@ fn rejection_names_structure_and_catalog_read_obligation() {
     );
 
     let mut catalog = gpu_catalog();
-    catalog.canons[0].levels.clear();
+    for canon in &mut catalog.canons {
+        canon.levels.clear();
+    }
     let error = select_from_catalog(&source, &catalog)
         .unwrap_err()
         .to_string();
@@ -324,5 +330,49 @@ fn unused_string_payload_is_projected_from_renamed_provider() {
             analysis.built_on("r", &["a".into()]).map(|(ty, _)| ty),
             Some(&catalog.providers[0].ty)
         );
+    }
+}
+
+#[test]
+fn canon_selection_uses_complete_heading_width() {
+    for (third, expected) in [(false, "PackedCanon"), (true, "WideCanon")] {
+        let mut source: structures::Program = syn::parse_quote! {
+            physical {
+                relation R(a:i64,b:i64,c:i64);
+                r = pipe rename R@0 {a -> a,b -> b,c -> c};
+                answer = pipe canon project r keep {a,b,c};
+                return answer as answer(a,b,c);
+            }
+            structures {
+                r host scan = HostColumns [];
+                answer canon = Canon;
+            }
+        };
+        if !third {
+            source = syn::parse_quote! {
+                physical {
+                    relation R(a:i64,b:i64);
+                    r = pipe rename R@0 {a -> a,b -> b};
+                    answer = pipe canon project r keep {a,b};
+                    return answer as answer(a,b);
+                }
+                structures {
+                    r host scan = HostColumns [];
+                    answer canon = Canon;
+                }
+            };
+        }
+        let selected = select_from_catalog(&source, &gpu_catalog()).unwrap();
+        structures::check_rewrite(&source, &selected).unwrap();
+        let analysis = structures::contract::check(&selected).unwrap();
+        let syn::Type::Path(ty) = &analysis.dedup["answer"] else {
+            panic!("provider path")
+        };
+        assert_eq!(ty.path.segments.last().unwrap().ident, expected);
+        if third {
+            let mut catalog = gpu_catalog();
+            catalog.canons.pop();
+            assert!(select_from_catalog(&source, &catalog).is_err());
+        }
     }
 }

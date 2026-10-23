@@ -115,7 +115,7 @@ with `host`; an empty list admits no levels. Provider type patterns allow `_`
 type/const arguments and `'_` lifetimes while retaining the author's actual type.
 Native catalogs describe the storage providers, identity/dense codecs and set
 canonicalizers; the GPU catalog describes resident `RangeProvider`,
-`DenseDictionary`/identity codes and publication-level `PackedCanon`.
+`DenseDictionary`/identity codes and publication-level `PackedCanon`/`WideCanon`.
 
 Checks (each a named `// Formal rule BE-…:` marker):
 - BE-Alpha: every Term is well-formed over Structures (named results exist, `map` names a total segment, `lookup` key ⊆ heading, `compact` names a select).
@@ -987,9 +987,9 @@ The GPU suite imports single-program grouped heads from their authored Rust,
 preserves complete valuation domains, and decodes dictionary-valued answers.
 Staged H02/H11/H13/H15/H18/H20 are explicitly reported as unsupported by the
 single-program GPU executor. H14/H19 retain opaque String-valued witnesses and
-are rejected by the current PackedCanon catalog. H10 builds, but its complete
-valuation exceeds PackedCanon's runtime 128-bit capability at both scales;
-no witness projection or truncated key is substituted.
+are rejected when opaque values lack a supported device encoding. The
+`WideCanon` catalog provider removes H10's former 128-bit complete-valuation
+limit; no witness projection or truncated equality key is substituted.
 
 Host row codecs now support sixteen columns (H10 requires fifteen). Downloaded
 host publications map their carried layout to the downstream consumer's demand;
@@ -1012,7 +1012,7 @@ These are correctness measurements, not performance acceptance. Evidence is
 is retained in `/data/tpch-gpu/grouped-advised.json`. The final command returns
 failure for the selected H14/H19 rejected entries, not for an answer mismatch
 in H01/H06/H12. GPU suite tests additionally exercised importer/encoding and
-plan replay; H10 remains a known failing capability test.
+plan replay; the earlier H10 capability failure is superseded by Box 12c.
 
 ### Box 11d resource recovery and ordering diagnosis
 
@@ -1100,3 +1100,35 @@ Evidence: `/data/tpch-gpu/box11d-automatic-initial-sf10.json`,
 `artifact://1831`. Final handoff requires a complete corpus rebuild/execution,
 fresh original-15 automatic/advised SF1 and SF10 exactness/timing reports,
 and scoped formatting/clippy/API/formal checks.
+
+### Box 12c arbitrary-width GPU canon
+
+`WideCanon` follows `PackedCanon` in the target catalog. Selection compares the
+complete declared scalar domains against each provider's maximum-bit
+capability; no data evidence establishes a codec premise. Runtime packing uses
+the recorded actual codec bounds to allocate N low-first u64 lanes. Stable
+least-significant-lane radix passes carry row indices, then adjacent complete-row
+equality retains one row in deterministic ascending packed-key order.
+
+Both providers publish the same device count and decode through the same
+column adapter. Intermediate providers, host downloads, grouped inputs and
+union consumers all decode arbitrary-width fields, including lane crossings.
+The formal `GPU-WideCanon` instance cites `BE-Canon`; runtime tests cover
+three-lane duplicates, repeated calls and empty input, and catalog tests cover
+the 128/192-bit boundary and rejection without a sufficiently wide provider.
+
+Acceptance on the release sm_89 build: all eight runtime provider tests and
+all ten catalog-selection tests passed. The formal inventory check passed
+(241 rules). H10's one warmup and all five measured runs matched the exported
+dbgen answers exactly; SF1 also passed Sequential-of-the-same-Physical
+conformance. GPU timing includes build, kernels and final publication work;
+DuckDB is the exported t24 median (not a new CPU measurement).
+
+| H10 advised | Exact rows | GPU total ms | Build ms | Kernels ms | Final publication ms | DuckDB t24 ms |
+|---|---:|---:|---:|---:|---:|---:|
+| SF1 | 37,967 | 22.187 | 1.671 | 12.221 | 8.306 | 141.000 |
+| SF10 | 381,105 | 299.008 | 11.871 | 266.077 | 21.056 | 1158.000 |
+
+Evidence: `/tmp/canon-h10.json`. The final-publication phase label is the
+suite's `dedup_ms`; intermediate canonicalization runs inside the kernel
+interval, so that column is not an isolated canon benchmark.

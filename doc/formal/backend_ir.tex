@@ -643,6 +643,23 @@ BE-Length and BE-Abort; bounded output retries rather than publishing a
 truncated result. No target-side join order, uniqueness or tile choice is
 inferred by the translation.
 
+\paragraph{Arbitrary-width canonical provider.}
+Let an injective recorded codec pack a row into $N=\max(1,\lceil b/64\rceil)$
+little-endian lanes, where $b$ is computed from its checked setup bounds.
+\begin{mathpar}
+\Rule{GPU-WideCanon}{\mathsf{pack}\text{ injective}\quad
+  P=\mathsf{stableRadix}_{N-1}\circ\cdots\circ\mathsf{stableRadix}_{0}}
+ {\mathsf{decode}(\mathsf{unique}_{=\,\text{all lanes}}(P(\mathsf{pack}(B))))
+   =\iota(\mathrm{supp}\,B)}
+\end{mathpar}
+This is an instance of BE-Canon: successive stable least-significant-lane
+passes establish a total complete-key order, and adjacent equality compares
+every lane. The catalog tries \code{PackedCanon} (at most 128 bits) before
+\code{WideCanon} (no fixed width limit), using the complete declared scalar
+domains, never statistical evidence, as conservative obligations. Actual lane
+counts use recorded codec bounds at setup. Both providers publish the same
+device-resident count, failure ancestors, and decoded column protocol.
+
 The CUDA machine bounds block shared storage by 101,376 bytes. Its single
 layout implementation starts with 48 bytes, records each materialized lookup's
 256 begins and 257 offsets as four-byte entries, and stores each live parent

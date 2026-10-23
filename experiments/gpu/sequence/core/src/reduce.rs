@@ -183,8 +183,9 @@ pub fn group(
                 quote!(#fields[#field].shift),
                 quote!(#fields[#field].bits),
             ]);
+            let offset = crate::emit::packed_offset(quote!(packed), quote!(position), quote!(lanes), quote!(#shift), quote!(#bits));
             writes.push(quote! {
-                let offset = if #bits==0 {0} else {((key>>#shift) as u64) & if #bits==64 {u64::MAX} else {(1u64<<#bits)-1}};
+                let offset = #offset;
                 *values.add(position*#width+#column)=#base.wrapping_add(offset as i64);
             });
         } else {
@@ -217,8 +218,6 @@ pub fn group(
                 unsafe {
                     let mut position=::cuda_device::thread::index_1d().get() as usize;
                     while position<length {
-                        let key=*packed.add(position*lanes) as u128
-                            | if lanes==2 {(*packed.add(position*2+1) as u128)<<64} else {0};
                         #(#writes)*
                         position+=::cuda_device::thread::gridDim_x() as usize*256;
                     }

@@ -107,6 +107,10 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
             ty: syn::parse_quote!(::cq_gpu_sequence_runtime::canon::PackedCanon),
             levels: levels.clone(),
             max_packed_bits: Some(128),
+        }, CanonToken {
+            ty: syn::parse_quote!(::cq_gpu_sequence_runtime::canon::WideCanon),
+            levels,
+            max_packed_bits: None,
         }],
     }
 }

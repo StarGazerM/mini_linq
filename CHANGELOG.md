@@ -14,6 +14,12 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   now a Datalog workspace member with Ascent differential tests. Default
   expansions byte-identical; `experiments/gpu/legacy-datalog` is left to the
   GPU side and no longer builds against these crates.
+- Add the GPU `WideCanon` catalog provider after `PackedCanon`: complete
+  declared key domains select its unbounded-width capability, while recorded
+  codec bounds determine the runtime lane count. Stable per-lane radix passes
+  deduplicate complete rows without truncation, using the existing publication
+  count and host decode protocol. All packed publication consumers now decode
+  arbitrary-width, cross-lane fields.
 - Cleanup after the Sequence cutover and guard redesign: remove the
   test-only `cq_physical_realization::sources`, the uncalled
   `cq_print::Context::row` (and make `borrowed_pattern` private), unread
