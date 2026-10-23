@@ -320,6 +320,9 @@ or producing String-bearing rows likewise stay host through the projection
 that publishes a numeric-only row. Independent named union arms with distinct stored
 domains are published separately, then concatenated at host; neither rule
 weakens BE-Partial or BE-Boundary.
+An already-checked Sequence store cuts opaque Physical provenance, including
+for lookup providers: descendant reads consume the materialized rows rather
+than re-evaluating the host guard. This requires no asserted totality marker.
 Unknown lengths remain type-length expressions rather than measured input
 data or invented cardinalities. Work counts evaluated constructor positions;
 aliases, tiles and stores add no evaluation work, with stores a separate

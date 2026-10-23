@@ -61,7 +61,7 @@ pub(crate) fn boundaries(
         let Some(result) = facts.results.get(&symbol_name(&definition.name)) else {
             continue;
         };
-        if !facts.structures.filtered.contains_key(result) || string_row(facts, result) {
+        if string_row(facts, result) {
             continue;
         }
         let physical = program
@@ -72,12 +72,26 @@ pub(crate) fn boundaries(
             .iter()
             .find(|physical| symbol_name(&physical.name) == *result)
             .expect("checked result");
+        if !facts.structures.filtered.contains_key(result)
+            && !physical.operator.operands().iter().any(|input| {
+                program.structures.physical.program.definitions.iter().any(|source| {
+                    source.name == **input && matches!(source.operator, Operator::Guard(_))
+                })
+            })
+        {
+            continue;
+        }
         if !host_predicate(&physical.operator)
             && !physical
                 .operator
                 .operands()
                 .iter()
-                .any(|input| string_row(facts, &symbol_name(input)))
+                .any(|input| {
+                    facts.structures.physical.rows[&symbol_name(input)]
+                        .types
+                        .values()
+                        .any(string_type)
+                })
         {
             continue;
         }
@@ -440,7 +454,6 @@ fn host_predicate(operator: &Operator) -> bool {
             Constraint::Between { term, low, high } => scalar(term) || scalar(low) || scalar(high),
             Constraint::In { term, literals } => scalar(term) || literals.iter().any(string),
             Constraint::Or(arms) => arms.iter().flatten().any(constraint),
-            Constraint::Total { .. } => false,
         }
     }
     match operator {

@@ -559,7 +559,8 @@ fn host_string_filter_uploads_projected_index_before_device_lookups() {
         physical {
             relation L(a:i32); relation P(a:i32,s:String);
             p = pipe rename P@0 {a -> a,s -> s};
-            selected = let select p if (#[total] {s = s} (s.contains("green")));
+            filtered = pipe guard p if (s.contains("green"));
+            selected = let project filtered keep {a};
             l = pipe rename L@1 {a -> a};
             joined = pipe probe first [a] l,selected;
             answer = pipe canon project joined keep {a};

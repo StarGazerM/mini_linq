@@ -692,13 +692,20 @@ impl<'a> Checker<'a> {
 
     fn total_physical(&self, result: &Ident, stop: Option<&str>) -> syn::Result<()> {
         // Formal rule BE-Partial: opaque Bind/Guard code cannot be evaluated
-        // below host, including through an indirect Physical dependency. A map
-        // stops at its explicit input: a host Sequence store can supply an
-        // already-evaluated opaque result without re-executing that Rust.
+        // below host, including through an indirect Physical dependency. Stop
+        // at explicit map inputs and previously checked Sequence stores: their
+        // opaque results are already evaluated, including lookup providers.
         let mut pending = vec![symbol_name(result)];
         let mut visited = BTreeSet::new();
         while let Some(name) = pending.pop() {
             if Some(name.as_str()) == stop || !visited.insert(name.clone()) {
+                continue;
+            }
+            if self.roots.iter().any(|&root| {
+                let node = &self.nodes[root];
+                matches!(node.term, Term::Store { .. })
+                    && self.results.get(&self.name(node.owner)) == Some(&name)
+            }) {
                 continue;
             }
             let Some(definition) = self.physical.get(&name) else {

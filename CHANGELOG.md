@@ -7,6 +7,8 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Reconcile the GPU TPC-H planner with earned guard position independence:
+  host String filtering no longer relies on the removed totality assertion.
 - Make guard motion a relational-language property: remove `#[total]`,
   `Filter.total`, `Constraint::Total`, and the Rust method/type-name allowlist.
   Unrecognized Rust guards remain pinned to their written Rust chain and
