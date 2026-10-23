@@ -256,33 +256,7 @@ fn default_providers_record_concrete_types_in_declaration_order() {
 }
 
 #[test]
-fn device_selection_preserves_cover_and_checks_policy_pairs() {
-    let (incremental, cpu) = scheduled(syn::parse_quote! {
-        struct Policies;
-        relation Edge(x:i32,y:i32) = (edges);
-        relation Reach(x:i32,y:i32);
-        output Reach;
-        Reach(*x,*y) :- Edge(x,y);
-        Reach(*x,*z) :- Reach(x,y), Edge(y,z);
-    });
-    let device = cq_datalog_storage::compile_with_representation(
-        &incremental, cq_datalog_storage::Representation::DeviceSet,
-    ).unwrap();
-    assert_eq!(cpu.incremental, device.incremental);
-    assert_eq!(cpu.layouts, device.layouts);
-    assert_eq!(cpu.delta_layouts, device.delta_layouts);
-    check(&incremental, &device).unwrap();
-    let restored: Program = syn::parse2(device.to_token_stream()).unwrap();
-    assert_eq!(device, restored);
-    contract::check(&restored).unwrap();
-    assert!(cq_lang_datalog_storage::check_rewrite(&cpu, &device).is_err());
-    let mut mixed = device;
-    mixed.policy.negation_keys = cpu.policy.negation_keys;
-    assert!(contract::check(&mixed).is_err());
-}
-
-#[test]
-fn gpu_delta_driver_is_recorded_and_independently_checked() {
+fn delta_driver_is_recorded_and_independently_checked() {
     let source: source::Program = syn::parse_quote! {
         struct Drivers;
         relation E(x:i32,y:i32) = (e);
@@ -295,9 +269,7 @@ fn gpu_delta_driver_is_recorded_and_independently_checked() {
     let incremental = cq_datalog_incremental::compile_with_driver(
         &strata, cq_datalog_incremental::DriverPolicy::DeltaFirst,
     ).unwrap();
-    let target = cq_datalog_storage::compile_with_representation(
-        &incremental, cq_datalog_storage::Representation::DeviceSet,
-    ).unwrap();
+    let target = cq_datalog_storage::compile(&incremental).unwrap();
     let variant = &target.incremental.variants[1];
     assert_eq!(variant.delta, Some(1));
     assert_eq!(variant.driver, Some(1));

@@ -445,9 +445,7 @@ ownership of the set boundary.
 
 \paragraph{Frozen-key providers.} Each \code{KeySet} records its source relation,
 distinct-variable columns, constant filters, repeated-variable equalities,
-runtime name, construction hole, borrowed
-representation (\code{KeyRepresentation::Borrowed}, text \code{borrowed})
-and opaque Rust \code{provider} type. The default is
+runtime name, construction hole and opaque Rust \code{provider} type. The default is
 \code{::std::collections::HashSet<\_, Fx>}, with the same unkeyed Fx build
 hasher as Storage; this is not a type whitelist.
 Collection and borrowed membership must implement precisely the recorded
