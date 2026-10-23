@@ -240,7 +240,7 @@ impl Kernel {
         compiles.visit_block_mut(&mut run.block);
         if compiles.0.len() != 1 {
             return Err(format!(
-                "standalone run contains {} compile! stages; GPU suite requires one CQ program and cannot discard materialization or iterator composition",
+                "standalone run contains {} compile! stages; use the staged importer to retain materialization and iterator composition",
                 compiles.0.len()
             ).into());
         }
@@ -793,6 +793,20 @@ mod tests {
             let program = crate::stages::Program::import(source).unwrap().unwrap();
             assert_eq!(program.stages.len(), count, "{name}");
             assert_eq!(program.terminal, terminals, "{name}");
+            for (index, stage) in program.stages.iter().enumerate() {
+                let mut publications = BTreeMap::new();
+                for input in stage.program.inputs() {
+                    if program.aliases.contains_key(&input.name.to_string()) {
+                        publications.insert(input.name.to_string(), input.columns.iter()
+                            .map(|column| (column.name.clone(), column.ty.clone())).collect());
+                    }
+                }
+                for preprocess in &program.preprocessing {
+                    publications.insert(preprocess.name.to_string(), preprocess.columns.clone());
+                }
+                let kernel = program.kernel(index, &publications).unwrap();
+                assert_eq!(kernel.relations.len() + kernel.published.len(), stage.program.inputs().count());
+            }
             if name == "h11" {
                 assert_eq!(program.aliases["Stock"], 0);
                 assert_eq!(program.aliases["PartValue"], 1);
@@ -802,6 +816,8 @@ mod tests {
                 assert_eq!(program.preprocessing.len(), 1);
                 assert_eq!(program.preprocessing[0].name, "QualifiedOrders");
                 assert!(program.preprocessing[0].expression.to_token_stream().to_string().contains("split_once"));
+                assert!(program.preprocessing_tokens().to_string().contains("split_once"));
+                assert_eq!(program.preprocessing[0].relations[0].table, "orders");
             }
         }
     }

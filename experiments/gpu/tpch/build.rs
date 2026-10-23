@@ -642,17 +642,58 @@ fn compile_stage(
             }
         } else {
             let publish = if nullable {
-                quote!(output.to_host()?)
+                quote!({
+                    let started = ::std::time::Instant::now();
+                    let result = output.to_host()?;
+                    let elapsed = started.elapsed().as_secs_f64() * 1000.0;
+                    let mut timing = cq_gpu_runtime::take_last_timings().ok_or("stage published no timings")?;
+                    timing.build_ms += elapsed;
+                    timing.total_ms += elapsed;
+                    timing.wall_ms += elapsed;
+                    cq_gpu_runtime::publish_timings(timing);
+                    result
+                })
             } else if let Some(group) = &normal.query.group {
                 let columns: Vec<_> = group.keys.iter().chain(group.aggregates.iter().map(|a| &a.name)).collect();
                 let slots: Vec<_> = normal.query.head.args.iter().map(|argument| {
                     let syn::Expr::Path(path) = argument else { unreachable!("checked normalized group head"); };
                     columns.iter().position(|name| path.path.is_ident(*name)).expect("checked grouped output")
                 }).collect();
+                let bounds: Vec<_> = slots.iter().map(|&slot| {
+                    if slot < group.keys.len() {
+                        let key = columns[slot];
+                        for item in &cq.query.body {
+                            let cq_lang_cq::BodyItem::Positive { atom } = item else { continue; };
+                            let Some(field) = atom.args.iter().position(|arg| matches!(arg,
+                                syn::Expr::Path(path) if path.path.is_ident(key)
+                            )) else { continue; };
+                            let name = &atom.relation;
+                            let input = cq.inputs().find(|input| input.name == *name).unwrap();
+                            let published = publications.get(&name.to_string());
+                            let value = if published.is_some() { quote!(#name) } else { quote!(&data.#name) };
+                            let resident = published.copied().unwrap_or_else(|| !input.columns.iter()
+                                .any(|column| column.ty.to_token_stream().to_string() == "String"));
+                            if resident {
+                                return quote!((#value).storage().bounds[#field]);
+                            }
+                            let field = syn::Index::from(field);
+                            return quote!((#value).iter().fold(cq_gpu_runtime::Bounds::Empty, |bounds, row| {
+                                let value = row.#field as i64;
+                                match bounds {
+                                    cq_gpu_runtime::Bounds::Empty => cq_gpu_runtime::Bounds::Inclusive { min: value, max: value },
+                                    cq_gpu_runtime::Bounds::Inclusive { min, max } => cq_gpu_runtime::Bounds::Inclusive {
+                                        min: min.min(value), max: max.max(value),
+                                    },
+                                }
+                            }));
+                        }
+                    }
+                    quote!(cq_gpu_runtime::Bounds::Inclusive { min: i64::MIN, max: i64::MAX })
+                }).collect();
                 quote!({
                     let started = ::std::time::Instant::now();
                     let start = data.pool.stream().record_event(Some(::cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
-                    let result = unsafe { output.into_columns::<Answer>(&[#(#slots),*])? };
+                    let result = unsafe { output.into_columns::<Answer>(&[#(#slots),*], &[#(#bounds),*])? };
                     let end = data.pool.stream().record_event(Some(::cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
                     data.pool.stream().synchronize()?;
                     let elapsed = start.elapsed_ms(&end)? as f64;

@@ -56,23 +56,25 @@ impl<F> GroupedRows<F> {
     /// `slots` must describe `Row` in the physical key/aggregate column layout
     /// and select no nullable aggregate. The decoder is not applied: the grouped
     /// machine values must already be the row codec's integer representation.
+    /// Each supplied bound must enclose that output column's complete domain;
+    /// group keys inherit their input bounds, not the aggregate's value domain.
     pub unsafe fn into_columns<Row: gpu_device_columns::RowCodec<'static>>(
         self,
         slots: &[usize],
+        bounds: &[gpu_device_columns::Bounds],
     ) -> Result<cq_gpu_runtime::DeviceColumns<'static, Row>> {
-        use gpu_device_columns::{Bounds, Codec, ColumnView, DeviceColumns, Dictionary,
+        use gpu_device_columns::{Codec, ColumnView, DeviceColumns, Dictionary,
             EncodedColumn, SourceView, Table};
         let output = self.output;
-        if Row::WIDTH != slots.len() || slots.iter().any(|&slot| slot >= output.width) {
+        if Row::WIDTH != slots.len() || bounds.len() != slots.len() || slots.iter().any(|&slot| slot >= output.width) {
             return Err("grouped publication schema width mismatch".into());
         }
         let pool = output.values.pool().clone();
         // fold allocates exactly one row per group; metadata retains the same
         // count plus arithmetic failures. Neither values nor count are read back.
         let rows = output.values.len() / output.width;
-        let bounds = Bounds::Inclusive { min: i64::MIN, max: i64::MAX };
         let mut columns = Vec::with_capacity(slots.len());
-        for &slot in slots {
+        for (&slot, &bounds) in slots.iter().zip(bounds) {
             let mut source = SourceView::from(ColumnView {
                 headers: std::ptr::null(),
                 data: output.values.ptr().wrapping_add(if rows == 0 { 0 } else { slot }).cast(),
@@ -94,7 +96,7 @@ impl<F> GroupedRows<F> {
             views: Arc::new(Buffer::from_host(pool.clone(), &views)?),
             metadata: output.metadata,
             capacity: rows,
-            bounds: vec![bounds; slots.len()],
+            bounds: bounds.to_vec(),
             statuses: output.statuses,
         };
         Ok(unsafe { DeviceColumns::from_parts(table, Arc::new(Dictionary::default()), pool) })
@@ -481,9 +483,13 @@ mod publication_tests {
             }])?);
             let grouped = unsafe { fold(pool.clone(), &input, 3, 1, &[aggregate], vec![status])? };
             let published = unsafe {
-                grouped.with_decoder(()).into_columns::<(i64, i64)>(&[1, 0])?
+                grouped.with_decoder(()).into_columns::<(i64, i64)>(&[1, 0], &[
+                    gpu_device_columns::Bounds::Inclusive { min: i64::MIN, max: i64::MAX },
+                    gpu_device_columns::Bounds::Inclusive { min: 1, max: 2 },
+                ])?
             };
             assert_eq!(published.capacity(), 2);
+            assert_eq!(published.storage().bounds[1], gpu_device_columns::Bounds::Inclusive { min: 1, max: 2 });
             if error == 0 {
                 assert_eq!(published.to_host()?, [(10, 1), (5, 2)]);
             } else {

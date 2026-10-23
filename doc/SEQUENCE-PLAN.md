@@ -1026,8 +1026,9 @@ preserves complete valuation domains, and decodes dictionary-valued answers.
 Staged H02/H11/H13/H15/H18/H20 retain every authored compile! node and its
 materialization dependencies in the suite. Each node has its own checked plan,
 replay artifact and publication grade. Numeric grouped device publications are
-adapted to resident DeviceColumns without downloading rows or their count;
-nullable and host-graded publications retain host rows. H13's authored host
+adapted to resident DeviceColumns, retaining input key codec bounds without
+downloading rows or their count; nullable and host-graded publications retain
+host rows. H13's authored host
 preprocessing and terminal counts/zeros union are preserved. Stage timings are
 summed, and the same-Physical Sequential reference executes the complete graph.
 Device-planning failures remain explicit on host-planned stage artifacts.

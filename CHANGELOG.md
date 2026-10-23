@@ -38,8 +38,9 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 - Import staged GPU-suite programs as their complete authored dependency graph:
   H02/H18/H20 have two stages, H15 has three, H11 has four, and H13 preserves
   its two terminal branches and one-time order preprocessing. Plan each stage
-  independently, retain resident numeric publications between GPU stages, and
-  explicitly report host-planned publications when device grading is unavailable.
+  independently, retain resident numeric publications and key codec bounds
+  between GPU stages, and explicitly report host-planned publications when
+  device grading is unavailable.
   Sum stage timings and chain independently selected Sequential interpretations
   of the same Physical graphs for conformance.
 - Cleanup after the Sequence cutover and guard redesign: remove the
