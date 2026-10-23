@@ -7,6 +7,13 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Retire Datalog-side hooks kept only for the (already broken) legacy GPU
+  Datalog bridge: `KeyRepresentation`, `LayoutRealization`, device-owned
+  negation keys, frozen/leveled layout selection, `compile_with_ratio`, the
+  storage `Representation` and device-set policies (−397 lines). `ddisasm` is
+  now a Datalog workspace member with Ascent differential tests. Default
+  expansions byte-identical; `experiments/gpu/legacy-datalog` is left to the
+  GPU side and no longer builds against these crates.
 - Cleanup after the Sequence cutover and guard redesign: remove the
   test-only `cq_physical_realization::sources`, the uncalled
   `cq_print::Context::row` (and make `borrowed_pattern` private), unread
