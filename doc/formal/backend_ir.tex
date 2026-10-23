@@ -514,7 +514,10 @@ The forward phase retains predicate-bearing relations and bridge relations,
 filtering before building the next provider. This restricted transfer
 heuristic does not claim full semijoin reduction without its premises.
 The scan root retains its authored streaming mode unless a keyed consumer
-requires its retention. Root forward filters also stream: each has exactly
+or displaced native keyed adapter requires retention. Replacing a merge
+under the same consumer name records a retained-row transition before
+removing that root's ordered host reader; it cannot silently discard an
+authored adapter while leaving the root a pipe. Root forward filters also stream: each has exactly
 one consumer and never supplies a keyed child provider. Nonroot forward
 filters remain retained for those provider builds. Resource decomposition
 may subsequently introduce checked publications. Along a positive left spine, an existing
@@ -529,6 +532,10 @@ unchanged, this ordering pass returns the original checked Sequence and
 Structures verbatim. It does not use a no-op ordering decision to prune or
 replace authored provider entries: representation-only rewrites remain
 outside the join-reexpression certificate.
+Provider reconstruction preserves \textsc{STR-Range}: only stream-key demands
+justify a built keyed structure. Constant point and range demands keep their
+direct or retained-row scan/filter path, including shared prefixes of union
+arms; retaining a result does not turn those demands into stream probes.
 
 Expands are placed at the first consumer requiring the payload.
 Cycle-closing lookups wait for the Expands that supply their keys

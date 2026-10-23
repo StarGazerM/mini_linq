@@ -464,7 +464,7 @@ were respectively 4.28% and 5.13% above their authored references, within the
 Unadvised CQ and Sequence entry use the deterministic two-phase Lookup/Expand
 rule: filtering Lookups first in the GYO/LargestRoot transfer order, Expands
 as late as their consumers permit, and segmentation-first resource recovery.
-Explicit CQ order, Physical/Structures advice and decomposition retain precedence;
+Explicit ordering, selection, Physical/Structures, realization, staging and decomposition advice retain precedence;
 `plan(preserve_order)` also requests order-preserving decomposition explicitly.
 The 13 `sequence_conformance_*` crates exercise the automatic rule. GPU suite
 generation enables automatic entries by default (`CQ_GPU_TPCH_AUTOMATIC=0`

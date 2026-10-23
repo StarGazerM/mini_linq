@@ -1237,12 +1237,32 @@ fn resource_recovery_splits_only_one_boundary_when_two_dispatches_fit() {
     let mut machine = machines().pop().unwrap();
     machine.root.children[0].children[0].shared_bytes = Some(2);
     machine.layout = Some(|shape| {
-        Ok(shape.chains.iter().flatten().filter(|allocation| matches!(
-            allocation, cq_lang_sequence::ResourceAllocation::Payload { .. }
-        )).count())
+        Ok(shape
+            .chains
+            .iter()
+            .flatten()
+            .filter(|allocation| {
+                matches!(
+                    allocation,
+                    cq_lang_sequence::ResourceAllocation::Payload { .. }
+                )
+            })
+            .count())
     });
     let planned = decompose(&source, &machine, &catalog(&machine)).unwrap();
     let analysis = replay(&source, &machine, &planned);
-    assert_eq!(planned.trace.iter().filter(|step| matches!(step, Advice::StoreLevel(_))).count(), 1);
-    assert!(analysis.resources.values().all(|usage| usage.required_bytes <= 2));
+    assert_eq!(
+        planned
+            .trace
+            .iter()
+            .filter(|step| matches!(step, Advice::StoreLevel(_)))
+            .count(),
+        1
+    );
+    assert!(
+        analysis
+            .resources
+            .values()
+            .all(|usage| usage.required_bytes <= 2)
+    );
 }

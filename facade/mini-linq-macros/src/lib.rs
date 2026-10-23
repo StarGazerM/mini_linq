@@ -84,15 +84,30 @@ fn expand_compile(input: proc_macro2::TokenStream) -> syn::Result<proc_macro2::T
     if syn::parse2::<cq_lang_sequence::Program>(source.tokens.clone()).is_ok() {
         return sequence_pipeline(source.config)?.start(source.tokens);
     }
-    let mut defaults = defaults();
-    if source.config.plan.is_some()
+    let implicit_sequence = source.config.sequence.is_none()
+        && source.config.grade.is_none()
+        && source.config.decompose.is_empty();
+    let authored_advice = source.config.plan.is_some()
         || !source.config.physical.is_empty()
+        || source.config.select.is_some()
         || !source.config.structures.is_empty()
+        || source.config.represent.is_some()
+        || source.config.stage.is_some();
+    let mut pipeline = source.config.resolve(defaults())?;
+    let sequential: syn::Path = syn::parse_quote!(::mini_linq::passes::sequential);
+    if implicit_sequence
+        && !authored_advice
+        && let Some(index) = pipeline
+            .passes
+            .iter()
+            .position(|pass| pass.path == sequential)
     {
-        defaults.decompose =
-            vec![syn::parse_quote!(::mini_linq::passes::plan_sequential(preserve_order))];
+        pipeline.passes.insert(
+            index,
+            syn::parse_quote!(::mini_linq::passes::plan_sequential),
+        );
     }
-    source.config.resolve(defaults)?.start(source.tokens)
+    pipeline.start(source.tokens)
 }
 
 /// Complete Sequence input starts at planning, not at the CQ ordering phase.
@@ -112,12 +127,11 @@ fn sequence_pipeline(config: cq_stage::Configuration) -> syn::Result<cq_stage::P
             "complete Sequence input accepts only plan, decompose, grade and print phases",
         ));
     }
+    let authored_advice = !config.decompose.is_empty();
     let mut passes = config.decompose;
-    passes.push(
-        config
-            .plan
-            .unwrap_or_else(|| syn::parse_quote!(::mini_linq::passes::plan)),
-    );
+    passes.push(config.plan.unwrap_or_else(|| {
+        syn::parse_quote!(::mini_linq::passes::plan_sequential(preserve_order))
+    }));
     passes.push(
         config
             .grade
@@ -431,9 +445,11 @@ fn sequence_plan_target(input: &proc_macro2::TokenStream) -> bool {
         syn::braced!(arguments in input);
         let args: proc_macro2::TokenStream = arguments.parse()?;
         let _: proc_macro2::TokenStream = input.parse()?;
-        Ok(!matches!(args.to_string().as_str(), "lookup_first" | "preserve_order")
-            && syn::parse2::<PlanOptions>(args.clone()).is_err()
-            && syn::parse2::<syn::Path>(args).is_ok())
+        Ok(
+            !matches!(args.to_string().as_str(), "lookup_first" | "preserve_order")
+                && syn::parse2::<PlanOptions>(args.clone()).is_err()
+                && syn::parse2::<syn::Path>(args).is_ok(),
+        )
     };
     parser.parse2(input.clone()).unwrap_or(false)
 }
@@ -470,8 +486,11 @@ pub fn plan_sequential(input: TokenStream) -> TokenStream {
     cq_stage::rewrite::<cq_lang_sequence::Program>(input.into(), |source, args| {
         let machine = cq_sequence_pull::machine();
         let catalog = cq_sequence_pull::catalog();
+        // The unadvised default keeps the author's written order (checked
+        // decomposition only); Lookup-first ordering is opt-in because its
+        // estimate-free plans run far slower than advised ones on the suite.
         let lookup_first = if args.is_empty() {
-            true
+            false
         } else {
             let option: syn::Ident = syn::parse2(args)?;
             if option != "lookup_first" && option != "preserve_order" {
@@ -588,18 +607,31 @@ mod tests {
             relation R(x:i32);
             answer(x) :- R(x);
         };
-        let automatic = expand_compile(source.clone()).unwrap().to_string();
+        let automatic = expand_compile(quote!(pipeline {} #source))
+            .unwrap()
+            .to_string();
         assert!(automatic.contains("plan_sequential"));
         assert!(!automatic.contains("preserve_order"));
-        let advised = expand_compile(quote! {
-            pipeline { plan = custom_order; }
-            #source
-        }).unwrap().to_string();
-        assert!(advised.contains("plan_sequential (preserve_order)"));
+        for advice in [
+            quote!(plan = custom_order;),
+            quote!(select = custom_selection;),
+            quote!(represent = custom_realization;),
+            quote!(stage = custom_staging;),
+        ] {
+            let advised = expand_compile(quote! {
+                pipeline { #advice }
+                #source
+            })
+            .unwrap()
+            .to_string();
+            assert!(!advised.contains("plan_sequential"));
+        }
         let manual = expand_compile(quote! {
             pipeline { decompose = [authored_schedule]; }
             #source
-        }).unwrap().to_string();
+        })
+        .unwrap()
+        .to_string();
         assert!(manual.contains("authored_schedule"));
         assert!(!manual.contains("plan_sequential"));
     }
