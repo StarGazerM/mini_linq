@@ -14,9 +14,9 @@ evaluation counts are outside this meaning.
 
 The reference evaluates the desugared body in written order. Whenever it
 returns, a target must return the same set without panic, under the premises
-below; guard motion additionally rests on the totality of the moved predicate
-(recognized comparisons under the Eq/Ord premises, or the trusted
-`#[total]` assertion, scheduled for removal). Relational steps may
+below; guard motion additionally rests on the totality of the moved predicate,
+which only the language's relational vocabulary supplies (comparisons and
+`&& || !` under the Eq/Ord premises; negation as an anti-join). Relational steps may
 move earlier across Rust steps; Rust steps keep their relative order, binders,
 and source-before relational requirements. Relational equality assumes Leibniz
 identity; ordered comparisons assume a total, consistent order. Rust trait

@@ -19,11 +19,11 @@
   bottom-up Yannakakis pass, no top-down pass. Exact atom-to-block cuts on any
   scope. Each block branch is its own scope.
 - Predicates: relational disjunctions derive implied per-occurrence domains
-  (H07 `n_name ∈ {FRANCE, GERMANY}`) while keeping the exact predicate. Guards
-  over allowlisted total std operations, or marked `#[total] if <expr>`, move
-  like relational filters; other Rust guards stay where written. The
-  `#[total]` assertion is trusted, not checked, and is scheduled for removal;
-  the allowlist matches type names and is scheduled for replacement.
+  (H07 `n_name ∈ {FRANCE, GERMANY}`) while keeping the exact predicate.
+  Comparisons and `&& || !` over query variables are relational and move like
+  filters; every other Rust guard is ordinary Rust, type-checked by rustc and
+  kept where written (`#[total]` and the allowlist were removed). `!R(args)`
+  is core negation, elaborated to an anti-join (`doc/formal/guards.tex`).
 - Aggregates: one required set dedup; constant-group folds use `SingleGroup`;
   grouped containers use the recorded fast hasher.
 - Join filters (SQL Server bitmaps): every probe or semijoin into a filtered
@@ -498,10 +498,16 @@ the checked per-hole push-terminal rewrite. Known: `experiments/gpu/printer`
 still certifies discharged hosts (GPU side's file). Not context facts (by
 design, see context.tex): declared keys (need a provenance model; out of
 scope), first-witness consumption (lower-level `exists`/early stop), guard
-totality (CQ term semantics; redesign proposed in `doc/formal/guards.tex`:
-remove `#[total]` and the type-name allowlist; open: string pattern matching,
-Datalog negation as a relational anti-join), terminal canonical return (an
-exported Structures guarantee).
+totality (CQ term semantics: earned only by the relational vocabulary; the
+redesign landed as `f86f387`/`7b92d4e`/`2258607`, with Datalog negation as
+anti-joins over once-per-stratum key sets and zero per-call index builds),
+terminal canonical return (an exported Structures guarantee). Pre-existing
+upstream: `sequence_conformance` (Sequential vs Tasks over the corpus) does
+not finish within 20 min on base; one branch run sat CPU-idle for 6 h.
+Dependency gate (upstream, GPU side): core `cq-sequence-lowering` dev-depends
+on feature crates, and core `cq-sequence-plan` depends on
+`features/sequence-rewrites/passes`; the packaged external gate fails on
+`cq-testkit`'s optional path dependency on `features/sequence-tasks`.
 
 Sequence cutover (`358012d`, upstream): Datalog holes now end in `sequence →
 sequential → translate_pull`. The parallel extension's push holes replace that
