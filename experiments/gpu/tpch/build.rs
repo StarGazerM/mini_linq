@@ -92,6 +92,9 @@ fn compile(kernel: &source::Kernel, manifest: &Manifest) -> CompileResult<TokenS
                 .iter()
                 .find(|r| r.name == host.as_str())
                 .unwrap();
+            if relation.columns.iter().any(|column| column.ty.to_token_stream().to_string() == "String") {
+                continue;
+            }
             let types = relation.columns.iter().map(|c| &c.ty);
             structures = checked(
                 "loader host adapter",
@@ -182,24 +185,54 @@ fn compile(kernel: &source::Kernel, manifest: &Manifest) -> CompileResult<TokenS
             quote!((#(#types,)*))
         })
         .collect();
+    let mut input_types = Vec::new();
+    let mut bindings = Vec::new();
+    let mut sequential_bindings = Vec::new();
+    for (index, relation) in cq.declarations.iter().enumerate() {
+        let field = fields[index];
+        let table = &tables[index];
+        let names = &column_names[index];
+        let row = &row_types[index];
+        if relation.columns.iter().any(|column| column.ty.to_token_stream().to_string() == "String") {
+            input_types.push(quote!(Vec<#row>));
+            let columns: Vec<_> = relation.columns.iter().enumerate()
+                .map(|(index, _)| format_ident!("column_{index}")).collect();
+            let reads = relation.columns.iter().zip(&columns).enumerate().map(|(column_index, (column, variable))| {
+                let name = kernel.relations[index].columns[column_index].0.to_string();
+                let ty = &column.ty;
+                quote!(let mut #variable = <#ty as crate::manifest::HostValue>::read(manifest, #table, #name)?.into_iter();)
+            });
+            bindings.push(quote!({
+                #(#reads)*
+                (0..manifest.relations[#table].rows)
+                    .map(|_| (#(#columns.next().expect("validated manifest row count"),)*))
+                    .collect()
+            }));
+            sequential_bindings.push(quote!(let #field = &data.#field;));
+        } else {
+            input_types.push(quote!(cq_gpu_runtime::DeviceColumns<'static, #row, cq_gpu_runtime::For>));
+            bindings.push(quote!(loader.bind::<#row>(#table, #names)?));
+            sequential_bindings.push(quote!(let #field = data.#field.to_host()?;));
+        }
+    }
     let answer_types = kernel.answer.iter().map(|(_, ty)| ty);
     let outputs: Vec<_> = (0..kernel.answer.len()).map(syn::Index::from).collect();
     let borrowed_outputs = outputs.iter().map(|index| quote!(*row.#index as i64));
     let owned_outputs = outputs.iter().map(|index| quote!(row.#index as i64));
     Ok(quote! {
         type Answer = (#(#answer_types,)*);
-        struct Inputs { #(#fields: cq_gpu_runtime::DeviceColumns<'static, #row_types, cq_gpu_runtime::For>,)* }
+        struct Inputs { #(#fields: #input_types,)* }
         fn load(manifest: &crate::manifest::Manifest) -> crate::manifest::Result<Inputs> {
             let pool = cq_gpu_runtime::Pool::new(0, 0, 0)?;
             let mut loader = crate::loader::Loader::new(manifest, pool);
-            Ok(Inputs { #(#fields: loader.bind::<#row_types>(#tables, #column_names)?,)* })
+            Ok(Inputs { #(#fields: #bindings,)* })
         }
         fn gpu(data: &Inputs) -> cq_gpu_runtime::DeviceColumns<'_, Answer> {
             #(let #fields = &data.#fields;)*
             #gpu
         }
         fn sequential(data: &Inputs) -> crate::manifest::Result<Vec<Vec<i64>>> {
-            #(let #fields = data.#fields.to_host()?;)*
+            #(#sequential_bindings)*
             Ok((#cpu).map(|row| vec![#(#borrowed_outputs),*]).collect())
         }
         fn download(data: &Inputs) -> crate::manifest::Result<Vec<Vec<i64>>> {
@@ -209,6 +242,67 @@ fn compile(kernel: &source::Kernel, manifest: &Manifest) -> CompileResult<TokenS
             let data = load(manifest)?;
             let reference = if manifest.sf == 1 { Some(sequential(&data)?) } else { None };
             crate::benchmark::run(manifest, query, || download(&data), reference, conformance_only)
+        }
+    })
+}
+
+fn string_guard_regression(out: &Path) -> Result<TokenStream> {
+    let directory = out.join("string-guard-fixture");
+    fs::create_dir_all(&directory)?;
+    for (name, values) in [
+        ("keys.bin", [1_i32, 2, 3]),
+        ("names.bin", [1_i32, 0, 1]),
+    ] {
+        fs::write(directory.join(name), values.into_iter().flat_map(i32::to_le_bytes).collect::<Vec<_>>())?;
+    }
+    fs::write(directory.join("names.txt"), "red\ngreen part\n")?;
+    let key = |name: &str| json!({
+        "name": name, "type": "i32", "logical_type": "Integer",
+        "encoding": "plain", "file": "keys.bin"
+    });
+    fs::write(directory.join("manifest.json"), serde_json::to_vec(&json!({
+        "schema_version": 2, "sf": 1, "byte_order": "little",
+        "relations": {
+            "keys": {"rows": 3, "columns": [key("key")]},
+            "part": {"rows": 3, "columns": [key("p_partkey"), {
+                "name": "p_name", "type": "i32", "logical_type": "String",
+                "encoding": "dictionary", "file": "names.bin",
+                "dictionary": "names.txt", "dictionary_index_base": 0,
+                "dictionary_entries": 2
+            }]}
+        }
+    }))?)?;
+    let manifest = Manifest::load(&directory)?;
+    let kernel: source::Kernel = syn::parse_str(
+        "$; setup {} relations {
+            relation Keys => keys(key: i32);
+            relation Part => part(p_partkey: i32, p_name: String);
+        }
+        answer(key: i32) :- Keys(key), Part(key, name), if name == \"green part\";"
+    )?;
+    let code = compile(&kernel, &manifest)
+        .map_err(|error| format!("String guard regression {}: {}", error.phase, error.error))?;
+    let directory = directory.to_string_lossy();
+    Ok(quote! {
+        #[cfg(test)]
+        #[allow(non_snake_case, dead_code)]
+        mod string_guard_regression {
+            use serde_json::Value;
+            #code
+            #[test]
+            fn synthetic_string_literal_guard_executes_on_host() {
+                let manifest = crate::manifest::Manifest::load(::std::path::Path::new(#directory)).unwrap();
+                let data = load(&manifest).unwrap();
+                assert_eq!(data.Part, vec![
+                    (1, "green part".to_owned()), (2, "red".to_owned()), (3, "green part".to_owned())
+                ]);
+                let mut actual = download(&data).unwrap();
+                actual.sort();
+                assert_eq!(actual, vec![vec![1], vec![3]]);
+                let mut reference = sequential(&data).unwrap();
+                reference.sort();
+                assert_eq!(actual, reference);
+            }
         }
     })
 }
@@ -288,6 +382,7 @@ fn main() -> Result<()> {
     };
     generated.extend(executor);
     let out = PathBuf::from(env::var_os("OUT_DIR").ok_or("OUT_DIR missing")?);
+    generated.extend(string_guard_regression(&out)?);
     fs::write(out.join("queries.rs"), generated.to_string())?;
     fs::write(out.join("plans.json"), serde_json::to_vec_pretty(&reports)?)?;
     // Keep the same canonical path available to the runner, rather than silently

@@ -36,14 +36,32 @@ substitution, checked default CQ → Physical → Structures passes, generic
 `cq_sequence_plan::plan` with `cq_gpu_sequence::{machine, catalog}`, grading,
 and `cq_gpu_sequence::translate`. These are the programmatic equivalents of
 the facade's `plan(machine)` → `machine_grade!` → `translate!` pipeline.
-The manifest loader records its uniform `DeviceColumns` host adapter through
-the checked retype rewrite; neither the loader nor translator chooses a plan.
+The manifest loader records its integer-only `DeviceColumns` host adapters
+through the checked retype rewrite; relations declaring `String` retain host
+rows. Neither the loader nor translator chooses a plan.
 
-The loader reads only each imported query's declared columns. It preserves
-integer keys, resolves text literals from the column's `.dict.txt`, uses i32
-epoch-day dates and scale-2 integer decimals, and shares resident columns
-between repeated aliases. It does not reinterpret substring predicates as
-comparisons on dictionary IDs. Unsupported terms remain checked rejections.
+The loader reads only each imported query's declared columns. `String` columns
+are decoded from `.bin` dictionary codes and `.dict.txt` into owned host strings;
+integer/code declarations retain codes, and only their text literals are
+resolved to dictionary IDs. Integer-only relations keep resident device uploads
+and share columns between aliases. Dates use i32 epoch days and decimals use
+scale-2 integers. Substring predicates receive real strings, not dictionary IDs.
+This affects H03 (`c_mktsegment`), H05 (`r_name`), H07/H07-block (`n_name`),
+H08 (`p_type`, `r_name`), H09 (`p_name`), H21-positive (`o_orderstatus`, `n_name`),
+D19/D85 (`n_name`), and D27 (`p_brand`, `n_name`); D72-inner has no string columns.
+Catalog provider tokens declare their accepted element types: resident range
+providers accept scalar codes, while host providers retain unsupported rows.
+String literal equality and opaque string predicates execute through the shared
+host row printer. Once a host projection drops the strings, its numeric rows
+are uploaded for subsequent GPU work; host evaluation and upload are included
+in the build timing interval. The synthetic String-guard regression checks
+this boundary against Sequential and explicit expected keys.
+
+The binary accepts repeatable `--query <name>` and `--scale sf1|sf10` filters
+(for example `cq-gpu-tpch --query h09 --scale sf1`). Omitted filters select all
+queries/scales. Filtered runs print JSON measurements for the selected scales
+without writing a results file; only an unfiltered run publishes the complete
+inventory and paired SF1/SF10 table.
 
 ```sh
 export CUDA_HOME=/opt/nvidia/hpc_sdk/Linux_x86_64/25.5/cuda/12.9
@@ -252,6 +270,13 @@ row-to-column copy or full unpack. Selection, key sorting, and payload gathering
 read those same views. Store publication must precede provider construction;
 no provider layout or new Sequence term is inferred.
 
+Checked `compact` membership reads retain their Physical row provenance through
+later maps, projections, and payload lookups, even when one provider serves
+both existence and payload reads. Row-valued bounds in a recorded device
+`compact` are evaluated in each lane against that lane's row; they are not
+converted into host provider-build intervals. Host provider selections still
+require the recorded contiguous range supported by their adapter.
+
 The compiled triangle keeps its original `i64` relation and now translates
 normally, with positive translation and executable tuple-comparison tests in
 place of the rejection fixture. Range payloads support `u32`, `i32`, and full
@@ -264,9 +289,15 @@ per-call and median GPU build/kernel/dedup/total timings and query wall time.
 `--check` separately times the CPU tuple reference and checks every GPU call.
 Input loading/upload, answer download, and reference checks are excluded from
 the query samples.
-The recorded directory still requires dense nonnegative u32-range keys, and
-canonical output fields must fit one packed u64; no schema narrowing,
-ID remapping, or alternate plan is substituted.
+The recorded directory still requires dense nonnegative u32-range keys.
+`PackedCanon` advertises a 128-bit packed-key capability. At setup, the sum
+of the recorded codec-bound widths selects one u64 lane (up to 64 bits) or
+two lanes (up to 128 bits); larger headings return a setup error before
+packing or dispatch. Narrow keys retain radix sorting, while wide keys use
+exact row sorting and adjacent deduplication. Cross-lane fields remain
+zero-copy projections for later providers. This is provider-internal storage
+selection, not a translator or planner choice; no schema narrowing, ID
+remapping, or alternate query plan is substituted.
 
 ## Device-store and i64 acceptance
 

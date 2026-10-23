@@ -167,6 +167,7 @@ fn sequential_and_tasks_agree_on_every_corpus_configuration_and_scenario() {
     let catalog = cq_lang_sequence::Catalog {
         providers: vec![cq_lang_sequence::ProviderToken {
             ty: syn::parse_quote!(::cq_workloads::SortedIndex<_, _>),
+            elements: None,
             capabilities: vec![
                 cq_lang_sequence::Capability::Exact,
                 cq_lang_sequence::Capability::Membership,

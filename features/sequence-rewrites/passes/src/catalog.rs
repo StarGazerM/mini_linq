@@ -8,10 +8,10 @@ use structures::{Structure, physical::Operator};
 ///
 /// Structures has no machine grading: its publication level is `host`. Later
 /// Sequence planning checks the selected types at every actual execution level.
-/// Host adapters and non-provider decisions are preserved. Unlike `plan`, this
-/// explicit selection operation replaces recorded types, including authored ones.
-/// Each replacement uses the same checked retype operation as rewrite macros.
-// Formal rule PL-Select: Select the first host-capable token satisfying every entry obligation through checked retype.
+/// Host scan adapters are preserved. Unsupported keyed host reads are retained
+/// through `build_host_reads`; built indexes replace their keyed fallbacks.
+/// Unlike `plan`, this operation explicitly replaces recorded provider types.
+// Formal rule PL-Select: Retain unsupported host stream reads and select the first host-capable token satisfying every entry obligation through checked rewrites.
 pub fn select_from_catalog(
     source: &structures::Program,
     catalog: &Catalog,
@@ -109,6 +109,7 @@ pub fn select_from_catalog(
         } else {
             catalog.providers.iter().find(|token| {
                 at_host(&token.levels)
+                    && accepts_elements(token, &analysis, &name)
                     && required.iter().all(|capability| token.capabilities.contains(capability))
             }).map(|token| &token.ty)
         }.ok_or_else(|| syn::Error::new(
@@ -124,7 +125,151 @@ pub fn select_from_catalog(
                 )
             })?;
     }
+    retain_host_indexes(&target, catalog)
+}
+
+fn retain_host_indexes(
+    source: &structures::Program,
+    catalog: &Catalog,
+) -> syn::Result<structures::Program> {
+    let analysis = structures::contract::check(source)?;
+    let needed = structures::required_columns(&source.physical, &analysis.physical);
+    let mut target = source.clone();
+    let mut retained = std::collections::BTreeSet::new();
+    let mut indexes = std::collections::BTreeSet::new();
+    for entry in &source.structures.entries {
+        let Structure::Host { reader, keyed, .. } = &entry.structure else {
+            continue;
+        };
+        let name = symbol_name(&entry.name);
+        let reader_name = symbol_name(reader);
+        let mut keys = keyed.level_names().concat();
+        keys.sort();
+        let stream = analysis
+            .physical
+            .keyed_reads
+            .get(&name)
+            .is_some_and(|reads| {
+                reads.iter().any(|(read, columns, supply)| {
+                    *read == reader_name
+                        && *columns == keys
+                        && *supply == structures::physical::syntax::SupplyKind::Stream
+                })
+            });
+        if !stream || analysis.built_on(&name, &keys).is_some() {
+            continue;
+        }
+        let mut required = Vec::new();
+        for (read, columns, _) in &analysis.physical.keyed_reads[&name] {
+            if *columns != keys {
+                continue;
+            }
+            let capability = match source
+                .physical
+                .program
+                .definitions
+                .iter()
+                .find(|definition| symbol_name(&definition.name) == *read)
+                .map(|definition| &definition.operator)
+            {
+                Some(Operator::Semi(..) | Operator::Anti(..)) => Capability::Membership,
+                Some(Operator::Merge(..)) => Capability::Ordered,
+                _ => Capability::Range,
+            };
+            if !required.contains(&capability) {
+                required.push(capability);
+            }
+            if required.contains(&Capability::Range) && !required.contains(&Capability::Exact) {
+                required.push(Capability::Exact);
+            }
+        }
+        let projected = (source.physical.program.definitions.iter().any(|definition|
+            symbol_name(&definition.name) == name
+                && matches!(&definition.operator, Operator::Rename(rename) if rename.constants.is_none()))
+            && !analysis.physical.scanned.contains(&name)
+            && needed[&name].len() < analysis.layouts[&name].len()
+            && analysis.physical.keyed_reads[&name].iter().all(|(reader, columns, supply)| {
+                *columns == keys && *supply == structures::physical::syntax::SupplyKind::Stream
+                    && source.physical.program.definitions.iter().any(|definition| {
+                        symbol_name(&definition.name) == *reader
+                            && matches!(&definition.operator, Operator::Semi(..) | Operator::Anti(..))
+                                || symbol_name(&definition.name) == *reader
+                                    && matches!(&definition.operator, Operator::Probe(_, read)
+                                        if matches!(read.choice, Some(structures::physical::Choice::First(_))))
+                    })
+            })).then(|| needed[&name].iter().cloned().collect::<Vec<_>>());
+        if catalog.providers.iter().any(|token| {
+            token.ty == keyed.ty
+                && at_host(&token.levels)
+                && accepts_elements(token, &analysis, &name)
+                && required
+                    .iter()
+                    .all(|capability| token.capabilities.contains(capability))
+        }) {
+            continue;
+        }
+        let token = catalog.providers.iter().find(|token| {
+            at_host(&token.levels)
+                && accepts_columns(token, &analysis, &name, projected.as_deref().unwrap_or(&analysis.layouts[&name]))
+                && required.iter().all(|capability| token.capabilities.contains(capability))
+        }).ok_or_else(|| syn::Error::new(
+            entry.name.span(),
+            format!("PL-Select: structure `{name}` host read `{reader_name}` has unmet catalog obligation {required:?} at host"),
+        ))?;
+        let build = &entry.name;
+        if retained.insert(name.clone()) {
+            target.physical = cq_rewrite_passes::build_host_reads(&target.physical, quote!(#build))
+                .map_err(|error| syn::Error::new(error.span(), format!("PL-Select: {error}")))?;
+        }
+        if indexes.insert((name.clone(), keys.clone())) {
+            let ty = &token.ty;
+            let columns: Vec<_> = keys
+                .iter()
+                .map(|key| syn::Ident::new(key, entry.name.span()))
+                .collect();
+            let projection = projected.map(|columns| {
+                let payload: Vec<_> = columns
+                    .iter()
+                    .map(|column| syn::Ident::new(column, entry.name.span()))
+                    .collect();
+                quote!(payload [#(#payload),*] constants {})
+            });
+            target.structures.entries.push(syn::parse_quote!(
+                #build = #ty [#(#columns),*] #projection;
+            ));
+        }
+    }
+    // Retention replaces keyed host access, not the original column scan.
+    target.structures.entries.retain(|entry| {
+        !retained.contains(&symbol_name(&entry.name))
+            || !matches!(&entry.structure, Structure::Host { reader, .. } if reader != "scan")
+    });
+    structures::contract::check(&target)?;
     Ok(target)
+}
+
+fn accepts_elements(
+    token: &cq_lang_sequence::ProviderToken,
+    analysis: &structures::Analysis,
+    name: &str,
+) -> bool {
+    accepts_columns(token, analysis, name, &analysis.layouts[name])
+}
+
+fn accepts_columns(
+    token: &cq_lang_sequence::ProviderToken,
+    analysis: &structures::Analysis,
+    name: &str,
+    columns: &[String],
+) -> bool {
+    token.elements.as_ref().is_none_or(|accepted| {
+        columns.iter().all(|column| {
+            let actual = &analysis.physical.rows[name].types[column];
+            accepted
+                .iter()
+                .any(|ty| matches!(ty, syn::Type::Infer(_)) || ty == actual)
+        })
+    })
 }
 
 fn at_host(levels: &[Vec<String>]) -> bool {

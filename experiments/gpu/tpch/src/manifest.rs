@@ -39,6 +39,37 @@ pub struct Manifest {
     pub root: PathBuf,
 }
 
+/// Host values follow the query declaration, not the on-disk representation.
+pub trait HostValue: Sized {
+    fn read(manifest: &Manifest, table: &str, column: &str) -> Result<Vec<Self>>;
+}
+
+impl HostValue for i64 {
+    fn read(manifest: &Manifest, table: &str, column: &str) -> Result<Vec<Self>> {
+        manifest.read_column(table, column)
+    }
+}
+
+impl HostValue for i32 {
+    fn read(manifest: &Manifest, table: &str, column: &str) -> Result<Vec<Self>> {
+        manifest.read_column(table, column)?.into_iter()
+            .map(|value| i32::try_from(value).map_err(Into::into))
+            .collect()
+    }
+}
+
+impl HostValue for String {
+    fn read(manifest: &Manifest, table: &str, column: &str) -> Result<Vec<Self>> {
+        let dictionary = manifest.dictionary(manifest.column(table, column)?)?;
+        manifest.read_stored_column(table, column)?.into_iter()
+            .map(|code| {
+                usize::try_from(code).ok().and_then(|index| dictionary.get(index))
+                    .cloned().ok_or_else(|| format!("{table}.{column}: out-of-range dictionary code").into())
+            })
+            .collect()
+    }
+}
+
 impl Manifest {
     pub fn load(root: &Path) -> Result<Self> {
         let mut manifest: Self = serde_json::from_slice(&fs::read(root.join("manifest.json"))?)?;
@@ -116,7 +147,7 @@ impl Manifest {
             .unwrap_or(-1))
     }
 
-    pub fn read_column(&self, table: &str, name: &str) -> Result<Vec<i64>> {
+    fn read_stored_column(&self, table: &str, name: &str) -> Result<Vec<i64>> {
         let column = self.column(table, name)?;
         let bytes = fs::read(self.root.join(&column.file))?;
         let width = match column.ty.as_str() {
@@ -138,6 +169,12 @@ impl Manifest {
                 }
             })
             .collect();
+        Ok(values)
+    }
+
+    pub fn read_column(&self, table: &str, name: &str) -> Result<Vec<i64>> {
+        let column = self.column(table, name)?;
+        let values = self.read_stored_column(table, name)?;
         if column.encoding == "dictionary" {
             let count = self.dictionary(column)?.len();
             if values

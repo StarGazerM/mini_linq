@@ -20,6 +20,7 @@ enum Operation {
         provider: String,
         keys: Vec<String>,
         membership: bool,
+        negated: bool,
     },
     Flatten,
     Tile {
@@ -194,6 +195,32 @@ impl<'a> Compiler<'a> {
                 }
                 Ok(chains)
             }
+            Term::Compact(name, inner) if matches!(inner.as_ref(), Term::Lookup { .. }) => {
+                // Compact's checked Physical operator consumes existence, even
+                // when the same provider also supplies payloads to another read.
+                // The provider-wide capability is not this constructor's meaning.
+                let Term::Lookup { provider, keys, inner } = inner.as_ref() else {
+                    unreachable!()
+                };
+                let result = symbol_name(name);
+                let definition = self.program.structures.physical.program.definitions.iter()
+                    .find(|definition| symbol_name(&definition.name) == result)
+                    .ok_or_else(|| error("compact lacks checked Physical row provenance"))?;
+                let negated = matches!(definition.operator, Operator::Anti(_, _));
+                let mut keys = keys.iter().map(symbol_name).collect::<Vec<_>>();
+                keys.sort();
+                let mut chains = self.fold(inner)?;
+                for chain in &mut chains {
+                    chain.operations.push(Operation::Lookup {
+                        provider: self.rows.provider_name(&symbol_name(provider), &keys)?,
+                        keys: keys.clone(),
+                        membership: true,
+                        negated,
+                    });
+                    chain.result = result.clone();
+                }
+                Ok(chains)
+            }
             Term::Map(name, inner) | Term::Compact(name, inner) => {
                 let mut chains = self.fold(inner)?;
                 for chain in &mut chains {
@@ -254,9 +281,10 @@ impl<'a> Compiler<'a> {
                         chain.result = result;
                     }
                     chain.operations.push(Operation::Lookup {
-                        provider: provider.clone(),
+                        provider: self.rows.provider_name(&provider, &keys)?,
                         keys: keys.clone(),
                         membership,
+                        negated: false,
                     });
                 }
                 Ok(chains)
@@ -351,6 +379,9 @@ impl<'a> Compiler<'a> {
         membership: bool,
     ) -> syn::Result<TokenStream> {
         let (view, payload, order) = self.rows.provider(provider)?;
+        if order.is_empty() && keys.is_empty() {
+            return Ok(quote! { let (mut __begin, mut __end) = (0u32, #view.len); });
+        }
         let first = order
             .first()
             .ok_or_else(|| error("range provider has no directory key"))?;
@@ -473,6 +504,7 @@ impl Kernel<'_, '_> {
                     provider,
                     keys,
                     membership,
+                    ..
                 } => {
                     if !membership {
                         for column in self.compiler.rows.provider(provider)?.1 {
@@ -635,11 +667,12 @@ impl Kernel<'_, '_> {
                 provider,
                 keys,
                 membership,
+                negated,
             } => {
-                let lookup = row.rewrite(self.compiler.lookup(provider, keys, *membership)?)?;
+                let lookup = row.rewrite(self.compiler.lookup(provider, keys, *membership && !*negated)?)?;
                 if *membership {
                     let rest = self.scalar_operations(rest, row)?;
-                    return Ok(quote!(#lookup __live = __live && __begin < __end; #rest));
+                    return Ok(quote!(#lookup __live = __live && ((__begin < __end) != #negated); #rest));
                 }
                 if self.virtual_range.as_deref() == Some(provider)
                     && rest
@@ -869,12 +902,18 @@ impl Kernel<'_, '_> {
                 let base=format_ident!("__cq_pack_base_{i}");
                 let shift=format_ident!("__cq_pack_shift_{i}");
                 if self.compiler.rows.dense.contains(&slot) && !self.scalar_output {
-                    Ok(quote!((if #shift==64 {0u64} else {((__row[#slot] as u32).wrapping_sub(#base as u32) as u64) << #shift})))
+                    Ok(quote!((if #shift==128 {0u128} else {((__row[#slot] as u32).wrapping_sub(#base as u32) as u128) << #shift})))
                 } else {
-                    Ok(quote!((if #shift==64 {0u64} else {(__row[#slot].wrapping_sub(#base) as u64) << #shift})))
+                    Ok(quote!((if #shift==128 {0u128} else {(__row[#slot].wrapping_sub(#base) as u64 as u128) << #shift})))
                 }
             }).collect::<syn::Result<Vec<_>>>()?;
-            quote!(*__output_keys.add(__destination as usize) = 0u64 #(| #parts)*;)
+            quote! {
+                let __key = 0u128 #(| #parts)*;
+                *__output_keys.add(__destination as usize * __cq_key_lanes) = __key as u64;
+                if __cq_key_lanes == 2 {
+                    *__output_keys.add(__destination as usize * 2 + 1) = (__key >> 64) as u64;
+                }
+            }
         } else {
             let range = if self.virtual_range.is_some() {
                 quote! {
@@ -911,6 +950,19 @@ impl Kernel<'_, '_> {
             #emit
             ::cuda_device::thread::sync_threads();
         }
+    }
+}
+
+fn host_union<'a>(
+    term: &'a Term,
+    definitions: &BTreeMap<String, &'a Term>,
+) -> Option<(&'a [Term], bool)> {
+    match term {
+        Term::Union(arms) => Some((arms, false)),
+        Term::Store { inner, .. } => host_union(inner, definitions),
+        Term::Canon(inner) => host_union(inner, definitions).map(|(arms, _)| (arms, true)),
+        Term::Ref(name) => host_union(definitions.get(&symbol_name(name))?, definitions),
+        _ => None,
     }
 }
 
@@ -1019,7 +1071,6 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
             };
             let #shift=__cq_key_bits;
             __cq_key_bits=__cq_key_bits.checked_add(__cq_width).ok_or("packed Sequence key width overflow")?;
-            if __cq_key_bits>64 {return Err("packed Sequence equality key exceeds 64 bits".into());}
             __cq_fields.push(::cq_gpu_sequence_runtime::canon::PackedField {base:#base,shift:#shift,bits:__cq_width});
         });
     }
@@ -1033,30 +1084,221 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
         fingerprint.finish(),
         NEXT_MODULE.fetch_add(1, Ordering::Relaxed)
     );
-    for (index, dispatch) in analysis.dispatches.iter().enumerate() {
-        let publication = dispatch
-            .inner_stores
-            .iter()
-            .rev()
-            .find(|name| {
-                compiler
-                    .definitions
-                    .get(*name)
+    for definition in &program.sequence.definitions {
+        let publication = symbol_name(&definition.name);
+        let dispatch = analysis.dispatches.iter().find(|dispatch| {
+            dispatch.inner_stores.iter().rev().find(|name| {
+                compiler.definitions.get(*name)
                     .is_some_and(|term| matches!(term, Term::Store { .. }))
-            })
-            .ok_or_else(|| error("checked dispatch has no explicit publication store"))?;
+            }) == Some(&publication)
+        });
+        let index = compiler.stored.len();
+        let Some(dispatch) = dispatch else {
+            if analysis.levels.get(&publication)
+                .is_some_and(|level| level.last().is_some_and(|level| level == "host"))
+                && matches!(definition.term, Term::Store { .. })
+                && let Some((arms, canonical)) = host_union(&definition.term, &compiler.definitions)
+            {
+                let result = &analysis.results[&publication];
+                let width = compiler.rows.width;
+                let store_rows = format_ident!("__cq_store_rows_{index}");
+                let store_length = format_ident!("__cq_store_length_{index}");
+                let store_begin = format_ident!("__cq_store_begin_{index}");
+                let store_offsets = format_ident!("__cq_store_offsets_{index}");
+                let store_meta = format_ident!("__cq_store_meta_{index}");
+                let mut lengths = Vec::new();
+                let mut copies = Vec::new();
+                for arm in arms {
+                    let chains = compiler.fold(arm)?;
+                    for chain in chains {
+                        if !chain.operations.is_empty() {
+                            return Err(error("host union operands must be published stores"));
+                        }
+                        let prior = chain.stored.ok_or_else(|| error("host union operand has not published"))?;
+                        let source = &compiler.stored[prior];
+                        if source.range.is_some() {
+                            return Err(error("host union operand requires a materialized row publication"));
+                        }
+                        let length = format_ident!("__cq_store_length_{prior}");
+                        lengths.push(quote!(#length));
+                        let source_rows = format_ident!("__cq_store_rows_{prior}");
+                        if let Some(columns) = &source.packed {
+                            let owner = format_ident!("__cq_canonical_{prior}");
+                            let fields = format_ident!("__cq_fields_{prior}");
+                            let arm_index = copies.len();
+                            let kernel = format_ident!("__cq_union_decode_{index}_{arm_index}_{module_name}");
+                            let prepare = format_ident!("prepare_{kernel}");
+                            let mut params = Vec::new();
+                            let mut args = Vec::new();
+                            let mut writes = Vec::new();
+                            for (field, column) in columns.iter().enumerate() {
+                                let slot = compiler.slot(column)?;
+                                let base = format_ident!("base_{field}");
+                                let shift = format_ident!("shift_{field}");
+                                let bits = format_ident!("bits_{field}");
+                                params.extend([quote!(#base:i64), quote!(#shift:u32), quote!(#bits:u32)]);
+                                args.extend([quote!(#fields[#field].base), quote!(#fields[#field].shift), quote!(#fields[#field].bits)]);
+                                writes.push(quote! {
+                                    let value = if #bits == 0 {0} else {((key >> #shift) as u64) & if #bits == 64 {u64::MAX} else {(1u64 << #bits)-1}};
+                                    *rows.add(position * #width + #slot) = #base.wrapping_add(value as i64);
+                                });
+                            }
+                            kernels.push(quote! {
+                                #[kernel]
+                                #[launch_bounds(256)]
+                                #[launch_contract(domain=1,block=(256,1,1))]
+                                pub fn #kernel(keys:*const u64, rows:*mut i64, length:usize, lanes:usize, #(#params),*) {
+                                    unsafe {
+                                        let mut position = ::cuda_device::thread::index_1d().get() as usize;
+                                        while position < length {
+                                            let key = *keys.add(position * lanes) as u128
+                                                | if lanes == 2 { (*keys.add(position * 2 + 1) as u128) << 64 } else { 0 };
+                                            #(#writes)*
+                                            position += ::cuda_device::thread::gridDim_x() as usize * 256;
+                                        }
+                                    }
+                                }
+                            });
+                            copies.push(quote! {
+                                if #length != 0 {
+                                    let prepared = __cq_module.#prepare(::cuda_core::LaunchConfig1D::new((#length.div_ceil(256)) as u32,256,0))?;
+                                    __cq_module.#kernel(__cq_pool.stream(), &prepared, #owner.keys().ptr(),
+                                        unsafe { #store_rows.ptr().add(__cq_union_offset * #width) }, #length, #owner.lanes(), #(#args),*)?;
+                                }
+                                __cq_union_offset += #length;
+                            });
+                        } else {
+                            copies.push(quote! {
+                                if #length != 0 {
+                                    unsafe { ::cuda_core::memory::memcpy_dtod_async(
+                                        #store_rows.cu_deviceptr() + (__cq_union_offset * #width * ::std::mem::size_of::<i64>()) as u64,
+                                        #source_rows.cu_deviceptr(),
+                                        #length * #width * ::std::mem::size_of::<i64>(),
+                                        __cq_pool.stream().cu_stream())?; }
+                                }
+                                __cq_union_offset += #length;
+                            });
+                        }
+                    }
+                }
+                launches.push(quote! {
+                    let #store_length = 0usize #(.checked_add(#lengths).ok_or("Sequence union length overflow")?)*;
+                    if #store_length > u32::MAX as usize { return Err("Sequence union exceeds u32 positions".into()); }
+                    let #store_rows = unsafe { ::cq_gpu_runtime::Buffer::<i64>::uninitialized(
+                        __cq_pool.clone(), #store_length.checked_mul(#width).ok_or("Sequence union allocation overflow")?)? };
+                    let mut __cq_union_offset = 0usize;
+                    #(#copies)*
+                    let #store_begin = ::cq_gpu_runtime::Buffer::<u32>::zeroed(__cq_pool.clone(),0)?;
+                    let #store_offsets = ::cq_gpu_runtime::Buffer::<u32>::zeroed(__cq_pool.clone(),0)?;
+                    let #store_meta = ::cq_gpu_runtime::Buffer::<u32>::from_host(__cq_pool.clone(), &[#store_length as u32,0,0,0])?;
+                });
+                let final_output = publication == final_name;
+                let packed_columns = if final_output {
+                    compiler.rows.output_columns.clone()
+                } else {
+                    analysis.structures.physical.headings[result].clone()
+                };
+                if canonical || final_output {
+                    let mut fields = Vec::new();
+                    let mut params = Vec::new();
+                    let mut args = Vec::new();
+                    let mut parts = Vec::new();
+                    for (field, column) in packed_columns.iter().enumerate() {
+                        let bounds = compiler.rows.bounds(column)?;
+                        let base = format_ident!("base_{field}");
+                        let shift = format_ident!("shift_{field}");
+                        let slot = compiler.slot(column)?;
+                        fields.push(quote! {
+                            let (#base, bits) = match #bounds {
+                                ::cq_gpu_runtime::Bounds::Empty => (0i64,0u32),
+                                ::cq_gpu_runtime::Bounds::Inclusive {min,max} => (min,64-((max as i128-min as i128) as u64).leading_zeros()),
+                            };
+                            let #shift = __cq_key_bits;
+                            __cq_key_bits = __cq_key_bits.checked_add(bits).ok_or("packed Sequence key width overflow")?;
+                            __cq_fields.push(::cq_gpu_sequence_runtime::canon::PackedField {base:#base,shift:#shift,bits});
+                        });
+                        params.extend([quote!(#base:i64),quote!(#shift:u32)]);
+                        args.extend([quote!(#base),quote!(#shift)]);
+                        parts.push(quote!(if #shift == 128 {0} else {((*rows.add(position * #width + #slot)).wrapping_sub(#base) as u64 as u128) << #shift}));
+                    }
+                    let kernel = format_ident!("__cq_union_pack_{index}_{module_name}");
+                    let prepare = format_ident!("prepare_{kernel}");
+                    let keys = format_ident!("__cq_store_keys_{index}");
+                    kernels.push(quote! {
+                        #[kernel]
+                        #[launch_bounds(256)]
+                        #[launch_contract(domain=1,block=(256,1,1))]
+                        pub fn #kernel(rows:*const i64,keys:*mut u64,length:usize,lanes:usize,#(#params),*) {
+                            unsafe {
+                                let mut position = ::cuda_device::thread::index_1d().get() as usize;
+                                while position < length {
+                                    let key = 0u128 #(| (#parts))*;
+                                    *keys.add(position * lanes) = key as u64;
+                                    if lanes == 2 { *keys.add(position * 2 + 1) = (key >> 64) as u64; }
+                                    position += ::cuda_device::thread::gridDim_x() as usize * 256;
+                                }
+                            }
+                        }
+                    });
+                    launches.push(quote! {
+                        let mut __cq_key_bits = 0u32;
+                        let mut __cq_fields = ::std::vec::Vec::new();
+                        #(#fields)*
+                        let __cq_key_lanes = ::cq_gpu_sequence_runtime::canon::PackedCanon::key_lanes(__cq_key_bits)?;
+                        let #keys = unsafe { ::cq_gpu_runtime::Buffer::<u64>::uninitialized(__cq_pool.clone(),#store_length * __cq_key_lanes)? };
+                        if #store_length != 0 {
+                            let prepared = __cq_module.#prepare(::cuda_core::LaunchConfig1D::new(#store_length.div_ceil(256) as u32,256,0))?;
+                            __cq_module.#kernel(__cq_pool.stream(),&prepared,#store_rows.ptr(),#keys.ptr(),#store_length,__cq_key_lanes,#(#args),*)?;
+                        }
+                    });
+                    let owner = format_ident!("__cq_canonical_{index}");
+                    let saved_fields = format_ident!("__cq_fields_{index}");
+                    let canonicalize = quote! {
+                        let mut canon = ::cq_gpu_sequence_runtime::canon::PackedCanon::new(&__cq_pool,#store_length)?;
+                        let #owner = unsafe { canon.canonicalize(&#keys,#store_length,__cq_key_bits)? };
+                    };
+                    if final_output {
+                        output = Some(if canonical {
+                            quote! {
+                                #canonicalize
+                                let __cq_result = __cq_output_adapter.borrow_mut().unpack_columns(#owner,&__cq_fields,__cq_dictionary,__cq_statuses)?;
+                            }
+                        } else {
+                            quote! { let __cq_result = __cq_output_adapter.borrow_mut().packed_columns(#keys,#store_length,&__cq_fields,__cq_dictionary,__cq_statuses)?; }
+                        });
+                    } else if canonical {
+                        launches.push(quote! {
+                            #canonicalize
+                            let #store_length = #owner.logical_count()?;
+                            let #saved_fields = __cq_fields;
+                        });
+                    }
+                }
+                if !final_output {
+                    launches.push(compiler.rows.publish_provider(analysis,program,result,&publication,index,
+                        canonical.then_some(packed_columns.as_slice()))?);
+                }
+                compiler.stored.push(Stored {
+                    name: publication,
+                    result: result.clone(),
+                    range: None,
+                    packed: canonical.then_some(packed_columns),
+                });
+            }
+            continue;
+        };
         let term = compiler
             .definitions
-            .get(publication)
+            .get(&publication)
             .ok_or_else(|| error("checked dispatch names an absent publication"))?;
         let Term::Store { capacity, inner } = term else {
             return Err(error(
                 "GPU dispatch publication must be an explicit outer store",
             ));
         };
-        if !analysis.levels.contains_key(publication)
-            || !analysis.shapes.contains_key(publication)
-            || !analysis.lengths.contains_key(publication)
+        if !analysis.levels.contains_key(&publication)
+            || !analysis.shapes.contains_key(&publication)
+            || !analysis.lengths.contains_key(&publication)
         {
             return Err(error(
                 "GPU publication lacks checked level, shape, or length facts",
@@ -1152,7 +1394,16 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
             }
         }
         let provider_store = analysis.structures.built.contains_key(&chains[0].result);
-        let virtual_range = if !final_output && !canonical && !provider_store && chains.len() == 1 {
+        // A host union copies published rows, not the deferred lookup-range
+        // representation used by a subsequent device consumer.
+        let host_union_operand = program.sequence.definitions.iter().any(|definition| {
+            analysis.levels.get(&symbol_name(&definition.name))
+                .is_some_and(|level| level.last().is_some_and(|level| level == "host"))
+                && host_union(&definition.term, &compiler.definitions).is_some_and(|(arms, _)| {
+                    arms.iter().any(|arm| matches!(arm, Term::Ref(name) if symbol_name(name) == publication))
+                })
+        });
+        let virtual_range = if !final_output && !canonical && !provider_store && !host_union_operand && chains.len() == 1 {
             let ops = &chains[0].operations;
             let last = ops.iter().rposition(|op| {
                 matches!(
@@ -1239,7 +1490,6 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                     };
                     let #shift=__cq_key_bits;
                     __cq_key_bits=__cq_key_bits.checked_add(__cq_width).ok_or("Sequence equality width overflow")?;
-                    if __cq_key_bits>64 {return Err("packed Sequence equality key exceeds 64 bits".into());}
                     __cq_fields.push(::cq_gpu_sequence_runtime::canon::PackedField {base:#base,shift:#shift,bits:__cq_width});
                 });
             }
@@ -1273,6 +1523,9 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                 let keys = format_ident!("__cq_store_packed_{prior}");
                 let owner = format_ident!("__cq_canonical_{prior}");
                 let fields = format_ident!("__cq_fields_{prior}");
+                let lanes = format_ident!("__cq_stored_lanes_{prior}");
+                parameters.push(quote!(#lanes:usize));
+                arguments.push(quote!(#owner.lanes()));
                 parameters.push(quote!(#keys:*const u64));
                 arguments.push(quote!(#owner.keys().ptr()));
                 for field in 0..columns.len() {
@@ -1294,6 +1547,8 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
             parameters.extend([quote!(#base:i64), quote!(#shift:u32)]);
             arguments.extend([quote!(#base), quote!(#shift)]);
         }
+        parameters.push(quote!(__cq_key_lanes:usize));
+        arguments.push(quote!(__cq_key_lanes));
         let mut generator = Kernel {
             compiler: &compiler,
             shared_bytes: 48,
@@ -1352,6 +1607,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                 let meta = format_ident!("__cq_store_meta_{prior}");
                 if let Some(columns) = &compiler.stored[prior].packed {
                     let keys = format_ident!("__cq_store_packed_{prior}");
+                    let lanes = format_ident!("__cq_stored_lanes_{prior}");
                     let mut unpack = TokenStream::new();
                     for (field, column) in columns.iter().enumerate() {
                         let slot = compiler.slot(column)?;
@@ -1360,11 +1616,15 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                         let bits = format_ident!("__cq_stored_bits_{prior}_{field}");
                         unpack.extend(quote! {
                             let __mask=if #bits==64 {u64::MAX} else {(1u64<<#bits)-1};
-                            let __offset=if #bits==0 {0} else {(__key>>#shift)&__mask};
+                            let __offset=if #bits==0 {0} else {((__key>>#shift) as u64)&__mask};
                             __row[#slot]=#base.wrapping_add(__offset as i64);
                         });
                     }
-                    quote! {let __key=*#keys.add(__position as usize);#unpack}
+                    quote! {
+                        let __key=*#keys.add(__position as usize * #lanes) as u128
+                            | if #lanes == 2 { (*#keys.add(__position as usize * 2 + 1) as u128) << 64 } else { 0 };
+                        #unpack
+                    }
                 } else if let Some(provider) = &compiler.stored[prior].range {
                     let payload = compiler.payload(provider, quote!(__source_position))?;
                     let copy = (0..width).map(|slot| {
@@ -1515,6 +1775,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
             let mut __cq_key_bits=0u32;
             let mut __cq_fields=::std::vec::Vec::<::cq_gpu_sequence_runtime::canon::PackedField>::new();
             #(#local_packing)*
+            let __cq_key_lanes=::cq_gpu_sequence_runtime::canon::PackedCanon::key_lanes(__cq_key_bits)?;
             #(#host_domains)*
             let __cq_prepared=__cq_module.#prepare_name(::cuda_core::LaunchConfig1D::new(#grid,256,#shared_u32))?;
             let mut __cq_capacity=#initial;
@@ -1525,7 +1786,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                 let #store_begin=unsafe {::cq_gpu_runtime::Buffer::<u32>::uninitialized(__cq_pool.clone(),__cq_capacity*#range_width)?};
                 let #store_offsets=unsafe {::cq_gpu_runtime::Buffer::<u32>::uninitialized(__cq_pool.clone(),
                     __cq_capacity.checked_add(1).ok_or("Sequence offset allocation overflow")?*#range_width)?};
-                let #output_keys=unsafe {::cq_gpu_runtime::Buffer::<u64>::uninitialized(__cq_pool.clone(),__cq_capacity*#key_width)?};
+                let #output_keys=unsafe {::cq_gpu_runtime::Buffer::<u64>::uninitialized(__cq_pool.clone(),__cq_capacity*#key_width*__cq_key_lanes)?};
                 let #store_meta=::cq_gpu_runtime::Buffer::<u32>::zeroed(__cq_pool.clone(),#meta_words)?;
                 __cq_module.#kernel_name(__cq_pool.stream(),&__cq_prepared,#(#arguments,)*
                     #store_rows.ptr(),#store_begin.ptr(),#store_offsets.ptr(),#output_keys.ptr(),
@@ -1570,7 +1831,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                 analysis,
                 program,
                 &chains[0].result,
-                publication,
+                &publication,
                 index,
                 if canonical {
                     packed_columns.as_deref()
@@ -1657,7 +1918,10 @@ mod tests {
                     r = pipe canon rename R@0 {a -> a};
                     return r as answer(a);
                 }
-                structures { r host scan = Reader []; r canon = Canon; }
+                structures {
+                    r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(#ty,),::cq_gpu_runtime::For> [];
+                    r canon = Canon;
+                }
                 sequence { input = store canon rows r; }
                 graded gpu { input at host; }
             };

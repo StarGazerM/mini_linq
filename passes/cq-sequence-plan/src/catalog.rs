@@ -15,6 +15,16 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, catalog: &Catalog) -
                 let levels = provider_levels(program, analysis, provider);
                 catalog.providers.iter().any(|token| {
                     matches_type(&token.ty, ty)
+                        && token.elements.as_ref().is_none_or(|accepted| {
+                            analysis.structures.layouts[provider].iter().all(|column| {
+                                accepted.iter().any(|ty| {
+                                    matches_type(
+                                        ty,
+                                        &analysis.structures.physical.rows[provider].types[column],
+                                    )
+                                })
+                            })
+                        })
                         && token.capabilities.contains(capability)
                         && levels.iter().all(|level| token.levels.contains(level))
                 })

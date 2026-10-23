@@ -311,11 +311,13 @@ impl EncodedColumn {
     }
 
     /// Gather a possibly strided or packed source directly into FOR storage.
+    /// A null `order` preserves the source's row order without a permutation.
     ///
     /// # Safety
-    /// The source storage and `order` must remain live on the pool stream.
-    /// Every index must address an initialized source row, and `bounds` must
-    /// enclose every gathered value, which must fit the declared lane type.
+    /// The source storage and nonnull `order` must remain live on the pool stream.
+    /// Every selected index (or every row in the identity prefix) must address
+    /// an initialized source row, and `bounds` must enclose every gathered value,
+    /// which must fit the declared lane type.
     pub unsafe fn from_gather_source<T: DeviceCopy + 'static, L: Lane>(
         pool: Arc<Pool>,
         source: SourceView,

@@ -25,8 +25,20 @@ pub fn data_root() -> PathBuf {
     PathBuf::from(env!("TPCH_GPU_COMPILED_ROOT"))
 }
 
-pub fn run_all(output: &Path) -> Result<bool> {
+pub fn run(output: &Path, queries: &[String], scales: &[u32]) -> Result<bool> {
     let mut results = plans()?;
+    for query in queries {
+        if !results.iter().any(|result| result["query"].as_str() == Some(query.as_str())) {
+            return Err(format!("unknown query: {query}").into());
+        }
+    }
+    if scales.iter().any(|scale| !matches!(scale, 1 | 10)) {
+        return Err("scale must be sf1 or sf10".into());
+    }
+    results.retain(|result| {
+        (queries.is_empty() || queries.iter().any(|query| result["query"].as_str() == Some(query.as_str())))
+            && (scales.is_empty() || scales.iter().any(|&scale| result["sf"].as_u64() == Some(u64::from(scale))))
+    });
     let mut successful = true;
     for result in &mut results {
         let query = result["query"].as_str().unwrap().to_owned();
@@ -73,6 +85,10 @@ pub fn run_all(output: &Path) -> Result<bool> {
                 json!({"status": "not run", "reason": result["status"], "error": result["error"]});
         }
     }
+    if !queries.is_empty() || !scales.is_empty() {
+        println!("{}", serde_json::to_string_pretty(&results)?);
+        return Ok(successful);
+    }
     let table = benchmark::table(&results);
     println!("{table}");
     if let Some(parent) = output.parent() {
@@ -85,7 +101,7 @@ pub fn run_all(output: &Path) -> Result<bool> {
             "data_root": data_root(),
             "warmup_runs": benchmark::WARMUP_RUNS,
             "measured_runs": benchmark::MEASURED_RUNS,
-            "timing": "CUDA event medians; resident inputs; build + kernels + final dedup; loading, answer download and comparison excluded",
+            "timing": "CUDA event medians; host evaluation/upload + provider build + kernels + final dedup; initial input loading, answer download and comparison excluded",
             "source": "CPU retail_kernel invocations imported verbatim with include_str; only manifest storage types/literals adapted",
             "results": results,
             "table_markdown": table,

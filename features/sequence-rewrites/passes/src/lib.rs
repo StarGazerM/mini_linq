@@ -58,7 +58,7 @@ pub fn store(source: &Program, arguments: TokenStream) -> syn::Result<Program> {
 
 /// Materialize selected flatten definitions. Empty advice or `all` selects all
 /// flatten definitions; named selections must all exist and be flatten terms.
-// Formal rule EXT-SeqStore: Materialize a flatten level using its exclusive-scan length.
+// Formal rule EXT-SeqStore: Materialize flatten levels or factor named publication producers with unchanged support.
 pub fn store_level(source: &Program, arguments: TokenStream) -> syn::Result<Program> {
     let selection = Results::parse(arguments)?;
     let mut target = source.clone();
@@ -73,6 +73,43 @@ pub fn store_level(source: &Program, arguments: TokenStream) -> syn::Result<Prog
         }
     }
     selection.require_matches(&matched)?;
+    checked(source, target)
+}
+
+/// Name a store's producer so its execution grade can differ from publication.
+/// Factoring a definition and inserting a store preserve support (EXT-SeqStore).
+pub fn publish(source: &Program, name: &Ident, producer: &Ident) -> syn::Result<Program> {
+    let index = definition(source, name)?;
+    if source
+        .sequence
+        .definitions
+        .iter()
+        .any(|definition| definition.name == *producer)
+    {
+        return Err(syn::Error::new_spanned(
+            producer,
+            "publication producer name already exists",
+        ));
+    }
+    let mut target = source.clone();
+    let term = &mut target.sequence.definitions[index].term;
+    let inner = match term {
+        Term::Store { inner, .. } => std::mem::replace(inner.as_mut(), Term::Ref(producer.clone())),
+        _ => std::mem::replace(
+            term,
+            Term::Store {
+                capacity: None,
+                inner: Box::new(Term::Ref(producer.clone())),
+            },
+        ),
+    };
+    target.sequence.definitions.insert(
+        index,
+        cq_lang_sequence::Definition {
+            name: producer.clone(),
+            term: inner,
+        },
+    );
     checked(source, target)
 }
 

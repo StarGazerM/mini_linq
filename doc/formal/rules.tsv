@@ -139,7 +139,7 @@ IF-Positional	implementation	passes/cq-print/src/positional.rs	Formal rule IF-Po
 IF-Selection	implementation	passes/cq-print/src/positional.rs	Formal rule IF-Selection:	Immutable mask construction and reusable row projection.
 STR-Keyset	implementation	languages/cq-lang-structures/src/positional.rs	Formal rule STR-Keyset:	Keysets serve exact membership without imposing membership on supplemental payload indices.
 IF-PushPositional	implementation	features/own-dialect/printer/src/lib.rs	Formal rule IF-PushPositional:	Push the prepared exact ID stream to its sink; share recorded snapshot and Build construction.
-STR-Existential	implementation	languages/cq-lang-structures/src/filtered.rs	/// Formal rule STR-Existential:	Full-key filtered projections with no observed payload use exact membership, not witness enumeration.
+STR-Existential	implementation	languages/cq-lang-structures/src/filtered.rs	/// Formal rule STR-Existential:	Ordinary renames, selections (including trusted-total predicates) and unions record checked projected layouts; full-key projections with no observed payload use exact membership.
 EXT-SetFold	implementation	features/extensions/cq-ext-aggregate/src/expansion.rs	/// Formal rule EXT-SetFold:	Checked canonical terminals need no extension dedup; unknown terminals retain fast-hashed set boundaries.
 EXT-ConstantGroup	implementation	features/extensions/cq-ext-aggregate/src/expansion.rs	/// Formal rule EXT-ConstantGroup:	Literal-bound group columns use an optional accumulator and preserve empty-input semantics.
 H-FilterRank	implementation	languages/cq-lang-cq/src/hypergraph.rs	/// Formal rule H-FilterRank:	Rank literal-bearing occurrences and local total predicates through equality classes, without data statistics.
@@ -206,15 +206,15 @@ BE-Offsets	implementation	languages/cq-lang-sequence/src/contract.rs	// Formal r
 BE-Canon	implementation	languages/cq-lang-sequence/src/contract.rs	// Formal rule BE-Canon:	Global support requires flattened rows; record opaque canon and codec obligations.
 BE-Code	abstract	-	-	Codec injectivity and monotonicity remain runtime trait premises recorded in Sequence Analysis.obligations.
 BE-Choose	implementation	languages/cq-lang-sequence/src/contract.rs	// Formal rule BE-Choose:	Check exhaustive length guards and construction-equal alternatives; join their size types.
-BE-Scope	implementation	languages/cq-lang-sequence/src/grading.rs	// Formal rule BE-Scope:	Check complete grades, lexical definition order and reads inside ancestor store extents.
+BE-Scope	implementation	languages/cq-lang-sequence/src/grading.rs	// Formal rule BE-Scope:	Check complete grades, lexical order and reads inside ancestor store extents; stores enclose explicitly named host/descendant producers for publication in either direction.
 BE-Collective	implementation	languages/cq-lang-sequence/src/grading.rs	// Formal rule BE-Collective:	A fold, scan or flatten at a level with members is admissible only at a collaborative level with whole participation; at a leaf level it is a sequential loop.
 BE-Separate	implementation	languages/cq-lang-sequence/src/grading.rs	// Formal rule BE-Separate:	Reject exchange across separated siblings without an ancestor store.
-BE-Length	implementation	languages/cq-lang-sequence/src/contract.rs	// Formal rule BE-Length:	A store at a separated level has a length in its type before the write or a checked capacity; host stores need no bound.
-BE-Boundary	implementation	languages/cq-lang-sequence/src/grading.rs	// Formal rule BE-Boundary:	Derive maximal total dispatch segments and their outer domains and inner stores.
+BE-Length	implementation	languages/cq-lang-sequence/src/contract.rs	// Formal rule BE-Length:	A separated store has a pre-write length or checked capacity; a completed host producer supplies its length before downward publication.
+BE-Boundary	implementation	languages/cq-lang-sequence/src/grading.rs	// Formal rule BE-Boundary:	Derive maximal total dispatch segments, outer domains and publications; host-produced downward transfers are uploads, not query dispatches.
 BE-Partial	implementation	languages/cq-lang-sequence/src/grading.rs	// Formal rule BE-Partial:	Opaque Rust evaluation requires a host boundary before descendant execution.
 BE-Abort	implementation	languages/cq-lang-sequence/src/grading.rs	// Formal rule BE-Abort:	Every dispatch has a path to host; runtime flag propagation remains a recorded failure obligation.
 T-Tasks	implementation	features/sequence-tasks/src/lib.rs	// Formal rule T-Tasks:	Interpret checked Sequence with indexed Rayon chunks, ordered task-local buffer publication, monoidal reductions and local then global canonicalization.
-EXT-SeqStore	implementation	features/sequence-rewrites/passes/src/lib.rs	// Formal rule EXT-SeqStore:	Materialize selected flatten definitions with their exclusive-scan lengths and unchanged support.
+EXT-SeqStore	implementation	features/sequence-rewrites/passes/src/lib.rs	// Formal rule EXT-SeqStore:	Materialize selected flatten definitions with exclusive-scan lengths and unchanged support; factor a named producer for separately graded publication.
 EXT-SeqTile	implementation	features/sequence-rewrites/passes/src/lib.rs	// Formal rule EXT-SeqTile:	Wrap a definition in positive contiguous tiles; unknown-length stores require capacity.
 EXT-SeqChoose	implementation	features/sequence-rewrites/passes/src/lib.rs	// Formal rule EXT-SeqChoose:	Select earlier equal-Structures-result definitions under exhaustive length guards.
 EXT-SeqOutput	implementation	features/sequence-rewrites/passes/src/lib.rs	// Formal rule EXT-SeqOutput:	Set the final store output protocol without changing support; bounded requires capacity.
@@ -222,7 +222,7 @@ EXT-SeqGrade	implementation	features/sequence-rewrites/passes/src/lib.rs	// Form
 PL-Closure	implementation	passes/cq-sequence-plan/src/lib.rs	// Formal rule PL-Closure:	Return a replayable trace of checked Sequence rewrites and a machine-checked graded program.
 PL-Precedence	implementation	passes/cq-sequence-plan/src/lib.rs	// Formal rule PL-Precedence:	Preserve authored decisions, fill only missing decomposition and validate recorded catalog obligations.
 PL-Det	implementation	passes/cq-sequence-plan/src/lib.rs	// Formal rule PL-Det:	Enumerate candidates and catalog tokens in fixed order and break remaining ties by that order.
-PL-Select	implementation	features/sequence-rewrites/passes/src/catalog.rs	// Formal rule PL-Select:	Select built provider types in entry order using the first host-capable catalog token satisfying every read, through checked retype.
+PL-Select	implementation	features/sequence-rewrites/passes/src/catalog.rs	// Formal rule PL-Select:	Retain unsupported integral host stream reads through checked Physical retention, construct checked built indexes, then select the first host-capable token satisfying every read and accepted row-element obligation.
 PL-Cost	implementation	passes/cq-sequence-plan/src/cost.rs	// Formal rule PL-Cost:	Compare type-length work and span, then store and dispatch counts; cost does not change meaning.
 L-Sequence	implementation	passes/cq-sequence-lowering/src/lib.rs	// Formal rule L-Sequence:	Default one-part lowering preserves Physical retention and records explicit lookup, membership, union and final count-store terms.
 T-Pull	implementation	passes/cq-sequence-pull/src/lib.rs	// Formal rule T-Pull:	Host iterator interpretation of checked Sequence constructors with recorded provider capabilities and explicit Vec stores.

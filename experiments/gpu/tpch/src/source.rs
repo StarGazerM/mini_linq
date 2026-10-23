@@ -164,7 +164,8 @@ impl Kernel {
             let mut fields = Vec::new();
             for (column, logical) in &relation.columns {
                 let metadata = manifest.column(&relation.table.to_string(), &column.to_string())?;
-                if metadata.logical_type != logical.to_token_stream().to_string() {
+                let declared = logical.to_token_stream().to_string();
+                if metadata.logical_type != declared && metadata.ty != declared {
                     return Err(format!(
                         "{}.{}: CPU type {} differs from manifest logical type {}",
                         relation.table,
@@ -174,7 +175,11 @@ impl Kernel {
                     )
                     .into());
                 }
-                let ty: syn::Type = syn::parse_str(&metadata.ty)?;
+                let ty: syn::Type = if declared == "String" {
+                    logical.clone()
+                } else {
+                    syn::parse_str(&metadata.ty)?
+                };
                 fields.push(quote!(#column: #ty));
             }
             declarations.extend(quote!(relation #name(#(#fields),*);));
@@ -256,7 +261,10 @@ fn collect_variables(
             if let Some(TokenTree::Ident(name)) = index.checked_sub(1).and_then(|i| tokens.get(i))
                 && let Some(relation) = relations.iter().find(|r| r.name == *name)
             {
-                for (argument, (column, _)) in arguments(group)?.iter().zip(&relation.columns) {
+                for (argument, (column, ty)) in arguments(group)?.iter().zip(&relation.columns) {
+                    if ty.to_token_stream().to_string() == "String" {
+                        continue;
+                    }
                     if let syn::Expr::Path(path) = argument
                         && let Some(name) = path.path.get_ident()
                     {
@@ -300,7 +308,10 @@ fn encode_tokens(
                     });
                 let contents = if let Some(relation) = relation {
                     let mut args = arguments(group)?;
-                    for (arg, (column, _)) in args.iter_mut().zip(&relation.columns) {
+                    for (arg, (column, ty)) in args.iter_mut().zip(&relation.columns) {
+                        if ty.to_token_stream().to_string() == "String" {
+                            continue;
+                        }
                         if let syn::Expr::Lit(syn::ExprLit {
                             lit: syn::Lit::Str(text),
                             ..
@@ -367,6 +378,58 @@ mod encoding_tests {
     use super::*;
 
     #[test]
+    fn synthetic_manifest_loads_declared_strings_and_preserves_codes() {
+        use crate::manifest::HostValue;
+        use std::{fs, time::{SystemTime, UNIX_EPOCH}};
+        let root = std::env::temp_dir().join(format!(
+            "cq-tpch-loader-{}-{}", std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        fs::create_dir(&root).unwrap();
+        struct Fixture(std::path::PathBuf);
+        impl Drop for Fixture {
+            fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); }
+        }
+        let _fixture = Fixture(root.clone());
+        fs::write(root.join("name.bin"), [1_i32, 0, 1].into_iter()
+            .flat_map(i32::to_le_bytes).collect::<Vec<_>>()).unwrap();
+        fs::write(root.join("name.dict.txt"), "red\ngreen part\n").unwrap();
+        fs::write(root.join("manifest.json"), serde_json::to_vec(&serde_json::json!({
+            "schema_version": 2, "sf": 1, "byte_order": "little",
+            "relations": {"part": {"rows": 3, "columns": [{
+                "name": "p_name", "type": "i32", "logical_type": "String",
+                "encoding": "dictionary", "file": "name.bin",
+                "dictionary": "name.dict.txt", "dictionary_index_base": 0,
+                "dictionary_entries": 2
+            }]}}
+        })).unwrap()).unwrap();
+        let manifest = Manifest::load(&root).unwrap();
+        let strings = String::read(&manifest, "part", "p_name").unwrap();
+        assert_eq!(strings, ["green part", "red", "green part"]);
+        assert!(strings[0].contains("green"));
+        assert_eq!(i32::read(&manifest, "part", "p_name").unwrap(), [1, 0, 1]);
+        for (ty, expected) in [("String", "\"green part\""), ("i32", "1i32")] {
+            let kernel: Kernel = syn::parse_str(&format!(
+                "$; setup {{}} relations {{ relation Part => part(p_name: {ty}); }}
+                 answer(name: {ty}) :- Part(name), if name == \"green part\";"
+            )).unwrap();
+            let encoded = kernel.encoded_query(&manifest).unwrap().to_string();
+            assert!(encoded.contains(&format!("p_name : {ty}")), "{encoded}");
+            assert!(encoded.contains(&format!("name == {expected}")), "{encoded}");
+            let literal: Kernel = syn::parse_str(&format!(
+                "$; setup {{}} relations {{ relation Part => part(p_name: {ty}); }}
+                 answer() :- Part(\"green part\");"
+            )).unwrap();
+            let encoded = literal.encoded_query(&manifest).unwrap().to_string();
+            assert!(encoded.contains(&format!("Part ({expected})")), "{encoded}");
+        }
+        fs::write(root.join("name.bin"), [2_i32, 0, 1].into_iter()
+            .flat_map(i32::to_le_bytes).collect::<Vec<_>>()).unwrap();
+        assert!(String::read(&manifest, "part", "p_name").is_err());
+        assert!(i32::read(&manifest, "part", "p_name").is_err());
+    }
+
+    #[test]
     fn both_scales_encode_literals_from_their_own_dictionaries() {
         for sf in [1, 10] {
             let manifest = Manifest::load(&crate::data_root().join(format!("sf{sf}"))).unwrap();
@@ -379,7 +442,7 @@ mod encoding_tests {
                     for column in &relation.columns {
                         assert!(matches!(
                             column.ty.to_token_stream().to_string().as_str(),
-                            "i32" | "i64"
+                            "i32" | "i64" | "String"
                         ));
                     }
                 }
@@ -387,12 +450,8 @@ mod encoding_tests {
             let kernel =
                 Kernel::import(SOURCES.iter().find(|(name, _)| *name == "h03").unwrap().1).unwrap();
             let encoded = kernel.encoded_query(&manifest).unwrap().to_string();
-            let code = manifest
-                .text_id("customer", "c_mktsegment", "BUILDING")
-                .unwrap();
-            assert!(encoded.contains(&format!("Customer (customer_key , {code}i32)")));
             assert!(encoded.contains("9204i32"));
-            assert!(!encoded.contains("BUILDING"));
+            assert!(encoded.contains("BUILDING"));
             assert!(!encoded.contains("cutoff"));
             assert_eq!(
                 manifest

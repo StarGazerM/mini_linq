@@ -341,8 +341,13 @@ pub(crate) mod codecs {
             let mut high = i64::MIN;
             let mut i = lane;
             while i < count {
-                let gathered =
-                    unsafe { decode_source(source, order.add(begin as usize + i).read() as u64) };
+                let position = begin + i as u64;
+                let source_position = if order.is_null() {
+                    position
+                } else {
+                    unsafe { order.add(position as usize).read() as u64 }
+                };
+                let gathered = unsafe { decode_source(source, source_position) };
                 unsafe {
                     if element == ELEMENT_I64 {
                         (staged as *mut i64).add(i).write(gathered);

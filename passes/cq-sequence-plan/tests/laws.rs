@@ -86,6 +86,7 @@ fn catalog(machine: &Machine) -> Catalog {
     Catalog {
         providers: vec![ProviderToken {
             ty: syn::parse_quote!(Index),
+            elements: None,
             capabilities: vec![
                 Capability::Exact,
                 Capability::Range,
@@ -102,6 +103,7 @@ fn catalog(machine: &Machine) -> Catalog {
         canons: vec![CanonToken {
             ty: syn::parse_quote!(Canonical),
             levels,
+            max_packed_bits: None,
         }],
     }
 }
@@ -414,4 +416,179 @@ fn host_views_are_not_materialized_before_an_existing_host_store() {
         );
         replay(&source, &machine, &planned);
     }
+}
+
+#[test]
+fn distinct_union_drivers_publish_in_deterministic_separate_dispatches() {
+    let source: Program = syn::parse_quote! {
+        physical {
+            relation L(a:i32); relation R(a:i32); relation P(a:i32,b:i32);
+            l = pipe rename L@0 {a -> a};
+            r = pipe rename R@1 {a -> a};
+            p = let rename P@2 {a -> a,b -> b};
+            left = pipe probe first [a] l,p;
+            right = pipe probe first [a] r,p;
+            joined = let union left,right;
+            answer = pipe canon project joined keep {a,b};
+            return answer as answer(a,b);
+        }
+        structures {
+            l host scan = Reader []; r host scan = Reader [];
+            p host scan = Reader []; p = Index [a];
+            joined rows = Index; answer canon = Canonical;
+        }
+        sequence {
+            l = store rows l; r = store rows r; p = store rows p;
+            left = flatten lookup p [a] l;
+            right = flatten lookup p [a] r;
+            joined = store union [left,right];
+            result = store canon map answer joined;
+        }
+    };
+    let machine = machines().pop().unwrap();
+    let planned = plan(&source, &machine, &catalog(&machine)).unwrap();
+    assert_eq!(
+        planned,
+        plan(&source, &machine, &catalog(&machine)).unwrap()
+    );
+    let analysis = replay(&source, &machine, &planned);
+    assert_eq!(analysis.levels["joined"], ["host"]);
+    assert_eq!(analysis.levels["left"], ["host"]);
+    assert_eq!(analysis.levels["right"], ["host"]);
+    for (arm, driver) in [("left", "l"), ("right", "r")] {
+        assert!(
+            planned
+                .trace
+                .iter()
+                .any(|advice| matches!(advice, Advice::Publish { name, .. } if name == arm))
+        );
+        let dispatch = analysis
+            .dispatches
+            .iter()
+            .find(|dispatch| dispatch.inner_stores.iter().any(|name| name == arm))
+            .unwrap();
+        assert_eq!(dispatch.outer_store, driver);
+        assert!(!dispatch.members.iter().any(|name| name == "joined"));
+    }
+}
+
+#[test]
+fn opaque_predicate_and_feeds_stay_host_before_total_lookup_dispatch() {
+    let source: Program = syn::parse_quote! {
+        physical {
+            relation L(a:i32); relation R(a:i32,b:i32); relation S(b:i32,c:i32);
+            l = pipe rename L@0 {a -> a};
+            r = let rename R@1 {a -> a,b -> b};
+            joined = pipe probe first [a] l,r;
+            selected = pipe guard joined if (opaque(b));
+            s = let rename S@2 {b -> b,c -> c};
+            after = pipe probe first [b] selected,s;
+            answer = pipe canon project after keep {a,b,c};
+            return answer as answer(a,b,c);
+        }
+        structures {
+            l host scan = Reader []; r host scan = Reader [];
+            s host scan = Reader []; r = Index [a]; s = Index [b];
+            answer canon = Canonical;
+        }
+        sequence {
+            l = rows l; r = store rows r;
+            joined = flatten lookup r [a] l;
+            selected = map selected joined;
+            s = store rows s;
+            after = flatten lookup s [b] selected;
+            result = store canon map answer after;
+        }
+    };
+    let machine = machines().pop().unwrap();
+    let planned = plan(&source, &machine, &catalog(&machine)).unwrap();
+    let analysis = replay(&source, &machine, &planned);
+    for name in ["l", "joined", "selected"] {
+        assert_eq!(analysis.levels[name], ["host"], "{name}");
+    }
+    assert!(
+        planned
+            .trace
+            .iter()
+            .any(|advice| matches!(advice, Advice::Store(name) if name == "selected"))
+    );
+    assert!(
+        analysis
+            .dispatches
+            .iter()
+            .any(|dispatch| dispatch.outer_store == "selected")
+    );
+}
+
+#[test]
+fn string_predicate_and_numeric_projection_publish_at_host() {
+    let source: Program = syn::parse_quote! {
+        physical {
+            relation R(a:i32,s:String);
+            r = pipe rename R@0 {a -> a,s -> s};
+            selected = pipe select r if (s = "green");
+            numeric = pipe project selected keep {a};
+            answer = pipe canon project numeric keep {a};
+            return answer as answer(a);
+        }
+        structures { r host scan = Reader []; answer canon = Canonical; }
+        sequence {
+            input = rows r;
+            selected = compact selected input;
+            numeric = map numeric selected;
+            result = store canon map answer numeric;
+        }
+    };
+    let machine = machines().pop().unwrap();
+    let planned = plan(&source, &machine, &catalog(&machine)).unwrap();
+    let analysis = replay(&source, &machine, &planned);
+    for name in ["input", "selected", "numeric"] {
+        assert_eq!(analysis.levels[name], ["host"], "{name}");
+    }
+    assert!(
+        analysis
+            .dispatches
+            .iter()
+            .any(|dispatch| dispatch.outer_store == "numeric")
+    );
+}
+
+#[test]
+fn host_string_filter_uploads_projected_index_before_device_lookups() {
+    let physical = syn::parse_quote! {
+        physical {
+            relation L(a:i32); relation P(a:i32,s:String);
+            p = pipe rename P@0 {a -> a,s -> s};
+            selected = let select p if (#[total] {s = s} (s.contains("green")));
+            l = pipe rename L@1 {a -> a};
+            joined = pipe probe first [a] l,selected;
+            answer = pipe canon project joined keep {a};
+            return answer as answer(a);
+        }
+    };
+    let machine = machines().pop().unwrap();
+    let mut available = catalog(&machine);
+    available.providers[0].elements = Some(vec![syn::parse_quote!(i32)]);
+    let structures = cq_structure_selection::compile(&physical).unwrap();
+    let structures = cq_sequence_plan::select_from_catalog(&structures, &available).unwrap();
+    let facts = cq_lang_sequence::structures::contract::check(&structures).unwrap();
+    assert_eq!(facts.layouts["selected"], ["a"]);
+    let source = cq_sequence_lowering::compile(&structures).unwrap();
+    let planned = plan(&source, &machine, &available).unwrap();
+    let analysis = replay(&source, &machine, &planned);
+    assert_eq!(analysis.levels["__sequence_host_selected"], ["host"]);
+    assert_eq!(analysis.levels["selected"], ["host", "device"]);
+    assert_eq!(analysis.levels["joined"], ["host", "device", "block"]);
+    assert!(
+        analysis
+            .dispatches
+            .iter()
+            .all(|dispatch| !dispatch.members.iter().any(|name| name == "selected"))
+    );
+    assert!(
+        analysis
+            .dispatches
+            .iter()
+            .any(|dispatch| dispatch.members.iter().any(|name| name == "joined"))
+    );
 }

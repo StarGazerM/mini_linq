@@ -136,12 +136,13 @@ pub(super) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
             .find(|d| symbol_name(&d.name) == *name)
             .unwrap();
         let select = match &definition.operator {
-            Operator::Point(_, s) | Operator::Range(_, s) => Some(s),
+            Operator::Select(s) | Operator::Point(_, s) | Operator::Range(_, s) => Some(s),
             Operator::Union(_) => None,
+            Operator::Rename(rename) if rename.constants.is_none() => None,
             _ => {
                 return error(
                     &definition.name,
-                    "filtered storage requires a point or range selection, or union",
+                    "filtered storage requires a rename, selection or union",
                 );
             }
         };
@@ -318,6 +319,20 @@ pub(super) fn layouts(program: &Program, analysis: &Analysis) -> BTreeMap<String
             _ => analysis.physical.headings[&name].clone(),
         };
         columns.retain(|c| analysis.physical.headings[&name].contains(c));
+        if let Some(filtered) = analysis.filtered.get(&name) {
+            columns.retain(|column| {
+                filtered
+                    .payload
+                    .columns
+                    .iter()
+                    .any(|kept| symbol_name(kept) == *column)
+                    || required[&name].contains(column)
+                        && filtered
+                            .constants
+                            .iter()
+                            .any(|binding| symbol_name(&binding.column) == *column)
+            });
+        }
         columns.sort();
         columns.dedup();
         layouts.insert(name, columns);

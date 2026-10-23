@@ -62,11 +62,24 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
         ],
     ];
     Catalog {
-        providers: vec![ProviderToken {
-            ty: syn::parse_quote!(::cq_gpu_sequence_runtime::RangeProvider),
-            capabilities: vec![Capability::Exact, Capability::Range, Capability::Membership],
-            levels: levels.clone(),
-        }],
+        providers: vec![
+            ProviderToken {
+                ty: syn::parse_quote!(::cq_gpu_sequence_runtime::RangeProvider),
+                capabilities: vec![Capability::Exact, Capability::Range, Capability::Membership],
+                elements: Some(vec![
+                    syn::parse_quote!(i8), syn::parse_quote!(i16), syn::parse_quote!(i32),
+                    syn::parse_quote!(i64), syn::parse_quote!(u8), syn::parse_quote!(u16),
+                    syn::parse_quote!(u32), syn::parse_quote!(bool),
+                ]),
+                levels: levels.clone(),
+            },
+            ProviderToken {
+                ty: syn::parse_quote!(::cq_storage::SortedRun<_, _>),
+                capabilities: vec![Capability::Exact, Capability::Range, Capability::Membership],
+                elements: None,
+                levels: vec![vec!["host".into()]],
+            },
+        ],
         codecs: [
             syn::parse_quote!(::cq_storage::sequence::Identity),
             syn::parse_quote!(::cq_gpu_sequence_runtime::DenseDictionary<'_>),
@@ -81,6 +94,7 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
         canons: vec![CanonToken {
             ty: syn::parse_quote!(::cq_gpu_sequence_runtime::canon::PackedCanon),
             levels: levels[..2].to_vec(),
+            max_packed_bits: Some(128),
         }],
     }
 }

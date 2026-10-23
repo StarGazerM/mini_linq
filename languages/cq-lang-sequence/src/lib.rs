@@ -183,6 +183,8 @@ pub struct ProviderToken {
     pub ty: syn::Type,
     pub capabilities: Vec<Capability>,
     pub levels: Vec<Vec<String>>,
+    /// Accepted scalar row elements; `None` leaves the element type unrestricted.
+    pub elements: Option<Vec<syn::Type>>,
 }
 
 /// A value-refinement token; `ordered` certifies monotone encoding.
@@ -198,6 +200,9 @@ pub struct CodecToken {
 pub struct CanonToken {
     pub ty: syn::Type,
     pub levels: Vec<Vec<String>>,
+    /// Packed equality-key capability, checked against codec bounds at setup.
+    /// `None` denotes a provider without a fixed packed-width limit.
+    pub max_packed_bits: Option<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

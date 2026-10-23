@@ -155,6 +155,7 @@ version = "0.1.0"
 dependencies = [
  "cq-lang-sequence",
  "cq-lang-structures",
+ "cq-physical-realization",
  "cq-print",
  "proc-macro2",
  "quote",

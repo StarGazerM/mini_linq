@@ -111,6 +111,7 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
         ty,
         capabilities,
         levels: levels.clone(),
+        elements: None,
     })
     .collect();
     Catalog {
@@ -136,6 +137,7 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
         .map(|ty| CanonToken {
             ty,
             levels: levels.clone(),
+            max_packed_bits: None,
         })
         .collect(),
     }

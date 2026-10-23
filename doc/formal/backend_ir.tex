@@ -215,6 +215,20 @@ strip-mines; distribution to a deeper level requires a separately graded
 definition. Analysis records each tile's interpretation and the dispatch's
 producer level, outer tile width and concatenation protocol (count/scan,
 reserve or bounded); publication concatenates the parts in part order.
+The same publication rule applies to non-final stores. In
+\code{p = t} graded at an explicit descendant execution extent and
+\code{s = store p} graded at host, the producer executes at its recorded
+grade and the completed store is published at host. Only the store encloses
+that execution; a plain host reference to a descendant value is still
+ill-scoped. Factoring a producer into a fresh name changes neither rows nor
+support (EXT-SeqStore). Independent arm stores can therefore be published
+by separate dispatches and concatenated by a host \code{union}, without a
+dispatch spanning two outer stored spaces.
+Conversely, a separated descendant store may name a host-graded producer.
+The host producer is evaluated first, its completed length is known before
+the write, and the projected rows are transferred into the descendant store.
+This downward publication is an upload, not a GPU query dispatch; subsequent
+lookup execution uses the stored layout without re-evaluating its predicate.
 
 \paragraph{Output.} The final \code{flatten} into one stored sequence of
 unknown length is one term with several interpretations, equal under
@@ -255,11 +269,13 @@ Let $t_0=t$, $t_i=r_i(t_{i-1})$, and let $A(t)$ record authored choices.
   \text{candidate and catalog order fixed}}
  {\mathsf{plan}(t,M,K)\text{ has one result (or one rejection)}}
 
-\Rule{PL-Select}{e\in\mathsf{Structures}(s)\quad
+\Rule{PL-Select}{s'=\mathsf{retainUnsupportedHostReads}(s,K)\quad
+ e\in\mathsf{Structures}(s')\quad
  k=\mathsf{first}\{k\in K\mid \mathsf{needs}(e)\subseteq\mathsf{caps}(k),
- \ \mathsf{host}\in\mathsf{levels}(k)\}}
+ \ \mathsf{host}\in\mathsf{levels}(k),\
+ \mathsf{elements}(e)\subseteq\mathsf{acceptedElements}(k)\}}
  {\mathsf{select}(s,K):\
- e.\mathsf{type}\gets k.\mathsf{type}\quad\text{by checked retype}}
+ e.\mathsf{type}\gets k.\mathsf{type}\quad\text{by checked retention, index construction and retype}}
 
 \Rule{PL-Cost}{C=(c_1,\ldots,c_k)\text{ admissible, preserving }A(t)\quad
   \kappa(c)=(W(c),S(c),\#\mathsf{stores}(c),\#\mathsf{dispatches}(c))}
@@ -280,11 +296,30 @@ comparisons, like equal costs, retain the earlier candidate.
 PL-Select is an explicit Structures selection operation before decomposition,
 not an implicit override by PL-Precedence. It visits built indexes, sets,
 row buffers and canon providers in recorded entry order, selecting the first
-catalog token satisfying all reads of that entry; host adapters are unchanged.
+catalog token satisfying all reads of that entry; host scan adapters are unchanged.
+Unsupported integral keyed host stream reads first use the checked Physical
+\code{build\_host\_reads} retention rewrite, then receive a built index
+checked by Structures. Obsolete keyed host fallback entries are removed;
+the original host scan adapters remain unchanged. A built index supplies
+the keyed obligation rather than claiming that column encoding supplies
+an unavailable provider capability.
 Structures has no machine grading, so selection requires host publication.
 Later Sequence planning validates every actual execution level.
+Provider tokens may restrict scalar row element types; an omitted restriction
+accepts any type. Both built-index selection and host-fallback retention
+check the recorded stored-row layout (including checked filtered projection),
+and final catalog discharge checks it again at the actual execution grade.
+A numeric-only device provider cannot be selected
+for a row carrying a \code{String}; a compatible host token or a rejection
+is required.
 Each substitution uses the existing source/target Structures retype checks;
-an absent token rejects with the structure, capabilities and level.
+an absent token or inadmissible retention rejects with the obligation.
+Placement propagates opaque evaluation and its unstored feeds to host before
+assigning descendant work. String-literal predicates and operations reading
+or producing String-bearing rows likewise stay host through the projection
+that publishes a numeric-only row. Independent named union arms with distinct stored
+domains are published separately, then concatenated at host; neither rule
+weakens BE-Partial or BE-Boundary.
 Unknown lengths remain type-length expressions rather than measured input
 data or invented cardinalities. Work counts evaluated constructor positions;
 aliases, tiles and stores add no evaluation work, with stores a separate

@@ -32,6 +32,7 @@ struct Checker<'a> {
     nodes: Vec<Node<'a>>,
     collectives: Vec<(String, Monoid, Vec<String>)>,
     lengths: &'a BTreeMap<String, Len>,
+    results: &'a BTreeMap<String, String>,
     tilings: BTreeMap<String, Vec<crate::Tiling>>,
     parts: BTreeMap<String, Option<usize>>,
     range_reads: BTreeSet<(String, Vec<String>)>,
@@ -157,6 +158,7 @@ pub fn check_grading(program: &Program, machine: &Machine) -> syn::Result<Analys
         nodes: Vec::new(),
         collectives: Vec::new(),
         lengths: &analysis.lengths,
+        results: &analysis.results,
         tilings: BTreeMap::new(),
         parts: BTreeMap::new(),
         range_reads: BTreeSet::new(),
@@ -295,6 +297,14 @@ impl<'a> Checker<'a> {
         }
     }
 
+    fn host_transfer(&self, node: &Node<'_>) -> bool {
+        node.separated_store
+            && node
+                .inputs
+                .iter()
+                .all(|&input| self.nodes[input].level == 0)
+    }
+
     fn visit(
         &mut self,
         term: &'a Term,
@@ -306,6 +316,16 @@ impl<'a> Checker<'a> {
     ) -> syn::Result<usize> {
         let mut inputs = Vec::new();
         let mut tiling = None;
+        let transfer_producer = if let Term::Store { inner, .. } = term
+            && let Term::Ref(name) = inner.as_ref()
+        {
+            self.definitions
+                .get(&symbol_name(name))
+                .map(|&source| self.grades[source])
+                .filter(|&grade| (level == 0) != (grade == 0))
+        } else {
+            None
+        };
         let separated_store = level != 0
             && matches!(term, Term::Store { .. })
             && !self.levels[level].model.collaborative;
@@ -316,6 +336,7 @@ impl<'a> Checker<'a> {
             ));
         }
         if separated_store
+            && transfer_producer != Some(0)
             && let Term::Store {
                 capacity: None,
                 inner,
@@ -412,15 +433,30 @@ impl<'a> Checker<'a> {
             Term::Store { inner, .. } => {
                 // A separated store publishes child-produced values, not a
                 // collective spanning its mutually separated execution parts.
-                let producer = if separated_store && self.levels[level].children.len() == 1 {
-                    self.levels[level].children[0]
-                } else {
-                    level
-                };
+                // Host publication similarly encloses an explicitly graded
+                // named producer. This is not an upward read of its local
+                // value: only the completed ancestor store escapes dispatch.
+                // Downward publication evaluates its host producer before
+                // upload; its exact length is available at that boundary.
+                let producer = transfer_producer.unwrap_or_else(|| {
+                    if separated_store && self.levels[level].children.len() == 1 {
+                        self.levels[level].children[0]
+                    } else {
+                        level
+                    }
+                });
                 let publication = self.publication;
                 let publication_tile = self.publication_tile;
-                if separated_store {
-                    self.publication = Some(level);
+                if producer != 0 && (separated_store || transfer_producer.is_some()) {
+                    let publication_level = if level == 0 {
+                        self.levels
+                            .iter()
+                            .position(|candidate| candidate.path == self.levels[producer].path[..2])
+                            .expect("producer has a checked separated ancestor")
+                    } else {
+                        level
+                    };
+                    self.publication = Some(publication_level);
                     self.publication_tile = outer_tile(inner, self.program, &self.definitions);
                 }
                 let input = self.visit(inner, owner, producer, tiled, uniform, false);
@@ -644,11 +680,7 @@ impl<'a> Checker<'a> {
             Term::Rows(name) | Term::Map(name, _) | Term::Compact(name, _) => {
                 Some(symbol_name(name))
             }
-            Term::Ref(name) => self
-                .definitions
-                .get(&symbol_name(name))
-                .and_then(|&owner| self.roots.get(owner))
-                .and_then(|&root| self.physical_result(self.nodes[root].term)),
+            Term::Ref(name) => self.results.get(&symbol_name(name)).cloned(),
             Term::Flatten(inner)
             | Term::Fold(_, inner)
             | Term::Canon(inner)
@@ -706,7 +738,7 @@ impl<'a> Checker<'a> {
         }
         let mut parents: Vec<_> = (0..self.nodes.len()).collect();
         for (index, node) in self.nodes.iter().enumerate() {
-            if node.level == 0 {
+            if node.level == 0 || self.host_transfer(node) {
                 continue;
             }
             for &input in &node.inputs {
@@ -724,7 +756,7 @@ impl<'a> Checker<'a> {
         }
         let mut groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
         for (index, node) in self.nodes.iter().enumerate() {
-            if node.level != 0 {
+            if node.level != 0 && !self.host_transfer(node) {
                 let group = representative(&mut parents, index);
                 groups.entry(group).or_default().push(index);
             }
@@ -782,6 +814,9 @@ impl<'a> Checker<'a> {
                 ));
             }
             let level = self.levels[first.level].path[..2].to_vec();
+            let parts = stores
+                .iter()
+                .find_map(|&owner| self.parts.get(&self.name(owner)).copied().flatten());
             result.push(Dispatch {
                 outer_store: domains.into_iter().next().expect("one domain was checked"),
                 members: owners.into_iter().map(|owner| self.name(owner)).collect(),
@@ -799,13 +834,7 @@ impl<'a> Checker<'a> {
                     .map(|input| self.levels[self.nodes[input].level].path.clone())
                     .next()
                     .unwrap_or_else(|| self.levels[first.level].path.clone()),
-                parts: members.iter().find_map(|&index| {
-                    let node = &self.nodes[index];
-                    if !node.separated_store {
-                        return None;
-                    }
-                    self.parts.get(&self.name(node.owner)).copied().flatten()
-                }),
+                parts,
                 concatenation: if members.iter().any(|&index| {
                     self.nodes[index].owner + 1 == self.program.sequence.definitions.len()
                 }) {
