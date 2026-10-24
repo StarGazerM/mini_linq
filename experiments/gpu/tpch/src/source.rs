@@ -32,7 +32,6 @@ sources!(
     "h20",
     "h10",
     "h12",
-    "h14",
     "h19",
     "h03",
     "h04",
@@ -489,19 +488,19 @@ impl Kernel {
                 {
                     *ty = stored.clone();
                 } else if self.is_standalone() {
-                    let keep_string = ty.to_token_stream().to_string() == "String"
+                    let metadata =
+                        manifest.column(&relation.table.to_string(), &column.to_string())?;
+                    let declared = ty.to_token_stream().to_string();
+                    let keep_string = declared == "String"
                         && !dictionary_storage.contains_key(&(relation.table.to_string(), column.to_string()));
-                    if !keep_string {
-                        *ty = syn::parse_str(
-                            &manifest
-                                .column(&relation.table.to_string(), &column.to_string())?
-                                .ty,
-                        )?;
+                    let authored_code = declared == "u32" && metadata.encoding == "dictionary";
+                    if !keep_string && !authored_code {
+                        *ty = syn::parse_str(&metadata.ty)?;
                     }
                 }
             }
         }
-        let constants = setup_constants(&self.setup, &self.derived)?;
+        let constants = setup_constants(&self.setup, &self.derived, manifest)?;
         let mut variables = BTreeMap::new();
         collect_variables(self.body.clone(), &relations, &mut variables)?;
         let mut body = self.cpu_program()?.query.body;
@@ -522,6 +521,7 @@ impl Kernel {
                 let declared = logical.to_token_stream().to_string();
                 if metadata.logical_type != declared
                     && metadata.ty != declared
+                    && !(declared == "u32" && metadata.encoding == "dictionary")
                     && !(self.is_standalone()
                         && declared == "i64"
                         && metadata.logical_type == "Integer")
@@ -548,7 +548,9 @@ impl Kernel {
                     || storage.contains_key(&(relation.table.to_string(), column.to_string()))
                 {
                     ty.clone()
-                } else if declared == "String" {
+                } else if declared == "String"
+                    || (declared == "u32" && metadata.encoding == "dictionary")
+                {
                     logical.clone()
                 } else {
                     syn::parse_str(&metadata.ty)?
@@ -860,6 +862,7 @@ fn mentions(tokens: TokenStream, name: &Ident) -> bool {
 fn setup_constants(
     setup: &syn::Block,
     derived: &[(Ident, Vec<(Ident, syn::Type)>)],
+    manifest: &Manifest,
 ) -> Result<BTreeMap<String, TokenStream>> {
     let mut constants = BTreeMap::new();
     for statement in &setup.stmts {
@@ -886,6 +889,25 @@ fn setup_constants(
             .ok_or("setup local needs initializer")?
             .expr;
         let value = match expression.as_ref() {
+            syn::Expr::Call(call) if call.func.to_token_stream().to_string() == "intern" => {
+                let arguments: Vec<_> = call.args.iter().map(|argument| {
+                    match argument {
+                        syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(value), .. }) =>
+                            Ok(value.value()),
+                        _ => Err("intern needs table, column and text literals"),
+                    }
+                }).collect::<std::result::Result<_, _>>()?;
+                let [table, column, text] = arguments.as_slice() else {
+                    return Err("intern needs table, column and text literals".into());
+                };
+                if manifest.column(table, column)?.encoding != "dictionary" {
+                    return Err(format!("intern requires a dictionary column: {table}.{column}").into());
+                }
+                let code = manifest.text_id(table, column, text)?;
+                // The authored interner reserves MAX for absent literals.
+                let code = if code < 0 { u32::MAX } else { u32::try_from(code)? };
+                quote!(#code)
+            }
             syn::Expr::Call(call) if call.func.to_token_stream().to_string() == "date" => {
                 let Some(syn::Expr::Lit(syn::ExprLit {
                     lit: syn::Lit::Str(date),
@@ -1093,7 +1115,7 @@ mod tests {
     }
     #[test]
     fn every_cpu_query_is_imported_without_a_second_body() {
-        assert_eq!(SOURCES.len(), 27);
+        assert_eq!(SOURCES.len(), 26);
         for (name, source) in SOURCES {
             if crate::stages::Program::import(source).unwrap().is_some() {
                 continue;
@@ -1111,7 +1133,7 @@ mod tests {
 
     #[test]
     fn standalone_import_retains_aggregate_heads_and_output_types() {
-        for name in ["h01", "h06", "h10", "h12", "h14", "h19"] {
+        for name in ["h01", "h06", "h10", "h12", "h19"] {
             let source = SOURCES.iter().find(|(query, _)| *query == name).unwrap().1;
             let kernel = Kernel::import(source).unwrap();
             assert!(kernel.is_standalone());
@@ -1230,9 +1252,47 @@ mod encoding_tests {
     use super::*;
 
     #[test]
+    fn authored_interning_matches_exported_codes_at_both_scales() {
+        let source = SOURCES.iter().find(|(name, _)| *name == "h19").unwrap().1;
+        let kernel = Kernel::import(source).unwrap();
+        for sf in [1, 10] {
+            let manifest = Manifest::load(&crate::data_root().join(format!("sf{sf}"))).unwrap();
+            for (table, column) in [
+                ("lineitem", "l_shipmode"), ("lineitem", "l_shipinstruct"),
+                ("part", "p_brand"), ("part", "p_container"),
+            ] {
+                let metadata = manifest.column(table, column).unwrap();
+                assert_eq!(metadata.encoding, "dictionary");
+                assert_eq!(metadata.dictionary_index_base, Some(0));
+                let values = manifest.dictionary(metadata).unwrap();
+                assert!(values.windows(2).all(|pair| pair[0] < pair[1]));
+                let dictionary = cq_load::StringDictionary::new(values.iter().map(String::as_str));
+                for (code, text) in values.iter().enumerate() {
+                    assert_eq!(dictionary.lookup(text), Some(code as u32));
+                    let setup = syn::parse_quote!({
+                        let value: u32 = intern(#table, #column, #text);
+                    });
+                    let constants = setup_constants(&setup, &[], &manifest).unwrap();
+                    assert_eq!(constants["value"].to_string(), format!("{code}u32"));
+                }
+            }
+            let setup = syn::parse_quote!({
+                let absent: u32 = intern("part", "p_brand", "__absent__");
+            });
+            let constants = setup_constants(&setup, &[], &manifest).unwrap();
+            assert_eq!(constants["absent"].to_string(), format!("{}u32", u32::MAX));
+            let encoded = kernel.encoded_query(&manifest).unwrap();
+            assert!(!encoded.to_string().contains("intern"));
+            let program: cq_lang_cq::Program = syn::parse2(encoded).unwrap();
+            assert_eq!(program.inputs().flat_map(|relation| &relation.columns)
+                .filter(|column| column.ty.to_token_stream().to_string() == "u32").count(), 4);
+        }
+    }
+
+    #[test]
     fn grouped_storage_adaptation_preserves_folds_and_scalar_encodings() {
         let manifest = Manifest::load(&crate::data_root().join("sf1")).unwrap();
-        for name in ["h01", "h06", "h10", "h12", "h14", "h19"] {
+        for name in ["h01", "h06", "h10", "h12", "h19"] {
             let source = SOURCES.iter().find(|(query, _)| *query == name).unwrap().1;
             let kernel = Kernel::import(source).unwrap();
             let encoded = kernel.encoded_query(&manifest).unwrap();
@@ -1254,15 +1314,6 @@ mod encoding_tests {
                     .map(|column| column.ty.to_token_stream().to_string())
                     .collect();
                 assert_eq!(types, ["i32", "i32", "i64", "i64", "usize"]);
-            }
-            if name == "h14" {
-                assert!(spelling.contains("starts_with"));
-                assert!(
-                    program
-                        .inputs()
-                        .flat_map(|input| &input.columns)
-                        .any(|column| column.ty.to_token_stream().to_string() == "String")
-                );
             }
         }
     }
@@ -1495,7 +1546,7 @@ mod encoding_tests {
                     for column in &relation.columns {
                         assert!(matches!(
                             column.ty.to_token_stream().to_string().as_str(),
-                            "i32" | "i64" | "String" | "usize"
+                            "i32" | "i64" | "u32" | "String" | "usize"
                         ));
                     }
                 }

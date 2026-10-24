@@ -1,12 +1,12 @@
 # TPC-H statistics and hand-authored GPU plans
 
-Measurement scope: the original 17 runnable suite queries. h07, h10, h14 and h19 were excluded from those historical runs for the then-rejected-query reasons. The h07 section now includes a separate exact h07/h07_block run after dictionary disjunction support; its advice uses the existing h07_block statistics for their identical SQL predicate and output.
+Measurement scope: the original 17 runnable suite queries. h07, h10, h14 and h19 were excluded from those historical runs for the then-rejected-query reasons. The h07 section now includes a separate exact h07/h07_block run after dictionary disjunction support; its advice uses the existing h07_block statistics for their identical SQL predicate and output. The final H19 section separately derives advice from SF1/SF10 statistics after manual interning; it does not extend the historical execution claims.
 
 Measurements use read-only DuckDB 1.5.6 over `/data/tpch-gpu/{sf1,sf10}/dbgen.duckdb`, `SET threads=4`. Manifest row counts are cross-checked by SQL; the manifests contain no min/max fields, so key bounds below are measured with SQL rather than invented. DuckDB t24 benchmark timings are the suite's recorded independent timing files, not the four-thread statistics queries.
 
 The objective used to choose a traversal is the sum of surviving prefix positions, including the root. These counts are not elapsed time predictions: provider builds, predicate scans, host evaluation, canonicalization, and launch costs remain visible in measurements. Connected candidate orders are enumerated in each table; this is a minimum among measured candidates, not an unsupported proof of global runtime optimality. Fully bound relations become membership tests where the checked lowerer permits, so their existential result does not need to enumerate all SQL join multiplicities. `items 4` controls processing granularity, not a four-match maximum.
 
-Exact SQL and all raw counts are retained in [`tpch_statistics.json`](tpch_statistics.json). `OrderAtom` advice uses zero-based normalized body positions, including guards; `Lineitem@1` is not the first occurrence numbered from one. `block@5` schedules the whole checked H07 country-pair block without changing its branch order or relaxing opaque-Rust dependencies. Source queries are unchanged.
+Exact SQL and all raw counts for the original measurements are retained in [`tpch_statistics.json`](tpch_statistics.json); the later H19 derivation records its SQL and counts inline below. `OrderAtom` advice uses zero-based normalized body positions, including guards; `Lineitem@1` is not the first occurrence numbered from one. `block@5` schedules the whole checked H07 country-pair block without changing its branch order or relaxing opaque-Rust dependencies. Advice does not rewrite source query bodies.
 
 ## Base tables and key domains
 
@@ -1242,3 +1242,141 @@ Verification: the restricted release CUDA build passed, followed by the
 passed **23 tests**: 14 grouped tests (including the unchanged exact H15 MAX
 oracle cases) and nine catalog tests. Rustfmt was scoped to changed Rust ranges.
 Existing unused-variable/exported-inline warnings were not suppressed.
+
+## H19: manually interned fields and statistics-derived advice
+
+This derivation uses the authored `retail_h19` SQL and the SF1/SF10 manifests
+under `/data/tpch-gpu`, plus read-only DuckDB 1.5.6 measurements with
+`SET threads=4`. Both manifests declare 25 brand, 40 container, 7 ship-mode
+and 4 shipping-instruction dictionary entries, with zero-based manifest-local
+`i32` storage. Those storage codes are not assumed to be the authored `u32`
+codes: manual interning defines deterministic sorted-distinct domains from
+the four source columns. The query's literal constants resolve through those
+domains; an absent literal uses the nonmatching `u32::MAX` sentinel. H19 does
+not select the `tpch_dictionary` profile or add a query-specific loader filter.
+
+The authored shipping guard stays before the Part lookup. The three-branch
+brand/container/quantity/size guard remains one opaque Rust predicate; advice
+does not split it into a rule union, factor out a Part predicate, or alter its
+inclusive quantity/size boundaries. Named order/line identities retain distinct
+lineitems with equal revenue contributions. The final operation is the exact
+global sum of scale-four revenue coefficients, not a count or DISTINCT revenue.
+
+### Inputs, predicates and joined cardinalities
+
+SQL row counts agree with both manifests. SQL also measures the Part key
+bounds and distinct counts; the manifests do not provide those bounds.
+
+| Measurement | SF1 | SF10 |
+|---|---:|---:|
+| Part rows / distinct part keys | 200,000 / 200,000 | 2,000,000 / 2,000,000 |
+| Part and Lineitem part-key bounds | [1, 200,000] | [1, 2,000,000] |
+| Lineitem rows / rows after unfiltered Part join | 6,001,215 / 6,001,215 | 59,986,052 / 59,986,052 |
+| Lineitem distinct part keys | 200,000 | 2,000,000 |
+| AIR or AIR REG independently | 858,104 | 8,566,164 |
+| DELIVER IN PERSON independently | 1,500,048 | 14,994,611 |
+| Combined shipping guard / subsequent Part probes | 214,377 | 2,141,904 |
+| Distinct part keys after shipping guard | 131,562 | 1,320,295 |
+| Brand#12 branch after shipping guard and join | 25 | 171 |
+| Brand#23 branch after shipping guard and join | 40 | 382 |
+| Brand#34 branch after shipping guard and join | 56 | 581 |
+| Complete guard / distinct matching order-line keys | 121 / 121 | 1,134 / 1,134 |
+| Distinct matching part keys | 103 | 1,032 |
+| Global aggregate output rows (manifest oracle) | 1 | 1 |
+
+The retained plan is `no_reduce, order(Lineitem, Part)`. It scans Lineitem,
+applies the shipping guard, and probes the unique Part key for the remaining
+214,377 / 2,141,904 rows before evaluating the full branch guard. There is no
+expanding join at this lookup, and no need to build reverse Lineitem adjacency
+or introduce semijoin publications. Part carries brand/container/size payload,
+so this is not a payload-free membership test.
+
+| Candidate work, without factoring the branch guard | SF1 | SF10 |
+|---|---:|---:|
+| Chosen Lineitem-root surviving root → final guarded join | 214,377 → 121 | 2,141,904 → 1,134 |
+| Chosen sum of surviving relational prefixes | 214,498 | 2,143,038 |
+| Part-root surviving root → final guarded join | 200,000 → 121 | 2,000,000 → 1,134 |
+| Part-root sum of surviving relational prefixes | 200,121 | 2,001,134 |
+| Chosen Part provider rows | 200,000 | 2,000,000 |
+| Reverse Lineitem provider rows, even after shipping guard | 214,377 | 2,141,904 |
+| Part → raw Lineitem mean / maximum fanout | 30.006075 / 57 | 29.993026 / 58 |
+| Part → shipping-filtered Lineitem mean / maximum fanout | 1.071885 / 9 | 1.070952 / 9 |
+| Part keys with shipping-filtered fanout > 4 | 971 | 8,859 |
+
+The reverse order has a slightly smaller surviving-prefix sum, but needs a
+larger payload-bearing Lineitem provider and an expanding traversal rather
+than a unique Part lookup. Thus this choice explicitly trades the smaller
+prefix sum for the smaller provider and nonexpanding lookup; it is not a claim
+of a measured runtime win or global optimality. A selective Part-root plan
+based on extracting the branch disjunction would describe a different authored
+guard placement and is not silently substituted.
+
+As for H12, advice adds no Physical rewrite and retains the checked grouped
+decomposition/publication schedule. It adds no post-extraction join segment:
+the Part lookup has unit fanout, and group extraction may consume the flatten.
+Interning makes the four string carriers numeric without claiming that opaque
+Rust predicates or revenue arithmetic execute on device. Placement remains
+subject to the existing planner and contracts.
+
+### Reproducing the measurements
+
+Run the following against each read-only `dbgen.duckdb` with `SET threads=4`.
+The shipping and branch expressions below are exactly the authored SQL
+predicates; they are used for statistics only, not as a replacement query body.
+
+```sql
+SELECT count(*), min(p_partkey), max(p_partkey), count(DISTINCT p_partkey)
+FROM part;
+SELECT count(*), min(l_partkey), max(l_partkey), count(DISTINCT l_partkey),
+       count(*) FILTER (WHERE l_shipmode IN ('AIR', 'AIR REG')),
+       count(*) FILTER (WHERE l_shipinstruct = 'DELIVER IN PERSON')
+FROM lineitem;
+
+WITH joined AS (
+  SELECT *,
+    l_shipmode IN ('AIR', 'AIR REG')
+      AND l_shipinstruct = 'DELIVER IN PERSON' AS shipping,
+    p_brand = 'Brand#12'
+      AND p_container IN ('SM CASE', 'SM BOX', 'SM PACK', 'SM PKG')
+      AND l_quantity BETWEEN 1.00 AND 11.00
+      AND p_size BETWEEN 1 AND 5 AS branch1,
+    p_brand = 'Brand#23'
+      AND p_container IN ('MED BAG', 'MED BOX', 'MED PKG', 'MED PACK')
+      AND l_quantity BETWEEN 10.00 AND 20.00
+      AND p_size BETWEEN 1 AND 10 AS branch2,
+    p_brand = 'Brand#34'
+      AND p_container IN ('LG CASE', 'LG BOX', 'LG PACK', 'LG PKG')
+      AND l_quantity BETWEEN 20.00 AND 30.00
+      AND p_size BETWEEN 1 AND 15 AS branch3
+  FROM lineitem JOIN part ON l_partkey = p_partkey
+), measured AS (
+  SELECT *, shipping AND (branch1 OR branch2 OR branch3) AS matching
+  FROM joined
+)
+SELECT count(*) AS joined_rows,
+       count(*) FILTER (WHERE shipping) AS shipping_rows,
+       count(DISTINCT l_partkey) FILTER (WHERE shipping) AS shipping_part_keys,
+       count(*) FILTER (WHERE matching) AS matching_rows,
+       count(DISTINCT (l_orderkey, l_linenumber))
+         FILTER (WHERE matching) AS matching_line_keys,
+       count(DISTINCT l_partkey) FILTER (WHERE matching) AS matching_part_keys,
+       count(*) FILTER (WHERE shipping AND branch1) AS branch1_rows,
+       count(*) FILTER (WHERE shipping AND branch2) AS branch2_rows,
+       count(*) FILTER (WHERE shipping AND branch3) AS branch3_rows
+FROM measured;
+
+WITH fanout AS (
+  SELECT l_partkey, count(*) AS raw,
+    count(*) FILTER (WHERE l_shipmode IN ('AIR', 'AIR REG')
+      AND l_shipinstruct = 'DELIVER IN PERSON') AS shipped
+  FROM lineitem GROUP BY l_partkey
+)
+SELECT count(*) AS part_keys, min(raw), max(raw), avg(raw),
+       min(shipped), max(shipped), avg(shipped),
+       count(*) FILTER (WHERE shipped > 4) AS shipped_gt4_keys
+FROM fanout;
+```
+
+Only these read-only statistics were exercised for this derivation. No H19
+build, test, GPU run, timing, or acceptance result is claimed here; the
+historical benchmark tables above do not include the newly interned H19.

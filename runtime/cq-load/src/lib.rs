@@ -44,8 +44,13 @@
 //! [`NoBounds`] for other fields. [`column()`] creates declaration-order markers
 //! for cq-storage's positional reads and selections. Summaries always come
 //! from decoded rows; block skipping saves in-memory row tests, not Parquet I/O.
+//!
+//! [`StringDictionary`] lets caller-side preparation replace exact string values
+//! with deterministic, sorted-distinct `u32` codes. Dictionaries are per chosen
+//! column, not compiler rewrites or implicit changes to source loading.
 
 mod csv_source;
+mod intern;
 mod loader;
 mod scalar;
 pub mod zone;
@@ -55,6 +60,7 @@ mod zone_docs;
 mod parquet_source;
 
 pub use csv_source::{Csv, CsvOptions, read_csv};
+pub use intern::StringDictionary;
 pub use loader::{Group, Loader};
 pub use scalar::{Date, Decimal};
 pub use zone::{ColumnAt, MinMax, NoBounds, ZoneField, ZoneMetadata, ZoneRows, ZoneSchema, column};

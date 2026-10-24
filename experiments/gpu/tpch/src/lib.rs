@@ -241,18 +241,7 @@ mod tests {
             let mode = report["mode"].as_str().unwrap();
             if report["status"] != "accepted" {
                 let error = report["error"].as_str().unwrap();
-                match query {
-                    "h14" => assert_eq!(
-                        error,
-                        "T-Gpu: host publication r3 needs recorded device-representable code columns"
-                    ),
-                    "h19" => assert_eq!(
-                        error,
-                        "T-Gpu: host publication r4 needs recorded device-representable code columns"
-                    ),
-                    _ => panic!("{query} {mode}: {error}; term: {}", report["term"]),
-                }
-                continue;
+                panic!("{query} {mode}: {error}; term: {}", report["term"]);
             }
             let manifest = Manifest::load(&data_root().join("sf1"))?;
             let measurement = execute_query(query, &manifest, mode, true)?
@@ -305,7 +294,6 @@ mod tests {
         h06,
         h10,
         h12,
-        h14,
         h19,
         h03,
         h05,
