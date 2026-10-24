@@ -414,7 +414,9 @@ approval.
   isolation (no lock ever waits). DOOP cassandra at 15 threads is exact under
   every mode; relational is ~8% slower (1.84–1.88 s vs 1.67–1.76 s) because
   its dense points-to SCC has holes reading most members, so commits drain
-  readers. Index maintenance (≈42% of step time) remains the CPU bottleneck.
+  readers. Sharded native layouts (`shard_storage(layouts(sharded))`,
+  `DL-ShardedLayout`) cut publication from 42% to 20% of step time: DOOP
+  cassandra 15 threads 1.28 s compute, exact; evaluation (65%) now dominates.
 - Open: reach chain at 15 threads below sequential; nested CQ code in one
   codegen unit; rule-local aggregates; FlowLog comparison; partial-Rust
   multi-round refinement; surface sugar (disjunction, facts, rule macros).

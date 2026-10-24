@@ -7,6 +7,14 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Sharded native layouts (`DL-ShardedLayout`): `ShardedLayout<K, V, S>` splits a
+  grouped layout map into hash-routed disjoint shards; bulk publication fills
+  each shard by one task. `shard_storage(layouts(sharded))` rewrites keyed IDB
+  full/delta layouts (checked erasure, `CK-DL-ShardStorage`); unit-key scan and
+  EDB layouts are unchanged. `cq_storage::PointRows::new` is public for
+  external grouped providers. The parallel DOOP engines select it: cassandra at
+  15 threads 1.67–1.76 s → 1.28 s compute, exact; publication 0.61 s → 0.22 s
+  (42% → 20% of step time), evaluation now 65%.
 - Datalog Round records an evaluation **schedule**: per component, each rule
   hole's positive read set derived from Storage reads and an ordered wave
   partition of its seed and step holes (`WF-DL-Schedule`; `DL-WaveCommute`
