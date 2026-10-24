@@ -22,17 +22,33 @@ macro_rules! mutual {
 fn sequential_facade_schedules_refine_unscheduled_mutual_recursion() {
     for rows in [vec![], vec![(0,), (0,), (2,)], vec![(3,), (7,)]] {
         let base = || mutual!(&rows;).collect::<BTreeSet<_>>();
-        check_refinement(base, || mutual!(&rows;
-            round = [cq_datalog_schedule::schedule(whole)];
-        ).collect::<BTreeSet<_>>()).unwrap();
-        check_refinement(base, || mutual!(&rows;
-            round = [cq_datalog_schedule::schedule(per_hole)];
-        ).collect::<BTreeSet<_>>()).unwrap();
-        check_refinement(base, || mutual!(&rows;
-            round = [cq_datalog_schedule::schedule(by_head)];
-        ).collect::<BTreeSet<_>>()).unwrap();
-        check_refinement(base, || mutual!(&rows;
-            round = [cq_datalog_schedule::schedule(strata(0 { seed [0] step [0] [1 2] }))];
-        ).collect::<BTreeSet<_>>()).unwrap();
+        check_refinement(base, || {
+            mutual!(&rows;
+                round = [cq_datalog_schedule::schedule(whole)];
+            )
+            .collect::<BTreeSet<_>>()
+        })
+        .unwrap();
+        check_refinement(base, || {
+            mutual!(&rows;
+                round = [cq_datalog_schedule::schedule(per_hole)];
+            )
+            .collect::<BTreeSet<_>>()
+        })
+        .unwrap();
+        check_refinement(base, || {
+            mutual!(&rows;
+                round = [cq_datalog_schedule::schedule(by_head)];
+            )
+            .collect::<BTreeSet<_>>()
+        })
+        .unwrap();
+        check_refinement(base, || {
+            mutual!(&rows;
+                round = [cq_datalog_schedule::schedule(strata(0 { seed [0] step [0] [1 2] }))];
+            )
+            .collect::<BTreeSet<_>>()
+        })
+        .unwrap();
     }
 }

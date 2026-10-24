@@ -190,7 +190,10 @@ fn evaluate(
     if rules.is_empty() {
         return Ok((TokenStream::new(), TokenStream::new()));
     }
-    let (stratum_index, stratum, phase) = context.strata.iter().enumerate()
+    let (stratum_index, stratum, phase) = context
+        .strata
+        .iter()
+        .enumerate()
         .find_map(|(index, stratum)| {
             if stratum.seeds.iter().any(|rule| rule.hole == rules[0].hole) {
                 Some((index, stratum, round::schedule::SEED))
@@ -202,7 +205,11 @@ fn evaluate(
         })
         .expect("checked rule phase");
     let waves = &program.schedule.strata[stratum_index].waves;
-    let phase_rules = if phase == round::schedule::SEED { &stratum.seeds } else { &stratum.steps };
+    let phase_rules = if phase == round::schedule::SEED {
+        &stratum.seeds
+    } else {
+        &stratum.steps
+    };
     // Count each driving occurrence: a small delta must not serialize holes
     // whose selected full-input scans still do substantial work.
     let delta_work = if phase == round::schedule::STEP {
@@ -236,43 +243,74 @@ fn evaluate(
         .iter()
         .map(|rule| format_ident!("__cq_run_hole_{}", rule.hole, span = Span::mixed_site()))
         .collect();
-    let admissions: ::std::collections::BTreeMap<_, _> = candidates_by_head.into_iter().map(|(index, candidates)| {
-        let seen = format_ident!("__cq_admit_seen_{index}", span = Span::mixed_site());
-        let next = format_ident!("__cq_admit_next_{index}", span = Span::mixed_site());
-        let first = &candidates[0];
-        let rest = &candidates[1..];
-        (index, quote!(
-            #(#first.extend(#rest);)*
-            *#next = #seen.admit(#first, #threshold);
-        ))
-    }).collect();
+    let admissions: ::std::collections::BTreeMap<_, _> = candidates_by_head
+        .into_iter()
+        .map(|(index, candidates)| {
+            let seen = format_ident!("__cq_admit_seen_{index}", span = Span::mixed_site());
+            let next = format_ident!("__cq_admit_next_{index}", span = Span::mixed_site());
+            let first = &candidates[0];
+            let rest = &candidates[1..];
+            (
+                index,
+                quote!(
+                    #(#first.extend(#rest);)*
+                    *#next = #seen.admit(#first, #threshold);
+                ),
+            )
+        })
+        .collect();
     let mut emitted_waves = Vec::new();
     let mut pending = Vec::new();
-    for (wave_index, wave) in waves.iter().enumerate().filter(|(_, wave)| wave.phase == phase) {
-        let wave_evaluators: Vec<_> = wave.holes.iter().map(|&index| {
-            let hole = phase_rules[index].hole;
-            rules.iter().position(|rule| rule.hole == hole).expect("checked wave hole")
-        }).collect();
+    for (wave_index, wave) in waves
+        .iter()
+        .enumerate()
+        .filter(|(_, wave)| wave.phase == phase)
+    {
+        let wave_evaluators: Vec<_> = wave
+            .holes
+            .iter()
+            .map(|&index| {
+                let hole = phase_rules[index].hole;
+                rules
+                    .iter()
+                    .position(|rule| rule.hole == hole)
+                    .expect("checked wave hole")
+            })
+            .collect();
         let closures = wave_evaluators.iter().map(|&index| {
             let run = &evaluators[index];
             let body = &evaluations[index];
             quote!(let mut #run = || { #body };)
         });
-        let runs: Vec<_> = wave_evaluators.iter().map(|&index| &evaluators[index]).collect();
-        let admit = |spawn: bool| pending.iter().map(|head: &usize| {
-            let relation = &context.relations[*head];
-            let seen = &relation.seen;
-            let next = &relation.next;
-            let seen_ref = format_ident!("__cq_admit_seen_{head}", span = Span::mixed_site());
-            let next_ref = format_ident!("__cq_admit_next_{head}", span = Span::mixed_site());
-            let body = &admissions[head];
-            let body = if spawn { quote!(#scope.spawn(move |_| { #body });) } else { body.clone() };
-            quote!({
-                let #seen_ref = &mut #seen;
-                let #next_ref = &mut #next;
-                #body
-            })
-        }).collect::<Vec<_>>();
+        let runs: Vec<_> = wave_evaluators
+            .iter()
+            .map(|&index| &evaluators[index])
+            .collect();
+        let admit = |spawn: bool| {
+            pending
+                .iter()
+                .map(|head: &usize| {
+                    let relation = &context.relations[*head];
+                    let seen = &relation.seen;
+                    let next = &relation.next;
+                    let seen_ref =
+                        format_ident!("__cq_admit_seen_{head}", span = Span::mixed_site());
+                    let next_ref =
+                        format_ident!("__cq_admit_next_{head}", span = Span::mixed_site());
+                    let body = &admissions[head];
+                    let body = if spawn {
+                        quote!(#scope.spawn(move |_| { #body });)
+                    } else {
+                        body.clone()
+                    };
+                    quote!({
+                        let #seen_ref = &mut #seen;
+                        let #next_ref = &mut #next;
+                        #body
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
         let inline_admit = admit(false);
         let spawned_admit = admit(true);
         emitted_waves.push(quote! {
@@ -299,11 +337,14 @@ fn evaluate(
         let body = &admissions[head];
         quote!({ let #seen_ref = &mut #seen; let #next_ref = &mut #next; #body })
     });
-    Ok((quote!(
-        #(#declarations)*
-        let #inline = #work < #threshold || ::rayon::current_num_threads() == 1;
-        #(#emitted_waves)*
-    ), quote!(#(#final_admissions)*)))
+    Ok((
+        quote!(
+            #(#declarations)*
+            let #inline = #work < #threshold || ::rayon::current_num_threads() == 1;
+            #(#emitted_waves)*
+        ),
+        quote!(#(#final_admissions)*),
+    ))
 }
 
 fn collect_task(
@@ -419,7 +460,11 @@ mod tests {
 
     #[test]
     fn schedules_survive_partition_and_invalid_progress_is_rejected() {
-        for constructor in [round::Schedule::whole, round::Schedule::per_hole, round::Schedule::by_head] {
+        for constructor in [
+            round::Schedule::whole,
+            round::Schedule::per_hole,
+            round::Schedule::by_head,
+        ] {
             let mut source = pull_program();
             let analysis = round::storage::contract::check(&source.storage).unwrap();
             source.schedule = constructor(&source.storage, &analysis, &source.context).unwrap();

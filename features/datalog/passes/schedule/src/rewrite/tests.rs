@@ -1,5 +1,5 @@
 use super::*;
-use quote::{quote, ToTokens};
+use quote::{ToTokens, quote};
 
 fn fixture() -> round::Program {
     let source = syn::parse_quote! {
@@ -25,8 +25,12 @@ fn advice_pass_cases_and_round_text_roundtrip() {
     assert_eq!(source.context.strata.len(), 1);
     assert_eq!(source.context.strata[0].seeds.len(), 1);
     assert_eq!(source.context.strata[0].steps.len(), 3);
-    for advice in [quote!(whole), quote!(per_hole), quote!(by_head),
-        quote!(strata(0 { seed [0] step [0] [1 2] }))] {
+    for advice in [
+        quote!(whole),
+        quote!(per_hole),
+        quote!(by_head),
+        quote!(strata(0 { seed [0] step [0] [1 2] })),
+    ] {
         let target = cq_datalog_testkit::PassCase {
             source: source.clone(),
             expected_next: None,
@@ -34,7 +38,9 @@ fn advice_pass_cases_and_round_text_roundtrip() {
             check: Box::new(check),
             mutations: vec![],
             answers: None,
-        }.run(None).unwrap();
+        }
+        .run(None)
+        .unwrap();
         let parsed: round::Program = syn::parse2(target.to_token_stream()).unwrap();
         let reparsed: round::Program = syn::parse2(parsed.to_token_stream()).unwrap();
         assert_eq!(target, parsed);
@@ -47,7 +53,8 @@ fn advice_pass_cases_and_round_text_roundtrip() {
 fn rejects_invalid_advice_and_wave_partitions() {
     let source = fixture();
     for advice in [
-        quote!(unknown), quote!(whole extra),
+        quote!(unknown),
+        quote!(whole extra),
         quote!(strata(0 { seed [0 0] step [0 1 2] })),
         quote!(strata(0 { seed [0] step [0 1] })),
         quote!(strata(0 { step [0 1 2] seed [0] })),

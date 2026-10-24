@@ -55,17 +55,34 @@ fn rendered_invocations_follow_wave_and_within_wave_order() {
             program.policy.timing = syn::parse_str(if timed { "phases" } else { "none" }).unwrap();
             let rendered = render_with(&program, &holes, |rules, context, holes, _| {
                 Ok(evaluate(rules, context, holes, &program.holes, timed))
-            }).unwrap().to_token_stream().to_string();
+            })
+            .unwrap()
+            .to_token_stream()
+            .to_string();
             let stratum = &program.context.strata[0];
-            let expected: Vec<_> = program.schedule.strata[0].waves.iter().flat_map(|wave| {
-                let rules = if wave.phase == "seed" { &stratum.seeds } else { &stratum.steps };
-                wave.holes.iter().map(|&index| rules[index].hole).collect::<Vec<_>>()
-            }).collect();
-            let positions: Vec<_> = expected.iter().map(|index| {
-                let name = format!("scheduled_hole_{index} ()");
-                assert_eq!(rendered.matches(&name).count(), 1);
-                rendered.find(&name).unwrap()
-            }).collect();
+            let expected: Vec<_> = program.schedule.strata[0]
+                .waves
+                .iter()
+                .flat_map(|wave| {
+                    let rules = if wave.phase == "seed" {
+                        &stratum.seeds
+                    } else {
+                        &stratum.steps
+                    };
+                    wave.holes
+                        .iter()
+                        .map(|&index| rules[index].hole)
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+            let positions: Vec<_> = expected
+                .iter()
+                .map(|index| {
+                    let name = format!("scheduled_hole_{index} ()");
+                    assert_eq!(rendered.matches(&name).count(), 1);
+                    rendered.find(&name).unwrap()
+                })
+                .collect();
             assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
         }
     }
@@ -75,7 +92,12 @@ fn rendered_invocations_follow_wave_and_within_wave_order() {
 fn renderer_rejects_nonsynchronous_progress() {
     let mut program = program();
     program.schedule.progress = syn::parse_quote!(asynchronous);
-    assert!(compile(&program).unwrap_err().to_string().contains("synchronous"));
+    assert!(
+        compile(&program)
+            .unwrap_err()
+            .to_string()
+            .contains("synchronous")
+    );
 }
 
 #[test]
@@ -111,32 +133,68 @@ fn printed_schedules_match_round_reference_answers() {
 fn run_native(source: TokenStream) {
     struct TemporaryDirectory(std::path::PathBuf);
     impl Drop for TemporaryDirectory {
-        fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
     }
     let executable = std::env::current_exe().unwrap();
     let dependencies = executable.parent().unwrap();
-    let directory = TemporaryDirectory(std::env::temp_dir().join(format!(
-        "cq-datalog-print-schedules-{}", std::process::id()
-    )));
+    let directory = TemporaryDirectory(
+        std::env::temp_dir().join(format!("cq-datalog-print-schedules-{}", std::process::id())),
+    );
     std::fs::create_dir(&directory.0).unwrap();
     let path = directory.0.join("main.rs");
     let binary = directory.0.join("run");
     std::fs::write(&path, source.to_string()).unwrap();
-    let mut command = std::process::Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()));
-    command.arg("--edition=2024").arg(&path).arg("-L")
-        .arg(format!("dependency={}", dependencies.display())).arg("-o").arg(&binary);
-    for name in ["cq_datalog", "mini_linq", "cq_storage", "cq_datalog_testkit", "cq_datalog_test_passes"] {
+    let mut command =
+        std::process::Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()));
+    command
+        .arg("--edition=2024")
+        .arg(&path)
+        .arg("-L")
+        .arg(format!("dependency={}", dependencies.display()))
+        .arg("-o")
+        .arg(&binary);
+    for name in [
+        "cq_datalog",
+        "mini_linq",
+        "cq_storage",
+        "cq_datalog_testkit",
+        "cq_datalog_test_passes",
+    ] {
         let prefix = format!("lib{name}-");
-        let extension = if name == "cq_datalog_test_passes" { "so" } else { "rlib" };
-        let library = std::fs::read_dir(dependencies).unwrap()
+        let extension = if name == "cq_datalog_test_passes" {
+            "so"
+        } else {
+            "rlib"
+        };
+        let library = std::fs::read_dir(dependencies)
+            .unwrap()
             .map(|entry| entry.unwrap().path())
-            .filter(|path| path.file_name().unwrap().to_str().unwrap().starts_with(&prefix)
-                && path.extension().is_some_and(|ext| ext == extension))
-            .max_by_key(|path| path.metadata().unwrap().modified().unwrap()).unwrap();
-        command.arg("--extern").arg(format!("{name}={}", library.display()));
+            .filter(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .starts_with(&prefix)
+                    && path.extension().is_some_and(|ext| ext == extension)
+            })
+            .max_by_key(|path| path.metadata().unwrap().modified().unwrap())
+            .unwrap();
+        command
+            .arg("--extern")
+            .arg(format!("{name}={}", library.display()));
     }
     let compiled = command.output().unwrap();
-    assert!(compiled.status.success(), "native compilation failed:\n{}", String::from_utf8_lossy(&compiled.stderr));
+    assert!(
+        compiled.status.success(),
+        "native compilation failed:\n{}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
     let executed = std::process::Command::new(&binary).output().unwrap();
-    assert!(executed.status.success(), "native execution failed:\n{}", String::from_utf8_lossy(&executed.stderr));
+    assert!(
+        executed.status.success(),
+        "native execution failed:\n{}",
+        String::from_utf8_lossy(&executed.stderr)
+    );
 }

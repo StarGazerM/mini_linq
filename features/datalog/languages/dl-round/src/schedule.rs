@@ -83,7 +83,11 @@ fn ident(name: &str) -> Ident {
 
 impl Schedule {
     /// One wave per phase containing every hole: Fork's default.
-    pub fn whole(storage: &storage::Program, analysis: &storage::Analysis, context: &RoundContext) -> syn::Result<Self> {
+    pub fn whole(
+        storage: &storage::Program,
+        analysis: &storage::Analysis,
+        context: &RoundContext,
+    ) -> syn::Result<Self> {
         Self::with_waves(storage, analysis, context, |stratum| {
             let mut waves = Vec::new();
             if !stratum.seeds.is_empty() {
@@ -103,17 +107,31 @@ impl Schedule {
     }
 
     /// One hole per wave, in phase list order.
-    pub fn per_hole(storage: &storage::Program, analysis: &storage::Analysis, context: &RoundContext) -> syn::Result<Self> {
+    pub fn per_hole(
+        storage: &storage::Program,
+        analysis: &storage::Analysis,
+        context: &RoundContext,
+    ) -> syn::Result<Self> {
         Self::with_waves(storage, analysis, context, |stratum| {
             (0..stratum.seeds.len())
-                .map(|index| Wave { phase: ident(SEED), holes: vec![index] })
-                .chain((0..stratum.steps.len()).map(|index| Wave { phase: ident(STEP), holes: vec![index] }))
+                .map(|index| Wave {
+                    phase: ident(SEED),
+                    holes: vec![index],
+                })
+                .chain((0..stratum.steps.len()).map(|index| Wave {
+                    phase: ident(STEP),
+                    holes: vec![index],
+                }))
                 .collect()
         })
     }
 
     /// Holes grouped by head relation, waves in head order within each phase.
-    pub fn by_head(storage: &storage::Program, analysis: &storage::Analysis, context: &RoundContext) -> syn::Result<Self> {
+    pub fn by_head(
+        storage: &storage::Program,
+        analysis: &storage::Analysis,
+        context: &RoundContext,
+    ) -> syn::Result<Self> {
         Self::with_waves(storage, analysis, context, |stratum| {
             let group = |phase: &str, holes: &[RuleHole]| {
                 let heads: BTreeSet<usize> = holes.iter().map(|hole| hole.head).collect();
@@ -183,7 +201,11 @@ pub fn derive_reads(
             .enumerate()
             .map(|(index, hole)| {
                 let mut pairs = BTreeSet::new();
-                for read in storage.reads.iter().filter(|read| read.variant == hole.variant) {
+                for read in storage
+                    .reads
+                    .iter()
+                    .filter(|read| read.variant == hole.variant)
+                {
                     let kind = read.kind.to_string();
                     let (relation, version) = match kind.as_str() {
                         "direct" => (read.index, "delta"),
@@ -200,7 +222,10 @@ pub fn derive_reads(
                                 .positions
                                 .get(&symbol_name(&layout.relation))
                                 .ok_or_else(|| {
-                                    syn::Error::new_spanned(&layout.relation, "layout relation is not declared")
+                                    syn::Error::new_spanned(
+                                        &layout.relation,
+                                        "layout relation is not declared",
+                                    )
                                 })?;
                             (relation, if kind == "delta" { "delta" } else { "full" })
                         }
@@ -260,7 +285,11 @@ pub fn check_waves(waves: &[Wave], stratum: &Stratum) -> syn::Result<()> {
     let mut seeds = BTreeSet::new();
     let mut steps = BTreeSet::new();
     for wave in waves {
-        ensure(!wave.holes.is_empty(), wave, "a wave must name at least one hole")?;
+        ensure(
+            !wave.holes.is_empty(),
+            wave,
+            "a wave must name at least one hole",
+        )?;
         let (set, limit) = match wave.phase.to_string().as_str() {
             SEED => {
                 ensure(!seen_step, wave, "seed waves must precede step waves")?;
@@ -270,11 +299,20 @@ pub fn check_waves(waves: &[Wave], stratum: &Stratum) -> syn::Result<()> {
                 seen_step = true;
                 (&mut steps, stratum.steps.len())
             }
-            _ => return Err(syn::Error::new_spanned(&wave.phase, "wave phase must be seed or step")),
+            _ => {
+                return Err(syn::Error::new_spanned(
+                    &wave.phase,
+                    "wave phase must be seed or step",
+                ));
+            }
         };
         for &hole in &wave.holes {
             ensure(hole < limit, wave, "wave names a hole outside its phase")?;
-            ensure(set.insert(hole), wave, "wave repeats a hole already scheduled")?;
+            ensure(
+                set.insert(hole),
+                wave,
+                "wave repeats a hole already scheduled",
+            )?;
         }
     }
     ensure(
@@ -288,7 +326,11 @@ pub fn check_waves(waves: &[Wave], stratum: &Stratum) -> syn::Result<()> {
 /// every hole of that head in the phase lies in waves `0..=wave`.
 pub fn heads_completed_after(waves: &[Wave], stratum: &Stratum, wave: usize) -> Vec<usize> {
     let phase = waves[wave].phase.to_string();
-    let holes: &[RuleHole] = if phase == SEED { &stratum.seeds } else { &stratum.steps };
+    let holes: &[RuleHole] = if phase == SEED {
+        &stratum.seeds
+    } else {
+        &stratum.steps
+    };
     let scheduled: BTreeSet<usize> = waves
         .iter()
         .take(wave + 1)
@@ -358,14 +400,27 @@ mod tests {
     fn waves_partition_each_phase_in_order() {
         let s = stratum(&[0], &[0, 1, 0]);
         check_waves(&[wave(SEED, &[0]), wave(STEP, &[0, 1, 2])], &s).unwrap();
-        check_waves(&[wave(SEED, &[0]), wave(STEP, &[2]), wave(STEP, &[0, 1])], &s).unwrap();
+        check_waves(
+            &[wave(SEED, &[0]), wave(STEP, &[2]), wave(STEP, &[0, 1])],
+            &s,
+        )
+        .unwrap();
         let rejected = |waves: &[Wave]| check_waves(waves, &s).unwrap_err().to_string();
         assert!(rejected(&[wave(STEP, &[0, 1, 2]), wave(SEED, &[0])]).contains("precede"));
         assert!(rejected(&[wave(SEED, &[0]), wave(STEP, &[0, 1])]).contains("exactly once"));
         assert!(rejected(&[wave(SEED, &[0]), wave(STEP, &[0, 1, 2, 1])]).contains("repeats"));
         assert!(rejected(&[wave(SEED, &[0]), wave(STEP, &[0, 1, 3])]).contains("outside"));
-        assert!(rejected(&[wave(SEED, &[0]), wave(STEP, &[]), wave(STEP, &[0, 1, 2])]).contains("at least one"));
-        assert!(rejected(&[wave(SEED, &[0]), wave(ident("admit").to_string().as_str(), &[0, 1, 2])]).contains("seed or step"));
+        assert!(
+            rejected(&[wave(SEED, &[0]), wave(STEP, &[]), wave(STEP, &[0, 1, 2])])
+                .contains("at least one")
+        );
+        assert!(
+            rejected(&[
+                wave(SEED, &[0]),
+                wave(ident("admit").to_string().as_str(), &[0, 1, 2])
+            ])
+            .contains("seed or step")
+        );
     }
 
     #[test]
@@ -388,8 +443,14 @@ mod tests {
                     phase: ident(STEP),
                     index: 0,
                     reads: vec![
-                        Read { relation: 1, version: ident("delta") },
-                        Read { relation: 2, version: ident("full") },
+                        Read {
+                            relation: 1,
+                            version: ident("delta"),
+                        },
+                        Read {
+                            relation: 2,
+                            version: ident("full"),
+                        },
                     ],
                 }],
                 waves: vec![wave(STEP, &[0])],

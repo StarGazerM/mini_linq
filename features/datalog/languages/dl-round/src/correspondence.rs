@@ -403,10 +403,7 @@ pub(crate) fn check_storage_with_analysis(
                         column
                     })
                     .collect();
-                key.columns
-                    .iter()
-                    .map(|&i| atom.args[i].clone())
-                    .collect()
+                key.columns.iter().map(|&i| atom.args[i].clone()).collect()
             };
             let mut expected_declarations = required_inputs(context, &[], &hole.query);
             expected_declarations.push(output);

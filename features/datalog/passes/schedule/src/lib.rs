@@ -9,8 +9,8 @@ mod rewrite {
     use cq_lang_datalog_round as round;
     use proc_macro2::TokenStream;
     use round::schedule::{Schedule, Wave};
-    use syn::{Ident, LitInt, Token, braced, bracketed, parenthesized};
     use syn::parse::{Parse, ParseStream};
+    use syn::{Ident, LitInt, Token, braced, bracketed, parenthesized};
 
     enum Advice {
         Whole,
@@ -42,7 +42,10 @@ mod rewrite {
                         while !body.is_empty() {
                             let phase: Ident = body.parse()?;
                             if phase != "seed" && phase != "step" {
-                                return Err(syn::Error::new_spanned(phase, "expected seed or step"));
+                                return Err(syn::Error::new_spanned(
+                                    phase,
+                                    "expected seed or step",
+                                ));
                             }
                             loop {
                                 let holes;
@@ -51,17 +54,27 @@ mod rewrite {
                                 while !holes.is_empty() {
                                     indices.push(holes.parse::<LitInt>()?.base10_parse()?);
                                 }
-                                waves.push(Wave { phase: phase.clone(), holes: indices });
-                                if !body.peek(syn::token::Bracket) { break; }
+                                waves.push(Wave {
+                                    phase: phase.clone(),
+                                    holes: indices,
+                                });
+                                if !body.peek(syn::token::Bracket) {
+                                    break;
+                                }
                             }
                         }
                         strata.push((index, waves));
-                        if entries.is_empty() { break; }
+                        if entries.is_empty() {
+                            break;
+                        }
                         entries.parse::<Token![,]>()?;
                     }
                     Ok(Self::Strata(strata))
                 }
-                _ => Err(syn::Error::new_spanned(name, "expected whole, per_hole, by_head, or strata")),
+                _ => Err(syn::Error::new_spanned(
+                    name,
+                    "expected whole, per_hole, by_head, or strata",
+                )),
             }
         }
     }
@@ -78,7 +91,10 @@ mod rewrite {
                 let mut schedule = source.schedule.clone();
                 for (index, waves) in strata {
                     if index >= schedule.strata.len() {
-                        return Err(syn::Error::new(proc_macro2::Span::call_site(), "schedule component index out of range"));
+                        return Err(syn::Error::new(
+                            proc_macro2::Span::call_site(),
+                            "schedule component index out of range",
+                        ));
                     }
                     schedule = schedule.with_stratum_waves(index, waves);
                 }
@@ -99,7 +115,10 @@ mod rewrite {
         let mut target = round::erase(target)?;
         target.schedule = source.schedule.clone();
         if target != source {
-            return Err(syn::Error::new(proc_macro2::Span::call_site(), "schedule rewrite changed non-schedule data"));
+            return Err(syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "schedule rewrite changed non-schedule data",
+            ));
         }
         Ok(())
     }
