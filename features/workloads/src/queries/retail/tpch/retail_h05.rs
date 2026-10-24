@@ -14,6 +14,7 @@ JOIN region r ON r.r_regionkey = n.n_regionkey
 WHERE r.r_name = 'ASIA' AND o.o_orderdate >= DATE '1994-01-01'
 AND o.o_orderdate < DATE '1995-01-01'"#;
     candidate generic_smallest;
+    advise plan(no_reduce, order(Region, Nation, Customer, Orders, Lineitem, Supplier));
     setup { let start = date("1994-01-01"); let end = date("1995-01-01"); }
     relations {
         relation Customer => customer(c_custkey: i64, c_nationkey: i32);

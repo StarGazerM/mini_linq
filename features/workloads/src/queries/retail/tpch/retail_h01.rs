@@ -5,7 +5,7 @@
 use cq_load::{Date, Decimal, Load};
 
 pub const NAME: &str = "retail_h01";
-pub const CONFIGS: &[&str] = &["default"];
+
 pub const EXPORTS: &[(&str, &str)] = &[(
     "lineitem",
     "l_orderkey,l_linenumber,l_returnflag,l_linestatus,l_quantity,l_extendedprice,l_shipdate",
@@ -31,7 +31,7 @@ mini_linq::relation_loaders! {
 }
 
 pub fn load(root: &std::path::Path, config: &str) -> Result<Data, Box<dyn std::error::Error>> {
-    assert_eq!(config, "default", "unknown H01 configuration");
+    assert!(CONFIGS.contains(&config), "unknown H01 configuration");
     Ok(Data {
         lineitem: <relation_loader!(Lineitem)>::parquet(
             root.join("lineitem.parquet"),
@@ -40,29 +40,30 @@ pub fn load(root: &std::path::Path, config: &str) -> Result<Data, Box<dyn std::e
     })
 }
 
-#[allow(non_snake_case)]
-pub fn run(data: &Data, config: &str) -> Vec<Answer> {
-    assert_eq!(config, "default", "unknown H01 configuration");
-    let Lineitem = data.lineitem.as_slice();
-    let cutoff = Date::load("1998-09-02").expect("authored ISO date");
-    mini_linq::compile! {
-        pipeline {}
-        struct Query;
-        relation Lineitem(l_orderkey: i64, l_linenumber: i64,
-            l_returnflag: String, l_linestatus: String, l_quantity: Decimal,
-            l_extendedprice: Decimal, l_shipdate: Date);
-        relation answer(returnflag: String, linestatus: String,
-            sum_quantity: i64, sum_price: i64, count_order: usize);
-        answer(returnflag, linestatus, sum(quantity_units), sum(price_units), count()) :-
-            Lineitem(order_key, line_number, returnflag, linestatus, quantity, price, shipdate),
-            if *shipdate <= cutoff,
-            let quantity_units: i64 = quantity.scaled(),
-            let price_units: i64 = price.scaled();
+crate::tpch_runtime::standalone_configs! { $;
+    pub(super) fn run(data: &Data, config: &str) -> Vec<Answer> {
+        assert!(CONFIGS.contains(&config), "unknown H01 configuration");
+        let Lineitem = data.lineitem.as_slice();
+        let cutoff = Date::load("1998-09-02").expect("authored ISO date");
+        query! {
+            plan(no_reduce, order(Lineitem));
+            struct Query;
+            relation Lineitem(l_orderkey: i64, l_linenumber: i64,
+                l_returnflag: String, l_linestatus: String, l_quantity: Decimal,
+                l_extendedprice: Decimal, l_shipdate: Date);
+            relation answer(returnflag: String, linestatus: String,
+                sum_quantity: i64, sum_price: i64, count_order: usize);
+            answer(returnflag, linestatus, sum(quantity_units), sum(price_units), count()) :-
+                Lineitem(order_key, line_number, returnflag, linestatus, quantity, price, shipdate),
+                if *shipdate <= cutoff,
+                let quantity_units: i64 = quantity.scaled(),
+                let price_units: i64 = price.scaled();
+        }
+        .map(|(flag, status, quantity, price, count)| {
+            (flag.clone(), status.clone(), quantity, price, count)
+        })
+        .collect()
     }
-    .map(|(flag, status, quantity, price, count)| {
-        (flag.clone(), status.clone(), quantity, price, count)
-    })
-    .collect()
 }
 
 pub fn canonical(rows: &[Answer]) -> Vec<Vec<String>> {

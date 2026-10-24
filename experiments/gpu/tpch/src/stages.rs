@@ -121,7 +121,7 @@ fn terminal(
 
 impl Program {
     pub fn import(source: &str) -> Result<Option<Self>> {
-        let file = syn::parse_file(source)?;
+        let file = crate::source::authored_file(source)?;
         let Some(run) = file.items.iter().find_map(|item| match item {
             syn::Item::Fn(function) if function.sig.ident == "run" => Some(function),
             _ => None,

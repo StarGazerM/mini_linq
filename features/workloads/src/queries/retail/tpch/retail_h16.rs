@@ -10,6 +10,7 @@ AND p.p_size IN (49, 14, 23, 45, 19, 3, 36, 9)
 AND ps.ps_suppkey NOT IN (SELECT s.s_suppkey FROM supplier s
 WHERE s.s_comment LIKE '%Customer%Complaints%')"#;
     candidate hypergraph;
+    advise plan(no_reduce, order(Part, Partsupp));
     setup {
         let BadSupplier: Vec<(i64,)> = Supplier.iter().filter(|row|
             row.1.split_once("Customer").is_some_and(|(_, rest)| rest.contains("Complaints")))

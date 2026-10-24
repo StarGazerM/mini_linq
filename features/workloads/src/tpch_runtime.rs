@@ -56,6 +56,75 @@ macro_rules! configuration {
 }
 pub(crate) use configuration;
 
+/// Standalone (including staged aggregate) queries share one authored runner.
+/// Each `query!` carries stage-local advice; only the advised variant applies it.
+macro_rules! standalone_configs {
+    ($d:tt; $($body:tt)*) => {
+        pub const CONFIGS: &[&str] = &["default", "no-reduce", "le", "le_runs", "advised"];
+        crate::tpch_runtime::standalone_configuration!(default, $d, {}, [], { $($body)* });
+        crate::tpch_runtime::standalone_configuration!(no_reduce, $d, {
+            plan = ::mini_linq::passes::plan(no_reduce);
+        }, [], { $($body)* });
+        crate::tpch_runtime::standalone_configuration!(le, $d, {
+            plan = ::cq_planners::order(le);
+        }, [], { $($body)* });
+        crate::tpch_runtime::standalone_configuration!(le_runs, $d, {
+            plan = ::cq_planners::order(le);
+        }, [::cq_rewrites::sorted_runs, ::cq_rewrites::retain_lookups], { $($body)* });
+        crate::tpch_runtime::standalone_configuration!(advised, $d, {}, [], { $($body)* });
+        pub fn run(data: &Data, config: &str) -> Vec<Answer> {
+            match config {
+                "default" => default::run(data, config),
+                "no-reduce" => no_reduce::run(data, config),
+                "le" => le::run(data, config),
+                "le_runs" => le_runs::run(data, config),
+                "advised" => advised::run(data, config),
+                _ => panic!("unknown configuration {}", config),
+            }
+        }
+    };
+}
+pub(crate) use standalone_configs;
+
+macro_rules! standalone_configuration {
+    ($module:ident, $d:tt, { $($stages:tt)* }, [$($extra:path),*], { $($body:tt)* }) => {
+        #[allow(non_snake_case)]
+        mod $module {
+            use super::*;
+            macro_rules! query {
+                (plan($d($d advice:tt)*); $d($d tokens:tt)*) => {
+                    crate::tpch_runtime::standalone_query! {
+                        $module; [$d($d advice)*]; { $($stages)* };
+                        [$($extra),*]; $d($d tokens)*
+                    }
+                };
+            }
+            $($body)*
+        }
+    };
+}
+pub(crate) use standalone_configuration;
+
+macro_rules! standalone_query {
+    (advised; [$($advice:tt)*]; {}; []; $($tokens:tt)*) => {
+        crate::tpch_runtime::standalone_query! {
+            default; []; { plan = ::mini_linq::passes::plan($($advice)*); }; [];
+            $($tokens)*
+        }
+    };
+    ($module:ident; [$($advice:tt)*]; {$($stages:tt)*}; [$($extra:path),*]; $($tokens:tt)*) => {
+        ::mini_linq::compile! {
+            pipeline {
+                $($stages)*
+                structures = [$($extra,)* ::cq_rewrites::retype(dedup => crate::tpch_runtime::Dedup<_>)];
+                surface = [::cq_ext_aggregate::aggregate, ::cq_ext_correlated::correlated];
+            }
+            $($tokens)*
+        }
+    };
+}
+pub(crate) use standalone_query;
+
 macro_rules! candidate {
     (hypergraph; $d:tt; positional($($host:ident),*); $($body:tt)*) => {
         crate::tpch_runtime::configuration!(tuned, $d, { plan = ::cq_planners::order(hypergraph); select = ::mini_linq::passes::select(positional($($host),*)); }, { $($body)* });

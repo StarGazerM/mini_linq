@@ -1,8 +1,8 @@
 TPC-H-derived benchmark methodology
 
 Scope and query authorship
-The ten retail modules in src/queries/retail/tpch are independently named,
-inspired-by positive CQ kernels over dbgen tables. Their SQL peers are authored
+The retail modules in src/queries/retail/tpch are independently named,
+TPC-H-shaped CQ workloads over dbgen tables. Their SQL peers are authored
 in each module. The pre-existing synthetic retail corpus remains unchanged.
 The four d-prefixed kernels map their TPC-DS-inspired relation roles onto real
 TPC-H dbgen relations; each source documents the mapping. They are not TPC-DS
@@ -35,13 +35,20 @@ Products/sums use i128 coefficients at scale four. Empty scalar SUM yields NULL.
 Every timed run must reproduce its warm answer. Two separate untimed counting executions must agree exactly.
 
 Configurations
-Each query compiles the same authored clauses in two configurations:
+Every retail query compiles the same authored clauses in these configurations:
 - default: the written coarse binary CQ planner and default recorded Physical decisions;
-- hypergraph candidate: single-atom guard pushdown and GYO-tree semijoin
-  reduction on H03, H07, H08, D19, D27; the main written atom order is retained;
-- generic_smallest candidate: fine variable-at-a-time planner, canonical
-  projections and smallest intersection driver on H05, H09, H21, D72, D85;
-- generic-smallest candidate: the same Fine/canonical/smallest pass pipeline for full Q6 and Q19.
+- no-reduce: the written planner with implicit semijoin reduction disabled;
+- le: the Lookup & Expand planner;
+- le_runs: Lookup & Expand with sorted_runs and retain_lookups Structures rewrites;
+- advised: the checked order/reduction advice from experiments/gpu/tpch/src/advice.rs,
+  expressed through the public CPU plan pass. Device-only storage choices are
+  not imported. H10/H14 use the grouped GPU route's unreduced written order.
+Standalone queries use standalone_configs!, authoring their runner and each CQ
+body once. Each query! stage supplies its own advice, so staged queries retain
+the GPU's per-stage order rather than applying one stage's order to every rule.
+The GPU importer unwraps this shared shell without applying the CPU pipeline.
+Kernel queries also retain their existing transfer, hypergraph/generic_smallest
+and optional zone configurations. Full Q6/Q19 retain their separate candidates.
 All hosts are typed Vecs loaded from the same projections. This is a small
 candidate set, not an exhaustive planner search. The metadata records the
 best measured configuration for each query/scale from this set; candidates
@@ -79,7 +86,7 @@ aggregate extension expects borrowed measure columns. Both phases and that
 intermediate allocation are timed.
 
 Compilation
-A generated isolated binary crate per query contains both configurations plus
+A generated isolated binary crate per query contains its configurations plus
 the shared worker. Cargo release --timings supplies that binary unit's duration,
 excluding separate dependency units. The source is freshly rewritten before
 each measurement so an up-to-date no-op build cannot report a compile time.

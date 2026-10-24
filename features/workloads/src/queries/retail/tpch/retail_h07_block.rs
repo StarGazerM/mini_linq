@@ -15,6 +15,7 @@ WHERE ((ns.n_name = 'FRANCE' AND nc.n_name = 'GERMANY')
 OR (ns.n_name = 'GERMANY' AND nc.n_name = 'FRANCE'))
 AND l.l_shipdate >= DATE '1995-01-01' AND l.l_shipdate <= DATE '1996-12-31'"#;
     candidate hypergraph;
+    advise plan(no_reduce, order(block@5, Customer, Orders, Lineitem, Supplier));
     setup { let start = date("1995-01-01"); let end = date("1996-12-31"); }
     relations {
         relation Supplier => supplier(s_suppkey: i64, s_nationkey: i32);

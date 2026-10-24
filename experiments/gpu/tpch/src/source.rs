@@ -16,6 +16,63 @@ use syn::{
     punctuated::Punctuated,
 };
 
+/// Unwrap the shared CPU configuration shell without expanding its variants.
+/// GPU planning still consumes the single authored CQ, not a CPU plan.
+pub(crate) fn authored_file(source: &str) -> Result<syn::File> {
+    use syn::visit_mut::VisitMut;
+    struct Runner(syn::ItemFn);
+    impl Parse for Runner {
+        fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+            input.parse::<Token![$]>()?;
+            input.parse::<Token![;]>()?;
+            Ok(Self(input.parse()?))
+        }
+    }
+    struct Query(TokenStream);
+    impl Parse for Query {
+        fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+            let keyword: Ident = input.parse()?;
+            if keyword != "plan" {
+                return Err(syn::Error::new_spanned(keyword, "expected stage-local plan"));
+            }
+            let advice;
+            syn::parenthesized!(advice in input);
+            let _: TokenStream = advice.parse()?;
+            input.parse::<Token![;]>()?;
+            Ok(Self(input.parse()?))
+        }
+    }
+    struct Queries(Option<syn::Error>);
+    impl VisitMut for Queries {
+        fn visit_macro_mut(&mut self, mac: &mut syn::Macro) {
+            if mac.path.is_ident("query") {
+                match syn::parse2::<Query>(mac.tokens.clone()) {
+                    Ok(Query(body)) => {
+                        mac.path = syn::parse_quote!(mini_linq::compile);
+                        mac.tokens = quote!(pipeline {} #body);
+                    }
+                    Err(error) => self.0 = Some(error),
+                }
+            }
+        }
+    }
+    let mut file = syn::parse_file(source)?;
+    for item in &mut file.items {
+        if let syn::Item::Macro(shell) = item
+            && shell.mac.path.segments.last().is_some_and(|s| s.ident == "standalone_configs")
+        {
+            let Runner(mut runner) = syn::parse2(shell.mac.tokens.clone())?;
+            let mut queries = Queries(None);
+            queries.visit_block_mut(&mut runner.block);
+            if let Some(error) = queries.0 {
+                return Err(error.into());
+            }
+            *item = syn::Item::Fn(runner);
+        }
+    }
+    Ok(file)
+}
+
 macro_rules! sources {
     ($($name:literal),* $(,)?) => { pub const SOURCES: &[(&str, &str)] = &[$(
         ($name, include_str!(concat!("../../../../features/workloads/src/queries/retail/tpch/retail_", $name, ".rs"))),
@@ -210,7 +267,7 @@ impl Kernel {
     }
 
     pub fn import(source: &str) -> Result<Self> {
-        let mut file = syn::parse_file(source)?;
+        let mut file = authored_file(source)?;
         for item in &file.items {
             if let syn::Item::Macro(item) = item
                 && item
@@ -1110,7 +1167,7 @@ mod tests {
         let kernel = Kernel::import(source).unwrap();
         assert_eq!(
             kernel.plan_advice.to_string(),
-            quote!(skip(Lineitem with PartSupp), reduce(PartSupp with Lineitem)).to_string()
+            quote!(no_reduce, order(Nation, Supplier, Lineitem, Orders, Customer, PartSupp, Part)).to_string()
         );
     }
     #[test]

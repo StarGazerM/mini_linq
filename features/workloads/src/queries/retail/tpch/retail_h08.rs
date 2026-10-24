@@ -15,6 +15,7 @@ JOIN nation ns ON s.s_nationkey = ns.n_nationkey
 WHERE r.r_name = 'AMERICA' AND p.p_type = 'ECONOMY ANODIZED STEEL'
 AND o.o_orderdate >= DATE '1995-01-01' AND o.o_orderdate <= DATE '1996-12-31'"#;
     candidate hypergraph;
+    advise plan(no_reduce, order(Part, Lineitem, Orders, Customer, Nation@6, Region, Supplier, Nation@8));
     setup { let start = date("1995-01-01"); let end = date("1996-12-31"); }
     relations {
         relation Lineitem => lineitem(l_orderkey: i64, l_partkey: i64, l_suppkey: i64);

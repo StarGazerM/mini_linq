@@ -4,11 +4,17 @@
 use cq_load::{Date, Decimal, Load};
 
 pub const NAME: &str = "retail_h10";
-pub const CONFIGS: &[&str] = &["default"];
+
 pub const EXPORTS: &[(&str, &str)] = &[
-    ("customer", "c_custkey,c_name,c_acctbal,c_nationkey,c_address,c_phone,c_comment"),
+    (
+        "customer",
+        "c_custkey,c_name,c_acctbal,c_nationkey,c_address,c_phone,c_comment",
+    ),
     ("orders", "o_orderkey,o_custkey,o_orderdate"),
-    ("lineitem", "l_orderkey,l_linenumber,l_extendedprice,l_discount,l_returnflag"),
+    (
+        "lineitem",
+        "l_orderkey,l_linenumber,l_extendedprice,l_discount,l_returnflag",
+    ),
     ("nation", "n_nationkey,n_name"),
 ];
 pub const SQL: &str = r#"SELECT c_custkey, c_name,
@@ -46,63 +52,78 @@ mini_linq::relation_loaders! {
 }
 
 pub fn load(root: &std::path::Path, config: &str) -> Result<Data, Box<dyn std::error::Error>> {
-    assert_eq!(config, "default", "unknown H10 configuration");
+    assert!(CONFIGS.contains(&config), "unknown H10 configuration");
     Ok(Data {
         customer: <relation_loader!(Customer)>::parquet(
-            root.join("customer.parquet"), cq_load::ParquetOptions::default(),
+            root.join("customer.parquet"),
+            cq_load::ParquetOptions::default(),
         )?,
         orders: <relation_loader!(Orders)>::parquet(
-            root.join("orders.parquet"), cq_load::ParquetOptions::default(),
+            root.join("orders.parquet"),
+            cq_load::ParquetOptions::default(),
         )?,
         lineitem: <relation_loader!(Lineitem)>::parquet(
-            root.join("lineitem.parquet"), cq_load::ParquetOptions::default(),
+            root.join("lineitem.parquet"),
+            cq_load::ParquetOptions::default(),
         )?,
         nation: <relation_loader!(Nation)>::parquet(
-            root.join("nation.parquet"), cq_load::ParquetOptions::default(),
+            root.join("nation.parquet"),
+            cq_load::ParquetOptions::default(),
         )?,
     })
 }
 
-#[allow(non_snake_case)]
-pub fn run(data: &Data, config: &str) -> Vec<Answer> {
-    assert_eq!(config, "default", "unknown H10 configuration");
-    let Customer = data.customer.as_slice();
-    let Orders = data.orders.as_slice();
-    let Lineitem = data.lineitem.as_slice();
-    let Nation = data.nation.as_slice();
-    let start = Date::load("1993-10-01").expect("authored ISO date");
-    let end = Date::load("1994-01-01").expect("authored ISO date");
-    mini_linq::compile! {
-        pipeline {}
-        struct Query;
-        relation Customer(c_custkey: i64, c_name: String, c_acctbal: Decimal,
-            c_nationkey: i32, c_address: String, c_phone: String, c_comment: String);
-        relation Orders(o_orderkey: i64, o_custkey: i64, o_orderdate: Date);
-        relation Lineitem(l_orderkey: i64, l_linenumber: i64,
-            l_extendedprice: Decimal, l_discount: Decimal, l_returnflag: String);
-        relation Nation(n_nationkey: i32, n_name: String);
-        relation answer(customer_key: i64, name: String, revenue: i64,
-            account_balance: i64, nation: String, address: String, phone: String, comment: String);
-        answer(customer_key, name, sum(revenue_units), balance_units, nation, address, phone, comment) :-
-            Orders(order_key, customer_key, order_date),
-            if *order_date >= start && *order_date < end,
-            Lineitem(order_key, line_number, price, discount, "R"),
-            Customer(customer_key, name, balance, nation_key, address, phone, comment),
-            Nation(nation_key, nation),
-            let revenue_units: i64 = price.scaled() * (100 - discount.scaled()),
-            let balance_units: i64 = balance.scaled();
+crate::tpch_runtime::standalone_configs! { $;
+    pub(super) fn run(data: &Data, config: &str) -> Vec<Answer> {
+        assert!(CONFIGS.contains(&config), "unknown H10 configuration");
+        let Customer = data.customer.as_slice();
+        let Orders = data.orders.as_slice();
+        let Lineitem = data.lineitem.as_slice();
+        let Nation = data.nation.as_slice();
+        let start = Date::load("1993-10-01").expect("authored ISO date");
+        let end = Date::load("1994-01-01").expect("authored ISO date");
+        query! {
+            plan(no_reduce, order(Orders, Lineitem, Customer, Nation));
+            struct Query;
+            relation Customer(c_custkey: i64, c_name: String, c_acctbal: Decimal,
+                c_nationkey: i32, c_address: String, c_phone: String, c_comment: String);
+            relation Orders(o_orderkey: i64, o_custkey: i64, o_orderdate: Date);
+            relation Lineitem(l_orderkey: i64, l_linenumber: i64,
+                l_extendedprice: Decimal, l_discount: Decimal, l_returnflag: String);
+            relation Nation(n_nationkey: i32, n_name: String);
+            relation answer(customer_key: i64, name: String, revenue: i64,
+                account_balance: i64, nation: String, address: String, phone: String, comment: String);
+            answer(customer_key, name, sum(revenue_units), balance_units, nation, address, phone, comment) :-
+                Orders(order_key, customer_key, order_date),
+                if *order_date >= start && *order_date < end,
+                Lineitem(order_key, line_number, price, discount, "R"),
+                Customer(customer_key, name, balance, nation_key, address, phone, comment),
+                Nation(nation_key, nation),
+                let revenue_units: i64 = price.scaled() * (100 - discount.scaled()),
+                let balance_units: i64 = balance.scaled();
+        }
+        .map(|(key, name, revenue, balance, nation, address, phone, comment)| {
+            (*key, name.clone(), revenue, balance, nation.clone(), address.clone(), phone.clone(), comment.clone())
+        })
+        .collect()
     }
-    .map(|(key, name, revenue, balance, nation, address, phone, comment)| {
-        (*key, name.clone(), revenue, balance, nation.clone(), address.clone(), phone.clone(), comment.clone())
-    })
-    .collect()
 }
 
 pub fn canonical(rows: &[Answer]) -> Vec<Vec<String>> {
     rows.iter()
-        .map(|(key, name, revenue, balance, nation, address, phone, comment)| {
-            vec![key.to_string(), name.clone(), revenue.to_string(), balance.to_string(),
-                nation.clone(), address.clone(), phone.clone(), comment.clone()]
-        })
+        .map(
+            |(key, name, revenue, balance, nation, address, phone, comment)| {
+                vec![
+                    key.to_string(),
+                    name.clone(),
+                    revenue.to_string(),
+                    balance.to_string(),
+                    nation.clone(),
+                    address.clone(),
+                    phone.clone(),
+                    comment.clone(),
+                ]
+            },
+        )
         .collect()
 }

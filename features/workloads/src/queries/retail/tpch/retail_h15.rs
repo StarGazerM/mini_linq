@@ -4,10 +4,13 @@
 use cq_load::{Date, Decimal, Load};
 
 pub const NAME: &str = "retail_h15";
-pub const CONFIGS: &[&str] = &["default"];
+
 pub const EXPORTS: &[(&str, &str)] = &[
     ("supplier", "s_suppkey,s_name,s_address,s_phone"),
-    ("lineitem", "l_orderkey,l_linenumber,l_suppkey,l_extendedprice,l_discount,l_shipdate"),
+    (
+        "lineitem",
+        "l_orderkey,l_linenumber,l_suppkey,l_extendedprice,l_discount,l_shipdate",
+    ),
 ];
 pub const SQL: &str = r#"WITH revenue AS (
     SELECT l_suppkey AS supplier_key,
@@ -35,63 +38,74 @@ mini_linq::relation_loaders! {
 }
 
 pub fn load(root: &std::path::Path, config: &str) -> Result<Data, Box<dyn std::error::Error>> {
-    assert_eq!(config, "default", "unknown H15 configuration");
+    assert!(CONFIGS.contains(&config), "unknown H15 configuration");
     Ok(Data {
         supplier: <relation_loader!(Supplier)>::parquet(
-            root.join("supplier.parquet"), cq_load::ParquetOptions::default(),
+            root.join("supplier.parquet"),
+            cq_load::ParquetOptions::default(),
         )?,
         lineitem: <relation_loader!(Lineitem)>::parquet(
-            root.join("lineitem.parquet"), cq_load::ParquetOptions::default(),
+            root.join("lineitem.parquet"),
+            cq_load::ParquetOptions::default(),
         )?,
     })
 }
 
-#[allow(non_snake_case)]
-pub fn run(data: &Data, config: &str) -> Vec<Answer> {
-    assert_eq!(config, "default", "unknown H15 configuration");
-    let Supplier = data.supplier.as_slice();
-    let Lineitem = data.lineitem.as_slice();
-    let start = Date::load("1996-01-01").expect("authored ISO date");
-    let end = Date::load("1996-04-01").expect("authored ISO date");
-    let Revenue: Vec<(i64, i64)> = mini_linq::compile! {
-        pipeline {}
-        struct RevenueBySupplier;
-        relation Lineitem(l_orderkey: i64, l_linenumber: i64, l_suppkey: i64,
-            l_extendedprice: Decimal, l_discount: Decimal, l_shipdate: Date);
-        relation answer(supplier_key: i64, revenue: i64);
-        answer(supplier_key, sum(revenue_units)) :-
-            Lineitem(order_key, line_number, supplier_key, price, discount, shipdate),
-            if *shipdate >= start && *shipdate < end,
-            let revenue_units: i64 = price.scaled() * (100 - discount.scaled());
-    }.map(|(supplier, revenue)| (*supplier, revenue)).collect();
-    let Revenue = Revenue.as_slice();
-    let Maximum: Vec<(Option<i64>,)> = mini_linq::compile! {
-        pipeline {}
-        struct MaximumRevenue;
-        relation Revenue(supplier_key: i64, revenue: i64);
-        relation answer(maximum: Option<i64>);
-        answer(max(revenue)) :- Revenue(supplier_key, revenue);
+crate::tpch_runtime::standalone_configs! { $;
+    pub(super) fn run(data: &Data, config: &str) -> Vec<Answer> {
+        assert!(CONFIGS.contains(&config), "unknown H15 configuration");
+        let Supplier = data.supplier.as_slice();
+        let Lineitem = data.lineitem.as_slice();
+        let start = Date::load("1996-01-01").expect("authored ISO date");
+        let end = Date::load("1996-04-01").expect("authored ISO date");
+        let Revenue: Vec<(i64, i64)> = query! {
+            plan(no_reduce, order(Lineitem));
+            struct RevenueBySupplier;
+            relation Lineitem(l_orderkey: i64, l_linenumber: i64, l_suppkey: i64,
+                l_extendedprice: Decimal, l_discount: Decimal, l_shipdate: Date);
+            relation answer(supplier_key: i64, revenue: i64);
+            answer(supplier_key, sum(revenue_units)) :-
+                Lineitem(order_key, line_number, supplier_key, price, discount, shipdate),
+                if *shipdate >= start && *shipdate < end,
+                let revenue_units: i64 = price.scaled() * (100 - discount.scaled());
+        }.map(|(supplier, revenue)| (*supplier, revenue)).collect();
+        let Revenue = Revenue.as_slice();
+        let Maximum: Vec<(Option<i64>,)> = query! {
+            plan(no_reduce, order(Revenue));
+            struct MaximumRevenue;
+            relation Revenue(supplier_key: i64, revenue: i64);
+            relation answer(maximum: Option<i64>);
+            answer(max(revenue)) :- Revenue(supplier_key, revenue);
+        }
+        .collect();
+        let Maximum = Maximum.as_slice();
+        query! {
+            plan(no_reduce, order(Maximum, Revenue, Supplier));
+            struct Query;
+            relation Supplier(s_suppkey: i64, s_name: String, s_address: String, s_phone: String);
+            relation Revenue(supplier_key: i64, revenue: i64);
+            relation Maximum(maximum: Option<i64>);
+            relation answer(supplier_key: i64, name: String, address: String, phone: String, revenue: i64);
+            answer(supplier_key, name, address, phone, revenue) :-
+                Revenue(supplier_key, revenue), Maximum(maximum),
+                if Some(*revenue) == *maximum,
+                Supplier(supplier_key, name, address, phone);
+        }.map(|(supplier, name, address, phone, revenue)| {
+            (*supplier, name.clone(), address.clone(), phone.clone(), *revenue)
+        }).collect()
     }
-    .collect();
-    let Maximum = Maximum.as_slice();
-    mini_linq::compile! {
-        pipeline {}
-        struct Query;
-        relation Supplier(s_suppkey: i64, s_name: String, s_address: String, s_phone: String);
-        relation Revenue(supplier_key: i64, revenue: i64);
-        relation Maximum(maximum: Option<i64>);
-        relation answer(supplier_key: i64, name: String, address: String, phone: String, revenue: i64);
-        answer(supplier_key, name, address, phone, revenue) :-
-            Revenue(supplier_key, revenue), Maximum(maximum),
-            if Some(*revenue) == *maximum,
-            Supplier(supplier_key, name, address, phone);
-    }.map(|(supplier, name, address, phone, revenue)| {
-        (*supplier, name.clone(), address.clone(), phone.clone(), *revenue)
-    }).collect()
 }
 
 pub fn canonical(rows: &[Answer]) -> Vec<Vec<String>> {
-    rows.iter().map(|(supplier, name, address, phone, revenue)| {
-        vec![supplier.to_string(), name.clone(), address.clone(), phone.clone(), revenue.to_string()]
-    }).collect()
+    rows.iter()
+        .map(|(supplier, name, address, phone, revenue)| {
+            vec![
+                supplier.to_string(),
+                name.clone(),
+                address.clone(),
+                phone.clone(),
+                revenue.to_string(),
+            ]
+        })
+        .collect()
 }

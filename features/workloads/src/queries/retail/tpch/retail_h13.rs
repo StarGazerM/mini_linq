@@ -3,7 +3,7 @@
 //! Qualifying orders are filtered once; zero counts use a native CQ anti-join.
 
 pub const NAME: &str = "retail_h13";
-pub const CONFIGS: &[&str] = &["default"];
+
 pub const EXPORTS: &[(&str, &str)] = &[
     ("customer", "c_custkey"),
     ("orders", "o_orderkey,o_custkey,o_comment"),
@@ -28,51 +28,54 @@ mini_linq::relation_loaders! {
 }
 
 pub fn load(root: &std::path::Path, config: &str) -> Result<Data, Box<dyn std::error::Error>> {
-    assert_eq!(config, "default", "unknown H13 configuration");
+    assert!(CONFIGS.contains(&config), "unknown H13 configuration");
     Ok(Data {
         customer: <relation_loader!(Customer)>::parquet(
-            root.join("customer.parquet"), cq_load::ParquetOptions::default(),
+            root.join("customer.parquet"),
+            cq_load::ParquetOptions::default(),
         )?,
         orders: <relation_loader!(Orders)>::parquet(
-            root.join("orders.parquet"), cq_load::ParquetOptions::default(),
+            root.join("orders.parquet"),
+            cq_load::ParquetOptions::default(),
         )?,
     })
 }
 
-#[allow(non_snake_case)]
-pub fn run(data: &Data, config: &str) -> Vec<Answer> {
-    assert_eq!(config, "default", "unknown H13 configuration");
-    let Customer = data.customer.as_slice();
-    let QualifiedOrders: Vec<(i64, i64)> = data.orders.iter()
-        .filter(|row| !row.2.split_once("special")
-            .is_some_and(|(_, rest)| rest.contains("requests")))
-        .map(|row| (row.0, row.1))
-        .collect();
-    let QualifiedOrders = QualifiedOrders.as_slice();
-    let counts = mini_linq::compile! {
-        pipeline {}
-        struct Counts;
-        relation Customer(c_custkey: i64);
-        relation QualifiedOrders(order_key: i64, customer_key: i64);
-        relation answer(customer_key: i64, order_count: usize);
-        answer(customer_key, count()) :-
-            Customer(customer_key), QualifiedOrders(order_key, customer_key);
+crate::tpch_runtime::standalone_configs! { $;
+    pub(super) fn run(data: &Data, config: &str) -> Vec<Answer> {
+        assert!(CONFIGS.contains(&config), "unknown H13 configuration");
+        let Customer = data.customer.as_slice();
+        let QualifiedOrders: Vec<(i64, i64)> = data.orders.iter()
+            .filter(|row| !row.2.split_once("special")
+                .is_some_and(|(_, rest)| rest.contains("requests")))
+            .map(|row| (row.0, row.1))
+            .collect();
+        let QualifiedOrders = QualifiedOrders.as_slice();
+        let counts = query! {
+            plan(no_reduce, order(Customer, QualifiedOrders));
+            struct Counts;
+            relation Customer(c_custkey: i64);
+            relation QualifiedOrders(order_key: i64, customer_key: i64);
+            relation answer(customer_key: i64, order_count: usize);
+            answer(customer_key, count()) :-
+                Customer(customer_key), QualifiedOrders(order_key, customer_key);
+        }
+        .map(|(customer_key, count)| (*customer_key, count));
+        let zeros = query! {
+            plan(no_reduce, order(Customer));
+            struct Zeros;
+            relation Customer(c_custkey: i64);
+            relation QualifiedOrders(order_key: i64, customer_key: i64);
+            relation answer(customer_key: i64);
+            answer(customer_key) :- Customer(customer_key), !QualifiedOrders(_, customer_key);
+        }
+        .map(|(customer_key,)| (*customer_key, 0));
+        counts.chain(zeros).collect()
     }
-    .map(|(customer_key, count)| (*customer_key, count));
-    let zeros = mini_linq::compile! {
-        pipeline {}
-        struct Zeros;
-        relation Customer(c_custkey: i64);
-        relation QualifiedOrders(order_key: i64, customer_key: i64);
-        relation answer(customer_key: i64);
-        answer(customer_key) :- Customer(customer_key), !QualifiedOrders(_, customer_key);
-    }
-    .map(|(customer_key,)| (*customer_key, 0));
-    counts.chain(zeros).collect()
 }
 
 pub fn canonical(rows: &[Answer]) -> Vec<Vec<String>> {
-    rows.iter().map(|(customer_key, count)| {
-        vec![customer_key.to_string(), count.to_string()]
-    }).collect()
+    rows.iter()
+        .map(|(customer_key, count)| vec![customer_key.to_string(), count.to_string()])
+        .collect()
 }

@@ -7,9 +7,12 @@
 use cq_load::{Decimal, StringDictionary};
 
 pub const NAME: &str = "retail_h19";
-pub const CONFIGS: &[&str] = &["default"];
+
 pub const EXPORTS: &[(&str, &str)] = &[
-    ("lineitem", "l_orderkey,l_linenumber,l_partkey,l_quantity,l_extendedprice,l_discount,l_shipmode,l_shipinstruct"),
+    (
+        "lineitem",
+        "l_orderkey,l_linenumber,l_partkey,l_quantity,l_extendedprice,l_discount,l_shipmode,l_shipinstruct",
+    ),
     ("part", "p_partkey,p_brand,p_container,p_size"),
 ];
 pub const SQL: &str = r#"SELECT
@@ -47,16 +50,50 @@ impl Data {
         let shipinstruct = StringDictionary::new(lineitem.iter().map(|row| row.7.as_str()));
         let brand = StringDictionary::new(part.iter().map(|row| row.1.as_str()));
         let container = StringDictionary::new(part.iter().map(|row| row.2.as_str()));
-        let lineitem = lineitem.into_iter().map(|(order, line, part, quantity, price, discount, mode, instruction)| {
-            (order, line, part, quantity, price, discount,
-                shipmode.lookup(&mode).expect("dictionary contains source value"),
-                shipinstruct.lookup(&instruction).expect("dictionary contains source value"))
-        }).collect();
-        let part = part.into_iter().map(|(key, value, packaging, size)| {
-            (key, brand.lookup(&value).expect("dictionary contains source value"),
-                container.lookup(&packaging).expect("dictionary contains source value"), size)
-        }).collect();
-        Self { lineitem, part, shipmode, shipinstruct, brand, container }
+        let lineitem = lineitem
+            .into_iter()
+            .map(
+                |(order, line, part, quantity, price, discount, mode, instruction)| {
+                    (
+                        order,
+                        line,
+                        part,
+                        quantity,
+                        price,
+                        discount,
+                        shipmode
+                            .lookup(&mode)
+                            .expect("dictionary contains source value"),
+                        shipinstruct
+                            .lookup(&instruction)
+                            .expect("dictionary contains source value"),
+                    )
+                },
+            )
+            .collect();
+        let part = part
+            .into_iter()
+            .map(|(key, value, packaging, size)| {
+                (
+                    key,
+                    brand
+                        .lookup(&value)
+                        .expect("dictionary contains source value"),
+                    container
+                        .lookup(&packaging)
+                        .expect("dictionary contains source value"),
+                    size,
+                )
+            })
+            .collect();
+        Self {
+            lineitem,
+            part,
+            shipmode,
+            shipinstruct,
+            brand,
+            container,
+        }
     }
 }
 
@@ -68,76 +105,81 @@ mini_linq::relation_loaders! {
 }
 
 pub fn load(root: &std::path::Path, config: &str) -> Result<Data, Box<dyn std::error::Error>> {
-    assert_eq!(config, "default", "unknown H19 configuration");
+    assert!(CONFIGS.contains(&config), "unknown H19 configuration");
     Ok(Data::from_strings(
         <relation_loader!(Lineitem)>::parquet(
-            root.join("lineitem.parquet"), cq_load::ParquetOptions::default(),
+            root.join("lineitem.parquet"),
+            cq_load::ParquetOptions::default(),
         )?,
         <relation_loader!(Part)>::parquet(
-            root.join("part.parquet"), cq_load::ParquetOptions::default(),
+            root.join("part.parquet"),
+            cq_load::ParquetOptions::default(),
         )?,
     ))
 }
 
-#[allow(non_snake_case)]
-pub fn run(data: &Data, config: &str) -> Vec<Answer> {
-    assert_eq!(config, "default", "unknown H19 configuration");
-    let Lineitem = data.lineitem.as_slice();
-    let Part = data.part.as_slice();
-    let intern = |table: &str, column: &str, value: &str| -> u32 {
-        let dictionary = match (table, column) {
-            ("lineitem", "l_shipmode") => &data.shipmode,
-            ("lineitem", "l_shipinstruct") => &data.shipinstruct,
-            ("part", "p_brand") => &data.brand,
-            ("part", "p_container") => &data.container,
-            _ => panic!("unknown H19 interned column: {table}.{column}"),
+crate::tpch_runtime::standalone_configs! { $;
+    pub(super) fn run(data: &Data, config: &str) -> Vec<Answer> {
+        assert!(CONFIGS.contains(&config), "unknown H19 configuration");
+        let Lineitem = data.lineitem.as_slice();
+        let Part = data.part.as_slice();
+        let intern = |table: &str, column: &str, value: &str| -> u32 {
+            let dictionary = match (table, column) {
+                ("lineitem", "l_shipmode") => &data.shipmode,
+                ("lineitem", "l_shipinstruct") => &data.shipinstruct,
+                ("part", "p_brand") => &data.brand,
+                ("part", "p_container") => &data.container,
+                _ => panic!("unknown H19 interned column: {table}.{column}"),
+            };
+            dictionary.lookup(value).unwrap_or(u32::MAX)
         };
-        dictionary.lookup(value).unwrap_or(u32::MAX)
-    };
-    let air: u32 = intern("lineitem", "l_shipmode", "AIR");
-    let air_reg: u32 = intern("lineitem", "l_shipmode", "AIR REG");
-    let deliver_in_person: u32 = intern("lineitem", "l_shipinstruct", "DELIVER IN PERSON");
-    let brand12: u32 = intern("part", "p_brand", "Brand#12");
-    let brand23: u32 = intern("part", "p_brand", "Brand#23");
-    let brand34: u32 = intern("part", "p_brand", "Brand#34");
-    let sm_case: u32 = intern("part", "p_container", "SM CASE");
-    let sm_box: u32 = intern("part", "p_container", "SM BOX");
-    let sm_pack: u32 = intern("part", "p_container", "SM PACK");
-    let sm_pkg: u32 = intern("part", "p_container", "SM PKG");
-    let med_bag: u32 = intern("part", "p_container", "MED BAG");
-    let med_box: u32 = intern("part", "p_container", "MED BOX");
-    let med_pkg: u32 = intern("part", "p_container", "MED PKG");
-    let med_pack: u32 = intern("part", "p_container", "MED PACK");
-    let lg_case: u32 = intern("part", "p_container", "LG CASE");
-    let lg_box: u32 = intern("part", "p_container", "LG BOX");
-    let lg_pack: u32 = intern("part", "p_container", "LG PACK");
-    let lg_pkg: u32 = intern("part", "p_container", "LG PKG");
-    mini_linq::compile! {
-        pipeline {}
-        struct Query;
-        relation Lineitem(l_orderkey: i64, l_linenumber: i64, l_partkey: i64,
-            l_quantity: Decimal, l_extendedprice: Decimal, l_discount: Decimal,
-            l_shipmode: u32, l_shipinstruct: u32);
-        relation Part(p_partkey: i64, p_brand: u32, p_container: u32, p_size: i32);
-        relation answer(revenue: i64);
-        answer(sum(revenue_units)) :-
-            Lineitem(order_key, line_number, part_key, quantity, price, discount, ship_mode, ship_instruction),
-            if (*ship_mode == air || *ship_mode == air_reg) && *ship_instruction == deliver_in_person,
-            Part(part_key, brand, container, size),
-            if (*brand == brand12
-                && (*container == sm_case || *container == sm_box || *container == sm_pack || *container == sm_pkg)
-                && quantity.scaled() >= 100 && quantity.scaled() <= 1100 && *size >= 1 && *size <= 5)
-                || (*brand == brand23
-                && (*container == med_bag || *container == med_box || *container == med_pkg || *container == med_pack)
-                && quantity.scaled() >= 1000 && quantity.scaled() <= 2000 && *size >= 1 && *size <= 10)
-                || (*brand == brand34
-                && (*container == lg_case || *container == lg_box || *container == lg_pack || *container == lg_pkg)
-                && quantity.scaled() >= 2000 && quantity.scaled() <= 3000 && *size >= 1 && *size <= 15),
-            let revenue_units: i64 = price.scaled() * (100 - discount.scaled());
+        let air: u32 = intern("lineitem", "l_shipmode", "AIR");
+        let air_reg: u32 = intern("lineitem", "l_shipmode", "AIR REG");
+        let deliver_in_person: u32 = intern("lineitem", "l_shipinstruct", "DELIVER IN PERSON");
+        let brand12: u32 = intern("part", "p_brand", "Brand#12");
+        let brand23: u32 = intern("part", "p_brand", "Brand#23");
+        let brand34: u32 = intern("part", "p_brand", "Brand#34");
+        let sm_case: u32 = intern("part", "p_container", "SM CASE");
+        let sm_box: u32 = intern("part", "p_container", "SM BOX");
+        let sm_pack: u32 = intern("part", "p_container", "SM PACK");
+        let sm_pkg: u32 = intern("part", "p_container", "SM PKG");
+        let med_bag: u32 = intern("part", "p_container", "MED BAG");
+        let med_box: u32 = intern("part", "p_container", "MED BOX");
+        let med_pkg: u32 = intern("part", "p_container", "MED PKG");
+        let med_pack: u32 = intern("part", "p_container", "MED PACK");
+        let lg_case: u32 = intern("part", "p_container", "LG CASE");
+        let lg_box: u32 = intern("part", "p_container", "LG BOX");
+        let lg_pack: u32 = intern("part", "p_container", "LG PACK");
+        let lg_pkg: u32 = intern("part", "p_container", "LG PKG");
+        query! {
+            plan(no_reduce, order(Lineitem, Part));
+            struct Query;
+            relation Lineitem(l_orderkey: i64, l_linenumber: i64, l_partkey: i64,
+                l_quantity: Decimal, l_extendedprice: Decimal, l_discount: Decimal,
+                l_shipmode: u32, l_shipinstruct: u32);
+            relation Part(p_partkey: i64, p_brand: u32, p_container: u32, p_size: i32);
+            relation answer(revenue: i64);
+            answer(sum(revenue_units)) :-
+                Lineitem(order_key, line_number, part_key, quantity, price, discount, ship_mode, ship_instruction),
+                if (*ship_mode == air || *ship_mode == air_reg) && *ship_instruction == deliver_in_person,
+                Part(part_key, brand, container, size),
+                if (*brand == brand12
+                    && (*container == sm_case || *container == sm_box || *container == sm_pack || *container == sm_pkg)
+                    && quantity.scaled() >= 100 && quantity.scaled() <= 1100 && *size >= 1 && *size <= 5)
+                    || (*brand == brand23
+                    && (*container == med_bag || *container == med_box || *container == med_pkg || *container == med_pack)
+                    && quantity.scaled() >= 1000 && quantity.scaled() <= 2000 && *size >= 1 && *size <= 10)
+                    || (*brand == brand34
+                    && (*container == lg_case || *container == lg_box || *container == lg_pack || *container == lg_pkg)
+                    && quantity.scaled() >= 2000 && quantity.scaled() <= 3000 && *size >= 1 && *size <= 15),
+                let revenue_units: i64 = price.scaled() * (100 - discount.scaled());
+        }
+        .collect()
     }
-    .collect()
 }
 
 pub fn canonical(rows: &[Answer]) -> Vec<Vec<String>> {
-    rows.iter().map(|(revenue,)| vec![revenue.to_string()]).collect()
+    rows.iter()
+        .map(|(revenue,)| vec![revenue.to_string()])
+        .collect()
 }

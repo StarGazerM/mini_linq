@@ -10,6 +10,7 @@ WHERE o.o_orderdate >= DATE '1993-07-01' AND o.o_orderdate < DATE '1993-10-01'
 AND NOT EXISTS (SELECT 1 FROM lineitem l WHERE l.l_orderkey = o.o_orderkey
 AND l.l_commitdate < l.l_receiptdate)"#;
     candidate hypergraph;
+    advise plan(no_reduce, order(Orders));
     setup {
         let start = date("1993-07-01"); let end = date("1993-10-01");
         let LateLineitem: Vec<(i64,)> = Lineitem.iter()
