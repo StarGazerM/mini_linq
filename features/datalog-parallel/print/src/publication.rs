@@ -156,8 +156,9 @@ fn layout_phase(mut updates: Vec<(usize, TokenStream)>, inline: &Ident) -> Token
     let spawned = tasks
         .iter()
         .map(|task| quote!(#scope.spawn(move |_| { #task(); });));
-    // Each closure borrows a distinct map exclusively and its relation's rows
-    // immutably. The phase block releases these borrows before relation swaps.
+    // Each closure borrows a distinct layout exclusively and its relation's rows
+    // immutably. Sharded layouts bulk-fill internally; the phase block releases
+    // all borrows before relation swaps.
     quote!({
         #(#closures)*
         if #inline {
@@ -171,6 +172,135 @@ fn layout_phase(mut updates: Vec<(usize, TokenStream)>, inline: &Ident) -> Token
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn layout(provider: syn::Type, host: Ident) -> cq_datalog_print::Layout {
+        cq_datalog_print::Layout {
+            relation: 0,
+            columns: vec![1, 0, 2],
+            key: 1,
+            name: syn::parse_quote!(layout),
+            host,
+            provider,
+            maintenance: syn::parse_quote!(insert),
+        }
+    }
+
+    #[test]
+    fn hashmap_publication_tokens_stay_unchanged() {
+        let layout = layout(
+            syn::parse_quote!(::std::collections::HashMap<(u32,), Vec<(u32, u32)>>),
+            syn::parse_quote!(map),
+        );
+        let insert = quote!(
+            map.entry((::core::clone::Clone::clone(&row.1),))
+                .or_default()
+                .push((::core::clone::Clone::clone(&row.0), ::core::clone::Clone::clone(&row.2),));
+        );
+        assert_eq!(
+            cq_datalog_print::insert_layout(&layout, false).to_string(),
+            insert.to_string(),
+        );
+        assert_eq!(
+            cq_datalog_print::full_insert([&layout], &syn::parse_quote!(next)).to_string(),
+            quote!({ for row in &next { #insert } }).to_string(),
+        );
+        assert_eq!(
+            cq_datalog_print::delta_rebuild(&layout, &syn::parse_quote!(delta)).to_string(),
+            quote!({
+                map = ::core::default::Default::default();
+                for row in &delta { #insert }
+            })
+            .to_string(),
+        );
+        assert_eq!(
+            cq_datalog_print::insert_layout(&layout, true).to_string(),
+            quote!(
+                map.entry((::core::clone::Clone::clone(row.1),))
+                    .or_default()
+                    .push((::core::clone::Clone::clone(row.0), ::core::clone::Clone::clone(row.2),));
+            ).to_string(),
+        );
+    }
+
+    #[test]
+    fn sharded_publication_bulk_fills_outside_shared_hashmap_loop() {
+        let map = layout(
+            syn::parse_quote!(::std::collections::HashMap<(u32,), Vec<(u32, u32)>>),
+            syn::parse_quote!(map),
+        );
+        let sharded = layout(
+            syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedLayout<(u32,), (u32, u32)>),
+            syn::parse_quote!(sharded),
+        );
+        let insert = cq_datalog_print::insert_layout(&map, false);
+        let bulk = quote!(
+            sharded.extend_from(
+                &next,
+                |row| (::core::clone::Clone::clone(&row.1),),
+                |row| (::core::clone::Clone::clone(&row.0), ::core::clone::Clone::clone(&row.2),)
+            );
+        );
+        let printed = cq_datalog_print::full_insert([&sharded, &map], &syn::parse_quote!(next));
+        assert_eq!(
+            printed.to_string(),
+            quote!({ for row in &next { #insert } #bulk }).to_string()
+        );
+        assert_eq!(
+            cq_datalog_print::full_insert([&sharded], &syn::parse_quote!(next)).to_string(),
+            quote!({ #bulk }).to_string(),
+        );
+        let phase = layout_phase(vec![(7, printed)], &syn::parse_quote!(inline)).to_string();
+        assert_eq!(phase.matches("extend_from").count(), 1);
+        assert_eq!(phase.matches("for row").count(), 1);
+    }
+
+    #[test]
+    fn sharded_delta_clears_and_preserves_empty_payload_tuple() {
+        let mut layout = layout(
+            syn::parse_quote!(ShardedLayout<(u32, u32, u32), ()>),
+            syn::parse_quote!(sharded),
+        );
+        layout.key = 3;
+        assert_eq!(
+            cq_datalog_print::delta_rebuild(&layout, &syn::parse_quote!(delta)).to_string(),
+            quote!({
+                sharded.clear();
+                sharded.extend_from(
+                    &delta,
+                    |row| {
+                        (
+                            ::core::clone::Clone::clone(&row.1),
+                            ::core::clone::Clone::clone(&row.0),
+                            ::core::clone::Clone::clone(&row.2),
+                        )
+                    },
+                    |row| (),
+                );
+            })
+            .to_string(),
+        );
+        assert_eq!(
+            cq_datalog_print::insert_layout(&layout, false).to_string(),
+            quote!(
+                sharded.push(
+                    (::core::clone::Clone::clone(&row.1), ::core::clone::Clone::clone(&row.0), ::core::clone::Clone::clone(&row.2),),
+                    ()
+                );
+            ).to_string(),
+        );
+    }
+
+    #[test]
+    fn provider_detection_uses_only_last_path_segment() {
+        let layout = layout(
+            syn::parse_quote!(ShardedLayout::HashMap<(u32,), Vec<(u32, u32)>>),
+            syn::parse_quote!(map),
+        );
+        let printed =
+            cq_datalog_print::full_insert([&layout], &syn::parse_quote!(next)).to_string();
+        assert!(printed.contains("entry"));
+        assert!(!printed.contains("extend_from"));
+    }
 
     #[test]
     fn certified_owners_drive_task_identity_and_order() {

@@ -1,4 +1,4 @@
-//! Seen-only Storage erasure, admission shards, and exclusive layout publication.
+//! Storage provider erasure, admission shards, and exclusive layout publication.
 use cq_datalog_partition::{
     DEFAULT_GRAIN, DEFAULT_THRESHOLD, ShardedProgram, check_sharded, check_storage,
     compile_sharded, compile_sharded_with, compile_storage, compile_storage_with,
@@ -293,6 +293,139 @@ fn storage_rewrites_only_idb_seen_and_preserves_all_native_layouts() {
         target
     );
     assert!(compile_storage_with(&source, quote!(threshold = 3)).is_err());
+}
+
+fn shard_layout_type(provider: &syn::Type) -> syn::Type {
+    let syn::Type::Path(path) = provider else {
+        panic!("map provider")
+    };
+    let syn::PathArguments::AngleBracketed(args) = &path.path.segments.last().unwrap().arguments
+    else {
+        panic!("map arguments")
+    };
+    let key = &args.args[0];
+    let syn::GenericArgument::Type(syn::Type::Path(values)) = &args.args[1] else {
+        panic!("vector payload")
+    };
+    let syn::PathArguments::AngleBracketed(payload) =
+        &values.path.segments.last().unwrap().arguments
+    else {
+        panic!("vector arguments")
+    };
+    let value = &payload.args[0];
+    let hasher = &args.args[2];
+    syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedLayout<#key, #value, #hasher>)
+}
+
+#[test]
+fn sharded_layouts_rewrite_and_erase_exactly() {
+    let source = authored_storage();
+    let target = compile_storage_with(&source, quote!(layouts(sharded))).unwrap();
+    check_storage(&source, &target).unwrap();
+    let mut changed = 0;
+    for (before, after) in source
+        .layouts
+        .iter()
+        .chain(&source.delta_layouts)
+        .zip(target.layouts.iter().chain(&target.delta_layouts))
+    {
+        if before.key > 0
+            && source
+                .incremental
+                .strata
+                .source
+                .declarations
+                .iter()
+                .any(|declaration| {
+                    declaration.name == before.relation && declaration.value.is_none()
+                })
+        {
+            assert_eq!(after.provider, shard_layout_type(&before.provider));
+            changed += 1;
+        } else {
+            assert_eq!(before, after);
+        }
+    }
+    assert!(changed > 0);
+    compile_sharded(&cq_datalog_fork::compile(&target).unwrap()).unwrap();
+    assert_eq!(
+        syn::parse2::<storage::Program>(target.to_token_stream()).unwrap(),
+        target
+    );
+    for args in [
+        quote!(layouts(native)),
+        quote!(layouts()),
+        quote!(layouts(sharded), layouts(sharded)),
+    ] {
+        assert!(compile_storage_with(&source, args).is_err());
+    }
+}
+
+#[test]
+fn sharded_layout_checker_rejects_ineligible_and_changed_types() {
+    let source = authored_storage();
+    let target = compile_storage_with(&source, quote!(layouts(sharded))).unwrap();
+    for delta in [false, true] {
+        let layouts = if delta {
+            &source.delta_layouts
+        } else {
+            &source.layouts
+        };
+        for (index, layout) in layouts.iter().enumerate() {
+            let eligible = layout.key > 0
+                && source
+                    .incremental
+                    .strata
+                    .source
+                    .declarations
+                    .iter()
+                    .any(|declaration| {
+                        declaration.name == layout.relation && declaration.value.is_none()
+                    });
+            if !eligible {
+                let mut changed = target.clone();
+                let layouts = if delta {
+                    &mut changed.delta_layouts
+                } else {
+                    &mut changed.layouts
+                };
+                layouts[index].provider = shard_layout_type(&layout.provider);
+                assert!(check_storage(&source, &changed).is_err());
+                assert!(compile_sharded(&cq_datalog_fork::compile(&changed).unwrap()).is_err());
+            } else {
+                for argument in 0..3 {
+                    let mut changed = target.clone();
+                    let layouts = if delta {
+                        &mut changed.delta_layouts
+                    } else {
+                        &mut changed.layouts
+                    };
+                    let syn::Type::Path(path) = &mut layouts[index].provider else {
+                        unreachable!()
+                    };
+                    let syn::PathArguments::AngleBracketed(args) =
+                        &mut path.path.segments.last_mut().unwrap().arguments
+                    else {
+                        unreachable!()
+                    };
+                    args.args[argument] = syn::parse_quote!(Changed);
+                    assert!(check_storage(&source, &changed).is_err());
+                }
+                let mut changed = target.clone();
+                let layouts = if delta {
+                    &mut changed.delta_layouts
+                } else {
+                    &mut changed.layouts
+                };
+                let syn::Type::Path(path) = &mut layouts[index].provider else {
+                    unreachable!()
+                };
+                path.path.leading_colon = None;
+                assert!(check_storage(&source, &changed).is_err());
+                assert!(compile_sharded(&cq_datalog_fork::compile(&changed).unwrap()).is_err());
+            }
+        }
+    }
 }
 
 #[test]

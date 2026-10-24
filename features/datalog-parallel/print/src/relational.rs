@@ -171,6 +171,8 @@ pub(super) fn step_loop(
             }
         }));
     }
+    // Reuse provider-aware publication under each exclusive member guard:
+    // sharded layouts bulk-fill without introducing a separate commit path.
     let publications = cq_datalog_print::publication(context, stratum);
     let commit_arms = stratum.members.iter().enumerate().map(|(m, &member)| {
         let lock = &locks[m];
@@ -208,4 +210,52 @@ pub(super) fn step_loop(
             ::cq_datalog_parallel_runtime::relational::Action::Commit { member } => match member { #(#commit_arms,)* _ => unreachable!("checked member index") },
         });
     } else { #default }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sharded_publication_reborrows_guarded_layouts_and_delta() {
+        let layout = round::Layout {
+            relation: 0,
+            columns: vec![0, 1],
+            key: 1,
+            name: syn::parse_quote!(layout),
+            host: syn::parse_quote!(full),
+            provider: syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedLayout<(u32,), (u32,)>),
+            maintenance: syn::parse_quote!(insert),
+        };
+        let mut delta_layout = layout.clone();
+        delta_layout.host = syn::parse_quote!(delta_layout);
+        let full = cq_datalog_print::full_insert([&layout], &syn::parse_quote!(next));
+        let delta = cq_datalog_print::delta_rebuild(&delta_layout, &syn::parse_quote!(delta));
+        let names = BTreeMap::from([
+            ("full".into(), quote!((*__cq_rel_write.2))),
+            ("delta_layout".into(), quote!((*__cq_rel_write.3))),
+            ("delta".into(), quote!((*__cq_rel_write.1))),
+        ]);
+        assert_eq!(
+            rename(quote!(#full #delta), &names).to_string(),
+            quote!(
+                {
+                    (*__cq_rel_write.2).extend_from(
+                        &next,
+                        |row| (::core::clone::Clone::clone(&row.0),),
+                        |row| (::core::clone::Clone::clone(&row.1),)
+                    );
+                }
+                {
+                    (*__cq_rel_write.3).clear();
+                    (*__cq_rel_write.3).extend_from(
+                        &(*__cq_rel_write.1),
+                        |row| (::core::clone::Clone::clone(&row.0),),
+                        |row| (::core::clone::Clone::clone(&row.1),)
+                    );
+                }
+            )
+            .to_string(),
+        );
+    }
 }

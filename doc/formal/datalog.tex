@@ -1054,17 +1054,37 @@ commits, so commits cannot starve.
 \end{mathpar}
 
 \subsection{Sharded admission and exclusive-layout publication (extension)}
-The extension's Storage rewrite replaces only canonical IDB membership;
-full/delta layout maps, all other Storage records and CQ queues are unchanged.
+By default the extension's Storage rewrite replaces only canonical IDB
+membership. With the argument \code{layouts(sharded)} it additionally replaces
+every IDB full or delta layout whose key is nonempty, from
+\code{HashMap<K, Vec<V>, S>} to \code{ShardedLayout<K, V, S>}, preserving the
+key, payload and hasher types and the layout's relation, columns, key length
+and maintenance. Unit-key scan layouts, EDB layouts, other Storage records and
+CQ queues are unchanged.
 A Round-to-extension pass records the small-work threshold, partition grain,
 admission shard-count policy and ownership/publication certificate. None of
 these parallel choices belongs to the base language or default expansion.
 \begin{mathpar}
 \Rule{CK-DL-ShardStorage}{\mathrm{WF}_{\mathrm{Storage}}(s)\quad
  \mathrm{WF}_{\mathrm{Storage}}(t)\quad
- t\text{ changes only canonical IDB membership providers}}
+ t\text{ changes only canonical IDB membership providers and, optionally,}\\
+ \text{nonempty-key IDB layout maps to sharded layouts with equal }K,V,S}
  {\mathrm{check}_{\mathrm{shardStorage}}(s,t)}
 \end{mathpar}
+A sharded layout holds $S$ disjoint grouped maps; key $k$ lives only in shard
+$g_S(k)$, selected by bits of $h(k)$ disjoint from the table's own bucket and
+tag bits, so one hash serves routing and probing. Bulk insertion of rows $N$
+partitions them by $g_S$ and fills each shard by one task with exclusive
+access, appending in row order within each bucket.
+\begin{mathpar}
+\Rule{DL-ShardedLayout}{L=\biguplus_{i<S}L_i\quad
+ \mathrm{dom}(L_i)=\{k\mid g_S(k)=i\}\quad
+ L'_i=L_i\cdot\mathrm{layout}(\{r\in N\mid g_S(\mathrm{key}(r))=i\})}
+ {\mathrm{lookup}_{L'}(k)=\mathrm{lookup}_{M'}(k)\text{ for the grouped map }M'\text{ built by inserting the same rows in order}}
+\end{mathpar}
+So every read trait (keyed lookup, candidates, membership, scan) answers as
+the replaced \code{HashMap} would, and DL-LayoutPublication still holds with
+one owner task per layout; only that task's insertion is internally parallel.
 Let $S$ be a power of two at least the worker count and let
 $h_S(x)=h(x)\mathbin{\&}(S-1)$. Canonical admission uses the full tuple:
 $C_i=\{r\in C\mid h_S(r)=i\}$, so equal tuples always share a shard.

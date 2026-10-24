@@ -27,6 +27,13 @@ pub struct PointRows<K, I> {
     pub(crate) key: Option<K>,
     pub(crate) values: I,
 }
+impl<K, I> PointRows<K, I> {
+    /// Rows of one found (or absent) key paired with its payload cursor, for
+    /// providers outside this crate that store grouped buckets.
+    pub fn new(key: Option<K>, values: I) -> Self {
+        Self { key, values }
+    }
+}
 impl<K: Copy + Columns, I: Iterator> Iterator for PointRows<K, I>
 where
     I::Item: Columns,

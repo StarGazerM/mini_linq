@@ -32,6 +32,7 @@ impl syn::parse::Parse for Choice {
 #[derive(Clone, Copy)]
 enum Provider<'a> {
     Map(&'a Type, &'a Type),
+    Layout(&'a Type, &'a Type),
     Set(&'a Type),
     Sharded(&'a Type),
     Other,
@@ -46,7 +47,8 @@ fn path_is(path: &syn::Path, names: &[&str]) -> bool {
             .all(|(segment, name)| segment.ident == *name)
 }
 
-/// Inspect only the outer provider; arbitrary aliases and nested Rust remain opaque.
+/// Inspect only the outer provider; sharded layouts retain their row payload type.
+/// Arbitrary aliases and nested Rust remain opaque.
 fn provider(ty: &Type) -> syn::Result<Provider<'_>> {
     let Type::Path(path) = ty else {
         return Ok(Provider::Other);
@@ -59,7 +61,8 @@ fn provider(ty: &Type) -> syn::Result<Provider<'_>> {
     let set = path_is(path, &["std", "collections", "HashSet"]);
     let alias = path_is(path, &["cq_storage", "HashSet"]);
     let sharded = path_is(path, &["cq_datalog_parallel_runtime", "ShardedSeen"]);
-    if !map && !set && !alias && !sharded {
+    let layout = path_is(path, &["cq_datalog_parallel_runtime", "ShardedLayout"]);
+    if !map && !set && !alias && !sharded && !layout {
         return Ok(Provider::Other);
     }
     let malformed = || {
@@ -80,7 +83,7 @@ fn provider(ty: &Type) -> syn::Result<Provider<'_>> {
     let PathArguments::AngleBracketed(arguments) = &last.arguments else {
         return Err(malformed());
     };
-    let arity = if map {
+    let arity = if map || layout {
         2..=3
     } else if alias {
         1..=1
@@ -98,11 +101,15 @@ fn provider(ty: &Type) -> syn::Result<Provider<'_>> {
     let GenericArgument::Type(first) = &arguments.args[0] else {
         unreachable!()
     };
-    if map {
+    if map || layout {
         let GenericArgument::Type(second) = &arguments.args[1] else {
             unreachable!()
         };
-        Ok(Provider::Map(first, second))
+        Ok(if layout {
+            Provider::Layout(first, second)
+        } else {
+            Provider::Map(first, second)
+        })
     } else if sharded {
         Ok(Provider::Sharded(first))
     } else {
@@ -118,6 +125,13 @@ fn select(ty: &mut Type, choice: Choice) -> syn::Result<()> {
         ),
         (Provider::Map(key, value), Choice::Keyed) => syn::parse_quote!(
             ::std::collections::HashMap<#key, #value, ::cq_storage::HashState>
+        ),
+        (Provider::Layout(key, value), Choice::Fx) => syn::parse_quote!(
+            ::cq_datalog_parallel_runtime::ShardedLayout<#key, #value,
+                ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
+        ),
+        (Provider::Layout(key, value), Choice::Keyed) => syn::parse_quote!(
+            ::cq_datalog_parallel_runtime::ShardedLayout<#key, #value, ::cq_storage::HashState>
         ),
         (Provider::Set(row), Choice::Fx) => syn::parse_quote!(
             ::std::collections::HashSet<#row,
@@ -183,6 +197,18 @@ fn check_provider(source: &Type, target: &Type, choice: Choice) -> syn::Result<(
             }
             (Provider::Map(key, value), _) => (
                 &["std", "collections", "HashMap"],
+                (*key, Some(*value)),
+                Some(match choice {
+                    Choice::Fx => {
+                        syn::parse_quote!(
+                            ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>
+                        )
+                    }
+                    Choice::Keyed => syn::parse_quote!(::cq_storage::HashState),
+                }),
+            ),
+            (Provider::Layout(key, value), _) => (
+                &["cq_datalog_parallel_runtime", "ShardedLayout"],
                 (*key, Some(*value)),
                 Some(match choice {
                     Choice::Fx => {

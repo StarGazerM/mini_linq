@@ -185,6 +185,7 @@ version = "0.1.0"
 dependencies = [
  "ascent",
  "cq-datalog",
+ "cq-datalog-hasher",
  "cq-datalog-parallel-runtime",
  "cq-datalog-parallel-test-passes",
  "cq-datalog-partition",

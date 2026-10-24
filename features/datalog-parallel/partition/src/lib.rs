@@ -1,7 +1,7 @@
 //! Sharded seen admission and exclusive whole-layout publication certificates.
 //! Hybrid execution uses a separate wrapper and never extends the base Round
-//! language. Native layouts and opaque queues are preserved; the registered
-//! standard Sequence tail may use the existing Structures push realization.
+//! language. Layout ownership and opaque queues are preserved; keyed IDB layout
+//! providers may opt into sharding. The standard Sequence tail may use push.
 //! Scan substitution renames its discharged host fact and lower packet together;
 //! all other facts and the Round admission-owner lists remain unchanged.
 use cq_datalog_support::Fresh;
