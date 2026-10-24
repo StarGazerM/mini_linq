@@ -14,11 +14,11 @@ sf	query	gpu_exact	gpu_source	gpu_build_ms	gpu_query_ms	gpu_total_ms	gpu_error	d
 1	h11	True	performance_gpu.json	0.6158720053499565	18.803840055596083	19.418560068123043		11.0	5.0			Authored catalog exposes only default; no LE-kernel configuration.					default	ok	complete	0.01	62.907641	62.917640999999996	17.022279
 1	h12	True	performance_gpu.json	0.6306880116462708	8.576000213623047	9.206687927246094		60.0	11.0			Authored catalog exposes only default; no LE-kernel configuration.					default	ok	complete	139.257	83.519972	222.776972	177.882175
 1	h13	True	performance_gpu.json	6.457151889801025	9.50291184708476	15.913759745657444		223.0	38.0			Authored catalog exposes only default; no LE-kernel configuration.					default	ok	complete	123.323	358.762759	482.085759	459.702039
-1	h14		performance_gpu.json				T-Gpu: host publication r3 needs recorded device-representable code columns	44.0	18.0			Authored catalog exposes only default; no LE-kernel configuration.					default	ok	complete	5.383	68.725097	74.108097	67.97565
+1	h14	False	performance_gpu.json	removed	removed	removed	removed	44.0	18.0			Authored catalog exposes only default; no LE-kernel configuration.					default	ok	complete	5.383	68.725097	74.108097	67.97565
 1	h15	True	performance_gpu.json	0.2611610000166595	14.633471872424707	14.894633051953793		48.0	11.0			Authored catalog exposes only default; no LE-kernel configuration.					default	ok	complete	0.26	63.73936200000001	63.999362000000005	37.090351
 1	h16	True	performance_gpu.json	1.3526719808578491	0.25088001042604446	1.603551983833313		9.0	7.0	le	ok	complete	19.718	28.939275	48.657275	43.979738999999995	default	ok	complete	16.821	22.819830999999997	39.640831	41.193729
 1	h18	True	performance_gpu.json	1.0858880375744775	22.998751783859916	24.083264961838722		722.0	81.0			Authored catalog exposes only default; no LE-kernel configuration.					default	ok	complete	155.259	1388.153858	1543.412858	1350.12215
-1	h19		performance_gpu.json				T-Gpu: host publication r4 needs recorded device-representable code columns	93.0	14.0			Authored catalog exposes only default; no LE-kernel configuration.					default	ok	complete	17.758	122.989988	140.747988	109.99212299999999
+1	h19	True	gpu_tpch_intern.results.json	0.0016959999920800328	9.252575993537903	9.2543363571167		93.0	14.0			Authored catalog exposes only default; no LE-kernel configuration.					default	ok	complete	9.687	55.913449000000014	65.60044900000001	64.124491
 1	h20	True	performance_gpu.json	1.6093759631039575	14.985600033192895	16.59638361632824		99.0	22.0			Authored catalog exposes only default; no LE-kernel configuration.					default	ok	complete	2.94	365.409629	368.349629	320.66465900000003
 1	h21_positive	True	performance_gpu.json	1.879807949066162	2.493440091609955	4.368832111358643		111.0	20.0	le	ok	complete	34.787	143.441983	178.228983	144.74414399999998	default	ok	complete	45.978	249.99879799999997	295.976798	202.96888099999998
 1	h22	True	performance_gpu.json	0.868287980556488	0.14847999811172485	1.0147199630737305		23.0	15.0	le	ok	complete	18.059	3.8344689999999986	21.893469	23.238027000000002	default	ok	complete	18.146	4.031939999999999	22.17794	23.716571
@@ -41,11 +41,11 @@ sf	query	gpu_exact	gpu_source	gpu_build_ms	gpu_query_ms	gpu_total_ms	gpu_error	d
 10	h11	True	performance_gpu.json	2.3359359088353813	41.85990362614393	44.196128527633846		100.0	15.0			sf10 unsupported							sf10 unsupported				
 10	h12	True	performance_gpu.json	6.540768146514893	21.361663818359375	27.90435218811035		544.0	55.0			sf10 unsupported							sf10 unsupported				
 10	h13	True	performance_gpu.json	90.54502487182617	24.698016606271267	115.21545419096947		3484.0	286.0			sf10 unsupported							sf10 unsupported				
-10	h14		performance_gpu.json				T-Gpu: host publication r3 needs recorded device-representable code columns	583.0	60.0			sf10 unsupported							sf10 unsupported				
+10	h14	False	performance_gpu.json	removed	removed	removed	removed	583.0	60.0			sf10 unsupported							sf10 unsupported				
 10	h15	True	performance_gpu.json	1.7094590000274927	19.256543839350343	20.96600260352039		591.0	64.0			sf10 unsupported							sf10 unsupported				
 10	h16	True	performance_gpu.json	9.560768127441406	0.45977601408958435	10.022591590881348		156.0	24.0			sf10 unsupported							sf10 unsupported				
 10	h18	True	performance_gpu.json	8.59411200764589	166.32399878511205	174.92389845848083		9221.0	746.0			sf10 unsupported							sf10 unsupported				
-10	h19		performance_gpu.json				T-Gpu: host publication r4 needs recorded device-representable code columns	911.0	74.0			sf10 unsupported							sf10 unsupported				
+10	h19	True	gpu_tpch_intern.results.json	0.0016959999920800328	24.3734712600708	24.375167846679688		911.0	74.0			sf10 unsupported							sf10 unsupported				
 10	h20	True	performance_gpu.json	8.492608437431045	90.15878433117177	98.70985317230225		1439.0	128.0			sf10 unsupported							sf10 unsupported				
 10	h21_positive	True	performance_gpu.json	19.949567794799805	20.200448632240295	40.158206939697266		1509.0	136.0			sf10 unsupported							sf10 unsupported				
 10	h22	True	performance_gpu.json	6.222655773162842	0.19148800522089005	6.414144039154053		463.0	62.0			sf10 unsupported							sf10 unsupported				

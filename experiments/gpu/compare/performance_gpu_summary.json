@@ -274,9 +274,9 @@
       "query": "h14",
       "source": "performance_gpu.json",
       "mode": "advised",
-      "status": "translate rejected",
-      "exact": null,
-      "error": "T-Gpu: host publication r3 needs recorded device-representable code columns"
+      "status": "removed",
+      "exact": false,
+      "error": "removed: prefix predicate inside aggregate needs order-preserving interning"
     },
     {
       "sf": 1,
@@ -323,11 +323,16 @@
     {
       "sf": 1,
       "query": "h19",
-      "source": "performance_gpu.json",
+      "source": "gpu_tpch_intern.results.json",
       "mode": "advised",
-      "status": "translate rejected",
-      "exact": null,
-      "error": "T-Gpu: host publication r4 needs recorded device-representable code columns"
+      "status": "ran",
+      "exact": true,
+      "error": null,
+      "build_ms": 0.0016959999920800328,
+      "total_ms": 9.2543363571167,
+      "kernels_ms": 1.8622080087661743,
+      "dedup_ms": 7.391839981079102,
+      "query_ms": 9.252575993537903
     },
     {
       "sf": 1,
@@ -642,9 +647,9 @@
       "query": "h14",
       "source": "performance_gpu.json",
       "mode": "advised",
-      "status": "translate rejected",
-      "exact": null,
-      "error": "T-Gpu: host publication r3 needs recorded device-representable code columns"
+      "status": "removed",
+      "exact": false,
+      "error": "removed: prefix predicate inside aggregate needs order-preserving interning"
     },
     {
       "sf": 10,
@@ -691,11 +696,16 @@
     {
       "sf": 10,
       "query": "h19",
-      "source": "performance_gpu.json",
+      "source": "gpu_tpch_intern.results.json",
       "mode": "advised",
-      "status": "translate rejected",
-      "exact": null,
-      "error": "T-Gpu: host publication r4 needs recorded device-representable code columns"
+      "status": "ran",
+      "exact": true,
+      "error": null,
+      "build_ms": 0.0016959999920800328,
+      "total_ms": 24.375167846679688,
+      "kernels_ms": 16.37171173095703,
+      "dedup_ms": 8.00175952911377,
+      "query_ms": 24.3734712600708
     },
     {
       "sf": 10,
@@ -739,5 +749,6 @@
       "kernels_ms": 0.06387200206518173,
       "dedup_ms": 0.12825599312782288
     }
-  ]
+  ],
+  "h19_source_revision": "4cbe5eea: author-controlled u32 manual interning; fresh five-sample GPU medians"
 }

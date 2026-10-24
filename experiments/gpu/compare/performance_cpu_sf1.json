@@ -21,7 +21,8 @@
       "Timeout is a wall limit across process load, warm verification, measured runs, correctness checks and separate modes; it is NOT a lower bound on one query invocation.",
       "Rows with successful plain timing but missing/timed-out profile retain uninstrumented total and correctness; phase split remains null.",
       "The 12 standalone default-only queries pass exact-answer and operator-graph checks, but their primitive distinct_insertions counters disagree with operator set_insertions. primitive_build_counts_verified=false records this diagnostic separately; no independent set-insertion verification is claimed for these rows."
-    ]
+    ],
+    "h19_refresh": "Authored u32 manual-interning query at 4cbe5eea; stock collector build/prepare/measure restricted to retail_h19/default, five plain and five profile runs with exact checks; consolidated against all original 27 CPU catalog entries, retaining removed GPU h14 CPU data."
   },
   "rows": [
     {
@@ -544,27 +545,27 @@
       "profile_runs": 5,
       "correctness": "ok",
       "answer_rows": 1,
-      "load_ms": 1286.791725,
+      "load_ms": 2303.7598089999997,
       "zone_build_ms": 0.0,
-      "uninstrumented_total_median_ms": 109.99212299999999,
+      "uninstrumented_total_median_ms": 64.124491,
       "uninstrumented_samples_ms": [
-        107.241234,
-        108.709131,
-        109.99212299999999,
-        110.615489,
-        111.54865
+        57.454369,
+        57.968575,
+        64.124491,
+        65.190033,
+        68.602091
       ],
-      "profile_total_median_ms": 140.747988,
-      "profile_build_at_median_total_ms": 17.758,
-      "profile_query_residual_at_median_total_ms": 122.989988,
+      "profile_total_median_ms": 65.60044900000001,
+      "profile_build_at_median_total_ms": 9.687,
+      "profile_query_residual_at_median_total_ms": 55.913449000000014,
       "profile_samples_ms": [
-        140.168846,
-        140.584845,
-        140.747988,
-        146.606119,
-        154.052517
+        64.87137299999999,
+        65.447436,
+        65.60044900000001,
+        66.85509400000001,
+        70.706214
       ],
-      "profile_overhead_percent": 27.96187959750536,
+      "profile_overhead_percent": 2.30170715896989,
       "build_scope_kinds": [
         "INDEX_BUILD"
       ],
@@ -5416,27 +5417,27 @@
         "profile_runs": 5,
         "correctness": "ok",
         "answer_rows": 1,
-        "load_ms": 1286.791725,
+        "load_ms": 2303.7598089999997,
         "zone_build_ms": 0.0,
-        "uninstrumented_total_median_ms": 109.99212299999999,
+        "uninstrumented_total_median_ms": 64.124491,
         "uninstrumented_samples_ms": [
-          107.241234,
-          108.709131,
-          109.99212299999999,
-          110.615489,
-          111.54865
+          57.454369,
+          57.968575,
+          64.124491,
+          65.190033,
+          68.602091
         ],
-        "profile_total_median_ms": 140.747988,
-        "profile_build_at_median_total_ms": 17.758,
-        "profile_query_residual_at_median_total_ms": 122.989988,
+        "profile_total_median_ms": 65.60044900000001,
+        "profile_build_at_median_total_ms": 9.687,
+        "profile_query_residual_at_median_total_ms": 55.913449000000014,
         "profile_samples_ms": [
-          140.168846,
-          140.584845,
-          140.747988,
-          146.606119,
-          154.052517
+          64.87137299999999,
+          65.447436,
+          65.60044900000001,
+          66.85509400000001,
+          70.706214
         ],
-        "profile_overhead_percent": 27.96187959750536,
+        "profile_overhead_percent": 2.30170715896989,
         "build_scope_kinds": [
           "INDEX_BUILD"
         ],

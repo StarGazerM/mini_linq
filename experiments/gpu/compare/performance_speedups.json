@@ -241,5 +241,6 @@
       "n": 25,
       "geometric_mean_speedup": 2.472412491687419
     }
-  ]
+  ],
+  "status": "Historical pre-interning aggregates, excluding h19; final recalculation deferred pending all-query CPU LE, SF10 CPU and advised-order CPU collection."
 }
