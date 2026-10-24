@@ -16,6 +16,11 @@ thread_local! {
         const { RefCell::new(None) };
 }
 
+pub(crate) fn release_query_cache() {
+    CACHED_SCRATCH.with(|cache| cache.borrow_mut().take());
+    CACHED_KERNELS.with(|cache| cache.borrow_mut().take());
+}
+
 fn module(pool: &Pool) -> Result<Rc<canon_kernels::LoadedModule>> {
     CACHED_KERNELS.with(|cache| {
         if let Some((context, module)) = cache.borrow().as_ref() {

@@ -1,0 +1,21 @@
+{
+  "configs": [
+    "default"
+  ],
+  "exports": [
+    [
+      "partsupp",
+      "ps_partkey,ps_suppkey,ps_availqty,ps_supplycost"
+    ],
+    [
+      "supplier",
+      "s_suppkey,s_nationkey"
+    ],
+    [
+      "nation",
+      "n_nationkey,n_name"
+    ]
+  ],
+  "name": "retail_h11",
+  "sql": "WITH matches AS (\n    SELECT DISTINCT ps.ps_partkey, ps.ps_suppkey, ps.ps_availqty, ps.ps_supplycost\n    FROM partsupp ps JOIN supplier s ON s.s_suppkey = ps.ps_suppkey\n    JOIN nation n ON n.n_nationkey = s.s_nationkey WHERE n.n_name = 'GERMANY')\nSELECT ps_partkey, CAST(SUM(ps_supplycost * ps_availqty) * 100 AS BIGINT)\nFROM matches GROUP BY ps_partkey\nHAVING SUM(ps_supplycost * ps_availqty) >\n    (SELECT SUM(ps_supplycost * ps_availqty) * 0.0001 FROM matches)"
+}

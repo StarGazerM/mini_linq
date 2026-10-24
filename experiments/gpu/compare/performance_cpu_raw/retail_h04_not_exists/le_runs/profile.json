@@ -1,0 +1,242 @@
+{
+  "answer_rows": 4695,
+  "bag_insertions": 0,
+  "build_rows_verified": false,
+  "candidate_insertions": 0,
+  "distinct_insertions": 0,
+  "index_builds": 0,
+  "median_ms": 161.83902,
+  "operator_rows": [
+    {
+      "inputs": [],
+      "key": "Orders",
+      "kind": "RENAME",
+      "result": "r0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 1500000
+    },
+    {
+      "inputs": [
+        "r0"
+      ],
+      "key": "order_date",
+      "kind": "RANGE",
+      "result": "r1",
+      "rows_in": 1500000,
+      "rows_inserted": 0,
+      "rows_out": 57218
+    },
+    {
+      "inputs": [],
+      "key": "LateLineitem",
+      "kind": "RENAME",
+      "result": "r2",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 3793296
+    },
+    {
+      "inputs": [
+        "r1",
+        "r2"
+      ],
+      "key": "order_key",
+      "kind": "ANTI",
+      "result": "r3",
+      "rows_in": 57218,
+      "rows_inserted": 0,
+      "rows_out": 4695
+    },
+    {
+      "inputs": [
+        "r3"
+      ],
+      "key": "order_key",
+      "kind": "PROJECT",
+      "result": "r4",
+      "rows_in": 4695,
+      "rows_inserted": 0,
+      "rows_out": 4695
+    },
+    {
+      "inputs": [
+        "r2"
+      ],
+      "key": "order_key",
+      "kind": "KEYSET_BUILD",
+      "result": "r2.fallback.order_key",
+      "rows_in": 3793296,
+      "rows_inserted": 3793296,
+      "rows_out": 1375365
+    },
+    {
+      "inputs": [
+        "r4"
+      ],
+      "key": "",
+      "kind": "DEDUP",
+      "result": "r4.dedup",
+      "rows_in": 4695,
+      "rows_inserted": 4695,
+      "rows_out": 4695
+    },
+    {
+      "inputs": [
+        "r4"
+      ],
+      "key": "",
+      "kind": "ANSWER",
+      "result": "r4.answer",
+      "rows_in": 4695,
+      "rows_inserted": 0,
+      "rows_out": 4695
+    }
+  ],
+  "operators": [
+    {
+      "calls": 1,
+      "elapsed_ms": 161.83876,
+      "id": 0,
+      "inputs": [],
+      "key": "retail_h04_not_exists",
+      "kind": "QUERY",
+      "program": 0,
+      "result": "query",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 4695
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 120.051032,
+      "id": 1,
+      "inputs": [],
+      "key": "Orders",
+      "kind": "RENAME",
+      "program": 1,
+      "result": "r0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 1500000
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 120.051032,
+      "id": 2,
+      "inputs": [
+        "r0"
+      ],
+      "key": "order_date",
+      "kind": "RANGE",
+      "program": 1,
+      "result": "r1",
+      "rows_in": 1500000,
+      "rows_inserted": 0,
+      "rows_out": 57218
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 7.2992550000000005,
+      "id": 3,
+      "inputs": [],
+      "key": "LateLineitem",
+      "kind": "RENAME",
+      "program": 1,
+      "result": "r2",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 3793296
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 120.051342,
+      "id": 4,
+      "inputs": [
+        "r1",
+        "r2"
+      ],
+      "key": "order_key",
+      "kind": "ANTI",
+      "program": 1,
+      "result": "r3",
+      "rows_in": 57218,
+      "rows_inserted": 0,
+      "rows_out": 4695
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 120.05157299999999,
+      "id": 5,
+      "inputs": [
+        "r3"
+      ],
+      "key": "order_key",
+      "kind": "PROJECT",
+      "program": 1,
+      "result": "r4",
+      "rows_in": 4695,
+      "rows_inserted": 0,
+      "rows_out": 4695
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 111.32065100000001,
+      "id": 6,
+      "inputs": [
+        "r2"
+      ],
+      "key": "order_key",
+      "kind": "KEYSET_BUILD",
+      "program": 1,
+      "result": "r2.fallback.order_key",
+      "rows_in": 3793296,
+      "rows_inserted": 3793296,
+      "rows_out": 1375365
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 124.544925,
+      "id": 7,
+      "inputs": [
+        "r4"
+      ],
+      "key": "",
+      "kind": "DEDUP",
+      "program": 1,
+      "result": "r4.dedup",
+      "rows_in": 4695,
+      "rows_inserted": 4695,
+      "rows_out": 4695
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 124.54507500000001,
+      "id": 8,
+      "inputs": [
+        "r4"
+      ],
+      "key": "",
+      "kind": "ANSWER",
+      "program": 1,
+      "result": "r4.answer",
+      "rows_in": 4695,
+      "rows_inserted": 0,
+      "rows_out": 4695
+    }
+  ],
+  "rows_copied": 0,
+  "rows_enumerated": 0,
+  "samples_ms": [
+    161.008447,
+    161.44571499999998,
+    161.83902,
+    161.856324,
+    168.987014
+  ],
+  "set_insertions": 3797991,
+  "top_level_clock_verified": true,
+  "top_level_ms": 161.83876,
+  "tree": "QUERY            query [retail_h04_not_exists] inputs= rows=4695 in=0 inserted=0 t=161.839ms\n  ANSWER           r4.answer [] inputs=r4 rows=4695 in=4695 inserted=0 t=124.545ms\n    PROJECT          r4 [order_key] inputs=r3 rows=4695 in=4695 inserted=0 t=120.052ms\n      ANTI             r3 [order_key] inputs=r1,r2 rows=4695 in=57218 inserted=0 t=120.051ms\n        RANGE            r1 [order_date] inputs=r0 rows=57218 in=1500000 inserted=0 t=120.051ms\n          RENAME           r0 [Orders] inputs= rows=1500000 in=0 inserted=0 t=120.051ms\n        RENAME           r2 [LateLineitem] inputs= rows=3793296 in=0 inserted=0 t=7.299ms\n  DEDUP            r4.dedup [] inputs=r4 rows=4695 in=4695 inserted=4695 t=124.545ms\n    PROJECT          r4 [order_key] inputs=r3 rows=4695 in=4695 inserted=0 t=120.052ms (shared)\n  KEYSET_BUILD     r2.fallback.order_key [order_key] inputs=r2 rows=1375365 in=3793296 inserted=3793296 t=111.321ms excl=104.021ms\n    RENAME           r2 [LateLineitem] inputs= rows=3793296 in=0 inserted=0 t=7.299ms (shared)\nBUILD_EXCLUSIVE_TOTAL t=104.021ms\n",
+  "verified": true
+}

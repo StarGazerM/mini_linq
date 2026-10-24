@@ -91,7 +91,7 @@ pub fn run(
             // A runtime failure is neither a planning rejection nor a passing
             // measurement. Preserve it, continue the inventory, then fail main.
             let execution = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                generated::execute(&query, &manifest, &mode, false)
+                execute_query(&query, &manifest, &mode, false)
             }));
             let execution = match execution {
                 Ok(value) => value,
@@ -122,7 +122,7 @@ pub fn run(
                 }
             }
         } else {
-            successful &= query == "h07";
+            successful = false;
             result["exact"] = Value::Null;
             result["conformance"] =
                 json!({"status": "not run", "reason": result["status"], "error": result["error"]});
@@ -199,6 +199,29 @@ pub fn run(
     Ok(successful)
 }
 
+fn execute_query(
+    query: &str,
+    manifest: &Manifest,
+    mode: &str,
+    conformance_only: bool,
+) -> Result<Option<Value>> {
+    // Reuse generated and runtime caches for every iteration, then release
+    // their owning references before loading the next query, including errors
+    // and unwinding. Stay on this thread to preserve host allocator behavior.
+    let _scope = cq_gpu_sequence_runtime::QueryScope::new();
+    generated::execute(query, manifest, mode, conformance_only)
+}
+
+#[cfg(test)]
+fn device_free_memory(context: &cuda_core::CudaContext) -> Result<usize> {
+    use cuda_core::IntoResult;
+    context.synchronize()?;
+    let mut free = 0;
+    let mut total = 0;
+    unsafe { cuda_core::sys::cuMemGetInfo_v2(&mut free, &mut total).result()? };
+    Ok(free)
+}
+
 #[cfg(test)]
 #[path = "source.rs"]
 mod source;
@@ -219,7 +242,6 @@ mod tests {
             if report["status"] != "accepted" {
                 let error = report["error"].as_str().unwrap();
                 match query {
-                    "h07" => assert!(error.contains("unmet catalog obligation Canon"), "{error}"),
                     "h14" => assert_eq!(
                         error,
                         "T-Gpu: host publication r3 needs recorded device-representable code columns"
@@ -233,9 +255,35 @@ mod tests {
                 continue;
             }
             let manifest = Manifest::load(&data_root().join("sf1"))?;
-            let measurement = generated::execute(query, &manifest, mode, true)?
+            let measurement = execute_query(query, &manifest, mode, true)?
                 .ok_or("accepted conformance executor missing")?;
             assert_eq!(measurement["conformance"]["status"], "passed");
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires SF10 fixtures, all advised executors, and an idle GPU"]
+    fn sequential_sf10_queries_release_device_memory() -> Result<()> {
+        const ALLOWANCE: usize = 64 * 1024 * 1024;
+        let manifest = Manifest::load(&data_root().join("sf10"))?;
+        let context = cuda_core::CudaContext::new(0)?;
+        let baseline = device_free_memory(&context)?;
+        for query in ["h09", "d85"] {
+            let before = device_free_memory(&context)?;
+            let measurement = execute_query(query, &manifest, "advised", false)?
+                .ok_or("regression requires H09 and D85 advised executors")?;
+            assert_eq!(measurement["exact"], true, "{query}: {measurement}");
+            let after = device_free_memory(&context)?;
+            eprintln!(
+                "{query} SF10 device free bytes: baseline={baseline}, before={before}, after={after}, delta={}",
+                after as i64 - before as i64,
+            );
+            assert!(
+                after.saturating_add(ALLOWANCE) >= before
+                    && after.saturating_add(ALLOWANCE) >= baseline,
+                "{query} retained device memory: baseline={baseline}, before={before}, after={after}, allowance={ALLOWANCE}",
+            );
         }
         Ok(())
     }
@@ -307,12 +355,12 @@ mod tests {
 
     #[test]
     fn advised_h05_records_the_reference_boundaries() -> Result<()> {
-        for sf in [1, 10] {
-            let reports = plans()?;
-            let report = reports
-                .iter()
-                .find(|row| row["query"] == "h05" && row["sf"] == sf && row["mode"] == "advised")
-                .unwrap();
+        // Like conformance, inspect only executors selected at build time.
+        let reports = plans()?;
+        for report in reports
+            .iter()
+            .filter(|row| row["query"] == "h05" && row["mode"] == "advised")
+        {
             assert_eq!(report["status"], "accepted", "{}", report["error"]);
             let advice = report["pipeline"]["sequence"]
                 .as_array()

@@ -1,5 +1,0 @@
-error: CQ_GPU_MERGE: merge is unsupported
- --> tests/ui/merge.rs:8:13
-  |
-8 |             p = pipe canon merge [x] l,r;
-  |             ^

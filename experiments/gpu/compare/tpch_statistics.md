@@ -1,6 +1,6 @@
 # TPC-H statistics and hand-authored GPU plans
 
-Scope: all 17 runnable suite queries. h07, h10, h14 and h19 are excluded for the pre-existing rejected-query reasons in the assignment; no execution is fabricated for them.
+Measurement scope: the original 17 runnable suite queries. h07, h10, h14 and h19 were excluded from those historical runs for the then-rejected-query reasons. The h07 section now includes a separate exact h07/h07_block run after dictionary disjunction support; its advice uses the existing h07_block statistics for their identical SQL predicate and output.
 
 Measurements use read-only DuckDB 1.5.6 over `/data/tpch-gpu/{sf1,sf10}/dbgen.duckdb`, `SET threads=4`. Manifest row counts are cross-checked by SQL; the manifests contain no min/max fields, so key bounds below are measured with SQL rather than invented. DuckDB t24 benchmark timings are the suite's recorded independent timing files, not the four-thread statistics queries.
 
@@ -41,7 +41,7 @@ Exact SQL and all raw counts are retained in [`tpch_statistics.json`](tpch_stati
 
 ## Representation and scheduling decisions
 
-`tpch_dictionary` is an explicit loader profile for h03, h07_block, h08, h21_positive, d19, d27 and d85: only constant-compared or unused String columns use their existing manifest-local i32 dictionary representation. `encoded_query_with_types` resolves each literal through its own column dictionary; no global string IDs or string-method semantics are guessed. H09 substring, H16 string methods and H22 phone methods remain host Strings. H05 keeps its existing compressed-domain profile.
+`tpch_dictionary` is an explicit loader profile for h03, h07, h07_block, h08, h21_positive, d19, d27 and d85: only literal-equality-compared or unused String columns use their existing manifest-local i32 dictionary representation. Classification traverses relational `Or` arms and `In` sets; opaque predicates and ordered String comparisons retain String storage. `encoded_query_with_types` resolves each literal through its own column dictionary; no global string IDs or string-method semantics are guessed. H09 substring, H16 string methods and H22 phone methods remain host Strings. H05 keeps its existing compressed-domain profile. Disjoint literal domains need actual row filtering rather than a host contiguous-range descriptor, so stored integer `Or`/`In` selects are graded as device publications.
 
 The hand schedules retain selected forward prefixes, use full-key membership only where the checked live layout contains no payload, and place 1,024/items-4 segment boundaries at the measured expanding levels. Independent numeric filter publications are separately partitioned at 256/items-4; merely tiling the join would leave those producers scalar. Single-sided/multi-column range filters that the host range builder cannot express are explicit published device maps, with ancestor stores and recorded grades. Small prefixes stay untiled until an actual expansion or output partition. Count publication is retained.
 
@@ -388,6 +388,38 @@ Single lineitem scan; date window -> discount window -> quantity is the measured
 | distinct_line_numbers | 7 | 7 |
 
 **Accepted boundary:** retain the host arithmetic boundary. Device binding has the same BE-Partial rejection as H01. A forward-filter store before host arithmetic additionally reached generated-Rust errors E0277 (`RangeProvider` cannot be built from the row iterator) and E0599 (`RangeProvider` has no `iter`). The exact diagnostics are in the rejection log; this is not a successful optimization.
+
+## h07
+
+**Authored disjunction plan:** `no_reduce, order(Nation@6, Nation@5, Customer, Orders, Lineitem, Supplier)`. In `retail_h07.rs`, the date predicate occupies occurrence 1, Supplier is occurrence 2, and the supplier/customer Nation roles are occurrences 5/6 respectively. Both Nation occurrences bind before the unchanged France/Germany disjunction is evaluated; the surviving opposite-country pair drives nation-indexed Customer, customer-indexed Orders, date-qualified order-indexed Lineitem, and the opposite Supplier lookup. Two independent IN filters would admit same-country pairs and are not a substitute.
+
+The identical SQL in h07_block supplies the measured candidate comparison below: the customer branch has prefix sums **287,630 / 2,848,416**, versus **298,132 / 2,986,893** for the supplier branch. The two-row pair restricts Customer to **12,008 / 120,469**, then Orders to **121,324 / 1,205,808**, dated Lineitem to **148,370 / 1,463,770**, and opposite Supplier witnesses to **5,924 / 58,365** before final DISTINCT. These are reused SQL statistics, not measurements of h07 execution. The first single-Nation prefix counts in the table apply the implied country restriction; the authored disjunction need only filter once both Nation roles are available.
+
+Unlike h07_block's `block@5` root, h07 explicitly orders its two Nation occurrences. It uses the same dictionary profile, host-read construction, retained Customer prefix, and 1,024/items-4 Orders segmentation as h07_block. Retaining Customer exposes the selected forward stream before the measured ~10× Orders expansion (maximum 37 / 44); the subsequent date-filtered Lineitem step and full-key Supplier membership retain the existing block scheduling policy. The generic checked membership selection applies only when no Supplier payload remains. No reverse reductions, string-method encoding, or new disjunction semantics are introduced.
+
+**Dictionary-disjunction acceptance run (release, sm_89):** both queries are exact at both scales, with **5,501 SF1 / 54,142 SF10** DISTINCT answers. Every warmup and all five measured runs compare complete answers against `answer.retail_h07.tsv` or `answer.retail_h07_block.tsv` and their count files. Both SF1 runs also pass Sequential-of-the-same-Physical conformance. H07's stored Nation filter and coupled pair select execute over column-local i32 codes on the device; the literal pair is not evaluated as an opaque host String guard.
+
+| Query | Scale | GPU total ms | Build / kernels / dedup ms | DuckDB t24 ms | Exact |
+|---|---|---:|---|---:|---|
+| h07 | SF1 | 2.828 | 1.668 / 1.018 / 0.136 | 23.000 | yes |
+| h07_block | SF1 | 2.913 | 1.803 / 0.974 / 0.136 | 22.000 | yes |
+| h07 | SF10 | 15.025 | 13.100 / 1.753 / 0.161 | 130.000 | yes |
+| h07_block | SF10 | 15.159 | 13.242 / 1.737 / 0.162 | 132.000 | yes |
+
+Evidence: [`h07_dictionary.results.json`](h07_dictionary.results.json) preserves samples, recorded plans, exactness, conformance, and DuckDB provenance. The full runner artifact is `/data/tpch-gpu/h07-dictionary.results.json`. GPU use was exclusive; unrelated CPU builds could overlap. These are medians of five stage-sum measurements, with initial loading, answer download and comparison excluded. DuckDB values are the existing complete-SQL t24 measurements, not new or timing-boundary-identical benchmarks. H07 is approximately level with h07_block, not evidence of a substantial performance improvement.
+
+```sh
+cd experiments/gpu
+export CUDA_HOME=/opt/nvidia/hpc_sdk/Linux_x86_64/25.5/cuda/12.9
+export CARGO_BUILD_JOBS=1 CQ_GPU_TPCH_QUERIES=h07,h07_block
+cargo oxide build --arch sm_89 -- --release -p cq-gpu-tpch
+./target/release/cq-gpu-tpch /data/tpch-gpu/h07-dictionary.results.json \
+  --mode advised --query h07 --query h07_block --scale sf1 --scale sf10
+```
+
+Verification: `cargo test --release -p cq-sequence-plan --lib` passed **21 tests**, including integer Or/In streaming and stored-device placement and String host-placement regressions. With the same two-query build filter, `cargo oxide test --arch sm_89 -- --release -p cq-gpu-tpch --lib -- --test-threads=1` passed **36 tests**, including positive h07/h07_block conformance, schedule replay, dictionary Or/In encoding, and opaque String retention. Non-selected query conformance cases have no generated executors; this is not a full-suite GPU execution claim. The H05 schedule-inspection test now follows the same build-selected inventory rule.
+
+`cargo oxide test --arch sm_89 -- --release -p cq-gpu-sequence --test rows` passed **9 translation tests**, including an Or of two encoded equalities emitted as a native device `||` condition without host equality helpers or range selection. Scoped rustfmt was applied to the changed Rust files; existing CUDA exported-inline warnings remain unchanged.
 
 ## h07_block
 

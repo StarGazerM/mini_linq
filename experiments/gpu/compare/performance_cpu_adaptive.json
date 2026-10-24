@@ -1,0 +1,5 @@
+{
+  "generated_worker_sha256": "14599d077c483beecd0a906068461221fa9200a7584825a43533e08a9ce4643c",
+  "policy": "After priority override: 600-second combined wall budget per configuration. Warm query >60s selects 3 timed runs; otherwise first three timed samples >60s stops at three. Existing completed five-run workers retained.",
+  "changes": "Only warm clock, sample count, loop stopping and effective median index in generated worker. Original worker.rs, query sources and compiler/plans unchanged."
+}

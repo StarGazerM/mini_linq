@@ -1,0 +1,10 @@
+{
+  "status": "timeout",
+  "phase": "plain",
+  "worker_wall_limit_seconds": 600,
+  "configuration_wall_seconds": 600.0613598310156,
+  "warm_correctness": "unavailable",
+  "correctness": "unavailable",
+  "per_invocation_lower_bound_ms": null,
+  "error": "Command '['/tmp/mini-linq-performance-cpu/crates/retail_h09/timing-worker', '/tmp/mini-linq-performance-cpu/data/retail_h09', 'transfer', '5', '/data/mini_linq/experiments/gpu/compare/performance_cpu_raw/retail_h09/transfer/plain.answers.json', '/data/mini_linq/experiments/gpu/compare/performance_cpu_raw/retail_h09/transfer/plain.json', '/data/mini_linq/experiments/gpu/compare/performance_cpu_raw/retail_h09/oracle.json']' timed out after 599.9999617460417 seconds"
+}

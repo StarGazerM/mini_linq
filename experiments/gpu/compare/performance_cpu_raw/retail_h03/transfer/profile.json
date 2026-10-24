@@ -1,0 +1,664 @@
+{
+  "answer_rows": 11620,
+  "bag_insertions": 239670,
+  "build_rows_verified": false,
+  "candidate_insertions": 0,
+  "distinct_insertions": 0,
+  "index_builds": 0,
+  "median_ms": 67.934095,
+  "operator_rows": [
+    {
+      "inputs": [],
+      "key": "Orders",
+      "kind": "RENAME",
+      "result": "r0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 1500000
+    },
+    {
+      "inputs": [
+        "r0"
+      ],
+      "key": "order_date",
+      "kind": "RANGE",
+      "result": "r1",
+      "rows_in": 1500000,
+      "rows_inserted": 0,
+      "rows_out": 727305
+    },
+    {
+      "inputs": [
+        "r9",
+        "r8"
+      ],
+      "key": "customer_key",
+      "kind": "PROBE",
+      "result": "r10",
+      "rows_in": 30519,
+      "rows_inserted": 0,
+      "rows_out": 30519
+    },
+    {
+      "inputs": [
+        "r10"
+      ],
+      "key": "customer_key,order_key",
+      "kind": "PROJECT",
+      "result": "r11",
+      "rows_in": 30519,
+      "rows_inserted": 0,
+      "rows_out": 30519
+    },
+    {
+      "inputs": [],
+      "key": "Customer",
+      "kind": "RENAME",
+      "result": "r2",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 30142
+    },
+    {
+      "inputs": [
+        "r1",
+        "r2"
+      ],
+      "key": "customer_key",
+      "kind": "SEMI",
+      "result": "r3",
+      "rows_in": 727305,
+      "rows_inserted": 0,
+      "rows_out": 147126
+    },
+    {
+      "inputs": [],
+      "key": "Lineitem",
+      "kind": "RENAME",
+      "result": "r4",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 6001215
+    },
+    {
+      "inputs": [
+        "r4"
+      ],
+      "key": "ship_date",
+      "kind": "RANGE",
+      "result": "r5",
+      "rows_in": 6001215,
+      "rows_inserted": 0,
+      "rows_out": 3241776
+    },
+    {
+      "inputs": [
+        "r5",
+        "r3"
+      ],
+      "key": "order_key",
+      "kind": "SEMI",
+      "result": "r6",
+      "rows_in": 3241776,
+      "rows_inserted": 0,
+      "rows_out": 30519
+    },
+    {
+      "inputs": [
+        "r3",
+        "r6"
+      ],
+      "key": "order_key",
+      "kind": "SEMI",
+      "result": "r7",
+      "rows_in": 147126,
+      "rows_inserted": 0,
+      "rows_out": 11620
+    },
+    {
+      "inputs": [
+        "r2",
+        "r7"
+      ],
+      "key": "customer_key",
+      "kind": "SEMI",
+      "result": "r8",
+      "rows_in": 30142,
+      "rows_inserted": 0,
+      "rows_out": 8643
+    },
+    {
+      "inputs": [
+        "r6",
+        "r7"
+      ],
+      "key": "order_key",
+      "kind": "PROBE",
+      "result": "r9",
+      "rows_in": 30519,
+      "rows_inserted": 0,
+      "rows_out": 30519
+    },
+    {
+      "inputs": [
+        "r2"
+      ],
+      "key": "",
+      "kind": "ROWS_BUILD",
+      "result": "r2.rows",
+      "rows_in": 30142,
+      "rows_inserted": 30142,
+      "rows_out": 30142
+    },
+    {
+      "inputs": [
+        "r2"
+      ],
+      "key": "customer_key",
+      "kind": "KEYSET_BUILD",
+      "result": "r2.index.customer_key",
+      "rows_in": 30142,
+      "rows_inserted": 30142,
+      "rows_out": 30142
+    },
+    {
+      "inputs": [
+        "r3"
+      ],
+      "key": "",
+      "kind": "ROWS_BUILD",
+      "result": "r3.rows",
+      "rows_in": 147126,
+      "rows_inserted": 147126,
+      "rows_out": 147126
+    },
+    {
+      "inputs": [
+        "r3"
+      ],
+      "key": "order_key",
+      "kind": "KEYSET_BUILD",
+      "result": "r3.index.order_key",
+      "rows_in": 147126,
+      "rows_inserted": 147126,
+      "rows_out": 147126
+    },
+    {
+      "inputs": [
+        "r6"
+      ],
+      "key": "",
+      "kind": "ROWS_BUILD",
+      "result": "r6.rows",
+      "rows_in": 30519,
+      "rows_inserted": 30519,
+      "rows_out": 30519
+    },
+    {
+      "inputs": [
+        "r6"
+      ],
+      "key": "order_key",
+      "kind": "KEYSET_BUILD",
+      "result": "r6.index.order_key",
+      "rows_in": 30519,
+      "rows_inserted": 30519,
+      "rows_out": 11620
+    },
+    {
+      "inputs": [
+        "r7"
+      ],
+      "key": "",
+      "kind": "ROWS_BUILD",
+      "result": "r7.rows",
+      "rows_in": 11620,
+      "rows_inserted": 11620,
+      "rows_out": 11620
+    },
+    {
+      "inputs": [
+        "r7"
+      ],
+      "key": "customer_key",
+      "kind": "KEYSET_BUILD",
+      "result": "r7.index.customer_key",
+      "rows_in": 11620,
+      "rows_inserted": 11620,
+      "rows_out": 8643
+    },
+    {
+      "inputs": [
+        "r7"
+      ],
+      "key": "order_key",
+      "kind": "INDEX_BUILD",
+      "result": "r7.index.order_key",
+      "rows_in": 11620,
+      "rows_inserted": 11620,
+      "rows_out": 11620
+    },
+    {
+      "inputs": [
+        "r8"
+      ],
+      "key": "customer_key",
+      "kind": "INDEX_BUILD",
+      "result": "r8.index.customer_key",
+      "rows_in": 8643,
+      "rows_inserted": 8643,
+      "rows_out": 8643
+    },
+    {
+      "inputs": [
+        "r11"
+      ],
+      "key": "",
+      "kind": "DEDUP",
+      "result": "r11.dedup",
+      "rows_in": 30519,
+      "rows_inserted": 30519,
+      "rows_out": 11620
+    },
+    {
+      "inputs": [
+        "r11"
+      ],
+      "key": "",
+      "kind": "ANSWER",
+      "result": "r11.answer",
+      "rows_in": 11620,
+      "rows_inserted": 0,
+      "rows_out": 11620
+    }
+  ],
+  "operators": [
+    {
+      "calls": 1,
+      "elapsed_ms": 67.933904,
+      "id": 0,
+      "inputs": [],
+      "key": "retail_h03",
+      "kind": "QUERY",
+      "program": 0,
+      "result": "query",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 11620
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 12.17422,
+      "id": 1,
+      "inputs": [],
+      "key": "Orders",
+      "kind": "RENAME",
+      "program": 1,
+      "result": "r0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 1500000
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 12.17422,
+      "id": 2,
+      "inputs": [
+        "r0"
+      ],
+      "key": "order_date",
+      "kind": "RANGE",
+      "program": 1,
+      "result": "r1",
+      "rows_in": 1500000,
+      "rows_inserted": 0,
+      "rows_out": 727305
+    },
+    {
+      "calls": 30519,
+      "elapsed_ms": 0.7231650000000001,
+      "id": 3,
+      "inputs": [
+        "r9",
+        "r8"
+      ],
+      "key": "customer_key",
+      "kind": "PROBE",
+      "program": 1,
+      "result": "r10",
+      "rows_in": 30519,
+      "rows_inserted": 0,
+      "rows_out": 30519
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 6.96253,
+      "id": 4,
+      "inputs": [
+        "r10"
+      ],
+      "key": "customer_key,order_key",
+      "kind": "PROJECT",
+      "program": 1,
+      "result": "r11",
+      "rows_in": 30519,
+      "rows_inserted": 0,
+      "rows_out": 30519
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 0.5561980000000001,
+      "id": 5,
+      "inputs": [],
+      "key": "Customer",
+      "kind": "RENAME",
+      "program": 1,
+      "result": "r2",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 30142
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 12.17441,
+      "id": 6,
+      "inputs": [
+        "r1",
+        "r2"
+      ],
+      "key": "customer_key",
+      "kind": "SEMI",
+      "program": 1,
+      "result": "r3",
+      "rows_in": 727305,
+      "rows_inserted": 0,
+      "rows_out": 147126
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 27.807458,
+      "id": 7,
+      "inputs": [],
+      "key": "Lineitem",
+      "kind": "RENAME",
+      "program": 1,
+      "result": "r4",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 6001215
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 27.807458,
+      "id": 8,
+      "inputs": [
+        "r4"
+      ],
+      "key": "ship_date",
+      "kind": "RANGE",
+      "program": 1,
+      "result": "r5",
+      "rows_in": 6001215,
+      "rows_inserted": 0,
+      "rows_out": 3241776
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 27.807839,
+      "id": 9,
+      "inputs": [
+        "r5",
+        "r3"
+      ],
+      "key": "order_key",
+      "kind": "SEMI",
+      "program": 1,
+      "result": "r6",
+      "rows_in": 3241776,
+      "rows_inserted": 0,
+      "rows_out": 30519
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 3.562285,
+      "id": 10,
+      "inputs": [
+        "r3",
+        "r6"
+      ],
+      "key": "order_key",
+      "kind": "SEMI",
+      "program": 1,
+      "result": "r7",
+      "rows_in": 147126,
+      "rows_inserted": 0,
+      "rows_out": 11620
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 0.562158,
+      "id": 11,
+      "inputs": [
+        "r2",
+        "r7"
+      ],
+      "key": "customer_key",
+      "kind": "SEMI",
+      "program": 1,
+      "result": "r8",
+      "rows_in": 30142,
+      "rows_inserted": 0,
+      "rows_out": 8643
+    },
+    {
+      "calls": 30519,
+      "elapsed_ms": 4.328614,
+      "id": 12,
+      "inputs": [
+        "r6",
+        "r7"
+      ],
+      "key": "order_key",
+      "kind": "PROBE",
+      "program": 1,
+      "result": "r9",
+      "rows_in": 30519,
+      "rows_inserted": 0,
+      "rows_out": 30519
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 0.687409,
+      "id": 13,
+      "inputs": [
+        "r2"
+      ],
+      "key": "",
+      "kind": "ROWS_BUILD",
+      "program": 1,
+      "result": "r2.rows",
+      "rows_in": 30142,
+      "rows_inserted": 30142,
+      "rows_out": 30142
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 0.7786540000000001,
+      "id": 14,
+      "inputs": [
+        "r2"
+      ],
+      "key": "customer_key",
+      "kind": "KEYSET_BUILD",
+      "program": 1,
+      "result": "r2.index.customer_key",
+      "rows_in": 30142,
+      "rows_inserted": 30142,
+      "rows_out": 30142
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 13.509333,
+      "id": 15,
+      "inputs": [
+        "r3"
+      ],
+      "key": "",
+      "kind": "ROWS_BUILD",
+      "program": 1,
+      "result": "r3.rows",
+      "rows_in": 147126,
+      "rows_inserted": 147126,
+      "rows_out": 147126
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 11.233063999999999,
+      "id": 16,
+      "inputs": [
+        "r3"
+      ],
+      "key": "order_key",
+      "kind": "KEYSET_BUILD",
+      "program": 1,
+      "result": "r3.index.order_key",
+      "rows_in": 147126,
+      "rows_inserted": 147126,
+      "rows_out": 147126
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 27.914944000000002,
+      "id": 17,
+      "inputs": [
+        "r6"
+      ],
+      "key": "",
+      "kind": "ROWS_BUILD",
+      "program": 1,
+      "result": "r6.rows",
+      "rows_in": 30519,
+      "rows_inserted": 30519,
+      "rows_out": 30519
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 1.2660900000000002,
+      "id": 18,
+      "inputs": [
+        "r6"
+      ],
+      "key": "order_key",
+      "kind": "KEYSET_BUILD",
+      "program": 1,
+      "result": "r6.index.order_key",
+      "rows_in": 30519,
+      "rows_inserted": 30519,
+      "rows_out": 11620
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 3.62716,
+      "id": 19,
+      "inputs": [
+        "r7"
+      ],
+      "key": "",
+      "kind": "ROWS_BUILD",
+      "program": 1,
+      "result": "r7.rows",
+      "rows_in": 11620,
+      "rows_inserted": 11620,
+      "rows_out": 11620
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 0.6422319999999999,
+      "id": 20,
+      "inputs": [
+        "r7"
+      ],
+      "key": "customer_key",
+      "kind": "KEYSET_BUILD",
+      "program": 1,
+      "result": "r7.index.customer_key",
+      "rows_in": 11620,
+      "rows_inserted": 11620,
+      "rows_out": 8643
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 0.5530809999999999,
+      "id": 21,
+      "inputs": [
+        "r7"
+      ],
+      "key": "order_key",
+      "kind": "INDEX_BUILD",
+      "program": 1,
+      "result": "r7.index.order_key",
+      "rows_in": 11620,
+      "rows_inserted": 11620,
+      "rows_out": 11620
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 1.197898,
+      "id": 22,
+      "inputs": [
+        "r8"
+      ],
+      "key": "customer_key",
+      "kind": "INDEX_BUILD",
+      "program": 1,
+      "result": "r8.index.customer_key",
+      "rows_in": 8643,
+      "rows_inserted": 8643,
+      "rows_out": 8643
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 7.747726,
+      "id": 23,
+      "inputs": [
+        "r11"
+      ],
+      "key": "",
+      "kind": "DEDUP",
+      "program": 1,
+      "result": "r11.dedup",
+      "rows_in": 30519,
+      "rows_inserted": 30519,
+      "rows_out": 11620
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 7.747897,
+      "id": 24,
+      "inputs": [
+        "r11"
+      ],
+      "key": "",
+      "kind": "ANSWER",
+      "program": 1,
+      "result": "r11.answer",
+      "rows_in": 11620,
+      "rows_inserted": 0,
+      "rows_out": 11620
+    }
+  ],
+  "rows_copied": 0,
+  "rows_enumerated": 0,
+  "samples_ms": [
+    58.816649999999996,
+    65.683396,
+    67.934095,
+    68.237887,
+    71.327747
+  ],
+  "set_insertions": 249926,
+  "top_level_clock_verified": true,
+  "top_level_ms": 67.933904,
+  "tree": "QUERY            query [retail_h03] inputs= rows=11620 in=0 inserted=0 t=67.934ms\n  ANSWER           r11.answer [] inputs=r11 rows=11620 in=11620 inserted=0 t=7.748ms\n    PROJECT          r11 [customer_key,order_key] inputs=r10 rows=30519 in=30519 inserted=0 t=6.963ms\n      PROBE            r10 [customer_key] inputs=r9,r8 rows=30519 in=30519 inserted=0 t=0.723ms\n        PROBE            r9 [order_key] inputs=r6,r7 rows=30519 in=30519 inserted=0 t=4.329ms\n          SEMI             r6 [order_key] inputs=r5,r3 rows=30519 in=3241776 inserted=0 t=27.808ms\n            RANGE            r5 [ship_date] inputs=r4 rows=3241776 in=6001215 inserted=0 t=27.807ms\n              RENAME           r4 [Lineitem] inputs= rows=6001215 in=0 inserted=0 t=27.807ms\n            SEMI             r3 [customer_key] inputs=r1,r2 rows=147126 in=727305 inserted=0 t=12.174ms\n              RANGE            r1 [order_date] inputs=r0 rows=727305 in=1500000 inserted=0 t=12.174ms\n                RENAME           r0 [Orders] inputs= rows=1500000 in=0 inserted=0 t=12.174ms\n              RENAME           r2 [Customer] inputs= rows=30142 in=0 inserted=0 t=0.556ms\n          SEMI             r7 [order_key] inputs=r3,r6 rows=11620 in=147126 inserted=0 t=3.562ms\n            SEMI             r3 [customer_key] inputs=r1,r2 rows=147126 in=727305 inserted=0 t=12.174ms (shared)\n            SEMI             r6 [order_key] inputs=r5,r3 rows=30519 in=3241776 inserted=0 t=27.808ms (shared)\n        SEMI             r8 [customer_key] inputs=r2,r7 rows=8643 in=30142 inserted=0 t=0.562ms\n          RENAME           r2 [Customer] inputs= rows=30142 in=0 inserted=0 t=0.556ms (shared)\n          SEMI             r7 [order_key] inputs=r3,r6 rows=11620 in=147126 inserted=0 t=3.562ms (shared)\n  DEDUP            r11.dedup [] inputs=r11 rows=11620 in=30519 inserted=30519 t=7.748ms\n    PROJECT          r11 [customer_key,order_key] inputs=r10 rows=30519 in=30519 inserted=0 t=6.963ms (shared)\n  INDEX_BUILD      r8.index.customer_key [customer_key] inputs=r8 rows=8643 in=8643 inserted=8643 t=1.198ms excl=0.635ms\n    SEMI             r8 [customer_key] inputs=r2,r7 rows=8643 in=30142 inserted=0 t=0.562ms (shared)\n  INDEX_BUILD      r7.index.order_key [order_key] inputs=r7 rows=11620 in=11620 inserted=11620 t=0.553ms excl=0.545ms\n    SEMI             r7 [order_key] inputs=r3,r6 rows=11620 in=147126 inserted=0 t=3.562ms (shared)\n  KEYSET_BUILD     r7.index.customer_key [customer_key] inputs=r7 rows=8643 in=11620 inserted=11620 t=0.642ms excl=0.629ms\n    SEMI             r7 [order_key] inputs=r3,r6 rows=11620 in=147126 inserted=0 t=3.562ms (shared)\n  ROWS_BUILD       r7.rows [] inputs=r7 rows=11620 in=11620 inserted=11620 t=3.627ms excl=0.065ms\n    SEMI             r7 [order_key] inputs=r3,r6 rows=11620 in=147126 inserted=0 t=3.562ms (shared)\n  KEYSET_BUILD     r6.index.order_key [order_key] inputs=r6 rows=11620 in=30519 inserted=30519 t=1.266ms excl=1.252ms\n    SEMI             r6 [order_key] inputs=r5,r3 rows=30519 in=3241776 inserted=0 t=27.808ms (shared)\n  ROWS_BUILD       r6.rows [] inputs=r6 rows=30519 in=30519 inserted=30519 t=27.915ms excl=0.107ms\n    SEMI             r6 [order_key] inputs=r5,r3 rows=30519 in=3241776 inserted=0 t=27.808ms (shared)\n  KEYSET_BUILD     r3.index.order_key [order_key] inputs=r3 rows=147126 in=147126 inserted=147126 t=11.233ms excl=11.122ms\n    SEMI             r3 [customer_key] inputs=r1,r2 rows=147126 in=727305 inserted=0 t=12.174ms (shared)\n  ROWS_BUILD       r3.rows [] inputs=r3 rows=147126 in=147126 inserted=147126 t=13.509ms excl=1.335ms\n    SEMI             r3 [customer_key] inputs=r1,r2 rows=147126 in=727305 inserted=0 t=12.174ms (shared)\n  KEYSET_BUILD     r2.index.customer_key [customer_key] inputs=r2 rows=30142 in=30142 inserted=30142 t=0.779ms excl=0.774ms\n    RENAME           r2 [Customer] inputs= rows=30142 in=0 inserted=0 t=0.556ms (shared)\n  ROWS_BUILD       r2.rows [] inputs=r2 rows=30142 in=30142 inserted=30142 t=0.687ms excl=0.131ms\n    RENAME           r2 [Customer] inputs= rows=30142 in=0 inserted=0 t=0.556ms (shared)\nBUILD_EXCLUSIVE_TOTAL t=16.596ms\n",
+  "verified": true
+}

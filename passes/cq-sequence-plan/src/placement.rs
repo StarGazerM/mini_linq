@@ -705,8 +705,8 @@ fn driver_domains(
     }
 }
 
-// Row-to-row predicates require a producer over actual rows, not a host
-// descriptor whose interval bounds are constants or host parameters.
+// Row-to-row comparisons and disjoint literal domains require actual rows,
+// not a host descriptor with one contiguous interval.
 fn row_predicate(operator: &Operator) -> bool {
     use cq_syntax::EqualityValue;
     use cq_syntax::constraint::{Constraint, Term as Scalar};
@@ -720,8 +720,8 @@ fn row_predicate(operator: &Operator) -> bool {
                 matches!(term, Scalar::Variable(_))
                     && (matches!(low, Scalar::Variable(_)) || matches!(high, Scalar::Variable(_)))
             }
-            Constraint::Or(arms) => arms.iter().flatten().any(constraint),
-            Constraint::In { .. } => false,
+            Constraint::Or(_) => predicate.variables().next().is_some(),
+            Constraint::In { term, .. } => matches!(term, Scalar::Variable(_)),
         }
     }
 
@@ -868,6 +868,107 @@ mod tests {
                 max_packed_bits: None,
             }],
             codecs: Vec::new(),
+        }
+    }
+
+    fn filtered_codes(
+        ty: proc_macro2::TokenStream,
+        condition: proc_macro2::TokenStream,
+    ) -> Program {
+        syn::parse_quote! {
+            physical {
+                relation R(a:i32,s:#ty);
+                r = pipe rename R@0 {a -> a,s -> s};
+                selected = pipe select r if (#condition);
+                answer = pipe canon project selected keep {a};
+                return answer as answer(a);
+            }
+            structures { r host scan = Reader []; answer canon = Canon; }
+            sequence {
+                input = store rows r;
+                selected = compact selected input;
+                result = store canon map answer selected;
+            }
+        }
+    }
+
+    #[test]
+    fn encoded_integer_or_and_in_predicates_execute_below_host() {
+        for condition in [
+            quote::quote!((s = 1i32) or (s = 2i32)),
+            quote::quote!(s in {1i32, 2i32}),
+        ] {
+            let source = filtered_codes(quote::quote!(i32), condition);
+            let facts = cq_lang_sequence::contract::check(&source).unwrap();
+            let selected = &source.structures.physical.program.definitions[1].operator;
+            assert!(!host_predicate(selected));
+            assert!(!host_operations(&source, &facts).contains("selected"));
+            let advice = advise(
+                &source,
+                &machine(),
+                true,
+                &facts,
+                &source,
+                &catalog(Vec::new()),
+            );
+            assert!(advice.iter().any(|advice| matches!(advice,
+                Advice::Grade { name, level, .. }
+                    if name == "selected" && level.iter().map(symbol_name).collect::<Vec<_>>()
+                        == ["host", "device", "block"])));
+        }
+    }
+
+    #[test]
+    fn string_or_and_in_predicates_remain_host() {
+        for condition in [
+            quote::quote!((s = "green") or (s = "blue")),
+            quote::quote!(s in {"green", "blue"}),
+        ] {
+            let source = filtered_codes(quote::quote!(String), condition);
+            let facts = cq_lang_sequence::contract::check(&source).unwrap();
+            let selected = &source.structures.physical.program.definitions[1].operator;
+            assert!(host_predicate(selected));
+            assert!(host_operations(&source, &facts).contains("selected"));
+            let advice = advise(
+                &source,
+                &machine(),
+                true,
+                &facts,
+                &source,
+                &catalog(Vec::new()),
+            );
+            assert!(advice.iter().any(|advice| matches!(advice,
+                Advice::Grade { name, level, .. }
+                    if name == "selected" && level.iter().map(symbol_name).collect::<Vec<_>>()
+                        == ["host"])));
+        }
+    }
+
+    #[test]
+    fn stored_integer_disjunctions_publish_device_filtered_rows() {
+        for condition in [
+            quote::quote!((s = 1i32) or (s = 2i32)),
+            quote::quote!(s in {1i32, 2i32}),
+        ] {
+            let source = filtered_codes(quote::quote!(i32), condition);
+            let source = Advice::Store(syn::parse_quote!(selected))
+                .apply(&source)
+                .unwrap();
+            let facts = cq_lang_sequence::contract::check(&source).unwrap();
+            let selected = &source.structures.physical.program.definitions[1].operator;
+            assert!(row_predicate(selected));
+            let advice = advise(
+                &source,
+                &machine(),
+                true,
+                &facts,
+                &source,
+                &catalog(Vec::new()),
+            );
+            assert!(advice.iter().any(|advice| matches!(advice,
+                Advice::Grade { name, level, .. }
+                    if name == "selected" && level.iter().map(symbol_name).collect::<Vec<_>>()
+                        == ["host", "device"])));
         }
     }
 

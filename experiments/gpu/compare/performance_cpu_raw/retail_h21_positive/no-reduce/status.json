@@ -1,0 +1,8 @@
+{
+  "status": "skipped",
+  "correctness": "not_run",
+  "reason": "Cheaper same-planner-family configuration already >10x GPU",
+  "prior_configuration": "default",
+  "prior_total_ms": 202.96888099999998,
+  "gpu_total_ms": 4.368832111358643
+}

@@ -1,0 +1,1407 @@
+{
+  "schema_version": 1,
+  "sf": 10,
+  "methodology": {
+    "provenance": "Reused existing export_tpch.py timings; no new benchmark executions. Every saved SQL equals the current authored catalog SQL byte-for-byte; all six CLI log wall times match JSON warmup plus five measured samples.",
+    "engine_version": [
+      "v1.4.4 (Andium) 6ddac802ff"
+    ],
+    "timed_scope": "DuckDB CLI .timer real wall time for the complete authored SELECT, not a COUNT wrapper; execution consumes and renders all result rows in CSV mode to the per-query log. Result retrieval/output is included, rather than execution-only operator timing.",
+    "loading_excluded": "Database generation, binary export, process startup/database opening and SET threads occur outside the timed SELECT. Database scan/decompression and any reads needed by the SELECT remain inside its timing. A prior warmup runs the same SELECT in the same process; this is not a cold-cache test.",
+    "runs": {
+      "warmup": 1,
+      "measured": 5,
+      "process_scope": "one CLI process per query and thread count",
+      "thread_counts": [
+        1,
+        24
+      ]
+    },
+    "timer_units": "seconds",
+    "timer_resolution_seconds": 0.001,
+    "aggregation": "median of five measured runs, excluding warmup",
+    "sql_semantics": "Authored retail workload SQL, including DISTINCT and grouped folds where specified; these are not automatically the official TPC-H queries.",
+    "limitations": "Historical timings reused; exporter does not record capture time or concurrent host activity. Current hardware snapshot does not prove historical load/isolation.",
+    "exporter_path": "experiments/gpu/compare/export_tpch.py",
+    "exporter_sha256": "069ce8d2dec6f861cee40dc4c5a9e73fbbcdd7fb806688202a1511b31687c4aa"
+  },
+  "results": [
+    {
+      "gpu_query": "d19",
+      "catalog_name": "retail_d19",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_d19.rs",
+      "source_timing_path": "/data/tpch-gpu/sf10/duckdb_timing.retail_d19.json",
+      "source_timing_sha256": "878b36786fbaaeece6e9e9e6624b52ecc78b43d4205346f2c0e887d754ddae18",
+      "source_logs": {
+        "1": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_d19_threads1.log",
+          "sha256": "61f9a6c9a858e3adb89ea68320d9774627b85711c60982d2c293ca95dc6b66fb"
+        },
+        "24": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_d19_threads24.log",
+          "sha256": "db5add731d96b6c8aafbfb9865b36a2c3a6201c2e035361d16abf6c0e11b9e82"
+        }
+      },
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 10,
+        "query": "SELECT DISTINCT o.o_orderkey, p.p_partkey, c.c_custkey, s.s_suppkey\nFROM lineitem l JOIN orders o ON l.l_orderkey = o.o_orderkey\nJOIN part p ON l.l_partkey = p.p_partkey\nJOIN customer c ON o.o_custkey = c.c_custkey\nJOIN nation n ON c.c_nationkey = n.n_nationkey\nJOIN supplier s ON l.l_suppkey = s.s_suppkey\nWHERE o.o_orderdate >= DATE '1995-01-01' AND o.o_orderdate < DATE '1995-04-01'\nAND n.n_name = 'UNITED STATES'",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "method": "CLI .timer real wall time for complete authored SELECT; 1 ms resolution; one process per thread count",
+        "threads": {
+          "1": {
+            "warmup_seconds": 1.116,
+            "samples_seconds": [
+              0.574,
+              0.573,
+              0.571,
+              0.572,
+              0.565
+            ],
+            "median_seconds": 0.572
+          },
+          "24": {
+            "warmup_seconds": 0.269,
+            "samples_seconds": [
+              0.193,
+              0.229,
+              0.202,
+              0.202,
+              0.202
+            ],
+            "median_seconds": 0.202
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "d27",
+      "catalog_name": "retail_d27",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_d27.rs",
+      "source_timing_path": "/data/tpch-gpu/sf10/duckdb_timing.retail_d27.json",
+      "source_timing_sha256": "77301201fa5469fcc11cf61166d925bfd49064cc4e063f1a76d98a36db62bf02",
+      "source_logs": {
+        "1": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_d27_threads1.log",
+          "sha256": "0588f343381587907d1309baf623d8d870243e0c4c42863617be2a805f29a837"
+        },
+        "24": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_d27_threads24.log",
+          "sha256": "20f5d5bbef4e055b7f89cde8373baf107725c0f2ecc9e3a1328c7c638fbabb98"
+        }
+      },
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 10,
+        "query": "SELECT DISTINCT o.o_orderkey, p.p_partkey, s.s_suppkey\nFROM lineitem l JOIN orders o ON l.l_orderkey = o.o_orderkey\nJOIN part p ON l.l_partkey = p.p_partkey\nJOIN supplier s ON l.l_suppkey = s.s_suppkey\nJOIN nation n ON s.s_nationkey = n.n_nationkey\nWHERE o.o_orderdate >= DATE '1995-01-01' AND o.o_orderdate < DATE '1995-04-01'\nAND p.p_brand = 'Brand#12' AND n.n_name = 'UNITED STATES'",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "method": "CLI .timer real wall time for complete authored SELECT; 1 ms resolution; one process per thread count",
+        "threads": {
+          "1": {
+            "warmup_seconds": 1.218,
+            "samples_seconds": [
+              0.783,
+              0.773,
+              0.777,
+              0.789,
+              0.782
+            ],
+            "median_seconds": 0.782
+          },
+          "24": {
+            "warmup_seconds": 0.162,
+            "samples_seconds": [
+              0.079,
+              0.08,
+              0.086,
+              0.126,
+              0.13
+            ],
+            "median_seconds": 0.086
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "d72_inner",
+      "catalog_name": "retail_d72_inner",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_d72_inner.rs",
+      "source_timing_path": "/data/tpch-gpu/sf10/duckdb_timing.retail_d72_inner.json",
+      "source_timing_sha256": "f20b542341bfc623b6fe1be51271f939939cbff986d5b4cbb49ae0a800db5f21",
+      "source_logs": {
+        "1": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_d72_inner_threads1.log",
+          "sha256": "f0346c151f9fac212f7b437aac6eea9fa4b12ed644a2aa9f2720dbb8e04b5416"
+        },
+        "24": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_d72_inner_threads24.log",
+          "sha256": "25226e0943c72c65f4fca91b10bf122a89f00ba7d47d923f22e9588fa08eefa9"
+        }
+      },
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 10,
+        "query": "SELECT DISTINCT o.o_orderkey, p.p_partkey, s.s_suppkey, n.n_nationkey\nFROM lineitem l JOIN orders o ON l.l_orderkey = o.o_orderkey\nJOIN partsupp ps ON l.l_partkey = ps.ps_partkey AND l.l_suppkey = ps.ps_suppkey\nJOIN supplier s ON ps.ps_suppkey = s.s_suppkey\nJOIN part p ON ps.ps_partkey = p.p_partkey\nJOIN customer c ON o.o_custkey = c.c_custkey AND c.c_nationkey = s.s_nationkey\nJOIN nation n ON c.c_nationkey = n.n_nationkey\nWHERE l.l_shipdate >= DATE '1995-01-01' AND l.l_shipdate < DATE '1995-04-01'\nAND l.l_quantity > 20.00 AND ps.ps_availqty > 0",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "method": "CLI .timer real wall time for complete authored SELECT; 1 ms resolution; one process per thread count",
+        "threads": {
+          "1": {
+            "warmup_seconds": 2.223,
+            "samples_seconds": [
+              1.722,
+              1.663,
+              1.708,
+              1.61,
+              1.662
+            ],
+            "median_seconds": 1.663
+          },
+          "24": {
+            "warmup_seconds": 0.512,
+            "samples_seconds": [
+              0.336,
+              0.287,
+              0.273,
+              0.287,
+              0.272
+            ],
+            "median_seconds": 0.287
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "d85",
+      "catalog_name": "retail_d85",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_d85.rs",
+      "source_timing_path": "/data/tpch-gpu/sf10/duckdb_timing.retail_d85.json",
+      "source_timing_sha256": "dcf1bdb3f1a644bb49b356d462d46a04afad7a535f77266ccd85f28bf1494dff",
+      "source_logs": {
+        "1": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_d85_threads1.log",
+          "sha256": "8467abb1fdceef1e278d7141ae59a9d39a886f2ac488835b2dc6a0a1a4cd3191"
+        },
+        "24": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_d85_threads24.log",
+          "sha256": "2489455e6452e60c86649a709f50536a5481f4002d55f37640b9a299d2eadea1"
+        }
+      },
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 10,
+        "query": "SELECT DISTINCT o.o_orderkey, p.p_partkey, ns.n_nationkey\nFROM lineitem l JOIN partsupp ps ON l.l_partkey = ps.ps_partkey AND l.l_suppkey = ps.ps_suppkey\nJOIN part p ON p.p_partkey = l.l_partkey\nJOIN orders o ON o.o_orderkey = l.l_orderkey\nJOIN customer c ON c.c_custkey = o.o_custkey\nJOIN supplier s ON s.s_suppkey = ps.ps_suppkey\nJOIN nation nc ON nc.n_nationkey = c.c_nationkey\nJOIN nation ns ON ns.n_nationkey = s.s_nationkey\nWHERE o.o_orderdate >= DATE '1995-01-01' AND o.o_orderdate < DATE '1995-04-01'\nAND nc.n_name = 'UNITED STATES' AND ps.ps_availqty > 0",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "method": "CLI .timer real wall time for complete authored SELECT; 1 ms resolution; one process per thread count",
+        "threads": {
+          "1": {
+            "warmup_seconds": 1.251,
+            "samples_seconds": [
+              0.66,
+              0.715,
+              0.649,
+              0.636,
+              0.728
+            ],
+            "median_seconds": 0.66
+          },
+          "24": {
+            "warmup_seconds": 0.259,
+            "samples_seconds": [
+              0.178,
+              0.231,
+              0.178,
+              0.28,
+              0.189
+            ],
+            "median_seconds": 0.189
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h01",
+      "catalog_name": "retail_h01",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h01.rs",
+      "source_timing_path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h01.json",
+      "source_timing_sha256": "b99bd03f3cd9e70c7c330a3afd0ef46d8abed654d7edd92d3ae07ab5169d5630",
+      "source_logs": {
+        "1": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h01_threads1.log",
+          "sha256": "4cf56764223370f0977f1f2bebbfa05f2fb27129efc8539f5b2e61838876a218"
+        },
+        "24": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h01_threads24.log",
+          "sha256": "0e1fd7ab4c8dc7318d57f0997da9dcb4820f374b9eae5d66b40506ef3bb65c7c"
+        }
+      },
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 10,
+        "query": "SELECT l_returnflag, l_linestatus,\n    CAST(SUM(l_quantity) * 100 AS BIGINT) AS sum_quantity,\n    CAST(SUM(l_extendedprice) * 100 AS BIGINT) AS sum_price, COUNT(*) AS count_order\nFROM (SELECT DISTINCT l_orderkey, l_linenumber, l_returnflag, l_linestatus,\n    l_quantity, l_extendedprice, l_shipdate FROM lineitem\n    WHERE l_shipdate <= DATE '1998-09-02') AS matches\nGROUP BY l_returnflag, l_linestatus",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "method": "CLI .timer real wall time for complete authored SELECT; 1 ms resolution; one process per thread count",
+        "threads": {
+          "1": {
+            "warmup_seconds": 9.865,
+            "samples_seconds": [
+              9.699,
+              9.519,
+              9.438,
+              9.56,
+              9.426
+            ],
+            "median_seconds": 9.519
+          },
+          "24": {
+            "warmup_seconds": 0.655,
+            "samples_seconds": [
+              0.524,
+              0.523,
+              0.527,
+              0.524,
+              0.536
+            ],
+            "median_seconds": 0.524
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h02",
+      "catalog_name": "retail_h02",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h02.rs",
+      "source_timing_path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h02.json",
+      "source_timing_sha256": "c96b567a3199b3a1ef055eebb23ef34f21cc4f1bce8a1be06f91a37fc46a78e7",
+      "source_logs": {
+        "1": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h02_threads1.log",
+          "sha256": "ab31cf885a14846c6b435f1861e404b9342ed3f8f8747dea05e4d3b77a82d409"
+        },
+        "24": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h02_threads24.log",
+          "sha256": "1dc1e13c9ea5f41817f6b69d3e6cb0f15b5fcb96ecc82953da30bca01e23813e"
+        }
+      },
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 10,
+        "query": "SELECT DISTINCT CAST(s.s_acctbal * 100 AS BIGINT),\n    s.s_name, n.n_name, p.p_partkey, p.p_mfgr, s.s_address, s.s_phone, s.s_comment\nFROM part p JOIN partsupp ps ON ps.ps_partkey = p.p_partkey\nJOIN supplier s ON s.s_suppkey = ps.ps_suppkey\nJOIN nation n ON n.n_nationkey = s.s_nationkey\nJOIN region r ON r.r_regionkey = n.n_regionkey\nWHERE p.p_size = 15 AND p.p_type LIKE '%BRASS' AND r.r_name = 'EUROPE'\nAND ps.ps_supplycost = (\n    SELECT MIN(ps2.ps_supplycost) FROM partsupp ps2\n    JOIN supplier s2 ON s2.s_suppkey = ps2.ps_suppkey\n    JOIN nation n2 ON n2.n_nationkey = s2.s_nationkey\n    JOIN region r2 ON r2.r_regionkey = n2.n_regionkey\n    WHERE ps2.ps_partkey = p.p_partkey AND r2.r_name = 'EUROPE')",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "method": "CLI .timer real wall time for complete authored SELECT; 1 ms resolution; one process per thread count",
+        "threads": {
+          "1": {
+            "warmup_seconds": 0.197,
+            "samples_seconds": [
+              0.147,
+              0.146,
+              0.148,
+              0.146,
+              0.147
+            ],
+            "median_seconds": 0.147
+          },
+          "24": {
+            "warmup_seconds": 0.08,
+            "samples_seconds": [
+              0.048,
+              0.042,
+              0.041,
+              0.043,
+              0.04
+            ],
+            "median_seconds": 0.042
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h03",
+      "catalog_name": "retail_h03",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h03.rs",
+      "source_timing_path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h03.json",
+      "source_timing_sha256": "099636683986745e73080278828d4216606e26173ca634c3b7157b1048356005",
+      "source_logs": {
+        "1": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h03_threads1.log",
+          "sha256": "bc2002e1810f5bd3592b79cc650d7dee6d157e6da6e5dfe3e52929fe36f6a6fb"
+        },
+        "24": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h03_threads24.log",
+          "sha256": "9751e2f77bdc4a0e3fb71cdf0c19858bcfcffbb302f5ffc83d0f083c92ecdb11"
+        }
+      },
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 10,
+        "query": "SELECT DISTINCT o.o_orderkey, c.c_custkey\nFROM customer c JOIN orders o ON o.o_custkey = c.c_custkey\nJOIN lineitem l ON l.l_orderkey = o.o_orderkey\nWHERE c.c_mktsegment = 'BUILDING' AND o.o_orderdate < DATE '1995-03-15'\nAND l.l_shipdate > DATE '1995-03-15'",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "method": "CLI .timer real wall time for complete authored SELECT; 1 ms resolution; one process per thread count",
+        "threads": {
+          "1": {
+            "warmup_seconds": 0.977,
+            "samples_seconds": [
+              0.678,
+              0.706,
+              0.683,
+              0.749,
+              0.694
+            ],
+            "median_seconds": 0.694
+          },
+          "24": {
+            "warmup_seconds": 0.253,
+            "samples_seconds": [
+              0.165,
+              0.16,
+              0.158,
+              0.169,
+              0.162
+            ],
+            "median_seconds": 0.162
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h04",
+      "catalog_name": "retail_h04",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h04.rs",
+      "source_timing_path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h04.json",
+      "source_timing_sha256": "9e9051927afc45e889c9ee452920bc2740b1bd1dc47bf9dd295cb21c8985460f",
+      "source_logs": {
+        "1": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h04_threads1.log",
+          "sha256": "fd07e3860db73153cfb3a24e83589490d154ca89a6a99cfb9877fa30ce7b0752"
+        },
+        "24": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h04_threads24.log",
+          "sha256": "aea1ab5ff2af2a1276d27c9db4bacda47d3e60dbb0bbc6a89b294dfc02f4275a"
+        }
+      },
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 10,
+        "query": "SELECT DISTINCT o.o_orderkey\nFROM orders o JOIN lineitem l ON l.l_orderkey = o.o_orderkey\nWHERE o.o_orderdate >= DATE '1993-07-01' AND o.o_orderdate < DATE '1993-10-01'\nAND l.l_commitdate < l.l_receiptdate",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "method": "CLI .timer real wall time for complete authored SELECT; 1 ms resolution; one process per thread count",
+        "threads": {
+          "1": {
+            "warmup_seconds": 1.071,
+            "samples_seconds": [
+              0.731,
+              0.731,
+              0.747,
+              0.68,
+              0.68
+            ],
+            "median_seconds": 0.731
+          },
+          "24": {
+            "warmup_seconds": 0.357,
+            "samples_seconds": [
+              0.292,
+              0.292,
+              0.298,
+              0.297,
+              0.296
+            ],
+            "median_seconds": 0.296
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h04_not_exists",
+      "catalog_name": "retail_h04_not_exists",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h04_not_exists.rs",
+      "source_timing_path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h04_not_exists.json",
+      "source_timing_sha256": "8b942ebf8dd50563e334cddc7fd95be56d252e25c3845acdd1b1d8873ed46617",
+      "source_logs": {
+        "1": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h04_not_exists_threads1.log",
+          "sha256": "8f4595f0fe9f1c5df04f1c756f8b8fe0153f12a98e6ef6991483e45238c3b6be"
+        },
+        "24": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h04_not_exists_threads24.log",
+          "sha256": "2ddde82b40012ec4e4e7ecbc60da41c5fc99c88ca827a27141b62e267a69bca7"
+        }
+      },
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 10,
+        "query": "SELECT DISTINCT o.o_orderkey FROM orders o\nWHERE o.o_orderdate >= DATE '1993-07-01' AND o.o_orderdate < DATE '1993-10-01'\nAND NOT EXISTS (SELECT 1 FROM lineitem l WHERE l.l_orderkey = o.o_orderkey\nAND l.l_commitdate < l.l_receiptdate)",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "method": "CLI .timer real wall time for complete authored SELECT; 1 ms resolution; one process per thread count",
+        "threads": {
+          "1": {
+            "warmup_seconds": 0.867,
+            "samples_seconds": [
+              0.66,
+              0.637,
+              0.543,
+              0.532,
+              0.493
+            ],
+            "median_seconds": 0.543
+          },
+          "24": {
+            "warmup_seconds": 0.222,
+            "samples_seconds": [
+              0.095,
+              0.091,
+              0.087,
+              0.2,
+              0.172
+            ],
+            "median_seconds": 0.095
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h05",
+      "catalog_name": "retail_h05",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h05.rs",
+      "source_timing_path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h05.json",
+      "source_timing_sha256": "a4faad4a47dd8ecdc909f98b57fbe464f28ad38494950f3a47bcfcb27483abdc",
+      "source_logs": {
+        "1": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h05_threads1.log",
+          "sha256": "302c38f71ea608b8c3b173c63598c3a13f534c250c1f667ed0c10344c76f06a2"
+        },
+        "24": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h05_threads24.log",
+          "sha256": "22e2799eb415b6f25ab03cb2f8400094079ee0a87aca3602756eeac2a5f73fe1"
+        }
+      },
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 10,
+        "query": "SELECT DISTINCT o.o_orderkey, s.s_suppkey, n.n_nationkey\nFROM customer c JOIN orders o ON c.c_custkey = o.o_custkey\nJOIN lineitem l ON l.l_orderkey = o.o_orderkey\nJOIN supplier s ON s.s_suppkey = l.l_suppkey AND s.s_nationkey = c.c_nationkey\nJOIN nation n ON n.n_nationkey = s.s_nationkey\nJOIN region r ON r.r_regionkey = n.n_regionkey\nWHERE r.r_name = 'ASIA' AND o.o_orderdate >= DATE '1994-01-01'\nAND o.o_orderdate < DATE '1995-01-01'",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "method": "CLI .timer real wall time for complete authored SELECT; 1 ms resolution; one process per thread count",
+        "threads": {
+          "1": {
+            "warmup_seconds": 1.042,
+            "samples_seconds": [
+              0.65,
+              0.697,
+              0.687,
+              0.657,
+              0.691
+            ],
+            "median_seconds": 0.687
+          },
+          "24": {
+            "warmup_seconds": 0.245,
+            "samples_seconds": [
+              0.163,
+              0.159,
+              0.155,
+              0.155,
+              0.158
+            ],
+            "median_seconds": 0.158
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h06",
+      "catalog_name": "retail_h06",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h06.rs",
+      "source_timing_path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h06.json",
+      "source_timing_sha256": "f8fc5d4e5f06a02f4cc8f8eca06e867f9463bbd311be7da14e52bd38a5255916",
+      "source_logs": {
+        "1": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h06_threads1.log",
+          "sha256": "d94017ddddce20f7f900c956d813641a684f4aaeb2f752d8be26f892b7e60d08"
+        },
+        "24": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h06_threads24.log",
+          "sha256": "6be448bb321ef1d4a01836f0461aa6c246acdf92d2e503d0e4f4a0277a7119e0"
+        }
+      },
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 10,
+        "query": "SELECT CAST(COALESCE(SUM(l_extendedprice * l_discount), 0) * 10000 AS BIGINT) AS revenue\nFROM (SELECT DISTINCT l_orderkey, l_linenumber, l_extendedprice, l_discount,\n    l_quantity, l_shipdate FROM lineitem\n    WHERE l_shipdate >= DATE '1994-01-01' AND l_shipdate < DATE '1995-01-01'\n      AND l_discount BETWEEN 0.05 AND 0.07 AND l_quantity < 24) AS matches",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "method": "CLI .timer real wall time for complete authored SELECT; 1 ms resolution; one process per thread count",
+        "threads": {
+          "1": {
+            "warmup_seconds": 0.924,
+            "samples_seconds": [
+              0.501,
+              0.409,
+              0.566,
+              0.401,
+              0.4
+            ],
+            "median_seconds": 0.409
+          },
+          "24": {
+            "warmup_seconds": 0.105,
+            "samples_seconds": [
+              0.04,
+              0.04,
+              0.04,
+              0.041,
+              0.048
+            ],
+            "median_seconds": 0.04
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h07",
+      "catalog_name": "retail_h07",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h07.rs",
+      "source_timing_path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h07.json",
+      "source_timing_sha256": "97c2b060c35eb501151c29f9a0e96f88f89c0f76c4c77b2d2f98be1911a96526",
+      "source_logs": {
+        "1": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h07_threads1.log",
+          "sha256": "f072574dc65042efacd32fb1e45b25e44824f38fcc1194b07e84a1fa5832a56e"
+        },
+        "24": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h07_threads24.log",
+          "sha256": "cefc9379ecf7da4e9a36abc84f559d549a9f67c8e77defa5784f624f098e862b"
+        }
+      },
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 10,
+        "query": "SELECT DISTINCT o.o_orderkey, ns.n_nationkey, nc.n_nationkey\nFROM supplier s JOIN lineitem l ON s.s_suppkey = l.l_suppkey\nJOIN orders o ON l.l_orderkey = o.o_orderkey\nJOIN customer c ON c.c_custkey = o.o_custkey\nJOIN nation ns ON s.s_nationkey = ns.n_nationkey\nJOIN nation nc ON c.c_nationkey = nc.n_nationkey\nWHERE ((ns.n_name = 'FRANCE' AND nc.n_name = 'GERMANY')\nOR (ns.n_name = 'GERMANY' AND nc.n_name = 'FRANCE'))\nAND l.l_shipdate >= DATE '1995-01-01' AND l.l_shipdate <= DATE '1996-12-31'",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "method": "CLI .timer real wall time for complete authored SELECT; 1 ms resolution; one process per thread count",
+        "threads": {
+          "1": {
+            "warmup_seconds": 1.218,
+            "samples_seconds": [
+              0.825,
+              0.7,
+              0.719,
+              0.733,
+              0.693
+            ],
+            "median_seconds": 0.719
+          },
+          "24": {
+            "warmup_seconds": 0.178,
+            "samples_seconds": [
+              0.132,
+              0.131,
+              0.129,
+              0.13,
+              0.128
+            ],
+            "median_seconds": 0.13
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h07_block",
+      "catalog_name": "retail_h07_block",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h07_block.rs",
+      "source_timing_path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h07_block.json",
+      "source_timing_sha256": "2f1c5a95fba77d68cee2aa83a6362b9c2dc7581dfe21c21f8b3c4d4713cc40ab",
+      "source_logs": {
+        "1": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h07_block_threads1.log",
+          "sha256": "e9950e0432ecf30553829fa6c8c1467c69250d6494bc141ff945ef331e571c1b"
+        },
+        "24": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h07_block_threads24.log",
+          "sha256": "a1760f91a301f5780c77a4181448fa1676173c07acbc0fa72c902886d93d1800"
+        }
+      },
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 10,
+        "query": "SELECT DISTINCT o.o_orderkey, ns.n_nationkey, nc.n_nationkey\nFROM supplier s JOIN lineitem l ON s.s_suppkey = l.l_suppkey\nJOIN orders o ON l.l_orderkey = o.o_orderkey\nJOIN customer c ON c.c_custkey = o.o_custkey\nJOIN nation ns ON s.s_nationkey = ns.n_nationkey\nJOIN nation nc ON c.c_nationkey = nc.n_nationkey\nWHERE ((ns.n_name = 'FRANCE' AND nc.n_name = 'GERMANY')\nOR (ns.n_name = 'GERMANY' AND nc.n_name = 'FRANCE'))\nAND l.l_shipdate >= DATE '1995-01-01' AND l.l_shipdate <= DATE '1996-12-31'",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "method": "CLI .timer real wall time for complete authored SELECT; 1 ms resolution; one process per thread count",
+        "threads": {
+          "1": {
+            "warmup_seconds": 1.118,
+            "samples_seconds": [
+              0.66,
+              0.671,
+              0.699,
+              0.69,
+              0.675
+            ],
+            "median_seconds": 0.675
+          },
+          "24": {
+            "warmup_seconds": 0.197,
+            "samples_seconds": [
+              0.133,
+              0.132,
+              0.129,
+              0.133,
+              0.128
+            ],
+            "median_seconds": 0.132
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h08",
+      "catalog_name": "retail_h08",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h08.rs",
+      "source_timing_path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h08.json",
+      "source_timing_sha256": "d7559a0317fa6011836b5a7d89a1253e9c90eb6fd41b13890b2ac1f83a3ff80e",
+      "source_logs": {
+        "1": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h08_threads1.log",
+          "sha256": "28be75704b8f855e31c633e4906c0b8a641226d05a96cf0009657fc41fb17e73"
+        },
+        "24": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h08_threads24.log",
+          "sha256": "58f4d72896aeead84315d4497a07385c832909b061faf54f88156d85c61a7451"
+        }
+      },
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 10,
+        "query": "SELECT DISTINCT o.o_orderkey, p.p_partkey, s.s_suppkey\nFROM lineitem l JOIN part p ON l.l_partkey = p.p_partkey\nJOIN supplier s ON l.l_suppkey = s.s_suppkey\nJOIN orders o ON l.l_orderkey = o.o_orderkey\nJOIN customer c ON o.o_custkey = c.c_custkey\nJOIN nation nc ON c.c_nationkey = nc.n_nationkey\nJOIN region r ON nc.n_regionkey = r.r_regionkey\nJOIN nation ns ON s.s_nationkey = ns.n_nationkey\nWHERE r.r_name = 'AMERICA' AND p.p_type = 'ECONOMY ANODIZED STEEL'\nAND o.o_orderdate >= DATE '1995-01-01' AND o.o_orderdate <= DATE '1996-12-31'",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "method": "CLI .timer real wall time for complete authored SELECT; 1 ms resolution; one process per thread count",
+        "threads": {
+          "1": {
+            "warmup_seconds": 1.35,
+            "samples_seconds": [
+              0.869,
+              0.877,
+              0.866,
+              0.865,
+              0.864
+            ],
+            "median_seconds": 0.866
+          },
+          "24": {
+            "warmup_seconds": 0.172,
+            "samples_seconds": [
+              0.11,
+              0.113,
+              0.111,
+              0.109,
+              0.109
+            ],
+            "median_seconds": 0.11
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h09",
+      "catalog_name": "retail_h09",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h09.rs",
+      "source_timing_path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h09.json",
+      "source_timing_sha256": "9a5f9681fbfc76f9b4c6657e1f285eb8fc58aa7e96cac8079f7688ca8030277b",
+      "source_logs": {
+        "1": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h09_threads1.log",
+          "sha256": "ec7be7fa2ccff44f3f7fd1d71cdc3809b2fd717ae71334806dcb976989b3725d"
+        },
+        "24": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h09_threads24.log",
+          "sha256": "d0752c5793fd0929d5c9309b831375055e844141c55c42b761dc1d297d9043cb"
+        }
+      },
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 10,
+        "query": "SELECT DISTINCT o.o_orderkey, p.p_partkey, s.s_suppkey\nFROM lineitem l JOIN partsupp ps ON l.l_partkey = ps.ps_partkey AND l.l_suppkey = ps.ps_suppkey\nJOIN part p ON p.p_partkey = l.l_partkey\nJOIN supplier s ON s.s_suppkey = l.l_suppkey\nJOIN orders o ON o.o_orderkey = l.l_orderkey\nJOIN nation n ON n.n_nationkey = s.s_nationkey\nWHERE p.p_name LIKE '%green%'",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "method": "CLI .timer real wall time for complete authored SELECT; 1 ms resolution; one process per thread count",
+        "threads": {
+          "1": {
+            "warmup_seconds": 7.4,
+            "samples_seconds": [
+              6.917,
+              6.988,
+              6.997,
+              7.034,
+              7.3
+            ],
+            "median_seconds": 6.997
+          },
+          "24": {
+            "warmup_seconds": 4.469,
+            "samples_seconds": [
+              4.442,
+              4.342,
+              4.397,
+              4.346,
+              4.418
+            ],
+            "median_seconds": 4.397
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h10",
+      "catalog_name": "retail_h10",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h10.rs",
+      "source_timing_path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h10.json",
+      "source_timing_sha256": "06a998fe96610f7427463e17d6b9361238d36e5d2afd26edc769579793b12989",
+      "source_logs": {
+        "1": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h10_threads1.log",
+          "sha256": "41399a17dbbd5fa32cca8b1856701ce875562befc9ce7deb7f2216c490948055"
+        },
+        "24": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h10_threads24.log",
+          "sha256": "6ba4d64df745a4e8b78f3a0e59829ce4b7f0af3c63aaf7afe990e1964bbae445"
+        }
+      },
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 10,
+        "query": "SELECT c_custkey, c_name,\n    CAST(SUM(l_extendedprice * (1 - l_discount)) * 10000 AS BIGINT) AS revenue,\n    CAST(c_acctbal * 100 AS BIGINT) AS account_balance, n_name, c_address, c_phone, c_comment\nFROM (SELECT DISTINCT c.c_custkey, c.c_name, c.c_acctbal, c.c_nationkey,\n    c.c_address, c.c_phone, c.c_comment, o.o_orderkey, o.o_orderdate,\n    l.l_linenumber, l.l_extendedprice, l.l_discount, l.l_returnflag, n.n_name\n    FROM customer c JOIN orders o ON c.c_custkey = o.o_custkey\n    JOIN lineitem l ON l.l_orderkey = o.o_orderkey\n    JOIN nation n ON n.n_nationkey = c.c_nationkey\n    WHERE o.o_orderdate >= DATE '1993-10-01' AND o.o_orderdate < DATE '1994-01-01'\n      AND l.l_returnflag = 'R') AS matches\nGROUP BY c_custkey, c_name, c_acctbal, n_name, c_address, c_phone, c_comment",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "method": "CLI .timer real wall time for complete authored SELECT; 1 ms resolution; one process per thread count",
+        "threads": {
+          "1": {
+            "warmup_seconds": 3.21,
+            "samples_seconds": [
+              2.68,
+              2.693,
+              2.708,
+              2.721,
+              2.687
+            ],
+            "median_seconds": 2.693
+          },
+          "24": {
+            "warmup_seconds": 1.238,
+            "samples_seconds": [
+              1.157,
+              1.176,
+              1.158,
+              1.166,
+              1.154
+            ],
+            "median_seconds": 1.158
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h11",
+      "catalog_name": "retail_h11",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h11.rs",
+      "source_timing_path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h11.json",
+      "source_timing_sha256": "f999fc1cb2c137e08c2f72d8d2f6d55c33203a4a27256d81d87d43bc722c1daa",
+      "source_logs": {
+        "1": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h11_threads1.log",
+          "sha256": "d462ac507810fbe58f46f4a24ad3f214a24f8785b29600ede9a928208a1bd9b9"
+        },
+        "24": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h11_threads24.log",
+          "sha256": "b2a68465c48678f363001fa9e5f1995f27e8245698020ab7eca6dca3a0c236d4"
+        }
+      },
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 10,
+        "query": "WITH matches AS (\n    SELECT DISTINCT ps.ps_partkey, ps.ps_suppkey, ps.ps_availqty, ps.ps_supplycost\n    FROM partsupp ps JOIN supplier s ON s.s_suppkey = ps.ps_suppkey\n    JOIN nation n ON n.n_nationkey = s.s_nationkey WHERE n.n_name = 'GERMANY')\nSELECT ps_partkey, CAST(SUM(ps_supplycost * ps_availqty) * 100 AS BIGINT)\nFROM matches GROUP BY ps_partkey\nHAVING SUM(ps_supplycost * ps_availqty) >\n    (SELECT SUM(ps_supplycost * ps_availqty) * 0.0001 FROM matches)",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "method": "CLI .timer real wall time for complete authored SELECT; 1 ms resolution; one process per thread count",
+        "threads": {
+          "1": {
+            "warmup_seconds": 0.15,
+            "samples_seconds": [
+              0.098,
+              0.1,
+              0.1,
+              0.099,
+              0.099
+            ],
+            "median_seconds": 0.099
+          },
+          "24": {
+            "warmup_seconds": 0.049,
+            "samples_seconds": [
+              0.018,
+              0.016,
+              0.014,
+              0.014,
+              0.015
+            ],
+            "median_seconds": 0.015
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h12",
+      "catalog_name": "retail_h12",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h12.rs",
+      "source_timing_path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h12.json",
+      "source_timing_sha256": "5ce656f297dfe03fdfd0aeb3497e1ab289b6094c3144fb74a3069b5060303ef1",
+      "source_logs": {
+        "1": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h12_threads1.log",
+          "sha256": "a2dede4a640e84ae8613b06de853bcdb84c4a80d043a450e23ffa84f6af59ef7"
+        },
+        "24": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h12_threads24.log",
+          "sha256": "e851ae43e0586054d09ce887b1708221a73da2ffae063130b99bab7ba57b25b4"
+        }
+      },
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 10,
+        "query": "SELECT l_shipmode,\n    CAST(SUM(CASE WHEN o_orderpriority IN ('1-URGENT', '2-HIGH') THEN 1 ELSE 0 END) AS BIGINT) AS high_line_count,\n    CAST(SUM(CASE WHEN o_orderpriority NOT IN ('1-URGENT', '2-HIGH') THEN 1 ELSE 0 END) AS BIGINT) AS low_line_count\nFROM (SELECT DISTINCT l.l_orderkey, l.l_linenumber, l.l_shipmode, l.l_commitdate,\n    l.l_receiptdate, l.l_shipdate, o.o_orderpriority\n    FROM orders o JOIN lineitem l ON o.o_orderkey = l.l_orderkey\n    WHERE l.l_shipmode IN ('MAIL', 'SHIP') AND l.l_commitdate < l.l_receiptdate\n      AND l.l_shipdate < l.l_commitdate AND l.l_receiptdate >= DATE '1994-01-01'\n      AND l.l_receiptdate < DATE '1995-01-01') AS matches\nGROUP BY l_shipmode",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "method": "CLI .timer real wall time for complete authored SELECT; 1 ms resolution; one process per thread count",
+        "threads": {
+          "1": {
+            "warmup_seconds": 0.994,
+            "samples_seconds": [
+              0.535,
+              0.542,
+              0.546,
+              0.54,
+              0.541
+            ],
+            "median_seconds": 0.541
+          },
+          "24": {
+            "warmup_seconds": 0.115,
+            "samples_seconds": [
+              0.054,
+              0.053,
+              0.054,
+              0.054,
+              0.053
+            ],
+            "median_seconds": 0.054
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h13",
+      "catalog_name": "retail_h13",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h13.rs",
+      "source_timing_path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h13.json",
+      "source_timing_sha256": "ca725fee14f9cb802b8ae799d426088d781e436b3134c2b6e58fabc780363220",
+      "source_logs": {
+        "1": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h13_threads1.log",
+          "sha256": "083328621f504c8907596453fc9ea5e0a823def9f8f8ac1de3d8dcf3a3150c80"
+        },
+        "24": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h13_threads24.log",
+          "sha256": "7d96e981fe689c169b42f3e955ae199df3db9f6311a10561357dabfa9633ae46"
+        }
+      },
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 10,
+        "query": "SELECT c.c_custkey, COUNT(o.o_orderkey)\nFROM (SELECT DISTINCT c_custkey FROM customer) c\nLEFT JOIN (SELECT DISTINCT o_orderkey, o_custkey FROM orders\n    WHERE o_comment NOT LIKE '%special%requests%') o ON o.o_custkey = c.c_custkey\nGROUP BY c.c_custkey",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "method": "CLI .timer real wall time for complete authored SELECT; 1 ms resolution; one process per thread count",
+        "threads": {
+          "1": {
+            "warmup_seconds": 5.114,
+            "samples_seconds": [
+              4.795,
+              4.905,
+              4.904,
+              4.899,
+              4.906
+            ],
+            "median_seconds": 4.904
+          },
+          "24": {
+            "warmup_seconds": 1.729,
+            "samples_seconds": [
+              1.588,
+              1.579,
+              1.585,
+              1.61,
+              1.59
+            ],
+            "median_seconds": 1.588
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h14",
+      "catalog_name": "retail_h14",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h14.rs",
+      "source_timing_path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h14.json",
+      "source_timing_sha256": "fda3a31037691692e4ce65850813947632ad0b4bf5e283c80ddc10a21d521529",
+      "source_logs": {
+        "1": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h14_threads1.log",
+          "sha256": "191293387bb3ab291549b02d37e787edb0b86d3de8b974508b0e2641b100bf05"
+        },
+        "24": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h14_threads24.log",
+          "sha256": "5627b63dcffa8762e369f6d8e541fd6e8f2ae20701647d84c62df5932e48967d"
+        }
+      },
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 10,
+        "query": "SELECT\n    CAST(COALESCE(SUM(CASE WHEN p_type LIKE 'PROMO%' THEN\n        l_extendedprice * (1.00 - l_discount) ELSE 0 END), 0) * 10000 AS BIGINT) AS promo_revenue,\n    CAST(COALESCE(SUM(l_extendedprice * (1.00 - l_discount)), 0) * 10000 AS BIGINT) AS total_revenue\nFROM (SELECT DISTINCT l.l_orderkey, l.l_linenumber, l.l_partkey,\n    l.l_extendedprice, l.l_discount, l.l_shipdate, p.p_type\n    FROM lineitem l JOIN part p ON l.l_partkey = p.p_partkey\n    WHERE l.l_shipdate >= DATE '1995-09-01' AND l.l_shipdate < DATE '1995-10-01') AS matches",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "method": "CLI .timer real wall time for complete authored SELECT; 1 ms resolution; one process per thread count",
+        "threads": {
+          "1": {
+            "warmup_seconds": 1.145,
+            "samples_seconds": [
+              0.564,
+              0.574,
+              0.564,
+              0.57,
+              0.559
+            ],
+            "median_seconds": 0.564
+          },
+          "24": {
+            "warmup_seconds": 0.143,
+            "samples_seconds": [
+              0.061,
+              0.06,
+              0.06,
+              0.06,
+              0.06
+            ],
+            "median_seconds": 0.06
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h15",
+      "catalog_name": "retail_h15",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h15.rs",
+      "source_timing_path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h15.json",
+      "source_timing_sha256": "99e6367ea430393057e3f17018fc8b4c7542181ec1255315211d9b26c0db641b",
+      "source_logs": {
+        "1": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h15_threads1.log",
+          "sha256": "61a6a2970935b99726b8e0d7bd1160340bc0e461a87a2165a8704f3f472c8b3c"
+        },
+        "24": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h15_threads24.log",
+          "sha256": "4deb604ded4402c089e8887316eaaf65faded0d3226aa1516f6a1eae210abf19"
+        }
+      },
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 10,
+        "query": "WITH revenue AS (\n    SELECT l_suppkey AS supplier_key,\n        CAST(SUM(l_extendedprice * (1 - l_discount)) * 10000 AS BIGINT) AS total_revenue\n    FROM (SELECT DISTINCT l_orderkey, l_linenumber, l_suppkey,\n        l_extendedprice, l_discount, l_shipdate FROM lineitem\n        WHERE l_shipdate >= DATE '1996-01-01' AND l_shipdate < DATE '1996-04-01') matches\n    GROUP BY l_suppkey)\nSELECT DISTINCT s.s_suppkey, s.s_name, s.s_address, s.s_phone, r.total_revenue\nFROM supplier s JOIN revenue r ON s.s_suppkey = r.supplier_key\nWHERE r.total_revenue = (SELECT MAX(total_revenue) FROM revenue)",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "method": "CLI .timer real wall time for complete authored SELECT; 1 ms resolution; one process per thread count",
+        "threads": {
+          "1": {
+            "warmup_seconds": 1.06,
+            "samples_seconds": [
+              0.542,
+              0.544,
+              0.534,
+              0.561,
+              0.554
+            ],
+            "median_seconds": 0.544
+          },
+          "24": {
+            "warmup_seconds": 0.173,
+            "samples_seconds": [
+              0.065,
+              0.065,
+              0.065,
+              0.064,
+              0.065
+            ],
+            "median_seconds": 0.065
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h16",
+      "catalog_name": "retail_h16",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h16.rs",
+      "source_timing_path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h16.json",
+      "source_timing_sha256": "53540999f23ffe710d8f9681011bb860fe57989b4bb25e4b2a1b9758a9b2bcd0",
+      "source_logs": {
+        "1": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h16_threads1.log",
+          "sha256": "e26209a5c1d2bcb5b84c606b08d97e28d17dfaa0b7510e4753a1128d2ba1dff5"
+        },
+        "24": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h16_threads24.log",
+          "sha256": "0bbfa7bb6658b1e4f7a897a31e5bb8181e0e5d8c44444818c675c962f73bf297"
+        }
+      },
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 10,
+        "query": "SELECT DISTINCT p.p_partkey, ps.ps_suppkey\nFROM part p JOIN partsupp ps ON ps.ps_partkey = p.p_partkey\nWHERE p.p_brand <> 'Brand#45' AND p.p_type NOT LIKE 'MEDIUM POLISHED%'\nAND p.p_size IN (49, 14, 23, 45, 19, 3, 36, 9)\nAND ps.ps_suppkey NOT IN (SELECT s.s_suppkey FROM supplier s\nWHERE s.s_comment LIKE '%Customer%Complaints%')",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "method": "CLI .timer real wall time for complete authored SELECT; 1 ms resolution; one process per thread count",
+        "threads": {
+          "1": {
+            "warmup_seconds": 1.195,
+            "samples_seconds": [
+              1.158,
+              1.152,
+              1.149,
+              1.157,
+              1.137
+            ],
+            "median_seconds": 1.152
+          },
+          "24": {
+            "warmup_seconds": 1.057,
+            "samples_seconds": [
+              1.036,
+              1.026,
+              1.023,
+              1.025,
+              1.021
+            ],
+            "median_seconds": 1.025
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h18",
+      "catalog_name": "retail_h18",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h18.rs",
+      "source_timing_path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h18.json",
+      "source_timing_sha256": "736fd159e225515aeb19af3261b755d5423d8550a4482ba7b15c70cfa15b1076",
+      "source_logs": {
+        "1": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h18_threads1.log",
+          "sha256": "a49c63ab44a81e24ccd923c5282f0fdd070ea0323f43575214fcd291d43dd372"
+        },
+        "24": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h18_threads24.log",
+          "sha256": "e826713b2f30b75cdb2f39ecfece739b00ac0a314e05b23b84c0d067c57f0083"
+        }
+      },
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 10,
+        "query": "WITH quantities AS (\n    SELECT l_orderkey, CAST(SUM(l_quantity) * 100 AS BIGINT) AS sum_quantity\n    FROM (SELECT DISTINCT l_orderkey, l_linenumber, l_quantity FROM lineitem) AS lines\n    GROUP BY l_orderkey HAVING SUM(l_quantity) > 300.00\n)\nSELECT DISTINCT c.c_name, c.c_custkey, o.o_orderkey,\n    (o.o_orderdate - DATE '1970-01-01')::INTEGER AS o_orderdate,\n    CAST(o.o_totalprice * 100 AS BIGINT) AS total_price, q.sum_quantity\nFROM quantities q JOIN orders o ON q.l_orderkey = o.o_orderkey\nJOIN customer c ON o.o_custkey = c.c_custkey",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "method": "CLI .timer real wall time for complete authored SELECT; 1 ms resolution; one process per thread count",
+        "threads": {
+          "1": {
+            "warmup_seconds": 9.744,
+            "samples_seconds": [
+              9.49,
+              9.288,
+              9.401,
+              9.31,
+              9.188
+            ],
+            "median_seconds": 9.31
+          },
+          "24": {
+            "warmup_seconds": 0.897,
+            "samples_seconds": [
+              0.771,
+              0.746,
+              0.754,
+              0.772,
+              0.773
+            ],
+            "median_seconds": 0.771
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h19",
+      "catalog_name": "retail_h19",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h19.rs",
+      "source_timing_path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h19.json",
+      "source_timing_sha256": "f6740e9920d017aa656627ff3c6b691490a1f565747e84ab9e47a3bf3eb1fd74",
+      "source_logs": {
+        "1": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h19_threads1.log",
+          "sha256": "a26060a91465dd3ecca57476eeba6ca504c1c8ba75bf7ece908d8609e1c40277"
+        },
+        "24": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h19_threads24.log",
+          "sha256": "f3f6c35d706eb086048e0e68716367c6294c05c384918b38b70cf1eb670c4b48"
+        }
+      },
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 10,
+        "query": "SELECT\n    CAST(COALESCE(SUM(l_extendedprice * (1.00 - l_discount)), 0) * 10000 AS BIGINT) AS revenue\nFROM (SELECT DISTINCT l.l_orderkey, l.l_linenumber, l.l_partkey, l.l_quantity,\n    l.l_extendedprice, l.l_discount, l.l_shipmode, l.l_shipinstruct,\n    p.p_brand, p.p_container, p.p_size\n    FROM lineitem l JOIN part p ON l.l_partkey = p.p_partkey\n    WHERE l.l_shipmode IN ('AIR', 'AIR REG') AND l.l_shipinstruct = 'DELIVER IN PERSON'\n    AND ((p.p_brand = 'Brand#12' AND p.p_container IN ('SM CASE', 'SM BOX', 'SM PACK', 'SM PKG')\n            AND l.l_quantity BETWEEN 1.00 AND 11.00 AND p.p_size BETWEEN 1 AND 5)\n        OR (p.p_brand = 'Brand#23' AND p.p_container IN ('MED BAG', 'MED BOX', 'MED PKG', 'MED PACK')\n            AND l.l_quantity BETWEEN 10.00 AND 20.00 AND p.p_size BETWEEN 1 AND 10)\n        OR (p.p_brand = 'Brand#34' AND p.p_container IN ('LG CASE', 'LG BOX', 'LG PACK', 'LG PKG')\n            AND l.l_quantity BETWEEN 20.00 AND 30.00 AND p.p_size BETWEEN 1 AND 15))) AS matches",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "method": "CLI .timer real wall time for complete authored SELECT; 1 ms resolution; one process per thread count",
+        "threads": {
+          "1": {
+            "warmup_seconds": 1.618,
+            "samples_seconds": [
+              0.921,
+              0.919,
+              0.912,
+              0.916,
+              0.916
+            ],
+            "median_seconds": 0.916
+          },
+          "24": {
+            "warmup_seconds": 0.159,
+            "samples_seconds": [
+              0.073,
+              0.074,
+              0.073,
+              0.074,
+              0.074
+            ],
+            "median_seconds": 0.074
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h20",
+      "catalog_name": "retail_h20",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h20.rs",
+      "source_timing_path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h20.json",
+      "source_timing_sha256": "9ead778838fb041c1986e4d134f548caaf88ad168b82052804de33606a143cdc",
+      "source_logs": {
+        "1": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h20_threads1.log",
+          "sha256": "7c24ef93d3791cbc41a78aa820a32427355a864d89525066876a4dfe74ff0dee"
+        },
+        "24": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h20_threads24.log",
+          "sha256": "806092f0e95bdd5dc9ba6874bb4950e6275d7c5a2ccc5715916c92a556608f93"
+        }
+      },
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 10,
+        "query": "SELECT DISTINCT s.s_name, s.s_address\nFROM supplier s JOIN nation n ON n.n_nationkey = s.s_nationkey\nWHERE n.n_name = 'CANADA' AND s.s_suppkey IN (\n    SELECT ps.ps_suppkey FROM partsupp ps\n    WHERE ps.ps_partkey IN (SELECT p.p_partkey FROM part p WHERE p.p_name LIKE 'forest%')\n    AND ps.ps_availqty > 0.5 * (\n        SELECT SUM(l.l_quantity) FROM (\n            SELECT DISTINCT l_orderkey, l_linenumber, l_partkey, l_suppkey, l_quantity, l_shipdate\n            FROM lineitem WHERE l_shipdate >= DATE '1994-01-01'\n                AND l_shipdate < DATE '1995-01-01') l\n        WHERE l.l_partkey = ps.ps_partkey AND l.l_suppkey = ps.ps_suppkey))",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "method": "CLI .timer real wall time for complete authored SELECT; 1 ms resolution; one process per thread count",
+        "threads": {
+          "1": {
+            "warmup_seconds": 2.076,
+            "samples_seconds": [
+              1.39,
+              1.365,
+              1.448,
+              1.383,
+              1.372
+            ],
+            "median_seconds": 1.383
+          },
+          "24": {
+            "warmup_seconds": 0.255,
+            "samples_seconds": [
+              0.129,
+              0.129,
+              0.127,
+              0.128,
+              0.127
+            ],
+            "median_seconds": 0.128
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h21_positive",
+      "catalog_name": "retail_h21_positive",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h21_positive.rs",
+      "source_timing_path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h21_positive.json",
+      "source_timing_sha256": "07dcd747306f290e041e3454e8c10dffd0342d1f3431908ea20b66ec9f70e630",
+      "source_logs": {
+        "1": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h21_positive_threads1.log",
+          "sha256": "b8c2462e9f32db965e3c08e3a17a993c469d6e2f5dc4dfd378b56eb4bd416cf0"
+        },
+        "24": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h21_positive_threads24.log",
+          "sha256": "1fd6c1c33e9b2d28925f92c3362a0a1c50139d003d4c911b08db806a04785700"
+        }
+      },
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 10,
+        "query": "SELECT DISTINCT l1.l_orderkey, s.s_suppkey, l2.l_suppkey\nFROM supplier s JOIN lineitem l1 ON s.s_suppkey = l1.l_suppkey\nJOIN orders o ON o.o_orderkey = l1.l_orderkey\nJOIN nation n ON n.n_nationkey = s.s_nationkey\nJOIN lineitem l2 ON l1.l_orderkey = l2.l_orderkey\nWHERE n.n_name = 'SAUDI ARABIA' AND o.o_orderstatus = 'F'\nAND l1.l_receiptdate > l1.l_commitdate AND l2.l_suppkey <> l1.l_suppkey",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "method": "CLI .timer real wall time for complete authored SELECT; 1 ms resolution; one process per thread count",
+        "threads": {
+          "1": {
+            "warmup_seconds": 5.633,
+            "samples_seconds": [
+              5.182,
+              5.23,
+              5.148,
+              5.219,
+              5.13
+            ],
+            "median_seconds": 5.182
+          },
+          "24": {
+            "warmup_seconds": 3.802,
+            "samples_seconds": [
+              3.771,
+              3.781,
+              3.831,
+              3.806,
+              3.797
+            ],
+            "median_seconds": 3.797
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h22",
+      "catalog_name": "retail_h22",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h22.rs",
+      "source_timing_path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h22.json",
+      "source_timing_sha256": "41b512378512552da54fe3f775fb57d2089af30b0dbc019b7fac6faf3034dedd",
+      "source_logs": {
+        "1": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h22_threads1.log",
+          "sha256": "7d0080b76ce73170390cf80e62f54e94dd2001cb20c687adf57fe04f558e410e"
+        },
+        "24": {
+          "path": "/data/tpch-gpu/sf10/duckdb_timing.retail_h22_threads24.log",
+          "sha256": "fc513b7c90638bb6e968e5c96480c5dc35dc41c69b6afa0cfa86b9a611ff1bce"
+        }
+      },
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 10,
+        "query": "SELECT DISTINCT c.c_custkey FROM customer c\nWHERE substring(c.c_phone FROM 1 FOR 2) IN ('13', '31', '23', '29', '30', '18', '17')\nAND NOT EXISTS (SELECT 1 FROM orders o WHERE o.o_custkey = c.c_custkey)",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "method": "CLI .timer real wall time for complete authored SELECT; 1 ms resolution; one process per thread count",
+        "threads": {
+          "1": {
+            "warmup_seconds": 0.598,
+            "samples_seconds": [
+              0.527,
+              0.523,
+              0.524,
+              0.536,
+              0.53
+            ],
+            "median_seconds": 0.527
+          },
+          "24": {
+            "warmup_seconds": 0.152,
+            "samples_seconds": [
+              0.129,
+              0.129,
+              0.124,
+              0.128,
+              0.122
+            ],
+            "median_seconds": 0.128
+          }
+        }
+      }
+    }
+  ]
+}

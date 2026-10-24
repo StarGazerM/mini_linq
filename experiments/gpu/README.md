@@ -64,11 +64,15 @@ H08 (`p_type`, `r_name`), H09 (`p_name`), H21-positive (`o_orderstatus`, `n_name
 D19/D85 (`n_name`), and D27 (`p_brand`, `n_name`); D72-inner has no string columns.
 Catalog provider tokens declare their accepted element types: resident range
 providers accept scalar codes, while host providers retain unsupported rows.
-String literal equality and opaque string predicates execute through the shared
-host row printer. Once a host projection drops the strings, its numeric rows
-are uploaded for subsequent GPU work; host evaluation and upload are included
-in the build timing interval. The synthetic String-guard regression checks
-this boundary against Sequential and explicit expected keys.
+The explicit `tpch_dictionary` profile also stores String columns as codes when
+their uses are literal equality predicates, including relational `Or` arms and
+`In` sets. Each literal uses its own column's dictionary; H07's country-pair
+select therefore executes on integer codes on the device. Opaque string
+predicates and ordered String comparisons retain host strings. Once a host
+projection drops the strings, its numeric rows are uploaded for subsequent GPU
+work; host evaluation and upload are included in the build timing interval.
+The synthetic String-guard regression checks this boundary against Sequential
+and explicit expected keys.
 
 H05 uses the explicit `tpch_domains` loader profile in **both** modes: the shared
 `gpu_compress_host::tpch::schema`/`gpu_compress::Catalog` stores join keys as dense u32 domain IDs
@@ -145,11 +149,47 @@ answer download, and comparison are outside those event intervals. SF1 also
 compares the GPU answer to independent Sequential translation of the identical
 Physical using `cq_testkit::conformance::assert_answers_equal`, the external
 target API used by H05 (`assert_conformant` itself exposes only CPU targets).
-The eleven conformance tests cover both modes and reject unexpected planning
-failures; H07's existing unsupported opaque country disjunction remains an
-explicit reported rejection. `TPCH_GPU_DATA_ROOT` changes the fixture root at
-build time. The new advised acceptance results must be measured; the schedules
-and timing ceilings above are requirements, not claimed measurements.
+The suite conformance tests cover built modes and reject unexpected planning
+failures; H07 now requires a positive exact run rather than an expected catalog
+rejection. `TPCH_GPU_DATA_ROOT` changes the fixture root at build time.
+Each query runs all its iterations inside a same-thread `QueryScope`. Generated
+thread-local caches register release hooks; scope teardown drops their owning
+references, runtime scratch, and per-program modules before the next query
+loads. Caches remain reusable across warmup and measured iterations. The suite
+uses one process and one calling thread; teardown is outside query timings.
+Do not substitute a fresh worker thread: H09/H21's large downloaded answers
+fragment its malloc arena, and subsequent host-publication allocations spend
+hundreds of milliseconds in `malloc_consolidate` inside the build interval.
+The four-query subset can still show H09 totals around 45–66 ms, with an
+occasional ~820 ms sample: glibc consolidates the freed answer allocations on
+a later provider allocation. This is host work inside the build timing, not
+slower device kernels. Reusing the numeric-bound readback vector moved that
+cost to another allocation rather than removing it, so that experiment was
+discarded. Full-suite timings and the subset variance are both recorded below.
+The original unmodified executable on the same four-query subset also has the
+outlier: H09 samples 52.276, 843.368, 44.806, 52.410, 44.807 ms (median 52.276).
+Thus subset allocator sensitivity predates this fix; the same-thread cleanup
+subset measured 66.436 ms, rather than the worker-thread version's 807.611 ms.
+The ignored `sequential_sf10_queries_release_device_memory` GPU regression
+runs H09 and D85 sequentially and checks `cuMemGetInfo` after each query against
+the pre-query free-memory baseline (64 MiB allowance for driver bookkeeping).
+Run it alone on an idle device after building all advised executors:
+`cargo oxide test --arch sm_89 -- --release -p cq-gpu-tpch tests::sequential_sf10_queries_release_device_memory -- --ignored --exact --test-threads=1 --nocapture`.
+The [SF10 lifetime regression measurements](compare/gpu_tpch_vram.results.json)
+record all 25 compiled queries exact in one process, with zero free-memory
+delta after every query (49,617,043,456 bytes free before and after each).
+Before the fix, per-expansion thread-local `RangeWorkspace` and
+`PackedColumnsAdapter` owners kept their pools' arenas alive across queries:
+free memory fell to 814,219,264 bytes and D85 failed with an OOM. Explicit
+release hooks remove those owners without changing plans or kernels. The
+merged cuda-host module cache is bounded per native context and needs no
+external API change. The full inventory still
+exits 1 for the pre-existing H14/H19 translation rejections, not a runtime
+failure; the H05 timing gate passes at 10.275 ms. Final full-suite totals versus
+`performance_report.md` are H05 10.275 vs 10.314 ms, H09 44.588 vs 44.563 ms,
+H21-positive 40.053 vs 40.158 ms, and D85 26.925 vs 26.935 ms.
+Statistics-derived H07 advice and its comparison with H07-block are recorded in
+[`compare/tpch_statistics.md`](compare/tpch_statistics.md).
 
 Historical initial inventory, before the subsequent translation fixes: all eleven queries were rejected at both scales, so **no GPU
 exactness, conformance agreement, or timing is claimed**. The release build and
@@ -281,23 +321,6 @@ If the dataset directory is absent, it prints an explicit `SKIP` before CUDA
 initialization; loading or CUDA failures with the directory present fail the
 test. It also runs in the default `cargo oxide test --arch sm_89 -- --release -p cq-gpu-sequence`
 suite without feature flags; only the standalone example requires `cuda-oracle`.
-
-## Legacy Datalog boundary
-
-`legacy-datalog/` is an excluded, independent workspace, not a compatibility
-path in the Sequence pipeline. It contains the GPU Datalog bridge and its
-oracle/ddisasm consumers, the old Structures printer, blocked-run indexes,
-legacy runtime oracles, and the handwritten H05/triangle baselines that use
-those indexes. Maintained frozen/leveled indexes have no Sequence term yet;
-these consumers therefore have **not** migrated. Their original algorithms
-and historical results are preserved rather than silently changed.
-
-The shared column runtime exposes its old execution/index APIs only through
-its optional `legacy-datalog` feature. Main-workspace callers do not enable it.
-Build the old bridge separately, from `legacy-datalog/`, using the same CUDA
-configuration and `cargo oxide build --arch sm_89 -- --release --workspace`.
-Historical pre-cutover documentation is in
-[`legacy-datalog/README.md`](legacy-datalog/README.md).
 
 ## Authored advice and rejection boundaries
 

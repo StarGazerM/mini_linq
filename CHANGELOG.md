@@ -7,13 +7,13 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Legacy GPU Datalog workspace removed.
 - Retire Datalog-side hooks kept only for the (already broken) legacy GPU
   Datalog bridge: `KeyRepresentation`, `LayoutRealization`, device-owned
   negation keys, frozen/leveled layout selection, `compile_with_ratio`, the
   storage `Representation` and device-set policies (−397 lines). `ddisasm` is
   now a Datalog workspace member with Ascent differential tests. Default
-  expansions byte-identical; `experiments/gpu/legacy-datalog` is left to the
-  GPU side and no longer builds against these crates.
+  expansions remain byte-identical.
 - Add the GPU `WideCanon` catalog provider after `PackedCanon`: complete
   declared key domains select its unbounded-width capability, while recorded
   codec bounds determine the runtime lane count. Stable per-lane radix passes
@@ -168,9 +168,7 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   Explicit Structures push terminals remain selectable; shared realization
   and source helpers remain available to `own_push`.
 - Add checked GPU Sequence pipeline adapters (`machine_grade` → `translate`)
-  and migrate supported resident callers. Isolate the maintained-index GPU
-  Datalog bridge, its Structures printer, and blocked-run handwritten baselines
-  in `experiments/gpu/legacy-datalog`; unsupported Sequence plans remain
+  and migrate supported resident callers; unsupported Sequence plans remain
   explicitly rejected rather than substituted.
 
 - Datalog discharges context facts: Storage records canonicality

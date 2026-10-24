@@ -157,6 +157,10 @@ impl Pipeline {
             // SF10: 300,276 -> 1,461,923 -> 302,114.
             // The final Lineitem contributes no payload, only existence.
             "h03" => "Customer, Orders, Lineitem",
+            // Customer Nation@6 and Supplier Nation@5 form the exact country
+            // pair before nation-indexed Customer; use the block's measured
+            // forward traversal without replacing the authored disjunction.
+            "h07" => "Nation@6, Nation@5, Customer, Orders, Lineitem, Supplier",
             // The two country pairs restrict Customer to 12,008 at SF1, then
             // Orders 121,324 -> dated Lineitem 148,370 -> opposite Supplier 5,924.
             // SF10: 2 -> 120,469 -> 1,205,808 -> 1,463,770 -> 58,365.
@@ -217,7 +221,7 @@ impl Pipeline {
             // H09 substring, H16 string methods and H22 phone methods stay host.
             storage: if matches!(
                 query,
-                "h03" | "h07_block" | "h08" | "h21_positive" | "d19" | "d27" | "d85"
+                "h03" | "h07" | "h07_block" | "h08" | "h21_positive" | "d19" | "d27" | "d85"
             ) {
                 "tpch_dictionary".into()
             } else {
@@ -651,7 +655,7 @@ pub fn hand_physical(
     }
     let prefix = match query {
         "h21_positive" | "d72_inner" => Some("Supplier"),
-        "d19" | "d85" | "h07_block" => Some("Customer"),
+        "d19" | "d85" | "h07" | "h07_block" => Some("Customer"),
         "d27" => Some("Supplier"),
         _ => None,
     };
@@ -876,7 +880,7 @@ pub fn hand_schedule(
     // d72 Supplier 400/4000 and filtered Lineitem 13.56/13.49.
     let expanded: &[&str] = match query {
         "h09" | "h08" | "d27" | "d19" | "d85" => &["Lineitem"],
-        "h03" | "h07_block" => &["Orders"],
+        "h03" | "h07" | "h07_block" => &["Orders"],
         "h21_positive" | "d72_inner" => &["Supplier", "Lineitem"],
         "h11.0" => &["Supplier", "Partsupp"],
         _ => &[],

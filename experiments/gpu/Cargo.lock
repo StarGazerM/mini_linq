@@ -115,13 +115,7 @@ dependencies = [
 name = "cq-gpu-runtime"
 version = "0.1.0"
 dependencies = [
- "cuda-core",
- "cuda-device",
- "cuda-host",
- "gpu-blocked-run",
  "gpu-device-columns",
- "gpu-tiles",
- "rccl-memory",
 ]
 
 [[package]]
@@ -750,17 +744,6 @@ name = "glob"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
-
-[[package]]
-name = "gpu-blocked-run"
-version = "0.1.0"
-dependencies = [
- "cuda-core",
- "cuda-device",
- "cuda-host",
- "gpu-tiles",
- "rccl-memory",
-]
 
 [[package]]
 name = "gpu-compress"

@@ -395,11 +395,6 @@ approval.
   → `features/sequence-rewrites/passes`); packaged external gate fails on
   `cq-testkit`'s optional path dependency on `features/sequence-tasks`;
   `translate_pull` codegen triggers `clippy::unused_unit` in workloads.
-- Legacy GPU Datalog (`experiments/gpu/legacy-datalog`, GPU side): no longer
-  builds (removed `Constraint::Total`, then the device-key/leveled Round
-  policies it selected). Remaining core hooks used only by it, kept pending a
-  GPU-side decision: `leveled_host_read`, the resident-range expand arm and
-  `PrefixRun` recognition (`cq-lang-structures`, rewrites, realization).
 - Archived: abandoned v1-design branches are tags `archive/<name>`; the parked
   pre-redesign refactor is `../mini_linq-archive/datalog-par-factor.patch`.
 

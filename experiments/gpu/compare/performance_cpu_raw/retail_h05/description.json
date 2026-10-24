@@ -1,0 +1,38 @@
+{
+  "configs": [
+    "default",
+    "no-reduce",
+    "transfer",
+    "le",
+    "le_runs",
+    "generic_smallest"
+  ],
+  "exports": [
+    [
+      "customer",
+      "c_custkey,c_nationkey"
+    ],
+    [
+      "orders",
+      "o_orderkey,o_custkey,o_orderdate"
+    ],
+    [
+      "lineitem",
+      "l_orderkey,l_suppkey"
+    ],
+    [
+      "supplier",
+      "s_suppkey,s_nationkey"
+    ],
+    [
+      "nation",
+      "n_nationkey,n_regionkey"
+    ],
+    [
+      "region",
+      "r_regionkey,r_name"
+    ]
+  ],
+  "name": "retail_h05",
+  "sql": "SELECT DISTINCT o.o_orderkey, s.s_suppkey, n.n_nationkey\nFROM customer c JOIN orders o ON c.c_custkey = o.o_custkey\nJOIN lineitem l ON l.l_orderkey = o.o_orderkey\nJOIN supplier s ON s.s_suppkey = l.l_suppkey AND s.s_nationkey = c.c_nationkey\nJOIN nation n ON n.n_nationkey = s.s_nationkey\nJOIN region r ON r.r_regionkey = n.n_regionkey\nWHERE r.r_name = 'ASIA' AND o.o_orderdate >= DATE '1994-01-01'\nAND o.o_orderdate < DATE '1995-01-01'"
+}

@@ -1,0 +1,1097 @@
+{
+  "schema_version": 1,
+  "sf": 1,
+  "captured_at_utc": "2026-10-24T06:48:19.121368+00:00",
+  "methodology": {
+    "engine_version": "v1.4.4 (Andium) 6ddac802ff",
+    "timer": "DuckDB CLI .timer real wall seconds, 1 ms resolution",
+    "runs": "One warmup then five measured runs; one process per query/thread count; t1 and t24",
+    "timed_scope": "Complete authored SELECT in CLI .mode trash. No answer CSV formatting, serialization, download or comparison. Intrinsic engine result materialization/consumption remains part of query execution.",
+    "loading_excluded": "Database creation/export, process startup/database opening and SET threads excluded. Query-required scanning, decompression and reads remain timed; same-query warmup precedes samples.",
+    "aggregation": "Median of five measured samples, excluding warmup",
+    "historical_csv_timings": "performance_duck_sf1.json",
+    "script": "experiments/gpu/compare/performance_duck.py"
+  },
+  "results": [
+    {
+      "gpu_query": "d19",
+      "catalog_name": "retail_d19",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_d19.rs",
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 1,
+        "query": "SELECT DISTINCT o.o_orderkey, p.p_partkey, c.c_custkey, s.s_suppkey\nFROM lineitem l JOIN orders o ON l.l_orderkey = o.o_orderkey\nJOIN part p ON l.l_partkey = p.p_partkey\nJOIN customer c ON o.o_custkey = c.c_custkey\nJOIN nation n ON c.c_nationkey = n.n_nationkey\nJOIN supplier s ON l.l_suppkey = s.s_suppkey\nWHERE o.o_orderdate >= DATE '1995-01-01' AND o.o_orderdate < DATE '1995-04-01'\nAND n.n_name = 'UNITED STATES'",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "threads": {
+          "1": {
+            "warmup_seconds": 0.205,
+            "samples_seconds": [
+              0.037,
+              0.035,
+              0.034,
+              0.035,
+              0.034
+            ],
+            "median_seconds": 0.035,
+            "raw_cli_output": "Run Time (s): real 0.205 user 0.055274 sys 0.040044\nRun Time (s): real 0.037 user 0.036439 sys 0.000676\nRun Time (s): real 0.035 user 0.035190 sys 0.000000\nRun Time (s): real 0.034 user 0.034521 sys 0.000000\nRun Time (s): real 0.035 user 0.034196 sys 0.000000\nRun Time (s): real 0.034 user 0.034720 sys 0.000000\n"
+          },
+          "24": {
+            "warmup_seconds": 0.027,
+            "samples_seconds": [
+              0.012,
+              0.012,
+              0.01,
+              0.011,
+              0.01
+            ],
+            "median_seconds": 0.011,
+            "raw_cli_output": "Run Time (s): real 0.027 user 0.090156 sys 0.048252\nRun Time (s): real 0.012 user 0.069853 sys 0.005334\nRun Time (s): real 0.012 user 0.066435 sys 0.004529\nRun Time (s): real 0.010 user 0.071242 sys 0.000000\nRun Time (s): real 0.011 user 0.073143 sys 0.000000\nRun Time (s): real 0.010 user 0.071785 sys 0.000000\n"
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "d27",
+      "catalog_name": "retail_d27",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_d27.rs",
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 1,
+        "query": "SELECT DISTINCT o.o_orderkey, p.p_partkey, s.s_suppkey\nFROM lineitem l JOIN orders o ON l.l_orderkey = o.o_orderkey\nJOIN part p ON l.l_partkey = p.p_partkey\nJOIN supplier s ON l.l_suppkey = s.s_suppkey\nJOIN nation n ON s.s_nationkey = n.n_nationkey\nWHERE o.o_orderdate >= DATE '1995-01-01' AND o.o_orderdate < DATE '1995-04-01'\nAND p.p_brand = 'Brand#12' AND n.n_name = 'UNITED STATES'",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "threads": {
+          "1": {
+            "warmup_seconds": 0.079,
+            "samples_seconds": [
+              0.044,
+              0.042,
+              0.042,
+              0.043,
+              0.041
+            ],
+            "median_seconds": 0.042,
+            "raw_cli_output": "Run Time (s): real 0.079 user 0.053082 sys 0.025709\nRun Time (s): real 0.044 user 0.043934 sys 0.000000\nRun Time (s): real 0.042 user 0.042373 sys 0.000000\nRun Time (s): real 0.042 user 0.042282 sys 0.000000\nRun Time (s): real 0.043 user 0.042211 sys 0.000000\nRun Time (s): real 0.041 user 0.041220 sys 0.000525\n"
+          },
+          "24": {
+            "warmup_seconds": 0.034,
+            "samples_seconds": [
+              0.011,
+              0.013,
+              0.01,
+              0.008,
+              0.01
+            ],
+            "median_seconds": 0.01,
+            "raw_cli_output": "Run Time (s): real 0.034 user 0.083215 sys 0.071321\nRun Time (s): real 0.011 user 0.084650 sys 0.014152\nRun Time (s): real 0.013 user 0.094368 sys 0.003227\nRun Time (s): real 0.010 user 0.089816 sys 0.004923\nRun Time (s): real 0.008 user 0.085489 sys 0.002985\nRun Time (s): real 0.010 user 0.085023 sys 0.007034\n"
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "d72_inner",
+      "catalog_name": "retail_d72_inner",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_d72_inner.rs",
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 1,
+        "query": "SELECT DISTINCT o.o_orderkey, p.p_partkey, s.s_suppkey, n.n_nationkey\nFROM lineitem l JOIN orders o ON l.l_orderkey = o.o_orderkey\nJOIN partsupp ps ON l.l_partkey = ps.ps_partkey AND l.l_suppkey = ps.ps_suppkey\nJOIN supplier s ON ps.ps_suppkey = s.s_suppkey\nJOIN part p ON ps.ps_partkey = p.p_partkey\nJOIN customer c ON o.o_custkey = c.c_custkey AND c.c_nationkey = s.s_nationkey\nJOIN nation n ON c.c_nationkey = n.n_nationkey\nWHERE l.l_shipdate >= DATE '1995-01-01' AND l.l_shipdate < DATE '1995-04-01'\nAND l.l_quantity > 20.00 AND ps.ps_availqty > 0",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "threads": {
+          "1": {
+            "warmup_seconds": 0.182,
+            "samples_seconds": [
+              0.12,
+              0.117,
+              0.116,
+              0.112,
+              0.113
+            ],
+            "median_seconds": 0.116,
+            "raw_cli_output": "Run Time (s): real 0.182 user 0.129698 sys 0.051880\nRun Time (s): real 0.120 user 0.113544 sys 0.006190\nRun Time (s): real 0.117 user 0.116844 sys 0.000000\nRun Time (s): real 0.116 user 0.114875 sys 0.000933\nRun Time (s): real 0.112 user 0.112494 sys 0.000000\nRun Time (s): real 0.113 user 0.110312 sys 0.001983\n"
+          },
+          "24": {
+            "warmup_seconds": 0.094,
+            "samples_seconds": [
+              0.074,
+              0.055,
+              0.055,
+              0.07,
+              0.075
+            ],
+            "median_seconds": 0.07,
+            "raw_cli_output": "Run Time (s): real 0.094 user 0.179689 sys 0.129842\nRun Time (s): real 0.074 user 0.188606 sys 0.042032\nRun Time (s): real 0.055 user 0.182784 sys 0.012233\nRun Time (s): real 0.055 user 0.189962 sys 0.008131\nRun Time (s): real 0.070 user 0.208428 sys 0.020264\nRun Time (s): real 0.075 user 0.217371 sys 0.026606\n"
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "d85",
+      "catalog_name": "retail_d85",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_d85.rs",
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 1,
+        "query": "SELECT DISTINCT o.o_orderkey, p.p_partkey, ns.n_nationkey\nFROM lineitem l JOIN partsupp ps ON l.l_partkey = ps.ps_partkey AND l.l_suppkey = ps.ps_suppkey\nJOIN part p ON p.p_partkey = l.l_partkey\nJOIN orders o ON o.o_orderkey = l.l_orderkey\nJOIN customer c ON c.c_custkey = o.o_custkey\nJOIN supplier s ON s.s_suppkey = ps.ps_suppkey\nJOIN nation nc ON nc.n_nationkey = c.c_nationkey\nJOIN nation ns ON ns.n_nationkey = s.s_nationkey\nWHERE o.o_orderdate >= DATE '1995-01-01' AND o.o_orderdate < DATE '1995-04-01'\nAND nc.n_name = 'UNITED STATES' AND ps.ps_availqty > 0",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "threads": {
+          "1": {
+            "warmup_seconds": 0.087,
+            "samples_seconds": [
+              0.044,
+              0.042,
+              0.042,
+              0.043,
+              0.044
+            ],
+            "median_seconds": 0.043,
+            "raw_cli_output": "Run Time (s): real 0.087 user 0.045310 sys 0.041312\nRun Time (s): real 0.044 user 0.042017 sys 0.001850\nRun Time (s): real 0.042 user 0.042283 sys 0.000000\nRun Time (s): real 0.042 user 0.042059 sys 0.000000\nRun Time (s): real 0.043 user 0.042556 sys 0.000000\nRun Time (s): real 0.044 user 0.044525 sys 0.000000\n"
+          },
+          "24": {
+            "warmup_seconds": 0.035,
+            "samples_seconds": [
+              0.013,
+              0.014,
+              0.013,
+              0.014,
+              0.013
+            ],
+            "median_seconds": 0.013,
+            "raw_cli_output": "Run Time (s): real 0.035 user 0.076211 sys 0.081922\nRun Time (s): real 0.013 user 0.080651 sys 0.005394\nRun Time (s): real 0.014 user 0.079912 sys 0.007461\nRun Time (s): real 0.013 user 0.078752 sys 0.004516\nRun Time (s): real 0.014 user 0.083590 sys 0.004711\nRun Time (s): real 0.013 user 0.081052 sys 0.004400\n"
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h01",
+      "catalog_name": "retail_h01",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h01.rs",
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 1,
+        "query": "SELECT l_returnflag, l_linestatus,\n    CAST(SUM(l_quantity) * 100 AS BIGINT) AS sum_quantity,\n    CAST(SUM(l_extendedprice) * 100 AS BIGINT) AS sum_price, COUNT(*) AS count_order\nFROM (SELECT DISTINCT l_orderkey, l_linenumber, l_returnflag, l_linestatus,\n    l_quantity, l_extendedprice, l_shipdate FROM lineitem\n    WHERE l_shipdate <= DATE '1998-09-02') AS matches\nGROUP BY l_returnflag, l_linestatus",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "threads": {
+          "1": {
+            "warmup_seconds": 0.942,
+            "samples_seconds": [
+              0.839,
+              0.815,
+              0.844,
+              0.777,
+              0.819
+            ],
+            "median_seconds": 0.819,
+            "raw_cli_output": "Run Time (s): real 0.942 user 0.741827 sys 0.199995\nRun Time (s): real 0.839 user 0.746950 sys 0.091025\nRun Time (s): real 0.815 user 0.738209 sys 0.077050\nRun Time (s): real 0.844 user 0.731442 sys 0.112910\nRun Time (s): real 0.777 user 0.733771 sys 0.042984\nRun Time (s): real 0.819 user 0.730566 sys 0.088082\n"
+          },
+          "24": {
+            "warmup_seconds": 0.102,
+            "samples_seconds": [
+              0.063,
+              0.065,
+              0.064,
+              0.062,
+              0.063
+            ],
+            "median_seconds": 0.063,
+            "raw_cli_output": "Run Time (s): real 0.102 user 1.078425 sys 0.331552\nRun Time (s): real 0.063 user 1.160463 sys 0.055761\nRun Time (s): real 0.065 user 1.251794 sys 0.043098\nRun Time (s): real 0.064 user 1.155092 sys 0.016272\nRun Time (s): real 0.062 user 1.173869 sys 0.017258\nRun Time (s): real 0.063 user 1.228645 sys 0.019730\n"
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h02",
+      "catalog_name": "retail_h02",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h02.rs",
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 1,
+        "query": "SELECT DISTINCT CAST(s.s_acctbal * 100 AS BIGINT),\n    s.s_name, n.n_name, p.p_partkey, p.p_mfgr, s.s_address, s.s_phone, s.s_comment\nFROM part p JOIN partsupp ps ON ps.ps_partkey = p.p_partkey\nJOIN supplier s ON s.s_suppkey = ps.ps_suppkey\nJOIN nation n ON n.n_nationkey = s.s_nationkey\nJOIN region r ON r.r_regionkey = n.n_regionkey\nWHERE p.p_size = 15 AND p.p_type LIKE '%BRASS' AND r.r_name = 'EUROPE'\nAND ps.ps_supplycost = (\n    SELECT MIN(ps2.ps_supplycost) FROM partsupp ps2\n    JOIN supplier s2 ON s2.s_suppkey = ps2.ps_suppkey\n    JOIN nation n2 ON n2.n_nationkey = s2.s_nationkey\n    JOIN region r2 ON r2.r_regionkey = n2.n_regionkey\n    WHERE ps2.ps_partkey = p.p_partkey AND r2.r_name = 'EUROPE')",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "threads": {
+          "1": {
+            "warmup_seconds": 0.046,
+            "samples_seconds": [
+              0.015,
+              0.012,
+              0.012,
+              0.011,
+              0.012
+            ],
+            "median_seconds": 0.012,
+            "raw_cli_output": "Run Time (s): real 0.046 user 0.013317 sys 0.009111\nRun Time (s): real 0.015 user 0.010217 sys 0.004115\nRun Time (s): real 0.012 user 0.011281 sys 0.001098\nRun Time (s): real 0.012 user 0.010809 sys 0.000906\nRun Time (s): real 0.011 user 0.011661 sys 0.000000\nRun Time (s): real 0.012 user 0.011490 sys 0.000013\n"
+          },
+          "24": {
+            "warmup_seconds": 0.014,
+            "samples_seconds": [
+              0.01,
+              0.009,
+              0.01,
+              0.009,
+              0.009
+            ],
+            "median_seconds": 0.009,
+            "raw_cli_output": "Run Time (s): real 0.014 user 0.032373 sys 0.029028\nRun Time (s): real 0.010 user 0.026247 sys 0.015260\nRun Time (s): real 0.009 user 0.028826 sys 0.010879\nRun Time (s): real 0.010 user 0.032695 sys 0.007562\nRun Time (s): real 0.009 user 0.030702 sys 0.010084\nRun Time (s): real 0.009 user 0.034891 sys 0.001462\n"
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h03",
+      "catalog_name": "retail_h03",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h03.rs",
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 1,
+        "query": "SELECT DISTINCT o.o_orderkey, c.c_custkey\nFROM customer c JOIN orders o ON o.o_custkey = c.c_custkey\nJOIN lineitem l ON l.l_orderkey = o.o_orderkey\nWHERE c.c_mktsegment = 'BUILDING' AND o.o_orderdate < DATE '1995-03-15'\nAND l.l_shipdate > DATE '1995-03-15'",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "threads": {
+          "1": {
+            "warmup_seconds": 0.081,
+            "samples_seconds": [
+              0.038,
+              0.037,
+              0.037,
+              0.037,
+              0.037
+            ],
+            "median_seconds": 0.037,
+            "raw_cli_output": "Run Time (s): real 0.081 user 0.042179 sys 0.026475\nRun Time (s): real 0.038 user 0.036037 sys 0.002596\nRun Time (s): real 0.037 user 0.036590 sys 0.000000\nRun Time (s): real 0.037 user 0.036693 sys 0.000000\nRun Time (s): real 0.037 user 0.036942 sys 0.000000\nRun Time (s): real 0.037 user 0.037202 sys 0.000000\n"
+          },
+          "24": {
+            "warmup_seconds": 0.028,
+            "samples_seconds": [
+              0.012,
+              0.011,
+              0.013,
+              0.01,
+              0.011
+            ],
+            "median_seconds": 0.011,
+            "raw_cli_output": "Run Time (s): real 0.028 user 0.077620 sys 0.064582\nRun Time (s): real 0.012 user 0.071580 sys 0.010311\nRun Time (s): real 0.011 user 0.073526 sys 0.006804\nRun Time (s): real 0.013 user 0.078868 sys 0.007434\nRun Time (s): real 0.010 user 0.072130 sys 0.008456\nRun Time (s): real 0.011 user 0.083047 sys 0.001312\n"
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h04",
+      "catalog_name": "retail_h04",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h04.rs",
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 1,
+        "query": "SELECT DISTINCT o.o_orderkey\nFROM orders o JOIN lineitem l ON l.l_orderkey = o.o_orderkey\nWHERE o.o_orderdate >= DATE '1993-07-01' AND o.o_orderdate < DATE '1993-10-01'\nAND l.l_commitdate < l.l_receiptdate",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "threads": {
+          "1": {
+            "warmup_seconds": 0.225,
+            "samples_seconds": [
+              0.051,
+              0.044,
+              0.044,
+              0.044,
+              0.044
+            ],
+            "median_seconds": 0.044,
+            "raw_cli_output": "Run Time (s): real 0.225 user 0.053911 sys 0.036774\nRun Time (s): real 0.051 user 0.050323 sys 0.000766\nRun Time (s): real 0.044 user 0.044157 sys 0.000000\nRun Time (s): real 0.044 user 0.044049 sys 0.000000\nRun Time (s): real 0.044 user 0.044213 sys 0.000000\nRun Time (s): real 0.044 user 0.044044 sys 0.000000\n"
+          },
+          "24": {
+            "warmup_seconds": 0.041,
+            "samples_seconds": [
+              0.01,
+              0.01,
+              0.01,
+              0.01,
+              0.011
+            ],
+            "median_seconds": 0.01,
+            "raw_cli_output": "Run Time (s): real 0.041 user 0.123797 sys 0.044686\nRun Time (s): real 0.010 user 0.081450 sys 0.008455\nRun Time (s): real 0.010 user 0.084391 sys 0.006113\nRun Time (s): real 0.010 user 0.088111 sys 0.002282\nRun Time (s): real 0.010 user 0.086881 sys 0.001949\nRun Time (s): real 0.011 user 0.089643 sys 0.001277\n"
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h04_not_exists",
+      "catalog_name": "retail_h04_not_exists",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h04_not_exists.rs",
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 1,
+        "query": "SELECT DISTINCT o.o_orderkey FROM orders o\nWHERE o.o_orderdate >= DATE '1993-07-01' AND o.o_orderdate < DATE '1993-10-01'\nAND NOT EXISTS (SELECT 1 FROM lineitem l WHERE l.l_orderkey = o.o_orderkey\nAND l.l_commitdate < l.l_receiptdate)",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "threads": {
+          "1": {
+            "warmup_seconds": 0.082,
+            "samples_seconds": [
+              0.047,
+              0.046,
+              0.047,
+              0.046,
+              0.046
+            ],
+            "median_seconds": 0.046,
+            "raw_cli_output": "Run Time (s): real 0.082 user 0.057234 sys 0.024124\nRun Time (s): real 0.047 user 0.046837 sys 0.000000\nRun Time (s): real 0.046 user 0.046724 sys 0.000000\nRun Time (s): real 0.047 user 0.046219 sys 0.000000\nRun Time (s): real 0.046 user 0.046153 sys 0.000000\nRun Time (s): real 0.046 user 0.046385 sys 0.000000\n"
+          },
+          "24": {
+            "warmup_seconds": 0.024,
+            "samples_seconds": [
+              0.014,
+              0.012,
+              0.011,
+              0.01,
+              0.011
+            ],
+            "median_seconds": 0.011,
+            "raw_cli_output": "Run Time (s): real 0.024 user 0.091636 sys 0.069581\nRun Time (s): real 0.014 user 0.096709 sys 0.010088\nRun Time (s): real 0.012 user 0.083180 sys 0.012201\nRun Time (s): real 0.011 user 0.090129 sys 0.002686\nRun Time (s): real 0.010 user 0.093329 sys 0.003443\nRun Time (s): real 0.011 user 0.089557 sys 0.010892\n"
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h05",
+      "catalog_name": "retail_h05",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h05.rs",
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 1,
+        "query": "SELECT DISTINCT o.o_orderkey, s.s_suppkey, n.n_nationkey\nFROM customer c JOIN orders o ON c.c_custkey = o.o_custkey\nJOIN lineitem l ON l.l_orderkey = o.o_orderkey\nJOIN supplier s ON s.s_suppkey = l.l_suppkey AND s.s_nationkey = c.c_nationkey\nJOIN nation n ON n.n_nationkey = s.s_nationkey\nJOIN region r ON r.r_regionkey = n.n_regionkey\nWHERE r.r_name = 'ASIA' AND o.o_orderdate >= DATE '1994-01-01'\nAND o.o_orderdate < DATE '1995-01-01'",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "threads": {
+          "1": {
+            "warmup_seconds": 0.075,
+            "samples_seconds": [
+              0.048,
+              0.047,
+              0.047,
+              0.046,
+              0.047
+            ],
+            "median_seconds": 0.047,
+            "raw_cli_output": "Run Time (s): real 0.075 user 0.060045 sys 0.014965\nRun Time (s): real 0.048 user 0.047574 sys 0.000631\nRun Time (s): real 0.047 user 0.045574 sys 0.001020\nRun Time (s): real 0.047 user 0.047002 sys 0.000000\nRun Time (s): real 0.046 user 0.045655 sys 0.000854\nRun Time (s): real 0.047 user 0.046267 sys 0.000000\n"
+          },
+          "24": {
+            "warmup_seconds": 0.024,
+            "samples_seconds": [
+              0.011,
+              0.013,
+              0.013,
+              0.012,
+              0.012
+            ],
+            "median_seconds": 0.012,
+            "raw_cli_output": "Run Time (s): real 0.024 user 0.104644 sys 0.057126\nRun Time (s): real 0.011 user 0.096757 sys 0.010369\nRun Time (s): real 0.013 user 0.111899 sys 0.005318\nRun Time (s): real 0.013 user 0.120576 sys 0.007315\nRun Time (s): real 0.012 user 0.119456 sys 0.006422\nRun Time (s): real 0.012 user 0.121908 sys 0.001250\n"
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h06",
+      "catalog_name": "retail_h06",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h06.rs",
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 1,
+        "query": "SELECT CAST(COALESCE(SUM(l_extendedprice * l_discount), 0) * 10000 AS BIGINT) AS revenue\nFROM (SELECT DISTINCT l_orderkey, l_linenumber, l_extendedprice, l_discount,\n    l_quantity, l_shipdate FROM lineitem\n    WHERE l_shipdate >= DATE '1994-01-01' AND l_shipdate < DATE '1995-01-01'\n      AND l_discount BETWEEN 0.05 AND 0.07 AND l_quantity < 24) AS matches",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "threads": {
+          "1": {
+            "warmup_seconds": 0.095,
+            "samples_seconds": [
+              0.037,
+              0.035,
+              0.036,
+              0.037,
+              0.035
+            ],
+            "median_seconds": 0.036,
+            "raw_cli_output": "Run Time (s): real 0.095 user 0.044263 sys 0.042444\nRun Time (s): real 0.037 user 0.036299 sys 0.000000\nRun Time (s): real 0.035 user 0.035398 sys 0.000000\nRun Time (s): real 0.036 user 0.036494 sys 0.000000\nRun Time (s): real 0.037 user 0.036129 sys 0.000000\nRun Time (s): real 0.035 user 0.035379 sys 0.000000\n"
+          },
+          "24": {
+            "warmup_seconds": 0.04,
+            "samples_seconds": [
+              0.008,
+              0.007,
+              0.007,
+              0.006,
+              0.007
+            ],
+            "median_seconds": 0.007,
+            "raw_cli_output": "Run Time (s): real 0.040 user 0.118655 sys 0.087218\nRun Time (s): real 0.008 user 0.108298 sys 0.004646\nRun Time (s): real 0.007 user 0.103055 sys 0.004187\nRun Time (s): real 0.007 user 0.101158 sys 0.001462\nRun Time (s): real 0.006 user 0.101386 sys 0.000000\nRun Time (s): real 0.007 user 0.103527 sys 0.002126\n"
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h07",
+      "catalog_name": "retail_h07",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h07.rs",
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 1,
+        "query": "SELECT DISTINCT o.o_orderkey, ns.n_nationkey, nc.n_nationkey\nFROM supplier s JOIN lineitem l ON s.s_suppkey = l.l_suppkey\nJOIN orders o ON l.l_orderkey = o.o_orderkey\nJOIN customer c ON c.c_custkey = o.o_custkey\nJOIN nation ns ON s.s_nationkey = ns.n_nationkey\nJOIN nation nc ON c.c_nationkey = nc.n_nationkey\nWHERE ((ns.n_name = 'FRANCE' AND nc.n_name = 'GERMANY')\nOR (ns.n_name = 'GERMANY' AND nc.n_name = 'FRANCE'))\nAND l.l_shipdate >= DATE '1995-01-01' AND l.l_shipdate <= DATE '1996-12-31'",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "threads": {
+          "1": {
+            "warmup_seconds": 0.096,
+            "samples_seconds": [
+              0.05,
+              0.048,
+              0.049,
+              0.047,
+              0.048
+            ],
+            "median_seconds": 0.048,
+            "raw_cli_output": "Run Time (s): real 0.096 user 0.064820 sys 0.022060\nRun Time (s): real 0.050 user 0.047999 sys 0.001823\nRun Time (s): real 0.048 user 0.047534 sys 0.000826\nRun Time (s): real 0.049 user 0.047286 sys 0.001020\nRun Time (s): real 0.047 user 0.046695 sys 0.000935\nRun Time (s): real 0.048 user 0.047750 sys 0.000072\n"
+          },
+          "24": {
+            "warmup_seconds": 0.032,
+            "samples_seconds": [
+              0.014,
+              0.014,
+              0.013,
+              0.014,
+              0.012
+            ],
+            "median_seconds": 0.014,
+            "raw_cli_output": "Run Time (s): real 0.032 user 0.130146 sys 0.071816\nRun Time (s): real 0.014 user 0.116038 sys 0.012473\nRun Time (s): real 0.014 user 0.128542 sys 0.007060\nRun Time (s): real 0.013 user 0.123720 sys 0.010349\nRun Time (s): real 0.014 user 0.120581 sys 0.007351\nRun Time (s): real 0.012 user 0.107090 sys 0.005728\n"
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h07_block",
+      "catalog_name": "retail_h07_block",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h07_block.rs",
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 1,
+        "query": "SELECT DISTINCT o.o_orderkey, ns.n_nationkey, nc.n_nationkey\nFROM supplier s JOIN lineitem l ON s.s_suppkey = l.l_suppkey\nJOIN orders o ON l.l_orderkey = o.o_orderkey\nJOIN customer c ON c.c_custkey = o.o_custkey\nJOIN nation ns ON s.s_nationkey = ns.n_nationkey\nJOIN nation nc ON c.c_nationkey = nc.n_nationkey\nWHERE ((ns.n_name = 'FRANCE' AND nc.n_name = 'GERMANY')\nOR (ns.n_name = 'GERMANY' AND nc.n_name = 'FRANCE'))\nAND l.l_shipdate >= DATE '1995-01-01' AND l.l_shipdate <= DATE '1996-12-31'",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "threads": {
+          "1": {
+            "warmup_seconds": 0.086,
+            "samples_seconds": [
+              0.05,
+              0.049,
+              0.048,
+              0.047,
+              0.048
+            ],
+            "median_seconds": 0.048,
+            "raw_cli_output": "Run Time (s): real 0.086 user 0.061142 sys 0.025673\nRun Time (s): real 0.050 user 0.047111 sys 0.002679\nRun Time (s): real 0.049 user 0.048439 sys 0.000452\nRun Time (s): real 0.048 user 0.047336 sys 0.000380\nRun Time (s): real 0.047 user 0.047272 sys 0.000116\nRun Time (s): real 0.048 user 0.047866 sys 0.000144\n"
+          },
+          "24": {
+            "warmup_seconds": 0.046,
+            "samples_seconds": [
+              0.018,
+              0.014,
+              0.014,
+              0.015,
+              0.013
+            ],
+            "median_seconds": 0.014,
+            "raw_cli_output": "Run Time (s): real 0.046 user 0.120866 sys 0.077131\nRun Time (s): real 0.018 user 0.112542 sys 0.010840\nRun Time (s): real 0.014 user 0.106053 sys 0.010680\nRun Time (s): real 0.014 user 0.112235 sys 0.009425\nRun Time (s): real 0.015 user 0.109995 sys 0.009331\nRun Time (s): real 0.013 user 0.108679 sys 0.006839\n"
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h08",
+      "catalog_name": "retail_h08",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h08.rs",
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 1,
+        "query": "SELECT DISTINCT o.o_orderkey, p.p_partkey, s.s_suppkey\nFROM lineitem l JOIN part p ON l.l_partkey = p.p_partkey\nJOIN supplier s ON l.l_suppkey = s.s_suppkey\nJOIN orders o ON l.l_orderkey = o.o_orderkey\nJOIN customer c ON o.o_custkey = c.c_custkey\nJOIN nation nc ON c.c_nationkey = nc.n_nationkey\nJOIN region r ON nc.n_regionkey = r.r_regionkey\nJOIN nation ns ON s.s_nationkey = ns.n_nationkey\nWHERE r.r_name = 'AMERICA' AND p.p_type = 'ECONOMY ANODIZED STEEL'\nAND o.o_orderdate >= DATE '1995-01-01' AND o.o_orderdate <= DATE '1996-12-31'",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "threads": {
+          "1": {
+            "warmup_seconds": 0.081,
+            "samples_seconds": [
+              0.042,
+              0.039,
+              0.04,
+              0.04,
+              0.039
+            ],
+            "median_seconds": 0.04,
+            "raw_cli_output": "Run Time (s): real 0.081 user 0.054883 sys 0.026130\nRun Time (s): real 0.042 user 0.041751 sys 0.000031\nRun Time (s): real 0.039 user 0.039840 sys 0.000030\nRun Time (s): real 0.040 user 0.039504 sys 0.000135\nRun Time (s): real 0.040 user 0.039513 sys 0.000000\nRun Time (s): real 0.039 user 0.039486 sys 0.000022\n"
+          },
+          "24": {
+            "warmup_seconds": 0.032,
+            "samples_seconds": [
+              0.015,
+              0.013,
+              0.013,
+              0.015,
+              0.013
+            ],
+            "median_seconds": 0.013,
+            "raw_cli_output": "Run Time (s): real 0.032 user 0.091425 sys 0.070294\nRun Time (s): real 0.015 user 0.084229 sys 0.007211\nRun Time (s): real 0.013 user 0.080740 sys 0.004292\nRun Time (s): real 0.013 user 0.083670 sys 0.005305\nRun Time (s): real 0.015 user 0.098754 sys 0.000000\nRun Time (s): real 0.013 user 0.096395 sys 0.000000\n"
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h09",
+      "catalog_name": "retail_h09",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h09.rs",
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 1,
+        "query": "SELECT DISTINCT o.o_orderkey, p.p_partkey, s.s_suppkey\nFROM lineitem l JOIN partsupp ps ON l.l_partkey = ps.ps_partkey AND l.l_suppkey = ps.ps_suppkey\nJOIN part p ON p.p_partkey = l.l_partkey\nJOIN supplier s ON s.s_suppkey = l.l_suppkey\nJOIN orders o ON o.o_orderkey = l.l_orderkey\nJOIN nation n ON n.n_nationkey = s.s_nationkey\nWHERE p.p_name LIKE '%green%'",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "threads": {
+          "1": {
+            "warmup_seconds": 0.254,
+            "samples_seconds": [
+              0.176,
+              0.166,
+              0.166,
+              0.162,
+              0.165
+            ],
+            "median_seconds": 0.166,
+            "raw_cli_output": "Run Time (s): real 0.254 user 0.178445 sys 0.067623\nRun Time (s): real 0.176 user 0.163595 sys 0.012014\nRun Time (s): real 0.166 user 0.164848 sys 0.000863\nRun Time (s): real 0.166 user 0.164093 sys 0.001962\nRun Time (s): real 0.162 user 0.161788 sys 0.000000\nRun Time (s): real 0.165 user 0.162821 sys 0.002910\n"
+          },
+          "24": {
+            "warmup_seconds": 0.054,
+            "samples_seconds": [
+              0.038,
+              0.039,
+              0.04,
+              0.041,
+              0.042
+            ],
+            "median_seconds": 0.04,
+            "raw_cli_output": "Run Time (s): real 0.054 user 0.323916 sys 0.133942\nRun Time (s): real 0.038 user 0.346446 sys 0.041308\nRun Time (s): real 0.039 user 0.365625 sys 0.022346\nRun Time (s): real 0.040 user 0.361787 sys 0.039156\nRun Time (s): real 0.041 user 0.334648 sys 0.049013\nRun Time (s): real 0.042 user 0.383432 sys 0.010164\n"
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h10",
+      "catalog_name": "retail_h10",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h10.rs",
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 1,
+        "query": "SELECT c_custkey, c_name,\n    CAST(SUM(l_extendedprice * (1 - l_discount)) * 10000 AS BIGINT) AS revenue,\n    CAST(c_acctbal * 100 AS BIGINT) AS account_balance, n_name, c_address, c_phone, c_comment\nFROM (SELECT DISTINCT c.c_custkey, c.c_name, c.c_acctbal, c.c_nationkey,\n    c.c_address, c.c_phone, c.c_comment, o.o_orderkey, o.o_orderdate,\n    l.l_linenumber, l.l_extendedprice, l.l_discount, l.l_returnflag, n.n_name\n    FROM customer c JOIN orders o ON c.c_custkey = o.o_custkey\n    JOIN lineitem l ON l.l_orderkey = o.o_orderkey\n    JOIN nation n ON n.n_nationkey = c.c_nationkey\n    WHERE o.o_orderdate >= DATE '1993-10-01' AND o.o_orderdate < DATE '1994-01-01'\n      AND l.l_returnflag = 'R') AS matches\nGROUP BY c_custkey, c_name, c_acctbal, n_name, c_address, c_phone, c_comment",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "threads": {
+          "1": {
+            "warmup_seconds": 0.301,
+            "samples_seconds": [
+              0.148,
+              0.148,
+              0.148,
+              0.147,
+              0.148
+            ],
+            "median_seconds": 0.148,
+            "raw_cli_output": "Run Time (s): real 0.301 user 0.173619 sys 0.055280\nRun Time (s): real 0.148 user 0.148033 sys 0.000419\nRun Time (s): real 0.148 user 0.147874 sys 0.000000\nRun Time (s): real 0.148 user 0.146948 sys 0.000741\nRun Time (s): real 0.147 user 0.146248 sys 0.000935\nRun Time (s): real 0.148 user 0.147886 sys 0.000000\n"
+          },
+          "24": {
+            "warmup_seconds": 0.082,
+            "samples_seconds": [
+              0.044,
+              0.045,
+              0.051,
+              0.041,
+              0.042
+            ],
+            "median_seconds": 0.044,
+            "raw_cli_output": "Run Time (s): real 0.082 user 0.332462 sys 0.155000\nRun Time (s): real 0.044 user 0.340521 sys 0.021031\nRun Time (s): real 0.045 user 0.359597 sys 0.016388\nRun Time (s): real 0.051 user 0.370574 sys 0.003869\nRun Time (s): real 0.041 user 0.341101 sys 0.009691\nRun Time (s): real 0.042 user 0.334491 sys 0.006433\n"
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h11",
+      "catalog_name": "retail_h11",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h11.rs",
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 1,
+        "query": "WITH matches AS (\n    SELECT DISTINCT ps.ps_partkey, ps.ps_suppkey, ps.ps_availqty, ps.ps_supplycost\n    FROM partsupp ps JOIN supplier s ON s.s_suppkey = ps.ps_suppkey\n    JOIN nation n ON n.n_nationkey = s.s_nationkey WHERE n.n_name = 'GERMANY')\nSELECT ps_partkey, CAST(SUM(ps_supplycost * ps_availqty) * 100 AS BIGINT)\nFROM matches GROUP BY ps_partkey\nHAVING SUM(ps_supplycost * ps_availqty) >\n    (SELECT SUM(ps_supplycost * ps_availqty) * 0.0001 FROM matches)",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "threads": {
+          "1": {
+            "warmup_seconds": 0.018,
+            "samples_seconds": [
+              0.01,
+              0.011,
+              0.011,
+              0.011,
+              0.011
+            ],
+            "median_seconds": 0.011,
+            "raw_cli_output": "Run Time (s): real 0.018 user 0.012854 sys 0.005018\nRun Time (s): real 0.010 user 0.010133 sys 0.000453\nRun Time (s): real 0.011 user 0.009827 sys 0.001237\nRun Time (s): real 0.011 user 0.009944 sys 0.000306\nRun Time (s): real 0.011 user 0.011496 sys 0.000178\nRun Time (s): real 0.011 user 0.010103 sys 0.000191\n"
+          },
+          "24": {
+            "warmup_seconds": 0.009,
+            "samples_seconds": [
+              0.005,
+              0.005,
+              0.005,
+              0.006,
+              0.005
+            ],
+            "median_seconds": 0.005,
+            "raw_cli_output": "Run Time (s): real 0.009 user 0.029987 sys 0.024019\nRun Time (s): real 0.005 user 0.029667 sys 0.005455\nRun Time (s): real 0.005 user 0.032061 sys 0.004122\nRun Time (s): real 0.005 user 0.026615 sys 0.003203\nRun Time (s): real 0.006 user 0.032957 sys 0.000000\nRun Time (s): real 0.005 user 0.031121 sys 0.000984\n"
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h12",
+      "catalog_name": "retail_h12",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h12.rs",
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 1,
+        "query": "SELECT l_shipmode,\n    CAST(SUM(CASE WHEN o_orderpriority IN ('1-URGENT', '2-HIGH') THEN 1 ELSE 0 END) AS BIGINT) AS high_line_count,\n    CAST(SUM(CASE WHEN o_orderpriority NOT IN ('1-URGENT', '2-HIGH') THEN 1 ELSE 0 END) AS BIGINT) AS low_line_count\nFROM (SELECT DISTINCT l.l_orderkey, l.l_linenumber, l.l_shipmode, l.l_commitdate,\n    l.l_receiptdate, l.l_shipdate, o.o_orderpriority\n    FROM orders o JOIN lineitem l ON o.o_orderkey = l.l_orderkey\n    WHERE l.l_shipmode IN ('MAIL', 'SHIP') AND l.l_commitdate < l.l_receiptdate\n      AND l.l_shipdate < l.l_commitdate AND l.l_receiptdate >= DATE '1994-01-01'\n      AND l.l_receiptdate < DATE '1995-01-01') AS matches\nGROUP BY l_shipmode",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "threads": {
+          "1": {
+            "warmup_seconds": 0.112,
+            "samples_seconds": [
+              0.06,
+              0.06,
+              0.059,
+              0.06,
+              0.06
+            ],
+            "median_seconds": 0.06,
+            "raw_cli_output": "Run Time (s): real 0.112 user 0.067223 sys 0.036223\nRun Time (s): real 0.060 user 0.059760 sys 0.000000\nRun Time (s): real 0.060 user 0.059433 sys 0.000138\nRun Time (s): real 0.059 user 0.059437 sys 0.000000\nRun Time (s): real 0.060 user 0.059671 sys 0.000020\nRun Time (s): real 0.060 user 0.060161 sys 0.000000\n"
+          },
+          "24": {
+            "warmup_seconds": 0.038,
+            "samples_seconds": [
+              0.013,
+              0.012,
+              0.011,
+              0.01,
+              0.011
+            ],
+            "median_seconds": 0.011,
+            "raw_cli_output": "Run Time (s): real 0.038 user 0.129752 sys 0.077237\nRun Time (s): real 0.013 user 0.116756 sys 0.006365\nRun Time (s): real 0.012 user 0.111313 sys 0.008111\nRun Time (s): real 0.011 user 0.116614 sys 0.003801\nRun Time (s): real 0.010 user 0.116158 sys 0.004884\nRun Time (s): real 0.011 user 0.124129 sys 0.001185\n"
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h13",
+      "catalog_name": "retail_h13",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h13.rs",
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 1,
+        "query": "SELECT c.c_custkey, COUNT(o.o_orderkey)\nFROM (SELECT DISTINCT c_custkey FROM customer) c\nLEFT JOIN (SELECT DISTINCT o_orderkey, o_custkey FROM orders\n    WHERE o_comment NOT LIKE '%special%requests%') o ON o.o_custkey = c.c_custkey\nGROUP BY c.c_custkey",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "threads": {
+          "1": {
+            "warmup_seconds": 0.262,
+            "samples_seconds": [
+              0.223,
+              0.213,
+              0.232,
+              0.222,
+              0.229
+            ],
+            "median_seconds": 0.223,
+            "raw_cli_output": "Run Time (s): real 0.262 user 0.221890 sys 0.039691\nRun Time (s): real 0.223 user 0.212054 sys 0.010877\nRun Time (s): real 0.213 user 0.213354 sys 0.000000\nRun Time (s): real 0.232 user 0.213620 sys 0.017919\nRun Time (s): real 0.222 user 0.211048 sys 0.010992\nRun Time (s): real 0.229 user 0.209064 sys 0.020010\n"
+          },
+          "24": {
+            "warmup_seconds": 0.075,
+            "samples_seconds": [
+              0.044,
+              0.038,
+              0.037,
+              0.038,
+              0.037
+            ],
+            "median_seconds": 0.038,
+            "raw_cli_output": "Run Time (s): real 0.075 user 0.455709 sys 0.103790\nRun Time (s): real 0.044 user 0.446622 sys 0.036389\nRun Time (s): real 0.038 user 0.439420 sys 0.031114\nRun Time (s): real 0.037 user 0.426679 sys 0.012102\nRun Time (s): real 0.038 user 0.426752 sys 0.005469\nRun Time (s): real 0.037 user 0.448838 sys 0.004149\n"
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h14",
+      "catalog_name": "retail_h14",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h14.rs",
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 1,
+        "query": "SELECT\n    CAST(COALESCE(SUM(CASE WHEN p_type LIKE 'PROMO%' THEN\n        l_extendedprice * (1.00 - l_discount) ELSE 0 END), 0) * 10000 AS BIGINT) AS promo_revenue,\n    CAST(COALESCE(SUM(l_extendedprice * (1.00 - l_discount)), 0) * 10000 AS BIGINT) AS total_revenue\nFROM (SELECT DISTINCT l.l_orderkey, l.l_linenumber, l.l_partkey,\n    l.l_extendedprice, l.l_discount, l.l_shipdate, p.p_type\n    FROM lineitem l JOIN part p ON l.l_partkey = p.p_partkey\n    WHERE l.l_shipdate >= DATE '1995-09-01' AND l.l_shipdate < DATE '1995-10-01') AS matches",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "threads": {
+          "1": {
+            "warmup_seconds": 0.108,
+            "samples_seconds": [
+              0.046,
+              0.043,
+              0.044,
+              0.044,
+              0.043
+            ],
+            "median_seconds": 0.044,
+            "raw_cli_output": "Run Time (s): real 0.108 user 0.058738 sys 0.049114\nRun Time (s): real 0.046 user 0.043525 sys 0.001920\nRun Time (s): real 0.043 user 0.043611 sys 0.000000\nRun Time (s): real 0.044 user 0.043193 sys 0.000000\nRun Time (s): real 0.044 user 0.044166 sys 0.000000\nRun Time (s): real 0.043 user 0.043457 sys 0.000000\n"
+          },
+          "24": {
+            "warmup_seconds": 0.05,
+            "samples_seconds": [
+              0.021,
+              0.019,
+              0.018,
+              0.016,
+              0.012
+            ],
+            "median_seconds": 0.018,
+            "raw_cli_output": "Run Time (s): real 0.050 user 0.131408 sys 0.095653\nRun Time (s): real 0.021 user 0.096439 sys 0.015252\nRun Time (s): real 0.019 user 0.109614 sys 0.003543\nRun Time (s): real 0.018 user 0.105554 sys 0.004071\nRun Time (s): real 0.016 user 0.100068 sys 0.007516\nRun Time (s): real 0.012 user 0.088240 sys 0.006252\n"
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h15",
+      "catalog_name": "retail_h15",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h15.rs",
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 1,
+        "query": "WITH revenue AS (\n    SELECT l_suppkey AS supplier_key,\n        CAST(SUM(l_extendedprice * (1 - l_discount)) * 10000 AS BIGINT) AS total_revenue\n    FROM (SELECT DISTINCT l_orderkey, l_linenumber, l_suppkey,\n        l_extendedprice, l_discount, l_shipdate FROM lineitem\n        WHERE l_shipdate >= DATE '1996-01-01' AND l_shipdate < DATE '1996-04-01') matches\n    GROUP BY l_suppkey)\nSELECT DISTINCT s.s_suppkey, s.s_name, s.s_address, s.s_phone, r.total_revenue\nFROM supplier s JOIN revenue r ON s.s_suppkey = r.supplier_key\nWHERE r.total_revenue = (SELECT MAX(total_revenue) FROM revenue)",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "threads": {
+          "1": {
+            "warmup_seconds": 0.109,
+            "samples_seconds": [
+              0.049,
+              0.048,
+              0.047,
+              0.048,
+              0.047
+            ],
+            "median_seconds": 0.048,
+            "raw_cli_output": "Run Time (s): real 0.109 user 0.066037 sys 0.034868\nRun Time (s): real 0.049 user 0.046442 sys 0.002572\nRun Time (s): real 0.048 user 0.047563 sys 0.000345\nRun Time (s): real 0.047 user 0.047158 sys 0.000100\nRun Time (s): real 0.048 user 0.047311 sys 0.000264\nRun Time (s): real 0.047 user 0.047047 sys 0.000144\n"
+          },
+          "24": {
+            "warmup_seconds": 0.042,
+            "samples_seconds": [
+              0.014,
+              0.011,
+              0.012,
+              0.011,
+              0.01
+            ],
+            "median_seconds": 0.011,
+            "raw_cli_output": "Run Time (s): real 0.042 user 0.159838 sys 0.089406\nRun Time (s): real 0.014 user 0.135590 sys 0.011388\nRun Time (s): real 0.011 user 0.138685 sys 0.006205\nRun Time (s): real 0.012 user 0.144399 sys 0.000000\nRun Time (s): real 0.011 user 0.138082 sys 0.003301\nRun Time (s): real 0.010 user 0.135270 sys 0.005003\n"
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h16",
+      "catalog_name": "retail_h16",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h16.rs",
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 1,
+        "query": "SELECT DISTINCT p.p_partkey, ps.ps_suppkey\nFROM part p JOIN partsupp ps ON ps.ps_partkey = p.p_partkey\nWHERE p.p_brand <> 'Brand#45' AND p.p_type NOT LIKE 'MEDIUM POLISHED%'\nAND p.p_size IN (49, 14, 23, 45, 19, 3, 36, 9)\nAND ps.ps_suppkey NOT IN (SELECT s.s_suppkey FROM supplier s\nWHERE s.s_comment LIKE '%Customer%Complaints%')",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "threads": {
+          "1": {
+            "warmup_seconds": 0.015,
+            "samples_seconds": [
+              0.011,
+              0.009,
+              0.009,
+              0.009,
+              0.009
+            ],
+            "median_seconds": 0.009,
+            "raw_cli_output": "Run Time (s): real 0.015 user 0.011125 sys 0.004420\nRun Time (s): real 0.011 user 0.010248 sys 0.000335\nRun Time (s): real 0.009 user 0.008710 sys 0.000215\nRun Time (s): real 0.009 user 0.008925 sys 0.000178\nRun Time (s): real 0.009 user 0.008921 sys 0.000129\nRun Time (s): real 0.009 user 0.008978 sys 0.000105\n"
+          },
+          "24": {
+            "warmup_seconds": 0.01,
+            "samples_seconds": [
+              0.008,
+              0.007,
+              0.006,
+              0.007,
+              0.006
+            ],
+            "median_seconds": 0.007,
+            "raw_cli_output": "Run Time (s): real 0.010 user 0.021314 sys 0.015958\nRun Time (s): real 0.008 user 0.029947 sys 0.003876\nRun Time (s): real 0.007 user 0.029567 sys 0.002646\nRun Time (s): real 0.006 user 0.022934 sys 0.002906\nRun Time (s): real 0.007 user 0.022358 sys 0.007221\nRun Time (s): real 0.006 user 0.024323 sys 0.001046\n"
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h18",
+      "catalog_name": "retail_h18",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h18.rs",
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 1,
+        "query": "WITH quantities AS (\n    SELECT l_orderkey, CAST(SUM(l_quantity) * 100 AS BIGINT) AS sum_quantity\n    FROM (SELECT DISTINCT l_orderkey, l_linenumber, l_quantity FROM lineitem) AS lines\n    GROUP BY l_orderkey HAVING SUM(l_quantity) > 300.00\n)\nSELECT DISTINCT c.c_name, c.c_custkey, o.o_orderkey,\n    (o.o_orderdate - DATE '1970-01-01')::INTEGER AS o_orderdate,\n    CAST(o.o_totalprice * 100 AS BIGINT) AS total_price, q.sum_quantity\nFROM quantities q JOIN orders o ON q.l_orderkey = o.o_orderkey\nJOIN customer c ON o.o_custkey = c.c_custkey",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "threads": {
+          "1": {
+            "warmup_seconds": 0.971,
+            "samples_seconds": [
+              0.767,
+              0.705,
+              0.735,
+              0.722,
+              0.709
+            ],
+            "median_seconds": 0.722,
+            "raw_cli_output": "Run Time (s): real 0.971 user 0.674111 sys 0.171698\nRun Time (s): real 0.767 user 0.668871 sys 0.098096\nRun Time (s): real 0.705 user 0.657593 sys 0.048033\nRun Time (s): real 0.735 user 0.648068 sys 0.087028\nRun Time (s): real 0.722 user 0.665810 sys 0.056010\nRun Time (s): real 0.709 user 0.652067 sys 0.057033\n"
+          },
+          "24": {
+            "warmup_seconds": 0.124,
+            "samples_seconds": [
+              0.081,
+              0.082,
+              0.08,
+              0.081,
+              0.08
+            ],
+            "median_seconds": 0.081,
+            "raw_cli_output": "Run Time (s): real 0.124 user 1.427550 sys 0.440312\nRun Time (s): real 0.081 user 1.525259 sys 0.065607\nRun Time (s): real 0.082 user 1.519235 sys 0.016644\nRun Time (s): real 0.080 user 1.517586 sys 0.021678\nRun Time (s): real 0.081 user 1.536394 sys 0.018062\nRun Time (s): real 0.080 user 1.487384 sys 0.012476\n"
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h19",
+      "catalog_name": "retail_h19",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h19.rs",
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 1,
+        "query": "SELECT\n    CAST(COALESCE(SUM(l_extendedprice * (1.00 - l_discount)), 0) * 10000 AS BIGINT) AS revenue\nFROM (SELECT DISTINCT l.l_orderkey, l.l_linenumber, l.l_partkey, l.l_quantity,\n    l.l_extendedprice, l.l_discount, l.l_shipmode, l.l_shipinstruct,\n    p.p_brand, p.p_container, p.p_size\n    FROM lineitem l JOIN part p ON l.l_partkey = p.p_partkey\n    WHERE l.l_shipmode IN ('AIR', 'AIR REG') AND l.l_shipinstruct = 'DELIVER IN PERSON'\n    AND ((p.p_brand = 'Brand#12' AND p.p_container IN ('SM CASE', 'SM BOX', 'SM PACK', 'SM PKG')\n            AND l.l_quantity BETWEEN 1.00 AND 11.00 AND p.p_size BETWEEN 1 AND 5)\n        OR (p.p_brand = 'Brand#23' AND p.p_container IN ('MED BAG', 'MED BOX', 'MED PKG', 'MED PACK')\n            AND l.l_quantity BETWEEN 10.00 AND 20.00 AND p.p_size BETWEEN 1 AND 10)\n        OR (p.p_brand = 'Brand#34' AND p.p_container IN ('LG CASE', 'LG BOX', 'LG PACK', 'LG PKG')\n            AND l.l_quantity BETWEEN 20.00 AND 30.00 AND p.p_size BETWEEN 1 AND 15))) AS matches",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "threads": {
+          "1": {
+            "warmup_seconds": 0.18,
+            "samples_seconds": [
+              0.093,
+              0.093,
+              0.093,
+              0.094,
+              0.093
+            ],
+            "median_seconds": 0.093,
+            "raw_cli_output": "Run Time (s): real 0.180 user 0.115929 sys 0.055109\nRun Time (s): real 0.093 user 0.092490 sys 0.000845\nRun Time (s): real 0.093 user 0.093337 sys 0.000000\nRun Time (s): real 0.093 user 0.093049 sys 0.000000\nRun Time (s): real 0.094 user 0.093134 sys 0.000000\nRun Time (s): real 0.093 user 0.093441 sys 0.000000\n"
+          },
+          "24": {
+            "warmup_seconds": 0.045,
+            "samples_seconds": [
+              0.014,
+              0.014,
+              0.013,
+              0.014,
+              0.016
+            ],
+            "median_seconds": 0.014,
+            "raw_cli_output": "Run Time (s): real 0.045 user 0.216988 sys 0.107131\nRun Time (s): real 0.014 user 0.203406 sys 0.010053\nRun Time (s): real 0.014 user 0.197162 sys 0.010671\nRun Time (s): real 0.013 user 0.189761 sys 0.005322\nRun Time (s): real 0.014 user 0.182888 sys 0.000633\nRun Time (s): real 0.016 user 0.176351 sys 0.003973\n"
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h20",
+      "catalog_name": "retail_h20",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h20.rs",
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 1,
+        "query": "SELECT DISTINCT s.s_name, s.s_address\nFROM supplier s JOIN nation n ON n.n_nationkey = s.s_nationkey\nWHERE n.n_name = 'CANADA' AND s.s_suppkey IN (\n    SELECT ps.ps_suppkey FROM partsupp ps\n    WHERE ps.ps_partkey IN (SELECT p.p_partkey FROM part p WHERE p.p_name LIKE 'forest%')\n    AND ps.ps_availqty > 0.5 * (\n        SELECT SUM(l.l_quantity) FROM (\n            SELECT DISTINCT l_orderkey, l_linenumber, l_partkey, l_suppkey, l_quantity, l_shipdate\n            FROM lineitem WHERE l_shipdate >= DATE '1994-01-01'\n                AND l_shipdate < DATE '1995-01-01') l\n        WHERE l.l_partkey = ps.ps_partkey AND l.l_suppkey = ps.ps_suppkey))",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "threads": {
+          "1": {
+            "warmup_seconds": 0.18,
+            "samples_seconds": [
+              0.111,
+              0.098,
+              0.099,
+              0.104,
+              0.098
+            ],
+            "median_seconds": 0.099,
+            "raw_cli_output": "Run Time (s): real 0.180 user 0.125107 sys 0.055015\nRun Time (s): real 0.111 user 0.101131 sys 0.008990\nRun Time (s): real 0.098 user 0.096924 sys 0.001947\nRun Time (s): real 0.099 user 0.096293 sys 0.002032\nRun Time (s): real 0.104 user 0.097020 sys 0.006990\nRun Time (s): real 0.098 user 0.097613 sys 0.000000\n"
+          },
+          "24": {
+            "warmup_seconds": 0.043,
+            "samples_seconds": [
+              0.023,
+              0.02,
+              0.023,
+              0.022,
+              0.022
+            ],
+            "median_seconds": 0.022,
+            "raw_cli_output": "Run Time (s): real 0.043 user 0.251988 sys 0.134992\nRun Time (s): real 0.023 user 0.243888 sys 0.034496\nRun Time (s): real 0.020 user 0.240228 sys 0.011972\nRun Time (s): real 0.023 user 0.245613 sys 0.014597\nRun Time (s): real 0.022 user 0.256740 sys 0.002261\nRun Time (s): real 0.022 user 0.250505 sys 0.007168\n"
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h21_positive",
+      "catalog_name": "retail_h21_positive",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h21_positive.rs",
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 1,
+        "query": "SELECT DISTINCT l1.l_orderkey, s.s_suppkey, l2.l_suppkey\nFROM supplier s JOIN lineitem l1 ON s.s_suppkey = l1.l_suppkey\nJOIN orders o ON o.o_orderkey = l1.l_orderkey\nJOIN nation n ON n.n_nationkey = s.s_nationkey\nJOIN lineitem l2 ON l1.l_orderkey = l2.l_orderkey\nWHERE n.n_name = 'SAUDI ARABIA' AND o.o_orderstatus = 'F'\nAND l1.l_receiptdate > l1.l_commitdate AND l2.l_suppkey <> l1.l_suppkey",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "threads": {
+          "1": {
+            "warmup_seconds": 0.168,
+            "samples_seconds": [
+              0.111,
+              0.111,
+              0.11,
+              0.11,
+              0.111
+            ],
+            "median_seconds": 0.111,
+            "raw_cli_output": "Run Time (s): real 0.168 user 0.117802 sys 0.034378\nRun Time (s): real 0.111 user 0.111637 sys 0.000000\nRun Time (s): real 0.111 user 0.110996 sys 0.000000\nRun Time (s): real 0.110 user 0.110132 sys 0.000000\nRun Time (s): real 0.110 user 0.109833 sys 0.000000\nRun Time (s): real 0.111 user 0.109854 sys 0.000792\n"
+          },
+          "24": {
+            "warmup_seconds": 0.048,
+            "samples_seconds": [
+              0.022,
+              0.022,
+              0.02,
+              0.019,
+              0.02
+            ],
+            "median_seconds": 0.02,
+            "raw_cli_output": "Run Time (s): real 0.048 user 0.232636 sys 0.088779\nRun Time (s): real 0.022 user 0.250539 sys 0.005941\nRun Time (s): real 0.022 user 0.248692 sys 0.009935\nRun Time (s): real 0.020 user 0.254337 sys 0.000000\nRun Time (s): real 0.019 user 0.247584 sys 0.004645\nRun Time (s): real 0.020 user 0.252944 sys 0.003128\n"
+          }
+        }
+      }
+    },
+    {
+      "gpu_query": "h22",
+      "catalog_name": "retail_h22",
+      "sql_source": "features/workloads/src/queries/retail/tpch/retail_h22.rs",
+      "raw_timing": {
+        "engine": "DuckDB",
+        "version": "v1.4.4 (Andium) 6ddac802ff",
+        "sf": 1,
+        "query": "SELECT DISTINCT c.c_custkey FROM customer c\nWHERE substring(c.c_phone FROM 1 FOR 2) IN ('13', '31', '23', '29', '30', '18', '17')\nAND NOT EXISTS (SELECT 1 FROM orders o WHERE o.o_custkey = c.c_custkey)",
+        "units": "seconds",
+        "warmup_runs": 1,
+        "measured_runs": 5,
+        "threads": {
+          "1": {
+            "warmup_seconds": 0.039,
+            "samples_seconds": [
+              0.023,
+              0.023,
+              0.022,
+              0.024,
+              0.022
+            ],
+            "median_seconds": 0.023,
+            "raw_cli_output": "Run Time (s): real 0.039 user 0.027430 sys 0.003250\nRun Time (s): real 0.023 user 0.021130 sys 0.001979\nRun Time (s): real 0.023 user 0.022468 sys 0.000016\nRun Time (s): real 0.022 user 0.022564 sys 0.000000\nRun Time (s): real 0.024 user 0.023179 sys 0.000000\nRun Time (s): real 0.022 user 0.022481 sys 0.000000\n"
+          },
+          "24": {
+            "warmup_seconds": 0.018,
+            "samples_seconds": [
+              0.014,
+              0.014,
+              0.015,
+              0.016,
+              0.016
+            ],
+            "median_seconds": 0.015,
+            "raw_cli_output": "Run Time (s): real 0.018 user 0.049961 sys 0.018117\nRun Time (s): real 0.014 user 0.048336 sys 0.004354\nRun Time (s): real 0.014 user 0.037567 sys 0.007948\nRun Time (s): real 0.015 user 0.058133 sys 0.001507\nRun Time (s): real 0.016 user 0.053302 sys 0.004254\nRun Time (s): real 0.016 user 0.061367 sys 0.000785\n"
+          }
+        }
+      }
+    }
+  ]
+}

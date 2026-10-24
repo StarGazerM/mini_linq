@@ -36,6 +36,11 @@ fn module(pool: &Pool) -> Result<Rc<kernels::codecs::LoadedModule>> {
 pub fn prepare_kernels(pool: &Pool) -> Result<()> {
     module(pool).map(|_| ())
 }
+
+/// Release the current thread's codec module after a query has finished.
+pub fn release_cached_kernels() {
+    MODULE.with(|cache| cache.borrow_mut().take());
+}
 fn config(items: usize) -> LaunchConfig1D {
     LaunchConfig1D::new(items.div_ceil(256).clamp(1, 568) as u32, 256, 0)
 }

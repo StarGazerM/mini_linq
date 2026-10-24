@@ -1,0 +1,44 @@
+{
+  "configs": [
+    "default",
+    "no-reduce",
+    "transfer",
+    "le",
+    "le_runs",
+    "generic_smallest",
+    "hypergraph",
+    "hypergraph_zone"
+  ],
+  "exports": [
+    [
+      "lineitem",
+      "l_orderkey,l_partkey,l_suppkey"
+    ],
+    [
+      "partsupp",
+      "ps_partkey,ps_suppkey,ps_availqty"
+    ],
+    [
+      "part",
+      "p_partkey"
+    ],
+    [
+      "orders",
+      "o_orderkey,o_custkey,o_orderdate"
+    ],
+    [
+      "customer",
+      "c_custkey,c_nationkey"
+    ],
+    [
+      "supplier",
+      "s_suppkey,s_nationkey"
+    ],
+    [
+      "nation",
+      "n_nationkey,n_name"
+    ]
+  ],
+  "name": "retail_d85",
+  "sql": "SELECT DISTINCT o.o_orderkey, p.p_partkey, ns.n_nationkey\nFROM lineitem l JOIN partsupp ps ON l.l_partkey = ps.ps_partkey AND l.l_suppkey = ps.ps_suppkey\nJOIN part p ON p.p_partkey = l.l_partkey\nJOIN orders o ON o.o_orderkey = l.l_orderkey\nJOIN customer c ON c.c_custkey = o.o_custkey\nJOIN supplier s ON s.s_suppkey = ps.ps_suppkey\nJOIN nation nc ON nc.n_nationkey = c.c_nationkey\nJOIN nation ns ON ns.n_nationkey = s.s_nationkey\nWHERE o.o_orderdate >= DATE '1995-01-01' AND o.o_orderdate < DATE '1995-04-01'\nAND nc.n_name = 'UNITED STATES' AND ps.ps_availqty > 0"
+}

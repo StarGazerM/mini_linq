@@ -1,5 +1,6 @@
 #[path = "src/advice.rs"]
 mod advice;
+mod build_stages;
 #[path = "src/manifest.rs"]
 #[allow(dead_code)]
 mod manifest;
@@ -7,7 +8,6 @@ mod manifest;
 mod source;
 #[path = "src/stages.rs"]
 mod stages;
-mod build_stages;
 
 use manifest::{Manifest, Result};
 use proc_macro2::TokenStream;
@@ -82,26 +82,25 @@ fn compile_stage(
             for (column, logical) in &relation.columns {
                 if logical.to_token_stream().to_string() == "i64" {
                     stored_types.insert(
-                        (relation.table.to_string(), column.to_string()), logical.clone(),
+                        (relation.table.to_string(), column.to_string()),
+                        logical.clone(),
                     );
                 }
             }
         }
     }
     if pipeline.storage == "tpch_dictionary" {
-        // Authored constant-only string queries use the manifest's existing
-        // column-local i32 dictionaries. The source adapter resolves literals;
-        // this does not change predicates or teach the GPU to execute Rust.
-        for relation in &kernel.relations {
-            for (column, logical) in &relation.columns {
-                if logical.to_token_stream().to_string() == "String" {
-                    stored_types.insert(
-                        (relation.table.to_string(), column.to_string()),
-                        syn::parse_quote!(i32),
-                    );
-                }
-            }
-        }
+        // The manifest dictionaries preserve constant-literal equality,
+        // including Or/In, but never replace opaque String operations.
+        stored_types.extend(
+            kernel
+                .dictionary_types(manifest)
+                .map_err(|error| Rejected {
+                    phase: "loader profile",
+                    error: error.to_string(),
+                    term: cpu_source.to_string(),
+                })?,
+        );
     }
     if let Some(schema) = &storage_schema {
         for relation in &kernel.relations {
@@ -229,8 +228,16 @@ fn compile_stage(
         &default_structures,
         advice::structures(&default_structures, &pipeline.structures),
     )?;
-    let catalog = if host { cq_sequence_pull::catalog() } else { cq_gpu_sequence::catalog() };
-    let machine = if host { cq_sequence_pull::machine() } else { cq_gpu_sequence::machine() };
+    let catalog = if host {
+        cq_sequence_pull::catalog()
+    } else {
+        cq_gpu_sequence::catalog()
+    };
+    let machine = if host {
+        cq_sequence_pull::machine()
+    } else {
+        cq_gpu_sequence::machine()
+    };
     let mut structures = checked(
         "catalog selection",
         &selected,
@@ -253,7 +260,9 @@ fn compile_stage(
                 .iter()
                 .find(|r| r.name == host.as_str())
                 .unwrap();
-            if publications.is_some_and(|inputs| inputs.get(&relation.name.to_string()) == Some(&false)) {
+            if publications
+                .is_some_and(|inputs| inputs.get(&relation.name.to_string()) == Some(&false))
+            {
                 continue;
             }
             if kernel
@@ -276,7 +285,11 @@ fn compile_stage(
                 &structures,
                 cq_rewrite_passes::retype(
                     &structures,
-                    if kernel.published.iter().any(|input| input.name == relation.name) {
+                    if kernel
+                        .published
+                        .iter()
+                        .any(|input| input.name == relation.name)
+                    {
                         quote!(entry(#index) => ::cq_gpu_runtime::DeviceColumns<'static, (#(#types,)*)>)
                     } else {
                         quote!(entry(#index) => ::cq_gpu_runtime::DeviceColumns<'static, (#(#types,)*), ::cq_gpu_runtime::For>)
@@ -403,11 +416,17 @@ fn compile_stage(
         cq_lang_sequence::check_grading(&planned.program, &machine),
     )?;
     let gpu = if host {
-        checked("host translate", &planned.program,
-            cq_sequence_pull::translate(&planned.program, &analysis))?
+        checked(
+            "host translate",
+            &planned.program,
+            cq_sequence_pull::translate(&planned.program, &analysis),
+        )?
     } else {
-        checked("translate", &planned.program,
-            cq_gpu_sequence::translate(&planned.program, &analysis))?
+        checked(
+            "translate",
+            &planned.program,
+            cq_gpu_sequence::translate(&planned.program, &analysis),
+        )?
     };
 
     // Independently select/lower Sequential from the identical Physical. No GPU
@@ -478,10 +497,11 @@ fn compile_stage(
         let table = &tables[index];
         let names = &column_names[index];
         let row = &row_types[index];
-        if host || relation
-            .columns
-            .iter()
-            .any(|column| column.ty.to_token_stream().to_string() == "String")
+        if host
+            || relation
+                .columns
+                .iter()
+                .any(|column| column.ty.to_token_stream().to_string() == "String")
         {
             input_types.push(quote!(Vec<#row>));
             let columns: Vec<_> = relation
@@ -599,17 +619,25 @@ fn compile_stage(
     };
     if let Some(publications) = publications {
         let names: Vec<_> = kernel.published.iter().map(|r| &r.name).collect();
-        let rows: Vec<_> = kernel.published.iter().map(|r| {
-            let types = r.columns.iter().map(|(_, ty)| ty);
-            quote!((#(#types,)*))
-        }).collect();
-        let inputs: Vec<_> = names.iter().zip(&rows).map(|(name, row)| {
-            if publications[&name.to_string()] {
-                quote!(cq_gpu_runtime::DeviceColumns<'static, #row>)
-            } else {
-                quote!(Vec<#row>)
-            }
-        }).collect();
+        let rows: Vec<_> = kernel
+            .published
+            .iter()
+            .map(|r| {
+                let types = r.columns.iter().map(|(_, ty)| ty);
+                quote!((#(#types,)*))
+            })
+            .collect();
+        let inputs: Vec<_> = names
+            .iter()
+            .zip(&rows)
+            .map(|(name, row)| {
+                if publications[&name.to_string()] {
+                    quote!(cq_gpu_runtime::DeviceColumns<'static, #row>)
+                } else {
+                    quote!(Vec<#row>)
+                }
+            })
+            .collect();
         let cpu_names: Vec<_> = (0..answer_types.len()).map(syn::Index::from).collect();
         let own_row = {
             let fields = answer_types.iter().zip(&cpu_names).map(|(ty, index)| {
@@ -619,9 +647,14 @@ fn compile_stage(
             });
             quote!((#(#fields,)*))
         };
-        let host_inputs: Vec<_> = names.iter().filter(|name| publications[&name.to_string()])
-            .map(|name| quote!(let #name = #name.to_host()?;)).collect();
-        let nullable = answer_types.iter().any(|ty| ty.to_token_stream().to_string().starts_with("Option"));
+        let host_inputs: Vec<_> = names
+            .iter()
+            .filter(|name| publications[&name.to_string()])
+            .map(|name| quote!(let #name = #name.to_host()?;))
+            .collect();
+        let nullable = answer_types
+            .iter()
+            .any(|ty| ty.to_token_stream().to_string().starts_with("Option"));
         let resident = !host && !nullable;
         let output_type = if resident {
             quote!(cq_gpu_runtime::DeviceColumns<'static, Answer>)
@@ -646,7 +679,8 @@ fn compile_stage(
                     let started = ::std::time::Instant::now();
                     let result = output.to_host()?;
                     let elapsed = started.elapsed().as_secs_f64() * 1000.0;
-                    let mut timing = cq_gpu_runtime::take_last_timings().ok_or("stage published no timings")?;
+                    let mut timing =
+                        cq_gpu_runtime::take_last_timings().ok_or("stage published no timings")?;
                     timing.build_ms += elapsed;
                     timing.total_ms += elapsed;
                     timing.wall_ms += elapsed;
@@ -654,11 +688,26 @@ fn compile_stage(
                     result
                 })
             } else if let Some(group) = &normal.query.group {
-                let columns: Vec<_> = group.keys.iter().chain(group.aggregates.iter().map(|a| &a.name)).collect();
-                let slots: Vec<_> = normal.query.head.args.iter().map(|argument| {
-                    let syn::Expr::Path(path) = argument else { unreachable!("checked normalized group head"); };
-                    columns.iter().position(|name| path.path.is_ident(*name)).expect("checked grouped output")
-                }).collect();
+                let columns: Vec<_> = group
+                    .keys
+                    .iter()
+                    .chain(group.aggregates.iter().map(|a| &a.name))
+                    .collect();
+                let slots: Vec<_> = normal
+                    .query
+                    .head
+                    .args
+                    .iter()
+                    .map(|argument| {
+                        let syn::Expr::Path(path) = argument else {
+                            unreachable!("checked normalized group head");
+                        };
+                        columns
+                            .iter()
+                            .position(|name| path.path.is_ident(*name))
+                            .expect("checked grouped output")
+                    })
+                    .collect();
                 let bounds: Vec<_> = slots.iter().map(|&slot| {
                     if slot < group.keys.len() {
                         let key = columns[slot];
@@ -715,28 +764,36 @@ fn compile_stage(
         };
         let mut artifact = artifact;
         artifact["publication"] = json!(if resident { "device" } else { "host" });
-        artifact["answer_types"] = json!(answer_types.iter().map(|ty| ty.to_token_stream().to_string()).collect::<Vec<_>>());
-        return Ok((quote! {
-            pub(super) type Answer = (#(#answer_types,)*);
-            pub(super) type Output = #output_type;
-            pub(super) struct Inputs { #(#fields: #input_types,)* #catalog_field pool: ::std::sync::Arc<cq_gpu_runtime::Pool> }
-            pub(super) fn load(manifest: &crate::manifest::Manifest, pool: ::std::sync::Arc<cq_gpu_runtime::Pool>) -> crate::manifest::Result<Inputs> {
-                #load_setup
-                #(let #fields: #input_types = #bindings;)*
-                Ok(Inputs { #(#fields,)* #catalog_init pool })
-            }
-            pub(super) fn execute(data: &Inputs, #(#names: &#inputs),*) -> crate::manifest::Result<Output> {
-                #execute
-            }
-            pub(super) fn sequential(data: &Inputs, #(#names: &Vec<#rows>),*) -> crate::manifest::Result<Vec<Answer>> {
-                #(#sequential_bindings)*
-                Ok((#cpu).map(|row| #own_row).collect())
-            }
-            pub(super) fn decode(data: &Inputs, manifest: &crate::manifest::Manifest, rows: Vec<Answer>) -> crate::manifest::Result<Vec<Vec<String>>> {
-                #(#decode_bindings)*
-                Ok(rows.into_iter().map(|row| vec![#(#owned_outputs),*]).collect())
-            }
-        }, artifact));
+        artifact["answer_types"] = json!(
+            answer_types
+                .iter()
+                .map(|ty| ty.to_token_stream().to_string())
+                .collect::<Vec<_>>()
+        );
+        return Ok((
+            quote! {
+                pub(super) type Answer = (#(#answer_types,)*);
+                pub(super) type Output = #output_type;
+                pub(super) struct Inputs { #(#fields: #input_types,)* #catalog_field pool: ::std::sync::Arc<cq_gpu_runtime::Pool> }
+                pub(super) fn load(manifest: &crate::manifest::Manifest, pool: ::std::sync::Arc<cq_gpu_runtime::Pool>) -> crate::manifest::Result<Inputs> {
+                    #load_setup
+                    #(let #fields: #input_types = #bindings;)*
+                    Ok(Inputs { #(#fields,)* #catalog_init pool })
+                }
+                pub(super) fn execute(data: &Inputs, #(#names: &#inputs),*) -> crate::manifest::Result<Output> {
+                    #execute
+                }
+                pub(super) fn sequential(data: &Inputs, #(#names: &Vec<#rows>),*) -> crate::manifest::Result<Vec<Answer>> {
+                    #(#sequential_bindings)*
+                    Ok((#cpu).map(|row| #own_row).collect())
+                }
+                pub(super) fn decode(data: &Inputs, manifest: &crate::manifest::Manifest, rows: Vec<Answer>) -> crate::manifest::Result<Vec<Vec<String>>> {
+                    #(#decode_bindings)*
+                    Ok(rows.into_iter().map(|row| vec![#(#owned_outputs),*]).collect())
+                }
+            },
+            artifact,
+        ));
     }
     Ok((
         quote! {
@@ -907,7 +964,11 @@ fn main() -> Result<()> {
                 "cargo:rerun-if-changed=../../../features/workloads/src/queries/retail/tpch/retail_{name}.rs"
             );
             let staged = stages::Program::import(source)?;
-            let kernel = if staged.is_none() { Some(source::Kernel::import(source)?) } else { None };
+            let kernel = if staged.is_none() {
+                Some(source::Kernel::import(source)?)
+            } else {
+                None
+            };
             for mode in ["automatic", "advised"] {
                 if mode == "automatic" && !automatic {
                     continue;
@@ -949,8 +1010,17 @@ fn main() -> Result<()> {
                 };
                 let generation_started = std::time::Instant::now();
                 let compiled = if let Some(staged) = &staged {
-                    build_stages::compile(staged, name, &manifest, mode,
-                        if mode == "advised" { overrides.get(name) } else { None })
+                    build_stages::compile(
+                        staged,
+                        name,
+                        &manifest,
+                        mode,
+                        if mode == "advised" {
+                            overrides.get(name)
+                        } else {
+                            None
+                        },
+                    )
                 } else {
                     compile(kernel.as_ref().unwrap(), &manifest, &pipeline, profile)
                 };

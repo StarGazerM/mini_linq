@@ -26,6 +26,60 @@ thread_local! {
     static NUMERIC_UPLOAD_SCRATCH: RefCell<Vec<Vec<i64>>> = const { RefCell::new(Vec::new()) };
 }
 
+thread_local! {
+    static QUERY_CLEANUP: RefCell<Option<Vec<fn()>>> = const { RefCell::new(None) };
+}
+
+/// Own the lifetime of generated thread-local caches for one complete query.
+/// Keep this scope alive across warmup and measured iterations, then drop it
+/// after all query outputs and inputs. It must stay on its creating thread.
+pub struct QueryScope(std::marker::PhantomData<std::rc::Rc<()>>);
+
+impl QueryScope {
+    pub fn new() -> Self {
+        QUERY_CLEANUP.with(|cleanup| {
+            let mut cleanup = cleanup.borrow_mut();
+            assert!(cleanup.is_none(), "GPU query scopes cannot be nested");
+            *cleanup = Some(Vec::new());
+        });
+        Self(std::marker::PhantomData)
+    }
+}
+
+impl Default for QueryScope {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Register an emitted cache's release hook once per active query scope.
+#[doc(hidden)]
+pub fn register_query_cleanup(release: fn()) {
+    QUERY_CLEANUP.with(|cleanup| {
+        if let Some(cleanup) = cleanup.borrow_mut().as_mut() {
+            if !cleanup.iter().any(|&existing| std::ptr::fn_addr_eq(existing, release)) {
+                cleanup.push(release);
+            }
+        }
+    });
+}
+
+impl Drop for QueryScope {
+    fn drop(&mut self) {
+        let cleanup = QUERY_CLEANUP.with(|cleanup| cleanup.borrow_mut().take());
+        for release in cleanup.into_iter().flatten() {
+            release();
+        }
+        RANGE_RADIX_WORKSPACE.with(|cache| cache.borrow_mut().take());
+        TEMP_U32.with(|cache| cache.borrow_mut().take());
+        TEMP_U64.with(|cache| cache.borrow_mut().take());
+        canon::release_query_cache();
+        BUILD_MODULE.with(|cache| cache.borrow_mut().take());
+        gpu_device_columns::release_cached_kernels();
+        NUMERIC_UPLOAD_SCRATCH.with(|cache| cache.borrow_mut().clear());
+    }
+}
+
 /// Upload primitive numeric columns emitted by a host Sequence boundary.
 /// The translator supplies one i64 lane per declared field, in layout order.
 /// This avoids re-encoding primitive tuples through a dictionary and scratch
