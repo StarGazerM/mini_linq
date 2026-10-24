@@ -20,6 +20,7 @@ struct Options {
     query: Option<String>,
     config: Option<String>,
     reduction_comparison: bool,
+    cap_seconds: Option<u64>,
 }
 impl Options {
     fn parse(arguments: Vec<String>) -> Result<Self> {
@@ -29,6 +30,7 @@ impl Options {
         let mut query = None;
         let mut config = None;
         let mut reduction_comparison = false;
+        let mut cap_seconds = None;
         let mut args = arguments.into_iter();
         while let Some(arg) = args.next() {
             match arg.as_str() {
@@ -43,11 +45,18 @@ impl Options {
                             .ok_or("--config requires a configuration name")?,
                     )
                 }
-                "--sf" if sf.is_none() => sf = Some(args.next().ok_or("--sf requires 0.1 or 1")?),
+                "--sf" if sf.is_none() => sf = Some(args.next().ok_or("--sf requires 0.1, 1 or 10")?),
+                "--cap-seconds" if cap_seconds.is_none() => {
+                    let seconds = args.next().ok_or("--cap-seconds requires a positive integer")?.parse::<u64>()?;
+                    if seconds == 0 {
+                        return Err("--cap-seconds must be positive".into());
+                    }
+                    cap_seconds = Some(seconds);
+                }
                 "--runs" if runs.is_none() => {
                     runs = Some(
                         args.next()
-                            .ok_or("--runs requires an odd integer >= 3")?
+                            .ok_or("--runs requires a positive odd integer")?
                             .parse::<usize>()?,
                     )
                 }
@@ -58,13 +67,13 @@ impl Options {
                 }
             }
         }
-        let sf = sf.ok_or("TPC-H-derived bench requires --sf 0.1 or --sf 1")?;
-        if !tpch || !matches!(sf.as_str(), "0.1" | "1") {
-            return Err("TPC-H-derived bench requires --tpch --sf 0.1|1".into());
+        let sf = sf.ok_or("TPC-H-derived bench requires --sf 0.1|1|10")?;
+        if !tpch || !matches!(sf.as_str(), "0.1" | "1" | "10") {
+            return Err("TPC-H-derived bench requires --tpch --sf 0.1|1|10".into());
         }
         let runs = runs.unwrap_or(5);
-        if runs < 3 || runs % 2 == 0 {
-            return Err("--runs must be odd and at least 3".into());
+        if runs == 0 || runs % 2 == 0 {
+            return Err("--runs must be a positive odd integer".into());
         }
         if config.is_some() && reduction_comparison {
             return Err("--config and --reduction-comparison are mutually exclusive".into());
@@ -75,6 +84,7 @@ impl Options {
             query,
             config,
             reduction_comparison,
+            cap_seconds,
         })
     }
 }
@@ -213,6 +223,7 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
         Some(data::dbgen(&root, "0.1")?)
     };
     let verification_database = small.as_ref().unwrap_or(&database);
+    let mut gate_timeouts = BTreeSet::new();
     for query in &queries {
         let directory = data::export(verification_database, &query.name, &query.exports)?;
         let (oracle, _) = data::preload(&directory, &query.exports)?;
@@ -223,7 +234,11 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
                 .join("verification/sf-0.1")
                 .join(&query.name)
                 .join(config);
-            execute_worker(query, &directory, config, 0, &artifact, &expected)?;
+            let deadline = options.cap_seconds.map(|s| Instant::now() + std::time::Duration::from_secs(s));
+            if execute_worker_limited(query, &query.built.binary, &directory, config, 0, &artifact, &expected, deadline)?.is_none() {
+                gate_timeouts.insert((query.name.clone(), config.clone()));
+                continue;
+            }
             eprintln!(
                 "verified TPC-H-derived {}/{} SF 0.1: {} rows",
                 query.name,
@@ -287,33 +302,46 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
                 "measuring TPC-H-derived {}/{} SF {}...",
                 query.name, config, options.sf
             );
-            let measured = execute_worker(
-                query,
-                &directory,
-                config,
-                options.runs,
-                &artifact,
-                &expected,
-            )?;
-            let mut measured = measured;
-            let counted = execute_worker_binary(
-                query,
-                &query.built.count_binary,
-                &directory,
-                config,
-                0,
-                &artifact.with_extension("counts"),
-                &expected,
-            )?;
-            let repeated = execute_worker_binary(
-                query,
-                &query.built.count_binary,
-                &directory,
-                config,
-                0,
-                &artifact.with_extension("counts-repeat"),
-                &expected,
-            )?;
+            let deadline = options.cap_seconds.map(|s| Instant::now() + std::time::Duration::from_secs(s));
+            let results = (|| -> Result<Option<(Value, Value, Value)>> {
+                if gate_timeouts.contains(&(query.name.clone(), config.clone())) {
+                    return Ok(None);
+                }
+                let Some(measured) = execute_worker_limited(query, &query.built.binary,
+                    &directory, config, options.runs, &artifact, &expected, deadline)? else {
+                    return Ok(None);
+                };
+                let Some(counted) = execute_worker_limited(query, &query.built.count_binary,
+                    &directory, config, 0, &artifact.with_extension("counts"), &expected, deadline)? else {
+                    return Ok(None);
+                };
+                let Some(repeated) = execute_worker_limited(query, &query.built.count_binary,
+                    &directory, config, 0, &artifact.with_extension("counts-repeat"), &expected, deadline)? else {
+                    return Ok(None);
+                };
+                Ok(Some((measured, counted, repeated)))
+            })()?;
+            let Some((mut measured, counted, repeated)) = results else {
+                let mut row = vec!["NA".to_owned(); 34];
+                row[0] = "TPC-H-derived".into();
+                row[1] = options.sf.clone();
+                row[2] = query.name.clone();
+                row[3] = config.clone();
+                row[4] = options.runs.to_string();
+                row[8] = format!("{duck_load_ms:.6}");
+                row[9] = format!("{:.6}", duck_one.0);
+                row[10] = format!("{:.6}", duck_default.0);
+                row[11] = database.default_threads.to_string();
+                row[12] = query.built.unit_ms.to_string();
+                row[30] = "timeout".into();
+                row[33] = format!("{:.6}", duck_one_execute.0);
+                table.push_str(&row.join("\t"));
+                table.push('\n');
+                std::fs::write(&pending, &table)?;
+                eprintln!("{} / {config}: timeout", query.name);
+                configs.push(serde_json::json!({"configuration":config,"status":"timeout"}));
+                continue;
+            };
             if repeated != counted {
                 return Err("separate deterministic counting runs disagree".into());
             }
@@ -396,6 +424,7 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
         }
         let best = configs
             .iter()
+            .filter(|v| v["metrics"]["median_ms"].is_number())
             .min_by(|a, b| {
                 a["metrics"]["median_ms"]
                     .as_f64()
@@ -413,6 +442,7 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
         .output()?;
     let metadata = serde_json::json!({
         "label":"TPC-H-derived", "selection":options.query, "sf":options.sf,"runs":options.runs,"warm_runs":1,
+        "cap_seconds":options.cap_seconds,
         "duckdb_version":database.version,"duckdb_default_threads":database.default_threads,
         "rustc":String::from_utf8_lossy(&rustc.stdout).trim(),
         "compile_method":"Cargo --release --timings per-query binary unit (all authored configurations); macro expansion + optimization + linking; dependency units excluded; not isolated proc-macro CPU time",
@@ -428,7 +458,7 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
         serde_json::to_vec_pretty(&metadata)?,
     )?;
     println!(
-        "all configurations matched DuckDB exactly; wrote {}",
+        "completed configurations matched DuckDB exactly; see status rows for timeouts; wrote {}",
         path.display()
     );
     Ok(())
@@ -472,6 +502,20 @@ fn execute_worker_binary(
     artifact: &Path,
     expected: &Answers,
 ) -> Result<Value> {
+    execute_worker_limited(query, binary, directory, config, runs, artifact, expected, None)?
+        .ok_or_else(|| "uncapped worker unexpectedly timed out".into())
+}
+
+fn execute_worker_limited(
+    query: &Query,
+    binary: &Path,
+    directory: &Path,
+    config: &str,
+    runs: usize,
+    artifact: &Path,
+    expected: &Answers,
+    deadline: Option<Instant>,
+) -> Result<Option<Value>> {
     std::fs::create_dir_all(artifact)?;
     let answers = artifact.join("answers.json");
     let metrics = artifact.join("metrics.json");
@@ -482,14 +526,25 @@ fn execute_worker_binary(
             &serde_json::json!({"rows":expected.rows,"decimal_columns":expected.decimal_columns}),
         )?,
     )?;
-    let status = worker_command(binary)
+    let mut child = worker_command(binary)
         .arg(directory)
         .arg(config)
         .arg(runs.to_string())
         .arg(&answers)
         .arg(&metrics)
         .arg(&witness)
-        .status()?;
+        .spawn()?;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            child.kill()?;
+            child.wait()?;
+            return Ok(None);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
     if !status.success() {
         return Err(format!("{} / {config} failed: {status}", query.name).into());
     }
@@ -502,7 +557,7 @@ fn execute_worker_binary(
         )
         .into());
     }
-    Ok(serde_json::from_slice(&std::fs::read(&metrics)?)?)
+    Ok(Some(serde_json::from_slice(&std::fs::read(&metrics)?)?))
 }
 
 fn number(value: &Value, key: &str) -> Result<f64> {
@@ -605,6 +660,7 @@ mod tests {
                 query: None,
                 config: None,
                 reduction_comparison: false,
+                cap_seconds: None,
             }
         );
         assert_eq!(
@@ -614,10 +670,14 @@ mod tests {
                 .as_deref(),
             Some("le"),
         );
+        assert_eq!(parse(&["--tpch", "--sf", "10", "--runs", "1", "--cap-seconds", "2"]).unwrap().cap_seconds, Some(2));
         for args in [
             vec!["--tpch"],
             vec!["--tpch", "--sf", "2"],
             vec!["--tpch", "--sf", "1", "--runs", "2"],
+            vec!["--tpch", "--sf", "1", "--runs", "0"],
+            vec!["--tpch", "--sf", "1", "--cap-seconds", "0"],
+            vec!["--tpch", "--sf", "1", "--cap-seconds"],
             vec!["--tpch", "--sf", "1", "--sf", "1"],
             vec!["--tpch", "--sf", "1", "--config"],
             vec![

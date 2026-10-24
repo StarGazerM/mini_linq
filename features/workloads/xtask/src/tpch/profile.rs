@@ -22,9 +22,9 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
             _ => return Err(format!("unknown or duplicate profile argument {arg}").into()),
         }
     }
-    let sf = sf.ok_or("profile requires --tpch --sf 0.1|1")?;
-    if !tpch || !matches!(sf.as_str(), "0.1" | "1") {
-        return Err("profile requires --tpch --sf 0.1|1".into());
+    let sf = sf.ok_or("profile requires --tpch --sf 0.1|1|10")?;
+    if !tpch || !matches!(sf.as_str(), "0.1" | "1" | "10") {
+        return Err("profile requires --tpch --sf 0.1|1|10".into());
     }
     if query
         .as_ref()
