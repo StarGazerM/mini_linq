@@ -42,13 +42,15 @@ fn rendered_invocations_follow_wave_and_within_wave_order() {
     for mut schedule in schedules(&program) {
         // Reverse both the wave order within a phase and each wave's holes.
         // This catches printers that silently retain the original context order.
-        for stratum in &mut schedule.strata {
-            for wave in &mut stratum.waves {
+        for index in 0..schedule.strata.len() {
+            let mut waves = schedule.strata[index].waves.clone();
+            for wave in &mut waves {
                 wave.holes.reverse();
             }
-            let seeds = stratum.waves.partition_point(|wave| wave.phase == "seed");
-            stratum.waves[..seeds].reverse();
-            stratum.waves[seeds..].reverse();
+            let seeds = waves.partition_point(|wave| wave.phase == "seed");
+            waves[..seeds].reverse();
+            waves[seeds..].reverse();
+            schedule = schedule.with_stratum_waves(index, waves, &program.context);
         }
         program.schedule = schedule;
         for timed in [false, true] {
