@@ -1,10 +1,12 @@
 //! Checked sharded admission and exclusive-layout publication around CQ evaluation.
-//! Bindings, round barriers, observers and outputs reuse the base printer.
+//! Bindings, synchronous seeds, observers and outputs reuse the base printer.
 //! Certified chunk inputs retain their renamed host-set facts. The checked
 //! per-task realization removes local duplicates without cloning owned rows.
 //! Cross-task/round duplicates still reach the recorded canonical admission owner.
 //! Recorded waves join in order; completed heads admit and publish alongside
 //! later waves only after every reader has joined.
+//! Relational progress replaces only the step loop with member-batch scheduling;
+//! a single worker retains the recorded synchronous step realization.
 //! Standard rule tasks use the registered push adapter to feed the collector
 //! directly; custom pull terminals retain iteration through their authored API.
 use cq_lang_datalog_round::{self as round, InputSource, RoundContext, RuleHole};
@@ -16,6 +18,7 @@ use quote::ToTokens;
 use quote::{format_ident, quote};
 use syn::Ident;
 mod publication;
+mod relational;
 
 pub fn compile(program: &cq_datalog_partition::ShardedProgram) -> syn::Result<syn::Expr> {
     let source = round::erase(&program.round)?;
@@ -23,7 +26,7 @@ pub fn compile(program: &cq_datalog_partition::ShardedProgram) -> syn::Result<sy
     let holes = cq_datalog_print::splice(&program.round)?;
     let mut stratum_index = 0usize;
     let mut evaluation_index = 0usize;
-    cq_datalog_print::render_with_publication(
+    cq_datalog_print::render_with_step_loop(
         &program.round,
         &holes,
         |rules, context, holes, _| {
@@ -42,6 +45,7 @@ pub fn compile(program: &cq_datalog_partition::ShardedProgram) -> syn::Result<sy
                 &program.certificate,
                 stratum,
                 phase,
+                false,
                 #[cfg(feature = "hole-timing")]
                 &source,
             )
@@ -72,6 +76,7 @@ pub fn compile(program: &cq_datalog_partition::ShardedProgram) -> syn::Result<sy
             let seed_phase = Ident::new("__cq_seed_phase", Span::mixed_site());
             vec![quote!(if #seed_phase { #(#seed)* } else { #(#step)* })]
         },
+        |index, stratum, default| relational::step_loop(program, &holes, index, stratum, default),
     )
 }
 
@@ -85,6 +90,7 @@ fn evaluate(
     certificate: &cq_datalog_partition::ShardCertificate,
     stratum_index: usize,
     phase: &str,
+    standalone: bool,
     #[cfg(feature = "hole-timing")] original: &Program,
 ) -> syn::Result<(TokenStream, TokenStream)> {
     let threshold = certificate.threshold;
@@ -135,12 +141,19 @@ fn evaluate(
             let seen = &head.seen;
             // Borrow only S before task closures: capturing seen inside a split
             // evaluation would request mutable storage and impose row Sync.
-            declarations.push(quote!(let #hasher = #seen.hasher();));
+            if standalone {
+                let owned =
+                    format_ident!("__cq_rel_hasher_{}", rule.head, span = Span::mixed_site());
+                declarations.push(quote!(let #hasher = &#owned;));
+            } else {
+                declarations.push(quote!(let #hasher = #seen.hasher();));
+            }
             collect_task(
                 specifications[rule.hole].interface,
                 invocation,
                 quote!((#(#types,)*)),
                 &hasher,
+                !standalone,
             )
         } else {
             cq_datalog_print::collect_hole(
@@ -150,7 +163,11 @@ fn evaluate(
             )
         };
         #[cfg(feature = "hole-timing")]
-        let consume = timed_chunk(consume, rule, execution, self_dedup);
+        let consume = if standalone {
+            consume
+        } else {
+            timed_chunk(consume, rule, execution, self_dedup)
+        };
         let evaluation = if let Some(scan) = &rule.scan {
             let annotation = execution
                 .iter()
@@ -204,7 +221,9 @@ fn evaluate(
         #[cfg(not(feature = "hole-timing"))]
         evaluations.push(quote!(#candidates = #evaluation;));
         #[cfg(feature = "hole-timing")]
-        {
+        if standalone {
+            evaluations.push(quote!(#candidates = #evaluation;));
+        } else {
             let hole = rule.hole;
             let variant = rule.variant;
             let partitioned = rule.scan.is_some();
@@ -240,6 +259,18 @@ fn evaluate(
             .entry(rule.head)
             .or_default()
             .push(candidates);
+    }
+    if standalone {
+        assert_eq!(rules.len(), 1);
+        let candidates = format_ident!(
+            "__cq_candidates_{}",
+            rules[0].hole,
+            span = Span::mixed_site()
+        );
+        return Ok((
+            quote!(#(#declarations)* #(#evaluations)*),
+            quote!(#candidates),
+        ));
     }
     let early = publication::early_members(schedule, phase);
     let evaluators: Vec<_> = rules
@@ -379,13 +410,20 @@ fn collect_task(
     invocation: &TokenStream,
     row_type: TokenStream,
     hasher: &Ident,
+    timing: bool,
 ) -> TokenStream {
     let candidates = Ident::new("__cq_task_candidates", Span::mixed_site());
     #[cfg(feature = "hole-timing")]
     let count = {
         let raw = Ident::new("__cq_timing_chunk_before", Span::mixed_site());
-        quote!(#raw += 1;)
+        if timing {
+            quote!(#raw += 1;)
+        } else {
+            TokenStream::new()
+        }
     };
+    #[cfg(not(feature = "hole-timing"))]
+    let _ = timing;
     #[cfg(not(feature = "hole-timing"))]
     let count = TokenStream::new();
     let consume = cq_datalog_print::consume_hole(
@@ -486,6 +524,30 @@ mod tests {
     }
 
     #[test]
+    fn relational_step_has_event_driven_branch() {
+        let mut source = pull_program();
+        source.schedule.progress = syn::parse_quote!(relational);
+        let sharded = cq_datalog_partition::compile_sharded(&source).unwrap();
+        let holes = cq_datalog_print::splice(&sharded.round).unwrap();
+        let block = relational::step_loop(
+            &sharded,
+            &holes,
+            0,
+            &sharded.round.context.strata[0],
+            quote!(while fallback {}),
+        )
+        .unwrap();
+        let expression: syn::ExprIf = syn::parse2(block).unwrap();
+        let parallel = expression.then_branch.to_token_stream().to_string();
+        assert!(parallel.contains("RwLock"));
+        assert!(parallel.contains("drive ("));
+        assert!(!parallel.contains("while"));
+        // Also exercise whole-component storage splitting and contract checks.
+        compile(&sharded).unwrap();
+        println!("{}", expression.to_token_stream());
+    }
+
+    #[test]
     fn schedules_survive_partition_and_invalid_progress_is_rejected() {
         for constructor in [
             round::Schedule::whole,
@@ -564,6 +626,7 @@ mod tests {
             &sharded.certificate,
             0,
             round::schedule::STEP,
+            false,
             #[cfg(feature = "hole-timing")]
             &round::erase(&sharded.round).unwrap(),
         )
@@ -781,6 +844,7 @@ mod tests {
                 &program.certificate,
                 0,
                 round::schedule::SEED,
+                false,
                 #[cfg(feature = "hole-timing")]
                 &round::erase(&program.round).unwrap(),
             )

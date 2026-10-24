@@ -98,9 +98,13 @@ fn early_publication_of_three_head_cycle_matches_round() {
 #[test]
 fn per_hole_chunk_policy_preserves_two_rule_sets() {
     for threads in [1, 4] {
-        rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(|| {
-            let rows: Vec<_> = (0..32).map(|x| (x,)).collect();
-            macro_rules! run {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+            .install(|| {
+                let rows: Vec<_> = (0..32).map(|x| (x,)).collect();
+                macro_rules! run {
                 ($($policy:tt)*) => {
                     cq_datalog::datalog! {
                         pipeline {
@@ -117,8 +121,11 @@ fn per_hole_chunk_policy_preserves_two_rule_sets() {
                     }.into_iter().collect::<Vec<_>>()
                 };
             }
-            assert_same(&run!(cq_datalog_parallel_test_passes::hole_policy), &run!(cq_datalog_parallel::partition));
-        });
+                assert_same(
+                    &run!(cq_datalog_parallel_test_passes::hole_policy),
+                    &run!(cq_datalog_parallel::partition),
+                );
+            });
     }
 }
 
@@ -444,10 +451,16 @@ fn small_work_threshold_evaluates_inline_and_preserves_sets() {
         .build()
         .unwrap()
         .install(|| {
-            let caller = std::thread::current().id();
+            let threads = [
+                std::sync::Mutex::new(Vec::new()),
+                std::sync::Mutex::new(Vec::new()),
+            ];
             let inputs: Vec<_> = (0..31_i32).map(|x| (x,)).collect();
-            let checked = |x: i32| {
-                assert_eq!(std::thread::current().id(), caller);
+            let checked = |x: i32, hole: usize| {
+                threads[hole]
+                    .lock()
+                    .unwrap()
+                    .push(std::thread::current().id());
                 x
             };
             let actual = cq_datalog::datalog! {
@@ -460,11 +473,18 @@ fn small_work_threshold_evaluates_inline_and_preserves_sets() {
                 relation Input(x:i32) = (&inputs);
                 relation Reach(x:i32);
                 output Reach;
-                Reach(checked(*x)) :- Input(x);
-                Reach(checked(*x + 1)) :- Reach(x), if *x < 31;
+                Reach(checked(*x, 0)) :- Input(x);
+                Reach(checked(*x + 1, 1)) :- Reach(x), if *x < 31;
             }
             .collect::<BTreeSet<_>>();
             assert_eq!(actual, (0..=31).map(|x| (x,)).collect());
+            // Small drivers inline their chunks, not concurrency between holes.
+            // Each hole here emits 31 callbacks in its sole nonempty evaluation.
+            for recorded in threads {
+                let recorded = recorded.into_inner().unwrap();
+                assert_eq!(recorded.len(), 31);
+                assert!(recorded.iter().all(|thread| thread == &recorded[0]));
+            }
         });
 }
 

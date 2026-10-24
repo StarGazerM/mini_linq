@@ -130,7 +130,9 @@ pub fn compile_with(
     ) -> syn::Result<(TokenStream, TokenStream)>,
 ) -> syn::Result<syn::Expr> {
     let holes = splice(program)?;
-    render_admitted(program, &holes, evaluator, publication)
+    render_admitted(program, &holes, evaluator, publication, |_, _, body| {
+        Ok(body)
+    })
 }
 /// Realize already-spliced holes. The length and complete Round contract are checked.
 pub fn render_with(
@@ -159,8 +161,23 @@ pub fn render_with_publication(
     ) -> syn::Result<(TokenStream, TokenStream)>,
     publish: impl FnMut(&RoundContext, &Stratum) -> Vec<TokenStream>,
 ) -> syn::Result<syn::Expr> {
+    render_with_step_loop(program, holes, evaluator, publish, |_, _, body| Ok(body))
+}
+/// Replace only the step loop, retaining synchronous seed publication and outputs.
+pub fn render_with_step_loop(
+    program: &Program,
+    holes: &[TokenStream],
+    evaluator: impl FnMut(
+        &[RuleHole],
+        &RoundContext,
+        &[TokenStream],
+        &[Execution],
+    ) -> syn::Result<(TokenStream, TokenStream)>,
+    publish: impl FnMut(&RoundContext, &Stratum) -> Vec<TokenStream>,
+    step_loop: impl FnMut(usize, &Stratum, TokenStream) -> syn::Result<TokenStream>,
+) -> syn::Result<syn::Expr> {
     round::contract::check(program)?;
-    render_admitted(program, holes, evaluator, publish)
+    render_admitted(program, holes, evaluator, publish, step_loop)
 }
 // Internal callers retain the Round admission performed before splicing.
 fn render_admitted(
@@ -173,6 +190,7 @@ fn render_admitted(
         &[Execution],
     ) -> syn::Result<(TokenStream, TokenStream)>,
     mut publish: impl FnMut(&RoundContext, &Stratum) -> Vec<TokenStream>,
+    mut step_loop: impl FnMut(usize, &Stratum, TokenStream) -> syn::Result<TokenStream>,
 ) -> syn::Result<syn::Expr> {
     ensure(
         holes.len() == program.holes.len(),
@@ -293,6 +311,7 @@ fn render_admitted(
             ),
             _ => unreachable!("checked loop form"),
         };
+        let loop_body = step_loop(stratum_index, stratum, loop_body)?;
         match stratum.key_scope.to_string().as_str() {
             "component" => {
                 let body = quote!({
