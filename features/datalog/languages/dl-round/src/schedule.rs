@@ -254,7 +254,8 @@ pub fn check(program: &Program, analysis: &storage::Analysis) -> syn::Result<()>
     Ok(())
 }
 
-fn check_waves(waves: &[Wave], stratum: &Stratum) -> syn::Result<()> {
+/// Waves partition each phase's holes exactly once; seed waves precede step waves.
+pub fn check_waves(waves: &[Wave], stratum: &Stratum) -> syn::Result<()> {
     let mut seen_step = false;
     let mut seeds = BTreeSet::new();
     let mut steps = BTreeSet::new();
@@ -316,4 +317,86 @@ pub fn heads_completed_after(waves: &[Wave], stratum: &Stratum, wave: usize) -> 
                     .all(|(index, _)| before.contains(&index))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hole(head: usize) -> RuleHole {
+        RuleHole {
+            variant: 0,
+            head,
+            hole: 0,
+            scan: None,
+            insertion: ident("insert"),
+        }
+    }
+    fn stratum(seed_heads: &[usize], step_heads: &[usize]) -> Stratum {
+        Stratum {
+            members: vec![0, 1],
+            keys: Vec::new(),
+            seeds: seed_heads.iter().map(|&h| hole(h)).collect(),
+            steps: step_heads.iter().map(|&h| hole(h)).collect(),
+            phases: vec![ident("evaluate"), ident("admit"), ident("publish")],
+            publication: Vec::new(),
+            termination: vec![0, 1],
+            termination_test: ident("sum_delta_lengths"),
+            observer: ident("before_step"),
+            key_scope: ident("component"),
+            loop_form: ident("while_nonempty"),
+        }
+    }
+    fn wave(phase: &str, holes: &[usize]) -> Wave {
+        Wave {
+            phase: ident(phase),
+            holes: holes.to_vec(),
+        }
+    }
+
+    #[test]
+    fn waves_partition_each_phase_in_order() {
+        let s = stratum(&[0], &[0, 1, 0]);
+        check_waves(&[wave(SEED, &[0]), wave(STEP, &[0, 1, 2])], &s).unwrap();
+        check_waves(&[wave(SEED, &[0]), wave(STEP, &[2]), wave(STEP, &[0, 1])], &s).unwrap();
+        let rejected = |waves: &[Wave]| check_waves(waves, &s).unwrap_err().to_string();
+        assert!(rejected(&[wave(STEP, &[0, 1, 2]), wave(SEED, &[0])]).contains("precede"));
+        assert!(rejected(&[wave(SEED, &[0]), wave(STEP, &[0, 1])]).contains("exactly once"));
+        assert!(rejected(&[wave(SEED, &[0]), wave(STEP, &[0, 1, 2, 1])]).contains("repeats"));
+        assert!(rejected(&[wave(SEED, &[0]), wave(STEP, &[0, 1, 3])]).contains("outside"));
+        assert!(rejected(&[wave(SEED, &[0]), wave(STEP, &[]), wave(STEP, &[0, 1, 2])]).contains("at least one"));
+        assert!(rejected(&[wave(SEED, &[0]), wave(ident("admit").to_string().as_str(), &[0, 1, 2])]).contains("seed or step"));
+    }
+
+    #[test]
+    fn heads_complete_after_their_last_wave_only() {
+        let s = stratum(&[], &[0, 1, 0, 2]);
+        let waves = [wave(STEP, &[0]), wave(STEP, &[1, 2]), wave(STEP, &[3])];
+        assert_eq!(heads_completed_after(&waves, &s, 0), Vec::<usize>::new());
+        assert_eq!(heads_completed_after(&waves, &s, 1), vec![0, 1]);
+        assert_eq!(heads_completed_after(&waves, &s, 2), vec![2]);
+        let one = [wave(STEP, &[0, 1, 2, 3])];
+        assert_eq!(heads_completed_after(&one, &s, 0), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn schedule_text_roundtrips() {
+        let schedule = Schedule {
+            progress: ident(SYNCHRONOUS),
+            strata: vec![StratumSchedule {
+                reads: vec![HoleReads {
+                    phase: ident(STEP),
+                    index: 0,
+                    reads: vec![
+                        Read { relation: 1, version: ident("delta") },
+                        Read { relation: 2, version: ident("full") },
+                    ],
+                }],
+                waves: vec![wave(STEP, &[0])],
+            }],
+        };
+        let text = quote::ToTokens::to_token_stream(&schedule);
+        let parsed: Schedule = syn::parse2(text).unwrap();
+        assert_eq!(parsed, schedule);
+    }
 }
