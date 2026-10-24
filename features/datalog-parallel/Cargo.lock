@@ -215,6 +215,7 @@ name = "cq-datalog-parallel-test-passes"
 version = "0.0.0"
 dependencies = [
  "cq-datalog-partition",
+ "cq-lang-datalog-round",
  "cq-stage",
  "quote",
  "syn 2.0.119",

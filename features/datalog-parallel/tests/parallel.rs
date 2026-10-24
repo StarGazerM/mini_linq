@@ -60,6 +60,69 @@ fn recorded_waves_match_round_oracle_for_mutual_heads() {
 }
 
 #[test]
+fn early_publication_of_three_head_cycle_matches_round() {
+    for threads in [1, 4] {
+        rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(|| {
+            let rows: Vec<_> = (0..8).map(|x| (x,)).collect();
+            macro_rules! run {
+                ($($mode:tt)*) => {{
+                    let (a, b, c) = cq_datalog::datalog! {
+                        pipeline { $($mode)* }
+                        struct EarlyCycle;
+                        relation E(x:i32) = (&rows);
+                        relation A(x:i32);
+                        relation B(x:i32);
+                        relation C(x:i32);
+                        output A, B, C;
+                        A(*x) :- E(x);
+                        A(*x) :- C(x);
+                        B(*x) :- A(x);
+                        C(*x + 1) :- B(x), if *x < 12;
+                    };
+                    (a.into_iter().collect::<Vec<_>>(), b.into_iter().collect::<Vec<_>>(), c.into_iter().collect::<Vec<_>>())
+                }};
+            }
+            let expected = run!(print = cq_datalog_test_passes::eval_round;);
+            let actual = run!(
+                storage_rewrites = [cq_datalog_parallel::shard_storage];
+                round = [cq_datalog_schedule::schedule(per_hole), cq_datalog_parallel::partition(threshold = 0, grain = 2)];
+                print = cq_datalog_parallel::print_rounds;
+            );
+            assert_same(&actual.0, &expected.0);
+            assert_same(&actual.1, &expected.1);
+            assert_same(&actual.2, &expected.2);
+        });
+    }
+}
+
+#[test]
+fn per_hole_chunk_policy_preserves_two_rule_sets() {
+    for threads in [1, 4] {
+        rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(|| {
+            let rows: Vec<_> = (0..32).map(|x| (x,)).collect();
+            macro_rules! run {
+                ($($policy:tt)*) => {
+                    cq_datalog::datalog! {
+                        pipeline {
+                            storage_rewrites = [cq_datalog_parallel::shard_storage];
+                            round = [$($policy)*];
+                            print = cq_datalog_parallel::print_rounds;
+                        }
+                        struct Policy;
+                        relation E(x:i32) = (&rows);
+                        relation A(x:i32);
+                        output A;
+                        A(*x) :- E(x);
+                        A(*x + 1) :- E(x);
+                    }.into_iter().collect::<Vec<_>>()
+                };
+            }
+            assert_same(&run!(cq_datalog_parallel_test_passes::hole_policy), &run!(cq_datalog_parallel::partition));
+        });
+    }
+}
+
+#[test]
 fn self_join_matches_sequential_sets_and_ascent_in_local_pools() {
     for threads in [2, 4] {
         rayon::ThreadPoolBuilder::new()

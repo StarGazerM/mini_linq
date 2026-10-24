@@ -19,6 +19,13 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   (`P-DL-Waves`). The parallel oracle corpus adds a `by_head` configuration;
   DOOP cassandra remains exact at 15 threads. Relational (per-relation) progress
   is written up as a proposal only; both printers reject any other progress mode.
+  The schedule also records per-hole realization `policy` (`grain`,
+  `inline_below`; advice `grain(N)`, `inline_below(N)`, `policy(..)`) and a
+  derived per-member `publication` wave (`DL-PublishAfterReaders`: after the
+  last wave holding a writer or reader). The Rayon printer decides chunking per
+  hole and always runs a wave concurrently on a multi-worker pool; a member
+  whose publication wave precedes the phase's last wave is admitted and fully
+  published in one task alongside the next wave and leaves the phase barrier.
 - Integrate the parallel Tasks work with the closed-core layout: key-partition
   advice and the Tasks provider-preserving catalog selection live in
   `cq_sequence_plan::rewrites`; eager-membership host retention moved into

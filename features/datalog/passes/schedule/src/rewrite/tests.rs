@@ -30,6 +30,13 @@ fn advice_pass_cases_and_round_text_roundtrip() {
         quote!(per_hole),
         quote!(by_head),
         quote!(strata(0 { seed [0] step [0] [1 2] })),
+        quote!(grain(128)),
+        quote!(inline_below(0)),
+        quote!(grain(1), inline_below(0)),
+        quote!(by_head, grain(2)),
+        quote!(policy(0 { seed 0 inline_below 8 step 1 grain 128 inline_below 0 })),
+        quote!(policy(0 { step 1 grain 128 }), grain(2), inline_below(0), per_hole),
+        quote!(strata(0 { seed [0] step [0] [1 2] }), grain(8)),
     ] {
         let target = cq_datalog_testkit::PassCase {
             source: source.clone(),
@@ -55,6 +62,21 @@ fn rejects_invalid_advice_and_wave_partitions() {
     for advice in [
         quote!(unknown),
         quote!(whole extra),
+        quote!(grain(0)),
+        quote!(whole, per_hole),
+        quote!(strata(), by_head),
+        quote!(policy(0 { step 9 grain 1 })),
+        quote!(policy(9 { step 0 grain 1 })),
+        quote!(policy(0 { step 1 grain 1 step 1 inline_below 0 })),
+        quote!(policy(0 { step 1 grain 1 }), policy(0 { step 1 grain 2 })),
+        quote!(policy(0 { step 1 grain 0 })),
+        quote!(policy(0 { other 1 grain 1 })),
+        quote!(policy(0 { step grain 1 })),
+        quote!(policy(0 { step 1 grain })),
+        quote!(policy(0 { step 1 unknown 1 })),
+        quote!(policy(0 { step 1 grain 1 grain 2 })),
+        quote!(grain(1 2)),
+        quote!(grain(1), grain(2)),
         quote!(strata(0 { seed [0 0] step [0 1 2] })),
         quote!(strata(0 { seed [0] step [0 1] })),
         quote!(strata(0 { step [0 1 2] seed [0] })),
@@ -79,4 +101,36 @@ fn checker_rejects_otherwise_admitted_non_schedule_edits() {
     let mut target = source.clone();
     target.holes[0].pipeline = syn::parse_quote!(pipeline { other::printer });
     assert!(check(&source, &target).is_err());
+}
+
+#[test]
+fn policies_apply_after_waves_with_fieldwise_hole_overrides() {
+    let source = fixture();
+    let target = compile_with(
+        &source,
+        quote!(policy(0 { step 1 grain 128 }), inline_below(0), grain(2), per_hole),
+    )
+    .unwrap();
+    assert_eq!(target.schedule.strata[0].waves.len(), 4);
+    let policies = &target.schedule.strata[0].policy;
+    assert_eq!(policies.len(), 4);
+    for policy in policies {
+        assert_eq!(policy.inline_below, Some(0));
+        assert_eq!(
+            policy.grain,
+            Some(if policy.phase == "step" && policy.index == 1 {
+                128
+            } else {
+                2
+            })
+        );
+    }
+    let updated = compile_with(&target, quote!(policy(0 { step 1 inline_below 16 }))).unwrap();
+    let policy = updated.schedule.strata[0]
+        .policy
+        .iter()
+        .find(|p| p.phase == "step" && p.index == 1)
+        .unwrap();
+    assert_eq!(policy.grain, Some(128));
+    assert_eq!(policy.inline_below, Some(16));
 }

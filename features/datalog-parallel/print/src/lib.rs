@@ -3,8 +3,8 @@
 //! Certified chunk inputs retain their renamed host-set facts. The checked
 //! per-task realization removes local duplicates without cloning owned rows.
 //! Cross-task/round duplicates still reach the recorded canonical admission owner.
-//! Recorded waves join in order; completed heads admit alongside the next wave,
-//! borrowing only their own seen/next state. Publication remains a phase barrier.
+//! Recorded waves join in order; completed heads admit and publish alongside
+//! later waves only after every reader has joined.
 //! Standard rule tasks use the registered push adapter to feed the collector
 //! directly; custom pull terminals retain iteration through their authored API.
 use cq_lang_datalog_round::{self as round, InputSource, RoundContext, RuleHole};
@@ -22,16 +22,26 @@ pub fn compile(program: &cq_datalog_partition::ShardedProgram) -> syn::Result<sy
     cq_datalog_partition::check_sharded(&source, program)?;
     let holes = cq_datalog_print::splice(&program.round)?;
     let mut stratum_index = 0usize;
+    let mut evaluation_index = 0usize;
     cq_datalog_print::render_with_publication(
         &program.round,
         &holes,
         |rules, context, holes, _| {
+            let stratum = evaluation_index / 2;
+            let phase = if evaluation_index % 2 == 0 {
+                round::schedule::SEED
+            } else {
+                round::schedule::STEP
+            };
+            evaluation_index += 1;
             evaluate(
                 rules,
                 context,
                 holes,
                 &program.round,
                 &program.certificate,
+                stratum,
+                phase,
                 #[cfg(feature = "hole-timing")]
                 &source,
             )
@@ -43,26 +53,54 @@ pub fn compile(program: &cq_datalog_partition::ShardedProgram) -> syn::Result<sy
                 .iter()
                 .find(|barrier| barrier.stratum == stratum_index)
                 .expect("checked complete publication barriers");
+            let schedule = &program.round.schedule.strata[stratum_index];
             stratum_index += 1;
-            publication::publication(context, barrier, &program.certificate)
+            let seed = publication::phase_publication(
+                context,
+                barrier,
+                &program.certificate,
+                schedule,
+                round::schedule::SEED,
+            );
+            let step = publication::phase_publication(
+                context,
+                barrier,
+                &program.certificate,
+                schedule,
+                round::schedule::STEP,
+            );
+            let seed_phase = Ident::new("__cq_seed_phase", Span::mixed_site());
+            vec![quote!(if #seed_phase { #(#seed)* } else { #(#step)* })]
         },
     )
 }
 
 /// Formal rule P-DL-Waves:
-/// Join each recorded wave before admitting its completed heads alongside the next wave.
+/// Join waves before admitting and publishing members whose readers have finished.
 fn evaluate(
     rules: &[RuleHole],
     context: &RoundContext,
     holes: &[TokenStream],
     program: &round::Program,
     certificate: &cq_datalog_partition::ShardCertificate,
+    stratum_index: usize,
+    phase: &str,
     #[cfg(feature = "hole-timing")] original: &Program,
 ) -> syn::Result<(TokenStream, TokenStream)> {
     let threshold = certificate.threshold;
     let partition_grain = certificate.grain;
     let self_dedup = certificate.self_dedup.is_some();
     let specifications = &program.holes;
+    let stratum = &context.strata[stratum_index];
+    let schedule = &program.schedule.strata[stratum_index];
+    let phase_rules = if phase == round::schedule::SEED {
+        &stratum.seeds
+    } else {
+        &stratum.steps
+    };
+    let waves = &schedule.waves;
+    let seed_phase = Ident::new("__cq_seed_phase", Span::mixed_site());
+    let is_seed = phase == round::schedule::SEED;
     let execution = &program.execution;
     let mut declarations = Vec::new();
     let mut evaluations = Vec::new();
@@ -74,6 +112,20 @@ fn evaluate(
     let bucket = Ident::new("__cq_bucket", Span::mixed_site());
     let inline = Ident::new("__cq_inline", Span::mixed_site());
     for rule in rules {
+        let index = phase_rules
+            .iter()
+            .position(|entry| entry.hole == rule.hole)
+            .expect("checked phase hole");
+        let policy = schedule
+            .policy
+            .iter()
+            .find(|entry| entry.phase == phase && entry.index == index);
+        let partition_grain = policy
+            .and_then(|entry| entry.grain)
+            .unwrap_or(partition_grain);
+        let inline_below = policy
+            .and_then(|entry| entry.inline_below)
+            .unwrap_or(threshold);
         let candidates = format_ident!("__cq_candidates_{}", rule.hole, span = Span::mixed_site());
         let invocation = &holes[rule.hole];
         let head = &context.relations[rule.head];
@@ -131,11 +183,13 @@ fn evaluate(
             quote!({
                 let #source_name = #source;
                 let #evaluator = |#chunk: &[(#(#input_types,)*)]| { #consume };
+                // Recorded minimum grain, widened so a large driver yields about
+                // four chunks per worker (the documented partition formula).
                 let #grain = ::core::cmp::max(
                     #partition_grain,
                     #source_name.len() / (4 * ::rayon::current_num_threads()),
                 );
-                if #inline || #source_name.len() <= #grain {
+                if #source_name.len() < #inline_below || #source_name.len() <= #grain || ::rayon::current_num_threads() == 1 {
                     ::std::vec![#evaluator(#source_name)]
                 } else {
                     use ::rayon::prelude::*;
@@ -187,58 +241,7 @@ fn evaluate(
             .or_default()
             .push(candidates);
     }
-    if rules.is_empty() {
-        return Ok((TokenStream::new(), TokenStream::new()));
-    }
-    let (stratum_index, stratum, phase) = context
-        .strata
-        .iter()
-        .enumerate()
-        .find_map(|(index, stratum)| {
-            if stratum.seeds.iter().any(|rule| rule.hole == rules[0].hole) {
-                Some((index, stratum, round::schedule::SEED))
-            } else if stratum.steps.iter().any(|rule| rule.hole == rules[0].hole) {
-                Some((index, stratum, round::schedule::STEP))
-            } else {
-                None
-            }
-        })
-        .expect("checked rule phase");
-    let waves = &program.schedule.strata[stratum_index].waves;
-    let phase_rules = if phase == round::schedule::SEED {
-        &stratum.seeds
-    } else {
-        &stratum.steps
-    };
-    // Count each driving occurrence: a small delta must not serialize holes
-    // whose selected full-input scans still do substantial work.
-    let delta_work = if phase == round::schedule::STEP {
-        let lengths = stratum
-            .members
-            .iter()
-            .filter_map(|&index| context.relations[index].delta_host.as_ref())
-            .map(|delta| quote!(#delta.len()));
-        quote!(0usize #(+ #lengths)*)
-    } else {
-        quote!(0usize)
-    };
-    let lengths = rules
-        .iter()
-        .filter_map(|rule| rule.scan.as_ref())
-        .map(|scan| match scan.source {
-            InputSource::Delta(index) => {
-                let host = context.relations[index]
-                    .delta_host
-                    .as_ref()
-                    .expect("checked delta host");
-                quote!(#host.len())
-            }
-            InputSource::Layout(index) => {
-                let host = &context.layouts[index].host;
-                quote!(#host.get(&()).map_or(0, |#bucket| #bucket.len()))
-            }
-        });
-    let work = quote!(::core::cmp::max(#delta_work, 0usize #(+ #lengths)*));
+    let early = publication::early_members(schedule, phase);
     let evaluators: Vec<_> = rules
         .iter()
         .map(|rule| format_ident!("__cq_run_hole_{}", rule.hole, span = Span::mixed_site()))
@@ -286,7 +289,7 @@ fn evaluate(
             .iter()
             .map(|&index| &evaluators[index])
             .collect();
-        let admit = |spawn: bool| {
+        let admit = || {
             pending
                 .iter()
                 .map(|head: &usize| {
@@ -297,9 +300,10 @@ fn evaluate(
                         format_ident!("__cq_admit_seen_{head}", span = Span::mixed_site());
                     let next_ref =
                         format_ident!("__cq_admit_next_{head}", span = Span::mixed_site());
-                    let body = &admissions[head];
-                    let body = if spawn {
-                        quote!(#scope.spawn(move |_| { #body });)
+                    let body = admissions.get(head).cloned().unwrap_or_default();
+                    let body = if early.contains(head) {
+                        let publish = publication::member(context, *head, certificate);
+                        quote!(#body let #next = ::core::mem::take(#next_ref); #publish)
                     } else {
                         body.clone()
                     };
@@ -311,8 +315,15 @@ fn evaluate(
                 })
                 .collect::<Vec<_>>()
         };
-        let inline_admit = admit(false);
-        let spawned_admit = admit(true);
+        let inline_admit = admit();
+        let admission_tasks: Vec<_> = pending
+            .iter()
+            .map(|head| format_ident!("__cq_publish_head_{head}", span = Span::mixed_site()))
+            .collect();
+        let admission_closures = admission_tasks
+            .iter()
+            .zip(&inline_admit)
+            .map(|(task, body)| quote!(let #task = || { #body };));
         emitted_waves.push(quote! {
             #(#closures)*
             if #inline {
@@ -320,13 +331,28 @@ fn evaluate(
                 #(#inline_admit)*
                 #(#runs();)*
             } else {
+                #(#admission_closures)*
                 ::rayon::scope(|#scope| {
-                    #(#spawned_admit)*
+                    #(#scope.spawn(move |_| { #admission_tasks(); });)*
                     #(#scope.spawn(move |_| { #runs(); });)*
                 });
             }
         });
-        pending = round::schedule::heads_completed_after(waves, stratum, wave_index);
+        pending = round::schedule::heads_completed_after(waves, stratum, wave_index)
+            .into_iter()
+            .filter(|head| !early.contains(head))
+            .collect();
+        pending.extend(
+            schedule
+                .publication
+                .iter()
+                .filter(|entry| {
+                    entry.phase == phase
+                        && entry.wave == wave_index
+                        && early.contains(&entry.relation)
+                })
+                .map(|entry| entry.relation),
+        );
     }
     let final_admissions = pending.iter().map(|head| {
         let relation = &context.relations[*head];
@@ -340,7 +366,8 @@ fn evaluate(
     Ok((
         quote!(
             #(#declarations)*
-            let #inline = #work < #threshold || ::rayon::current_num_threads() == 1;
+            let #seed_phase = #is_seed;
+            let #inline = ::rayon::current_num_threads() == 1;
             #(#emitted_waves)*
         ),
         quote!(#(#final_admissions)*),
@@ -476,6 +503,111 @@ mod tests {
             let error = compile(&sharded).unwrap_err().to_string();
             assert!(error.contains("synchronous"), "{error}");
         }
+    }
+
+    #[test]
+    fn hole_policy_is_applied_after_fork_before_partition() {
+        let mut source = pull_program();
+        source.schedule = source.schedule.with_policy(
+            0,
+            round::schedule::HolePolicy {
+                phase: syn::parse_quote!(seed),
+                index: 0,
+                grain: Some(1),
+                inline_below: Some(0),
+            },
+        );
+        let sharded = cq_datalog_partition::compile_sharded(&source).unwrap();
+        assert_eq!(sharded.round.schedule, source.schedule);
+        let text = compile(&sharded).unwrap().to_token_stream().to_string();
+        assert!(text.contains("let __cq_grain = :: core :: cmp :: max (1usize"));
+        assert!(text.contains("__cq_source . len () < 0usize"));
+        assert!(text.contains("__cq_source . len () <= __cq_grain"));
+        assert!(!text.contains("__cq_inline ||"));
+    }
+
+    #[test]
+    fn early_member_publication_is_in_next_wave_not_phase_barrier() {
+        let source = syn::parse_quote! {
+            struct EarlyCycle;
+            relation E(x:i32) = (rows);
+            relation A(x:i32);
+            relation B(x:i32);
+            relation C(x:i32);
+            output A, B, C;
+            A(*x) :- E(x);
+            A(*x) :- C(x);
+            B(*x) :- A(x);
+            C(*x + 1) :- B(x), if *x < 12;
+        };
+        let strata = cq_datalog_stratify::compile(&source).unwrap();
+        let incremental = cq_datalog_incremental::compile(&strata).unwrap();
+        let storage = cq_datalog_storage::compile(&incremental).unwrap();
+        let storage = cq_datalog_partition::compile_storage(&storage).unwrap();
+        let mut source = cq_datalog_fork::compile(&storage).unwrap();
+        let analysis = round::storage::contract::check(&source.storage).unwrap();
+        source.schedule =
+            round::Schedule::per_hole(&source.storage, &analysis, &source.context).unwrap();
+        let sharded =
+            cq_datalog_partition::compile_sharded_with(&source, quote!(threshold = 0, grain = 2))
+                .unwrap();
+        let context = &sharded.round.context;
+        let schedule = &sharded.round.schedule.strata[0];
+        let early = publication::early_members(schedule, round::schedule::STEP);
+        assert!(!early.is_empty());
+        let holes = cq_datalog_print::splice(&sharded.round).unwrap();
+        let (waves, admit) = evaluate(
+            &context.strata[0].steps,
+            context,
+            &holes,
+            &sharded.round,
+            &sharded.certificate,
+            0,
+            round::schedule::STEP,
+            #[cfg(feature = "hole-timing")]
+            &round::erase(&sharded.round).unwrap(),
+        )
+        .unwrap();
+        let waves = waves.to_string();
+        let admit = admit.to_string();
+        let barrier = publication::phase_publication(
+            context,
+            &sharded.certificate.publication[0],
+            &sharded.certificate,
+            schedule,
+            round::schedule::STEP,
+        );
+        let barrier = quote!(#(#barrier)*).to_string();
+        for head in early {
+            let relation = &context.relations[head];
+            let all = &relation.all;
+            let delta = relation.delta_host.as_ref().unwrap();
+            let next = &relation.next;
+            let extend = quote!(#all.extend).to_string();
+            let swap = quote!(#delta = #next).to_string();
+            let task = format!("__cq_publish_head_{head}");
+            assert!(waves.contains(&format!("let {task} =")));
+            assert!(waves.contains(&format!("{task} ()")));
+            assert!(waves.contains(&extend));
+            assert!(waves.contains(&swap));
+            assert!(waves.contains(&format!("__cq_admit_seen_{head} . admit")));
+            assert!(!admit.contains(&format!("__cq_admit_seen_{head}")));
+            assert!(!barrier.contains(&extend));
+            assert!(!barrier.contains(&swap));
+        }
+        let last = schedule
+            .waves
+            .iter()
+            .rposition(|wave| wave.phase == round::schedule::STEP)
+            .unwrap();
+        let late = schedule
+            .publication
+            .iter()
+            .find(|entry| entry.phase == round::schedule::STEP && entry.wave == last)
+            .unwrap();
+        let relation = &context.relations[late.relation];
+        let all = &relation.all;
+        assert!(barrier.contains(&quote!(#all.extend).to_string()));
     }
 
     /// Canonical admission and certified host inputs belong to Round, not to
@@ -647,6 +779,8 @@ mod tests {
                 &holes,
                 &program.round,
                 &program.certificate,
+                0,
+                round::schedule::SEED,
                 #[cfg(feature = "hole-timing")]
                 &round::erase(&program.round).unwrap(),
             )

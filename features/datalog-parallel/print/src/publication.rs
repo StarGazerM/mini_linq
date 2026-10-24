@@ -5,6 +5,71 @@ use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote};
 use syn::Ident;
 
+pub fn early_members(
+    schedule: &cq_lang_datalog_round::schedule::StratumSchedule,
+    phase: &str,
+) -> Vec<usize> {
+    let last = schedule.waves.iter().rposition(|wave| wave.phase == phase);
+    schedule
+        .publication
+        .iter()
+        .filter(|entry| entry.phase == phase && Some(entry.wave) < last)
+        .map(|entry| entry.relation)
+        .collect()
+}
+
+pub fn phase_publication(
+    context: &RoundContext,
+    barrier: &PublicationBarrier,
+    certificate: &ShardCertificate,
+    schedule: &cq_lang_datalog_round::schedule::StratumSchedule,
+    phase: &str,
+) -> Vec<TokenStream> {
+    let early = early_members(schedule, phase);
+    let mut barrier = barrier.clone();
+    barrier.relations.retain(|index| !early.contains(index));
+    barrier
+        .layouts
+        .retain(|&index| !early.contains(&context.layouts[index].relation));
+    barrier
+        .delta_layouts
+        .retain(|&index| !early.contains(&context.delta_layouts[index].relation));
+    publication(context, &barrier, certificate)
+}
+
+/// Publish a completed member in one task, after its last reader has joined.
+pub fn member(context: &RoundContext, index: usize, certificate: &ShardCertificate) -> TokenStream {
+    let relation = &context.relations[index];
+    let mut layouts: Vec<_> = certificate
+        .layouts
+        .iter()
+        .filter(|entry| context.layouts[entry.index].relation == index)
+        .collect();
+    layouts.sort_unstable_by_key(|entry| owner(&certificate.layouts, entry.index));
+    let full = layouts.iter().map(|entry| {
+        cq_datalog_print::full_insert(
+            std::iter::once(&context.layouts[entry.index]),
+            &relation.next,
+        )
+    });
+    let extend = cq_datalog_print::all_extend(relation);
+    let swap = cq_datalog_print::delta_swap(relation);
+    let mut layouts: Vec<_> = certificate
+        .delta_layouts
+        .iter()
+        .filter(|entry| context.delta_layouts[entry.index].relation == index)
+        .collect();
+    layouts.sort_unstable_by_key(|entry| owner(&certificate.delta_layouts, entry.index));
+    let delta = relation
+        .delta_host
+        .as_ref()
+        .expect("checked IDB delta host");
+    let rebuild = layouts
+        .iter()
+        .map(|entry| cq_datalog_print::delta_rebuild(&context.delta_layouts[entry.index], delta));
+    quote!(#(#full)* #extend #swap #(#rebuild)*)
+}
+
 /// Formal rule DL-LayoutPublication: Publish each native layout through one exclusive owner and join before evaluation.
 pub fn publication(
     context: &RoundContext,
