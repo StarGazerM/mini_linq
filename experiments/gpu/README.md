@@ -152,6 +152,26 @@ target API used by H05 (`assert_conformant` itself exposes only CPU targets).
 The suite conformance tests cover built modes and reject unexpected planning
 failures; H07 now requires a positive exact run rather than an expected catalog
 rejection. `TPCH_GPU_DATA_ROOT` changes the fixture root at build time.
+Each query runs all its iterations on one scoped worker thread, joined before
+the next query starts. This keeps warm-run caches reusable within a query but
+drops generated thread-local workspaces, resident-column owners, allocator
+arenas, and cached CUDA modules at the query boundary. The suite still uses
+one process; query timing does not include thread creation or teardown.
+The ignored `sequential_sf10_queries_release_device_memory` GPU regression
+runs H09 and D85 sequentially and checks `cuMemGetInfo` after each query against
+the pre-query free-memory baseline (64 MiB allowance for driver bookkeeping).
+Run it alone on an idle device after building all advised executors:
+`cargo oxide test --arch sm_89 -- --release -p cq-gpu-tpch tests::sequential_sf10_queries_release_device_memory -- --ignored --exact --test-threads=1 --nocapture`.
+The [SF10 lifetime regression measurements](compare/gpu_tpch_vram.results.json)
+record all 25 compiled queries exact in one process, with zero free-memory
+delta after every query (49,617,043,456 bytes free before and after each).
+Before the fix, per-expansion thread-local `RangeWorkspace` and
+`PackedColumnsAdapter` owners kept their pools' arenas alive across queries:
+free memory fell to 814,219,264 bytes and D85 failed with an OOM. Joining the
+query worker also releases runtime scratch and thread-local CUDA modules;
+no cuda-oxide API or translator change is needed. The full inventory still
+exits 1 for the pre-existing H14/H19 translation rejections, not a runtime
+failure; the H05 timing gate passes at 10.301 ms.
 Statistics-derived H07 advice and its comparison with H07-block are recorded in
 [`compare/tpch_statistics.md`](compare/tpch_statistics.md).
 

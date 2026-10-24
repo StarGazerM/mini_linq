@@ -91,7 +91,7 @@ pub fn run(
             // A runtime failure is neither a planning rejection nor a passing
             // measurement. Preserve it, continue the inventory, then fail main.
             let execution = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                generated::execute(&query, &manifest, &mode, false)
+                execute_query(&query, &manifest, &mode, false)
             }));
             let execution = match execution {
                 Ok(value) => value,
@@ -199,6 +199,38 @@ pub fn run(
     Ok(successful)
 }
 
+fn execute_query(
+    query: &str,
+    manifest: &Manifest,
+    mode: &str,
+    conformance_only: bool,
+) -> Result<Option<Value>> {
+    // Generated workspaces and runtime/module caches are thread-local and own
+    // the query's pools, even after its ordinary program locals have dropped.
+    // Reuse them for every iteration, then join to finish TLS destruction before
+    // loading the next query. Only the host measurement crosses this boundary.
+    std::thread::scope(|scope| {
+        scope
+            .spawn(|| {
+                generated::execute(query, manifest, mode, conformance_only)
+                    .map_err(|error| error.to_string())
+            })
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+            .map_err(Into::into)
+    })
+}
+
+#[cfg(test)]
+fn device_free_memory(context: &cuda_core::CudaContext) -> Result<usize> {
+    use cuda_core::IntoResult;
+    context.synchronize()?;
+    let mut free = 0;
+    let mut total = 0;
+    unsafe { cuda_core::sys::cuMemGetInfo_v2(&mut free, &mut total).result()? };
+    Ok(free)
+}
+
 #[cfg(test)]
 #[path = "source.rs"]
 mod source;
@@ -232,9 +264,35 @@ mod tests {
                 continue;
             }
             let manifest = Manifest::load(&data_root().join("sf1"))?;
-            let measurement = generated::execute(query, &manifest, mode, true)?
+            let measurement = execute_query(query, &manifest, mode, true)?
                 .ok_or("accepted conformance executor missing")?;
             assert_eq!(measurement["conformance"]["status"], "passed");
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires SF10 fixtures, all advised executors, and an idle GPU"]
+    fn sequential_sf10_queries_release_device_memory() -> Result<()> {
+        const ALLOWANCE: usize = 64 * 1024 * 1024;
+        let manifest = Manifest::load(&data_root().join("sf10"))?;
+        let context = cuda_core::CudaContext::new(0)?;
+        let baseline = device_free_memory(&context)?;
+        for query in ["h09", "d85"] {
+            let before = device_free_memory(&context)?;
+            let measurement = execute_query(query, &manifest, "advised", false)?
+                .ok_or("regression requires H09 and D85 advised executors")?;
+            assert_eq!(measurement["exact"], true, "{query}: {measurement}");
+            let after = device_free_memory(&context)?;
+            eprintln!(
+                "{query} SF10 device free bytes: baseline={baseline}, before={before}, after={after}, delta={}",
+                after as i64 - before as i64,
+            );
+            assert!(
+                after.saturating_add(ALLOWANCE) >= before
+                    && after.saturating_add(ALLOWANCE) >= baseline,
+                "{query} retained device memory: baseline={baseline}, before={before}, after={after}, allowance={ALLOWANCE}",
+            );
         }
         Ok(())
     }
