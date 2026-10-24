@@ -402,13 +402,19 @@ approval.
   Sequence back end has no supplied-consumer entry, `cq-sequence-pull`
   `lib.rs:654-711`). DOOP at 15 threads ≈ 0.8 s (cassandra), 2.3 s (xalan);
   all six apps exact vs Ascent sequentially and at 15 threads.
-- Schedule: Round records per-hole read sets and wave partitions
-  (`WF-DL-Schedule`, `DL-WaveCommute`, `CK-DL-Schedule`, `P-DL-Waves`,
-  `doc/formal/datalog.tex` "Schedule records"). This is the Datalog-owned
-  dependency structure a parallel printer realizes: waves are rayon scopes on
-  CPU and will be stream/graph branches on GPU; admission is the only
-  per-head join. Per-relation (asynchronous) progress is a written proposal
-  pending snapshot-isolating storage and a new covering obligation.
+- Schedule: Round records per-hole read sets, wave partitions, per-hole
+  policy, derived publication placement and a progress mode
+  (`WF-DL-Schedule`, `WF-DL-Progress`, `DL-WaveCommute`,
+  `DL-PublishAfterReaders`, `DL-AsyncCovering`, `CK-DL-Schedule`,
+  `P-DL-Waves`, `P-DL-Relational`, `DL-RelationalScheduler`;
+  `doc/formal/datalog.tex` "Schedule records", "Relational progress"). Waves
+  are rayon scopes on CPU and will be stream/graph branches on GPU; admission
+  is the only per-head join. `relational` progress drops the step-round
+  barrier: per-member batches, tiled delta windows, scheduler-gated
+  isolation (no lock ever waits). DOOP cassandra at 15 threads is exact under
+  every mode; relational is ~8% slower (1.84–1.88 s vs 1.67–1.76 s) because
+  its dense points-to SCC has holes reading most members, so commits drain
+  readers. Index maintenance (≈42% of step time) remains the CPU bottleneck.
 - Open: reach chain at 15 threads below sequential; nested CQ code in one
   codegen unit; rule-local aggregates; FlowLog comparison; partial-Rust
   multi-round refinement; surface sugar (disjunction, facts, rule macros).

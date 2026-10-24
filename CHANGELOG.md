@@ -17,8 +17,7 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   printer joins each wave in its own scope and spawns a head's sharded
   admission alongside the next wave once all of that head's holes have run
   (`P-DL-Waves`). The parallel oracle corpus adds a `by_head` configuration;
-  DOOP cassandra remains exact at 15 threads. Relational (per-relation) progress
-  is written up as a proposal only; both printers reject any other progress mode.
+  DOOP cassandra remains exact at 15 threads.
   The schedule also records per-hole realization `policy` (`grain`,
   `inline_below`; advice `grain(N)`, `inline_below(N)`, `policy(..)`) and a
   derived per-member `publication` wave (`DL-PublishAfterReaders`: after the
@@ -26,6 +25,16 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   hole and always runs a wave concurrently on a multi-worker pool; a member
   whose publication wave precedes the phase's last wave is admitted and fully
   published in one task alongside the next wave and leaves the phase barrier.
+  `schedule(relational)` selects relational progress (`WF-DL-Progress`,
+  `DL-AsyncCovering`): after synchronous seeds, each member commits its own
+  batches, every delta reader runs once per batch, and holes read under a
+  frozen cut. The Rayon printer realizes it through a new step-loop hook with
+  an event-driven executor (`P-DL-Relational`) over the runtime
+  `RelationalScheduler`/`drive` (`DL-RelationalScheduler`): isolation is
+  scheduler gating with draining, host locks are only ever tried, so nested
+  work stealing cannot deadlock. The sequential printer realizes it as
+  synchronous rounds. Exact on the oracle corpus and DOOP cassandra; ~8%
+  slower than synchronous there.
 - Integrate the parallel Tasks work with the closed-core layout: key-partition
   advice and the Tasks provider-preserving catalog selection live in
   `cq_sequence_plan::rewrites`; eager-membership host retention moved into
