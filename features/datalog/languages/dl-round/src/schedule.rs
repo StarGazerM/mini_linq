@@ -113,6 +113,7 @@ record!(Wave {
 pub const SEED: &str = "seed";
 pub const STEP: &str = "step";
 pub const SYNCHRONOUS: &str = "synchronous";
+pub const RELATIONAL: &str = "relational";
 
 fn ident(name: &str) -> Ident {
     Ident::new(name, proc_macro2::Span::call_site())
@@ -368,14 +369,34 @@ pub fn derive_publication(
     out
 }
 
-/// Formal rule WF-DL-Schedule: derived read sets, partitioning phase-ordered waves, synchronous progress.
+/// Formal rule WF-DL-Progress: synchronous or relational progress; relational requires no observer and no phase timing.
+pub fn check_progress(program: &Program) -> syn::Result<()> {
+    let progress = &program.schedule.progress;
+    match progress.to_string().as_str() {
+        SYNCHRONOUS => Ok(()),
+        RELATIONAL => {
+            ensure(
+                program.context.observer.is_none(),
+                progress,
+                "relational progress has no global rounds for an observer",
+            )?;
+            ensure(
+                program.policy.timing == "none",
+                progress,
+                "relational progress has no global phases to time",
+            )
+        }
+        _ => Err(syn::Error::new_spanned(
+            progress,
+            "schedule progress must be `synchronous` or `relational`",
+        )),
+    }
+}
+
+/// Formal rule WF-DL-Schedule: derived read sets, partitioning phase-ordered waves, policy, derived publication and an admissible progress mode.
 pub fn check(program: &Program, analysis: &storage::Analysis) -> syn::Result<()> {
     let schedule = &program.schedule;
-    ensure(
-        schedule.progress == SYNCHRONOUS,
-        &schedule.progress,
-        "the only admitted schedule progress is `synchronous`",
-    )?;
+    check_progress(program)?;
     ensure(
         schedule.strata.len() == program.context.strata.len(),
         schedule,

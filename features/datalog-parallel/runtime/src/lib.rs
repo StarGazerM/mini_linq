@@ -9,6 +9,7 @@
 //!
 //! Admission routes by the entire tuple. Each parallel task owns an exclusive
 //! mutable seen shard; native layout maps are published by the extension printer.
+pub mod relational;
 use cq_storage::HashState;
 use hashbrown::HashTable;
 use hashbrown::hash_table::Entry;

@@ -517,7 +517,7 @@ member, the wave after which that member's publication may begin.
  \text{waves partition each phase's holes, nonempty, seeds before steps}\quad
  \text{policy names existing holes once, positive grain}\quad
  \mathrm{publication}=\mathrm{derive}(\mathrm{reads},\mathrm{waves})\quad
- \mathrm{progress}=\code{synchronous}}
+ \text{WF-DL-Progress}}
  {\mathrm{WF}_{\mathrm{Schedule}}(P)}
 \end{mathpar}
 Publication of a member $H$ mutates the hosts and layouts that holes reading
@@ -561,17 +561,59 @@ relation in head order), or an explicit per-component listing. Advice
 selects among schedules that WF-DL-Schedule already admits; it is not a
 semantic choice.
 
-\paragraph{Relational progress (proposal, not a rule).}
-A \code{relational} progress mode would let a hole run round $i+1$ as soon as
-every relation it reads has published round $i$, with each hole's delta
-window being the admissions of its delta relation since that hole last ran,
-and its full reads a snapshot no older than the window's end. The covering
-argument then takes the latest-admitted tuple of a derivation: the step
-variant selecting that occurrence runs with that tuple in its window and all
-other tuples already in full. This needs snapshot isolation from storage
-(immutable runs, or a per-relation reader/writer discipline for publication)
-and a new covering obligation beside \code{seminaive\_covering}; neither is
-recorded or checked here, and the base printers reject any other progress mode.
+\paragraph{Relational progress.}
+\code{progress \{relational\}} removes the step-phase round barrier. Seeds and
+their publication remain synchronous. Afterwards each component member $R$
+has its own sequence of committed batches $B_R^1,B_R^2,\ldots$; committing a
+batch admits it against $R$'s canonical owner and performs $R$'s complete
+recorded publication atomically with respect to every reader of $R$. A step
+hole $h$ whose variant selects a changing occurrence on $R$ executes on one
+batch of $R$ at a time and reads all its relations under a \emph{consistent
+cut}: a state of every member it reads that contains exactly the batches
+committed before some instant $T_h$, held unchanged while $h$ runs. The
+realization obligations are:
+\begin{enumerate}
+\item \emph{tiled windows}: for every step hole $h$ with delta relation $R$ and
+  every nonempty batch $B_R^k$, $h$ executes exactly once with $B_R^k$ as its
+  delta, and $R$ commits $B_R^{k+1}$ only after every such hole has done so;
+\item \emph{consistent cuts}: the cut of $h$ includes $B_R^k$ and every batch
+  of every member committed before $B_R^k$;
+\item \emph{exclusive admission}: one owner admits each member, candidates of
+  every hole with that head enter some later admission, and admitted rows are
+  committed only through that member's batches;
+\item \emph{quiescence}: the component ends when no hole runs, no candidate
+  is pending, and every committed batch has been consumed by all its delta
+  readers.
+\end{enumerate}
+Relational progress requires the component to declare no observer (rounds
+are no longer global) and timing policy \code{none}.
+\begin{mathpar}
+\Rule{DL-AsyncCovering}{\text{seeds committed synchronously}\quad
+ \text{tiled windows}\quad\text{consistent cuts}\quad
+ \text{exclusive admission}\quad\text{quiescence}\quad
+ \text{rules total on reached prefixes}}
+ {\text{the final accumulated members equal the synchronous seminaive fixpoint}}
+\end{mathpar}
+\emph{Argument.} Soundness: every hole evaluates its monotone rule on subsets
+of the fixpoint. Completeness by induction on derivation height: given body
+tuples $t_1,\ldots,t_n$ of a rule instance whose changing occurrences are all
+committed, let $t_j$ be the one whose batch $B_R^k$ committed last (any, on
+ties within one batch). \code{seminaive\_covering} provides a step variant
+selecting occurrence $j$; by (1) its hole executes on $B_R^k$; by (2) its cut
+contains every other $t_i$, at full version, including members of the same
+batch; frozen and lower-component occurrences are constant. So the head is a
+candidate, and by (3) it is committed unless already present; (4) ensures no
+pending work is lost. Synchronous rounds are one admissible relational
+schedule (each round's cut is the committed snapshot, and every delta reader
+runs on each batch), so a printer realizing only synchronous rounds also
+realizes \code{relational}. Partial Rust remains subject to the prefix-safety
+premise of the preceding paragraph.
+\begin{mathpar}
+\Rule{WF-DL-Progress}{\mathrm{progress}\in\{\code{synchronous},\code{relational}\}\quad
+ \mathrm{progress}=\code{relational}\Rightarrow
+ \text{no observer}\land\mathrm{timing}=\code{none}}
+ {\text{the progress mode is admissible}}
+\end{mathpar}
 
 \paragraph{Control and output records.} A component's \code{termination}
 list contains each component member exactly once, in any order, with no foreign
@@ -958,14 +1000,39 @@ extension, delta replacement, delta rebuilds, in the recorded order) run as
 one task in the following wave's scope and are omitted from the phase
 barrier; otherwise they follow the final wave as before. The sequential base
 printer evaluates holes in wave order with its inline admission and ignores
-policy and placement. Neither printer accepts a progress mode other than
-\code{synchronous}.
+policy and placement; it realizes \code{relational} progress by synchronous
+rounds, which DL-AsyncCovering admits.
 \begin{mathpar}
 \Rule{P-DL-Waves}{\mathrm{WF}_{\mathrm{Schedule}}(t)\quad
  \text{scope}_w\text{ joins before scope}_{w+1}\quad
  \mathrm{admit}(H)\text{ is spawned after the last wave of }H\text{'s holes}\quad
  \mathrm{publish}(H)\text{ is spawned after }w_H\text{ (DL-PublishAfterReaders)}}
  {\text{the realization refines DL-WaveCommute}}
+\end{mathpar}
+Under \code{relational} progress the extension printer keeps the seed phase
+above and replaces the step loop by an event-driven executor. Each member's
+hosts (accumulated rows, delta host, full and delta layouts) sit behind one
+reader/writer lock; its canonical admission set and pending candidates sit
+behind one mutex. A step-hole task acquires read locks on every member it
+reads, in member-index order, and holds them for its whole evaluation; since
+commits take one write lock at a time and readers acquire in a fixed order,
+the held state is a consistent cut and no lock cycle arises. On completion
+the task appends its candidates to each head's pending buffer and records
+that it consumed its delta relation's current batch. A pure scheduler state,
+updated under one mutex after every task, spawns a hole whenever its delta
+relation has a committed batch it has not consumed and it is not running,
+and spawns a member commit whenever the member has pending candidates, is not
+committing, and every delta reader has consumed its current batch. A commit
+takes the pending candidates, admits them, and if any are fresh performs the
+member's recorded publication under its write lock, advancing its batch
+number. The joining scope ends at quiescence. With one worker the step loop
+falls back to synchronous rounds.
+\begin{mathpar}
+\Rule{P-DL-Relational}{\text{per-member reader/writer isolation}\quad
+ \text{ordered read acquisition held per hole}\quad
+ \text{commit gated on every delta reader's consumption}\quad
+ \text{scope joins at quiescence}}
+ {\text{the executor discharges the obligations of DL-AsyncCovering}}
 \end{mathpar}
 
 \subsection{Sharded admission and exclusive-layout publication (extension)}
