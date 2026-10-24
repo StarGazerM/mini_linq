@@ -3,6 +3,8 @@
 //! Certified chunk inputs retain their renamed host-set facts. The checked
 //! per-task realization removes local duplicates without cloning owned rows.
 //! Cross-task/round duplicates still reach the recorded canonical admission owner.
+//! Recorded waves join in order; completed heads admit alongside the next wave,
+//! borrowing only their own seen/next state. Publication remains a phase barrier.
 //! Standard rule tasks use the registered push adapter to feed the collector
 //! directly; custom pull terminals retain iteration through their authored API.
 use cq_lang_datalog_round::{self as round, InputSource, RoundContext, RuleHole};
@@ -47,6 +49,8 @@ pub fn compile(program: &cq_datalog_partition::ShardedProgram) -> syn::Result<sy
     )
 }
 
+/// Formal rule P-DL-Waves:
+/// Join each recorded wave before admitting its completed heads alongside the next wave.
 fn evaluate(
     rules: &[RuleHole],
     context: &RoundContext,
@@ -186,9 +190,22 @@ fn evaluate(
     if rules.is_empty() {
         return Ok((TokenStream::new(), TokenStream::new()));
     }
+    let (stratum_index, stratum, phase) = context.strata.iter().enumerate()
+        .find_map(|(index, stratum)| {
+            if stratum.seeds.iter().any(|rule| rule.hole == rules[0].hole) {
+                Some((index, stratum, round::schedule::SEED))
+            } else if stratum.steps.iter().any(|rule| rule.hole == rules[0].hole) {
+                Some((index, stratum, round::schedule::STEP))
+            } else {
+                None
+            }
+        })
+        .expect("checked rule phase");
+    let waves = &program.schedule.strata[stratum_index].waves;
+    let phase_rules = if phase == round::schedule::SEED { &stratum.seeds } else { &stratum.steps };
     // Count each driving occurrence: a small delta must not serialize holes
     // whose selected full-input scans still do substantial work.
-    let delta_work = if let Some(stratum) = context.strata.iter().find(|s| s.steps == rules) {
+    let delta_work = if phase == round::schedule::STEP {
         let lengths = stratum
             .members
             .iter()
@@ -219,35 +236,74 @@ fn evaluate(
         .iter()
         .map(|rule| format_ident!("__cq_run_hole_{}", rule.hole, span = Span::mixed_site()))
         .collect();
-    let closures = evaluators
-        .iter()
-        .zip(&evaluations)
-        .map(|(run, body)| quote!(let mut #run = || { #body };));
-    let spawned = evaluators
-        .iter()
-        .map(|run| quote!(#scope.spawn(move |_| { #run(); });));
-    let evaluation = quote!(
-        #(#declarations)*
-        let #inline = #work < #threshold || ::rayon::current_num_threads() == 1;
-        #(#closures)*
-        if #inline {
-            #(#evaluators();)*
-        } else {
-            ::rayon::scope(|#scope| { #(#spawned)* });
-        }
-    );
-    let admissions = candidates_by_head.into_iter().map(|(index, candidates)| {
-        let relation = &context.relations[index];
-        let seen = &relation.seen;
-        let next = &relation.next;
+    let admissions: ::std::collections::BTreeMap<_, _> = candidates_by_head.into_iter().map(|(index, candidates)| {
+        let seen = format_ident!("__cq_admit_seen_{index}", span = Span::mixed_site());
+        let next = format_ident!("__cq_admit_next_{index}", span = Span::mixed_site());
         let first = &candidates[0];
         let rest = &candidates[1..];
-        quote!(
+        (index, quote!(
             #(#first.extend(#rest);)*
-            #next = #seen.admit(#first, #threshold);
-        )
+            *#next = #seen.admit(#first, #threshold);
+        ))
+    }).collect();
+    let mut emitted_waves = Vec::new();
+    let mut pending = Vec::new();
+    for (wave_index, wave) in waves.iter().enumerate().filter(|(_, wave)| wave.phase == phase) {
+        let wave_evaluators: Vec<_> = wave.holes.iter().map(|&index| {
+            let hole = phase_rules[index].hole;
+            rules.iter().position(|rule| rule.hole == hole).expect("checked wave hole")
+        }).collect();
+        let closures = wave_evaluators.iter().map(|&index| {
+            let run = &evaluators[index];
+            let body = &evaluations[index];
+            quote!(let mut #run = || { #body };)
+        });
+        let runs: Vec<_> = wave_evaluators.iter().map(|&index| &evaluators[index]).collect();
+        let admit = |spawn: bool| pending.iter().map(|head: &usize| {
+            let relation = &context.relations[*head];
+            let seen = &relation.seen;
+            let next = &relation.next;
+            let seen_ref = format_ident!("__cq_admit_seen_{head}", span = Span::mixed_site());
+            let next_ref = format_ident!("__cq_admit_next_{head}", span = Span::mixed_site());
+            let body = &admissions[head];
+            let body = if spawn { quote!(#scope.spawn(move |_| { #body });) } else { body.clone() };
+            quote!({
+                let #seen_ref = &mut #seen;
+                let #next_ref = &mut #next;
+                #body
+            })
+        }).collect::<Vec<_>>();
+        let inline_admit = admit(false);
+        let spawned_admit = admit(true);
+        emitted_waves.push(quote! {
+            #(#closures)*
+            if #inline {
+                // The preceding wave has joined; admit before the next evaluation.
+                #(#inline_admit)*
+                #(#runs();)*
+            } else {
+                ::rayon::scope(|#scope| {
+                    #(#spawned_admit)*
+                    #(#scope.spawn(move |_| { #runs(); });)*
+                });
+            }
+        });
+        pending = round::schedule::heads_completed_after(waves, stratum, wave_index);
+    }
+    let final_admissions = pending.iter().map(|head| {
+        let relation = &context.relations[*head];
+        let seen = &relation.seen;
+        let next = &relation.next;
+        let seen_ref = format_ident!("__cq_admit_seen_{head}", span = Span::mixed_site());
+        let next_ref = format_ident!("__cq_admit_next_{head}", span = Span::mixed_site());
+        let body = &admissions[head];
+        quote!({ let #seen_ref = &mut #seen; let #next_ref = &mut #next; #body })
     });
-    Ok((evaluation, quote!(#(#admissions)*)))
+    Ok((quote!(
+        #(#declarations)*
+        let #inline = #work < #threshold || ::rayon::current_num_threads() == 1;
+        #(#emitted_waves)*
+    ), quote!(#(#final_admissions)*)))
 }
 
 fn collect_task(
@@ -359,6 +415,22 @@ mod tests {
 
     fn program() -> cq_datalog_partition::ShardedProgram {
         cq_datalog_partition::compile_sharded(&pull_program()).unwrap()
+    }
+
+    #[test]
+    fn schedules_survive_partition_and_invalid_progress_is_rejected() {
+        for constructor in [round::Schedule::whole, round::Schedule::per_hole, round::Schedule::by_head] {
+            let mut source = pull_program();
+            let analysis = round::storage::contract::check(&source.storage).unwrap();
+            source.schedule = constructor(&source.storage, &analysis, &source.context).unwrap();
+            let mut sharded = cq_datalog_partition::compile_sharded(&source).unwrap();
+            assert_eq!(sharded.round.schedule, source.schedule);
+            cq_datalog_partition::check_sharded(&source, &sharded).unwrap();
+            compile(&sharded).unwrap();
+            sharded.round.schedule.progress = syn::parse_quote!(asynchronous);
+            let error = compile(&sharded).unwrap_err().to_string();
+            assert!(error.contains("synchronous"), "{error}");
+        }
     }
 
     /// Canonical admission and certified host inputs belong to Round, not to

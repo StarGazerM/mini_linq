@@ -7,6 +7,18 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Datalog Round records an evaluation **schedule**: per component, each rule
+  hole's positive read set derived from Storage reads and an ordered wave
+  partition of its seed and step holes (`WF-DL-Schedule`; `DL-WaveCommute`
+  states why waves change no value). Fork records one wave per phase. The new
+  `cq-datalog-schedule` Round rewrite (`round = [cq_datalog_schedule::schedule(
+  whole | per_hole | by_head | strata(..))]`, `CK-DL-Schedule`) changes only
+  that record. The sequential printer evaluates holes in wave order; the Rayon
+  printer joins each wave in its own scope and spawns a head's sharded
+  admission alongside the next wave once all of that head's holes have run
+  (`P-DL-Waves`). The parallel oracle corpus adds a `by_head` configuration;
+  DOOP cassandra remains exact at 15 threads. Relational (per-relation) progress
+  is written up as a proposal only; both printers reject any other progress mode.
 - Integrate the parallel Tasks work with the closed-core layout: key-partition
   advice and the Tasks provider-preserving catalog selection live in
   `cq_sequence_plan::rewrites`; eager-membership host retention moved into

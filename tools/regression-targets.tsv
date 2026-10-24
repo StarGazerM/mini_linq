@@ -74,6 +74,7 @@ doop-shared	manifest-test	doop-shared	features/datalog/doop/shared/Cargo.toml
 datalog-oracle	manifest-test	oracles	features/datalog/oracle/Cargo.toml
 oracle-shared	manifest-test	oracle-shared	features/datalog/oracle/shared/Cargo.toml
 cq-datalog-hasher	manifest-test	correspondence	features/datalog/passes/hasher/Cargo.toml
+cq-datalog-schedule	manifest-test	correspondence	features/datalog/passes/schedule/Cargo.toml
 cq-datalog-parallel-runtime	manifest-test	runtime	features/datalog-parallel/runtime/Cargo.toml
 doop-mini	manifest-test	engine	features/datalog/doop/engines/mini/Cargo.toml
 doop-mini-keyed	manifest-test	engine	features/datalog/doop/engines/mini-keyed/Cargo.toml

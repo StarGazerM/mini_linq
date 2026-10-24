@@ -27,6 +27,7 @@ cq-datalog-rayon-print = { path = "print" }
 syn = { version = "2", features = ["full"] }
 
 [dev-dependencies]
+cq-datalog-schedule = { path = "../datalog/passes/schedule" }
 cq-datalog-parallel-runtime = { path = "runtime" }
 cq-datalog = { path = "../datalog/facade/cq-datalog" }
 mini-linq = { version = "0.1.0", path = "../../facade/mini-linq" }

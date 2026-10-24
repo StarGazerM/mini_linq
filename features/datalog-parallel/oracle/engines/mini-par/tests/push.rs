@@ -12,12 +12,25 @@ oracle_shared::oracle_programs!(
     }
 );
 
+oracle_shared::oracle_programs!(
+    by_head,
+    mini,
+    ascent::ascent,
+    oracle_shared::oracle_input,
+    pipeline {
+        storage_rewrites = [cq_datalog_parallel::shard_storage];
+        round = [cq_datalog_schedule::schedule(by_head), cq_datalog_parallel::partition(threshold = 0, grain = 2)];
+        print = cq_datalog_parallel::print_rounds;
+    }
+);
+
 macro_rules! cases {
     ($($name:ident),* $(,)?) => {
         const CASES: &[(&str, oracle_shared::harness::Evaluate,
-            oracle_shared::harness::Evaluate, oracle_shared::harness::Evaluate)] = &[
+            oracle_shared::harness::Evaluate, oracle_shared::harness::Evaluate,
+            oracle_shared::harness::Evaluate)] = &[
             $((stringify!($name), pushed::$name::mini,
-                oracle_mini_par::$name::mini, oracle_ascent::$name::oracle)),*
+                oracle_mini_par::$name::mini, oracle_ascent::$name::oracle, by_head::$name::mini)),*
         ];
     };
 }
@@ -45,11 +58,12 @@ fn all_oracle_programs_match_pull_and_ascent_in_local_pools() {
             .build()
             .unwrap()
             .install(|| {
-                for &(name, push, pull, ascent) in CASES {
+                for &(name, push, pull, ascent, scheduled) in CASES {
                     let compare = |data: &oracle_shared::Data| {
                         let expected = ascent(data).0;
                         assert_eq!(pull(data).0, expected, "{name} pull/{threads}");
                         assert_eq!(push(data).0, expected, "{name} push/{threads}");
+                        assert_eq!(scheduled(data).0, expected, "{name} by_head/{threads}");
                     };
                     for scenario in oracle_shared::SCENARIOS {
                         compare(&oracle_shared::generate(scenario, 6, 0x5eed));

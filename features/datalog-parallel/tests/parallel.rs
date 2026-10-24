@@ -17,6 +17,49 @@ fn assert_same<T: Ord + Clone + std::fmt::Debug>(parallel: &[T], sequential: &[T
 }
 
 #[test]
+fn recorded_waves_match_round_oracle_for_mutual_heads() {
+    for threads in [1, 4] {
+        rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(|| {
+            let rows: Vec<_> = (0..32).map(|x| (x,)).collect();
+            macro_rules! run {
+                ($($mode:tt)*) => {{
+                    let (a, b) = cq_datalog::datalog! {
+                        pipeline { $($mode)* }
+                        struct MutualWaves;
+                        relation E(x:i32) = (&rows);
+                        relation A(x:i32);
+                        relation B(x:i32);
+                        output A, B;
+                        A(*x) :- E(x);
+                        A(*x) :- B(x);
+                        A(*x + 1) :- B(x), if *x < 40;
+                        B(*x) :- E(x);
+                        B(*x) :- A(x);
+                        B(*x + 1) :- A(x), if *x < 40;
+                    };
+                    (a.into_iter().collect::<Vec<_>>(), b.into_iter().collect::<Vec<_>>())
+                }};
+            }
+            let expected = run!(print = cq_datalog_test_passes::eval_round;);
+            macro_rules! check {
+                ($schedule:ident) => {{
+                    let actual = run!(
+                        storage_rewrites = [cq_datalog_parallel::shard_storage];
+                        round = [cq_datalog_schedule::schedule($schedule), cq_datalog_parallel::partition(threshold = 0, grain = 2)];
+                        print = cq_datalog_parallel::print_rounds;
+                    );
+                    assert_same(&actual.0, &expected.0);
+                    assert_same(&actual.1, &expected.1);
+                }};
+            }
+            check!(whole);
+            check!(per_hole);
+            check!(by_head);
+        });
+    }
+}
+
+#[test]
 fn self_join_matches_sequential_sets_and_ascent_in_local_pools() {
     for threads in [2, 4] {
         rayon::ThreadPoolBuilder::new()

@@ -196,16 +196,20 @@ dependencies = [
 name = "cq-datalog-print"
 version = "0.0.0"
 dependencies = [
+ "cq-datalog",
  "cq-datalog-fork",
  "cq-datalog-incremental",
  "cq-datalog-storage",
  "cq-datalog-stratify",
  "cq-datalog-support",
+ "cq-datalog-test-passes",
+ "cq-datalog-testkit",
  "cq-lang-datalog-round",
  "cq-lang-ix",
  "cq-lang-physical",
  "cq-physical-lowering",
  "cq-stage",
+ "cq-storage",
  "cq-syntax",
  "proc-macro2",
  "quote",
@@ -218,6 +222,26 @@ version = "0.0.0"
 dependencies = [
  "cq-datalog-print",
  "cq-lang-datalog-round",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-schedule"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog",
+ "cq-datalog-fork",
+ "cq-datalog-incremental",
+ "cq-datalog-storage",
+ "cq-datalog-stratify",
+ "cq-datalog-testkit",
+ "cq-lang-datalog-round",
+ "cq-lang-datalog-storage",
+ "cq-stage",
+ "cq-storage",
+ "mini-linq",
+ "proc-macro2",
+ "quote",
  "syn 2.0.119",
 ]
 

@@ -5,6 +5,9 @@
 //! admission, ordered publication operations, phase/loop control, termination,
 //! observer/key-set scope and output conversions. This terminal realizes those
 //! checked records rather than selecting a second execution plan.
+//! Evaluators receive each phase's holes in flattened schedule-wave order.
+//! Sequential admission remains inline (or in the timed admission phase);
+//! publication still occurs only after the complete phase has evaluated.
 //!
 //! A hole's CQ input is fact-free, so its first invocation has the empty context.
 //! Round records discharged facts in the checked lower-owner argument packet;
@@ -143,6 +146,8 @@ pub fn render_with(
     render_with_publication(program, holes, evaluator, publication)
 }
 /// Realize checked holes with alternative publication realizations.
+/// The evaluator's rules follow the recorded waves, preserving each wave's
+/// hole order. Context and splice indices retain their original identities.
 pub fn render_with_publication(
     program: &Program,
     holes: &[TokenStream],
@@ -195,8 +200,26 @@ fn render_admitted(
             );
             quote!(let #name = &#collection;)
         });
-        let seeds = evaluator(&stratum.seeds, context, holes, &program.execution)?;
-        let steps = evaluator(&stratum.steps, context, holes, &program.execution)?;
+        let scheduled_rules = |phase: &str, rules: &[RuleHole]| {
+            program.schedule.strata[stratum_index]
+                .waves
+                .iter()
+                .filter(|wave| wave.phase == phase)
+                .flat_map(|wave| wave.holes.iter().map(|&index| rules[index].clone()))
+                .collect::<Vec<_>>()
+        };
+        let seeds = evaluator(
+            &scheduled_rules(round::schedule::SEED, &stratum.seeds),
+            context,
+            holes,
+            &program.execution,
+        )?;
+        let steps = evaluator(
+            &scheduled_rules(round::schedule::STEP, &stratum.steps),
+            context,
+            holes,
+            &program.execution,
+        )?;
         let allocate: Vec<_> = stratum
             .members
             .iter()

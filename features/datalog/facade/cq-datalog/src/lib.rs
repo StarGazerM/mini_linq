@@ -121,6 +121,14 @@
 //! `retype(dedup => ...)` to the discharged hole pipeline: it has no dedup
 //! representation to retype. MiniLinq core defaults are unchanged.
 //!
+//! Round evaluation waves can be selected with a direct `cq-datalog-schedule`
+//! dependency and `round = [cq_datalog_schedule::schedule(by_head)]`.
+//! Advice `whole` groups all holes in each phase, `per_hole` uses singleton
+//! waves, and `by_head` groups holes by their output relation. Explicit advice
+//! such as `strata(0 { seed [0] step [0] [1] })` replaces only the listed
+//! components. Every wave reads the committed snapshot; progress stays
+//! synchronous and answers are unchanged.
+//!
 //! Resume authored IR at its next pass, not at a separate front-end macro:
 //! `cq_datalog::passes::incremental! { pipeline {
 //! cq_datalog::passes::storage, cq_datalog::passes::fork,

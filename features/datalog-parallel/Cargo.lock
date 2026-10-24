@@ -189,6 +189,7 @@ dependencies = [
  "cq-datalog-parallel-test-passes",
  "cq-datalog-partition",
  "cq-datalog-rayon-print",
+ "cq-datalog-schedule",
  "cq-datalog-test-passes",
  "cq-datalog-testkit",
  "cq-lang-datalog-round",
@@ -278,6 +279,17 @@ dependencies = [
  "cq-structure-selection",
  "proc-macro2",
  "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-schedule"
+version = "0.0.0"
+dependencies = [
+ "cq-lang-datalog-round",
+ "cq-lang-datalog-storage",
+ "cq-stage",
+ "proc-macro2",
  "syn 2.0.119",
 ]
 
@@ -1068,6 +1080,7 @@ dependencies = [
  "cq-datalog",
  "cq-datalog-parallel",
  "cq-datalog-parallel-runtime",
+ "cq-datalog-schedule",
  "cq-storage",
  "mini-linq",
  "oracle-ascent",
