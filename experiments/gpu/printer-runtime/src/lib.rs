@@ -1,8 +1,6 @@
 //! Shared resident columns and measurements for the GPU Sequence target.
 //!
-//! The default runtime exposes the pooled storage and codec APIs consumed by
-//! Sequence. Structures execution, blocked runs, and Datalog publication are
-//! available only through `legacy-datalog` for the isolated legacy workspace.
+//! The runtime exposes the pooled storage and codec APIs consumed by Sequence.
 
 pub mod nvtx;
 
@@ -43,5 +41,3 @@ pub fn publish_timings(timings: Timings) {
     LAST_TIMINGS.with(|last| last.set(Some(timings)));
 }
 
-#[cfg(feature = "legacy-datalog")]
-include!("legacy.rs");

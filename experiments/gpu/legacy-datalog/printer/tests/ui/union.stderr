@@ -1,5 +1,0 @@
-error: CQ_GPU_UNION: union blocks are unsupported
- --> tests/ui/union.rs:8:13
-  |
-8 |             p = pipe canon union l,r;
-  |             ^

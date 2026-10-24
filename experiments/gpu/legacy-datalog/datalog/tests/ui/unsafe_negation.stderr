@@ -1,5 +1,0 @@
-error: negation variable must be bound by a positive atom before the clause
- --> tests/ui/unsafe_negation.rs:7:27
-  |
-7 |         R(*x) :- E(x), !E(y);
-  |                           ^

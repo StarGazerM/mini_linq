@@ -1,5 +1,0 @@
-error: CQ_GPU_NON_INTEGRAL_KEY: key columns must have integral declared types
-  --> tests/ui/non_integral_key.rs:14:13
-   |
-14 |             r = ::cq_storage::SortedRun<_,_,::cq_storage::BorrowedI64TupleCodec> [x];
-   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

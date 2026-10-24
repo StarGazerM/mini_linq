@@ -4,7 +4,6 @@
 unsafe extern "C" {
     fn cq_nvtx_push(name: *const std::ffi::c_char);
     fn cq_nvtx_pop();
-    fn cq_nvtx_stream(stream: *mut std::ffi::c_void, name: *const std::ffi::c_char);
 }
 
 #[must_use]
@@ -32,13 +31,3 @@ impl Drop for Range {
     }
 }
 
-#[cfg(feature = "legacy-datalog")]
-#[inline(always)]
-pub(crate) fn name_stream(stream: *mut std::ffi::c_void) {
-    #[cfg(feature = "nvtx")]
-    unsafe {
-        cq_nvtx_stream(stream, c"MiniLinq resident".as_ptr());
-    }
-    #[cfg(not(feature = "nvtx"))]
-    let _ = stream;
-}

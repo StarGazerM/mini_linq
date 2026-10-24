@@ -199,12 +199,12 @@ useful throughput or proximity to peak compute/memory bandwidth.
 
 ### Our ddisasm cvc5 profile: measured after GPU unblock
 
-The consumer now executes all 23 rules. The separate unprofiled
-[`gpu-cvc5.json`](../legacy-datalog/datalog-ddisasm/gpu-cvc5.json) records full tuple equality for
-all eleven outputs, 11,444.806 ms fixed-point time, 13.844 ms upload, and
-6,504,636,136 bytes (6.058 GiB) allocator peak. Its fixed-point timer is
-**18.79×** the prepared, synchronized SRDatalog run's 609.062 ms from
-[`srdatalog-cvc5.json`](../legacy-datalog/datalog-ddisasm/srdatalog-cvc5.json). Both exclude
+The removed consumer executed all 23 rules. Its archived unprofiled measurement
+recorded full tuple equality for all eleven outputs, 11,444.806 ms fixed-point
+time, 13.844 ms upload, and 6,504,636,136 bytes (6.058 GiB) allocator peak.
+Its fixed-point timer was **18.79×** the prepared, synchronized SRDatalog run's
+609.062 ms. The original unprofiled artifacts were removed with the old
+Datalog workspace. Both measurements excluded
 CSV parsing, H2D upload, and output checking; MiniLinq includes EDB
 canonicalization, first-use query-module loading, index construction, admission,
 and resumable compaction, while SRDatalog's recorded run follows prepare.
@@ -244,8 +244,7 @@ host timers, **not matching NVTX windows or per-round measurements**.
 | `DefUsedForAddress` | 5 | 182.189 | 13 | 23 + 25 | 14 | 11 |
 | `RegRegArithOpDefs` | 6 | 15.343 | 2 | 27 | 0 (rounded) | 0 (rounded) |
 
-Unprofiled SRDatalog step evidence is
-[`srdatalog-cvc5.log`](../legacy-datalog/datalog-ddisasm/srdatalog-cvc5.log).
+The original unprofiled SRDatalog step log was removed with the old workspace.
 The register and stack-live-at-block-end SCCs occupy 77.52% of MiniLinq's
 profiled window. SRDatalog also concentrates time in those groups, but uses
 a different schedule (including `_temp_StackLiveVarBlockEnd1`), so round counts
@@ -355,8 +354,8 @@ annotations without a profiler was detected in these runs** (both intervals
 include zero); negative differences are noise, not a speedup claim. Disabled
 annotations compile to empty inline guards and do not execute any NVTX path.
 
-The only pre-instrumentation phase-2a reference is the historical single run in
-`../legacy-datalog/datalog-oracle/results.json`: chain 199.903 ms, branching 86.100 ms. Current
+The pre-instrumentation phase-2a reference was a historical single run whose
+artifact was removed: chain 199.903 ms, branching 86.100 ms. Current
 disabled medians differ by -0.52% and +1.44%, respectively. That reference was
 measured on a shared GPU and no old binary was preserved: it is **approximate,
 not a controlled proof of zero pre/post regression**. The controlled evidence
