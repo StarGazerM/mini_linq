@@ -144,15 +144,15 @@ fn h19_three_branches_boundaries_shipping_and_duplicate_identity() {
     rows.push(vec![99, 1, 99, 1000, 1234, 7, 0, 0]); // Missing part.
     parts.push(parts[0].clone());
     for rows in [rows.clone(), rows.into_iter().rev().collect(), Vec::new()] {
-        let data = h19::Data {
-            lineitem: rows.iter().map(|r| (r[0].into(), r[1].into(), r[2].into(),
+        let data = h19::Data::from_strings(
+            rows.iter().map(|r| (r[0].into(), r[1].into(), r[2].into(),
                 decimal(r[3]), decimal(r[4]), decimal(r[5]),
                 ["AIR", "AIR REG", "RAIL"][r[6] as usize].into(),
                 ["DELIVER IN PERSON", "TAKE BACK RETURN"][r[7] as usize].into())).collect(),
-            part: parts.iter().map(|r| (r[0].into(),
+            parts.iter().map(|r| (r[0].into(),
                 ["Brand#12", "Brand#23", "Brand#34", "Brand#99"][r[1] as usize].into(),
                 containers[r[2] as usize].into(), r[3])).collect(),
-        };
+        );
         let actual = h19::run(&data, "default").into_iter()
             .map(|(revenue,)| vec![integer(revenue)]).collect::<Vec<_>>();
         let sql = format!(r#"WITH lineitem AS (

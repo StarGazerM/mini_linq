@@ -20,7 +20,7 @@ Timing boundaries are in [`benchmark.rs`](../tpch/src/benchmark.rs), [`build_sta
 
 All GPU measurements are fresh from this session. The initial complete-suite process exhausted device memory at SF10 d27/d72_inner/d85 after earlier queries had completed. A fresh process executing those same three queries, without changing plans, completed all five samples exactly. The report uses these recovered measurements, preserves both invocations, and does not treat the initial allocation failures as timings. Process-lifetime retention is a plausible explanation, not a proved leak diagnosis.
 
-**Unsupported GPU queries, both scales:** h14: `T-Gpu: host publication r3 needs recorded device-representable code columns`; h19: `T-Gpu: host publication r4 needs recorded device-representable code columns`. They have no numerical GPU measurements and are excluded from GPU speedups. They remain visible in the tables rather than being silently removed. The complete-suite command therefore exits nonzero; this is not a claim that the entire inventory passed.
+**Historical unsupported GPU queries:** the measurements above originally rejected h14 and h19 at both scales. **h14 removed for now: prefix predicate inside the aggregate; needs order-preserving interning.** Its CPU workload remains available. H19 now uses author-controlled `u32` interning and statistics-derived advised execution; the validation and new measurements below supersede its historical unsupported status. The original timing artifacts retain their original rejected entries.
 
 ### B/C: CQ CPU LE and default
 
@@ -83,11 +83,11 @@ and 14 best-observed LE configurations.
 | h11 | 0.616 | 18.804 | 19.419 | no LE config | no LE config | no LE config | 0.010 | 62.908 | 62.918 | 11.000 | 5.000 |
 | h12 | 0.631 | 8.576 | 9.207 | no LE config | no LE config | no LE config | 139.257 | 83.520 | 222.777 | 60.000 | 11.000 |
 | h13 | 6.457 | 9.503 | 15.914 | no LE config | no LE config | no LE config | 123.323 | 358.763 | 482.086 | 223.000 | 38.000 |
-| h14 | unsupported | unsupported | unsupported | no LE config | no LE config | no LE config | 5.383 | 68.725 | 74.108 | 44.000 | 18.000 |
+| h14 | removed | removed | removed | no LE config | no LE config | no LE config | 5.383 | 68.725 | 74.108 | 44.000 | 18.000 |
 | h15 | 0.261 | 14.633 | 14.895 | no LE config | no LE config | no LE config | 0.260 | 63.739 | 63.999 | 48.000 | 11.000 |
 | h16 | 1.353 | 0.251 | 1.604 | 19.718 | 28.939 | 48.657 (le) | 16.821 | 22.820 | 39.641 | 9.000 | 7.000 |
 | h18 | 1.086 | 22.999 | 24.083 | no LE config | no LE config | no LE config | 155.259 | 1388.154 | 1543.413 | 722.000 | 81.000 |
-| h19 | unsupported | unsupported | unsupported | no LE config | no LE config | no LE config | 17.758 | 122.990 | 140.748 | 93.000 | 14.000 |
+| h19 | see addendum | see addendum | see addendum | no LE config | no LE config | no LE config | 17.758 | 122.990 | 140.748 | 93.000 | 14.000 |
 | h20 | 1.609 | 14.986 | 16.596 | no LE config | no LE config | no LE config | 2.940 | 365.410 | 368.350 | 99.000 | 22.000 |
 | h21_positive | 1.880 | 2.493 | 4.369 | 34.787 | 143.442 | 178.229 (le) | 45.978 | 249.999 | 295.977 | 111.000 | 20.000 |
 | h22 | 0.868 | 0.148 | 1.015 | 18.059 | 3.834 | 21.893 (le) | 18.146 | 4.032 | 22.178 | 23.000 | 15.000 |
@@ -172,11 +172,11 @@ Every numerical GPU row is exact; query = kernels + dedup as defined above.
 | h11 | 2.336 | 41.860 | 44.196 | 100.000 | 15.000 |
 | h12 | 6.541 | 21.362 | 27.904 | 544.000 | 55.000 |
 | h13 | 90.545 | 24.698 | 115.215 | 3484.000 | 286.000 |
-| h14 | unsupported | unsupported | unsupported | 583.000 | 60.000 |
+| h14 | removed | removed | removed | 583.000 | 60.000 |
 | h15 | 1.709 | 19.257 | 20.966 | 591.000 | 64.000 |
 | h16 | 9.561 | 0.460 | 10.023 | 156.000 | 24.000 |
 | h18 | 8.594 | 166.324 | 174.924 | 9221.000 | 746.000 |
-| h19 | unsupported | unsupported | unsupported | 911.000 | 74.000 |
+| h19 | see addendum | see addendum | see addendum | 911.000 | 74.000 |
 | h20 | 8.493 | 90.159 | 98.710 | 1439.000 | 128.000 |
 | h21_positive | 19.950 | 20.200 | 40.158 | 1509.000 | 136.000 |
 | h22 | 6.223 | 0.191 | 6.414 | 463.000 | 62.000 |
@@ -235,3 +235,60 @@ sets must not be interpreted as directly comparable aggregate rankings.
 - Historical [SF1](performance_duck_sf1.json) and [SF10](performance_duck_sf10.json) DuckDB files preserve SQL/provenance and CSV-output timings used as inputs to the no-output collector. Their historical elapsed times are excluded from all reported tables and speedups.
 
 No older GPU timing artifact supplies any number in this report.
+
+## Author-interned H19 addendum
+
+H19 now declares shipping mode, shipping instruction, brand and container as
+`u32`, with author-side `cq_load::StringDictionary` preparation. Its setup
+`intern(table, column, literal)` calls resolve against the same per-column
+sorted-distinct, zero-based dictionaries on CPU and GPU. Missing literals use
+`u32::MAX`, outside the source-code domain. The exporter and existing SF1/SF10
+files already use this ordering for all four columns: no data re-export or
+exporter change was needed. The other queries' automatic String equality
+encoding remains unchanged. See [the H19 statistics derivation](tpch_statistics.md).
+
+**h14 removed for now: prefix predicate inside the aggregate; needs order-preserving interning.**
+The CPU h14 catalog entry and workload are unchanged.
+
+The [new full-suite artifact](gpu_tpch_intern.results.json) comes from one
+unfiltered process:
+
+```sh
+./target/release/cq-gpu-tpch compare/gpu_tpch_intern.results.json --mode advised
+```
+
+All **26 currently supported queries at both scales (52/52 results)** were
+exact, with no rejections or runtime failures. The inventory is 26, rather than
+the requested 24: the starting tree had 27 entries, and only h14 was removed.
+SF1 also passed equivalent sequential-program conformance. The timings use one
+warmup and five measured executions; query is the median of each sample's
+`kernels_ms + dedup_ms`, including aggregate reduction. The DuckDB figures below
+are the original report's t1/t24 values, not the different historical values
+embedded in the GPU manifest.
+
+| H19 scale | GPU total ms | GPU build ms | GPU query ms | DuckDB t1 ms | DuckDB t24 ms |
+|---|---:|---:|---:|---:|---:|
+| SF1 | 9.254 | 0.002 | 9.253 | 93 | 14 |
+| SF10 | 24.375 | 0.002 | 24.373 | 911 | 74 |
+
+Earlier aggregate speedup summaries and machine-readable comparison artifacts
+remain the original historical comparison, excluding its unsupported H19;
+this addendum does not retroactively recompute them.
+
+Release GPU library verification (only `cq-gpu-tpch`, not `gpu-h05-compiled`):
+`cargo oxide test --arch sm_89 -- --release -p cq-gpu-tpch --lib -- --test-threads=1`
+passed **36 tests**, with one pre-existing ignored idle-GPU memory regression.
+This includes manifest/CPU dictionary agreement at both scales, retained `u32`
+input types, absent-literal handling, H19 exact conformance, and unchanged
+automatic dictionary adaptation coverage.
+
+The CPU catalog benchmark
+`cargo xtask bench --tpch --sf 1 --runs 3 --query retail_h19`
+passed exact comparison against DuckDB for the default configuration (one
+answer row), also verifying SF0.1 before measuring SF1. Its new CPU query median
+is **50.518 ms**, with **2316.171 ms** input loading/preparation excluded;
+see [the preserved benchmark TSV](cpu_h19_intern.tsv). This benchmark uses
+DuckDB v1.5.5 and reports its own t1/t24 medians of 166.354/21.394 ms; those
+are separate from the report's historical DuckDB baselines in the GPU table.
+The first cold CPU command reached its execution deadline while compiling the
+generated worker; resuming with cached artifacts completed the exact benchmark.

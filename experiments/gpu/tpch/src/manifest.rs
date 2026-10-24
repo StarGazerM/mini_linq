@@ -60,6 +60,16 @@ impl HostValue for i32 {
     }
 }
 
+impl HostValue for u32 {
+    fn read(manifest: &Manifest, table: &str, column: &str) -> Result<Vec<Self>> {
+        manifest
+            .read_column(table, column)?
+            .into_iter()
+            .map(|value| u32::try_from(value).map_err(Into::into))
+            .collect()
+    }
+}
+
 impl HostValue for String {
     fn read(manifest: &Manifest, table: &str, column: &str) -> Result<Vec<Self>> {
         let dictionary = manifest.dictionary(manifest.column(table, column)?)?;

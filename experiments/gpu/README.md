@@ -183,13 +183,29 @@ Before the fix, per-expansion thread-local `RangeWorkspace` and
 free memory fell to 814,219,264 bytes and D85 failed with an OOM. Explicit
 release hooks remove those owners without changing plans or kernels. The
 merged cuda-host module cache is bounded per native context and needs no
-external API change. The full inventory still
-exits 1 for the pre-existing H14/H19 translation rejections, not a runtime
-failure; the H05 timing gate passes at 10.275 ms. Final full-suite totals versus
+external API change. That historical full inventory exited 1 for H14/H19
+translation rejections, not a runtime failure; its H05 timing gate passed at
+10.275 ms. Final full-suite totals versus
 `performance_report.md` are H05 10.275 vs 10.314 ms, H09 44.588 vs 44.563 ms,
 H21-positive 40.053 vs 40.158 ms, and D85 26.925 vs 26.935 ms.
 Statistics-derived H07 advice and its comparison with H07-block are recorded in
 [`compare/tpch_statistics.md`](compare/tpch_statistics.md).
+
+**h14 removed for now: prefix predicate inside the aggregate; needs order-preserving interning.**
+The CPU h14 workload is unchanged. H19 explicitly declares its shipping,
+brand and container columns as `u32`: the author prepares sorted-distinct,
+zero-based dictionaries and binds `intern(table, column, literal)` constants.
+The GPU importer resolves those constants against the column's manifest
+dictionary and preserves the authored `u32` storage type. Other queries retain
+the existing automatic literal-equality `dictionary_types` path.
+The exporter already assigns the same sorted-distinct, zero-based codes to
+all four columns; SF1/SF10 data need no re-export. Raw String loader declarations
+remain the export contract, independently of the authored interned CQ types.
+The [author-interned full-suite run](compare/gpu_tpch_intern.results.json) passed
+all 26 supported queries at SF1 and SF10 in one process (52 exact results).
+H19 total/build/query medians are SF1 9.254/0.002/9.253 ms and SF10
+24.375/0.002/24.373 ms; [the performance addendum](compare/performance_report.md#author-interned-h19-addendum)
+compares these with the report's DuckDB t1/t24 baselines.
 
 Historical initial inventory, before the subsequent translation fixes: all eleven queries were rejected at both scales, so **no GPU
 exactness, conformance agreement, or timing is claimed**. The release build and

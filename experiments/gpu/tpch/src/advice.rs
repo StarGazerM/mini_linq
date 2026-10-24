@@ -152,6 +152,10 @@ impl Pipeline {
             "h06" => "Lineitem",
             // 30,988 / 310,803 qualifying lines; Orders is a unique lookup.
             "h12" => "Lineitem, Orders",
+            // Shipping guard: 214,377 / 2,141,904 lines -> unique Part probes
+            // -> 121 / 1,134 aggregate inputs. Keep the mixed branch guard
+            // intact; Part-first needs a larger Lineitem adjacency provider.
+            "h19" => "Lineitem, Part",
             // BUILDING Customer -> pre-cutoff Orders -> post-cutoff Lineitem:
             // SF1 prefixes 30,142 -> 147,126 -> 30,519 (11,620 distinct orders).
             // SF10: 300,276 -> 1,461,923 -> 302,114.
@@ -238,7 +242,7 @@ impl Pipeline {
                 ),
                 _ => format!("no_reduce, order({order})"),
             },
-            physical: if matches!(query, "h01" | "h06" | "h12" | "h04") {
+            physical: if matches!(query, "h01" | "h06" | "h12" | "h19" | "h04") {
                 Vec::new()
             } else {
                 vec!["build_host_reads()".into()]
@@ -644,7 +648,7 @@ pub fn hand_physical(
     query: &str,
     pipeline: &mut Pipeline,
 ) -> syn::Result<()> {
-    if matches!(query, "h01" | "h06" | "h12" | "h04") {
+    if matches!(query, "h01" | "h06" | "h12" | "h19" | "h04") {
         return Ok(());
     }
     if matches!(
@@ -757,6 +761,7 @@ pub fn hand_schedule(
         "h01"
             | "h06"
             | "h12"
+            | "h19"
             | "h04"
             | "h02.0"
             | "h13.0"
