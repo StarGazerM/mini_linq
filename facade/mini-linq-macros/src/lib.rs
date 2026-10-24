@@ -30,6 +30,7 @@ fn defaults() -> cq_stage::Configuration {
         represent = ::mini_linq::passes::represent;
         stage = ::mini_linq::passes::stage;
         sequence = ::mini_linq::passes::sequence;
+        decompose = [::mini_linq::passes::plan_sequential];
         grade = ::mini_linq::passes::sequential;
         print = ::mini_linq::passes::translate_pull;
     } }
@@ -83,7 +84,30 @@ fn expand_compile(input: proc_macro2::TokenStream) -> syn::Result<proc_macro2::T
     if syn::parse2::<cq_lang_sequence::Program>(source.tokens.clone()).is_ok() {
         return sequence_pipeline(source.config)?.start(source.tokens);
     }
-    source.config.resolve(defaults())?.start(source.tokens)
+    let implicit_sequence = source.config.sequence.is_none()
+        && source.config.grade.is_none()
+        && source.config.decompose.is_empty();
+    let authored_advice = source.config.plan.is_some()
+        || !source.config.physical.is_empty()
+        || source.config.select.is_some()
+        || !source.config.structures.is_empty()
+        || source.config.represent.is_some()
+        || source.config.stage.is_some();
+    let mut pipeline = source.config.resolve(defaults())?;
+    let sequential: syn::Path = syn::parse_quote!(::mini_linq::passes::sequential);
+    if implicit_sequence
+        && !authored_advice
+        && let Some(index) = pipeline
+            .passes
+            .iter()
+            .position(|pass| pass.path == sequential)
+    {
+        pipeline.passes.insert(
+            index,
+            syn::parse_quote!(::mini_linq::passes::plan_sequential),
+        );
+    }
+    pipeline.start(source.tokens)
 }
 
 /// Complete Sequence input starts at planning, not at the CQ ordering phase.
@@ -103,12 +127,11 @@ fn sequence_pipeline(config: cq_stage::Configuration) -> syn::Result<cq_stage::P
             "complete Sequence input accepts only plan, decompose, grade and print phases",
         ));
     }
+    let authored_advice = !config.decompose.is_empty();
     let mut passes = config.decompose;
-    passes.push(
-        config
-            .plan
-            .unwrap_or_else(|| syn::parse_quote!(::mini_linq::passes::plan)),
-    );
+    passes.push(config.plan.unwrap_or_else(|| {
+        syn::parse_quote!(::mini_linq::passes::plan_sequential(preserve_order))
+    }));
     passes.push(
         config
             .grade
@@ -160,15 +183,15 @@ fn no_arguments(arguments: proc_macro2::TokenStream) -> syn::Result<()> {
 #[derive(Default)]
 struct PlanOptions {
     /// An explicit relation order, checked by the ordinary ordering pass.
-    order: Option<Vec<syn::Ident>>,
+    order: Option<Vec<cq_order::OrderAtom>>,
     no_reduce: bool,
-    /// `(target, support)` relation names to add, in advice order.
-    reduce: Vec<(syn::Ident, syn::Ident)>,
-    /// `(target, support)` relation names whose Masks reduction is dropped.
-    skip: Vec<(syn::Ident, syn::Ident)>,
+    /// `(target, support)` atom selectors to add, in advice order.
+    reduce: Vec<(cq_order::OrderAtom, cq_order::OrderAtom)>,
+    /// `(target, support)` atom selectors whose Masks reduction is dropped.
+    skip: Vec<(cq_order::OrderAtom, cq_order::OrderAtom)>,
 }
 impl Parse for PlanOptions {
-    /// Optional `order(Relation, ...)` plus `no_reduce`, or any number of
+    /// Optional `order(Relation, Relation@clause, ...)` plus `no_reduce`, or any number of
     /// `reduce(Target with Support)` and `skip(Target with Support)`, comma separated.
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let mut options = Self::default();
@@ -180,7 +203,7 @@ impl Parse for PlanOptions {
                 syn::parenthesized!(content in input);
                 options.order = Some(
                     content
-                        .parse_terminated(syn::Ident::parse, syn::Token![,])?
+                        .parse_terminated(cq_order::OrderAtom::parse, syn::Token![,])?
                         .into_iter()
                         .collect(),
                 );
@@ -189,12 +212,12 @@ impl Parse for PlanOptions {
             } else if (option == "reduce" || option == "skip") && !options.no_reduce {
                 let content;
                 syn::parenthesized!(content in input);
-                let target: syn::Ident = content.parse()?;
+                let target: cq_order::OrderAtom = content.parse()?;
                 let with: syn::Ident = content.parse()?;
                 if with != "with" {
                     return Err(syn::Error::new_spanned(with, "expected `with`"));
                 }
-                let support: syn::Ident = content.parse()?;
+                let support: cq_order::OrderAtom = content.parse()?;
                 if !content.is_empty() {
                     return Err(content.error("expected (Target with Support)"));
                 }
@@ -217,26 +240,6 @@ impl Parse for PlanOptions {
             }
         }
         Ok(options)
-    }
-}
-
-/// The written atom clause of the stream scope reading `relation`; advice must
-/// name a relation read exactly once there.
-fn advised_clause(
-    body: &cq_lang_cq::CommaList<cq_lang_cq::BodyItem>,
-    relation: &syn::Ident,
-) -> syn::Result<usize> {
-    let mut clauses = body
-        .iter()
-        .enumerate()
-        .filter(|(_, item)| item.atom().is_some_and(|atom| atom.relation == *relation))
-        .map(|(clause, _)| clause);
-    match (clauses.next(), clauses.next()) {
-        (Some(clause), None) => Ok(clause),
-        _ => Err(syn::Error::new_spanned(
-            relation,
-            "reduce advice names a relation read by exactly one top-level atom",
-        )),
     }
 }
 
@@ -289,15 +292,16 @@ pub fn plan(input: TokenStream) -> TokenStream {
             // Formal rule R-Advice: Advised semijoins of two top-level atoms sharing a variable run after the Masks reductions, before the stream; skipped ones are removed.
             let analysis = cq_lang_vo::contract::check(&reduced)?;
             let graph = cq_lang_cq::hypergraph::Analysis::of(&reduced.cq);
-            let body = &reduced.cq.query.body;
-            let pair = |target: &syn::Ident, support: &syn::Ident| -> syn::Result<(usize, usize)> {
+            let pair = |target: &cq_order::OrderAtom,
+                        support: &cq_order::OrderAtom|
+             -> syn::Result<(usize, usize)> {
                 let (t, s) = (
-                    advised_clause(body, target)?,
-                    advised_clause(body, support)?,
+                    target.positive_clause(&reduced.cq)?,
+                    support.positive_clause(&reduced.cq)?,
                 );
                 if t == s || graph.shared(t, s).is_empty() {
                     return Err(syn::Error::new_spanned(
-                        support,
+                        &support.relation,
                         "reduce advice needs two atoms sharing a variable",
                     ));
                 }
@@ -309,7 +313,7 @@ pub fn plan(input: TokenStream) -> TokenStream {
                 let step = cq_reduce::semijoin(&analysis, &graph, t, s);
                 if !reduced.valuation.steps.contains(&step) {
                     return Err(syn::Error::new_spanned(
-                        target,
+                        &target.relation,
                         "skip advice names no Masks reduction",
                     ));
                 }
@@ -422,9 +426,11 @@ fn sequence_plan_target(input: &proc_macro2::TokenStream) -> bool {
         syn::braced!(arguments in input);
         let args: proc_macro2::TokenStream = arguments.parse()?;
         let _: proc_macro2::TokenStream = input.parse()?;
-        Ok(args.to_string() != "lookup_first"
-            && syn::parse2::<PlanOptions>(args.clone()).is_err()
-            && syn::parse2::<syn::Path>(args).is_ok())
+        Ok(
+            !matches!(args.to_string().as_str(), "lookup_first" | "preserve_order")
+                && syn::parse2::<PlanOptions>(args.clone()).is_err()
+                && syn::parse2::<syn::Path>(args).is_ok(),
+        )
     };
     parser.parse2(input.clone()).unwrap_or(false)
 }
@@ -455,12 +461,15 @@ fn sequence_plan_source(input: &proc_macro2::TokenStream) -> bool {
 
 /// Fill unauthored Sequence decisions using the Sequential machine and catalog.
 /// Use in `decompose` directly or through `plan(mini_linq::passes::plan_sequential)`.
-/// Authored order is preserved by default; `lookup_first` explicitly opts into reordering.
+/// The unadvised default keeps the written order; `lookup_first` opts into Lookup/Expand ordering.
 #[proc_macro]
 pub fn plan_sequential(input: TokenStream) -> TokenStream {
     cq_stage::rewrite::<cq_lang_sequence::Program>(input.into(), |source, args| {
         let machine = cq_sequence_pull::machine();
         let catalog = cq_sequence_pull::catalog();
+        // The unadvised default keeps the author's written order (checked
+        // decomposition only); Lookup-first ordering is opt-in because its
+        // estimate-free plans run far slower than advised ones on the suite.
         let lookup_first = if args.is_empty() {
             false
         } else {
@@ -566,10 +575,79 @@ mod tests {
     fn explicit_order_combines_with_existing_reduction_options() {
         let options: PlanOptions = syn::parse2(quote!(order(R, S), no_reduce)).unwrap();
         assert!(options.no_reduce);
-        let expected: Vec<syn::Ident> = vec![syn::parse_quote!(R), syn::parse_quote!(S)];
+        let expected: Vec<cq_order::OrderAtom> = vec![syn::parse_quote!(R), syn::parse_quote!(S)];
         assert_eq!(options.order.unwrap(), expected);
         assert!(syn::parse2::<PlanOptions>(quote!(order(R), order(S))).is_err());
         assert!(syn::parse2::<PlanOptions>(quote!(order(R S))).is_err());
+        let qualified: PlanOptions =
+            syn::parse2(quote!(order(R @ 2, R @ 0, S), no_reduce)).unwrap();
+        assert_eq!(qualified.order.unwrap()[0].occurrence, Some(2));
+        assert!(syn::parse2::<PlanOptions>(quote!(order(R@))).is_err());
+        assert!(syn::parse2::<PlanOptions>(quote!(order(R @ -1))).is_err());
+    }
+
+    #[test]
+    fn reduction_selectors_share_occurrence_resolution_and_reject_blocks() {
+        let options: PlanOptions = syn::parse2(quote!(
+            reduce(R@2 with S@1), skip(R@0 with S@1)
+        ))
+        .unwrap();
+        let source: cq_lang_cq::Program = syn::parse_quote! {
+            struct Q;
+            relation R(a:i32);
+            relation S(a:i32);
+            answer(x) :- R(x), S(x), R(x), { S(x) } | { S(x) };
+        };
+        let source = cq_lang_cq::normal::normalize(&source).unwrap();
+        assert_eq!(options.reduce[0].0.positive_clause(&source).unwrap(), 2);
+        assert_eq!(options.reduce[0].1.positive_clause(&source).unwrap(), 1);
+        assert_eq!(options.skip[0].0.positive_clause(&source).unwrap(), 0);
+        for selector in ["R", "R@1", "R@99", "block@3"] {
+            assert!(
+                syn::parse_str::<cq_order::OrderAtom>(selector)
+                    .unwrap()
+                    .positive_clause(&source)
+                    .is_err()
+            );
+        }
+        assert!(syn::parse2::<PlanOptions>(quote!(reduce(R@ with S))).is_err());
+        assert!(syn::parse2::<PlanOptions>(quote!(skip(R with S@-1))).is_err());
+    }
+
+    #[test]
+    fn robust_sequence_default_keeps_authored_cq_advisory_precedence() {
+        let source = quote! {
+            struct Query;
+            relation R(x:i32);
+            answer(x) :- R(x);
+        };
+        let automatic = expand_compile(quote!(pipeline {} #source))
+            .unwrap()
+            .to_string();
+        assert!(automatic.contains("plan_sequential"));
+        assert!(!automatic.contains("preserve_order"));
+        for advice in [
+            quote!(plan = custom_order;),
+            quote!(select = custom_selection;),
+            quote!(represent = custom_realization;),
+            quote!(stage = custom_staging;),
+        ] {
+            let advised = expand_compile(quote! {
+                pipeline { #advice }
+                #source
+            })
+            .unwrap()
+            .to_string();
+            assert!(!advised.contains("plan_sequential"));
+        }
+        let manual = expand_compile(quote! {
+            pipeline { decompose = [authored_schedule]; }
+            #source
+        })
+        .unwrap()
+        .to_string();
+        assert!(manual.contains("authored_schedule"));
+        assert!(!manual.contains("plan_sequential"));
     }
 
     #[test]

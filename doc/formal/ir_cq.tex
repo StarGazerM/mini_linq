@@ -101,6 +101,10 @@ Let $Q$ be the query binders, $B$ the written bound names and $P$ the closing
 host parameters. Over the Syn AST (no separate grammar):
 \begin{lstlisting}
 t ::= x | *x | &x | literal | -numeric-literal | bare-host-identifier
+a ::= integer-name | *integer-name | integer-literal | -integer-literal
+    | decimal-name.scaled() | a + a | a - a | a * a | a / nonzero-integer-literal | (a)
+    | if C { a } else { a } | lossless-integer-type::from(a)
+t ::= ... | a
 C ::= t == t | t != t | t < t | t <= t | t > t | t >= t
     | C && C | C || C | !C | (C)
 \end{lstlisting}
@@ -116,7 +120,7 @@ them only under the premises.
  {\Sigma;B;P\vdash t_1\ op\ t_2\Rightarrow B}
 
 \Rule{CQ-GuardRecognize}{e\text{ has only recognized comparisons and boolean nodes}\\
- \text{all comparisons satisfy the Eq/Ord premises}}
+ \text{comparison operands satisfy CQ-Arith or the Eq/Ord premises}}
  {\mathsf{recognize}_{Q,P}(e)=\theta\quad\sem e=\sem\theta}
 
 \Rule{CQ-GuardSplit}{e=e_1\mathbin{\&\&}\cdots\mathbin{\&\&}e_n\\
@@ -128,9 +132,12 @@ them only under the premises.
 \end{mathpar}
 Recognized comparisons are total, so short-circuit \code{\&\&}, \code{||} and
 \code{!} mean classical connectives on them.
-Arithmetic, calls, methods, casts, indexing, blocks, macros, qualified paths
-and field access are opaque; a mixed \code{||} or \code{!} is one opaque leaf;
-only the top-level conjunction splits.
+Arithmetic outside CQ-Arith (Section~\ref{sec:guards-design}), arbitrary calls,
+methods, casts, indexing, blocks, macros, qualified value paths and field
+access are opaque; a mixed \code{||} or \code{!} is one opaque leaf.
+Only the top-level conjunction splits. Typed arithmetic predicates retain
+Guard syntax, with totality rederived from their declared inputs rather than
+an author assertion.
 Parameters print as \code{@name} in later languages and are borrowed once outside
 query loops.
 \begin{proof}[Proof of CQ-GuardSplit]

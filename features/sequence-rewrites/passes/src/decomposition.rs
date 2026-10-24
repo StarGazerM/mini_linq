@@ -17,7 +17,7 @@ pub fn partition_in(
 ) -> syn::Result<Program> {
     let Tile { name, n, items } = syn::parse2(arguments)?;
     let index = definition(source, &name)?;
-    checker.check(source)?;
+    checker.check_shared(source)?;
     positive(&name, n, items)?;
     let Some((index, depth)) = boundary(
         source,

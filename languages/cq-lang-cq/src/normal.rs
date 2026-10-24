@@ -182,6 +182,7 @@ fn normalize_body(
     names: &mut BTreeSet<String>,
     bound: &mut BTreeSet<String>,
 ) -> syn::Result<Vec<BodyItem>> {
+    let types = super::blocks::types(declarations, source, &BTreeMap::new())?;
     let mut body = Vec::new();
     for (clause, item) in source.iter().enumerate() {
         match item {
@@ -253,10 +254,19 @@ fn normalize_body(
                 });
                 body.extend(after);
             }
-            BodyItem::Equality(_)
-            | BodyItem::Constraint(_)
-            | BodyItem::Filter(_)
-            | BodyItem::Negation(_) => body.push(item.clone()),
+            BodyItem::Filter(filter) => {
+                let (arithmetic, residual) =
+                    super::syntax::guard::split_arithmetic(&filter.condition, &types);
+                for condition in arithmetic.into_iter().chain(residual) {
+                    body.push(BodyItem::Filter(super::Filter {
+                        condition,
+                        ..filter.clone()
+                    }));
+                }
+            }
+            BodyItem::Equality(_) | BodyItem::Constraint(_) | BodyItem::Negation(_) => {
+                body.push(item.clone())
+            }
             BodyItem::Let(binding) => {
                 bound.extend(rust::bindings(&binding.pattern).iter().map(symbol_name));
                 body.push(item.clone());

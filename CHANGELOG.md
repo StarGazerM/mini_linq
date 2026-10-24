@@ -7,6 +7,42 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Retire Datalog-side hooks kept only for the (already broken) legacy GPU
+  Datalog bridge: `KeyRepresentation`, `LayoutRealization`, device-owned
+  negation keys, frozen/leveled layout selection, `compile_with_ratio`, the
+  storage `Representation` and device-set policies (−397 lines). `ddisasm` is
+  now a Datalog workspace member with Ascent differential tests. Default
+  expansions byte-identical; `experiments/gpu/legacy-datalog` is left to the
+  GPU side and no longer builds against these crates.
+- Add the GPU `WideCanon` catalog provider after `PackedCanon`: complete
+  declared key domains select its unbounded-width capability, while recorded
+  codec bounds determine the runtime lane count. Stable per-lane radix passes
+  deduplicate complete rows without truncation, using the existing publication
+  count and host decode protocol. All packed publication consumers now decode
+  arbitrary-width, cross-lane fields.
+- Add CQ-Arith: declared fixed-width integer/decimal-coefficient arithmetic
+  uses wrapping addition, subtraction and multiplication, plus wrapping integer
+  division by a nonzero literal. Total conditionals and explicit lossless
+  primitive widening close the grammar. Typed arithmetic bindings and guards
+  earn position independence; arbitrary methods, lossy casts, mixed widths and
+  runtime divisors stay opaque. CPU and GPU row interpretation share the checked arithmetic
+  grammar, allowing aggregate arguments to execute below the host boundary.
+- Box 12d: add `R(a,b) key` evidence syntax and checked
+  `group_without_canon` advice, with complete-evidence proof cache identity.
+  TPC-H loaders assert declared keys only when their projections retain them.
+  Key-covered groups consume resident columns and only materialize aggregate
+  arguments, not complete named valuations; unadvised groups retain canon.
+  With CQ-Arith, exact advised SF10 medians improve H01 from 9,107.255 to
+  590.690 ms, H06 from 3,310.908 to 11.776 ms, and H12 from 44.427 to 25.930 ms;
+  the unchanged CPU grouped corpus passes all eight tests.
+- Import staged GPU-suite programs as their complete authored dependency graph:
+  H02/H18/H20 have two stages, H15 has three, H11 has four, and H13 preserves
+  its two terminal branches and one-time order preprocessing. Plan each stage
+  independently, retain resident numeric publications and key codec bounds
+  between GPU stages, and explicitly report host-planned publications when
+  device grading is unavailable.
+  Sum stage timings and chain independently selected Sequential interpretations
+  of the same Physical graphs for conformance.
 - Cleanup after the Sequence cutover and guard redesign: remove the
   test-only `cq_physical_realization::sources`, the uncalled
   `cq_print::Context::row` (and make `borrowed_pattern` private), unread
@@ -27,9 +63,10 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   or permitting compiler motion of arbitrary Rust guards.
   Checked guard-result carriers drop dead columns only after predicate evaluation,
   allowing numeric Part keys to be published without carrying String data.
-- Add nonsemantic Sequence evidence advice for row counts, keys, foreign keys,
-  selectivities, bounds and sortedness. Evidence is parsed and recorded beside
-  analysis obligations; false facts cannot discharge a correctness premise.
+- Add Sequence evidence advice for row counts, keys, foreign keys,
+  selectivities, bounds and sortedness. Estimates rank checked plans.
+  Keys are author-asserted physical uniqueness premises; false keys can
+  change grouped answers through checked canonicalization elimination.
 - Expose `cq_sequence_plan::Planner` and a checked `RuleBased` implementation.
   Complete Sequence input supports a swappable named `plan = path` facade
   phase; existing CQ-input `plan` remains its join-order phase. Planner advice

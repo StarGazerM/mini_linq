@@ -1,8 +1,8 @@
 //! GPU machine instance of segmented grouped monoid folds.
-use crate::{pointer, release, temporary, Result};
+use crate::{Result, pointer, release, temporary};
 use cq_gpu_runtime::{Buffer, Pool};
 use gpu_device_columns::OutputCount;
-use rccl_thrust::{arithmetic_range, select_flagged, DeviceBufferExt};
+use rccl_thrust::{DeviceBufferExt, arithmetic_range, select_flagged};
 use std::sync::Arc;
 
 /// A checked aggregate's machine representation. Extrema use a separate validity
@@ -50,6 +50,73 @@ impl<F> GroupedRows<F> {
     pub fn checked_len(&self) -> Result<usize> {
         self.output.checked_len()
     }
+    /// Publish a nonnullable grouped result as resident input columns.
+    ///
+    /// # Safety
+    /// `slots` must describe `Row` in the physical key/aggregate column layout
+    /// and select no nullable aggregate. The decoder is not applied: the grouped
+    /// machine values must already be the row codec's integer representation.
+    /// Each supplied bound must enclose that output column's complete domain;
+    /// group keys inherit their input bounds, not the aggregate's value domain.
+    pub unsafe fn into_columns<Row: gpu_device_columns::RowCodec<'static>>(
+        self,
+        slots: &[usize],
+        bounds: &[gpu_device_columns::Bounds],
+    ) -> Result<cq_gpu_runtime::DeviceColumns<'static, Row>> {
+        use gpu_device_columns::{
+            Codec, ColumnView, DeviceColumns, Dictionary, EncodedColumn, SourceView, Table,
+        };
+        let output = self.output;
+        if Row::WIDTH != slots.len()
+            || bounds.len() != slots.len()
+            || slots.iter().any(|&slot| slot >= output.width)
+        {
+            return Err("grouped publication schema width mismatch".into());
+        }
+        let pool = output.values.pool().clone();
+        // fold allocates exactly one row per group; metadata retains the same
+        // count plus arithmetic failures. Neither values nor count are read back.
+        let rows = output.values.len() / output.width;
+        let mut columns = Vec::with_capacity(slots.len());
+        for (&slot, &bounds) in slots.iter().zip(bounds) {
+            let mut source = SourceView::from(ColumnView {
+                headers: std::ptr::null(),
+                data: output
+                    .values
+                    .ptr()
+                    .wrapping_add(if rows == 0 { 0 } else { slot })
+                    .cast(),
+                len: output.values.len() as u64,
+                count: std::ptr::null(),
+                codec: Codec::Plain as u32,
+            });
+            source.stride = output.width as u64;
+            columns.push(Arc::new(unsafe {
+                EncodedColumn::from_gather_source::<_, i64>(
+                    pool.clone(),
+                    source,
+                    std::ptr::null(),
+                    rows,
+                    output.metadata.clone(),
+                    0,
+                    bounds,
+                )?
+            }));
+        }
+        let views: Vec<_> = columns
+            .iter()
+            .map(|column| unsafe { column.view() })
+            .collect();
+        let table = Table {
+            columns,
+            views: Arc::new(Buffer::from_host(pool.clone(), &views)?),
+            metadata: output.metadata,
+            capacity: rows,
+            bounds: bounds.to_vec(),
+            statuses: output.statuses,
+        };
+        Ok(unsafe { DeviceColumns::from_parts(table, Arc::new(Dictionary::default()), pool) })
+    }
     pub fn to_host<Row>(&self) -> Result<Vec<Row>>
     where
         F: Fn(&[i64], &[u8]) -> Result<Row>,
@@ -71,10 +138,12 @@ impl<F> GroupedRows<F> {
 ///
 /// # Safety
 /// The initialized row-major input must be canonical over complete valuations,
-/// not merely over aggregate arguments, and ready on `pool`'s stream.
+/// not merely over aggregate arguments. Optional 0/1 flags and all live rows
+/// must be initialized on the same device and ready on `pool`'s stream.
 pub unsafe fn fold(
     pool: Arc<Pool>,
     input: &Buffer<i64>,
+    live: Option<&cuda_core::DeviceBuffer<u32>>,
     rows: usize,
     keys: usize,
     aggregates: &[Aggregate],
@@ -87,6 +156,7 @@ pub unsafe fn fold(
         || rows > u32::MAX as usize
         || input.len() < rows.checked_mul(width).ok_or("group size overflow")?
         || !Arc::ptr_eq(input.pool(), &pool)
+        || live.is_some_and(|live| live.len() < rows)
     {
         return Err("invalid grouped input extent or pool".into());
     }
@@ -97,6 +167,40 @@ pub unsafe fn fold(
     let cub = rccl_cub::cuda::Program::load(pool.context())?;
     let launch = cub.on(stream)?;
     let mut order = temporary::<u32>(stream, rows)?;
+    let rows = if let Some(live) = live {
+        let mut count = temporary::<u64>(stream, 1)?;
+        if rows != 0 {
+            select_flagged(
+                &exec,
+                arithmetic_range(0u32, 1, rows),
+                live.view(),
+                order.view_mut(),
+                &mut count,
+            )?;
+        }
+        let selected = if rows == 0 {
+            0
+        } else {
+            count.to_host_vec(stream)?[0] as usize
+        };
+        let selected_order = temporary::<u32>(stream, selected)?;
+        if selected != 0 {
+            unsafe {
+                cuda_core::memory::memcpy_dtod_async(
+                    selected_order.cu_deviceptr(),
+                    order.cu_deviceptr(),
+                    selected * std::mem::size_of::<u32>(),
+                    stream.cu_stream(),
+                )?;
+            }
+        }
+        release(stream, order)?;
+        release(stream, count)?;
+        order = selected_order;
+        selected
+    } else {
+        rows
+    };
     let mut alternate_order = temporary::<u32>(stream, rows)?;
     let mut sort_keys = temporary::<u64>(stream, rows)?;
     let mut alternate_keys = temporary::<u64>(stream, rows)?;
@@ -113,12 +217,14 @@ pub unsafe fn fold(
                 u32,
             >(&launch, rows)?)
         };
-        module.identity(
-            stream,
-            &module.prepare_identity(config)?,
-            pointer(&order),
-            rows as u32,
-        )?;
+        if live.is_none() {
+            module.identity(
+                stream,
+                &module.prepare_identity(config)?,
+                pointer(&order),
+                rows as u32,
+            )?;
+        }
         // Stable least-significant-field passes produce lexicographic group order.
         for key in (0..keys).rev() {
             module.gather_key(
@@ -375,5 +481,56 @@ mod group_kernels {
                 *valid.add(group * width + column) = present as u8;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod publication_tests {
+    use super::*;
+
+    #[test]
+    fn resident_group_publication_preserves_values_count_and_failure() -> Result<()> {
+        let pool = Pool::new(0, 0, 0)?;
+        let input = Buffer::from_host(pool.clone(), &[1i64, 3, 1, 7, 2, 5])?;
+        let aggregate = Aggregate {
+            kind: 1,
+            min: i64::MIN,
+            max: i64::MAX,
+        };
+        for error in [0, 1] {
+            let status = Arc::new(Buffer::from_host(
+                pool.clone(),
+                &[OutputCount {
+                    rows: 3,
+                    error,
+                    padding: 0,
+                }],
+            )?);
+            let grouped =
+                unsafe { fold(pool.clone(), &input, None, 3, 1, &[aggregate], vec![status])? };
+            let published = unsafe {
+                grouped.with_decoder(()).into_columns::<(i64, i64)>(
+                    &[1, 0],
+                    &[
+                        gpu_device_columns::Bounds::Inclusive {
+                            min: i64::MIN,
+                            max: i64::MAX,
+                        },
+                        gpu_device_columns::Bounds::Inclusive { min: 1, max: 2 },
+                    ],
+                )?
+            };
+            assert_eq!(published.capacity(), 2);
+            assert_eq!(
+                published.storage().bounds[1],
+                gpu_device_columns::Bounds::Inclusive { min: 1, max: 2 }
+            );
+            if error == 0 {
+                assert_eq!(published.to_host()?, [(10, 1), (5, 2)]);
+            } else {
+                assert!(published.to_host().is_err());
+            }
+        }
+        Ok(())
     }
 }

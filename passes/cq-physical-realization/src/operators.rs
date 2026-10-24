@@ -439,7 +439,11 @@ impl<'a> Printer<'a> {
                     &guard.condition,
                     guard.environment.as_ref(),
                 );
-                let condition = &guard.condition;
+                let arithmetic = cq::arithmetic::predicate(
+                    &guard.condition,
+                    &self.infos[&symbol_name(&guard.input)].types,
+                );
+                let condition = arithmetic.as_ref().unwrap_or(&guard.condition);
                 Ok(quote! {
                     ::core::iter::Iterator::filter(#input, move |#[allow(unused_variables)] #pattern| ::cq_storage::residual(#condition))
                 })
@@ -477,10 +481,11 @@ impl<'a> Printer<'a> {
                     self.rust_aliases(&input_name, &bind.expression, bind.environment.as_ref());
                 let binding = &bind.pattern;
                 let annotation = &bind.annotation;
+                let arithmetic = cq::arithmetic::binding(bind, &self.infos[&input_name].types);
                 let value = self
                     .generator_expressions
                     .get(name)
-                    .unwrap_or(&bind.expression);
+                    .unwrap_or_else(|| arithmetic.as_ref().unwrap_or(&bind.expression));
                 // Fan out each prefix through its finite iterator,
                 // moving generated values and retaining the prefix for subsequent items.
                 let generator = bind.for_token.is_some();

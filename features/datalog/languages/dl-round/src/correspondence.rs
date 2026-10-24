@@ -56,9 +56,7 @@ fn required_inputs(
         declarations.push(declaration);
     }
     for key in keys {
-        if key.representation != KeyRepresentation::Borrowed
-            || !required.contains(&symbol_name(&key.name))
-        {
+        if !required.contains(&symbol_name(&key.name)) {
             continue;
         }
         let mut declaration = context.relations[key.relation].declaration.clone();
@@ -158,28 +156,11 @@ pub fn use_scan(
 
 fn negation(atom: &cq_syntax::Atom, key: &KeySet) -> BodyItem {
     let name = &key.name;
-    if key.representation == KeyRepresentation::DeviceSetOwned {
-        let args = key.columns.iter().map(|&i| &atom.args[i]);
-        return syn::parse_quote!(
-            if !::cq_gpu_runtime::datalog::contains(&#name, &(#(#args,)*))
-        );
-    }
     if key.columns.is_empty() {
         syn::parse_quote!(!#name(_))
     } else {
         let args = key.columns.iter().map(|&i| &atom.args[i]);
         syn::parse_quote!(!#name(#(#args),*))
-    }
-}
-
-fn key_representation(source: &storage::Program) -> syn::Result<KeyRepresentation> {
-    match Some(symbol_name(&source.policy.negation_keys)).as_deref() {
-        Some("borrowed") => Ok(KeyRepresentation::Borrowed),
-        Some("device_set_owned") => Ok(KeyRepresentation::DeviceSetOwned),
-        _ => Err(syn::Error::new_spanned(
-            source,
-            "fork requires a checked negation key representation",
-        )),
     }
 }
 
@@ -197,20 +178,7 @@ pub(crate) fn check_storage_with_analysis(
     analysis: &storage::Analysis,
 ) -> syn::Result<()> {
     let variants = &source.incremental.variants;
-    let representation = key_representation(source)?;
     let context = &target.context;
-    ensure(
-        context.representation == representation
-            && context.layout_realization == representation.layouts()
-            && context.changing_layout_realization == representation.changing_layouts(),
-        source,
-        "fork changed the recorded representation policy",
-    )?;
-    ensure(
-        context.leveled_ratio >= 2,
-        source,
-        "invalid leveled device index ratio",
-    )?;
     ensure(
         context.relations.len() == source.incremental.strata.source.declarations.len()
             && context.strata.len() == analysis.components.len(),
@@ -328,15 +296,8 @@ pub(crate) fn check_storage_with_analysis(
         )?;
         let mut projections = Vec::new();
         let mut used_keys = BTreeSet::new();
-        let mut frozen_layouts = BTreeSet::new();
-        let mut leveled_layouts = BTreeSet::new();
         for key in &stratum.keys {
             add_name(&key.name)?;
-            ensure(
-                key.representation == representation,
-                source,
-                "fork changed negation key representation",
-            )?;
             let projection = (
                 key.relation,
                 key.columns.clone(),
@@ -428,16 +389,8 @@ pub(crate) fn check_storage_with_analysis(
             output.value = None;
             let expected_args: Vec<Expr> = if key.columns.is_empty() {
                 let column = &hole.declarations.last().expect("checked output").columns[0].name;
-                match representation {
-                    KeyRepresentation::Borrowed => {
-                        output.columns = syn::parse_quote!(#column: ());
-                        vec![syn::parse_quote!(())]
-                    }
-                    KeyRepresentation::DeviceSetOwned => {
-                        output.columns = syn::parse_quote!(#column: u8);
-                        vec![syn::parse_quote!(0u8)]
-                    }
-                }
+                output.columns = syn::parse_quote!(#column: ());
+                vec![syn::parse_quote!(())]
             } else {
                 output.columns = key
                     .columns
@@ -446,21 +399,13 @@ pub(crate) fn check_storage_with_analysis(
                         let mut column = declaration.columns[i].clone();
                         column.name = variables[i].expect("checked key variable").clone();
                         let ty = &column.ty;
-                        if representation == KeyRepresentation::Borrowed {
-                            column.ty = syn::parse_quote!(&#ty);
-                        }
+                        column.ty = syn::parse_quote!(&#ty);
                         column
                     })
                     .collect();
                 key.columns
                     .iter()
-                    .map(|&i| {
-                        let arg = &atom.args[i];
-                        match representation {
-                            KeyRepresentation::Borrowed => arg.clone(),
-                            KeyRepresentation::DeviceSetOwned => syn::parse_quote!(*#arg),
-                        }
-                    })
+                    .map(|&i| atom.args[i].clone())
                     .collect()
             };
             let mut expected_declarations = required_inputs(context, &[], &hole.query);
@@ -513,23 +458,6 @@ pub(crate) fn check_storage_with_analysis(
                 let mut query = variant.query.clone();
                 query.head.relation = hole.name.clone();
                 use_layouts(&mut query, context, source, rule.variant)?;
-                if representation == KeyRepresentation::DeviceSetOwned {
-                    for item in &query.body {
-                        if let BodyItem::Positive { atom } = item {
-                            if let Some((index, layout)) =
-                                context.layouts.iter().enumerate().find(|(_, layout)| {
-                                    layout.name == atom.relation && layout.key != 0
-                                })
-                            {
-                                if members.contains(&layout.relation) {
-                                    leveled_layouts.insert(index);
-                                } else {
-                                    frozen_layouts.insert(index);
-                                }
-                            }
-                        }
-                    }
-                }
                 ensure(
                     rule.scan.as_ref().map(|scan| &scan.source)
                         == scan_source(&query, context).as_ref(),
@@ -586,16 +514,6 @@ pub(crate) fn check_storage_with_analysis(
                 )?;
             }
         }
-        ensure(
-            stratum.frozen_layouts.iter().copied().eq(frozen_layouts),
-            source,
-            "fork frozen device indexes must exactly cover keyed EDB/lower-stratum layouts in layout order",
-        )?;
-        ensure(
-            stratum.leveled_layouts.iter().copied().eq(leveled_layouts),
-            source,
-            "fork leveled device indexes must exactly cover changing keyed full layouts in layout order",
-        )?;
         ensure(
             used_keys.len() == stratum.keys.len(),
             source,

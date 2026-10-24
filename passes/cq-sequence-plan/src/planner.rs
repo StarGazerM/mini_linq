@@ -6,7 +6,7 @@ use crate::Planned;
 ///
 /// Implementations return checked advice: replaying `Planned::trace` over the
 /// input must reproduce `Planned::program`. Authored decisions retain precedence,
-/// and evidence may select a candidate but must never justify changing answers.
+/// and key-dependent rewrites are conditional on the author's asserted keys.
 /// A target-owned ordinary pass supplies its machine and catalog, then forwards
 /// the resulting program through the checked pipeline.
 pub trait Planner {

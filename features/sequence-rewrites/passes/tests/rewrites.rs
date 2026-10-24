@@ -242,3 +242,77 @@ fn evidence_advice_is_checked_replayable_metadata() {
             .is_err()
     );
 }
+
+#[test]
+fn grouped_key_premises_remove_only_proven_valuation_canon() {
+    let source: Program = syn::parse_quote! {
+        physical {
+            relation R(id:i64, value:i64);
+            r = pipe canon rename R@0 {id -> id, value -> value};
+            grouped = let group r by [] { total: i64 = sum(value); };
+            return grouped as answer(total);
+        }
+        structures { r host scan = Reader []; r canon = Canon; grouped rows = Rows; }
+        sequence { values = store canon rows r; answer = store group grouped values; }
+    };
+    assert!(cq_sequence_rewrite_passes::group_without_canon(&source, quote!(answer)).is_err());
+    let mut keyed = source.clone();
+    keyed.evidence = syn::parse_quote!(evidence { R(id) key; });
+    let target = cq_sequence_rewrite_passes::group_without_canon(&keyed, quote!(answer)).unwrap();
+    assert!(matches!(target.sequence.definitions[0].term, Term::Rows(_)));
+    contract::check_rewrite(&keyed, &target).unwrap();
+    assert!(
+        contract::check_rewrite(&source, &target).is_err(),
+        "the rewrite cannot invent an unasserted key"
+    );
+    let mut checker = cq_lang_sequence::contract::Checker::new(&target).unwrap();
+    let mut missing = target.clone();
+    missing.evidence.facts.clear();
+    assert!(
+        checker.check(&missing).is_err(),
+        "cached proofs must retain key premises"
+    );
+    let mut projected = keyed.clone();
+    if let cq_lang_sequence::structures::physical::Operator::Rename(rename) =
+        &mut projected.structures.physical.program.definitions[0].operator
+    {
+        rename.mapping = rename
+            .mapping
+            .iter()
+            .filter(|mapping| mapping.source != "id")
+            .cloned()
+            .collect();
+    }
+    assert!(cq_sequence_rewrite_passes::group_without_canon(&projected, quote!(answer)).is_err());
+}
+
+#[test]
+fn grouped_join_requires_keys_for_every_enumerated_atom() {
+    let mut source: Program = syn::parse_quote! {
+        physical {
+            relation L(id:i64, a:i64); relation R(a:i64,b:i64);
+            l = pipe rename L@0 {id -> id,a -> a};
+            r = let rename R@1 {a -> a,b -> b};
+            j = let canon probe first [a] l,r;
+            grouped = let group j by [] { total:i64=sum(b); };
+            return grouped as answer(total);
+        }
+        structures {
+            l host scan = Reader []; r host scan = Reader [];
+            r = Provider [a]; j rows = Rows; j canon = Canon; grouped rows = Rows;
+        }
+        sequence {
+            l = rows l; r = store rows r;
+            j = store canon flatten lookup r [a] l;
+            result = store group grouped j;
+        }
+        evidence { L(id) key; }
+    };
+    assert!(cq_sequence_rewrite_passes::group_without_canon(&source, quote!(result)).is_err());
+    source.evidence = syn::parse_quote!(evidence { L(id) key; R(a,b) key; });
+    let target = cq_sequence_rewrite_passes::group_without_canon(&source, quote!(result)).unwrap();
+    let Term::Store { inner, .. } = &target.sequence.definitions[2].term else {
+        panic!("expanding input keeps its flat publication");
+    };
+    assert!(matches!(inner.as_ref(), Term::Flatten(_)));
+}

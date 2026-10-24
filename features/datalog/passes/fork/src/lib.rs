@@ -29,16 +29,11 @@ pub fn default_pipeline() -> cq_stage::Pipeline {
     resolve_cq(cq_stage::Configuration::default()).expect("complete CQ defaults")
 }
 pub fn compile(source: &storage::Program) -> syn::Result<Program> {
-    compile_with_ratio(source, 4)
-}
-/// Record explicit device index capacity advice without changing CPU lowering.
-pub fn compile_with_ratio(source: &storage::Program, ratio: u32) -> syn::Result<Program> {
     construct(
         source,
         default_pipeline(),
         TerminalRegistry::default(),
         syn::parse_quote!(none),
-        ratio,
         None,
     )
 }
@@ -46,7 +41,6 @@ struct Arguments {
     pipeline: cq_stage::Pipeline,
     terminals: TerminalRegistry,
     timing: Ident,
-    ratio: u32,
     lower: Option<usize>,
 }
 impl syn::parse::Parse for Arguments {
@@ -54,7 +48,6 @@ impl syn::parse::Parse for Arguments {
         let mut pipeline = None;
         let mut terminals = None;
         let mut timing = None;
-        let mut ratio = None;
         let mut lower = None;
         while !input.is_empty() {
             let name: Ident = input.parse()?;
@@ -65,8 +58,6 @@ impl syn::parse::Parse for Arguments {
                 timing = Some(input.parse()?);
             } else if name == "terminals" && terminals.is_none() {
                 terminals = Some(input.parse()?);
-            } else if name == "leveled_ratio" && ratio.is_none() {
-                ratio = Some(input.parse::<syn::LitInt>()?.base10_parse()?);
             } else if name == "lower" && lower.is_none() {
                 lower = Some(input.parse::<syn::LitInt>()?.base10_parse()?);
             } else {
@@ -81,7 +72,6 @@ impl syn::parse::Parse for Arguments {
             pipeline: pipeline.unwrap_or_else(default_pipeline),
             terminals: terminals.unwrap_or_default(),
             timing: timing.unwrap_or_else(|| syn::parse_quote!(none)),
-            ratio: ratio.unwrap_or(4),
             lower,
         })
     }
@@ -91,10 +81,9 @@ pub fn compile_with(source: &storage::Program, args: TokenStream) -> syn::Result
         pipeline,
         terminals,
         timing,
-        ratio,
         lower,
     } = syn::parse2(args)?;
-    construct(source, pipeline, terminals, timing, ratio, lower)
+    construct(source, pipeline, terminals, timing, lower)
 }
 /// Formal rule CK-DL-Fork: independently check storage embedding and every hole.
 pub fn check(source: &storage::Program, target: &Program) -> syn::Result<()> {
@@ -114,28 +103,11 @@ pub fn check(source: &storage::Program, target: &Program) -> syn::Result<()> {
 
 fn negation(atom: &cq_syntax::Atom, key: &KeySet) -> BodyItem {
     let name = &key.name;
-    if key.representation == KeyRepresentation::DeviceSetOwned {
-        let args = key.columns.iter().map(|&i| &atom.args[i]);
-        return syn::parse_quote!(
-            if !::cq_gpu_runtime::datalog::contains(&#name, &(#(#args,)*))
-        );
-    }
     if key.columns.is_empty() {
         syn::parse_quote!(!#name(_))
     } else {
         let args = key.columns.iter().map(|&i| &atom.args[i]);
         syn::parse_quote!(!#name(#(#args),*))
-    }
-}
-
-fn key_representation(source: &storage::Program) -> syn::Result<KeyRepresentation> {
-    match Some(symbol_name(&source.policy.negation_keys)).as_deref() {
-        Some("borrowed") => Ok(KeyRepresentation::Borrowed),
-        Some("device_set_owned") => Ok(KeyRepresentation::DeviceSetOwned),
-        _ => Err(syn::Error::new_spanned(
-            source,
-            "fork requires a checked negation key representation",
-        )),
     }
 }
 
@@ -211,9 +183,7 @@ fn hole_inputs<'a>(
         }
     }
     for key in keys {
-        if key.representation == KeyRepresentation::Borrowed
-            && names.contains(&symbol_name(&key.name))
-        {
+        if names.contains(&symbol_name(&key.name)) {
             let mut declaration = context.relations[key.relation].declaration.clone();
             declaration.name = key.name.clone();
             declaration.columns = if key.columns.is_empty() {
@@ -238,14 +208,8 @@ fn construct(
     pipeline: cq_stage::Pipeline,
     terminals: TerminalRegistry,
     timing: Ident,
-    ratio: u32,
     lower: Option<usize>,
 ) -> syn::Result<Program> {
-    ensure(
-        ratio >= 2,
-        source,
-        "leveled device index ratio must be at least two",
-    )?;
     let analysis = storage::contract::check(source)?;
     terminals.check()?;
     let interface = terminals.interface(&pipeline)?;
@@ -284,13 +248,8 @@ fn construct(
         "fork derives lower facts; do not author a separate lower fact packet",
     )?;
     let variants = &source.incremental.variants;
-    let representation = key_representation(source)?;
     let mut fresh = Fresh::new(source);
     let mut context = RoundContext {
-        representation,
-        layout_realization: representation.layouts(),
-        changing_layout_realization: representation.changing_layouts(),
-        leveled_ratio: ratio,
         relations: source
             .incremental
             .strata
@@ -372,8 +331,6 @@ fn construct(
         let mut stratum = Stratum {
             members: members.clone(),
             keys: Vec::new(),
-            frozen_layouts: Vec::new(),
-            leveled_layouts: Vec::new(),
             seeds: Vec::new(),
             steps: Vec::new(),
             phases: vec![
@@ -474,7 +431,6 @@ fn construct(
                         filters: selections,
                         equalities: repeated,
                         name: fresh.id("keys"),
-                        representation,
                         provider: syn::parse_quote!(::std::collections::HashSet<_, ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>),
                         hole: holes.len(),
                     };
@@ -487,24 +443,14 @@ fn construct(
                         .collect();
                     let (selected, output_columns): (Vec<_>, Vec<_>) = if key.columns.is_empty() {
                         let column = &variables[0];
-                        match representation {
-                            KeyRepresentation::Borrowed => {
-                                (vec![quote!(())], vec![quote!(#column: ())])
-                            }
-                            KeyRepresentation::DeviceSetOwned => {
-                                (vec![quote!(0u8)], vec![quote!(#column: u8)])
-                            }
-                        }
+                        (vec![quote!(())], vec![quote!(#column: ())])
                     } else {
                         (
                             key.columns
                                 .iter()
                                 .map(|&i| {
                                     let variable = &variables[i];
-                                    match representation {
-                                        KeyRepresentation::Borrowed => quote!(#variable),
-                                        KeyRepresentation::DeviceSetOwned => quote!(*#variable),
-                                    }
+                                    quote!(#variable)
                                 })
                                 .collect(),
                             key.columns
@@ -515,10 +461,7 @@ fn construct(
                                         [relation]
                                         .columns[i]
                                         .ty;
-                                    match representation {
-                                        KeyRepresentation::Borrowed => quote!(#variable: &#ty),
-                                        KeyRepresentation::DeviceSetOwned => quote!(#variable: #ty),
-                                    }
+                                    quote!(#variable: &#ty)
                                 })
                                 .collect(),
                         )
@@ -587,23 +530,6 @@ fn construct(
                 stratum.steps.push(rule);
             } else {
                 stratum.seeds.push(rule);
-            }
-        }
-        if representation == KeyRepresentation::DeviceSetOwned {
-            for (index, layout) in context.layouts.iter().enumerate() {
-                if layout.key != 0
-                    && stratum.seeds.iter().chain(&stratum.steps).any(|rule| {
-                        holes[rule.hole].query.body.iter().any(|item| {
-                        matches!(item, BodyItem::Positive { atom } if atom.relation == layout.name)
-                    })
-                    })
-                {
-                    if members.contains(&layout.relation) {
-                        stratum.leveled_layouts.push(index);
-                    } else {
-                        stratum.frozen_layouts.push(index);
-                    }
-                }
             }
         }
         context.strata.push(stratum);

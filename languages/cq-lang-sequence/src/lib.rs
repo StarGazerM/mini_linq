@@ -2,8 +2,8 @@
 //!
 //! A program appends `sequence { name = term; ... }` and an optional
 //! `graded machine { name at level.path; ... }` to a complete Structures program.
-//! Optional `evidence { ... }` records untrusted estimates for checked planning,
-//! never premises for correctness; see [`Evidence`] and [`EvidenceFact`].
+//! Optional `evidence { ... }` records estimates and author-asserted key premises;
+//! see [`Evidence`] and [`EvidenceFact`] for their distinct correctness contracts.
 //! Terms are prefix forms: `rows`, `map`, `flatten`, `compact`, `tile`, `lookup`,
 //! `fold`, `group`, `canon`, `store`, `union` and `choose`, or references to earlier definitions.
 //! Constructor names are also valid references when followed by a term boundary.
@@ -322,13 +322,16 @@ pub struct Analysis {
     pub views: BTreeSet<String>,
     pub stores: BTreeMap<String, Len>,
     pub capabilities: BTreeMap<(String, Vec<String>), Capability>,
+    /// Providers evaluated directly by each named definition, excluding Ref
+    /// dependencies and support-equal Map reheadings.
+    pub provider_reads: BTreeMap<String, BTreeSet<String>>,
     pub levels: BTreeMap<String, Vec<String>>,
     pub dispatches: Vec<Dispatch>,
     pub resources: BTreeMap<String, ResourceUsage>,
     pub collectives: Vec<(String, Monoid, Vec<String>)>,
     pub output: Option<(String, OutputProtocol)>,
     pub obligations: Vec<Obligation>,
-    /// Untrusted planning advice, separate from checked facts and obligations.
+    /// Planning estimates and explicit author-asserted key premises.
     pub evidence: Evidence,
 }
 

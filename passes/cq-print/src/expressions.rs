@@ -5,7 +5,6 @@ use cq_lang_structures::syntax::{
     EqualityValue,
     algebra::Theta,
     constraint::{Comparison, Constraint, Term},
-    symbol_name,
 };
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -13,45 +12,14 @@ use std::collections::BTreeMap;
 use syn::Ident;
 
 pub fn term_reference(term: &Term, parameters: &BTreeMap<String, Ident>) -> TokenStream {
-    match term {
-        Term::Variable(v) => quote!(#v),
-        Term::Parameter(v) => match parameters.get(&symbol_name(v)) {
-            Some(p) => quote!(#p),
-            None => quote!(&#v),
-        },
-        Term::Literal(v) => quote!(&(#v)),
-    }
+    term.reference(parameters)
 }
 
 pub fn relational_constraint(c: &Constraint, parameters: &BTreeMap<String, Ident>) -> TokenStream {
     let compare = |left: &Term, comparison: Comparison, right: &Term| {
         let l = term_reference(left, parameters);
         let r = term_reference(right, parameters);
-        let string = |t: &Term| matches!(t, Term::Literal(l) if matches!(l.as_ref(), syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(_), .. })));
-        let string_literal = string(left) || string(right);
-        let equality = if string_literal {
-            quote!(::cq_storage::relational_string_eq(#l, #r))
-        } else {
-            quote!(::cq_storage::relational_eq(#l, #r))
-        };
-        match comparison {
-            Comparison::Eq(_) => equality,
-            Comparison::Ne(_) => quote!(!#equality),
-            _ => {
-                let ordering = if string_literal {
-                    quote!(::cq_storage::relational_str_cmp(#l, #r))
-                } else {
-                    quote!(::cq_storage::relational_cmp(#l, #r))
-                };
-                match comparison {
-                    Comparison::Lt(_) => quote!(#ordering.is_lt()),
-                    Comparison::Le(_) => quote!(!#ordering.is_gt()),
-                    Comparison::Gt(_) => quote!(#ordering.is_gt()),
-                    Comparison::Ge(_) => quote!(!#ordering.is_lt()),
-                    _ => unreachable!(),
-                }
-            }
-        }
+        comparison.expression(l, r, left.string_literal() || right.string_literal())
     };
     match c {
         Constraint::Compare {

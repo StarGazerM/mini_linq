@@ -13,6 +13,108 @@ fn error(message: impl std::fmt::Display) -> syn::Error {
     syn::Error::new(Span::call_site(), message)
 }
 
+// NVPTX64 kernel ABI layouts. Aggregate entries mirror the repr(C) device views.
+fn parameter_layout(ty: &syn::Type) -> syn::Result<(usize, usize)> {
+    if matches!(ty, syn::Type::Ptr(_)) {
+        return Ok((8, 8));
+    }
+    if let syn::Type::Path(path) = ty {
+        match path
+            .path
+            .segments
+            .last()
+            .unwrap()
+            .ident
+            .to_string()
+            .as_str()
+        {
+            "bool" | "u8" | "i8" => return Ok((1, 1)),
+            "u16" | "i16" => return Ok((2, 2)),
+            "u32" | "i32" | "f32" => return Ok((4, 4)),
+            "usize" | "isize" | "u64" | "i64" | "f64" => return Ok((8, 8)),
+            "ColumnView" => return Ok((40, 8)),
+            "RangeView" => return Ok((64, 8)),
+            _ => {}
+        }
+    }
+    Err(error(format!(
+        "BE-Resource: unknown kernel parameter ABI: {}",
+        quote!(#ty)
+    )))
+}
+
+fn prune_kernel_parameters(
+    kernels: &mut [TokenStream],
+    launches: &mut [TokenStream],
+) -> syn::Result<()> {
+    use syn::visit::Visit;
+    use syn::visit_mut::VisitMut;
+    struct Uses(BTreeSet<String>);
+    impl<'ast> Visit<'ast> for Uses {
+        fn visit_expr_path(&mut self, path: &'ast syn::ExprPath) {
+            if let Some(name) = path.path.get_ident() {
+                self.0.insert(name.to_string());
+            }
+            syn::visit::visit_expr_path(self, path);
+        }
+    }
+    let mut live = BTreeMap::new();
+    for tokens in kernels {
+        let mut kernel: syn::ItemFn = syn::parse2(tokens.clone())?;
+        let mut uses = Uses(BTreeSet::new());
+        uses.visit_block(&kernel.block);
+        let mut keep = Vec::new();
+        let mut bytes = 0usize;
+        let mut inputs = syn::punctuated::Punctuated::new();
+        for input in kernel.sig.inputs {
+            let syn::FnArg::Typed(argument) = &input else {
+                return Err(error("generated kernel has a receiver"));
+            };
+            let syn::Pat::Ident(name) = &*argument.pat else {
+                return Err(error("generated kernel parameter is not an identifier"));
+            };
+            let used = uses.0.contains(&name.ident.to_string());
+            keep.push(used);
+            if used {
+                let (size, alignment) = parameter_layout(&argument.ty)?;
+                bytes = bytes.next_multiple_of(alignment) + size;
+                inputs.push(input);
+            }
+        }
+        if bytes >= 4096 {
+            return Err(error(format!(
+                "BE-Resource: kernel {} requires {bytes} parameter bytes ({} live parameters); parameter area must be below 4096 bytes",
+                kernel.sig.ident,
+                inputs.len()
+            )));
+        }
+        live.insert(kernel.sig.ident.to_string(), keep);
+        kernel.sig.inputs = inputs;
+        *tokens = quote!(#kernel);
+    }
+    struct Launches<'a>(&'a BTreeMap<String, Vec<bool>>);
+    impl VisitMut for Launches<'_> {
+        fn visit_expr_method_call_mut(&mut self, call: &mut syn::ExprMethodCall) {
+            syn::visit_mut::visit_expr_method_call_mut(self, call);
+            if let Some(keep) = self.0.get(&call.method.to_string()) {
+                // The loaded-module ABI prepends stream and prepared launch.
+                call.args = std::mem::take(&mut call.args)
+                    .into_iter()
+                    .enumerate()
+                    .filter_map(|(index, arg)| (index < 2 || keep[index - 2]).then_some(arg))
+                    .collect();
+            }
+        }
+    }
+    for tokens in launches {
+        let mut block: syn::Block = syn::parse2(quote!({#tokens}))?;
+        Launches(&live).visit_block_mut(&mut block);
+        let statements = block.stmts;
+        *tokens = quote!(#(#statements)*);
+    }
+    Ok(())
+}
+
 #[derive(Clone)]
 enum Operation {
     Map(String, String),
@@ -695,14 +797,23 @@ impl Kernel<'_, '_> {
         };
         match operation {
             Operation::Map(name, input) => {
-                let map = row.rewrite(self.compiler.rows.map(
-                    name,
-                    input,
-                    quote!(__row),
-                    quote!(__live),
-                )?)?;
-                let rest = self.scalar_operations(rest, row)?;
-                Ok(quote!(#map #rest))
+                let map = self
+                    .compiler
+                    .rows
+                    .map(name, input, quote!(__row), quote!(__live))?;
+                // A child may read parent-owned shared codes, but its computed
+                // bindings must be lane-local: siblings can share one owner.
+                let mut local = row.clone();
+                let mut declarations = TokenStream::new();
+                for slot in DeviceRow::writes(map.clone())? {
+                    let id = format_ident!("__map_code_{slot}");
+                    let ty = self.code_type(slot);
+                    declarations.extend(quote!(let mut #id: #ty = 0;));
+                    local.0.insert(slot, quote!(#id));
+                }
+                let map = local.rewrite(map)?;
+                let rest = self.scalar_operations(rest, &local)?;
+                Ok(quote! { { #declarations #map #rest } })
             }
             Operation::Lookup {
                 provider,
@@ -941,22 +1052,35 @@ impl Kernel<'_, '_> {
     fn output_write(&self) -> syn::Result<TokenStream> {
         let width = self.compiler.rows.width;
         let write = if let Some(columns) = &self.packed_columns {
-            let parts=columns.iter().enumerate().map(|(i,column)| {
-                let slot=self.compiler.slot(column)?;
-                let base=format_ident!("__cq_pack_base_{i}");
-                let shift=format_ident!("__cq_pack_shift_{i}");
-                if self.compiler.rows.dense.contains(&slot) && !self.scalar_output {
-                    Ok(quote!((if #shift==128 {0u128} else {((__row[#slot] as u32).wrapping_sub(#base as u32) as u128) << #shift})))
-                } else {
-                    Ok(quote!((if #shift==128 {0u128} else {(__row[#slot].wrapping_sub(#base) as u64 as u128) << #shift})))
-                }
-            }).collect::<syn::Result<Vec<_>>>()?;
+            let parts = columns
+                .iter()
+                .enumerate()
+                .map(|(i, column)| {
+                    let slot = self.compiler.slot(column)?;
+                    let base = format_ident!("__cq_pack_base_{i}");
+                    let shift = format_ident!("__cq_pack_shift_{i}");
+                    let value = if self.compiler.rows.dense.contains(&slot) && !self.scalar_output {
+                        quote!((__row[#slot] as u32).wrapping_sub(#base as u32) as u64)
+                    } else {
+                        quote!(__row[#slot].wrapping_sub(#base) as u64)
+                    };
+                    Ok(quote! {
+                        let value = #value;
+                        let lane = (#shift / 64) as usize;
+                        let local = #shift % 64;
+                        if lane < __cq_key_lanes {
+                            *__packed.add(lane) |= value << local;
+                            if local != 0 && lane + 1 < __cq_key_lanes {
+                                *__packed.add(lane + 1) |= value >> (64 - local);
+                            }
+                        }
+                    })
+                })
+                .collect::<syn::Result<Vec<_>>>()?;
             quote! {
-                let __key = 0u128 #(| #parts)*;
-                *__output_keys.add(__destination as usize * __cq_key_lanes) = __key as u64;
-                if __cq_key_lanes == 2 {
-                    *__output_keys.add(__destination as usize * 2 + 1) = (__key >> 64) as u64;
-                }
+                let __packed = __output_keys.add(__destination as usize * __cq_key_lanes);
+                for lane in 0..__cq_key_lanes { *__packed.add(lane) = 0; }
+                #(#parts)*
             }
         } else {
             let range = if self.virtual_range.is_some() {
@@ -1020,6 +1144,46 @@ fn grouped_boundary<'a>(
         Term::Ref(name) => grouped_boundary(definitions.get(&symbol_name(name))?, definitions),
         _ => None,
     }
+}
+
+pub(crate) fn packed_offset(
+    keys: TokenStream,
+    row: TokenStream,
+    lanes: TokenStream,
+    shift: TokenStream,
+    bits: TokenStream,
+) -> TokenStream {
+    quote! {{
+        if #bits == 0 { 0u64 } else {
+            let index = (#row) * (#lanes) + (#shift / 64) as usize;
+            let local = #shift % 64;
+            let mut value = unsafe { *(#keys).add(index) } >> local;
+            if local + #bits > 64 {
+                value |= unsafe { *(#keys).add(index + 1) } << (64 - local);
+            }
+            value & if #bits == 64 { u64::MAX } else { (1u64 << #bits) - 1 }
+        }
+    }}
+}
+
+fn canon_type<'a>(analysis: &'a Analysis, publication: &str) -> syn::Result<&'a syn::Type> {
+    analysis
+        .obligations
+        .iter()
+        .find_map(|obligation| match obligation {
+            cq_lang_sequence::Obligation::Canon {
+                result,
+                ty: Some(ty),
+            } if result == publication => Some(ty),
+            _ => None,
+        })
+        .or_else(|| {
+            analysis
+                .results
+                .get(publication)
+                .and_then(|result| analysis.structures.dedup.get(result))
+        })
+        .ok_or_else(|| error("GPU canon publication requires its recorded provider type"))
 }
 
 /// Translate only checked scheduling facts; no planner is consulted here.
@@ -1170,6 +1334,19 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
     );
     for definition in &program.sequence.definitions {
         let publication = symbol_name(&definition.name);
+        // Lowering can give the terminal group its own store, followed by a
+        // final store alias. Both name the same grouped publication, which is
+        // realized by the collective below, not a CPU group/download/reupload.
+        // Only transparent wrappers around that terminal group are deferred;
+        // ordinary host publications still follow their recorded boundaries.
+        if publication != final_name
+            && final_group.is_some_and(|(final_group, _)| {
+                grouped_boundary(&definition.term, &compiler.definitions)
+                    .is_some_and(|(group, _)| group == final_group)
+            })
+        {
+            continue;
+        }
         if publication == final_name
             && let Some((name, input)) = grouped_boundary(&definition.term, &compiler.definitions)
         {
@@ -1179,17 +1356,6 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                     "GPU group requires one canonical valuation publication",
                 ));
             };
-            if !chain.operations.is_empty() {
-                return Err(error(
-                    "GPU group input must be separately published by checked decomposition",
-                ));
-            }
-            let prior = chain
-                .stored
-                .ok_or_else(|| error("GPU group input is not published"))?;
-            let columns = compiler.stored[prior].packed.as_ref().ok_or_else(|| {
-                error("GPU group requires its recorded canonical valuation provider")
-            })?;
             let result = symbol_name(name);
             let physical = program
                 .structures
@@ -1202,6 +1368,114 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
             let Operator::Group(group) = &physical.operator else {
                 return Err(error("GPU group provenance is not a Physical group"));
             };
+            let canonical = chain
+                .stored
+                .and_then(|index| (chain.operations.is_empty()).then_some(index))
+                .and_then(|index| {
+                    compiler.stored[index]
+                        .packed
+                        .as_ref()
+                        .map(|columns| (index, columns))
+                });
+            let direct = if canonical.is_none() {
+                let mut load = TokenStream::new();
+                let length = if let Some(index) = chain.stored {
+                    let stored = &compiler.stored[index];
+                    if stored.packed.is_some() || stored.range.is_some() {
+                        return Err(error(
+                            "GPU group row chain needs a flat resident publication",
+                        ));
+                    }
+                    let rows = format_ident!("__cq_store_rows_{index}");
+                    let width = compiler.rows.width;
+                    for column in &analysis.structures.physical.headings[&stored.result] {
+                        let slot = compiler.slot(column)?;
+                        load.extend(quote!(__row[#slot] = *#rows.add(position * #width + #slot);));
+                    }
+                    let length = format_ident!("__cq_store_length_{index}");
+                    quote!(#length)
+                } else {
+                    load.extend(compiler.rows.source(
+                        &chain.source,
+                        quote!(position),
+                        quote!(__row),
+                    )?);
+                    compiler.rows.source_len(&chain.source)?
+                };
+                let mut used = BTreeSet::new();
+                for key in &group.keys {
+                    used.insert(compiler.slot(&symbol_name(key))?);
+                }
+                for aggregate in &group.aggregates {
+                    if let Some(expression) = &aggregate.expression
+                        && let Some(name) = cq_lang_structures::syntax::rust::variable(expression)
+                    {
+                        used.insert(compiler.slot(&symbol_name(name))?);
+                    }
+                }
+                for operation in &chain.operations {
+                    match operation {
+                        Operation::Map(name, input) => {
+                            let code =
+                                compiler
+                                    .rows
+                                    .map(name, input, quote!(__row), quote!(__live))?;
+                            used.extend(DeviceRow::uses(code.clone())?);
+                            load.extend(code);
+                        }
+                        Operation::Store | Operation::Flatten => {}
+                        _ => {
+                            return Err(error(
+                                "GPU group row chain requires a checked flat publication before expansion",
+                            ));
+                        }
+                    }
+                }
+                let mut row = DeviceRow::default();
+                let mut declarations = TokenStream::new();
+                for slot in used {
+                    let id = format_ident!("__group_code_{slot}");
+                    declarations.extend(quote!(let mut #id = 0i64;));
+                    row.0.insert(slot, quote!(#id));
+                }
+                let load = row.rewrite(load)?;
+                let mut parameters: Vec<_> = compiler
+                    .rows
+                    .parameters
+                    .iter()
+                    .map(|(name, ty, _)| quote!(#name: #ty))
+                    .collect();
+                let mut arguments: Vec<_> = compiler
+                    .rows
+                    .parameters
+                    .iter()
+                    .map(|(_, _, value)| value.clone())
+                    .collect();
+                if let Some(index) = chain.stored {
+                    let rows = format_ident!("__cq_store_rows_{index}");
+                    parameters.push(quote!(#rows: *const i64));
+                    arguments.push(quote!(#rows.ptr()));
+                }
+                Some(crate::reduce::GroupInput {
+                    parameters,
+                    arguments,
+                    length,
+                    load: quote!(#declarations #load),
+                    columns: compiler
+                        .rows
+                        .columns
+                        .iter()
+                        .filter_map(|(name, slot)| {
+                            row.0.get(slot).map(|value| (name.clone(), value.clone()))
+                        })
+                        .collect(),
+                })
+            } else {
+                None
+            };
+            let (prior, columns) = canonical
+                .map(|(index, columns)| (index, columns.as_slice()))
+                .unwrap_or((0, &[]));
             let kernel = format_ident!("__cq_group_arguments_{module_name}");
             let (code, publication) = crate::reduce::group(
                 group,
@@ -1210,6 +1484,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                 &analysis.structures.physical.rows[&result].types,
                 prior,
                 &kernel,
+                direct,
             )?;
             kernels.push(code);
             output = Some(publication);
@@ -1285,8 +1560,15 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                                     quote!(#fields[#field].shift),
                                     quote!(#fields[#field].bits),
                                 ]);
+                                let offset = packed_offset(
+                                    quote!(keys),
+                                    quote!(position),
+                                    quote!(lanes),
+                                    quote!(#shift),
+                                    quote!(#bits),
+                                );
                                 writes.push(quote! {
-                                    let value = if #bits == 0 {0} else {((key >> #shift) as u64) & if #bits == 64 {u64::MAX} else {(1u64 << #bits)-1}};
+                                    let value = #offset;
                                     *rows.add(position * #width + #slot) = #base.wrapping_add(value as i64);
                                 });
                             }
@@ -1298,8 +1580,6 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                                     unsafe {
                                         let mut position = ::cuda_device::thread::index_1d().get() as usize;
                                         while position < length {
-                                            let key = *keys.add(position * lanes) as u128
-                                                | if lanes == 2 { (*keys.add(position * 2 + 1) as u128) << 64 } else { 0 };
                                             #(#writes)*
                                             position += ::cuda_device::thread::gridDim_x() as usize * 256;
                                         }
@@ -1346,6 +1626,9 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                     analysis.structures.physical.headings[result].clone()
                 };
                 if canonical || final_output {
+                    let provider = canonical
+                        .then(|| canon_type(analysis, &publication))
+                        .transpose()?;
                     let mut fields = Vec::new();
                     let mut params = Vec::new();
                     let mut args = Vec::new();
@@ -1366,7 +1649,17 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                         });
                         params.extend([quote!(#base:i64), quote!(#shift:u32)]);
                         args.extend([quote!(#base), quote!(#shift)]);
-                        parts.push(quote!(if #shift == 128 {0} else {((*rows.add(position * #width + #slot)).wrapping_sub(#base) as u64 as u128) << #shift}));
+                        parts.push(quote! {
+                            let value = (*rows.add(position * #width + #slot)).wrapping_sub(#base) as u64;
+                            let lane = (#shift / 64) as usize;
+                            let local = #shift % 64;
+                            if lane < lanes {
+                                *packed.add(lane) |= value << local;
+                                if local != 0 && lane + 1 < lanes {
+                                    *packed.add(lane + 1) |= value >> (64 - local);
+                                }
+                            }
+                        });
                     }
                     let kernel = format_ident!("__cq_union_pack_{index}_{module_name}");
                     let prepare = format_ident!("prepare_{kernel}");
@@ -1379,9 +1672,9 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                             unsafe {
                                 let mut position = ::cuda_device::thread::index_1d().get() as usize;
                                 while position < length {
-                                    let key = 0u128 #(| (#parts))*;
-                                    *keys.add(position * lanes) = key as u64;
-                                    if lanes == 2 { *keys.add(position * 2 + 1) = (key >> 64) as u64; }
+                                    let packed = keys.add(position * lanes);
+                                    for lane in 0..lanes { *packed.add(lane) = 0; }
+                                    #(#parts)*
                                     position += ::cuda_device::thread::gridDim_x() as usize * 256;
                                 }
                             }
@@ -1391,7 +1684,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                         let mut __cq_key_bits = 0u32;
                         let mut __cq_fields = ::std::vec::Vec::new();
                         #(#fields)*
-                        let __cq_key_lanes = ::cq_gpu_sequence_runtime::canon::PackedCanon::key_lanes(__cq_key_bits)?;
+                        let __cq_key_lanes = ::cq_gpu_sequence_runtime::canon::WideCanon::key_lanes(__cq_key_bits)?;
                         let #keys = unsafe { ::cq_gpu_runtime::Buffer::<u64>::uninitialized(__cq_pool.clone(),#store_length * __cq_key_lanes)? };
                         if #store_length != 0 {
                             let prepared = __cq_module.#prepare(::cuda_core::LaunchConfig1D::new(#store_length.div_ceil(256) as u32,256,0))?;
@@ -1401,7 +1694,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                     let owner = format_ident!("__cq_canonical_{index}");
                     let saved_fields = format_ident!("__cq_fields_{index}");
                     let canonicalize = quote! {
-                        let mut canon = ::cq_gpu_sequence_runtime::canon::PackedCanon::new(&__cq_pool,#store_length)?;
+                        let mut canon = <#provider>::new(&__cq_pool,#store_length)?;
                         let #owner = unsafe { canon.canonicalize(&#keys,#store_length,__cq_key_bits)? };
                     };
                     if final_output {
@@ -1489,12 +1782,16 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                                     .ok_or_else(|| {
                                         error("host consumer column absent from packed publication")
                                     })?;
+                                let offset = packed_offset(
+                                    quote!(__cq_downloaded_codes.as_ptr()),
+                                    quote!(__position),
+                                    quote!(__lanes),
+                                    quote!(field.shift),
+                                    quote!(field.bits),
+                                );
                                 quote! {{
                                     let field = #fields[#field];
-                                    let offset = if field.bits == 0 { 0 } else {
-                                        ((__key >> field.shift) as u64)
-                                            & if field.bits == 64 { u64::MAX } else { (1u64 << field.bits) - 1 }
-                                    };
+                                    let offset = #offset;
                                     field.base.wrapping_add(offset as i64)
                                 }}
                             } else {
@@ -1509,8 +1806,6 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                                 quote!(#owner.keys().to_host()?),
                                 quote! {
                                     let __lanes = #owner.lanes();
-                                    let __key = __cq_downloaded_codes[__position * __lanes] as u128
-                                        | if __lanes == 2 { ( __cq_downloaded_codes[__position * 2 + 1] as u128) << 64 } else { 0 };
                                 },
                             )
                         } else {
@@ -1576,6 +1871,9 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                 .iter()
                 .any(|op| matches!(op, Operation::Canon))
         });
+        let provider = canonical
+            .then(|| canon_type(analysis, &publication))
+            .transpose()?;
         if !canonical
             && chains.iter().any(|chain| {
                 chain
@@ -1876,15 +2174,19 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                         let base = format_ident!("__cq_stored_base_{prior}_{field}");
                         let shift = format_ident!("__cq_stored_shift_{prior}_{field}");
                         let bits = format_ident!("__cq_stored_bits_{prior}_{field}");
+                        let offset = packed_offset(
+                            quote!(#keys),
+                            quote!(__position as usize),
+                            quote!(#lanes),
+                            quote!(#shift),
+                            quote!(#bits),
+                        );
                         unpack.extend(quote! {
-                            let __mask=if #bits==64 {u64::MAX} else {(1u64<<#bits)-1};
-                            let __offset=if #bits==0 {0} else {((__key>>#shift) as u64)&__mask};
+                            let __offset = #offset;
                             __row[#slot]=#base.wrapping_add(__offset as i64);
                         });
                     }
                     quote! {
-                        let __key=*#keys.add(__position as usize * #lanes) as u128
-                            | if #lanes == 2 { (*#keys.add(__position as usize * 2 + 1) as u128) << 64 } else { 0 };
                         #unpack
                     }
                 } else if let Some(provider) = &compiler.stored[prior].range {
@@ -2045,7 +2347,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
             let mut __cq_key_bits=0u32;
             let mut __cq_fields=::std::vec::Vec::<::cq_gpu_sequence_runtime::canon::PackedField>::new();
             #(#local_packing)*
-            let __cq_key_lanes=::cq_gpu_sequence_runtime::canon::PackedCanon::key_lanes(__cq_key_bits)?;
+            let __cq_key_lanes=::cq_gpu_sequence_runtime::canon::WideCanon::key_lanes(__cq_key_bits)?;
             #(#host_domains)*
             let __cq_prepared=__cq_module.#prepare_name(::cuda_core::LaunchConfig1D::new(#grid,256,#shared_u32))?;
             let mut __cq_capacity=#initial;
@@ -2074,7 +2376,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
         if final_output {
             output = Some(if canonical {
                 quote! {
-                    let mut __cq_canon=::cq_gpu_sequence_runtime::canon::PackedCanon::new(&__cq_pool,#store_length)?;
+                    let mut __cq_canon=<#provider>::new(&__cq_pool,#store_length)?;
                     let __cq_keys=unsafe {__cq_canon.canonicalize(&#output_keys,#store_length,__cq_key_bits)?};
                     let __cq_result=__cq_output_adapter.borrow_mut().unpack_columns(__cq_keys,&__cq_fields,__cq_dictionary,__cq_statuses)?;
                 }
@@ -2089,7 +2391,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
             let canonical_owner = format_ident!("__cq_canonical_{index}");
             let fields = format_ident!("__cq_fields_{index}");
             launches.push(quote! {
-                let mut __cq_canon=::cq_gpu_sequence_runtime::canon::PackedCanon::new(&__cq_pool,#store_length)?;
+                let mut __cq_canon=<#provider>::new(&__cq_pool,#store_length)?;
                 let #canonical_owner=unsafe {__cq_canon.canonicalize(&#output_keys,#store_length,__cq_key_bits)?};
                 let #store_length=#canonical_owner.logical_count()?;
                 let #fields=__cq_fields;
@@ -2136,6 +2438,9 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
             .definitions
             .get(final_name)
             .is_some_and(|term| canonical_publication(term, &compiler.definitions));
+        let provider = canonical
+            .then(|| canon_type(analysis, final_name))
+            .transpose()?;
         // A checked host publication may be the complete result. Its transfer
         // to the device is a storage adapter, not an additional row dispatch.
         let mut name = final_name;
@@ -2220,7 +2525,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                 let mut __cq_key_bits = 0u32;
                 let mut __cq_fields = ::std::vec::Vec::new();
                 #(#packing)*
-                let __cq_key_lanes = ::cq_gpu_sequence_runtime::canon::PackedCanon::key_lanes(__cq_key_bits)?;
+                let __cq_key_lanes = ::cq_gpu_sequence_runtime::canon::WideCanon::key_lanes(__cq_key_bits)?;
                 let __cq_host_output_keys = unsafe {
                     ::cq_gpu_runtime::Buffer::<u64>::uninitialized(__cq_pool.clone(),
                         __cq_host_output_length.checked_mul(__cq_key_lanes).ok_or("Sequence output allocation overflow")?)?
@@ -2235,7 +2540,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
             });
             output = Some(if canonical {
                 quote! {
-                    let mut canon = ::cq_gpu_sequence_runtime::canon::PackedCanon::new(
+                    let mut canon = <#provider>::new(
                         &__cq_pool,__cq_host_output_length)?;
                     let keys = unsafe { canon.canonicalize(
                         &__cq_host_output_keys,__cq_host_output_length,__cq_key_bits)? };
@@ -2250,8 +2555,11 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
             });
         }
     }
-    let output =
-        output.ok_or_else(|| error("checked GPU output has no recorded publication adapter"))?;
+    launches.push(
+        output.ok_or_else(|| error("checked GPU output has no recorded publication adapter"))?,
+    );
+    prune_kernel_parameters(&mut kernels, &mut launches)?;
+    let output = launches.pop().expect("output launch");
     let setup = &compiler.rows.setup;
     let build = &compiler.rows.build;
     syn::parse2(quote!({
@@ -2306,6 +2614,42 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
 #[cfg(test)]
 mod tests {
     use super::*;
+    use quote::ToTokens;
+
+    #[test]
+    fn rejects_a_legitimately_oversized_live_signature() {
+        let names: Vec<_> = (0..513).map(|index| format_ident!("p{index}")).collect();
+        let mut kernels = vec![quote! {
+            fn oversized(#(#names: *const u64),*) {
+                #(let _ = #names;)*
+            }
+        }];
+        let message = prune_kernel_parameters(&mut kernels, &mut [])
+            .unwrap_err()
+            .to_string();
+        assert!(message.contains("BE-Resource"));
+        assert!(message.contains("4104 parameter bytes (513 live parameters)"));
+        assert!(message.contains("oversized"));
+    }
+
+    #[test]
+    fn pruning_preserves_signature_and_launch_order() {
+        let mut kernels = vec![quote! {
+            fn kernel(unused: u32, a: u32, b: *const i64) { let _ = (b, a); }
+        }];
+        let mut launches =
+            vec![quote! { module.kernel(stream, prepared, unused(), first(), second())?; }];
+        prune_kernel_parameters(&mut kernels, &mut launches).unwrap();
+        let function: syn::ItemFn = syn::parse2(kernels[0].clone()).unwrap();
+        assert_eq!(
+            function.sig.inputs.to_token_stream().to_string(),
+            quote!(a: u32, b: *const i64).to_string()
+        );
+        assert_eq!(
+            launches[0].to_string(),
+            quote!(module.kernel(stream, prepared, first(), second())?;).to_string()
+        );
+    }
 
     fn uploaded_host_program(canonical: bool) -> Program {
         let canon = canonical.then(|| quote!(canon));
@@ -2338,6 +2682,90 @@ mod tests {
                 result at host.device;
             }
         }
+    }
+
+    #[test]
+    fn terminal_group_store_alias_emits_one_collective_without_host_reupload() {
+        for keyed in [false, true] {
+            let keys = keyed.then(|| quote!(key));
+            let output_key = keyed.then(|| quote!(key,));
+            let program: Program = syn::parse2(quote! {
+                physical {
+                    relation R(id:i64,key:i32,value:i64) = (&data.r);
+                    r = pipe rename R@0 {id -> id,key -> key,value -> value};
+                    valuation = pipe canon project r keep {id,key,value};
+                    grouped = pipe group valuation by [#keys] {
+                        total:i64=sum(value); rows:usize=count();
+                    };
+                    return grouped as answer(#output_key total,rows);
+                }
+                structures {
+                    r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(i64,i32,i64)> [];
+                    valuation canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                }
+                sequence {
+                    input = store rows r;
+                    feed = canon map valuation flatten tile 256 input;
+                    valuations = store feed;
+                    groups = store group grouped valuations;
+                    result = store groups;
+                    output count;
+                }
+                graded gpu {
+                    input at host;
+                    feed at host.device.block;
+                    valuations at host;
+                    groups at host;
+                    result at host.device;
+                }
+            })
+            .unwrap();
+            let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
+            let generated = translate(&program, &analysis)
+                .unwrap()
+                .to_token_stream()
+                .to_string();
+            assert_eq!(generated.matches("group :: fold").count(), 1, "{generated}");
+            assert!(
+                !generated.contains("__cq_sequence_uploaded_grouped"),
+                "{generated}"
+            );
+            assert!(!generated.contains("__cq_downloaded_"), "{generated}");
+        }
+    }
+
+    #[test]
+    fn keyed_group_reads_resident_columns_without_valuation_publication() {
+        let program: Program = syn::parse_quote! {
+            physical {
+                relation R(id:i64,key:i32,value:i64) = (&data.r);
+                r = pipe rename R@0 {id -> id,key -> key,value -> value};
+                valuation = pipe canon project r keep {id,key,value};
+                grouped = pipe group valuation by [key] { total:i64=sum(value); rows:usize=count(); };
+                return grouped as answer(key,total,rows);
+            }
+            structures {
+                r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(i64,i32,i64)> [];
+                valuation canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            }
+            sequence {
+                input = rows r;
+                valuations = map valuation input;
+                groups = store group grouped valuations;
+                output count;
+            }
+            graded gpu { input at host; valuations at host; groups at host; }
+            evidence { R(id) key; }
+        };
+        let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
+        let generated = translate(&program, &analysis)
+            .unwrap()
+            .to_token_stream()
+            .to_string();
+        assert_eq!(generated.matches("group :: fold").count(), 1);
+        assert!(generated.contains("__cq_group_live"));
+        assert!(!generated.contains("packed_columns"));
+        assert!(!generated.contains("__cq_canonical_"));
     }
 
     #[test]

@@ -53,6 +53,18 @@ fn translate(program: &Program) -> String {
 }
 
 #[test]
+fn primitive_host_provider_uploads_columns_without_tuple_reencoding() {
+    let mut program = filtered_probe(quote!(value > 0));
+    program.structures.structures.entries[1] =
+        syn::parse_quote!(provider host scan = ::core::iter::Map<_, _> [];);
+    let generated = translate(&program);
+    assert!(generated.contains("upload_numeric_columns"));
+    assert!(generated.contains("__cq_host_column_0"));
+    assert!(generated.contains("__cq_host_column_1"));
+    assert!(!generated.contains("DeviceColumns :: from_rows"));
+}
+
+#[test]
 fn compact_and_project_preserve_probe_row_provenance() {
     // The same provider is consumed first for membership and then for payload.
     // Its aggregate Exact capability must not turn Compact into a payload read.
@@ -181,4 +193,72 @@ fn planned_retained_provider_filter_evaluates_row_columns_before_build() {
     assert!(generated.contains("ColumnDescriptor :: from_rows"));
     assert!(!generated.contains("RangeSelection"));
     assert!(!generated.contains("__row"));
+}
+
+fn segmented_binding(expression: proc_macro2::TokenStream) -> Program {
+    syn::parse_quote! {
+        physical {
+            relation Driver(a:i32) = (&data.driver);
+            relation Provider(a:i32, value:i32) = (&data.provider);
+            driver = pipe rename Driver@0 {a -> a};
+            provider = let rename Provider@1 {a -> a, value -> value};
+            joined = pipe probe first [a] driver, provider;
+            computed = pipe bind joined with doubled:i32 = (#expression);
+            result = pipe canon project computed keep {a, doubled};
+            return result as answer(a, doubled);
+        }
+        structures {
+            driver host scan = ::cq_gpu_runtime::DeviceColumns [];
+            provider host scan = ::cq_gpu_runtime::DeviceColumns [];
+            provider = ::cq_gpu_sequence_runtime::RangeProvider [a];
+            result canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+        }
+        sequence {
+            input = store rows driver;
+            index = store rows provider;
+            joined_rows = flatten lookup provider [a] flatten tile 256 input;
+            computed_rows = map computed joined_rows;
+            output_rows = store canon map result computed_rows;
+            output count;
+        }
+        graded gpu {
+            input at host;
+            index at host;
+            joined_rows at host.device.block;
+            computed_rows at host.device.block;
+            output_rows at host.device;
+        }
+    }
+}
+
+#[test]
+fn identity_bindings_preserve_source_codec_bounds_in_publications() {
+    let generated = translate(&segmented_binding(quote!(*value)));
+    assert!(
+        generated.contains("__cq_sequence_host_Provider . storage () . bounds [1usize]"),
+        "{generated}"
+    );
+    assert!(!generated.contains("< i32 > :: MIN"), "{generated}");
+    let arithmetic = translate(&segmented_binding(quote!(*value * 2)));
+    assert!(arithmetic.contains("< i32 > :: MIN"), "{arithmetic}");
+}
+
+#[test]
+fn segmented_arithmetic_bindings_are_lane_local() {
+    let generated = translate(&segmented_binding(quote!(*value * 2)));
+    assert!(generated.contains("__child_position"), "{generated}");
+    assert!(generated.contains("let mut __map_code_"), "{generated}");
+    assert!(
+        generated.contains("wrapping_mul (* value , 2)"),
+        "{generated}"
+    );
+    // Parent slots can be read by sibling lanes, never assigned by a map.
+    for statement in generated.split(';') {
+        if let Some((left, _)) = statement.split_once(" = ") {
+            assert!(
+                !(left.contains("* __parent_") && left.contains("__owner")),
+                "{statement}"
+            );
+        }
+    }
 }

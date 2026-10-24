@@ -98,7 +98,7 @@ pub struct Analysis {
     pub collectives: Vec<(String, Monoid, Vec<String>)>, // fold/scan Defs and their level
     pub output: Option<(String, OutputProtocol)>,       // the final store and how it is filled
     pub obligations: Vec<Obligation>,                  // provider/codec/canon traits and dispatch failure paths
-    pub evidence: Evidence,                           // nonsemantic data advice, never obligations
+    pub evidence: Evidence,                           // estimates and author-asserted key premises
 }
 pub mod contract { pub fn check(p: &Program) -> syn::Result<Analysis>; }   // BE-Alpha…BE-Choose structurally
 pub fn check_grading(p: &Program, m: &Machine) -> syn::Result<Analysis>;   // BE-Scope…BE-Abort against m
@@ -115,7 +115,7 @@ with `host`; an empty list admits no levels. Provider type patterns allow `_`
 type/const arguments and `'_` lifetimes while retaining the author's actual type.
 Native catalogs describe the storage providers, identity/dense codecs and set
 canonicalizers; the GPU catalog describes resident `RangeProvider`,
-`DenseDictionary`/identity codes and publication-level `PackedCanon`.
+`DenseDictionary`/identity codes and publication-level `PackedCanon`/`WideCanon`.
 
 Checks (each a named `// Formal rule BE-…:` marker):
 - BE-Alpha: every Term is well-formed over Structures (named results exist, `map` names a total segment, `lookup` key ⊆ heading, `compact` names a select).
@@ -378,9 +378,9 @@ Laws:
   grades, tiles and output protocols, and validates recorded obligations.
 - PL-Det: a pure function of `(t, M, K)`; candidates are enumerated in a
   fixed order and ties broken by that order.
-- PL-Cost: candidates are compared by the work/span cost of the formal
-  "Cost" paragraph, computed from the lengths in types; equal-work
-  candidates prefer smaller span, then fewer stores, then fewer dispatches.
+- PL-Cost: the work/span model compares legal segmented and plain schedules
+  at the first feasible machine geometry. Proven lower span wins, then fewer
+  stores and dispatches; equality or incomparability keeps the earlier candidate.
   Cost is an argument, never a meaning.
 
 The checked `cq_sequence_plan::cost(&Program, &Machine)` API exposes the same
@@ -394,9 +394,8 @@ An actual graded `Distribute` introduces symbolic
 `tile_width * items`. Unknown bucket sizes remain symbolic.
 Comparisons use bounds and coefficient dominance, not measured or guessed
 cardinalities; `.partial_cmp` can leave symbolic costs incomparable.
-The planner replaces its current candidate only for a provably smaller
-cost, retaining the first candidate on equality or incomparability;
-`.leq` does not treat incomparability as success.
+Symbolic comparisons retain the first candidate on equality or
+incomparability; `.leq` does not treat incomparability as success.
 
 Decision procedure (bounded enumeration, no search):
 1. Grading: `rows` at host; a store that feeds a `lookup`, a `canon`, or is
@@ -405,11 +404,11 @@ Decision procedure (bounded enumeration, no search):
    level.
 2. Tiling: the first fanout in each `flatten` chain below host is tiled at
    the distributing level's width (`LevelNode::width`, a machine property;
-   `None` for dynamic levels). Bounded candidates are plain or segmented
-   decomposition crossed with `items m` from `{1, M.items}`, in fixed
-   plain-first order. Further flattens receive `store_level` plus an inner
-   tile only when grading requires offsets (BE-Offsets) or PL-Cost proves
-   lower span; otherwise the fewer-stores tie-break favors plain tiling.
+   `None` for dynamic levels), initially with `M.items`. Try nested
+   inner-flatten segmentation before plain tiling at that geometry and compare
+   legal survivors by PL-Cost. Only if neither fits, halve items to one, then
+   halve the machine-derived strip width to one. Dispatch-splitting publications
+   at named flattens and choices are a last resort, preserving authored choices.
    Where separate primitives cannot express the change, the checked
    `segment(d, n, items m)` rewrite pairs an inner-flatten store with an
    outer tile (BE-Offsets and BE-Partition), shared by the library and macro.
@@ -461,14 +460,17 @@ were respectively 4.28% and 5.13% above their authored references, within the
 
 ## [11] Lookup & Expand planning, evidence advice, swappable planners
 
-**Release gate: automatic: opt-in pending box 11b.** The facade Sequence
-`plan` defaults to `decompose`, preserving authored/CQ order. Explicit
-`plan(lookup_first)` (or `plan_sequential(lookup_first)`) enables Lookup-first;
-the explicit planner API remains available for target-owned phase paths.
-The 13 `sequence_conformance_*` crates compare non-Lookup-first decomposition.
-GPU suite builds generate advised entries only unless
-`CQ_GPU_TPCH_AUTOMATIC=1` is set. Automatic H08/D27 code generation and H09/D72
-planning/translation failures remain box 11b blockers, not advised-mode fallbacks.
+**automatic = robust default (no CE); performance plans are authored through the advisory.**
+Unadvised CQ and Sequence entry use the deterministic two-phase Lookup/Expand
+rule: filtering Lookups first in the GYO/LargestRoot transfer order, Expands
+as late as their consumers permit, and segmentation-first resource recovery.
+Explicit ordering, selection, Physical/Structures, realization, staging and decomposition advice retain precedence;
+`plan(preserve_order)` also requests order-preserving decomposition explicitly.
+The 13 `sequence_conformance_*` crates exercise the automatic rule. GPU suite
+generation enables automatic entries by default (`CQ_GPU_TPCH_AUTOMATIC=0`
+opts out). Handoff gates are exact SF1/SF10 execution of all 14 supported entries,
+13-crate agreement, and scoped API/lint/formal checks. Timings are reported,
+not compared against an automatic-versus-advised performance gate.
 
 Sources: Birler, Kemper, Neumann, "Robust Join Processing with Diamond
 Hardened Joins" (VLDB 2024); Zhao et al., "Debunking the Myth of Join
@@ -484,17 +486,15 @@ the generic path keeps written atom order and expands first (61 ms vs
 10 ms at SF10). No new primitive is needed, only ordering rewrites.
 
 Rewrites (checked by `check_rewrite`; laws Motion, BE-Offsets, BE-Scope):
-1. `lookup_first`: join graph from the Physical program; LargestRoot
-   maximum spanning tree (RPT Lemma 3.2: a join tree is exactly a maximum
-   spanning tree under shared-attribute weights; root = largest relation)
-   with RPT+'s chain tie-break for the forward phase (filter a relation
-   before building on it). Forward phase: for each predicate-bearing
-   relation (a constant or guard; RPT+ §3.6) and each bridge relation, a
-   `store compact(lookup …)` along the chain with a provider over the
-   store. Expand phase: `flatten`s in tree order, each placed at its first
-   consumer (L&E: Expands as late as possible). A Lookup that closes a
-   cycle is placed after the Expand it needs (L&E §4.2); TPC-H Q5 is
-   cyclic (RPT §5.1.3), so H05 takes this path.
+1. `lookup_first`: derive the join graph and deterministic GYO/LargestRoot
+   transfer order, with the deepest-parent chain tie break. Predicate-bearing
+   relations and bridges filter before keyed provider builds. Scan-only roots
+   and their one-consumer forward filters stream; nonroot keyed forwards retain
+   rows. Schedule filtering Lookups before growth and place Expands at their
+   first required consumer. Cyclic keys become available only after their
+   required preceding Expand. The untested restricted-expansion-root experiment
+   is not part of the default; explicit order and early-Expand advice remain
+   available through the advisory.
 2. `choose` on the published count of a filtered store when no evidence
    says the filter is selective (RPT+ §5 dynamic pipeline; our BE-Choose).
 3. PL-Cost prefers Lookup-before-Expand (shrinking before growing) at
@@ -504,9 +504,9 @@ Evidence advice: estimation is not part of the query. An `evidence { … }`
 advice block carries facts about data (row counts, keys, foreign keys,
 selectivities, bounds, sortedness), hand-written or generated (build.rs
 from a manifest, DuckDB statistics, a sampling pass). Recorded in the
-Analysis beside obligations. Law PL-Evidence: evidence selects among
-checked candidates and never changes meaning; a wrong fact costs time, not
-answers. Consumers: Lookup order and early Expand placement (L&E §4
+Analysis beside obligations. Law PL-Evidence: estimates select among checked
+candidates; a wrong estimate costs time, not answers. Keys are explicit author
+assertions: false keys can change answers through BE-GroupKey. Consumers: Lookup order and early Expand placement (L&E §4
 `earlyExpand`), the transfer-tree root (LargestRoot sizes), static
 filter-worthiness (RPT+ threshold) instead of `choose`.
 
@@ -641,6 +641,44 @@ unchanged unrelated goldens, formal inventory and scoped API snapshots.
 GPU translation is outside this box: it will need keyed grouping, stable
 owner-offset construction, segment-local monoid reduction and publication.
 
+### Box 12d key-aware grouped fold
+
+`evidence { Lineitem(l_orderkey, l_linenumber) key; }` asserts that no two
+physical input rows have the same key. The prefix spelling
+`key Lineitem [l_orderkey, l_linenumber];` denotes the same premise.
+These assertions are not inferred from counts, bounds or sampled statistics.
+Unlike estimates, a false key can change answers: the author is responsible
+for its truth. The manifest-driven TPC-H suite asserts dbgen's declared keys
+only when a loader projection carries every key column.
+
+`group_without_canon(grouped_definition)` is checked by BE-GroupKey and
+BE-Group: the rewritten input must retain positional uniqueness after every
+valuation canonicalizer is removed. Keys transfer through renaming, filters,
+scalar binds and joins; projections must preserve them. Missing keys, unions
+and expanding Rust binds do not supply a certificate. The planner records
+successful rewrites in its replay trace. GPU groups can then read resident
+columns directly, evaluating group arguments without materializing complete
+named valuations. With no key advice the existing canonical path is unchanged.
+
+Measured SF10 acceptance (advised suite, one warmup and five measured runs;
+before: baseline suite, after: key-aware grouping plus CQ-Arith):
+
+| Query | Before total ms | After total ms | Speedup | After wall ms | Exact rows |
+|---|---:|---:|---:|---:|---:|
+| H01 | 9,107.255 | 590.690 | 15.42× | 595.870 | 4 |
+| H06 | 3,310.908 | 11.776 | 281.15× | 16.895 | 1 |
+| H12 | 44.427 | 25.930 | 1.71× | 25.939 | 2 |
+
+All answers match the independent DISTINCT-valuation oracle. H01 and H06
+have no canonical-valuation publication or Sequence dispatch; their group
+argument kernels read resident input columns. H12 keeps its checked join
+publication and removes the later valuation canon. The suite's historical
+`dedup` timing bucket includes grouped argument evaluation, key ordering and
+folding; it does not imply valuation dedup remains.
+The unchanged CPU grouped corpus passed all eight tests. Evidence artifacts:
+`/tmp/sweep3.json` (baseline), `/tmp/groupkeys-h01-sf10.json`,
+`/tmp/groupkeys-h06-sf10.json`, `/tmp/groupkeys-h12-sf10.json`.
+
 ## [13] Negation in the corpus and on the GPU
 
 CPU: the real-dbgen TPC-H inventory includes `retail_h04` (an EXISTS
@@ -758,10 +796,15 @@ types and codec facts, tile and item counts; it contains no GPU byte constants.
 `Analysis.resources` records checked shape, required bytes and capacity per
 publication. BE-Resource rejects oversized authored or generated dispatches.
 
-The planner first considers its ordinary tile/item candidates. If none is legal
-for the target, it prepares one checked publication alternative between named
-expansions and choices, then grades/costs its tile/item candidates. It neither
-discards alternatives nor hides resource failure inside translation.
+The planner starts at the machine width and preferred items. It first tries
+nested inner-flatten segmentation, then plain tiling, and compares legal
+survivors by PL-Cost. Only if neither fits does it try smaller items, then
+smaller machine-derived strips. Named flatten and choice/union publications
+that split dispatches are the last resort, not the first resource repair.
+Single-boundary cuts are enumerated in definition order and their legal
+survivors compared by PL-Cost before attempting multiple publications.
+If all fail, one `syn::Error` retains every candidate diagnostic, including failed
+publication preparation; suite reports print every component.
 
 Catalog level lists govern reads. Host construction alone does not require or
 establish host read capability. Generated Lookup-first stores select replayable
@@ -791,3 +834,479 @@ measurement was 10.374 ms versus a separate authored 10.310 ms, also within
 that band, although the suite's existing fixed 10.35 ms ceiling returned a
 failure exit status. The interleaved comparison leaves that original evidence
 intact and changes neither the implementation nor the fixed-ceiling check.
+
+### Box 11c shared checking and candidate preparation
+
+`Checker::new(program)` seeds the invocation's complete checked source.
+`Checker::check_shared` returns immutable `Rc<Analysis>` facts to read-only
+planner/rewrite clients; the owned `check` API and machine-grading obligations
+are unchanged. The source and two recent proofs are retained. Checked Structures
+prefixes intern their physical-definition index and Lookup/Expand support queries;
+Sequence proofs compare those checked identities rather than repeatedly comparing
+the same opaque Rust inside one rewrite. An externally supplied mutable program
+still undergoes complete prefix equality. Evidence-only changes reuse structural
+facts but revalidate every evidence obligation.
+
+Candidate-independent placement is checked once before tile/item enumeration.
+Contiguous grade advice is checked as one typed batch, with each grade retained
+in the replayable trace. Partition/segment construction returns its already
+checked program instead of immediately replaying the same rewrite list a second
+time. Resource alternatives first use nested `segment` stores and tiles;
+named `store_level` and choice publications split dispatches only as a last resort.
+`CQ_SEQUENCE_PLAN_TIMING` additionally reports ordering, adaptive-choice and
+decomposition times; these are measured stages, not estimates.
+
+Generated keyed tokens account for their reader layouts as well as provider
+payloads: a String-carrying host reader requires a host-capable catalog token.
+Where an authored descendant-only provider produces numeric rows for a host
+consumer, the planner inserts a checked publication boundary instead of moving
+the provider read to host. Authored provider tokens retain precedence.
+These changes preserve the checked automatic-default contract: suite exactness
+and corpus agreement are required; comparative performance belongs to advice.
+
+Adaptive alternatives project each arm to the original checked live layout
+before constructing their union. This is a checked Physical/Sequence projection,
+not a target shortcut: a union cannot restore dead String columns that its
+providers no longer carry. Later adaptive rewrites can traverse those pure
+projections without crossing opaque code or retained publications.
+
+`Analysis.provider_reads` records providers actually evaluated by each named
+definition. Catalog grading consumes these checked sites instead of inferring
+reads by walking a Map's entire Physical ancestry. A support-equal reheading
+does not read its old providers again. Construction and offset capability
+upgrades remain separate from actual read sites.
+
+The checker interns provider/key/input edges once with each checked Structures
+prefix, indexes materialized results and their proven keys, and retains inherited
+read requirements as a set. Repeated reads reuse an already stronger provider
+and codec obligation; choices do not multiply identical obligations. Complete
+syntax checks, support proofs and machine grading remain mandatory.
+
+### Box 13c numeric host membership build
+
+The H04 anti-membership slowdown was host realization/upload work, not an
+anti-join algorithm or a planner choice. At SF10 the filtered input contains
+37,929,348 numeric rows (303,434,784 upload bytes). Nsight Systems measured
+382.066 ms build while its 19 build kernels occupied about 10 ms: input
+compression (five launches), key decoding (one), radix-pair ordering (seven,
+including four onesweep passes), directory lower bounds (one), and directory
+compression (five). Key decoding took 0.444 ms, the four sort passes about
+3.006 ms, and directory lower bounds 2.970 ms. Nsight Compute measured key
+decoding at 76.79% DRAM throughput and 89.89% achieved occupancy.
+
+Primitive host boundaries now emit columns directly into reusable scratch
+capacity, without the intermediate tuple copy and dynamic row-codec transpose.
+Scratch is emptied after each use: inputs, results and membership indexes are
+never cached. Exact bounds are reduced over the uploaded values on the GPU;
+FOR encoding retains device count metadata instead of downloading the compact
+extent. All realization, bounds, upload and provider construction remain in the
+reported build phase. The provider algorithm and recorded plan are unchanged.
+
+The final profile has 20 build launches (the same 19 plus `numeric_bounds`).
+The new bounds launch is 568 blocks of 256 lanes over all 37,929,348 values:
+0.352 ms and 95.64% DRAM throughput in Nsight Compute. Its 4,544 warp min/max
+pairs transfer 72,704 bytes to the host, replacing the full CPU bounds scan.
+One 303,434,784-byte H2D transfer remains per build (about 15.6 ms); there is
+no membership-row D2H transfer in that phase. The compact-extent readback is
+replaced by the bounds summary readback; the two scalar metadata readbacks
+remain. Dataset preprocessing downloads happen once outside the timed build,
+not once per membership construction. Nsight Systems' final build median was
+47.710 ms; the unprofiled median was 45.808 ms.
+
+Advised measurements below use one warmup and five measured executions.
+Every execution matched the independent exported answer exactly; all eight
+before/after `sequence_input` and `sequence_planned` strings were identical.
+
+| Query | Scale | Build before ms | Build after ms | Total before ms | Total after ms | Exact rows |
+|---|---|---:|---:|---:|---:|---:|
+| h04 | SF1 | 0.511 | 0.512 | 1.154 | 1.154 | 52,523 |
+| h04 | SF10 | 5.113 | 5.098 | 10.439 | 10.423 | 526,040 |
+| h04_not_exists | SF1 | 36.367 | 3.814 | 36.612 | 4.051 | 4,695 |
+| h04_not_exists | SF10 | 361.713 | 45.808 | 362.907 | 47.012 | 47,631 |
+| h16 | SF1 | 1.216 | 1.354 | 1.450 | 1.594 | 118,274 |
+| h16 | SF10 | 9.841 | 10.423 | 10.292 | 10.873 | 1,186,602 |
+| h22 | SF1 | 0.898 | 0.844 | 1.045 | 0.992 | 14,086 |
+| h22 | SF10 | 7.471 | 6.266 | 7.662 | 6.465 | 140,489 |
+
+H16's first after batch had build medians 1.327/26.528 ms (SF1/SF10), with
+SF10 samples 26.528, 233.343, 39.555, 9.549 and 10.454 ms. The table reports
+the separate repeat, not a pooled or trimmed median; that repeat still had
+two large SF10 samples (260.942 and 39.415 ms). This variability is retained
+rather than attributed to a kernel improvement.
+
+Evidence: `/tmp/antibuild-before.nsys-rep`, `/tmp/antibuild-after.nsys-rep`,
+`/tmp/antibuild-before-ncu.ncu-rep`, `/tmp/antibuild-after-ncu.ncu-rep`,
+`/tmp/antibuild-{before,after}-{query}-both.json`, and
+`/tmp/antibuild-after-h16-repeat.json`. The release build used
+`CQ_GPU_TPCH_QUERIES=h04,h04_not_exists,h16,h22` to isolate these measurements
+from concurrent grouped-query integration. Added regressions cover primitive
+column emission, signed extrema, duplicate rows, empty and changed inputs,
+scratch reuse, mismatched column lengths, and multi-iteration bounds reduction.
+
+### Box 11c historical build gate (automatic was opt-in)
+
+The scoped language/planner run passed 122 tests, followed by the additional
+inherited-read deduplication regression. Scoped root language/planner
+`clippy --all-targets -D warnings` and rewrite-library clippy passed. The
+Structures-checker API snapshot includes `new`, `check_shared` and
+`Analysis.provider_reads`; `Checker` retains its `UnwindSafe` auto trait.
+
+The 13 automatic corpus targets rebuilt in **2m08s Cargo time / 132.49s wall**
+under `perf record`, below the six-minute build gate. All 13 executed:
+3,436 configurations, 10,272 scenario agreements, zero divergences.
+The profiled build recorded 6,872 planner invocations: median 3.823 ms,
+p95 17.458 ms, maximum 5,999.138 ms; 100 exceeded 100 ms. These measurements
+precede the final provider/key/input indexing and inherited-read set changes,
+so they establish the build gate, not the remaining per-plan latency gate.
+Sampling attributed 48.30% cumulative library samples to structural analysis,
+22.06% to the compiler token-symbol display bridge and 13.04% to provider
+storage checks; those percentages overlap. The profiler reported 37 lost
+samples, and the profile remains `/tmp/box11c-conformance.perf`.
+
+The release original-15-query GPU build succeeded with automatic generation
+enabled and its explicit build-time query selector. SF10 generation results:
+
+| Query | Automatic generation s | Generation status |
+|---|---:|---|
+| h03 | 0.043 | accepted |
+| h04 | 0.015 | accepted |
+| h04_not_exists | 0.007 | accepted |
+| h05 | 1.018 | BE-Resource rejected |
+| h07 | 0.923 | BE-Resource rejected |
+| h07_block | 0.169 | BE-Resource rejected |
+| h08 | 0.496 | BE-Resource rejected |
+| h09 | 0.059 | accepted |
+| h16 | 0.013 | accepted |
+| h22 | 0.007 | accepted |
+| h21_positive | 0.285 | BE-Resource rejected |
+| d19 | 0.146 | BE-Resource rejected |
+| d27 | 0.057 | accepted |
+| d72_inner | 0.073 | BE-Resource rejected |
+| d85 | 0.522 | BE-Resource rejected |
+
+H05/H08 generation improved from the preserved baseline's 2.911/4.184 s,
+but accepted generation is not execution exactness. The resource-rejected
+queries and per-plan latency outliers left box 11c incomplete; automatic
+was therefore still opt-in at that checkpoint, with advised precedence unchanged. Combined
+candidate errors must be inspected when diagnosing the resource fallback:
+the suite currently displays only the first error from `syn::Error`.
+
+The seven generated automatic entries then executed exactly at SF10, with one
+warmup and five measured runs. Matching advised runs used the same binary and
+fixtures in the following batch (not interleaved):
+
+| Query | Exact rows | Automatic total ms | Advised total ms |
+|---|---:|---:|---:|
+| h03 | 114,003 | 54.038 | 16.862 |
+| h04 | 526,040 | 16.330 | 10.351 |
+| h04_not_exists | 47,631 | 47.023 | 46.767 |
+| h09 | 3,261,612 | 43.744 | 66.535 |
+| h16 | 1,186,602 | 9.956 | 9.913 |
+| h22 | 140,489 | 6.517 | 6.507 |
+| d27 | 3,575 | 16.587 | 18.517 |
+
+Evidence: `/data/tpch-gpu/box11c-automatic-sf10.json` and
+`/data/tpch-gpu/box11c-advised-sf10.json`. The automatic full-suite command
+returned failure because eight entries remained planner-rejected, not because
+any executed result differed. These seven exact results do not satisfy the
+all-query gate and do not authorize changing the unadvised default.
+
+### Grouped retail corpus acceptance
+
+The real-dbgen inventory now includes one H01 and the H02/H06/H10/H11/H12/
+H13/H14/H15/H18/H19/H20 cores. All twelve match their independent DuckDB
+oracles at SF0.1; twelve fixture oracle tests cover duplicates, distinct line
+identities, empty groups and predicate boundaries. The exporter includes their
+typed projections and exact SF1/SF10 answers. Scope and numeric details live in
+`features/workloads/tpch/numeric_contract.txt`; H17's aggregate-dependent outer
+sum remains outside the requested nonnested-aggregate inventory.
+
+The GPU suite imports single-program grouped heads from their authored Rust,
+preserves complete valuation domains, and decodes dictionary-valued answers.
+Staged H02/H11/H13/H15/H18/H20 retain every authored compile! node and its
+materialization dependencies in the suite. Each node has its own checked plan,
+replay artifact and publication grade. Numeric grouped device publications are
+adapted to resident DeviceColumns, retaining input key codec bounds without
+downloading rows or their count; nullable and host-graded publications retain
+host rows. H13's authored host
+preprocessing and terminal counts/zeros union are preserved. Stage timings are
+summed, and the same-Physical Sequential reference executes the complete graph.
+Device-planning failures remain explicit on host-planned stage artifacts.
+H14/H19 retain opaque String-valued witnesses and are rejected when opaque values
+lack a supported device encoding. The `WideCanon` catalog provider removes H10's
+former 128-bit complete-valuation limit; no witness projection or truncated
+equality key is substituted.
+
+Host row codecs now support sixteen columns (H10 requires fifteen). Downloaded
+host publications map their carried layout to the downstream consumer's demand;
+an eight-column publication/three-column probe regression covers the D72 shape.
+A terminal stored group followed by a stored alias emits one GPU grouped
+collective, not a redundant CPU group and host reupload. The ten Sequence core
+and six device-column unit tests passed in release CUDA builds.
+
+The unrestricted advised GPU executable builds. Final exact grouped timings
+(one warmup, median of five, milliseconds) are:
+
+| Query | SF1 total | SF10 total | Exact at both scales |
+|---|---:|---:|---|
+| H01 | 922.226 | 9491.752 | yes |
+| H06 | 338.968 | 3534.769 | yes |
+| H12 | 11.954 | 44.738 | yes |
+
+These are correctness measurements, not performance acceptance. Evidence is
+`/data/tpch-gpu/grouped-advised-final.json`; the earlier H10 capability failure
+is retained in `/data/tpch-gpu/grouped-advised.json`. The final command returns
+failure for the selected H14/H19 rejected entries, not for an answer mismatch
+in H01/H06/H12. GPU suite tests additionally exercised importer/encoding and
+plan replay; the earlier H10 capability failure is superseded by Box 12c.
+
+### Box 11d resource recovery and ordering diagnosis
+
+Resource recovery follows the deterministic segmentation-first order documented
+above. Nested target-layout diagnostics survive grading and rewrite annotation;
+the GPU suite joins every component of the final `syn::Error`, not only its
+first `Display` message. This changes neither the layout premise nor target
+translation. Halved tile widths cannot reduce a target's fixed-width scratch
+allocation unless its supplied layout model records that reduction.
+
+Full diagnostics exposed the previously hidden fallback failures: stored
+flatten arms had ambiguous outer spaces (BE-Boundary), while storing their
+choices at a separated level required an unknown capacity (BE-Length).
+Placement now keeps a growing, host-readable store at host and uses the
+existing checked publication factoring to transfer descendant producers.
+It does not invent a capacity or weaken either premise. A regression forces
+resource recovery through nested adaptive choices and replays the complete
+checked trace.
+
+The preserved box 11c SF10 reports expose these Lookup/Expand differences:
+
+| Query | Automatic / advised ms | Sequence distinction |
+|---|---:|---|
+| h03 | 54.038 / 16.862 | Repeated membership in already-filtered Orders; retained filtered Lineitem; extra forward filtering and adaptive alternatives |
+| h04 | 16.330 / 10.351 | Orders-driven automatic plan versus Lineitem-driven advised plan with the smaller Orders-date membership build |
+| h04_not_exists | 47.023 / 46.767 | Input, planned term and trace identical |
+| h16 | 9.956 / 9.913 | Input, planned term and trace identical |
+| h22 | 6.517 / 6.507 | Input, planned term and trace identical |
+
+For H03, writing `O' = O_date semi C_BUILDING`, automatic previously
+recomputed membership `O' semi C_BUILDING`, separately retained the selected
+Lineitem stream, and constructed nested choices around membership before the
+same mandatory Expands. Advised streams selected Lineitem and expands O', then C.
+Its upstream advice supplies no additional keys or selectivities. The generic
+rule now omits membership already witnessed on the same provider/key left
+spine and preserves scan-only streaming roots. Root forward filters also stay
+in the one-consumer pipeline; only nonroot forwards serving keyed providers
+are retained by the ordering rewrite.
+
+For H04 the author's `no_reduce, order(Lineitem, Orders)` does not encode
+unavailable statistics: recorded base counts already favor Lineitem
+(59,986,052 versus 15,000,000). The earlier planner could not consider a root
+whose retained index carried only membership keys. The generic rewrite now
+recovers an exclusively consumed, unfrozen Rename/Select/Point/Range producer
+as a full-row streaming root, preserves its scan adapters, removes the obsolete
+projected index, and selects the opposite-side provider from the catalog.
+Shared, frozen and union-produced indexes remain protected. These are
+inferable rule defects, not documented author-knowledge exemptions.
+
+The three identical-term rows were noninterleaved measurements; their small
+differences do not establish a scheduling difference. All numbers in this
+diagnosis are the preserved box 11c baseline, not post-change measurements.
+
+#### Box 11d observed integration status
+
+These intermediate measurements precede the final single-boundary/default
+cutover. The untested restricted-root experiment was removed; timings below
+are diagnostic, not release criteria:
+
+| Check | Observed result |
+|---|---|
+| Language/planner integration | 130 tests passed before the final single-cut/root changes |
+| Rewrite integration | 54 tests passed before the final no-op/root changes |
+| Original-15 automatic generation | All 14 intended entries accepted; H07 remained Canon-rejected |
+| Initial SF10 execution | The shared PTX module failed JIT because H05 signatures exceeded its parameter limit; not answer mismatches |
+| Parameter-pruned H05 automatic | Exact 72,983 rows, 4,733.318 ms median, approximately 55 dispatches; intermediate diagnostic |
+| Partial corpus profile | 2,900 calls, maximum 63.697 ms, p99 33.316 ms, zero above 100 ms; build stopped at two classic-intersection macro errors |
+| Full 13-crate agreement | Not established at this intermediate checkpoint |
+
+The partial profile forced one Cargo build job and is not comparable to the
+earlier default-concurrency full corpus build. Its 567.93-second wall time
+mostly sampled rustc/LLVM, not planning. The classic rejection was an unchanged
+Physical expression followed by inappropriate Structures-only cleanup; a
+no-op-before-cleanup regression and fix were added afterward.
+
+The unacceptable H05 fallback globally published expansion branches and
+choices. R instead has an untiled Region/Nation/Customer prefix, then nested
+`flatten tile 1024 items 4 store flatten lookup` segments for Orders and
+Lineitem inside the final dispatch, followed by full-key Supplier membership.
+The revised policy must be measured against that R shape, not accepted merely
+because the many-dispatch fallback fits shared memory.
+
+Evidence: `/data/tpch-gpu/box11d-automatic-initial-sf10.json`,
+`/tmp/paramprune.json`, `/tmp/box11d-conformance.perf`, and timing log
+`artifact://1831`. Final handoff requires a complete corpus rebuild/execution,
+fresh original-15 automatic/advised SF1 and SF10 exactness/timing reports,
+and scoped formatting/clippy/API/formal checks.
+
+### Box 12c arbitrary-width GPU canon
+
+`WideCanon` follows `PackedCanon` in the target catalog. Selection compares the
+complete declared scalar domains against each provider's maximum-bit
+capability; no data evidence establishes a codec premise. Runtime packing uses
+the recorded actual codec bounds to allocate N low-first u64 lanes. Stable
+least-significant-lane radix passes carry row indices, then adjacent complete-row
+equality retains one row in deterministic ascending packed-key order.
+
+Both providers publish the same device count and decode through the same
+column adapter. Intermediate providers, host downloads, grouped inputs and
+union consumers all decode arbitrary-width fields, including lane crossings.
+The formal `GPU-WideCanon` instance cites `BE-Canon`; runtime tests cover
+three-lane duplicates, repeated calls and empty input, and catalog tests cover
+the 128/192-bit boundary and rejection without a sufficiently wide provider.
+
+Acceptance on the release sm_89 build: all eight runtime provider tests and
+all ten catalog-selection tests passed. The formal inventory check passed
+(241 rules). H10's one warmup and all five measured runs matched the exported
+dbgen answers exactly; SF1 also passed Sequential-of-the-same-Physical
+conformance. GPU timing includes build, kernels and final publication work;
+DuckDB is the exported t24 median (not a new CPU measurement).
+
+| H10 advised | Exact rows | GPU total ms | Build ms | Kernels ms | Final publication ms | DuckDB t24 ms |
+|---|---:|---:|---:|---:|---:|---:|
+| SF1 | 37,967 | 22.187 | 1.671 | 12.221 | 8.306 | 141.000 |
+| SF10 | 381,105 | 299.008 | 11.871 | 266.077 | 21.056 | 1158.000 |
+
+Evidence: `/tmp/canon-h10.json`. The final-publication phase label is the
+suite's `dedup_ms`; intermediate canonicalization runs inside the kernel
+interval, so that column is not an isolated canon benchmark.
+## [15] CQ-Arith: earned arithmetic position independence
+
+CQ defines `+`, `-`, `*`, and integer `/` by a nonzero literal as wrapping
+operations over declared integer types. Decimal arithmetic operates on the
+signed 64-bit coefficient (`Decimal::scaled`); integer-encoded dates retain
+their declared width. Total numeric `if` expressions and explicit lossless
+primitive `T::from` widening close the grammar. Arbitrary calls, lossy casts,
+mixed-width operands and nonliteral divisors remain opaque.
+
+The shared syntax recognizer returns the canonical wrapping expression.
+CQ-GuardRecognize extracts typed total conjuncts without splitting through
+opaque disjunctions or negations. CQ ordering and its independent VO checker
+admit arithmetic clauses when their inputs are available, while preserving
+opaque clauses' written Before domains. Bind/Guard syntax is retained in
+later IRs; Physical type facts rederive totality for planner placement and
+BE-Partial instead of trusting an annotation. Host and GPU row interpreters
+emit the same primitive wrapping operations, with no target placement choices
+inside translators.
+
+Acceptance: recognition/rejection (especially variable or zero divisors),
+overflow and signed-minimum division laws in debug CPU execution, arithmetic
+Motion with opaque-domain rejection, BE-Partial device acceptance/rejection,
+H06 DISTINCT-valuation exactness against DuckDB, and advised H06/H12 SF10
+device exactness with before/after timings.
+
+Observed acceptance: 124 syntax/VO/order/planner tests, 55 Sequence language
+tests, 13 GPU row/core tests, and all five H06/H10/H12 CPU tests passed.
+The CPU cases include debug-overflow laws, signed-minimum division by -1 and
+H06's independent DuckDB DISTINCT-valuation oracle. Scoped library clippy
+passed; the three changed public API snapshots were regenerated.
+
+Both the generic CQ-Arith + WideCanon path and the combined key-covered GPU
+grouping path were measured with one warmup and five exact runs at SF10:
+
+| Query | Exact answer rows | Baseline median ms | CQ-Arith + WideCanon ms | With key-covered grouping ms |
+|---|---:|---:|---:|---:|
+| H06 | 1 | 3310.908 | 16.893 | 11.776 |
+| H12 | 2 | 44.427 | 30.955 | 25.930 |
+
+The generic path grades H06's range guards and multiplication (`r1`--`r4`)
+at `host.device.block`; H12's guards, join and numeric conditionals
+(`r1`--`r4`, `r6`--`r8`) likewise run there. The final column includes the
+separate grouped-input optimization, not just arithmetic recognition.
+Baseline evidence is `/tmp/sweep3.json`; generic-path evidence is
+`/tmp/arith-h06-sf10.json` and `/tmp/arith-h12-sf10.json`; combined evidence
+is `/tmp/groupkeys-h06-sf10.json` and `/tmp/groupkeys-h12-sf10.json`.
+The generic canonical-publication path additionally needs declared primitive
+bounds for computed columns: wrapping expressions may cross either endpoint,
+so source codec bounds cannot be reused. WideCanon supplies complete keys when
+those full declared ranges exceed 128 bits.
+## [14] Staged programs in the GPU suite
+
+The importer retains the authored compile! graph, not merely its final rule:
+H02/H18/H20 have two nodes, H15 has three, H11 has four, and H13 has two
+independent terminal branches. H13 also retains its authored one-time
+QualifiedOrders preprocessing and counts/zeros iterator composition. Each node
+has a separately checked/advised plan and replay artifact. Resident numeric
+publications retain count, input key codec bounds, output column order and
+ancestor statuses; nullable or host-planned publications use host rows.
+Explicit caller advice is not discarded when device planning fails.
+
+The advised correctness gate passes at SF1 and SF10, including exact comparison
+against every exported answer TSV and same-Physical Sequential graph conformance
+at SF1. Times below are milliseconds: one warmup, median of five per-run sums
+of stage times, including inter-stage host publication when required.
+
+| Query | SF1 rows | SF10 rows | SF1 staged / DuckDB t24 | SF10 staged / DuckDB t24 | Exact both |
+|---|---:|---:|---:|---:|---|
+| H02 | 460 | 4,667 | 22.600 / 11 | 496.737 / 42 | yes |
+| H11 | 1,048 | 0 | 33.102 / 6 | 521.764 / 15 | yes |
+| H13 | 150,000 | 1,500,000 | 15.164 / 184 | 157.185 / 1,588 | yes |
+| H15 | 1 | 1 | 664.863 / 11 | 33,827.704 / 65 | yes |
+| H18 | 57 | 624 | 493.079 / 87 | 5,393.855 / 771 | yes |
+| H20 | 186 | 1,804 | 399.399 / 21 | 4,219.653 / 128 | yes |
+
+These measurements include WideCanon but precede CQ-Arith/GroupKeys integration;
+they are not claims of fully device execution or performance acceptance. H02
+publishes its GPU minimum on the host because it is nullable; its final stage,
+all H11 stages, H15's anti-dominance stage and H18's final stage are host-planned.
+H20 retains its authored host predicates within GPU-planned stages. In
+particular, H15's unchanged quadratic anti-dominance stage costs about 30 seconds
+at SF10. The report records each host stage's device-planning diagnostic rather
+than treating it as an unreported GPU execution.
+
+Evidence: `/data/tpch-gpu/box14-stages-final-sf1.json` and the six
+`/data/tpch-gpu/box14-h{02,11,13,15,18,20}-final-sf10.json` reports.
+
+The release importer/encoding tests (9), stage-plan replay test (1), and resident
+group publication regression (1) passed. The latter covers column order,
+inherited key bounds, row count and ancestor failure propagation. Formal rule
+inventory (241) and formatting of the new staged helper modules passed.
+Scoped clippy checks the runtime with warnings, but the suite lint gate reports
+44 `clippy::erasing_op` errors in generated zero-width CUDA allocations
+(`capacity * 0`); no translator change or lint suppression is included here.
+
+### Box 14b: arithmetic/key-aware staged replanning
+
+H15 now computes per-supplier revenue, a global grouped `max()`, and an equality
+join retaining every tied supplier. The nullable maximum preserves empty-input
+semantics and removes the quadratic anti-dominance stage. Its independent
+DuckDB oracle SQL is unchanged.
+
+Every H02/H11/H13/H15/H18/H20 stage has a statistics-derived order and checked
+schedule in `tpch/src/advice.rs`; raw DuckDB measurements, stage-by-stage
+cardinalities, segmentation decisions, placement and exact compiler rejections
+are recorded in `experiments/gpu/compare/tpch_statistics.md` (Box 14b).
+All eight grouped stages use checked key evidence to remove valuation canon.
+H11 arithmetic, H18's final guard/bind and H20's availability guard run on
+device; resident grouped argument kernels evaluate the scan arithmetic.
+H02 and H15 retain nullable host publications and host final stages, with their
+device translator rejections retained rather than patched.
+
+One warmup and five exact runs at each scale, using the same timing contract
+as the preceding acceptance table:
+
+| Query | SF1 before → after ms | SF10 before → after ms | DuckDB t24 SF1 / SF10 ms | Exact both |
+|---|---:|---:|---:|---|
+| H02 | 22.600 → 25.566 | 496.737 → 400.515 | 11 / 42 | yes |
+| H11 | 33.102 → 15.872 | 521.764 → 41.827 | 6 / 15 | yes |
+| H13 | 15.164 → 14.597 | 157.185 → 116.182 | 184 / 1,588 | yes |
+| H15 | 664.863 → 12.177 | 33,827.704 → 18.305 | 11 / 65 | yes |
+| H18 | 493.079 → 22.890 | 5,393.855 → 172.927 | 87 / 771 | yes |
+| H20 | 399.399 → 16.097 | 4,219.653 → 97.352 | 21 / 128 | yes |
+
+All six SF1 same-Physical Sequential comparisons also pass. H02's SF1
+regression is reported rather than hidden. Evidence is
+`experiments/gpu/compare/tpch_staged.results.json`; the rejected extra-segment
+candidate measurements are retained in `tpch_staged.initial.json`, and exact
+statistics SQL/results in `tpch_staged.statistics.json` alongside it.
+The four release grouped integration suites (14 tests) and workloads catalog
+suite (nine tests) pass, including H15's exact tied/empty/boundary DuckDB oracle.
+Changed Rust ranges were formatted; existing unrelated warnings remain.

@@ -419,6 +419,20 @@ pub struct RustStep {
 }
 
 impl BodyItem {
+    /// Typed arithmetic is a language expression, not an opaque Rust step.
+    pub fn arithmetic(&self, types: &BTreeMap<String, syn::Type>) -> Option<syn::Expr> {
+        match self {
+            Self::Filter(filter) => cq_syntax::arithmetic::predicate(&filter.condition, types),
+            Self::Let(binding) if matches!(binding.pattern, syn::Pat::Ident(_)) => {
+                cq_syntax::arithmetic::expression(
+                    &binding.expression,
+                    types,
+                    Some(&binding.annotation.as_ref()?.ty),
+                )
+            }
+            _ => None,
+        }
+    }
     pub fn rust_step(&self) -> Option<RustStep> {
         match self {
             Self::Filter(filter) => Some(RustStep {

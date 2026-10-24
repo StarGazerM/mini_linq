@@ -6,15 +6,14 @@ use std::fs;
 pub const WARMUP_RUNS: usize = 1;
 pub const MEASURED_RUNS: usize = 5;
 
-pub fn answer(manifest: &Manifest, query: &str) -> Result<Vec<Vec<i64>>> {
+pub fn answer(manifest: &Manifest, query: &str) -> Result<Vec<Vec<String>>> {
     let path = manifest.root.join(format!("answer.retail_{query}.tsv"));
-    let mut rows = fs::read_to_string(path)?
-        .lines()
-        .map(|line| {
-            line.split('\t')
-                .map(|field| field.parse::<i64>().map_err(Into::into))
-                .collect::<Result<Vec<_>>>()
-        })
+    let mut rows = csv::ReaderBuilder::new()
+        .has_headers(false)
+        .delimiter(b'\t')
+        .from_path(path)?
+        .records()
+        .map(|record| Ok(record?.iter().map(str::to_owned).collect::<Vec<_>>()))
         .collect::<Result<Vec<_>>>()?;
     let count: usize =
         fs::read_to_string(manifest.root.join(format!("answer.retail_{query}.count")))?
@@ -31,8 +30,8 @@ pub fn answer(manifest: &Manifest, query: &str) -> Result<Vec<Vec<i64>>> {
 }
 
 fn exact(
-    expected: &[Vec<i64>],
-    actual: &mut [Vec<i64>],
+    expected: &[Vec<String>],
+    actual: &mut [Vec<String>],
     query: &str,
     sf: u32,
     iteration: usize,
@@ -48,8 +47,8 @@ fn exact(
 pub fn run(
     manifest: &Manifest,
     query: &str,
-    mut execute: impl FnMut() -> Result<Vec<Vec<i64>>>,
-    reference: Option<Vec<Vec<i64>>>,
+    mut execute: impl FnMut() -> Result<Vec<Vec<String>>>,
+    reference: Option<Vec<Vec<String>>>,
     conformance_only: bool,
 ) -> Result<Value> {
     let expected = answer(manifest, query)?;

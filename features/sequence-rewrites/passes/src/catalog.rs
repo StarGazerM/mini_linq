@@ -8,6 +8,8 @@ use structures::{Structure, physical::Operator};
 ///
 /// Catalog levels constrain reads, not construction. Structures has no machine
 /// grading; Sequence planning checks each selected type at its actual read levels.
+/// A keyed reader carrying strings also needs a host read level, even when
+/// the provider's own retained layout is entirely numeric.
 /// Host scan adapters are preserved. Unsupported keyed host reads are retained
 /// through `build_host_reads`; built indexes replace their keyed fallbacks.
 /// Unlike `plan`, this operation explicitly replaces recorded provider types.
@@ -17,6 +19,7 @@ pub fn select_from_catalog(
     catalog: &Catalog,
 ) -> syn::Result<structures::Program> {
     let analysis = structures::contract::check(source)?;
+    let needed = structures::required_columns(&source.physical, &analysis.physical);
     let candidates = structures::physical::candidate_prefixes(&source.physical, &analysis.physical);
     let mut target = source.clone();
     for (index, entry) in source.structures.entries.iter().enumerate() {
@@ -105,11 +108,37 @@ pub fn select_from_catalog(
             | Structure::Share { .. } => continue,
         };
         let ty = if kind == "canon" {
-            catalog.canons.iter().find(|token| !token.levels.is_empty()).map(|token| &token.ty)
+            let columns = &analysis.physical.headings[&name];
+            // The declared scalar domains are conservative codec bounds. Setup
+            // may pack fewer bits, but evidence never narrows this obligation.
+            let bits = columns.iter().try_fold(0u32, |sum, column| {
+                let ty = &analysis.physical.rows[&name].types[column];
+                let width = match ty {
+                    syn::Type::Path(path) => match path.path.get_ident().map(ToString::to_string).as_deref() {
+                        Some("bool") => 1,
+                        Some("u8" | "i8") => 8,
+                        Some("u16" | "i16") => 16,
+                        Some("u32" | "i32") => 32,
+                        Some("u64" | "i64" | "usize" | "isize") => 64,
+                        _ => return None,
+                    },
+                    _ => return None,
+                };
+                sum.checked_add(width)
+            });
+            catalog.canons.iter().find(|token| {
+                !token.levels.is_empty() && token.max_packed_bits.is_none_or(|maximum| bits.is_some_and(|bits| bits <= maximum))
+            }).map(|token| &token.ty)
         } else {
             catalog.providers.iter().find(|token| {
                 !token.levels.is_empty()
                     && accepts_elements(token, &analysis, &name)
+                    && match &entry.structure {
+                        Structure::Built { keyed, .. } => accepts_read_levels(
+                            token, source, &analysis, &name, &keyed.level_names(), &needed,
+                        ),
+                        _ => true,
+                    }
                     && required.iter().all(|capability| token.capabilities.contains(capability))
             }).map(|token| &token.ty)
         }.ok_or_else(|| syn::Error::new(
@@ -202,6 +231,14 @@ fn retain_host_indexes(
             token.ty == keyed.ty
                 && !token.levels.is_empty()
                 && accepts_elements(token, &analysis, &name)
+                && accepts_read_levels(
+                    token,
+                    source,
+                    &analysis,
+                    &name,
+                    &keyed.level_names(),
+                    &needed,
+                )
                 && required
                     .iter()
                     .all(|capability| token.capabilities.contains(capability))
@@ -211,6 +248,7 @@ fn retain_host_indexes(
         let token = catalog.providers.iter().find(|token| {
             !token.levels.is_empty()
                 && accepts_columns(token, &analysis, &name, projected.as_deref().unwrap_or(&analysis.layouts[&name]))
+                && accepts_read_levels(token, source, &analysis, &name, &keyed.level_names(), &needed)
                 && required.iter().all(|capability| token.capabilities.contains(capability))
         }).ok_or_else(|| syn::Error::new(
             entry.name.span(),
@@ -270,4 +308,51 @@ fn accepts_columns(
                 .any(|ty| matches!(ty, syn::Type::Infer(_)) || ty == actual)
         })
     })
+}
+
+// PL-Catalog: element compatibility belongs to the retained provider layout;
+// read-level compatibility also includes the row carried by each keyed reader.
+// A numeric membership index does not consume an unused right-hand payload.
+pub(crate) fn accepts_read_levels(
+    token: &cq_lang_sequence::ProviderToken,
+    source: &structures::Program,
+    analysis: &structures::Analysis,
+    name: &str,
+    levels: &[Vec<String>],
+    needed: &std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
+) -> bool {
+    let string_row = |name: &str| {
+        needed[name].iter().any(|column| {
+            matches!(&analysis.physical.rows[name].types[column], syn::Type::Path(path)
+                if path.path.segments.last().is_some_and(|segment| segment.ident == "String"))
+        })
+    };
+    let host_read = analysis.physical.keyed_reads.get(name).into_iter().flatten().any(
+        |(reader, columns, _)| {
+            if structures::prefix_depth(levels, columns).is_none() {
+                return false;
+            }
+            let Some(definition) = source.physical.program.definitions.iter()
+                .find(|definition| symbol_name(&definition.name) == *reader)
+            else {
+                return false;
+            };
+            string_row(reader) || match &definition.operator {
+                Operator::Probe(_, keyed) | Operator::Merge(_, keyed)
+                | Operator::Semi(_, keyed) | Operator::Anti(_, keyed) => {
+                    string_row(&symbol_name(&keyed.left))
+                        || columns.iter().any(|column| {
+                            matches!(&analysis.physical.rows[name].types[column], syn::Type::Path(path)
+                                if path.path.segments.last().is_some_and(|segment| segment.ident == "String"))
+                        })
+                }
+                _ => false,
+            }
+        },
+    );
+    !host_read
+        || token
+            .levels
+            .iter()
+            .any(|level| level.len() == 1 && level[0] == "host")
 }

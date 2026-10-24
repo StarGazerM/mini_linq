@@ -1,4 +1,4 @@
-//! Evidence advice is metadata, never a proof of a data property.
+//! Evidence records estimates and explicit author assertions of relation keys.
 
 use cq_lang_sequence::{Evidence, Program};
 use proc_macro2::TokenStream;
@@ -9,11 +9,11 @@ pub fn evidence(source: &Program, arguments: TokenStream) -> syn::Result<Program
     record_evidence(source, &syn::parse2(arguments)?)
 }
 
-/// Append estimates without removing previously authored facts. Contradictory
-/// facts remain recorded; consumers may use them only to rank checked plans.
+/// Append estimates and asserted keys without removing previously authored facts.
+/// Estimates rank plans; key-dependent rewrites are conditional on those keys.
 /// Passing the already recorded metadata is idempotent, so an explicit planner
 /// evidence parameter may borrow `program.evidence` without duplicating it.
-// Formal rule PL-Evidence: Untrusted evidence changes planning advice, never the checked construction or its answers.
+// Formal rule PL-Evidence: Estimates rank checked plans; asserted keys are explicit premises of key-dependent rewrites.
 pub fn record_evidence(source: &Program, evidence: &Evidence) -> syn::Result<Program> {
     record_evidence_in(&mut Default::default(), source, evidence)
 }

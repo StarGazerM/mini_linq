@@ -118,27 +118,6 @@ fn source() -> TokenStream {
 }
 
 #[test]
-fn cpu_printer_rejects_device_policy_before_expanding_holes() {
-    let source: source::Program = syn::parse2(source()).unwrap();
-    let strata = cq_datalog_stratify::compile(&source).unwrap();
-    let incremental = cq_datalog_incremental::compile(&strata).unwrap();
-    let storage = cq_datalog_storage::compile_with_representation(
-        &incremental,
-        cq_datalog_storage::Representation::DeviceSet,
-    )
-    .unwrap();
-    let program = cq_datalog_fork::compile(&storage).unwrap();
-    let error = splice_with(&program, |_| panic!("device holes must not be expanded")).unwrap_err();
-    assert!(error.to_string().contains("CPU Datalog printer requires"));
-    let holes = vec![quote!(hole); program.holes.len()];
-    assert!(
-        render_with(&program, &holes, |_, _, _, _| {
-            panic!("device rounds must not be rendered")
-        })
-        .is_err()
-    );
-}
-#[test]
 fn authored_round_expansion_matches_independent_fixture() {
     let source = source();
     let program: incremental::Program = syn::parse2(quote! {

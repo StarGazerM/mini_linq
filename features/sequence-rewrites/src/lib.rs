@@ -12,7 +12,8 @@
 //! | `choose` | `d, len x < k => a, else => b` | Select earlier equal-Structures-result definitions (BE-Choose). |
 //! | `output` | `count`, `reserve`, or `bounded` | Set the final store protocol; bounded requires declared capacity. |
 //! | `grade` | `machine, d at host.device, ...` | Add/update placements; preserve other grades on the same machine. |
-//! | `evidence` | `evidence { ... }` | Record checked estimation advice; facts never justify answer changes. |
+//! | `evidence` | `evidence { ... }` | Record estimates and author-asserted key premises. False keys can change grouped answers. |
+//! | `group_without_canon` | group definition | Remove valuation canon only with checked positional uniqueness. |
 //! | `lookup_first` | `using Provider, order [...], transfer [...], early [...]` | Checked LargestRoot/ATP Lookup-before-Expand family; every decision is replayable. |
 //! | `adaptive` | selected filter plus published-count decision | Choose checked optional-filter and exact-join alternatives from the same family. |
 //!
@@ -76,5 +77,6 @@ sequence_rewrite!(choose, b, len r < 4 => a, else => missing);
 sequence_rewrite!(output, bounded);
 sequence_rewrite!(grade, custom, missing at host);
 sequence_rewrite!(evidence, evidence { count missing = 1; });
+sequence_rewrite!(group_without_canon, missing);
 sequence_rewrite!(lookup_first, missing);
 sequence_rewrite!(adaptive, missing);

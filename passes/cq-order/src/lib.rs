@@ -95,7 +95,11 @@ impl Clause<'_> {
 /// Formal rule D-Guard: Guard requires dependencies on the written prefix.
 /// Formal rule D-Bind: Binding provides pattern names and requires RHS prefix dependencies.
 /// Formal rule D-For: Generator provides pattern names and requires RHS prefix dependencies.
-fn clauses<'a>(body: &'a cq::CommaList<BodyItem>, context: &BTreeSet<String>) -> Vec<Clause<'a>> {
+fn clauses<'a>(
+    body: &'a cq::CommaList<BodyItem>,
+    context: &BTreeSet<String>,
+    types: &BTreeMap<String, syn::Type>,
+) -> Vec<Clause<'a>> {
     let mut let_bound = BTreeSet::new();
     let mut written = context.clone();
     for item in body {
@@ -196,7 +200,7 @@ fn clauses<'a>(body: &'a cq::CommaList<BodyItem>, context: &BTreeSet<String>) ->
                     unreachable!("normal form")
                 }
             };
-            let rust = item.rust_step().is_some()
+            let rust = (item.rust_step().is_some() && item.arithmetic(types).is_none())
                 || matches!(item, BodyItem::Block(block) if block.analyze(&prefix).rust);
             let atom = match item {
                 BodyItem::Positive { atom } => Some(atom.clone()),
@@ -237,16 +241,9 @@ fn ready(
     clauses[clause].requires.is_subset(bound)
         && (!clauses[clause].rust
             || (pending.iter().copied().filter(|&c| clauses[c].rust).min() == Some(clause)
-                && !pending.iter().any(|&c| {
-                    c < clause
-                        && (clauses[c].atom.is_some()
-                            || matches!(
-                                clauses[c].item,
-                                BodyItem::Equality(_)
-                                    | BodyItem::Constraint(_)
-                                    | BodyItem::Negation(_)
-                            ))
-                })))
+                && !pending
+                    .iter()
+                    .any(|&c| c < clause && (!clauses[c].rust || clauses[c].atom.is_some()))))
 }
 
 /// A rank orders the ready clauses; the least is placed next. Guards and
@@ -534,7 +531,7 @@ fn fine(
         .collect();
     let let_bound: BTreeSet<&String> = clauses
         .iter()
-        .filter(|c| c.rust)
+        .filter(|c| c.rust || matches!(c.item, BodyItem::Let(_)))
         .flat_map(|c| &c.provides)
         .collect();
     let mut plan = Fine {
@@ -648,39 +645,110 @@ pub fn compile(source: &cq::Program, options: &Options) -> syn::Result<valuation
     Ok(program)
 }
 
+/// A top-level positive atom selected by relation, optionally qualified by its
+/// zero-based normal-body clause index (the same occurrence used by `R@0` in RA).
+/// `block@i` selects a whole top-level block without reordering its branches.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OrderAtom {
+    pub relation: syn::Ident,
+    pub occurrence: Option<usize>,
+}
+
+impl syn::parse::Parse for OrderAtom {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let relation = input.parse()?;
+        let occurrence = if input.peek(syn::Token![@]) {
+            input.parse::<syn::Token![@]>()?;
+            Some(input.parse::<LitInt>()?.base10_parse()?)
+        } else {
+            None
+        };
+        Ok(Self {
+            relation,
+            occurrence,
+        })
+    }
+}
+
+impl OrderAtom {
+    /// Resolve the selector in an already normalized top-level body.
+    pub fn resolve(&self, source: &cq::Program) -> syn::Result<usize> {
+        let relation = &self.relation;
+        if let Some(index) = self.occurrence {
+            let matches = match source.query.body.get(index) {
+                Some(BodyItem::Positive { atom }) => atom.relation == *relation,
+                Some(BodyItem::Block(_)) => relation == "block",
+                _ => false,
+            };
+            if !matches {
+                return Err(syn::Error::new_spanned(
+                    relation,
+                    if relation == "block" {
+                        format!("advice selector block@{index} does not name a top-level block")
+                    } else {
+                        format!(
+                            "advice selector {relation}@{index} does not name that top-level positive atom"
+                        )
+                    },
+                ));
+            }
+            Ok(index)
+        } else {
+            let mut occurrences = source
+                .query
+                .body
+                .iter()
+                .enumerate()
+                .filter_map(|(i, item)| {
+                    matches!(item, BodyItem::Positive { atom } if atom.relation == *relation)
+                        .then_some(i)
+                });
+            let first = occurrences.next();
+            if first.is_none() || occurrences.next().is_some() {
+                return Err(syn::Error::new_spanned(
+                    relation,
+                    "advice needs one top-level occurrence; qualify repeated relations as Relation@clause",
+                ));
+            }
+            Ok(first.unwrap())
+        }
+    }
+
+    /// Reduction endpoints are positive atoms, not whole block frontiers.
+    pub fn positive_clause(&self, source: &cq::Program) -> syn::Result<usize> {
+        let clause = self.resolve(source)?;
+        if !matches!(source.query.body[clause], BodyItem::Positive { .. }) {
+            return Err(syn::Error::new_spanned(
+                &self.relation,
+                "reduction advice requires a top-level positive atom, not a block",
+            ));
+        }
+        Ok(clause)
+    }
+}
+
 /// Author a coarse top-level relation order without rewriting the query.
-/// Every named relation must occur exactly once at this level. Unnamed clauses
-/// retain written priority after the named relations; opaque Rust still obeys
-/// the ordinary readiness and Before contract. Nested blocks keep written order.
+/// Unqualified relations must occur exactly once; `R@i` selects the positive
+/// atom named R at normal-body clause i, including non-atom clauses in the
+/// numbering. `block@i` selects a block as a unit. Unnamed clauses retain
+/// written priority after named atoms/blocks. Opaque Rust still obeys readiness
+/// and Before; nested blocks keep their internal order.
 pub fn compile_explicit(
     source: &cq::Program,
-    relations: &[syn::Ident],
+    relations: &[OrderAtom],
 ) -> syn::Result<valuation::Program> {
     cq::normal::check(source)?;
     let context = BTreeSet::new();
-    let clauses = clauses(&source.query.body, &context);
+    let types = declared_types(source, &source.query.body)?;
+    let clauses = clauses(&source.query.body, &context, &types);
     let mut priorities = BTreeMap::new();
-    for (priority, relation) in relations.iter().enumerate() {
-        let occurrences: Vec<_> = source
-            .query
-            .body
-            .iter()
-            .enumerate()
-            .filter_map(|(i, item)| {
-                matches!(item, BodyItem::Positive { atom } if atom.relation == *relation)
-                    .then_some(i)
-            })
-            .collect();
-        if occurrences.len() != 1 {
+    for (priority, selector) in relations.iter().enumerate() {
+        let relation = &selector.relation;
+        let occurrence = selector.resolve(source)?;
+        if priorities.insert(occurrence, priority).is_some() {
             return Err(syn::Error::new_spanned(
                 relation,
-                "order advice needs one top-level occurrence",
-            ));
-        }
-        if priorities.insert(occurrences[0], priority).is_some() {
-            return Err(syn::Error::new_spanned(
-                relation,
-                "duplicate relation in order advice",
+                "duplicate atom occurrence in order advice",
             ));
         }
     }
@@ -723,6 +791,14 @@ pub fn compile_explicit(
     Ok(program)
 }
 
+fn declared_types(
+    source: &cq::Program,
+    body: &cq::CommaList<BodyItem>,
+) -> syn::Result<BTreeMap<String, syn::Type>> {
+    let schema = source.inputs().map(|d| (symbol_name(&d.name), d)).collect();
+    cq::blocks::types(&schema, body, &BTreeMap::new())
+}
+
 fn compile_body(
     source: &cq::Program,
     options: &Options,
@@ -730,7 +806,8 @@ fn compile_body(
     parent: Option<(valuation::Occurrence, usize)>,
 ) -> syn::Result<Vec<valuation::Step>> {
     let query = &source.query;
-    let clauses = clauses(&query.body, context);
+    let types = declared_types(source, &query.body)?;
+    let clauses = clauses(&query.body, context, &types);
     let hypergraph = cq::hypergraph::Analysis::of_body(&query.body, context);
     let (sequence, mut variables) = match options.heuristic {
         Heuristic::Filtered => {
@@ -894,6 +971,7 @@ pub fn check(
         ));
     }
     check_steps(
+        source,
         &source.query.body,
         &target.valuation.steps,
         &analysis,
@@ -903,6 +981,7 @@ pub fn check(
 }
 
 fn check_steps(
+    source: &cq::Program,
     body: &cq::CommaList<BodyItem>,
     steps: &[valuation::Step],
     analysis: &valuation::Analysis,
@@ -1005,7 +1084,8 @@ fn check_steps(
                 .flatten()
                 .cloned()
                 .collect();
-            let facts = clauses(body, &context);
+            let types = declared_types(source, body)?;
+            let facts = clauses(body, &context, &types);
             let graph = cq::hypergraph::Analysis::of_body(body, &context);
             let mut filters = cq::hypergraph::filter_ranks(body, &graph);
             if let Some(groups) = join_branches {
@@ -1064,6 +1144,7 @@ fn check_steps(
                     };
                     for (j, arm) in block.branches.iter().enumerate() {
                         check_steps(
+                            source,
                             &written.branches[j].body,
                             &arm.steps,
                             &analysis.branches[&a.clause()][j],

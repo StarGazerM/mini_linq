@@ -6,6 +6,37 @@ pub mod build {
     use super::*;
     use cuda_device::{kernel, launch_bounds, launch_contract};
 
+    /// Exact numeric upload bounds. Every lane participates in the warp
+    /// reduction, including lanes outside a short final input prefix.
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub fn numeric_bounds(input: *const i64, rows: u32, partial: *mut i64) {
+        let lane = thread::index_1d().get();
+        let stride = thread::gridDim_x() as usize * 256;
+        let mut row = lane;
+        let mut min = i64::MAX;
+        let mut max = i64::MIN;
+        while row < rows as usize {
+            let value = unsafe { *input.add(row) };
+            min = min.min(value);
+            max = max.max(value);
+            row += stride;
+        }
+        let mut distance = 16;
+        while distance > 0 {
+            min = min.min(cuda_device::warp::shuffle_xor_u64(min as u64, distance) as i64);
+            max = max.max(cuda_device::warp::shuffle_xor_u64(max as u64, distance) as i64);
+            distance /= 2;
+        }
+        if lane % 32 == 0 {
+            unsafe {
+                *partial.add((lane / 32) * 2) = min;
+                *partial.add((lane / 32) * 2 + 1) = max;
+            }
+        }
+    }
+
     /// Decode a key through an optional base-row permutation.
     #[kernel]
     #[launch_bounds(256)]

@@ -22,6 +22,9 @@ pub use catalog::select_from_catalog;
 mod evidence;
 pub use evidence::{evidence, record_evidence, record_evidence_in};
 
+mod group;
+pub use group::{group_without_canon, group_without_canon_in};
+
 mod adaptive;
 pub use adaptive::{
     AdaptiveCandidate, adaptive, adaptive_candidates, adaptive_candidates_in, adaptive_choose,
@@ -194,7 +197,7 @@ pub fn tile_in(
     let Tile { name, n, items } = syn::parse2(arguments)?;
     let index = definition(source, &name)?;
     let mut target = source.clone();
-    let analysis = checker.check(source)?;
+    let analysis = checker.check_shared(source)?;
     if matches!(
         source.sequence.definitions[index].term,
         Term::Store { capacity: None, .. }
@@ -354,7 +357,7 @@ pub fn grade_definitions_in(
             "cannot extend a different graded machine",
         ));
     }
-    checker.check_rewrite_in(source, source)?;
+    checker.check_shared(source)?;
     let graded = source.graded.get_or_insert_with(|| Graded {
         machine: machine.clone(),
         grades: Vec::new(),

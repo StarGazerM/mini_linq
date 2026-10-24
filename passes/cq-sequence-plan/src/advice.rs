@@ -18,6 +18,7 @@ impl Parse for Advice {
         parenthesized!(arguments in input);
         let result = match kind.to_string().as_str() {
             "store" => Self::Store(arguments.parse()?),
+            "group_without_canon" => Self::GroupWithoutCanon(arguments.parse()?),
             "lookup_first" => Self::LookupFirst(Box::new(arguments.parse()?)),
             "adaptive" => Self::Adaptive(arguments.parse()?),
             "store_level" => Self::StoreLevel(arguments.parse()?),
@@ -83,6 +84,7 @@ impl ToTokens for Advice {
             Self::Evidence(evidence) => quote!(#evidence),
             Self::LookupFirst(arguments) => quote!(lookup_first(#arguments)),
             Self::Store(name) => quote!(store(#name)),
+            Self::GroupWithoutCanon(name) => quote!(group_without_canon(#name)),
             Self::StoreLevel(name) => quote!(store_level(#name)),
             Self::Adaptive(arguments) => quote!(adaptive(#arguments)),
             Self::Publish { name, producer } => quote!(publish(#name, #producer)),
@@ -121,6 +123,7 @@ mod tests {
     fn authored_advice_is_the_serialized_planner_trace() {
         for invocation in [
             "store(result)",
+            "group_without_canon(grouped)",
             "store_level(joined)",
             "publish(result, producer)",
             "tile(result, 256)",

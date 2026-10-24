@@ -81,7 +81,7 @@ pub fn adaptive_candidates_in(
     checker: &mut cq_lang_sequence::contract::Checker,
     source: &Program,
 ) -> syn::Result<Vec<AdaptiveCandidate>> {
-    let analysis = checker.check(source)?;
+    let analysis = checker.check_shared(source)?;
     if !plain(source)? {
         return Ok(Vec::new());
     }
@@ -137,7 +137,7 @@ pub fn apply_adaptive_in(
     source: &Program,
     candidate: &AdaptiveCandidate,
 ) -> syn::Result<Program> {
-    checker.check(source)?;
+    checker.check_shared(source)?;
     let endpoints = covering_joins(source, candidate)?;
     let mut target = source.clone();
     for endpoint in endpoints {
@@ -296,7 +296,7 @@ fn prepare(
     candidate: &AdaptiveCandidate,
     requested: &Ident,
 ) -> syn::Result<(Program, Ident, Term, Term)> {
-    let analysis = checker.check(source)?;
+    let analysis = checker.check_shared(source)?;
     if source.graded.is_some() {
         return Err(syn::Error::new_spanned(
             &candidate.filter,
@@ -391,6 +391,7 @@ fn prepare(
                 pending.push(join.left.clone());
             }
             Operator::Union(union) => pending.extend(union.operands.iter().cloned()),
+            Operator::Project(project) => pending.push(project.input.clone()),
             _ => {
                 return Err(syn::Error::new_spanned(
                     &name,
@@ -439,7 +440,7 @@ fn prepare(
                 ) && join.right == keyed.right
                     && join.columns == keyed.columns
             }
-            Operator::Union(_) => false,
+            Operator::Union(_) | Operator::Project(_) => false,
             _ => {
                 return Err(syn::Error::new_spanned(
                     &definition.name,
@@ -469,7 +470,26 @@ fn prepare(
     let joined = fresh(&filtered, "alternatives", &mut occupied);
     let redirect = BTreeMap::from([(symbol_name(&filtered), joined.clone())]);
     let mut prepared = source.clone();
-    copies.push(syn::parse_quote!(#joined = pipe union #filtered, #raw;));
+    // A union otherwise restores the complete relational heading, including
+    // dead opaque columns that neither branch carries. Project both checked
+    // alternatives to the original live layout before joining their support.
+    let columns = &analysis.structures.layouts[&symbol_name(&filtered)];
+    let project =
+        columns.len() != analysis.structures.physical.headings[&symbol_name(&filtered)].len();
+    let (yes, no) = if project {
+        let yes = fresh(&filtered, "live", &mut occupied);
+        let no = fresh(&raw, "live", &mut occupied);
+        let columns: Vec<_> = columns
+            .iter()
+            .map(|column| Ident::new(column, filtered.span()))
+            .collect();
+        copies.push(syn::parse_quote!(#yes = pipe project #filtered keep {#(#columns),*};));
+        copies.push(syn::parse_quote!(#no = pipe project #raw keep {#(#columns),*};));
+        (yes, no)
+    } else {
+        (filtered.clone(), raw.clone())
+    };
+    copies.push(syn::parse_quote!(#joined = pipe union #yes, #no;));
     let inserted = copies.len();
     prepared
         .structures
@@ -533,9 +553,19 @@ fn prepare(
             "adaptive join lacks an explicit Sequence producer",
         ));
     }
+    if project {
+        terms.push(cq_lang_sequence::Definition {
+            name: yes.clone(),
+            term: Term::Map(yes.clone(), Box::new(Term::Ref(filtered.clone()))),
+        });
+        terms.push(cq_lang_sequence::Definition {
+            name: no.clone(),
+            term: Term::Map(no.clone(), Box::new(Term::Ref(raw.clone()))),
+        });
+    }
     terms.push(cq_lang_sequence::Definition {
         name: joined.clone(),
-        term: Term::Union(vec![Term::Ref(filtered.clone()), Term::Ref(raw.clone())]),
+        term: Term::Union(vec![Term::Ref(yes.clone()), Term::Ref(no.clone())]),
     });
     let inserted = terms.len();
     prepared
@@ -547,7 +577,7 @@ fn prepare(
         rewrite_term(&mut definition.term, &redirect, &unchanged);
     }
     let prepared = checked_in(checker, source, prepared)?;
-    Ok((prepared, joined, Term::Ref(filtered), Term::Ref(raw)))
+    Ok((prepared, joined, Term::Ref(yes), Term::Ref(no)))
 }
 
 fn rename(name: &mut Ident, replacements: &BTreeMap<String, Ident>) -> bool {

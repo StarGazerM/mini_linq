@@ -16,7 +16,7 @@ fn rows<const N: usize>(path: &Path) -> Result<Vec<[i64; N]>, Error> {
             line.clear();
             continue;
         }
-        let mut cells = line.trim_end().split(|c: char| c == ',' || c == '\t');
+        let mut cells = line.trim_end().split([',', '\t']);
         let mut row = [0; N];
         for (i, value) in row.iter_mut().enumerate() {
             let cell = cells

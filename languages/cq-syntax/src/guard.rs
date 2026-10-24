@@ -1,5 +1,5 @@
-//! Recognize Rust's comparison trait operations under the Eq/Ord premises.
-//! All other expressions remain opaque. Only a top-level conjunction may be
+//! Recognize comparisons under Eq/Ord and the typed CQ-Arith extension.
+//! Other expressions remain opaque. Only a top-level conjunction may be
 //! split: its relational conjuncts restrict the domain of its residual guard.
 use crate::{
     Constraint,
@@ -55,6 +55,56 @@ pub fn split(expression: &Expr, query_names: &BTreeSet<String>) -> Split {
     result
 }
 
+/// Typed CQ-GuardRecognize/CQ-GuardSplit extension. Arithmetic predicates retain
+/// Guard syntax in later IRs, but their totality is rederived from declared types.
+pub fn split_arithmetic(
+    expression: &Expr,
+    types: &std::collections::BTreeMap<String, syn::Type>,
+) -> (Vec<Expr>, Option<Expr>) {
+    fn collect(
+        e: &Expr,
+        types: &std::collections::BTreeMap<String, syn::Type>,
+        locals: &mut BTreeSet<String>,
+        recognized: &mut Vec<Expr>,
+        residual: &mut Option<Expr>,
+    ) {
+        if let Expr::Binary(b) = unparen(e) {
+            if b.attrs.is_empty() && matches!(b.op, BinOp::And(_)) {
+                collect(&b.left, types, locals, recognized, residual);
+                collect(&b.right, types, locals, recognized, residual);
+                return;
+            }
+        }
+        if crate::rust::free_variables(e)
+            .dependencies(locals)
+            .is_empty()
+            && crate::arithmetic::predicate(e, types).is_some()
+        {
+            recognized.push(e.clone());
+        } else {
+            *residual = Some(match residual.take() {
+                None => e.clone(),
+                Some(left) => syn::parse_quote!(#left && #e),
+            });
+            if let Expr::Let(binding) = unparen(e) {
+                locals.extend(crate::rust::bindings(&binding.pat).iter().map(symbol_name));
+            }
+        }
+    }
+    let (mut recognized, mut residual) = (Vec::new(), None);
+    collect(
+        expression,
+        types,
+        &mut BTreeSet::new(),
+        &mut recognized,
+        &mut residual,
+    );
+    if recognized.is_empty() {
+        residual = Some(expression.clone());
+    }
+    (recognized, residual)
+}
+
 fn unparen(mut e: &Expr) -> &Expr {
     loop {
         match e {
@@ -65,7 +115,7 @@ fn unparen(mut e: &Expr) -> &Expr {
     }
 }
 
-fn term(e: &Expr, names: &BTreeSet<String>, locals: &BTreeSet<String>) -> Option<Term> {
+pub(crate) fn term(e: &Expr, names: &BTreeSet<String>, locals: &BTreeSet<String>) -> Option<Term> {
     let e = unparen(e);
     if let Expr::Path(p) = e {
         if p.attrs.is_empty() {

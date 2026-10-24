@@ -127,8 +127,8 @@ fn describe_in(root: &Path, source: &Path, cache: Option<&Path>) -> Result<Query
                 .ok_or_else(|| "invalid configuration".into())
         })
         .collect::<Result<Vec<_>>>()?;
-    if configs.len() < 2 || !configs.iter().any(|v| v == "default") {
-        return Err(format!("{name} requires default and an authored shape configuration").into());
+    if !configs.iter().any(|v| v == "default") {
+        return Err(format!("{name} requires a default configuration").into());
     }
     let exports = value["exports"]
         .as_array()

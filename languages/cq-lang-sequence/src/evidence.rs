@@ -1,4 +1,4 @@
-//! Untrusted planning advice. These facts never establish a language premise.
+//! Planning estimates and explicitly asserted relational key premises.
 //!
 //! ```text
 //! evidence {
@@ -12,16 +12,16 @@
 //! ```
 //! Subjects may name declared relations, Physical results, or Sequence results.
 //! Column references use the subject's heading. Counts and selectivities also
-//! accept scalar Sequence definitions. Contradictory facts are retained; scalar
-//! consumers use the last authored fact. No estimate changes lengths, capacities,
-//! uniqueness premises, provider capabilities, or generated runtime checks.
+//! accept scalar Sequence definitions. Contradictory estimates are retained;
+//! scalar consumers use the last authored fact. A key is an author assertion:
+//! false keys may change grouped answers when canonicalization is eliminated.
 
 use cq_syntax::symbol_name;
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
-use syn::{Ident, LitInt, Token, braced, bracketed};
+use syn::{Ident, LitInt, Token, braced, bracketed, parenthesized};
 
 use crate::{Analysis, Program};
 
@@ -35,7 +35,7 @@ pub(crate) mod kw {
     syn::custom_keyword!(sorted);
 }
 
-/// Ordered, untrusted estimates used only to rank checked candidates.
+/// Ordered estimates and author-asserted keys, recorded with checked analysis.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Evidence {
     pub facts: Vec<EvidenceFact>,
@@ -48,8 +48,7 @@ pub struct Selectivity {
     pub denominator: u64,
 }
 
-/// Facts are metadata, including keys and foreign keys: neither licenses removal
-/// of a lookup, a duplicate, a filter, or any other answer-producing operation.
+/// Keys assert unique physical rows per key; all other facts remain estimates.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EvidenceFact {
     Count {
@@ -105,8 +104,7 @@ impl Evidence {
         })
     }
 
-    /// Whether this exact column set has an authored key estimate. This is not
-    /// a uniqueness certificate and must never justify a semantic rewrite.
+    /// Whether this exact column set has an author-asserted key premise.
     pub fn has_key(&self, subject: &str, columns: &[String]) -> bool {
         self.facts.iter().any(|fact| match fact {
             EvidenceFact::Key {
@@ -354,6 +352,15 @@ impl Parse for EvidenceFact {
                 subject: input.parse()?,
                 columns: columns(input)?,
             }
+        } else if lookahead.peek(Ident) {
+            let subject = input.parse()?;
+            let body;
+            parenthesized!(body in input);
+            let columns = Punctuated::<Ident, Token![,]>::parse_terminated(&body)?
+                .into_iter()
+                .collect();
+            input.parse::<kw::key>()?;
+            Self::Key { subject, columns }
         } else {
             return Err(lookahead.error());
         };

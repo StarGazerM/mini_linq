@@ -5,21 +5,7 @@ use cq_lang_datalog_storage::{BodyItem, HostCanonical, Layout, Policy, Program, 
 use cq_syntax::symbol_name;
 use std::collections::BTreeSet;
 
-/// Admission and negative-key representation, independent of incremental coverage.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Representation {
-    #[default]
-    CpuHashSet,
-    DeviceSet,
-}
 pub fn compile(source: &incremental::Program) -> syn::Result<Program> {
-    compile_with_representation(source, Representation::CpuHashSet)
-}
-
-pub fn compile_with_representation(
-    source: &incremental::Program,
-    representation: Representation,
-) -> syn::Result<Program> {
     let analysis = incremental::contract::check(source)?;
     let (layouts, delta_layouts) = choose_layouts(source, &analysis);
     let mut target = Program {
@@ -61,15 +47,9 @@ pub fn compile_with_representation(
         reads: Vec::new(),
         negations: Vec::new(),
         certificates: Vec::new(),
-        policy: match representation {
-            Representation::CpuHashSet => Policy {
-                insertion: syn::parse_quote!(all_columns),
-                negation_keys: syn::parse_quote!(borrowed),
-            },
-            Representation::DeviceSet => Policy {
-                insertion: syn::parse_quote!(device_set_all_columns),
-                negation_keys: syn::parse_quote!(device_set_owned),
-            },
+        policy: Policy {
+            insertion: syn::parse_quote!(all_columns),
+            negation_keys: syn::parse_quote!(borrowed),
         },
     };
     (target.reads, target.negations) = cq_lang_datalog_storage::read_plan(&target, &analysis)?;

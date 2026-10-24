@@ -1,5 +1,5 @@
 [workspace]
-members = ["languages/*", "passes/*", "support", "print", "facade/*", "oracle", "oracle/shared", "oracle/engines/*", "doop", "doop/shared", "doop/engines/*", "testkit", "test-passes"]
+members = ["languages/*", "passes/*", "support", "print", "facade/*", "oracle", "oracle/shared", "oracle/engines/*", "doop", "doop/shared", "doop/engines/*", "ddisasm", "testkit", "test-passes"]
 default-members = ["facade/cq-datalog"]
 resolver = "3"
 

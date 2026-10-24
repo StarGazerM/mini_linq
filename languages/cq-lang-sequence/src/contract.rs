@@ -29,60 +29,126 @@ struct Fact {
     materializes: bool,
     /// A key proved for these positions, not merely for their relational support.
     unique: Option<Vec<String>>,
-    reads: Vec<(String, Vec<String>)>,
+    reads: BTreeSet<(String, Vec<String>)>,
 }
 
 struct Checked<'a> {
     program: &'a Program,
     analysis: Analysis,
     facts: BTreeMap<String, Fact>,
-    physical: BTreeMap<String, usize>,
+    stored_results: BTreeSet<String>,
+    result_keys: BTreeMap<String, (String, Vec<String>)>,
+    stored_result_keys: BTreeMap<String, (String, Vec<String>)>,
+    prefix: &'a StructuresProof,
     support: &'a lookup_semantics::Context,
-    queries: std::cell::OnceCell<std::rc::Rc<lookup_semantics::Queries>>,
+}
+
+type LookupIndex = BTreeMap<String, BTreeMap<Vec<String>, Vec<(usize, String)>>>;
+
+struct StructuresProof {
+    program: cq_lang_structures::Program,
+    analysis: cq_lang_structures::Analysis,
+    physical: BTreeMap<String, usize>,
+    lookups: LookupIndex,
+    queries: std::rc::Rc<lookup_semantics::Queries>,
 }
 
 struct CheckedProof {
-    program: Program,
-    analysis: Analysis,
-    facts: BTreeMap<String, Fact>,
+    prefix: std::rc::Rc<StructuresProof>,
+    sequence: crate::Sequence,
+    evidence: crate::Evidence,
+    analysis: std::rc::Rc<Analysis>,
+    facts: std::rc::Rc<BTreeMap<String, Fact>>,
 }
 
 /// Proof context shared by every checked rewrite in a planning invocation.
 #[derive(Default)]
 pub struct Checker {
     support: lookup_semantics::Context,
-    structures:
-        std::cell::RefCell<Vec<(cq_lang_structures::Program, cq_lang_structures::Analysis)>>,
+    structures: std::cell::RefCell<Vec<std::rc::Rc<StructuresProof>>>,
     proofs: std::cell::RefCell<Vec<std::rc::Rc<CheckedProof>>>,
 }
 
 impl Checker {
+    fn remember(&self, proof: CheckedProof) -> std::rc::Rc<CheckedProof> {
+        let mut proofs = self.proofs.borrow_mut();
+        // Keep the invocation's original source while exploring alternatives.
+        if proofs.len() == 3 {
+            proofs.remove(1);
+        }
+        let proof = std::rc::Rc::new(proof);
+        proofs.push(proof.clone());
+        proof
+    }
+
+    /// Seed an invocation with its checked source. Opaque syntax stays in the
+    /// prefix proof; subsequent Sequence proofs refer to that interned identity.
+    pub fn new(program: &Program) -> syn::Result<Self> {
+        let mut checker = Self::default();
+        checker.check_shared(program)?;
+        Ok(checker)
+    }
+
     fn structures(
         &self,
         program: &cq_lang_structures::Program,
-    ) -> syn::Result<cq_lang_structures::Analysis> {
-        if let Some((_, analysis)) = self
+    ) -> syn::Result<std::rc::Rc<StructuresProof>> {
+        if let Some(proof) = self
             .structures
             .borrow()
             .iter()
             .rev()
-            .find(|(checked, _)| checked == program)
+            .find(|proof| proof.program == *program)
         {
-            return Ok(analysis.clone());
+            return Ok(proof.clone());
+        }
+        let mut lookups = LookupIndex::new();
+        for (index, definition) in program.physical.program.definitions.iter().enumerate() {
+            if let Operator::Probe(_, keyed) | Operator::Merge(_, keyed) = &definition.operator {
+                let mut keys: Vec<_> = keyed.columns.iter().map(symbol_name).collect();
+                keys.sort();
+                lookups
+                    .entry(symbol_name(&keyed.right))
+                    .or_default()
+                    .entry(keys)
+                    .or_default()
+                    .push((index, symbol_name(&keyed.left)));
+            }
         }
         let analysis = cq_lang_structures::contract::check(program)?;
+        let queries = self.support.queries(&program.physical, &analysis.physical);
+        let proof = std::rc::Rc::new(StructuresProof {
+            program: program.clone(),
+            analysis,
+            physical: program
+                .physical
+                .program
+                .definitions
+                .iter()
+                .enumerate()
+                .map(|(i, definition)| (symbol_name(&definition.name), i))
+                .collect(),
+            lookups,
+            queries,
+        });
         let mut cache = self.structures.borrow_mut();
-        // Reexpression checks both prefixes; decomposition changes neither.
-        // Keep those two proofs without retaining every explored candidate.
-        if cache.len() == 2 {
-            cache.remove(0);
+        // Preserve the invocation's source and the two most recent prefixes.
+        if cache.len() == 3 {
+            cache.remove(1);
         }
-        cache.push((program.clone(), analysis.clone()));
-        Ok(analysis)
+        cache.push(proof.clone());
+        Ok(proof)
+    }
+
+    /// Borrow immutable checked facts without cloning their complete analysis.
+    /// Only structural facts are shared; machine grading is always rechecked.
+    pub fn check_shared(&mut self, program: &Program) -> syn::Result<std::rc::Rc<Analysis>> {
+        analyze(program, self).map(|checked| checked.analysis.clone())
     }
 
     pub fn check(&mut self, program: &Program) -> syn::Result<Analysis> {
-        analyze(program, self).map(|checked| checked.analysis.clone())
+        self.check_shared(program)
+            .map(|analysis| (*analysis).clone())
     }
 
     pub fn check_rewrite_in(&mut self, source: &Program, target: &Program) -> syn::Result<()> {
@@ -109,18 +175,33 @@ pub fn check(program: &Program) -> syn::Result<Analysis> {
 }
 
 fn analyze(program: &Program, context: &Checker) -> syn::Result<std::rc::Rc<CheckedProof>> {
-    if let Some(proof) = context.proofs.borrow().iter().rev().find(|proof| {
-        proof.program.sequence == program.sequence
-            && proof.program.evidence == program.evidence
-            && proof.program.structures == program.structures
-    }) {
-        return Ok(proof.clone());
+    let prefix = context.structures(&program.structures)?;
+    analyze_in(program, context, prefix)
+}
+
+fn analyze_in(
+    program: &Program,
+    context: &Checker,
+    prefix: std::rc::Rc<StructuresProof>,
+) -> syn::Result<std::rc::Rc<CheckedProof>> {
+    let previous = context
+        .proofs
+        .borrow()
+        .iter()
+        .rev()
+        .find(|proof| {
+            std::rc::Rc::ptr_eq(&proof.prefix, &prefix)
+                && proof.sequence == program.sequence
+                && proof.evidence == program.evidence
+        })
+        .cloned();
+    if let Some(proof) = previous {
+        return Ok(proof);
     }
-    let structures = context.structures(&program.structures)?;
     let mut checker = Checked {
         program,
         analysis: Analysis {
-            structures,
+            structures: prefix.analysis.clone(),
             evidence: program.evidence.clone(),
             results: BTreeMap::new(),
             lengths: BTreeMap::new(),
@@ -129,6 +210,7 @@ fn analyze(program: &Program, context: &Checker) -> syn::Result<std::rc::Rc<Chec
             views: BTreeSet::new(),
             stores: BTreeMap::new(),
             capabilities: BTreeMap::new(),
+            provider_reads: BTreeMap::new(),
             levels: BTreeMap::new(),
             dispatches: Vec::new(),
             resources: BTreeMap::new(),
@@ -137,17 +219,11 @@ fn analyze(program: &Program, context: &Checker) -> syn::Result<std::rc::Rc<Chec
             obligations: Vec::new(),
         },
         facts: BTreeMap::new(),
-        physical: program
-            .structures
-            .physical
-            .program
-            .definitions
-            .iter()
-            .enumerate()
-            .map(|(i, definition)| (symbol_name(&definition.name), i))
-            .collect(),
+        stored_results: BTreeSet::new(),
+        result_keys: BTreeMap::new(),
+        stored_result_keys: BTreeMap::new(),
+        prefix: &prefix,
         support: &context.support,
-        queries: std::cell::OnceCell::new(),
     };
     for definition in &program.sequence.definitions {
         let name = symbol_name(&definition.name);
@@ -174,6 +250,23 @@ fn analyze(program: &Program, context: &Checker) -> syn::Result<std::rc::Rc<Chec
             fact.meaning = Meaning::Result(name.clone());
         }
         if let Meaning::Result(result) = &fact.meaning {
+            if fact.materializes {
+                checker.stored_results.insert(result.clone());
+            }
+            if let Some(key) = &fact.unique {
+                // Match facts.values().find_map's lexical definition order,
+                // independently for all facts and actual publications.
+                let indices = std::iter::once(&mut checker.result_keys)
+                    .chain(fact.materializes.then_some(&mut checker.stored_result_keys));
+                for index in indices {
+                    let entry = index
+                        .entry(result.clone())
+                        .or_insert_with(|| (name.clone(), key.clone()));
+                    if name < entry.0 {
+                        *entry = (name.clone(), key.clone());
+                    }
+                }
+            }
             checker
                 .analysis
                 .results
@@ -223,17 +316,13 @@ fn analyze(program: &Program, context: &Checker) -> syn::Result<std::rc::Rc<Chec
         );
     }
     program.evidence.check(program, &checker.analysis)?;
-    let mut proofs = context.proofs.borrow_mut();
-    if proofs.len() == 2 {
-        proofs.remove(0);
-    }
-    let proof = std::rc::Rc::new(CheckedProof {
-        program: program.clone(),
-        analysis: checker.analysis,
-        facts: checker.facts,
-    });
-    proofs.push(proof.clone());
-    Ok(proof)
+    Ok(context.remember(CheckedProof {
+        prefix: prefix.clone(),
+        sequence: program.sequence.clone(),
+        evidence: program.evidence.clone(),
+        analysis: std::rc::Rc::new(checker.analysis),
+        facts: std::rc::Rc::new(checker.facts),
+    }))
 }
 
 fn has_capacity(term: &Term) -> bool {
@@ -255,10 +344,7 @@ impl Checked<'_> {
             .physical
             .hosts
             .contains_key(&result)
-            && !self.facts.values().any(|fact| {
-                fact.materializes
-                    && matches!(&fact.meaning, Meaning::Result(name) if name == &result)
-            })
+            && !self.stored_results.contains(&result)
         {
             return fail(
                 name,
@@ -280,7 +366,8 @@ impl Checked<'_> {
         Ok(())
     }
     fn physical(&self, name: &Ident) -> syn::Result<&physical::Definition> {
-        self.physical
+        self.prefix
+            .physical
             .get(&symbol_name(name))
             .map(|&index| &self.program.structures.physical.program.definitions[index])
             .ok_or_else(|| syn::Error::new_spanned(name, "BE-Alpha: unknown Physical result"))
@@ -296,10 +383,7 @@ impl Checked<'_> {
             if self.analysis.structures.physical.headings[left]
                 == self.analysis.structures.physical.headings[right]
                 && self.support.equal_in(
-                    self.queries.get_or_init(|| self.support.queries(
-                        &self.program.structures.physical,
-                        &self.analysis.structures.physical,
-                    )),
+                    &self.prefix.queries,
                     left,
                     right,
                 ))
@@ -331,22 +415,49 @@ impl Checked<'_> {
     }
     fn inferred_key(&self, name: &Ident, input: Option<&Fact>) -> Option<Vec<String>> {
         let definition = self.physical(name).ok()?;
+        // Formal rule BE-GroupKey: Asserted relation keys survive renaming and inherited-key transfer.
+        if let Operator::Rename(rename) = &definition.operator {
+            for fact in &self.program.evidence.facts {
+                if let crate::EvidenceFact::Key { subject, columns } = fact
+                    && *subject == rename.relation
+                    && let Some(key) = columns
+                        .iter()
+                        .filter(|column| {
+                            !rename.constants.as_ref().is_some_and(|constants| {
+                                constants.equalities.iter().any(|equality| {
+                                    equality.left == **column
+                                        && matches!(
+                                            equality.right,
+                                            cq_syntax::EqualityValue::Literal(_)
+                                        )
+                                })
+                            })
+                        })
+                        .map(|column| {
+                            rename
+                                .mapping
+                                .iter()
+                                .find(|mapping| mapping.source == *column)
+                                .map(|mapping| symbol_name(&mapping.target))
+                        })
+                        .collect::<Option<Vec<_>>>()
+                {
+                    return Some(key);
+                }
+            }
+        }
         physical::inherited_key(
             &definition.operator,
             &self.analysis.structures.physical.headings[&symbol_name(name)],
             &self.program.structures.physical.program.host_sets,
             |operand| {
-                let meaning = Meaning::Result(symbol_name(operand));
+                let result = symbol_name(operand);
                 if let Some(input) = input
-                    && input.meaning == meaning
+                    && matches!(&input.meaning, Meaning::Result(name) if *name == result)
                 {
                     return input.unique.clone();
                 }
-                self.facts.values().find_map(|fact| {
-                    (fact.meaning == meaning)
-                        .then(|| fact.unique.clone())
-                        .flatten()
-                })
+                self.result_keys.get(&result).map(|(_, key)| key.clone())
             },
         )
     }
@@ -424,21 +535,18 @@ impl Checked<'_> {
                     return fail(name, "BE-Alpha", "rows names no retained result or host");
                 };
                 Ok(Fact {
-                    unique: self
-                        .facts
-                        .values()
-                        .find_map(|fact| {
+                    unique: match &meaning {
+                        Meaning::Result(result) => self
+                            .stored_result_keys
+                            .get(result)
+                            .map(|(_, key)| key.clone())
+                            .or_else(|| self.inferred_key(name, None)),
+                        _ => self.facts.values().find_map(|fact| {
                             (fact.materializes && fact.meaning == meaning)
                                 .then(|| fact.unique.clone())
                                 .flatten()
-                        })
-                        .or_else(|| {
-                            physical
-                                .headings
-                                .contains_key(&name_string)
-                                .then(|| self.inferred_key(name, None))
-                                .flatten()
                         }),
+                    },
                     shape: vec![if matches!(meaning, Meaning::Result(_))
                         && matches!(self.physical(name)?.operator, Operator::Unit(_))
                     {
@@ -457,7 +565,7 @@ impl Checked<'_> {
                     depth: 0,
                     max_depth: 0,
                     materializes: false,
-                    reads: Vec::new(),
+                    reads: BTreeSet::new(),
                 })
             }
             Term::Ref(name) => self
@@ -525,6 +633,11 @@ impl Checked<'_> {
                         );
                     }
                     self.provider(provider, &columns, Capability::Membership)?;
+                    self.analysis
+                        .provider_reads
+                        .entry(owner.into())
+                        .or_default()
+                        .insert(symbol_name(provider));
                     fact.meaning = Meaning::Result(symbol_name(name));
                     fact.len = Len::Scan(owner.into());
                     *fact.shape.last_mut().expect("row level") = fact.len.clone();
@@ -548,13 +661,10 @@ impl Checked<'_> {
                         break;
                     }
                     let definition = self
-                        .program
-                        .structures
+                        .prefix
                         .physical
-                        .program
-                        .definitions
-                        .iter()
-                        .find(|definition| symbol_name(&definition.name) == current)
+                        .get(&current)
+                        .map(|&index| &self.program.structures.physical.program.definitions[index])
                         .ok_or_else(|| {
                             syn::Error::new_spanned(
                                 name,
@@ -616,8 +726,13 @@ impl Checked<'_> {
                 for (provider, keys, capability) in provider_reads {
                     let enumerated = matches!(capability, Capability::Exact | Capability::Ordered);
                     self.provider(&provider, &keys, capability)?;
+                    self.analysis
+                        .provider_reads
+                        .entry(owner.into())
+                        .or_default()
+                        .insert(symbol_name(&provider));
                     if enumerated {
-                        fact.reads.push((symbol_name(&provider), keys));
+                        fact.reads.insert((symbol_name(&provider), keys));
                     }
                 }
                 for segment in segments.iter().rev() {
@@ -681,27 +796,22 @@ impl Checked<'_> {
                     );
                 }
                 let ordered_left = self
-                    .program
-                    .structures
-                    .physical
-                    .program
-                    .definitions
-                    .iter()
-                    .find_map(|definition| {
-                        if let Operator::Merge(_, keyed) = &definition.operator {
-                            let mut columns: Vec<_> =
-                                keyed.columns.iter().map(symbol_name).collect();
-                            columns.sort();
-                            if self.same_meaning(
-                                &fact.meaning,
-                                &Meaning::Result(symbol_name(&keyed.left)),
-                            ) && symbol_name(&keyed.right) == provider_name
-                                && columns == names
-                            {
-                                return Some(keyed.left.clone());
-                            }
+                    .prefix
+                    .lookups
+                    .get(&provider_name)
+                    .and_then(|lookups| lookups.get(&names))
+                    .into_iter()
+                    .flatten()
+                    .find_map(|(index, input)| {
+                        let definition =
+                            &self.program.structures.physical.program.definitions[*index];
+                        if let Operator::Merge(_, keyed) = &definition.operator
+                            && self.same_meaning(&fact.meaning, &Meaning::Result(input.clone()))
+                        {
+                            Some(keyed.left.clone())
+                        } else {
+                            None
                         }
-                        None
                     });
                 let capability = if self
                     .analysis
@@ -716,6 +826,11 @@ impl Checked<'_> {
                     Capability::Exact
                 };
                 self.provider(provider, &names, capability)?;
+                self.analysis
+                    .provider_reads
+                    .entry(owner.into())
+                    .or_default()
+                    .insert(symbol_name(provider));
                 if let Some(left) = ordered_left {
                     // The ordered left stream is already carried by this term;
                     // only the independently probed right needs a prior store.
@@ -738,16 +853,12 @@ impl Checked<'_> {
                         self.provider_capability(&left, &names, Capability::Ordered)?;
                     }
                 }
-                fact.reads.push((provider_name.clone(), names.clone()));
+                fact.reads.insert((provider_name.clone(), names.clone()));
                 fact.unique = fact.unique.take().and_then(|mut key| {
                     let other = self
-                        .facts
-                        .values()
-                        .find_map(|candidate| {
-                            (candidate.meaning == Meaning::Result(provider_name.clone()))
-                                .then(|| candidate.unique.clone())
-                                .flatten()
-                        })
+                        .result_keys
+                        .get(&provider_name)
+                        .map(|(_, key)| key.clone())
                         .or_else(|| self.inferred_key(provider, None))?;
                     key.extend(other);
                     key.sort();
@@ -784,11 +895,19 @@ impl Checked<'_> {
                 *fact.shape.last_mut().expect("flatten leaves a row level") = fact.len.clone();
                 if let Meaning::Lookup(provider, keys, inner) = &fact.meaning {
                     if let Meaning::Result(_) = inner.as_ref() {
-                        if let Some(definition) = self.program.structures.physical.program.definitions.iter().find(|definition| {
-                            matches!(&definition.operator, Operator::Probe(_, keyed) | Operator::Merge(_, keyed)
-                                if self.same_meaning(inner.as_ref(), &Meaning::Result(symbol_name(&keyed.left))) && symbol_name(&keyed.right) == *provider
-                                    && { let mut columns: Vec<_> = keyed.columns.iter().map(symbol_name).collect(); columns.sort(); columns == *keys })
-                        }) {
+                        if let Some((index, _)) = self
+                            .prefix
+                            .lookups
+                            .get(provider)
+                            .and_then(|lookups| lookups.get(keys))
+                            .into_iter()
+                            .flatten()
+                            .find(|(_, input)| {
+                                self.same_meaning(inner.as_ref(), &Meaning::Result(input.clone()))
+                            })
+                        {
+                            let definition =
+                                &self.program.structures.physical.program.definitions[*index];
                             fact.meaning = Meaning::Result(symbol_name(&definition.name));
                         }
                     }
@@ -950,6 +1069,16 @@ impl Checked<'_> {
     ) -> syn::Result<()> {
         let name = symbol_name(provider);
         let key = (name.clone(), keys.to_vec());
+        if self.analysis.capabilities.get(&key).is_some_and(|current| {
+            *current == required
+                || *current == Capability::Ordered
+                || (*current == Capability::Range && required != Capability::Ordered)
+                || (*current == Capability::Exact && required == Capability::Membership)
+        }) {
+            // The complete provider/type/key obligation and its codec premise
+            // already hold. Repeated inherited reads add no stronger premise.
+            return Ok(());
+        }
         if required != Capability::Membership && self.analysis.structures.membership.contains(&key)
         {
             return fail(
@@ -1079,27 +1208,33 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
 }
 
 fn check_rewrite_in(source: &Program, target: &Program, context: &Checker) -> syn::Result<()> {
-    // Grade-only advice has identical structural obligations and final meaning.
-    // Reuse the complete proof without cloning its analysis for each grade.
-    if std::ptr::eq(source, target)
-        || (source.sequence == target.sequence
-            && source.evidence == target.evidence
-            && source.structures == target.structures)
-    {
-        let checked = context.proofs.borrow().iter().rev().any(|proof| {
-            proof.program.sequence == source.sequence
-                && proof.program.evidence == source.evidence
-                && proof.program.structures == source.structures
-        });
-        if !checked {
-            analyze(source, context)?;
-        }
+    // Resolve complete Structures syntax once per distinct endpoint. All
+    // subsequent proof comparisons use the interned prefix identity rather
+    // than revisiting opaque Rust tokens for each candidate Sequence proof.
+    let source_prefix = context.structures(&source.structures)?;
+    let target_prefix = if std::ptr::eq(source, target) {
+        source_prefix.clone()
+    } else {
+        context.structures(&target.structures)?
+    };
+    let unchanged = std::rc::Rc::ptr_eq(&source_prefix, &target_prefix);
+    let source_facts = analyze_in(source, context, source_prefix)?;
+    if unchanged && source.sequence == target.sequence && source.evidence == target.evidence {
         return Ok(());
     }
-    let source_facts = analyze(source, context)?;
-    let target_facts = analyze(target, context)?;
+    if (!unchanged || source.sequence != target.sequence)
+        && target.evidence.facts.iter().any(|fact| {
+            matches!(fact, crate::EvidenceFact::Key { .. }) && !source.evidence.facts.contains(fact)
+        })
+    {
+        return fail(
+            target,
+            "PL-Evidence",
+            "a structural rewrite cannot invent key premises; record author evidence first",
+        );
+    }
+    let target_facts = analyze_in(target, context, target_prefix)?;
     let support = &context.support;
-    let unchanged = source.structures == target.structures;
     let preserves_adapters = unchanged
         || source.structures.structures.entries.iter().all(|entry| {
             use cq_lang_structures::Structure;
@@ -1133,6 +1268,8 @@ fn check_rewrite_in(source: &Program, target: &Program, context: &Checker) -> sy
                 &source_facts.analysis.structures.physical,
                 &target.structures.physical,
                 &target_facts.analysis.structures.physical,
+                &source_facts.prefix.queries,
+                &target_facts.prefix.queries,
                 support,
             ))
     {
@@ -1156,11 +1293,9 @@ fn check_rewrite_in(source: &Program, target: &Program, context: &Checker) -> sy
     } else {
         matches!((&left, &right), (Some(Meaning::Result(left)), Some(Meaning::Result(right)))
         if support.same_result(
-            &source.structures.physical,
-            &source_facts.analysis.structures.physical,
+            &source_facts.prefix.queries,
             left,
-            &target.structures.physical,
-            &target_facts.analysis.structures.physical,
+            &target_facts.prefix.queries,
             right,
         ))
     };
@@ -1172,4 +1307,63 @@ fn check_rewrite_in(source: &Program, target: &Program, context: &Checker) -> sy
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn indexed_publication_keys_preserve_lexical_fact_order() {
+        let program: Program = syn::parse_quote! {
+            physical {
+                relation R(k:i32, value:i64);
+                r = pipe canon rename R@0 {k -> k, value -> value};
+                grouped = let group r by [k] { n: usize = count(); };
+                return grouped as answer(k,n);
+            }
+            structures {
+                r host scan = Reader [];
+                r canon = Canon;
+                grouped rows = Rows;
+            }
+            sequence {
+                source = canon rows r;
+                z_group = group grouped source;
+                before = rows grouped;
+                a_store = store canon z_group;
+                after = rows grouped;
+                zero_later = store z_group;
+                last = rows grouped;
+            }
+        };
+        let proof = analyze(&program, &Checker::default()).unwrap();
+        assert_eq!(proof.facts["before"].unique, Some(vec!["k".into()]));
+        for name in ["after", "last"] {
+            assert_eq!(proof.facts[name].unique, Some(vec!["k".into(), "n".into()]));
+        }
+    }
+
+    #[test]
+    fn indexed_publication_keys_do_not_promote_unstored_views() {
+        let program: Program = syn::parse_quote! {
+            physical {
+                relation R(a:i32);
+                r = pipe rename R@0 {a -> a};
+                output = pipe canon project r keep {a};
+                return output as answer(a);
+            }
+            structures { r host scan = Reader []; output canon = Canon; }
+            sequence {
+                a_view = canon rows r;
+                before = rows r;
+                z_store = store a_view;
+                after = rows r;
+                output = canon map output after;
+            }
+        };
+        let proof = analyze(&program, &Checker::default()).unwrap();
+        assert_eq!(proof.facts["before"].unique, None);
+        assert_eq!(proof.facts["after"].unique, Some(vec!["a".into()]));
+    }
 }

@@ -13,7 +13,7 @@ pub(super) struct Query {
     variables: usize,
 }
 
-pub(super) type Queries = BTreeMap<u32, Query>;
+pub(super) type Queries = BTreeMap<u32, std::rc::Rc<Query>>;
 #[derive(PartialEq, Eq, Hash)]
 enum NodeKey {
     Join {
@@ -123,15 +123,11 @@ impl Context {
 
     pub(super) fn same_result(
         &self,
-        source: &physical::Program,
-        source_analysis: &physical::Analysis,
+        source: &Queries,
         left: &str,
-        target: &physical::Program,
-        target_analysis: &physical::Analysis,
+        target: &Queries,
         right: &str,
     ) -> bool {
-        let source = self.queries(source, source_analysis);
-        let target = self.queries(target, target_analysis);
         source
             .get(&self.intern(left))
             .zip(target.get(&self.intern(right)))
@@ -142,16 +138,35 @@ impl Context {
 fn queries(program: &ProgramKey, context: &Context) -> Queries {
     let mut queries: Queries = BTreeMap::new();
     for (name, operator) in program {
+        // Aliases and equal-support alternatives share a proved query rather
+        // than copying all existential witnesses into another graph node.
+        if let NodeKey::Alias(input) = operator {
+            queries.insert(*name, queries[input].clone());
+            continue;
+        }
+        if let NodeKey::Union { operands, .. } = operator
+            && let Some(representative) = operands
+                .iter()
+                .map(|operand| &queries[operand])
+                .min_by_key(|query| (query.atoms.len(), query.variables))
+            && operands
+                .iter()
+                .all(|arm| equal(representative, &queries[arm], context))
+        {
+            // Prefer the smaller certified construction: an absorbed optional
+            // semijoin need not survive as redundant witnesses at every join.
+            queries.insert(*name, representative.clone());
+            continue;
+        }
         let mut query =
             match operator {
-                NodeKey::Alias(input) => queries[input].clone(),
                 NodeKey::Join {
                     semi,
                     left,
                     right,
                     columns,
                 } => {
-                    let mut left = queries[left].clone();
+                    let mut left = (*queries[left]).clone();
                     let right = &queries[right];
                     let mut variables: Vec<_> =
                         (left.variables..left.variables + right.variables).collect();
@@ -172,16 +187,6 @@ fn queries(program: &ProgramKey, context: &Context) -> Queries {
                     }
                     left
                 }
-                NodeKey::Union { operands, .. }
-                    if operands.first().is_some_and(|first| {
-                        let first = &queries[first];
-                        operands
-                            .iter()
-                            .all(|arm| equal(first, &queries[arm], context))
-                    }) =>
-                {
-                    queries[operands.first().expect("nonempty union")].clone()
-                }
                 NodeKey::Opaque(columns) | NodeKey::Union { columns, .. } => Query {
                     head: columns
                         .iter()
@@ -191,10 +196,11 @@ fn queries(program: &ProgramKey, context: &Context) -> Queries {
                     atoms: vec![(*name, (0..columns.len()).collect())],
                     variables: columns.len(),
                 },
+                NodeKey::Alias(_) => unreachable!("aliases share their input query"),
             };
         query.atoms.sort_unstable();
         query.atoms.dedup();
-        queries.insert(*name, query);
+        queries.insert(*name, std::rc::Rc::new(query));
     }
     queries
 }
@@ -453,6 +459,8 @@ pub(super) fn reexpression(
     source_analysis: &physical::Analysis,
     target: &physical::Program,
     target_analysis: &physical::Analysis,
+    left: &Queries,
+    right: &Queries,
     context: &Context,
 ) -> bool {
     let a = &source.program;
@@ -481,10 +489,8 @@ pub(super) fn reexpression(
     {
         return false;
     }
-    let left = context.queries(source, source_analysis);
-    let right = context.queries(target, target_analysis);
-    let old = opaque(source, &left, context);
-    let new = opaque(target, &right, context);
+    let old = opaque(source, left, context);
+    let new = opaque(target, right, context);
     if old.keys().ne(new.keys()) {
         return false;
     }
@@ -589,5 +595,59 @@ mod tests {
         };
         let repeated = queries(&graph, &context);
         assert!(equal(&repeated[&0], &repeated[&2], &context));
+        assert!(std::rc::Rc::ptr_eq(&repeated[&0], &repeated[&2]));
+    }
+
+    #[test]
+    fn adaptive_unions_share_the_smallest_proved_support() {
+        let context = Context::default();
+        let mut graph = vec![
+            (0, NodeKey::Opaque(vec![10])),
+            (1, NodeKey::Opaque(vec![10, 11])),
+            (
+                2,
+                NodeKey::Join {
+                    semi: true,
+                    left: 0,
+                    right: 1,
+                    columns: vec![10],
+                },
+            ),
+            (
+                3,
+                NodeKey::Join {
+                    semi: false,
+                    left: 2,
+                    right: 1,
+                    columns: vec![10],
+                },
+            ),
+            (
+                4,
+                NodeKey::Join {
+                    semi: false,
+                    left: 0,
+                    right: 1,
+                    columns: vec![10],
+                },
+            ),
+            (
+                5,
+                NodeKey::Union {
+                    operands: vec![3, 4],
+                    columns: vec![10, 11],
+                },
+            ),
+        ];
+        for name in 6..70 {
+            graph.push((name, NodeKey::Alias(name - 1)));
+        }
+        let checked = queries(&graph, &context);
+        assert_eq!(checked[&3].atoms.len(), 3);
+        assert_eq!(checked[&4].atoms.len(), 2);
+        assert!(equal(&checked[&3], &checked[&4], &context));
+        for name in 5..70 {
+            assert!(std::rc::Rc::ptr_eq(&checked[&name], &checked[&4]));
+        }
     }
 }

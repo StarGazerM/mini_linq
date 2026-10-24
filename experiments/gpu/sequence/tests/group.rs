@@ -82,3 +82,55 @@ fn gpu_grouped_counts_sums_extrema_and_canonical_valuations() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn gpu_keyed_group_reads_resident_columns_and_filters_before_folding() -> Result<()> {
+    let pool = Pool::new(0, 0, 0)?;
+    for raw in [
+        vec![(1u32, 1u32, 5i64), (1, 2, 5), (2, 1, -7)],
+        vec![(2, 1, -7)],
+        vec![],
+    ] {
+        let data = DeviceColumns::from_rows(
+            pool.clone(),
+            &raw,
+            &mut Dictionary::default(),
+            &[Codec::For; 3],
+        )?;
+        let result = cq_gpu_sequence_test_macros::sequence! {
+            physical {
+                relation R(k:u32,id:u32,value:i64) = (&data);
+                r = pipe rename R@0 {k -> k,id -> id,value -> value};
+                f = pipe canon select r if (value > 0);
+                grouped = let group f by [k] {
+                    n:usize=count(); total:i64=sum(value);
+                    low:Option<i64> = min(value); high:Option<i64> = max(value);
+                };
+                return grouped as answer(k,n,total,low,high);
+            }
+            structures {
+                r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,i64)> [];
+                f canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                grouped rows = ::cq_gpu_sequence_runtime::group::GroupedRows<_>;
+            }
+            sequence {
+                source=rows r;
+                feed=compact f source;
+                result=store group grouped feed;
+                output count;
+            }
+            graded gpu {source at host; feed at host; result at host;}
+            evidence { R(k,id) key; }
+        };
+        let actual: Vec<(u32, usize, i64, Option<i64>, Option<i64>)> = result.to_host()?;
+        assert_eq!(
+            actual,
+            if raw.iter().all(|row| row.2 <= 0) {
+                vec![]
+            } else {
+                vec![(1, 2, 10, Some(5), Some(5))]
+            }
+        );
+    }
+    Ok(())
+}

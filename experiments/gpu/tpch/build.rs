@@ -5,6 +5,9 @@ mod advice;
 mod manifest;
 #[path = "src/source.rs"]
 mod source;
+#[path = "src/stages.rs"]
+mod stages;
+mod build_stages;
 
 use manifest::{Manifest, Result};
 use proc_macro2::TokenStream;
@@ -30,7 +33,11 @@ fn checked<T>(
 ) -> CompileResult<T> {
     result.map_err(|error| Rejected {
         phase,
-        error: error.to_string(),
+        error: error
+            .into_iter()
+            .map(|error| error.to_string())
+            .collect::<Vec<_>>()
+            .join("\n"),
         term: term.to_token_stream().to_string(),
     })
 }
@@ -41,9 +48,22 @@ fn compile(
     pipeline: &advice::Pipeline,
     profile: &str,
 ) -> CompileResult<(TokenStream, serde_json::Value)> {
+    compile_stage(kernel, manifest, pipeline, profile, None, false)
+}
+
+fn compile_stage(
+    kernel: &source::Kernel,
+    manifest: &Manifest,
+    pipeline: &advice::Pipeline,
+    profile: &str,
+    publications: Option<&std::collections::BTreeMap<String, bool>>,
+    host: bool,
+) -> CompileResult<(TokenStream, serde_json::Value)> {
     let cpu_source = kernel.cpu_query();
+    // Registration passes a query name only for an authored hand profile.
+    let hand_profile = !matches!(profile, "automatic" | "advised" | "h05");
     let storage_schema = match pipeline.storage.as_str() {
-        "" => None,
+        "" | "tpch_dictionary" => None,
         "tpch_domains" => Some(gpu_compress_host::tpch::schema()),
         other => {
             return Err(Rejected {
@@ -55,6 +75,34 @@ fn compile(
     };
     let mut stored_types = std::collections::BTreeMap::new();
     let mut domains = std::collections::BTreeMap::new();
+    if publications.is_some() {
+        // Stages exchange authored integer domains, not narrowed manifest
+        // storage lanes. In particular Stock.quantity remains i64 for H11.
+        for relation in &kernel.relations {
+            for (column, logical) in &relation.columns {
+                if logical.to_token_stream().to_string() == "i64" {
+                    stored_types.insert(
+                        (relation.table.to_string(), column.to_string()), logical.clone(),
+                    );
+                }
+            }
+        }
+    }
+    if pipeline.storage == "tpch_dictionary" {
+        // Authored constant-only string queries use the manifest's existing
+        // column-local i32 dictionaries. The source adapter resolves literals;
+        // this does not change predicates or teach the GPU to execute Rust.
+        for relation in &kernel.relations {
+            for (column, logical) in &relation.columns {
+                if logical.to_token_stream().to_string() == "String" {
+                    stored_types.insert(
+                        (relation.table.to_string(), column.to_string()),
+                        syn::parse_quote!(i32),
+                    );
+                }
+            }
+        }
+    }
     if let Some(schema) = &storage_schema {
         for relation in &kernel.relations {
             let columns = schema
@@ -142,6 +190,13 @@ fn compile(
                 .insert(0, quote!(retain_streams(#leaf)).to_string());
         }
     }
+    if hand_profile {
+        checked(
+            "hand Physical choices",
+            &physical,
+            advice::hand_physical(&physical, profile, &mut pipeline),
+        )?;
+    }
     let physical = checked(
         "Physical advice",
         &physical,
@@ -162,15 +217,24 @@ fn compile(
             )?,
         );
     }
+    if hand_profile && profile != "h04" {
+        pipeline.structures.extend(checked(
+            "hand membership layout",
+            &default_structures,
+            advice::hand_membership(&default_structures),
+        )?);
+    }
     let selected = checked(
         "Structures advice",
         &default_structures,
         advice::structures(&default_structures, &pipeline.structures),
     )?;
+    let catalog = if host { cq_sequence_pull::catalog() } else { cq_gpu_sequence::catalog() };
+    let machine = if host { cq_sequence_pull::machine() } else { cq_gpu_sequence::machine() };
     let mut structures = checked(
         "catalog selection",
         &selected,
-        cq_sequence_plan::select_from_catalog(&selected, &cq_gpu_sequence::catalog()),
+        cq_sequence_plan::select_from_catalog(&selected, &catalog),
     )?;
     let facts = checked(
         "Structures check",
@@ -181,7 +245,7 @@ fn compile(
     // Record its uniform DeviceColumns adapter with the checked retype rewrite.
     for index in 0..structures.structures.entries.len() {
         let entry = &structures.structures.entries[index];
-        if matches!(entry.structure, cq_lang_structures::Structure::Host { .. }) {
+        if !host && matches!(entry.structure, cq_lang_structures::Structure::Host { .. }) {
             let host = &facts.physical.hosts[&entry.name.to_string()];
             let relation = physical
                 .program
@@ -189,6 +253,9 @@ fn compile(
                 .iter()
                 .find(|r| r.name == host.as_str())
                 .unwrap();
+            if publications.is_some_and(|inputs| inputs.get(&relation.name.to_string()) == Some(&false)) {
+                continue;
+            }
             if kernel
                 .derived
                 .iter()
@@ -209,7 +276,11 @@ fn compile(
                 &structures,
                 cq_rewrite_passes::retype(
                     &structures,
-                    quote!(entry(#index) => ::cq_gpu_runtime::DeviceColumns<'static, (#(#types,)*), ::cq_gpu_runtime::For>),
+                    if kernel.published.iter().any(|input| input.name == relation.name) {
+                        quote!(entry(#index) => ::cq_gpu_runtime::DeviceColumns<'static, (#(#types,)*)>)
+                    } else {
+                        quote!(entry(#index) => ::cq_gpu_runtime::DeviceColumns<'static, (#(#types,)*), ::cq_gpu_runtime::For>)
+                    },
                 ),
             )?;
         }
@@ -229,9 +300,44 @@ fn compile(
             facts: kernel
                 .relations
                 .iter()
-                .map(|relation| cq_lang_sequence::EvidenceFact::Count {
-                    subject: relation.name.clone(),
-                    rows: manifest.relations[&relation.table.to_string()].rows,
+                .flat_map(|relation| {
+                    let table = relation.table.to_string();
+                    let mut facts = vec![cq_lang_sequence::EvidenceFact::Count {
+                        subject: relation.name.clone(),
+                        rows: manifest.relations[&table].rows,
+                    }];
+                    // TPC-H's declared primary keys are assertions about the
+                    // dbgen input, not cardinality estimates. A projected loader
+                    // only carries a key when every key column is present.
+                    let key: &[&str] = match table.as_str() {
+                        "lineitem" => &["l_orderkey", "l_linenumber"],
+                        "orders" => &["o_orderkey"],
+                        "part" => &["p_partkey"],
+                        "partsupp" => &["ps_partkey", "ps_suppkey"],
+                        "supplier" => &["s_suppkey"],
+                        "customer" => &["c_custkey"],
+                        "nation" => &["n_nationkey"],
+                        "region" => &["r_regionkey"],
+                        _ => &[],
+                    };
+                    if !key.is_empty()
+                        && let Some(columns) = key
+                            .iter()
+                            .map(|key| {
+                                relation
+                                    .columns
+                                    .iter()
+                                    .find(|(name, _)| name == key)
+                                    .map(|(name, _)| name.clone())
+                            })
+                            .collect::<Option<Vec<_>>>()
+                    {
+                        facts.push(cq_lang_sequence::EvidenceFact::Key {
+                            subject: relation.name.clone(),
+                            columns,
+                        });
+                    }
+                    facts
                 })
                 .collect(),
         };
@@ -255,8 +361,12 @@ fn compile(
                 program: authored.program.clone(),
                 trace: Vec::new(),
             })
+        } else if host {
+            cq_sequence_plan::decompose(&authored.program, &machine, &catalog)
         } else if profile == "h05" {
             advice::h05_schedule(&authored.program)
+        } else if hand_profile {
+            advice::hand_schedule(&authored.program, profile)
         } else if profile == "automatic" {
             cq_sequence_plan::plan(
                 &authored.program,
@@ -285,18 +395,20 @@ fn compile(
         "sequence_trace": trace,
         "sequence_planned": planned.program.to_token_stream().to_string(),
         "cost": checked("PL-Cost", &planned.program,
-            cq_sequence_plan::cost(&planned.program, &cq_gpu_sequence::machine()))?.to_string(),
+            cq_sequence_plan::cost(&planned.program, &machine))?.to_string(),
     });
     let analysis = checked(
         "machine_grade",
         &planned.program,
-        cq_lang_sequence::check_grading(&planned.program, &cq_gpu_sequence::machine()),
+        cq_lang_sequence::check_grading(&planned.program, &machine),
     )?;
-    let gpu = checked(
-        "translate",
-        &planned.program,
-        cq_gpu_sequence::translate(&planned.program, &analysis),
-    )?;
+    let gpu = if host {
+        checked("host translate", &planned.program,
+            cq_sequence_pull::translate(&planned.program, &analysis))?
+    } else {
+        checked("translate", &planned.program,
+            cq_gpu_sequence::translate(&planned.program, &analysis))?
+    };
 
     // Independently select/lower Sequential from the identical Physical. No GPU
     // schedule, provider, partition, or canonicalization advice is copied over.
@@ -352,8 +464,7 @@ fn compile(
         })
         .collect();
     let row_types: Vec<_> = cq
-        .declarations
-        .iter()
+        .inputs()
         .map(|r| {
             let types = r.columns.iter().map(|c| &c.ty);
             quote!((#(#types,)*))
@@ -362,17 +473,12 @@ fn compile(
     let mut input_types = Vec::new();
     let mut bindings = Vec::new();
     let mut sequential_bindings = Vec::new();
-    for (index, relation) in cq
-        .declarations
-        .iter()
-        .take(kernel.relations.len())
-        .enumerate()
-    {
+    for (index, relation) in cq.inputs().take(kernel.relations.len()).enumerate() {
         let field = fields[index];
         let table = &tables[index];
         let names = &column_names[index];
         let row = &row_types[index];
-        if relation
+        if host || relation
             .columns
             .iter()
             .any(|column| column.ty.to_token_stream().to_string() == "String")
@@ -441,20 +547,38 @@ fn compile(
     let mut owned_outputs = Vec::new();
     for (index, ((_, ty), column)) in kernel.answer.iter().zip(&answer_columns).enumerate() {
         let output = syn::Index::from(index);
-        answer_types.push(
+        answer_types.push(if let Some(output) = cq.output() {
+            &output.columns[index].ty
+        } else {
             column
                 .as_ref()
                 .and_then(|column| stored_types.get(column))
-                .unwrap_or(ty),
-        );
+                .unwrap_or(ty)
+        });
         if let Some(domain) = column.as_ref().and_then(|column| domains.get(column)) {
             let decoder = format_ident!("domain_{index}");
             decode_bindings.push(quote!(let #decoder = data.catalog.domain(#domain)?;));
-            borrowed_outputs.push(quote!(#decoder.value(*row.#output)));
-            owned_outputs.push(quote!(#decoder.value(row.#output)));
+            borrowed_outputs.push(quote!(#decoder.value(*row.#output).to_string()));
+            owned_outputs.push(quote!(#decoder.value(row.#output).to_string()));
+        } else if kernel.is_standalone()
+            && ty.to_token_stream().to_string() == "String"
+            && answer_types.last().unwrap().to_token_stream().to_string() != "String"
+        {
+            let (table, column) = column
+                .as_ref()
+                .expect("encoded string output has an input domain");
+            let decoder = format_ident!("dictionary_{index}");
+            decode_bindings.push(
+                quote!(let #decoder = manifest.dictionary(manifest.column(#table, #column)?)?;),
+            );
+            borrowed_outputs.push(quote!(#decoder[*row.#output as usize].clone()));
+            owned_outputs.push(quote!(#decoder[row.#output as usize].clone()));
+        } else if ty.to_token_stream().to_string().starts_with("Option") {
+            borrowed_outputs.push(quote!(format!("{:?}", row.#output)));
+            owned_outputs.push(quote!(format!("{:?}", row.#output)));
         } else {
-            borrowed_outputs.push(quote!(*row.#output as i64));
-            owned_outputs.push(quote!(row.#output as i64));
+            borrowed_outputs.push(quote!(row.#output.to_string()));
+            owned_outputs.push(quote!(row.#output.to_string()));
         }
     }
     let (catalog_field, catalog_init, load_setup) = if storage_schema.is_some() {
@@ -470,9 +594,150 @@ fn compile(
         (
             quote!(),
             quote!(),
-            quote!(let mut loader = crate::loader::Loader::new(manifest, pool);),
+            quote!(let mut loader = crate::loader::Loader::new(manifest, pool.clone());),
         )
     };
+    if let Some(publications) = publications {
+        let names: Vec<_> = kernel.published.iter().map(|r| &r.name).collect();
+        let rows: Vec<_> = kernel.published.iter().map(|r| {
+            let types = r.columns.iter().map(|(_, ty)| ty);
+            quote!((#(#types,)*))
+        }).collect();
+        let inputs: Vec<_> = names.iter().zip(&rows).map(|(name, row)| {
+            if publications[&name.to_string()] {
+                quote!(cq_gpu_runtime::DeviceColumns<'static, #row>)
+            } else {
+                quote!(Vec<#row>)
+            }
+        }).collect();
+        let cpu_names: Vec<_> = (0..answer_types.len()).map(syn::Index::from).collect();
+        let own_row = {
+            let fields = answer_types.iter().zip(&cpu_names).map(|(ty, index)| {
+                quote!(<#ty as ::core::clone::Clone>::clone(
+                    ::core::borrow::Borrow::<#ty>::borrow(&row.#index)
+                ))
+            });
+            quote!((#(#fields,)*))
+        };
+        let host_inputs: Vec<_> = names.iter().filter(|name| publications[&name.to_string()])
+            .map(|name| quote!(let #name = #name.to_host()?;)).collect();
+        let nullable = answer_types.iter().any(|ty| ty.to_token_stream().to_string().starts_with("Option"));
+        let resident = !host && !nullable;
+        let output_type = if resident {
+            quote!(cq_gpu_runtime::DeviceColumns<'static, Answer>)
+        } else {
+            quote!(Vec<Answer>)
+        };
+        let execute = if host {
+            quote! {
+                let started = ::std::time::Instant::now();
+                #(#sequential_bindings)*
+                #(#host_inputs)*
+                let result = (#gpu).map(|row| #own_row).collect();
+                let elapsed = started.elapsed().as_secs_f64() * 1000.0;
+                cq_gpu_runtime::publish_timings(cq_gpu_runtime::Timings {
+                    build_ms: elapsed, total_ms: elapsed, wall_ms: elapsed, ..Default::default()
+                });
+                Ok(result)
+            }
+        } else {
+            let publish = if nullable {
+                quote!({
+                    let started = ::std::time::Instant::now();
+                    let result = output.to_host()?;
+                    let elapsed = started.elapsed().as_secs_f64() * 1000.0;
+                    let mut timing = cq_gpu_runtime::take_last_timings().ok_or("stage published no timings")?;
+                    timing.build_ms += elapsed;
+                    timing.total_ms += elapsed;
+                    timing.wall_ms += elapsed;
+                    cq_gpu_runtime::publish_timings(timing);
+                    result
+                })
+            } else if let Some(group) = &normal.query.group {
+                let columns: Vec<_> = group.keys.iter().chain(group.aggregates.iter().map(|a| &a.name)).collect();
+                let slots: Vec<_> = normal.query.head.args.iter().map(|argument| {
+                    let syn::Expr::Path(path) = argument else { unreachable!("checked normalized group head"); };
+                    columns.iter().position(|name| path.path.is_ident(*name)).expect("checked grouped output")
+                }).collect();
+                let bounds: Vec<_> = slots.iter().map(|&slot| {
+                    if slot < group.keys.len() {
+                        let key = columns[slot];
+                        for item in &cq.query.body {
+                            let cq_lang_cq::BodyItem::Positive { atom } = item else { continue; };
+                            let Some(field) = atom.args.iter().position(|arg| matches!(arg,
+                                syn::Expr::Path(path) if path.path.is_ident(key)
+                            )) else { continue; };
+                            let name = &atom.relation;
+                            let input = cq.inputs().find(|input| input.name == *name).unwrap();
+                            let published = publications.get(&name.to_string());
+                            let value = if published.is_some() { quote!(#name) } else { quote!(&data.#name) };
+                            let resident = published.copied().unwrap_or_else(|| !input.columns.iter()
+                                .any(|column| column.ty.to_token_stream().to_string() == "String"));
+                            if resident {
+                                return quote!((#value).storage().bounds[#field]);
+                            }
+                            let field = syn::Index::from(field);
+                            return quote!((#value).iter().fold(cq_gpu_runtime::Bounds::Empty, |bounds, row| {
+                                let value = row.#field as i64;
+                                match bounds {
+                                    cq_gpu_runtime::Bounds::Empty => cq_gpu_runtime::Bounds::Inclusive { min: value, max: value },
+                                    cq_gpu_runtime::Bounds::Inclusive { min, max } => cq_gpu_runtime::Bounds::Inclusive {
+                                        min: min.min(value), max: max.max(value),
+                                    },
+                                }
+                            }));
+                        }
+                    }
+                    quote!(cq_gpu_runtime::Bounds::Inclusive { min: i64::MIN, max: i64::MAX })
+                }).collect();
+                quote!({
+                    let started = ::std::time::Instant::now();
+                    let start = data.pool.stream().record_event(Some(::cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
+                    let result = unsafe { output.into_columns::<Answer>(&[#(#slots),*], &[#(#bounds),*])? };
+                    let end = data.pool.stream().record_event(Some(::cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
+                    data.pool.stream().synchronize()?;
+                    let elapsed = start.elapsed_ms(&end)? as f64;
+                    let mut timing = cq_gpu_runtime::take_last_timings().ok_or("group stage published no timings")?;
+                    timing.dedup_ms += elapsed;
+                    timing.total_ms += elapsed;
+                    timing.wall_ms += started.elapsed().as_secs_f64() * 1000.0;
+                    cq_gpu_runtime::publish_timings(timing);
+                    result
+                })
+            } else {
+                quote!(output)
+            };
+            quote! {
+                #(let #fields = &data.#fields;)*
+                let output = #gpu;
+                Ok(#publish)
+            }
+        };
+        let mut artifact = artifact;
+        artifact["publication"] = json!(if resident { "device" } else { "host" });
+        artifact["answer_types"] = json!(answer_types.iter().map(|ty| ty.to_token_stream().to_string()).collect::<Vec<_>>());
+        return Ok((quote! {
+            pub(super) type Answer = (#(#answer_types,)*);
+            pub(super) type Output = #output_type;
+            pub(super) struct Inputs { #(#fields: #input_types,)* #catalog_field pool: ::std::sync::Arc<cq_gpu_runtime::Pool> }
+            pub(super) fn load(manifest: &crate::manifest::Manifest, pool: ::std::sync::Arc<cq_gpu_runtime::Pool>) -> crate::manifest::Result<Inputs> {
+                #load_setup
+                #(let #fields: #input_types = #bindings;)*
+                Ok(Inputs { #(#fields,)* #catalog_init pool })
+            }
+            pub(super) fn execute(data: &Inputs, #(#names: &#inputs),*) -> crate::manifest::Result<Output> {
+                #execute
+            }
+            pub(super) fn sequential(data: &Inputs, #(#names: &Vec<#rows>),*) -> crate::manifest::Result<Vec<Answer>> {
+                #(#sequential_bindings)*
+                Ok((#cpu).map(|row| #own_row).collect())
+            }
+            pub(super) fn decode(data: &Inputs, manifest: &crate::manifest::Manifest, rows: Vec<Answer>) -> crate::manifest::Result<Vec<Vec<String>>> {
+                #(#decode_bindings)*
+                Ok(rows.into_iter().map(|row| vec![#(#owned_outputs),*]).collect())
+            }
+        }, artifact));
+    }
     Ok((
         quote! {
             type Answer = (#(#answer_types,)*);
@@ -483,23 +748,24 @@ fn compile(
                 #(let #fields: #input_types = #bindings;)*
                 Ok(Inputs { #(#fields,)* #catalog_init })
             }
-            fn gpu(data: &Inputs) -> cq_gpu_runtime::DeviceColumns<'_, Answer> {
+            fn gpu(data: &Inputs) -> crate::manifest::Result<Vec<Answer>> {
                 #(let #fields = &data.#fields;)*
-                #gpu
+                let output = #gpu;
+                Ok(output.to_host()?)
             }
-            fn sequential(data: &Inputs) -> crate::manifest::Result<Vec<Vec<i64>>> {
+            fn sequential(data: &Inputs, manifest: &crate::manifest::Manifest) -> crate::manifest::Result<Vec<Vec<String>>> {
                 #(#decode_bindings)*
                 #(#sequential_bindings)*
                 Ok((#cpu).map(|row| vec![#(#borrowed_outputs),*]).collect())
             }
-            fn download(data: &Inputs) -> crate::manifest::Result<Vec<Vec<i64>>> {
+            fn download(data: &Inputs, manifest: &crate::manifest::Manifest) -> crate::manifest::Result<Vec<Vec<String>>> {
                 #(#decode_bindings)*
-                Ok(gpu(data).to_host()?.into_iter().map(|row| vec![#(#owned_outputs),*]).collect())
+                Ok(gpu(data)?.into_iter().map(|row| vec![#(#owned_outputs),*]).collect())
             }
             pub(super) fn run(manifest: &crate::manifest::Manifest, query: &str, conformance_only: bool) -> crate::manifest::Result<Value> {
                 let data = load(manifest)?;
-                let reference = if manifest.sf == 1 { Some(sequential(&data)?) } else { None };
-                crate::benchmark::run(manifest, query, || download(&data), reference, conformance_only)
+                let reference = if manifest.sf == 1 { Some(sequential(&data, manifest)?) } else { None };
+                crate::benchmark::run(manifest, query, || download(&data, manifest), reference, conformance_only)
             }
         },
         artifact,
@@ -564,10 +830,10 @@ fn string_guard_regression(out: &Path) -> Result<TokenStream> {
                 assert_eq!(data.Part, vec![
                     (1, "green part".to_owned()), (2, "red".to_owned()), (3, "green part".to_owned())
                 ]);
-                let mut actual = download(&data).unwrap();
+                let mut actual = download(&data, &manifest).unwrap();
                 actual.sort();
-                assert_eq!(actual, vec![vec![1], vec![3]]);
-                let mut reference = sequential(&data).unwrap();
+                assert_eq!(actual, vec![vec!["1".to_owned()], vec!["3".to_owned()]]);
+                let mut reference = sequential(&data, &manifest).unwrap();
                 reference.sort();
                 assert_eq!(actual, reference);
             }
@@ -579,6 +845,21 @@ fn main() -> Result<()> {
     println!("cargo:rerun-if-env-changed=TPCH_GPU_DATA_ROOT");
     println!("cargo:rerun-if-env-changed=TPCH_GPU_ADVICE");
     println!("cargo:rerun-if-env-changed=CQ_GPU_TPCH_AUTOMATIC");
+    println!("cargo:rerun-if-env-changed=CQ_GPU_TPCH_QUERIES");
+    // An unset/empty filter retains the full suite. Comma-separated names
+    // isolate compilation itself, unlike the runner's execution-only filter.
+    let queries: std::collections::BTreeSet<String> = env::var("CQ_GPU_TPCH_QUERIES")
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .collect();
+    for name in &queries {
+        if !source::SOURCES.iter().any(|(query, _)| query == name) {
+            return Err(format!("unknown build query: {name}").into());
+        }
+    }
     let automatic = env::var("CQ_GPU_TPCH_AUTOMATIC").is_ok_and(|value| value == "1");
     let overrides: std::collections::BTreeMap<String, advice::Pipeline> =
         if let Some(path) = env::var_os("TPCH_GPU_ADVICE") {
@@ -619,26 +900,36 @@ fn main() -> Result<()> {
             }
         }
         for &(name, source) in source::SOURCES {
+            if !queries.is_empty() && !queries.contains(name) {
+                continue;
+            }
             println!(
                 "cargo:rerun-if-changed=../../../features/workloads/src/queries/retail/tpch/retail_{name}.rs"
             );
-            let kernel = source::Kernel::import(source)?;
+            let staged = stages::Program::import(source)?;
+            let kernel = if staged.is_none() { Some(source::Kernel::import(source)?) } else { None };
             for mode in ["automatic", "advised"] {
                 if mode == "automatic" && !automatic {
                     continue;
                 }
                 let default_h05 =
                     mode == "advised" && name == "h05" && !overrides.contains_key(name);
+                let hand = if mode == "advised" && !overrides.contains_key(name) {
+                    advice::Pipeline::hand(name)
+                } else {
+                    None
+                };
+                let hand_profile = hand.is_some();
                 let mut pipeline = if mode == "automatic" {
                     advice::Pipeline::baseline()
                 } else if let Some(pipeline) = overrides.get(name) {
                     pipeline.clone()
                 } else if default_h05 {
                     advice::Pipeline::h05()
-                } else if name == "h09" {
-                    advice::Pipeline::h09()
-                } else if matches!(name, "h04" | "h04_not_exists" | "h16" | "h22") {
-                    advice::Pipeline::negation(name)
+                } else if let Some(hand) = hand {
+                    hand
+                } else if kernel.as_ref().is_some_and(source::Kernel::is_standalone) {
+                    advice::Pipeline::grouped(&kernel.as_ref().unwrap().cpu_query())?
                 } else {
                     // CPU hints remain available explicitly, but an unmeasured CPU
                     // choice must not replace the existing accepted GPU baseline.
@@ -648,16 +939,22 @@ fn main() -> Result<()> {
                 if name == "h05" && pipeline.storage.is_empty() {
                     pipeline.storage = "tpch_domains".into();
                 }
-                let mut report = json!({"query": name, "sf": sf, "mode": mode, "cpu_query": kernel.cpu_query().to_string(), "cpu_plan_advice": kernel.plan_advice.to_string(), "pipeline": pipeline});
+                let mut report = json!({"query": name, "sf": sf, "mode": mode, "cpu_query": kernel.as_ref().map(|k| k.cpu_query().to_string()), "cpu_plan_advice": kernel.as_ref().map(|k| k.plan_advice.to_string()), "pipeline": pipeline});
                 let profile = if default_h05 {
                     "h05"
-                } else if mode == "advised" && name == "h09" && !overrides.contains_key(name) {
-                    "h09"
+                } else if hand_profile {
+                    name
                 } else {
                     mode
                 };
                 let generation_started = std::time::Instant::now();
-                match compile(&kernel, &manifest, &pipeline, profile) {
+                let compiled = if let Some(staged) = &staged {
+                    build_stages::compile(staged, name, &manifest, mode,
+                        if mode == "advised" { overrides.get(name) } else { None })
+                } else {
+                    compile(kernel.as_ref().unwrap(), &manifest, &pipeline, profile)
+                };
+                match compiled {
                     Ok((code, artifact)) => {
                         let module = format_ident!("{name}_sf{sf}_{mode}");
                         generated.extend(quote! { #[allow(non_snake_case)] mod #module { use serde_json::Value; #code } });

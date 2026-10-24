@@ -16,6 +16,13 @@ and `grade` records machine placements. Canonicalization remains a Sequence
 `canon` term with its recorded implementation. Translator rejection is not a
 license to substitute another query or plan.
 
+Computed CQ-Arith bindings in segmented maps are lane-local scalar codes.
+Sibling lanes may read parent-owned codes through their owner index, but map
+assignments never write those shared parent slots.
+Identity bindings preserve inherited codec bounds through publication; arithmetic
+bindings retain their full declared primitive bounds because wrapping can cross
+either endpoint.
+
 ## Build and run
 
 From this directory, with the pinned cuda-oxide backend:
@@ -512,6 +519,14 @@ formula used both by grading and by the emitter. An advised plan exceeding the
 capacity is rejected before translation, with its publication, required bytes
 and capacity. Automatic planning considers explicit publication boundaries
 between expanding stages and choices; the emitter never chooses a fallback.
+
+Kernel signatures and their launch arguments retain only parameters referenced
+by each generated body, preserving declaration order. This includes column and
+provider views, prior stores, packing fields, domains, enables, and output
+pointers. The translator checks the aligned NVPTX64 parameter ABI after pruning:
+a live signature of 4096 bytes or more is rejected as `BE-Resource`, naming the
+kernel, byte demand, and live parameter count. It does not silently move
+parameters into device memory or change the recorded plan.
 
 Catalog `levels` describe provider reads, not construction. Resident
 `RangeProvider` and `PackedCanon` tokens are device/block/lane tokens;

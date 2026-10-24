@@ -190,8 +190,8 @@ pub fn run(
             "data_root": data_root(),
             "warmup_runs": benchmark::WARMUP_RUNS,
             "measured_runs": benchmark::MEASURED_RUNS,
-            "timing": "CUDA event medians; host evaluation/upload + provider build + kernels + final dedup; initial input loading, answer download and comparison excluded",
-            "source": "CPU retail_kernel invocations imported verbatim with include_str; only manifest storage types/literals adapted",
+            "timing": "Median of per-run stage sums: CUDA phase events for device stages, elapsed execution for host-planned stages; initial input loading, final answer download and comparison excluded",
+            "source": "CPU retail_kernel and standalone compile! CQ ASTs imported with include_str; only manifest storage types, date/decimal encodings and dictionary literals adapted",
             "results": results,
             "table_markdown": table,
         }))?,
@@ -202,6 +202,8 @@ pub fn run(
 #[cfg(test)]
 #[path = "source.rs"]
 mod source;
+#[cfg(test)]
+mod stages;
 
 #[cfg(test)]
 mod tests {
@@ -215,12 +217,19 @@ mod tests {
         {
             let mode = report["mode"].as_str().unwrap();
             if report["status"] != "accepted" {
-                // The opaque H07 country disjunction remains a reported rejection.
-                assert_eq!(
-                    query, "h07",
-                    "{query} {mode}: {}; term: {}",
-                    report["error"], report["term"]
-                );
+                let error = report["error"].as_str().unwrap();
+                match query {
+                    "h07" => assert!(error.contains("unmet catalog obligation Canon"), "{error}"),
+                    "h14" => assert_eq!(
+                        error,
+                        "T-Gpu: host publication r3 needs recorded device-representable code columns"
+                    ),
+                    "h19" => assert_eq!(
+                        error,
+                        "T-Gpu: host publication r4 needs recorded device-representable code columns"
+                    ),
+                    _ => panic!("{query} {mode}: {error}; term: {}", report["term"]),
+                }
                 continue;
             }
             let manifest = Manifest::load(&data_root().join("sf1"))?;
@@ -238,6 +247,18 @@ mod tests {
         )* };
     }
     conformance!(
+        h01,
+        h02,
+        h11,
+        h13,
+        h15,
+        h18,
+        h20,
+        h06,
+        h10,
+        h12,
+        h14,
+        h19,
         h03,
         h05,
         h07,
@@ -253,10 +274,19 @@ mod tests {
 
     #[test]
     fn accepted_schedule_artifacts_replay_exactly() -> Result<()> {
-        for report in plans()?
+        let reports = plans()?;
+        let mut artifacts = Vec::new();
+        for report in reports
             .iter()
             .filter(|report| report["status"] == "accepted")
         {
+            if let Some(stages) = report["stages"].as_array() {
+                artifacts.extend(stages);
+            } else {
+                artifacts.push(report);
+            }
+        }
+        for report in artifacts {
             let mut current: cq_lang_sequence::Program =
                 syn::parse_str(report["sequence_input"].as_str().unwrap())?;
             for invocation in report["pipeline"]["sequence"].as_array().unwrap() {
