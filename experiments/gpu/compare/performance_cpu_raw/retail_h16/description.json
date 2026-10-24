@@ -1,0 +1,26 @@
+{
+  "configs": [
+    "default",
+    "no-reduce",
+    "transfer",
+    "le",
+    "le_runs",
+    "hypergraph"
+  ],
+  "exports": [
+    [
+      "part",
+      "p_partkey,p_brand,p_type,p_size"
+    ],
+    [
+      "partsupp",
+      "ps_partkey,ps_suppkey"
+    ],
+    [
+      "supplier",
+      "s_suppkey,s_comment"
+    ]
+  ],
+  "name": "retail_h16",
+  "sql": "SELECT DISTINCT p.p_partkey, ps.ps_suppkey\nFROM part p JOIN partsupp ps ON ps.ps_partkey = p.p_partkey\nWHERE p.p_brand <> 'Brand#45' AND p.p_type NOT LIKE 'MEDIUM POLISHED%'\nAND p.p_size IN (49, 14, 23, 45, 19, 3, 36, 9)\nAND ps.ps_suppkey NOT IN (SELECT s.s_suppkey FROM supplier s\nWHERE s.s_comment LIKE '%Customer%Complaints%')"
+}

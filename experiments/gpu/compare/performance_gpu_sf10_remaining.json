@@ -1,0 +1,436 @@
+{
+  "data_root": "/data/tpch-gpu",
+  "measured_runs": 5,
+  "results": [
+    {
+      "answer_rows": 3575,
+      "conformance": null,
+      "cost": "(work=2*len(r0) + 3*len(r1) + 2*len(r3) + 2*len(r5) + len(r8) + 5*scan(r10) + 4*scan(r11) + 6*scan(r13) + scan(r4) + scan(r7) + 4*unknown(r12), lookup_after_expand=2, span=max(len(r0) + depth(maxpart(len(r0);len(r0);256);lanes=256), len(r1) + depth(len(r1);lanes=256) + scan_depth(len(r1);lanes=256) + depth(scan(r10);lanes=256) + 2*depth(maxpart(scan(r10);scan(r10);256);lanes=256) + 2*scan_depth(maxpart(scan(r10);scan(r10);256);lanes=256) + 4*depth(maxpart(scan(r11);scan(r10);256);lanes=256) + 4*depth(maxpart(scan(r13);scan(r10);256);lanes=256) + 2*scan_depth(maxpart(scan(r13);scan(r10);256);lanes=256) + 2*depth(maxpart(unknown(r12);scan(r10);256);lanes=256) + 2*scan_depth(maxpart(unknown(r12);scan(r10);256);lanes=256), len(r3) + depth(maxpart(len(r3);len(r3);256);lanes=256) + depth(maxpart(scan(r4);len(r3);256);lanes=256) + depth(maxpart(scan(r7);len(r3);256);lanes=256), 2*len(r5), len(r8)), stores=10, dispatches=4)",
+      "cpu_plan_advice": "",
+      "cpu_query": "struct Query ; relation Lineitem (l_orderkey : i64 , l_partkey : i64 , l_suppkey : i64) ; relation Orders (o_orderkey : i64 , o_orderdate : Date) ; relation Part (p_partkey : i64 , p_brand : String) ; relation Supplier (s_suppkey : i64 , s_nationkey : i32) ; relation Nation (n_nationkey : i32 , n_name : String) ; answer (order_key , part_key , supplier_key) : - Lineitem (order_key , part_key , supplier_key) , Orders (order_key , order_date) , if * order_date >= start && * order_date < end , Part (part_key , \"Brand#12\") , Supplier (supplier_key , nation_key) , Nation (nation_key , \"UNITED STATES\") ;",
+      "duckdb": {
+        "measurement": {
+          "engine": "DuckDB",
+          "measured_runs": 5,
+          "method": "CLI .timer real wall time for complete authored SELECT; 1 ms resolution; one process per thread count",
+          "query": "SELECT DISTINCT o.o_orderkey, p.p_partkey, s.s_suppkey\nFROM lineitem l JOIN orders o ON l.l_orderkey = o.o_orderkey\nJOIN part p ON l.l_partkey = p.p_partkey\nJOIN supplier s ON l.l_suppkey = s.s_suppkey\nJOIN nation n ON s.s_nationkey = n.n_nationkey\nWHERE o.o_orderdate >= DATE '1995-01-01' AND o.o_orderdate < DATE '1995-04-01'\nAND p.p_brand = 'Brand#12' AND n.n_name = 'UNITED STATES'",
+          "sf": 10,
+          "threads": {
+            "1": {
+              "median_seconds": 0.782,
+              "samples_seconds": [
+                0.783,
+                0.773,
+                0.777,
+                0.789,
+                0.782
+              ],
+              "warmup_seconds": 1.218
+            },
+            "24": {
+              "median_seconds": 0.086,
+              "samples_seconds": [
+                0.079,
+                0.08,
+                0.086,
+                0.126,
+                0.13
+              ],
+              "warmup_seconds": 0.162
+            }
+          },
+          "units": "seconds",
+          "version": "v1.4.4 (Andium) 6ddac802ff",
+          "warmup_runs": 1
+        },
+        "source": "/data/tpch-gpu/sf10/duckdb_timing.retail_d27.json",
+        "t24_median_ms": 86.0
+      },
+      "exact": true,
+      "generation_seconds": 0.048575916,
+      "median_ms": {
+        "build": 5.314847946166992,
+        "dedup": 0.19830399751663208,
+        "kernels": 13.830528259277344,
+        "total": 19.34332847595215
+      },
+      "mode": "advised",
+      "pipeline": {
+        "complete": true,
+        "physical": [
+          "retain_streams (r10)",
+          "build_host_reads()"
+        ],
+        "plan": "no_reduce, order(Nation, Supplier, Lineitem, Orders, Part), reduce(Supplier with Nation), reduce(Lineitem with Supplier), reduce(Lineitem with Orders), reduce(Lineitem with Part)",
+        "sequence": [
+          "evidence { count Lineitem = 59986052usize ; count Orders = 15000000usize ; key Orders [o_orderkey] ; count Part = 2000000usize ; key Part [p_partkey] ; count Supplier = 100000usize ; key Supplier [s_suppkey] ; count Nation = 25usize ; key Nation [n_nationkey] ; }",
+          "store (r0)",
+          "store (r3)",
+          "grade (gpu , r0 at host)",
+          "grade (gpu , r1 at host)",
+          "grade (gpu , r2 at host . device)",
+          "grade (gpu , r3 at host)",
+          "grade (gpu , r4 at host . device . block)",
+          "grade (gpu , r5 at host)",
+          "grade (gpu , r6 at host)",
+          "grade (gpu , r7 at host . device . block)",
+          "grade (gpu , r8 at host)",
+          "grade (gpu , r9 at host . device)",
+          "grade (gpu , r10 at host . device)",
+          "grade (gpu , r11 at host . device . block)",
+          "grade (gpu , r12 at host . device . block)",
+          "grade (gpu , r13 at host . device . block)",
+          "grade (gpu , r14 at host . device . block)",
+          "grade (gpu , __sequence_output at host . device)",
+          "partition (__sequence_output , 256)",
+          "partition (r2 , 256 , items 4)",
+          "partition (r9 , 256 , items 4)",
+          "segment (r11 , 1024 , items 4)",
+          "output (count)"
+        ],
+        "storage": "tpch_dictionary",
+        "structures": [
+          "membership(r6)"
+        ]
+      },
+      "query": "d27",
+      "samples": [
+        {
+          "build_ms": 5.335231781005859,
+          "dedup_ms": 0.2006399929523468,
+          "kernels_ms": 13.844544410705566,
+          "total_ms": 19.380416870117188,
+          "wall_ms": 19.38805
+        },
+        {
+          "build_ms": 5.373568058013916,
+          "dedup_ms": 0.19814400374889374,
+          "kernels_ms": 13.821439743041992,
+          "total_ms": 19.393152236938477,
+          "wall_ms": 19.401125
+        },
+        {
+          "build_ms": 5.309088230133057,
+          "dedup_ms": 0.19830399751663208,
+          "kernels_ms": 13.832544326782227,
+          "total_ms": 19.339935302734375,
+          "wall_ms": 19.348363
+        },
+        {
+          "build_ms": 5.314847946166992,
+          "dedup_ms": 0.1985280066728592,
+          "kernels_ms": 13.828224182128906,
+          "total_ms": 19.34160041809082,
+          "wall_ms": 19.350778
+        },
+        {
+          "build_ms": 5.314527988433838,
+          "dedup_ms": 0.1982720047235489,
+          "kernels_ms": 13.830528259277344,
+          "total_ms": 19.34332847595215,
+          "wall_ms": 19.35179
+        }
+      ],
+      "sequence_input": "physical { relation Lineitem (l_orderkey : i64 , l_partkey : i64 , l_suppkey : i64) ; relation Orders (o_orderkey : i64 , o_orderdate : i32) ; relation Part (p_partkey : i64 , p_brand : i32) ; relation Supplier (s_suppkey : i64 , s_nationkey : i32) ; relation Nation (n_nationkey : i32 , n_name : i32) ; r0 = pipe rename Supplier @ 5 { s_suppkey - > supplier_key , s_nationkey - > nation_key } ; r1 = let rename Nation @ 6 { n_nationkey - > nation_key } constants { n_name = 23i32 } ; r2 = let semi eager [nation_key] r0 , r1 ; r3 = pipe rename Lineitem @ 0 { l_orderkey - > order_key , l_partkey - > part_key , l_suppkey - > supplier_key } ; r4 = pipe semi eager [supplier_key] r3 , r2 ; r5 = pipe rename Orders @ 1 { o_orderkey - > order_key , o_orderdate - > order_date } ; r6 = let range select r5 if (order_date >= 9131i32 , order_date < 9221i32) ; r7 = pipe semi eager [order_key] r4 , r6 ; r8 = let rename Part @ 4 { p_partkey - > part_key } constants { p_brand = 1i32 } ; r9 = let semi eager [part_key] r7 , r8 ; r10 = let probe first [nation_key] r1 , r2 ; r11 = pipe probe first [supplier_key] r10 , r9 ; r12 = pipe probe first [order_key] r11 , r6 ; r13 = pipe probe first [part_key] r12 , r8 ; r14 = pipe canon project r13 keep { order_key , part_key , supplier_key } ; return r14 as answer (order_key , part_key , supplier_key) ; } structures { r1 = :: cq_gpu_sequence_runtime :: RangeProvider [nation_key] ; r2 = :: cq_gpu_sequence_runtime :: RangeProvider [nation_key] ; r2 = :: cq_gpu_sequence_runtime :: RangeProvider [supplier_key] ; r6 = :: cq_gpu_sequence_runtime :: RangeProvider [order_key] membership payload [order_key] constants { } ; r8 = :: cq_gpu_sequence_runtime :: RangeProvider [part_key] ; r9 = :: cq_gpu_sequence_runtime :: RangeProvider [supplier_key] ; r0 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i32 ,) , :: cq_gpu_runtime :: For > [] ; r1 rows = :: cq_gpu_sequence_runtime :: RangeProvider ; r1 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i32 , i32 ,) , :: cq_gpu_runtime :: For > [] ; r2 rows = :: cq_gpu_sequence_runtime :: RangeProvider ; r3 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i64 , i64 ,) , :: cq_gpu_runtime :: For > [] ; r5 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i32 ,) , :: cq_gpu_runtime :: For > [] ; r5 host r6 = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i32 ,) , :: cq_gpu_runtime :: For > [order_date] ; r8 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i32 ,) , :: cq_gpu_runtime :: For > [] ; r10 rows = :: cq_gpu_sequence_runtime :: RangeProvider ; r14 canon = :: cq_gpu_sequence_runtime :: canon :: WideCanon ; } sequence { r0 = rows r0 ; r1 = store rows r1 ; r2 = store compact r2 lookup r1 [nation_key] r0 ; r3 = rows r3 ; r4 = compact r4 lookup r2 [supplier_key] r3 ; r5 = rows r5 ; r6 = store map r6 r5 ; r7 = compact r7 lookup r6 [order_key] r4 ; r8 = store rows r8 ; r9 = store compact r9 lookup r8 [part_key] r7 ; r10 = store flatten lookup r2 [nation_key] r1 ; r11 = flatten lookup r9 [supplier_key] r10 ; r12 = compact r12 lookup r6 [order_key] r11 ; r13 = flatten lookup r8 [part_key] r12 ; r14 = canon map r14 r13 ; __sequence_output = store r14 ; output count ; }",
+      "sequence_planned": "physical { relation Lineitem (l_orderkey : i64 , l_partkey : i64 , l_suppkey : i64) ; relation Orders (o_orderkey : i64 , o_orderdate : i32) ; relation Part (p_partkey : i64 , p_brand : i32) ; relation Supplier (s_suppkey : i64 , s_nationkey : i32) ; relation Nation (n_nationkey : i32 , n_name : i32) ; r0 = pipe rename Supplier @ 5 { s_suppkey - > supplier_key , s_nationkey - > nation_key } ; r1 = let rename Nation @ 6 { n_nationkey - > nation_key } constants { n_name = 23i32 } ; r2 = let semi eager [nation_key] r0 , r1 ; r3 = pipe rename Lineitem @ 0 { l_orderkey - > order_key , l_partkey - > part_key , l_suppkey - > supplier_key } ; r4 = pipe semi eager [supplier_key] r3 , r2 ; r5 = pipe rename Orders @ 1 { o_orderkey - > order_key , o_orderdate - > order_date } ; r6 = let range select r5 if (order_date >= 9131i32 , order_date < 9221i32) ; r7 = pipe semi eager [order_key] r4 , r6 ; r8 = let rename Part @ 4 { p_partkey - > part_key } constants { p_brand = 1i32 } ; r9 = let semi eager [part_key] r7 , r8 ; r10 = let probe first [nation_key] r1 , r2 ; r11 = pipe probe first [supplier_key] r10 , r9 ; r12 = pipe probe first [order_key] r11 , r6 ; r13 = pipe probe first [part_key] r12 , r8 ; r14 = pipe canon project r13 keep { order_key , part_key , supplier_key } ; return r14 as answer (order_key , part_key , supplier_key) ; } structures { r1 = :: cq_gpu_sequence_runtime :: RangeProvider [nation_key] ; r2 = :: cq_gpu_sequence_runtime :: RangeProvider [nation_key] ; r2 = :: cq_gpu_sequence_runtime :: RangeProvider [supplier_key] ; r6 = :: cq_gpu_sequence_runtime :: RangeProvider [order_key] membership payload [order_key] constants { } ; r8 = :: cq_gpu_sequence_runtime :: RangeProvider [part_key] ; r9 = :: cq_gpu_sequence_runtime :: RangeProvider [supplier_key] ; r0 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i32 ,) , :: cq_gpu_runtime :: For > [] ; r1 rows = :: cq_gpu_sequence_runtime :: RangeProvider ; r1 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i32 , i32 ,) , :: cq_gpu_runtime :: For > [] ; r2 rows = :: cq_gpu_sequence_runtime :: RangeProvider ; r3 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i64 , i64 ,) , :: cq_gpu_runtime :: For > [] ; r5 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i32 ,) , :: cq_gpu_runtime :: For > [] ; r5 host r6 = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i32 ,) , :: cq_gpu_runtime :: For > [order_date] ; r8 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i32 ,) , :: cq_gpu_runtime :: For > [] ; r10 rows = :: cq_gpu_sequence_runtime :: RangeProvider ; r14 canon = :: cq_gpu_sequence_runtime :: canon :: WideCanon ; } sequence { r0 = store rows r0 ; r1 = store rows r1 ; r2 = store compact r2 lookup r1 [nation_key] flatten tile 256 items 4 r0 ; r3 = store rows r3 ; r4 = compact r4 lookup r2 [supplier_key] flatten tile 256 items 4 r3 ; r5 = rows r5 ; r6 = store map r6 r5 ; r7 = compact r7 lookup r6 [order_key] r4 ; r8 = store rows r8 ; r9 = store compact r9 lookup r8 [part_key] r7 ; r10 = store flatten lookup r2 [nation_key] r1 ; r11 = flatten tile 1024 items 4 store flatten lookup r9 [supplier_key] flatten tile 256 r10 ; r12 = compact r12 lookup r6 [order_key] r11 ; r13 = flatten lookup r8 [part_key] r12 ; r14 = canon map r14 r13 ; __sequence_output = store r14 ; output count ; } graded gpu { r0 at host ; r1 at host ; r2 at host . device ; r3 at host ; r4 at host . device . block ; r5 at host ; r6 at host ; r7 at host . device . block ; r8 at host ; r9 at host . device ; r10 at host . device ; r11 at host . device . block ; r12 at host . device . block ; r13 at host . device . block ; r14 at host . device . block ; __sequence_output at host . device ; } evidence { count Lineitem = 59986052usize ; count Orders = 15000000usize ; key Orders [o_orderkey] ; count Part = 2000000usize ; key Part [p_partkey] ; count Supplier = 100000usize ; key Supplier [s_suppkey] ; count Nation = 25usize ; key Nation [n_nationkey] ; }",
+      "sequence_trace": "evidence { count Lineitem = 59986052usize ; count Orders = 15000000usize ; key Orders [o_orderkey] ; count Part = 2000000usize ; key Part [p_partkey] ; count Supplier = 100000usize ; key Supplier [s_suppkey] ; count Nation = 25usize ; key Nation [n_nationkey] ; } ; store (r0) ; store (r3) ; grade (gpu , r0 at host) ; grade (gpu , r1 at host) ; grade (gpu , r2 at host . device) ; grade (gpu , r3 at host) ; grade (gpu , r4 at host . device . block) ; grade (gpu , r5 at host) ; grade (gpu , r6 at host) ; grade (gpu , r7 at host . device . block) ; grade (gpu , r8 at host) ; grade (gpu , r9 at host . device) ; grade (gpu , r10 at host . device) ; grade (gpu , r11 at host . device . block) ; grade (gpu , r12 at host . device . block) ; grade (gpu , r13 at host . device . block) ; grade (gpu , r14 at host . device . block) ; grade (gpu , __sequence_output at host . device) ; partition (__sequence_output , 256) ; partition (r2 , 256 , items 4) ; partition (r9 , 256 , items 4) ; segment (r11 , 1024 , items 4) ; output (count)",
+      "sf": 10,
+      "status": "ran"
+    },
+    {
+      "answer_rows": 53966,
+      "conformance": null,
+      "cost": "(work=3*len(r0) + len(r1) + 2*len(r11) + len(r14) + 2*len(r3) + len(r7) + len(r9) + 5*scan(r2) + scan(r4) + 6*scan(r6) + 4*scan(r8) + 2*unknown(r10) + 2*unknown(r13) + 4*unknown(r15), lookup_after_expand=7, span=max(len(r0) + depth(len(r0);lanes=256) + scan_depth(len(r0);lanes=256) + depth(scan(r2);lanes=256) + 2*depth(maxpart(scan(r2);scan(r2);256);lanes=256) + 2*scan_depth(maxpart(scan(r2);scan(r2);256);lanes=256) + 4*depth(maxpart(scan(r6);scan(r2);256);lanes=256) + 2*scan_depth(maxpart(scan(r6);scan(r2);256);lanes=256) + 4*depth(maxpart(scan(r8);scan(r2);256);lanes=256) + 2*depth(maxpart(unknown(r10);scan(r2);256);lanes=256) + 2*depth(maxpart(unknown(r13);scan(r2);256);lanes=256) + 2*depth(maxpart(unknown(r15);scan(r2);256);lanes=256) + 2*scan_depth(maxpart(unknown(r15);scan(r2);256);lanes=256), len(r1), len(r11) + depth(maxpart(len(r11);len(r11);256);lanes=256), len(r14), len(r3) + depth(maxpart(len(r3);len(r3);256);lanes=256) + depth(maxpart(scan(r4);len(r3);256);lanes=256), len(r7), len(r9)), stores=12, dispatches=4)",
+      "cpu_plan_advice": "skip (Lineitem with PartSupp) , reduce (PartSupp with Lineitem)",
+      "cpu_query": "struct Query ; relation Lineitem (l_orderkey : i64 , l_partkey : i64 , l_suppkey : i64 , l_shipdate : Date , l_quantity : Decimal) ; relation Orders (o_orderkey : i64 , o_custkey : i64) ; relation PartSupp (ps_partkey : i64 , ps_suppkey : i64 , ps_availqty : i64) ; relation Supplier (s_suppkey : i64 , s_nationkey : i32) ; relation Part (p_partkey : i64) ; relation Customer (c_custkey : i64 , c_nationkey : i32) ; relation Nation (n_nationkey : i32) ; answer (order_key , part_key , supplier_key , nation_key) : - Orders (order_key , customer_key) , Lineitem (order_key , part_key , supplier_key , ship_date , quantity) , if * ship_date >= start && * ship_date < end , if * quantity > minimum , PartSupp (part_key , supplier_key , available) , if * available > 0 , Supplier (supplier_key , nation_key) , Part (part_key) , Customer (customer_key , nation_key) , Nation (nation_key) ;",
+      "duckdb": {
+        "measurement": {
+          "engine": "DuckDB",
+          "measured_runs": 5,
+          "method": "CLI .timer real wall time for complete authored SELECT; 1 ms resolution; one process per thread count",
+          "query": "SELECT DISTINCT o.o_orderkey, p.p_partkey, s.s_suppkey, n.n_nationkey\nFROM lineitem l JOIN orders o ON l.l_orderkey = o.o_orderkey\nJOIN partsupp ps ON l.l_partkey = ps.ps_partkey AND l.l_suppkey = ps.ps_suppkey\nJOIN supplier s ON ps.ps_suppkey = s.s_suppkey\nJOIN part p ON ps.ps_partkey = p.p_partkey\nJOIN customer c ON o.o_custkey = c.c_custkey AND c.c_nationkey = s.s_nationkey\nJOIN nation n ON c.c_nationkey = n.n_nationkey\nWHERE l.l_shipdate >= DATE '1995-01-01' AND l.l_shipdate < DATE '1995-04-01'\nAND l.l_quantity > 20.00 AND ps.ps_availqty > 0",
+          "sf": 10,
+          "threads": {
+            "1": {
+              "median_seconds": 1.663,
+              "samples_seconds": [
+                1.722,
+                1.663,
+                1.708,
+                1.61,
+                1.662
+              ],
+              "warmup_seconds": 2.223
+            },
+            "24": {
+              "median_seconds": 0.287,
+              "samples_seconds": [
+                0.336,
+                0.287,
+                0.273,
+                0.287,
+                0.272
+              ],
+              "warmup_seconds": 0.512
+            }
+          },
+          "units": "seconds",
+          "version": "v1.4.4 (Andium) 6ddac802ff",
+          "warmup_runs": 1
+        },
+        "source": "/data/tpch-gpu/sf10/duckdb_timing.retail_d72_inner.json",
+        "t24_median_ms": 287.0
+      },
+      "exact": true,
+      "generation_seconds": 0.067010778,
+      "median_ms": {
+        "build": 8.077664375305176,
+        "dedup": 0.4021120071411133,
+        "kernels": 17.137920379638672,
+        "total": 25.623231887817383
+      },
+      "mode": "advised",
+      "pipeline": {
+        "complete": true,
+        "physical": [
+          "retain_streams (r2)",
+          "build_host_reads()",
+          "hoist (r0 , r1 , r3 , r4 , r5 , r7 , r9 , r11 , r12 , r14)"
+        ],
+        "plan": "no_reduce, order(Nation, Supplier, Lineitem, Orders, Customer, PartSupp, Part)",
+        "sequence": [
+          "evidence { count Lineitem = 59986052usize ; count Orders = 15000000usize ; key Orders [o_orderkey] ; count PartSupp = 8000000usize ; key PartSupp [ps_partkey , ps_suppkey] ; count Supplier = 100000usize ; key Supplier [s_suppkey] ; count Part = 2000000usize ; key Part [p_partkey] ; count Customer = 1500000usize ; key Customer [c_custkey] ; count Nation = 25usize ; key Nation [n_nationkey] ; }",
+          "store (r0)",
+          "grade (gpu , r0 at host)",
+          "grade (gpu , r1 at host)",
+          "grade (gpu , r3 at host)",
+          "grade (gpu , r4 at host)",
+          "grade (gpu , r5 at host)",
+          "grade (gpu , r7 at host)",
+          "grade (gpu , r9 at host)",
+          "grade (gpu , r11 at host)",
+          "grade (gpu , r12 at host)",
+          "grade (gpu , r14 at host)",
+          "grade (gpu , r2 at host . device)",
+          "grade (gpu , r6 at host . device . block)",
+          "grade (gpu , r8 at host . device . block)",
+          "grade (gpu , r10 at host . device . block)",
+          "grade (gpu , r13 at host . device . block)",
+          "grade (gpu , r15 at host . device . block)",
+          "grade (gpu , r16 at host . device . block)",
+          "grade (gpu , __sequence_output at host . device)",
+          "partition (__sequence_output , 256)",
+          "grade (gpu , r4 at host . device . block)",
+          "store (r3)",
+          "publish (r5 , __hand_filter_r5)",
+          "grade (gpu , __hand_filter_r5 at host . device . block)",
+          "partition (r5 , 256)",
+          "store (r11)",
+          "publish (r12 , __hand_filter_r12)",
+          "grade (gpu , __hand_filter_r12 at host . device . block)",
+          "partition (r12 , 256)",
+          "segment (r6 , 1024 , items 4)",
+          "output (count)"
+        ],
+        "storage": "",
+        "structures": [
+          "membership(r12)",
+          "membership(r14)",
+          "membership(r9)"
+        ]
+      },
+      "query": "d72_inner",
+      "samples": [
+        {
+          "build_ms": 8.057920455932617,
+          "dedup_ms": 0.4002560079097748,
+          "kernels_ms": 17.19411277770996,
+          "total_ms": 25.65228843688965,
+          "wall_ms": 25.663905
+        },
+        {
+          "build_ms": 8.102911949157715,
+          "dedup_ms": 0.40384000539779663,
+          "kernels_ms": 17.007232666015625,
+          "total_ms": 25.51398468017578,
+          "wall_ms": 25.525239000000003
+        },
+        {
+          "build_ms": 8.036831855773926,
+          "dedup_ms": 0.4021120071411133,
+          "kernels_ms": 17.0314884185791,
+          "total_ms": 25.47043228149414,
+          "wall_ms": 25.480714000000003
+        },
+        {
+          "build_ms": 8.083135604858398,
+          "dedup_ms": 0.40217599272727966,
+          "kernels_ms": 17.137920379638672,
+          "total_ms": 25.623231887817383,
+          "wall_ms": 25.633665999999998
+        },
+        {
+          "build_ms": 8.077664375305176,
+          "dedup_ms": 0.40108799934387207,
+          "kernels_ms": 17.160512924194336,
+          "total_ms": 25.639263153076172,
+          "wall_ms": 25.650109
+        }
+      ],
+      "sequence_input": "physical { relation Lineitem (l_orderkey : i64 , l_partkey : i64 , l_suppkey : i64 , l_shipdate : i32 , l_quantity : i64) ; relation Orders (o_orderkey : i64 , o_custkey : i64) ; relation PartSupp (ps_partkey : i64 , ps_suppkey : i64 , ps_availqty : i64) ; relation Supplier (s_suppkey : i64 , s_nationkey : i32) ; relation Part (p_partkey : i64) ; relation Customer (c_custkey : i64 , c_nationkey : i32) ; relation Nation (n_nationkey : i32) ; r0 = pipe rename Nation @ 10 { n_nationkey - > nation_key } ; r1 = let rename Supplier @ 7 { s_suppkey - > supplier_key , s_nationkey - > nation_key } ; r3 = pipe rename Lineitem @ 1 { l_orderkey - > order_key , l_partkey - > part_key , l_suppkey - > supplier_key , l_shipdate - > ship_date , l_quantity - > quantity } ; r4 = pipe range select r3 if (ship_date >= 9131i32 , ship_date < 9221i32) ; r5 = let range select r4 if (quantity > 2000i64) ; r7 = let rename Orders @ 0 { o_orderkey - > order_key , o_custkey - > customer_key } ; r9 = let rename Customer @ 9 { c_custkey - > customer_key , c_nationkey - > nation_key } ; r11 = pipe rename PartSupp @ 5 { ps_partkey - > part_key , ps_suppkey - > supplier_key , ps_availqty - > available } ; r12 = let range select r11 if (available > 0) ; r14 = let rename Part @ 8 { p_partkey - > part_key } ; r2 = let probe first [nation_key] r0 , r1 ; r6 = pipe probe first [supplier_key] r2 , r5 ; r8 = pipe probe first [order_key] r6 , r7 ; r10 = pipe probe first [customer_key , nation_key] r8 , r9 ; r13 = pipe probe first [part_key , supplier_key] r10 , r12 ; r15 = pipe probe first [part_key] r13 , r14 ; r16 = pipe canon project r15 keep { nation_key , order_key , part_key , supplier_key } ; return r16 as answer (order_key , part_key , supplier_key , nation_key) ; } structures { r1 = :: cq_gpu_sequence_runtime :: RangeProvider [nation_key] ; r5 = :: cq_gpu_sequence_runtime :: RangeProvider [supplier_key] payload [order_key , part_key , supplier_key] constants { } ; r7 = :: cq_gpu_sequence_runtime :: RangeProvider [order_key] ; r9 = :: cq_gpu_sequence_runtime :: RangeProvider [customer_key , nation_key] membership payload [customer_key , nation_key] constants { } ; r12 = :: cq_gpu_sequence_runtime :: RangeProvider [part_key , supplier_key] membership payload [part_key , supplier_key] constants { } ; r14 = :: cq_gpu_sequence_runtime :: RangeProvider [part_key] membership payload [part_key] constants { } ; r0 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i32 ,) , :: cq_gpu_runtime :: For > [] ; r1 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i32 ,) , :: cq_gpu_runtime :: For > [] ; r3 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i64 , i64 , i32 , i64 ,) , :: cq_gpu_runtime :: For > [] ; r3 host r4 = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i64 , i64 , i32 , i64 ,) , :: cq_gpu_runtime :: For > [ship_date] ; r7 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i64 ,) , :: cq_gpu_runtime :: For > [] ; r9 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i32 ,) , :: cq_gpu_runtime :: For > [] ; r11 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i64 , i64 ,) , :: cq_gpu_runtime :: For > [] ; r11 host r12 = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i64 , i64 ,) , :: cq_gpu_runtime :: For > [available] ; r14 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 ,) , :: cq_gpu_runtime :: For > [] ; r2 rows = :: cq_gpu_sequence_runtime :: RangeProvider ; r16 canon = :: cq_gpu_sequence_runtime :: canon :: WideCanon ; } sequence { r0 = rows r0 ; r1 = store rows r1 ; r3 = rows r3 ; r4 = map r4 r3 ; r5 = store map r5 r4 ; r7 = store rows r7 ; r9 = store rows r9 ; r11 = rows r11 ; r12 = store map r12 r11 ; r14 = store rows r14 ; r2 = store flatten lookup r1 [nation_key] r0 ; r6 = flatten lookup r5 [supplier_key] r2 ; r8 = flatten lookup r7 [order_key] r6 ; r10 = compact r10 lookup r9 [customer_key , nation_key] r8 ; r13 = compact r13 lookup r12 [part_key , supplier_key] r10 ; r15 = compact r15 lookup r14 [part_key] r13 ; r16 = canon map r16 r15 ; __sequence_output = store r16 ; output count ; }",
+      "sequence_planned": "physical { relation Lineitem (l_orderkey : i64 , l_partkey : i64 , l_suppkey : i64 , l_shipdate : i32 , l_quantity : i64) ; relation Orders (o_orderkey : i64 , o_custkey : i64) ; relation PartSupp (ps_partkey : i64 , ps_suppkey : i64 , ps_availqty : i64) ; relation Supplier (s_suppkey : i64 , s_nationkey : i32) ; relation Part (p_partkey : i64) ; relation Customer (c_custkey : i64 , c_nationkey : i32) ; relation Nation (n_nationkey : i32) ; r0 = pipe rename Nation @ 10 { n_nationkey - > nation_key } ; r1 = let rename Supplier @ 7 { s_suppkey - > supplier_key , s_nationkey - > nation_key } ; r3 = pipe rename Lineitem @ 1 { l_orderkey - > order_key , l_partkey - > part_key , l_suppkey - > supplier_key , l_shipdate - > ship_date , l_quantity - > quantity } ; r4 = pipe range select r3 if (ship_date >= 9131i32 , ship_date < 9221i32) ; r5 = let range select r4 if (quantity > 2000i64) ; r7 = let rename Orders @ 0 { o_orderkey - > order_key , o_custkey - > customer_key } ; r9 = let rename Customer @ 9 { c_custkey - > customer_key , c_nationkey - > nation_key } ; r11 = pipe rename PartSupp @ 5 { ps_partkey - > part_key , ps_suppkey - > supplier_key , ps_availqty - > available } ; r12 = let range select r11 if (available > 0) ; r14 = let rename Part @ 8 { p_partkey - > part_key } ; r2 = let probe first [nation_key] r0 , r1 ; r6 = pipe probe first [supplier_key] r2 , r5 ; r8 = pipe probe first [order_key] r6 , r7 ; r10 = pipe probe first [customer_key , nation_key] r8 , r9 ; r13 = pipe probe first [part_key , supplier_key] r10 , r12 ; r15 = pipe probe first [part_key] r13 , r14 ; r16 = pipe canon project r15 keep { nation_key , order_key , part_key , supplier_key } ; return r16 as answer (order_key , part_key , supplier_key , nation_key) ; } structures { r1 = :: cq_gpu_sequence_runtime :: RangeProvider [nation_key] ; r5 = :: cq_gpu_sequence_runtime :: RangeProvider [supplier_key] payload [order_key , part_key , supplier_key] constants { } ; r7 = :: cq_gpu_sequence_runtime :: RangeProvider [order_key] ; r9 = :: cq_gpu_sequence_runtime :: RangeProvider [customer_key , nation_key] membership payload [customer_key , nation_key] constants { } ; r12 = :: cq_gpu_sequence_runtime :: RangeProvider [part_key , supplier_key] membership payload [part_key , supplier_key] constants { } ; r14 = :: cq_gpu_sequence_runtime :: RangeProvider [part_key] membership payload [part_key] constants { } ; r0 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i32 ,) , :: cq_gpu_runtime :: For > [] ; r1 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i32 ,) , :: cq_gpu_runtime :: For > [] ; r3 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i64 , i64 , i32 , i64 ,) , :: cq_gpu_runtime :: For > [] ; r3 host r4 = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i64 , i64 , i32 , i64 ,) , :: cq_gpu_runtime :: For > [ship_date] ; r7 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i64 ,) , :: cq_gpu_runtime :: For > [] ; r9 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i32 ,) , :: cq_gpu_runtime :: For > [] ; r11 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i64 , i64 ,) , :: cq_gpu_runtime :: For > [] ; r11 host r12 = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i64 , i64 ,) , :: cq_gpu_runtime :: For > [available] ; r14 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 ,) , :: cq_gpu_runtime :: For > [] ; r2 rows = :: cq_gpu_sequence_runtime :: RangeProvider ; r16 canon = :: cq_gpu_sequence_runtime :: canon :: WideCanon ; } sequence { r0 = store rows r0 ; r1 = store rows r1 ; r3 = store rows r3 ; r4 = map r4 flatten tile 256 r3 ; __hand_filter_r5 = map r5 r4 ; r5 = store __hand_filter_r5 ; r7 = store rows r7 ; r9 = store rows r9 ; r11 = store rows r11 ; __hand_filter_r12 = map r12 flatten tile 256 r11 ; r12 = store __hand_filter_r12 ; r14 = store rows r14 ; r2 = store flatten lookup r1 [nation_key] r0 ; r6 = flatten tile 1024 items 4 store flatten lookup r5 [supplier_key] flatten tile 256 r2 ; r8 = flatten lookup r7 [order_key] r6 ; r10 = compact r10 lookup r9 [customer_key , nation_key] r8 ; r13 = compact r13 lookup r12 [part_key , supplier_key] r10 ; r15 = compact r15 lookup r14 [part_key] r13 ; r16 = canon map r16 r15 ; __sequence_output = store r16 ; output count ; } graded gpu { r0 at host ; r1 at host ; r3 at host ; r4 at host . device . block ; r5 at host ; r7 at host ; r9 at host ; r11 at host ; r12 at host ; r14 at host ; r2 at host . device ; r6 at host . device . block ; r8 at host . device . block ; r10 at host . device . block ; r13 at host . device . block ; r15 at host . device . block ; r16 at host . device . block ; __sequence_output at host . device ; __hand_filter_r5 at host . device . block ; __hand_filter_r12 at host . device . block ; } evidence { count Lineitem = 59986052usize ; count Orders = 15000000usize ; key Orders [o_orderkey] ; count PartSupp = 8000000usize ; key PartSupp [ps_partkey , ps_suppkey] ; count Supplier = 100000usize ; key Supplier [s_suppkey] ; count Part = 2000000usize ; key Part [p_partkey] ; count Customer = 1500000usize ; key Customer [c_custkey] ; count Nation = 25usize ; key Nation [n_nationkey] ; }",
+      "sequence_trace": "evidence { count Lineitem = 59986052usize ; count Orders = 15000000usize ; key Orders [o_orderkey] ; count PartSupp = 8000000usize ; key PartSupp [ps_partkey , ps_suppkey] ; count Supplier = 100000usize ; key Supplier [s_suppkey] ; count Part = 2000000usize ; key Part [p_partkey] ; count Customer = 1500000usize ; key Customer [c_custkey] ; count Nation = 25usize ; key Nation [n_nationkey] ; } ; store (r0) ; grade (gpu , r0 at host) ; grade (gpu , r1 at host) ; grade (gpu , r3 at host) ; grade (gpu , r4 at host) ; grade (gpu , r5 at host) ; grade (gpu , r7 at host) ; grade (gpu , r9 at host) ; grade (gpu , r11 at host) ; grade (gpu , r12 at host) ; grade (gpu , r14 at host) ; grade (gpu , r2 at host . device) ; grade (gpu , r6 at host . device . block) ; grade (gpu , r8 at host . device . block) ; grade (gpu , r10 at host . device . block) ; grade (gpu , r13 at host . device . block) ; grade (gpu , r15 at host . device . block) ; grade (gpu , r16 at host . device . block) ; grade (gpu , __sequence_output at host . device) ; partition (__sequence_output , 256) ; grade (gpu , r4 at host . device . block) ; store (r3) ; publish (r5 , __hand_filter_r5) ; grade (gpu , __hand_filter_r5 at host . device . block) ; partition (r5 , 256) ; store (r11) ; publish (r12 , __hand_filter_r12) ; grade (gpu , __hand_filter_r12 at host . device . block) ; partition (r12 , 256) ; segment (r6 , 1024 , items 4) ; output (count)",
+      "sf": 10,
+      "status": "ran"
+    },
+    {
+      "answer_rows": 90015,
+      "conformance": null,
+      "cost": "(work=3*len(r0) + len(r1) + 2*len(r10) + len(r13) + len(r15) + 2*len(r3) + len(r6) + len(r8) + 4*scan(r14) + 5*scan(r2) + 6*scan(r5) + 4*scan(r7) + 4*unknown(r12) + 4*unknown(r16) + 2*unknown(r9), lookup_after_expand=10, span=max(len(r0) + depth(len(r0);lanes=256) + scan_depth(len(r0);lanes=256) + 4*depth(maxpart(scan(r14);scan(r2);256);lanes=256) + depth(scan(r2);lanes=256) + 2*depth(maxpart(scan(r2);scan(r2);256);lanes=256) + 2*scan_depth(maxpart(scan(r2);scan(r2);256);lanes=256) + 4*depth(maxpart(scan(r5);scan(r2);256);lanes=256) + 2*scan_depth(maxpart(scan(r5);scan(r2);256);lanes=256) + 4*depth(maxpart(scan(r7);scan(r2);256);lanes=256) + 2*depth(maxpart(unknown(r12);scan(r2);256);lanes=256) + 2*scan_depth(maxpart(unknown(r12);scan(r2);256);lanes=256) + 2*depth(maxpart(unknown(r16);scan(r2);256);lanes=256) + 2*scan_depth(maxpart(unknown(r16);scan(r2);256);lanes=256) + 2*depth(maxpart(unknown(r9);scan(r2);256);lanes=256), len(r1), len(r10) + depth(maxpart(len(r10);len(r10);256);lanes=256), len(r13), len(r15), len(r3) + depth(maxpart(len(r3);len(r3);256);lanes=256), len(r6), len(r8)), stores=13, dispatches=4)",
+      "cpu_plan_advice": "",
+      "cpu_query": "struct Query ; relation Lineitem (l_orderkey : i64 , l_partkey : i64 , l_suppkey : i64) ; relation PartSupp (ps_partkey : i64 , ps_suppkey : i64 , ps_availqty : i64) ; relation Part (p_partkey : i64) ; relation Orders (o_orderkey : i64 , o_custkey : i64 , o_orderdate : Date) ; relation Customer (c_custkey : i64 , c_nationkey : i32) ; relation Supplier (s_suppkey : i64 , s_nationkey : i32) ; relation Nation (n_nationkey : i32 , n_name : String) ; answer (order_key , part_key , supplier_nation) : - PartSupp (part_key , supplier_key , available) , if * available > 0 , Lineitem (order_key , part_key , supplier_key) , Orders (order_key , customer_key , order_date) , if * order_date >= start && * order_date < end , Customer (customer_key , customer_nation) , Nation (customer_nation , \"UNITED STATES\") , Part (part_key) , Supplier (supplier_key , supplier_nation) , Nation (supplier_nation , _supplier_name) ;",
+      "duckdb": {
+        "measurement": {
+          "engine": "DuckDB",
+          "measured_runs": 5,
+          "method": "CLI .timer real wall time for complete authored SELECT; 1 ms resolution; one process per thread count",
+          "query": "SELECT DISTINCT o.o_orderkey, p.p_partkey, ns.n_nationkey\nFROM lineitem l JOIN partsupp ps ON l.l_partkey = ps.ps_partkey AND l.l_suppkey = ps.ps_suppkey\nJOIN part p ON p.p_partkey = l.l_partkey\nJOIN orders o ON o.o_orderkey = l.l_orderkey\nJOIN customer c ON c.c_custkey = o.o_custkey\nJOIN supplier s ON s.s_suppkey = ps.ps_suppkey\nJOIN nation nc ON nc.n_nationkey = c.c_nationkey\nJOIN nation ns ON ns.n_nationkey = s.s_nationkey\nWHERE o.o_orderdate >= DATE '1995-01-01' AND o.o_orderdate < DATE '1995-04-01'\nAND nc.n_name = 'UNITED STATES' AND ps.ps_availqty > 0",
+          "sf": 10,
+          "threads": {
+            "1": {
+              "median_seconds": 0.66,
+              "samples_seconds": [
+                0.66,
+                0.715,
+                0.649,
+                0.636,
+                0.728
+              ],
+              "warmup_seconds": 1.251
+            },
+            "24": {
+              "median_seconds": 0.189,
+              "samples_seconds": [
+                0.178,
+                0.231,
+                0.178,
+                0.28,
+                0.189
+              ],
+              "warmup_seconds": 0.259
+            }
+          },
+          "units": "seconds",
+          "version": "v1.4.4 (Andium) 6ddac802ff",
+          "warmup_runs": 1
+        },
+        "source": "/data/tpch-gpu/sf10/duckdb_timing.retail_d85.json",
+        "t24_median_ms": 189.0
+      },
+      "exact": true,
+      "generation_seconds": 0.069858735,
+      "median_ms": {
+        "build": 17.781951904296875,
+        "dedup": 0.2483839988708496,
+        "kernels": 8.904064178466797,
+        "total": 26.935487747192383
+      },
+      "mode": "advised",
+      "pipeline": {
+        "complete": true,
+        "physical": [
+          "retain_streams (r2)",
+          "build_host_reads()"
+        ],
+        "plan": "no_reduce, order(Nation@7, Customer, Orders, Lineitem, Part, PartSupp, Supplier, Nation@10)",
+        "sequence": [
+          "evidence { count Lineitem = 59986052usize ; count PartSupp = 8000000usize ; key PartSupp [ps_partkey , ps_suppkey] ; count Part = 2000000usize ; key Part [p_partkey] ; count Orders = 15000000usize ; key Orders [o_orderkey] ; count Customer = 1500000usize ; key Customer [c_custkey] ; count Supplier = 100000usize ; key Supplier [s_suppkey] ; count Nation = 25usize ; key Nation [n_nationkey] ; }",
+          "grade (gpu , r0 at host)",
+          "grade (gpu , r1 at host)",
+          "grade (gpu , r2 at host . device)",
+          "grade (gpu , r3 at host)",
+          "grade (gpu , r4 at host)",
+          "grade (gpu , r5 at host . device . block)",
+          "grade (gpu , r6 at host)",
+          "grade (gpu , r7 at host . device . block)",
+          "grade (gpu , r8 at host)",
+          "grade (gpu , r9 at host . device . block)",
+          "grade (gpu , r10 at host)",
+          "grade (gpu , r11 at host)",
+          "grade (gpu , r12 at host . device . block)",
+          "grade (gpu , r13 at host)",
+          "grade (gpu , r14 at host . device . block)",
+          "grade (gpu , r15 at host)",
+          "grade (gpu , r16 at host . device . block)",
+          "grade (gpu , r17 at host . device . block)",
+          "grade (gpu , __sequence_output at host . device)",
+          "partition (__sequence_output , 256)",
+          "store (r3)",
+          "publish (r4 , __hand_filter_r4)",
+          "grade (gpu , __hand_filter_r4 at host . device . block)",
+          "partition (r4 , 256)",
+          "store (r10)",
+          "publish (r11 , __hand_filter_r11)",
+          "grade (gpu , __hand_filter_r11 at host . device . block)",
+          "partition (r11 , 256)",
+          "segment (r7 , 1024 , items 4)",
+          "output (count)"
+        ],
+        "storage": "tpch_dictionary",
+        "structures": [
+          "membership(r11)",
+          "membership(r15)",
+          "membership(r8)"
+        ]
+      },
+      "query": "d85",
+      "samples": [
+        {
+          "build_ms": 17.781951904296875,
+          "dedup_ms": 0.2494720071554184,
+          "kernels_ms": 8.904064178466797,
+          "total_ms": 26.935487747192383,
+          "wall_ms": 26.947975
+        },
+        {
+          "build_ms": 17.83260726928711,
+          "dedup_ms": 0.2483839988708496,
+          "kernels_ms": 8.89798355102539,
+          "total_ms": 26.978975296020508,
+          "wall_ms": 26.9925
+        },
+        {
+          "build_ms": 17.769920349121094,
+          "dedup_ms": 0.2489600032567978,
+          "kernels_ms": 8.907648086547852,
+          "total_ms": 26.926528930664062,
+          "wall_ms": 26.939409
+        },
+        {
+          "build_ms": 17.79955291748047,
+          "dedup_ms": 0.24480000138282776,
+          "kernels_ms": 8.904640197753906,
+          "total_ms": 26.948991775512695,
+          "wall_ms": 26.96079
+        },
+        {
+          "build_ms": 17.713024139404297,
+          "dedup_ms": 0.24646399915218353,
+          "kernels_ms": 8.893759727478027,
+          "total_ms": 26.853248596191406,
+          "wall_ms": 26.869185
+        }
+      ],
+      "sequence_input": "physical { relation Lineitem (l_orderkey : i64 , l_partkey : i64 , l_suppkey : i64) ; relation PartSupp (ps_partkey : i64 , ps_suppkey : i64 , ps_availqty : i64) ; relation Part (p_partkey : i64) ; relation Orders (o_orderkey : i64 , o_custkey : i64 , o_orderdate : i32) ; relation Customer (c_custkey : i64 , c_nationkey : i32) ; relation Supplier (s_suppkey : i64 , s_nationkey : i32) ; relation Nation (n_nationkey : i32 , n_name : i32) ; r0 = let rename Nation @ 7 { n_nationkey - > customer_nation } constants { n_name = 23i32 } ; r1 = let rename Customer @ 6 { c_custkey - > customer_key , c_nationkey - > customer_nation } ; r2 = let probe first [customer_nation] r0 , r1 ; r3 = pipe rename Orders @ 3 { o_orderkey - > order_key , o_custkey - > customer_key , o_orderdate - > order_date } ; r4 = let range select r3 if (order_date >= 9131i32 , order_date < 9221i32) ; r5 = pipe probe first [customer_key] r2 , r4 ; r6 = let rename Lineitem @ 2 { l_orderkey - > order_key , l_partkey - > part_key , l_suppkey - > supplier_key } ; r7 = pipe probe first [order_key] r5 , r6 ; r8 = let rename Part @ 8 { p_partkey - > part_key } ; r9 = pipe probe first [part_key] r7 , r8 ; r10 = pipe rename PartSupp @ 0 { ps_partkey - > part_key , ps_suppkey - > supplier_key , ps_availqty - > available } ; r11 = let range select r10 if (available > 0) ; r12 = pipe probe first [part_key , supplier_key] r9 , r11 ; r13 = let rename Supplier @ 9 { s_suppkey - > supplier_key , s_nationkey - > supplier_nation } ; r14 = pipe probe first [supplier_key] r12 , r13 ; r15 = let rename Nation @ 10 { n_nationkey - > supplier_nation , n_name - > _supplier_name } ; r16 = pipe probe first [supplier_nation] r14 , r15 ; r17 = pipe canon project r16 keep { order_key , part_key , supplier_nation } ; return r17 as answer (order_key , part_key , supplier_nation) ; } structures { r1 = :: cq_gpu_sequence_runtime :: RangeProvider [customer_nation] ; r4 = :: cq_gpu_sequence_runtime :: RangeProvider [customer_key] payload [customer_key , order_key] constants { } ; r6 = :: cq_gpu_sequence_runtime :: RangeProvider [order_key] ; r8 = :: cq_gpu_sequence_runtime :: RangeProvider [part_key] membership payload [part_key] constants { } ; r11 = :: cq_gpu_sequence_runtime :: RangeProvider [part_key , supplier_key] membership payload [part_key , supplier_key] constants { } ; r13 = :: cq_gpu_sequence_runtime :: RangeProvider [supplier_key] ; r15 = :: cq_gpu_sequence_runtime :: RangeProvider [supplier_nation] membership payload [supplier_nation] constants { } ; r0 rows = :: cq_gpu_sequence_runtime :: RangeProvider ; r0 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i32 , i32 ,) , :: cq_gpu_runtime :: For > [] ; r1 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i32 ,) , :: cq_gpu_runtime :: For > [] ; r2 rows = :: cq_gpu_sequence_runtime :: RangeProvider ; r3 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i64 , i32 ,) , :: cq_gpu_runtime :: For > [] ; r3 host r4 = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i64 , i32 ,) , :: cq_gpu_runtime :: For > [order_date] ; r6 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i64 , i64 ,) , :: cq_gpu_runtime :: For > [] ; r8 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 ,) , :: cq_gpu_runtime :: For > [] ; r10 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i64 , i64 ,) , :: cq_gpu_runtime :: For > [] ; r10 host r11 = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i64 , i64 ,) , :: cq_gpu_runtime :: For > [available] ; r13 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i32 ,) , :: cq_gpu_runtime :: For > [] ; r15 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i32 , i32 ,) , :: cq_gpu_runtime :: For > [] ; r17 canon = :: cq_gpu_sequence_runtime :: canon :: WideCanon ; } sequence { r0 = store rows r0 ; r1 = store rows r1 ; r2 = store flatten lookup r1 [customer_nation] r0 ; r3 = rows r3 ; r4 = store map r4 r3 ; r5 = flatten lookup r4 [customer_key] r2 ; r6 = store rows r6 ; r7 = flatten lookup r6 [order_key] r5 ; r8 = store rows r8 ; r9 = compact r9 lookup r8 [part_key] r7 ; r10 = rows r10 ; r11 = store map r11 r10 ; r12 = compact r12 lookup r11 [part_key , supplier_key] r9 ; r13 = store rows r13 ; r14 = flatten lookup r13 [supplier_key] r12 ; r15 = store rows r15 ; r16 = compact r16 lookup r15 [supplier_nation] r14 ; r17 = canon map r17 r16 ; __sequence_output = store r17 ; output count ; }",
+      "sequence_planned": "physical { relation Lineitem (l_orderkey : i64 , l_partkey : i64 , l_suppkey : i64) ; relation PartSupp (ps_partkey : i64 , ps_suppkey : i64 , ps_availqty : i64) ; relation Part (p_partkey : i64) ; relation Orders (o_orderkey : i64 , o_custkey : i64 , o_orderdate : i32) ; relation Customer (c_custkey : i64 , c_nationkey : i32) ; relation Supplier (s_suppkey : i64 , s_nationkey : i32) ; relation Nation (n_nationkey : i32 , n_name : i32) ; r0 = let rename Nation @ 7 { n_nationkey - > customer_nation } constants { n_name = 23i32 } ; r1 = let rename Customer @ 6 { c_custkey - > customer_key , c_nationkey - > customer_nation } ; r2 = let probe first [customer_nation] r0 , r1 ; r3 = pipe rename Orders @ 3 { o_orderkey - > order_key , o_custkey - > customer_key , o_orderdate - > order_date } ; r4 = let range select r3 if (order_date >= 9131i32 , order_date < 9221i32) ; r5 = pipe probe first [customer_key] r2 , r4 ; r6 = let rename Lineitem @ 2 { l_orderkey - > order_key , l_partkey - > part_key , l_suppkey - > supplier_key } ; r7 = pipe probe first [order_key] r5 , r6 ; r8 = let rename Part @ 8 { p_partkey - > part_key } ; r9 = pipe probe first [part_key] r7 , r8 ; r10 = pipe rename PartSupp @ 0 { ps_partkey - > part_key , ps_suppkey - > supplier_key , ps_availqty - > available } ; r11 = let range select r10 if (available > 0) ; r12 = pipe probe first [part_key , supplier_key] r9 , r11 ; r13 = let rename Supplier @ 9 { s_suppkey - > supplier_key , s_nationkey - > supplier_nation } ; r14 = pipe probe first [supplier_key] r12 , r13 ; r15 = let rename Nation @ 10 { n_nationkey - > supplier_nation , n_name - > _supplier_name } ; r16 = pipe probe first [supplier_nation] r14 , r15 ; r17 = pipe canon project r16 keep { order_key , part_key , supplier_nation } ; return r17 as answer (order_key , part_key , supplier_nation) ; } structures { r1 = :: cq_gpu_sequence_runtime :: RangeProvider [customer_nation] ; r4 = :: cq_gpu_sequence_runtime :: RangeProvider [customer_key] payload [customer_key , order_key] constants { } ; r6 = :: cq_gpu_sequence_runtime :: RangeProvider [order_key] ; r8 = :: cq_gpu_sequence_runtime :: RangeProvider [part_key] membership payload [part_key] constants { } ; r11 = :: cq_gpu_sequence_runtime :: RangeProvider [part_key , supplier_key] membership payload [part_key , supplier_key] constants { } ; r13 = :: cq_gpu_sequence_runtime :: RangeProvider [supplier_key] ; r15 = :: cq_gpu_sequence_runtime :: RangeProvider [supplier_nation] membership payload [supplier_nation] constants { } ; r0 rows = :: cq_gpu_sequence_runtime :: RangeProvider ; r0 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i32 , i32 ,) , :: cq_gpu_runtime :: For > [] ; r1 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i32 ,) , :: cq_gpu_runtime :: For > [] ; r2 rows = :: cq_gpu_sequence_runtime :: RangeProvider ; r3 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i64 , i32 ,) , :: cq_gpu_runtime :: For > [] ; r3 host r4 = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i64 , i32 ,) , :: cq_gpu_runtime :: For > [order_date] ; r6 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i64 , i64 ,) , :: cq_gpu_runtime :: For > [] ; r8 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 ,) , :: cq_gpu_runtime :: For > [] ; r10 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i64 , i64 ,) , :: cq_gpu_runtime :: For > [] ; r10 host r11 = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i64 , i64 ,) , :: cq_gpu_runtime :: For > [available] ; r13 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i64 , i32 ,) , :: cq_gpu_runtime :: For > [] ; r15 host scan = :: cq_gpu_runtime :: DeviceColumns < 'static , (i32 , i32 ,) , :: cq_gpu_runtime :: For > [] ; r17 canon = :: cq_gpu_sequence_runtime :: canon :: WideCanon ; } sequence { r0 = store rows r0 ; r1 = store rows r1 ; r2 = store flatten lookup r1 [customer_nation] r0 ; r3 = store rows r3 ; __hand_filter_r4 = map r4 flatten tile 256 r3 ; r4 = store __hand_filter_r4 ; r5 = flatten lookup r4 [customer_key] flatten tile 256 r2 ; r6 = store rows r6 ; r7 = flatten tile 1024 items 4 store flatten lookup r6 [order_key] r5 ; r8 = store rows r8 ; r9 = compact r9 lookup r8 [part_key] r7 ; r10 = store rows r10 ; __hand_filter_r11 = map r11 flatten tile 256 r10 ; r11 = store __hand_filter_r11 ; r12 = compact r12 lookup r11 [part_key , supplier_key] r9 ; r13 = store rows r13 ; r14 = flatten lookup r13 [supplier_key] r12 ; r15 = store rows r15 ; r16 = compact r16 lookup r15 [supplier_nation] r14 ; r17 = canon map r17 r16 ; __sequence_output = store r17 ; output count ; } graded gpu { r0 at host ; r1 at host ; r2 at host . device ; r3 at host ; r4 at host ; r5 at host . device . block ; r6 at host ; r7 at host . device . block ; r8 at host ; r9 at host . device . block ; r10 at host ; r11 at host ; r12 at host . device . block ; r13 at host ; r14 at host . device . block ; r15 at host ; r16 at host . device . block ; r17 at host . device . block ; __sequence_output at host . device ; __hand_filter_r4 at host . device . block ; __hand_filter_r11 at host . device . block ; } evidence { count Lineitem = 59986052usize ; count PartSupp = 8000000usize ; key PartSupp [ps_partkey , ps_suppkey] ; count Part = 2000000usize ; key Part [p_partkey] ; count Orders = 15000000usize ; key Orders [o_orderkey] ; count Customer = 1500000usize ; key Customer [c_custkey] ; count Supplier = 100000usize ; key Supplier [s_suppkey] ; count Nation = 25usize ; key Nation [n_nationkey] ; }",
+      "sequence_trace": "evidence { count Lineitem = 59986052usize ; count PartSupp = 8000000usize ; key PartSupp [ps_partkey , ps_suppkey] ; count Part = 2000000usize ; key Part [p_partkey] ; count Orders = 15000000usize ; key Orders [o_orderkey] ; count Customer = 1500000usize ; key Customer [c_custkey] ; count Supplier = 100000usize ; key Supplier [s_suppkey] ; count Nation = 25usize ; key Nation [n_nationkey] ; } ; grade (gpu , r0 at host) ; grade (gpu , r1 at host) ; grade (gpu , r2 at host . device) ; grade (gpu , r3 at host) ; grade (gpu , r4 at host) ; grade (gpu , r5 at host . device . block) ; grade (gpu , r6 at host) ; grade (gpu , r7 at host . device . block) ; grade (gpu , r8 at host) ; grade (gpu , r9 at host . device . block) ; grade (gpu , r10 at host) ; grade (gpu , r11 at host) ; grade (gpu , r12 at host . device . block) ; grade (gpu , r13 at host) ; grade (gpu , r14 at host . device . block) ; grade (gpu , r15 at host) ; grade (gpu , r16 at host . device . block) ; grade (gpu , r17 at host . device . block) ; grade (gpu , __sequence_output at host . device) ; partition (__sequence_output , 256) ; store (r3) ; publish (r4 , __hand_filter_r4) ; grade (gpu , __hand_filter_r4 at host . device . block) ; partition (r4 , 256) ; store (r10) ; publish (r11 , __hand_filter_r11) ; grade (gpu , __hand_filter_r11 at host . device . block) ; partition (r11 , 256) ; segment (r7 , 1024 , items 4) ; output (count)",
+      "sf": 10,
+      "status": "ran"
+    }
+  ],
+  "schema_version": 2,
+  "source": "CPU retail_kernel and standalone compile! CQ ASTs imported with include_str; only manifest storage types, date/decimal encodings and dictionary literals adapted",
+  "table_markdown": "| query | mode | scale | exact | GPU total ms (build/kernels/dedup) | DuckDB t24 ms | status |\n|---|---|---|---|---|---|---|\n| d27 | advised | SF10 | yes | 19.343 (5.315/13.831/0.198) | 86.000 | ran |\n| d72_inner | advised | SF10 | yes | 25.623 (8.078/17.138/0.402) | 287.000 | ran |\n| d85 | advised | SF10 | yes | 26.935 (17.782/8.904/0.248) | 189.000 | ran |\n",
+  "timing": "Median of per-run stage sums: CUDA phase events for device stages, elapsed execution for host-planned stages; initial input loading, final answer download and comparison excluded",
+  "warmup_runs": 1
+}

@@ -1,0 +1,43 @@
+{
+  "configs": [
+    "default",
+    "no-reduce",
+    "transfer",
+    "le",
+    "le_runs",
+    "generic_smallest",
+    "advised"
+  ],
+  "exports": [
+    [
+      "lineitem",
+      "l_orderkey,l_partkey,l_suppkey,l_shipdate,l_quantity"
+    ],
+    [
+      "orders",
+      "o_orderkey,o_custkey"
+    ],
+    [
+      "partsupp",
+      "ps_partkey,ps_suppkey,ps_availqty"
+    ],
+    [
+      "supplier",
+      "s_suppkey,s_nationkey"
+    ],
+    [
+      "part",
+      "p_partkey"
+    ],
+    [
+      "customer",
+      "c_custkey,c_nationkey"
+    ],
+    [
+      "nation",
+      "n_nationkey"
+    ]
+  ],
+  "name": "retail_d72_inner",
+  "sql": "SELECT DISTINCT o.o_orderkey, p.p_partkey, s.s_suppkey, n.n_nationkey\nFROM lineitem l JOIN orders o ON l.l_orderkey = o.o_orderkey\nJOIN partsupp ps ON l.l_partkey = ps.ps_partkey AND l.l_suppkey = ps.ps_suppkey\nJOIN supplier s ON ps.ps_suppkey = s.s_suppkey\nJOIN part p ON ps.ps_partkey = p.p_partkey\nJOIN customer c ON o.o_custkey = c.c_custkey AND c.c_nationkey = s.s_nationkey\nJOIN nation n ON c.c_nationkey = n.n_nationkey\nWHERE l.l_shipdate >= DATE '1995-01-01' AND l.l_shipdate < DATE '1995-04-01'\nAND l.l_quantity > 20.00 AND ps.ps_availqty > 0"
+}

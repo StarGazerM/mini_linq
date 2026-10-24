@@ -1,0 +1,11 @@
+{
+  "status": "timeout",
+  "phase": "plain",
+  "policy": "Parent-directed stop after worker exceeded 600 seconds wall clock; original uncapped process was reported running 44 minutes.",
+  "worker_wall_limit_seconds": 600,
+  "warm_correctness": "ok",
+  "measured_runs_completed": null,
+  "correctness": "unavailable",
+  "per_invocation_lower_bound_ms": null,
+  "note": "Exact warm answer file was written before intervention. Worker emitted no timed metrics; worker wall duration is not a per-query timing lower bound."
+}

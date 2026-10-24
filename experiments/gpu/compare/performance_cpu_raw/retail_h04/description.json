@@ -1,0 +1,22 @@
+{
+  "configs": [
+    "default",
+    "no-reduce",
+    "transfer",
+    "le",
+    "le_runs",
+    "hypergraph"
+  ],
+  "exports": [
+    [
+      "orders",
+      "o_orderkey,o_orderdate"
+    ],
+    [
+      "lineitem",
+      "l_orderkey,l_commitdate,l_receiptdate"
+    ]
+  ],
+  "name": "retail_h04",
+  "sql": "SELECT DISTINCT o.o_orderkey\nFROM orders o JOIN lineitem l ON l.l_orderkey = o.o_orderkey\nWHERE o.o_orderdate >= DATE '1993-07-01' AND o.o_orderdate < DATE '1993-10-01'\nAND l.l_commitdate < l.l_receiptdate"
+}

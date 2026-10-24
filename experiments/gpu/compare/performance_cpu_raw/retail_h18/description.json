@@ -1,0 +1,21 @@
+{
+  "configs": [
+    "default"
+  ],
+  "exports": [
+    [
+      "lineitem",
+      "l_orderkey,l_linenumber,l_quantity"
+    ],
+    [
+      "orders",
+      "o_orderkey,o_custkey,o_orderdate,o_totalprice"
+    ],
+    [
+      "customer",
+      "c_custkey,c_name"
+    ]
+  ],
+  "name": "retail_h18",
+  "sql": "WITH quantities AS (\n    SELECT l_orderkey, CAST(SUM(l_quantity) * 100 AS BIGINT) AS sum_quantity\n    FROM (SELECT DISTINCT l_orderkey, l_linenumber, l_quantity FROM lineitem) AS lines\n    GROUP BY l_orderkey HAVING SUM(l_quantity) > 300.00\n)\nSELECT DISTINCT c.c_name, c.c_custkey, o.o_orderkey,\n    (o.o_orderdate - DATE '1970-01-01')::INTEGER AS o_orderdate,\n    CAST(o.o_totalprice * 100 AS BIGINT) AS total_price, q.sum_quantity\nFROM quantities q JOIN orders o ON q.l_orderkey = o.o_orderkey\nJOIN customer c ON o.o_custkey = c.c_custkey"
+}

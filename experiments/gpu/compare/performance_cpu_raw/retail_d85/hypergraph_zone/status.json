@@ -1,0 +1,8 @@
+{
+  "status": "skipped",
+  "correctness": "not_run",
+  "reason": "Cheaper same-planner-family configuration already >10x GPU",
+  "prior_configuration": "hypergraph",
+  "prior_total_ms": 64.93198699999999,
+  "gpu_total_ms": 3.570784091949463
+}

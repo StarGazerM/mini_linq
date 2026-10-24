@@ -1,0 +1,1052 @@
+{
+  "answer_rows": 302284,
+  "bag_insertions": 33914519,
+  "build_rows_verified": false,
+  "candidate_insertions": 0,
+  "distinct_insertions": 0,
+  "index_builds": 0,
+  "median_ms": 18679.512734,
+  "operator_rows": [
+    {
+      "inputs": [],
+      "key": "Lineitem",
+      "kind": "RENAME",
+      "result": "r0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 24004860
+    },
+    {
+      "inputs": [
+        "r0"
+      ],
+      "key": "order_key",
+      "kind": "PROJECT",
+      "result": "r1",
+      "rows_in": 6001215,
+      "rows_inserted": 0,
+      "rows_out": 6001215
+    },
+    {
+      "inputs": [
+        "r6",
+        "r9"
+      ],
+      "key": "order_key",
+      "kind": "PROBE",
+      "result": "r10",
+      "rows_in": 6001215,
+      "rows_inserted": 0,
+      "rows_out": 18969545
+    },
+    {
+      "inputs": [
+        "r8"
+      ],
+      "key": "order_key,receipt_date,waiting_supplier",
+      "kind": "PROJECT",
+      "result": "r11",
+      "rows_in": 3793296,
+      "rows_inserted": 0,
+      "rows_out": 3793296
+    },
+    {
+      "inputs": [
+        "r10",
+        "r11"
+      ],
+      "key": "order_key,waiting_supplier",
+      "kind": "PROBE",
+      "result": "r12",
+      "rows_in": 18969545,
+      "rows_inserted": 0,
+      "rows_out": 18972299
+    },
+    {
+      "inputs": [
+        "r12",
+        "r8"
+      ],
+      "key": "order_key,receipt_date,waiting_supplier",
+      "kind": "PROBE",
+      "result": "r13",
+      "rows_in": 18972299,
+      "rows_inserted": 0,
+      "rows_out": 18972324
+    },
+    {
+      "inputs": [],
+      "key": "Supplier",
+      "kind": "RENAME",
+      "result": "r14",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 10000
+    },
+    {
+      "inputs": [
+        "r13",
+        "r14"
+      ],
+      "key": "waiting_supplier",
+      "kind": "PROBE",
+      "result": "r15",
+      "rows_in": 18972324,
+      "rows_inserted": 0,
+      "rows_out": 18972324
+    },
+    {
+      "inputs": [],
+      "key": "Nation",
+      "kind": "RENAME",
+      "result": "r16",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 1
+    },
+    {
+      "inputs": [
+        "r15",
+        "r16"
+      ],
+      "key": "nation_key",
+      "kind": "PROBE",
+      "result": "r17",
+      "rows_in": 18972324,
+      "rows_inserted": 0,
+      "rows_out": 783594
+    },
+    {
+      "inputs": [],
+      "key": "Orders",
+      "kind": "RENAME",
+      "result": "r18",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 729413
+    },
+    {
+      "inputs": [
+        "r17",
+        "r18"
+      ],
+      "key": "order_key",
+      "kind": "PROBE",
+      "result": "r19",
+      "rows_in": 783594,
+      "rows_inserted": 0,
+      "rows_out": 378274
+    },
+    {
+      "inputs": [
+        "r0"
+      ],
+      "key": "order_key,other_supplier",
+      "kind": "PROJECT",
+      "result": "r2",
+      "rows_in": 6001215,
+      "rows_inserted": 0,
+      "rows_out": 6001215
+    },
+    {
+      "inputs": [
+        "r19"
+      ],
+      "key": "_other_commit,_other_receipt,commit_date,nation_key,order_key,other_supplier,receipt_date,waiting_supplier",
+      "kind": "SELECT",
+      "result": "r20",
+      "rows_in": 378274,
+      "rows_inserted": 0,
+      "rows_out": 302383
+    },
+    {
+      "inputs": [
+        "r20"
+      ],
+      "key": "order_key,other_supplier,waiting_supplier",
+      "kind": "PROJECT",
+      "result": "r21",
+      "rows_in": 302383,
+      "rows_inserted": 0,
+      "rows_out": 302383
+    },
+    {
+      "inputs": [
+        "r1",
+        "r2"
+      ],
+      "key": "order_key",
+      "kind": "PROBE",
+      "result": "r3",
+      "rows_in": 1500000,
+      "rows_inserted": 0,
+      "rows_out": 5999989
+    },
+    {
+      "inputs": [
+        "r0"
+      ],
+      "key": "_other_receipt,order_key,other_supplier",
+      "kind": "PROJECT",
+      "result": "r4",
+      "rows_in": 6001215,
+      "rows_inserted": 0,
+      "rows_out": 6001215
+    },
+    {
+      "inputs": [
+        "r3",
+        "r4"
+      ],
+      "key": "order_key,other_supplier",
+      "kind": "PROBE",
+      "result": "r5",
+      "rows_in": 5999989,
+      "rows_inserted": 0,
+      "rows_out": 6001206
+    },
+    {
+      "inputs": [
+        "r5",
+        "r0"
+      ],
+      "key": "_other_receipt,order_key,other_supplier",
+      "kind": "PROBE",
+      "result": "r6",
+      "rows_in": 6001206,
+      "rows_inserted": 0,
+      "rows_out": 6001215
+    },
+    {
+      "inputs": [],
+      "key": "Lineitem",
+      "kind": "RENAME",
+      "result": "r7",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 6001215
+    },
+    {
+      "inputs": [
+        "r7"
+      ],
+      "key": "commit_date,order_key,receipt_date,waiting_supplier",
+      "kind": "SELECT",
+      "result": "r8",
+      "rows_in": 6001215,
+      "rows_inserted": 0,
+      "rows_out": 3793296
+    },
+    {
+      "inputs": [
+        "r8"
+      ],
+      "key": "order_key,waiting_supplier",
+      "kind": "PROJECT",
+      "result": "r9",
+      "rows_in": 3793296,
+      "rows_inserted": 0,
+      "rows_out": 3793296
+    },
+    {
+      "inputs": [
+        "r0"
+      ],
+      "key": "_other_receipt,order_key,other_supplier",
+      "kind": "INDEX_BUILD",
+      "result": "r0.fallback._other_receipt_order_key_other_supplier",
+      "rows_in": 6001215,
+      "rows_inserted": 6001215,
+      "rows_out": 6001215
+    },
+    {
+      "inputs": [
+        "r1"
+      ],
+      "key": "",
+      "kind": "DEDUP",
+      "result": "r1.dedup",
+      "rows_in": 6001215,
+      "rows_inserted": 6001215,
+      "rows_out": 1500000
+    },
+    {
+      "inputs": [
+        "r2"
+      ],
+      "key": "",
+      "kind": "DEDUP",
+      "result": "r2.dedup",
+      "rows_in": 6001215,
+      "rows_inserted": 6001215,
+      "rows_out": 5999989
+    },
+    {
+      "inputs": [
+        "r2"
+      ],
+      "key": "order_key",
+      "kind": "INDEX_BUILD",
+      "result": "r2.index.order_key",
+      "rows_in": 5999989,
+      "rows_inserted": 5999989,
+      "rows_out": 5999989
+    },
+    {
+      "inputs": [
+        "r4"
+      ],
+      "key": "",
+      "kind": "DEDUP",
+      "result": "r4.dedup",
+      "rows_in": 6001215,
+      "rows_inserted": 6001215,
+      "rows_out": 6001206
+    },
+    {
+      "inputs": [
+        "r4"
+      ],
+      "key": "order_key,other_supplier",
+      "kind": "INDEX_BUILD",
+      "result": "r4.index.order_key_other_supplier",
+      "rows_in": 6001206,
+      "rows_inserted": 6001206,
+      "rows_out": 6001206
+    },
+    {
+      "inputs": [
+        "r8"
+      ],
+      "key": "",
+      "kind": "ROWS_BUILD",
+      "result": "r8.rows",
+      "rows_in": 3793296,
+      "rows_inserted": 3793296,
+      "rows_out": 3793296
+    },
+    {
+      "inputs": [
+        "r8"
+      ],
+      "key": "order_key,receipt_date,waiting_supplier",
+      "kind": "INDEX_BUILD",
+      "result": "r8.index.order_key_receipt_date_waiting_supplier",
+      "rows_in": 3793296,
+      "rows_inserted": 3793296,
+      "rows_out": 3793296
+    },
+    {
+      "inputs": [
+        "r9"
+      ],
+      "key": "",
+      "kind": "DEDUP",
+      "result": "r9.dedup",
+      "rows_in": 3793296,
+      "rows_inserted": 3793296,
+      "rows_out": 3792811
+    },
+    {
+      "inputs": [
+        "r9"
+      ],
+      "key": "order_key",
+      "kind": "INDEX_BUILD",
+      "result": "r9.index.order_key",
+      "rows_in": 3792811,
+      "rows_inserted": 3792811,
+      "rows_out": 3792811
+    },
+    {
+      "inputs": [
+        "r11"
+      ],
+      "key": "",
+      "kind": "DEDUP",
+      "result": "r11.dedup",
+      "rows_in": 3793296,
+      "rows_inserted": 3793296,
+      "rows_out": 3793292
+    },
+    {
+      "inputs": [
+        "r11"
+      ],
+      "key": "order_key,waiting_supplier",
+      "kind": "INDEX_BUILD",
+      "result": "r11.index.order_key_waiting_supplier",
+      "rows_in": 3793292,
+      "rows_inserted": 3793292,
+      "rows_out": 3793292
+    },
+    {
+      "inputs": [
+        "r14"
+      ],
+      "key": "waiting_supplier",
+      "kind": "INDEX_BUILD",
+      "result": "r14.fallback.waiting_supplier",
+      "rows_in": 10000,
+      "rows_inserted": 10000,
+      "rows_out": 10000
+    },
+    {
+      "inputs": [
+        "r16"
+      ],
+      "key": "nation_key",
+      "kind": "INDEX_BUILD",
+      "result": "r16.index.nation_key",
+      "rows_in": 1,
+      "rows_inserted": 1,
+      "rows_out": 1
+    },
+    {
+      "inputs": [
+        "r18"
+      ],
+      "key": "order_key",
+      "kind": "INDEX_BUILD",
+      "result": "r18.index.order_key",
+      "rows_in": 729413,
+      "rows_inserted": 729413,
+      "rows_out": 729413
+    },
+    {
+      "inputs": [
+        "r21"
+      ],
+      "key": "",
+      "kind": "DEDUP",
+      "result": "r21.dedup",
+      "rows_in": 302383,
+      "rows_inserted": 302383,
+      "rows_out": 302284
+    },
+    {
+      "inputs": [
+        "r21"
+      ],
+      "key": "",
+      "kind": "ANSWER",
+      "result": "r21.answer",
+      "rows_in": 302284,
+      "rows_inserted": 0,
+      "rows_out": 302284
+    }
+  ],
+  "operators": [
+    {
+      "calls": 1,
+      "elapsed_ms": 18679.512413,
+      "id": 0,
+      "inputs": [],
+      "key": "retail_h21_positive",
+      "kind": "QUERY",
+      "program": 0,
+      "result": "query",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 302284
+    },
+    {
+      "calls": 4,
+      "elapsed_ms": 172.149089,
+      "id": 1,
+      "inputs": [],
+      "key": "Lineitem",
+      "kind": "RENAME",
+      "program": 1,
+      "result": "r0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 24004860
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 5.461086000000001,
+      "id": 2,
+      "inputs": [
+        "r0"
+      ],
+      "key": "order_key",
+      "kind": "PROJECT",
+      "program": 1,
+      "result": "r1",
+      "rows_in": 6001215,
+      "rows_inserted": 0,
+      "rows_out": 6001215
+    },
+    {
+      "calls": 6001215,
+      "elapsed_ms": 9290.929216,
+      "id": 3,
+      "inputs": [
+        "r6",
+        "r9"
+      ],
+      "key": "order_key",
+      "kind": "PROBE",
+      "program": 1,
+      "result": "r10",
+      "rows_in": 6001215,
+      "rows_inserted": 0,
+      "rows_out": 18969545
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 39.069579,
+      "id": 4,
+      "inputs": [
+        "r8"
+      ],
+      "key": "order_key,receipt_date,waiting_supplier",
+      "kind": "PROJECT",
+      "program": 1,
+      "result": "r11",
+      "rows_in": 3793296,
+      "rows_inserted": 0,
+      "rows_out": 3793296
+    },
+    {
+      "calls": 18969545,
+      "elapsed_ms": 5937.817187000001,
+      "id": 5,
+      "inputs": [
+        "r10",
+        "r11"
+      ],
+      "key": "order_key,waiting_supplier",
+      "kind": "PROBE",
+      "program": 1,
+      "result": "r12",
+      "rows_in": 18969545,
+      "rows_inserted": 0,
+      "rows_out": 18972299
+    },
+    {
+      "calls": 18972299,
+      "elapsed_ms": 3151.926167,
+      "id": 6,
+      "inputs": [
+        "r12",
+        "r8"
+      ],
+      "key": "order_key,receipt_date,waiting_supplier",
+      "kind": "PROBE",
+      "program": 1,
+      "result": "r13",
+      "rows_in": 18972299,
+      "rows_inserted": 0,
+      "rows_out": 18972324
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 0.01048,
+      "id": 7,
+      "inputs": [],
+      "key": "Supplier",
+      "kind": "RENAME",
+      "program": 1,
+      "result": "r14",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 10000
+    },
+    {
+      "calls": 18972324,
+      "elapsed_ms": 1755.7709109999998,
+      "id": 8,
+      "inputs": [
+        "r13",
+        "r14"
+      ],
+      "key": "waiting_supplier",
+      "kind": "PROBE",
+      "program": 1,
+      "result": "r15",
+      "rows_in": 18972324,
+      "rows_inserted": 0,
+      "rows_out": 18972324
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 0.0006309999999999999,
+      "id": 9,
+      "inputs": [],
+      "key": "Nation",
+      "kind": "RENAME",
+      "program": 1,
+      "result": "r16",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 1
+    },
+    {
+      "calls": 18972324,
+      "elapsed_ms": 588.951814,
+      "id": 10,
+      "inputs": [
+        "r15",
+        "r16"
+      ],
+      "key": "nation_key",
+      "kind": "PROBE",
+      "program": 1,
+      "result": "r17",
+      "rows_in": 18972324,
+      "rows_inserted": 0,
+      "rows_out": 783594
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 7.8618820000000005,
+      "id": 11,
+      "inputs": [],
+      "key": "Orders",
+      "kind": "RENAME",
+      "program": 1,
+      "result": "r18",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 729413
+    },
+    {
+      "calls": 783594,
+      "elapsed_ms": 34.971022999999995,
+      "id": 12,
+      "inputs": [
+        "r17",
+        "r18"
+      ],
+      "key": "order_key",
+      "kind": "PROBE",
+      "program": 1,
+      "result": "r19",
+      "rows_in": 783594,
+      "rows_inserted": 0,
+      "rows_out": 378274
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 39.085048,
+      "id": 13,
+      "inputs": [
+        "r0"
+      ],
+      "key": "order_key,other_supplier",
+      "kind": "PROJECT",
+      "program": 1,
+      "result": "r2",
+      "rows_in": 6001215,
+      "rows_inserted": 0,
+      "rows_out": 6001215
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 18303.471208000003,
+      "id": 14,
+      "inputs": [
+        "r19"
+      ],
+      "key": "_other_commit,_other_receipt,commit_date,nation_key,order_key,other_supplier,receipt_date,waiting_supplier",
+      "kind": "SELECT",
+      "program": 1,
+      "result": "r20",
+      "rows_in": 378274,
+      "rows_inserted": 0,
+      "rows_out": 302383
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 18303.471468,
+      "id": 15,
+      "inputs": [
+        "r20"
+      ],
+      "key": "order_key,other_supplier,waiting_supplier",
+      "kind": "PROJECT",
+      "program": 1,
+      "result": "r21",
+      "rows_in": 302383,
+      "rows_inserted": 0,
+      "rows_out": 302383
+    },
+    {
+      "calls": 1500000,
+      "elapsed_ms": 16636.305772,
+      "id": 16,
+      "inputs": [
+        "r1",
+        "r2"
+      ],
+      "key": "order_key",
+      "kind": "PROBE",
+      "program": 1,
+      "result": "r3",
+      "rows_in": 1500000,
+      "rows_inserted": 0,
+      "rows_out": 5999989
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 55.786948,
+      "id": 17,
+      "inputs": [
+        "r0"
+      ],
+      "key": "_other_receipt,order_key,other_supplier",
+      "kind": "PROJECT",
+      "program": 1,
+      "result": "r4",
+      "rows_in": 6001215,
+      "rows_inserted": 0,
+      "rows_out": 6001215
+    },
+    {
+      "calls": 5999989,
+      "elapsed_ms": 13359.912946999999,
+      "id": 18,
+      "inputs": [
+        "r3",
+        "r4"
+      ],
+      "key": "order_key,other_supplier",
+      "kind": "PROBE",
+      "program": 1,
+      "result": "r5",
+      "rows_in": 5999989,
+      "rows_inserted": 0,
+      "rows_out": 6001206
+    },
+    {
+      "calls": 6001206,
+      "elapsed_ms": 10858.29174,
+      "id": 19,
+      "inputs": [
+        "r5",
+        "r0"
+      ],
+      "key": "_other_receipt,order_key,other_supplier",
+      "kind": "PROBE",
+      "program": 1,
+      "result": "r6",
+      "rows_in": 6001206,
+      "rows_inserted": 0,
+      "rows_out": 6001215
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 69.30217499999999,
+      "id": 20,
+      "inputs": [],
+      "key": "Lineitem",
+      "kind": "RENAME",
+      "program": 1,
+      "result": "r7",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 6001215
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 69.302615,
+      "id": 21,
+      "inputs": [
+        "r7"
+      ],
+      "key": "commit_date,order_key,receipt_date,waiting_supplier",
+      "kind": "SELECT",
+      "program": 1,
+      "result": "r8",
+      "rows_in": 6001215,
+      "rows_inserted": 0,
+      "rows_out": 3793296
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 27.632508,
+      "id": 22,
+      "inputs": [
+        "r8"
+      ],
+      "key": "order_key,waiting_supplier",
+      "kind": "PROJECT",
+      "program": 1,
+      "result": "r9",
+      "rows_in": 3793296,
+      "rows_inserted": 0,
+      "rows_out": 3793296
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 974.798114,
+      "id": 23,
+      "inputs": [
+        "r0"
+      ],
+      "key": "_other_receipt,order_key,other_supplier",
+      "kind": "INDEX_BUILD",
+      "program": 1,
+      "result": "r0.fallback._other_receipt_order_key_other_supplier",
+      "rows_in": 6001215,
+      "rows_inserted": 6001215,
+      "rows_out": 6001215
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 18303.468112000002,
+      "id": 24,
+      "inputs": [
+        "r1"
+      ],
+      "key": "",
+      "kind": "DEDUP",
+      "program": 1,
+      "result": "r1.dedup",
+      "rows_in": 6001215,
+      "rows_inserted": 6001215,
+      "rows_out": 1500000
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 721.036841,
+      "id": 25,
+      "inputs": [
+        "r2"
+      ],
+      "key": "",
+      "kind": "DEDUP",
+      "program": 1,
+      "result": "r2.dedup",
+      "rows_in": 6001215,
+      "rows_inserted": 6001215,
+      "rows_out": 5999989
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 1031.299788,
+      "id": 26,
+      "inputs": [
+        "r2"
+      ],
+      "key": "order_key",
+      "kind": "INDEX_BUILD",
+      "program": 1,
+      "result": "r2.index.order_key",
+      "rows_in": 5999989,
+      "rows_inserted": 5999989,
+      "rows_out": 5999989
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 932.626729,
+      "id": 27,
+      "inputs": [
+        "r4"
+      ],
+      "key": "",
+      "kind": "DEDUP",
+      "program": 1,
+      "result": "r4.dedup",
+      "rows_in": 6001215,
+      "rows_inserted": 6001215,
+      "rows_out": 6001206
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 1771.2956640000002,
+      "id": 28,
+      "inputs": [
+        "r4"
+      ],
+      "key": "order_key,other_supplier",
+      "kind": "INDEX_BUILD",
+      "program": 1,
+      "result": "r4.index.order_key_other_supplier",
+      "rows_in": 6001206,
+      "rows_inserted": 6001206,
+      "rows_out": 6001206
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 133.93523199999998,
+      "id": 29,
+      "inputs": [
+        "r8"
+      ],
+      "key": "",
+      "kind": "ROWS_BUILD",
+      "program": 1,
+      "result": "r8.rows",
+      "rows_in": 3793296,
+      "rows_inserted": 3793296,
+      "rows_out": 3793296
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 766.9829030000001,
+      "id": 30,
+      "inputs": [
+        "r8"
+      ],
+      "key": "order_key,receipt_date,waiting_supplier",
+      "kind": "INDEX_BUILD",
+      "program": 1,
+      "result": "r8.index.order_key_receipt_date_waiting_supplier",
+      "rows_in": 3793296,
+      "rows_inserted": 3793296,
+      "rows_out": 3793296
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 592.5422,
+      "id": 31,
+      "inputs": [
+        "r9"
+      ],
+      "key": "",
+      "kind": "DEDUP",
+      "program": 1,
+      "result": "r9.dedup",
+      "rows_in": 3793296,
+      "rows_inserted": 3793296,
+      "rows_out": 3792811
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 866.6723920000001,
+      "id": 32,
+      "inputs": [
+        "r9"
+      ],
+      "key": "order_key",
+      "kind": "INDEX_BUILD",
+      "program": 1,
+      "result": "r9.index.order_key",
+      "rows_in": 3792811,
+      "rows_inserted": 3792811,
+      "rows_out": 3792811
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 774.6013790000001,
+      "id": 33,
+      "inputs": [
+        "r11"
+      ],
+      "key": "",
+      "kind": "DEDUP",
+      "program": 1,
+      "result": "r11.dedup",
+      "rows_in": 3793296,
+      "rows_inserted": 3793296,
+      "rows_out": 3793292
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 1464.498275,
+      "id": 34,
+      "inputs": [
+        "r11"
+      ],
+      "key": "order_key,waiting_supplier",
+      "kind": "INDEX_BUILD",
+      "program": 1,
+      "result": "r11.index.order_key_waiting_supplier",
+      "rows_in": 3793292,
+      "rows_inserted": 3793292,
+      "rows_out": 3793292
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 0.248116,
+      "id": 35,
+      "inputs": [
+        "r14"
+      ],
+      "key": "waiting_supplier",
+      "kind": "INDEX_BUILD",
+      "program": 1,
+      "result": "r14.fallback.waiting_supplier",
+      "rows_in": 10000,
+      "rows_inserted": 10000,
+      "rows_out": 10000
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 0.0020540000000000003,
+      "id": 36,
+      "inputs": [
+        "r16"
+      ],
+      "key": "nation_key",
+      "kind": "INDEX_BUILD",
+      "program": 1,
+      "result": "r16.index.nation_key",
+      "rows_in": 1,
+      "rows_inserted": 1,
+      "rows_out": 1
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 55.764874999999996,
+      "id": 37,
+      "inputs": [
+        "r18"
+      ],
+      "key": "order_key",
+      "kind": "INDEX_BUILD",
+      "program": 1,
+      "result": "r18.index.order_key",
+      "rows_in": 729413,
+      "rows_inserted": 729413,
+      "rows_out": 729413
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 18327.967459,
+      "id": 38,
+      "inputs": [
+        "r21"
+      ],
+      "key": "",
+      "kind": "DEDUP",
+      "program": 1,
+      "result": "r21.dedup",
+      "rows_in": 302383,
+      "rows_inserted": 302383,
+      "rows_out": 302284
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 18327.96768,
+      "id": 39,
+      "inputs": [
+        "r21"
+      ],
+      "key": "",
+      "kind": "ANSWER",
+      "program": 1,
+      "result": "r21.answer",
+      "rows_in": 302284,
+      "rows_inserted": 0,
+      "rows_out": 302284
+    }
+  ],
+  "rows_copied": 0,
+  "rows_enumerated": 0,
+  "samples_ms": [
+    18379.575919,
+    18562.193530999997,
+    18679.512734,
+    18724.159442,
+    18817.533947
+  ],
+  "set_insertions": 25892620,
+  "top_level_clock_verified": true,
+  "top_level_ms": 18679.512413,
+  "tree": "QUERY            query [retail_h21_positive] inputs= rows=302284 in=0 inserted=0 t=18679.512ms\n  ANSWER           r21.answer [] inputs=r21 rows=302284 in=302284 inserted=0 t=18327.968ms\n    PROJECT          r21 [order_key,other_supplier,waiting_supplier] inputs=r20 rows=302383 in=302383 inserted=0 t=18303.471ms\n      SELECT           r20 [_other_commit,_other_receipt,commit_date,nation_key,order_key,other_supplier,receipt_date,waiting_supplier] inputs=r19 rows=302383 in=378274 inserted=0 t=18303.471ms\n        PROBE            r19 [order_key] inputs=r17,r18 rows=378274 in=783594 inserted=0 t=34.971ms\n          PROBE            r17 [nation_key] inputs=r15,r16 rows=783594 in=18972324 inserted=0 t=588.952ms\n            PROBE            r15 [waiting_supplier] inputs=r13,r14 rows=18972324 in=18972324 inserted=0 t=1755.771ms\n              PROBE            r13 [order_key,receipt_date,waiting_supplier] inputs=r12,r8 rows=18972324 in=18972299 inserted=0 t=3151.926ms\n                PROBE            r12 [order_key,waiting_supplier] inputs=r10,r11 rows=18972299 in=18969545 inserted=0 t=5937.817ms\n                  PROBE            r10 [order_key] inputs=r6,r9 rows=18969545 in=6001215 inserted=0 t=9290.929ms\n                    PROBE            r6 [_other_receipt,order_key,other_supplier] inputs=r5,r0 rows=6001215 in=6001206 inserted=0 t=10858.292ms\n                      PROBE            r5 [order_key,other_supplier] inputs=r3,r4 rows=6001206 in=5999989 inserted=0 t=13359.913ms\n                        PROBE            r3 [order_key] inputs=r1,r2 rows=5999989 in=1500000 inserted=0 t=16636.306ms\n                          PROJECT          r1 [order_key] inputs=r0 rows=6001215 in=6001215 inserted=0 t=5.461ms\n                            RENAME           r0 [Lineitem] inputs= rows=24004860 in=0 inserted=0 t=172.149ms\n                          PROJECT          r2 [order_key,other_supplier] inputs=r0 rows=6001215 in=6001215 inserted=0 t=39.085ms\n                            RENAME           r0 [Lineitem] inputs= rows=24004860 in=0 inserted=0 t=172.149ms (shared)\n                        PROJECT          r4 [_other_receipt,order_key,other_supplier] inputs=r0 rows=6001215 in=6001215 inserted=0 t=55.787ms\n                          RENAME           r0 [Lineitem] inputs= rows=24004860 in=0 inserted=0 t=172.149ms (shared)\n                      RENAME           r0 [Lineitem] inputs= rows=24004860 in=0 inserted=0 t=172.149ms (shared)\n                    PROJECT          r9 [order_key,waiting_supplier] inputs=r8 rows=3793296 in=3793296 inserted=0 t=27.633ms\n                      SELECT           r8 [commit_date,order_key,receipt_date,waiting_supplier] inputs=r7 rows=3793296 in=6001215 inserted=0 t=69.303ms\n                        RENAME           r7 [Lineitem] inputs= rows=6001215 in=0 inserted=0 t=69.302ms\n                  PROJECT          r11 [order_key,receipt_date,waiting_supplier] inputs=r8 rows=3793296 in=3793296 inserted=0 t=39.070ms\n                    SELECT           r8 [commit_date,order_key,receipt_date,waiting_supplier] inputs=r7 rows=3793296 in=6001215 inserted=0 t=69.303ms (shared)\n                SELECT           r8 [commit_date,order_key,receipt_date,waiting_supplier] inputs=r7 rows=3793296 in=6001215 inserted=0 t=69.303ms (shared)\n              RENAME           r14 [Supplier] inputs= rows=10000 in=0 inserted=0 t=0.010ms\n            RENAME           r16 [Nation] inputs= rows=1 in=0 inserted=0 t=0.001ms\n          RENAME           r18 [Orders] inputs= rows=729413 in=0 inserted=0 t=7.862ms\n  DEDUP            r21.dedup [] inputs=r21 rows=302284 in=302383 inserted=302383 t=18327.967ms\n    PROJECT          r21 [order_key,other_supplier,waiting_supplier] inputs=r20 rows=302383 in=302383 inserted=0 t=18303.471ms (shared)\n  INDEX_BUILD      r18.index.order_key [order_key] inputs=r18 rows=729413 in=729413 inserted=729413 t=55.765ms excl=47.903ms\n    RENAME           r18 [Orders] inputs= rows=729413 in=0 inserted=0 t=7.862ms (shared)\n  INDEX_BUILD      r16.index.nation_key [nation_key] inputs=r16 rows=1 in=1 inserted=1 t=0.002ms excl=0.001ms\n    RENAME           r16 [Nation] inputs= rows=1 in=0 inserted=0 t=0.001ms (shared)\n  INDEX_BUILD      r14.fallback.waiting_supplier [waiting_supplier] inputs=r14 rows=10000 in=10000 inserted=10000 t=0.248ms excl=0.237ms\n    RENAME           r14 [Supplier] inputs= rows=10000 in=0 inserted=0 t=0.010ms (shared)\n  INDEX_BUILD      r11.index.order_key_waiting_supplier [order_key,waiting_supplier] inputs=r11 rows=3793292 in=3793292 inserted=3793292 t=1464.498ms excl=671.242ms\n    PROJECT          r11 [order_key,receipt_date,waiting_supplier] inputs=r8 rows=3793296 in=3793296 inserted=0 t=39.070ms (shared)\n  DEDUP            r11.dedup [] inputs=r11 rows=3793292 in=3793296 inserted=3793296 t=774.601ms\n    PROJECT          r11 [order_key,receipt_date,waiting_supplier] inputs=r8 rows=3793296 in=3793296 inserted=0 t=39.070ms (shared)\n  INDEX_BUILD      r9.index.order_key [order_key] inputs=r9 rows=3792811 in=3792811 inserted=3792811 t=866.672ms excl=261.469ms\n    PROJECT          r9 [order_key,waiting_supplier] inputs=r8 rows=3793296 in=3793296 inserted=0 t=27.633ms (shared)\n  DEDUP            r9.dedup [] inputs=r9 rows=3792811 in=3793296 inserted=3793296 t=592.542ms\n    PROJECT          r9 [order_key,waiting_supplier] inputs=r8 rows=3793296 in=3793296 inserted=0 t=27.633ms (shared)\n  INDEX_BUILD      r8.index.order_key_receipt_date_waiting_supplier [order_key,receipt_date,waiting_supplier] inputs=r8 rows=3793296 in=3793296 inserted=3793296 t=766.983ms excl=729.298ms\n    SELECT           r8 [commit_date,order_key,receipt_date,waiting_supplier] inputs=r7 rows=3793296 in=6001215 inserted=0 t=69.303ms (shared)\n  ROWS_BUILD       r8.rows [] inputs=r8 rows=3793296 in=3793296 inserted=3793296 t=133.935ms excl=64.632ms\n    SELECT           r8 [commit_date,order_key,receipt_date,waiting_supplier] inputs=r7 rows=3793296 in=6001215 inserted=0 t=69.303ms (shared)\n  INDEX_BUILD      r4.index.order_key_other_supplier [order_key,other_supplier] inputs=r4 rows=6001206 in=6001206 inserted=6001206 t=1771.296ms excl=814.782ms\n    PROJECT          r4 [_other_receipt,order_key,other_supplier] inputs=r0 rows=6001215 in=6001215 inserted=0 t=55.787ms (shared)\n  DEDUP            r4.dedup [] inputs=r4 rows=6001206 in=6001215 inserted=6001215 t=932.627ms\n    PROJECT          r4 [_other_receipt,order_key,other_supplier] inputs=r0 rows=6001215 in=6001215 inserted=0 t=55.787ms (shared)\n  INDEX_BUILD      r2.index.order_key [order_key] inputs=r2 rows=5999989 in=5999989 inserted=5999989 t=1031.300ms excl=294.135ms\n    PROJECT          r2 [order_key,other_supplier] inputs=r0 rows=6001215 in=6001215 inserted=0 t=39.085ms (shared)\n  DEDUP            r2.dedup [] inputs=r2 rows=5999989 in=6001215 inserted=6001215 t=721.037ms\n    PROJECT          r2 [order_key,other_supplier] inputs=r0 rows=6001215 in=6001215 inserted=0 t=39.085ms (shared)\n  DEDUP            r1.dedup [] inputs=r1 rows=1500000 in=6001215 inserted=6001215 t=18303.468ms\n    PROJECT          r1 [order_key] inputs=r0 rows=6001215 in=6001215 inserted=0 t=5.461ms (shared)\n  INDEX_BUILD      r0.fallback._other_receipt_order_key_other_supplier [_other_receipt,order_key,other_supplier] inputs=r0 rows=6001215 in=6001215 inserted=6001215 t=974.798ms excl=902.980ms\n    RENAME           r0 [Lineitem] inputs= rows=24004860 in=0 inserted=0 t=172.149ms (shared)\nBUILD_EXCLUSIVE_TOTAL t=3786.679ms\n",
+  "verified": true
+}
