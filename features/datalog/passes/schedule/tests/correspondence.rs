@@ -64,5 +64,12 @@ fn sequential_facade_schedules_refine_unscheduled_mutual_recursion() {
             .collect::<BTreeSet<_>>()
         })
         .unwrap();
+        check_refinement(base, || {
+            mutual!(&rows;
+                round = [cq_datalog_schedule::schedule(relational, per_hole)];
+            )
+            .collect::<BTreeSet<_>>()
+        })
+        .unwrap();
     }
 }

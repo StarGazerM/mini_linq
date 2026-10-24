@@ -6,7 +6,9 @@
 //! Combine forms with commas: `by_head, grain(128), inline_below(0)`.
 //! Global policy applies to all holes; `policy(0 { step 1 grain 64 })`
 //! overrides only the named fields of individual holes, after wave selection.
-//! All waves read the committed snapshot and preserve synchronous progress.
+//! `synchronous` or `relational` selects the step-phase progress mode
+//! (WF-DL-Progress); otherwise the source's mode is kept. Relational progress
+//! drops the round barrier between steps; seeds stay synchronous.
 
 mod rewrite {
     use cq_lang_datalog_round as round;
@@ -83,6 +85,7 @@ mod rewrite {
     }
     struct Advice {
         waves: Option<WaveAdvice>,
+        progress: Option<Ident>,
         grain: Option<usize>,
         inline_below: Option<usize>,
         policy: Vec<(usize, HolePolicy)>,
@@ -92,6 +95,7 @@ mod rewrite {
         fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
             let mut advice = Self {
                 waves: None,
+                progress: None,
                 grain: None,
                 inline_below: None,
                 policy: Vec::new(),
@@ -107,6 +111,15 @@ mod rewrite {
                             return Err(input.error("wave advice listed more than once"));
                         }
                         advice.waves = Some(input.parse()?);
+                    }
+                    "synchronous" | "relational" => {
+                        let name: Ident = input.parse()?;
+                        if advice.progress.replace(name.clone()).is_some() {
+                            return Err(syn::Error::new_spanned(
+                                name,
+                                "progress advice listed more than once",
+                            ));
+                        }
                     }
                     "grain" | "inline_below" => {
                         let name: Ident = input.parse()?;
@@ -242,6 +255,9 @@ mod rewrite {
             }
             None => source.schedule.clone(),
         };
+        target.schedule.progress = advice
+            .progress
+            .unwrap_or_else(|| source.schedule.progress.clone());
         if advice.grain.is_some() || advice.inline_below.is_some() {
             for (component, stratum) in source.schedule.strata.iter().enumerate() {
                 for hole in &stratum.reads {

@@ -37,6 +37,9 @@ fn advice_pass_cases_and_round_text_roundtrip() {
         quote!(policy(0 { seed 0 inline_below 8 step 1 grain 128 inline_below 0 })),
         quote!(policy(0 { step 1 grain 128 }), grain(2), inline_below(0), per_hole),
         quote!(strata(0 { seed [0] step [0] [1 2] }), grain(8)),
+        quote!(relational),
+        quote!(relational, by_head, grain(2)),
+        quote!(synchronous, per_hole),
     ] {
         let target = cq_datalog_testkit::PassCase {
             source: source.clone(),
@@ -54,6 +57,31 @@ fn advice_pass_cases_and_round_text_roundtrip() {
         assert_eq!(parsed, reparsed);
     }
     assert_eq!(compile_with(&source, quote!(strata())).unwrap(), source);
+}
+
+#[test]
+fn progress_advice_is_kept_and_checked() {
+    let source = fixture();
+    let relational = compile_with(&source, quote!(relational)).unwrap();
+    assert_eq!(relational.schedule.progress, "relational");
+    // Later wave advice keeps the recorded progress unless it is restated.
+    let regrouped = compile_with(&relational, quote!(by_head)).unwrap();
+    assert_eq!(regrouped.schedule.progress, "relational");
+    assert_eq!(
+        compile_with(&regrouped, quote!(synchronous))
+            .unwrap()
+            .schedule
+            .progress,
+        "synchronous"
+    );
+    assert!(compile_with(&source, quote!(relational, synchronous)).is_err());
+    // WF-DL-Progress: relational has no global phases to time.
+    let mut timed = relational.clone();
+    timed.policy.timing = syn::parse_quote!(phases);
+    assert!(round::contract::check(&timed).is_err());
+    let mut unknown = relational;
+    unknown.schedule.progress = syn::parse_quote!(asynchronous);
+    assert!(round::contract::check(&unknown).is_err());
 }
 
 #[test]
