@@ -86,6 +86,22 @@ fn row_valued_bound_is_evaluated_per_lane_before_range_lookup() {
 }
 
 #[test]
+fn encoded_integer_disjunction_is_a_device_or_condition() {
+    let generated = translate(&filtered_probe(quote!((value = 1i32) or (value = 2i32))));
+    assert!(generated.contains("let value = &"), "{generated}");
+    assert!(
+        generated.split(';').any(|statement| {
+            statement.contains("* value == * & (1i32)")
+                && statement.contains("||")
+                && statement.contains("* value == * & (2i32)")
+        }),
+        "{generated}"
+    );
+    assert!(!generated.contains("relational_eq"), "{generated}");
+    assert!(!generated.contains("RangeSelection"), "{generated}");
+}
+
+#[test]
 fn published_row_bound_filter_is_not_rebuilt_as_a_host_interval() {
     let mut program = filtered_probe(quote!(value > bound));
     for definition in &mut program.sequence.definitions {

@@ -64,11 +64,15 @@ H08 (`p_type`, `r_name`), H09 (`p_name`), H21-positive (`o_orderstatus`, `n_name
 D19/D85 (`n_name`), and D27 (`p_brand`, `n_name`); D72-inner has no string columns.
 Catalog provider tokens declare their accepted element types: resident range
 providers accept scalar codes, while host providers retain unsupported rows.
-String literal equality and opaque string predicates execute through the shared
-host row printer. Once a host projection drops the strings, its numeric rows
-are uploaded for subsequent GPU work; host evaluation and upload are included
-in the build timing interval. The synthetic String-guard regression checks
-this boundary against Sequential and explicit expected keys.
+The explicit `tpch_dictionary` profile also stores String columns as codes when
+their uses are literal equality predicates, including relational `Or` arms and
+`In` sets. Each literal uses its own column's dictionary; H07's country-pair
+select therefore executes on integer codes on the device. Opaque string
+predicates and ordered String comparisons retain host strings. Once a host
+projection drops the strings, its numeric rows are uploaded for subsequent GPU
+work; host evaluation and upload are included in the build timing interval.
+The synthetic String-guard regression checks this boundary against Sequential
+and explicit expected keys.
 
 H05 uses the explicit `tpch_domains` loader profile in **both** modes: the shared
 `gpu_compress_host::tpch::schema`/`gpu_compress::Catalog` stores join keys as dense u32 domain IDs
@@ -145,11 +149,11 @@ answer download, and comparison are outside those event intervals. SF1 also
 compares the GPU answer to independent Sequential translation of the identical
 Physical using `cq_testkit::conformance::assert_answers_equal`, the external
 target API used by H05 (`assert_conformant` itself exposes only CPU targets).
-The eleven conformance tests cover both modes and reject unexpected planning
-failures; H07's existing unsupported opaque country disjunction remains an
-explicit reported rejection. `TPCH_GPU_DATA_ROOT` changes the fixture root at
-build time. The new advised acceptance results must be measured; the schedules
-and timing ceilings above are requirements, not claimed measurements.
+The suite conformance tests cover built modes and reject unexpected planning
+failures; H07 now requires a positive exact run rather than an expected catalog
+rejection. `TPCH_GPU_DATA_ROOT` changes the fixture root at build time.
+Statistics-derived H07 advice and its comparison with H07-block are recorded in
+[`compare/tpch_statistics.md`](compare/tpch_statistics.md).
 
 Historical initial inventory, before the subsequent translation fixes: all eleven queries were rejected at both scales, so **no GPU
 exactness, conformance agreement, or timing is claimed**. The release build and

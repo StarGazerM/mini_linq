@@ -122,7 +122,7 @@ pub fn run(
                 }
             }
         } else {
-            successful &= query == "h07";
+            successful = false;
             result["exact"] = Value::Null;
             result["conformance"] =
                 json!({"status": "not run", "reason": result["status"], "error": result["error"]});
@@ -219,7 +219,6 @@ mod tests {
             if report["status"] != "accepted" {
                 let error = report["error"].as_str().unwrap();
                 match query {
-                    "h07" => assert!(error.contains("unmet catalog obligation Canon"), "{error}"),
                     "h14" => assert_eq!(
                         error,
                         "T-Gpu: host publication r3 needs recorded device-representable code columns"
@@ -307,12 +306,12 @@ mod tests {
 
     #[test]
     fn advised_h05_records_the_reference_boundaries() -> Result<()> {
-        for sf in [1, 10] {
-            let reports = plans()?;
-            let report = reports
-                .iter()
-                .find(|row| row["query"] == "h05" && row["sf"] == sf && row["mode"] == "advised")
-                .unwrap();
+        // Like conformance, inspect only executors selected at build time.
+        let reports = plans()?;
+        for report in reports
+            .iter()
+            .filter(|row| row["query"] == "h05" && row["mode"] == "advised")
+        {
             assert_eq!(report["status"], "accepted", "{}", report["error"]);
             let advice = report["pipeline"]["sequence"]
                 .as_array()

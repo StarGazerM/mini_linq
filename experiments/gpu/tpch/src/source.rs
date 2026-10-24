@@ -435,6 +435,33 @@ impl Kernel {
         quote!(struct Query; #(#declarations)* #(#derived)* answer(#(#outputs),*) :- #body)
     }
 
+    /// Column-local dictionary codes preserve literal equality, including
+    /// disjunctions and finite membership. Opaque or ordered String uses still
+    /// require the authored host representation.
+    pub fn dictionary_types(
+        &self,
+        manifest: &Manifest,
+    ) -> Result<BTreeMap<(String, String), syn::Type>> {
+        let program = self.cpu_program()?;
+        let mut variables = BTreeMap::new();
+        collect_variables(self.body.clone(), &self.relations, &mut variables)?;
+        let mut storage = BTreeMap::new();
+        for relation in &self.relations {
+            for (column, logical) in &relation.columns {
+                let origin = (relation.table.to_string(), column.to_string());
+                if logical.to_token_stream().to_string() == "String"
+                    && manifest.column(&origin.0, &origin.1)?.encoding == "dictionary"
+                    && variables.iter().all(|(variable, source)| {
+                        source != &origin || dictionary_body(&program.query.body, variable)
+                    })
+                {
+                    storage.insert(origin, syn::parse_quote!(i32));
+                }
+            }
+        }
+        Ok(storage)
+    }
+
     #[cfg(test)]
     /// Storage adaptation only: types and constants, not order/providers/plans.
     pub fn encoded_query(&self, manifest: &Manifest) -> Result<TokenStream> {
@@ -476,8 +503,10 @@ impl Kernel {
         let constants = setup_constants(&self.setup, &self.derived)?;
         let mut variables = BTreeMap::new();
         collect_variables(self.body.clone(), &relations, &mut variables)?;
+        let mut body = self.cpu_program()?.query.body;
+        encode_dictionary_body(&mut body, &relations, manifest, &variables)?;
         let body = encode_tokens(
-            self.body.clone(),
+            body.to_token_stream(),
             &relations,
             manifest,
             &constants,
@@ -570,7 +599,7 @@ impl Kernel {
             );
         }
         let outputs = self.answer.iter().map(|(name, _)| name);
-        Ok(quote!(struct Query; #declarations answer(#(#outputs),*) :- #body))
+        Ok(quote!(struct Query; #declarations answer(#(#outputs),*) :- #body;))
     }
 
     pub fn answer_columns(&self) -> Result<Vec<Option<(String, String)>>> {
@@ -594,6 +623,146 @@ impl Kernel {
             })
             .collect())
     }
+}
+fn dictionary_constraint(predicate: &cq_lang_cq::Constraint, variable: &str) -> bool {
+    use cq_lang_cq::syntax::constraint::{Constraint, Term};
+    let is_variable = |term: &Term| matches!(term, Term::Variable(name) if name == variable);
+    let string = |expression: &syn::Expr| matches!(expression, syn::Expr::Lit(literal) if matches!(literal.lit, syn::Lit::Str(_)));
+    if !predicate.variables().any(|name| name == variable) {
+        return true;
+    }
+    match predicate {
+        Constraint::Compare {
+            left,
+            comparison,
+            right,
+        } if !comparison.ordered() => {
+            matches!(right, Term::Literal(literal) if is_variable(left) && string(literal))
+                || matches!(left, Term::Literal(literal) if is_variable(right) && string(literal))
+        }
+        Constraint::In { term, literals } => is_variable(term) && literals.iter().all(string),
+        Constraint::Or(arms) => arms
+            .iter()
+            .flatten()
+            .all(|arm| dictionary_constraint(arm, variable)),
+        _ => false,
+    }
+}
+
+fn dictionary_body(body: &cq_lang_cq::CommaList<cq_lang_cq::BodyItem>, variable: &str) -> bool {
+    use cq_lang_cq::{BodyItem, Constraint};
+    body.iter().all(|item| match item {
+        BodyItem::Block(block) => block
+            .branches
+            .iter()
+            .all(|branch| dictionary_body(&branch.body, variable)),
+        BodyItem::Equality(equality) => {
+            dictionary_constraint(&Constraint::from_equality(equality), variable)
+        }
+        BodyItem::Constraint(predicate) => dictionary_constraint(predicate, variable),
+        BodyItem::Positive { atom } => atom.args.iter().all(|argument| {
+            matches!(
+                argument,
+                syn::Expr::Path(_) | syn::Expr::Lit(_) | syn::Expr::Infer(_)
+            ) || !mentions(
+                argument.to_token_stream(),
+                &quote::format_ident!("{variable}"),
+            )
+        }),
+        _ => !mentions(item.to_token_stream(), &quote::format_ident!("{variable}")),
+    })
+}
+
+fn encode_dictionary_body(
+    body: &mut cq_lang_cq::CommaList<cq_lang_cq::BodyItem>,
+    relations: &[Relation],
+    manifest: &Manifest,
+    variables: &BTreeMap<String, (String, String)>,
+) -> Result<()> {
+    use cq_lang_cq::syntax::constraint::Term;
+    use cq_lang_cq::{BodyItem, Constraint};
+
+    fn literal(
+        term: &Term,
+        expression: &mut syn::Expr,
+        relations: &[Relation],
+        manifest: &Manifest,
+        variables: &BTreeMap<String, (String, String)>,
+    ) -> Result<()> {
+        if let Term::Variable(name) = term
+            && let Some((table, column)) = variables.get(&name.to_string())
+            && let syn::Expr::Lit(syn::ExprLit {
+                lit: syn::Lit::Str(text),
+                ..
+            }) = expression
+            && relations.iter().any(|relation| {
+                relation.table == table.as_str()
+                    && relation.columns.iter().any(|(name, ty)| {
+                        name == column.as_str() && ty.to_token_stream().to_string() != "String"
+                    })
+            })
+        {
+            let code = manifest.text_id(table, column, &text.value())?;
+            *expression = syn::parse_quote!(#code);
+        }
+        Ok(())
+    }
+
+    fn constraint(
+        predicate: &mut Constraint,
+        relations: &[Relation],
+        manifest: &Manifest,
+        variables: &BTreeMap<String, (String, String)>,
+    ) -> Result<()> {
+        match predicate {
+            Constraint::Compare {
+                left,
+                comparison,
+                right,
+            } if !comparison.ordered() => {
+                if let Term::Literal(expression) = right {
+                    literal(left, expression, relations, manifest, variables)?;
+                }
+                if let Term::Literal(expression) = left {
+                    literal(right, expression, relations, manifest, variables)?;
+                }
+            }
+            Constraint::In { term, literals } => {
+                for expression in literals {
+                    literal(term, expression, relations, manifest, variables)?;
+                }
+            }
+            Constraint::Or(arms) => {
+                for predicate in arms.iter_mut().flatten() {
+                    constraint(predicate, relations, manifest, variables)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    for item in body {
+        match item {
+            BodyItem::Block(block) => {
+                for branch in &mut block.branches {
+                    encode_dictionary_body(&mut branch.body, relations, manifest, variables)?;
+                }
+            }
+            BodyItem::Equality(equality) => {
+                let mut predicate = Constraint::from_equality(equality);
+                constraint(&mut predicate, relations, manifest, variables)?;
+                *equality = predicate
+                    .equality()
+                    .expect("literal adaptation preserves equality");
+            }
+            BodyItem::Constraint(predicate) => {
+                constraint(predicate, relations, manifest, variables)?
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 fn mentions(tokens: TokenStream, name: &Ident) -> bool {
@@ -829,35 +998,6 @@ fn encode_tokens(
                 let mut replacement = Group::new(group.delimiter(), contents);
                 replacement.set_span(group.span());
                 encoded.extend([TokenTree::Group(replacement)]);
-            }
-            TokenTree::Literal(literal) if index >= 3 => {
-                // Equality guards have the same dictionary as their bound column.
-                // Method arguments (e.g. contains) remain untouched for the checked
-                // translator to accept or reject; dictionary codes are not strings.
-                let comparison = matches!((&tokens[index-2], &tokens[index-1]),
-                    (TokenTree::Punct(a), TokenTree::Punct(b)) if (a.as_char() == '=' || a.as_char() == '!') && b.as_char() == '=');
-                if comparison
-                    && let (TokenTree::Ident(name), Ok(text)) = (
-                        &tokens[index - 3],
-                        syn::parse_str::<syn::LitStr>(&literal.to_string()),
-                    )
-                    && let Some((table, column)) = variables.get(&name.to_string())
-                    && relations
-                        .iter()
-                        .find(|relation| relation.table == table.as_str())
-                        .and_then(|relation| {
-                            relation
-                                .columns
-                                .iter()
-                                .find(|(name, _)| name == column.as_str())
-                        })
-                        .is_some_and(|(_, ty)| ty.to_token_stream().to_string() != "String")
-                {
-                    let id = manifest.text_id(table, column, &text.value())?;
-                    encoded.extend(quote!(#id));
-                    continue;
-                }
-                encoded.extend([token.clone()]);
             }
             _ => encoded.extend([token.clone()]),
         }
@@ -1183,6 +1323,41 @@ mod encoding_tests {
             .unwrap();
             let encoded = literal.encoded_query(&manifest).unwrap().to_string();
             assert!(encoded.contains(&format!("Part ({expected})")), "{encoded}");
+        }
+        for (guard, dictionary) in [
+            ("name == \"red\"", true),
+            ("name == \"red\" || name == \"green part\"", true),
+            (
+                "(name == \"red\" && other == \"green part\") || (name == \"green part\" && other == \"red\")",
+                true,
+            ),
+            ("\"red\" == name || \"green part\" == name", true),
+            ("name.contains(\"red\")", false),
+            ("name == \"red\" || name.contains(\"green\")", false),
+            ("name == \"red\" && name.contains(\"green\")", false),
+            ("name < \"red\"", false),
+        ] {
+            let kernel: Kernel = syn::parse_str(&format!(
+                "$; setup {{}} relations {{ relation Part => part(p_name: String); }}
+                 answer(name: String) :- Part(name), Part(other), if {guard};"
+            ))
+            .unwrap();
+            let storage = kernel.dictionary_types(&manifest).unwrap();
+            assert_eq!(!storage.is_empty(), dictionary, "{guard}");
+            let encoded = kernel
+                .encoded_query_with_types(&manifest, &storage)
+                .unwrap();
+            let spelling = encoded.to_string();
+            assert_eq!(spelling.contains("p_name : i32"), dictionary, "{spelling}");
+            if dictionary {
+                assert!(!spelling.contains('"'), "{spelling}");
+                assert!(spelling.contains("0i32"), "{spelling}");
+            } else {
+                assert!(spelling.contains("p_name : String"), "{spelling}");
+                assert!(spelling.contains('"'), "{spelling}");
+            }
+            let program: cq_lang_cq::Program = syn::parse2(encoded).unwrap();
+            cq_lang_cq::normal::normalize(&program).unwrap();
         }
         fs::write(
             root.join("name.bin"),
