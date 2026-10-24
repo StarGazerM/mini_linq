@@ -96,7 +96,7 @@ mod rewrite {
                             "schedule component index out of range",
                         ));
                     }
-                    schedule = schedule.with_stratum_waves(index, waves);
+                    schedule = schedule.with_stratum_waves(index, waves, &source.context);
                 }
                 schedule
             }

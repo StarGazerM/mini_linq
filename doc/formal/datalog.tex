@@ -505,12 +505,32 @@ committed by the preceding publication. The schedule records which holes the
 printer may evaluate concurrently and after which wave each head's admission
 may begin; it records no join order, provider, or CQ decision, and Fork's
 default schedule is one wave per phase containing every hole.
+Two further per-component records are realization advice and a derived
+placement. A \code{policy} entry names one hole at most once and may give a
+positive chunk \code{grain} and an \code{inline\_below} driver length under
+which that hole's own chunking is inlined; it never affects wave concurrency
+or any value. A \code{publication} entry names, per phase with waves and per
+member, the wave after which that member's publication may begin.
 \begin{mathpar}
 \Rule{WF-DL-Schedule}{\mathrm{WF}_{\mathrm{Round}}(P)\quad
  \forall h.\ \mathrm{reads}(h)=\mathrm{derive}(\mathrm{Storage},h)\quad
  \text{waves partition each phase's holes, nonempty, seeds before steps}\quad
+ \text{policy names existing holes once, positive grain}\quad
+ \mathrm{publication}=\mathrm{derive}(\mathrm{reads},\mathrm{waves})\quad
  \mathrm{progress}=\code{synchronous}}
  {\mathrm{WF}_{\mathrm{Schedule}}(P)}
+\end{mathpar}
+Publication of a member $H$ mutates the hosts and layouts that holes reading
+$H$ (at either version) scan or probe in the same round, and consumes the
+admitted rows of every hole whose head is $H$. Its placement is therefore
+derived, not chosen: the last wave of the phase containing a writer or reader
+of $H$, or the phase's last wave when none touches $H$. A printer that starts
+$H$'s admission and publication after that wave, inside the following wave's
+scope, interleaves them only with holes that neither write nor read $H$.
+\begin{mathpar}
+\Rule{DL-PublishAfterReaders}{w_H=\max\{w\mid \text{wave }w\text{ holds }h,\ \mathrm{head}(h)=H\lor H\in\mathrm{reads}(h)\}\quad
+ \text{publish}(H)\text{ starts after wave }w_H\text{ joins}}
+ {\text{no hole of the round observes }H\text{ after its publication}}
 \end{mathpar}
 \paragraph{Meaning.} Evaluations in one round read only the committed
 immutable snapshot $(A_r,\Delta_r)$ and never a candidate of the same round.
@@ -925,18 +945,26 @@ new checked rule; it is not an unchecked performance choice.
 
 The extension printer realizes the recorded schedule. The partition pass
 preserves the schedule record exactly. Each wave is one joining Rayon scope
-whose tasks are that wave's holes (each possibly chunked as above); a head's
-sharded admission is spawned into the first scope after the last wave
-containing one of its holes, so it overlaps later evaluations, and the
-publication barrier follows the final wave and every admission. Under
-inline evaluation the waves run in order on one thread with the same
-admission placement. The sequential base printer evaluates holes in wave
-order with its inline admission. Neither printer accepts a progress mode
-other than \code{synchronous}.
+whose tasks are that wave's holes. Inside a hole, chunking of the leading
+scan uses the hole's recorded \code{grain} and is inlined when the driver is
+shorter than its recorded \code{inline\_below}; the certificate's threshold
+and grain are the defaults. The wave itself is spawned whenever the pool has
+more than one worker: a small delta inlines a hole's chunks, never the
+concurrency between holes. A head's sharded admission is spawned into the
+first scope after the last wave containing one of its holes. When the
+recorded publication wave of a member precedes the phase's last wave, that
+member's admission and complete publication (full layouts, accumulated
+extension, delta replacement, delta rebuilds, in the recorded order) run as
+one task in the following wave's scope and are omitted from the phase
+barrier; otherwise they follow the final wave as before. The sequential base
+printer evaluates holes in wave order with its inline admission and ignores
+policy and placement. Neither printer accepts a progress mode other than
+\code{synchronous}.
 \begin{mathpar}
 \Rule{P-DL-Waves}{\mathrm{WF}_{\mathrm{Schedule}}(t)\quad
  \text{scope}_w\text{ joins before scope}_{w+1}\quad
- \mathrm{admit}(H)\text{ is spawned after the last wave of }H\text{'s holes}}
+ \mathrm{admit}(H)\text{ is spawned after the last wave of }H\text{'s holes}\quad
+ \mathrm{publish}(H)\text{ is spawned after }w_H\text{ (DL-PublishAfterReaders)}}
  {\text{the realization refines DL-WaveCommute}}
 \end{mathpar}
 

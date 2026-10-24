@@ -28,6 +28,30 @@ pub struct Schedule {
 pub struct StratumSchedule {
     pub reads: Vec<HoleReads>,
     pub waves: Vec<Wave>,
+    /// Per-hole realization advice; holes without an entry use printer defaults.
+    pub policy: Vec<HolePolicy>,
+    /// Derived: the wave after which each member's publication may begin.
+    pub publication: Vec<PublishAfter>,
+}
+
+/// Realization advice for one hole: chunk grain and the driver length below
+/// which the hole's own chunking is inlined. Never changes a value.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HolePolicy {
+    pub phase: Ident,
+    pub index: usize,
+    pub grain: Option<usize>,
+    pub inline_below: Option<usize>,
+}
+
+/// In `phase`, publication of `relation` may start once wave `wave` (a global
+/// index into `waves`) has joined: every hole writing or reading the relation
+/// in that phase lies in a wave at or before it (DL-PublishAfterReaders).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PublishAfter {
+    pub phase: Ident,
+    pub relation: usize,
+    pub wave: usize,
 }
 
 /// The positive relational inputs of one rule hole, in relation order.
@@ -57,7 +81,20 @@ record!(Schedule {
 });
 record!(StratumSchedule {
     reads: Vec<HoleReads>,
-    waves: Vec<Wave>
+    waves: Vec<Wave>,
+    policy: Vec<HolePolicy>,
+    publication: Vec<PublishAfter>
+});
+record!(HolePolicy {
+    phase: Ident,
+    index: usize,
+    grain: Option<usize>,
+    inline_below: Option<usize>
+});
+record!(PublishAfter {
+    phase: Ident,
+    relation: usize,
+    wave: usize
 });
 record!(HoleReads {
     phase: Ident,
@@ -165,9 +202,14 @@ impl Schedule {
             .strata
             .iter()
             .map(|stratum| {
+                let reads = derive_reads(storage, analysis, stratum)?;
+                let waves = waves(stratum);
+                let publication = derive_publication(&reads, &waves, stratum);
                 Ok(StratumSchedule {
-                    reads: derive_reads(storage, analysis, stratum)?,
-                    waves: waves(stratum),
+                    reads,
+                    waves,
+                    policy: Vec::new(),
+                    publication,
                 })
             })
             .collect::<syn::Result<_>>()?;
@@ -177,10 +219,31 @@ impl Schedule {
         })
     }
 
-    /// Replace the waves of one component, keeping its derived read sets.
-    pub fn with_stratum_waves(mut self, stratum: usize, waves: Vec<Wave>) -> Self {
-        if let Some(entry) = self.strata.get_mut(stratum) {
+    /// Replace the waves of one component, keeping its derived read sets and
+    /// re-deriving its publication placement.
+    pub fn with_stratum_waves(
+        mut self,
+        stratum: usize,
+        waves: Vec<Wave>,
+        context: &RoundContext,
+    ) -> Self {
+        if let (Some(entry), Some(members)) =
+            (self.strata.get_mut(stratum), context.strata.get(stratum))
+        {
+            entry.publication = derive_publication(&entry.reads, &waves, members);
             entry.waves = waves;
+        }
+        self
+    }
+
+    /// Set or replace one hole's policy entry in one component.
+    pub fn with_policy(mut self, stratum: usize, policy: HolePolicy) -> Self {
+        if let Some(entry) = self.strata.get_mut(stratum) {
+            entry
+                .policy
+                .retain(|p| !(p.phase == policy.phase && p.index == policy.index));
+            entry.policy.push(policy);
+            entry.policy.sort_by_key(|p| (p.phase != SEED, p.index));
         }
         self
     }
@@ -254,6 +317,57 @@ pub fn derive_reads(
     Ok(reads)
 }
 
+/// Formal rule DL-PublishAfterReaders: a member's publication in a phase may start only after the last wave holding a hole that writes or reads it.
+///
+/// For every phase with at least one wave and every component member, the
+/// recorded wave is the maximum global index of a wave of that phase containing
+/// a hole whose head is the member or whose read set names the member (either
+/// version); a member nobody touches in that phase gets the phase's last wave.
+pub fn derive_publication(
+    reads: &[HoleReads],
+    waves: &[Wave],
+    stratum: &Stratum,
+) -> Vec<PublishAfter> {
+    let mut out = Vec::new();
+    for phase in [SEED, STEP] {
+        let indexed: Vec<(usize, &Wave)> = waves
+            .iter()
+            .enumerate()
+            .filter(|(_, wave)| wave.phase == phase)
+            .collect();
+        let Some(&(last, _)) = indexed.last() else {
+            continue;
+        };
+        let holes: &[RuleHole] = if phase == SEED {
+            &stratum.seeds
+        } else {
+            &stratum.steps
+        };
+        for &member in &stratum.members {
+            let touches = |hole: usize| {
+                holes.get(hole).is_some_and(|h| h.head == member)
+                    || reads.iter().any(|r| {
+                        r.phase == phase
+                            && r.index == hole
+                            && r.reads.iter().any(|read| read.relation == member)
+                    })
+            };
+            let wave = indexed
+                .iter()
+                .filter(|(_, wave)| wave.holes.iter().any(|&hole| touches(hole)))
+                .map(|(index, _)| *index)
+                .max()
+                .unwrap_or(last);
+            out.push(PublishAfter {
+                phase: ident(phase),
+                relation: member,
+                wave,
+            });
+        }
+    }
+    out
+}
+
 /// Formal rule WF-DL-Schedule: derived read sets, partitioning phase-ordered waves, synchronous progress.
 pub fn check(program: &Program, analysis: &storage::Analysis) -> syn::Result<()> {
     let schedule = &program.schedule;
@@ -275,6 +389,39 @@ pub fn check(program: &Program, analysis: &storage::Analysis) -> syn::Result<()>
             "recorded read sets differ from the sets derived from Storage reads",
         )?;
         check_waves(&entry.waves, stratum)?;
+        let mut seen = BTreeSet::new();
+        for policy in &entry.policy {
+            let limit = match policy.phase.to_string().as_str() {
+                SEED => stratum.seeds.len(),
+                STEP => stratum.steps.len(),
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        &policy.phase,
+                        "policy phase must be seed or step",
+                    ));
+                }
+            };
+            ensure(
+                policy.index < limit,
+                policy,
+                "policy names a hole outside its phase",
+            )?;
+            ensure(
+                seen.insert((policy.phase.to_string(), policy.index)),
+                policy,
+                "policy repeats a hole",
+            )?;
+            ensure(
+                policy.grain.is_none_or(|grain| grain > 0),
+                policy,
+                "policy grain must be positive",
+            )?;
+        }
+        ensure(
+            entry.publication == derive_publication(&entry.reads, &entry.waves, stratum),
+            entry,
+            "recorded publication placement differs from the last writer or reader wave of each member",
+        )?;
     }
     Ok(())
 }
@@ -454,10 +601,74 @@ mod tests {
                     ],
                 }],
                 waves: vec![wave(STEP, &[0])],
+                policy: vec![HolePolicy {
+                    phase: ident(STEP),
+                    index: 0,
+                    grain: Some(128),
+                    inline_below: None,
+                }],
+                publication: vec![PublishAfter {
+                    phase: ident(STEP),
+                    relation: 1,
+                    wave: 0,
+                }],
             }],
         };
         let text = quote::ToTokens::to_token_stream(&schedule);
         let parsed: Schedule = syn::parse2(text).unwrap();
         assert_eq!(parsed, schedule);
+    }
+
+    #[test]
+    fn publication_follows_last_writer_or_reader_wave() {
+        // steps: hole0 writes A(0) reads B; hole1 writes B(1) reads A; hole2 writes A(0) reads nothing of A/B.
+        let s = stratum(&[], &[0, 1, 0]);
+        let reads = vec![
+            HoleReads {
+                phase: ident(STEP),
+                index: 0,
+                reads: vec![Read {
+                    relation: 1,
+                    version: ident("delta"),
+                }],
+            },
+            HoleReads {
+                phase: ident(STEP),
+                index: 1,
+                reads: vec![Read {
+                    relation: 0,
+                    version: ident("full"),
+                }],
+            },
+            HoleReads {
+                phase: ident(STEP),
+                index: 2,
+                reads: vec![Read {
+                    relation: 5,
+                    version: ident("full"),
+                }],
+            },
+        ];
+        let waves = [wave(STEP, &[1]), wave(STEP, &[0]), wave(STEP, &[2])];
+        let derived = derive_publication(&reads, &waves, &s);
+        // A(0): written by holes 0 (wave 1) and 2 (wave 2), read by hole 1 (wave 0) -> wave 2.
+        // B(1): written by hole 1 (wave 0), read by hole 0 (wave 1) -> wave 1.
+        assert_eq!(
+            derived,
+            vec![
+                PublishAfter {
+                    phase: ident(STEP),
+                    relation: 0,
+                    wave: 2
+                },
+                PublishAfter {
+                    phase: ident(STEP),
+                    relation: 1,
+                    wave: 1
+                },
+            ]
+        );
+        // No seed waves: no seed entries.
+        assert!(derived.iter().all(|p| p.phase == STEP));
     }
 }
