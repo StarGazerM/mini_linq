@@ -734,6 +734,12 @@ and $S$ checked redundant-support absorption:
  \text{WF-VO}(t)\quad \mathsf{check}^{Masks}(t)}
  {\mathsf{check}^{Le}(q,t)\Downarrow\ok}
 \end{mathpar}
+The \code{no_reduce} option disables implicit Masks reductions, not explicit
+\code{reduce(T with S)} advice. Such advice therefore composes with the empty
+Masks schedule. A \code{skip(T with S)} still requires an existing Masks
+reduction; under \code{no_reduce} it fails the R-Advice premise rather than
+silently becoming a no-op.
+
 \code{order(transfer)} is robust predicate transfer (Zhao et al., SIGMOD'25) on
 the written left-deep order, a diverging route through the same public
 pipeline. Its transfer graph is the reduction tree rooted at the stream: in

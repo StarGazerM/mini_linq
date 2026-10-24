@@ -92,7 +92,7 @@ O-Leaf	abstract	-	-	Ghost full-atom binary-tree leaf; no stored order witness.
 O-Join	abstract	-	-	Ghost binary-tree composition on disjoint full-atom coverages.
 L-Retention	abstract	-	-	Leibniz identity and functional extensionality permit canonical projection before an opaque Rust node whenever its free variables are retained.
 Plan-Prefix	implementation	facade/mini-linq-macros/src/lib.rs	/// Formal rule Plan-Prefix:	Normalize, order Written/Coarse, then optionally reduce by outer-rooted masks and advised reductions before IX.
-R-Advice	implementation	facade/mini-linq-macros/src/lib.rs	// Formal rule R-Advice:	Advised semijoins of two top-level atoms sharing a variable run after the Masks reductions, before the stream; skipped Masks reductions are removed.
+R-Advice	implementation	facade/mini-linq-macros/src/lib.rs	// Formal rule R-Advice:	Advised semijoins of two top-level atoms sharing a variable run after any Masks reductions, before the stream; skip must name an existing Masks reduction.
 Plan-Generic	implementation	features/planners/plan/src/lib.rs	// Formal rule Plan-Generic:	External Written/Fine planner records variable-at-a-time valuation steps.
 Plan-Graph	implementation	features/planners/plan/src/lib.rs	// Formal rule Plan-Graph:	Hypergraph uses tree reductions only in acyclic scopes and exact block cuts in any scope.
 Plan-Transfer	implementation	features/planners/plan/src/lib.rs	/// Formal rule Plan-Transfer:	Robust predicate transfer on the written order: Masks forward pass, the stream's forward reductions by filtered children, then the backward pass from filtered sides, parents first, all before the stream.
