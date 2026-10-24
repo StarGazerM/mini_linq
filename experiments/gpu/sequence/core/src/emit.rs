@@ -2576,6 +2576,9 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                     #module_name::LoadedModule,
                 )>> = const { ::std::cell::RefCell::new(None) };
             }
+            ::cq_gpu_sequence_runtime::register_query_cleanup(|| {
+                __CQ_SEQUENCE_MODULE.with(|cache| cache.borrow_mut().take());
+            });
             let __cq_module=__CQ_SEQUENCE_MODULE.with(|cache| -> ::cq_gpu_runtime::Result<_> {
                 let mut cache=cache.borrow_mut();
                 if let Some((context,module))=cache.as_ref() {

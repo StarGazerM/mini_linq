@@ -205,20 +205,11 @@ fn execute_query(
     mode: &str,
     conformance_only: bool,
 ) -> Result<Option<Value>> {
-    // Generated workspaces and runtime/module caches are thread-local and own
-    // the query's pools, even after its ordinary program locals have dropped.
-    // Reuse them for every iteration, then join to finish TLS destruction before
-    // loading the next query. Only the host measurement crosses this boundary.
-    std::thread::scope(|scope| {
-        scope
-            .spawn(|| {
-                generated::execute(query, manifest, mode, conformance_only)
-                    .map_err(|error| error.to_string())
-            })
-            .join()
-            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
-            .map_err(Into::into)
-    })
+    // Reuse generated and runtime caches for every iteration, then release
+    // their owning references before loading the next query, including errors
+    // and unwinding. Stay on this thread to preserve host allocator behavior.
+    let _scope = cq_gpu_sequence_runtime::QueryScope::new();
+    generated::execute(query, manifest, mode, conformance_only)
 }
 
 #[cfg(test)]

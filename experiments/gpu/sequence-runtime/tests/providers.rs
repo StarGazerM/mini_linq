@@ -18,6 +18,23 @@ fn column(pool: &Arc<Pool>, values: &[u32]) -> Result<ColumnDescriptor> {
 }
 
 #[test]
+fn query_scope_releases_each_hook_once_on_return_and_unwind() {
+    use cq_gpu_sequence_runtime::{register_query_cleanup, QueryScope};
+    thread_local! { static RELEASED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+    fn release() { RELEASED.with(|count| count.set(count.get() + 1)); }
+    for unwind in [false, true] {
+        let result = std::panic::catch_unwind(|| {
+            let _scope = QueryScope::new();
+            register_query_cleanup(release);
+            register_query_cleanup(release);
+            if unwind { panic!("exercise query cleanup"); }
+        });
+        assert_eq!(result.is_err(), unwind);
+    }
+    RELEASED.with(|count| assert_eq!(count.get(), 2));
+}
+
+#[test]
 fn numeric_host_columns_preserve_values_duplicates_and_empty_rows() -> Result<()> {
     use cq_gpu_sequence_runtime::upload_numeric_columns;
     let pool = Pool::new(0, 1 << 20, 128 << 20)?;

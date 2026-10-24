@@ -152,11 +152,24 @@ target API used by H05 (`assert_conformant` itself exposes only CPU targets).
 The suite conformance tests cover built modes and reject unexpected planning
 failures; H07 now requires a positive exact run rather than an expected catalog
 rejection. `TPCH_GPU_DATA_ROOT` changes the fixture root at build time.
-Each query runs all its iterations on one scoped worker thread, joined before
-the next query starts. This keeps warm-run caches reusable within a query but
-drops generated thread-local workspaces, resident-column owners, allocator
-arenas, and cached CUDA modules at the query boundary. The suite still uses
-one process; query timing does not include thread creation or teardown.
+Each query runs all its iterations inside a same-thread `QueryScope`. Generated
+thread-local caches register release hooks; scope teardown drops their owning
+references, runtime scratch, and per-program modules before the next query
+loads. Caches remain reusable across warmup and measured iterations. The suite
+uses one process and one calling thread; teardown is outside query timings.
+Do not substitute a fresh worker thread: H09/H21's large downloaded answers
+fragment its malloc arena, and subsequent host-publication allocations spend
+hundreds of milliseconds in `malloc_consolidate` inside the build interval.
+The four-query subset can still show H09 totals around 45–66 ms, with an
+occasional ~820 ms sample: glibc consolidates the freed answer allocations on
+a later provider allocation. This is host work inside the build timing, not
+slower device kernels. Reusing the numeric-bound readback vector moved that
+cost to another allocation rather than removing it, so that experiment was
+discarded. Full-suite timings and the subset variance are both recorded below.
+The original unmodified executable on the same four-query subset also has the
+outlier: H09 samples 52.276, 843.368, 44.806, 52.410, 44.807 ms (median 52.276).
+Thus subset allocator sensitivity predates this fix; the same-thread cleanup
+subset measured 66.436 ms, rather than the worker-thread version's 807.611 ms.
 The ignored `sequential_sf10_queries_release_device_memory` GPU regression
 runs H09 and D85 sequentially and checks `cuMemGetInfo` after each query against
 the pre-query free-memory baseline (64 MiB allowance for driver bookkeeping).
@@ -167,11 +180,14 @@ record all 25 compiled queries exact in one process, with zero free-memory
 delta after every query (49,617,043,456 bytes free before and after each).
 Before the fix, per-expansion thread-local `RangeWorkspace` and
 `PackedColumnsAdapter` owners kept their pools' arenas alive across queries:
-free memory fell to 814,219,264 bytes and D85 failed with an OOM. Joining the
-query worker also releases runtime scratch and thread-local CUDA modules;
-no cuda-oxide API or translator change is needed. The full inventory still
+free memory fell to 814,219,264 bytes and D85 failed with an OOM. Explicit
+release hooks remove those owners without changing plans or kernels. The
+merged cuda-host module cache is bounded per native context and needs no
+external API change. The full inventory still
 exits 1 for the pre-existing H14/H19 translation rejections, not a runtime
-failure; the H05 timing gate passes at 10.301 ms.
+failure; the H05 timing gate passes at 10.275 ms. Final full-suite totals versus
+`performance_report.md` are H05 10.275 vs 10.314 ms, H09 44.588 vs 44.563 ms,
+H21-positive 40.053 vs 40.158 ms, and D85 26.925 vs 26.935 ms.
 Statistics-derived H07 advice and its comparison with H07-block are recorded in
 [`compare/tpch_statistics.md`](compare/tpch_statistics.md).
 

@@ -276,6 +276,11 @@ impl Rows {
             }
             let __cq_range_builder = ::cq_gpu_sequence_runtime::RangeBuilder::new(&__cq_pool)?;
         });
+        setup.extend(quote! {
+            ::cq_gpu_sequence_runtime::register_query_cleanup(|| {
+                __CQ_OUTPUT_ADAPTER.with(|cache| cache.borrow_mut().take());
+            });
+        });
         let output_width = output_columns.len();
         setup.extend(quote! {
             let __cq_output_adapter = __CQ_OUTPUT_ADAPTER.with(|cache| -> ::cq_gpu_sequence_runtime::Result<_> {
@@ -502,6 +507,9 @@ impl Rows {
                             ::cq_gpu_sequence_runtime::RangeWorkspace
                         >>>> = const { ::std::cell::RefCell::new(None) };
                     }
+                    ::cq_gpu_sequence_runtime::register_query_cleanup(|| {
+                        #cache.with(|cache| cache.borrow_mut().take());
+                    });
                     let #workspace = #cache.with(|cache| -> ::cq_gpu_sequence_runtime::Result<_> {
                         let mut cache = cache.borrow_mut();
                         if cache.as_ref().is_none_or(|workspace| !workspace.borrow().matches(&__cq_pool, &#descriptor)) {
