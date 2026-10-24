@@ -488,6 +488,71 @@ The publication member list may be any permutation of the component:
 publication is a barrier with no interleaved query evaluation, not a requirement
 to repeat the default member order.
 
+\paragraph{Schedule records.}
+A Round program records one \code{schedule}: a \code{progress} mode and, per
+component, each rule hole's positive \emph{read set} and an ordered list of
+\emph{waves}. A read is a pair (relation, \code{full}$\mid$\code{delta}); a
+hole's read set is derived from the Storage \code{Read} records of its
+variant: a \code{direct} read names the relation's delta, a \code{delta}
+layout read names its layout's relation at delta, a \code{full} layout read
+names its layout's relation at full. Negative keys are frozen for the
+component and are not reads. A wave names a phase (\code{seed} or
+\code{step}) and the positions of rule holes in that phase's list. The seed
+waves precede the step waves; each phase's waves partition its holes, every
+hole appearing exactly once; a wave is nonempty. The only admitted progress
+mode is \code{synchronous}: every hole of a round reads the snapshot
+committed by the preceding publication. The schedule records which holes the
+printer may evaluate concurrently and after which wave each head's admission
+may begin; it records no join order, provider, or CQ decision, and Fork's
+default schedule is one wave per phase containing every hole.
+\begin{mathpar}
+\Rule{WF-DL-Schedule}{\mathrm{WF}_{\mathrm{Round}}(P)\quad
+ \forall h.\ \mathrm{reads}(h)=\mathrm{derive}(\mathrm{Storage},h)\quad
+ \text{waves partition each phase's holes, nonempty, seeds before steps}\quad
+ \mathrm{progress}=\code{synchronous}}
+ {\mathrm{WF}_{\mathrm{Schedule}}(P)}
+\end{mathpar}
+\paragraph{Meaning.} Evaluations in one round read only the committed
+immutable snapshot $(A_r,\Delta_r)$ and never a candidate of the same round.
+Hence the candidate bag of a round is $\biguplus_h h(A_r,\Delta_r)$ for any
+evaluation order, concurrency, or wave partition, and a head's admission,
+which is owned by exactly one canonical owner, yields the same
+$\Delta_{r+1}$ whether it runs after the whole phase or as soon as every hole
+of that head has completed. Waves therefore change no value; they bound which
+evaluations may overlap and when an admission may start.
+\begin{mathpar}
+\Rule{DL-WaveCommute}{\text{holes read only }(A_r,\Delta_r)\quad
+ \text{admission of head }H\text{ runs after every hole with head }H}
+ {\mathrm{supp}\bigl(\textstyle\biguplus_h C_h\bigr)\text{ and }\Delta_{r+1}
+ \text{ are independent of wave partition and overlap}}
+\end{mathpar}
+The schedule is a Round rewrite target: a \code{schedule} pass changes only
+the schedule record, and the correspondence checker requires both contracts
+and exact equality of the erased programs modulo that record.
+\begin{mathpar}
+\Rule{CK-DL-Schedule}{\mathrm{WF}_{\mathrm{Schedule}}(s)\quad
+ \mathrm{WF}_{\mathrm{Schedule}}(t)\quad
+ \mathrm{erase}(s)[\mathrm{schedule}:=\mathrm{erase}(t).\mathrm{schedule}]=\mathrm{erase}(t)}
+ {\mathrm{check}_{\mathrm{schedule}}(s,t)}
+\end{mathpar}
+Admitted wave advice: \code{whole} (one wave per phase), \code{per\_hole}
+(one hole per wave, in list order), \code{by\_head} (holes grouped by head
+relation in head order), or an explicit per-component listing. Advice
+selects among schedules that WF-DL-Schedule already admits; it is not a
+semantic choice.
+
+\paragraph{Relational progress (proposal, not a rule).}
+A \code{relational} progress mode would let a hole run round $i+1$ as soon as
+every relation it reads has published round $i$, with each hole's delta
+window being the admissions of its delta relation since that hole last ran,
+and its full reads a snapshot no older than the window's end. The covering
+argument then takes the latest-admitted tuple of a derivation: the step
+variant selecting that occurrence runs with that tuple in its window and all
+other tuples already in full. This needs snapshot isolation from storage
+(immutable runs, or a per-relation reader/writer discipline for publication)
+and a new covering obligation beside \code{seminaive\_covering}; neither is
+recorded or checked here, and the base printers reject any other progress mode.
+
 \paragraph{Control and output records.} A component's \code{termination}
 list contains each component member exactly once, in any order, with no foreign
 references. Continuation means that at least one listed current delta is
@@ -857,6 +922,23 @@ A one-worker pool also evaluates inline. Thus a small delta cannot serialize
 an expensive full-input hole. This avoids narrow-delta task overhead without changing
 the selected occurrence or CQ rule. A different occurrence would require a
 new checked rule; it is not an unchecked performance choice.
+
+The extension printer realizes the recorded schedule. The partition pass
+preserves the schedule record exactly. Each wave is one joining Rayon scope
+whose tasks are that wave's holes (each possibly chunked as above); a head's
+sharded admission is spawned into the first scope after the last wave
+containing one of its holes, so it overlaps later evaluations, and the
+publication barrier follows the final wave and every admission. Under
+inline evaluation the waves run in order on one thread with the same
+admission placement. The sequential base printer evaluates holes in wave
+order with its inline admission. Neither printer accepts a progress mode
+other than \code{synchronous}.
+\begin{mathpar}
+\Rule{P-DL-Waves}{\mathrm{WF}_{\mathrm{Schedule}}(t)\quad
+ \text{scope}_w\text{ joins before scope}_{w+1}\quad
+ \mathrm{admit}(H)\text{ is spawned after the last wave of }H\text{'s holes}}
+ {\text{the realization refines DL-WaveCommute}}
+\end{mathpar}
 
 \subsection{Sharded admission and exclusive-layout publication (extension)}
 The extension's Storage rewrite replaces only canonical IDB membership;

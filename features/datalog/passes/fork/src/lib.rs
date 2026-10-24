@@ -592,6 +592,7 @@ fn construct(
             }
         })
         .collect();
+    let schedule = cq_lang_datalog_round::Schedule::whole(source, &analysis, &context)?;
     let target = Program {
         storage: source.clone(),
         context,
@@ -599,6 +600,7 @@ fn construct(
         terminals,
         execution: Vec::new(),
         policy: RoundPolicy { timing },
+        schedule,
     };
     check(source, &target)?;
     Ok(target)
