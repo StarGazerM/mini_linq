@@ -26,54 +26,88 @@ pub enum Completion {
 }
 
 /// Bookkeeping for one component's step phase.
+///
+/// Isolation is a scheduling property: a member commits only while no hole
+/// reading it runs, and no hole reading a committing or draining member is
+/// released. Host access therefore never waits, so nested work stealing inside
+/// a task cannot block on state held lower on the same thread.
 #[derive(Clone, Debug)]
 pub struct RelationalScheduler {
     delta_of: Vec<usize>,
+    reads: Vec<Vec<usize>>,
+    delta_readers: Vec<Vec<usize>>,
     readers: Vec<Vec<usize>>,
     version: Vec<u64>,
     consumed: Vec<u64>,
     running: Vec<bool>,
     pending: Vec<bool>,
+    draining: Vec<bool>,
     committing: Vec<bool>,
 }
 
 impl RelationalScheduler {
-    /// `delta_of[h]` is the member whose batches step hole `h` consumes.
-    /// `initial[m]` states whether the seed publication left `m` a nonempty
-    /// current batch; such a member starts at batch 1, otherwise at 0.
-    pub fn new(delta_of: Vec<usize>, initial: &[bool]) -> Self {
+    /// `holes[h] = (delta, reads)`: step hole `h` consumes batches of member
+    /// `delta` and reads the members in `reads` (either version; `delta` is
+    /// added if absent). `initial[m]` states whether the seed publication left
+    /// `m` a nonempty current batch; such a member starts at batch 1, else 0.
+    pub fn new(holes: Vec<(usize, Vec<usize>)>, initial: &[bool]) -> Self {
         let members = initial.len();
+        let mut delta_readers = vec![Vec::new(); members];
         let mut readers = vec![Vec::new(); members];
-        for (hole, &member) in delta_of.iter().enumerate() {
-            assert!(member < members, "step hole {hole} reads an unknown member");
-            readers[member].push(hole);
+        let mut delta_of = Vec::with_capacity(holes.len());
+        let mut reads = Vec::with_capacity(holes.len());
+        for (hole, (delta, mut read)) in holes.into_iter().enumerate() {
+            assert!(
+                delta < members,
+                "step hole {hole} consumes an unknown member"
+            );
+            read.push(delta);
+            read.sort_unstable();
+            read.dedup();
+            for &member in &read {
+                assert!(member < members, "step hole {hole} reads an unknown member");
+                readers[member].push(hole);
+            }
+            delta_readers[delta].push(hole);
+            delta_of.push(delta);
+            reads.push(read);
         }
         Self {
             consumed: vec![0; delta_of.len()],
             running: vec![false; delta_of.len()],
             delta_of,
+            reads,
+            delta_readers,
             readers,
             version: initial
                 .iter()
                 .map(|&nonempty| u64::from(nonempty))
                 .collect(),
             pending: vec![false; members],
+            draining: vec![false; members],
             committing: vec![false; members],
         }
     }
 
-    /// Formal rule DL-RelationalScheduler: spawn each hole once per unconsumed committed batch and never concurrently with itself; commit a member only when it has pending candidates, is idle, and every delta reader consumed its current batch.
+    /// Formal rule DL-RelationalScheduler: release each hole once per unconsumed committed batch, never concurrently with itself nor with a commit of a member it reads; release a member commit only when it has pending candidates, every delta reader consumed its current batch, and no reader runs.
     ///
+    /// A member that is ready except for running readers is marked draining:
+    /// no new reader is released until it commits, so commits cannot starve.
     /// Returned actions are marked in flight. Commits are listed before holes.
     pub fn actions(&mut self) -> Vec<Action> {
         let mut out = Vec::new();
         for member in 0..self.version.len() {
             if self.pending[member]
                 && !self.committing[member]
-                && self.readers[member]
+                && self.delta_readers[member]
                     .iter()
                     .all(|&hole| self.consumed[hole] == self.version[member])
             {
+                self.draining[member] = true;
+            }
+            if self.draining[member] && self.readers[member].iter().all(|&hole| !self.running[hole])
+            {
+                self.draining[member] = false;
                 self.pending[member] = false;
                 self.committing[member] = true;
                 out.push(Action::Commit { member });
@@ -81,7 +115,12 @@ impl RelationalScheduler {
         }
         for hole in 0..self.delta_of.len() {
             let batch = self.version[self.delta_of[hole]];
-            if !self.running[hole] && self.consumed[hole] < batch {
+            if !self.running[hole]
+                && self.consumed[hole] < batch
+                && self.reads[hole]
+                    .iter()
+                    .all(|&member| !self.committing[member] && !self.draining[member])
+            {
                 self.running[hole] = true;
                 out.push(Action::Hole { hole, batch });
             }
@@ -118,6 +157,7 @@ impl RelationalScheduler {
     pub fn quiescent(&self) -> bool {
         !self.running.iter().any(|&r| r)
             && !self.committing.iter().any(|&c| c)
+            && !self.draining.iter().any(|&d| d)
             && !self.pending.iter().any(|&p| p)
             && self
                 .delta_of
@@ -182,7 +222,8 @@ mod tests {
     #[test]
     fn holes_wait_for_batches_and_commits_wait_for_readers() {
         // members 0,1; hole 0 reads delta of 0, holes 1 and 2 read delta of 1.
-        let mut s = RelationalScheduler::new(vec![0, 1, 1], &[true, false]);
+        let mut s =
+            RelationalScheduler::new(vec![(0, vec![]), (1, vec![]), (1, vec![])], &[true, false]);
         assert_eq!(s.actions(), vec![Action::Hole { hole: 0, batch: 1 }]);
         assert_eq!(s.actions(), vec![], "a running hole is not respawned");
         s.complete(
@@ -216,8 +257,55 @@ mod tests {
     }
 
     #[test]
+    fn commits_wait_for_full_readers_and_draining_stops_new_readers() {
+        // Members 0, 1. Hole 0: delta 0, reads full 1. Hole 1: delta 1.
+        let mut s = RelationalScheduler::new(vec![(0, vec![1]), (1, vec![])], &[true, true]);
+        let first = s.actions();
+        assert_eq!(
+            first,
+            vec![
+                Action::Hole { hole: 0, batch: 1 },
+                Action::Hole { hole: 1, batch: 1 }
+            ]
+        );
+        // Hole 1 finishes with a candidate for 1; hole 0 still reads 1 at full version.
+        s.complete(first[1], &Completion::Hole { produced: vec![1] });
+        assert_eq!(
+            s.actions(),
+            vec![],
+            "member 1 drains while its full reader runs"
+        );
+        s.complete(first[0], &Completion::Hole { produced: vec![] });
+        assert_eq!(s.actions(), vec![Action::Commit { member: 1 }]);
+        s.complete(
+            Action::Commit { member: 1 },
+            &Completion::Commit { fresh: true },
+        );
+        // Batch 2 of member 1 releases its delta reader; hole 0 has consumed batch 1 of 0.
+        assert_eq!(s.actions(), vec![Action::Hole { hole: 1, batch: 2 }]);
+    }
+
+    #[test]
+    fn a_draining_member_blocks_release_of_its_readers() {
+        // Member 0 with two delta readers; member 1 read in full by hole 2 (delta 0).
+        let mut s = RelationalScheduler::new(vec![(1, vec![]), (0, vec![1])], &[false, true]);
+        let first = s.actions();
+        assert_eq!(first, vec![Action::Hole { hole: 0, batch: 1 }]);
+        // Member 0 gets candidates; it has no delta reader pending a batch (version 0).
+        s.complete(first[0], &Completion::Hole { produced: vec![0] });
+        assert_eq!(s.actions(), vec![Action::Commit { member: 0 }]);
+        // While 0 commits, its reader (hole 1) is not released even if runnable later.
+        assert_eq!(s.actions(), vec![]);
+        s.complete(
+            Action::Commit { member: 0 },
+            &Completion::Commit { fresh: true },
+        );
+        assert_eq!(s.actions(), vec![Action::Hole { hole: 1, batch: 1 }]);
+    }
+
+    #[test]
     fn candidates_during_a_commit_are_kept_for_the_next_commit() {
-        let mut s = RelationalScheduler::new(vec![0, 0], &[true]);
+        let mut s = RelationalScheduler::new(vec![(0, vec![]), (0, vec![])], &[true]);
         let first = s.actions();
         s.complete(first[0], &Completion::Hole { produced: vec![0] });
         assert_eq!(s.actions(), vec![], "reader 1 has not consumed batch 1");
@@ -249,7 +337,7 @@ mod tests {
                 let batches: Mutex<Vec<Vec<(u32, u32)>>> = Mutex::new(vec![edges.clone()]);
                 let pending: Mutex<Vec<(u32, u32)>> = Mutex::new(Vec::new());
                 let seen_batches: Mutex<HashMap<u64, usize>> = Mutex::new(HashMap::new());
-                let mut scheduler = RelationalScheduler::new(vec![0], &[true]);
+                let mut scheduler = RelationalScheduler::new(vec![(0, vec![])], &[true]);
                 drive(&mut scheduler, &|action| match action {
                     Action::Hole { batch, .. } => {
                         *seen_batches.lock().unwrap().entry(batch).or_default() += 1;
@@ -295,7 +383,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "boom")]
     fn a_panicking_action_resumes_after_in_flight_work() {
-        let mut s = RelationalScheduler::new(vec![0, 0], &[true]);
+        let mut s = RelationalScheduler::new(vec![(0, vec![]), (0, vec![])], &[true]);
         drive(&mut s, &|action| match action {
             Action::Hole { hole: 0, .. } => panic!("boom"),
             Action::Hole { .. } => Completion::Hole { produced: vec![] },

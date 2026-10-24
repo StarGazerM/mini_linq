@@ -1010,29 +1010,47 @@ rounds, which DL-AsyncCovering admits.
  {\text{the realization refines DL-WaveCommute}}
 \end{mathpar}
 Under \code{relational} progress the extension printer keeps the seed phase
-above and replaces the step loop by an event-driven executor. Each member's
-hosts (accumulated rows, delta host, full and delta layouts) sit behind one
-reader/writer lock; its canonical admission set and pending candidates sit
-behind one mutex. A step-hole task acquires read locks on every member it
-reads, in member-index order, and holds them for its whole evaluation; since
-commits take one write lock at a time and readers acquire in a fixed order,
-the held state is a consistent cut and no lock cycle arises. On completion
-the task appends its candidates to each head's pending buffer and records
-that it consumed its delta relation's current batch. A pure scheduler state,
-updated under one mutex after every task, spawns a hole whenever its delta
-relation has a committed batch it has not consumed and it is not running,
-and spawns a member commit whenever the member has pending candidates, is not
-committing, and every delta reader has consumed its current batch. A commit
-takes the pending candidates, admits them, and if any are fresh performs the
-member's recorded publication under its write lock, advancing its batch
-number. The joining scope ends at quiescence. With one worker the step loop
-falls back to synchronous rounds.
+above and replaces the step loop by an event-driven executor. Isolation is a
+scheduling property, not lock waiting: a hole task may itself run nested
+parallel chunks, and a work-stealing pool may then run another released task
+on the same thread's stack, so no released task may ever wait on state held
+by another. Each member's hosts (accumulated rows, delta host, full and delta
+layouts) sit behind one reader/writer lock acquired only by non-blocking
+attempts; its admission set sits behind a mutex touched only by its own
+commit; its pending candidates sit behind a mutex held only to append or take,
+never across nested work. Per-head hashers are cloned before the step phase.
+A step-hole task takes read access to every member it reads, in member-index
+order, and keeps it for its whole evaluation; on completion it appends its
+candidates to each head's pending buffer and the scheduler records that it
+consumed its delta member's current batch. A commit takes the pending
+candidates, admits them, and if any are fresh performs the member's recorded
+publication under write access, advancing its batch number. Because the
+scheduler never releases a commit of a member while a reader of it runs, nor
+a reader of a committing member, every access attempt succeeds; a failed
+attempt is a violated premise and panics rather than blocks. The state a hole
+holds is therefore frozen for every member it reads, a consistent cut. The
+dispatching thread ends the joining scope at quiescence. With one worker the
+step loop falls back to synchronous rounds.
 \begin{mathpar}
-\Rule{P-DL-Relational}{\text{per-member reader/writer isolation}\quad
- \text{ordered read acquisition held per hole}\quad
- \text{commit gated on every delta reader's consumption}\quad
+\Rule{P-DL-Relational}{\text{access granted only as released by DL-RelationalScheduler, never waited for}\quad
+ \text{read access held for each hole's evaluation}\quad
+ \text{pending and admission mutexes never held across nested work}\quad
  \text{scope joins at quiescence}}
  {\text{the executor discharges the obligations of DL-AsyncCovering}}
+\end{mathpar}
+The scheduler is pure bookkeeping over local member and step-hole indices.
+Each member records its committed nonempty batch count $v_R$ (1 after a
+nonempty seed batch, else 0); each step hole $h$ its delta member
+$\delta(h)$, its read members $\rho(h)\ni\delta(h)$, and the batch $c_h$ it last
+consumed. A member is \emph{ready} when it has pending candidates, is not
+committing, and every delta reader has consumed its current batch; a ready
+member becomes \emph{draining} and stops the release of its readers until it
+commits, so commits cannot starve.
+\begin{mathpar}
+\Rule{DL-RelationalScheduler}{\text{release }h\iff\neg\mathrm{running}(h)\land c_h<v_{\delta(h)}\land
+   \forall R\in\rho(h).\ \neg\mathrm{committing}(R)\land\neg\mathrm{draining}(R)\\
+ \text{release commit }R\iff\mathrm{draining}(R)\land\forall h.\ R\in\rho(h)\Rightarrow\neg\mathrm{running}(h)}
+ {\text{tiled windows and frozen cuts hold, no release waits, and dispatch stops exactly at quiescence}}
 \end{mathpar}
 
 \subsection{Sharded admission and exclusive-layout publication (extension)}
