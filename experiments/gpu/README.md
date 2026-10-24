@@ -286,23 +286,6 @@ initialization; loading or CUDA failures with the directory present fail the
 test. It also runs in the default `cargo oxide test --arch sm_89 -- --release -p cq-gpu-sequence`
 suite without feature flags; only the standalone example requires `cuda-oracle`.
 
-## Legacy Datalog boundary
-
-`legacy-datalog/` is an excluded, independent workspace, not a compatibility
-path in the Sequence pipeline. It contains the GPU Datalog bridge and its
-oracle/ddisasm consumers, the old Structures printer, blocked-run indexes,
-legacy runtime oracles, and the handwritten H05/triangle baselines that use
-those indexes. Maintained frozen/leveled indexes have no Sequence term yet;
-these consumers therefore have **not** migrated. Their original algorithms
-and historical results are preserved rather than silently changed.
-
-The shared column runtime exposes its old execution/index APIs only through
-its optional `legacy-datalog` feature. Main-workspace callers do not enable it.
-Build the old bridge separately, from `legacy-datalog/`, using the same CUDA
-configuration and `cargo oxide build --arch sm_89 -- --release --workspace`.
-Historical pre-cutover documentation is in
-[`legacy-datalog/README.md`](legacy-datalog/README.md).
-
 ## Authored advice and rejection boundaries
 
 The resident H05 A/B/R and identity-chain callers author their Sequence programs

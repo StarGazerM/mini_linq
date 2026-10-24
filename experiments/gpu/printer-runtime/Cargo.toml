@@ -6,16 +6,9 @@ workspace = ".."
 
 [features]
 default = []
-legacy-datalog = ["dep:cuda-core", "dep:cuda-device", "dep:cuda-host", "dep:gpu-blocked-run", "dep:gpu-tiles", "dep:rccl-memory"]
 nvtx = []
 timings = []
 dedup-diagnostics = []
 
 [dependencies]
-cuda-core = { workspace = true, optional = true }
-cuda-device = { workspace = true, optional = true }
-cuda-host = { workspace = true, optional = true }
-gpu-blocked-run = { path = "../legacy-datalog/blocked-run", optional = true }
-gpu-tiles = { path = "../tiles", optional = true }
 gpu-device-columns = { path = "../device-columns" }
-rccl-memory = { workspace = true, optional = true }
