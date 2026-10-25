@@ -70,11 +70,20 @@ pub fn par_group_global<S: Send, R: Send>(
     parts: Vec<Vec<R>>, init: impl Fn() -> S + Sync,
     step: impl Fn(&mut S, R) + Sync, merge: impl Fn(&mut S, S) + Sync,
 ) -> S {
-    let partials: Vec<S> = parts.into_par_iter().map(|part| {
+    par_group_global_with(parts, |part| {
         let mut state = init();
         for row in part { step(&mut state, row); }
         state
-    }).collect();
+    }, &init, merge)
+}
+
+/// Run a serial global-group adapter per part, then merge its states on host.
+/// `init` is the empty-input identity; `merge` obeys the commutative monoid laws.
+pub fn par_group_global_with<R: Send, S: Send>(
+    parts: Vec<Vec<R>>, fold: impl Fn(Vec<R>) -> S + Sync + Send,
+    init: impl Fn() -> S, merge: impl Fn(&mut S, S),
+) -> S {
+    let partials: Vec<S> = parts.into_par_iter().map(fold).collect();
     let mut state = init();
     for partial in partials { merge(&mut state, partial); }
     state
@@ -83,6 +92,18 @@ pub fn par_group_global<S: Send, R: Send>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn global_adapter_merges_on_host_with_empty_identity() {
+        let host = std::thread::current().id();
+        for parts in [vec![], vec![vec![]], vec![vec![1u64, 2], vec![], vec![3]]] {
+            let expected: u64 = parts.iter().flatten().sum();
+            let actual = par_group_global_with(parts, |rows| rows.into_iter().sum::<u64>(), || 0, |sum, partial| {
+                assert_eq!(std::thread::current().id(), host);
+                *sum += partial;
+            });
+            assert_eq!(actual, expected);
+        }
+    }
     #[test]
     fn routing_borrows_owned_keys() {
         struct Row { key: String }
