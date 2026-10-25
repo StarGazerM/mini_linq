@@ -255,8 +255,9 @@ fn bind_rejects_provider_without_requested_key_capability() {
 
 #[test]
 fn bind_records_range_obligations_without_inspecting_type_names() {
-    let p = lookup_program(quote!(a = flatten lookup r [a] tile 8 rows l;));
-    let a = contract::check(&p).unwrap();
+    let mut p = lookup_program(quote!(a = flatten lookup r [a] tile 8 rows l;));
+    grade(&mut p, quote!(a at device.block;));
+    let a = check_grading(&p, &gpu()).unwrap();
     assert_eq!(
         a.capabilities[&("r".into(), vec!["a".into()])],
         Capability::Range
@@ -647,7 +648,7 @@ fn host_retained_probe_stores_rows_without_requiring_range_offsets() {
 }
 
 #[test]
-fn row_stores_need_exact_and_segmented_or_distributed_reads_need_range() {
+fn row_stores_need_exact_and_collective_or_distributed_reads_need_range() {
     let streaming = lookup_program(quote!(a = flatten lookup r [a] rows l;));
     let key = ("r".into(), vec!["a".into()]);
     assert_eq!(
@@ -667,7 +668,7 @@ fn row_stores_need_exact_and_segmented_or_distributed_reads_need_range() {
     let segmented = lookup_program(quote!(a = flatten lookup r [a] tile 8 rows l;));
     assert_eq!(
         contract::check(&segmented).unwrap().capabilities[&key],
-        Capability::Range
+        Capability::Exact
     );
     let mut distributed = lookup_program(quote!(a = store tile 8 flatten lookup r [a] rows l;));
     grade(&mut distributed, quote!(a at device;));
@@ -1392,4 +1393,23 @@ fn storage_type_rewrites_preserve_adapters_and_key_layouts() {
         }
     }
     assert!(contract::check_rewrite(&source, &target).is_err());
+}
+
+#[test]
+fn task_local_nested_lookup_flatten_requires_only_exact_provider_access() {
+    let mut p = lookup_program(quote!(
+        source = store rows r;
+        provider = store partition_k[a](4) source;
+        input = store rows l;
+        out = store flatten flatten lookup r[a] tile 4 input;
+    ));
+    grade(&mut p, quote!(
+        source at host; provider at pool; input at host; out at pool;
+    ));
+    let key = ("r".into(), vec!["a".into()]);
+    let facts = check_grading(&p, &key_pool()).unwrap();
+    assert_eq!(facts.capabilities[&key], Capability::Exact);
+    assert!(facts.obligations.iter().all(|obligation| !matches!(
+        obligation, Obligation::Provider { capability: Capability::Range, .. }
+    )));
 }

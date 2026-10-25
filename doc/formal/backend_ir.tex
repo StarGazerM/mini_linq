@@ -83,6 +83,12 @@ that change addressing and materialize nothing (Lift's layout patterns,
 Descend's views~\cite{paper-lift,paper-descend}). \code{store} materializes,
 and \code{partition\_k} redistributes an ancestor store into owned parts;
 a segmented stored \code{flatten} retains offsets (BE-Offsets).
+Nested shape alone does not demand a Range provider: a sequential leaf
+task can enumerate each exact bucket within its owned input tile.
+Machine grading adds Range obligations when a non-leaf collective needs
+indexed bucket offsets, or a distributing tile cuts the flattened bucket
+stream across executors. This distinction preserves exact routed-provider
+reads inside a whole task-local segment without weakening collective scans.
 Under BE-Alpha, constructors are lifted through outer tile levels:
 \code{map}, \code{compact}, \code{lookup}, \code{fold}, \code{canon} and
 \code{store} operate on innermost rows and preserve those outer partitions;

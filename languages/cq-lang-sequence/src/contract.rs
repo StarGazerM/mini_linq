@@ -359,16 +359,6 @@ impl Checked<'_> {
         Ok(())
     }
 
-    fn range_reads(&mut self, fact: &Fact) -> syn::Result<()> {
-        for (provider, keys) in &fact.reads {
-            self.provider(
-                &Ident::new(provider, proc_macro2::Span::call_site()),
-                keys,
-                Capability::Range,
-            )?;
-        }
-        Ok(())
-    }
     fn physical(&self, name: &Ident) -> syn::Result<&physical::Definition> {
         self.prefix
             .physical
@@ -910,15 +900,13 @@ impl Checked<'_> {
                 if fact.depth == 0 {
                     return fail(term, "BE-Offsets", "flatten requires nested positions");
                 }
-                // Only segmented flattening needs indexed bucket offsets.
-                // A single row stream enumerates exact buckets sequentially.
-                if fact.depth > 1 {
-                    self.range_reads(&fact)?;
-                } else {
-                    for (provider, keys) in &fact.reads {
-                        let name = Ident::new(provider, proc_macro2::Span::call_site());
-                        self.provider(&name, keys, Capability::Exact)?;
-                    }
+                // Nesting alone does not require random bucket offsets:
+                // a leaf task enumerates each bucket sequentially. Grading
+                // adds Range only for collective scans or distributing a
+                // flattened bucket stream across executors.
+                for (provider, keys) in &fact.reads {
+                    let name = Ident::new(provider, proc_macro2::Span::call_site());
+                    self.provider(&name, keys, Capability::Exact)?;
                 }
                 fact.depth -= 1;
                 fact.max_depth -= 1;
