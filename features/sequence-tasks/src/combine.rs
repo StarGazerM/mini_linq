@@ -20,11 +20,19 @@ pub fn canon_parts<R: Eq + Hash + Send>(parts: Vec<Vec<R>>) -> Vec<Vec<R>> {
 
 /// Route task-local chunks, then transpose into exclusive, source-ordered parts.
 pub fn route<R: Send, K: Hash>(chunks: Vec<Vec<R>>, count: usize, key: impl Fn(&R) -> K + Sync) -> Vec<Vec<R>> {
+    route_by(chunks, count, |row, count| cq_storage::sharded::route_index(&key(row), count))
+}
+
+/// Route with a borrowing key projection, avoiding owned key copies solely
+/// for hashing. The router must return an index below the plan's positive count.
+pub fn route_by<R: Send>(
+    chunks: Vec<Vec<R>>, count: usize, router: impl Fn(&R, usize) -> usize + Sync,
+) -> Vec<Vec<R>> {
     assert!(count > 0, "key partition count must be positive");
     let buckets: Vec<Vec<Vec<R>>> = chunks.into_par_iter().map(|chunk| {
         let mut buckets: Vec<_> = (0..count).map(|_| Vec::new()).collect();
         for row in chunk {
-            buckets[cq_storage::sharded::route_index(&key(&row), count)].push(row);
+            buckets[router(&row, count)].push(row);
         }
         buckets
     }).collect();
@@ -75,6 +83,18 @@ pub fn par_group_global<S: Send, R: Send>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn routing_borrows_owned_keys() {
+        struct Row { key: String }
+        let chunks = vec![vec![Row { key: "alpha".into() }], vec![], vec![Row { key: "beta".into() }, Row { key: "alpha".into() }]];
+        let parts = route_by(chunks, 7, |row, n| cq_storage::sharded::route_index(&(&row.key,), n));
+        assert_eq!(parts.iter().map(Vec::len).sum::<usize>(), 3);
+        for (part, rows) in parts.iter().enumerate() {
+            for row in rows {
+                assert_eq!(part, cq_storage::sharded::route_index(&(&row.key,), 7));
+            }
+        }
+    }
     #[test]
     fn serial_equivalence() {
         for threads in [1, 24] {
