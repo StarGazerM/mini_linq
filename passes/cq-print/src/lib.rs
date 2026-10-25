@@ -504,6 +504,22 @@ impl<'a> Context<'a> {
 
     /// Build the selected structures over a result and append their statements.
     pub fn materialize(&mut self, name: &str, source: TokenStream) -> Repr {
+        self.materialize_from(name, source, None)
+    }
+
+    /// Publish providers from the key-disjoint parts recorded by Sequence.
+    /// The caller owns the parts binding for the lifetime of every provider.
+    pub fn materialize_partitioned(&mut self, name: &str, parts: TokenStream) -> Repr {
+        let rows = quote!((#parts).iter().flatten().cloned());
+        self.materialize_from(name, rows, Some(parts))
+    }
+
+    fn materialize_from(
+        &mut self,
+        name: &str,
+        source: TokenStream,
+        parts: Option<TokenStream>,
+    ) -> Repr {
         let structures: Vec<(Vec<Vec<String>>, syn::Type)> =
             self.analysis.built.get(name).cloned().unwrap_or_default();
         let rows = self
@@ -623,7 +639,17 @@ impl<'a> Context<'a> {
             // written arguments (or holes) select the qualified form.
             let bare = matches!(ty, syn::Type::Path(path)
                 if path.qself.is_none() && path.path.segments.iter().all(|s| s.arguments.is_none()));
-            let build = if let Some(selection) = selection.as_ref().filter(|_| !bare) {
+            let sharded = matches!(ty, syn::Type::Path(path)
+                if path.path.segments.last().is_some_and(|segment| segment.ident == "Sharded"));
+            let build = if sharded {
+                let parts = parts.as_ref().expect("Sharded provider requires a Sequence key partition");
+                quote!(<#ty>::build_parts(
+                    (#parts).iter().map(|__cq_part| {
+                        __cq_part.iter().cloned().map(|#pattern| #nested)
+                            .collect::<::std::vec::Vec<_>>()
+                    }).collect::<::std::vec::Vec<_>>()
+                ))
+            } else if let Some(selection) = selection.as_ref().filter(|_| !bare) {
                 let host_pattern = self.positional_pattern(name);
                 let nested = if let Some(i) = self.profile_index(&build_name) {
                     let profile = self.profile_handle();

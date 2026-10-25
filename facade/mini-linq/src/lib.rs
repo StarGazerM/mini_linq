@@ -61,9 +61,12 @@
 //! negative references and Rust source paths with inherited Before facts.
 //!
 pub use mini_linq_macros::{compile, mini_linq, relation_loaders, workload_query};
+#[doc(hidden)]
+pub use cq_sequence_tasks as __tasks;
 
 /// Core default passes. Customization is an external pass or an authored IR.
 pub mod passes {
+    pub use cq_sequence_tasks_macros::{plan as plan_tasks, tasks, translate_tasks};
     pub use mini_linq_macros::{
         index_demands, lower, plan, plan_sequential, represent, select, sequence, sequential,
         stage, translate_pull,

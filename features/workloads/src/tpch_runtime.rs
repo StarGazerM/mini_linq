@@ -12,6 +12,11 @@ pub type Dedup<T> = cq_storage::HashSet<T>;
 macro_rules! configuration {
     (default, $d:tt, { $($stages:tt)* }, { $($body:tt)* }) => {
         crate::tpch_runtime::configuration!(@named default, $d, { $($stages)* }, { $($body)* });
+        crate::tpch_runtime::configuration!(@named par, $d, {
+            decompose = [::mini_linq::passes::plan_tasks];
+            grade = ::mini_linq::passes::tasks;
+            print = ::mini_linq::passes::translate_tasks;
+        }, { $($body)* });
         crate::tpch_runtime::configuration!(@named no_reduce, $d, {
             plan = ::mini_linq::passes::plan(no_reduce);
             $($stages)*
@@ -60,8 +65,13 @@ pub(crate) use configuration;
 /// Each `query!` carries stage-local advice; only the advised variant applies it.
 macro_rules! standalone_configs {
     ($d:tt; $($body:tt)*) => {
-        pub const CONFIGS: &[&str] = &["default", "no-reduce", "le", "le_runs", "advised"];
+        pub const CONFIGS: &[&str] = &["default", "par", "no-reduce", "le", "le_runs", "advised"];
         crate::tpch_runtime::standalone_configuration!(default, $d, {}, [], { $($body)* });
+        crate::tpch_runtime::standalone_configuration!(par, $d, {
+            decompose = [::mini_linq::passes::plan_tasks];
+            grade = ::mini_linq::passes::tasks;
+            print = ::mini_linq::passes::translate_tasks;
+        }, [], { $($body)* });
         crate::tpch_runtime::standalone_configuration!(no_reduce, $d, {
             plan = ::mini_linq::passes::plan(no_reduce);
         }, [], { $($body)* });
@@ -75,6 +85,7 @@ macro_rules! standalone_configs {
         pub fn run(data: &Data, config: &str) -> Vec<Answer> {
             match config {
                 "default" => default::run(data, config),
+                "par" => par::run(data, config),
                 "no-reduce" => no_reduce::run(data, config),
                 "le" => le::run(data, config),
                 "le_runs" => le_runs::run(data, config),
@@ -160,7 +171,7 @@ macro_rules! retail_kernel {
     ) => {
         pub const NAME: &str = $name;
         pub const SQL: &str = $sql;
-        pub const CONFIGS: &[&str] = &["default", "no-reduce", "transfer", "le", "le_runs", stringify!($candidate) $(, crate::tpch_runtime::advised_name!($($advice)*))? $(, stringify!($extra), concat!(stringify!($extra), "_zone"))?];
+        pub const CONFIGS: &[&str] = &["default", "par", "no-reduce", "transfer", "le", "le_runs", stringify!($candidate) $(, crate::tpch_runtime::advised_name!($($advice)*))? $(, stringify!($extra), concat!(stringify!($extra), "_zone"))?];
         pub const EXPORTS: &[(&str, &str)] = &[$(
             (stringify!($table), concat!(stringify!($first) $(, ",", stringify!($column))*)),
         )*];
@@ -278,6 +289,7 @@ macro_rules! retail_kernel {
         pub fn run(data: &Data, config: &str) -> Vec<Answer> {
             match config {
                 "default" => default::run(data),
+                "par" => par::run(data),
                 "no-reduce" => no_reduce::run(data),
                 "transfer" => transfer::run(data),
                 "le" => le::run(data),

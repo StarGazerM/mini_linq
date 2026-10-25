@@ -8,7 +8,7 @@ cq-sequence-pull = { path = "../../passes/cq-sequence-pull" }
 cq-sequence-tasks = { path = "." }
 proc-macro2 = "1"
 quote = "1"
-syn = { version = "2", features = ["full", "extra-traits"] }
+syn = { version = "2", features = ["full", "extra-traits", "visit-mut"] }
 
 [package]
 name = "cq-sequence-tasks"

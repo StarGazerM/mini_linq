@@ -5,15 +5,34 @@
 //! analysis. Host and task-local constructors reuse the sequential interpreter.
 //! Pool chunks own their buffers and publish in chunk order at the join. Rayon
 //! propagates a task panic to that join rather than publishing partial output.
-//! Grouped folds reuse the host hash fold after publication; no task-pool
-//! collective or per-chunk grouping may replace that global valuation domain.
+//! Grouped folds join canonical valuations before parallel keyed aggregation.
 
 use cq_lang_sequence::{Analysis, LevelNode, Machine, Program, Term, Tiling};
-use cq_sequence_pull::{Emitter, Value};
-use quote::quote;
+use quote::{format_ident, quote};
+
+/// Pool scheduling parameters, independent of the checked partition width.
+#[derive(Clone, Copy, Debug)]
+pub struct Config {
+    /// `None` uses the calling Rayon's pool (including RAYON_NUM_THREADS).
+    pub threads: Option<usize>,
+    /// Contiguous driver rows owned by one task.
+    pub grain: usize,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self { threads: None, grain: 1024 }
+    }
+}
 
 /// The host owns a separated dynamic pool of sequential tasks.
 pub fn machine() -> Machine {
+    machine_with(Config::default())
+}
+
+pub fn machine_with(config: Config) -> Machine {
+    assert!(config.grain > 0, "task grain must be positive");
+    assert!(config.threads != Some(0), "task thread count must be positive");
     Machine {
         layout: None,
         name: syn::parse_quote!(tasks),
@@ -29,7 +48,7 @@ pub fn machine() -> Machine {
                 name: syn::parse_quote!(pool),
                 collaborative: false,
                 dynamic: true,
-                width: None,
+                width: Some(config.grain),
                 children: vec![LevelNode {
                     shared_bytes: None,
                     name: syn::parse_quote!(task),
@@ -65,12 +84,19 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
     catalog
 }
 
-/// Translate checked Sequence into an owned, deterministically concatenated Vec.
-// Formal rule T-Tasks: fold the checked term using ordered pool partitions and
-// local buffers; canonicalize parts before the global canonical boundary.
+/// Translate checked partitions into joined, owned output.
+// Formal rule T-Tasks: defer the entire partition-local iterator pipeline into
+// the worker closure, then join before any global canonicalization/publication.
 pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Expr> {
+    translate_with(program, analysis, Config::default())
+}
+
+pub fn translate_with(
+    program: &Program,
+    analysis: &Analysis,
+    config: Config,
+) -> syn::Result<syn::Expr> {
     let mut tiles = std::collections::BTreeMap::new();
-    let mut publications = std::collections::BTreeSet::new();
     for definition in &program.sequence.definitions {
         let name = syn::ext::IdentExt::unraw(&definition.name).to_string();
         let mut nodes = Vec::new();
@@ -80,120 +106,65 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                 tiles.insert(node, kind);
             }
         }
-        if matches!(definition.term, Term::Store { .. }) {
-            publications.insert(&definition.term as *const Term);
-        }
     }
-    cq_sequence_pull::translate_with(
+    // A distributing tile binds a symbolic one-part iterator. Row adapters
+    // compose beneath it unchanged; the paired flatten or pool store discharges
+    // the binding into a Rayon closure.
+    let mut partitions = Vec::new();
+    let mut expression = cq_sequence_pull::translate_with(
         program,
         analysis,
-        |term, emitter, child, output, definition, _| {
-            let node = term as *const Term;
-            let level = if publications.contains(&node) {
-                analysis.levels.get(definition)
-            } else {
-                analysis
-                    .dispatches
-                    .iter()
-                    .find(|dispatch| dispatch.inner_stores.iter().any(|name| name == definition))
-                    .map(|dispatch| &dispatch.producer_level)
-                    .or_else(|| analysis.levels.get(definition))
-            };
-            if matches!(term, Term::Group(_, _))
-                && level.is_some_and(|path| path.as_slice() != ["host"])
-            {
-                return Err(syn::Error::new_spanned(
-                    program,
-                    "BE-Group: grouped folds must execute at the host join",
-                ));
-            }
-            let active = if matches!(term, Term::Tile { .. }) {
-                tiles
-                    .get(&node)
+        |term, _emitter, child, output, _, _| {
+            if let Term::Tile { n, .. } = term
+                && tiles.get(&(term as *const Term))
                     .is_some_and(|kind| **kind == Tiling::Distribute)
-            } else {
-                level.is_some_and(|path| path.last().is_some_and(|name| name == "pool"))
-            };
-            if !active {
-                return Ok(());
-            }
-            if let Some(input) = child {
-                let lifted = emitter.lift(input.clone(), input.depth, &mut |emitter, input| {
-                    let mut result = input.clone();
-                    match term {
-                        Term::Tile { n, .. } => {
-                            tile(*n, &input, &mut result);
-                            result.depth += 1;
-                        }
-                        Term::Store { capacity, .. } => {
-                            store(*capacity, &input, &mut result);
-                            result.stored = true;
-                        }
-                        Term::Canon(_) => canon(emitter, &input, &mut result)?,
-                        _ => return Ok(input),
-                    }
-                    Ok(result)
-                })?;
-                if matches!(
-                    term,
-                    Term::Tile { .. } | Term::Store { .. } | Term::Canon(_)
-                ) {
-                    *output = lifted;
+            {
+                let input = child.expect("checked tile");
+                if input.depth != 0 {
+                    return Err(syn::Error::new_spanned(program, "Tasks distributing driver must be flat"));
+                }
+                let binding = format_ident!("__cq_task_driver_{}", partitions.len());
+                partitions.push((binding.clone(), input.rows.clone(), *n));
+                output.rows = quote!(::core::iter::once(#binding.iter().cloned()));
+            } else if (matches!(term, Term::Flatten(_)) && output.depth == 0)
+                || (matches!(term, Term::Store { .. }) && output.depth == 1)
+            {
+                if let Some((binding, source, grain)) = partitions.pop() {
+                    let nested = output.depth == 1;
+                    let rows = &output.rows;
+                    let local = if nested {
+                        quote!((#rows).flatten().collect::<::std::vec::Vec<_>>())
+                    } else {
+                        quote!((#rows).collect::<::std::vec::Vec<_>>())
+                    };
+                    let joined = if nested {
+                        quote!(__cq_parts.into_iter().map(::std::vec::Vec::into_iter))
+                    } else {
+                        quote!(__cq_parts.into_iter().flatten())
+                    };
+                    output.rows = quote!({
+                        use ::rayon::prelude::*;
+                        let __cq_driver = (#source).collect::<::std::vec::Vec<_>>();
+                        let __cq_parts = __cq_driver.par_chunks(#grain)
+                            .map(|#binding| #local)
+                            .collect::<::std::vec::Vec<_>>();
+                        #joined
+                    });
                 }
             }
             Ok(())
         },
-    )
-}
-
-fn tile(n: usize, input: &Value, output: &mut Value) {
-    let rows = &input.rows;
-    output.rows = quote! {{
-        use ::rayon::prelude::*;
-        let __cq_task_input = (#rows).collect::<::std::vec::Vec<_>>();
-        __cq_task_input.par_chunks(#n)
-            .map(|__cq_chunk| __cq_chunk.to_vec())
-            .collect::<::std::vec::Vec<_>>()
-            .into_iter()
-    }};
-}
-
-fn store(capacity: Option<usize>, input: &Value, output: &mut Value) {
-    let rows = &input.rows;
-    let capacity_check = capacity.map(|capacity| {
-        quote! {
-            ::core::assert!(__cq_task_input.len() <= #capacity, "Sequence store capacity exceeded");
-        }
-    });
-    output.rows = quote! {{
-        use ::rayon::prelude::*;
-        let __cq_task_input = (#rows).collect::<::std::vec::Vec<_>>();
-        #capacity_check
-        let __cq_parts = __cq_task_input.into_par_iter()
-            .chunks(1024)
-            .collect::<::std::vec::Vec<_>>();
-        __cq_parts.into_iter().flatten()
-    }};
-}
-
-fn canon(emitter: &mut Emitter<'_>, input: &Value, output: &mut Value) -> syn::Result<()> {
-    let rows = &input.rows;
-    let mut part = input.clone();
-    part.rows = quote! { __cq_chunk.iter().cloned() };
-    part.stored = false;
-    let local = emitter.canon(part)?.rows;
-    let mut prefiltered = input.clone();
-    prefiltered.rows = quote! {{
-        use ::rayon::prelude::*;
-        let __cq_task_input = (#rows).collect::<::std::vec::Vec<_>>();
-        let __cq_parts = __cq_task_input.par_chunks(1024)
-            .map(|__cq_chunk| (#local).collect::<::std::vec::Vec<_>>())
-            .collect::<::std::vec::Vec<_>>();
-        __cq_parts.into_iter().flatten()
-    }};
-    prefiltered.stored = false;
-    *output = emitter.canon(prefiltered)?;
-    Ok(())
+    )?;
+    if !partitions.is_empty() {
+        return Err(syn::Error::new_spanned(program, "Tasks partition lacks a joined flatten or pool store"));
+    }
+    if let Some(threads) = config.threads {
+        expression = syn::parse_quote!({
+            ::rayon::ThreadPoolBuilder::new().num_threads(#threads).build()
+                .expect("create CQ task pool").install(|| #expression)
+        });
+    }
+    Ok(syn::parse_quote!((#expression).into_iter()))
 }
 
 fn tile_nodes(term: &Term, output: &mut Vec<*const Term>) {

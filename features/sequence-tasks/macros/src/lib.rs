@@ -24,3 +24,21 @@ pub fn plan(input: TokenStream) -> TokenStream {
     })
     .into()
 }
+
+/// Check the target-owned schedule before interpretation.
+#[proc_macro]
+pub fn tasks(input: TokenStream) -> TokenStream {
+    cq_stage::rewrite::<cq_lang_sequence::Program>(input.into(), |source, _| {
+        cq_lang_sequence::check_grading(source, &cq_sequence_tasks::machine())?;
+        Ok(source.clone())
+    }).into()
+}
+
+/// Return joined owned answers through the ordinary Pull iterator ABI.
+#[proc_macro]
+pub fn translate_tasks(input: TokenStream) -> TokenStream {
+    cq_stage::pass::<cq_lang_sequence::Program, syn::Expr>(input.into(), |source, _| {
+        let analysis = cq_lang_sequence::check_grading(source, &cq_sequence_tasks::machine())?;
+        cq_sequence_tasks::translate(source, &analysis)
+    }).into()
+}

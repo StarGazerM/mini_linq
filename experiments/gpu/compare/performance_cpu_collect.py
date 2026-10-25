@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Collect exact CPU plain/profile measurements independently at SF1 and SF10."""
+"""Collect existing CPU profiles or isolated, exact plain-only par t1/t24 runs.
+
+Parallel protocol (run serially): all --par --threads 1|24 --sf 0.1|1|10
+--cap-seconds 100. SF0.1 verifies one untimed answer; SF1/SF10 use one warmup
+and five timed runs. Artifacts use performance_cpu_par_t{threads}_sf{sf}
+and performance_cpu_raw/par/t{threads}/sf{sf}; existing CPU data is untouched.
+"""
 import argparse
 import csv
 import hashlib
@@ -21,6 +27,8 @@ CAP_SECONDS = 600
 SLOW_SECONDS = 60
 PROFILE_WINNERS_ONLY = False
 CONFIGS = ['default', 'le', 'le_runs', 'advised']
+PAR = False
+THREADS = None
 WORK = ROOT / 'features/workloads'
 SOURCE = ROOT / 'experiments/gpu/tpch/src/source.rs'
 NAMES = ['retail_' + x for x in re.findall(r'"([a-z0-9_]+)"', SOURCE.read_text().split('sources!(', 1)[1].split(');', 1)[0])]
@@ -33,6 +41,11 @@ ENV = dict(os.environ, CARGO_BUILD_JOBS='1', CARGO_TARGET_DIR=str(CACHE / 'targe
 def save(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2) + '\n')
+
+
+def artifact_name(kind=''):
+    prefix = f'performance_cpu_par_t{THREADS}' if PAR else 'performance_cpu'
+    return f'{prefix}{("_" + kind) if kind else ""}_sf{SF}'
 
 
 def invoke(args, log, env=ENV, timeout=None):
@@ -51,18 +64,22 @@ def build():
         'cq-ext-correlated': 'features/extensions/cq-ext-correlated',
     }
     CACHE.mkdir(parents=True, exist_ok=True)
-    log = OUT / 'performance_cpu_build.log'
+    log = OUT / (artifact_name('build') + '.log') if PAR else OUT / 'performance_cpu_build.log'
+    workers = [(None, 'timing-worker')]
+    if not PAR:
+        workers += [('counters', 'counting-worker'), ('profile', 'profile-worker')]
     for name in NAMES:
-        if all((RAW / name / c / 'profile.json').exists() or (RAW / name / c / 'status.json').exists() for c in CONFIGS):
+        if all((RAW / name / c / ('plain.json' if PAR else 'profile.json')).exists() or (RAW / name / c / 'status.json').exists() for c in CONFIGS):
             continue
         crate = CACHE / 'crates' / name
         other = CACHE_ROOT / f'sf{10 if SF == 1 else 1}' / 'crates' / name
         if not (crate / 'build_stamp.json').exists() and (other / 'build_stamp.json').exists() and json.loads((other / 'build_stamp.json').read_text()) == build_stamp(name):
             shutil.copytree(other, crate, dirs_exist_ok=True)
         if (crate / 'build_stamp.json').exists() and json.loads((crate / 'build_stamp.json').read_text()) == build_stamp(name) and all(
-            (crate / binary).exists() for binary in ['timing-worker', 'counting-worker', 'profile-worker']
+            (crate / binary).exists() for _, binary in workers
         ):
             description = json.loads(subprocess.check_output([crate / 'timing-worker', 'describe']))
+            assert set(CONFIGS) <= set(description['configs']), (name, description['configs'])
             save(RAW / name / 'description.json', description)
             continue
         (crate / 'src').mkdir(parents=True, exist_ok=True)
@@ -70,7 +87,7 @@ def build():
         for dep, path in dependencies.items():
             features = ', features = ["parquet"]' if dep == 'cq-load' else ''
             manifest += f'{dep} = {{ path = "{ROOT / path}"{features} }}\n'
-        manifest += 'serde_json = "1"\n'
+        manifest += 'serde_json = "1"\nrayon = "1"\n'
         (crate / 'Cargo.toml').write_text(manifest)
         main = '#![recursion_limit = "512"]\n'
         main += f'#[allow(unused_imports, unused_macros, dead_code)] #[path = "{WORK / "src/tpch_runtime.rs"}"] mod tpch_runtime;\n'
@@ -80,7 +97,7 @@ def build():
         (crate / 'src/main.rs').write_text(main)
         shutil.copy(WORK / 'Cargo.lock', crate / 'Cargo.lock')
         invoke(['cargo', 'metadata', '--offline', '--format-version', '1', '--manifest-path', crate / 'Cargo.toml'], log)
-        for feature, binary in [(None, 'timing-worker'), ('counters', 'counting-worker'), ('profile', 'profile-worker')]:
+        for feature, binary in workers:
             args = ['cargo', 'build', '--release', '--locked', '--offline', '--manifest-path', crate / 'Cargo.toml']
             if feature:
                 args += ['--features', feature]
@@ -96,7 +113,7 @@ def build():
 def build_stamp(name):
     paths = [WORK / 'src/tpch_runtime.rs', WORK / 'xtask/src/tpch/worker.rs',
              WORK / 'xtask/src/tpch/comparison.rs', CACHE_ROOT / 'adaptive-worker.rs',
-             WORK / 'src/queries/retail/tpch' / (name + '.rs')]
+             WORK / 'src/queries/retail/tpch' / (name + '.rs'), Path(__file__)]
     return {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
 
 
@@ -129,11 +146,13 @@ def prepare():
             rows.append(row)
         save(raw / 'oracle.json', {'rows': sorted({tuple(row) for row in rows}), 'decimal_columns': decimals})
         print('PREPARED', name, len(rows), flush=True)
-    save(OUT / f'performance_cpu_environment_sf{SF}.json', {
+    save(OUT / (artifact_name('environment') + '.json'), {
         'sf': SF, 'duckdb_version': duckdb.__version__, 'database': database,
         'rustc': subprocess.check_output(['rustc', '--version'], text=True).strip(),
         'machine': os.uname()._asdict() if hasattr(os.uname(), '_asdict') else list(os.uname()),
         'affinity': sorted(os.sched_getaffinity(0)), 'runs': RUNS, 'cap_seconds': CAP_SECONDS, 'query_names': NAMES,
+        **({'configuration': 'par', 'rayon_num_threads': THREADS, 'plain_only': True,
+            'verification_only': SF == 0.1, 'runs': 0 if SF == 0.1 else RUNS} if PAR else {}),
         'source_sha256': {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in [SOURCE, WORK / 'src/tpch_runtime.rs', WORK / 'xtask/src/tpch/worker.rs'] + [WORK / 'src/queries/retail/tpch' / (n + '.rs') for n in NAMES]},
     })
 
@@ -141,6 +160,16 @@ def prepare():
 def adaptive():
     """Only alter generated measurement controls; preserve query and planner sources."""
     source = (WORK / 'xtask/src/tpch/worker.rs').read_text()
+    if PAR:
+        worker = CACHE_ROOT / 'adaptive-worker.rs'
+        worker.parent.mkdir(parents=True, exist_ok=True)
+        worker.write_text(source)
+        save(OUT / (artifact_name('adaptive') + '.json'), {
+            'generated_worker_sha256': hashlib.sha256(source.encode()).hexdigest(),
+            'policy': 'One exact untimed execution at SF0.1; one exact warmup and five exact plain samples at SF1/SF10; 100-second process wall cap per query.',
+            'changes': 'None. Unmodified authored worker, without counters or profile features.',
+        })
+        return
     source = source.replace('    let warm = query::run(&data, &args[1]);',
                             '    let warm_started = Instant::now();\n    let warm = query::run(&data, &args[1]);\n    let runs = if runs > 0 && warm_started.elapsed().as_secs_f64() > 60.0 { 3 } else { runs };')
     source = source.replace('    times.sort_by(f64::total_cmp);',
@@ -155,7 +184,7 @@ def adaptive():
     worker = CACHE_ROOT / 'adaptive-worker.rs'
     worker.parent.mkdir(parents=True, exist_ok=True)
     worker.write_text(source)
-    save(OUT / f'performance_cpu_adaptive_sf{SF}.json', {
+    save(OUT / (artifact_name('adaptive') + '.json'), {
         'generated_worker_sha256': hashlib.sha256(source.encode()).hexdigest(),
         'policy': f'{CAP_SECONDS}-second combined wall budget per configuration; warm query >{SLOW_SECONDS}s selects three timed runs, otherwise stop after three when a timed sample exceeds {SLOW_SECONDS}s. No plain-run pruning. Profile winners only: {PROFILE_WINNERS_ONLY}. Completed measurements are retained.',
         'changes': 'Only warm clock, sample count, loop stopping and effective median index in generated worker. Authored worker, query sources and compiler/plans unchanged.',
@@ -170,13 +199,15 @@ def measure():
         def run_modes(config, modes):
             directory = raw / config
             directory.mkdir(parents=True, exist_ok=True)
-            if (directory / 'profile.json').exists() or (directory / 'status.json').exists():
+            if (directory / ('plain.json' if PAR else 'profile.json')).exists() or (directory / 'status.json').exists():
                 return
             budget_path = directory / 'budget.json'
             budget = json.loads(budget_path.read_text()) if budget_path.exists() else {
                 'wall_seconds': 0, 'cap_seconds': CAP_SECONDS,
                 'slow_seconds': SLOW_SECONDS, 'profile_winners_only': PROFILE_WINNERS_ONLY,
                 'retained_plain_before_policy_change': (directory / 'plain.json').exists(),
+                **({'configuration': 'par', 'rayon_num_threads': THREADS, 'plain_only': True,
+                    'verification_only': SF == 0.1, 'runs': 0 if SF == 0.1 else RUNS} if PAR else {}),
             }
             for kind, binary, runs in modes:
                 if (directory / (kind + '.json')).exists():
@@ -195,7 +226,10 @@ def measure():
                     save(budget_path, budget)
             print('MEASURED', SF, name, config, [m[0] for m in modes], flush=True)
 
-        plain = [('plain', 'timing-worker', RUNS)]
+        plain = [('plain', 'timing-worker', 0 if PAR and SF == 0.1 else RUNS)]
+        if PAR:
+            run_modes('par', plain)
+            continue
         profile = [('counts', 'counting-worker', 0), ('profile', 'profile-worker', RUNS)]
         if not PROFILE_WINNERS_ONLY:
             for config in CONFIGS:
@@ -214,7 +248,63 @@ def measure():
                 save(raw / config / 'status.json', {'status': 'plain_only_not_selected', 'correctness': 'ok', 'reason': 'Profile omitted by user-authorized column-winner policy; all plain candidates measured.'})
 
 
+def consolidate_par():
+    rows = []
+    for name in NAMES:
+        directory = RAW / name / 'par'
+        path = directory / 'plain.json'
+        plain = json.loads(path.read_text()) if path.exists() else None
+        path = directory / 'status.json'
+        status = json.loads(path.read_text()) if path.exists() else {
+            'status': 'complete' if plain else 'missing',
+        }
+        if plain:
+            assert not plain['instrumented']
+            if SF == 0.1:
+                assert plain['verified']
+            else:
+                assert len(plain['samples_ms']) == RUNS
+        path = directory / 'budget.json'
+        rows.append({
+            'sf': SF, 'query': name, 'configuration': 'par', 'threads': THREADS,
+            'status': status['status'], 'status_details': status,
+            'correctness': 'ok' if plain else 'unavailable',
+            'verification_only': SF == 0.1,
+            'runs': len(plain.get('samples_ms', [])) if plain else 0,
+            'answer_rows': plain['answer_rows'] if plain else None,
+            'uninstrumented_total_median_ms': plain.get('median_ms') if plain else None,
+            'uninstrumented_samples_ms': plain.get('samples_ms', []) if plain else [],
+            'load_ms': plain.get('load_ms') if plain else None,
+            'zone_build_ms': plain.get('zone_build_ms') if plain else None,
+            'peak_rss_kib': plain.get('peak_rss_kib') if plain else None,
+            'measurement_policy': json.loads(path.read_text()) if path.exists() else None,
+            'raw_directory': str(directory.relative_to(ROOT)),
+        })
+    save(OUT / (artifact_name() + '.json'), {
+        'schema_version': 1, 'sf': SF, 'configuration': 'par', 'threads': THREADS,
+        'methodology': {
+            'scope': 'All 27 catalog queries; fixed par configuration; no selection or instrumented modes.',
+            'invocations': 'One untimed exact execution at SF0.1; one warmup plus five timed runs at SF1/SF10.',
+            'cap_seconds': CAP_SECONDS, 'rayon_num_threads': THREADS,
+            'correctness': 'Every warm and timed result matches the authored DuckDB SQL as a normalized exact set; DECIMAL trailing-zero normalization only.',
+            'plain_boundary': 'query::run including query-local construction; excludes loading, canonicalization, comparison and final answer destruction.',
+            'timeout': 'Process wall budget includes loading, warmup, timed runs and exact checks; never a numeric query timing.',
+        },
+        'rows': rows,
+    })
+    columns = [k for k in rows[0] if k not in ['status_details', 'measurement_policy', 'uninstrumented_samples_ms']]
+    with (OUT / (artifact_name() + '.tsv')).open('w') as stream:
+        writer = csv.DictWriter(stream, fieldnames=columns, delimiter='\t', extrasaction='ignore')
+        writer.writeheader()
+        writer.writerows(rows)
+    print(json.dumps({'sf': SF, 'threads': THREADS, 'queries': len(rows),
+                      'exact_complete': sum(r['correctness'] == 'ok' for r in rows)}))
+
+
 def consolidate():
+    if PAR:
+        consolidate_par()
+        return
     planner = {
         'default': 'written_coarse', 'no-reduce': 'written_coarse_no_reduce',
         'transfer': 'transfer', 'le': 'le', 'le_runs': 'le',
@@ -317,7 +407,7 @@ def cleanup():
     for path in RAW.glob('*/oracle.json'):
         removed.append(str(path.relative_to(ROOT)))
         path.unlink()
-    save(OUT / f'performance_cpu_cleanup_sf{SF}.json', {
+    save(OUT / (artifact_name('cleanup') + '.json'), {
         'removed_temporary_correctness_artifacts': removed,
         'reason': 'Exact comparisons completed inside workers; retain metrics, graphs, statuses and reproduction SQL, not large duplicate answer sets. prepare recreates oracles from the shared dbgen database.',
     })
@@ -326,18 +416,39 @@ def cleanup():
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('phase', choices=['build', 'prepare', 'adaptive', 'measure', 'consolidate', 'cleanup', 'all'])
-    parser.add_argument('--sf', type=int, choices=[1, 10], required=True)
+    parser.add_argument('--sf', choices=['0.1', '1', '10'], required=True)
     parser.add_argument('--runs', type=int, choices=[5], default=5)
-    parser.add_argument('--cap-seconds', type=int, default=600)
+    parser.add_argument('--cap-seconds', type=int, default=None)
     parser.add_argument('--slow-seconds', type=int, default=60)
     parser.add_argument('--profile-winners-only', action='store_true')
+    parser.add_argument('--par', action='store_true', help='Fixed par config, plain-only, isolated artifacts; SF0.1 verifies without timing')
+    parser.add_argument('--threads', type=int, choices=[1, 24], help='Required with --par; sets RAYON_NUM_THREADS explicitly')
     args = parser.parse_args()
-    if args.cap_seconds <= 0:
-        parser.error('--cap-seconds must be positive')
-    SF, RUNS, CAP_SECONDS = args.sf, args.runs, args.cap_seconds
+    PAR, THREADS = args.par, args.threads
+    if PAR != (THREADS is not None):
+        parser.error('--par and --threads must be supplied together')
+    if args.sf == '0.1' and not PAR:
+        parser.error('SF0.1 is the --par exactness phase')
+    if PAR and args.profile_winners_only:
+        parser.error('--par never collects instrumented profiles')
+    if args.cap_seconds is None:
+        args.cap_seconds = 100 if PAR else 600
+    if args.cap_seconds <= 0 or (PAR and args.cap_seconds != 100):
+        parser.error('--cap-seconds must be positive; the par protocol requires 100')
+    SF = 0.1 if args.sf == '0.1' else int(args.sf)
+    RUNS, CAP_SECONDS = args.runs, args.cap_seconds
     SLOW_SECONDS, PROFILE_WINNERS_ONLY = args.slow_seconds, args.profile_winners_only
+    if PAR:
+        CONFIGS = ['par']
+        CACHE_ROOT = CACHE_ROOT / 'par' / f't{THREADS}'
+        ENV['RAYON_NUM_THREADS'] = str(THREADS)
+        for key in ['CQ_OPERATOR_PROFILE', 'CQ_OPERATOR_COUNTS']:
+            ENV.pop(key, None)
     CACHE = CACHE_ROOT / f'sf{SF}'
-    RAW = OUT / 'performance_cpu_raw' / f'sf{SF}'
+    RAW = OUT / 'performance_cpu_raw'
+    if PAR:
+        RAW = RAW / 'par' / f't{THREADS}'
+    RAW = RAW / f'sf{SF}'
     CACHE.mkdir(parents=True, exist_ok=True)
     # Cargo artifacts are scale-independent; query data and binaries are isolated.
     ENV['CARGO_TARGET_DIR'] = str(CACHE_ROOT / 'target')

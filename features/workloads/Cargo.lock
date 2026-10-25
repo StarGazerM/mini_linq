@@ -699,6 +699,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-sequence-tasks-macros"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-sequence",
+ "cq-sequence-plan",
+ "cq-sequence-tasks",
+ "cq-stage",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "cq-stage"
 version = "0.1.0"
 dependencies = [
@@ -856,6 +867,7 @@ dependencies = [
  "mini-linq",
  "proc-macro2",
  "quote",
+ "rayon",
  "syn 2.0.119",
 ]
 
@@ -1388,6 +1400,8 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 name = "mini-linq"
 version = "0.1.0"
 dependencies = [
+ "cq-sequence-tasks",
+ "cq-sequence-tasks-macros",
  "mini-linq-macros",
 ]
 

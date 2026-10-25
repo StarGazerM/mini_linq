@@ -53,7 +53,7 @@ pub(super) fn build_in(
         .collect::<Vec<_>>()
         .join("\n")
         + "\n";
-    manifest.push_str("serde_json = \"1\"\n");
+    manifest.push_str("serde_json = \"1\"\nrayon = \"1\"\n");
     std::fs::write(directory.join("Cargo.toml"), manifest)?;
     // Preserve the repository's dependency versions. Cargo may only adapt the
     // root-package entries here; the actual measured build always uses --locked.

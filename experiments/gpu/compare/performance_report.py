@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Render the SF1/SF10 comparison from exact, uncensored measurements."""
+"""Render retained CPU/GPU/DuckDB metrics plus exact plain-only par t1/t24.
+
+Optional par inputs: performance_cpu_par_t{1,24}_sf{0.1,1,10}.json.
+Existing results remain available when par artifacts are missing. Common-set
+summaries compare CPU-default, CPU-par t1/t24 and DuckDB t1/t24 only where all
+five have completed exact numeric results; GPU common-set summaries additionally
+require an exact GPU result. No timeout or failed correctness run is imputed.
+"""
 import csv
 import json
 import math
@@ -10,6 +17,19 @@ OUT = Path(__file__).resolve().parent
 
 def load(name):
     return json.loads((OUT / name).read_text())
+
+
+def load_par(sf, threads):
+    path = OUT / f'performance_cpu_par_t{threads}_sf{sf}.json'
+    if not path.exists():
+        return {}
+    document = json.loads(path.read_text())
+    assert document['sf'] == sf and document['configuration'] == 'par' and document['threads'] == threads
+    return {r['query']: r for r in document['rows']}
+
+
+def geometric_speedup(rows, numerator, denominator):
+    return math.exp(sum(math.log(r[numerator] / r[denominator]) for r in rows) / len(rows)) if rows else None
 
 
 def number(value):
@@ -30,10 +50,19 @@ def table(headers, rows):
 
 def main():
     gpu = {(r['sf'], r['query']): r for r in load('performance_gpu_summary.json')['results'] if r.get('exact')}
-    comparisons, summaries, sections = [], [], []
+    comparisons, summaries, common_summaries, sections = [], [], [], []
+    exactness = []
+    for threads in [1, 24]:
+        rows = list(load_par(0.1, threads).values())
+        complete = [r for r in rows if r['status'] == 'complete' and r['correctness'] == 'ok']
+        exactness.append([f'par t{threads}', len(complete), len(rows),
+                          ', '.join(r['query'].removeprefix('retail_') + ': ' + status_text(r) for r in rows if r not in complete) or ('none' if rows else 'not collected')])
+    sections.append('## Parallel SF0.1 exactness\n\nOne untimed execution per query and thread count, compared as an exact normalized set against authored DuckDB SQL. This is correctness evidence, not timing data.\n\n'
+                    + table(['Configuration', 'Exact completed', 'Rows collected (of 27)', 'Unavailable'], exactness))
     for sf in [1, 10]:
         cpu = load(f'performance_cpu_sf{sf}.json')
         duck = {r['gpu_query']: r['raw_timing']['threads'] for r in load(f'performance_duck_trash_sf{sf}.json')['results']}
+        par = {threads: load_par(sf, threads) for threads in [1, 24]}
         phase_rows, plain_rows = [], []
         for selection in sorted(cpu['selections'], key=lambda s: (not s['query'].startswith('retail_h'), s['query'])):
             query = selection['query'].removeprefix('retail_')
@@ -63,9 +92,20 @@ def main():
                 plain.append(number(value) if value is not None else status)
             row['cpu_le_search_complete'] = selection['le_search_complete']
             for threads in [1, 24]:
+                c = par[threads].get(selection['query'])
+                exact = bool(c and c['status'] == 'complete' and c['correctness'] == 'ok')
+                value = c['uninstrumented_total_median_ms'] if exact else None
+                row[f'cpu_par_t{threads}_configuration'] = 'par'
+                row[f'cpu_par_t{threads}_status'] = status_text(c) if c else 'missing'
+                row[f'cpu_par_t{threads}_exact'] = exact
+                row[f'cpu_par_t{threads}_uninstrumented_total_ms'] = value
+                row[f'cpu_par_t{threads}_runs'] = c['runs'] if c else 0
+                plain.append(number(value) if value is not None else row[f'cpu_par_t{threads}_status'])
+            for threads in [1, 24]:
                 value = duck[query][str(threads)]['median_seconds'] * 1000
                 row[f'duckdb_t{threads}_ms'] = value
                 phases.append(number(value))
+                plain.append(number(value))
             comparisons.append(row)
             phase_rows.append(phases)
             plain_rows.append(plain)
@@ -80,25 +120,55 @@ def main():
             f"## SF{sf}: phase comparison\n\nAll values are milliseconds. CPU build/query/total are paired **instrumented profile** measurements; GPU and DuckDB are ordinary timings. CPU-LE is selected by the minimum **plain** median of `le` and `le_runs`.\n\n"
             + table(headers, phase_rows)
             + f"\n\nCoverage: {len(cpu['rows'])} configurations attempted across 27 queries; {coverage}; {three} configurations used three runs in at least one completed mode.\n\n### SF{sf} uninstrumented CPU totals\n\nThese whole-query medians include index construction and determine the primary CPU speedups.\n\n"
-            + table(['Query', 'CPU-LE total', 'CPU-advised total', 'CPU-default total'], plain_rows)
+            + table(['Query', 'CPU-LE total', 'CPU-advised total', 'CPU-default total', 'CPU-par t1 total', 'CPU-par t24 total', 'DuckDB t1', 'DuckDB t24'], plain_rows)
         )
-        fields = ['duckdb_t1_ms', 'duckdb_t24_ms'] + [f'cpu_{label}_{mode}_total_ms' for mode in ['uninstrumented', 'profile'] for label in ['le', 'advised', 'default']]
+        primary_fields = ['cpu_default_uninstrumented_total_ms', 'cpu_par_t1_uninstrumented_total_ms', 'cpu_par_t24_uninstrumented_total_ms', 'duckdb_t1_ms', 'duckdb_t24_ms']
+        fields = ['duckdb_t1_ms', 'duckdb_t24_ms', 'cpu_par_t1_uninstrumented_total_ms', 'cpu_par_t24_uninstrumented_total_ms'] + [f'cpu_{label}_{mode}_total_ms' for mode in ['uninstrumented', 'profile'] for label in ['le', 'advised', 'default']]
         for field in fields:
             eligible = [r for r in comparisons if r['sf'] == sf and r['gpu_exact'] and r[field] is not None and r[field] > 0]
             summaries.append({'sf': sf, 'comparator': field, 'queries': [r['query'] for r in eligible], 'n': len(eligible), 'geometric_mean_speedup': math.exp(sum(math.log(r[field] / r['gpu_total_ms']) for r in eligible) / len(eligible)) if eligible else None})
+        common = [r for r in comparisons if r['sf'] == sf and all(r[f] is not None and r[f] > 0 for f in primary_fields)]
+        for denominator in ['cpu_par_t1_uninstrumented_total_ms', 'cpu_par_t24_uninstrumented_total_ms']:
+            for numerator in primary_fields:
+                if numerator == denominator:
+                    continue
+                common_summaries.append({
+                    'sf': sf, 'set': 'cpu_default_par_t1_par_t24_duckdb_t1_t24',
+                    'numerator': numerator, 'denominator': denominator,
+                    'queries': [r['query'] for r in common], 'n': len(common),
+                    'geometric_mean_speedup': geometric_speedup(common, numerator, denominator),
+                })
+        common_gpu = [r for r in common if r['gpu_exact'] and r['gpu_total_ms'] > 0]
+        for numerator in primary_fields:
+            common_summaries.append({
+                'sf': sf, 'set': 'gpu_cpu_default_par_t1_par_t24_duckdb_t1_t24',
+                'numerator': numerator, 'denominator': 'gpu_total_ms',
+                'queries': [r['query'] for r in common_gpu], 'n': len(common_gpu),
+                'geometric_mean_speedup': geometric_speedup(common_gpu, numerator, 'gpu_total_ms'),
+            })
     with (OUT / 'performance_comparison.tsv').open('w') as stream:
         writer = csv.DictWriter(stream, fieldnames=list(comparisons[0]), delimiter='\t')
         writer.writeheader()
         writer.writerows(comparisons)
-    (OUT / 'performance_speedups.json').write_text(json.dumps({'formula': 'exp(mean(log(comparator_total_ms / gpu_total_ms)))', 'selection': 'CPU-LE minimizes exact uninstrumented median of le/le_runs; unavailable timings are excluded, never imputed.', 'results': summaries}, indent=2) + '\n')
+    (OUT / 'performance_speedups.json').write_text(json.dumps({
+        'formula': 'exp(mean(log(comparator_total_ms / gpu_total_ms)))',
+        'selection': 'CPU-LE minimizes exact uninstrumented median of le/le_runs; par is fixed par. Unavailable timings are excluded, never imputed.',
+        'results': summaries,
+        'common_formula': 'exp(mean(log(numerator_ms / denominator_ms))); greater than one favors denominator',
+        'common_selection': 'Shared exact completed positive timings for CPU-default, par t1/t24 and DuckDB t1/t24; GPU sets also require exact completed GPU. Query lists identify every denominator set.',
+        'common_results': common_summaries,
+    }, indent=2) + '\n')
     means = table(['Scale', 'Comparator', 'Common exact queries (n)', 'Geometric-mean GPU speedup'], [[f"SF{r['sf']}", r['comparator'], r['n'], number(r['geometric_mean_speedup']) + '×'] for r in summaries])
+    common_means = table(['Scale', 'Common set', 'Numerator', 'Denominator (favored above 1×)', 'n', 'Geometric-mean speedup'],
+                         [[f"SF{r['sf']}", r['set'], r['numerator'], r['denominator'], r['n'],
+                           number(r['geometric_mean_speedup']) + '×'] for r in common_summaries])
     intro = '''# CQ TPC-H-shaped performance comparison
 
 ## Scope and methodology
 
 These are the **27 authored CQ-shaped catalog queries**, not full standard TPC-H coverage: 26 GPU-suite queries plus **h14, CPU-only**, at SF1 and SF10. GPU name `hXX`/`dXX` maps to CPU catalog name `retail_hXX`/`retail_dXX`. Numerical results require exact answers; no timeout is interpreted as an execution time. All times are milliseconds, lower is better.
 
-Hardware: **AMD Ryzen Threadripper PRO 5945WX, 12 cores / 24 hardware threads**, approximately **125.77 GiB RAM**, **NVIDIA RTX 6000 Ada Generation (49,140 MiB)**, driver **580.178.04**. GPU compilation targeted `sm_89` with CUDA 12.9 (NVIDIA HPC SDK 25.5). See [hardware](performance_hardware.json). CPU workers are sequential, and timed CPU windows are serialized with no concurrent compilation.
+Hardware: **AMD Ryzen Threadripper PRO 5945WX, 12 cores / 24 hardware threads**, approximately **125.77 GiB RAM**, **NVIDIA RTX 6000 Ada Generation (49,140 MiB)**, driver **580.178.04**. GPU compilation targeted `sm_89` with CUDA 12.9 (NVIDIA HPC SDK 25.5). See [hardware](performance_hardware.json). Retained CPU-default/LE/advised workers are sequential; CPU-par explicitly uses Rayon t1/t24. Run timed CPU windows serially, with no concurrent compilation.
 
 ### GPU: statistics-derived advised plans
 
@@ -128,6 +198,13 @@ The separate counter run supplies checked operator rows; profiles check exact an
 
 Boundaries: [`worker.rs`](../../../features/workloads/xtask/src/tpch/worker.rs), [collector](performance_cpu_collect.py). Source hashes and machine metadata: [SF1](performance_cpu_environment_sf1.json), [SF10](performance_cpu_environment_sf10.json).
 
+### CPU: fixed parallel configuration
+
+CPU-par always selects the authored **`par`** configuration, never the best of multiple plans. Each scale and thread count is isolated: `RAYON_NUM_THREADS=1` or `24`, raw data under `performance_cpu_raw/par/t{threads}/sf{sf}`, consolidated `performance_cpu_par_t{threads}_sf{sf}.json` and `.tsv`, and separate cache roots. Generated consumers depend directly on Rayon because emitted task code uses `::rayon`. Only the plain timing worker is built; no counters, operator profiles or instrumentation overhead are collected.
+
+SF0.1 runs one untimed exact comparison for every query at each thread count. SF1/SF10 use one exact warmup and five plain timed runs, each checked against the same authored SQL with the exact normalized-set comparison described above. The fixed **100-second process wall cap** includes loading, warmup, measurement and comparisons. A timeout or mismatch has no numeric median. Query-local task scheduling and construction are included in plain totals; input loading and answer comparison are excluded. Parallel environment, source hashes and command logs are retained separately from the original CPU evidence. Missing artifacts remain explicitly unavailable.
+
+
 ### DuckDB
 
 DuckDB **v1.4.4 (Andium), `6ddac802ff`**, explicit t1/t24. CLI `.timer` measures complete authored SQL in **`.mode trash`**, with one warmup and five samples, avoiding answer CSV formatting/output and comparison. Intrinsic result materialization/consumption remains timed; resolution is 1 ms. Database generation/export, process opening and thread configuration are excluded. Scanning, reads/decompression, hash construction, aggregation and DISTINCT are included. There is no separate external index-build phase. The report uses [SF1](performance_duck_trash_sf1.json) and [SF10](performance_duck_trash_sf10.json), not CSV-output timers.
@@ -145,6 +222,13 @@ python3 experiments/gpu/compare/performance_cpu_collect.py build --sf 10 --cap-s
 python3 experiments/gpu/compare/performance_cpu_collect.py measure --sf 10 --cap-seconds 100 --slow-seconds 10 --profile-winners-only
 python3 experiments/gpu/compare/performance_cpu_collect.py consolidate --sf 10 --cap-seconds 100 --slow-seconds 10 --profile-winners-only
 python3 experiments/gpu/compare/performance_cpu_collect.py cleanup --sf 10
+# Parallel protocol: complete SF0.1 exactness first, then time SF1/SF10.
+# Run serially; do not overlap builds or measurements:
+for sf in 0.1 1 10; do
+  for threads in 1 24; do
+    python3 experiments/gpu/compare/performance_cpu_collect.py all --par --threads "$threads" --sf "$sf" --runs 5 --cap-seconds 100
+  done
+done
 python3 experiments/gpu/compare/performance_report.py
 ```
 
@@ -164,17 +248,22 @@ DuckDB reproduction: `python3 experiments/gpu/compare/performance_duck.py`.
 Speedup = comparator total / GPU total; **greater than 1× favors GPU**. The geometric mean is `exp(mean(log(comparator_ms / gpu_ms)))`, equally weighting queries. The denominator counts common exact GPU queries with a completed numeric comparator measurement. h14 is excluded, as are unavailable/timed-out measurements; a timeout's elapsed wall time is never included. Different denominator sets are not directly comparable aggregate rankings. **Uninstrumented CPU comparisons are primary**; profile comparisons only describe the phase-table measurements.
 
 '''
+    common_conclusion = '''## Common-set parallel speedups
+
+These summaries use the **same completed exact query set for CPU-default, CPU-par t1/t24 and DuckDB t1/t24** at each scale. GPU common-set summaries intersect that set with completed exact GPU results. h14 may participate in CPU/DuckDB comparisons but never GPU comparisons. Missing, failed, timed-out and zero-resolution timings are excluded from geometric means; no capped wall duration is substituted. Each JSON summary retains its query list. Speedup is numerator / denominator, so **greater than 1× favors the named denominator**. The historical pairwise GPU summaries above remain available and retain their original CPU metrics.
+
+'''
     slower = []
     for sf in [1, 10]:
         group = [r for r in comparisons if r['sf'] == sf and r['gpu_exact']]
-        for field in ['duckdb_t1_ms', 'duckdb_t24_ms', 'cpu_le_uninstrumented_total_ms', 'cpu_advised_uninstrumented_total_ms', 'cpu_default_uninstrumented_total_ms']:
+        for field in ['duckdb_t1_ms', 'duckdb_t24_ms', 'cpu_le_uninstrumented_total_ms', 'cpu_advised_uninstrumented_total_ms', 'cpu_default_uninstrumented_total_ms', 'cpu_par_t1_uninstrumented_total_ms', 'cpu_par_t24_uninstrumented_total_ms']:
             names = [r['query'] for r in group if r[field] is not None and r[field] < r['gpu_total_ms']]
             slower.append(f"- SF{sf}, {field}: " + (', '.join(names) if names else 'none among completed measurements') + '.')
-    report = intro + '\n\n'.join(sections) + '\n\n' + conclusion + means + '\n\n## Queries where GPU is slower\n\n' + '\n'.join(slower) + '''
+    report = intro + '\n\n'.join(sections) + '\n\n' + conclusion + means + '\n\n' + common_conclusion + common_means + '\n\n## Queries where GPU is slower\n\n' + '\n'.join(slower) + '''
 
 h02 includes host fallback/intermediate publication; h11 and h01 spend substantial GPU time in grouping/reduction/publication. These phase allocations are not hardware-counter diagnoses: occupancy, bandwidth and cache misses are not inferred. Differences near DuckDB's 1 ms timer resolution should not be treated as precise rankings.
 
-Machine-readable outputs: [comparison TSV](performance_comparison.tsv), [speedups JSON](performance_speedups.json), [CPU SF1](performance_cpu_sf1.json), [CPU SF10](performance_cpu_sf10.json), [GPU summary](performance_gpu_summary.json). Raw CPU measurement artifacts are under `performance_cpu_raw/sf1` and `performance_cpu_raw/sf10`.
+Machine-readable outputs: [comparison TSV](performance_comparison.tsv), [speedups JSON](performance_speedups.json), [CPU SF1](performance_cpu_sf1.json), [CPU SF10](performance_cpu_sf10.json), [GPU summary](performance_gpu_summary.json). Retained raw CPU measurement artifacts are under `performance_cpu_raw/sf1` and `performance_cpu_raw/sf10`. Parallel JSON/TSV inputs are `performance_cpu_par_t{1,24}_sf{0.1,1,10}.{json,tsv}`, with per-thread raw artifacts under `performance_cpu_raw/par/t{1,24}/sf{0.1,1,10}`. Speedups JSON retains historical `results` and adds `common_results` with explicit numerator, denominator, query lists and counts.
 '''
     (OUT / 'performance_report.md').write_text(report)
     print(means)
