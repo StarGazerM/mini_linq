@@ -123,6 +123,7 @@ pub fn sources_with<'a>(
         active_prefixes: BTreeMap::new(),
         consumer: None,
         input: None,
+        partitioned: false,
     };
     printer.certify_host_sets(module);
     let definitions = &module.physical.program.definitions;
@@ -183,6 +184,7 @@ impl<'a> RowEmitter<'a> {
                 consumer: None,
                 active_prefixes: BTreeMap::new(),
                 input: None,
+                partitioned: false,
             },
         }
     }
@@ -207,6 +209,18 @@ impl<'a> RowEmitter<'a> {
         let result = self.printer.produce(name, definition);
         self.printer.consumer = previous;
         self.printer.input = previous_input;
+        result
+    }
+
+    /// Respect a target-owned input partition rather than reopening its host.
+    pub fn operator_in_partition(
+        &mut self,
+        name: &str,
+        input: Option<(String, TokenStream)>,
+    ) -> syn::Result<TokenStream> {
+        let previous = std::mem::replace(&mut self.printer.partitioned, true);
+        let result = self.operator(name, input);
+        self.printer.partitioned = previous;
         result
     }
 
@@ -325,6 +339,7 @@ struct Printer<'a> {
     consumer: Option<String>,
     active_prefixes: BTreeMap<String, TokenStream>,
     input: Option<(String, TokenStream)>,
+    partitioned: bool,
 }
 impl<'a> std::ops::Deref for Printer<'a> {
     type Target = Context<'a>;

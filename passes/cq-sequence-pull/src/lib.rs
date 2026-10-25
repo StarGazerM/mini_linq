@@ -362,7 +362,11 @@ impl<'a> Emitter<'a> {
         };
         // The input stream is separate from its retained keyed representation:
         // an operator may scan and probe the same stored result.
-        let rows = self.adapters.operator(&result, operand)?;
+        let rows = if partition {
+            self.adapters.operator_in_partition(&result, operand)?
+        } else {
+            self.adapters.operator(&result, operand)?
+        };
         let rows = self.context().profile_stream(&result, rows);
         // Physical fan-out adapters already flatten their row iterator. Rewrap
         // only an expanding constructor: Compact consumes membership directly,
@@ -932,7 +936,7 @@ impl<'a> Emitter<'a> {
         let rows = if self.owned_answer {
             rows
         } else if self.pull {
-            if context.bound {
+            if context.bound || value.stored {
                 quote!(::core::iter::IntoIterator::into_iter(
                     ::core::iter::Iterator::collect::<::std::vec::Vec<_>>(#rows)))
             } else {

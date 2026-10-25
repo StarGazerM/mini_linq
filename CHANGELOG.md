@@ -16,6 +16,10 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   canonical sets. PL-Cost charges key routing and bucket publication before
   selecting routed providers; eager indexes keep singleton payloads inline,
   and adaptive membership's immutable fallback keys support shared task reads.
+  Named single-use canonical inputs move inside checked group-key partitions;
+  global collectives no longer inherit fictitious parallel span from flattened
+  contiguous tiles. Primitive work counters remain repeatable; concurrent
+  retained-memory peaks are reported as scheduler-dependent observations.
 - Legacy GPU Datalog workspace removed.
 - Retire Datalog-side hooks kept only for the (already broken) legacy GPU
   Datalog bridge: `KeyRepresentation`, `LayoutRealization`, device-owned

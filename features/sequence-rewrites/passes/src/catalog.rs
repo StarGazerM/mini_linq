@@ -143,6 +143,8 @@ pub fn select_from_catalog(
                     && required.iter().all(|capability| token.capabilities.contains(capability))
             }).min_by_key(|token| match &entry.structure {
                 Structure::Built { keyed, .. } => token.ty != keyed.ty,
+                Structure::KeySet { ty, .. } => token.ty != *ty,
+                Structure::JoinFilter { filter, .. } => token.ty != filter.ty,
                 _ => true,
             }).map(|token| &token.ty)
         }.ok_or_else(|| syn::Error::new(

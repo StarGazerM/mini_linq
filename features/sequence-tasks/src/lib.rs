@@ -182,12 +182,17 @@ pub fn select_providers(
     // transient retype can invalidate obligations such as exact join filters.
     let mut native = catalog.clone();
     for entry in &source.structures.structures.entries {
-        if let cq_lang_sequence::structures::Structure::Built { keyed, .. } = &entry.structure
-            && let Some(token) = catalog.providers.iter().find(|token|
-                cq_sequence_plan::matches_type(&token.ty, &keyed.ty))
+        let ty = match &entry.structure {
+            cq_lang_sequence::structures::Structure::Built { keyed, .. } => &keyed.ty,
+            cq_lang_sequence::structures::Structure::KeySet { ty, .. } => ty,
+            cq_lang_sequence::structures::Structure::JoinFilter { filter, .. } => &filter.ty,
+            _ => continue,
+        };
+        if let Some(token) = catalog.providers.iter().find(|token|
+                cq_sequence_plan::matches_type(&token.ty, ty))
         {
             let mut token = token.clone();
-            token.ty = keyed.ty.clone();
+            token.ty = ty.clone();
             native.providers.push(token);
         }
     }

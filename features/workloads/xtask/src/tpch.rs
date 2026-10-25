@@ -342,7 +342,13 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
                 configs.push(serde_json::json!({"configuration":config,"status":"timeout"}));
                 continue;
             };
-            if repeated != counted {
+            // Parallel task lifetimes overlap according to the scheduler, so
+            // retained-memory high water is an observation, not a work count.
+            // All primitive work and final retained bytes must still agree.
+            if counted.as_object().zip(repeated.as_object()).is_none_or(|(left, right)|
+                left.len() != right.len() || left.iter().any(|(name, value)|
+                    name != "bytes_retained_peak" && right.get(name) != Some(value)))
+            {
                 return Err("separate deterministic counting runs disagree".into());
             }
             if measured["instrumented"].as_bool() != Some(false)
