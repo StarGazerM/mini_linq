@@ -52,36 +52,32 @@ fn node(name: &str, collaborative: bool, dynamic: bool, children: Vec<LevelNode>
 }
 
 fn sequential() -> Machine {
-    Machine {
-        layout: None,
-        name: syn::parse_quote!(target),
-        items: 1,
-        root: node("host", false, false, vec![]),
-    }
+    Machine { key_partition_threshold: 65536, layout: None,
+    name: syn::parse_quote!(target),
+    items: 1,
+    root: node("host", false, false, vec![]), }
 }
 
 fn gpu() -> Machine {
-    Machine {
-        layout: None,
-        name: syn::parse_quote!(target),
-        items: 4,
-        root: node(
-            "host",
+    Machine { key_partition_threshold: 65536, layout: None,
+    name: syn::parse_quote!(target),
+    items: 4,
+    root: node(
+        "host",
+        false,
+        false,
+        vec![node(
+            "device",
             false,
-            false,
+            true,
             vec![node(
-                "device",
-                false,
+                "block",
                 true,
-                vec![node(
-                    "block",
-                    true,
-                    false,
-                    vec![node("lane", false, false, vec![])],
-                )],
+                false,
+                vec![node("lane", false, false, vec![])],
             )],
-        ),
-    }
+        )],
+    ), }
 }
 
 fn grade(program: &mut Program, grades: proc_macro2::TokenStream) {
@@ -572,22 +568,20 @@ fn ungraded_programs_default_to_host_only() {
 
 #[test]
 fn leaf_flatten_is_sequential_but_parent_fold_needs_collaboration() {
-    let tasks = Machine {
-        layout: None,
-        name: syn::parse_quote!(target),
-        items: 1,
-        root: node(
-            "host",
+    let tasks = Machine { key_partition_threshold: 65536, layout: None,
+    name: syn::parse_quote!(target),
+    items: 1,
+    root: node(
+        "host",
+        false,
+        false,
+        vec![node(
+            "pool",
             false,
             false,
-            vec![node(
-                "pool",
-                false,
-                false,
-                vec![node("task", false, false, vec![])],
-            )],
-        ),
-    };
+            vec![node("task", false, false, vec![])],
+        )],
+    ), };
     let mut p = lookup_program(quote!(a = flatten lookup r [a] rows l;));
     grade(&mut p, quote!(a at pool.task;));
     assert!(check_grading(&p, &tasks).unwrap().collectives.is_empty());
@@ -1195,7 +1189,7 @@ fn shared_choices_reuse_provider_obligations_without_repeating_reads() {
 fn key_pool() -> Machine {
     let mut pool = node("pool", false, true, vec![node("task", false, false, vec![])]);
     pool.width = Some(4);
-    Machine { root: node("host", false, false, vec![pool]), ..sequential() }
+    Machine { key_partition_threshold: 65536, root: node("host", false, false, vec![pool]), ..sequential() }
 }
 
 #[test]
@@ -1239,6 +1233,28 @@ fn key_partition_rejects_missing_ancestor_store_and_invalid_width() {
     let mut machine = key_pool();
     machine.root.children[0].width = Some(8);
     reject_grade(&p, &machine, "BE-KeyPart");
+}
+
+#[test]
+fn runtime_provider_cover_keeps_routing_and_grades_both_branches() {
+    let mut p = lookup_program(quote!(
+        input = store rows r;
+        provider = store choose [
+            len input < 65536 => partition_k[a](1) input,
+            else => partition_k[a](4) input
+        ];
+        out = flatten lookup r[a] rows l;
+    ));
+    grade(&mut p, quote!(input at host; provider at pool; out at host;));
+    let facts = check_grading(&p, &key_pool()).unwrap();
+    assert_eq!(facts.shapes["provider"][0], Len::Unknown(None));
+    assert_eq!(p, syn::parse2(p.to_token_stream()).unwrap());
+
+    let mut wrong_width = key_pool();
+    wrong_width.root.children[0].width = Some(8);
+    reject_grade(&p, &wrong_width, "BE-KeyPart");
+    grade(&mut p, quote!(input at pool; provider at pool; out at host;));
+    reject_grade(&p, &key_pool(), "BE-KeyPart");
 }
 
 #[test]

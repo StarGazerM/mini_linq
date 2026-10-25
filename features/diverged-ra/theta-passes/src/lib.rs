@@ -83,19 +83,17 @@ pub fn sequence(input: TokenStream) -> TokenStream {
 }
 
 fn sequential_machine() -> cq_lang_sequence::Machine {
-    cq_lang_sequence::Machine {
-        layout: None,
-        name: syn::parse_quote!(sequential),
-        items: 1,
-        root: cq_lang_sequence::LevelNode {
-            shared_bytes: None,
-            name: syn::parse_quote!(host),
-            collaborative: false,
-            dynamic: false,
-            width: None,
-            children: vec![],
-        },
-    }
+    cq_lang_sequence::Machine { key_partition_threshold: 65536, layout: None,
+    name: syn::parse_quote!(sequential),
+    items: 1,
+    root: cq_lang_sequence::LevelNode {
+        shared_bytes: None,
+        name: syn::parse_quote!(host),
+        collaborative: false,
+        dynamic: false,
+        width: None,
+        children: vec![],
+    }, }
 }
 
 /// Check host-only grading without changing authored Sequence decisions.

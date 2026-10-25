@@ -790,3 +790,57 @@ fn membership_projected_probes_keep_native_keysets() {
         entry.name == "r" && matches!(&entry.structure,
             cq_lang_sequence::structures::Structure::Built { keyed, .. } if keyed.ty == native)));
 }
+
+#[test]
+fn adaptive_provider_guard_selects_identity_and_routed_builds_at_runtime() {
+    use cq_lang_sequence::{Guard, Len, Term};
+    let mut program = routed_provider_program(quote::quote!(a,b), false);
+    let part = |parts| Term::PartitionK {
+        keys: vec![syn::parse_quote!(a), syn::parse_quote!(b)],
+        parts,
+        inner: Box::new(Term::Ref(syn::parse_quote!(provider_input))),
+    };
+    program.sequence.definitions.iter_mut().find(|definition| definition.name == "provider").unwrap().term =
+        Term::Store { capacity: None, inner: Box::new(Term::Choose(vec![
+            (Guard::Lt(Len::Input("provider_input".into()), 4), part(1)),
+            (Guard::Else, part(64)),
+        ])) };
+    let facts = check_grading(&program, &machine()).unwrap();
+    let mut expression = translate(&program, &facts).unwrap();
+    struct ObserveBuild;
+    impl VisitMut for ObserveBuild {
+        fn visit_expr_call_mut(&mut self, call: &mut syn::ExprCall) {
+            visit_mut::visit_expr_call_mut(self, call);
+            if matches!(call.func.as_ref(), syn::Expr::Path(path)
+                if path.path.segments.last().is_some_and(|segment| segment.ident == "build_from_parts_with_router"))
+            {
+                let parts = call.args.first().unwrap().clone();
+                *call.args.first_mut().unwrap() = syn::parse_quote!(observe_parts(#parts));
+            }
+        }
+    }
+    ObserveBuild.visit_expr_mut(&mut expression);
+    run_partition_fixture(quote::quote! {
+        static PARTS: ::std::sync::atomic::AtomicUsize = ::std::sync::atomic::AtomicUsize::new(0);
+        fn observe_parts<R>(parts: &[Vec<R>]) -> &[Vec<R>] {
+            PARTS.store(parts.len(), ::std::sync::atomic::Ordering::Relaxed);
+            parts
+        }
+        fn main() {
+            let probes = [(1,2),(3,4)];
+            let values = [(1,2,8),(3,4,9),(1,2,10),(3,4,11),(1,2,12)];
+            for threads in [1,4] {
+                let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+                for length in [0,3,4,5] {
+                    let L = probes.as_slice();
+                    let R = &values[..length];
+                    let actual: Vec<_> = pool.install(|| (#expression).map(|(a,b,c)| (*a,*b,*c)).collect());
+                    let expected: Vec<_> = L.iter().flat_map(|&(a,b)|
+                        R.iter().filter_map(move |&(ra,rb,c)| (a==ra && b==rb).then_some((a,b,c)))).collect();
+                    assert_eq!(actual, expected);
+                    assert_eq!(PARTS.load(::std::sync::atomic::Ordering::Relaxed), if length < 4 { 1 } else { 64 });
+                }
+            }
+        }
+    });
+}

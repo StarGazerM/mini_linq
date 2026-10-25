@@ -567,6 +567,12 @@ impl Evaluator<'_> {
             }
             Term::PartitionK { parts, inner, .. } => {
                 let mut fact = self.term(inner, owner, level, tile)?;
+                if *parts == 1 {
+                    // The singleton cover is an identity view: native provider
+                    // Build has no hashing, routing pass, or bucket publication.
+                    fact.layers.push(Layer::KeyPart { parts: 1, lanes: 1 });
+                    return Ok(fact);
+                }
                 let size = fact.size.clone();
                 let collective = self.program.sequence.definitions.iter()
                     .find(|definition| symbol_name(&definition.name) == owner)
@@ -916,19 +922,17 @@ mod tests {
     use quote::quote;
 
     fn sequential() -> Machine {
-        Machine {
-            layout: None,
-            name: syn::parse_quote!(target),
-            items: 1,
-            root: LevelNode {
-                shared_bytes: None,
-                name: syn::parse_quote!(host),
-                collaborative: false,
-                dynamic: false,
-                width: None,
-                children: Vec::new(),
-            },
-        }
+        Machine { key_partition_threshold: 65536, layout: None,
+        name: syn::parse_quote!(target),
+        items: 1,
+        root: LevelNode {
+            shared_bytes: None,
+            name: syn::parse_quote!(host),
+            collaborative: false,
+            dynamic: false,
+            width: None,
+            children: Vec::new(),
+        }, }
     }
 
     fn program(body: proc_macro2::TokenStream) -> Program {

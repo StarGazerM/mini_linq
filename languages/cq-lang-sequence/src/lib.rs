@@ -159,6 +159,9 @@ pub struct Machine {
     pub name: Ident,
     /// Preferred per-lane item count; the planner also considers one item.
     pub items: usize,
+    /// Minimum published input rows for automatic routed provider builds.
+    /// A positive target parameter, independent of cardinality estimates or workers.
+    pub key_partition_threshold: usize,
     pub root: LevelNode,
     /// Target-owned storage layout for one checked dispatch's resource demands.
     /// The language derives the shape; the machine alone assigns byte sizes.

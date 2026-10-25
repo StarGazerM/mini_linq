@@ -11,24 +11,7 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, catalog: &Catalog) -
                 capability,
                 ty,
                 ..
-            } => {
-                let levels = provider_levels(analysis, provider);
-                catalog.providers.iter().any(|token| {
-                    matches_type(&token.ty, ty)
-                        && token.elements.as_ref().is_none_or(|accepted| {
-                            analysis.structures.layouts[provider].iter().all(|column| {
-                                accepted.iter().any(|ty| {
-                                    matches_type(
-                                        ty,
-                                        &analysis.structures.physical.rows[provider].types[column],
-                                    )
-                                })
-                            })
-                        })
-                        && token.capabilities.contains(capability)
-                        && levels.iter().all(|level| token.levels.contains(level))
-                })
-            }
+            } => provider_available(analysis, catalog, provider, capability, ty),
             Obligation::Canon { result, ty } => {
                 let levels = result_levels(program, analysis, result, true);
                 catalog.canons.iter().any(|token| {
@@ -64,6 +47,30 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, catalog: &Catalog) -
         }
     }
     Ok(())
+}
+
+/// Check the complete target promise, including scheduled read levels and row
+/// element types. A matching family name alone does not authorize retyping.
+pub(crate) fn provider_available(
+    analysis: &Analysis,
+    catalog: &Catalog,
+    provider: &str,
+    capability: &cq_lang_sequence::Capability,
+    ty: &Type,
+) -> bool {
+    let levels = provider_levels(analysis, provider);
+    catalog.providers.iter().any(|token| {
+        matches_type(&token.ty, ty)
+            && token.elements.as_ref().is_none_or(|accepted| {
+                analysis.structures.layouts[provider].iter().all(|column| {
+                    accepted.iter().any(|ty| {
+                        matches_type(ty, &analysis.structures.physical.rows[provider].types[column])
+                    })
+                })
+            })
+            && token.capabilities.contains(capability)
+            && levels.iter().all(|level| token.levels.contains(level))
+    })
 }
 
 fn result_levels(

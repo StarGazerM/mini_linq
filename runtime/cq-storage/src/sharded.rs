@@ -39,6 +39,7 @@ impl<K: ?Sized, F: Fn(&K, usize) -> usize> Router<K> for F {
 pub struct Sharded<I, F = FullKey> {
     shards: Vec<I>,
     router: F,
+    release: fn(&mut Vec<I>),
 }
 
 impl<I> Sharded<I> {
@@ -58,7 +59,7 @@ impl<I, F> Sharded<I, F> {
     /// Wrap parts with the routing policy used to partition their source.
     pub fn from_parts_with_router(shards: Vec<I>, router: F) -> Self {
         assert!(!shards.is_empty(), "routed provider needs positive partition count");
-        Self { shards, router }
+        Self { shards, router, release: Vec::clear }
     }
 
     /// Build already routed parts and retain the lookup-key projection policy.
@@ -66,6 +67,10 @@ impl<I, F> Sharded<I, F> {
         parts: Vec<Vec<(K, V)>>, router: F,
     ) -> Self
     where I: Build<std::vec::IntoIter<(K, V)>> + Send {
+        if parts.len() == 1 {
+            let part = parts.into_iter().next().expect("singleton cover");
+            return Self::from_parts_with_router(vec![I::build(part.into_iter())], router);
+        }
         #[cfg(any(feature = "counters", feature = "operator-timing"))]
         let context = crate::counters::TaskContext::capture();
         Self::from_parts_with_router(
@@ -76,7 +81,35 @@ impl<I, F> Sharded<I, F> {
                 { I::build(part.into_iter()) }
             }).collect(),
             router,
-        )
+        ).with_parallel_release()
+    }
+
+    /// Build each recorded row part directly, without first copying all pairs
+    /// into another set of buffers. A singleton cover is a serial host build.
+    pub fn build_from_parts_with_router<'a, R: Sync>(
+        parts: &'a [Vec<R>],
+        build: impl Fn(&'a [R]) -> I + Sync + Send,
+        router: F,
+    ) -> Self
+    where
+        I: Send,
+    {
+        if parts.len() == 1 {
+            return Self::from_parts_with_router(vec![build(&parts[0])], router);
+        }
+        #[cfg(any(feature = "counters", feature = "operator-timing"))]
+        let context = crate::counters::TaskContext::capture();
+        Self::from_parts_with_router(parts.par_iter().map(|part| {
+            #[cfg(any(feature = "counters", feature = "operator-timing"))]
+            { context.run(|| build(part)) }
+            #[cfg(not(any(feature = "counters", feature = "operator-timing")))]
+            { build(part) }
+        }).collect(), router).with_parallel_release()
+    }
+
+    fn with_parallel_release(mut self) -> Self where I: Send {
+        self.release = release_parallel::<I>;
+        self
     }
     /// Number of independently built indexes fixed by the plan.
     pub fn shard_count(&self) -> usize {
@@ -85,7 +118,58 @@ impl<I, F> Sharded<I, F> {
 
     #[inline]
     fn shard<K: ?Sized>(&self, key: &K) -> &I where F: Router<K> {
-        &self.shards[self.router.route(key, self.shards.len())]
+        if self.shards.len() == 1 {
+            &self.shards[0]
+        } else {
+            &self.shards[self.router.route(key, self.shards.len())]
+        }
+    }
+}
+
+impl<I, F> Drop for Sharded<I, F> {
+    fn drop(&mut self) {
+        // The constructor installs this only where Send was proved. Manual
+        // from_parts wrappers retain their ordinary serial destruction.
+        (self.release)(&mut self.shards);
+    }
+}
+
+fn release_parallel<I: Send>(shards: &mut Vec<I>) {
+    if shards.len() <= 1 || rayon::current_num_threads() == 1 {
+        shards.clear();
+        return;
+    }
+    #[cfg(any(feature = "counters", feature = "operator-timing"))]
+    let context = crate::counters::TaskContext::capture();
+    std::mem::take(shards).into_par_iter().for_each(|shard| {
+        #[cfg(any(feature = "counters", feature = "operator-timing"))]
+        { context.run(|| drop(shard)); }
+        #[cfg(not(any(feature = "counters", feature = "operator-timing")))]
+        { drop(shard); }
+    });
+}
+
+impl<K, V, F> Sharded<Index<K, V>, F> {
+    pub fn keys(&self) -> impl Iterator<Item = &K> {
+        self.shards.iter().flat_map(Index::keys)
+    }
+    pub fn len(&self) -> usize {
+        self.shards.iter().map(Index::len).sum()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.shards.iter().all(Index::is_empty)
+    }
+}
+
+impl<K: Ord + Copy, V: Copy, C: crate::KeyCodec<K>, F> Sharded<crate::SortedRun<K, V, C>, F> {
+    pub fn keys(&self) -> impl Iterator<Item = &K> {
+        self.shards.iter().flat_map(crate::SortedRun::keys)
+    }
+    pub fn len(&self) -> usize {
+        self.shards.iter().map(crate::SortedRun::len).sum()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.shards.iter().all(crate::SortedRun::is_empty)
     }
 }
 
@@ -128,6 +212,9 @@ routed_read!([K, V] std::collections::BTreeMap<K, Vec<V>>);
 #[inline]
 pub fn route_index<K: Hash + ?Sized>(key: &K, count: usize) -> usize {
     assert!(count > 0, "key partition count must be positive");
+    if count == 1 {
+        return 0;
+    }
     crate::count!(hash_computations);
     (ahash::RandomState::with_seeds(0, 0, 0, 0).hash_one(key) % count as u64) as usize
 }
@@ -227,6 +314,45 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn identity_cover_builds_on_host_and_never_routes_reads() {
+        let host = std::thread::current().id();
+        let parts = vec![vec![(1u32, 7u32), (1, 8), (2, 9)]];
+        let provider = Sharded::build_from_parts_with_router(
+            &parts,
+            |rows| {
+                assert_eq!(std::thread::current().id(), host);
+                Index::build(rows.iter().copied())
+            },
+            |_: &u32, _: usize| -> usize { panic!("identity cover must not hash-route") },
+        );
+        assert_eq!(provider.shard_count(), 1);
+        assert!(provider.contains(&1));
+        assert_eq!((&provider).lookup(&1).collect::<Vec<_>>(), vec![7, 8]);
+        let mut keys = provider.keys().copied().collect::<Vec<_>>();
+        keys.sort_unstable();
+        assert_eq!(keys, [1, 2]);
+        assert_eq!(provider.len(), 2);
+    }
+
+    #[test]
+    fn parallel_provider_release_joins_all_native_destructors() {
+        use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+        struct Native(Arc<AtomicUsize>);
+        impl Drop for Native {
+            fn drop(&mut self) {
+                assert!(rayon::current_thread_index().is_some());
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        let count = Arc::new(AtomicUsize::new(0));
+        rayon::ThreadPoolBuilder::new().num_threads(4).build().unwrap().install(|| {
+            let parts: Vec<Vec<u8>> = (0..64).map(|_| Vec::new()).collect();
+            let provider = Sharded::build_from_parts_with_router(&parts, |_| Native(count.clone()), FullKey);
+            drop(provider);
+        });
+        assert_eq!(count.load(Ordering::Relaxed), 64);
+    }
     #[test]
     fn singleton_buckets_do_not_allocate_payload_vectors() {
         let index = Index::build((0..128).map(|key| (key, key * 2)));

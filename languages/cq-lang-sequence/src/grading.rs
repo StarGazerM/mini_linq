@@ -473,7 +473,9 @@ impl<'a> Checker<'a> {
                 let pool = self.levels.iter().enumerate().filter(|(_, candidate)|
                     self.levels[level].path.starts_with(&candidate.path)
                     && candidate.path.len() > 1 && !candidate.model.collaborative
-                    && candidate.model.width == Some(*parts) && !candidate.children.is_empty())
+                    && (*parts == 1 || candidate.model.width == Some(*parts))
+                    && candidate.model.width.is_some_and(|width| width > 0)
+                    && !candidate.children.is_empty())
                     .max_by_key(|(_, candidate)| candidate.path.len())
                     .map(|(index, _)| index)
                     .ok_or_else(|| self.error(owner, "BE-KeyPart: partition count must match a separated distributing pool"))?;
@@ -705,6 +707,13 @@ impl<'a> Checker<'a> {
             } => self.unknown_length(inner),
             Term::Union(arms) => arms.iter().any(|arm| self.unknown_length(arm)),
             Term::Choose(arms) => {
+                // A choice of fixed covers reads already published rows. Its
+                // outer part count varies, but each branch's allocation is known.
+                if !arms.is_empty() && arms.iter().all(|(_, arm)|
+                    matches!(arm, Term::PartitionK { .. }))
+                {
+                    return false;
+                }
                 // The contract records joins of unequal branch lengths.
                 arms.iter().any(|(_, arm)| self.unknown_length(arm))
                     || arms.windows(2).any(|pair| pair[0].1 != pair[1].1)
@@ -783,6 +792,7 @@ impl<'a> Checker<'a> {
         }
     }
 
+
     fn nested_parts(&self, term: &Term) -> bool {
         match term {
             Term::Tile { .. } | Term::PartitionK { .. } => true,
@@ -800,6 +810,8 @@ impl<'a> Checker<'a> {
             Term::Canon(inner) | Term::Store { inner, .. } => self.key_partitioned(inner),
             Term::Ref(name) => self.definitions.get(&symbol_name(name))
                 .is_some_and(|&index| self.key_partitioned(&self.program.sequence.definitions[index].term)),
+            Term::Choose(arms) => !arms.is_empty()
+                && arms.iter().all(|(_, arm)| self.key_partitioned(arm)),
             _ => false,
         }
     }

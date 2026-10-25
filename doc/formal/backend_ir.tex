@@ -157,7 +157,7 @@ equal keys must always route together. Empty parts are retained.
 \begin{mathpar}
 \Rule{BE-KeyPart}{P>0\quad K\subseteq V\quad
  t\text{ reads a store at a strict ancestor of the separated pool}\quad
- P=\mathsf{width}(\mathsf{pool})}
+ P\in\{1,\mathsf{width}(\mathsf{pool})\}}
  {\mathsf{partition}_{K,P}(t)=[B_0,\ldots,B_{P-1}]
  \quad\biguplus_{p<P}B_p=B
  \quad K(\mathrm{supp}\,B_p)\cap K(\mathrm{supp}\,B_q)=\varnothing\ (p\ne q)}
@@ -185,6 +185,7 @@ equal keys must always route together. Empty parts are retained.
  {\mathsf{lookup}_{\mathsf{build}_L(B)}(l)
  =\mathsf{lookup}_{I_{r_P(h(l))}}(l)}
 \end{mathpar}
+The case $P=1$ is the identity cover $B_0=B$, with no hash routing.
 Here equalities forget enumeration order but preserve bag multiplicities;
 canon compares complete valuations, never just routing or aggregate columns.
 The group law uses the same complete-valuation canonicalization and declared
@@ -411,8 +412,45 @@ span, stores and dispatches. An inversion is a Lookup evaluated after an
 upstream Expand in the same pipeline; retained references begin new pipelines.
 Bounds and coefficient dominance establish comparisons; unresolved
 comparisons, like equal costs, retain the earlier candidate.
+For an eligible native exact-key provider Store, the automatic schedule retains
+an explicit runtime BE-Choose before this cost comparison: a positive machine
+parameter $\theta$ selects $\mathsf{partition}_{K,1}(t)$ when the published
+input length is below $\theta$, and $\mathsf{partition}_{K,P}(t)$ otherwise.
+Written guards use $\mathsf{len}(t)$ (the Sequence \texttt{Len::Input} name of
+the prior publication), not a cardinality estimate. Both arms retain the same
+routing keys and provider token; BE-Choose joins their unequal outer lengths.
+The one-part identity cover builds the native provider without hashing; the
+other arm builds $P$ routed providers. Fixed-cover allocations are available
+in each branch, so differing part counts alone do not require Store capacity.
+The rewrite redirects every ordinary row reference and written length guard
+on the original provider definition to the new raw publication, preserving
+its flat carrier and ancestor extent. Lookup provider identities retain the
+retyped token. Consequently a derived provider sharing the original rows
+does not inherit a spurious extra cover level from an earlier provider build.
+Force advice selects the fixed $P$-part schedule without a guard; forbid and
+authored grades retain the native schedule. PL-Cost compares the remaining
+collective and decomposition choices, never discards the automatic provider
+choice for lack of a provable cardinality, and never overrides these policies.
+Provider selection is unique per physical provider, not per Sequence alias:
+an explicitly forced eligible publication wins, otherwise the last eligible
+publication preceding every keyed reader is selected without reordering definitions.
+This dominance premise is checked from recorded provider reads; forced or replayed
+advice that moves the sole provider build after a reader is rejected. A forbid on
+any alias retains the common native type; conflicting forced aliases are rejected.
+Checked replay rejects retyping an already routed provider, rather than
+constructing a nested routed family.
+Provider eligibility is evaluated after decomposition against the scheduled
+grading obligations. If segmentation or distributed lookup requires a range
+cursor, the exact-only routed family is ineligible and the native provider is
+retained; no runtime choice weakens a range or ordered-access requirement.
+The publication must carry a flat valuation containing every routing key;
+native layouts that reconstruct an omitted constant key do not satisfy this
+premise. The routed token must cover every scheduled read level, capability,
+and carried element type, not only match the provider family's type name.
 Resource recovery first preserves the machine's preferred item count and
 distributing width, trying nested segmentation before reducing either.
+Local offsets segmentation is considered only at collaborative grades:
+its inline Store cannot satisfy BE-Boundary at a separated task or pool.
 At each geometry PL-Cost compares admissible segmented and plain candidates;
 strict improvement replaces the earlier candidate, preserving stable ties.
 Dispatch splitting is a last resort, never a substitute for an admissible

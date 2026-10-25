@@ -138,6 +138,7 @@ mod tests {
             "adaptive(filtered, published, 100000)",
             "adaptive(filtered, published, 100000, select false)",
             "key_partition(grouped, published, [region, year], 8)",
+            "key_partition(provider, published, [key], 8, threshold 65536)",
         ] {
             let advice: Advice = syn::parse_str(invocation).unwrap();
             assert_eq!(advice, syn::parse2(advice.to_token_stream()).unwrap());

@@ -27,13 +27,15 @@ pub struct Config {
     pub grain: usize,
     /// Logical partition count fixed before execution, independent of workers.
     pub partitions: usize,
+    /// Published rows at which the planner records routed-provider construction.
+    pub key_partition_threshold: usize,
 }
 
 impl Default for Config {
     fn default() -> Self {
         // A routing task fills about 1K rows per logical bucket, avoiding a
         // tiny allocation for every (1K-row chunk, partition) pair.
-        Self { threads: None, grain: 64 * 1024, partitions: 64 }
+        Self { threads: None, grain: 64 * 1024, partitions: 64, key_partition_threshold: 64 * 1024 }
     }
 }
 
@@ -50,7 +52,10 @@ pub fn machine() -> Machine {
 pub fn machine_with(config: Config) -> Machine {
     assert!(config.grain > 0, "task grain must be positive");
     assert!(config.threads != Some(0), "task thread count must be positive");
-    machine_with_width(config.partitions)
+    assert!(config.key_partition_threshold > 0, "provider partition threshold must be positive");
+    let mut machine = machine_with_width(config.partitions);
+    machine.key_partition_threshold = config.key_partition_threshold;
+    machine
 }
 
 /// Build a task machine with a fixed positive logical partition count.
@@ -60,6 +65,7 @@ pub fn machine_with_width(parts: usize) -> Machine {
         layout: None,
         name: syn::parse_quote!(tasks),
         items: 1,
+        key_partition_threshold: Config::default().key_partition_threshold,
         root: LevelNode {
             shared_bytes: None,
             name: syn::parse_quote!(host),
@@ -109,12 +115,15 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
         elements: None,
     });
     // Hash sharding retains exact probes, but not a shard's global ordering.
-    // Providers are published at the pool join and read by sequential tasks.
-    let task = vec![vec!["host".into(), "pool".into(), "task".into()]];
+    // The synchronous pool join publishes native memory to host and task readers.
     use cq_lang_sequence::{Capability, ProviderToken};
     for (ty, capabilities) in [
         (
             syn::parse_quote!(::cq_storage::sharded::Sharded<::cq_storage::HashSet<_>>),
+            vec![Capability::Membership],
+        ),
+        (
+            syn::parse_quote!(::cq_storage::sharded::Sharded<::cq_storage::AdaptiveKeySet<_, _, _>>),
             vec![Capability::Membership],
         ),
         (
@@ -155,13 +164,13 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
         catalog.providers.push(ProviderToken {
             ty: routed_ty,
             capabilities: capabilities.clone(),
-            levels: task.clone(),
+            levels: levels.clone(),
             elements: None,
         });
         catalog.providers.push(ProviderToken {
             ty,
             capabilities,
-            levels: task.clone(),
+            levels: levels.clone(),
             elements: None,
         });
     }
@@ -437,18 +446,49 @@ fn translate_mode(
                     }
                 }
             }
+            let routed_provider = output.result.as_ref().is_some_and(|result|
+                analysis.structures.built.get(result).is_some_and(|providers|
+                    providers.iter().any(|(_, ty)| matches!(ty, syn::Type::Path(path)
+                        if path.path.segments.last().is_some_and(|segment| segment.ident == "Sharded")))));
             if matches!(term, Term::Store { .. }) && output.depth == 0
                 && base_rows(term, program)
                 && output.result.as_ref().is_some_and(|result|
                     emitter.context().physical_analysis.hosts.contains_key(result)
-                    && analysis.structures.built.get(result).is_none_or(Vec::is_empty)
-                    && !analysis.structures.selections.contains_key(result))
+                    && (routed_provider || analysis.structures.built.get(result).is_none_or(Vec::is_empty))
+                    && !analysis.structures.selections.contains_key(result)
+                    && emitter.context().join_filter_ids(result).is_none()
+                    && matches!(&emitter.context().physical[result].operator,
+                        cq_lang_sequence::structures::physical::Operator::Rename(rename)
+                            if rename.constants.is_none()))
             {
                 // An immutable base relation is already resident storage. The
                 // checked Store publishes that borrow; it need not clone rows.
                 output.rows = child.expect("checked base store").rows.clone();
+                let scan = emitter.context().host_scan(output.result.as_ref().expect("base row provenance"));
+                emitter.publish_length(owner, quote!({
+                    let __cq_length_rows = #scan;
+                    let (__cq_minimum, __cq_maximum) = __cq_length_rows.size_hint();
+                    if __cq_maximum == ::core::option::Option::Some(__cq_minimum) {
+                        __cq_minimum
+                    } else {
+                        __cq_length_rows.count()
+                    }
+                }));
                 emitter.mark_target_published(owner);
-            } else if matches!(term, Term::Store { .. }) && partition_inputs.contains(owner) {
+            } else if output.depth == 0 && (partition_inputs.contains(owner) || routed_provider)
+                && let Term::Store { inner, .. } = term
+                && let Term::Ref(source) = inner.as_ref()
+                && emitter.alias_store(owner, &cq_lang_sequence::structures::symbol_name(source))
+            {
+                output.rows = child.expect("checked store alias").rows.clone();
+                if analysis.results.get(owner) == child.and_then(|value| value.result.as_ref())
+                    && let Some(binding) = stored_sources.get(&cq_lang_sequence::structures::symbol_name(source)).cloned()
+                {
+                    stored_sources.insert(owner.to_owned(), binding);
+                }
+            } else if matches!(term, Term::Store { .. }) && output.depth == 0
+                && (partition_inputs.contains(owner) || routed_provider)
+            {
                 let label = format!("{owner}.rows");
                 emitter.context_mut().profile_label(
                     &label, "ROWS_BUILD", "", output.result.iter().cloned().collect(),
@@ -467,6 +507,7 @@ fn translate_mode(
                 ));
                 emitter.context_mut().bound = true;
                 emitter.mark_target_published(owner);
+                emitter.publish_length(owner, quote!(#binding.len()));
                 output.rows = quote!(#binding.iter().cloned());
             } else if matches!(term, Term::Store { .. }) && output.depth == 1
                 && let Some(keys) = keyed::partition_keys(term, program)

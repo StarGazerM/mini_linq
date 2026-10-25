@@ -30,9 +30,9 @@ pub struct JoinFilterCandidate {
 
 /// Every admissible filter of `covering`, one per scalar `i64` key column:
 /// an eager probe or semijoin into a total single-level exact hash index or
-/// sorted run, whose unique keys supply the conservative filter, and whose left
-/// operand reaches a scan through an exclusive pipe spine of declarative
-/// selections, projections and the left operands of eager probes/semijoins,
+/// sorted run (including a checked routed family), whose unique keys supply
+/// the conservative filter, and whose left operand reaches a scan through an
+/// exclusive pipe spine of selections, projections and eager probes/semijoins,
 /// carrying the key column from the scan's lineage.
 pub fn join_filter_candidates(
     program: &Program,
@@ -67,19 +67,37 @@ pub fn join_filter_candidates(
         || facts.physical.modes[&build] != ModeKind::Let
         || !facts.physical.rows[&build].computed.is_empty()
         || facts.built_on(&build, &columns).is_none_or(|(ty, levels)| {
-            let sorted_run = matches!(ty, syn::Type::Path(path)
-                if path.qself.is_none()
-                    && path.path.segments.len() == 2
-                    && path.path.segments[0].ident == "cq_storage"
-                    && path.path.segments[1].ident == "SortedRun");
-            let eager_hash = matches!(ty, syn::Type::Path(path)
-                if path.qself.is_none()
+            let enumerable = |ty: &syn::Type| {
+                let syn::Type::Path(path) = ty else { return false };
+                path.qself.is_none() && (
+                    (path.path.segments.len() == 2
+                        && path.path.segments[0].ident == "cq_storage"
+                        && path.path.segments[1].ident == "SortedRun")
+                    || (path.path.segments.len() == 3
+                        && path.path.segments[0].ident == "cq_storage"
+                        && path.path.segments[1].ident == "sharded"
+                        && path.path.segments[2].ident == "Index")
+                )
+            };
+            let routed = match ty {
+                syn::Type::Path(path) if path.qself.is_none()
                     && path.path.segments.len() == 3
                     && path.path.segments[0].ident == "cq_storage"
                     && path.path.segments[1].ident == "sharded"
-                    && path.path.segments[2].ident == "Index");
-            levels != 1
-                || !(*ty == syn::parse_quote!(::cq_storage::HashIndex<'_, _, _>) || sorted_run || eager_hash)
+                    && path.path.segments[2].ident == "Sharded" => {
+                        match &path.path.segments[2].arguments {
+                            syn::PathArguments::AngleBracketed(arguments)
+                                if arguments.args.len() == 1 => {
+                                    matches!(&arguments.args[0], syn::GenericArgument::Type(inner)
+                                        if enumerable(inner))
+                                }
+                            _ => false,
+                        }
+                    }
+                _ => false,
+            };
+            levels != 1 || !(*ty == syn::parse_quote!(::cq_storage::HashIndex<'_, _, _>)
+                || enumerable(ty) || routed)
         })
     {
         return Vec::new();

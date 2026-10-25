@@ -7,6 +7,12 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Add checked runtime choices for Tasks provider builds using published input
+  length and a machine-supplied threshold, with authoritative force/forbid
+  advice. Singleton covers build and read native providers without routing;
+  routed covers build directly from row parts and release their providers in
+  the pool. Shared H01/H13 sources now carry dbgen key evidence through both
+  CPU and GPU pipelines, removing unnecessary complete-valuation canonicalization.
 - Preserve authored relational order and selection stages in the CPU Tasks
   configuration. Contiguous host tiles borrow input rows (positional tiles
   enumerate base-relative ranges); named stream adapters remain inside their

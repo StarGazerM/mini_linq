@@ -1,7 +1,7 @@
 //! Machine-selected collective and provider decomposition. Keyed groups route
 //! their keys; global groups route complete valuations before per-part Canon,
 //! or use contiguous tiles when BE-GroupKey already proves global uniqueness.
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use cq_lang_sequence::structures::physical::Operator;
 use cq_lang_sequence::{Analysis, Catalog, Machine, Program, Term};
 use cq_sequence_rewrite_passes::KeyPartition;
@@ -10,8 +10,8 @@ use syn::Ident;
 use crate::{Advice, Planned};
 
 /// An explicit static decision, following adaptive advice's `select` convention.
-/// `true` requires a checked partition; `false` forbids it. Unmentioned definitions
-/// remain PL-Cost choices. Authored grades are never overridden.
+/// `true` requires a fixed checked partition; `false` retains the native provider.
+/// Unmentioned providers use runtime count choice; collectives remain PL-Cost choices.
 /// For global aggregates this controls both tiled partial folds and key-routed
 /// canonical partial folds; both return one host-merged row, even on empty input.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -70,6 +70,7 @@ pub(crate) fn validate(program: &Program, policies: &[KeyPartitionPolicy]) -> sy
 pub(crate) fn choices(program: &Program, facts: &Analysis, policies: &[KeyPartitionPolicy]) -> Vec<Vec<KeyPartitionPolicy>> {
     let names: Vec<_> = program.sequence.definitions.iter()
         .filter(|definition| !policies.iter().any(|policy| policy.name == definition.name))
+        .filter(|definition| !provider_store(&definition.term))
         .filter(|definition| keys(program, facts, &definition.name, &definition.term).is_some())
         .map(|definition| definition.name.clone()).collect();
     let mut choices = vec![policies.to_vec()];
@@ -97,12 +98,14 @@ pub(crate) fn apply(
     catalog: &Catalog,
     policies: &[KeyPartitionPolicy],
     enabled: bool,
+    providers: bool,
 ) -> syn::Result<()> {
-    let forced = policies.iter().find(|p| p.select);
-    if !enabled {
-        return if let Some(policy) = forced {
-            Err(syn::Error::new_spanned(&policy.name, "key partition is forced by advice"))
-        } else { Ok(()) };
+    let applies = |policy: &&KeyPartitionPolicy| policy.select
+        && authored.sequence.definitions.iter().find(|d| d.name == policy.name)
+            .is_some_and(|d| provider_store(&d.term) == providers);
+    let forced = policies.iter().find(applies);
+    if !enabled && let Some(policy) = forced {
+        return Err(syn::Error::new_spanned(&policy.name, "key partition is forced by advice"));
     }
     let pool = machine.root.children.iter().find(|level| {
         !level.collaborative && !level.children.is_empty() && level.width.is_some_and(|n| n > 0)
@@ -112,7 +115,13 @@ pub(crate) fn apply(
             Err(syn::Error::new_spanned(&policy.name, "BE-KeyPart: machine has no separated distributing pool"))
         } else { Ok(()) };
     };
-    let facts = checker.check_shared(&planned.program)?;
+    // Decomposition may require range cursors even when construction needed
+    // only exact lookup. Provider routing must inspect the completed schedule.
+    let facts = if providers {
+        std::rc::Rc::new(checker.check_grading(&planned.program, machine)?)
+    } else {
+        checker.check_shared(&planned.program)?
+    };
     let mut candidates = Vec::new();
     let mut names: BTreeSet<_> = planned.program.sequence.definitions.iter()
         .map(|d| symbol_name(&d.name)).collect();
@@ -122,6 +131,8 @@ pub(crate) fn apply(
         {
             continue;
         }
+        let provider = provider_store(&definition.term);
+        if provider != providers || (!enabled && !provider) { continue; }
         let Some(mut keys) = keys(&planned.program, &facts, &definition.name, &definition.term) else { continue };
         let global = global_group(&planned.program, &definition.term);
         if global {
@@ -137,16 +148,27 @@ pub(crate) fn apply(
         } else if keys.is_empty() {
             continue;
         }
-        if matches!(&definition.term, Term::Store { inner, .. }
-            if !matches!(inner.as_ref(), Term::Canon(_) | Term::Group(_, _)))
-        {
+        if provider {
             let result = &facts.results[&symbol_name(&definition.name)];
+            // A type/layout belongs to the physical provider, not to one of its
+            // Sequence publication aliases. A forbid must retain that type.
+            if policies.iter().any(|policy| !policy.select
+                && facts.results.get(&symbol_name(&policy.name)) == Some(result))
+            {
+                continue;
+            }
             let supported = planned.program.structures.structures.entries.iter().all(|entry| {
                 if symbol_name(&entry.name) != *result { return true; }
                 let cq_lang_sequence::structures::Structure::Built { keyed, .. } = &entry.structure else { return true };
                 let ty = &keyed.ty;
                 let routed: syn::Type = syn::parse_quote!(::cq_storage::sharded::Sharded<#ty>);
-                catalog.providers.iter().any(|token| crate::catalog::matches_type(&token.ty, &routed))
+                facts.obligations.iter().all(|obligation| match obligation {
+                    cq_lang_sequence::Obligation::Provider { provider, capability, .. }
+                        if provider == result => crate::catalog::provider_available(
+                            &facts, catalog, provider, capability, &routed,
+                        ),
+                    _ => true,
+                })
             });
             if !supported { continue; }
         }
@@ -157,9 +179,47 @@ pub(crate) fn apply(
             input: Ident::new(&input, definition.name.span()),
             keys,
             parts: pool.width.expect("selected distributing pool"),
+            threshold: (provider && !policies.iter().any(|p| p.name == definition.name && p.select))
+                .then_some(machine.key_partition_threshold),
         });
     }
-    for policy in policies.iter().filter(|p| p.select) {
+    if providers {
+        // Host staging and the final provider publication can denote the same
+        // physical result. Retype exactly once, preferring explicit force and
+        // otherwise the final publication preceding every keyed consumer.
+        let mut selected = BTreeMap::new();
+        let positions: BTreeMap<_, _> = planned.program.sequence.definitions.iter()
+            .enumerate().map(|(index, definition)| (symbol_name(&definition.name), index)).collect();
+        for (index, candidate) in candidates.iter().enumerate() {
+            let result = &facts.results[&symbol_name(&candidate.name)];
+            let forced = policies.iter().any(|p| p.name == candidate.name && p.select);
+            let position = positions[&symbol_name(&candidate.name)];
+            if facts.provider_reads.iter().any(|(reader, providers)|
+                providers.contains(result) && positions[reader] <= position)
+            {
+                if forced {
+                    return Err(syn::Error::new_spanned(&candidate.name,
+                        "BE-KeyPartProvider: publication must precede every keyed read of its physical provider"));
+                }
+                continue;
+            }
+            if let Some(&previous) = selected.get(result) {
+                let previous: &KeyPartition = &candidates[previous];
+                let previous_forced = policies.iter().any(|p| p.name == previous.name && p.select);
+                if forced && previous_forced {
+                    return Err(syn::Error::new_spanned(&candidate.name,
+                        "BE-KeyPartProvider: multiple forced publications name the same physical provider"));
+                }
+                if previous_forced { continue; }
+            }
+            selected.insert(result, index);
+        }
+        candidates = candidates.into_iter().enumerate().filter_map(|(index, candidate)| {
+            let result = &facts.results[&symbol_name(&candidate.name)];
+            (selected.get(result) == Some(&index)).then_some(candidate)
+        }).collect();
+    }
+    for policy in policies.iter().filter(applies) {
         if !candidates.iter().any(|c| c.name == policy.name) {
             return Err(syn::Error::new_spanned(&policy.name, "BE-KeyPart: forced definition is not an unauthored Canon, Group, or catalog-supported exact-key provider Store"));
         }
@@ -176,6 +236,11 @@ pub(crate) fn apply(
         })?;
     }
     Ok(())
+}
+
+fn provider_store(term: &Term) -> bool {
+    matches!(term, Term::Store { inner, .. }
+        if !matches!(inner.as_ref(), Term::Canon(_) | Term::Group(_, _)))
 }
 
 fn keys(program: &Program, facts: &Analysis, name: &Ident, term: &Term) -> Option<Vec<Ident>> {
@@ -196,13 +261,30 @@ fn keys(program: &Program, facts: &Analysis, name: &Ident, term: &Term) -> Optio
             }),
         Term::Store { inner, .. } if matches!(inner.as_ref(), Term::Canon(_) | Term::Group(_, _)) => keys(program, facts, name, inner),
         Term::Store { inner, .. } if !contains_partition(inner) => {
+            // BE-KeyPart consumes flat valuations, not an existing tiled or
+            // nested lookup carrier. Keep those authored/native schedules intact.
+            if facts.shapes.get(&symbol_name(name)).is_none_or(|shape| shape.len() != 1) {
+                return None;
+            }
             let result = facts.results.get(&symbol_name(name))?;
-            let mut reads = Vec::new();
-            for d in &program.sequence.definitions { lookup_keys(&d.term, result, &mut reads); }
-            let first = reads.first()?;
+            let reads: Vec<_> = facts.obligations.iter().filter_map(|obligation| {
+                match obligation {
+                    cq_lang_sequence::Obligation::Provider { provider, keys, capability, .. }
+                        if provider == result => Some((keys, capability)),
+                    _ => None,
+                }
+            }).collect();
+            let (first, _) = *reads.first()?;
+            // Filtered native layouts may reconstruct constant keys that are
+            // absent from their carried valuations. Routing cannot read them.
+            if first.iter().any(|key| !facts.structures.physical.headings[result].contains(key)) {
+                return None;
+            }
             // Sharded providers hash the complete outer key tuple, including
             // its order. Prefix/range routing is not this runtime protocol.
-            if reads.iter().any(|keys| *keys != *first) { return None; }
+            if reads.iter().any(|(keys, capability)| *keys != first
+                || !matches!(capability, cq_lang_sequence::Capability::Exact
+                    | cq_lang_sequence::Capability::Membership)) { return None; }
             let layout = program.structures.structures.entries.iter().find_map(|entry| {
                 if symbol_name(&entry.name) != *result { return None; }
                 match &entry.structure {
@@ -210,9 +292,8 @@ fn keys(program: &Program, facts: &Analysis, name: &Ident, term: &Term) -> Optio
                     _ => None,
                 }
             })?;
-            let lookup: Vec<_> = first.iter().map(symbol_name).collect();
-            if layout.first()? != &lookup { return None; }
-            Some(first.to_vec())
+            if layout.first()? != first { return None; }
+            Some(first.iter().map(|key| Ident::new(key, name.span())).collect())
         }
         _ => None,
     }

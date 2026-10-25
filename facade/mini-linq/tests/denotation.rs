@@ -3,19 +3,17 @@ use quote::quote;
 
 #[test]
 fn every_planner_keeps_partial_steps_in_their_written_domain() {
-    let machine = cq_lang_sequence::Machine {
-        layout: None,
-        name: syn::parse_quote!(sequential),
-        items: 1,
-        root: cq_lang_sequence::LevelNode {
-            shared_bytes: None,
-            name: syn::parse_quote!(host),
-            collaborative: false,
-            dynamic: false,
-            width: None,
-            children: vec![],
-        },
-    };
+    let machine = cq_lang_sequence::Machine { key_partition_threshold: 65536, layout: None,
+    name: syn::parse_quote!(sequential),
+    items: 1,
+    root: cq_lang_sequence::LevelNode {
+        shared_bytes: None,
+        name: syn::parse_quote!(host),
+        collaborative: false,
+        dynamic: false,
+        width: None,
+        children: vec![],
+    }, };
     let queries: [(&str, proc_macro2::TokenStream); 3] = [
         (
             "struct Q; relation R(x:i32); relation S(w:i32); answer(x,y) :- R(x), S(w), if *x != 0 && *w > 1, let y:i32 = 10 / *x;",

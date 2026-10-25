@@ -148,8 +148,8 @@ pub fn plan(program: &Program, machine: &Machine, catalog: &Catalog) -> syn::Res
     plan_with_key_partitions(program, machine, catalog, &[])
 }
 
-/// Plan with explicit force/forbid decisions for key partitioning; unmentioned
-/// definitions are selected by the same checked PL-Cost candidate comparison.
+/// Plan with explicit force/forbid decisions for key partitioning. Unmentioned
+/// providers use a checked runtime count choice; collectives use PL-Cost.
 pub fn plan_with_key_partitions(
     program: &Program,
     machine: &Machine,
@@ -246,6 +246,12 @@ fn decompose_in(
         return Err(syn::Error::new(
             machine.name.span(),
             "P-Decompose: machine items must be positive",
+        ));
+    }
+    if machine.key_partition_threshold == 0 {
+        return Err(syn::Error::new(
+            machine.name.span(),
+            "P-Decompose: machine key partition threshold must be positive",
         ));
     }
     if let Some(graded) = &program.graded
@@ -480,13 +486,14 @@ fn candidate(
     keyed: bool,
 ) -> syn::Result<(Analysis, Planned)> {
     let mut planned = source.clone();
-    key_partition::apply(checker, &mut planned, authored, machine, catalog, policies, keyed)?;
+    key_partition::apply(checker, &mut planned, authored, machine, catalog, policies, keyed, false)?;
     if !machine.root.children.is_empty() {
         let mut decomposed =
             decomposition::advise(checker, &planned.program, machine, width, items, segmented)?;
         planned.trace.append(&mut decomposed.trace);
         planned.program = decomposed.program;
     }
+    key_partition::apply(checker, &mut planned, authored, machine, catalog, policies, keyed, true)?;
     // Formal rule PL-Precedence: Recorded grades, tiles and output are never replaced by generated advice.
     if source.program.sequence.output.is_none() {
         let last =

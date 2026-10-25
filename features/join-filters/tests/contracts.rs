@@ -134,3 +134,33 @@ fn explicit_advice_can_cover_a_total_unfiltered_build() {
     assert_eq!(advised.physical, selected.physical);
     assert_eq!(ir::contract::check(&advised).unwrap().join_filters.len(), 1);
 }
+
+#[test]
+fn routed_exact_provider_retyping_preserves_join_filter_obligations() {
+    let before = join_filter(&source(), quote!(l)).unwrap();
+    let expected = ir::contract::check(&before).unwrap().join_filters;
+    for ty in [
+        quote!(::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>>),
+        quote!(::cq_storage::sharded::Sharded<::cq_storage::SortedRun<_, _>>),
+    ] {
+        let changed = retype(&before, quote!(b => #ty)).unwrap();
+        assert_eq!(changed.physical, before.physical);
+        let facts = ir::contract::check(&changed).unwrap();
+        assert_eq!(facts.join_filters, expected);
+        assert_eq!(ir::join_filter_candidates(&changed, &facts, "j").len(), 1);
+        assert_eq!(changed, syn::parse2(changed.to_token_stream()).unwrap());
+    }
+}
+
+#[test]
+fn routed_filter_requires_an_enumerable_exact_native_family() {
+    let before = join_filter(&source(), quote!(l)).unwrap();
+    for ty in [
+        quote!(::cq_storage::sharded::Sharded<MembershipOnly>),
+        quote!(::cq_storage::sharded::Sharded<::cq_storage::HashIndex<'_, _, _>>),
+        quote!(::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>, UnknownRouter>),
+        quote!(::cq_storage::sharded::Sharded<::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>>>),
+    ] {
+        assert!(retype(&before, quote!(b => #ty)).is_err(), "{ty}");
+    }
+}

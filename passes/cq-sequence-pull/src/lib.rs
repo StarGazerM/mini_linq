@@ -18,6 +18,7 @@ pub fn machine() -> cq_lang_sequence::Machine {
         layout: None,
         name: syn::parse_quote!(sequential),
         items: 1,
+        key_partition_threshold: 65536,
         root: cq_lang_sequence::LevelNode {
             shared_bytes: None,
             name: syn::parse_quote!(host),
@@ -170,6 +171,7 @@ pub struct Emitter<'a> {
     adapters: RowEmitter<'a>,
     values: BTreeMap<String, Value>,
     target_published: std::collections::BTreeSet<String>,
+    lengths: BTreeMap<String, TokenStream>,
     owner: String,
     pull: bool,
     owned_answer: bool,
@@ -185,6 +187,7 @@ impl<'a> Emitter<'a> {
             adapters: RowEmitter::new(context),
             values: BTreeMap::new(),
             target_published: std::collections::BTreeSet::new(),
+            lengths: BTreeMap::new(),
             owner: String::new(),
             pull: false,
             owned_answer: false,
@@ -202,6 +205,73 @@ impl<'a> Emitter<'a> {
     /// A target hook has already emitted this store's binding and providers.
     pub fn mark_target_published(&mut self, owner: &str) {
         self.target_published.insert(owner.to_owned());
+    }
+
+    /// Publish the exact count of an already evaluated Sequence store.
+    pub fn publish_length(&mut self, name: &str, length: TokenStream) {
+        self.lengths.insert(name.to_owned(), length);
+    }
+
+    /// Re-publish an immutable flat row view already owned by an ancestor.
+    pub fn alias_store(&mut self, name: &str, source: &str) -> bool {
+        if !self.values.get(source).is_some_and(|value| value.stored && value.depth == 0) {
+            return false;
+        }
+        let Some(length) = self.lengths.get(source).cloned() else { return false };
+        self.lengths.insert(name.to_owned(), length);
+        self.mark_target_published(name);
+        true
+    }
+
+    fn runtime_length(&self, length: &cq_lang_sequence::Len) -> syn::Result<TokenStream> {
+        use cq_lang_sequence::Len;
+        match length {
+            Len::Lit(value) => Ok(quote!(#value)),
+            Len::Add(left, right) => {
+                let left = self.runtime_length(left)?;
+                let right = self.runtime_length(right)?;
+                Ok(quote!((#left).saturating_add(#right)))
+            }
+            Len::Input(name) => {
+                if let Some(length) = self.lengths.get(name) {
+                    return Ok(length.clone());
+                }
+                if let Some(value) = self.values.get(name).filter(|value| value.stored && value.depth == 0) {
+                    let rows = &value.rows;
+                    return Ok(quote!((#rows).count()));
+                }
+                if let Some(host) = self.context().hosts.get(name) {
+                    let host = &host.value;
+                    return Ok(quote!({
+                        let __cq_input_rows = ::cq_storage::rows::Rows::rows(#host);
+                        let (__cq_lower, __cq_upper) = __cq_input_rows.size_hint();
+                        if __cq_upper == ::core::option::Option::Some(__cq_lower) {
+                            __cq_lower
+                        } else {
+                            __cq_input_rows.count()
+                        }
+                    }));
+                }
+                Err(syn::Error::new(proc_macro2::Span::call_site(),
+                    format!("runtime choice length `{name}` has no published flat store")))
+            }
+            _ => Err(syn::Error::new(proc_macro2::Span::call_site(),
+                "runtime choice requires a recorded input length, literal, or sum")),
+        }
+    }
+
+    fn runtime_guard(&self, guard: &Guard) -> syn::Result<TokenStream> {
+        match guard {
+            Guard::Lt(length, threshold) => {
+                let length = self.runtime_length(length)?;
+                Ok(quote!(#length < #threshold))
+            }
+            Guard::Ge(length, threshold) => {
+                let length = self.runtime_length(length)?;
+                Ok(quote!(#length >= #threshold))
+            }
+            Guard::Else => Ok(quote!(true)),
+        }
     }
 
     /// A target's final task buffers already contain the owned answer head.
@@ -1138,9 +1208,43 @@ fn translate_with_profile(
                 };
                 emitter.union(values)?
             }
-            Term::Choose(arms) => {
+            Term::Choose(arms) if emitter.pull => {
                 let alternative = emitter.choose(arms)?;
                 term(emitter, alternative, owner, tiles, false, hook)?
+            }
+            Term::Choose(arms) => {
+                let mut values = Vec::with_capacity(arms.len());
+                for (guard, arm) in arms {
+                    let condition = emitter.runtime_guard(guard)?;
+                    let start = emitter.context().statements.len();
+                    let value = term(emitter, arm, owner, tiles, false, hook)?;
+                    let statements = emitter.context_mut().statements.split_off(start);
+                    values.push((guard, condition, value, statements));
+                }
+                let depth = values.iter().map(|(_, _, value, _)| value.depth).min()
+                    .expect("checked nonempty choice");
+                let result = values[0].2.result.clone();
+                let stored = values.iter().any(|(_, _, value, _)| value.stored);
+                let mut selected = quote!(::core::unreachable!("checked exhaustive Sequence choice"));
+                for (guard, condition, mut value, statements) in values.into_iter().rev() {
+                    while value.depth > depth {
+                        value = emitter.flatten(value);
+                    }
+                    let rows = collect_choice_rows(value.rows, depth);
+                    let branch = quote!({ #(#statements)* #rows });
+                    selected = if *guard == Guard::Else {
+                        branch
+                    } else {
+                        quote!(if #condition { #branch } else { #selected })
+                    };
+                }
+                Value {
+                    rows: choice_rows(selected, depth),
+                    result,
+                    depth,
+                    stored,
+                    partitioned: false,
+                }
             }
         };
         value.partitioned |= child.as_ref().is_some_and(|input| input.partitioned);
@@ -1198,4 +1302,22 @@ fn translate_with_profile(
         output
             .ok_or_else(|| syn::Error::new_spanned(program, "Sequence has no output definition"))?,
     )
+}
+
+fn collect_choice_rows(rows: TokenStream, depth: usize) -> TokenStream {
+    if depth == 0 {
+        quote!((#rows).collect::<::std::vec::Vec<_>>())
+    } else {
+        let part = collect_choice_rows(quote!(::core::iter::IntoIterator::into_iter(__cq_choice_part)), depth - 1);
+        quote!((#rows).map(|__cq_choice_part| #part).collect::<::std::vec::Vec<_>>())
+    }
+}
+
+fn choice_rows(rows: TokenStream, depth: usize) -> TokenStream {
+    if depth == 0 {
+        quote!((#rows).into_iter())
+    } else {
+        let part = choice_rows(quote!(__cq_choice_part), depth - 1);
+        quote!((#rows).into_iter().map(|__cq_choice_part| #part))
+    }
 }

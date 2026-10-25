@@ -13,19 +13,17 @@ fn sequence_rows(module: &structures::Program) -> syn::Result<syn::Expr> {
     let program = cq_sequence_lowering::compile(module)?;
     let analysis = cq_lang_sequence::check_grading(
         &program,
-        &cq_lang_sequence::Machine {
-            layout: None,
-            name: syn::parse_quote!(sequential),
-            items: 1,
-            root: cq_lang_sequence::LevelNode {
-                shared_bytes: None,
-                name: syn::parse_quote!(host),
-                collaborative: false,
-                dynamic: false,
-                width: None,
-                children: vec![],
-            },
-        },
+        &cq_lang_sequence::Machine { key_partition_threshold: 65536, layout: None,
+        name: syn::parse_quote!(sequential),
+        items: 1,
+        root: cq_lang_sequence::LevelNode {
+            shared_bytes: None,
+            name: syn::parse_quote!(host),
+            collaborative: false,
+            dynamic: false,
+            width: None,
+            children: vec![],
+        }, },
     )?;
     let expression = cq_sequence_pull::translate(&program, &analysis)?;
     Ok(syn::parse_quote!((#expression).into_iter()))

@@ -8,6 +8,10 @@ pub(crate) fn partition(
     emitter: &Emitter<'_>, input: &Value, keys: &[syn::Ident], parts: usize, grain: usize,
     stored: Option<&syn::Ident>,
 ) -> syn::Result<proc_macro2::TokenStream> {
+    if parts == 1 {
+        let rows = &input.rows;
+        return Ok(quote!(::core::iter::once(#rows)));
+    }
     let result = input.result.as_ref().ok_or_else(|| syn::Error::new(
         proc_macro2::Span::call_site(), "Tasks key partition lacks row provenance"))?;
     let pattern = emitter.context().pattern(result);
@@ -72,6 +76,10 @@ pub(crate) fn partition_keys<'a>(
         Term::Store { inner, .. } | Term::Canon(inner)
         | Term::Map(_, inner) | Term::Compact(_, inner) | Term::Group(_, inner)
         | Term::Lookup { inner, .. } => partition_keys(inner, program),
+        Term::Choose(arms) => {
+            let keys = arms.first().and_then(|(_, arm)| partition_keys(arm, program))?;
+            arms.iter().all(|(_, arm)| partition_keys(arm, program) == Some(keys)).then_some(keys)
+        }
         _ => None,
     }
 }

@@ -4,21 +4,19 @@ use cq_sequence_rewrite_passes::key_partition;
 use quote::{ToTokens, quote};
 
 fn machine(parts: Option<usize>) -> Machine {
-    Machine {
-        name: syn::parse_quote!(tasks), layout: None, items: 1,
-        root: LevelNode {
-            name: syn::parse_quote!(host), collaborative: false, dynamic: false,
-            width: None, shared_bytes: None,
+    Machine { key_partition_threshold: 65536, name: syn::parse_quote!(tasks), layout: None, items: 1,
+    root: LevelNode {
+        name: syn::parse_quote!(host), collaborative: false, dynamic: false,
+        width: None, shared_bytes: None,
+        children: vec![LevelNode {
+            name: syn::parse_quote!(pool), collaborative: false, dynamic: true,
+            width: parts, shared_bytes: None,
             children: vec![LevelNode {
-                name: syn::parse_quote!(pool), collaborative: false, dynamic: true,
-                width: parts, shared_bytes: None,
-                children: vec![LevelNode {
-                    name: syn::parse_quote!(task), collaborative: false, dynamic: false,
-                    width: None, shared_bytes: None, children: vec![],
-                }],
+                name: syn::parse_quote!(task), collaborative: false, dynamic: false,
+                width: None, shared_bytes: None, children: vec![],
             }],
-        },
-    }
+        }],
+    }, }
 }
 
 fn catalog() -> Catalog {
@@ -260,25 +258,21 @@ fn provider_store_retains_parts_and_records_routed_provider_type() {
     replay(&source, &planned);
     assert!(key_partition(&source, quote!(provider, staged, [b], 4)).is_err());
     let automatic = decompose(&source, &machine(Some(4)), &catalog()).unwrap();
-    assert!(!automatic.trace.iter().any(|a| matches!(a, Advice::KeyPartition(k) if k.name == "provider")));
+    assert!(automatic.trace.iter().any(|a| matches!(a, Advice::KeyPartition(k)
+        if k.name == "provider" && k.threshold == Some(65536))));
 }
 
 #[test]
-fn routing_setup_keeps_small_providers_serial_and_amortizes_large_builds() {
-    for rows in [0usize, 1, 4, 4096] {
+fn provider_choice_does_not_use_cardinality_evidence() {
+    for rows in [0usize, 1, 4, 4096, 65535, 65536, 65537] {
         let mut source = provider_program();
         source.evidence = syn::parse2(quote!(evidence { count R = #rows; count L = 1; })).unwrap();
         let machine = machine(Some(4));
         let automatic = decompose(&source, &machine, &catalog()).unwrap();
-        assert_eq!(
-            automatic.trace.iter().any(|a| matches!(a, Advice::KeyPartition(k) if k.name == "provider")),
-            rows == 4096,
-            "rows={rows}: {}", automatic.program.to_token_stream(),
-        );
+        assert!(automatic.trace.iter().any(|a| matches!(a, Advice::KeyPartition(k)
+            if k.name == "provider" && k.threshold == Some(machine.key_partition_threshold))));
+        assert!(automatic.program.to_token_stream().to_string().contains("Sharded < Index >"));
         replay(&source, &automatic);
-        if rows <= 4 {
-            assert!(!automatic.program.to_token_stream().to_string().contains("Sharded < Index >"));
-        }
     }
 }
 
@@ -359,3 +353,320 @@ fn empty_global_partial_plans_keep_the_singleton_identity_shape() {
         replay(&source, &planned);
     }
 }
+
+#[test]
+fn unknown_provider_uses_published_runtime_count_and_checked_identity_cover() {
+    use cq_lang_sequence::{Guard, Len};
+    let source = provider_program();
+    let mut machine = machine(Some(4));
+    machine.key_partition_threshold = 17;
+    let planned = decompose(&source, &machine, &catalog()).unwrap();
+    let advice = planned.trace.iter().find_map(|advice| match advice {
+        Advice::KeyPartition(advice) if advice.name == "provider" => Some(advice),
+        _ => None,
+    }).expect("unknown-cardinality provider must retain runtime advice");
+    assert_eq!(advice.threshold, Some(17));
+    let provider = planned.program.sequence.definitions.iter().find(|d| d.name == "provider").unwrap();
+    let Term::Store { inner, .. } = &provider.term else { panic!("provider Store required") };
+    let Term::Choose(arms) = inner.as_ref() else { panic!("runtime Choose required") };
+    assert_eq!(arms.len(), 2);
+    assert_eq!(arms[0].0, Guard::Lt(Len::Input(advice.input.to_string()), 17));
+    assert_eq!(arms[1].0, Guard::Else);
+    for (arm, parts) in arms.iter().zip([1, 4]) {
+        assert_eq!(arm.1, Term::PartitionK {
+            keys: advice.keys.clone(), parts,
+            inner: Box::new(Term::Ref(advice.input.clone())),
+        });
+    }
+    // Interpret the written first-match guards, including the exact boundary.
+    for (rows, expected_parts) in [(0, 1), (16, 1), (17, 4), (18, 4)] {
+        let selected = arms.iter().find(|(guard, _)| match guard {
+            Guard::Lt(Len::Input(name), threshold) => {
+                assert_eq!(name, &advice.input.to_string());
+                rows < *threshold
+            }
+            Guard::Else => true,
+            _ => panic!("unexpected guard"),
+        }).unwrap();
+        assert!(matches!(&selected.1, Term::PartitionK { parts, .. } if *parts == expected_parts));
+    }
+    let facts = cq_lang_sequence::check_grading(&planned.program, &machine).unwrap();
+    assert_eq!(facts.shapes["provider"][0], Len::Unknown(None));
+    assert!(planned.program.graded.as_ref().unwrap().grades.iter().any(|grade|
+        grade.name == advice.input && grade.level.as_slice() == ["host"]));
+    replay(&source, &planned);
+    assert_eq!(planned.program, syn::parse2(planned.program.to_token_stream()).unwrap());
+    assert!(cq_lang_sequence::check_grading(&planned.program, &self::machine(Some(8))).is_err());
+}
+
+#[test]
+fn provider_force_forbid_and_authored_grade_override_runtime_choice() {
+    let source = provider_program();
+    for select in [true, false] {
+        let planned = decompose_with_key_partitions(
+            &source, &machine(Some(4)), &catalog(), &[policy("provider", select)],
+        ).unwrap();
+        let provider = planned.program.sequence.definitions.iter().find(|d| d.name == "provider").unwrap();
+        let Term::Store { inner, .. } = &provider.term else { panic!("provider Store required") };
+        assert!(!matches!(inner.as_ref(), Term::Choose(_)));
+        if select {
+            assert!(matches!(inner.as_ref(), Term::PartitionK { parts: 4, .. }));
+            assert!(planned.trace.iter().any(|a| matches!(a, Advice::KeyPartition(k)
+                if k.name == "provider" && k.threshold.is_none())));
+        } else {
+            assert!(!planned.trace.iter().any(|a| matches!(a, Advice::KeyPartition(k) if k.name == "provider")));
+            assert!(!planned.program.to_token_stream().to_string().contains("Sharded < Index >"));
+        }
+        replay(&source, &planned);
+    }
+    let mut authored = source.clone();
+    authored.graded = Some(syn::parse_quote!(graded tasks { provider at host; }));
+    let planned = decompose(&authored, &machine(Some(4)), &catalog()).unwrap();
+    assert!(!planned.trace.iter().any(|a| matches!(a, Advice::KeyPartition(k) if k.name == "provider")));
+}
+
+#[test]
+fn adaptive_provider_threshold_is_positive_and_provider_only() {
+    let source = provider_program();
+    let mut invalid = machine(Some(4));
+    invalid.key_partition_threshold = 0;
+    assert!(decompose(&source, &invalid, &catalog()).is_err());
+    assert!(key_partition(&source, quote!(provider, published, [a], 4, threshold 0)).is_err());
+    assert!(key_partition(&source, quote!(provider, published, [a], 0, threshold 17)).is_err());
+    assert!(key_partition(&grouped(false),
+        quote!(result, published, [returnflag, linestatus], 4, threshold 17)).is_err());
+    assert!(syn::parse_str::<Advice>("key_partition(provider, published, [a], 4, cutoff 17)").is_err());
+}
+
+#[test]
+fn exact_membership_provider_supports_runtime_partition_choice() {
+    let source: Program = syn::parse_quote! {
+        physical {
+            relation L(a:i32); relation R(a:i32);
+            l = pipe rename L@0 {a -> a};
+            r = let rename R@1 {a -> a};
+            j = pipe canon semi eager [a] l,r;
+            return j as answer(a);
+        }
+        structures {
+            l host scan = Reader []; r host scan = Reader [];
+            r = Index [a]; j canon = Canonical;
+        }
+        sequence {
+            provider = store rows r;
+            input = store rows l;
+            result = store canon compact j lookup r [a] input;
+        }
+    };
+    let mut membership_catalog = catalog();
+    for provider in &mut membership_catalog.providers {
+        provider.capabilities = vec![Capability::Membership];
+    }
+    let planned = decompose(&source, &machine(Some(4)), &membership_catalog).unwrap();
+    assert!(planned.trace.iter().any(|a| matches!(a, Advice::KeyPartition(k)
+        if k.name == "provider" && k.threshold == Some(65536))));
+    cq_lang_sequence::check_grading(&planned.program, &machine(Some(4))).unwrap();
+    replay(&source, &planned);
+}
+
+#[test]
+fn scheduled_range_obligation_keeps_native_provider() {
+    let mut source = provider_program();
+    source.sequence.definitions.last_mut().unwrap().term =
+        syn::parse_quote!(store tile 2 canon flatten lookup r [a] input);
+    let mut catalog = catalog();
+    // Native cursors support the authored distributed lookup. The routed
+    // wrapper deliberately remains exact-only: hash routing grants no Range.
+    catalog.providers[0].capabilities.push(Capability::Range);
+    let machine = machine(Some(4));
+    let planned = decompose(&source, &machine, &catalog).unwrap();
+    let facts = cq_lang_sequence::check_grading(&planned.program, &machine).unwrap();
+    assert_eq!(facts.capabilities[&("r".into(), vec!["a".into()])], Capability::Range);
+    assert!(!planned.trace.iter().any(|a| matches!(a, Advice::KeyPartition(k)
+        if k.name == "provider")));
+    assert!(!planned.program.to_token_stream().to_string().contains("Sharded < Index >"));
+    replay(&source, &planned);
+    assert!(decompose_with_key_partitions(
+        &source, &machine, &catalog, &[policy("provider", true)],
+    ).is_err());
+}
+
+#[test]
+fn provider_routing_requires_flat_carried_valuations() {
+    let mut source = provider_program();
+    source.sequence.definitions[0].term = syn::parse_quote!(store tile 2 rows r);
+    let machine = machine(Some(4));
+    let planned = decompose(&source, &machine, &catalog()).unwrap();
+    assert!(!planned.trace.iter().any(|a| matches!(a, Advice::KeyPartition(k)
+        if k.name == "provider")));
+    replay(&source, &planned);
+    assert!(decompose_with_key_partitions(
+        &source, &machine, &catalog(), &[policy("provider", true)],
+    ).is_err());
+}
+
+#[test]
+fn routed_catalog_requires_capability_elements_and_scheduled_read_levels() {
+    let mut source = provider_program();
+    source.graded = Some(syn::parse_quote!(graded tasks { result at host; }));
+    for restriction in 0..3 {
+        let mut catalog = catalog();
+        let routed = &mut catalog.providers[1];
+        match restriction {
+            0 => routed.capabilities = vec![Capability::Membership],
+            1 => routed.elements = Some(vec![syn::parse_quote!(String)]),
+            _ => routed.levels = vec![vec!["host".into(), "pool".into(), "task".into()]],
+        }
+        let planned = decompose(&source, &machine(Some(4)), &catalog).unwrap();
+        assert!(!planned.trace.iter().any(|a| matches!(a, Advice::KeyPartition(k)
+            if k.name == "provider")), "restriction {restriction}");
+        replay(&source, &planned);
+    }
+}
+
+#[test]
+fn task_flatten_decomposition_does_not_introduce_unnamed_separated_stores() {
+    let mut source = provider_program();
+    source.sequence.definitions.insert(2, syn::parse_quote!(
+        expanded = flatten lookup r [a] input;
+    ));
+    source.sequence.definitions.last_mut().unwrap().term = syn::parse_quote!(store canon expanded);
+    let mut catalog = catalog();
+    catalog.providers[0].capabilities.push(Capability::Range);
+    let machine = machine(Some(4));
+    let planned = decompose_with_key_partitions(
+        &source, &machine, &catalog, &[policy("result", false)],
+    ).unwrap();
+    assert!(!planned.trace.iter().any(|a| matches!(a, Advice::Segment { .. })));
+    cq_lang_sequence::check_grading(&planned.program, &machine).unwrap();
+    replay(&source, &planned);
+}
+
+#[test]
+fn provider_rewrite_preserves_shared_flat_rows_and_published_length_guards() {
+    let source: Program = syn::parse_quote! {
+        physical {
+            relation L(a:i32); relation R(a:i32,b:i32);
+            l = pipe rename L@0 {a -> a};
+            r = let rename R@1 {a -> a,b -> b};
+            selected = let project r keep {a};
+            joined = pipe probe first [a] l,r;
+            final_rows = pipe canon semi eager [a] joined,selected;
+            return final_rows as answer(a,b);
+        }
+        structures {
+            l host scan = Reader []; r host scan = Reader [];
+            r = Index [a]; selected = Index [a]; final_rows canon = Canonical;
+            r rows = ::std::vec::Vec<_>;
+        }
+        sequence {
+            provider = store rows r;
+            derived = store map selected provider;
+            same_rows = choose [len provider < 17 => provider, else => provider];
+            input = store rows l;
+            expanded = flatten lookup r [a] input;
+            result = store canon compact final_rows lookup selected [a] expanded;
+        }
+    };
+    let routed = key_partition(&source,
+        quote!(provider, published, [a], 4, threshold 17)).unwrap();
+    let derived = routed.sequence.definitions.iter().find(|d| d.name == "derived").unwrap();
+    assert_eq!(derived.term, syn::parse_quote!(store map selected published));
+    let same_rows = routed.sequence.definitions.iter().find(|d| d.name == "same_rows").unwrap();
+    assert_eq!(same_rows.term,
+        syn::parse_quote!(choose [len published < 17 => published, else => published]));
+    // A second provider can now publish the shared rows without accidentally
+    // receiving the first provider's new nested cover level.
+    let twice = key_partition(&routed,
+        quote!(derived, derived_input, [a], 4, threshold 17)).unwrap();
+    let input = twice.sequence.definitions.iter().find(|d| d.name == "derived_input").unwrap();
+    assert_eq!(input.term, syn::parse_quote!(store map selected published));
+    let facts = cq_lang_sequence::contract::check(&twice).unwrap();
+    assert_eq!(facts.shapes["derived_input"].len(), 1);
+    assert_eq!(facts.shapes["same_rows"].len(), 1);
+    assert_eq!(twice, syn::parse2(twice.to_token_stream()).unwrap());
+
+    let mut catalog = catalog();
+    for token in &mut catalog.providers {
+        token.capabilities.push(Capability::Membership);
+    }
+    let machine = machine(Some(4));
+    let planned = decompose(&source, &machine, &catalog).unwrap();
+    assert!(planned.trace.iter().any(|a| matches!(a, Advice::KeyPartition(k)
+        if k.name == "derived")));
+    cq_lang_sequence::check_grading(&planned.program, &machine).unwrap();
+    replay(&source, &planned);
+}
+
+#[test]
+fn physical_provider_is_partitioned_once_across_publication_aliases() {
+    let mut source = provider_program();
+    source.sequence.definitions.insert(1, syn::parse_quote!(
+        provider_alias = store provider;
+    ));
+    let machine = machine(Some(4));
+    for policies in [
+        vec![],
+        vec![policy("provider", true)],
+        vec![policy("provider_alias", true)],
+    ] {
+        let planned = decompose_with_key_partitions(&source, &machine, &catalog(), &policies).unwrap();
+        let routed: Vec<_> = planned.trace.iter().filter_map(|advice| match advice {
+            Advice::KeyPartition(advice)
+                if advice.name == "provider" || advice.name == "provider_alias" => Some(advice),
+            _ => None,
+        }).collect();
+        assert_eq!(routed.len(), 1);
+        assert_eq!(routed[0].name, policies.first().map_or(
+            syn::parse_quote!(provider_alias), |policy| policy.name.clone(),
+        ));
+        assert_eq!(planned.program.to_token_stream().to_string().matches("Sharded").count(), 1);
+        cq_lang_sequence::check_grading(&planned.program, &machine).unwrap();
+        replay(&source, &planned);
+    }
+    for forbidden in ["provider", "provider_alias"] {
+        let planned = decompose_with_key_partitions(
+            &source, &machine, &catalog(), &[policy(forbidden, false)],
+        ).unwrap();
+        assert!(!planned.program.to_token_stream().to_string().contains("Sharded"));
+        replay(&source, &planned);
+    }
+    assert!(decompose_with_key_partitions(&source, &machine, &catalog(),
+        &[policy("provider", true), policy("provider_alias", true)]).is_err());
+    assert!(decompose_with_key_partitions(&source, &machine, &catalog(),
+        &[policy("provider", true), policy("provider_alias", false)]).is_err());
+
+    let once = key_partition(&source,
+        quote!(provider, raw_input, [a], 4, threshold 17)).unwrap();
+    let error = key_partition(&once,
+        quote!(provider_alias, second_input, [a], 4, threshold 17)).unwrap_err();
+    assert!(error.to_string().contains("physical provider is already routed"));
+}
+
+#[test]
+fn selected_provider_publication_precedes_every_keyed_consumer() {
+    let mut source = provider_program();
+    source.sequence.definitions.insert(2, syn::parse_quote!(
+        early_read = store flatten lookup r [a] input;
+    ));
+    source.sequence.definitions.insert(3, syn::parse_quote!(
+        late_alias = store provider;
+    ));
+    let machine = machine(Some(4));
+    let planned = decompose(&source, &machine, &catalog()).unwrap();
+    let selected: Vec<_> = planned.trace.iter().filter_map(|advice| match advice {
+        Advice::KeyPartition(advice) if advice.name == "provider" || advice.name == "late_alias" => Some(advice),
+        _ => None,
+    }).collect();
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].name, "provider");
+    replay(&source, &planned);
+    let error = decompose_with_key_partitions(
+        &source, &machine, &catalog(), &[policy("late_alias", true)],
+    ).unwrap_err();
+    assert!(error.into_iter().any(|error| error.to_string().contains("must precede every keyed read")));
+    let error = key_partition(&source,
+        quote!(late_alias, late_input, [a], 4, threshold 17)).unwrap_err();
+    assert!(error.to_string().contains("must precede every keyed read"));
+}
+

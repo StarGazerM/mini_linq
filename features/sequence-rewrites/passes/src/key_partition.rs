@@ -1,7 +1,7 @@
 //! Checked key-disjoint decomposition; routing choices remain explicit advice.
 //! A single-use named Canon feeding Group moves inside the same key-disjoint
 //! parts as an inline Canon. Shared producers and explicit stores stay intact.
-use cq_lang_sequence::{Definition, Program, Term};
+use cq_lang_sequence::{Definition, Guard, Len, Program, Term};
 use cq_syntax::symbol_name;
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
@@ -16,6 +16,8 @@ pub struct KeyPartition {
     pub input: Ident,
     pub keys: Vec<Ident>,
     pub parts: usize,
+    /// Runtime row-count cutoff for provider builds; absent means fixed routing.
+    pub threshold: Option<usize>,
 }
 
 impl Parse for KeyPartition {
@@ -29,15 +31,27 @@ impl Parse for KeyPartition {
         let keys = keys.parse_terminated(Ident::parse, Token![,])?.into_iter().collect();
         input.parse::<Token![,]>()?;
         let parts = input.parse::<LitInt>()?.base10_parse()?;
-        Ok(Self { name, input: producer, keys, parts })
+        let threshold = if input.peek(Token![,]) {
+            input.parse::<Token![,]>()?;
+            let keyword: Ident = input.parse()?;
+            if keyword != "threshold" {
+                return Err(syn::Error::new_spanned(keyword, "expected threshold"));
+            }
+            Some(input.parse::<LitInt>()?.base10_parse()?)
+        } else { None };
+        Ok(Self { name, input: producer, keys, parts, threshold })
     }
 }
 
 impl ToTokens for KeyPartition {
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        let Self { name, input, keys, parts } = self;
+        let Self { name, input, keys, parts, threshold } = self;
         let parts = LitInt::new(&parts.to_string(), name.span());
-        tokens.extend(quote!(#name, #input, [#(#keys),*], #parts));
+        let threshold = threshold.map(|n| {
+            let n = LitInt::new(&n.to_string(), name.span());
+            quote!(, threshold #n)
+        });
+        tokens.extend(quote!(#name, #input, [#(#keys),*], #parts #threshold));
     }
 }
 fn references(term: &Term, counts: &mut std::collections::BTreeMap<String, usize>) {
@@ -54,6 +68,43 @@ fn references(term: &Term, counts: &mut std::collections::BTreeMap<String, usize
             for (_, term) in arms { references(term, counts); }
         }
         Term::Rows(_) => {}
+    }
+}
+
+// The raw publication preserves the old flat carrier and ancestor scope.
+// Ordinary row/length consumers reuse it; Lookup provider identifiers retain
+// the retyped routed token. Never expose the new cover level to old row users.
+fn redirect_references(term: &mut Term, name: &Ident, publication: &Ident) {
+    fn length(len: &mut Len, name: &str, publication: &Ident) {
+        match len {
+            Len::Input(reference) if reference == name => *reference = symbol_name(publication),
+            Len::Add(left, right) => {
+                length(left, name, publication);
+                length(right, name, publication);
+            }
+            _ => {}
+        }
+    }
+    match term {
+        Term::Ref(reference) if reference == name => *reference = publication.clone(),
+        Term::Map(_, inner) | Term::Compact(_, inner) | Term::Flatten(inner)
+        | Term::Fold(_, inner) | Term::Group(_, inner) | Term::Canon(inner)
+        | Term::Tile { inner, .. } | Term::PartitionK { inner, .. }
+        | Term::Store { inner, .. } | Term::Lookup { inner, .. } => {
+            redirect_references(inner, name, publication);
+        }
+        Term::Union(arms) => {
+            for arm in arms { redirect_references(arm, name, publication); }
+        }
+        Term::Choose(arms) => {
+            for (guard, arm) in arms {
+                if let Guard::Lt(len, _) | Guard::Ge(len, _) = guard {
+                    length(len, &symbol_name(name), publication);
+                }
+                redirect_references(arm, name, publication);
+            }
+        }
+        Term::Rows(_) | Term::Ref(_) => {}
     }
 }
 
@@ -81,7 +132,6 @@ fn canonical_input(
     }
 }
 
-
 pub fn key_partition(source: &Program, arguments: TokenStream) -> syn::Result<Program> {
     key_partition_in(&mut Default::default(), source, &syn::parse2(arguments)?)
 }
@@ -97,6 +147,15 @@ pub fn key_partition_in(
     let index = super::definition(source, &advice.name)?;
     if advice.parts == 0 {
         return Err(syn::Error::new_spanned(&advice.name, "BE-KeyPart: positive partition geometry required"));
+    }
+    if advice.threshold == Some(0) {
+        return Err(syn::Error::new_spanned(&advice.name, "BE-KeyPartProvider: runtime threshold must be positive"));
+    }
+    if advice.threshold.is_some() && !matches!(
+        &source.sequence.definitions[index].term,
+        Term::Store { inner, .. } if !matches!(inner.as_ref(), Term::Canon(_) | Term::Group(_, _))
+    ) {
+        return Err(syn::Error::new_spanned(&advice.name, "BE-KeyPartProvider: runtime threshold requires a provider Store"));
     }
     if source.sequence.definitions.iter().any(|d| d.name == advice.input) {
         return Err(syn::Error::new_spanned(&advice.input, "key partition publication name already exists"));
@@ -151,7 +210,17 @@ pub fn key_partition_in(
                     if advice.keys.is_empty() {
                         return Err(syn::Error::new_spanned(&advice.name, "BE-KeyPartProvider: provider routing keys must be nonempty"));
                     }
-                    (*inner.clone(), routed())
+                    let output = if let Some(threshold) = advice.threshold {
+                        Term::Choose(vec![
+                            (Guard::Lt(Len::Input(symbol_name(&advice.input)), threshold),
+                                Term::PartitionK {
+                                    keys: advice.keys.clone(), parts: 1,
+                                    inner: Box::new(Term::Ref(advice.input.clone())),
+                                }),
+                            (Guard::Else, routed()),
+                        ])
+                    } else { routed() };
+                    (*inner.clone(), output)
                 };
                 Ok((input, Term::Store { capacity: *capacity, inner: Box::new(output) }))
             }
@@ -169,33 +238,34 @@ pub fn key_partition_in(
         Term::Store { capacity: None, inner: Box::new(output) }
     };
     // A bare Store is only a provider candidate when the physical result is
-    // actually consumed by a lookup. The construction checker checks every key.
+    // consumed by exact lookup or membership. The checker records every read.
     let mut provider = None;
     if matches!(&source.sequence.definitions[index].term, Term::Store { inner, .. }
         if !matches!(inner.as_ref(), Term::Canon(_) | Term::Group(_, _)))
     {
         let analysis = checker.check_shared(source)?;
         let result = analysis.results.get(&symbol_name(&advice.name));
-        fn reads(term: &Term, result: &str, keys: &[Ident], count: &mut usize) -> bool {
-            match term {
-                Term::Lookup { provider, keys: lookup, inner } => {
-                    if symbol_name(provider) == result {
-                        *count += 1;
-                        if lookup != keys { return false; }
-                    }
-                    reads(inner, result, keys, count)
-                }
-                Term::Map(_, t) | Term::Compact(_, t) | Term::Flatten(t) | Term::Fold(_, t)
-                | Term::Group(_, t) | Term::Canon(t) | Term::Store { inner: t, .. }
-                | Term::Tile { inner: t, .. } | Term::PartitionK { inner: t, .. } => reads(t, result, keys, count),
-                Term::Union(arms) => arms.iter().all(|t| reads(t, result, keys, count)),
-                Term::Choose(arms) => arms.iter().all(|(_, t)| reads(t, result, keys, count)),
-                Term::Rows(_) | Term::Ref(_) => true,
+        let keys: Vec<_> = advice.keys.iter().map(symbol_name).collect();
+        let reads: Vec<_> = analysis.obligations.iter().filter_map(|obligation| {
+            match obligation {
+                cq_lang_sequence::Obligation::Provider { provider, keys, capability, .. }
+                    if Some(provider) == result => Some((keys, capability)),
+                _ => None,
             }
+        }).collect();
+        if reads.is_empty() || reads.iter().any(|(lookup, capability)| **lookup != keys
+            || !matches!(capability, cq_lang_sequence::Capability::Exact
+                | cq_lang_sequence::Capability::Membership))
+        {
+            return Err(syn::Error::new_spanned(&advice.name, "BE-KeyPartProvider: Store requires complete-key exact lookup or membership reads"));
         }
-        let mut count = 0;
-        if !result.is_some_and(|result| source.sequence.definitions.iter().all(|d| reads(&d.term, result, &advice.keys, &mut count))) || count == 0 {
-            return Err(syn::Error::new_spanned(&advice.name, "BE-KeyPartProvider: Store must build a lookup provider"));
+        if let Some(result) = result
+            && source.sequence.definitions.iter().take(index + 1).any(|definition|
+                analysis.provider_reads.get(&symbol_name(&definition.name))
+                    .is_some_and(|reads| reads.contains(result)))
+        {
+            return Err(syn::Error::new_spanned(&advice.name,
+                "BE-KeyPartProvider: publication must precede every keyed read of its physical provider"));
         }
         provider = result.cloned();
     }
@@ -213,6 +283,15 @@ pub fn key_partition_in(
                 return Err(syn::Error::new_spanned(&advice.name, "BE-KeyPartProvider: routing keys must equal the complete outer provider key"));
             }
             let ty = &keyed.ty;
+            if matches!(ty, syn::Type::Path(path) if path.qself.is_none()
+                && path.path.segments.len() == 3
+                && path.path.segments[0].ident == "cq_storage"
+                && path.path.segments[1].ident == "sharded"
+                && path.path.segments[2].ident == "Sharded")
+            {
+                return Err(syn::Error::new_spanned(&advice.name,
+                    "BE-KeyPartProvider: physical provider is already routed"));
+            }
             let entry_index = LitInt::new(&entry_index.to_string(), advice.name.span());
             target.structures = cq_rewrite_passes::retype(
                 &target.structures, quote!(entry(#entry_index) => ::cq_storage::sharded::Sharded<#ty>),
@@ -221,6 +300,9 @@ pub fn key_partition_in(
         }
         if !found {
             return Err(syn::Error::new_spanned(&advice.name, "BE-KeyPartProvider: no built provider layout"));
+        }
+        for definition in target.sequence.definitions.iter_mut().skip(index + 1) {
+            redirect_references(&mut definition.term, &advice.name, &advice.input);
         }
     }
     target.sequence.definitions[index].term = output;

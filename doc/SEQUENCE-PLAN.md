@@ -74,7 +74,7 @@ pub enum Term { Rows(Ident), Map(Ident, Box<Term>), Flatten(Box<Term>), Compact(
                 Choose(Vec<(Guard, Term)>), Ref(Ident) }
 
 /// Machine model: a tree of levels with labels. Data, not code; each target exports one.
-pub struct Machine { pub name: Ident, pub items: usize, pub root: LevelNode }
+pub struct Machine { pub name: Ident, pub items: usize, pub key_partition_threshold: usize, pub root: LevelNode }
 pub struct LevelNode { pub name: Ident, pub collaborative: bool, pub dynamic: bool, pub width: Option<usize>, pub children: Vec<LevelNode> }
 
 /// Target catalogs are ordered syntax/capability data, with no target dependency here.
@@ -381,6 +381,23 @@ Laws:
 - PL-Cost: the work/span model compares legal segmented and plain schedules
   at the first feasible machine geometry. Proven lower span wins, then fewer
   stores and dispatches; equality or incomparability keeps the earlier candidate.
+  Eligible exact-key native provider Stores retain a checked runtime `choose`
+  in every candidate: below the positive machine `key_partition_threshold`
+  (target default 65,536 published input rows), use the one-part identity cover;
+  at or above it, use the machine's fixed routing width. The written guard names
+  the prior publication with `Len::Input`; it is not a cardinality estimate.
+  Both branches use `Sharded<I>`; the identity branch builds native `I` without
+  hash routing. Replay advice is
+  `key_partition(provider, published, [keys], P, threshold 65536)`.
+  Policy `select true` forces fixed routing without a guard; `select false`
+  keeps native storage. Authored grades remain authoritative.
+  Tasks author syntax is `plan_tasks(threshold 65536,
+  key_partition(provider, select true))`; `threshold` configures the machine,
+  and omitted policies remain adaptive. The translator evaluates the recorded
+  guard, never a target-local threshold.
+  Provider eligibility uses the completed schedule's grading obligations:
+  distributed/segmented range reads keep native providers rather than granting
+  range capability to a hash-routed family.
   Cost is an argument, never a meaning.
 
 The checked `cq_sequence_plan::cost(&Program, &Machine)` API exposes the same

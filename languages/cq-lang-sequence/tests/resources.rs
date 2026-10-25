@@ -14,19 +14,17 @@ fn machine() -> Machine {
             children,
         }
     }
-    Machine {
-        name: syn::parse_quote!(target),
-        items: 3,
-        root: node(
-            "host",
-            vec![node(
-                "engine",
-                vec![node("team", vec![node("item", vec![])])],
-            )],
-        ),
-        // Deliberately not a GPU layout: the callback sees only structural facts.
-        layout: Some(|shape| Ok(shape.chains.iter().map(Vec::len).sum())),
-    }
+    Machine { key_partition_threshold: 65536, name: syn::parse_quote!(target),
+    items: 3,
+    root: node(
+        "host",
+        vec![node(
+            "engine",
+            vec![node("team", vec![node("item", vec![])])],
+        )],
+    ),
+    // Deliberately not a GPU layout: the callback sees only structural facts.
+    layout: Some(|shape| Ok(shape.chains.iter().map(Vec::len).sum())), }
 }
 
 fn lookup_program(body: proc_macro2::TokenStream, grades: proc_macro2::TokenStream) -> Program {

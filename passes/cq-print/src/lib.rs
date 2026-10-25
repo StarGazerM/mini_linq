@@ -668,10 +668,9 @@ impl<'a> Context<'a> {
                     &build_name,
                     quote!(__cq_part.iter().cloned().map(|#pattern| #nested)),
                 );
-                quote!(::cq_storage::sharded::Sharded::<#inner, _>::build_parts_with_router(
-                    (#parts).iter().map(|__cq_part| {
-                        (#part_rows).collect::<::std::vec::Vec<_>>()
-                    }).collect::<::std::vec::Vec<_>>(),
+                quote!(::cq_storage::sharded::Sharded::<#inner, _>::build_from_parts_with_router(
+                    &(#parts),
+                    |__cq_part| <#inner as ::cq_storage::Build<_>>::build(#part_rows),
                     |__cq_key: &(#(#key_types,)*), __cq_count| {
                         ::cq_storage::sharded::route_index(&(#(&__cq_key.#fields,)*), __cq_count)
                     }

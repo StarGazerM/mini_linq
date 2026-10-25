@@ -209,19 +209,17 @@ fn explain_case(case: &QueryCase, through: Stage, repository_root: &Path) -> Res
     let sequence = artifacts.attempt("Structures -> Sequence", || {
         cq_sequence_lowering::compile(&staged)
     })?;
-    let machine = cq_lang_sequence::Machine {
-        layout: None,
-        name: syn::parse_quote!(sequential),
-        items: 1,
-        root: cq_lang_sequence::LevelNode {
-            shared_bytes: None,
-            name: syn::parse_quote!(host),
-            collaborative: false,
-            dynamic: false,
-            width: None,
-            children: vec![],
-        },
-    };
+    let machine = cq_lang_sequence::Machine { key_partition_threshold: 65536, layout: None,
+    name: syn::parse_quote!(sequential),
+    items: 1,
+    root: cq_lang_sequence::LevelNode {
+        shared_bytes: None,
+        name: syn::parse_quote!(host),
+        collaborative: false,
+        dynamic: false,
+        width: None,
+        children: vec![],
+    }, };
     let analysis = artifacts.attempt("Sequence host grading", || {
         cq_lang_sequence::check_grading(&sequence, &machine)
     })?;

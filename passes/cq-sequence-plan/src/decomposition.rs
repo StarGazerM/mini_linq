@@ -101,6 +101,15 @@ pub(crate) fn advise(
         if grade.level.len() == 1 && grade.level[0] == machine.root.name {
             continue;
         }
+        // Segment introduces an inline Store. BE-Boundary requires every
+        // separated Store to be named, so only a collaborative grade admits
+        // this local offsets publication; a task/pool keeps the plain schedule.
+        let collaborative = grade.level.iter().skip(1).try_fold(&machine.root, |level, name| {
+            level.children.iter().find(|child| child.name == *name)
+        }).is_some_and(|level| level.collaborative);
+        if !collaborative {
+            continue;
+        }
         if has_tile(program, &definition.term) {
             continue;
         }
