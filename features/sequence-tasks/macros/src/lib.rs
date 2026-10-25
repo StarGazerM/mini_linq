@@ -5,7 +5,8 @@
 
 use proc_macro::TokenStream;
 
-/// Fill only unauthored decisions using the Tasks machine and catalog.
+/// Fill only execution decomposition using the Tasks machine and catalog; the
+/// relational order stays the authored or written one (no automatic reordering).
 #[proc_macro]
 pub fn plan(input: TokenStream) -> TokenStream {
     cq_stage::rewrite::<cq_lang_sequence::Program>(input.into(), |source, arguments| {
@@ -17,7 +18,7 @@ pub fn plan(input: TokenStream) -> TokenStream {
         }
         let catalog = cq_sequence_tasks::catalog();
         let source = cq_sequence_tasks::select_providers(source, &catalog)?;
-        Ok(cq_sequence_plan::plan(
+        Ok(cq_sequence_plan::decompose(
             &source,
             &cq_sequence_tasks::machine(),
             &catalog,
