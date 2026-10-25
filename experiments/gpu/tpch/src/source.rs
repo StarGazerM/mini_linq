@@ -1181,8 +1181,11 @@ mod tests {
             &["l_orderkey".into(), "l_linenumber".into()],
         ));
         let h13 = crate::stages::Program::import(source("h13")).unwrap().unwrap();
+        let publications = h13.preprocessing.iter()
+            .map(|preprocess| (preprocess.name.to_string(), preprocess.columns.clone()))
+            .collect();
         for index in 0..h13.stages.len() {
-            let kernel = h13.kernel(index, &BTreeMap::new()).unwrap();
+            let kernel = h13.kernel(index, &publications).unwrap();
             assert_eq!(kernel.evidence, h13.stages[index].evidence);
             assert!(kernel.evidence.has_key("Customer", &["c_custkey".into()]));
             assert!(kernel.evidence.has_key("QualifiedOrders", &["order_key".into()]));
