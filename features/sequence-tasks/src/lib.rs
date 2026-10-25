@@ -16,7 +16,7 @@
 //! exclusive index-insertion split. Deferred builds belong to the phase that
 //! demands them. Runtime task contexts merge primitive worker costs at joins.
 
-use cq_lang_sequence::{Analysis, LevelNode, Machine, Program, Term, Tiling};
+use cq_lang_sequence::{Analysis, LevelNode, Machine, Program, Publication, Term, Tiling};
 use quote::{format_ident, quote};
 
 /// Pool scheduling parameters, independent of the checked partition width.
@@ -335,15 +335,22 @@ fn translate_mode(
     profile: bool,
 ) -> syn::Result<syn::Expr> {
     let mut tiles = std::collections::BTreeMap::new();
-    let mut partition_inputs = std::collections::BTreeSet::new();
+    let mut host_tiles = std::collections::BTreeSet::new();
     for definition in &program.sequence.definitions {
-        keyed::ancestors(&definition.term, &mut partition_inputs);
         let name = syn::ext::IdentExt::unraw(&definition.name).to_string();
         let mut nodes = Vec::new();
         tile_nodes(&definition.term, &mut nodes);
         if let Some(kinds) = analysis.tilings.get(&name) {
-            for (node, kind) in nodes.into_iter().zip(kinds) {
+            for (index, (node, kind)) in nodes.into_iter().zip(kinds).enumerate() {
                 tiles.insert(node, kind);
+                if analysis
+                    .host_tiles
+                    .get(&name)
+                    .and_then(|inputs| inputs.get(index))
+                    .is_some_and(Option::is_some)
+                {
+                    host_tiles.insert(node);
+                }
             }
         }
     }
@@ -383,21 +390,25 @@ fn translate_mode(
                 next_driver += 1;
                 let context = emitter.context();
                 let host_result = input.result.as_ref().filter(|result| {
-                    inner_term(term).is_some_and(|inner| base_rows(inner, program))
+                    host_tiles.contains(&(term as *const Term))
                         && context.physical_analysis.hosts.contains_key(*result)
                         && !context.analysis.selections.contains_key(*result)
-                        && context.join_filter_ids(result).is_none()
                         && matches!(&context.physical[*result].operator,
                         cq_lang_sequence::structures::physical::Operator::Rename(rename)
                             if !context.carries_positions(result) || rename.constants.is_none())
                 });
-                let positional = host_result.filter(|result| context.carries_positions(result));
+                let positional = host_result.filter(|result| {
+                    context.carries_positions(result) || context.join_filter_ids(result).is_some()
+                });
                 if let Some(result) = positional {
                     let host = cq_print::Context::positional_host(
                         &context.physical_analysis.hosts[result],
                     );
                     let ids = quote!(::cq_storage::PositionalRows::position_range(
                         #host, #binding * #n..(#binding + 1) * #n));
+                    let ids = context
+                        .join_filter_ids_from(result, ids.clone())
+                        .unwrap_or(ids);
                     let rows = context.profile_stream(result, context.positional_rows(result, ids));
                     partitions.push(TaskTile {
                         binding,
@@ -439,7 +450,29 @@ fn translate_mode(
                     }
                     _ => None,
                 };
-                output.rows = keyed::partition(emitter, input, keys, *parts, config.grain, stored)?;
+                let borrowed_host = match inner.as_ref() {
+                    Term::Ref(name) => match analysis
+                        .publications
+                        .get(&cq_lang_sequence::structures::symbol_name(name))
+                    {
+                        Some(Publication::BorrowHost { result, .. })
+                            if input.result.as_ref() == Some(result) =>
+                        {
+                            Some(result.as_str())
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                output.rows = keyed::partition(
+                    emitter,
+                    input,
+                    keys,
+                    *parts,
+                    config.grain,
+                    stored,
+                    borrowed_host,
+                )?;
             } else if matches!(term, Term::Canon(_)) && child.is_some_and(|input| input.depth == 1)
             {
                 output.rows = keyed::canon(emitter, child.unwrap())?;
@@ -549,53 +582,65 @@ fn translate_mode(
                 // Symbolic distributing tiles remain partitioned until joined.
                 output.partitioned = false;
             }
-            let routed_provider = output.result.as_ref().is_some_and(|result|
-                analysis.structures.built.get(result).is_some_and(|providers|
-                    providers.iter().any(|(_, ty)| matches!(ty, syn::Type::Path(path)
-                        if path.path.segments.last().is_some_and(|segment| segment.ident == "Sharded")))));
-            if matches!(term, Term::Store { .. }) && output.depth == 0
-                && base_rows(term, program)
-                && output.result.as_ref().is_some_and(|result|
-                    emitter.context().physical_analysis.hosts.contains_key(result)
-                    && (routed_provider || analysis.structures.built.get(result).is_none_or(Vec::is_empty))
-                    && !analysis.structures.selections.contains_key(result))
+            let publication = analysis.publications.get(owner).filter(|_| {
+                program
+                    .sequence
+                    .definitions
+                    .iter()
+                    .any(|definition| std::ptr::eq(&definition.term, term))
+            });
+            if matches!(term, Term::Store { .. })
+                && output.depth == 0
+                && let Some(Publication::BorrowHost { result, .. }) = publication
             {
                 // An immutable base relation is already resident storage. The
                 // checked Store publishes that borrow; it need not clone rows.
                 output.rows = child.expect("checked base store").rows.clone();
-                let scan = emitter.context().host_scan(output.result.as_ref().expect("base row provenance"));
-                emitter.publish_length(owner, quote!({
-                    let __cq_length_rows = #scan;
-                    let (__cq_minimum, __cq_maximum) = __cq_length_rows.size_hint();
-                    if __cq_maximum == ::core::option::Option::Some(__cq_minimum) {
-                        __cq_minimum
-                    } else {
-                        __cq_length_rows.count()
-                    }
-                }));
+                let scan = emitter.context().host_scan(result);
+                emitter.publish_length(
+                    owner,
+                    quote!({
+                        let __cq_length_rows = #scan;
+                        let (__cq_minimum, __cq_maximum) = __cq_length_rows.size_hint();
+                        if __cq_maximum == ::core::option::Option::Some(__cq_minimum) {
+                            __cq_minimum
+                        } else {
+                            __cq_length_rows.count()
+                        }
+                    }),
+                );
                 emitter.mark_target_published(owner);
-            } else if output.depth == 0 && (partition_inputs.contains(owner) || routed_provider)
-                && let Term::Store { inner, .. } = term
-                && let Term::Ref(source) = inner.as_ref()
-                && emitter.alias_store(owner, &cq_lang_sequence::structures::symbol_name(source))
+            } else if matches!(term, Term::Store { .. })
+                && output.depth == 0
+                && let Some(Publication::Alias { source }) = publication
             {
+                assert!(
+                    emitter.alias_store(owner, source),
+                    "checked publication alias"
+                );
                 output.rows = child.expect("checked store alias").rows.clone();
                 if analysis.results.get(owner) == child.and_then(|value| value.result.as_ref())
-                    && let Some(binding) = stored_sources.get(&cq_lang_sequence::structures::symbol_name(source)).cloned()
+                    && let Some(binding) = stored_sources.get(source).cloned()
                 {
                     stored_sources.insert(owner.to_owned(), binding);
                 }
-            } else if matches!(term, Term::Store { .. }) && output.depth == 0
-                && (partition_inputs.contains(owner) || routed_provider)
+            } else if matches!(term, Term::Store { .. })
+                && output.depth == 0
+                && matches!(publication, Some(Publication::OwnRows { staged: true }))
             {
                 let label = format!("{owner}.rows");
                 emitter.context_mut().profile_label(
-                    &label, "ROWS_BUILD", "", output.result.iter().cloned().collect(),
+                    &label,
+                    "ROWS_BUILD",
+                    "",
+                    output.result.iter().cloned().collect(),
                 );
-                let rows = emitter.context().profile_inserting(&label, output.rows.clone());
-                let build = emitter.context().profile_build(
-                    &label, quote!((#rows).collect::<::std::vec::Vec<_>>()),
-                );
+                let rows = emitter
+                    .context()
+                    .profile_inserting(&label, output.rows.clone());
+                let build = emitter
+                    .context()
+                    .profile_build(&label, quote!((#rows).collect::<::std::vec::Vec<_>>()));
                 let binding = format_ident!("__cq_key_source_{}", owner);
                 // A publication may rehead an equivalent Physical result.
                 // Reuse the raw slice only when its carrier is unchanged.
@@ -612,19 +657,22 @@ fn translate_mode(
                 emitter.mark_target_published(owner);
                 emitter.publish_length(owner, quote!(#binding.len()));
                 output.rows = quote!(#binding.iter().cloned());
-            } else if matches!(term, Term::Store { .. }) && output.depth == 1
-                && let Some(keys) = keyed::partition_keys(term, program)
+            } else if matches!(term, Term::Store { .. })
+                && output.depth == 1
+                && let Some(Publication::Parts { keys }) = publication
                 && let Some(result) = output.result.clone()
-                && analysis.structures.built.get(&result).is_some_and(|providers|
-                    providers.iter().any(|(_, ty)| matches!(ty, syn::Type::Path(path)
-                        if path.path.segments.last().is_some_and(|segment| segment.ident == "Sharded"))))
             {
                 let label = format!("{owner}.parts");
                 emitter.context_mut().profile_label(
-                    &label, "PARTITION_BUILD", "", vec![result.clone()],
+                    &label,
+                    "PARTITION_BUILD",
+                    "",
+                    vec![result.clone()],
                 );
                 let rows = &output.rows;
-                let part = emitter.context().profile_inserting(&label, quote!(__cq_part));
+                let part = emitter
+                    .context()
+                    .profile_inserting(&label, quote!(__cq_part));
                 let build = emitter.context().profile_build(
                     &label,
                     quote!((#rows).map(|__cq_part|
@@ -638,9 +686,11 @@ fn translate_mode(
                 emitter.context_mut().statements.push(syn::parse_quote!(
                     let _retain_parts = #binding.iter().map(::cq_storage::retain_rows).collect::<::std::vec::Vec<_>>();
                 ));
-                let keys = keys.iter().map(cq_lang_sequence::structures::symbol_name).collect::<Vec<_>>();
                 let repr = emitter.context_mut().materialize_partitioned(
-                    &result, quote!(#binding), &keys,
+                    &result,
+                    quote!(#binding),
+                    keys,
+                    &analysis.routed_providers[&result],
                 )?;
                 emitter.context_mut().reprs.insert(result, repr);
                 emitter.context_mut().bound = true;
@@ -685,27 +735,6 @@ pub(crate) struct TaskTile {
     binding: syn::Ident,
     prepare: proc_macro2::TokenStream,
     parts: proc_macro2::TokenStream,
-}
-
-fn inner_term(term: &Term) -> Option<&Term> {
-    match term {
-        Term::Tile { inner, .. } => Some(inner),
-        _ => None,
-    }
-}
-
-fn base_rows(term: &Term, program: &Program) -> bool {
-    match term {
-        Term::Rows(_) => true,
-        Term::Store { inner, .. } => base_rows(inner, program),
-        Term::Ref(name) => program
-            .sequence
-            .definitions
-            .iter()
-            .find(|definition| definition.name == *name)
-            .is_some_and(|definition| base_rows(&definition.term, program)),
-        _ => false,
-    }
 }
 
 fn uses_binding(tokens: &proc_macro2::TokenStream, binding: &syn::Ident) -> bool {

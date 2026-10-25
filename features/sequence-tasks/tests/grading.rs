@@ -17,6 +17,64 @@ fn program(sequence: proc_macro2::TokenStream, grades: proc_macro2::TokenStream)
 }
 
 #[test]
+fn checked_publication_owns_rows_once_and_aliases_without_copying() {
+    use cq_lang_sequence::Publication;
+    let program = program(
+        quote::quote! {
+            borrowed = store rows r;
+            retained = store canon borrowed;
+            retained_parts = partition_k[a](64) retained;
+            alias = store retained;
+            parts = store partition_k[a](64) alias;
+            joined = store parts;
+            result = flatten joined;
+        },
+        quote::quote! {
+            borrowed at host; retained at host; retained_parts at pool.task;
+            alias at host; parts at pool; joined at host; result at host;
+        },
+    );
+    let facts = check_grading(&program, &machine()).unwrap();
+    assert!(matches!(
+        facts.publications["borrowed"],
+        Publication::BorrowHost { .. }
+    ));
+    assert_eq!(
+        facts.publications["retained"],
+        Publication::OwnRows { staged: true }
+    );
+    assert_eq!(
+        facts.publications["alias"],
+        Publication::Alias {
+            source: "retained".into()
+        }
+    );
+    let tasks = translate(&program, &facts).unwrap();
+    let tokens = tasks.to_token_stream().to_string();
+    assert!(
+        tokens.contains("let __cq_key_source_retained ="),
+        "{tokens}"
+    );
+    assert!(!tokens.contains("let __cq_key_source_alias ="), "{tokens}");
+    assert!(
+        !tokens.contains("let __cq_key_source_borrowed ="),
+        "{tokens}"
+    );
+    run_partition_fixture(quote::quote! {
+        fn main() {
+            for R in [&[][..], &[(1i32,)][..], &[(2,), (1,), (2,), (3,)][..]] {
+                let mut actual: Vec<(i32,)> = (#tasks).map(|(a,)| (*a,)).collect();
+                actual.sort();
+                let mut expected = R.to_vec();
+                expected.sort();
+                expected.dedup();
+                assert_eq!(actual, expected);
+            }
+        }
+    });
+}
+
+#[test]
 fn machine_has_separated_dynamic_pool_and_sequential_leaf() {
     let machine = machine();
     assert_eq!(machine.name, "tasks");
@@ -1400,6 +1458,95 @@ fn flattened_key_covers_restore_positional_reads() {
             let mut actual: Vec<_> = (#expression).map(|(a,)| *a).collect();
             actual.sort();
             assert_eq!(actual, [2, 3]);
+        }
+    });
+}
+
+#[test]
+fn filtered_host_tiles_apply_predicates_without_collecting_the_host() {
+    let mut program = late_covering_program(quote::quote!(rows l));
+    program.sequence = syn::parse_quote! {
+        sequence {
+            b = store map b map s rows r;
+            parts = store map out flatten lookup b [x] flatten tile 64 rows l;
+            joined = store parts;
+            result = store canon joined;
+        }
+    };
+    program.graded = Some(syn::parse_quote! {
+        graded tasks { b at host; parts at pool; joined at host; result at host; }
+    });
+    let facts = check_grading(&program, &machine()).unwrap();
+    assert!(!facts.structures.join_filters["l"].is_empty());
+    let expression = translate(&program, &facts).unwrap();
+    let rendered = expression.to_token_stream().to_string();
+    assert!(rendered.contains("position_range"), "{rendered}");
+    assert!(rendered.contains("ReadPredicate :: test"), "{rendered}");
+    assert!(!rendered.contains("let __cq_driver = ("), "{rendered}");
+    run_partition_fixture(quote::quote! {
+        fn main() {
+            let left: Vec<_> = (0..257i64).map(|i| (i % 17, i)).collect();
+            let right = [(2i64, 4i64), (5, 3), (9, 0), (11, 8)];
+            for threads in [1, 24] {
+                rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(|| {
+                    for length in [0, 1, 63, 64, 65, 257] {
+                        let L = &left[..length];
+                        let R = &right[..];
+                        let expected: ::std::collections::BTreeSet<_> = L.iter()
+                            .flat_map(|&(x, y)| R.iter()
+                                .filter(move |&&(key, z)| key == x && z > 1)
+                                .map(move |&(_, z)| (x, y, z)))
+                            .collect();
+                        let actual: ::std::collections::BTreeSet<_> =
+                            (#expression).map(|(x, y, z)| (*x, *y, *z)).collect();
+                        assert_eq!(actual, expected);
+                    }
+                });
+            }
+        }
+    });
+}
+
+#[test]
+fn borrowed_host_key_cover_uses_host_tiles_without_input_collection() {
+    let program = program(
+        quote::quote! {
+            input = store rows r;
+            parts = store canon partition_k[a](64) input;
+            joined = store parts;
+            result = flatten joined;
+        },
+        quote::quote! {
+            input at host; parts at pool; joined at host; result at host;
+        },
+    );
+    let facts = check_grading(&program, &machine()).unwrap();
+    assert!(matches!(
+        facts.publications["input"],
+        cq_lang_sequence::Publication::BorrowHost { .. }
+    ));
+    let expression = translate(&program, &facts).unwrap();
+    let rendered = expression.to_token_stream().to_string();
+    assert!(rendered.contains("__cq_route_source"), "{rendered}");
+    assert!(
+        !rendered.contains("let __cq_key_source_input"),
+        "{rendered}"
+    );
+    run_partition_fixture(quote::quote! {
+        fn main() {
+            let rows: Vec<_> = (0..4097i32).map(|i| (i % 131,)).collect();
+            for threads in [1, 24] {
+                rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(|| {
+                    for length in [0, 1, 63, 64, 65, 4097] {
+                        let R = &rows[..length];
+                        let actual: ::std::collections::BTreeSet<_> =
+                            (#expression).map(|(a,)| *a).collect();
+                        let expected: ::std::collections::BTreeSet<_> =
+                            R.iter().map(|&(a,)| a).collect();
+                        assert_eq!(actual, expected);
+                    }
+                });
+            }
         }
     });
 }

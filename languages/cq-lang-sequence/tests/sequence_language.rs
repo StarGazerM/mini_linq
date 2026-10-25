@@ -16,6 +16,137 @@ fn program(body: proc_macro2::TokenStream) -> Program {
     .unwrap()
 }
 
+#[test]
+fn publication_distinguishes_borrow_alias_and_real_retained_rows() {
+    let p = program(quote! {
+        borrowed = store rows r;
+        view = borrowed;
+        borrowed_again = store view;
+        retained = store canon borrowed;
+        retained_parts = partition_k[a](4) retained;
+        alias = store retained;
+        alias_parts = partition_k[a](4) alias;
+    });
+    let analysis = contract::check(&p).unwrap();
+    let borrow = Publication::BorrowHost {
+        result: "r".into(),
+        host: "R".into(),
+    };
+    assert_eq!(analysis.publications["borrowed"], borrow);
+    assert_eq!(analysis.publications["borrowed_again"], borrow);
+    assert!(!analysis.publications.contains_key("view"));
+    assert_eq!(analysis.host_sources["view"], "r");
+    assert_eq!(
+        analysis.publications["retained"],
+        Publication::OwnRows { staged: true }
+    );
+    assert_eq!(
+        analysis.publications["alias"],
+        Publication::Alias {
+            source: "retained".into()
+        }
+    );
+    assert!(!analysis.host_sources.contains_key("retained"));
+}
+
+#[test]
+fn publication_alias_preserves_original_carrier_across_reheading() {
+    let p: Program = syn::parse_quote! {
+        physical {
+            relation R(a:i32);
+            r = pipe canon rename R@0 {a -> a};
+            s = pipe canon project r keep {a};
+            return s as answer(a);
+        }
+        structures { r host scan = Reader []; r canon = Canon; s canon = Canon; }
+        sequence {
+            input = store canon rows r;
+            input_parts = partition_k[a](4) input;
+            s = store input;
+            out = flatten partition_k[a](4) s;
+        }
+    };
+    let analysis = contract::check(&p).unwrap();
+    assert_eq!(analysis.results["input"], "r");
+    assert_eq!(analysis.results["s"], "s");
+    assert_eq!(
+        analysis.publications["s"],
+        Publication::Alias {
+            source: "input".into()
+        }
+    );
+    assert!(!analysis.host_sources.contains_key("s"));
+}
+
+#[test]
+fn routed_publication_checks_native_representation_and_stored_key_coverage() {
+    let mut p = lookup_program(quote! {
+        input = store rows r;
+        r = store partition_k[a](4) input;
+        out = rows l;
+    });
+    let entry = p
+        .structures
+        .structures
+        .entries
+        .iter_mut()
+        .find(|entry| matches!(entry.structure, structures::Structure::Built { .. }))
+        .unwrap();
+    let structures::Structure::Built { keyed, .. } = &mut entry.structure else {
+        unreachable!()
+    };
+    keyed.ty = syn::parse_quote!(::cq_storage::sharded::Sharded<Provider, _>);
+    let analysis = contract::check(&p).unwrap();
+    assert_eq!(
+        analysis.publications["r"],
+        Publication::Parts {
+            keys: vec!["a".into()]
+        }
+    );
+    assert_eq!(
+        analysis.routed_providers["r"][&0],
+        syn::parse_quote!(Provider)
+    );
+
+    p.sequence.definitions[1].term = syn::parse_quote!(store partition_k[b](4) input);
+    reject(&p, "BE-Publication");
+    p.sequence.definitions[1].term = syn::parse_quote!(store partition_k[a](4) input);
+    let entry = p
+        .structures
+        .structures
+        .entries
+        .iter_mut()
+        .find(|entry| matches!(entry.structure, structures::Structure::Built { .. }))
+        .unwrap();
+    let structures::Structure::Built { keyed, .. } = &mut entry.structure else {
+        unreachable!()
+    };
+    keyed.ty = syn::parse_quote!(::cq_storage::sharded::Sharded);
+    reject(&p, "BE-Publication");
+}
+
+#[test]
+fn unrelated_sharded_type_is_not_a_native_routed_provider() {
+    let mut p = lookup_program(quote! { input = store rows r; out = rows l; });
+    let entry = p
+        .structures
+        .structures
+        .entries
+        .iter_mut()
+        .find(|entry| matches!(entry.structure, structures::Structure::Built { .. }))
+        .unwrap();
+    let structures::Structure::Built { keyed, .. } = &mut entry.structure else {
+        unreachable!()
+    };
+    keyed.ty = syn::parse_quote!(::custom::Sharded<Provider>);
+    let analysis = contract::check(&p).unwrap();
+    assert!(analysis.routed_providers.is_empty());
+    assert_eq!(
+        analysis.publications["input"],
+        Publication::OwnRows { staged: false }
+    );
+}
+
 fn lookup_program(body: proc_macro2::TokenStream) -> Program {
     syn::parse2(quote! {
         physical {

@@ -1,5 +1,4 @@
 //! Task realizations of the checked key-partition constructors.
-use cq_lang_sequence::Term;
 use cq_lang_sequence::structures::symbol_name;
 use cq_sequence_pull::{Emitter, Value};
 use quote::quote;
@@ -11,6 +10,7 @@ pub(crate) fn partition(
     parts: usize,
     grain: usize,
     stored: Option<&syn::Ident>,
+    borrowed_host: Option<&str>,
 ) -> syn::Result<proc_macro2::TokenStream> {
     if parts == 1 {
         let rows = &input.rows;
@@ -28,14 +28,49 @@ pub(crate) fn partition(
         .map(|key| emitter.context().access(result, &symbol_name(key)))
         .collect::<Vec<_>>();
     let key = cq_print::group(&keys);
+    let context = emitter.context();
+    let borrowed_host = borrowed_host.filter(|host| {
+        *host == result
+            && matches!(&context.physical[*host].operator,
+                cq_lang_sequence::structures::physical::Operator::Rename(rename)
+                if rename.constants.is_none()
+                    || (!context.carries_positions(host)
+                        && context.join_filter_ids(host).is_none()))
+    });
+    let mut prepare = quote!();
     let chunks = if let Some(stored) = stored {
         quote!(#stored.par_chunks(#grain).map(|__cq_chunk| __cq_chunk.iter().cloned()))
+    } else if let Some(result) = borrowed_host {
+        if context.carries_positions(result) || context.join_filter_ids(result).is_some() {
+            let host = cq_print::Context::positional_host(&context.physical_analysis.hosts[result]);
+            let ids = quote!(::cq_storage::PositionalRows::position_range(
+                #host, __cq_chunk * #grain..(__cq_chunk + 1) * #grain));
+            let ids = context
+                .join_filter_ids_from(result, ids.clone())
+                .unwrap_or(ids);
+            let rows = context.profile_stream(result, context.positional_rows(result, ids));
+            quote!((0..::cq_storage::PositionalRows::len(#host).div_ceil(#grain))
+                .into_par_iter().map(|__cq_chunk| #rows))
+        } else {
+            let host = &context.hosts[&context.physical_analysis.hosts[result]].value;
+            let rows = context.profile_stream(
+                result,
+                context.host_scan_from(result, Some(quote!(__cq_chunk))),
+            );
+            prepare = quote! {
+                use ::cq_sequence_tasks::combine::TileRows as _;
+                let __cq_route_source = ::cq_sequence_tasks::combine::TileSource(#host);
+                let __cq_route_source_ref = &&__cq_route_source;
+            };
+            quote!(__cq_route_source_ref.tile_rows(#grain).map(|__cq_chunk| #rows))
+        }
     } else {
         let rows = &input.rows;
         quote!((#rows).collect::<::std::vec::Vec<_>>().into_par_iter().chunks(#grain))
     };
     Ok(quote!({
         use ::rayon::prelude::*;
+        #prepare
         ::cq_sequence_tasks::combine::route_by(#chunks, #parts, |#pattern, __cq_count| {
             ::cq_storage::sharded::route_index(&#key, __cq_count)
         }).into_iter().map(::std::vec::Vec::into_iter)
@@ -79,67 +114,6 @@ pub(crate) fn group(
             #grouped
         }).into_iter().map(::std::vec::Vec::into_iter)
     }))
-}
-
-pub(crate) fn partition_keys<'a>(
-    term: &'a Term,
-    program: &'a cq_lang_sequence::Program,
-) -> Option<&'a [syn::Ident]> {
-    match term {
-        Term::PartitionK { keys, .. } => Some(keys),
-        Term::Ref(name) => program
-            .sequence
-            .definitions
-            .iter()
-            .find(|definition| definition.name == *name)
-            .and_then(|definition| partition_keys(&definition.term, program)),
-        Term::Store { inner, .. }
-        | Term::Canon(inner)
-        | Term::Map(_, inner)
-        | Term::Compact(_, inner)
-        | Term::Group(_, inner)
-        | Term::Lookup { inner, .. } => partition_keys(inner, program),
-        Term::Choose(arms) => {
-            let keys = arms
-                .first()
-                .and_then(|(_, arm)| partition_keys(arm, program))?;
-            arms.iter()
-                .all(|(_, arm)| partition_keys(arm, program) == Some(keys))
-                .then_some(keys)
-        }
-        _ => None,
-    }
-}
-
-pub(crate) fn ancestors(term: &Term, names: &mut std::collections::BTreeSet<String>) {
-    match term {
-        Term::PartitionK { inner, .. } => {
-            if let Term::Ref(name) = inner.as_ref() {
-                names.insert(symbol_name(name));
-            }
-            ancestors(inner, names);
-        }
-        Term::Map(_, inner)
-        | Term::Compact(_, inner)
-        | Term::Flatten(inner)
-        | Term::Fold(_, inner)
-        | Term::Group(_, inner)
-        | Term::Canon(inner)
-        | Term::Store { inner, .. }
-        | Term::Tile { inner, .. }
-        | Term::Lookup { inner, .. } => ancestors(inner, names),
-        Term::Choose(arms) => {
-            for (_, arm) in arms {
-                ancestors(arm, names);
-            }
-        }
-        Term::Union(arms) => {
-            for arm in arms {
-                ancestors(arm, names);
-            }
-        }
-        Term::Rows(_) | Term::Ref(_) => {}
-    }
 }
 
 /// Fold each scheduler task directly into a finite map, then merge maps on host.

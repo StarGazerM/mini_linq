@@ -70,6 +70,19 @@ impl Context<'_> {
             rest,
         ))
     }
+
+    /// Apply recorded join filters to an already bounded, base-relative cover.
+    /// Tasks use this adapter inside checked contiguous tiles rather than
+    /// collecting the complete filtered host scan before dispatch.
+    pub fn join_filter_ids_from(&self, name: &str, ids: TokenStream) -> Option<TokenStream> {
+        let (base, filters) = self.join_filters_of(name)?;
+        let host = Self::positional_host(&base);
+        Some(Self::remaining_join_filters(
+            &host.to_token_stream(),
+            ids,
+            &filters,
+        ))
+    }
     fn combined_join_filter_ids(
         &self,
         name: &str,

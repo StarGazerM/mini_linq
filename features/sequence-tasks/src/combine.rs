@@ -105,6 +105,12 @@ pub fn map_parts<R: Send, O: Send>(
 
 /// Route with a borrowing key projection, avoiding owned key copies solely
 /// for hashing. The router must return an index below the plan's positive count.
+///
+/// Each Rayon fold accumulates a contiguous range of chunks into shared owner
+/// buffers instead of allocating a set of buffers for every chunk. Ordered
+/// collection of the folds preserves per-owner chunk and row encounter order,
+/// regardless of how the pool splits the work. Unordered sources gain no order
+/// guarantee. Pool scheduling never changes the supplied partition geometry.
 pub fn route_by<R: Send, Chunks, Chunk>(
     chunks: Chunks,
     count: usize,
@@ -121,34 +127,41 @@ where
     };
     let buckets: Vec<Vec<Vec<R>>> = chunks
         .into_par_iter()
-        .map(|chunk| {
-            let route = || {
-                let mut buckets: Vec<_> = (0..count).map(|_| Vec::new()).collect();
-                for row in chunk {
-                    buckets[router(&row, count)].push(row);
+        .fold(
+            || (0..count).map(|_| Vec::new()).collect::<Vec<Vec<R>>>(),
+            |mut buckets, chunk| {
+                let route = || {
+                    for row in chunk {
+                        buckets[router(&row, count)].push(row);
+                    }
+                    buckets
+                };
+                cq_storage::profile_select! {
+                    plain { route() }
+                    counters { _context.run(route) }
                 }
-                buckets
-            };
-            cq_storage::profile_select! {
-                plain { route() }
-                counters { _context.run(route) }
-            }
-        })
+            },
+        )
         .collect();
     let mut owners: Vec<Vec<Vec<R>>> = (0..count)
         .map(|_| Vec::with_capacity(buckets.len()))
         .collect();
     for buckets in buckets {
         for (owner, bucket) in owners.iter_mut().zip(buckets) {
-            owner.push(bucket);
+            if !bucket.is_empty() {
+                owner.push(bucket);
+            }
         }
     }
     owners
         .into_par_iter()
         .map(|chunks| {
-            let mut rows = Vec::with_capacity(chunks.iter().map(Vec::len).sum());
-            for chunk in chunks {
-                rows.extend(chunk);
+            // Reuse the first nonempty buffer; a single fold needs no row copy.
+            let mut chunks = chunks.into_iter();
+            let mut rows = chunks.next().unwrap_or_default();
+            rows.reserve_exact(chunks.as_slice().iter().map(Vec::len).sum());
+            for mut chunk in chunks {
+                rows.append(&mut chunk);
             }
             rows
         })
@@ -185,14 +198,84 @@ mod tests {
                 },
             ],
         ];
+        let mut expected = vec![Vec::new(); 7];
+        for row in chunks.iter().flatten() {
+            let owner = cq_storage::sharded::route_index(&(&row.key,), 7);
+            expected[owner].push(row.key.as_ptr());
+        }
         let parts = route_by(chunks, 7, |row, n| {
             cq_storage::sharded::route_index(&(&row.key,), n)
         });
         assert_eq!(parts.iter().map(Vec::len).sum::<usize>(), 3);
         for (part, rows) in parts.iter().enumerate() {
+            // The non-Clone rows keep the original owned key allocations and
+            // their occurrence order, including repeated equal keys.
+            assert_eq!(
+                rows.iter().map(|row| row.key.as_ptr()).collect::<Vec<_>>(),
+                expected[part]
+            );
             for row in rows {
                 assert_eq!(part, cq_storage::sharded::route_index(&(&row.key,), 7));
             }
+        }
+    }
+    #[test]
+    fn routing_preserves_ordered_occurrences() {
+        for threads in [1, 2, 7] {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mixed: Vec<Vec<_>> = (0..257usize)
+                        .map(|chunk| {
+                            let len = if chunk == 127 { 1024 } else { chunk % 13 };
+                            (0..len)
+                                .map(|row| ((chunk + row) % 11, chunk * 1024 + row))
+                                .collect()
+                        })
+                        .collect();
+                    let skewed: Vec<Vec<_>> = mixed
+                        .iter()
+                        .map(|chunk| {
+                            chunk
+                                .iter()
+                                .map(|&(_, occurrence)| (7, occurrence))
+                                .collect()
+                        })
+                        .collect();
+                    for chunks in [
+                        vec![],
+                        vec![vec![]; 17],
+                        vec![vec![(7, 0); 113]; 23],
+                        mixed,
+                        skewed,
+                    ] {
+                        for count in [1, 7, 32] {
+                            let mut expected = vec![Vec::new(); count];
+                            for &row in chunks.iter().flatten() {
+                                let owner = cq_storage::sharded::route_index(&(row.0,), count);
+                                expected[owner].push(row);
+                            }
+                            let routed = route_by(chunks.clone(), count, |row, n| {
+                                cq_storage::sharded::route_index(&(row.0,), n)
+                            });
+                            assert_eq!(routed, expected);
+
+                            // Filtering removes indexedness, not source encounter
+                            // order; both forms must retain every occurrence.
+                            let routed = route_by(
+                                chunks
+                                    .clone()
+                                    .into_par_iter()
+                                    .filter(|chunk| !chunk.is_empty()),
+                                count,
+                                |row, n| cq_storage::sharded::route_index(&(row.0,), n),
+                            );
+                            assert_eq!(routed, expected);
+                        }
+                    }
+                });
         }
     }
     #[test]

@@ -375,7 +375,7 @@ fn canon_partition_and_machine_width_are_explicit() {
                 .trace
                 .iter()
                 .any(|a| matches!(a, Advice::KeyPartition(_))),
-            parts >= 4,
+            routed_cost.better_than(&global_cost),
             "routing must consume bandwidth: parts={parts}",
         );
         replay(&source, &automatic);

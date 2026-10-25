@@ -319,6 +319,25 @@ pub enum Obligation {
     },
 }
 
+/// Checked ownership of a named publication. Views have no publication entry.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Publication {
+    BorrowHost {
+        result: String,
+        host: String,
+    },
+    Alias {
+        source: String,
+    },
+    /// `staged` publishes a raw row buffer for subsequent key routing.
+    OwnRows {
+        staged: bool,
+    },
+    Parts {
+        keys: Vec<String>,
+    },
+}
+
 /// Checked facts consumed by rewrites and target translations.
 #[derive(Clone, Debug)]
 pub struct Analysis {
@@ -336,6 +355,15 @@ pub struct Analysis {
     pub partial_groups: BTreeMap<String, Vec<bool>>,
     pub views: BTreeSet<String>,
     pub stores: BTreeMap<String, Len>,
+    /// Publication ownership, derived once from checked provenance and consumers.
+    pub publications: BTreeMap<String, Publication>,
+    /// Pure Rows/Ref/Store provenance, before any support-equal reheading.
+    pub host_sources: BTreeMap<String, String>,
+    /// Borrowable base provenance of Tile inputs, in constructor preorder.
+    pub host_tiles: BTreeMap<String, Vec<Option<String>>>,
+    /// Native routed-provider representation: result -> provider ordinal -> inner type.
+    /// Only the canonical cq_storage sharded ABI is admitted here.
+    pub routed_providers: BTreeMap<String, BTreeMap<usize, syn::Type>>,
     pub capabilities: BTreeMap<(String, Vec<String>), Capability>,
     /// Providers evaluated directly by each named definition, excluding Ref
     /// dependencies and support-equal Map reheadings.

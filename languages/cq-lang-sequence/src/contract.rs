@@ -10,6 +10,8 @@ use crate::{Analysis, Capability, Guard, Len, Monoid, Obligation, OutputProtocol
 
 #[path = "lookup_semantics.rs"]
 mod lookup_semantics;
+#[path = "publication.rs"]
+mod publication;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Meaning {
@@ -214,6 +216,10 @@ fn analyze_in(
             partial_groups: BTreeMap::new(),
             views: BTreeSet::new(),
             stores: BTreeMap::new(),
+            publications: BTreeMap::new(),
+            host_sources: BTreeMap::new(),
+            host_tiles: BTreeMap::new(),
+            routed_providers: BTreeMap::new(),
             capabilities: BTreeMap::new(),
             provider_reads: BTreeMap::new(),
             levels: BTreeMap::new(),
@@ -230,6 +236,7 @@ fn analyze_in(
         prefix: &prefix,
         support: &context.support,
     };
+    let mut publication_facts = BTreeMap::new();
     for definition in &program.sequence.definitions {
         let name = symbol_name(&definition.name);
         if checker.facts.contains_key(&name) {
@@ -240,6 +247,9 @@ fn analyze_in(
             );
         }
         let mut fact = checker.term(&definition.term, &name)?;
+        if matches!(definition.term, Term::Store { .. }) {
+            publication_facts.insert(name.clone(), publication::Input::from(&fact));
+        }
         if checker
             .analysis
             .structures
@@ -320,6 +330,7 @@ fn analyze_in(
             "output protocol requires a final store",
         );
     }
+    publication::derive(program, &mut checker.analysis, &publication_facts)?;
     program.evidence.check(program, &checker.analysis)?;
     Ok(context.remember(CheckedProof {
         prefix: prefix.clone(),

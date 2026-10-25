@@ -7,6 +7,16 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Derive checked Sequence publication ownership once (`BorrowHost`, `Alias`,
+  owned rows, or key parts) for PL-Cost and Tasks, preserving source provenance
+  across reheading. Real retained key-input copies pay a row-traffic tie-breaker
+  after compute span rather than being equated with hash/group evaluation;
+  borrows and aliases remain free. Native routed-provider representation and
+  stored-key coverage are checked upstream rather than guessed by the printer.
+- Tasks applies recorded join filters inside borrowed positional tiles and
+  routes borrowed host inputs without an intermediate whole-host vector.
+  Key routing groups contiguous chunks into scheduler-fold-local buckets and
+  reuses the first owner buffer while preserving per-part occurrence order.
 - TPC-H bench dev loop: generated worker sources are stable (no forced
   rebuilds; `compile_unit_ms` is NA for reused workers), per-query crates build
   their compiler proc macros at opt-level 3, `--runs 0` verifies exactness only

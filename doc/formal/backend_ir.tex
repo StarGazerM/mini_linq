@@ -293,6 +293,9 @@ GPU instance of the grade.
 \Rule{BE-Length}{\mathsf{store}\,t\text{ at a separated level (host stores need no bound)}}
  {|t|\text{ is in its type before the write (a scan), or a capacity with an overflow flag}}
 
+\Rule{BE-Publication}{d=\mathsf{store}\,t\quad t\text{ has checked provenance and consumers}}
+ {\mathsf{publication}(d)\in\{\mathsf{BorrowHost},\mathsf{Alias},\mathsf{OwnRows},\mathsf{Parts}\}}
+
 \Rule{BE-Boundary}{\text{a maximal segment of total terms between stores at a separated level}}
  {\text{is one unit of dispatch (a kernel, a task); its domain is the outer stored space; derived, not written}}
 
@@ -384,6 +387,21 @@ longest dependency chain. Plan R's two schedules have equal work; a
 one-part schedule has span proportional to work, a grid-wide one span
 logarithmic. Cost is not meaning; it is what a decomposition pass argues
 with, and lengths in types are what make it computable.
+BE-Publication derives ownership once, before support-equal result reheading.
+A resident host Rows/Ref/Store chain can publish a borrow; a flat routing
+input can alias an already published flat buffer and its length. Otherwise
+retained rows are owned, either flat or as checked key-disjoint parts. Aliases
+may rehead logical columns without claiming the source's raw carrier is
+unchanged. Real row copies, including raw key-input staging, contribute
+retained-row traffic $B$, not another row-expression evaluation or a unit of
+compute span. Provider insertions continue to contribute work and span.
+Borrow and alias publication add no traffic. Thus being consumed by a key
+partition is not a free-store rule.
+The native routed-provider representation records the inner provider of the
+canonical \code{cq\_storage::sharded::Sharded} ABI. Before emission, checking
+validates its type arguments and proves every routing column belongs to the
+stored outer key, after constant elision. An unrelated type with the same
+last identifier has no routed interpretation.
 
 \subsection{Decomposition}
 A planner is an advice generator, not another interpretation of Sequence.
@@ -415,7 +433,7 @@ Let $t_0=t$, $t_i=r_i(t_{i-1})$, and let $A(t)$ record authored choices.
  e.\mathsf{type}\gets k.\mathsf{type}\quad\text{by checked retention, index construction and retype}}
 
 \Rule{PL-Cost}{C=(c_1,\ldots,c_k)\text{ admissible, preserving }A(t)\quad
-  \kappa(c)=(W(c),I(c),S(c),\#\mathsf{stores}(c),\#\mathsf{dispatches}(c))}
+  \kappa(c)=(W(c),I(c),S(c),B(c),\#\mathsf{stores}(c),\#\mathsf{dispatches}(c))}
  {c^*=\mathsf{foldl}\bigl(
    (a,b)\mapsto\text{if }\kappa(b)\prec\kappa(a)\text{ then }b\text{ else }a,
    c_1,(c_2,\ldots,c_k)\bigr)}
@@ -433,8 +451,11 @@ PL-Det includes rejection when no catalog token satisfies a recorded
 obligation. PL-Cost uses the work and span of the preceding Cost paragraph,
 not a semantic preference. Here $\prec$ is provable strict lexicographic
 symbolic cost dominance: work first, then Lookup/Expand inversions $I$,
-span, stores and dispatches. An inversion is a Lookup evaluated after an
-upstream Expand in the same pipeline; retained references begin new pipelines.
+span, retained-row traffic $B$, stores and dispatches. $B$ sums the checked
+owned publication lengths. It is a bandwidth tie-breaker, not an assumption
+that copying one carrier costs as much as a hash/group row evaluation.
+An inversion is a Lookup evaluated after an upstream Expand in the same
+pipeline; retained references begin new pipelines.
 Bounds and coefficient dominance establish comparisons; unresolved
 comparisons, like equal costs, retain the earlier candidate.
 For a BE-GroupKey-proven keyed group, both contiguous partial-map folding
@@ -838,6 +859,15 @@ An early retained host publication uses an identity join predicate until its
 covering provider is built (IF-JoinFilter). The build shadows that initial
 binding, so subsequently evaluated lazy pipelines use the constructed filter.
 The exact covering operator still rejects the same nonmatching rows.
+Tasks consumes BE-Publication's ownership and representation records rather
+than rediscovering base-row ancestry, partition consumers, or provider type
+names. A BorrowHost routing input reads borrowed host tiles (or base-relative
+positional ranges), without an intermediate whole-host vector. Host tiles
+apply every recorded join-filter predicate inside each base-relative range,
+not in a serial collection before dispatch. Routing groups consecutive chunks
+into scheduler-fold-local buckets, reuses the first nonempty owner buffer,
+and preserves occurrence order within each published part. These are
+realizations of the existing checked covers, not additional IR choices.
 
 The parallel Datalog extension (Section~\ref{sec:datalog-languages}) is the
 task interpretation at the granularity of rule holes: its partitioned

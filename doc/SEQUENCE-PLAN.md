@@ -92,6 +92,10 @@ pub struct Analysis {
     pub shapes: BTreeMap<String, Vec<Len>>,             // outer partitions through innermost row lengths
     pub views: BTreeSet<String>,                        // Defs that materialize nothing
     pub stores: BTreeMap<String, Len>,                  // stored Defs and their length/capacity
+    pub publications: BTreeMap<String, Publication>,    // checked BorrowHost | Alias | OwnRows { staged } | Parts
+    pub host_sources: BTreeMap<String, String>,         // pure base provenance before reheading
+    pub host_tiles: BTreeMap<String, Vec<Option<String>>>, // Tile input provenance in preorder
+    pub routed_providers: BTreeMap<String, BTreeMap<usize, syn::Type>>, // checked native ABI inner types
     pub capabilities: BTreeMap<(String, Vec<String>), Capability>, // provider reads: Exact | Range | Membership | Ordered
     pub levels: BTreeMap<String, Vec<String>>,          // grade of every Def (empty when ungraded)
     pub dispatches: Vec<Dispatch>,                      // derived (BE-Boundary): outer store, members, inner stores
@@ -105,6 +109,16 @@ pub fn check_grading(p: &Program, m: &Machine) -> syn::Result<Analysis>;   // BE
 pub fn check_rewrite(s: &Program, t: &Program) -> syn::Result<()>;         // checked equal support; join motion preserves pinned Rust domains
 impl cq_stage::Language for Program { … }
 ```
+`BE-Publication` derives named Store ownership once for both PL-Cost and Tasks.
+Borrowed host stores and aliases do not allocate rows. Owned flat staging and
+key-part publication do; their lengths contribute a retained-row traffic
+tie-breaker after compute span, without equating a copy with row-expression
+evaluation. Provider insertion still pays work and span. Alias reheading
+does not license raw-buffer reuse unless the carrier is unchanged. Native
+`cq_storage::sharded::Sharded` representation arguments and routing coverage of
+the stored outer key (after constant elision) are checked before emission;
+the printer consumes the checked inner types, never a last-path-name heuristic.
+
 
 `Machine.items` is the preferred per-lane count (the planner also considers one);
 `LevelNode.width` records a fixed distributing width, or `None` for dynamic
@@ -379,8 +393,9 @@ Laws:
 - PL-Det: a pure function of `(t, M, K)`; candidates are enumerated in a
   fixed order and ties broken by that order.
 - PL-Cost: the work/span model compares legal segmented and plain schedules
-  at the first feasible machine geometry. Proven lower span wins, then fewer
-  stores and dispatches; equality or incomparability keeps the earlier candidate.
+  at the first feasible machine geometry. Proven lower compute span wins,
+  then less retained-row traffic, fewer stores and dispatches; equality or
+  incomparability keeps the earlier candidate.
   Eligible exact-key native provider Stores retain a checked runtime `choose`
   in every candidate: below the positive machine `key_partition_threshold`
   (target default 65,536 published input rows), use the one-part identity cover;

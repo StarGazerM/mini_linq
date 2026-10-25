@@ -511,36 +511,24 @@ impl<'a> Context<'a> {
 
     /// Publish providers from the key-disjoint parts recorded by Sequence.
     /// The caller owns the parts binding for the lifetime of every provider.
+    /// `routed` contains provider ordinals and inner types validated by Sequence;
+    /// routing-key coverage is an upstream BE-Publication obligation.
     pub fn materialize_partitioned(
         &mut self,
         name: &str,
         parts: TokenStream,
         routing: &[String],
+        routed: &BTreeMap<usize, syn::Type>,
     ) -> syn::Result<Repr> {
-        for (levels, ty) in self.analysis.built.get(name).into_iter().flatten() {
-            let sharded = matches!(ty, syn::Type::Path(path)
-                if path.path.segments.last().is_some_and(|segment| segment.ident == "Sharded"));
-            if sharded
-                && !levels.first().is_some_and(|key| {
-                    let stored = self.stored_key(name, key);
-                    routing.iter().all(|column| stored.contains(column))
-                })
-            {
-                return error(
-                    &self.physical[name].name,
-                    "Tasks provider routing must be determined by its outer lookup key",
-                );
-            }
-        }
         let rows = quote!((#parts).iter().flatten().cloned());
-        Ok(self.materialize_from(name, rows, Some((parts, routing))))
+        Ok(self.materialize_from(name, rows, Some((parts, routing, routed))))
     }
 
     fn materialize_from(
         &mut self,
         name: &str,
         source: TokenStream,
-        parts: Option<(TokenStream, &[String])>,
+        parts: Option<(TokenStream, &[String], &BTreeMap<usize, syn::Type>)>,
     ) -> Repr {
         let structures: Vec<(Vec<Vec<String>>, syn::Type)> =
             self.analysis.built.get(name).cloned().unwrap_or_default();
@@ -598,7 +586,7 @@ impl<'a> Context<'a> {
         };
         let source = if replay { direct_source } else { source };
         let mut built = Vec::new();
-        for (levels, ty) in &structures {
+        for (ordinal, (levels, ty)) in structures.iter().enumerate() {
             let columns: Vec<String> = levels.concat();
             let payload_columns = self.built_payload(name, levels);
             let stored_columns: Vec<_> = levels
@@ -661,21 +649,11 @@ impl<'a> Context<'a> {
             // written arguments (or holes) select the qualified form.
             let bare = matches!(ty, syn::Type::Path(path)
                 if path.qself.is_none() && path.path.segments.iter().all(|s| s.arguments.is_none()));
-            let sharded = matches!(ty, syn::Type::Path(path)
-                if path.path.segments.last().is_some_and(|segment| segment.ident == "Sharded"));
-            let build = if sharded {
-                let (parts, routing) = parts
-                    .as_ref()
-                    .expect("Sharded provider requires a Sequence key partition");
-                let syn::Type::Path(path) = ty else {
-                    unreachable!()
-                };
-                let syn::PathArguments::AngleBracketed(arguments) =
-                    &path.path.segments.last().unwrap().arguments
-                else {
-                    unreachable!()
-                };
-                let inner = arguments.args.first().expect("checked sharded provider");
+            let routed = parts
+                .as_ref()
+                .and_then(|(_, _, providers)| providers.get(&ordinal));
+            let build = if let Some(inner) = routed {
+                let (parts, routing, _) = parts.as_ref().expect("checked partition publication");
                 let stored_key = self.stored_key(name, &levels[0]);
                 let fields = routing
                     .iter()

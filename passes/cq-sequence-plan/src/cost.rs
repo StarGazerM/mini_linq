@@ -1,8 +1,9 @@
 //! Symbolic evaluated-position work and dependency-chain span.
 //!
-//! Tiles, references and publication are not extra row evaluations. Stores and
-//! dispatches are separate tie breakers. Span follows data dependencies (a join
-//! of independent branches takes their maximum), not definition order. A tile
+//! Tiles and references are not extra row evaluations. Owned row publication
+//! pays span; provider insertion also pays work. Borrows and aliases are free.
+//! Store/dispatch counts remain tie breakers. Span follows data dependencies:
+//! independent branches join at their maximum, not definition order. A tile
 //! only creates parallel parts when grading records `Distribute`; strip widths
 //! and per-lane item counts never manufacture additional processors.
 //! Retained provider routing pays a routing pass and P bucket publications;
@@ -11,11 +12,13 @@
 //! routing plus consumption halves their effective lanes. Known counts retain
 //! the explicit setup cost, including for empty and singleton collectives.
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt;
 
 use cq_lang_sequence::structures::physical::Operator;
-use cq_lang_sequence::{Analysis, Len, LevelNode, Machine, OutputProtocol, Program, Term, Tiling};
+use cq_lang_sequence::{
+    Analysis, Len, LevelNode, Machine, OutputProtocol, Program, Publication, Term, Tiling,
+};
 use cq_syntax::symbol_name;
 
 /// A conservative symbolic cost. Incomparable costs retain candidate order.
@@ -23,6 +26,8 @@ use cq_syntax::symbol_name;
 pub struct Cost {
     work: Sum,
     span: Sum,
+    /// Retained row traffic, separate from row-expression dependency span.
+    copies: Sum,
     /// Shrinking lookups evaluated after an upstream Expand in the same pipeline.
     pub lookup_after_expand: usize,
     pub stores: usize,
@@ -42,15 +47,10 @@ impl Cost {
         machine: &Machine,
         analysis: &Analysis,
     ) -> syn::Result<Self> {
-        let mut key_inputs = BTreeSet::new();
-        for definition in &program.sequence.definitions {
-            partition_inputs(&definition.term, &mut key_inputs);
-        }
         let mut evaluator = Evaluator {
             program,
             analysis,
             facts: BTreeMap::new(),
-            key_inputs,
             scheduler_parts: machine
                 .root
                 .children
@@ -61,6 +61,7 @@ impl Cost {
                 .max(1),
         };
         let mut work = Sum::default();
+        let mut copies = Sum::default();
         let mut ends = Vec::new();
         let mut stores = 0usize;
         let mut lookup_after_expand = 0usize;
@@ -78,6 +79,24 @@ impl Cost {
             }
             let mut tile = 0;
             let mut fact = evaluator.term(&definition.term, &name, level, &mut tile)?;
+            let copies_rows = match analysis.publications.get(&name) {
+                Some(Publication::OwnRows { staged: true } | Publication::Parts { .. }) => true,
+                Some(Publication::OwnRows { staged: false }) => {
+                    analysis.structures.retained.contains_key(&fact.result)
+                        || analysis
+                            .structures
+                            .physical
+                            .modes
+                            .get(&fact.result)
+                            .is_none_or(|mode| {
+                                *mode == cq_lang_sequence::structures::physical::ModeKind::Pipe
+                            })
+                }
+                _ => false,
+            };
+            if copies_rows {
+                copies.add(&Sum::positions(&fact.size)?)?;
+            }
             if let Some(result) = analysis.results.get(&name) {
                 fact.result.clone_from(result);
             }
@@ -118,6 +137,7 @@ impl Cost {
         Ok(Self {
             work,
             span: Sum::maximum(ends),
+            copies,
             lookup_after_expand,
             stores,
             dispatches: analysis.dispatches.len(),
@@ -139,14 +159,17 @@ impl Cost {
 }
 
 impl PartialOrd for Cost {
-    // Formal rule PL-Cost: Compare work, Lookup-before-Expand, dependency span, stores, then dispatches; unresolved work comparisons retain enumeration order.
+    // Formal rule PL-Cost: Compare work, Lookup-before-Expand, dependency span, retained-row traffic, stores, then dispatches; unresolved comparisons retain enumeration order.
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.work.compare(&other.work)? {
             Ordering::Equal => match self.lookup_after_expand.cmp(&other.lookup_after_expand) {
                 Ordering::Equal => match self.span.compare(&other.span)? {
-                    Ordering::Equal => {
-                        Some((self.stores, self.dispatches).cmp(&(other.stores, other.dispatches)))
-                    }
+                    Ordering::Equal => match self.copies.compare(&other.copies)? {
+                        Ordering::Equal => Some(
+                            (self.stores, self.dispatches).cmp(&(other.stores, other.dispatches)),
+                        ),
+                        ordering => Some(ordering),
+                    },
                     ordering => Some(ordering),
                 },
                 ordering => Some(ordering),
@@ -160,8 +183,13 @@ impl fmt::Display for Cost {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "(work={}, lookup_after_expand={}, span={}, stores={}, dispatches={})",
-            self.work, self.lookup_after_expand, self.span, self.stores, self.dispatches
+            "(work={}, lookup_after_expand={}, span={}, copies={}, stores={}, dispatches={})",
+            self.work,
+            self.lookup_after_expand,
+            self.span,
+            self.copies,
+            self.stores,
+            self.dispatches
         )
     }
 }
@@ -483,7 +511,6 @@ struct Evaluator<'a> {
     program: &'a Program,
     analysis: &'a Analysis,
     facts: BTreeMap<String, Fact>,
-    key_inputs: BTreeSet<String>,
     scheduler_parts: usize,
 }
 
@@ -560,23 +587,28 @@ impl Evaluator<'_> {
                     level
                 };
                 let mut fact = self.term(inner, owner, producer, tile)?;
-                if !self.key_inputs.contains(owner)
-                    && self
-                        .program
-                        .structures
-                        .structures
-                        .entries
-                        .iter()
-                        .any(|entry| {
-                            symbol_name(&entry.name) == fact.result
-                                && matches!(
-                                    entry.structure,
-                                    cq_lang_sequence::structures::Structure::Built { .. }
-                                )
-                        })
+                let publication = self.analysis.publications.get(owner).filter(|_| {
+                    self.program.sequence.definitions.iter().any(|definition| {
+                        symbol_name(&definition.name) == owner
+                            && std::ptr::eq(&definition.term, term)
+                    })
+                });
+                if !matches!(
+                    publication,
+                    Some(
+                        Publication::BorrowHost { .. }
+                            | Publication::Alias { .. }
+                            | Publication::OwnRows { staged: true }
+                    )
+                ) && self
+                    .analysis
+                    .structures
+                    .built
+                    .get(&fact.result)
+                    .is_some_and(|providers| !providers.is_empty())
                 {
-                    // Building an index evaluates one insertion per row.
-                    // A routing publication holds raw rows, not a second index.
+                    // Provider insertion evaluates rows; copying their carrier
+                    // is separately accounted as retained publication traffic.
                     let size = fact.size.clone();
                     fact.evaluate(&size, producer, false)?;
                 }
@@ -931,37 +963,6 @@ fn streamed_collective(term: &Term) -> bool {
     }
 }
 
-fn partition_inputs(term: &Term, inputs: &mut BTreeSet<String>) {
-    match term {
-        Term::PartitionK { inner, .. } => {
-            if let Term::Ref(name) = inner.as_ref() {
-                inputs.insert(symbol_name(name));
-            }
-            partition_inputs(inner, inputs);
-        }
-        Term::Map(_, t)
-        | Term::Compact(_, t)
-        | Term::Flatten(t)
-        | Term::Fold(_, t)
-        | Term::Group(_, t)
-        | Term::Canon(t)
-        | Term::Tile { inner: t, .. }
-        | Term::Store { inner: t, .. }
-        | Term::Lookup { inner: t, .. } => partition_inputs(t, inputs),
-        Term::Union(arms) => {
-            for term in arms {
-                partition_inputs(term, inputs);
-            }
-        }
-        Term::Choose(arms) => {
-            for (_, term) in arms {
-                partition_inputs(term, inputs);
-            }
-        }
-        Term::Rows(_) | Term::Ref(_) => {}
-    }
-}
-
 fn count_stores(term: &Term) -> syn::Result<usize> {
     match term {
         Term::Store { inner, .. } => count_stores(inner)?.checked_add(1).ok_or_else(overflow),
@@ -1088,7 +1089,6 @@ mod tests {
             program: &source,
             analysis: &analysis,
             facts: BTreeMap::new(),
-            key_inputs: BTreeSet::new(),
             scheduler_parts: 1,
         };
         let level = sequential().root;
@@ -1146,13 +1146,54 @@ mod tests {
     }
 
     #[test]
+    fn real_key_input_copies_pay_retained_traffic_but_aliases_do_not() {
+        let mut alias = program(quote! {
+            source = store canon rows r;
+            source_parts = partition_k[a](4) source;
+            out = store source;
+            result = flatten partition_k[a](4) out;
+        });
+        alias.graded = Some(syn::parse_quote! {
+            graded target {
+                source at host; source_parts at device.block;
+                out at host; result at device.block;
+            }
+        });
+        let mut machine = gpu();
+        machine.root.children[0].width = Some(4);
+        let mut copied = alias.clone();
+        copied.sequence.definitions[2].term = syn::parse_quote!(store flatten tile 8 source);
+        let alias_analysis = cq_lang_sequence::contract::check(&alias).unwrap();
+        let copied_analysis = cq_lang_sequence::contract::check(&copied).unwrap();
+        assert_eq!(
+            alias_analysis.publications["out"],
+            Publication::Alias {
+                source: "source".into()
+            },
+        );
+        assert_eq!(
+            copied_analysis.publications["out"],
+            Publication::OwnRows { staged: true },
+        );
+        let alias = cost(&alias, &machine).unwrap();
+        let copied = cost(&copied, &machine).unwrap();
+        assert_eq!(alias.work, copied.work, "copying is not a row expression");
+        assert_eq!(alias.span, copied.span);
+        assert_eq!(alias.copies.compare(&copied.copies), Some(Ordering::Less));
+        assert!(alias.better_than(&copied));
+    }
+
+    #[test]
     fn aliases_and_partition_views_do_not_add_evaluated_positions() {
         let plain = program(quote!(a = store rows r; output reserve;));
         let aliased = program(quote!(source = rows r; a = store source; output reserve;));
         let tiled = program(quote!(a = store flatten tile 8 rows r; output reserve;));
         let expected = cost(&plain, &sequential()).unwrap();
         assert_eq!(cost(&aliased, &sequential()).unwrap(), expected);
-        assert_eq!(cost(&tiled, &sequential()).unwrap(), expected);
+        let tiled = cost(&tiled, &sequential()).unwrap();
+        assert_eq!(tiled.work, expected.work);
+        assert_eq!(expected.span, tiled.span);
+        assert_eq!(expected.copies.compare(&tiled.copies), Some(Ordering::Less));
     }
 
     #[test]
@@ -1162,6 +1203,7 @@ mod tests {
         let mut expected = Sum::positions(&Size::Input("r".into())).unwrap();
         expected.add(&expected.clone()).unwrap();
         assert_eq!(evaluated.work, expected);
+        assert_eq!(evaluated.copies, Sum::positions(&Size::Constant(1)).unwrap());
         assert_eq!(evaluated.span, expected);
     }
 
@@ -1315,7 +1357,7 @@ mod tests {
     }
 
     #[test]
-    fn extra_strip_store_without_span_improvement_loses_the_tie() {
+    fn unnamed_strip_store_uses_the_store_tiebreaker() {
         let plain = join(quote!(store canon flatten flatten lookup r [a] tile 8 left));
         let segmented = join(quote!(
             store canon flatten flatten tile 32 items 4
@@ -1324,7 +1366,7 @@ mod tests {
         let plain = cost(&plain, &gpu()).unwrap();
         let segmented = cost(&segmented, &gpu()).unwrap();
         assert_eq!(plain.work, segmented.work);
-        assert_eq!(plain.span, segmented.span);
+        assert_eq!(plain.span.compare(&segmented.span), Some(Ordering::Equal));
         assert!(plain.better_than(&segmented));
     }
 
@@ -1358,6 +1400,7 @@ mod tests {
         let a = Cost {
             work: a,
             span: Sum::default(),
+            copies: Sum::default(),
             lookup_after_expand: 0,
             stores: 0,
             dispatches: 0,
@@ -1365,6 +1408,7 @@ mod tests {
         let b = Cost {
             work: b,
             span: Sum::default(),
+            copies: Sum::default(),
             lookup_after_expand: 0,
             stores: 0,
             dispatches: 0,
@@ -1410,6 +1454,7 @@ mod tests {
         let base = Cost {
             work: Sum::default(),
             span: Sum::default(),
+            copies: Sum::default(),
             lookup_after_expand: 0,
             stores: 1,
             dispatches: 1,
@@ -1420,6 +1465,10 @@ mod tests {
         later = base.clone();
         later.stores += 1;
         later.dispatches = 0;
+        assert!(base.better_than(&later));
+        later = base.clone();
+        later.copies = Sum::atom(Atom::One, 1);
+        later.stores = 0;
         assert!(base.better_than(&later));
         later = base.clone();
         later.span = Sum::atom(Atom::One, 1);
