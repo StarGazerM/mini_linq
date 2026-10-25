@@ -6,7 +6,7 @@
 macro_rules! doop_engine {
     ($name:ident, pipeline { $($pipeline:tt)* }) => {
 pub fn $name(facts: $crate::Facts) -> $crate::Results {
-    use $crate::{Results, interner::{IStr, res, sym}};
+    use $crate::{Results, interner::{IStr, sym}};
     let (
         mainclass,
         method_simplename,
@@ -113,7 +113,7 @@ pub fn $name(facts: $crate::Facts) -> $crate::Results {
         relation _specialmethodinvocation(c0: IStr, c1: i32, c2: IStr, c3: IStr, c4: IStr) = (facts._specialmethodinvocation);
         relation _virtualmethodinvocation(c0: IStr, c1: i32, c2: IStr, c3: IStr, c4: IStr) = (facts._virtualmethodinvocation);
         relation _method(c0: IStr, c1: IStr, c2: IStr, c3: IStr, c4: IStr, c5: IStr, c6: i32) = (facts._method);
-        relation method_descriptor(c0: IStr, c1: IStr);
+        relation method_descriptor(c0: IStr, c1: IStr) = (facts.method_descriptor);
         relation _storeinstancefield(c0: IStr, c1: i32, c2: IStr, c3: IStr, c4: IStr, c5: IStr) = (facts._storeinstancefield);
         relation _loadinstancefield(c0: IStr, c1: i32, c2: IStr, c3: IStr, c4: IStr, c5: IStr) = (facts._loadinstancefield);
         relation _storestaticfield(c0: IStr, c1: i32, c2: IStr, c3: IStr, c4: IStr) = (facts._storestaticfield);
@@ -224,11 +224,6 @@ pub fn $name(facts: $crate::Facts) -> $crate::Results {
             _method(method, simplename, params, declaringtype, returntype, jvmdescriptor, arity);
     method_returntype(*method, *returntype) :-
             _method(method, simplename, params, declaringtype, returntype, jvmdescriptor, arity);
-
-        // Method_Descriptor computed via cat
-    method_descriptor(*method, sym(&format!("{}({})", res(*returntype), res(*params)))) :-
-            method_returntype(method, returntype),
-            method_paramtypes(method, params);
 
     instruction_method(*instruction, *method) :-
             _storeinstancefield(instruction, index, from, base, signature, method);
