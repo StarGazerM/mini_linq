@@ -1,0 +1,6 @@
+
+COMMAND ["/tmp/mini-linq-performance-cpu/sf1/crates/retail_h01/timing-worker", "/tmp/mini-linq-performance-cpu/sf1/data/retail_h01", "default", "5", "/data/mini_linq/experiments/gpu/compare/performance_cpu_raw/sf1/retail_h01/default/plain.answers.json", "/data/mini_linq/experiments/gpu/compare/performance_cpu_raw/sf1/retail_h01/default/plain.json", "/data/mini_linq/experiments/gpu/compare/performance_cpu_raw/sf1/retail_h01/oracle.json"]
+
+COMMAND ["/tmp/mini-linq-performance-cpu/sf1/crates/retail_h01/counting-worker", "/tmp/mini-linq-performance-cpu/sf1/data/retail_h01", "default", "0", "/data/mini_linq/experiments/gpu/compare/performance_cpu_raw/sf1/retail_h01/default/counts.answers.json", "/data/mini_linq/experiments/gpu/compare/performance_cpu_raw/sf1/retail_h01/default/counts.json", "/data/mini_linq/experiments/gpu/compare/performance_cpu_raw/sf1/retail_h01/oracle.json"]
+
+COMMAND ["/tmp/mini-linq-performance-cpu/sf1/crates/retail_h01/profile-worker", "/tmp/mini-linq-performance-cpu/sf1/data/retail_h01", "default", "5", "/data/mini_linq/experiments/gpu/compare/performance_cpu_raw/sf1/retail_h01/default/profile.answers.json", "/data/mini_linq/experiments/gpu/compare/performance_cpu_raw/sf1/retail_h01/default/profile.json", "/data/mini_linq/experiments/gpu/compare/performance_cpu_raw/sf1/retail_h01/oracle.json"]

@@ -1,0 +1,21 @@
+{
+  "configs": [
+    "default",
+    "no-reduce",
+    "le",
+    "le_runs",
+    "advised"
+  ],
+  "exports": [
+    [
+      "supplier",
+      "s_suppkey,s_name,s_address,s_phone"
+    ],
+    [
+      "lineitem",
+      "l_orderkey,l_linenumber,l_suppkey,l_extendedprice,l_discount,l_shipdate"
+    ]
+  ],
+  "name": "retail_h15",
+  "sql": "WITH revenue AS (\n    SELECT l_suppkey AS supplier_key,\n        CAST(SUM(l_extendedprice * (1 - l_discount)) * 10000 AS BIGINT) AS total_revenue\n    FROM (SELECT DISTINCT l_orderkey, l_linenumber, l_suppkey,\n        l_extendedprice, l_discount, l_shipdate FROM lineitem\n        WHERE l_shipdate >= DATE '1996-01-01' AND l_shipdate < DATE '1996-04-01') matches\n    GROUP BY l_suppkey)\nSELECT DISTINCT s.s_suppkey, s.s_name, s.s_address, s.s_phone, r.total_revenue\nFROM supplier s JOIN revenue r ON s.s_suppkey = r.supplier_key\nWHERE r.total_revenue = (SELECT MAX(total_revenue) FROM revenue)"
+}

@@ -1,0 +1,296 @@
+{
+  "answer_rows": 1,
+  "bag_insertions": 0,
+  "build_rows_verified": false,
+  "candidate_insertions": 0,
+  "distinct_insertions": 0,
+  "index_builds": 0,
+  "median_ms": 533.836402,
+  "operator_rows": [
+    {
+      "inputs": [],
+      "key": "Lineitem",
+      "kind": "RENAME",
+      "result": "r0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 59986052
+    },
+    {
+      "inputs": [
+        "r0"
+      ],
+      "key": "shipdate",
+      "kind": "RANGE",
+      "result": "r1",
+      "rows_in": 59986052,
+      "rows_inserted": 0,
+      "rows_out": 9099165
+    },
+    {
+      "inputs": [
+        "r1"
+      ],
+      "key": "discount,line_number,order_key,price,quantity,shipdate",
+      "kind": "GUARD",
+      "result": "r2",
+      "rows_in": 9099165,
+      "rows_inserted": 0,
+      "rows_out": 4962546
+    },
+    {
+      "inputs": [
+        "r2"
+      ],
+      "key": "discount,line_number,order_key,price,quantity,shipdate",
+      "kind": "GUARD",
+      "result": "r3",
+      "rows_in": 4962546,
+      "rows_inserted": 0,
+      "rows_out": 2480002
+    },
+    {
+      "inputs": [
+        "r3"
+      ],
+      "key": "discount,line_number,order_key,price,quantity,shipdate",
+      "kind": "GUARD",
+      "result": "r4",
+      "rows_in": 2480002,
+      "rows_inserted": 0,
+      "rows_out": 1139264
+    },
+    {
+      "inputs": [
+        "r4"
+      ],
+      "key": "discount,line_number,order_key,price,quantity,revenue_units,shipdate",
+      "kind": "BIND",
+      "result": "r5",
+      "rows_in": 1139264,
+      "rows_inserted": 0,
+      "rows_out": 1139264
+    },
+    {
+      "inputs": [
+        "r5"
+      ],
+      "key": "discount,line_number,order_key,price,quantity,revenue_units,shipdate",
+      "kind": "PROJECT",
+      "result": "r6",
+      "rows_in": 1139264,
+      "rows_inserted": 0,
+      "rows_out": 1139264
+    },
+    {
+      "inputs": [
+        "r6"
+      ],
+      "key": "__cq_6_0",
+      "kind": "GROUP",
+      "result": "r7",
+      "rows_in": 1139264,
+      "rows_inserted": 0,
+      "rows_out": 1
+    },
+    {
+      "inputs": [
+        "r6"
+      ],
+      "key": "",
+      "kind": "DEDUP",
+      "result": "r6.dedup",
+      "rows_in": 1139264,
+      "rows_inserted": 1139264,
+      "rows_out": 1139264
+    },
+    {
+      "inputs": [
+        "r7"
+      ],
+      "key": "",
+      "kind": "ANSWER",
+      "result": "r7.answer",
+      "rows_in": 1,
+      "rows_inserted": 0,
+      "rows_out": 1
+    }
+  ],
+  "operators": [
+    {
+      "calls": 1,
+      "elapsed_ms": 533.8357609999999,
+      "id": 0,
+      "inputs": [],
+      "key": "retail_h06",
+      "kind": "QUERY",
+      "program": 0,
+      "result": "query",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 1
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 230.73131899999998,
+      "id": 1,
+      "inputs": [],
+      "key": "Lineitem",
+      "kind": "RENAME",
+      "program": 1,
+      "result": "r0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 59986052
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 230.73156,
+      "id": 2,
+      "inputs": [
+        "r0"
+      ],
+      "key": "shipdate",
+      "kind": "RANGE",
+      "program": 1,
+      "result": "r1",
+      "rows_in": 59986052,
+      "rows_inserted": 0,
+      "rows_out": 9099165
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 230.73169,
+      "id": 3,
+      "inputs": [
+        "r1"
+      ],
+      "key": "discount,line_number,order_key,price,quantity,shipdate",
+      "kind": "GUARD",
+      "program": 1,
+      "result": "r2",
+      "rows_in": 9099165,
+      "rows_inserted": 0,
+      "rows_out": 4962546
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 230.73181,
+      "id": 4,
+      "inputs": [
+        "r2"
+      ],
+      "key": "discount,line_number,order_key,price,quantity,shipdate",
+      "kind": "GUARD",
+      "program": 1,
+      "result": "r3",
+      "rows_in": 4962546,
+      "rows_inserted": 0,
+      "rows_out": 2480002
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 230.73203,
+      "id": 5,
+      "inputs": [
+        "r3"
+      ],
+      "key": "discount,line_number,order_key,price,quantity,shipdate",
+      "kind": "GUARD",
+      "program": 1,
+      "result": "r4",
+      "rows_in": 2480002,
+      "rows_inserted": 0,
+      "rows_out": 1139264
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 230.732251,
+      "id": 6,
+      "inputs": [
+        "r4"
+      ],
+      "key": "discount,line_number,order_key,price,quantity,revenue_units,shipdate",
+      "kind": "BIND",
+      "program": 1,
+      "result": "r5",
+      "rows_in": 1139264,
+      "rows_inserted": 0,
+      "rows_out": 1139264
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 230.73238099999998,
+      "id": 7,
+      "inputs": [
+        "r5"
+      ],
+      "key": "discount,line_number,order_key,price,quantity,revenue_units,shipdate",
+      "kind": "PROJECT",
+      "program": 1,
+      "result": "r6",
+      "rows_in": 1139264,
+      "rows_inserted": 0,
+      "rows_out": 1139264
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 0.000301,
+      "id": 8,
+      "inputs": [
+        "r6"
+      ],
+      "key": "__cq_6_0",
+      "kind": "GROUP",
+      "program": 1,
+      "result": "r7",
+      "rows_in": 1139264,
+      "rows_inserted": 0,
+      "rows_out": 1
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 522.220238,
+      "id": 9,
+      "inputs": [
+        "r6"
+      ],
+      "key": "",
+      "kind": "DEDUP",
+      "program": 1,
+      "result": "r6.dedup",
+      "rows_in": 1139264,
+      "rows_inserted": 1139264,
+      "rows_out": 1139264
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 0.000451,
+      "id": 10,
+      "inputs": [
+        "r7"
+      ],
+      "key": "",
+      "kind": "ANSWER",
+      "program": 1,
+      "result": "r7.answer",
+      "rows_in": 1,
+      "rows_inserted": 0,
+      "rows_out": 1
+    }
+  ],
+  "rows_copied": 0,
+  "rows_enumerated": 0,
+  "samples_ms": [
+    533.576013,
+    533.816073,
+    533.836402,
+    534.990705,
+    537.897339
+  ],
+  "set_insertions": 1139264,
+  "top_level_clock_verified": true,
+  "top_level_ms": 533.8357609999999,
+  "tree": "QUERY            query [retail_h06] inputs= rows=1 in=0 inserted=0 t=533.836ms\n  ANSWER           r7.answer [] inputs=r7 rows=1 in=1 inserted=0 t=0.000ms\n    GROUP            r7 [__cq_6_0] inputs=r6 rows=1 in=1139264 inserted=0 t=0.000ms\n      PROJECT          r6 [discount,line_number,order_key,price,quantity,revenue_units,shipdate] inputs=r5 rows=1139264 in=1139264 inserted=0 t=230.732ms\n        BIND             r5 [discount,line_number,order_key,price,quantity,revenue_units,shipdate] inputs=r4 rows=1139264 in=1139264 inserted=0 t=230.732ms\n          GUARD            r4 [discount,line_number,order_key,price,quantity,shipdate] inputs=r3 rows=1139264 in=2480002 inserted=0 t=230.732ms\n            GUARD            r3 [discount,line_number,order_key,price,quantity,shipdate] inputs=r2 rows=2480002 in=4962546 inserted=0 t=230.732ms\n              GUARD            r2 [discount,line_number,order_key,price,quantity,shipdate] inputs=r1 rows=4962546 in=9099165 inserted=0 t=230.732ms\n                RANGE            r1 [shipdate] inputs=r0 rows=9099165 in=59986052 inserted=0 t=230.732ms\n                  RENAME           r0 [Lineitem] inputs= rows=59986052 in=0 inserted=0 t=230.731ms\n  DEDUP            r6.dedup [] inputs=r6 rows=1139264 in=1139264 inserted=1139264 t=522.220ms\n    PROJECT          r6 [discount,line_number,order_key,price,quantity,revenue_units,shipdate] inputs=r5 rows=1139264 in=1139264 inserted=0 t=230.732ms (shared)\nBUILD_EXCLUSIVE_TOTAL t=0.000ms\n",
+  "verified": true
+}

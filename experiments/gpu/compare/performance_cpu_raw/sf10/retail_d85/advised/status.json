@@ -1,0 +1,9 @@
+{
+  "status": "timeout",
+  "phase": "profile",
+  "worker_wall_limit_seconds": 100,
+  "configuration_wall_seconds": 100.3950549250003,
+  "warm_correctness": "ok",
+  "correctness": "ok",
+  "error": "Command '['/tmp/mini-linq-performance-cpu/sf10/crates/retail_d85/profile-worker', '/tmp/mini-linq-performance-cpu/sf10/data/retail_d85', 'advised', '5', '/data/mini_linq/experiments/gpu/compare/performance_cpu_raw/sf10/retail_d85/advised/profile.answers.json', '/data/mini_linq/experiments/gpu/compare/performance_cpu_raw/sf10/retail_d85/advised/profile.json', '/data/mini_linq/experiments/gpu/compare/performance_cpu_raw/sf10/retail_d85/oracle.json']' timed out after 34.380650483071804 seconds"
+}

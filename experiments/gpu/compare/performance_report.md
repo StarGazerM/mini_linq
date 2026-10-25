@@ -2,247 +2,244 @@
 
 ## Scope and methodology
 
-Measurements were collected on 2026-10-24 from `5e03047784c357dcdbbef3bd0f253879f964ee85`, with the dictionary-literal loader correction committed alongside this report. These are the **27 authored CQ-shaped catalog queries**, not a claim of full standard TPC-H coverage. GPU name `hXX`/`dXX` maps to CPU/SQL catalog name `retail_hXX`/`retail_dXX`. GPU and DuckDB use **one warmup and five measured executions**. CPU normally uses five, subject to the explicitly authorized runtime cap below. Times below are milliseconds; lower is better.
+These are the **27 authored CQ-shaped catalog queries**, not full standard TPC-H coverage: 26 GPU-suite queries plus **h14, CPU-only**, at SF1 and SF10. GPU name `hXX`/`dXX` maps to CPU catalog name `retail_hXX`/`retail_dXX`. Numerical results require exact answers; no timeout is interpreted as an execution time. All times are milliseconds, lower is better.
 
-Hardware: **AMD Ryzen Threadripper PRO 5945WX, 12 cores / 24 hardware threads**, approximately **125.77 GiB RAM**, and **NVIDIA RTX 6000 Ada Generation, 49,140 MiB reported device memory**, NVIDIA driver **580.178.04**. GPU compilation targeted `sm_89` with CUDA 12.9 from the NVIDIA HPC SDK 25.5. See [the hardware snapshot](performance_hardware.json) for the raw inventory. Timed GPU, CPU, and DuckDB windows were serialized; CPU builds were paused during DuckDB measurements and finished before GPU measurements.
+Hardware: **AMD Ryzen Threadripper PRO 5945WX, 12 cores / 24 hardware threads**, approximately **125.77 GiB RAM**, **NVIDIA RTX 6000 Ada Generation (49,140 MiB)**, driver **580.178.04**. GPU compilation targeted `sm_89` with CUDA 12.9 (NVIDIA HPC SDK 25.5). See [hardware](performance_hardware.json). CPU workers are sequential, and timed CPU windows are serialized with no concurrent compilation.
 
-### A: CQ GPU, statistics-derived advised plans
+### GPU: statistics-derived advised plans
 
-The suite runs `--mode advised`: the checked statistics-derived order, reduction, storage, and launch advice already present in the repository. “Advised” is not a proof of global optimality and no plans were changed for this comparison. Every numerical GPU row passed exact answer comparison for its warmup and all five executions; SF1 also checks the equivalent sequential physical program.
+GPU uses the checked `--mode advised` plans, one warmup and five measured executions. All 52 included GPU results passed exact comparison. SF1 additionally checks sequential-program conformance. The retained results are [the original suite](performance_gpu.json), [fresh-process SF10 recovery for d27/d72_inner/d85](performance_gpu_sf10_remaining.json), and **h19 from [the exact interning suite](gpu_tpch_intern.results.json)**. Initial device allocation failures are not timings. h14's prefix predicate requires order-preserving interning and has no GPU result.
 
-- **Build** is the suite's `build_ms`: CUDA-event elapsed time for query-required structure construction, selection/index preparation and associated scheduled work. In staged queries, the suite sums stage measurements. Its existing accounting also charges complete host-graded stages and nullable intermediate host publication to build. Thus this label is **not exclusively GPU index-construction time**.
-- **Query** is the median of each sample's `kernels_ms + dedup_ms`. Kernels includes scheduled query traversal/expansion; dedup includes canonicalization, grouping/reduction, and device output publication. In grouped queries, substantial query computation is attributed to dedup, so it must not be read as only a final DISTINCT operation.
-- **Total** is the median of `total_ms`. Build, query, and total are independent medians and can differ slightly from their arithmetic sum. Raw samples retain full precision.
-- Input file loading, input upload/compression, module initialization, final answer download/decoding, and answer comparison are excluded. Query-required intermediate publication is included, unlike final answer retrieval. These are resident-input execution measurements, not end-to-end application latency.
-- **Hybrid caveat:** h02 stage 1 and h15 stage 2 run on the host after checked device rejection. Other staged queries can publish nullable intermediates to the host. Their measured work is retained, not hidden, but these rows must not be described as entirely device execution.
+- **Build:** CUDA-event elapsed construction, selection/index preparation and scheduled work. Staged plans also charge host-graded stages and nullable intermediate host publication to build; it is not exclusively device index construction.
+- **Query:** median of each sample's kernels + dedup. Dedup includes grouping/reduction, canonicalization and device publication, not merely final DISTINCT.
+- **Total:** median total. These independent medians need not sum exactly.
+- Input file loading, upload/compression, module initialization, final answer download/decoding and comparison are excluded. Query-required intermediate publication is included. These are resident-input execution measurements, not end-to-end latency.
+- h02 stage 1 and h15 stage 2 execute on the host after checked device rejection; these hybrid measurements are not wholly device execution.
 
-Timing boundaries are in [`benchmark.rs`](../tpch/src/benchmark.rs), [`build_stages.rs`](../tpch/build_stages.rs), [`build.rs`](../tpch/build.rs), and [`emit.rs`](../sequence/core/src/emit.rs).
+H19 uses author-controlled `u32` dictionaries for shipping mode/instruction, brand and container. CPU and GPU use matching sorted-distinct dictionaries; missing literals use `u32::MAX`. Input dictionary preparation is excluded from timing. See [statistics derivation](tpch_statistics.md) and [`benchmark.rs`](../tpch/src/benchmark.rs).
 
-All GPU measurements are fresh from this session. The initial complete-suite process exhausted device memory at SF10 d27/d72_inner/d85 after earlier queries had completed. A fresh process executing those same three queries, without changing plans, completed all five samples exactly. The report uses these recovered measurements, preserves both invocations, and does not treat the initial allocation failures as timings. Process-lifetime retention is a plausible explanation, not a proved leak diagnosis.
+### CPU: LE, advised and default
 
-**Current GPU coverage:** 26 queries at each scale. **h14 is removed for now: its prefix predicate inside the aggregate needs order-preserving interning.** Its CPU and DuckDB rows remain available. H19 now uses author-controlled `u32` interning and statistics-derived advised execution. Its five-sample GPU medians come from [the exact full-suite interning run](gpu_tpch_intern.results.json), superseding the original rejected H19 entries; other GPU rows retain the original measurements and SF10 recovery described above.
+Each of the 27 queries has **default, le, le_runs and advised** measured independently at each scale. There is **no family pruning**. CPU-default is exactly `default`; CPU-advised is exactly `advised`; CPU-LE is the fastest successfully measured `le`/`le_runs` by its uninstrumented whole-query median. If a candidate times out, the best completed candidate is reported and `cpu_le_search_complete` records the incomplete search. No different planner substitutes for an unavailable LE result.
 
-H19 declares shipping mode, shipping instruction, brand and container as `u32`, prepared with `cq_load::StringDictionary`. Author-side `intern(table, column, literal)` resolves the same sorted-distinct, zero-based per-column dictionaries on CPU and GPU; missing literals use `u32::MAX`. Existing SF1/SF10 exports already use this ordering. No exporter change or data re-export was needed; other queries' automatic String equality encoding is unchanged. See [the statistics derivation](tpch_statistics.md).
+The original policy was one warm execution, **five plain runs**, one independent counter execution, and **five profile runs**, reducing to **three** timed runs when a warm or timed execution exceeded **60 seconds**, with a **600-second combined wall budget per configuration**. All SF1 and the first part of SF10 used that policy. **At the user's priority override, the remaining SF10 work switched to a 100-second cap, three runs above 10 seconds, and profiles only for each column's selected default / best-LE / advised configuration.** Plain runs still cover every configuration; already completed results are retained, including earlier profiles for nonwinning LE candidates. Per-row policy metadata distinguishes the two collection policies. Completed modes are retained across interruption; incomplete work resumes under the new cap.
 
-The interning GPU invocation was `./target/release/cq-gpu-tpch compare/gpu_tpch_intern.results.json --mode advised`: all 52 results (26 queries at two scales) passed exact comparison, with SF1 sequential-program conformance. H19 CPU-default was subsequently recollected using the CPU collector's stock workers: one warm execution, five plain runs, an independent counter execution, and five profile runs, with exact comparisons. H19 has no authored LE configuration. Its input loading/dictionary preparation is excluded, consistently with the other CPU rows.
+Caps include loading, warmup, measurements and exact comparisons across modes. `>100 s timeout` (or the earlier `>600 s timeout`) is a **configuration-budget status, not a numeric query timing or per-execution lower bound**. A completed exact plain measurement remains usable if a later profile phase times out; missing phases stay unavailable.
 
-### B/C: CQ CPU LE and default
+**Plain total** surrounds `query::run`, including query-local preprocessing and structure/index construction. Parquet loading, load-time zone preparation, canonicalization, sorting, serialization, exact comparison and final answer destruction are excluded. Every warm and timed answer is compared as a normalized exact set against the same authored DuckDB SQL at the same scale. Only DECIMAL trailing-zero formatting is normalized; there is no floating tolerance.
 
-The generated worker's `query_median_ms`/`median_ms` times the complete `query::run`, **including query-required structure/index construction**. It excludes input loading and excludes canonicalization, answer serialization, and exact comparison. The separate `index_builds` counter counts operations, not milliseconds. It cannot by itself split the measured total.
+**Profile build** is `BUILD_EXCLUSIVE_TOTAL`: the sum of exclusive elapsed construction time (elapsed minus separately measured source production, saturating) for operator kinds ending `_BUILD`. **Profile query** is the paired profile total minus that build; **profile total** is the median-total profile execution. The build tree rounds to 0.001 ms. All three refer to the same execution, not independent phase medians. Profiling materializes build inputs and adds clocks/bookkeeping, so its timings can differ substantially from plain execution. **Never subtract profile build from plain total.** Zero build means no time in these explicit scopes, not no allocation or hashing.
 
-The phase table uses the existing operator-profile measurement to obtain a genuine measured split: **build** is the exclusive build time, **query** is the paired profile total minus that build time, and **total** is that same profile execution's total. The selected execution is the median-total profile execution. Exclusive build accounting avoids counting the upstream input stream twice. **These CPU phase totals are instrumented**, not the uninstrumented bench median: profiling materializes build inputs before insertion and can change runtime substantially. No profile time is subtracted from an unrelated uninstrumented total.
+The separate counter run supplies checked operator rows; profiles check exact answers, graph labels, rows and the top-level clock. Independent primitive insertion-count agreement is recorded as `primitive_build_counts_verified`, separately from exactness. Per-configuration plain/profile samples, run counts, statuses and profiles are retained in the raw SF-specific directories and consolidated JSON/TSV. SF1 and SF10 data/cache directories are isolated; compiled artifacts may be reused only when source fingerprints agree.
 
-The split uses `BUILD_EXCLUSIVE_TOTAL` from the profile tree: for each operator whose kind ends in `_BUILD`, elapsed construction time minus its separately timed input production, using saturating subtraction. The tree prints this total to 0.001 ms, so the residual has corresponding rounding uncertainty. Query-local preprocessing remains in total/query unless covered by such an operator; one-time Parquet loading and load-time zone preparation are excluded. This is an execution-phase accounting comparison, not identical internal operator boundaries across engines.
+Boundaries: [`worker.rs`](../../../features/workloads/xtask/src/tpch/worker.rs), [collector](performance_cpu_collect.py). Source hashes and machine metadata: [SF1](performance_cpu_environment_sf1.json), [SF10](performance_cpu_environment_sf10.json).
 
-The CPU search includes authored configurations, including `no-reduce`, subject to the later-authorized stopping rule: cap a configuration worker at 600 seconds, use three rather than five measured runs when an execution exceeds 60 seconds, and skip more expensive configurations in a family once a cheaper one is already over 10× slower than GPU. C is exactly `default`. B is the fastest successfully measured authored **`le` or `le_runs`** configuration, selected by its **uninstrumented** median total, not by the profile total. These choose `Planner::Le`; `transfer`, `candidate`, `advised`, and `hypergraph_zone` do not become LE merely because they share downstream Sequence machinery. Queries without an authored LE configuration are marked “no LE config”. “Best” is limited to completed measurements under this stopping rule, not an exhaustive search over all join orders. The uninstrumented medians are reported separately and are the primary basis for CPU speedups; profile-based speedups are explicitly distinguished.
+### DuckDB
 
-CPU timeouts/skips are not correctness passes or numeric query timings. In particular, “worker >600 s” denotes exhaustion of a configuration measurement budget, including its loading, warmup, repeated executions and untimed comparisons; it is **not** a lower bound of 600 seconds on an individual query execution. Numeric CPU timings are admitted only when the worker's exact correctness check passes. Censored or unavailable values are excluded from geometric means with the denominator stated.
+DuckDB **v1.4.4 (Andium), `6ddac802ff`**, explicit t1/t24. CLI `.timer` measures complete authored SQL in **`.mode trash`**, with one warmup and five samples, avoiding answer CSV formatting/output and comparison. Intrinsic result materialization/consumption remains timed; resolution is 1 ms. Database generation/export, process opening and thread configuration are excluded. Scanning, reads/decompression, hash construction, aggregation and DISTINCT are included. There is no separate external index-build phase. The report uses [SF1](performance_duck_trash_sf1.json) and [SF10](performance_duck_trash_sf10.json), not CSV-output timers.
 
-CPU timing/correctness boundaries are in [`worker.rs`](../../../features/workloads/xtask/src/tpch/worker.rs). CPU workers are sequential; DuckDB is shown with explicit t1 and t24 settings. CPU SF10 is unavailable: the CPU benchmark accepts only SF0.1 and SF1.
+## Reproduction
 
-### D: DuckDB
-
-DuckDB **v1.4.4 (Andium), `6ddac802ff`**, with separate `SET threads=1` and `SET threads=24` processes. Fresh CLI `.timer` measurements execute the complete authored SQL in **`.mode trash`**, with one warmup followed by five samples. This avoids answer CSV formatting/output and comparison; intrinsic engine result materialization/consumption remains part of execution. CLI timer resolution is 1 ms.
-
-Database generation/export, process startup/opening, and setting the thread count are outside the timer. Query-required scans, reads/decompression, hash-table builds, aggregation and DISTINCT are inside. **DuckDB has no separately measured external index-build phase**: its displayed time already includes its query-time hash/index construction. Historical CSV-output timers embedded by the GPU suite are not used for either table or speedups; fresh no-output timings are used instead.
-
-Reproduction commands (from the repository root unless noted):
+From the repository root (run CPU scales serially):
 
 ```sh
-# In experiments/gpu:
-CUDA_HOME=/opt/nvidia/hpc_sdk/Linux_x86_64/25.5/cuda/12.9 CARGO_BUILD_JOBS=1 \
-  cargo oxide build --arch sm_89 -- --release -p cq-gpu-tpch
-./target/release/cq-gpu-tpch compare/performance_gpu.json --mode advised
-./target/release/cq-gpu-tpch compare/performance_gpu_sf10_remaining.json \
-  --mode advised --scale sf10 --query d27 --query d72_inner --query d85
-# At repository root:
-python3 experiments/gpu/compare/performance_duck.py
+python3 experiments/gpu/compare/performance_cpu_collect.py all --sf 1 --runs 5 --cap-seconds 600
+# Initial SF10 policy; completed results are retained:
+python3 experiments/gpu/compare/performance_cpu_collect.py all --sf 10 --runs 5 --cap-seconds 600
+# Resume remaining SF10 work using the user-authorized final policy:
+python3 experiments/gpu/compare/performance_cpu_collect.py build --sf 10 --cap-seconds 100 --slow-seconds 10 --profile-winners-only
+python3 experiments/gpu/compare/performance_cpu_collect.py measure --sf 10 --cap-seconds 100 --slow-seconds 10 --profile-winners-only
+python3 experiments/gpu/compare/performance_cpu_collect.py consolidate --sf 10 --cap-seconds 100 --slow-seconds 10 --profile-winners-only
+python3 experiments/gpu/compare/performance_cpu_collect.py cleanup --sf 10
+python3 experiments/gpu/compare/performance_report.py
 ```
 
-The loader fix rewrites dictionary string literals in equality/disjunction/membership guards and nested conditional/arithmetic expressions, including aggregate heads normalized into Bind later. Opaque or ordered string uses retain String storage. The synthetic-manifest regression covers conditional bindings, aggregate heads, reversed inequality, and unsafe string operations. The authorized release build and targeted synthetic-manifest test passed before measurement.
+The collector also exposes `adaptive`, `build`, `prepare`, `measure`, `consolidate`, and `cleanup` phases. Cleanup removes duplicate answers/oracles after exact checks while preserving measurement evidence; prepare regenerates the oracles. GPU reproduction (inside `experiments/gpu`):
 
+```sh
+CUDA_HOME=/opt/nvidia/hpc_sdk/Linux_x86_64/25.5/cuda/12.9 CARGO_BUILD_JOBS=1 cargo oxide build --arch sm_89 -- --release -p cq-gpu-tpch
+./target/release/cq-gpu-tpch compare/performance_gpu.json --mode advised
+./target/release/cq-gpu-tpch compare/performance_gpu_sf10_remaining.json --mode advised --scale sf10 --query d27 --query d72_inner --query d85
+./target/release/cq-gpu-tpch compare/gpu_tpch_intern.results.json --mode advised
+```
+
+DuckDB reproduction: `python3 experiments/gpu/compare/performance_duck.py`.
 ## SF1: phase comparison
 
-**CPU columns are instrumented profile phases; GPU/DuckDB are ordinary
-benchmark timings.** Use the uninstrumented CPU table and primary speedups
-below for whole-query comparison. All 89 completed CPU measurements have
-correctness **ok**, five plain samples and five profile samples; no completed
-row needed the adaptive three-run option. The table selects 26 defaults
-and 14 best-observed LE configurations.
+All values are milliseconds. CPU build/query/total are paired **instrumented profile** measurements; GPU and DuckDB are ordinary timings. CPU-LE is selected by the minimum **plain** median of `le` and `le_runs`.
 
-| Query | GPU build | GPU query | GPU total | CPU-LE build | CPU-LE query | CPU-LE total (config) | CPU-default build | CPU-default query | CPU-default total | DuckDB t1 | DuckDB t24 |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| h01 | 0.002 | 66.294 | 66.295 | no LE config | no LE config | no LE config | 0.000 | 2823.732 | 2823.732 | 819.000 | 63.000 |
-| h02 | 8.125 | 18.525 | 26.689 | no LE config | no LE config | no LE config | 18.958 | 110.268 | 129.226 | 12.000 | 9.000 |
-| h03 | 0.044 | 1.922 | 1.965 | 7.332 | 32.382 | 39.714 (le_runs) | 17.085 | 37.638 | 54.723 | 37.000 | 11.000 |
-| h04 | 0.514 | 0.652 | 1.164 | 45.775 | 40.958 | 86.733 (le) | 46.209 | 41.427 | 87.636 | 44.000 | 10.000 |
-| h04_not_exists | 3.735 | 0.240 | 3.971 | 104.021 | 57.818 | 161.839 (le_runs) | 105.759 | 58.262 | 164.021 | 46.000 | 11.000 |
-| h05 | 1.542 | 0.469 | 2.011 | 2.445 | 56.519 | 58.964 (le_runs) | 5.541 | 83.285 | 88.826 | 47.000 | 12.000 |
-| h06 | 0.002 | 7.416 | 7.417 | no LE config | no LE config | no LE config | 0.000 | 36.984 | 36.984 | 36.000 | 7.000 |
-| h07 | 1.665 | 1.172 | 2.838 | 2.976 | 30.259 | 33.235 (le_runs) | 13.233 | 33.063 | 46.296 | 48.000 | 14.000 |
-| h07_block | 1.803 | 1.084 | 2.883 | 3.689 | 37.702 | 41.391 (le_runs) | 15.199 | 143.843 | 159.042 | 48.000 | 14.000 |
-| h08 | 2.663 | 2.164 | 4.835 | 6.511 | 340.951 | 347.462 (le_runs) | 9.229 | 50.425 | 59.654 | 40.000 | 13.000 |
-| h09 | 4.064 | 1.741 | 5.805 | — | — | worker >600 s (le/le_runs) | — | — | worker >600 s (default) | 166.000 | 40.000 |
-| h10 | 1.673 | 12.365 | 14.038 | no LE config | no LE config | no LE config | 167.441 | 231.001 | 398.442 | 148.000 | 44.000 |
-| h11 | 0.616 | 18.804 | 19.419 | no LE config | no LE config | no LE config | 0.010 | 62.908 | 62.918 | 11.000 | 5.000 |
-| h12 | 0.631 | 8.576 | 9.207 | no LE config | no LE config | no LE config | 139.257 | 83.520 | 222.777 | 60.000 | 11.000 |
-| h13 | 6.457 | 9.503 | 15.914 | no LE config | no LE config | no LE config | 123.323 | 358.763 | 482.086 | 223.000 | 38.000 |
-| h14 | removed | removed | removed | no LE config | no LE config | no LE config | 5.383 | 68.725 | 74.108 | 44.000 | 18.000 |
-| h15 | 0.261 | 14.633 | 14.895 | no LE config | no LE config | no LE config | 0.260 | 63.739 | 63.999 | 48.000 | 11.000 |
-| h16 | 1.353 | 0.251 | 1.604 | 19.718 | 28.939 | 48.657 (le) | 16.821 | 22.820 | 39.641 | 9.000 | 7.000 |
-| h18 | 1.086 | 22.999 | 24.083 | no LE config | no LE config | no LE config | 155.259 | 1388.154 | 1543.413 | 722.000 | 81.000 |
-| h19 | 0.002 | 9.253 | 9.254 | no LE config | no LE config | no LE config | 9.687 | 55.913 | 65.600 | 93.000 | 14.000 |
-| h20 | 1.609 | 14.986 | 16.596 | no LE config | no LE config | no LE config | 2.940 | 365.410 | 368.350 | 99.000 | 22.000 |
-| h21_positive | 1.880 | 2.493 | 4.369 | 34.787 | 143.442 | 178.229 (le) | 45.978 | 249.999 | 295.977 | 111.000 | 20.000 |
-| h22 | 0.868 | 0.148 | 1.015 | 18.059 | 3.834 | 21.893 (le) | 18.146 | 4.032 | 22.178 | 23.000 | 15.000 |
-| d19 | 2.330 | 0.550 | 2.878 | 7.813 | 18.346 | 26.159 (le) | 7.993 | 20.515 | 28.508 | 35.000 | 11.000 |
-| d27 | 0.793 | 1.812 | 2.610 | 1.386 | 28.267 | 29.653 (le_runs) | 1.800 | 32.037 | 33.837 | 42.000 | 10.000 |
-| d72_inner | 1.331 | 2.988 | 4.319 | 69.768 | 127.739 | 197.507 (le) | 78.324 | 177.522 | 255.846 | 116.000 | 70.000 |
-| d85 | 2.106 | 1.465 | 3.571 | 8.613 | 28.940 | 37.553 (le) | 9.372 | 25.350 | 34.722 | 43.000 | 13.000 |
+| Query | GPU build | GPU query | GPU total | CPU-LE build | CPU-LE query | CPU-LE total | CPU-advised build | CPU-advised query | CPU-advised total | CPU-default build | CPU-default query | CPU-default total | DuckDB t1 | DuckDB t24 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| h01 | 0.002 | 66.294 | 66.295 | 0.000 | 5471.737 | 5471.737 (le) | 0.000 | 3013.778 | 3013.778 | 0.000 | 2846.514 | 2846.514 | 819.000 | 63.000 |
+| h02 | 8.125 | 18.525 | 26.689 | 9.628 | 65.429 | 75.057 (le_runs) | 63.075 | 59.751 | 122.826 | 20.327 | 107.628 | 127.955 | 12.000 | 9.000 |
+| h03 | 0.044 | 1.922 | 1.965 | 7.215 | 32.748 | 39.963 (le_runs) | 130.073 | 78.265 | 208.338 | 20.107 | 41.449 | 61.556 | 37.000 | 11.000 |
+| h04 | 0.514 | 0.652 | 1.164 | 46.436 | 40.751 | 87.187 (le_runs) | 0.617 | 30.147 | 30.764 | 46.826 | 39.429 | 86.255 | 44.000 | 10.000 |
+| h04_not_exists | 3.735 | 0.240 | 3.971 | 104.746 | 54.958 | 159.704 (le_runs) | 103.434 | 55.042 | 158.476 | 103.327 | 55.924 | 159.251 | 46.000 | 11.000 |
+| h05 | 1.542 | 0.469 | 2.011 | 2.577 | 56.248 | 58.825 (le_runs) | 314.900 | 122.290 | 437.190 | 4.768 | 81.344 | 86.112 | 47.000 | 12.000 |
+| h06 | 0.002 | 7.416 | 7.417 | 0.000 | 37.017 | 37.017 (le) | 0.000 | 36.187 | 36.187 | 0.000 | 36.102 | 36.102 | 36.000 | 7.000 |
+| h07 | 1.665 | 1.172 | 2.838 | 3.826 | 26.844 | 30.670 (le_runs) | 202.133 | 109.758 | 311.891 | 14.560 | 33.244 | 47.804 | 48.000 | 14.000 |
+| h07_block | 1.803 | 1.084 | 2.883 | 4.058 | 43.791 | 47.849 (le_runs) | 195.178 | 109.865 | 305.043 | 11.359 | 145.856 | 157.215 | 48.000 | 14.000 |
+| h08 | 2.663 | 2.164 | 4.835 | 4.810 | 340.789 | 345.599 (le_runs) | 1089.728 | 142.679 | 1232.407 | 11.961 | 51.857 | 63.818 | 40.000 | 13.000 |
+| h09 | 4.064 | 1.741 | 5.805 | — | — | >600 s timeout | 1074.692 | 377.499 | 1452.191 | — | — | >600 s timeout | 166.000 | 40.000 |
+| h10 | 1.673 | 12.365 | 14.038 | 99.553 | 253.516 | 353.069 (le_runs) | 173.931 | 234.481 | 408.412 | 166.472 | 231.429 | 397.901 | 148.000 | 44.000 |
+| h11 | 0.616 | 18.804 | 19.419 | 0.005 | 14.295 | 14.300 (le_runs) | 32.198 | 8.947 | 41.145 | 0.011 | 63.134 | 63.145 | 11.000 | 5.000 |
+| h12 | 0.631 | 8.576 | 9.207 | 136.790 | 80.503 | 217.293 (le_runs) | 157.203 | 86.107 | 243.310 | 136.437 | 87.685 | 224.122 | 60.000 | 11.000 |
+| h13 | 6.457 | 9.503 | 15.914 | 114.193 | 348.446 | 462.639 (le_runs) | 119.680 | 352.934 | 472.614 | 119.806 | 351.400 | 471.206 | 223.000 | 38.000 |
+| h14 | CPU-only | CPU-only | CPU-only | 4.834 | 69.367 | 74.201 (le) | 4.865 | 71.352 | 76.217 | 5.027 | 69.937 | 74.964 | 44.000 | 18.000 |
+| h15 | 0.261 | 14.633 | 14.895 | 0.262 | 64.234 | 64.496 (le_runs) | 0.358 | 63.309 | 63.667 | 0.264 | 63.576 | 63.840 | 48.000 | 11.000 |
+| h16 | 1.353 | 0.251 | 1.604 | 16.878 | 25.702 | 42.580 (le) | 19.843 | 25.568 | 45.411 | 17.057 | 21.510 | 38.567 | 9.000 | 7.000 |
+| h18 | 1.086 | 22.999 | 24.083 | 167.813 | 1375.637 | 1543.450 (le) | 165.853 | 1379.107 | 1544.960 | 170.014 | 1459.305 | 1629.319 | 722.000 | 81.000 |
+| h19 | 0.002 | 9.253 | 9.254 | 9.996 | 66.763 | 76.759 (le) | 15.132 | 99.872 | 115.004 | 8.781 | 56.294 | 65.075 | 93.000 | 14.000 |
+| h20 | 1.609 | 14.986 | 16.596 | 5.140 | 371.923 | 377.063 (le_runs) | 68.364 | 385.528 | 453.892 | 1.742 | 365.546 | 367.288 | 99.000 | 22.000 |
+| h21_positive | 1.880 | 2.493 | 4.369 | 37.213 | 145.183 | 182.396 (le) | 426.302 | 320.309 | 746.611 | 45.927 | 239.165 | 285.092 | 111.000 | 20.000 |
+| h22 | 0.868 | 0.148 | 1.015 | 17.905 | 3.770 | 21.675 (le) | 18.145 | 3.934 | 22.079 | 18.116 | 4.019 | 22.135 | 23.000 | 15.000 |
+| d19 | 2.330 | 0.550 | 2.878 | 7.724 | 18.606 | 26.330 (le) | 346.406 | 75.643 | 422.049 | 7.833 | 20.569 | 28.402 | 35.000 | 11.000 |
+| d27 | 0.793 | 1.812 | 2.610 | 1.527 | 28.502 | 30.029 (le_runs) | 1.732 | 40.275 | 42.007 | 1.645 | 31.935 | 33.580 | 42.000 | 10.000 |
+| d72_inner | 1.331 | 2.988 | 4.319 | 57.646 | 126.881 | 184.527 (le_runs) | 177.116 | 109.836 | 286.952 | 79.904 | 163.406 | 243.310 | 116.000 | 70.000 |
+| d85 | 2.106 | 1.465 | 3.571 | 8.647 | 29.113 | 37.760 (le) | 429.686 | 81.076 | 510.762 | 9.648 | 26.732 | 36.380 | 43.000 | 13.000 |
 
-Build scopes observed: `INDEX_BUILD`, `JOIN_FILTER_BUILD`, `KEYSET_BUILD`,
-`ROWS_BUILD`. Zero means no recorded time in these explicit build scopes,
-not absence of allocation, grouping state, or hashing anywhere in the query.
-The twelve default-only queries (h01, h02, h06, h10, h11, h12, h13, h14,
-h15, h18, h19, h20), including the refreshed manually interned h19, passed
-exact-answer, operator-graph and top-level clock checks, but primitive
-`distinct_insertions` disagreed with profiled set-insertion accounting.
-Their JSON records `primitive_build_counts_verified=false`; independent
-insertion-count verification is not claimed. This diagnostic remains present
-after h19's refresh and does not invalidate its exact-answer result.
+Coverage: 108 configurations attempted across 27 queries; 105 complete, 3 timeout; 0 configurations used three runs in at least one completed mode.
 
 ### SF1 uninstrumented CPU totals
 
-These include index construction and determine the primary CPU speedups.
+These whole-query medians include index construction and determine the primary CPU speedups.
 
-| Query | CPU-LE total | CPU-default total |
-|---|---:|---:|
-| h01 | no LE config | 2656.013 |
-| h02 | no LE config | 65.371 |
-| h03 | 30.914 | 44.045 |
-| h04 | 49.530 | 49.732 |
-| h04_not_exists | 169.839 | 173.460 |
-| h05 | 35.699 | 43.504 |
-| h06 | no LE config | 24.567 |
-| h07 | 30.188 | 39.758 |
-| h07_block | 33.072 | 66.872 |
-| h08 | 60.726 | 36.907 |
-| h09 | worker >600 s | worker >600 s |
-| h10 | no LE config | 326.971 |
-| h11 | no LE config | 17.022 |
-| h12 | no LE config | 177.882 |
-| h13 | no LE config | 459.702 |
-| h14 | no LE config | 67.976 |
-| h15 | no LE config | 37.090 |
-| h16 | 43.980 | 41.194 |
-| h18 | no LE config | 1350.122 |
-| h19 | no LE config | 64.124 |
-| h20 | no LE config | 320.665 |
-| h21_positive | 144.744 | 202.969 |
-| h22 | 23.238 | 23.717 |
-| d19 | 20.762 | 21.477 |
-| d27 | 16.333 | 17.907 |
-| d72_inner | 156.919 | 197.245 |
-| d85 | 28.950 | 28.892 |
+| Query | CPU-LE total | CPU-advised total | CPU-default total |
+|---|---:|---:|---:|
+| h01 | 3017.642 | 2656.798 | 2675.986 |
+| h02 | 49.400 | 128.540 | 63.620 |
+| h03 | 32.536 | 133.097 | 57.806 |
+| h04 | 49.934 | 23.244 | 50.404 |
+| h04_not_exists | 166.242 | 167.519 | 167.514 |
+| h05 | 36.805 | 390.747 | 41.987 |
+| h06 | 25.249 | 24.538 | 24.971 |
+| h07 | 27.923 | 257.435 | 39.322 |
+| h07_block | 41.254 | 253.724 | 73.726 |
+| h08 | 60.004 | 983.256 | 39.276 |
+| h09 | >600 s timeout | 1162.877 | >600 s timeout |
+| h10 | 305.760 | 348.885 | 330.515 |
+| h11 | 10.328 | 45.122 | 17.479 |
+| h12 | 178.829 | 203.075 | 185.366 |
+| h13 | 451.932 | 473.216 | 463.084 |
+| h14 | 65.537 | 67.724 | 67.493 |
+| h15 | 37.281 | 37.375 | 36.780 |
+| h16 | 43.328 | 40.924 | 40.938 |
+| h18 | 1349.829 | 1330.657 | 1326.745 |
+| h19 | 50.912 | 83.001 | 101.599 |
+| h20 | 330.369 | 401.665 | 327.993 |
+| h21_positive | 150.455 | 616.978 | 207.703 |
+| h22 | 22.695 | 22.855 | 23.738 |
+| d19 | 21.093 | 387.530 | 21.450 |
+| d27 | 16.543 | 44.204 | 18.064 |
+| d72_inner | 142.113 | 236.778 | 200.163 |
+| d85 | 29.560 | 428.292 | 28.429 |
 
-**Coverage:** 105 configurations inventoried; 89 completed, six h09 timeouts
-(`default`, `no-reduce`, `transfer`, `le`, `le_runs`, `generic_smallest`),
-and ten authorized family skips. Skipped: h16/h22/h21_positive:
-`no-reduce`, `le_runs`; d72_inner: `no-reduce`, `le_runs`, `advised`;
-d85: `hypergraph_zone`. The h16, h22, h21_positive and d72_inner LE winners
-are best observed, not fully searched LE winners. h09 default ran about
-44 minutes before the cap was authorized and applied; no numeric result
-is inferred from that elapsed worker time.
+## SF10: phase comparison
 
-## SF10: GPU versus DuckDB
+All values are milliseconds. CPU build/query/total are paired **instrumented profile** measurements; GPU and DuckDB are ordinary timings. CPU-LE is selected by the minimum **plain** median of `le` and `le_runs`.
 
-CPU SF10 is not supported by the CPU benchmark and is not extrapolated.
-Every numerical GPU row is exact; query = kernels + dedup as defined above.
+| Query | GPU build | GPU query | GPU total | CPU-LE build | CPU-LE query | CPU-LE total | CPU-advised build | CPU-advised query | CPU-advised total | CPU-default build | CPU-default query | CPU-default total | DuckDB t1 | DuckDB t24 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| h01 | 0.002 | 591.959 | 591.961 | — | — | >600 s timeout | — | — | >600 s timeout | — | — | >600 s timeout | 9431.000 | 531.000 |
+| h02 | 217.414 | 113.961 | 331.269 | 155.739 | 903.716 | 1059.455 (le_runs) | 1280.914 | 1157.691 | 2438.605 | 298.778 | 1396.583 | 1695.361 | 137.000 | 33.000 |
+| h03 | 0.089 | 17.449 | 17.537 | 95.751 | 443.438 | 539.189 (le_runs) | 5098.104 | 1184.874 | 6282.978 | 204.295 | 539.140 | 743.435 | 566.000 | 57.000 |
+| h04 | 5.014 | 5.403 | 10.420 | 5240.084 | 811.306 | 6051.390 (le) | 158.651 | 761.343 | 919.994 | 5229.588 | 812.524 | 6042.112 | 459.000 | 50.000 |
+| h04_not_exists | 44.211 | 1.212 | 45.430 | 1646.462 | 565.264 | 2211.726 (le_runs) | 1643.291 | 550.408 | 2193.699 | 1683.748 | 554.727 | 2238.475 | 475.000 | 63.000 |
+| h05 | 9.137 | 1.164 | 10.314 | 81.059 | 928.382 | 1009.441 (le) | 5136.249 | 1479.485 | 6615.734 | 72.995 | 1059.461 | 1132.456 | 523.000 | 56.000 |
+| h06 | 0.002 | 13.439 | 13.441 | 0.000 | 535.059 | 535.059 (le) | 0.000 | 532.734 | 532.734 | 0.000 | 533.836 | 533.836 | 403.000 | 39.000 |
+| h07 | 13.098 | 1.968 | 15.048 | 172.658 | 420.560 | 593.218 (le) | 4716.723 | 1692.505 | 6409.228 | 160.484 | 418.738 | 579.222 | 604.000 | 61.000 |
+| h07_block | 13.170 | 1.911 | 15.084 | 175.441 | 706.900 | 882.341 (le) | 4973.764 | 1741.846 | 6715.610 | 152.279 | 1497.246 | 1649.525 | 605.000 | 61.000 |
+| h08 | 24.904 | 2.766 | 27.662 | 99.327 | 4190.165 | 4289.492 (le) | — | — | >100 s timeout | 132.676 | 616.426 | 749.102 | 838.000 | 80.000 |
+| h09 | 40.861 | 3.607 | 44.563 | — | — | >100 s timeout | — | — | >100 s timeout | — | — | >100 s timeout | 2643.000 | 250.000 |
+| h10 | 11.808 | 46.979 | 58.787 | 1000.914 | 2886.995 | 3887.909 (le_runs) | 1966.679 | 3108.271 | 5074.950 | 1965.405 | 3114.413 | 5079.818 | 1658.000 | 207.000 |
+| h11 | 2.336 | 41.860 | 44.196 | 0.048 | 156.610 | 156.658 (le_runs) | 715.580 | 249.265 | 964.845 | 0.114 | 625.529 | 625.643 | 100.000 | 15.000 |
+| h12 | 6.541 | 21.362 | 27.904 | 2249.878 | 914.660 | 3164.538 (le_runs) | 2252.839 | 936.069 | 3188.908 | 2259.324 | 927.198 | 3186.522 | 544.000 | 55.000 |
+| h13 | 90.545 | 24.698 | 115.215 | 4116.506 | 5831.543 | 9948.049 (le) | 4157.649 | 5891.410 | 10049.059 | 4065.632 | 5849.338 | 9914.970 | 3484.000 | 286.000 |
+| h14 | CPU-only | CPU-only | CPU-only | 240.159 | 900.599 | 1140.758 (le_runs) | 241.916 | 887.772 | 1129.688 | 243.198 | 898.822 | 1142.020 | 583.000 | 60.000 |
+| h15 | 1.709 | 19.257 | 20.966 | 3.260 | 924.013 | 927.273 (le_runs) | 4.035 | 910.366 | 914.401 | 3.216 | 923.515 | 926.731 | 591.000 | 64.000 |
+| h16 | 9.561 | 0.460 | 10.023 | 439.635 | 536.980 | 976.615 (le_runs) | 436.414 | 373.434 | 809.848 | 442.066 | 391.892 | 833.958 | 156.000 | 24.000 |
+| h18 | 8.594 | 166.324 | 174.924 | 2794.608 | 23313.767 | 26108.375 (le) | 2751.547 | 22937.331 | 25688.878 | 2725.572 | 22927.674 | 25653.246 | 9221.000 | 746.000 |
+| h19 | 0.002 | 24.373 | 24.375 | 179.105 | 898.733 | 1077.838 (le_runs) | 179.939 | 842.718 | 1022.657 | 181.271 | 832.290 | 1013.561 | 911.000 | 74.000 |
+| h20 | 8.493 | 90.159 | 98.710 | 83.246 | 6002.543 | 6085.789 (le) | 1253.098 | 5679.675 | 6932.773 | 44.358 | 5876.727 | 5921.085 | 1439.000 | 128.000 |
+| h21_positive | 19.950 | 20.200 | 40.158 | 509.424 | 1436.558 | 1945.982 (le_runs) | — | — | >100 s timeout | 673.218 | 2638.130 | 3311.348 | 1509.000 | 136.000 |
+| h22 | 6.223 | 0.191 | 6.414 | 634.356 | 168.101 | 802.457 (le) | 627.281 | 162.779 | 790.060 | 643.993 | 164.743 | 808.736 | 463.000 | 62.000 |
+| d19 | 18.631 | 0.708 | 19.341 | 170.908 | 238.883 | 409.791 (le_runs) | 5525.091 | 886.363 | 6411.454 | 173.044 | 252.049 | 425.093 | 420.000 | 45.000 |
+| d27 | 5.315 | 14.029 | 19.343 | 170.077 | 936.197 | 1106.274 (le) | 159.967 | 410.910 | 570.877 | 159.253 | 902.955 | 1062.208 | 774.000 | 68.000 |
+| d72_inner | 8.078 | 17.540 | 25.623 | 1506.139 | 1877.459 | 3383.598 (le_runs) | 4327.880 | 1564.585 | 5892.465 | 1903.303 | 2660.757 | 4564.060 | 1507.000 | 159.000 |
+| d85 | 17.782 | 9.149 | 26.935 | 179.014 | 403.227 | 582.241 (le_runs) | — | — | >100 s timeout | 173.567 | 339.132 | 512.699 | 519.000 | 57.000 |
 
-| Query | GPU build | GPU query | GPU total | DuckDB t1 | DuckDB t24 |
-|---|---:|---:|---:|---:|---:|
-| h01 | 0.002 | 591.959 | 591.961 | 9431.000 | 531.000 |
-| h02 | 217.414 | 113.961 | 331.269 | 137.000 | 33.000 |
-| h03 | 0.089 | 17.449 | 17.537 | 566.000 | 57.000 |
-| h04 | 5.014 | 5.403 | 10.420 | 459.000 | 50.000 |
-| h04_not_exists | 44.211 | 1.212 | 45.430 | 475.000 | 63.000 |
-| h05 | 9.137 | 1.164 | 10.314 | 523.000 | 56.000 |
-| h06 | 0.002 | 13.439 | 13.441 | 403.000 | 39.000 |
-| h07 | 13.098 | 1.968 | 15.048 | 604.000 | 61.000 |
-| h07_block | 13.170 | 1.911 | 15.084 | 605.000 | 61.000 |
-| h08 | 24.904 | 2.766 | 27.662 | 838.000 | 80.000 |
-| h09 | 40.861 | 3.607 | 44.563 | 2643.000 | 250.000 |
-| h10 | 11.808 | 46.979 | 58.787 | 1658.000 | 207.000 |
-| h11 | 2.336 | 41.860 | 44.196 | 100.000 | 15.000 |
-| h12 | 6.541 | 21.362 | 27.904 | 544.000 | 55.000 |
-| h13 | 90.545 | 24.698 | 115.215 | 3484.000 | 286.000 |
-| h14 | removed | removed | removed | 583.000 | 60.000 |
-| h15 | 1.709 | 19.257 | 20.966 | 591.000 | 64.000 |
-| h16 | 9.561 | 0.460 | 10.023 | 156.000 | 24.000 |
-| h18 | 8.594 | 166.324 | 174.924 | 9221.000 | 746.000 |
-| h19 | 0.002 | 24.373 | 24.375 | 911.000 | 74.000 |
-| h20 | 8.493 | 90.159 | 98.710 | 1439.000 | 128.000 |
-| h21_positive | 19.950 | 20.200 | 40.158 | 1509.000 | 136.000 |
-| h22 | 6.223 | 0.191 | 6.414 | 463.000 | 62.000 |
-| d19 | 18.631 | 0.708 | 19.341 | 420.000 | 45.000 |
-| d27 | 5.315 | 14.029 | 19.343 | 774.000 | 68.000 |
-| d72_inner | 8.078 | 17.540 | 25.623 | 1507.000 | 159.000 |
-| d85 | 17.782 | 9.149 | 26.935 | 519.000 | 57.000 |
+Coverage: 108 configurations attempted across 27 queries; 88 complete, 9 plain_only_not_selected, 11 timeout; 1 configurations used three runs in at least one completed mode.
 
-## Where GPU is slower than DuckDB
+### SF10 uninstrumented CPU totals
 
-- **h02, both scales, both thread counts:** SF1 total 26.689 ms versus DuckDB 12/9 ms; SF10 total 331.269 ms versus 137/33 ms. The hybrid plan's host fallback and intermediate publication are charged to build: 217.414 ms at SF10, approximately 66% of total; kernels add 97.023 ms and dedup 16.863 ms. This is not a purely GPU index-build bottleneck.
-- **h11, SF1 versus t1/t24 and SF10 versus t24:** SF1 19.419 ms versus 11/5 ms; SF10 44.196 ms versus t24's 15 ms. SF1 is dominated by the dedup/group/publication bucket (16.196 ms); SF10 has both substantial kernels (23.240 ms) and dedup (18.627 ms), rather than large build cost.
-- **h01 versus t24 at both scales:** 66.295 versus 63 ms at SF1; 591.961 versus 531 ms at SF10. Almost all suite time is in the grouping/reduction/output bucket labeled dedup (66.292/591.957 ms), not index building.
-- **h15 versus t24 at SF1 only:** 14.895 versus 11 ms; 14.630 ms is attributed to dedup/grouping/publication. The staged plan also has a host-graded terminal stage. At SF10 it is faster than both DuckDB settings.
-- **h06 versus t24 at SF1 only:** 7.417 versus 7 ms, with 7.414 ms in dedup/grouping. This small difference is below the 1 ms resolution of the DuckDB CLI timer and should not be treated as a precise ranking.
+These whole-query medians include index construction and determine the primary CPU speedups.
 
-The phase breakdown establishes where elapsed time is charged, not a hardware-counter diagnosis. No claims about occupancy, bandwidth saturation, or cache misses are inferred from these timings.
+| Query | CPU-LE total | CPU-advised total | CPU-default total |
+|---|---:|---:|---:|
+| h01 | 42990.346 | 42655.486 | 43062.649 |
+| h02 | 1078.245 | 1973.574 | 1329.774 |
+| h03 | 503.634 | 6193.515 | 681.095 |
+| h04 | 5727.454 | 835.487 | 5755.165 |
+| h04_not_exists | 2171.690 | 2178.073 | 2242.424 |
+| h05 | 750.828 | 5811.544 | 679.672 |
+| h06 | 442.199 | 443.559 | 441.270 |
+| h07 | 544.212 | 5314.043 | 524.141 |
+| h07_block | 689.782 | 5541.788 | 783.912 |
+| h08 | 1270.142 | 18587.764 | 622.492 |
+| h09 | >100 s timeout | >100 s timeout | >100 s timeout |
+| h10 | 3341.593 | 4171.500 | 4139.860 |
+| h11 | 146.347 | 697.315 | 209.818 |
+| h12 | 2798.779 | 2773.156 | 2774.910 |
+| h13 | 9687.810 | 10138.350 | 9670.642 |
+| h14 | 994.480 | 982.689 | 994.722 |
+| h15 | 849.570 | 853.291 | 856.435 |
+| h16 | 810.836 | 737.909 | 771.604 |
+| h18 | 23709.349 | 23643.970 | 23540.553 |
+| h19 | 925.780 | 1029.923 | 1105.112 |
+| h20 | 5690.554 | 6641.867 | 5489.040 |
+| h21_positive | 1878.550 | 8926.413 | 2501.338 |
+| h22 | 1264.351 | 1269.022 | 1257.905 |
+| d19 | 353.958 | 5541.231 | 366.826 |
+| d27 | 871.748 | 558.667 | 883.822 |
+| d72_inner | 2825.684 | 5354.696 | 3752.724 |
+| d85 | 510.415 | 8029.475 | 445.691 |
 
-Against uninstrumented CPU, **h11 is the only measured query where GPU is
-slower**: 19.419 ms versus default's 17.022 ms (GPU 1.14× slower). Its GPU
-dedup/group/publication bucket alone is 16.196 ms. No measured LE row is
-faster than GPU; no claim is made about censored h09 CPU configurations.
-The larger profile-based speedups below demonstrate why profiling overhead
-must not be confused with ordinary CPU runtime.
+## Geometric-mean speedups
 
-## Speedup definition
+Speedup = comparator total / GPU total; **greater than 1× favors GPU**. The geometric mean is `exp(mean(log(comparator_ms / gpu_ms)))`, equally weighting queries. The denominator counts common exact GPU queries with a completed numeric comparator measurement. h14 is excluded, as are unavailable/timed-out measurements; a timeout's elapsed wall time is never included. Different denominator sets are not directly comparable aggregate rankings. **Uninstrumented CPU comparisons are primary**; profile comparisons only describe the phase-table measurements.
 
-Speedup is comparator total / GPU total, so **greater than 1× favors GPU**.
-The geometric mean is `exp(mean(log(comparator_ms / gpu_ms)))`, giving each
-query equal weight rather than weighting by runtime. Unsupported GPU rows
-are excluded, and CPU comparisons additionally exclude absent LE configs,
-timeouts, skips, and failed/unavailable measurements. Different coverage
-sets must not be interpreted as directly comparable aggregate rankings.
+| Scale | Comparator | Common exact queries (n) | Geometric-mean GPU speedup |
+|---|---:|---:|---:|
+| SF1 | duckdb_t1_ms | 26 | 10.314× |
+| SF1 | duckdb_t24_ms | 26 | 2.768× |
+| SF1 | cpu_le_uninstrumented_total_ms | 25 | 12.999× |
+| SF1 | cpu_advised_uninstrumented_total_ms | 26 | 33.067× |
+| SF1 | cpu_default_uninstrumented_total_ms | 25 | 14.881× |
+| SF1 | cpu_le_profile_total_ms | 25 | 17.863× |
+| SF1 | cpu_advised_profile_total_ms | 26 | 38.739× |
+| SF1 | cpu_default_profile_total_ms | 25 | 20.061× |
+| SF10 | duckdb_t1_ms | 26 | 23.686× |
+| SF10 | duckdb_t24_ms | 26 | 2.492× |
+| SF10 | cpu_le_uninstrumented_total_ms | 25 | 47.429× |
+| SF10 | cpu_advised_uninstrumented_total_ms | 25 | 103.589× |
+| SF10 | cpu_default_uninstrumented_total_ms | 25 | 49.287× |
+| SF10 | cpu_le_profile_total_ms | 24 | 53.675× |
+| SF10 | cpu_advised_profile_total_ms | 21 | 96.064× |
+| SF10 | cpu_default_profile_total_ms | 24 | 58.023× |
 
-**Historical aggregates, pending expanded CPU collection:** the speedups below
-and `performance_speedups.json` retain the pre-interning comparison, excluding
-h19. They are not final aggregates for the updated tables. Recalculation is
-deferred until the requested all-query LE, SF10 CPU and advised-order CPU
-measurements are collected.
+## Queries where GPU is slower
 
-| Scale | Comparator | Common exact GPU queries | Geometric-mean GPU speedup |
-|---|---|---:|---:|
-| SF1 | DuckDB t1 | 25 | 10.325× |
-| SF1 | DuckDB t24 | 25 | 2.835× |
-| SF10 | DuckDB t1 | 25 | 23.258× |
-| SF10 | DuckDB t24 | 25 | 2.472× |
-| SF1 | CPU LE, uninstrumented (primary) | 14 | 17.302× |
-| SF1 | CPU default, uninstrumented (primary) | 24 | 14.781× |
-| SF1 | CPU LE, instrumented phase-table total | 14 | 24.546× |
-| SF1 | CPU default, instrumented phase-table total | 24 | 20.908× |
+- SF1, duckdb_t1_ms: h02, h11.
+- SF1, duckdb_t24_ms: h01, h02, h06, h11, h15.
+- SF1, cpu_le_uninstrumented_total_ms: h11.
+- SF1, cpu_advised_uninstrumented_total_ms: none among completed measurements.
+- SF1, cpu_default_uninstrumented_total_ms: h11.
+- SF10, duckdb_t1_ms: h02.
+- SF10, duckdb_t24_ms: h01, h02, h11.
+- SF10, cpu_le_uninstrumented_total_ms: none among completed measurements.
+- SF10, cpu_advised_uninstrumented_total_ms: none among completed measurements.
+- SF10, cpu_default_uninstrumented_total_ms: none among completed measurements.
 
-## Raw data and provenance
+h02 includes host fallback/intermediate publication; h11 and h01 spend substantial GPU time in grouping/reduction/publication. These phase allocations are not hardware-counter diagnoses: occupancy, bandwidth and cache misses are not inferred. Differences near DuckDB's 1 ms timer resolution should not be treated as precise rankings.
 
-- [CPU summary JSON](performance_cpu_sf1.json), [successful timing TSV](performance_cpu_sf1.tsv) (89 rows, every correctness value `ok`), [complete status TSV](performance_cpu_sf1_status.tsv), [raw CPU metrics](performance_cpu_raw/), [CPU collector](performance_cpu_collect.py), and [CPU environment](performance_cpu_environment.json). The collector records the mechanically adapted generated harness used for the authorized timeout/run-count rule; authored queries/compiler plans are unchanged.
-- [Combined comparison TSV](performance_comparison.tsv) retains full-precision phase/total values and explicit unavailable statuses. [Speedup JSON](performance_speedups.json) records the formula, exact query membership, denominator and full-precision geometric mean for every comparison.
-
-- [Full fresh GPU suite invocation](performance_gpu.json): five raw samples per completed query, resolved plans/stages, exactness, unsupported-query errors, and the initial three SF10 allocation failures. Embedded historical DuckDB values are **not used** in this comparison.
-- [Fresh-process SF10 recovery](performance_gpu_sf10_remaining.json): exact d27, d72_inner, d85, five samples each.
-- [Derived GPU phase summary](performance_gpu_summary.json): explicit raw-file selection and per-sample aggregation rules.
-- [Fresh DuckDB SF1](performance_duck_trash_sf1.json) and [SF10](performance_duck_trash_sf10.json): all 27 SQL statements, both thread counts, warmup, five samples, medians, and raw CLI output.
-- [DuckDB reproduction script](performance_duck.py), [hardware snapshot](performance_hardware.json).
-- Historical [SF1](performance_duck_sf1.json) and [SF10](performance_duck_sf10.json) DuckDB files preserve SQL/provenance and CSV-output timings used as inputs to the no-output collector. Their historical elapsed times are excluded from all reported tables and speedups.
-
-No older GPU timing artifact supplies any number in this report.
-
+Machine-readable outputs: [comparison TSV](performance_comparison.tsv), [speedups JSON](performance_speedups.json), [CPU SF1](performance_cpu_sf1.json), [CPU SF10](performance_cpu_sf10.json), [GPU summary](performance_gpu_summary.json). Raw CPU measurement artifacts are under `performance_cpu_raw/sf1` and `performance_cpu_raw/sf10`.

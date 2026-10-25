@@ -1,0 +1,7 @@
+{
+  "wall_seconds": 100.45183312997688,
+  "cap_seconds": 100,
+  "slow_seconds": 10,
+  "profile_winners_only": true,
+  "retained_plain_before_policy_change": false
+}

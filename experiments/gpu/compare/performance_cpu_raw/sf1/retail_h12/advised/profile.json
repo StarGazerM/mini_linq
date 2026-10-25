@@ -1,0 +1,398 @@
+{
+  "answer_rows": 2,
+  "bag_insertions": 1500000,
+  "build_rows_verified": false,
+  "candidate_insertions": 0,
+  "distinct_insertions": 0,
+  "index_builds": 0,
+  "median_ms": 243.30959299999998,
+  "operator_rows": [
+    {
+      "inputs": [],
+      "key": "Lineitem",
+      "kind": "RENAME",
+      "result": "r0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 6001215
+    },
+    {
+      "inputs": [
+        "r0"
+      ],
+      "key": "",
+      "kind": "POINT",
+      "result": "r1",
+      "rows_in": 6001215,
+      "rows_inserted": 0,
+      "rows_out": 1715437
+    },
+    {
+      "inputs": [
+        "r9"
+      ],
+      "key": "__cq_9_1,__cq_9_2,shipmode",
+      "kind": "GROUP",
+      "result": "r10",
+      "rows_in": 30988,
+      "rows_inserted": 0,
+      "rows_out": 2
+    },
+    {
+      "inputs": [
+        "r1"
+      ],
+      "key": "commitdate,line_number,order_key,receiptdate,shipdate,shipmode",
+      "kind": "SELECT",
+      "result": "r2",
+      "rows_in": 1715437,
+      "rows_inserted": 0,
+      "rows_out": 836110
+    },
+    {
+      "inputs": [
+        "r2"
+      ],
+      "key": "commitdate,line_number,order_key,receiptdate,shipdate,shipmode",
+      "kind": "SELECT",
+      "result": "r3",
+      "rows_in": 836110,
+      "rows_inserted": 0,
+      "rows_out": 205778
+    },
+    {
+      "inputs": [
+        "r3"
+      ],
+      "key": "receiptdate",
+      "kind": "RANGE",
+      "result": "r4",
+      "rows_in": 205778,
+      "rows_inserted": 0,
+      "rows_out": 30988
+    },
+    {
+      "inputs": [],
+      "key": "Orders",
+      "kind": "RENAME",
+      "result": "r5",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 1500000
+    },
+    {
+      "inputs": [
+        "r4",
+        "r5"
+      ],
+      "key": "order_key",
+      "kind": "PROBE",
+      "result": "r6",
+      "rows_in": 30988,
+      "rows_inserted": 0,
+      "rows_out": 30988
+    },
+    {
+      "inputs": [
+        "r6"
+      ],
+      "key": "commitdate,high,line_number,order_key,priority,receiptdate,shipdate,shipmode",
+      "kind": "BIND",
+      "result": "r7",
+      "rows_in": 30988,
+      "rows_inserted": 0,
+      "rows_out": 30988
+    },
+    {
+      "inputs": [
+        "r7"
+      ],
+      "key": "commitdate,high,line_number,low,order_key,priority,receiptdate,shipdate,shipmode",
+      "kind": "BIND",
+      "result": "r8",
+      "rows_in": 30988,
+      "rows_inserted": 0,
+      "rows_out": 30988
+    },
+    {
+      "inputs": [
+        "r8"
+      ],
+      "key": "commitdate,high,line_number,low,order_key,priority,receiptdate,shipdate,shipmode",
+      "kind": "PROJECT",
+      "result": "r9",
+      "rows_in": 30988,
+      "rows_inserted": 0,
+      "rows_out": 30988
+    },
+    {
+      "inputs": [
+        "r5"
+      ],
+      "key": "order_key",
+      "kind": "INDEX_BUILD",
+      "result": "r5.fallback.order_key",
+      "rows_in": 1500000,
+      "rows_inserted": 1500000,
+      "rows_out": 1500000
+    },
+    {
+      "inputs": [
+        "r9"
+      ],
+      "key": "",
+      "kind": "DEDUP",
+      "result": "r9.dedup",
+      "rows_in": 30988,
+      "rows_inserted": 30988,
+      "rows_out": 30988
+    },
+    {
+      "inputs": [
+        "r10"
+      ],
+      "key": "",
+      "kind": "ANSWER",
+      "result": "r10.answer",
+      "rows_in": 2,
+      "rows_inserted": 0,
+      "rows_out": 2
+    }
+  ],
+  "operators": [
+    {
+      "calls": 1,
+      "elapsed_ms": 243.309132,
+      "id": 0,
+      "inputs": [],
+      "key": "retail_h12",
+      "kind": "QUERY",
+      "program": 0,
+      "result": "query",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 2
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 221.32332699999998,
+      "id": 1,
+      "inputs": [],
+      "key": "Lineitem",
+      "kind": "RENAME",
+      "program": 1,
+      "result": "r0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 6001215
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 221.323478,
+      "id": 2,
+      "inputs": [
+        "r0"
+      ],
+      "key": "",
+      "kind": "POINT",
+      "program": 1,
+      "result": "r1",
+      "rows_in": 6001215,
+      "rows_inserted": 0,
+      "rows_out": 1715437
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 0.001163,
+      "id": 3,
+      "inputs": [
+        "r9"
+      ],
+      "key": "__cq_9_1,__cq_9_2,shipmode",
+      "kind": "GROUP",
+      "program": 1,
+      "result": "r10",
+      "rows_in": 30988,
+      "rows_inserted": 0,
+      "rows_out": 2
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 221.323728,
+      "id": 4,
+      "inputs": [
+        "r1"
+      ],
+      "key": "commitdate,line_number,order_key,receiptdate,shipdate,shipmode",
+      "kind": "SELECT",
+      "program": 1,
+      "result": "r2",
+      "rows_in": 1715437,
+      "rows_inserted": 0,
+      "rows_out": 836110
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 221.32395899999997,
+      "id": 5,
+      "inputs": [
+        "r2"
+      ],
+      "key": "commitdate,line_number,order_key,receiptdate,shipdate,shipmode",
+      "kind": "SELECT",
+      "program": 1,
+      "result": "r3",
+      "rows_in": 836110,
+      "rows_inserted": 0,
+      "rows_out": 205778
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 221.324199,
+      "id": 6,
+      "inputs": [
+        "r3"
+      ],
+      "key": "receiptdate",
+      "kind": "RANGE",
+      "program": 1,
+      "result": "r4",
+      "rows_in": 205778,
+      "rows_inserted": 0,
+      "rows_out": 30988
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 8.413608,
+      "id": 7,
+      "inputs": [],
+      "key": "Orders",
+      "kind": "RENAME",
+      "program": 1,
+      "result": "r5",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 1500000
+    },
+    {
+      "calls": 30988,
+      "elapsed_ms": 2.879568,
+      "id": 8,
+      "inputs": [
+        "r4",
+        "r5"
+      ],
+      "key": "order_key",
+      "kind": "PROBE",
+      "program": 1,
+      "result": "r6",
+      "rows_in": 30988,
+      "rows_inserted": 0,
+      "rows_out": 30988
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 221.32494,
+      "id": 9,
+      "inputs": [
+        "r6"
+      ],
+      "key": "commitdate,high,line_number,order_key,priority,receiptdate,shipdate,shipmode",
+      "kind": "BIND",
+      "program": 1,
+      "result": "r7",
+      "rows_in": 30988,
+      "rows_inserted": 0,
+      "rows_out": 30988
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 221.325071,
+      "id": 10,
+      "inputs": [
+        "r7"
+      ],
+      "key": "commitdate,high,line_number,low,order_key,priority,receiptdate,shipdate,shipmode",
+      "kind": "BIND",
+      "program": 1,
+      "result": "r8",
+      "rows_in": 30988,
+      "rows_inserted": 0,
+      "rows_out": 30988
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 221.32528100000002,
+      "id": 11,
+      "inputs": [
+        "r8"
+      ],
+      "key": "commitdate,high,line_number,low,order_key,priority,receiptdate,shipdate,shipmode",
+      "kind": "PROJECT",
+      "program": 1,
+      "result": "r9",
+      "rows_in": 30988,
+      "rows_inserted": 0,
+      "rows_out": 30988
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 165.617414,
+      "id": 12,
+      "inputs": [
+        "r5"
+      ],
+      "key": "order_key",
+      "kind": "INDEX_BUILD",
+      "program": 1,
+      "result": "r5.fallback.order_key",
+      "rows_in": 1500000,
+      "rows_inserted": 1500000,
+      "rows_out": 1500000
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 234.532257,
+      "id": 13,
+      "inputs": [
+        "r9"
+      ],
+      "key": "",
+      "kind": "DEDUP",
+      "program": 1,
+      "result": "r9.dedup",
+      "rows_in": 30988,
+      "rows_inserted": 30988,
+      "rows_out": 30988
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 0.0013030000000000001,
+      "id": 14,
+      "inputs": [
+        "r10"
+      ],
+      "key": "",
+      "kind": "ANSWER",
+      "program": 1,
+      "result": "r10.answer",
+      "rows_in": 2,
+      "rows_inserted": 0,
+      "rows_out": 2
+    }
+  ],
+  "rows_copied": 0,
+  "rows_enumerated": 0,
+  "samples_ms": [
+    233.771719,
+    236.303723,
+    243.30959299999998,
+    244.661434,
+    249.185857
+  ],
+  "set_insertions": 30988,
+  "top_level_clock_verified": true,
+  "top_level_ms": 243.309132,
+  "tree": "QUERY            query [retail_h12] inputs= rows=2 in=0 inserted=0 t=243.309ms\n  ANSWER           r10.answer [] inputs=r10 rows=2 in=2 inserted=0 t=0.001ms\n    GROUP            r10 [__cq_9_1,__cq_9_2,shipmode] inputs=r9 rows=2 in=30988 inserted=0 t=0.001ms\n      PROJECT          r9 [commitdate,high,line_number,low,order_key,priority,receiptdate,shipdate,shipmode] inputs=r8 rows=30988 in=30988 inserted=0 t=221.325ms\n        BIND             r8 [commitdate,high,line_number,low,order_key,priority,receiptdate,shipdate,shipmode] inputs=r7 rows=30988 in=30988 inserted=0 t=221.325ms\n          BIND             r7 [commitdate,high,line_number,order_key,priority,receiptdate,shipdate,shipmode] inputs=r6 rows=30988 in=30988 inserted=0 t=221.325ms\n            PROBE            r6 [order_key] inputs=r4,r5 rows=30988 in=30988 inserted=0 t=2.880ms\n              RANGE            r4 [receiptdate] inputs=r3 rows=30988 in=205778 inserted=0 t=221.324ms\n                SELECT           r3 [commitdate,line_number,order_key,receiptdate,shipdate,shipmode] inputs=r2 rows=205778 in=836110 inserted=0 t=221.324ms\n                  SELECT           r2 [commitdate,line_number,order_key,receiptdate,shipdate,shipmode] inputs=r1 rows=836110 in=1715437 inserted=0 t=221.324ms\n                    POINT            r1 [] inputs=r0 rows=1715437 in=6001215 inserted=0 t=221.323ms\n                      RENAME           r0 [Lineitem] inputs= rows=6001215 in=0 inserted=0 t=221.323ms\n              RENAME           r5 [Orders] inputs= rows=1500000 in=0 inserted=0 t=8.414ms\n  DEDUP            r9.dedup [] inputs=r9 rows=30988 in=30988 inserted=30988 t=234.532ms\n    PROJECT          r9 [commitdate,high,line_number,low,order_key,priority,receiptdate,shipdate,shipmode] inputs=r8 rows=30988 in=30988 inserted=0 t=221.325ms (shared)\n  INDEX_BUILD      r5.fallback.order_key [order_key] inputs=r5 rows=1500000 in=1500000 inserted=1500000 t=165.617ms excl=157.203ms\n    RENAME           r5 [Orders] inputs= rows=1500000 in=0 inserted=0 t=8.414ms (shared)\nBUILD_EXCLUSIVE_TOTAL t=157.203ms\n",
+  "verified": true
+}

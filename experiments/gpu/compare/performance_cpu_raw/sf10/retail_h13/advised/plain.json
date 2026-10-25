@@ -1,0 +1,16 @@
+{
+  "answer_rows": 1500000,
+  "instrumented": false,
+  "load_ms": 1930.274839,
+  "median_ms": 10138.350132,
+  "peak_rss_kib": 3842944,
+  "samples_ms": [
+    10087.853707,
+    10132.202911,
+    10138.350132,
+    10145.864315,
+    10219.102063999999
+  ],
+  "zone_build_ms": 0.0,
+  "zone_metadata_bytes": 0
+}

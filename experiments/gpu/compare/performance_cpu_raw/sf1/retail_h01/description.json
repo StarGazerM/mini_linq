@@ -1,0 +1,17 @@
+{
+  "configs": [
+    "default",
+    "no-reduce",
+    "le",
+    "le_runs",
+    "advised"
+  ],
+  "exports": [
+    [
+      "lineitem",
+      "l_orderkey,l_linenumber,l_returnflag,l_linestatus,l_quantity,l_extendedprice,l_shipdate"
+    ]
+  ],
+  "name": "retail_h01",
+  "sql": "SELECT l_returnflag, l_linestatus,\n    CAST(SUM(l_quantity) * 100 AS BIGINT) AS sum_quantity,\n    CAST(SUM(l_extendedprice) * 100 AS BIGINT) AS sum_price, COUNT(*) AS count_order\nFROM (SELECT DISTINCT l_orderkey, l_linenumber, l_returnflag, l_linestatus,\n    l_quantity, l_extendedprice, l_shipdate FROM lineitem\n    WHERE l_shipdate <= DATE '1998-09-02') AS matches\nGROUP BY l_returnflag, l_linestatus"
+}

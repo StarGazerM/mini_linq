@@ -1,0 +1,5 @@
+{
+  "status": "plain_only_not_selected",
+  "correctness": "ok",
+  "reason": "Profile omitted by user-authorized column-winner policy; all plain candidates measured."
+}

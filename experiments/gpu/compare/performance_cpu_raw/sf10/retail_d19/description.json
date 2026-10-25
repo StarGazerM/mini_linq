@@ -1,0 +1,39 @@
+{
+  "configs": [
+    "default",
+    "no-reduce",
+    "transfer",
+    "le",
+    "le_runs",
+    "hypergraph",
+    "advised"
+  ],
+  "exports": [
+    [
+      "lineitem",
+      "l_orderkey,l_partkey,l_suppkey"
+    ],
+    [
+      "orders",
+      "o_orderkey,o_custkey,o_orderdate"
+    ],
+    [
+      "part",
+      "p_partkey"
+    ],
+    [
+      "customer",
+      "c_custkey,c_nationkey"
+    ],
+    [
+      "nation",
+      "n_nationkey,n_name"
+    ],
+    [
+      "supplier",
+      "s_suppkey"
+    ]
+  ],
+  "name": "retail_d19",
+  "sql": "SELECT DISTINCT o.o_orderkey, p.p_partkey, c.c_custkey, s.s_suppkey\nFROM lineitem l JOIN orders o ON l.l_orderkey = o.o_orderkey\nJOIN part p ON l.l_partkey = p.p_partkey\nJOIN customer c ON o.o_custkey = c.c_custkey\nJOIN nation n ON c.c_nationkey = n.n_nationkey\nJOIN supplier s ON l.l_suppkey = s.s_suppkey\nWHERE o.o_orderdate >= DATE '1995-01-01' AND o.o_orderdate < DATE '1995-04-01'\nAND n.n_name = 'UNITED STATES'"
+}

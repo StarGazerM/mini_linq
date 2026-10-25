@@ -1,0 +1,5 @@
+{
+  "generated_worker_sha256": "088f0472b3369fdc587a0edb9d8d18acbbbd18484cbbbcddf856e7c3a473908c",
+  "policy": "100-second combined wall budget per configuration; warm query >10s selects three timed runs, otherwise stop after three when a timed sample exceeds 10s. No plain-run pruning. Profile winners only: True. Completed measurements are retained.",
+  "changes": "Only warm clock, sample count, loop stopping and effective median index in generated worker. Authored worker, query sources and compiler/plans unchanged."
+}

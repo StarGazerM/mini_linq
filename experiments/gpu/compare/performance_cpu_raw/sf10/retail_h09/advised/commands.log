@@ -1,0 +1,2 @@
+
+COMMAND ["/tmp/mini-linq-performance-cpu/sf10/crates/retail_h09/timing-worker", "/tmp/mini-linq-performance-cpu/sf10/data/retail_h09", "advised", "5", "/data/mini_linq/experiments/gpu/compare/performance_cpu_raw/sf10/retail_h09/advised/plain.answers.json", "/data/mini_linq/experiments/gpu/compare/performance_cpu_raw/sf10/retail_h09/advised/plain.json", "/data/mini_linq/experiments/gpu/compare/performance_cpu_raw/sf10/retail_h09/oracle.json"]

@@ -1,0 +1,43 @@
+{
+  "configs": [
+    "default",
+    "no-reduce",
+    "transfer",
+    "le",
+    "le_runs",
+    "hypergraph",
+    "advised"
+  ],
+  "exports": [
+    [
+      "lineitem",
+      "l_orderkey,l_partkey,l_suppkey"
+    ],
+    [
+      "part",
+      "p_partkey,p_type"
+    ],
+    [
+      "supplier",
+      "s_suppkey,s_nationkey"
+    ],
+    [
+      "orders",
+      "o_orderkey,o_custkey,o_orderdate"
+    ],
+    [
+      "customer",
+      "c_custkey,c_nationkey"
+    ],
+    [
+      "nation",
+      "n_nationkey,n_regionkey"
+    ],
+    [
+      "region",
+      "r_regionkey,r_name"
+    ]
+  ],
+  "name": "retail_h08",
+  "sql": "SELECT DISTINCT o.o_orderkey, p.p_partkey, s.s_suppkey\nFROM lineitem l JOIN part p ON l.l_partkey = p.p_partkey\nJOIN supplier s ON l.l_suppkey = s.s_suppkey\nJOIN orders o ON l.l_orderkey = o.o_orderkey\nJOIN customer c ON o.o_custkey = c.c_custkey\nJOIN nation nc ON c.c_nationkey = nc.n_nationkey\nJOIN region r ON nc.n_regionkey = r.r_regionkey\nJOIN nation ns ON s.s_nationkey = ns.n_nationkey\nWHERE r.r_name = 'AMERICA' AND p.p_type = 'ECONOMY ANODIZED STEEL'\nAND o.o_orderdate >= DATE '1995-01-01' AND o.o_orderdate <= DATE '1996-12-31'"
+}
