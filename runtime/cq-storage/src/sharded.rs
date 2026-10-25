@@ -1,7 +1,8 @@
 //! Immutable hash-routed providers for the task-pool target.
 //!
-//! The checked Sequence partition routes by the full lookup-key tuple using
-//! [`route_index`], then gives each part to exactly one builder. Part order
+//! The checked Sequence partition routes by a lookup-key projection using
+//! [`route_index`], then gives each part to exactly one builder. The retained
+//! [`Router`] must apply exactly that projection and field order. Part order
 //! preserves serial occurrence order, including duplicates. The plan fixes P;
 //! runtime worker count only schedules the independent builds.
 //! Published providers contain no locks or lazy state. Hash routing does not
@@ -14,17 +15,34 @@ use rayon::prelude::*;
 
 use crate::{Build, ExactMembership, HashState, IndexRead};
 
+/// Routing policy recorded with a provider; must match its input partition.
+pub trait Router<K: ?Sized> {
+    fn route(&self, key: &K, count: usize) -> usize;
+}
+
+/// Default policy hashes the complete lookup key.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FullKey;
+
+impl<K: Hash + ?Sized> Router<K> for FullKey {
+    fn route(&self, key: &K, count: usize) -> usize { route_index(key, count) }
+}
+
+impl<K: ?Sized, F: Fn(&K, usize) -> usize> Router<K> for F {
+    fn route(&self, key: &K, count: usize) -> usize { self(key, count) }
+}
+
 /// A plan-sized family of immutable indexes with deterministic key routing.
 #[derive(Debug)]
-pub struct Sharded<I> {
+pub struct Sharded<I, F = FullKey> {
     shards: Vec<I>,
+    router: F,
 }
 
 impl<I> Sharded<I> {
     /// Wrap indexes built from parts routed by [`route_index`].
     pub fn from_parts(shards: Vec<I>) -> Self {
-        assert!(!shards.is_empty(), "routed provider needs positive partition count");
-        Self { shards }
+        Self::from_parts_with_router(shards, FullKey)
     }
 
     /// Build one index per already routed part, without rerouting or copying.
@@ -32,20 +50,40 @@ impl<I> Sharded<I> {
     where I: Build<std::vec::IntoIter<(K, V)>> + Send {
         Self::from_parts(parts.into_par_iter().map(|part| I::build(part.into_iter())).collect())
     }
+}
+
+impl<I, F> Sharded<I, F> {
+    /// Wrap parts with the routing policy used to partition their source.
+    pub fn from_parts_with_router(shards: Vec<I>, router: F) -> Self {
+        assert!(!shards.is_empty(), "routed provider needs positive partition count");
+        Self { shards, router }
+    }
+
+    /// Build already routed parts and retain the lookup-key projection policy.
+    pub fn build_parts_with_router<K: Send, V: Send>(
+        parts: Vec<Vec<(K, V)>>, router: F,
+    ) -> Self
+    where I: Build<std::vec::IntoIter<(K, V)>> + Send {
+        Self::from_parts_with_router(
+            parts.into_par_iter().map(|part| I::build(part.into_iter())).collect(),
+            router,
+        )
+    }
     /// Number of independently built indexes fixed by the plan.
     pub fn shard_count(&self) -> usize {
         self.shards.len()
     }
 
     #[inline]
-    fn shard<K: Hash + ?Sized>(&self, key: &K) -> &I {
-        &self.shards[route_index(key, self.shards.len())]
+    fn shard<K: ?Sized>(&self, key: &K) -> &I where F: Router<K> {
+        &self.shards[self.router.route(key, self.shards.len())]
     }
 }
 
-impl<I, K: Hash + ?Sized> ExactMembership<K> for Sharded<I>
+impl<I, F, K: ?Sized> ExactMembership<K> for Sharded<I, F>
 where
     I: ExactMembership<K>,
+    F: Router<K>,
 {
     #[inline]
     fn contains(&self, key: &K) -> bool {
@@ -57,9 +95,9 @@ where
 // `&I: IndexRead` wrapper makes higher-ranked cursor inference recurse forever.
 macro_rules! routed_read {
     ([$($generic:ident),*] $index:ty) => {
-        impl<'a, $($generic: 'a),*> IndexRead for &'a Sharded<$index>
+        impl<'a, F: 'a, $($generic: 'a),*> IndexRead for &'a Sharded<$index, F>
         where
-            K: Hash,
+            F: Router<K>,
             &'a $index: IndexRead<Key = K>,
         {
             type Key = K;
@@ -126,6 +164,26 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn projected_routing_preserves_full_lookup_keys() {
+        for threads in [1, 24] {
+            rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(|| {
+                for count in [1, 7, 32] {
+                    let rows = [((2u64, 7u64), 3u64), ((2, 8), 4), ((2, 7), 3), ((9, 7), 5)];
+                    let router = |key: &(u64, u64), n| route_index(&(key.1,), n);
+                    let mut parts: Vec<_> = (0..count).map(|_| vec![]).collect();
+                    for row in rows { parts[router(&row.0, count)].push(row); }
+                    let index = Sharded::<Index<(u64,u64),u64>, _>::build_parts_with_router(parts.clone(), router);
+                    let seen = Sharded::<crate::HashSet<(u64,u64)>, _>::build_parts_with_router(parts, router);
+                    for key in [(2,7), (2,8), (9,7), (9,8), (0,0)] {
+                        let expected: Vec<_> = rows.iter().filter(|r| r.0 == key).map(|r| r.1).collect();
+                        assert_eq!((&index).lookup(&key).collect::<Vec<_>>(), expected);
+                        assert_eq!(seen.contains(&key), !expected.is_empty());
+                    }
+                }
+            });
+        }
+    }
     #[test]
     fn routed_hits_misses_duplicates_and_empty() {
         for threads in [1, 24] {

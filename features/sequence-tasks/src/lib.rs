@@ -122,6 +122,22 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
             vec![Capability::Exact, Capability::Membership],
         ),
     ] {
+        let ty: syn::Type = ty;
+        // A projection router changes partition placement, not capabilities.
+        let mut routed_ty: syn::Type = ty.clone();
+        if let syn::Type::Path(path) = &mut routed_ty {
+            if let syn::PathArguments::AngleBracketed(args) =
+                &mut path.path.segments.last_mut().unwrap().arguments
+            {
+                args.args.push(syn::parse_quote!(_));
+            }
+        }
+        catalog.providers.push(ProviderToken {
+            ty: routed_ty,
+            capabilities: capabilities.clone(),
+            levels: task.clone(),
+            elements: None,
+        });
         catalog.providers.push(ProviderToken {
             ty,
             capabilities,
