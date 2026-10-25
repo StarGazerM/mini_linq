@@ -91,6 +91,38 @@ building another index.
 cargo oxide test --arch sm_89 -- --release -p cq-gpu-sequence --test run_holes
 ```
 
+### Whole-program GPU Datalog
+
+`cq-gpu-datalog` runs a Datalog program on the device through the ordinary
+Datalog pipeline (`CK-DL-DeviceStorage`, `P-DL-Gpu`):
+
+```rust
+pipeline {
+    storage_rewrites = [::cq_gpu_datalog::device_storage];
+    cq = pipeline {
+        structures = [::cq_gpu_datalog::bind_inputs, ::cq_gpu_sequence::bind_runs];
+        sequence = ::mini_linq::passes::sequence;
+        decompose = [::cq_gpu_sequence::plan];
+        grade = ::cq_gpu_sequence::machine_grade;
+        print = ::cq_gpu_sequence::translate_arena;
+    };
+    terminals = [::cq_gpu_sequence::translate_arena => batch];
+    print = ::cq_gpu_datalog::print_rounds;
+}
+```
+
+Inputs upload once; each round issues the recorded waves in order, admits each
+head's candidate batches into its accepted runs, and publishes the delta into
+the recorded layouts; outputs download once. All programs on one thread share
+`gpu_datalog_runtime::thread_pool()` (device 0), so the runtime's thread-local
+caches never pin a finished program's pool.
+
+```sh
+cargo oxide test --arch sm_89 -- --release -p cq-gpu-datalog --test oracle
+GPU_DATALOG_PROBE_NODES=2048 GPU_DATALOG_PROBE_CASES=tc_left,tc_right,same_generation \
+  cargo oxide test --arch sm_89 -- --release -p cq-gpu-datalog --test oracle timing -- --ignored --nocapture
+```
+
 ### Planner-driven 11-query TPC-H suite
 
 `tpch` is one crate with one binary, `cq-gpu-tpch`. It imports the CPU

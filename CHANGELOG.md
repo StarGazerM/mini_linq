@@ -7,6 +7,18 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- GPU Datalog: whole Datalog programs run on the GPU through the ordinary
+  pipeline. `gpu-datalog-runtime` packs fixed-width tuples most-significant
+  first (`DL-DevicePacking`) into sorted, unique, disjoint device runs with
+  sort/unique/anti-join admission and ratio-4 merging (`DL-DeviceRuns`); GPU
+  Sequence reads `DeviceLayout` inputs as runs (`GPU-Runs`) and publishes
+  candidates through `translate_arena` (`GPU-Arena`); Round holes gain a
+  `batch` interface (host printers reject it); `cq-gpu-datalog` provides
+  `device_storage` (`CK-DL-DeviceStorage`) and `print_rounds` (`P-DL-Gpu`).
+  Programs on one thread share a device pool (`thread_pool`). Oracle: 13
+  programs exact (416 comparisons). 2048-node random graph: TC 0.36–0.49 s vs
+  1.58–1.79 s `mini`; same generation 0.41 s vs 3.58 s. The local cuda-oxide
+  branch namespaces static shared symbols per merged PTX bundle (`c53311d3`).
 - Sorted-run storage, CPU reference for device runs (`DL-RunLayout`,
   `DL-RunAdmission`, realizing `STR-RunRead`/`STR-RunCompact`):
   `RunLayout<K, V>` (immutable (key, payload)-sorted runs, ratio-4 leveled

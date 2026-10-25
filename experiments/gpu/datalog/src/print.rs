@@ -207,7 +207,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
     let result = if outputs.len() == 1 { outputs[0].clone() } else { quote!((#(#outputs,)*)) };
     syn::parse2(quote!({
         (|| -> ::gpu_datalog_runtime::Result<_> {
-            let __cq_gpu_pool = ::gpu_datalog_runtime::Pool::new(0, 0, 0)?;
+            let __cq_gpu_pool = ::gpu_datalog_runtime::thread_pool()?;
             #(#initialize)*
             #(#strata)*
             Ok(#result)

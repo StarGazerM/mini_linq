@@ -420,11 +420,20 @@ approval.
   Sorted-run providers (`layouts(runs)`, `seen(runs)`; `DL-RunLayout`,
   `DL-RunAdmission`) are the exact CPU reference for GPU Datalog storage
   (3.11 s on cassandra; not a CPU default).
+- GPU Datalog (`experiments/gpu/datalog`, `cq-gpu-datalog`): `device_storage`
+  (`CK-DL-DeviceStorage`) + `batch` hole terminal `translate_arena` over
+  packed-run inputs (`GPU-Runs`, `GPU-Arena`) + `print_rounds` (`P-DL-Gpu`) on
+  device runs (`DL-DevicePacking`, `DL-DeviceRuns`). The 13-program oracle is
+  exact on the GPU (416 comparisons). Random graph, 2048 nodes, ~4.1M answers:
+  TC 0.36–0.49 s vs 1.58–1.79 s mini / 1.83–2.18 s mini-par; same generation
+  0.41 s vs 3.58 s / 3.07 s. Remaining realization cost: per-hole metadata
+  readback and stream synchronize, per-admission and per-layout-sort count
+  readbacks, waves issued in order on the pool's single stream. DOOP needs
+  symbol codes for `IStr` columns.
 - Open: reach chain at 15 threads below sequential; nested CQ code in one
   codegen unit; rule-local aggregates; FlowLog comparison; partial-Rust
   multi-round refinement; surface sugar (disjunction, facts, rule macros).
-- On hold (GPU-side storage design first): lattices and custom providers;
-  DOOP probe efficiency; geometric run merging.
+- On hold: lattices and custom providers; DOOP probe efficiency.
 - Not context facts (see context.tex): declared keys (need a provenance
   model), first-witness consumption, guard totality, terminal canonical
   return.

@@ -102,31 +102,40 @@ fn wall_time(evaluate: Evaluate, data: &Data) -> (Rows, Duration) {
 #[test]
 #[ignore = "requires CUDA; opt-in end-to-end GPU/mini/15-thread mini-par timing probe"]
 fn timing_random_tc_and_same_generation() {
-    const NODES: i32 = 256;
-    const FANOUT: usize = 4;
+    // Defaults fit a roughly 4 GiB device; override with GPU_DATALOG_PROBE_NODES,
+    // GPU_DATALOG_PROBE_FANOUT and GPU_DATALOG_PROBE_CASES (comma-separated).
+    let env = |name: &str, default: usize| {
+        std::env::var(name).ok().map_or(default, |value| value.parse().expect(name))
+    };
+    let nodes = env("GPU_DATALOG_PROBE_NODES", 256) as i32;
+    let fanout = env("GPU_DATALOG_PROBE_FANOUT", 4);
+    let cases = std::env::var("GPU_DATALOG_PROBE_CASES")
+        .unwrap_or_else(|_| "tc_left,tc_right,tc_nonlinear,same_generation".into());
     const SEED: u64 = 0x5eed;
     const THREADS: usize = 15;
 
-    // A conservative workload for a roughly 4 GiB device: at most 65,536
-    // answer pairs; each nonlinear delta/full join emits at most 256^3
-    // candidates (128 MiB of packed u64 rows), and each same-generation round
-    // emits at most 256^2 * 4^2 candidates (8 MiB), before admission. This
-    // leaves room for all layouts, sort/merge scratch, and capacity retries.
-    let data = bounded_random_graph(NODES, FANOUT, SEED);
+    // At the defaults: at most 65,536 answer pairs; each nonlinear delta/full
+    // join emits at most 256^3 candidates (128 MiB of packed u64 rows), and each
+    // same-generation round at most 256^2 * 4^2 candidates (8 MiB), before
+    // admission, leaving room for layouts, sort/merge scratch and retries.
+    let data = bounded_random_graph(nodes, fanout, SEED);
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(THREADS)
         .build()
         .expect("create the 15-thread mini-par timing pool");
+    // Exclude CUDA context creation and module loading from the measurements.
+    let warm = bounded_random_graph(8, 2, SEED);
+    for case in CASES.iter() {
+        (case.gpu)(&warm);
+    }
 
     eprintln!(
         "program\tnodes\tedges\tseed\trows\tmini_par_threads\tgpu_wall_ms\tmini_wall_ms\tmini_par_wall_ms"
     );
-    for case in CASES.iter().filter(|case| {
-        matches!(
-            case.name,
-            "tc_left" | "tc_right" | "tc_nonlinear" | "same_generation"
-        )
-    }) {
+    for case in CASES
+        .iter()
+        .filter(|case| cases.split(',').any(|name| name == case.name))
+    {
         let (expected, mini_elapsed) = wall_time(case.mini, &data);
         let (actual, gpu_elapsed) = wall_time(case.gpu, &data);
         assert_eq!(actual, expected, "{} / GPU timing result", case.name);
@@ -141,7 +150,7 @@ fn timing_random_tc_and_same_generation() {
         assert_eq!(parallel, expected, "{} / mini-par timing result", case.name);
 
         eprintln!(
-            "{}\t{NODES}\t{}\t{SEED}\t{}\t{THREADS}\t{:.3}\t{:.3}\t{:.3}",
+            "{}\t{nodes}\t{}\t{SEED}\t{}\t{THREADS}\t{:.3}\t{:.3}\t{:.3}",
             case.name,
             data.edge.len(),
             expected.len(),
