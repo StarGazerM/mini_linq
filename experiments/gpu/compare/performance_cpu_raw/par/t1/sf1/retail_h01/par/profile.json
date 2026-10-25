@@ -1,0 +1,366 @@
+{
+  "answer_rows": 4,
+  "bag_insertions": 5916595,
+  "build_rows_verified": false,
+  "candidate_insertions": 0,
+  "distinct_insertions": 0,
+  "index_builds": 0,
+  "median_ms": 3923.28385,
+  "operator_rows": [
+    {
+      "inputs": [],
+      "key": "Lineitem",
+      "kind": "RENAME",
+      "result": "r0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 6001215
+    },
+    {
+      "inputs": [
+        "r0"
+      ],
+      "key": "shipdate",
+      "kind": "RANGE",
+      "result": "r1",
+      "rows_in": 6001215,
+      "rows_inserted": 0,
+      "rows_out": 5916591
+    },
+    {
+      "inputs": [
+        "r1"
+      ],
+      "key": "line_number,linestatus,order_key,price,quantity,quantity_units,returnflag,shipdate",
+      "kind": "BIND",
+      "result": "r2",
+      "rows_in": 5916591,
+      "rows_inserted": 0,
+      "rows_out": 5916591
+    },
+    {
+      "inputs": [
+        "r2"
+      ],
+      "key": "line_number,linestatus,order_key,price,price_units,quantity,quantity_units,returnflag,shipdate",
+      "kind": "BIND",
+      "result": "r3",
+      "rows_in": 5916591,
+      "rows_inserted": 0,
+      "rows_out": 5916591
+    },
+    {
+      "inputs": [
+        "r3"
+      ],
+      "key": "line_number,linestatus,order_key,price,price_units,quantity,quantity_units,returnflag,shipdate",
+      "kind": "PROJECT",
+      "result": "r4",
+      "rows_in": 5916591,
+      "rows_inserted": 0,
+      "rows_out": 5916591
+    },
+    {
+      "inputs": [
+        "r4"
+      ],
+      "key": "__cq_4_2,__cq_4_3,__cq_4_4,linestatus,returnflag",
+      "kind": "GROUP",
+      "result": "r5",
+      "rows_in": 5916591,
+      "rows_inserted": 0,
+      "rows_out": 4
+    },
+    {
+      "inputs": [
+        "r4"
+      ],
+      "key": "",
+      "kind": "DEDUP",
+      "result": "r4.dedup",
+      "rows_in": 5916591,
+      "rows_inserted": 5916591,
+      "rows_out": 5916591
+    },
+    {
+      "inputs": [
+        "r4"
+      ],
+      "key": "",
+      "kind": "ROWS_BUILD",
+      "result": "__cq_key_input_r5.rows",
+      "rows_in": 5916591,
+      "rows_inserted": 5916591,
+      "rows_out": 5916591
+    },
+    {
+      "inputs": [
+        "r5"
+      ],
+      "key": "",
+      "kind": "ROWS_BUILD",
+      "result": "r5.rows",
+      "rows_in": 4,
+      "rows_inserted": 4,
+      "rows_out": 4
+    },
+    {
+      "inputs": [
+        "r5"
+      ],
+      "key": "",
+      "kind": "ANSWER",
+      "result": "r5.answer",
+      "rows_in": 4,
+      "rows_inserted": 0,
+      "rows_out": 4
+    },
+    {
+      "inputs": [],
+      "key": "",
+      "kind": "TASKS_BUILD_WALL",
+      "result": "__cq_tasks_build",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "inputs": [
+        "r5.answer"
+      ],
+      "key": "",
+      "kind": "TASKS_QUERY_WALL",
+      "result": "__cq_tasks_query",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "inputs": [],
+      "key": "",
+      "kind": "TASKS_BUILD_WALL_TOTAL",
+      "result": "__cq_tasks_build_wall_total",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    }
+  ],
+  "operators": [
+    {
+      "calls": 1,
+      "elapsed_ms": 3923.2833299999998,
+      "id": 0,
+      "inputs": [],
+      "key": "retail_h01",
+      "kind": "QUERY",
+      "program": 0,
+      "result": "query",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 4
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 204.40071400000002,
+      "id": 1,
+      "inputs": [],
+      "key": "Lineitem",
+      "kind": "RENAME",
+      "program": 1,
+      "result": "r0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 6001215
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 204.401075,
+      "id": 2,
+      "inputs": [
+        "r0"
+      ],
+      "key": "shipdate",
+      "kind": "RANGE",
+      "program": 1,
+      "result": "r1",
+      "rows_in": 6001215,
+      "rows_inserted": 0,
+      "rows_out": 5916591
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 204.40132499999999,
+      "id": 3,
+      "inputs": [
+        "r1"
+      ],
+      "key": "line_number,linestatus,order_key,price,quantity,quantity_units,returnflag,shipdate",
+      "kind": "BIND",
+      "program": 1,
+      "result": "r2",
+      "rows_in": 5916591,
+      "rows_inserted": 0,
+      "rows_out": 5916591
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 204.401555,
+      "id": 4,
+      "inputs": [
+        "r2"
+      ],
+      "key": "line_number,linestatus,order_key,price,price_units,quantity,quantity_units,returnflag,shipdate",
+      "kind": "BIND",
+      "program": 1,
+      "result": "r3",
+      "rows_in": 5916591,
+      "rows_inserted": 0,
+      "rows_out": 5916591
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 204.401796,
+      "id": 5,
+      "inputs": [
+        "r3"
+      ],
+      "key": "line_number,linestatus,order_key,price,price_units,quantity,quantity_units,returnflag,shipdate",
+      "kind": "PROJECT",
+      "program": 1,
+      "result": "r4",
+      "rows_in": 5916591,
+      "rows_inserted": 0,
+      "rows_out": 5916591
+    },
+    {
+      "calls": 64,
+      "elapsed_ms": 0.0043170000000000005,
+      "id": 6,
+      "inputs": [
+        "r4"
+      ],
+      "key": "__cq_4_2,__cq_4_3,__cq_4_4,linestatus,returnflag",
+      "kind": "GROUP",
+      "program": 1,
+      "result": "r5",
+      "rows_in": 5916591,
+      "rows_inserted": 0,
+      "rows_out": 4
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 2554.1567,
+      "id": 7,
+      "inputs": [
+        "r4"
+      ],
+      "key": "",
+      "kind": "DEDUP",
+      "program": 1,
+      "result": "r4.dedup",
+      "rows_in": 5916591,
+      "rows_inserted": 5916591,
+      "rows_out": 5916591
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 2857.4611409999998,
+      "id": 8,
+      "inputs": [
+        "r4"
+      ],
+      "key": "",
+      "kind": "ROWS_BUILD",
+      "program": 1,
+      "result": "__cq_key_input_r5.rows",
+      "rows_in": 5916591,
+      "rows_inserted": 5916591,
+      "rows_out": 5916591
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 1037.258773,
+      "id": 9,
+      "inputs": [
+        "r5"
+      ],
+      "key": "",
+      "kind": "ROWS_BUILD",
+      "program": 1,
+      "result": "r5.rows",
+      "rows_in": 4,
+      "rows_inserted": 4,
+      "rows_out": 4
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 0.00014000000000000001,
+      "id": 10,
+      "inputs": [
+        "r5"
+      ],
+      "key": "",
+      "kind": "ANSWER",
+      "program": 1,
+      "result": "r5.answer",
+      "rows_in": 4,
+      "rows_inserted": 0,
+      "rows_out": 4
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 3894.723,
+      "id": 11,
+      "inputs": [],
+      "key": "",
+      "kind": "TASKS_BUILD_WALL",
+      "program": 1,
+      "result": "__cq_tasks_build",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 0.002434,
+      "id": 12,
+      "inputs": [
+        "r5.answer"
+      ],
+      "key": "",
+      "kind": "TASKS_QUERY_WALL",
+      "program": 1,
+      "result": "__cq_tasks_query",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 3894.72296,
+      "id": 13,
+      "inputs": [],
+      "key": "",
+      "kind": "TASKS_BUILD_WALL_TOTAL",
+      "program": 0,
+      "result": "__cq_tasks_build_wall_total",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    }
+  ],
+  "rows_copied": 0,
+  "rows_enumerated": 0,
+  "samples_ms": [
+    3873.73986,
+    3910.8510020000003,
+    3923.28385,
+    3948.920186,
+    3968.528412
+  ],
+  "set_insertions": 5916591,
+  "top_level_clock_verified": true,
+  "top_level_ms": 3923.2833299999998,
+  "tree": "QUERY            query [retail_h01] inputs= rows=4 in=0 inserted=0 t=3923.283ms\n  TASKS_BUILD_WALL_TOTAL __cq_tasks_build_wall_total [] inputs= rows=0 in=0 inserted=0 t=3894.723ms\n  TASKS_QUERY_WALL __cq_tasks_query [] inputs=r5.answer rows=0 in=0 inserted=0 t=0.002ms\n    ANSWER           r5.answer [] inputs=r5 rows=4 in=4 inserted=0 t=0.000ms\n      GROUP            r5 [__cq_4_2,__cq_4_3,__cq_4_4,linestatus,returnflag] inputs=r4 rows=4 in=5916591 inserted=0 t=0.004ms\n        PROJECT          r4 [line_number,linestatus,order_key,price,price_units,quantity,quantity_units,returnflag,shipdate] inputs=r3 rows=5916591 in=5916591 inserted=0 t=204.402ms\n          BIND             r3 [line_number,linestatus,order_key,price,price_units,quantity,quantity_units,returnflag,shipdate] inputs=r2 rows=5916591 in=5916591 inserted=0 t=204.402ms\n            BIND             r2 [line_number,linestatus,order_key,price,quantity,quantity_units,returnflag,shipdate] inputs=r1 rows=5916591 in=5916591 inserted=0 t=204.401ms\n              RANGE            r1 [shipdate] inputs=r0 rows=5916591 in=6001215 inserted=0 t=204.401ms\n                RENAME           r0 [Lineitem] inputs= rows=6001215 in=0 inserted=0 t=204.401ms\n  TASKS_BUILD_WALL __cq_tasks_build [] inputs= rows=0 in=0 inserted=0 t=3894.723ms\n  ROWS_BUILD       r5.rows [] inputs=r5 rows=4 in=4 inserted=4 t=1037.259ms excl=1037.259ms\n    GROUP            r5 [__cq_4_2,__cq_4_3,__cq_4_4,linestatus,returnflag] inputs=r4 rows=4 in=5916591 inserted=0 t=0.004ms (shared)\n  ROWS_BUILD       __cq_key_input_r5.rows [] inputs=r4 rows=5916591 in=5916591 inserted=5916591 t=2857.461ms excl=2857.461ms\n    PROJECT          r4 [line_number,linestatus,order_key,price,price_units,quantity,quantity_units,returnflag,shipdate] inputs=r3 rows=5916591 in=5916591 inserted=0 t=204.402ms (shared)\n  DEDUP            r4.dedup [] inputs=r4 rows=5916591 in=5916591 inserted=5916591 t=2554.157ms\n    PROJECT          r4 [line_number,linestatus,order_key,price,price_units,quantity,quantity_units,returnflag,shipdate] inputs=r3 rows=5916591 in=5916591 inserted=0 t=204.402ms (shared)\nBUILD_EXCLUSIVE_TOTAL t=3894.720ms\nTASKS_BUILD_WALL_TOTAL t=3894.722960000ms\n",
+  "verified": true
+}

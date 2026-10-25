@@ -1,0 +1,28 @@
+{
+  "configs": [
+    "default",
+    "par",
+    "no-reduce",
+    "transfer",
+    "le",
+    "le_runs",
+    "hypergraph",
+    "advised"
+  ],
+  "exports": [
+    [
+      "customer",
+      "c_custkey,c_mktsegment"
+    ],
+    [
+      "orders",
+      "o_orderkey,o_custkey,o_orderdate"
+    ],
+    [
+      "lineitem",
+      "l_orderkey,l_shipdate"
+    ]
+  ],
+  "name": "retail_h03",
+  "sql": "SELECT DISTINCT o.o_orderkey, c.c_custkey\nFROM customer c JOIN orders o ON o.o_custkey = c.c_custkey\nJOIN lineitem l ON l.l_orderkey = o.o_orderkey\nWHERE c.c_mktsegment = 'BUILDING' AND o.o_orderdate < DATE '1995-03-15'\nAND l.l_shipdate > DATE '1995-03-15'"
+}

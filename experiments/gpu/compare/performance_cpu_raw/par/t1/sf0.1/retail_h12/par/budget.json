@@ -1,0 +1,12 @@
+{
+  "wall_seconds": 0.11459344998002052,
+  "cap_seconds": 100,
+  "slow_seconds": 10,
+  "profile_winners_only": false,
+  "retained_plain_before_policy_change": false,
+  "configuration": "par",
+  "rayon_num_threads": 1,
+  "plain_only": true,
+  "verification_only": true,
+  "runs": 0
+}

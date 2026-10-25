@@ -1,0 +1,15 @@
+{
+  "removed_temporary_correctness_artifacts": [
+    "experiments/gpu/compare/performance_cpu_raw/default_spotcheck/t1/sf0.1/retail_h01/default/plain.answers.json",
+    "experiments/gpu/compare/performance_cpu_raw/default_spotcheck/t1/sf0.1/retail_h02/default/plain.answers.json",
+    "experiments/gpu/compare/performance_cpu_raw/default_spotcheck/t1/sf0.1/retail_h06/default/plain.answers.json",
+    "experiments/gpu/compare/performance_cpu_raw/default_spotcheck/t1/sf0.1/retail_h13/default/plain.answers.json",
+    "experiments/gpu/compare/performance_cpu_raw/default_spotcheck/t1/sf0.1/retail_h19/default/plain.answers.json",
+    "experiments/gpu/compare/performance_cpu_raw/default_spotcheck/t1/sf0.1/retail_h01/oracle.json",
+    "experiments/gpu/compare/performance_cpu_raw/default_spotcheck/t1/sf0.1/retail_h02/oracle.json",
+    "experiments/gpu/compare/performance_cpu_raw/default_spotcheck/t1/sf0.1/retail_h06/oracle.json",
+    "experiments/gpu/compare/performance_cpu_raw/default_spotcheck/t1/sf0.1/retail_h13/oracle.json",
+    "experiments/gpu/compare/performance_cpu_raw/default_spotcheck/t1/sf0.1/retail_h19/oracle.json"
+  ],
+  "reason": "Exact comparisons completed inside workers; retain metrics, graphs, statuses and reproduction SQL, not large duplicate answer sets. prepare recreates oracles from the shared dbgen database."
+}

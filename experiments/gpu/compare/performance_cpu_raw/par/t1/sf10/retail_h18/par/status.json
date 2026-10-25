@@ -1,0 +1,9 @@
+{
+  "status": "timeout",
+  "phase": "plain",
+  "worker_wall_limit_seconds": 100,
+  "configuration_wall_seconds": 100.51187001005746,
+  "warm_correctness": "ok",
+  "correctness": "unavailable",
+  "error": "Command '['/tmp/mini-linq-performance-cpu/par/crates/retail_h18/timing-worker', '/tmp/mini-linq-performance-cpu/par/sf10/data/retail_h18', 'par', '5', '/data/mini_linq-wt/partarget/experiments/gpu/compare/performance_cpu_raw/par/t1/sf10/retail_h18/par/plain.answers.json', '/data/mini_linq-wt/partarget/experiments/gpu/compare/performance_cpu_raw/par/t1/sf10/retail_h18/par/plain.json', '/data/mini_linq-wt/partarget/experiments/gpu/compare/performance_cpu_raw/par/t1/sf10/retail_h18/oracle.json']' timed out after 99.99998160405084 seconds"
+}
