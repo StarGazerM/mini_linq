@@ -14,6 +14,7 @@ use syn::{
 
 pub struct Stage {
     pub program: cq_lang_cq::Program,
+    pub evidence: cq_lang_sequence::Evidence,
     pub map: Option<syn::ExprClosure>,
 }
 
@@ -40,21 +41,6 @@ fn binding(pattern: &syn::Pat) -> Option<&Ident> {
     }
 }
 
-struct Compile(cq_lang_cq::Program);
-impl Parse for Compile {
-    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let keyword: Ident = input.parse()?;
-        if keyword != "pipeline" {
-            return Err(input.error("expected pipeline"));
-        }
-        let pipeline;
-        syn::braced!(pipeline in input);
-        if !pipeline.is_empty() {
-            return Err(pipeline.error("expected authored default pipeline"));
-        }
-        Ok(Self(input.parse()?))
-    }
-}
 
 fn compiled(expression: &syn::Expr) -> Result<Option<Stage>> {
     match expression {
@@ -66,8 +52,10 @@ fn compiled(expression: &syn::Expr) -> Result<Option<Stage>> {
                 .last()
                 .is_some_and(|s| s.ident == "compile") =>
         {
+            let source = syn::parse2::<crate::source::AuthoredQuery>(mac.mac.tokens.clone())?;
             Ok(Some(Stage {
-                program: syn::parse2::<Compile>(mac.mac.tokens.clone())?.0,
+                program: source.program,
+                evidence: source.evidence,
                 map: None,
             }))
         }
@@ -261,7 +249,9 @@ impl Program {
         index: usize,
         types: &BTreeMap<String, Vec<(Ident, syn::Type)>>,
     ) -> Result<Kernel> {
-        Kernel::standalone_program(&self.file, self.stages[index].program.clone(), types)
+        let mut kernel = Kernel::standalone_program(&self.file, self.stages[index].program.clone(), types)?;
+        kernel.evidence = self.stages[index].evidence.clone();
+        Ok(kernel)
     }
 
     pub fn preprocessing_tokens(&self) -> TokenStream {

@@ -405,10 +405,14 @@ pub fn sequence(input: TokenStream) -> TokenStream {
     cq_stage::pass::<cq_lang_structures::Program, cq_lang_sequence::Program>(
         input.into(),
         |source, args| {
-            no_arguments(args)?;
             let target = cq_sequence_lowering::compile(source)?;
             cq_sequence_lowering::check(source, &target)?;
-            Ok(target)
+            if args.is_empty() {
+                Ok(target)
+            } else {
+                let evidence: cq_lang_sequence::Evidence = syn::parse2(args)?;
+                cq_sequence_plan::Advice::Evidence(evidence).apply(&target)
+            }
         },
     )
     .into()

@@ -104,6 +104,15 @@ macro_rules! standalone_configuration {
         mod $module {
             use super::*;
             macro_rules! query {
+                (plan($d($d advice:tt)*); evidence { $d($d facts:tt)* } $d($d tokens:tt)*) => {
+                    crate::tpch_runtime::standalone_query! {
+                        $module; [$d($d advice)*]; {
+                            $($stages)*
+                            sequence = ::mini_linq::passes::sequence(evidence { $d($d facts)* });
+                        };
+                        [$($extra),*]; $d($d tokens)*
+                    }
+                };
                 (plan($d($d advice:tt)*); $d($d tokens:tt)*) => {
                     crate::tpch_runtime::standalone_query! {
                         $module; [$d($d advice)*]; { $($stages)* };
@@ -118,9 +127,9 @@ macro_rules! standalone_configuration {
 pub(crate) use standalone_configuration;
 
 macro_rules! standalone_query {
-    (advised; [$($advice:tt)*]; {}; []; $($tokens:tt)*) => {
+    (advised; [$($advice:tt)*]; {$($stages:tt)*}; []; $($tokens:tt)*) => {
         crate::tpch_runtime::standalone_query! {
-            default; []; { plan = ::mini_linq::passes::plan($($advice)*); }; [];
+            default; []; { $($stages)* plan = ::mini_linq::passes::plan($($advice)*); }; [];
             $($tokens)*
         }
     };

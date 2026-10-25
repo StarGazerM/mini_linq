@@ -47,6 +47,8 @@ crate::tpch_runtime::standalone_configs! { $;
         let cutoff = Date::load("1998-09-02").expect("authored ISO date");
         query! {
             plan(no_reduce, order(Lineitem));
+            // dbgen's line identity is retained by the loader and group valuation.
+            evidence { key Lineitem [l_orderkey, l_linenumber]; }
             struct Query;
             relation Lineitem(l_orderkey: i64, l_linenumber: i64,
                 l_returnflag: String, l_linestatus: String, l_quantity: Decimal,

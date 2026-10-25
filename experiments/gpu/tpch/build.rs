@@ -361,6 +361,14 @@ fn compile_stage(
                 .to_string(),
         );
     }
+    if !kernel.evidence.facts.is_empty() {
+        pipeline.sequence.insert(
+            0,
+            cq_sequence_plan::Advice::Evidence(kernel.evidence.clone())
+                .to_token_stream()
+                .to_string(),
+        );
+    }
     let mut authored = checked(
         "Sequence advice",
         &sequence,

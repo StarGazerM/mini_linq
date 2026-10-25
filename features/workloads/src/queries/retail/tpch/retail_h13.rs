@@ -53,6 +53,11 @@ crate::tpch_runtime::standalone_configs! { $;
         let QualifiedOrders = QualifiedOrders.as_slice();
         let counts = query! {
             plan(no_reduce, order(Customer, QualifiedOrders));
+            // Filtering Orders and retaining o_orderkey preserves its dbgen key.
+            evidence {
+                key Customer [c_custkey];
+                key QualifiedOrders [order_key];
+            }
             struct Counts;
             relation Customer(c_custkey: i64);
             relation QualifiedOrders(order_key: i64, customer_key: i64);
@@ -63,6 +68,10 @@ crate::tpch_runtime::standalone_configs! { $;
         .map(|(customer_key, count)| (*customer_key, count));
         let zeros = query! {
             plan(no_reduce, order(Customer));
+            evidence {
+                key Customer [c_custkey];
+                key QualifiedOrders [order_key];
+            }
             struct Zeros;
             relation Customer(c_custkey: i64);
             relation QualifiedOrders(order_key: i64, customer_key: i64);

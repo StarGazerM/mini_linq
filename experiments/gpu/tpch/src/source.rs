@@ -116,6 +116,7 @@ pub struct Relation {
 
 pub struct Kernel {
     pub plan_advice: TokenStream,
+    pub evidence: cq_lang_sequence::Evidence,
     pub setup: syn::Block,
     pub relations: Vec<Relation>,
     pub answer: Vec<(Ident, syn::Type)>,
@@ -125,6 +126,32 @@ pub struct Kernel {
     pub body: TokenStream,
     /// Standalone programs retain their declared output and aggregate head.
     program: Option<cq_lang_cq::Program>,
+}
+
+/// The shared source prefix carries author premises, not CPU planning choices.
+pub(crate) struct AuthoredQuery {
+    pub program: cq_lang_cq::Program,
+    pub evidence: cq_lang_sequence::Evidence,
+}
+
+impl Parse for AuthoredQuery {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let keyword: Ident = input.parse()?;
+        if keyword != "pipeline" {
+            return Err(input.error("expected pipeline"));
+        }
+        let pipeline;
+        syn::braced!(pipeline in input);
+        if !pipeline.is_empty() {
+            return Err(pipeline.error("expected authored default pipeline"));
+        }
+        let evidence = if input.peek(Ident) {
+            input.parse()?
+        } else {
+            Default::default()
+        };
+        Ok(Self { program: input.parse()?, evidence })
+    }
 }
 
 fn columns(input: ParseStream<'_>) -> syn::Result<Vec<(Ident, syn::Type)>> {
@@ -218,6 +245,7 @@ impl Parse for Kernel {
         input.parse::<Token![-]>()?;
         Ok(Self {
             plan_advice,
+            evidence: Default::default(),
             setup,
             relations,
             derived,
@@ -314,24 +342,10 @@ impl Kernel {
                 compiles.0.len()
             ).into());
         }
-        struct Compile(cq_lang_cq::Program);
-        impl Parse for Compile {
-            fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-                let keyword: Ident = input.parse()?;
-                if keyword != "pipeline" {
-                    return Err(syn::Error::new_spanned(keyword, "expected pipeline"));
-                }
-                let pipeline;
-                syn::braced!(pipeline in input);
-                if !pipeline.is_empty() {
-                    return Err(pipeline
-                        .error("standalone importer requires the authored default pipeline"));
-                }
-                Ok(Self(input.parse()?))
-            }
-        }
-        let program = syn::parse2::<Compile>(compiles.0.remove(0))?.0;
-        Self::standalone_program(file, program, &BTreeMap::new())
+        let source = syn::parse2::<AuthoredQuery>(compiles.0.remove(0))?;
+        let mut kernel = Self::standalone_program(file, source.program, &BTreeMap::new())?;
+        kernel.evidence = source.evidence;
+        Ok(kernel)
     }
 
     pub fn standalone_program(
@@ -454,6 +468,7 @@ impl Kernel {
             .collect();
         Ok(Self {
             plan_advice: TokenStream::new(),
+            evidence: Default::default(),
             setup,
             relations,
             answer,
@@ -1157,6 +1172,23 @@ fn encode_tokens(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn shared_key_evidence_survives_single_and_staged_imports() {
+        let source = |name| SOURCES.iter().find(|(query, _)| *query == name).unwrap().1;
+        let h01 = Kernel::import(source("h01")).unwrap();
+        assert!(h01.evidence.has_key(
+            "Lineitem",
+            &["l_orderkey".into(), "l_linenumber".into()],
+        ));
+        let h13 = crate::stages::Program::import(source("h13")).unwrap().unwrap();
+        for index in 0..h13.stages.len() {
+            let kernel = h13.kernel(index, &BTreeMap::new()).unwrap();
+            assert_eq!(kernel.evidence, h13.stages[index].evidence);
+            assert!(kernel.evidence.has_key("Customer", &["c_custkey".into()]));
+            assert!(kernel.evidence.has_key("QualifiedOrders", &["order_key".into()]));
+        }
+    }
+
     #[test]
     fn imported_plan_hints_are_not_discarded() {
         let source = SOURCES

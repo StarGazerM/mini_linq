@@ -23,6 +23,17 @@ Cargo timing reports, answer witnesses and output reports live under target/benc
 Exports contain only declared columns, in declaration order, without filters,
 preaggregation or casts. Typed relation_loaders! read the Parquet schemas into
 Vec hosts. The file cache is local and engine-version/projection keyed.
+H01 and H13 author physical-row key evidence in their shared query sources,
+independent of configuration. H01 retains Lineitem(l_orderkey,l_linenumber);
+H13 retains Customer(c_custkey) and QualifiedOrders(order_key), the latter
+preserved by filtering Orders and projecting its unique o_orderkey. These are
+dbgen key premises, not estimated cardinalities or assertions about group keys.
+Hand-built fixtures for these workloads must satisfy the same uniqueness
+contract; equal aggregate values on different identities remain valid inputs.
+The standalone evidence prefix uses the Sequence Evidence grammar and is
+forwarded to the checked sequence lowering phase for every CPU configuration.
+The GPU importer preserves the same stage-local evidence and merges it with
+its existing manifest and planning evidence before Sequence planning.
 
 Every fresh executable/configuration is checked against authored DuckDB SQL on
 SF 0.1 before any query measurements, including invocations requesting SF 1.

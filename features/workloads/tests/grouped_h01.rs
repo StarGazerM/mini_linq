@@ -1,22 +1,28 @@
 use cq_load::{Date, Decimal, Load};
 use cq_testkit::conformance::assert_answers_equal;
 
+#[allow(dead_code, unused_imports, unused_macros)]
+#[path = "../src/tpch_runtime.rs"]
+mod tpch_runtime;
+
 #[allow(dead_code)]
 #[path = "../src/queries/retail/tpch/retail_h01.rs"]
 mod h01;
 
 #[test]
 fn h01_grouped_head_matches_duckdb_distinct_join() {
-    // Two different line identities have equal aggregate arguments; duplicate
-    // physical rows contribute once, distinct identities contribute twice.
+    // dbgen's (order, line) key is unique. Equal aggregate arguments on
+    // different line identities must still contribute twice.
     let raw = vec![
-        vec![1, 1, 65, 70, 200, 1250, 0],
         vec![1, 1, 65, 70, 200, 1250, 0],
         vec![1, 2, 65, 70, 200, 1250, 0],
         vec![2, 1, 78, 79, 300, 700, 0],
         vec![3, 1, 65, 70, 900, 9900, 1],
     ];
-    for rows in [raw.clone(), raw.into_iter().rev().collect(), Vec::new()] {
+    for (rows, config) in [raw.clone(), raw.into_iter().rev().collect(), Vec::new()]
+        .into_iter()
+        .flat_map(|rows| h01::CONFIGS.iter().map(move |config| (rows.clone(), config)))
+    {
         let data = h01::Data {
             lineitem: rows
                 .iter()
@@ -38,7 +44,7 @@ fn h01_grouped_head_matches_duckdb_distinct_join() {
                 })
                 .collect(),
         };
-        let actual = h01::run(&data, "default")
+        let actual = h01::run(&data, config)
             .into_iter()
             .map(|(flag, status, quantity, price, count)| {
                 vec![
@@ -66,7 +72,7 @@ fn h01_grouped_head_matches_duckdb_distinct_join() {
             &[cq_testkit::duckdb::RelationData {
                 name: "Lineitem".into(),
                 arity: 7,
-                rows,
+                rows: rows.clone(),
             }],
             &sql,
         )
