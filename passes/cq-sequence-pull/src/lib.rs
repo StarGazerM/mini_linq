@@ -166,6 +166,7 @@ pub struct Emitter<'a> {
     program: &'a Program,
     adapters: RowEmitter<'a>,
     values: BTreeMap<String, Value>,
+    target_published: std::collections::BTreeSet<String>,
     owner: String,
     pull: bool,
 }
@@ -179,6 +180,7 @@ impl<'a> Emitter<'a> {
             program,
             adapters: RowEmitter::new(context),
             values: BTreeMap::new(),
+            target_published: std::collections::BTreeSet::new(),
             owner: String::new(),
             pull: false,
         }
@@ -190,6 +192,11 @@ impl<'a> Emitter<'a> {
 
     pub fn context_mut(&mut self) -> &mut Context<'a> {
         self.adapters.context_mut()
+    }
+
+    /// A target hook has already emitted this store's binding and providers.
+    pub fn mark_target_published(&mut self, owner: &str) {
+        self.target_published.insert(owner.to_owned());
     }
 
     fn register(&mut self, name: &str) {
@@ -740,6 +747,10 @@ impl<'a> Emitter<'a> {
             value = self.lift(value, depth, &mut |emitter, rows| {
                 emitter.rehead(&result, rows)
             })?;
+        }
+        if self.target_published.remove(&symbol_name(name)) {
+            self.values.insert(symbol_name(name), value.clone());
+            return Ok(value);
         }
         if value.stored {
             let physical_store = value

@@ -8,6 +8,7 @@ and performance_cpu_raw/par/t{threads}/sf{sf}; existing CPU data is untouched.
 """
 import argparse
 import csv
+from functools import cache
 import hashlib
 import json
 import os
@@ -29,11 +30,13 @@ PROFILE_WINNERS_ONLY = False
 CONFIGS = ['default', 'le', 'le_runs', 'advised']
 PAR = False
 THREADS = None
+DATABASE = None
 WORK = ROOT / 'features/workloads'
 SOURCE = ROOT / 'experiments/gpu/tpch/src/source.rs'
 NAMES = ['retail_' + x for x in re.findall(r'"([a-z0-9_]+)"', SOURCE.read_text().split('sources!(', 1)[1].split(');', 1)[0])]
 if 'retail_h14' not in NAMES:
     NAMES.insert(NAMES.index('retail_h15'), 'retail_h14')
+CATALOG_NAMES = NAMES.copy()
 RAW = OUT / 'performance_cpu_raw'
 ENV = dict(os.environ, CARGO_BUILD_JOBS='1', CARGO_TARGET_DIR=str(CACHE / 'target'))
 
@@ -46,6 +49,36 @@ def save(path, value):
 def artifact_name(kind=''):
     prefix = f'performance_cpu_par_t{THREADS}' if PAR else 'performance_cpu'
     return f'{prefix}{("_" + kind) if kind else ""}_sf{SF}'
+
+
+def crate_directory(name):
+    return (CACHE_ROOT if PAR else CACHE) / 'crates' / name
+
+
+@cache
+def compiler_fingerprint():
+    """Hash compiler/runtime inputs once per invocation, including new sources."""
+    paths = [ROOT / 'Cargo.toml', ROOT / 'Cargo.lock', ROOT / 'rust-toolchain.toml']
+    for root in ['facade', 'features', 'languages', 'passes', 'runtime', 'testkit', '.cargo']:
+        for directory, children, files in os.walk(ROOT / root):
+            children[:] = sorted(child for child in children if child not in ['target', '.git'])
+            paths.extend(Path(directory) / name for name in files
+                         if name.endswith(('.rs', '.toml')) or name == 'Cargo.lock')
+    digest = hashlib.sha256()
+    for path in sorted(set(paths)):
+        digest.update(str(path.relative_to(ROOT)).encode() + b'\0')
+        digest.update(path.read_bytes())
+        digest.update(b'\0')
+    return digest.hexdigest()
+
+
+def validate_raw_stamp(name, stamp, required=False):
+    if not PAR:
+        return
+    path = RAW / name / 'source_stamp.json'
+    recorded = json.loads(path.read_text()) if path.exists() else None
+    if (required or (RAW / name / 'par').exists()) and recorded != stamp:
+        raise RuntimeError(f'{RAW / name}: parallel artifacts have missing/stale source fingerprints; archive this query directory before recollecting')
 
 
 def invoke(args, log, env=ENV, timeout=None):
@@ -69,18 +102,24 @@ def build():
     if not PAR:
         workers += [('counters', 'counting-worker'), ('profile', 'profile-worker')]
     for name in NAMES:
+        stamp = build_stamp(name) if PAR else None
+        validate_raw_stamp(name, stamp)
         if all((RAW / name / c / ('plain.json' if PAR else 'profile.json')).exists() or (RAW / name / c / 'status.json').exists() for c in CONFIGS):
             continue
-        crate = CACHE / 'crates' / name
+        if stamp is None:
+            stamp = build_stamp(name)
+        crate = crate_directory(name)
         other = CACHE_ROOT / f'sf{10 if SF == 1 else 1}' / 'crates' / name
-        if not (crate / 'build_stamp.json').exists() and (other / 'build_stamp.json').exists() and json.loads((other / 'build_stamp.json').read_text()) == build_stamp(name):
+        if not PAR and not (crate / 'build_stamp.json').exists() and (other / 'build_stamp.json').exists() and json.loads((other / 'build_stamp.json').read_text()) == stamp:
             shutil.copytree(other, crate, dirs_exist_ok=True)
-        if (crate / 'build_stamp.json').exists() and json.loads((crate / 'build_stamp.json').read_text()) == build_stamp(name) and all(
+        if (crate / 'build_stamp.json').exists() and json.loads((crate / 'build_stamp.json').read_text()) == stamp and all(
             (crate / binary).exists() for _, binary in workers
         ):
             description = json.loads(subprocess.check_output([crate / 'timing-worker', 'describe']))
             assert set(CONFIGS) <= set(description['configs']), (name, description['configs'])
             save(RAW / name / 'description.json', description)
+            if PAR:
+                save(RAW / name / 'source_stamp.json', stamp)
             continue
         (crate / 'src').mkdir(parents=True, exist_ok=True)
         manifest = f'[package]\nname = "tpch-derived-{name}"\nversion = "0.0.0"\nedition = "2024"\n[workspace]\n[features]\ncounters = ["cq-storage/counters"]\nprofile = ["cq-storage/operator-timing"]\n[dependencies]\n'
@@ -106,7 +145,9 @@ def build():
         description = json.loads(subprocess.check_output([crate / 'timing-worker', 'describe']))
         assert set(CONFIGS) <= set(description['configs']), (name, description['configs'])
         save(RAW / name / 'description.json', description)
-        save(crate / 'build_stamp.json', build_stamp(name))
+        save(crate / 'build_stamp.json', stamp)
+        if PAR:
+            save(RAW / name / 'source_stamp.json', stamp)
         print('BUILT', name, description['configs'], flush=True)
 
 
@@ -114,15 +155,20 @@ def build_stamp(name):
     paths = [WORK / 'src/tpch_runtime.rs', WORK / 'xtask/src/tpch/worker.rs',
              WORK / 'xtask/src/tpch/comparison.rs', CACHE_ROOT / 'adaptive-worker.rs',
              WORK / 'src/queries/retail/tpch' / (name + '.rs'), Path(__file__)]
-    return {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
+    stamp = {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
+    if PAR:
+        stamp['compiler_runtime_sha256'] = compiler_fingerprint()
+    return stamp
 
 
 def prepare():
     import duckdb
-    database = f'/data/tpch-gpu/sf{SF}/dbgen.duckdb'
+    database = str(DATABASE) if DATABASE is not None else f'/data/tpch-gpu/sf{SF}/dbgen.duckdb'
     db = duckdb.connect(database, read_only=True)
     db.execute('SET threads=1')
     for name in NAMES:
+        if PAR:
+            validate_raw_stamp(name, build_stamp(name), required=True)
         raw = RAW / name
         description = json.loads((raw / 'description.json').read_text())
         data = CACHE / 'data' / name
@@ -153,6 +199,7 @@ def prepare():
         'affinity': sorted(os.sched_getaffinity(0)), 'runs': RUNS, 'cap_seconds': CAP_SECONDS, 'query_names': NAMES,
         **({'configuration': 'par', 'rayon_num_threads': THREADS, 'plain_only': True,
             'verification_only': SF == 0.1, 'runs': 0 if SF == 0.1 else RUNS} if PAR else {}),
+        **({'compiler_runtime_sha256': compiler_fingerprint()} if PAR else {}),
         'source_sha256': {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in [SOURCE, WORK / 'src/tpch_runtime.rs', WORK / 'xtask/src/tpch/worker.rs'] + [WORK / 'src/queries/retail/tpch' / (n + '.rs') for n in NAMES]},
     })
 
@@ -194,7 +241,12 @@ def adaptive():
 def measure():
     for name in NAMES:
         raw = RAW / name
-        crate = CACHE / 'crates' / name
+        crate = crate_directory(name)
+        if PAR:
+            stamp = build_stamp(name)
+            validate_raw_stamp(name, stamp, required=True)
+            if json.loads((crate / 'build_stamp.json').read_text()) != stamp:
+                raise RuntimeError(f'{crate}: stale binary; run the build phase before measuring')
 
         def run_modes(config, modes):
             directory = raw / config
@@ -250,7 +302,9 @@ def measure():
 
 def consolidate_par():
     rows = []
-    for name in NAMES:
+    for name in CATALOG_NAMES:
+        if (RAW / name / 'par').exists():
+            validate_raw_stamp(name, build_stamp(name), required=True)
         directory = RAW / name / 'par'
         path = directory / 'plain.json'
         plain = json.loads(path.read_text()) if path.exists() else None
@@ -282,6 +336,7 @@ def consolidate_par():
         })
     save(OUT / (artifact_name() + '.json'), {
         'schema_version': 1, 'sf': SF, 'configuration': 'par', 'threads': THREADS,
+        'compiler_runtime_sha256': compiler_fingerprint(),
         'methodology': {
             'scope': 'All 27 catalog queries; fixed par configuration; no selection or instrumented modes.',
             'invocations': 'One untimed exact execution at SF0.1; one warmup plus five timed runs at SF1/SF10.',
@@ -401,10 +456,14 @@ def consolidate():
 
 def cleanup():
     removed = []
-    for path in RAW.rglob('*.answers.json'):
+    answer_paths = (path for name in NAMES for path in (RAW / name).rglob('*.answers.json')) if PAR else RAW.rglob('*.answers.json')
+    for path in answer_paths:
         removed.append(str(path.relative_to(ROOT)))
         path.unlink()
-    for path in RAW.glob('*/oracle.json'):
+    oracle_paths = [RAW / name / 'oracle.json' for name in NAMES] if PAR else RAW.glob('*/oracle.json')
+    for path in oracle_paths:
+        if not path.exists():
+            continue
         removed.append(str(path.relative_to(ROOT)))
         path.unlink()
     save(OUT / (artifact_name('cleanup') + '.json'), {
@@ -423,8 +482,15 @@ if __name__ == '__main__':
     parser.add_argument('--profile-winners-only', action='store_true')
     parser.add_argument('--par', action='store_true', help='Fixed par config, plain-only, isolated artifacts; SF0.1 verifies without timing')
     parser.add_argument('--threads', type=int, choices=[1, 24], help='Required with --par; sets RAYON_NUM_THREADS explicitly')
+    parser.add_argument('--query', action='append', choices=CATALOG_NAMES, help='Repeat to select a par smoke subset; consolidation still includes all catalog queries')
+    parser.add_argument('--database', type=Path, help='Explicit DuckDB oracle/export database override; recorded in environment metadata')
     args = parser.parse_args()
     PAR, THREADS = args.par, args.threads
+    DATABASE = args.database.resolve() if args.database is not None else None
+    if args.query:
+        if not PAR:
+            parser.error('--query subsets require --par')
+        NAMES = [name for name in CATALOG_NAMES if name in args.query]
     if PAR != (THREADS is not None):
         parser.error('--par and --threads must be supplied together')
     if args.sf == '0.1' and not PAR:
@@ -440,7 +506,7 @@ if __name__ == '__main__':
     SLOW_SECONDS, PROFILE_WINNERS_ONLY = args.slow_seconds, args.profile_winners_only
     if PAR:
         CONFIGS = ['par']
-        CACHE_ROOT = CACHE_ROOT / 'par' / f't{THREADS}'
+        CACHE_ROOT = CACHE_ROOT / 'par'
         ENV['RAYON_NUM_THREADS'] = str(THREADS)
         for key in ['CQ_OPERATOR_PROFILE', 'CQ_OPERATOR_COUNTS']:
             ENV.pop(key, None)
@@ -450,7 +516,7 @@ if __name__ == '__main__':
         RAW = RAW / 'par' / f't{THREADS}'
     RAW = RAW / f'sf{SF}'
     CACHE.mkdir(parents=True, exist_ok=True)
-    # Cargo artifacts are scale-independent; query data and binaries are isolated.
+    # Parallel binaries/target are shared across scales and threads; data is scale-specific.
     ENV['CARGO_TARGET_DIR'] = str(CACHE_ROOT / 'target')
     if args.phase == 'all':
         for phase in [adaptive, build, prepare, measure, consolidate, cleanup]:

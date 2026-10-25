@@ -78,6 +78,16 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
     for token in &mut catalog.providers {
         token.levels = levels.clone();
     }
+    // Shared reads must not capture the serial lazy Rc/RefCell providers.
+    catalog.providers.retain(|token| !matches!(&token.ty, syn::Type::Path(path)
+        if path.path.segments.last().is_some_and(|segment|
+            segment.ident == "HashIndex" || segment.ident == "Trie")));
+    catalog.providers.insert(0, cq_lang_sequence::ProviderToken {
+        ty: syn::parse_quote!(::cq_storage::sharded::Index<_, _>),
+        capabilities: vec![cq_lang_sequence::Capability::Exact, cq_lang_sequence::Capability::Membership],
+        levels: levels.clone(),
+        elements: None,
+    });
     // Hash sharding retains exact probes, but not a shard's global ordering.
     // Providers are published at the pool join and read by sequential tasks.
     let task = vec![vec!["host".into(), "pool".into(), "task".into()]];

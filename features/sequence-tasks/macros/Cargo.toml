@@ -12,6 +12,7 @@ proc-macro = true
 cq-lang-sequence.workspace = true
 cq-sequence-tasks.workspace = true
 cq-sequence-plan = { path = "../../../passes/cq-sequence-plan" }
+cq-sequence-rewrite-passes = { path = "../../sequence-rewrites/passes" }
 cq-stage = { path = "../../../facade/cq-stage" }
 syn.workspace = true
 

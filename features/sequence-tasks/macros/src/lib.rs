@@ -15,10 +15,14 @@ pub fn plan(input: TokenStream) -> TokenStream {
                 "Tasks planning accepts no arguments; record advice before plan",
             ));
         }
+        let catalog = cq_sequence_tasks::catalog();
+        let mut source = source.clone();
+        source.structures =
+            cq_sequence_rewrite_passes::select_from_catalog(&source.structures, &catalog)?;
         Ok(cq_sequence_plan::plan(
-            source,
+            &source,
             &cq_sequence_tasks::machine(),
-            &cq_sequence_tasks::catalog(),
+            &catalog,
         )?
         .program)
     })

@@ -200,7 +200,7 @@ Boundaries: [`worker.rs`](../../../features/workloads/xtask/src/tpch/worker.rs),
 
 ### CPU: fixed parallel configuration
 
-CPU-par always selects the authored **`par`** configuration, never the best of multiple plans. Each scale and thread count is isolated: `RAYON_NUM_THREADS=1` or `24`, raw data under `performance_cpu_raw/par/t{threads}/sf{sf}`, consolidated `performance_cpu_par_t{threads}_sf{sf}.json` and `.tsv`, and separate cache roots. Generated consumers depend directly on Rayon because emitted task code uses `::rayon`. Only the plain timing worker is built; no counters, operator profiles or instrumentation overhead are collected.
+CPU-par always selects the authored **`par`** configuration, never the best of multiple plans. Each scale and thread count has isolated measurement artifacts: `RAYON_NUM_THREADS=1` or `24`, raw data under `performance_cpu_raw/par/t{threads}/sf{sf}`, consolidated `performance_cpu_par_t{threads}_sf{sf}.json` and `.tsv`. Scale/thread-independent binaries and Cargo output are shared under `/tmp/mini-linq-performance-cpu/par`; exported data remains scale-specific. Cache stamps hash compiler/runtime Rust sources and Cargo inputs, including Tasks, pull, IR, planner, printer, storage and facade. Existing raw results must match their source stamps before reuse; stale evidence is rejected rather than silently overwritten. Generated consumers depend directly on Rayon because emitted task code uses `::rayon`. Only the plain timing worker is built; no counters, operator profiles or instrumentation overhead are collected.
 
 SF0.1 runs one untimed exact comparison for every query at each thread count. SF1/SF10 use one exact warmup and five plain timed runs, each checked against the same authored SQL with the exact normalized-set comparison described above. The fixed **100-second process wall cap** includes loading, warmup, measurement and comparisons. A timeout or mismatch has no numeric median. Query-local task scheduling and construction are included in plain totals; input loading and answer comparison are excluded. Parallel environment, source hashes and command logs are retained separately from the original CPU evidence. Missing artifacts remain explicitly unavailable.
 
@@ -224,13 +224,19 @@ python3 experiments/gpu/compare/performance_cpu_collect.py consolidate --sf 10 -
 python3 experiments/gpu/compare/performance_cpu_collect.py cleanup --sf 10
 # Parallel protocol: complete SF0.1 exactness first, then time SF1/SF10.
 # Run serially; do not overlap builds or measurements:
-for sf in 0.1 1 10; do
+for threads in 1 24; do
+  python3 experiments/gpu/compare/performance_cpu_collect.py all --par --threads "$threads" --sf 0.1 --cap-seconds 100 \
+    --database features/workloads/target/bench/data/tpch-0.1/dbgen.duckdb
+done
+for sf in 1 10; do
   for threads in 1 24; do
     python3 experiments/gpu/compare/performance_cpu_collect.py all --par --threads "$threads" --sf "$sf" --runs 5 --cap-seconds 100
   done
 done
 python3 experiments/gpu/compare/performance_report.py
 ```
+
+`--database PATH` explicitly overrides the oracle/export database and records its resolved path in environment metadata; otherwise the existing `/data/tpch-gpu/sf{sf}/dbgen.duckdb` convention is unchanged. The SF0.1 command assumes the xtask-generated database already exists. For an initial parallel smoke subset, add repeatable `--query retail_hXX`; consolidation still preserves every catalog row, marking uncollected queries missing. This does not replace full 27-query exactness.
 
 The collector also exposes `adaptive`, `build`, `prepare`, `measure`, `consolidate`, and `cleanup` phases. Cleanup removes duplicate answers/oracles after exact checks while preserving measurement evidence; prepare regenerates the oracles. GPU reproduction (inside `experiments/gpu`):
 
