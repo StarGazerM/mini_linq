@@ -147,6 +147,440 @@ fn unrelated_sharded_type_is_not_a_native_routed_provider() {
     );
 }
 
+fn deferred_publication_program(body: proc_macro2::TokenStream) -> Program {
+    syn::parse2(quote! {
+        physical {
+            relation R(a:i32,b:i32); relation P(a:i32);
+            r = pipe canon rename R@0 {a -> a,b -> b};
+            selected = let select r if (b > 0);
+            probe = pipe rename P@1 {a -> a};
+            out = pipe canon probe first [a] probe,selected;
+            return out as answer(a,b);
+        }
+        structures {
+            r host scan = Reader [];
+            r canon = Canon;
+            selected = ::cq_storage::sharded::Sharded<Provider> [a];
+            probe host scan = Reader [];
+            out canon = Canon;
+        }
+        sequence { #body }
+    })
+    .unwrap()
+}
+
+fn deferred_cover() -> proc_macro2::TokenStream {
+    quote! {
+        selected = store choose [
+            workers < 2 => choose [
+                len R < 16 => partition_k[a](1) input,
+                len input < 16 => partition_k[a](1) input,
+                else => partition_k[a](4) input
+            ],
+            len input < 8 => partition_k[a](1) input,
+            else => partition_k[a](4) input
+        ];
+    }
+}
+
+#[test]
+fn deferred_rows_accept_total_selection_and_pure_named_producer() {
+    let cover = deferred_cover();
+    for producer in [
+        quote!(input = store compact selected rows r;),
+        quote! {
+            producer = compact selected rows r;
+            input = store producer;
+        },
+        quote! {
+            scan = rows r;
+            producer = compact selected scan;
+            input = store producer;
+        },
+        quote! {
+            scan = store rows r;
+            producer = compact selected scan;
+            input = store producer;
+        },
+    ] {
+        let p = deferred_publication_program(quote! {
+            #producer
+            #cover
+            out = flatten lookup selected [a] rows probe;
+        });
+        let facts = contract::check(&p).unwrap();
+        assert_eq!(
+            facts.publications["input"],
+            Publication::DeferredRows {
+                consumer: "selected".into()
+            }
+        );
+        assert_eq!(
+            facts.publications["selected"],
+            Publication::Parts {
+                keys: vec!["a".into()]
+            }
+        );
+    }
+}
+
+#[test]
+fn deferred_rows_accept_direct_and_recursively_nested_worker_covers() {
+    for worker in [
+        quote!(partition_k[a](1) input),
+        quote!(choose [
+            len input < 16 => partition_k[a](1) input,
+            else => partition_k[a](4) input
+        ]),
+        quote!(choose [
+            len R < 16 => partition_k[a](1) input,
+            else => choose [
+                len input < 16 => partition_k[a](1) input,
+                else => partition_k[a](4) input
+            ]
+        ]),
+    ] {
+        let p = deferred_publication_program(quote! {
+            input = store compact selected rows r;
+            selected = store choose [
+                workers < 2 => #worker,
+                else => choose [
+                    len input < 8 => partition_k[a](1) input,
+                    else => partition_k[a](4) input
+                ]
+            ];
+            out = flatten lookup selected [a] rows probe;
+        });
+        assert_eq!(
+            contract::check(&p).unwrap().publications["input"],
+            Publication::DeferredRows {
+                consumer: "selected".into()
+            }
+        );
+    }
+}
+
+#[test]
+fn deferred_rows_require_the_recorded_leading_worker_singleton() {
+    for cover in [
+        quote!(selected = store partition_k[a](4) input;),
+        quote!(selected = store choose [
+            len input < 8 => partition_k[a](1) input,
+            else => partition_k[a](4) input
+        ];),
+        quote!(selected = store choose [
+            workers < 3 => partition_k[a](1) input,
+            else => partition_k[a](4) input
+        ];),
+        quote!(selected = store choose [
+            workers < 2 => partition_k[a](4) input,
+            else => partition_k[a](1) input
+        ];),
+        quote!(selected = store choose [
+            len input < 8 => partition_k[a](1) input,
+            workers < 2 => partition_k[a](1) input,
+            else => partition_k[a](4) input
+        ];),
+        quote!(selected = store choose [
+            workers < 2 => choose [
+                len R < 16 => partition_k[a](4) input,
+                else => partition_k[a](4) input
+            ],
+            else => partition_k[a](1) input
+        ];),
+    ] {
+        let p = deferred_publication_program(quote! {
+            input = store compact selected rows r;
+            #cover
+            out = flatten lookup selected [a] rows probe;
+        });
+        assert_eq!(
+            contract::check(&p).unwrap().publications["input"],
+            Publication::OwnRows { staged: true }
+        );
+    }
+}
+
+#[test]
+fn deferred_rows_reject_shared_raw_rows_lengths_and_consumer_replay() {
+    let cover = deferred_cover();
+    for extra in [
+        quote!(shared = input;),
+        quote!(shared = store input;),
+        quote!(shared = fold count input;),
+        quote!(shared = choose [len input < 8 => rows r, else => rows r];),
+        quote!(shared = flatten selected;),
+        quote!(shared = selected;),
+        quote!(shared = choose [len selected < 8 => rows r, else => rows r];),
+        quote!(shared = rows selected;),
+        quote!(shared = store partition_k[a](4) input;),
+    ] {
+        let p = deferred_publication_program(quote! {
+            input = store compact selected rows r;
+            #cover
+            #extra
+            out = flatten lookup selected [a] rows probe;
+        });
+        assert_eq!(
+            contract::check(&p).unwrap().publications["input"],
+            Publication::OwnRows { staged: true },
+            "{extra}"
+        );
+    }
+    let p = deferred_publication_program(quote! {
+        input = store compact selected rows r;
+        #cover
+    });
+    assert_eq!(
+        contract::check(&p).unwrap().publications["input"],
+        Publication::OwnRows { staged: true },
+        "a final Parts output replays the publication"
+    );
+}
+
+#[test]
+fn deferred_rows_do_not_hide_prior_materialization_or_source_aliases() {
+    let cover = deferred_cover();
+    let p = deferred_publication_program(quote! {
+        materialized = store compact selected rows r;
+        producer = materialized;
+        input = store producer;
+        #cover
+        out = flatten lookup selected [a] rows probe;
+    });
+    assert_eq!(
+        contract::check(&p).unwrap().publications["input"],
+        Publication::OwnRows { staged: true }
+    );
+    let p = deferred_publication_program(quote! {
+        input = store compact selected rows r;
+        alias = store input;
+        selected = store choose [
+            workers < 2 => choose [
+                len R < 16 => partition_k[a](1) input,
+                len input < 16 => partition_k[a](1) input,
+                else => partition_k[a](4) alias
+            ],
+            else => partition_k[a](4) alias
+        ];
+        out = flatten lookup selected [a] rows probe;
+    });
+    assert_eq!(
+        contract::check(&p).unwrap().publications["input"],
+        Publication::OwnRows { staged: true }
+    );
+}
+
+#[test]
+fn deferred_rows_do_not_cross_source_publication_rebindings() {
+    let cover = deferred_cover();
+    for (between, expected) in [
+        (
+            quote!(view = rows r;),
+            Publication::DeferredRows {
+                consumer: "selected".into(),
+            },
+        ),
+        (
+            quote!(rebound = store rows r;),
+            Publication::OwnRows { staged: true },
+        ),
+    ] {
+        let p = deferred_publication_program(quote! {
+            input = store compact selected rows r;
+            #between
+            #cover
+            out = flatten lookup selected [a] rows probe;
+        });
+        assert_eq!(contract::check(&p).unwrap().publications["input"], expected);
+    }
+}
+
+#[test]
+fn deferred_rows_reject_opaque_dependencies_not_just_the_outer_operator() {
+    let cover = deferred_cover();
+    for opaque in [
+        quote!(g = pipe guard r if (opaque_predicate(a));),
+        quote!(g = pipe bind r with c:i32 = (opaque_value(a));),
+    ] {
+        let mut p = deferred_publication_program(quote! {
+            producer = compact selected rows r;
+            input = store producer;
+            #cover
+            out = flatten lookup selected [a] rows probe;
+        });
+        p.structures
+            .physical
+            .program
+            .definitions
+            .insert(1, syn::parse2(opaque).unwrap());
+        p.structures
+            .physical
+            .program
+            .definitions
+            .insert(2, syn::parse_quote!(clean = pipe project g keep {a,b};));
+        p.structures.physical.program.definitions[3] =
+            syn::parse_quote!(selected = let select clean if (b > 0););
+        assert_eq!(
+            contract::check(&p).unwrap().publications["input"],
+            Publication::OwnRows { staged: true }
+        );
+    }
+}
+
+#[test]
+fn deferred_rows_reject_retained_rows_and_multiple_native_builds() {
+    let cover = deferred_cover();
+    for (multiple, extra) in [
+        (false, quote!(selected rows = Rows;)),
+        (
+            true,
+            quote! {
+                selected rows = Rows;
+                selected = ::cq_storage::sharded::Sharded<OtherProvider> [a,b];
+            },
+        ),
+    ] {
+        let mut p = deferred_publication_program(quote! {
+            input = store compact selected rows r;
+            #cover
+            out = flatten lookup selected [a] rows probe;
+        });
+        let additional: structures::Structures =
+            syn::parse2(quote!(structures { #extra })).unwrap();
+        p.structures.structures.entries.extend(additional.entries);
+        if multiple {
+            *p.structures
+                .physical
+                .program
+                .definitions
+                .last_mut()
+                .unwrap() = syn::parse_quote!(first = pipe probe first [a] probe,selected;);
+            p.structures
+                .physical
+                .program
+                .definitions
+                .push(syn::parse_quote!(out = pipe canon probe first [a,b] first,selected;));
+            p.sequence.definitions.last_mut().unwrap().term = syn::parse_quote!(flatten lookup selected [a,b]
+                    flatten lookup selected [a] rows probe);
+        }
+        assert_eq!(
+            contract::check(&p).unwrap().publications["input"],
+            Publication::OwnRows { staged: true }
+        );
+    }
+}
+
+#[test]
+fn deferred_rows_reject_support_equal_source_and_consumer_reheading() {
+    for source_alias in [false, true] {
+        let input = if source_alias {
+            quote!(alias)
+        } else {
+            quote!(input)
+        };
+        let consumer = if source_alias {
+            quote!(selected)
+        } else {
+            quote!(alias)
+        };
+        let p: Program = syn::parse2(quote! {
+            physical {
+                relation R(a:i32,b:i32); relation P(a:i32);
+                r = pipe canon rename R@0 {a -> a,b -> b};
+                selected = let select r if (b > 0);
+                alias = let project selected keep {a,b};
+                probe = pipe rename P@1 {a -> a};
+                first = pipe probe first [a] probe,selected;
+                out = pipe canon probe first [a,b] first,alias;
+                return out as answer(a,b);
+            }
+            structures {
+                r host scan = Reader [];
+                r canon = Canon;
+                probe host scan = Reader [];
+                selected = ::cq_storage::sharded::Sharded<Provider> [a];
+                selected rows = Rows;
+                alias = ::cq_storage::sharded::Sharded<AliasProvider> [a,b];
+                out canon = Canon;
+            }
+            sequence {
+                #input = store compact selected rows r;
+                #consumer = store choose [
+                    workers < 2 => choose [
+                        len R < 16 => partition_k[a](1) #input,
+                        len #input < 16 => partition_k[a](1) #input,
+                        else => partition_k[a](4) #input
+                    ],
+                    else => partition_k[a](4) #input
+                ];
+                out = flatten lookup selected [a] rows probe;
+            }
+        })
+        .unwrap();
+        let facts = contract::check(&p).unwrap();
+        assert_eq!(facts.results["alias"], "alias");
+        assert_eq!(
+            facts.publications[&input.to_string()],
+            Publication::OwnRows { staged: true }
+        );
+    }
+}
+
+#[test]
+fn deferred_rows_pin_sources_with_shadowed_join_filter_bindings() {
+    let mut p: Program = syn::parse_quote! {
+        physical {
+            relation L(a:i64); relation R(a:i64); relation O(a:i64);
+            l = pipe rename L@0 {a -> a};
+            r = pipe rename R@1 {a -> a};
+            b = let select r if (a > 0);
+            selected = let probe first [a] l,b;
+            probe = pipe rename O@2 {a -> a};
+            out = pipe canon probe first [a] probe,selected;
+            return out as answer(a);
+        }
+        structures {
+            l host scan = Reader [];
+            r host scan = Reader [];
+            b = ::cq_storage::HashIndex<'_, _, _> [a];
+            l join_filter = Filter build b [a] covering selected marker ::cq_load::ColumnAt<0>;
+            selected = ::cq_storage::sharded::Sharded<Provider> [a];
+            probe host scan = Reader [];
+            out canon = Canon;
+        }
+        sequence {
+            source = rows l;
+            b = store compact b rows r;
+            input = store flatten map selected source;
+            selected = store choose [
+                workers < 2 => choose [
+                    len L < 16 => partition_k[a](1) input,
+                    len input < 16 => partition_k[a](1) input,
+                    else => partition_k[a](4) input
+                ],
+                else => partition_k[a](4) input
+            ];
+            answer = flatten lookup selected [a] rows probe;
+        }
+    };
+    assert_eq!(
+        contract::check(&p).unwrap().publications["input"],
+        Publication::OwnRows { staged: true }
+    );
+    p.structures
+        .structures
+        .entries
+        .retain(|entry| !matches!(entry.structure, structures::Structure::JoinFilter { .. }));
+    assert_eq!(
+        contract::check(&p).unwrap().publications["input"],
+        Publication::DeferredRows {
+            consumer: "selected".into()
+        },
+        "the same total join is eligible without a shadowed scan-filter binding"
+    );
+}
+
 fn lookup_program(body: proc_macro2::TokenStream) -> Program {
     syn::parse2(quote! {
         physical {
@@ -188,6 +622,7 @@ fn sequential() -> Machine {
         name: syn::parse_quote!(target),
         items: 1,
         key_partition_threshold: 65536,
+        key_partition_cache_threshold: 6 * 1024 * 1024,
         root: node("host", false, false, vec![]),
     }
 }
@@ -198,6 +633,7 @@ fn gpu() -> Machine {
         name: syn::parse_quote!(target),
         items: 4,
         key_partition_threshold: 65536,
+        key_partition_cache_threshold: 6 * 1024 * 1024,
         root: node(
             "host",
             false,
@@ -480,6 +916,31 @@ fn choose_rejects_nonexhaustive_and_unequal_alternatives() {
 }
 
 #[test]
+fn worker_guards_roundtrip_and_preserve_support_without_claiming_size() {
+    let source = program(quote!(a = rows r;));
+    let target = program(quote!(a = choose [
+        workers < 2 => tile 1 rows r,
+        len r < 3 => tile 2 rows r,
+        else => tile 4 rows r
+    ];));
+    assert_eq!(target, syn::parse2(target.to_token_stream()).unwrap());
+    check_rewrite(&source, &target).unwrap();
+    let facts = contract::check(&target).unwrap();
+    assert_eq!(
+        facts.lengths["a"],
+        contract::check(&source).unwrap().lengths["a"]
+    );
+    for body in [
+        quote!(a = choose [workers < 0 => rows r, else => rows r];),
+        quote!(a = choose [workers < 2 => rows r];),
+        quote!(a = choose [workers < 2 => rows r, else => fold count rows r];),
+        quote!(a = choose [else => rows r, workers < 2 => rows r];),
+    ] {
+        reject(&program(body), "BE-Choose");
+    }
+}
+
+#[test]
 fn choose_unknown_lengths_need_capacity_only_when_stored() {
     let body = quote!(choose [len r < 3 => rows r, else => canon rows r]);
     let p = program(quote!(a = #body;));
@@ -557,6 +1018,20 @@ fn collectives_obey_machine_labels_not_machine_names() {
     let mut collaborative = gpu();
     collaborative.root.children[0].collaborative = true;
     check_grading(&p, &collaborative).unwrap();
+}
+
+#[test]
+fn worker_guards_are_uniform_for_collective_participation() {
+    let mut p = program(quote!(
+        a = store rows r;
+        b = choose [workers < 2 => fold count a, else => fold count a];
+    ));
+    grade(&mut p, quote!(a at host; b at device;));
+    let mut collaborative = gpu();
+    collaborative.root.children[0].collaborative = true;
+    let facts = check_grading(&p, &collaborative).unwrap();
+    assert_eq!(facts.lengths["b"], Len::Lit(1));
+    assert_eq!(facts.collectives.len(), 2);
 }
 
 #[test]
@@ -723,6 +1198,7 @@ fn leaf_flatten_is_sequential_but_parent_fold_needs_collaboration() {
         name: syn::parse_quote!(target),
         items: 1,
         key_partition_threshold: 65536,
+        key_partition_cache_threshold: 6 * 1024 * 1024,
         root: node(
             "host",
             false,

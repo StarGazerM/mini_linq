@@ -3,8 +3,8 @@
 //! The checked Sequence partition routes by a lookup-key projection using
 //! [`route_index`], then gives each part to exactly one builder. The retained
 //! [`Router`] must apply exactly that projection and field order. Part order
-//! preserves serial occurrence order, including duplicates. The plan fixes P;
-//! runtime worker count only schedules the independent builds.
+//! preserves serial occurrence order, including duplicates. The checked plan
+//! fixes P, possibly through recorded guards; workers schedule the chosen build.
 //! Published providers contain no locks or lazy state. Hash routing does not
 //! confer ordered/range access, even when an individual shard supports it.
 //! Eager hash buckets keep their first payload inline, so distinct-key builds
@@ -44,6 +44,69 @@ pub struct Sharded<I, F = FullKey> {
     shards: Vec<I>,
     router: F,
     release: fn(&mut Vec<I>),
+}
+
+/// A checked provider cover over an immutable input.
+///
+/// `None` records a singleton cover: no row-part buffer is allocated or copied.
+/// `Some` owns the already routed parts. Usually the source closure replays an
+/// existing publication. A checked single-consumer `DeferredRows` publication
+/// may instead consume its pure producer once, or replay its lazily owned rows
+/// after a length/routing demand. This is not general lazy Store semantics.
+pub struct ProviderParts<S, R> {
+    source: S,
+    routed: Option<Vec<Vec<R>>>,
+}
+
+impl<S, R, I> ProviderParts<S, R>
+where
+    S: Fn() -> I,
+    I: Iterator<Item = R>,
+    R: Clone,
+{
+    pub fn new(source: S, routed: Option<Vec<Vec<R>>>) -> Self {
+        Self { source, routed }
+    }
+
+    /// Owned row buffers exist only for the recorded routed arm.
+    pub fn routed(&self) -> Option<&[Vec<R>]> {
+        self.routed.as_deref()
+    }
+
+    /// Read the checked source for a singleton native build.
+    pub fn source(&self) -> I {
+        (self.source)()
+    }
+
+    pub fn part_count(&self) -> usize {
+        self.routed.as_ref().map_or(1, Vec::len)
+    }
+
+    /// Replay one checked part without allocating a row buffer.
+    pub fn part<'a>(&'a self, index: usize) -> impl Iterator<Item = R> + 'a
+    where
+        I: 'a,
+    {
+        assert!(index < self.part_count(), "provider part index");
+        self.routed
+            .is_none()
+            .then(|| self.source())
+            .into_iter()
+            .flatten()
+            .chain(
+                self.routed
+                    .as_ref()
+                    .into_iter()
+                    .flat_map(move |parts| parts[index].iter().cloned()),
+            )
+    }
+
+    pub fn rows<'a>(&'a self) -> impl Iterator<Item = R> + 'a
+    where
+        I: 'a,
+    {
+        (0..self.part_count()).flat_map(|index| self.part(index))
+    }
 }
 
 impl<I> Sharded<I> {

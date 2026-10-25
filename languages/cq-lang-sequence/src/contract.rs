@@ -1122,9 +1122,9 @@ impl Checked<'_> {
                 Ok(fact)
             }
             Term::Choose(alternatives) => {
-                // Formal rule BE-Choose: Length guards cover all sizes and alternatives have equal support.
+                // Formal rule BE-Choose: Scheduling guards are exhaustive and alternatives have equal support.
                 if alternatives.is_empty() || !self.exhaustive(alternatives)? {
-                    return fail(term, "BE-Choose", "length guards are not exhaustive");
+                    return fail(term, "BE-Choose", "scheduling guards are not exhaustive");
                 }
                 let mut result: Option<Fact> = None;
                 for (_, alternative) in alternatives {
@@ -1304,6 +1304,11 @@ impl Checked<'_> {
                         return fail(guard, "BE-Choose", "else must be the last guard");
                     }
                     covered = true;
+                }
+                Guard::WorkersLt(bound) => {
+                    if *bound == 0 {
+                        return fail(guard, "BE-Choose", "worker guard bound must be positive");
+                    }
                 }
                 Guard::Lt(len, bound) | Guard::Ge(len, bound) => {
                     self.guard_len(len)?;

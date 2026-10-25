@@ -80,7 +80,11 @@ impl Cost {
             let mut tile = 0;
             let mut fact = evaluator.term(&definition.term, &name, level, &mut tile)?;
             let copies_rows = match analysis.publications.get(&name) {
-                Some(Publication::OwnRows { staged: true } | Publication::Parts { .. }) => true,
+                Some(
+                    Publication::OwnRows { staged: true }
+                    | Publication::DeferredRows { .. }
+                    | Publication::Parts { .. },
+                ) => true,
                 Some(Publication::OwnRows { staged: false }) => {
                     analysis.structures.retained.contains_key(&fact.result)
                         || analysis
@@ -599,6 +603,7 @@ impl Evaluator<'_> {
                         Publication::BorrowHost { .. }
                             | Publication::Alias { .. }
                             | Publication::OwnRows { staged: true }
+                            | Publication::DeferredRows { .. }
                     )
                 ) && self
                     .analysis
@@ -1057,6 +1062,7 @@ mod tests {
             name: syn::parse_quote!(target),
             items: 1,
             key_partition_threshold: 65536,
+            key_partition_cache_threshold: 6 * 1024 * 1024,
             root: LevelNode {
                 shared_bytes: None,
                 name: syn::parse_quote!(host),
@@ -1184,6 +1190,57 @@ mod tests {
     }
 
     #[test]
+    fn deferred_raw_rows_keep_worst_case_owned_publication_cost() {
+        let program: Program = syn::parse_quote! {
+            physical {
+                relation R(a:i32); relation P(a:i32);
+                r = pipe canon rename R@0 {a -> a};
+                selected = let select r if (a > 0);
+                probe = pipe rename P@1 {a -> a};
+                out = pipe canon probe first [a] probe,selected;
+                return out as answer(a);
+            }
+            structures {
+                r host scan = Reader [];
+                r canon = Canon;
+                selected = ::cq_storage::sharded::Sharded<Provider> [a];
+                probe host scan = Reader [];
+                out canon = Canon;
+            }
+            sequence {
+                input = store compact selected rows r;
+                selected = store choose [
+                    workers < 2 => partition_k[a](1) input,
+                    len input < 8 => partition_k[a](1) input,
+                    else => partition_k[a](4) input
+                ];
+                out = flatten lookup selected [a] rows probe;
+            }
+            graded target {
+                input at host;
+                selected at device;
+                out at device.block;
+            }
+        };
+        let mut machine = gpu();
+        machine.root.children[0].width = Some(4);
+        let mut analysis = cq_lang_sequence::check_grading(&program, &machine).unwrap();
+        assert_eq!(
+            analysis.publications["input"],
+            Publication::DeferredRows {
+                consumer: "selected".into()
+            }
+        );
+        let deferred = Cost::from_analysis(&program, &machine, &analysis).unwrap();
+        analysis
+            .publications
+            .insert("input".into(), Publication::OwnRows { staged: true });
+        let owned = Cost::from_analysis(&program, &machine, &analysis).unwrap();
+        assert_eq!(deferred, owned, "fusion is not a planner cost discount");
+        assert_ne!(deferred.copies, Sum::default());
+    }
+
+    #[test]
     fn aliases_and_partition_views_do_not_add_evaluated_positions() {
         let plain = program(quote!(a = store rows r; output reserve;));
         let aliased = program(quote!(source = rows r; a = store source; output reserve;));
@@ -1203,7 +1260,10 @@ mod tests {
         let mut expected = Sum::positions(&Size::Input("r".into())).unwrap();
         expected.add(&expected.clone()).unwrap();
         assert_eq!(evaluated.work, expected);
-        assert_eq!(evaluated.copies, Sum::positions(&Size::Constant(1)).unwrap());
+        assert_eq!(
+            evaluated.copies,
+            Sum::positions(&Size::Constant(1)).unwrap()
+        );
         assert_eq!(evaluated.span, expected);
     }
 

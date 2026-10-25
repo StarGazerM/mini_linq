@@ -57,7 +57,7 @@ Term     ::= "rows" Ident                          // retained Physical result o
            | "choose" "[" (Guard "=>" Term),+ "]"
            | Ident                                  // a Def name
 Monoid   ::= "count" | "or" | "sum" Ident
-Guard    ::= LenExpr ("<" | ">=") LitInt | "else"
+Guard    ::= LenExpr ("<" | ">=") LitInt | "workers" "<" LitInt | "else"
 LenExpr  ::= "len" Ident | LenExpr "+" LenExpr | LitInt
 Grade    ::= Ident "at" Level ";"                  // Def name -> level of the machine
 Level    ::= Ident ("." Ident)*                    // path in the machine tree, e.g. device.block.lane
@@ -74,7 +74,7 @@ pub enum Term { Rows(Ident), Map(Ident, Box<Term>), Flatten(Box<Term>), Compact(
                 Choose(Vec<(Guard, Term)>), Ref(Ident) }
 
 /// Machine model: a tree of levels with labels. Data, not code; each target exports one.
-pub struct Machine { pub name: Ident, pub items: usize, pub key_partition_threshold: usize, pub root: LevelNode }
+pub struct Machine { pub name: Ident, pub items: usize, pub key_partition_threshold: usize, pub key_partition_cache_threshold: usize, pub root: LevelNode }
 pub struct LevelNode { pub name: Ident, pub collaborative: bool, pub dynamic: bool, pub width: Option<usize>, pub children: Vec<LevelNode> }
 
 /// Target catalogs are ordered syntax/capability data, with no target dependency here.
@@ -92,7 +92,7 @@ pub struct Analysis {
     pub shapes: BTreeMap<String, Vec<Len>>,             // outer partitions through innermost row lengths
     pub views: BTreeSet<String>,                        // Defs that materialize nothing
     pub stores: BTreeMap<String, Len>,                  // stored Defs and their length/capacity
-    pub publications: BTreeMap<String, Publication>,    // checked BorrowHost | Alias | OwnRows { staged } | Parts
+    pub publications: BTreeMap<String, Publication>,    // checked BorrowHost | Alias | OwnRows { staged } | DeferredRows { consumer } | Parts
     pub host_sources: BTreeMap<String, String>,         // pure base provenance before reheading
     pub host_tiles: BTreeMap<String, Vec<Option<String>>>, // Tile input provenance in preorder
     pub routed_providers: BTreeMap<String, BTreeMap<usize, syn::Type>>, // checked native ABI inner types
@@ -118,6 +118,31 @@ does not license raw-buffer reuse unless the carrier is unchanged. Native
 `cq_storage::sharded::Sharded` representation arguments and routing coverage of
 the stored outer key (after constant elision) are checked before emission;
 the printer consumes the checked inner types, never a last-path-name heuristic.
+`DeferredRows { consumer }` is a checked Store-consumer fusion, not general lazy
+Store semantics. Only an owned flat staging input can receive it: every row or
+written length demand must belong to one `Parts` publication whose leading
+`workers < 2` arm contains a singleton leaf, directly or through checked nested
+length choices. Every leaf covers that same named input with the same keys.
+The consumer has exactly one native routed provider,
+no retained-row requirement, no direct part-row replay or alias, and is not the
+final output publication. Original input and consumer carriers must agree;
+support-equal reheading alone is insufficient. Pure named producer views and
+previously published `BorrowHost` sources are followed; prior owned or nested
+Stores remain pinned. The checker traverses Physical dependencies using
+`Analysis::opaque`, rejects scan dependencies with shadowable
+join-filter bindings, and rejects intervening publications of source dependencies.
+Everything failing these premises retains its original ownership record.
+
+On a recorded worker-singleton leaf reached without counting the staged input,
+Tasks may consume that pure producer once without a raw `Vec`. In particular,
+a proven nonexpanding host-length bound can select it before demanding the
+filtered input count. A written staged-input count or routed leaf initializes
+one owned row buffer (and its retention token); subsequent demands reuse it. If counting
+already forced the buffer, a later singleton arm reads that buffer rather than
+reevaluating the producer. Skipped staging reports neither row-build nor retained
+row activity; actual routed copies remain charged. PL-Cost still charges deferred
+input at the worst-case owned-row traffic and unchanged work/span: this checked
+fusion grants neither a new scheduling decision nor a planner cost discount.
 
 
 `Machine.items` is the preferred per-lane count (the planner also considers one);
@@ -139,7 +164,7 @@ Checks (each a named `// Formal rule BE-…:` marker):
 - BE-Group: `group result input` names a Physical Group and consumes exactly its complete, flat, distinct valuation heading. Grouping executes at host, never per tile or at a separated pool/task. Global grouping has length one, including empty input; keyed grouping has data-dependent length and no empty groups.
 - `union [d, ...]` is a view with α = ⊎ and summed Len; opaque Guard/Bind are `map` Defs that must be graded at host (BE-Partial).
 - BE-Code: codec premises are deferred to traits (recorded as obligations in Analysis, like Leibniz).
-- BE-Choose: guards exhaustive; all alternatives have equal `supp∘α` by construction (the same result or independently checked equivalent join/semijoin support).
+- BE-Choose: guards exhaustive; all alternatives have equal `supp∘α` by construction (the same result or independently checked equivalent join/semijoin support). `workers < N` requires a positive bound and observes the target-wide available worker count, a uniform scheduling parameter that neither changes support nor supplies size evidence; a final `else` covers its remaining cases.
 - Grading: BE-Scope (reads inside extent, inner level), BE-Collective (fold/scan at collaborative level, whole level), BE-Separate (siblings exchange only via a store at an ancestor), BE-Boundary (derive `dispatches`), BE-Partial (no opaque Rust below host), BE-Abort (every dispatch has a failure channel).
 
 Acceptance: round-trip of every form; one rejection test per rule; `rules.tsv` rows switch to `implementation`; `tools/public-api/cq-lang-sequence.txt`.
@@ -220,7 +245,7 @@ checked by `check_rewrite`:
 |---|---|---|---|
 | `store_level(d)` | a `flatten` Def | wrap it in `store` (kept as offsets) | BE-Offsets |
 | `tile(d, n [, items m])` | a Def | `tile n [items m]` around it | BE-Partition (views are bijections) |
-| `choose(d, len x < k => a, else => b)` | guards + two Defs | `choose` | BE-Choose |
+| `choose(d, len x < k => a, else => b)` or `choose(d, workers < k => a, else => b)` | guards + two Defs | `choose` | BE-Choose |
 | `output(protocol)` | `count` / `reserve` / `bounded(n)` | set the final store's protocol | output paragraph |
 | `codec(R.c => Type)` | host column, codec type token | record codec obligation | BE-Code |
 | `canon(d => Type)` | canon provider type token | record | BE-Canon |
@@ -234,7 +259,11 @@ rejection case (e.g. `tile` over a `store` at an unknown length).
 pub fn translate(p: &cq_lang_sequence::Program, a: &Analysis) -> syn::Result<syn::Expr>;
 ```
 One function per Term constructor; `tile` groups contiguous rows and `choose`
-uses the checked fallback arm; lifted constructors preserve outer groups.
+evaluates recorded first-match guards; lifted constructors preserve outer groups.
+Pull realizes `workers` as `1usize`. The target-hook `translate_with` and
+`translate_profile_with` APIs take an explicit `syn::Expr` worker count before
+the hook; Tasks supplies `rayon::current_num_threads()`. This expression must
+be uniform across all scopes in the target.
 `store` → `Vec`; output flatten → push. Reads only `Analysis`.
 `group` uses the shared Physical host hash-fold adapter, preserving declared
 accumulator types and consuming every canonical valuation once for every aggregate.
@@ -397,19 +426,48 @@ Laws:
   then less retained-row traffic, fewer stores and dispatches; equality or
   incomparability keeps the earlier candidate.
   Eligible exact-key native provider Stores retain a checked runtime `choose`
-  in every candidate: below the positive machine `key_partition_threshold`
-  (target default 65,536 published input rows), use the one-part identity cover;
-  at or above it, use the machine's fixed routing width. The written guard names
-  the prior publication with `Len::Input`; it is not a cardinality estimate.
-  Both branches use `Sharded<I>`; the identity branch builds native `I` without
+  in every candidate. With published row count `n`, available workers `w`,
+  positive machine cutoffs `low = key_partition_threshold` and
+  `cache = key_partition_cache_threshold`, route iff
+  `n >= low && (w > 1 || n >= cache)`. The single-worker cutoff is
+  `effective_cache = max(low, cache)`; a cache cutoff below `low` is valid.
+  Tasks defaults are `low = 65,536` and `cache = 6 * 1024 * 1024 = 6,291,456`
+  rows. The latter is a measured target default, not a universal optimum or
+  a cache-byte guarantee: it exceeds H04 SF1's 6,001,215 host rows while falling
+  below the measured H04 and H21 SF10 provider inputs.
+  The recorded first-match tree is:
+  ```text
+  workers < 2 => choose [
+      len Host < effective_cache => partition_k[K](1) input, // only if proven
+      len input < effective_cache => partition_k[K](1) input,
+      else => partition_k[K](P) input
+  ],
+  len input < low => partition_k[K](1) input,
+  else => partition_k[K](P) input
+  ```
+  The optional host-layout `Len::Input` bound follows only nonexpanding Physical
+  Rename/Select/Point/Range/Guard/Bind/Project and Semi/Anti driver chains,
+  never Probe/Merge/Union/Group. This is also an occurrence proof over the actual
+  Sequence producer, not just its set support: it follows host Rows, pure Refs,
+  Store/Tile/Flatten/Canon and compatible Choices; each Map/Compact must extend
+  its child's provenance through that nonexpanding Physical path. Membership
+  Compact may consume a Lookup's existence; expanding Lookups, Union, Fold and
+  Group cannot supply this bound. A Rows read of a previously published
+  non-`BorrowHost` result is excluded, even when its support equals a host.
+  A host name shadowed by an existing or newly introduced Sequence definition
+  is not used. The shortcut proves singleton selection without forcing filtered
+  staging; the exact-input fallback preserves the policy when the host is larger.
+  These guards are not estimates.
+  All branches use `Sharded<I>`; identity branches build native `I` without
   hash routing. Replay advice is
-  `key_partition(provider, published, [keys], P, threshold 65536)`.
-  Policy `select true` forces fixed routing without a guard; `select false`
+  `key_partition(provider, published, [keys], P, threshold 65536, cache 6291456)`.
+  Explicit threshold-only recipes retain the legacy worker/count policy.
+  Policy `select true` forces fixed routing without either cutoff; `select false`
   keeps native storage. Authored grades remain authoritative.
-  Tasks author syntax is `cq_sequence_tasks_macros::plan(threshold 65536,
-  key_partition(provider, select true))`; `threshold` configures the machine,
-  and omitted policies remain adaptive. The translator evaluates the recorded
-  guard, never a target-local threshold.
+  Tasks author syntax remains `cq_sequence_tasks_macros::plan(threshold 65536,
+  key_partition(provider, select true))`. The cache cutoff is an in-band
+  `Machine`/Tasks `Config` field, not a new `plan(..)` option. The translator
+  evaluates recorded guards, never a target-local threshold or query predicate.
   For globally unique grouped valuations, keyed partial folds may instead use
   contiguous tiles: each scheduler task accumulates a finite map and the host
   merges maps pointwise with the declared monoids. Total single-use producer

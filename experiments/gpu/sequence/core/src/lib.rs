@@ -16,6 +16,7 @@ pub fn machine() -> Machine {
         name: syn::parse_quote!(gpu),
         items: 4,
         key_partition_threshold: 65536,
+        key_partition_cache_threshold: 6 * 1024 * 1024,
         layout: Some(layout::shared_bytes),
         root: LevelNode {
             name: syn::parse_quote!(host),
@@ -104,14 +105,17 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
                 .collect(),
         })
         .collect(),
-        canons: vec![CanonToken {
-            ty: syn::parse_quote!(::cq_gpu_sequence_runtime::canon::PackedCanon),
-            levels: levels.clone(),
-            max_packed_bits: Some(128),
-        }, CanonToken {
-            ty: syn::parse_quote!(::cq_gpu_sequence_runtime::canon::WideCanon),
-            levels,
-            max_packed_bits: None,
-        }],
+        canons: vec![
+            CanonToken {
+                ty: syn::parse_quote!(::cq_gpu_sequence_runtime::canon::PackedCanon),
+                levels: levels.clone(),
+                max_packed_bits: Some(128),
+            },
+            CanonToken {
+                ty: syn::parse_quote!(::cq_gpu_sequence_runtime::canon::WideCanon),
+                levels,
+                max_packed_bits: None,
+            },
+        ],
     }
 }

@@ -257,6 +257,12 @@ fn decompose_in(
             "P-Decompose: machine key partition threshold must be positive",
         ));
     }
+    if machine.key_partition_cache_threshold == 0 {
+        return Err(syn::Error::new(
+            machine.name.span(),
+            "P-Decompose: machine key partition cache threshold must be positive",
+        ));
+    }
     if let Some(graded) = &program.graded
         && symbol_name(&graded.machine) != symbol_name(&machine.name)
     {

@@ -105,6 +105,65 @@ fn equal_support_choice_reheads_before_a_downstream_projection() {
 }
 
 #[test]
+fn worker_guards_use_serial_or_explicit_target_worker_counts() {
+    use cq_lang_sequence::Term;
+    let physical = syn::parse_quote!(physical {
+        relation input(a:i32);
+        r = pipe canon rename input@0 {a -> a};
+        return r as answer(a);
+    });
+    let selected = cq_structure_selection::compile(&physical).unwrap();
+    let mut program = cq_sequence_lowering::compile(&selected).unwrap();
+    program.sequence.definitions.last_mut().unwrap().term = syn::parse_quote!(
+        store flatten choose [
+            workers < 2 => tile 1 rows r,
+            else => tile 2 rows r
+        ]
+    );
+    let analysis = cq_lang_sequence::check_grading(&program, &cq_sequence_pull::machine()).unwrap();
+    let serial = cq_sequence_pull::translate(&program, &analysis).unwrap();
+    assert!(text(&serial).contains(&text(quote!((1usize) < 2usize))));
+    let target = cq_sequence_pull::translate_with(
+        &program,
+        &analysis,
+        syn::parse_quote!(available_workers),
+        |term, _, _, output, _, _| {
+            if let Term::Tile { n, .. } = term {
+                let rows = &output.rows;
+                output.rows = quote!({ selected_cover.set(#n); #rows });
+            }
+            Ok(())
+        },
+    )
+    .unwrap();
+    let profiled = cq_sequence_pull::translate_profile_with(
+        &program,
+        &analysis,
+        syn::parse_quote!(available_workers),
+        |_, _, _, _, _, _| Ok(()),
+    )
+    .unwrap();
+    assert!(text(profiled).contains(&text(quote!((available_workers) < 2usize))));
+    let source = quote!(
+        fn main() {
+            for input in [&[][..], &[(1i32,), (2,), (3,)][..]] {
+                let serial_rows: Vec<_> = (#serial).into_iter().map(|(a,)| *a).collect();
+                assert_eq!(serial_rows, input.iter().map(|(a,)| *a).collect::<Vec<_>>());
+                for available_workers in [1usize, 2, 8] {
+                    let selected_cover = ::std::cell::Cell::new(0usize);
+                    let rows: Vec<_> = (#target).into_iter().map(|(a,)| *a).collect();
+                    assert_eq!(rows, serial_rows);
+                    assert_eq!(selected_cover.get(), if available_workers < 2 { 1 } else { 2 });
+                }
+            }
+        }
+    );
+    let runtime = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../runtime/cq-storage/src/lib.rs");
+    cq_testkit::rustc::Runtime::new(&runtime, false).run(&source.to_string());
+}
+
+#[test]
 fn projected_membership_probes_keep_flat_rows_inside_outer_tiles() {
     use cq_lang_sequence::Term;
     let mut checks = Vec::new();
@@ -170,6 +229,7 @@ fn projected_membership_probes_keep_flat_rows_inside_outer_tiles() {
             let expression = cq_sequence_pull::translate_with(
                 &program,
                 &analysis,
+                syn::parse_quote!(1usize),
                 |term, _, input, output, _, _| {
                     if matches!(term, Term::Compact(name, _) if name == "member") {
                         assert_eq!(output.depth, input.unwrap().depth);

@@ -232,8 +232,8 @@ impl Parse for Choose {
         let name = input.parse()?;
         input.parse::<Token![,]>()?;
         let guard = input.parse()?;
-        if !matches!(guard, Guard::Lt(Len::Input(_), _)) {
-            return Err(input.error("expected len x < k"));
+        if !matches!(guard, Guard::Lt(Len::Input(_), _) | Guard::WorkersLt(_)) {
+            return Err(input.error("expected len x < k or workers < k"));
         }
         input.parse::<Token![=>]>()?;
         let yes = input.parse()?;
@@ -250,9 +250,9 @@ impl Parse for Choose {
     }
 }
 
-/// Replace `d` by `choose [len x < k => a, else => b]`. The two earlier
-/// definitions must denote the same Structures result, not just its heading.
-// Formal rule EXT-SeqChoose: Exhaustive size guards select equal-support constructions.
+/// Replace `d` by a length- or worker-guarded choice with an `else` fallback.
+/// The two earlier definitions must denote the same Structures result, not just its heading.
+// Formal rule EXT-SeqChoose: Exhaustive scheduling guards select equal-support constructions.
 pub fn choose(source: &Program, arguments: TokenStream) -> syn::Result<Program> {
     choose_in(&mut Default::default(), source, arguments)
 }

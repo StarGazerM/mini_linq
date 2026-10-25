@@ -13,6 +13,7 @@ fn machine(parts: Option<usize>) -> Machine {
         layout: None,
         items: 1,
         key_partition_threshold: 65536,
+        key_partition_cache_threshold: 6 * 1024 * 1024,
         root: LevelNode {
             name: syn::parse_quote!(host),
             collaborative: false,
@@ -435,7 +436,8 @@ fn provider_store_retains_parts_and_records_routed_provider_type() {
             .trace
             .iter()
             .any(|a| matches!(a, Advice::KeyPartition(k)
-        if k.name == "provider" && k.threshold == Some(65536)))
+        if k.name == "provider" && k.threshold == Some(65536)
+            && k.cache_threshold == Some(6 * 1024 * 1024)))
     );
 }
 
@@ -451,7 +453,8 @@ fn provider_choice_does_not_use_cardinality_evidence() {
                 .trace
                 .iter()
                 .any(|a| matches!(a, Advice::KeyPartition(k)
-            if k.name == "provider" && k.threshold == Some(machine.key_partition_threshold)))
+            if k.name == "provider" && k.threshold == Some(machine.key_partition_threshold)
+                && k.cache_threshold == Some(machine.key_partition_cache_threshold)))
         );
         assert!(
             automatic
@@ -602,12 +605,47 @@ fn empty_global_partial_plans_keep_the_singleton_identity_shape() {
     }
 }
 
+fn selected_provider_parts(
+    term: &Term,
+    workers: usize,
+    rows: usize,
+    host_rows: usize,
+    input: &str,
+    counted_input: &mut bool,
+) -> usize {
+    use cq_lang_sequence::{Guard, Len};
+    match term {
+        Term::Store { inner, .. } => {
+            selected_provider_parts(inner, workers, rows, host_rows, input, counted_input)
+        }
+        Term::Choose(arms) => {
+            let (_, selected) = arms
+                .iter()
+                .find(|(guard, _)| match guard {
+                    Guard::WorkersLt(bound) => workers < *bound,
+                    Guard::Lt(Len::Input(name), threshold) if name == input => {
+                        *counted_input = true;
+                        rows < *threshold
+                    }
+                    Guard::Lt(Len::Input(name), threshold) if name == "R" => host_rows < *threshold,
+                    Guard::Else => true,
+                    _ => panic!("unexpected guard: {guard:?}"),
+                })
+                .unwrap();
+            selected_provider_parts(selected, workers, rows, host_rows, input, counted_input)
+        }
+        Term::PartitionK { parts, .. } => *parts,
+        _ => panic!("provider cover required"),
+    }
+}
+
 #[test]
-fn unknown_provider_uses_published_runtime_count_and_checked_identity_cover() {
+fn unknown_provider_records_nested_worker_cache_and_published_count_guards() {
     use cq_lang_sequence::{Guard, Len};
     let source = provider_program();
     let mut machine = machine(Some(4));
     machine.key_partition_threshold = 17;
+    machine.key_partition_cache_threshold = 31;
     let planned = decompose(&source, &machine, &catalog()).unwrap();
     let advice = planned
         .trace
@@ -618,6 +656,7 @@ fn unknown_provider_uses_published_runtime_count_and_checked_identity_cover() {
         })
         .expect("unknown-cardinality provider must retain runtime advice");
     assert_eq!(advice.threshold, Some(17));
+    assert_eq!(advice.cache_threshold, Some(31));
     let provider = planned
         .program
         .sequence
@@ -631,15 +670,32 @@ fn unknown_provider_uses_published_runtime_count_and_checked_identity_cover() {
     let Term::Choose(arms) = inner.as_ref() else {
         panic!("runtime Choose required")
     };
-    assert_eq!(arms.len(), 2);
+    assert_eq!(arms.len(), 3);
+    assert_eq!(arms[0].0, Guard::WorkersLt(2));
     assert_eq!(
-        arms[0].0,
+        arms[1].0,
         Guard::Lt(Len::Input(advice.input.to_string()), 17)
     );
-    assert_eq!(arms[1].0, Guard::Else);
-    for (arm, parts) in arms.iter().zip([1, 4]) {
+    assert_eq!(arms[2].0, Guard::Else);
+    let Term::Choose(single_worker) = &arms[0].1 else {
+        panic!("single-worker cache choice required")
+    };
+    assert_eq!(single_worker.len(), 3);
+    assert_eq!(single_worker[0].0, Guard::Lt(Len::Input("R".into()), 31));
+    assert_eq!(
+        single_worker[1].0,
+        Guard::Lt(Len::Input(advice.input.to_string()), 31)
+    );
+    assert_eq!(single_worker[2].0, Guard::Else);
+    for (term, parts) in [
+        (&single_worker[0].1, 1),
+        (&single_worker[1].1, 1),
+        (&single_worker[2].1, 4),
+        (&arms[1].1, 1),
+        (&arms[2].1, 4),
+    ] {
         assert_eq!(
-            arm.1,
+            *term,
             Term::PartitionK {
                 keys: advice.keys.clone(),
                 parts,
@@ -647,20 +703,35 @@ fn unknown_provider_uses_published_runtime_count_and_checked_identity_cover() {
             }
         );
     }
-    // Interpret the written first-match guards, including the exact boundary.
-    for (rows, expected_parts) in [(0, 1), (16, 1), (17, 4), (18, 4)] {
-        let selected = arms
-            .iter()
-            .find(|(guard, _)| match guard {
-                Guard::Lt(Len::Input(name), threshold) => {
-                    assert_eq!(name, &advice.input.to_string());
-                    rows < *threshold
-                }
-                Guard::Else => true,
-                _ => panic!("unexpected guard"),
-            })
-            .unwrap();
-        assert!(matches!(&selected.1, Term::PartitionK { parts, .. } if *parts == expected_parts));
+    for (workers, rows, host_rows, expected_parts, expected_count) in [
+        (0, 31, 31, 4, true),
+        (1, 0, 0, 1, false),
+        (1, 17, 17, 1, false),
+        (1, 30, 30, 1, false),
+        (1, 17, 31, 1, true),
+        (1, 30, 31, 1, true),
+        (1, 31, 31, 4, true),
+        (1, 32, 32, 4, true),
+        (1, usize::MAX, usize::MAX, 4, true),
+        (2, 16, 16, 1, true),
+        (2, 17, 17, 4, true),
+        (2, 18, 18, 4, true),
+        (8, 16, 16, 1, true),
+        (8, 17, 17, 4, true),
+    ] {
+        let mut counted = false;
+        assert_eq!(
+            selected_provider_parts(
+                &provider.term,
+                workers,
+                rows,
+                host_rows,
+                &advice.input.to_string(),
+                &mut counted,
+            ),
+            expected_parts
+        );
+        assert_eq!(counted, expected_count);
     }
     let facts = cq_lang_sequence::check_grading(&planned.program, &machine).unwrap();
     assert_eq!(facts.shapes["provider"][0], Len::Unknown(None));
@@ -680,6 +751,49 @@ fn unknown_provider_uses_published_runtime_count_and_checked_identity_cover() {
         syn::parse2(planned.program.to_token_stream()).unwrap()
     );
     assert!(cq_lang_sequence::check_grading(&planned.program, &self::machine(Some(8))).is_err());
+}
+
+#[test]
+fn cache_policy_matches_equation_at_cutoffs_and_every_fixed_width() {
+    let source = provider_program();
+    for parts in [1usize, 3, 16] {
+        for cache in [9usize, 17, 31] {
+            let advice: Advice = syn::parse2(quote!(
+                key_partition(provider, published, [a], #parts, threshold 17, cache #cache)
+            ))
+            .unwrap();
+            assert_eq!(advice, syn::parse2(advice.to_token_stream()).unwrap());
+            let routed = advice.apply(&source).unwrap();
+            let provider = routed
+                .sequence
+                .definitions
+                .iter()
+                .find(|d| d.name == "provider")
+                .unwrap();
+            for workers in [0, 1, 2, 8] {
+                for rows in [0, 8, 9, 16, 17, 18, 30, 31, 32, usize::MAX] {
+                    let expected = if rows >= 17 && (workers > 1 || rows >= cache) {
+                        parts
+                    } else {
+                        1
+                    };
+                    for host_rows in [rows, usize::MAX] {
+                        assert_eq!(
+                            selected_provider_parts(
+                                &provider.term,
+                                workers,
+                                rows,
+                                host_rows,
+                                "published",
+                                &mut false,
+                            ),
+                            expected
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[test]
@@ -711,7 +825,7 @@ fn provider_force_forbid_and_authored_grade_override_runtime_choice() {
                     .trace
                     .iter()
                     .any(|a| matches!(a, Advice::KeyPartition(k)
-                if k.name == "provider" && k.threshold.is_none()))
+                if k.name == "provider" && k.threshold.is_none() && k.cache_threshold.is_none()))
             );
         } else {
             assert!(
@@ -747,6 +861,17 @@ fn adaptive_provider_threshold_is_positive_and_provider_only() {
     let mut invalid = machine(Some(4));
     invalid.key_partition_threshold = 0;
     assert!(decompose(&source, &invalid, &catalog()).is_err());
+    invalid.key_partition_threshold = 17;
+    invalid.key_partition_cache_threshold = 0;
+    assert!(decompose(&source, &invalid, &catalog()).is_err());
+    assert!(
+        key_partition(
+            &source,
+            quote!(provider, published, [a], 4, threshold 17, cache 0)
+        )
+        .is_err()
+    );
+    assert!(key_partition(&source, quote!(provider, published, [a], 4, cache 31)).is_err());
     assert!(key_partition(&source, quote!(provider, published, [a], 4, threshold 0)).is_err());
     assert!(key_partition(&source, quote!(provider, published, [a], 0, threshold 17)).is_err());
     assert!(
@@ -759,6 +884,16 @@ fn adaptive_provider_threshold_is_positive_and_provider_only() {
     assert!(
         syn::parse_str::<Advice>("key_partition(provider, published, [a], 4, cutoff 17)").is_err()
     );
+    for recipe in [
+        "key_partition(provider, published, [a], 4, threshold 17, threshold 31)",
+        "key_partition(provider, published, [a], 4, threshold 17, cache 31, cache 63)",
+    ] {
+        assert!(syn::parse_str::<Advice>(recipe).is_err());
+    }
+    let reordered: Advice =
+        syn::parse_str("key_partition(provider, published, [a], 4, cache 31, threshold 17)")
+            .unwrap();
+    assert_eq!(reordered, syn::parse2(reordered.to_token_stream()).unwrap());
 }
 
 #[test]
@@ -1475,5 +1610,209 @@ fn adaptive_provider_publication_preserves_task_owned_pipe_execution() {
             vec!["host".to_owned()]
         );
         replay(&source, &planned);
+    }
+}
+
+fn single_worker_arms(program: &Program) -> &[(cq_lang_sequence::Guard, Term)] {
+    let provider = program
+        .sequence
+        .definitions
+        .iter()
+        .find(|d| d.name == "provider")
+        .unwrap();
+    let Term::Store { inner, .. } = &provider.term else {
+        panic!("provider Store required")
+    };
+    let Term::Choose(arms) = inner.as_ref() else {
+        panic!("worker choice required")
+    };
+    assert_eq!(arms[0].0, cq_lang_sequence::Guard::WorkersLt(2));
+    let Term::Choose(arms) = &arms[0].1 else {
+        panic!("cache choice required")
+    };
+    arms
+}
+
+#[test]
+fn filtered_provider_uses_host_layout_bound_before_demanding_input_count() {
+    use cq_lang_sequence::{Guard, Len};
+    let source: Program = syn::parse_quote! {
+        physical {
+            relation L(a:i32); relation R(a:i32,b:i32);
+            l = pipe rename L@0 {a -> a};
+            r = pipe rename R@1 {a -> a,b -> b};
+            selected = let select r if (b > a);
+            joined = pipe canon probe first [a] l,selected;
+            return joined as answer(a,b);
+        }
+        structures {
+            l host scan = Reader []; r host scan = Reader [];
+            selected = Index [a]; joined canon = Canonical;
+        }
+        sequence {
+            r = store rows r;
+            producer = compact selected flatten tile 64 r;
+            provider = store producer;
+            input = store rows l;
+            result = store canon flatten lookup selected [a] input;
+        }
+    };
+    let routed = key_partition(
+        &source,
+        quote!(provider, published, [a], 4, threshold 17, cache 31),
+    )
+    .unwrap();
+    let arms = single_worker_arms(&routed);
+    assert_eq!(arms.len(), 3);
+    assert_eq!(arms[0].0, Guard::Lt(Len::Input("R".into()), 31));
+    assert_eq!(arms[1].0, Guard::Lt(Len::Input("published".into()), 31));
+    let provider = &routed
+        .sequence
+        .definitions
+        .iter()
+        .find(|d| d.name == "provider")
+        .unwrap()
+        .term;
+    for (rows, host_rows, expected, counted) in
+        [(17, 30, 1, false), (17, 31, 1, true), (31, 31, 4, true)]
+    {
+        let mut demanded = false;
+        assert_eq!(
+            selected_provider_parts(provider, 1, rows, host_rows, "published", &mut demanded),
+            expected
+        );
+        assert_eq!(demanded, counted);
+    }
+    let planned = decompose(&source, &machine(Some(4)), &catalog()).unwrap();
+    replay(&source, &planned);
+}
+
+#[test]
+fn expanding_provider_join_requires_exact_count_without_a_host_shortcut() {
+    use cq_lang_sequence::{Guard, Len};
+    let source: Program = syn::parse_quote! {
+        physical {
+            relation L(a:i32); relation R(a:i32,b:i32);
+            l = pipe rename L@0 {a -> a};
+            r = let rename R@1 {a -> a,b -> b};
+            joined = let probe first [a] l,r;
+            final_rows = pipe canon probe first [a] l,joined;
+            return final_rows as answer(a,b);
+        }
+        structures {
+            l host scan = Reader []; r host scan = Reader [];
+            r = Index [a]; joined = Index [a]; final_rows canon = Canonical;
+        }
+        sequence {
+            right = store rows r;
+            input = store rows l;
+            provider = store flatten lookup r [a] input;
+            result = store canon flatten lookup joined [a] input;
+        }
+    };
+    let mut mapped = source.clone();
+    mapped.sequence.definitions[2].term = syn::parse_quote!(store flatten map joined input);
+    let mut merged = mapped.clone();
+    merged.structures.physical.program.definitions[2].operator = syn::parse_quote!(merge [a] l,r);
+    merged
+        .structures
+        .structures
+        .entries
+        .push(syn::parse_quote!(l host joined = Ordered [a];));
+    for source in [source, mapped, merged] {
+        let routed = key_partition(
+            &source,
+            quote!(provider, published, [a], 4, threshold 17, cache 31),
+        )
+        .unwrap();
+        let arms = single_worker_arms(&routed);
+        assert_eq!(arms.len(), 2);
+        assert_eq!(arms[0].0, Guard::Lt(Len::Input("published".into()), 31));
+        assert_eq!(arms[1].0, Guard::Else);
+    }
+}
+
+#[test]
+fn host_bound_omits_existing_and_new_sequence_name_collisions() {
+    use cq_lang_sequence::{Guard, Len};
+    let mut source = provider_program();
+    source
+        .sequence
+        .definitions
+        .insert(0, syn::parse_quote!(R = store rows l;));
+    let routed = key_partition(
+        &source,
+        quote!(provider, published, [a], 4, threshold 17, cache 31),
+    )
+    .unwrap();
+    let arms = single_worker_arms(&routed);
+    assert_eq!(arms.len(), 2);
+    assert_eq!(arms[0].0, Guard::Lt(Len::Input("published".into()), 31));
+    let routed = key_partition(
+        &provider_program(),
+        quote!(provider, R, [a], 4, threshold 17, cache 31),
+    )
+    .unwrap();
+    let arms = single_worker_arms(&routed);
+    assert_eq!(arms.len(), 2);
+    assert_eq!(arms[0].0, Guard::Lt(Len::Input("R".into()), 31));
+}
+
+#[test]
+fn support_equal_duplicate_rows_never_supply_a_host_cardinality_bound() {
+    use cq_lang_sequence::{Guard, Len};
+    let mut source = provider_program();
+    source
+        .structures
+        .physical
+        .program
+        .definitions
+        .insert(2, syn::parse_quote!(duplicates = let union r,r;));
+    source.structures.physical.program.definitions[3] =
+        syn::parse_quote!(first = pipe probe first [a] l,r;);
+    source
+        .structures
+        .physical
+        .program
+        .definitions
+        .push(syn::parse_quote!(joined = pipe canon probe first [a,b] first,duplicates;));
+    source
+        .structures
+        .structures
+        .entries
+        .push(syn::parse_quote!(r rows = Rows;));
+    source
+        .structures
+        .structures
+        .entries
+        .push(syn::parse_quote!(duplicates = Index [a,b];));
+    source.sequence.definitions[0].term = syn::parse_quote!(store r);
+    source
+        .sequence
+        .definitions
+        .insert(0, syn::parse_quote!(r = store union [rows r, rows r];));
+    source
+        .sequence
+        .definitions
+        .insert(2, syn::parse_quote!(duplicates = store provider;));
+    source.sequence.definitions.last_mut().unwrap().term = syn::parse_quote!(store canon flatten lookup duplicates [a,b]
+            flatten lookup r [a] input);
+    let mut replayed_rows = source.clone();
+    replayed_rows.sequence.definitions[1].term = syn::parse_quote!(store rows r);
+    for source in [source, replayed_rows] {
+        let facts = cq_lang_sequence::contract::check(&source).unwrap();
+        assert_eq!(
+            facts.results["provider"], "r",
+            "support equality is not an occurrence bound"
+        );
+        let routed = key_partition(
+            &source,
+            quote!(provider, published, [a], 4, threshold 17, cache 31),
+        )
+        .unwrap();
+        let arms = single_worker_arms(&routed);
+        assert_eq!(arms.len(), 2);
+        assert_eq!(arms[0].0, Guard::Lt(Len::Input("published".into()), 31));
+        assert_eq!(arms[1].0, Guard::Else);
     }
 }

@@ -32,6 +32,7 @@ fn machines() -> Vec<Machine> {
             name: syn::parse_quote!(sequential),
             items: 1,
             key_partition_threshold: 65536,
+            key_partition_cache_threshold: 6 * 1024 * 1024,
             root: node("host", false, false, None, vec![]),
         },
         Machine {
@@ -39,6 +40,7 @@ fn machines() -> Vec<Machine> {
             name: syn::parse_quote!(tasks),
             items: 1,
             key_partition_threshold: 65536,
+            key_partition_cache_threshold: 6 * 1024 * 1024,
             root: node(
                 "host",
                 false,
@@ -58,6 +60,7 @@ fn machines() -> Vec<Machine> {
             name: syn::parse_quote!(gpu),
             items: 4,
             key_partition_threshold: 65536,
+            key_partition_cache_threshold: 6 * 1024 * 1024,
             root: node(
                 "host",
                 false,

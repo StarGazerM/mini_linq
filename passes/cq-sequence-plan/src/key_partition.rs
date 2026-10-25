@@ -11,7 +11,7 @@ use syn::Ident;
 
 /// An explicit static decision, following adaptive advice's `select` convention.
 /// `true` requires a fixed checked partition; `false` retains the native provider.
-/// Unmentioned providers use runtime count choice; collectives remain PL-Cost choices.
+/// Unmentioned providers use worker/count choice; collectives remain PL-Cost choices.
 /// For global aggregates this controls both tiled partial folds and key-routed
 /// canonical partial folds; both return one host-merged row, even on empty input.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -246,16 +246,17 @@ pub(crate) fn apply(
         while !names.insert(input.clone()) {
             input.push('_');
         }
+        let adaptive = provider
+            && !policies
+                .iter()
+                .any(|p| p.name == definition.name && p.select);
         candidates.push(KeyPartition {
             name: definition.name.clone(),
             input: Ident::new(&input, definition.name.span()),
             keys,
             parts: pool.width.expect("selected distributing pool"),
-            threshold: (provider
-                && !policies
-                    .iter()
-                    .any(|p| p.name == definition.name && p.select))
-            .then_some(machine.key_partition_threshold),
+            threshold: adaptive.then_some(machine.key_partition_threshold),
+            cache_threshold: adaptive.then_some(machine.key_partition_cache_threshold),
         });
     }
     if providers {

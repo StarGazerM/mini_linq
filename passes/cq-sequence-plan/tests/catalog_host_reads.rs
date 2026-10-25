@@ -21,6 +21,7 @@ fn machine() -> Machine {
         name: syn::parse_quote!(gpu),
         items: 1,
         key_partition_threshold: 65536,
+        key_partition_cache_threshold: 6 * 1024 * 1024,
         layout: None,
         root: node("host", vec![node("device", vec![node("block", vec![])])]),
     }

@@ -19,6 +19,7 @@ pub fn machine() -> cq_lang_sequence::Machine {
         name: syn::parse_quote!(sequential),
         items: 1,
         key_partition_threshold: 65536,
+        key_partition_cache_threshold: 6 * 1024 * 1024,
         root: cq_lang_sequence::LevelNode {
             shared_bytes: None,
             name: syn::parse_quote!(host),
@@ -175,6 +176,7 @@ pub struct Emitter<'a> {
     partial_groups: BTreeMap<*const Term, bool>,
     owner: String,
     pull: bool,
+    workers: syn::Expr,
     owned_answer: bool,
 }
 
@@ -201,6 +203,7 @@ impl<'a> Emitter<'a> {
             partial_groups,
             owner: String::new(),
             pull: false,
+            workers: syn::parse_quote!(1usize),
             owned_answer: false,
         }
     }
@@ -293,7 +296,8 @@ impl<'a> Emitter<'a> {
         }
     }
 
-    fn runtime_guard(&self, guard: &Guard) -> syn::Result<TokenStream> {
+    /// Realize a checked guard using published lengths and the uniform target worker expression.
+    pub fn runtime_guard(&self, guard: &Guard) -> syn::Result<TokenStream> {
         match guard {
             Guard::Lt(length, threshold) => {
                 let length = self.runtime_length(length)?;
@@ -302,6 +306,10 @@ impl<'a> Emitter<'a> {
             Guard::Ge(length, threshold) => {
                 let length = self.runtime_length(length)?;
                 Ok(quote!(#length >= #threshold))
+            }
+            Guard::WorkersLt(threshold) => {
+                let workers = &self.workers;
+                Ok(quote!((#workers) < #threshold))
             }
             Guard::Else => Ok(quote!(true)),
         }
@@ -1147,15 +1155,24 @@ fn translate_host(program: &Program, analysis: &Analysis, profile: bool) -> syn:
             "sequential translation requires host-only grading",
         ));
     }
-    translate_with_profile(program, analysis, profile, true, |_, _, _, _, _, _| Ok(()))
+    translate_with_profile(
+        program,
+        analysis,
+        syn::parse_quote!(1usize),
+        profile,
+        true,
+        |_, _, _, _, _, _| Ok(()),
+    )
 }
 
 /// Structural fold with a target hook after each constructor. `input` is its
 /// original child, `owner` its definition and `tiles` its enclosing tile depth.
 /// The hook may replace emitted iterator tokens without inspecting the program.
+/// `workers` evaluates to the target-wide available worker count in every scope.
 pub fn translate_with(
     program: &Program,
     analysis: &Analysis,
+    workers: syn::Expr,
     hook: impl FnMut(
         &Term,
         &mut Emitter<'_>,
@@ -1165,15 +1182,17 @@ pub fn translate_with(
         usize,
     ) -> syn::Result<()>,
 ) -> syn::Result<syn::Expr> {
-    translate_with_profile(program, analysis, false, false, hook)
+    translate_with_profile(program, analysis, workers, false, false, hook)
 }
 
 /// Target-hook interpretation with real operator counters and disjoint host
 /// preparation/final-evaluation wall scopes. Unlike operator spans, these
 /// phases include each concurrent segment only once, including its join.
+/// `workers` has the same uniform target-wide contract as in [`translate_with`].
 pub fn translate_profile_with(
     program: &Program,
     analysis: &Analysis,
+    workers: syn::Expr,
     hook: impl FnMut(
         &Term,
         &mut Emitter<'_>,
@@ -1183,12 +1202,13 @@ pub fn translate_profile_with(
         usize,
     ) -> syn::Result<()>,
 ) -> syn::Result<syn::Expr> {
-    translate_with_profile(program, analysis, true, false, hook)
+    translate_with_profile(program, analysis, workers, true, false, hook)
 }
 
 fn translate_with_profile(
     program: &Program,
     analysis: &Analysis,
+    workers: syn::Expr,
     profile: bool,
     pull: bool,
     mut hook: impl FnMut(
@@ -1302,7 +1322,12 @@ fn translate_with_profile(
                 };
                 emitter.union(values)?
             }
-            Term::Choose(arms) if emitter.pull => {
+            Term::Choose(arms)
+                if emitter.pull
+                    && !arms
+                        .iter()
+                        .any(|(guard, _)| matches!(guard, Guard::WorkersLt(_))) =>
+            {
                 let alternative = emitter.choose(arms)?;
                 term(emitter, alternative, owner, tiles, false, hook)?
             }
@@ -1352,6 +1377,7 @@ fn translate_with_profile(
     // Formal rule T-Pull: Interpret Sequence by the host iterator algebra.
     let mut emitter = Emitter::new(program, analysis);
     emitter.pull = pull;
+    emitter.workers = workers;
     if profile {
         emitter.context_mut().enable_profile(&program.structures);
     }

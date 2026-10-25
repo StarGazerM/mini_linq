@@ -3,6 +3,34 @@ use cq_sequence_tasks::{machine, translate};
 use quote::ToTokens;
 use syn::visit_mut::{self, VisitMut};
 
+#[test]
+fn machine_cache_cutoff_defaults_overrides_and_accepts_below_low_cutoff() {
+    use cq_sequence_tasks::{Config, machine_with};
+    assert_eq!(
+        Config::default().key_partition_cache_threshold,
+        6 * 1024 * 1024
+    );
+    assert_eq!(machine().key_partition_cache_threshold, 6 * 1024 * 1024);
+    for cache in [3, 8, 16] {
+        let machine = machine_with(Config {
+            key_partition_threshold: 8,
+            key_partition_cache_threshold: cache,
+            ..Default::default()
+        });
+        assert_eq!(machine.key_partition_threshold, 8);
+        assert_eq!(machine.key_partition_cache_threshold, cache);
+    }
+}
+
+#[test]
+#[should_panic(expected = "provider partition cache threshold must be positive")]
+fn machine_cache_cutoff_rejects_zero() {
+    cq_sequence_tasks::machine_with(cq_sequence_tasks::Config {
+        key_partition_cache_threshold: 0,
+        ..Default::default()
+    });
+}
+
 fn program(sequence: proc_macro2::TokenStream, grades: proc_macro2::TokenStream) -> Program {
     syn::parse2(quote::quote! {
         physical {
@@ -685,20 +713,36 @@ fn routed_providers_keep_subset_and_reordered_keys_through_named_publication() {
     let mut checks = Vec::new();
     for routing in [quote::quote!(b), quote::quote!(b, a)] {
         for named in [false, true] {
-            let program = routed_provider_program(routing.clone(), named);
-            let facts = check_grading(&program, &machine()).unwrap();
-            assert_eq!(
-                facts.capabilities[&("r".into(), vec!["a".into(), "b".into()])],
-                cq_lang_sequence::Capability::Exact,
-            );
-            let expression = translate(&program, &facts).unwrap();
-            let description = format!("routing [{routing}], named={named}");
-            checks.push(quote::quote! {
-                let actual: Vec<(i32,i32,i32)> = pool.install(|| {
-                    (#expression).into_iter().map(|(a,b,c)| (*a,*b,*c)).collect()
+            for width in [1, 64] {
+                let mut program = routed_provider_program(routing.clone(), named);
+                let definition = program
+                    .sequence
+                    .definitions
+                    .iter_mut()
+                    .find(|definition| definition.name == if named { "routed" } else { "provider" })
+                    .unwrap();
+                let term = match &mut definition.term {
+                    cq_lang_sequence::Term::Store { inner, .. } => inner.as_mut(),
+                    term => term,
+                };
+                let cq_lang_sequence::Term::PartitionK { parts, .. } = term else {
+                    panic!("partition fixture");
+                };
+                *parts = width;
+                let facts = check_grading(&program, &machine()).unwrap();
+                assert_eq!(
+                    facts.capabilities[&("r".into(), vec!["a".into(), "b".into()])],
+                    cq_lang_sequence::Capability::Exact,
+                );
+                let expression = translate(&program, &facts).unwrap();
+                let description = format!("routing [{routing}], named={named}, width={width}");
+                checks.push(quote::quote! {
+                    let actual: Vec<(i32,i32,i32)> = pool.install(|| {
+                        (#expression).into_iter().map(|(a,b,c)| (*a,*b,*c)).collect()
+                    });
+                    assert_eq!(actual, expected, #description);
                 });
-                assert_eq!(actual, expected, #description);
-            });
+            }
         }
     }
     run_partition_fixture(quote::quote! {
@@ -963,14 +1007,86 @@ fn adaptive_provider_guard_selects_identity_and_routed_builds_at_runtime() {
         .term = Term::Store {
         capacity: None,
         inner: Box::new(Term::Choose(vec![
+            (
+                Guard::WorkersLt(2),
+                Term::Choose(vec![
+                    (Guard::Lt(Len::Input("provider_input".into()), 6), part(1)),
+                    (Guard::Else, part(64)),
+                ]),
+            ),
             (Guard::Lt(Len::Input("provider_input".into()), 4), part(1)),
             (Guard::Else, part(64)),
         ])),
     };
     let facts = check_grading(&program, &machine()).unwrap();
     let mut expression = translate(&program, &facts).unwrap();
+    let rendered = expression.to_token_stream().to_string();
+    assert!(rendered.contains("ProviderParts :: new"), "{rendered}");
+    assert_eq!(
+        rendered.matches("current_num_threads").count(),
+        1,
+        "{rendered}"
+    );
+    assert!(rendered.contains(". source () . map"), "{rendered}");
+    let mut forced = program.clone();
+    forced
+        .sequence
+        .definitions
+        .iter_mut()
+        .find(|definition| definition.name == "provider")
+        .unwrap()
+        .term = Term::Store {
+        capacity: None,
+        inner: Box::new(part(64)),
+    };
+    let forced_facts = check_grading(&forced, &machine()).unwrap();
+    let mut forced_expression = translate(&forced, &forced_facts).unwrap();
+    let mut configured_one = cq_sequence_tasks::translate_with(
+        &program,
+        &facts,
+        cq_sequence_tasks::Config {
+            threads: Some(1),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let mut configured_many = cq_sequence_tasks::translate_with(
+        &program,
+        &facts,
+        cq_sequence_tasks::Config {
+            threads: Some(24),
+            ..Default::default()
+        },
+    )
+    .unwrap();
     struct ObserveBuild;
     impl VisitMut for ObserveBuild {
+        fn visit_expr_mut(&mut self, expression: &mut syn::Expr) {
+            if let syn::Expr::Macro(mac) = expression
+                && mac
+                    .mac
+                    .path
+                    .segments
+                    .last()
+                    .is_some_and(|segment| segment.ident == "profile_select")
+            {
+                // Expand the plain arm to reach Config::threads bodies. This
+                // fixture checks cover geometry, not primitive counters.
+                let parser = |input: syn::parse::ParseStream<'_>| -> syn::Result<syn::Block> {
+                    let plain: syn::Ident = input.parse()?;
+                    assert_eq!(plain, "plain");
+                    let block: syn::Block = input.parse()?;
+                    let counters: syn::Ident = input.parse()?;
+                    assert_eq!(counters, "counters");
+                    let _: syn::Block = input.parse()?;
+                    Ok(block)
+                };
+                let block = syn::parse::Parser::parse2(parser, mac.mac.tokens.clone()).unwrap();
+                *expression = syn::parse_quote!(#block);
+            }
+            visit_mut::visit_expr_mut(self, expression);
+        }
+
         fn visit_expr_call_mut(&mut self, call: &mut syn::ExprCall) {
             visit_mut::visit_expr_call_mut(self, call);
             if matches!(call.func.as_ref(), syn::Expr::Path(path)
@@ -978,33 +1094,434 @@ fn adaptive_provider_guard_selects_identity_and_routed_builds_at_runtime() {
             {
                 let parts = call.args.first().unwrap().clone();
                 *call.args.first_mut().unwrap() = syn::parse_quote!(observe_parts(#parts));
+            } else if matches!(call.func.as_ref(), syn::Expr::Path(path)
+                if path.path.segments.last().is_some_and(|segment| segment.ident == "from_parts_with_router"))
+            {
+                let shards = call.args.first().unwrap().clone();
+                *call.args.first_mut().unwrap() = syn::parse_quote!(observe_shards(#shards));
+            } else if matches!(call.func.as_ref(), syn::Expr::Path(path)
+                if path.path.segments.iter().any(|segment| segment.ident == "ProviderParts")
+                    && path.path.segments.last().is_some_and(|segment| segment.ident == "new"))
+            {
+                let buffers = call.args.iter().nth(1).unwrap().clone();
+                *call.args.iter_mut().nth(1).unwrap() =
+                    syn::parse_quote!(observe_buffers(#buffers));
             }
         }
     }
     ObserveBuild.visit_expr_mut(&mut expression);
+    ObserveBuild.visit_expr_mut(&mut forced_expression);
+    ObserveBuild.visit_expr_mut(&mut configured_one);
+    ObserveBuild.visit_expr_mut(&mut configured_many);
     run_partition_fixture(quote::quote! {
         static PARTS: ::std::sync::atomic::AtomicUsize = ::std::sync::atomic::AtomicUsize::new(0);
+        static BUFFERS: ::std::sync::atomic::AtomicUsize = ::std::sync::atomic::AtomicUsize::new(usize::MAX);
+        fn observe_buffers<R>(parts: Option<Vec<Vec<R>>>) -> Option<Vec<Vec<R>>> {
+            BUFFERS.store(parts.as_ref().map_or(0, Vec::len), ::std::sync::atomic::Ordering::Relaxed);
+            parts
+        }
+        fn observe_shards<I>(shards: Vec<I>) -> Vec<I> {
+            PARTS.store(shards.len(), ::std::sync::atomic::Ordering::Relaxed);
+            shards
+        }
         fn observe_parts<R>(parts: &[Vec<R>]) -> &[Vec<R>] {
             PARTS.store(parts.len(), ::std::sync::atomic::Ordering::Relaxed);
             parts
         }
         fn main() {
             let probes = [(1,2),(3,4)];
-            let values = [(1,2,8),(3,4,9),(1,2,10),(3,4,11),(1,2,12)];
-            for threads in [1,4] {
+            let values = [(1,2,8),(3,4,9),(1,2,10),(3,4,11),(1,2,12),(3,4,13),(1,2,14)];
+            for threads in [1,24] {
                 let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
-                for length in [0,3,4,5] {
+                for length in [0,3,4,5,6,7] {
                     let L = probes.as_slice();
                     let R = &values[..length];
                     let actual: Vec<_> = pool.install(|| (#expression).map(|(a,b,c)| (*a,*b,*c)).collect());
                     let expected: Vec<_> = L.iter().flat_map(|&(a,b)|
                         R.iter().filter_map(move |&(ra,rb,c)| (a==ra && b==rb).then_some((a,b,c)))).collect();
                     assert_eq!(actual, expected);
-                    assert_eq!(PARTS.load(::std::sync::atomic::Ordering::Relaxed), if length < 4 { 1 } else { 64 });
+                    let singleton = length < 4 || (threads == 1 && length < 6);
+                    assert_eq!(PARTS.load(::std::sync::atomic::Ordering::Relaxed), if singleton { 1 } else { 64 });
+                    assert_eq!(BUFFERS.load(::std::sync::atomic::Ordering::Relaxed), if singleton { 0 } else { 64 });
+                    let forced: Vec<_> = pool.install(|| (#forced_expression).map(|(a,b,c)| (*a,*b,*c)).collect());
+                    assert_eq!(forced, expected);
+                    assert_eq!(PARTS.load(::std::sync::atomic::Ordering::Relaxed), 64);
+                    assert_eq!(BUFFERS.load(::std::sync::atomic::Ordering::Relaxed), 64);
+                    let configured: Vec<_> = pool.install(|| (#configured_one).map(|(a,b,c)| (*a,*b,*c)).collect());
+                    assert_eq!(configured, expected);
+                    assert_eq!(BUFFERS.load(::std::sync::atomic::Ordering::Relaxed), if length < 6 { 0 } else { 64 });
+                    let configured: Vec<_> = pool.install(|| (#configured_many).map(|(a,b,c)| (*a,*b,*c)).collect());
+                    assert_eq!(configured, expected);
+                    assert_eq!(BUFFERS.load(::std::sync::atomic::Ordering::Relaxed), if length < 4 { 0 } else { 64 });
                 }
             }
         }
     });
+}
+
+fn deferred_provider_program(tiled: bool, host_bound: bool) -> Program {
+    let physical = syn::parse_quote! {
+        physical {
+            relation L(a:i32,b:i32); relation R(a:i32,b:i32,c:i32);
+            consumer canonical;
+            l = pipe rename L@0 {a -> a,b -> b};
+            raw = pipe rename R@1 {a -> a,b -> b,c -> c};
+            r = let select raw if (c > 0);
+            joined = pipe probe first [a,b] l,r;
+            return joined as answer(a,b,c);
+        }
+    };
+    let mut structures = cq_structure_selection::compile(&physical).unwrap();
+    let authored: Program = syn::parse_quote! {
+        #physical
+        structures {
+            r = ::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>, _> [a,b];
+        }
+        sequence { result = rows l; }
+    };
+    for provider in authored.structures.structures.entries {
+        structures.structures.entries.retain(|entry| {
+            entry.name != provider.name
+                || std::mem::discriminant(&entry.structure)
+                    != std::mem::discriminant(&provider.structure)
+        });
+        structures.structures.entries.push(provider);
+    }
+    let (source, source_grade) = if tiled {
+        (
+            quote::quote! {
+                scan = store rows raw;
+                producer = flatten compact r tile 2 scan;
+                provider_input = store producer;
+            },
+            quote::quote!(scan at host; producer at pool.task;),
+        )
+    } else {
+        (
+            quote::quote! {
+                scan = rows raw;
+                provider_input = store compact r scan;
+            },
+            quote::quote!(scan at host;),
+        )
+    };
+    let host_arm = host_bound.then(|| {
+        quote::quote! {
+            len R < 6 => partition_k[a,b](1) provider_input,
+        }
+    });
+    syn::parse_quote! {
+        #structures
+        sequence {
+            #source
+            provider = store choose [
+                workers < 2 => choose [
+                    #host_arm
+                    len provider_input < 6 => partition_k[a,b](1) provider_input,
+                    else => partition_k[a,b](64) provider_input
+                ],
+                len provider_input < 4 => partition_k[a,b](1) provider_input,
+                else => partition_k[a,b](64) provider_input
+            ];
+            input = store rows l;
+            parts = store capacity 8192 flatten flatten lookup r [a,b] tile 64 input;
+            result = store parts;
+        }
+        graded tasks {
+            #source_grade provider_input at host; provider at pool;
+            input at host; parts at pool; result at host;
+        }
+    }
+}
+
+#[test]
+fn deferred_provider_source_is_once_only_and_profiles_only_real_staging() {
+    struct ObserveDeferred {
+        factories: usize,
+        deferred: bool,
+    }
+    impl VisitMut for ObserveDeferred {
+        fn visit_local_mut(&mut self, local: &mut syn::Local) {
+            visit_mut::visit_local_mut(self, local);
+            if matches!(&local.pat, syn::Pat::Ident(pattern)
+                if pattern.ident == "__cq_key_factory_provider_input")
+            {
+                let init = local.init.as_mut().unwrap();
+                let syn::Expr::Closure(factory) = init.expr.as_mut() else {
+                    panic!("source factory must stay deferred")
+                };
+                let body = &factory.body;
+                factory.body = Box::new(syn::parse_quote!({
+                    assert_eq!(capture.as_str(), "still borrowed");
+                    PRODUCERS.fetch_add(1, ::std::sync::atomic::Ordering::Relaxed);
+                    (#body).inspect(|_| {
+                        PRODUCED_ROWS.fetch_add(1, ::std::sync::atomic::Ordering::Relaxed);
+                    })
+                }));
+                self.factories += 1;
+            } else if !self.deferred
+                && matches!(&local.pat, syn::Pat::Ident(pattern)
+                    if pattern.ident == "__cq_key_source_provider_input")
+            {
+                let init = local.init.as_mut().unwrap();
+                let source = &init.expr;
+                init.expr = Box::new(syn::parse_quote!({
+                    assert_eq!(capture.as_str(), "still borrowed");
+                    PRODUCERS.fetch_add(1, ::std::sync::atomic::Ordering::Relaxed);
+                    let rows = #source;
+                    PRODUCED_ROWS.store(rows.len(), ::std::sync::atomic::Ordering::Relaxed);
+                    rows
+                }));
+            }
+        }
+
+        fn visit_expr_mut(&mut self, expression: &mut syn::Expr) {
+            visit_mut::visit_expr_mut(self, expression);
+            let syn::Expr::Call(call) = expression else {
+                return;
+            };
+            let syn::Expr::Path(path) = call.func.as_ref() else {
+                return;
+            };
+            let name = &path.path.segments.last().unwrap().ident;
+            if name == "new"
+                && path
+                    .path
+                    .segments
+                    .iter()
+                    .any(|segment| segment.ident == "ProviderParts")
+            {
+                let buffers = call.args.iter_mut().nth(1).unwrap();
+                let before = usize::from(!self.deferred);
+                *buffers = syn::parse_quote!({
+                    // Deferred factory construction cannot evaluate the producer;
+                    // rejected fusion retains the original eager publication.
+                    assert_eq!(PRODUCERS.load(::std::sync::atomic::Ordering::Relaxed), #before);
+                    let __cq_buffers = #buffers;
+                    BUFFERS.store(__cq_buffers.as_ref().map_or(0, Vec::len), ::std::sync::atomic::Ordering::Relaxed);
+                    __cq_buffers
+                });
+            } else if name == "from_parts_with_router" || name == "build_from_parts_with_router" {
+                *expression = syn::parse_quote!(observe_native(#expression));
+            }
+        }
+    }
+
+    let mut cases = Vec::new();
+    for tiled in [false, true] {
+        for (host_bound, mode) in [
+            (false, "deferred"),
+            (true, "deferred"),
+            (true, "shared"),
+            (true, "opaque"),
+            (true, "forced"),
+        ] {
+            let mut program = deferred_provider_program(tiled, host_bound);
+            let deferred = mode == "deferred";
+            let forced = mode == "forced";
+            if mode == "shared" {
+                let provider = program
+                    .sequence
+                    .definitions
+                    .iter()
+                    .position(|definition| definition.name == "provider")
+                    .unwrap();
+                program
+                    .sequence
+                    .definitions
+                    .insert(provider, syn::parse_quote!(shared = provider_input;));
+                let grades = &mut program.graded.as_mut().unwrap().grades;
+                let mut grade = grades[0].clone();
+                grade.name = syn::parse_quote!(shared);
+                grades.push(grade);
+            } else if mode == "opaque" {
+                let definitions = &mut program.structures.physical.program.definitions;
+                let selected = definitions
+                    .iter()
+                    .position(|definition| definition.name == "r")
+                    .unwrap();
+                definitions[selected] = syn::parse_quote!(r = let select guarded if (c > 0););
+                definitions.insert(
+                    selected,
+                    syn::parse_quote!(guarded = pipe guard raw if (opaque_positive(c));),
+                );
+                if tiled {
+                    program
+                        .graded
+                        .as_mut()
+                        .unwrap()
+                        .grades
+                        .iter_mut()
+                        .find(|grade| grade.name == "producer")
+                        .unwrap()
+                        .level = vec![syn::parse_quote!(host)];
+                }
+            } else if forced {
+                program
+                    .sequence
+                    .definitions
+                    .iter_mut()
+                    .find(|definition| definition.name == "provider")
+                    .unwrap()
+                    .term = syn::parse_quote!(store partition_k[a,b](64) provider_input);
+            }
+            let facts = check_grading(&program, &machine()).unwrap();
+            assert_eq!(
+                facts.publications["provider_input"],
+                if deferred {
+                    cq_lang_sequence::Publication::DeferredRows {
+                        consumer: "provider".into(),
+                    }
+                } else {
+                    cq_lang_sequence::Publication::OwnRows { staged: true }
+                }
+            );
+            let mut expression = cq_sequence_tasks::translate_profile(&program, &facts).unwrap();
+            if tiled {
+                // Opaque producer tiles stay at host; total producers retain
+                // their distributing schedule even when staging is fused.
+                assert_eq!(
+                    facts.tilings["producer"],
+                    vec![if mode == "opaque" {
+                        cq_lang_sequence::Tiling::Strip
+                    } else {
+                        cq_lang_sequence::Tiling::Distribute
+                    }]
+                );
+                assert!(!worker_bodies(&expression).is_empty());
+            }
+            let mut observer = ObserveDeferred {
+                factories: 0,
+                deferred,
+            };
+            observer.visit_expr_mut(&mut expression);
+            assert_eq!(observer.factories, usize::from(deferred));
+            let mut plain = translate(&program, &facts).unwrap();
+            let mut plain_observer = ObserveDeferred {
+                factories: 0,
+                deferred,
+            };
+            plain_observer.visit_expr_mut(&mut plain);
+            assert_eq!(plain_observer.factories, usize::from(deferred));
+            cases.push(quote::quote! {
+                {
+                    PRODUCERS.store(0, Ordering::Relaxed);
+                    PRODUCED_ROWS.store(0, Ordering::Relaxed);
+                    NATIVE_COPIES.store(usize::MAX, Ordering::Relaxed);
+                    cq_storage::counters::reset();
+                    let actual: Vec<_> = (#expression).map(|(a,b,c)| (*a,*b,*c)).collect();
+                    assert_eq!(actual, expected, "threads={threads}, tiled={}, host_bound={}, mode={}", #tiled, #host_bound, #mode);
+                    assert_eq!(capture, "still borrowed");
+                    assert_eq!(PRODUCERS.load(Ordering::Relaxed), 1);
+                    assert_eq!(PRODUCED_ROWS.load(Ordering::Relaxed), selected);
+                    let staged = !#deferred || threads != 1 || !#host_bound || R.len() >= 6;
+                    let routed = #forced || (selected >= 4 && (threads != 1 || selected >= 6));
+                    assert_eq!(BUFFERS.load(Ordering::Relaxed), if routed { 64 } else { 0 });
+                    // Observe before unrelated probe/answer buffers: exactly
+                    // one native copy, plus only the actual raw/routed copies.
+                    assert_eq!(
+                        NATIVE_COPIES.load(Ordering::Relaxed),
+                        selected * (1 + usize::from(staged) + usize::from(routed))
+                    );
+                    let records = cq_storage::counters::operators();
+                    let raw = records.iter().find(|record|
+                        record.label.result == "provider_input.rows").unwrap();
+                    assert_eq!(raw.label.kind, "ROWS_BUILD");
+                    assert_eq!(raw.calls, u64::from(staged));
+                    assert_eq!(raw.rows_inserted, if staged { selected as u64 } else { 0 });
+                    if !staged {
+                        assert_eq!(raw.elapsed, ::std::time::Duration::ZERO);
+                    }
+                    let parts = records.iter().find(|record|
+                        record.label.result == "provider.parts").unwrap();
+                    assert_eq!(parts.rows_inserted, if routed { selected as u64 } else { 0 });
+                    let native = records.iter().find(|record|
+                        record.label.result == "r.index.a_b").unwrap();
+                    assert_eq!(native.rows_inserted, selected as u64);
+                    PRODUCERS.store(0, Ordering::Relaxed);
+                    PRODUCED_ROWS.store(0, Ordering::Relaxed);
+                    NATIVE_COPIES.store(usize::MAX, Ordering::Relaxed);
+                    cq_storage::counters::reset();
+                    let actual: Vec<_> = (#plain).map(|(a,b,c)| (*a,*b,*c)).collect();
+                    assert_eq!(actual, expected);
+                    assert_eq!(PRODUCERS.load(Ordering::Relaxed), 1);
+                    assert_eq!(PRODUCED_ROWS.load(Ordering::Relaxed), selected);
+                    assert_eq!(BUFFERS.load(Ordering::Relaxed), if routed { 64 } else { 0 });
+                    assert_eq!(
+                        NATIVE_COPIES.load(Ordering::Relaxed),
+                        selected * (1 + usize::from(staged) + usize::from(routed))
+                    );
+                }
+            });
+        }
+    }
+    run_partition_fixture(quote::quote! {
+        use ::std::sync::atomic::{AtomicUsize, Ordering};
+        static PRODUCERS: AtomicUsize = AtomicUsize::new(0);
+        static PRODUCED_ROWS: AtomicUsize = AtomicUsize::new(0);
+        static NATIVE_COPIES: AtomicUsize = AtomicUsize::new(usize::MAX);
+        static BUFFERS: AtomicUsize = AtomicUsize::new(usize::MAX);
+        fn observe_native<T>(provider: T) -> T {
+            NATIVE_COPIES.store(cq_storage::counters::snapshot().rows_copied as usize, Ordering::Relaxed);
+            provider
+        }
+        fn opaque_positive(value: impl ::std::borrow::Borrow<i32>) -> bool {
+            *value.borrow() > 0
+        }
+        fn main() {
+            let probes = [(1,2),(3,4)];
+            let values = [(1,2,-1),(1,2,8),(3,4,9),(1,2,10),(3,4,11),(1,2,12),(3,4,13),(1,2,14)];
+            let capture = String::from("still borrowed");
+            for threads in [1,24] {
+                let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+                // Host equality stages even if selection remains below cache;
+                // selected equality routes. Four selected rows is the low cutoff.
+                for length in [0,1,3,4,5,6,7,8] {
+                    let L = probes.as_slice();
+                    let R = &values[..length];
+                    let selected = R.iter().filter(|row| row.2 > 0).count();
+                    let expected: Vec<_> = L.iter().flat_map(|&(a,b)|
+                        R.iter().filter_map(move |&(ra,rb,c)|
+                            (a == ra && b == rb && c > 0).then_some((a,b,c)))).collect();
+                    pool.install(|| { #(#cases)* });
+                }
+            }
+        }
+    });
+}
+
+#[test]
+fn singleton_provider_cover_replays_without_a_row_buffer_or_extra_clones() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    struct Row(usize, Arc<AtomicUsize>);
+    impl Clone for Row {
+        fn clone(&self) -> Self {
+            self.1.fetch_add(1, Ordering::Relaxed);
+            Self(self.0, self.1.clone())
+        }
+    }
+    let clones = Arc::new(AtomicUsize::new(0));
+    let rows: Vec<_> = (0..129).map(|key| Row(key, clones.clone())).collect();
+    let cover = cq_storage::sharded::ProviderParts::new(|| rows.iter().cloned(), None);
+    assert!(cover.routed().is_none());
+    assert_eq!(cover.part_count(), 1);
+    assert_eq!(clones.load(Ordering::Relaxed), 0);
+    use cq_storage::Build as _;
+    let provider =
+        cq_storage::sharded::Sharded::from_parts(vec![cq_storage::sharded::Index::build(
+            cover.source().map(|row| (row.0, row)),
+        )]);
+    assert_eq!(provider.shard_count(), 1);
+    assert_eq!(provider.len(), rows.len());
+    assert_eq!(clones.load(Ordering::Relaxed), rows.len());
+    assert_eq!(
+        cover.part(0).map(|row| row.0).collect::<Vec<_>>(),
+        (0..129).collect::<Vec<_>>()
+    );
+    assert_eq!(clones.load(Ordering::Relaxed), rows.len() * 2);
 }
 
 #[test]

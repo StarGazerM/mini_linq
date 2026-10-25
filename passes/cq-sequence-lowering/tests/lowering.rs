@@ -14,6 +14,7 @@ fn accept(source: &cq_lang_structures::Program) -> Program {
             name: syn::parse_quote!(sequential),
             items: 1,
             key_partition_threshold: 65536,
+            key_partition_cache_threshold: 6 * 1024 * 1024,
             root: LevelNode {
                 shared_bytes: None,
                 name: syn::parse_quote!(host),

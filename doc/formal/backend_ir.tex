@@ -122,7 +122,7 @@ one part; a separated store publishes the concatenation of its outer parts.
  {\text{equality, hashing and canon on }K\text{, and order reads on }c\text{, act on codes}}
 
 \Rule{BE-Choose}{t_1,\ldots,t_n\text{ have checked equal support}\quad
- \text{guards }g_i\text{ over lengths, exhaustive}}
+ \text{guards }g_i\text{ over lengths or target-wide workers, exhaustive}}
  {\mathsf{choose}\,[g_i\Rightarrow t_i]\text{ denotes any }t_i\text{; which runs is free}}
 \end{mathpar}
 BE-Bind is the Kleisli bind of Section~\ref{sec:denotation} restated: a
@@ -144,9 +144,14 @@ stop and is stated on bags: a lost or duplicated position changes
 $\alpha$. BE-Canon makes per-part canon a sound prefilter that replaces
 the global boundary only when equal rows meet in one part. BE-Choose is
 incremental flattening~\cite{paper-futhark-flatten}: the right
-decomposition depends on lengths known at run time, so several equal
-decompositions may be recorded under thresholds that are tuning
-parameters, not meaning.
+decomposition depends on lengths and available workers known at run time,
+so several equal decompositions may be recorded under thresholds that are
+tuning parameters, not meaning. The guard \code{workers < N} has a positive
+bound and reads one target-wide available-worker count. It is uniform for
+collective participation, supplies no size evidence, and does not change
+support; a final \code{else} covers the remaining worker counts. Pull supplies
+one worker; target-hook translations receive an explicit worker expression,
+with Tasks supplying \code{rayon::current\_num\_threads()}.
 
 \paragraph{Key-disjoint partitions.}
 Let $B=\alpha t$ be a bag of complete valuations $V$, $K$ a tuple of
@@ -294,7 +299,7 @@ GPU instance of the grade.
  {|t|\text{ is in its type before the write (a scan), or a capacity with an overflow flag}}
 
 \Rule{BE-Publication}{d=\mathsf{store}\,t\quad t\text{ has checked provenance and consumers}}
- {\mathsf{publication}(d)\in\{\mathsf{BorrowHost},\mathsf{Alias},\mathsf{OwnRows},\mathsf{Parts}\}}
+ {\mathsf{publication}(d)\in\{\mathsf{BorrowHost},\mathsf{Alias},\mathsf{OwnRows},\mathsf{DeferredRows},\mathsf{Parts}\}}
 
 \Rule{BE-Boundary}{\text{a maximal segment of total terms between stores at a separated level}}
  {\text{is one unit of dispatch (a kernel, a task); its domain is the outer stored space; derived, not written}}
@@ -403,6 +408,32 @@ validates its type arguments and proves every routing column belongs to the
 stored outer key, after constant elision. An unrelated type with the same
 last identifier has no routed interpretation.
 
+The \(\mathsf{DeferredRows}(c)\) refinement is checked Store-consumer fusion,
+not a global lazy interpretation of \code{store}. It applies only to a staged
+owned input \(d=\mathsf{store}\,t\) whose row and written-length consumers are
+confined to one \(\mathsf{Parts}\) publication \(c\). That publication starts
+with the recorded uniform guard \code{workers < 2}, whose arm contains a
+singleton leaf \(\mathsf{partition}_K(1)\,d\), directly or beneath checked
+nested length choices. Every leaf covers the same named \(d\) with the same keys.
+Exactly one native routed provider is built, with no retained rows, direct
+part replay, consumer alias, or final-output use. The pre-reheading input and
+consumer result carriers agree. Checking follows pure named producer views
+and previously published resident-host borrows, but not prior owned or nested
+Stores. It uses Physical opacity analysis over every dependency, excludes
+shadowable join-filter source bindings, and excludes
+intervening publications of source dependencies.
+
+Under these premises a worker-singleton leaf reached without counting \(d\)
+may consume \(t\) directly. A proven nonexpanding host-length guard can select
+this leaf before demanding a filtered staged input. Any count of \(d\) or routed
+demand instead forces one owned row vector and retention token, reused by all
+subsequent demands, including a later singleton leaf.
+Thus \(t\) is evaluated at most once on each selected branch. A skipped vector
+incurs no row-build or retention activity; actual routed copies remain owned.
+PL-Cost nevertheless retains the worst-case owned-input traffic \(B\), with
+unchanged work and span. Failure of any premise preserves the original
+publication record, and the interpreter may not infer a new scheduling guard.
+
 \subsection{Decomposition}
 A planner is an advice generator, not another interpretation of Sequence.
 Its inputs are a Sequence program $t$, a machine $M$, and an ordered catalog
@@ -478,15 +509,48 @@ Like routing, merging states is organizational span rather than repeated
 evaluation of original row expressions. Many-group estimates can therefore
 select key routing over partial-map merging without changing either meaning.
 For an eligible native exact-key provider Store, the automatic schedule retains
-an explicit runtime BE-Choose before this cost comparison: a positive machine
-parameter $\theta$ selects $\mathsf{partition}_{K,1}(t)$ when the published
-input length is below $\theta$, and $\mathsf{partition}_{K,P}(t)$ otherwise.
-Written guards use $\mathsf{len}(t)$ (the Sequence \texttt{Len::Input} name of
-the prior publication), not a cardinality estimate. Both arms retain the same
-routing keys and provider token; BE-Choose joins their unequal outer lengths.
-The one-part identity cover builds the native provider without hashing; the
-other arm builds $P$ routed providers. Fixed-cover allocations are available
-in each branch, so differing part counts alone do not require Store capacity.
+an explicit runtime BE-Choose before this cost comparison. For published
+input length \(n\), workers \(w\), and positive machine row cutoffs
+\(\theta=\code{key\_partition\_threshold}\) and
+\(\kappa=\code{key\_partition\_cache\_threshold}\), the policy is
+\[
+  \mathsf{route}(n,w)\iff n\geq\theta\ \land\ (w>1\ \lor\ n\geq\kappa).
+\]
+Let \(c=\max(\theta,\kappa)\). The first root arm \(w<2\) is itself a choice:
+an optional proved \(\mathsf{len}(H)<c\) selects
+\(\mathsf{partition}_{K,1}(t)\), then \(n<c\) selects that same singleton,
+otherwise use \(\mathsf{partition}_{K,P}(t)\). The remaining root arms
+select singleton for \(n<\theta\), and \(P\) parts otherwise.
+Nested choices of fixed key covers retain the published-input allocation
+witness of every leaf (BE-Length); varying the selected part count does not
+introduce an unbounded separated store.
+The host-layout name \(H\) is accepted by \texttt{Len::Input} and supplies an
+upper bound only through nonexpanding Physical Rename, Select, Point, Range,
+Guard, Bind, Project, and Semi/Anti driver chains. Probe, Merge, Union and Group
+stop this derivation. The actual Sequence occurrence count must also be bounded:
+host Rows and pure Ref chains, Store, Tile/Flatten and Canon preserve the bound;
+Map/Compact additionally require the nonexpanding Physical path from their
+child's provenance. Membership Compact may consume a Lookup's existence,
+but expanding Lookup, Union, Fold and Group do not qualify. Choices require
+compatible host and result provenance in every arm. A Rows read following a
+non-BorrowHost publication of that result is excluded: support equality alone
+does not prevent duplicate occurrences. A Sequence definition (including the
+new publication) that shadows \(H\) also prevents the shortcut. Thus host length
+can establish singleton selection without demanding filtered staging; the
+exact-input fallback retains the equation when host length does not decide it.
+Tasks defaults \(\theta=65{,}536\) and \(\kappa=6{,}291{,}456\) rows are
+measured target parameters, not universal optima or cache-byte guarantees.
+The cache cutoff exceeds H04 SF1's \(6{,}001{,}215\) host rows but is below the
+measured H04/H21 SF10 provider inputs. A positive \(\kappa<\theta\) is valid.
+Replay records both \code{threshold N} and \code{cache N}; explicit
+threshold-only advice retains its legacy worker/count policy. This is a Machine
+and Tasks Config parameter, not a new macro option or interpreter branch.
+Written exact count guards use the Sequence \texttt{Len::Input} name of the
+prior publication, not a cardinality estimate. All arms retain the same routing
+keys and provider token; BE-Choose joins unequal outer lengths. The one-part
+identity cover builds the native provider without hashing; routed leaves build
+\(P\) providers. Fixed-cover allocations are available in each branch, so
+differing part counts alone do not require Store capacity.
 The rewrite redirects every ordinary row reference and written length guard
 on the original provider definition to the new raw publication, preserving
 its flat carrier and ancestor extent. Lookup provider identities retain the
@@ -848,7 +912,8 @@ The Tasks machine API \code{machine()} uses a fixed default of 64 logical
 pool partitions; \code{machine\_with\_width(parts)} requires a positive count
 and records it as the pool's distributing width. This logical width is not
 the contiguous tile grain and is not the Rayon worker count. Changing the
-runtime thread count changes scheduling only. Keyed group and routed point
+runtime thread count changes scheduling and may select an equivalent recorded
+worker-guarded cover, never results. Keyed group and routed point
 providers realize BE-KeyPartGroup and BE-KeyPartProvider only where the
 checked Sequence records them; the translator introduces no partition plan.
 Joining task buffers preserves every surviving sequence dimension. Fold,
@@ -868,6 +933,13 @@ not in a serial collection before dispatch. Routing groups consecutive chunks
 into scheduler-fold-local buckets, reuses the first nonempty owner buffer,
 and preserves occurrence order within each published part. These are
 realizations of the existing checked covers, not additional IR choices.
+For a recorded singleton provider cover over an immutable published source,
+Tasks retains the source iterator rather than copying it into a row-part
+vector. The native inner provider consumes that iterator directly. Routed
+covers retain their owned part buffers and matching lookup-key router.
+The singleton therefore records no partition-buffer insertions, while native
+provider insertions are still counted. Any preceding owned input publication
+remains an independently accounted Store.
 
 The parallel Datalog extension (Section~\ref{sec:datalog-languages}) is the
 task interpretation at the granularity of rule holes: its partitioned

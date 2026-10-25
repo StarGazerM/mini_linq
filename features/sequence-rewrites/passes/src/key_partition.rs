@@ -17,8 +17,11 @@ pub struct KeyPartition {
     pub input: Ident,
     pub keys: Vec<Ident>,
     pub parts: usize,
-    /// Runtime row-count cutoff for provider builds; absent means fixed routing.
+    /// Adaptive provider row-count cutoff. Absent means fixed routing.
     pub threshold: Option<usize>,
+    /// Optional single-worker cache-locality cutoff, effective at least `threshold`.
+    /// Omitted advice retains the legacy worker/count policy.
+    pub cache_threshold: Option<usize>,
 }
 
 impl Parse for KeyPartition {
@@ -35,22 +38,36 @@ impl Parse for KeyPartition {
             .collect();
         input.parse::<Token![,]>()?;
         let parts = input.parse::<LitInt>()?.base10_parse()?;
-        let threshold = if input.peek(Token![,]) {
+        let mut threshold = None;
+        let mut cache_threshold = None;
+        while input.peek(Token![,]) {
             input.parse::<Token![,]>()?;
             let keyword: Ident = input.parse()?;
-            if keyword != "threshold" {
-                return Err(syn::Error::new_spanned(keyword, "expected threshold"));
+            let slot = if keyword == "threshold" {
+                &mut threshold
+            } else if keyword == "cache" {
+                &mut cache_threshold
+            } else {
+                return Err(syn::Error::new_spanned(
+                    keyword,
+                    "expected threshold or cache",
+                ));
+            };
+            if slot.is_some() {
+                return Err(syn::Error::new_spanned(
+                    keyword,
+                    "duplicate partition cutoff",
+                ));
             }
-            Some(input.parse::<LitInt>()?.base10_parse()?)
-        } else {
-            None
-        };
+            *slot = Some(input.parse::<LitInt>()?.base10_parse()?);
+        }
         Ok(Self {
             name,
             input: producer,
             keys,
             parts,
             threshold,
+            cache_threshold,
         })
     }
 }
@@ -63,13 +80,18 @@ impl ToTokens for KeyPartition {
             keys,
             parts,
             threshold,
+            cache_threshold,
         } = self;
         let parts = LitInt::new(&parts.to_string(), name.span());
         let threshold = threshold.map(|n| {
             let n = LitInt::new(&n.to_string(), name.span());
             quote!(, threshold #n)
         });
-        tokens.extend(quote!(#name, #input, [#(#keys),*], #parts #threshold));
+        let cache = cache_threshold.map(|n| {
+            let n = LitInt::new(&n.to_string(), name.span());
+            quote!(, cache #n)
+        });
+        tokens.extend(quote!(#name, #input, [#(#keys),*], #parts #threshold #cache));
     }
 }
 fn references(term: &Term, counts: &mut std::collections::BTreeMap<String, usize>) {
@@ -260,6 +282,149 @@ fn streaming_partial_group(
     }
 }
 
+/// Bound actual Sequence occurrences, not merely their Physical set support.
+/// Every traversed map must also have a nonexpanding Physical driver path.
+fn nonexpanding_host(
+    source: &Program,
+    analysis: &cq_lang_sequence::Analysis,
+    term: &Term,
+    before: usize,
+) -> Option<String> {
+    use cq_lang_sequence::structures::physical::Operator;
+    fn extends<'a>(
+        source: &'a Program,
+        analysis: &cq_lang_sequence::Analysis,
+        mut result: &'a Ident,
+        input: &Ident,
+    ) -> bool {
+        loop {
+            if result == input {
+                return true;
+            }
+            let Some(definition) = source
+                .structures
+                .physical
+                .program
+                .definitions
+                .iter()
+                .find(|definition| definition.name == *result)
+            else {
+                return false;
+            };
+            result = match &definition.operator {
+                Operator::Rename(_) => {
+                    return analysis
+                        .structures
+                        .physical
+                        .hosts
+                        .get(&symbol_name(result))
+                        .is_some_and(|host| input == host.as_str());
+                }
+                Operator::Select(select)
+                | Operator::Point(_, select)
+                | Operator::Range(_, select) => &select.input,
+                Operator::Guard(guard) => &guard.input,
+                Operator::Bind(bind) => &bind.input,
+                Operator::Project(project) => &project.input,
+                Operator::Semi(_, keyed) | Operator::Anti(_, keyed) => &keyed.left,
+                Operator::Probe(..)
+                | Operator::Merge(..)
+                | Operator::Union(_)
+                | Operator::Group(_)
+                | Operator::Unit(_) => return false,
+            };
+        }
+    }
+    fn bound<'a>(
+        source: &'a Program,
+        analysis: &'a cq_lang_sequence::Analysis,
+        term: &'a Term,
+        before: usize,
+    ) -> Option<(&'a str, &'a Ident)> {
+        match term {
+            Term::Rows(name) => {
+                let result = symbol_name(name);
+                // Rows may read an earlier publication rather than the host.
+                // Support-equal duplicate buffers are not host cardinality bounds.
+                if source.sequence.definitions[..before]
+                    .iter()
+                    .any(|definition| {
+                        let name = symbol_name(&definition.name);
+                        analysis.results.get(&name) == Some(&result)
+                            && analysis.publications.get(&name).is_some_and(|publication| {
+                                !matches!(
+                                    publication,
+                                    cq_lang_sequence::Publication::BorrowHost { .. }
+                                )
+                            })
+                    })
+                {
+                    return None;
+                }
+                let host = analysis
+                    .structures
+                    .physical
+                    .hosts
+                    .get(&result)
+                    .map(String::as_str)
+                    .or_else(|| {
+                        analysis
+                            .structures
+                            .host_layouts
+                            .get_key_value(&result)
+                            .map(|(host, _)| host.as_str())
+                    })?;
+                analysis
+                    .structures
+                    .host_layouts
+                    .contains_key(host)
+                    .then_some((host, name))
+            }
+            Term::Ref(name) => {
+                let index = source.sequence.definitions[..before]
+                    .iter()
+                    .position(|definition| definition.name == *name)?;
+                bound(
+                    source,
+                    analysis,
+                    &source.sequence.definitions[index].term,
+                    index,
+                )
+            }
+            Term::Store { inner, .. }
+            | Term::Tile { inner, .. }
+            | Term::Flatten(inner)
+            | Term::Canon(inner) => bound(source, analysis, inner, before),
+            Term::Map(name, inner) | Term::Compact(name, inner) => {
+                let child = if matches!(term, Term::Compact(_, _)) {
+                    match inner.as_ref() {
+                        Term::Lookup { inner, .. } => inner.as_ref(),
+                        _ => inner.as_ref(),
+                    }
+                } else {
+                    inner.as_ref()
+                };
+                let (host, input) = bound(source, analysis, child, before)?;
+                extends(source, analysis, name, input).then_some((host, name))
+            }
+            Term::Choose(arms) => {
+                let (_, first) = arms.first()?;
+                let first = bound(source, analysis, first, before)?;
+                arms.iter()
+                    .skip(1)
+                    .all(|(_, arm)| bound(source, analysis, arm, before) == Some(first))
+                    .then_some(first)
+            }
+            Term::Union(_)
+            | Term::Lookup { .. }
+            | Term::Fold(_, _)
+            | Term::Group(_, _)
+            | Term::PartitionK { .. } => None,
+        }
+    }
+    bound(source, analysis, term, before).map(|(host, _)| host.to_owned())
+}
+
 pub fn key_partition(source: &Program, arguments: TokenStream) -> syn::Result<Program> {
     key_partition_in(&mut Default::default(), source, &syn::parse2(arguments)?)
 }
@@ -283,6 +448,18 @@ pub fn key_partition_in(
         return Err(syn::Error::new_spanned(
             &advice.name,
             "BE-KeyPartProvider: runtime threshold must be positive",
+        ));
+    }
+    if advice.cache_threshold == Some(0) {
+        return Err(syn::Error::new_spanned(
+            &advice.name,
+            "BE-KeyPartProvider: runtime cache threshold must be positive",
+        ));
+    }
+    if advice.cache_threshold.is_some() && advice.threshold.is_none() {
+        return Err(syn::Error::new_spanned(
+            &advice.name,
+            "BE-KeyPartProvider: cache cutoff requires a provider threshold",
         ));
     }
     if advice.threshold.is_some()
@@ -418,12 +595,18 @@ pub fn key_partition_in(
         term: &Term,
         advice: &KeyPartition,
         source: &Program,
+        host_bound: Option<&str>,
         counts: &std::collections::BTreeMap<String, usize>,
         updates: &mut Vec<(usize, Term)>,
     ) -> syn::Result<(Term, Term)> {
         let routed = || Term::PartitionK {
             keys: advice.keys.clone(),
             parts: advice.parts,
+            inner: Box::new(Term::Ref(advice.input.clone())),
+        };
+        let singleton = || Term::PartitionK {
+            keys: advice.keys.clone(),
+            parts: 1,
             inner: Box::new(Term::Ref(advice.input.clone())),
         };
         match term {
@@ -462,17 +645,33 @@ pub fn key_partition_in(
             Term::Store { capacity, inner } => {
                 let (input, output) =
                     if matches!(inner.as_ref(), Term::Canon(_) | Term::Group(_, _)) {
-                        split(inner, advice, source, counts, updates)?
+                        split(inner, advice, source, host_bound, counts, updates)?
                     } else {
                         let output = if let Some(threshold) = advice.threshold {
+                            let single_worker = if let Some(cache) = advice.cache_threshold {
+                                let cache = cache.max(threshold);
+                                let mut arms =
+                                    Vec::with_capacity(if host_bound.is_some() { 3 } else { 2 });
+                                if let Some(host) = host_bound {
+                                    arms.push((
+                                        Guard::Lt(Len::Input(host.into()), cache),
+                                        singleton(),
+                                    ));
+                                }
+                                arms.push((
+                                    Guard::Lt(Len::Input(symbol_name(&advice.input)), cache),
+                                    singleton(),
+                                ));
+                                arms.push((Guard::Else, routed()));
+                                Term::Choose(arms)
+                            } else {
+                                singleton()
+                            };
                             Term::Choose(vec![
+                                (Guard::WorkersLt(2), single_worker),
                                 (
                                     Guard::Lt(Len::Input(symbol_name(&advice.input)), threshold),
-                                    Term::PartitionK {
-                                        keys: advice.keys.clone(),
-                                        parts: 1,
-                                        inner: Box::new(Term::Ref(advice.input.clone())),
-                                    },
+                                    singleton(),
                                 ),
                                 (Guard::Else, routed()),
                             ])
@@ -495,11 +694,30 @@ pub fn key_partition_in(
             )),
         }
     }
+    let host_bound = advice
+        .cache_threshold
+        .and_then(|_| {
+            nonexpanding_host(
+                source,
+                &analysis,
+                &source.sequence.definitions[index].term,
+                index,
+            )
+        })
+        .filter(|host| {
+            advice.input != host.as_str()
+                && !source
+                    .sequence
+                    .definitions
+                    .iter()
+                    .any(|definition| definition.name == host.as_str())
+        });
     let mut updates = Vec::new();
     let (input, output) = split(
         &source.sequence.definitions[index].term,
         advice,
         source,
+        host_bound.as_deref(),
         &counts,
         &mut updates,
     )?;

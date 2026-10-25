@@ -501,6 +501,11 @@ impl<'a> Compiler<'a> {
     fn guard(&self, guard: &Guard) -> syn::Result<TokenStream> {
         Ok(match guard {
             Guard::Else => quote!(true),
+            Guard::WorkersLt(_) => {
+                return Err(error(
+                    "GPU Sequence does not support target-wide worker guards",
+                ));
+            }
             Guard::Lt(len, n) => {
                 let len = self.length(len)?;
                 quote!((#len) < #n)

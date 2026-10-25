@@ -521,14 +521,28 @@ impl<'a> Context<'a> {
         routed: &BTreeMap<usize, syn::Type>,
     ) -> syn::Result<Repr> {
         let rows = quote!((#parts).iter().flatten().cloned());
-        Ok(self.materialize_from(name, rows, Some((parts, routing, routed))))
+        Ok(self.materialize_from(name, rows, Some((parts, routing, routed, false))))
+    }
+
+    /// Publish a checked cover that borrows its singleton source instead of
+    /// allocating row parts. Routed arms retain the ordinary parallel builders.
+    /// The caller keeps both the source publication and cover alive.
+    pub fn materialize_provider_parts(
+        &mut self,
+        name: &str,
+        parts: TokenStream,
+        routing: &[String],
+        routed: &BTreeMap<usize, syn::Type>,
+    ) -> Repr {
+        let rows = quote!((#parts).rows());
+        self.materialize_from(name, rows, Some((parts, routing, routed, true)))
     }
 
     fn materialize_from(
         &mut self,
         name: &str,
         source: TokenStream,
-        parts: Option<(TokenStream, &[String], &BTreeMap<usize, syn::Type>)>,
+        parts: Option<(TokenStream, &[String], &BTreeMap<usize, syn::Type>, bool)>,
     ) -> Repr {
         let structures: Vec<(Vec<Vec<String>>, syn::Type)> =
             self.analysis.built.get(name).cloned().unwrap_or_default();
@@ -651,9 +665,10 @@ impl<'a> Context<'a> {
                 if path.qself.is_none() && path.path.segments.iter().all(|s| s.arguments.is_none()));
             let routed = parts
                 .as_ref()
-                .and_then(|(_, _, providers)| providers.get(&ordinal));
+                .and_then(|(_, _, providers, _)| providers.get(&ordinal));
             let build = if let Some(inner) = routed {
-                let (parts, routing, _) = parts.as_ref().expect("checked partition publication");
+                let (parts, routing, _, borrowed_singleton) =
+                    parts.as_ref().expect("checked partition publication");
                 let stored_key = self.stored_key(name, &levels[0]);
                 let fields = routing
                     .iter()
@@ -671,13 +686,37 @@ impl<'a> Context<'a> {
                     &build_name,
                     quote!(__cq_part.iter().cloned().map(|#pattern| #nested)),
                 );
-                quote!(::cq_storage::sharded::Sharded::<#inner, _>::build_from_parts_with_router(
-                    &(#parts),
-                    |__cq_part| <#inner as ::cq_storage::Build<_>>::build(#part_rows),
-                    |__cq_key: &(#(#key_types,)*), __cq_count| {
-                        ::cq_storage::sharded::route_index(&(#(&__cq_key.#fields,)*), __cq_count)
-                    }
-                ))
+                let router = quote!(|__cq_key: &(#(#key_types,)*), __cq_count| {
+                    ::cq_storage::sharded::route_index(&(#(&__cq_key.#fields,)*), __cq_count)
+                });
+                if *borrowed_singleton {
+                    let singleton_rows = self.profile_inserting(
+                        &build_name,
+                        quote!((#parts).source().map(|#pattern| #nested)),
+                    );
+                    quote!({
+                        let __cq_router = #router;
+                        match (#parts).routed() {
+                            ::core::option::Option::None =>
+                                ::cq_storage::sharded::Sharded::<#inner, _>::from_parts_with_router(
+                                    ::std::vec![<#inner as ::cq_storage::Build<_>>::build(#singleton_rows)],
+                                    __cq_router,
+                                ),
+                            ::core::option::Option::Some(__cq_parts) =>
+                                ::cq_storage::sharded::Sharded::<#inner, _>::build_from_parts_with_router(
+                                    __cq_parts,
+                                    |__cq_part| <#inner as ::cq_storage::Build<_>>::build(#part_rows),
+                                    __cq_router,
+                                ),
+                        }
+                    })
+                } else {
+                    quote!(::cq_storage::sharded::Sharded::<#inner, _>::build_from_parts_with_router(
+                        &(#parts),
+                        |__cq_part| <#inner as ::cq_storage::Build<_>>::build(#part_rows),
+                        #router,
+                    ))
+                }
             } else if let Some(selection) = selection.as_ref().filter(|_| !bare) {
                 let host_pattern = self.positional_pattern(name);
                 let nested = if let Some(i) = self.profile_index(&build_name) {

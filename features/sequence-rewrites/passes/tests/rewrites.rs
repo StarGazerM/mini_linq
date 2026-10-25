@@ -131,12 +131,19 @@ fn choose_uses_exhaustive_equal_support_alternatives() {
         target.sequence.definitions[2].term,
         syn::parse2::<Term>(quote!(choose [len r < 64 => a, else => b])).unwrap()
     );
+    let target = apply(choose, &source, quote!(d, workers < 2 => a, else => b));
+    assert_eq!(
+        target.sequence.definitions[2].term,
+        syn::parse2::<Term>(quote!(choose [workers < 2 => a, else => b])).unwrap()
+    );
     for advice in [
         quote!(missing, len r < 64 => a, else => b),
         quote!(d, len r < 64 => a, else => d),
         quote!(d, len r >= 64 => a, else => b),
         quote!(d, len r < 64 => a),
         quote!(d, len missing < 64 => a, else => b),
+        quote!(d, workers < 0 => a, else => b),
+        quote!(d, workers < 2 => a),
     ] {
         assert!(choose(&source, advice).is_err());
     }

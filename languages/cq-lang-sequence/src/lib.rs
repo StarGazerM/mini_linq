@@ -7,7 +7,7 @@
 //! Terms are prefix forms: `rows`, `map`, `flatten`, `compact`, `tile`, `lookup`,
 //! `partition_k[keys](parts)`, `fold`, `group`, `canon`, `store`, `union` and
 //! `choose`, or references to earlier definitions. A key partition reads a named
-//! ancestor store into fixed key-disjoint parts; runtime worker count is unrelated.
+//! ancestor store into fixed key-disjoint parts; scheduling guards may select a cover.
 //! Constructor names are also valid references when followed by a term boundary.
 //! A store may declare `store capacity N term`; the optional final sequence
 //! statement `output count;`, `output reserve;` or `output bounded;` selects the
@@ -54,6 +54,7 @@ mod kw {
     syn::custom_keyword!(or);
     syn::custom_keyword!(sum);
     syn::custom_keyword!(len);
+    syn::custom_keyword!(workers);
     syn::custom_keyword!(output);
     syn::custom_keyword!(reserve);
     syn::custom_keyword!(bounded);
@@ -138,6 +139,8 @@ pub enum Len {
 pub enum Guard {
     Lt(Len, usize),
     Ge(Len, usize),
+    /// Target-wide available workers; a uniform scheduling parameter, not a size.
+    WorkersLt(usize),
     Else,
 }
 
@@ -162,6 +165,9 @@ pub struct Machine {
     /// Minimum published input rows for automatic routed provider builds.
     /// A positive target parameter, independent of cardinality estimates or workers.
     pub key_partition_threshold: usize,
+    /// Minimum rows for automatic routing with fewer than two workers.
+    /// Positive; the effective single-worker cutoff is the maximum of both thresholds.
+    pub key_partition_cache_threshold: usize,
     pub root: LevelNode,
     /// Target-owned storage layout for one checked dispatch's resource demands.
     /// The language derives the shape; the machine alone assigns byte sizes.
@@ -332,6 +338,12 @@ pub enum Publication {
     /// `staged` publishes a raw row buffer for subsequent key routing.
     OwnRows {
         staged: bool,
+    },
+    /// Pure staged rows used only by this checked singleton/routed provider.
+    /// A count or routed demand owns one buffer; the worker-singleton arm may
+    /// consume the producer once without publishing a raw row buffer.
+    DeferredRows {
+        consumer: String,
     },
     Parts {
         keys: Vec<String>,
@@ -718,6 +730,11 @@ impl Parse for Guard {
             input.parse::<Token![else]>()?;
             return Ok(Self::Else);
         }
+        if input.peek(kw::workers) {
+            input.parse::<kw::workers>()?;
+            input.parse::<Token![<]>()?;
+            return Ok(Self::WorkersLt(parse_usize(input)?));
+        }
         let len = input.parse()?;
         let lookahead = input.lookahead1();
         if lookahead.peek(Token![<]) {
@@ -742,6 +759,10 @@ impl ToTokens for Guard {
             Self::Ge(len, threshold) => {
                 let threshold = integer(*threshold);
                 quote! { #len >= #threshold }
+            }
+            Self::WorkersLt(threshold) => {
+                let threshold = integer(*threshold);
+                quote! { workers < #threshold }
             }
             Self::Else => quote! { else },
         });

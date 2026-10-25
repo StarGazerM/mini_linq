@@ -7,6 +7,29 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Sequence records checked, uniform `workers < N` scheduling guards without
+  changing support or count semantics. Adaptive native provider plans route iff
+  `rows >= low && (workers > 1 || rows >= cache)`; forced plans stay unconditional.
+  Positive in-band `Machine`/Tasks `Config` cache cutoffs default to the measured
+  6,291,456 rows, not a universal optimum or cache-byte guarantee. Replay records
+  both cutoffs and nested guards; no new macro option or translator policy.
+  A proved nonexpanding, unshadowed host bound can choose singleton before
+  demanding filtered input length. The proof follows actual producer occurrences,
+  not just set support; expanding joins and duplicate unions never supply it.
+  Pull supplies one worker and target hooks receive an explicit worker-count
+  expression; Tasks uses the current Rayon pool's available worker count.
+- Recorded singleton provider covers build directly from immutable published
+  sources, avoiding the redundant row-part buffer; routed covers keep their
+  owned parts and router. Worker count is captured once inside the executing
+  pool, and partition-buffer counters reflect only buffers actually allocated.
+- Check single-consumer raw staging fusion as `DeferredRows { consumer }`:
+  recorded nested worker/cache singleton leaves consume total producers once
+  without a raw row vector when reached before the staged count is demanded;
+  exact-count fallback or routed demands retain one shared owned buffer.
+  Pure named producer views are eligible, but opaque dependencies, shared or
+  replayed rows, carrier reheading, prior stores and shadowable join-filter
+  sources keep their original publication. PL-Cost retains worst-case owned
+  traffic; skipped buffers produce no row-build or retention profiling activity.
 - Derive checked Sequence publication ownership once (`BorrowHost`, `Alias`,
   owned rows, or key parts) for PL-Cost and Tasks, preserving source provenance
   across reheading. Real retained key-input copies pay a row-traffic tie-breaker

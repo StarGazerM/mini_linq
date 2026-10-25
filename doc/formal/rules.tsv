@@ -211,7 +211,7 @@ BE-Offsets	implementation	languages/cq-lang-sequence/src/contract.rs	// Formal r
 BE-Canon	implementation	languages/cq-lang-sequence/src/contract.rs	// Formal rule BE-Canon:	Global support requires flattened rows; record opaque canon and codec obligations.
 GPU-WideCanon	implementation	experiments/gpu/sequence-runtime/src/canon.rs	// Formal rule GPU-WideCanon:	Stable least-significant-lane radix sorting and complete-row equality instantiate BE-Canon for arbitrary-width packed keys.
 BE-Code	abstract	-	-	Codec injectivity and monotonicity remain runtime trait premises recorded in Sequence Analysis.obligations.
-BE-Choose	implementation	languages/cq-lang-sequence/src/contract.rs	// Formal rule BE-Choose:	Check exhaustive length guards and construction-equal alternatives; join their size types.
+BE-Choose	implementation	languages/cq-lang-sequence/src/contract.rs	// Formal rule BE-Choose:	Check exhaustive length or positive-bound uniform worker guards and construction-equal alternatives; join their size types.
 BE-Scope	implementation	languages/cq-lang-sequence/src/grading.rs	// Formal rule BE-Scope:	Check complete grades, lexical order and reads inside ancestor store extents; stores enclose explicitly named host/descendant producers for publication in either direction.
 BE-Collective	implementation	languages/cq-lang-sequence/src/grading.rs	// Formal rule BE-Collective:	A fold, scan or flatten at a level with members is admissible only at a collaborative level with whole participation; at a leaf level it is a sequential loop.
 BE-Separate	implementation	languages/cq-lang-sequence/src/grading.rs	// Formal rule BE-Separate:	Reject exchange across separated siblings without an ancestor store.
@@ -224,7 +224,7 @@ BE-Resource	implementation	languages/cq-lang-sequence/src/grading.rs	// Formal r
 T-Tasks	implementation	features/sequence-tasks/src/lib.rs	// Formal rule T-Tasks:	Interpret checked Sequence with indexed Rayon chunks, ordered task-local buffer publication, monoidal reductions and local then global canonicalization.
 EXT-SeqStore	implementation	features/sequence-rewrites/passes/src/lib.rs	// Formal rule EXT-SeqStore:	Materialize selected flatten definitions with exclusive-scan lengths and unchanged support; factor a named producer for separately graded publication.
 EXT-SeqTile	implementation	features/sequence-rewrites/passes/src/lib.rs	// Formal rule EXT-SeqTile:	Wrap a definition in positive contiguous tiles; unknown-length stores require capacity.
-EXT-SeqChoose	implementation	features/sequence-rewrites/passes/src/lib.rs	// Formal rule EXT-SeqChoose:	Select earlier independently checked equal-support definitions under exhaustive length guards.
+EXT-SeqChoose	implementation	features/sequence-rewrites/passes/src/lib.rs	// Formal rule EXT-SeqChoose:	Select earlier independently checked equal-support definitions under exhaustive length or worker guards.
 EXT-SeqOutput	implementation	features/sequence-rewrites/passes/src/lib.rs	// Formal rule EXT-SeqOutput:	Set the final store output protocol without changing support; bounded requires capacity.
 EXT-SeqGrade	implementation	features/sequence-rewrites/passes/src/lib.rs	// Formal rule EXT-SeqGrade:	Add or update placements on one named machine without changing construction; machine validation is deferred.
 PL-Closure	implementation	passes/cq-sequence-plan/src/lib.rs	// Formal rule PL-Closure:	Return a replayable trace of checked Sequence rewrites and a machine-checked graded program.

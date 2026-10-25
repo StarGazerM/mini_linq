@@ -613,7 +613,7 @@ impl<'a> Checker<'a> {
                         Guard::Lt(length, _) | Guard::Ge(length, _) => {
                             self.uniform_length(length, owner, level)?
                         }
-                        Guard::Else => true,
+                        Guard::WorkersLt(_) | Guard::Else => true,
                     };
                     branch_uniform &= guard_uniform;
                     inputs.push(self.visit(
@@ -721,6 +721,15 @@ impl<'a> Checker<'a> {
         }
     }
     fn unknown_length(&self, term: &Term) -> bool {
+        fn fixed_key_cover(term: &Term) -> bool {
+            match term {
+                Term::PartitionK { .. } => true,
+                Term::Choose(arms) => {
+                    !arms.is_empty() && arms.iter().all(|(_, arm)| fixed_key_cover(arm))
+                }
+                _ => false,
+            }
+        }
         match term {
             Term::Ref(name) => matches!(
                 self.lengths.get(&symbol_name(name)),
@@ -734,13 +743,9 @@ impl<'a> Checker<'a> {
             } => self.unknown_length(inner),
             Term::Union(arms) => arms.iter().any(|arm| self.unknown_length(arm)),
             Term::Choose(arms) => {
-                // A choice of fixed covers reads already published rows. Its
-                // outer part count varies, but each branch's allocation is known.
-                if !arms.is_empty()
-                    && arms
-                        .iter()
-                        .all(|(_, arm)| matches!(arm, Term::PartitionK { .. }))
-                {
+                // Nested choices still select one fixed cover of previously
+                // published rows, so no arm needs an unknown-sized allocation.
+                if fixed_key_cover(term) {
                     return false;
                 }
                 // The contract records joins of unequal branch lengths.

@@ -18,6 +18,7 @@ fn machine() -> Machine {
         name: syn::parse_quote!(target),
         items: 3,
         key_partition_threshold: 65536,
+        key_partition_cache_threshold: 6 * 1024 * 1024,
         root: node(
             "host",
             vec![node(

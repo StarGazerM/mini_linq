@@ -3,13 +3,58 @@ use cq_lang_sequence::structures::symbol_name;
 use cq_sequence_pull::{Emitter, Value};
 use quote::quote;
 
+/// An immutable input publication and its exact checked cover alternatives.
+/// This is realization metadata, not a second partition-selection policy.
+#[derive(Clone)]
+pub(crate) struct ProviderCover {
+    pub source: String,
+    pub rows: proc_macro2::TokenStream,
+    pub result: Option<String>,
+    pub choice: CoverChoice,
+}
+
+#[derive(Clone)]
+pub(crate) enum CoverChoice {
+    Partition {
+        parts: usize,
+        rows: proc_macro2::TokenStream,
+    },
+    Choose(Vec<(proc_macro2::TokenStream, CoverChoice)>),
+}
+
+impl CoverChoice {
+    pub fn buffers(&self, emitter: &Emitter<'_>, label: &str) -> proc_macro2::TokenStream {
+        match self {
+            Self::Partition { parts: 1, .. } => quote!(::core::option::Option::None),
+            Self::Partition { rows, .. } => {
+                let part = emitter
+                    .context()
+                    .profile_inserting(label, quote!(__cq_part));
+                quote!(::core::option::Option::Some(
+                    (#rows).map(|__cq_part| (#part).collect::<::std::vec::Vec<_>>())
+                        .collect::<::std::vec::Vec<_>>()
+                ))
+            }
+            Self::Choose(arms) => {
+                let mut selected =
+                    quote!(::core::unreachable!("checked exhaustive Sequence choice"));
+                for (condition, arm) in arms.iter().rev() {
+                    let branch = arm.buffers(emitter, label);
+                    selected = quote!(if #condition { #branch } else { #selected });
+                }
+                selected
+            }
+        }
+    }
+}
+
 pub(crate) fn partition(
     emitter: &Emitter<'_>,
     input: &Value,
     keys: &[syn::Ident],
     parts: usize,
     grain: usize,
-    stored: Option<&syn::Ident>,
+    stored: Option<&proc_macro2::TokenStream>,
     borrowed_host: Option<&str>,
 ) -> syn::Result<proc_macro2::TokenStream> {
     if parts == 1 {
@@ -39,7 +84,7 @@ pub(crate) fn partition(
     });
     let mut prepare = quote!();
     let chunks = if let Some(stored) = stored {
-        quote!(#stored.par_chunks(#grain).map(|__cq_chunk| __cq_chunk.iter().cloned()))
+        quote!((#stored).par_chunks(#grain).map(|__cq_chunk| __cq_chunk.iter().cloned()))
     } else if let Some(result) = borrowed_host {
         if context.carries_positions(result) || context.join_filter_ids(result).is_some() {
             let host = cq_print::Context::positional_host(&context.physical_analysis.hosts[result]);

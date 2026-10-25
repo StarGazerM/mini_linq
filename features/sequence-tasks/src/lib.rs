@@ -30,6 +30,9 @@ pub struct Config {
     pub partitions: usize,
     /// Published rows at which the planner records routed-provider construction.
     pub key_partition_threshold: usize,
+    /// Rows at which cache-local provider partitions also apply with one worker.
+    /// The effective cutoff is at least `key_partition_threshold`.
+    pub key_partition_cache_threshold: usize,
 }
 
 impl Default for Config {
@@ -41,6 +44,8 @@ impl Default for Config {
             grain: 64 * 1024,
             partitions: 64,
             key_partition_threshold: 64 * 1024,
+            // Measured row cutoff, not a universal cache-capacity guarantee.
+            key_partition_cache_threshold: 6 * 1024 * 1024,
         }
     }
 }
@@ -65,8 +70,13 @@ pub fn machine_with(config: Config) -> Machine {
         config.key_partition_threshold > 0,
         "provider partition threshold must be positive"
     );
+    assert!(
+        config.key_partition_cache_threshold > 0,
+        "provider partition cache threshold must be positive"
+    );
     let mut machine = machine_with_width(config.partitions);
     machine.key_partition_threshold = config.key_partition_threshold;
+    machine.key_partition_cache_threshold = config.key_partition_cache_threshold;
     machine
 }
 
@@ -78,6 +88,7 @@ pub fn machine_with_width(parts: usize) -> Machine {
         name: syn::parse_quote!(tasks),
         items: 1,
         key_partition_threshold: Config::default().key_partition_threshold,
+        key_partition_cache_threshold: Config::default().key_partition_cache_threshold,
         root: LevelNode {
             shared_bytes: None,
             name: syn::parse_quote!(host),
@@ -358,8 +369,15 @@ fn translate_mode(
     // adapters compose through its paired flatten and named pipes. A Store or
     // non-distributive constructor joins the task buffers before proceeding.
     let mut partitions = Vec::new();
-    let mut stored_sources = std::collections::BTreeMap::<String, syn::Ident>::new();
+    let mut stored_sources = std::collections::BTreeMap::<String, proc_macro2::TokenStream>::new();
+    let mut deferred_sources =
+        std::collections::BTreeMap::<String, proc_macro2::TokenStream>::new();
+    let mut provider_covers =
+        std::collections::BTreeMap::<*const Term, keyed::ProviderCover>::new();
+    let mut named_covers = std::collections::BTreeMap::<String, keyed::ProviderCover>::new();
+    let mut immutable_sources = std::collections::BTreeSet::<String>::new();
     let mut next_driver = 0usize;
+    let mut needs_workers = false;
     let translate = if profile {
         cq_sequence_pull::translate_profile_with
     } else {
@@ -368,12 +386,18 @@ fn translate_mode(
     let mut expression = translate(
         program,
         analysis,
+        syn::parse_quote!(__cq_task_workers),
         |term: &Term,
          emitter: &mut cq_sequence_pull::Emitter<'_>,
          child: Option<&cq_sequence_pull::Value>,
          output: &mut cq_sequence_pull::Value,
          owner: &str,
          _: usize| {
+            if let Term::Choose(arms) = term {
+                needs_workers |= arms
+                    .iter()
+                    .any(|(guard, _)| matches!(guard, cq_lang_sequence::Guard::WorkersLt(_)));
+            }
             if let Term::Tile { n, .. } = term
                 && tiles
                     .get(&(term as *const Term))
@@ -582,6 +606,72 @@ fn translate_mode(
                 // Symbolic distributing tiles remain partitioned until joined.
                 output.partitioned = false;
             }
+            // Preserve the recorded cover before Pull unifies Choose arms by
+            // collecting rows. Only immutable flat publications may be replayed;
+            // all alternatives must retain the same source and carrier.
+            let cover = match term {
+                Term::PartitionK { parts, inner, .. } => {
+                    if let Term::Ref(name) = inner.as_ref()
+                        && immutable_sources
+                            .contains(&cq_lang_sequence::structures::symbol_name(name))
+                        && let Some(input) = child.filter(|input| input.depth == 0)
+                    {
+                        Some(keyed::ProviderCover {
+                            source: cq_lang_sequence::structures::symbol_name(name),
+                            rows: input.rows.clone(),
+                            result: input.result.clone(),
+                            choice: keyed::CoverChoice::Partition {
+                                parts: *parts,
+                                rows: output.rows.clone(),
+                            },
+                        })
+                    } else {
+                        None
+                    }
+                }
+                Term::Ref(name) => named_covers
+                    .get(&cq_lang_sequence::structures::symbol_name(name))
+                    .filter(|cover| cover.result == output.result)
+                    .cloned(),
+                Term::Choose(arms) => {
+                    let covers = arms
+                        .iter()
+                        .map(|(_, arm)| provider_covers.get(&(arm as *const Term)))
+                        .collect::<Option<Vec<_>>>();
+                    if let Some(covers) = covers
+                        && let Some(first) = covers.first()
+                        && covers.iter().all(|cover| {
+                            cover.source == first.source && cover.result == first.result
+                        })
+                    {
+                        let mut cover = (*first).clone();
+                        cover.choice = keyed::CoverChoice::Choose(
+                            arms.iter()
+                                .zip(covers)
+                                .map(|((guard, _), cover)| {
+                                    Ok((emitter.runtime_guard(guard)?, cover.choice.clone()))
+                                })
+                                .collect::<syn::Result<_>>()?,
+                        );
+                        Some(cover)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+            if let Some(cover) = cover {
+                provider_covers.insert(term as *const Term, cover.clone());
+                if program
+                    .sequence
+                    .definitions
+                    .iter()
+                    .any(|definition| std::ptr::eq(&definition.term, term))
+                    && analysis.results.get(owner) == cover.result.as_ref()
+                {
+                    named_covers.insert(owner.to_owned(), cover);
+                }
+            }
             let publication = analysis.publications.get(owner).filter(|_| {
                 program
                     .sequence
@@ -596,6 +686,7 @@ fn translate_mode(
                 // An immutable base relation is already resident storage. The
                 // checked Store publishes that borrow; it need not clone rows.
                 output.rows = child.expect("checked base store").rows.clone();
+                immutable_sources.insert(owner.to_owned());
                 let scan = emitter.context().host_scan(result);
                 emitter.publish_length(
                     owner,
@@ -619,6 +710,9 @@ fn translate_mode(
                     "checked publication alias"
                 );
                 output.rows = child.expect("checked store alias").rows.clone();
+                if immutable_sources.contains(source) {
+                    immutable_sources.insert(owner.to_owned());
+                }
                 if analysis.results.get(owner) == child.and_then(|value| value.result.as_ref())
                     && let Some(binding) = stored_sources.get(source).cloned()
                 {
@@ -626,7 +720,10 @@ fn translate_mode(
                 }
             } else if matches!(term, Term::Store { .. })
                 && output.depth == 0
-                && matches!(publication, Some(Publication::OwnRows { staged: true }))
+                && matches!(
+                    publication,
+                    Some(Publication::OwnRows { staged: true } | Publication::DeferredRows { .. })
+                )
             {
                 let label = format!("{owner}.rows");
                 emitter.context_mut().profile_label(
@@ -635,28 +732,71 @@ fn translate_mode(
                     "",
                     output.result.iter().cloned().collect(),
                 );
-                let rows = emitter
-                    .context()
-                    .profile_inserting(&label, output.rows.clone());
+                let binding = format_ident!("__cq_key_source_{}", owner);
+                let source = output.rows.clone();
+                let factory = format_ident!("__cq_key_factory_{}", owner);
+                let staged = format_ident!("__cq_key_staged_{}", owner);
+                let deferred = matches!(publication, Some(Publication::DeferredRows { .. }));
+                let rows = emitter.context().profile_inserting(
+                    &label,
+                    if deferred {
+                        quote!(#factory())
+                    } else {
+                        source.clone()
+                    },
+                );
                 let build = emitter
                     .context()
                     .profile_build(&label, quote!((#rows).collect::<::std::vec::Vec<_>>()));
-                let binding = format_ident!("__cq_key_source_{}", owner);
+                let stored = if deferred {
+                    // The checked single consumer may bypass this allocation,
+                    // but a length guard or routed arm owns exactly one copy.
+                    // Keep retention inside the initializer: merely publishing
+                    // the source must neither evaluate it nor charge a copy.
+                    emitter.context_mut().statements.push(syn::parse_quote!(
+                        let #factory = || { #source };
+                    ));
+                    emitter.context_mut().statements.push(syn::parse_quote!(
+                        let #binding = ::std::sync::OnceLock::<(
+                            ::std::vec::Vec<_>, ::cq_storage::Retention
+                        )>::new();
+                    ));
+                    emitter.context_mut().statements.push(syn::parse_quote!(
+                        let #staged = || #binding.get_or_init(|| {
+                            let __cq_rows = #build;
+                            let __cq_retention = ::cq_storage::retain_rows(&__cq_rows);
+                            (__cq_rows, __cq_retention)
+                        });
+                    ));
+                    deferred_sources.insert(
+                        owner.to_owned(),
+                        quote!({
+                            let __cq_staged = #binding.get();
+                            __cq_staged.is_none().then(|| #factory()).into_iter().flatten()
+                                .chain(__cq_staged.into_iter()
+                                    .flat_map(|(__cq_rows, _)| __cq_rows.iter().cloned()))
+                        }),
+                    );
+                    quote!(#staged().0)
+                } else {
+                    emitter.context_mut().statements.push(syn::parse_quote!(
+                        let #binding = #build;
+                    ));
+                    emitter.context_mut().statements.push(syn::parse_quote!(
+                        let _retain = ::cq_storage::retain_rows(&#binding);
+                    ));
+                    quote!(#binding)
+                };
                 // A publication may rehead an equivalent Physical result.
                 // Reuse the raw slice only when its carrier is unchanged.
                 if analysis.results.get(owner) == output.result.as_ref() {
-                    stored_sources.insert(owner.to_owned(), binding.clone());
+                    stored_sources.insert(owner.to_owned(), stored.clone());
                 }
-                emitter.context_mut().statements.push(syn::parse_quote!(
-                    let #binding = #build;
-                ));
-                emitter.context_mut().statements.push(syn::parse_quote!(
-                    let _retain = ::cq_storage::retain_rows(&#binding);
-                ));
                 emitter.context_mut().bound = true;
                 emitter.mark_target_published(owner);
-                emitter.publish_length(owner, quote!(#binding.len()));
-                output.rows = quote!(#binding.iter().cloned());
+                emitter.publish_length(owner, quote!((#stored).len()));
+                output.rows = quote!((#stored).iter().cloned());
+                immutable_sources.insert(owner.to_owned());
             } else if matches!(term, Term::Store { .. })
                 && output.depth == 1
                 && let Some(Publication::Parts { keys }) = publication
@@ -669,37 +809,81 @@ fn translate_mode(
                     "",
                     vec![result.clone()],
                 );
-                let rows = &output.rows;
-                let part = emitter
-                    .context()
-                    .profile_inserting(&label, quote!(__cq_part));
-                let build = emitter.context().profile_build(
-                    &label,
-                    quote!((#rows).map(|__cq_part|
-                        (#part).collect::<::std::vec::Vec<_>>())
-                        .collect::<::std::vec::Vec<_>>()),
-                );
+                let cover = match term {
+                    Term::Store { inner, .. } => provider_covers
+                        .get(&(inner.as_ref() as *const Term))
+                        .filter(|cover| cover.result == output.result),
+                    _ => None,
+                };
                 let binding = format_ident!("__cq_key_parts_{}", owner);
-                emitter.context_mut().statements.push(syn::parse_quote!(
-                    let #binding = #build;
-                ));
-                emitter.context_mut().statements.push(syn::parse_quote!(
-                    let _retain_parts = #binding.iter().map(::cq_storage::retain_rows).collect::<::std::vec::Vec<_>>();
-                ));
-                let repr = emitter.context_mut().materialize_partitioned(
-                    &result,
-                    quote!(#binding),
-                    keys,
-                    &analysis.routed_providers[&result],
-                )?;
+                let repr = if let Some(cover) = cover {
+                    let source = match analysis.publications.get(&cover.source) {
+                        Some(Publication::DeferredRows { consumer }) if consumer == owner => {
+                            &deferred_sources[&cover.source]
+                        }
+                        _ => &cover.rows,
+                    };
+                    let buffers = cover.choice.buffers(emitter, &label);
+                    let build = emitter.context().profile_build(
+                        &label,
+                        quote!(::cq_storage::sharded::ProviderParts::new(|| #source, #buffers)),
+                    );
+                    emitter.context_mut().statements.push(syn::parse_quote!(
+                        let #binding = #build;
+                    ));
+                    emitter.context_mut().statements.push(syn::parse_quote!(
+                        let _retain_parts = #binding.routed().into_iter().flatten()
+                            .map(::cq_storage::retain_rows).collect::<::std::vec::Vec<_>>();
+                    ));
+                    output.rows = quote!((0..#binding.part_count()).map(|__cq_index|
+                        #binding.part(__cq_index)));
+                    emitter.context_mut().materialize_provider_parts(
+                        &result,
+                        quote!(#binding),
+                        keys,
+                        &analysis.routed_providers[&result],
+                    )
+                } else {
+                    let rows = &output.rows;
+                    let part = emitter
+                        .context()
+                        .profile_inserting(&label, quote!(__cq_part));
+                    let build = emitter.context().profile_build(
+                        &label,
+                        quote!((#rows).map(|__cq_part|
+                            (#part).collect::<::std::vec::Vec<_>>())
+                            .collect::<::std::vec::Vec<_>>()),
+                    );
+                    emitter.context_mut().statements.push(syn::parse_quote!(
+                        let #binding = #build;
+                    ));
+                    emitter.context_mut().statements.push(syn::parse_quote!(
+                        let _retain_parts = #binding.iter().map(::cq_storage::retain_rows)
+                            .collect::<::std::vec::Vec<_>>();
+                    ));
+                    output.rows = quote!(#binding.iter().cloned().map(::std::vec::Vec::into_iter));
+                    emitter.context_mut().materialize_partitioned(
+                        &result,
+                        quote!(#binding),
+                        keys,
+                        &analysis.routed_providers[&result],
+                    )?
+                };
                 emitter.context_mut().reprs.insert(result, repr);
                 emitter.context_mut().bound = true;
                 emitter.mark_target_published(owner);
-                output.rows = quote!(#binding.iter().cloned().map(::std::vec::Vec::into_iter));
             }
             Ok(())
         },
     )?;
+    if needs_workers {
+        // Evaluate in the executing pool, including an explicitly installed
+        // Config::threads pool below, once for all recorded worker guards.
+        expression = syn::parse_quote!({
+            let __cq_task_workers = ::rayon::current_num_threads();
+            #expression
+        });
+    }
     if !partitions.is_empty() {
         return Err(syn::Error::new_spanned(
             program,
