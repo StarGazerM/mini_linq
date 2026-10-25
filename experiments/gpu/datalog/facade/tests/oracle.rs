@@ -10,6 +10,7 @@ oracle_shared::oracle_programs!(
     pipeline {
         storage_rewrites = [::cq_gpu_datalog::device_storage];
         cq = pipeline {
+            physical = [::cq_gpu_sequence::capture_constants];
             structures = [::cq_gpu_datalog::bind_inputs, ::cq_gpu_sequence::bind_runs];
             sequence = ::mini_linq::passes::sequence;
             decompose = [::cq_gpu_sequence::plan];

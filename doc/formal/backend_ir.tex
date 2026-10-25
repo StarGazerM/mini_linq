@@ -1028,6 +1028,35 @@ protocol, so a batch is never truncated.
  {\mathrm{unpack}(\mathrm{arena})\equiv_{\mathrm{bag}}\sem{t}}
 \end{mathpar}
 
+\paragraph{Closed host captures.}
+A Rust subexpression of a guard, binding or selection whose free variables
+include no row column (for example \code{sym("abstract")}) is a closed capture.
+The translator evaluates each closed capture once on the host per invocation,
+before the first dispatch that needs it and only if that dispatch's input is
+nonempty, converts the value to its device encoding (the declared
+\code{SymbolCodec} for symbol types), and passes it as a kernel parameter; the kernel compares
+encodings. Strings therefore never reach the device. This is the closed case of
+\textsc{BE-Partial} realized by \textsc{IF-Parameter}, for any machine; staging
+totality (\textsc{ST-Total}) is unchanged, so host plans are unaffected. The
+host premise is the one already made for Rust predicates: a closed capture is
+deterministic and total, so one evaluation equals the per-row evaluations it
+replaces.
+\begin{mathpar}
+\Rule{GPU-Capture}{e\text{ closed}\quad e\text{ deterministic and total}\quad
+ \mathrm{enc}\text{ injective}}
+ {\sem{\phi[\mathrm{enc}(e)/e]}_{\mathrm{device}}=\sem{\phi}_{\mathrm{host}}\text{ on every row}}
+\end{mathpar}
+A literal atom argument such as \code{method\_modifier(sym("abstract"), m)}
+reaches the translator as a constant inside a rename. The checked Physical
+rewrite \code{capture\_constants} turns each such argument into a fresh column,
+an equality guard against the literal (a closed capture), and a projection
+that drops the fresh column; its checker re-derives that triple from the
+source and requires exact equality.
+\begin{mathpar}
+\Rule{PH-ConstantGuard}{a=\mathsf{rename}(R,(\ldots,c,\ldots))\quad c\text{ closed}\quad x\text{ fresh}}
+ {\sem a=\sem{\mathsf{project}_{\neg x}(\mathsf{guard}_{x=c}(\mathsf{rename}(R,(\ldots,x,\ldots))))}}
+\end{mathpar}
+
 
 \subsection{Grouped folds}
 \label{sec:grouped-fold}

@@ -14,15 +14,15 @@ fn packing(types: &[&Type]) -> syn::Result<TokenStream> {
         .collect::<syn::Result<Vec<_>>>()?;
     Ok(quote!(::gpu_datalog_runtime::Packing::with_columns(&[#(#columns),*])?))
 }
-fn canonical_type(context: &RoundContext, index: usize) -> Type {
-    let types = types(context, index);
+fn canonical_type(schemas: &[Vec<Type>], index: usize) -> Type {
+    let types = schemas[index].iter().collect::<Vec<_>>();
     crate::storage::layout_type(&types, types.len())
 }
-fn input_types(program: &Program) -> syn::Result<std::collections::BTreeMap<String, Type>> {
+fn input_types(program: &Program, schemas: &[Vec<Type>]) -> syn::Result<std::collections::BTreeMap<String, Type>> {
     let context = &program.context;
     let mut inputs = std::collections::BTreeMap::new();
     for (index, relation) in context.relations.iter().enumerate() {
-        let ty = canonical_type(context, index);
+        let ty = canonical_type(schemas, index);
         inputs.insert(relation.declaration.name.to_string(), ty.clone());
         if let Some(delta) = &relation.delta { inputs.insert(delta.to_string(), ty); }
     }
@@ -33,14 +33,14 @@ fn input_types(program: &Program) -> syn::Result<std::collections::BTreeMap<Stri
         for key in &stratum.keys {
             ensure(!key.columns.is_empty(), program,
                 "GPU Datalog does not support unit-valued existential negation keys")?;
-            let columns = types(context, key.relation);
+            let columns = schemas[key.relation].iter().collect::<Vec<_>>();
             let selected = key.columns.iter().map(|&i| columns[i]).collect::<Vec<_>>();
             inputs.insert(key.name.to_string(), crate::storage::layout_type(&selected, selected.len()));
         }
         for rule in stratum.seeds.iter().chain(&stratum.steps) {
             if let Some(scan) = &rule.scan {
                 let ty = match scan.source {
-                    InputSource::Delta(index) => canonical_type(context, index),
+                    InputSource::Delta(index) => canonical_type(schemas, index),
                     InputSource::Layout(index) => context.layouts[index].provider.clone(),
                 };
                 inputs.insert(scan.binding.to_string(), ty);
@@ -48,6 +48,29 @@ fn input_types(program: &Program) -> syn::Result<std::collections::BTreeMap<Stri
         }
     }
     Ok(inputs)
+}
+
+fn memory_snapshot(context: &RoundContext, indices: &[usize], arenas: &[usize], stage: &str) -> TokenStream {
+    let entries = indices.iter().map(|&index| {
+        let relation = &context.relations[index];
+        let name = relation.declaration.name.to_string();
+        let state = local("state", index);
+        let arena = local("arena", index);
+        let arena_bytes = if arenas.contains(&index) { quote!(#arena.allocated_bytes()) } else { quote!(0usize) };
+        let layouts = context.layouts.iter().chain(&context.delta_layouts)
+            .filter(|layout| layout.relation == index).map(|layout| &layout.host).collect::<Vec<_>>();
+        quote!(__cq_gpu_memory_usage[#index] = ::gpu_datalog_runtime::MemoryUse {
+            name: #name, rows: #state.len(), accepted_live_bytes: #state.live_bytes(),
+            accepted_bytes: #state.allocated_bytes(),
+            layout_live_bytes: 0usize #(+ #layouts.live_bytes())*,
+            layout_bytes: 0usize #(+ #layouts.allocated_bytes())*,
+            arena_bytes: #arena_bytes,
+        };)
+    });
+    quote!(if __cq_gpu_trace_memory {
+        #(#entries)*
+        ::gpu_datalog_runtime::trace_memory(&__cq_gpu_pool, #stage, &__cq_gpu_memory_usage);
+    })
 }
 
 /// Formal rule P-DL-Gpu: Interpret the recorded waves, admission owners and
@@ -62,9 +85,13 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
         ensure(hole.interface == HoleInterface::Batch, hole, "GPU Datalog requires batch holes")?;
     }
     let context = &program.context;
+    let symbols = crate::storage::Symbols::from_program(&program.storage)?;
+    let schemas = (0..context.relations.len()).map(|index|
+        types(context, index).into_iter().map(|ty| symbols.device_type(ty)).collect::<Vec<_>>()
+    ).collect::<Vec<_>>();
     // Check eligibility independently, including schemas not read by a hole.
-    for index in 0..context.relations.len() { crate::storage::word_type(types(context, index))?; }
-    let input_types = input_types(program)?;
+    for schema in &schemas { crate::storage::word_type(schema)?; }
+    let input_types = input_types(program, &schemas)?;
     let bindings = input_types.iter().map(|(name, ty)| {
         let name = Ident::new(name, proc_macro2::Span::call_site());
         quote!(#name => #ty;)
@@ -89,20 +116,23 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
     for (index, relation) in context.relations.iter().enumerate() {
         let state = local("state", index);
         let packed = local("packing", index);
-        let arena = local("arena", index);
-        let word = crate::storage::word_type(types(context, index))?;
-        let schema = packing(&types(context, index))?;
+        let word = crate::storage::word_type(&schemas[index])?;
+        let schema = packing(&schemas[index].iter().collect::<Vec<_>>())?;
         let all = &relation.all;
-        let ty = canonical_type(context, index);
+        let ty = canonical_type(&schemas, index);
         initialize.push(quote!(
             let #packed = #schema;
             let mut #state = ::gpu_datalog_runtime::DeviceRuns::<#word>::new(__cq_gpu_pool.clone())?;
-            let mut #arena = ::gpu_datalog_runtime::CandidateArena::new(__cq_gpu_pool.clone());
         ));
         if let Some(value) = &relation.declaration.value {
             let expression = &value.expression;
-            let fields = (0..relation.declaration.arity()).map(syn::Index::from)
-                .map(|field| quote!(*row.#field as i128));
+            let fields = types(context, index).into_iter().enumerate().map(|(index, ty)| {
+                let field = syn::Index::from(index);
+                match symbols.codec(ty) {
+                    Some(codec) => quote!(<#codec as ::gpu_datalog_runtime::SymbolCodec<#ty>>::code(row.#field) as i128),
+                    None => quote!(*row.#field as i128),
+                }
+            });
             initialize.push(quote!({
                 let host = &(#expression);
                 let words = ::cq_storage::rows::Rows::rows(host)
@@ -124,7 +154,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
         let relation_state = local("state", layout.relation);
         let packed = local("packing", layout.relation);
         let schema = local("layout_packing", index);
-        let word = crate::storage::word_type(types(context, layout.relation))?;
+        let word = crate::storage::word_type(&schemas[layout.relation])?;
         let order = &layout.columns;
         let ty = &layout.provider;
         let host = &layout.host;
@@ -143,7 +173,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
     for (index, layout) in context.delta_layouts.iter().enumerate() {
         let packed = local("packing", layout.relation);
         let schema = local("delta_packing", index);
-        let word = crate::storage::word_type(types(context, layout.relation))?;
+        let word = crate::storage::word_type(&schemas[layout.relation])?;
         let order = &layout.columns;
         let ty = &layout.provider;
         let host = &layout.host;
@@ -158,7 +188,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
         for key in &stratum.keys {
             let name = &key.name;
             let ty = &input_types[&name.to_string()];
-            let relation_types = types(context, key.relation);
+            let relation_types = schemas[key.relation].iter().collect::<Vec<_>>();
             let types = key.columns.iter().map(|&i| relation_types[i]).collect::<Vec<_>>();
             let word = crate::storage::word_type(types.iter().copied())?;
             let schema = packing(&types)?;
@@ -174,8 +204,8 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
                 <#ty>::from_runs(__cq_gpu_pool.clone(), packing, vec![run])?
             };));
         }
-        let seed = phase(program, index, round::schedule::SEED, &holes)?;
-        let step = phase(program, index, round::schedule::STEP, &holes)?;
+        let seed = phase(program, index, round::schedule::SEED, &holes, &schemas)?;
+        let step = phase(program, index, round::schedule::STEP, &holes, &schemas)?;
         let lengths = stratum.termination.iter().map(|&i| {
             let delta = context.relations[i].delta_host.as_ref().expect("checked delta");
             quote!(#delta.len())
@@ -190,32 +220,61 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
             "loop_until_empty" => quote!(loop { if !(#condition) { break; } #step }),
             _ => unreachable!("checked loop"),
         };
-        strata.push(quote!({ #(#keys)* #seed #rounds }));
+        let arenas = stratum.members.iter().map(|&i| {
+            let arena = local("arena", i);
+            quote!(let mut #arena = ::gpu_datalog_runtime::CandidateArena::new(__cq_gpu_pool.clone());)
+        });
+        let released = memory_snapshot(context, &stratum.members, &[], &format!("stratum={index}/released"));
+        strata.push(quote!({
+            {
+                #(#arenas)*
+                #(#keys)*
+                let mut __cq_gpu_round = 0usize;
+                #seed
+                #rounds
+            }
+            ::cq_gpu_sequence_runtime::release_cached_scratch(&__cq_gpu_pool);
+            __cq_gpu_pool.release_unused()?;
+            #released
+        }));
     }
     let outputs = context.outputs.iter().map(|output| {
         let index = output.relation;
         let state = local("state", index);
         let packed = local("packing", index);
-        let fields = types(context, index).into_iter().enumerate().map(|(i, ty)| quote!(row[#i] as #ty));
-        // Both recorded conversions return owned tuples; EDB borrow cloning is
-        // already discharged by the one-time upload of supported Copy columns.
+        let fields = types(context, index).into_iter().enumerate().map(|(i, ty)| {
+            match symbols.codec(ty) {
+                Some(codec) => quote!(<#codec as ::gpu_datalog_runtime::SymbolCodec<#ty>>::decode(row[#i] as u32)),
+                None => quote!(row[#i] as #ty),
+            }
+        });
+        // Restore logical host symbols only at the explicit output boundary.
         quote!(#state.to_host()?.into_iter().map(|word| {
             let row = #packed.unpack(word)?;
             Ok((#(#fields,)*))
         }).collect::<::gpu_datalog_runtime::Result<::std::vec::Vec<_>>>()?.into_iter())
     }).collect::<Vec<_>>();
     let result = if outputs.len() == 1 { outputs[0].clone() } else { quote!((#(#outputs,)*)) };
+    let relation_count = context.relations.len();
+    let indices = (0..relation_count).collect::<Vec<_>>();
+    let initialized = memory_snapshot(context, &indices, &[], "initialized");
     syn::parse2(quote!({
         (|| -> ::gpu_datalog_runtime::Result<_> {
             let __cq_gpu_pool = ::gpu_datalog_runtime::thread_pool()?;
+            let __cq_gpu_trace_rounds = ::std::env::var_os("GPU_DATALOG_TRACE_ROUNDS").is_some();
+            let __cq_gpu_trace_memory = ::std::env::var_os("GPU_DATALOG_TRACE_MEMORY").is_some();
+            let mut __cq_gpu_memory_usage = if __cq_gpu_trace_memory {
+                ::std::vec![::gpu_datalog_runtime::MemoryUse::default(); #relation_count]
+            } else { ::std::vec::Vec::new() };
             #(#initialize)*
+            #initialized
             #(#strata)*
             Ok(#result)
         })().expect("GPU Datalog execution failed")
     }))
 }
 
-fn phase(program: &Program, index: usize, phase: &str, holes: &[TokenStream]) -> syn::Result<TokenStream> {
+fn phase(program: &Program, index: usize, phase: &str, holes: &[TokenStream], schemas: &[Vec<Type>]) -> syn::Result<TokenStream> {
     let context = &program.context;
     let stratum = &context.strata[index];
     let rules = if phase == round::schedule::SEED { &stratum.seeds } else { &stratum.steps };
@@ -232,6 +291,8 @@ fn phase(program: &Program, index: usize, phase: &str, holes: &[TokenStream]) ->
             let next = &context.relations[rule.head].next;
             let arena = local("arena", rule.head);
             let invocation = &holes[rule.hole];
+            let hole = rule.hole;
+            let head_name = context.relations[rule.head].declaration.name.to_string();
             let scan = rule.scan.as_ref().map(|scan| {
                 let binding = &scan.binding;
                 let source = match scan.source {
@@ -242,8 +303,18 @@ fn phase(program: &Program, index: usize, phase: &str, holes: &[TokenStream]) ->
             });
             launches.push(quote!({
                 #scan
+                if __cq_gpu_trace_memory {
+                    let memory = __cq_gpu_pool.memory_stats();
+                    ::std::eprintln!("gpu_datalog_hole\tstratum={}\tphase={}\thole={}\thead={}\tcurrent_bytes={}\treserved_bytes={}\tarena_bytes={}",
+                        #index, #phase, #hole, #head_name, memory.current_bytes, memory.reserved_bytes, #arena.allocated_bytes());
+                }
                 let __cq_gpu_arena = &mut #arena;
-                #next.push(#invocation);
+                let __cq_gpu_batch = #invocation;
+                if __cq_gpu_trace_memory {
+                    ::std::eprintln!("gpu_datalog_hole_result\tstratum={}\tphase={}\thole={}\trows={}\tcapacity={}\tbytes={}",
+                        #index, #phase, #hole, __cq_gpu_batch.len(), __cq_gpu_batch.reserved_capacity(), __cq_gpu_batch.allocated_bytes());
+                }
+                #next.push(__cq_gpu_batch);
             }));
         }
         // A single stream supplies both intra-wave order and inter-wave barriers.
@@ -254,11 +325,11 @@ fn phase(program: &Program, index: usize, phase: &str, holes: &[TokenStream]) ->
         let packed = local("packing", i);
         let fresh = local("fresh", i);
         let next = &context.relations[i].next;
-        let word = crate::storage::word_type(types(context, i))?;
+        let word = crate::storage::word_type(&schemas[i])?;
         Ok(quote!(let #fresh = {
             let candidates = ::gpu_datalog_runtime::concatenate_batches::<#word>(__cq_gpu_pool.clone(), &#packed, &#next)?;
             #state.admit(&candidates, candidates.len())?
-        };))
+        }; ::std::mem::drop(#next);))
     }).collect::<syn::Result<Vec<_>>>()?;
     let mut publication = Vec::new();
     for transaction in &stratum.publication {
@@ -284,12 +355,12 @@ fn phase(program: &Program, index: usize, phase: &str, holes: &[TokenStream]) ->
                 },
                 "all_extend" => {
                     let all = &context.relations[i].all;
-                    let ty = canonical_type(context, i);
+                    let ty = canonical_type(schemas, i);
                     publication.push(quote!(#all = <#ty>::from_runs(__cq_gpu_pool.clone(), #packed.clone(), #state.owned_runs())?;));
                 }
                 "delta_swap" => {
                     let delta = context.relations[i].delta_host.as_ref().expect("checked delta");
-                    let ty = canonical_type(context, i);
+                    let ty = canonical_type(schemas, i);
                     publication.push(quote!(#delta = <#ty>::from_runs(__cq_gpu_pool.clone(), #packed.clone(), vec![#fresh.clone()])?;));
                 }
                 "delta_rebuild" => for &j in &operation.layouts {
@@ -308,5 +379,27 @@ fn phase(program: &Program, index: usize, phase: &str, holes: &[TokenStream]) ->
             }
         }
     }
-    Ok(quote!(#(#batches)* #(#waves)* #(#admissions)* #(#publication)*))
+    let release_fresh = stratum.members.iter().map(|&i| {
+        let fresh = local("fresh", i);
+        quote!(::std::mem::drop(#fresh);)
+    });
+    let before = memory_snapshot(context, &[], &[], &format!("stratum={index}/{phase}/before"));
+    let after = memory_snapshot(context, &stratum.members, &stratum.members, &format!("stratum={index}/{phase}/after"));
+    Ok(quote!(
+        #before
+        let __cq_gpu_readbacks_before = if __cq_gpu_trace_rounds {
+            ::gpu_datalog_runtime::readback_count()
+        } else { 0 };
+        #(#batches)* #(#waves)* #(#admissions)* #(#publication)*
+        #(#release_fresh)*
+        #after
+        if __cq_gpu_trace_rounds {
+            ::std::eprintln!(
+                "gpu_datalog_round\tstratum={}\tphase={}\tround={}\treadbacks={}",
+                #index, #phase, __cq_gpu_round,
+                ::gpu_datalog_runtime::readback_count() - __cq_gpu_readbacks_before,
+            );
+            __cq_gpu_round += 1;
+        }
+    ))
 }

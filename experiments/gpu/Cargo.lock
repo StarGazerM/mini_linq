@@ -1056,6 +1056,45 @@ dependencies = [
 ]
 
 [[package]]
+name = "doop-gpu"
+version = "0.1.0"
+dependencies = [
+ "cq-datalog",
+ "cq-gpu-datalog",
+ "cq-gpu-runtime",
+ "cq-gpu-sequence",
+ "cq-gpu-sequence-runtime",
+ "cq-storage",
+ "cuda-core",
+ "cuda-device",
+ "cuda-host",
+ "doop-mini",
+ "doop-shared",
+ "gpu-compress",
+ "gpu-compress-host",
+ "gpu-datalog-runtime",
+ "mini-linq",
+]
+
+[[package]]
+name = "doop-mini"
+version = "0.1.0"
+dependencies = [
+ "cq-datalog",
+ "cq-storage",
+ "doop-shared",
+ "mini-linq",
+]
+
+[[package]]
+name = "doop-shared"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "libc",
+]
+
+[[package]]
 name = "either"
 version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -223,3 +223,86 @@ fn native_host_lookup_rejects_keys_outside_declared_prefix() {
         &planned.program, &analysis, &syn::parse_quote!(&mut arena)).unwrap_err();
     assert!(error.to_string().contains("native lookup key is not a packed leading prefix"));
 }
+
+#[test]
+fn host_captures_are_lazy_once_per_invocation_and_survive_retry() -> Result {
+    let pool = Pool::new(0, 0, 0)?;
+    let packing = Packing::with_columns(&[Column::I32, Column::U32])?;
+    let mut arena = gpu_datalog_runtime::CandidateArena::new(pool.clone());
+    for length in [0usize, 4097, 0, 4097] {
+        let calls = std::cell::Cell::new([0usize; 3]);
+        let host_key = || { let mut counts = calls.get(); counts[0] += 1; calls.set(counts); -7i32 };
+        let allow = || { let mut counts = calls.get(); counts[1] += 1; calls.set(counts); true };
+        let host_value = || { let mut counts = calls.get(); counts[2] += 1; calls.set(counts); 23u32 };
+        let rows = vec![(0..length).map(|value| vec![-7, value as i128]).collect()];
+        let edge = DeviceLayout::<(i32,), (u32,)>::from_runs(
+            pool.clone(), packing.clone(), runs(&pool, &packing, &rows)?)?;
+        let result = cq_gpu_sequence_test_macros::planned_arena_hole!(capture);
+        assert_eq!(bag(result.buffer(), result.len(), result.packing())?, vec![vec![-7, 23]; length]);
+        assert_eq!(calls.get(), [usize::from(length != 0); 3]);
+    }
+    Ok(())
+}
+
+#[test]
+fn constant_atom_filters_before_projection_exactly_like_cpu() -> Result {
+    let pool = Pool::new(0, 0, 0)?;
+    let packing = Packing::with_columns(&[Column::I32, Column::U32])?;
+    let rows = vec![vec![], vec![vec![-7, 0], vec![4, 19]], vec![vec![-7, u32::MAX as i128], vec![-7, 0]]];
+    let edge = DeviceLayout::<(i32,), (u32,)>::from_runs(
+        pool.clone(), packing.clone(), runs(&pool, &packing, &rows)?)?;
+    let mut arena = gpu_datalog_runtime::CandidateArena::new(pool);
+    let result = cq_gpu_sequence_test_macros::planned_arena_hole!(constant_atom);
+    let mut expected = rows.iter().flatten().filter(|row| row[0] == -7).map(|row| vec![row[1]]).collect::<Vec<_>>();
+    expected.sort();
+    assert_eq!(bag(result.buffer(), result.len(), result.packing())?, expected);
+    Ok(())
+}
+
+fn wide_runs<W: gpu_datalog_runtime::Word>(pool: &Arc<Pool>, packing: &Packing, rows: &[Vec<Vec<i128>>]) -> Result<Vec<Run<W>>> {
+    rows.iter().map(|rows| {
+        let mut words = rows.iter().map(|row| packing.pack::<W>(row)).collect::<Result<Vec<_>>>()?;
+        words.sort_unstable();
+        words.dedup();
+        let length = words.len();
+        let buffer = Buffer::from_host(pool.clone(), &words)?;
+        // SAFETY: every word was initialized above, then sorted and deduplicated.
+        unsafe { Run::from_sorted(buffer, length) }
+    }).collect()
+}
+
+#[test]
+fn three_lane_scan_decodes_cross_lane_fields_and_publishes_exact_bag() -> Result {
+    let pool = Pool::new(0, 0, 0)?;
+    let packing = Packing::with_columns(&[Column::I64, Column::I32, Column::I64])?;
+    let rows = vec![vec![], vec![vec![i64::MIN as i128, -7, i64::MAX as i128], vec![-1, 3, 0]],
+        vec![vec![-1, 3, 0], vec![i64::MAX as i128, i32::MIN as i128, i64::MIN as i128]]];
+    let edge = DeviceLayout::<(i64,), (i32,i64)>::from_runs(
+        pool.clone(), packing.clone(), wide_runs::<[u64; 3]>(&pool, &packing, &rows)?)?;
+    let mut arena = gpu_datalog_runtime::CandidateArena::new(pool);
+    let result = cq_gpu_sequence_test_macros::planned_arena_hole!(wide3_scan);
+    let words = result.buffer().to_host_prefix(result.len() * 3)?;
+    let mut actual = words.chunks_exact(3).map(|word| result.packing().unpack([word[0], word[1], word[2]])).collect::<Result<Vec<_>>>()?;
+    let mut expected: Vec<_> = rows.into_iter().flatten().collect();
+    actual.sort(); expected.sort();
+    assert_eq!(actual, expected);
+    Ok(())
+}
+
+#[test]
+fn four_lane_scan_decodes_cross_lane_fields_and_publishes_exact_bag() -> Result {
+    let pool = Pool::new(0, 0, 0)?;
+    let packing = Packing::with_columns(&[Column::I64, Column::I32, Column::I64, Column::I32, Column::I32])?;
+    let rows = vec![vec![], vec![vec![i64::MIN as i128, -7, i64::MAX as i128, 3, -9]],
+        vec![vec![i64::MIN as i128, -7, i64::MAX as i128, 3, -9], vec![-1, i32::MAX as i128, 0, i32::MIN as i128, 4]]];
+    let edge = DeviceLayout::<(i64,), (i32,i64,i32,i32)>::from_runs(
+        pool.clone(), packing.clone(), wide_runs::<[u64; 4]>(&pool, &packing, &rows)?)?;
+    let mut arena = gpu_datalog_runtime::CandidateArena::new(pool);
+    let result = cq_gpu_sequence_test_macros::planned_arena_hole!(wide4_scan);
+    let words = result.buffer().to_host_prefix(result.len() * 4)?;
+    let mut actual = words.chunks_exact(4).map(|word| result.packing().unpack([word[0], word[1], word[2], word[3]])).collect::<Result<Vec<_>>>()?;
+    let mut expected: Vec<_> = rows.into_iter().flatten().collect();
+    actual.sort(); expected.sort();
+    assert_eq!(actual, expected);
+    Ok(())
+}

@@ -31,7 +31,7 @@ impl Packing {
         let mut widths = Vec::with_capacity(types.len());
         let mut signed = Vec::with_capacity(types.len());
         let mut columns = Vec::with_capacity(types.len());
-        let mut bits = 0;
+        let mut bits = 0u32;
         for ty in &types {
             let name = match ty {
                 syn::Type::Path(path) if path.qself.is_none() => path.path.get_ident().map(ToString::to_string),
@@ -48,10 +48,9 @@ impl Packing {
                 _ => return Err(syn::Error::new_spanned(ty,
                     "GPU arena output requires declared i8/i16/i32/i64 or u8/u16/u32 scalar columns")),
             };
-            bits += width;
-            if bits > 128 {
-                return Err(syn::Error::new_spanned(ty, "GPU arena head packing exceeds 128 bits"));
-            }
+            bits = bits.checked_add(width).ok_or_else(|| {
+                syn::Error::new_spanned(ty, "GPU arena head packing width exceeds u32")
+            })?;
             widths.push(width);
             signed.push(sign);
             columns.push(format_ident!("{column}"));
@@ -72,16 +71,18 @@ impl Packing {
     }
 
     pub fn write(&self, slots: &[usize]) -> TokenStream {
+        let lanes = self.bits.div_ceil(64).max(1) as usize;
+        let physical_lane = |lane: usize| if lanes <= 2 { lane } else { lanes - 1 - lane };
         let mut shift = self.bits;
         let parts = slots.iter().zip(&self.types).zip(&self.widths).zip(&self.signed)
             .map(|(((slot, ty), width), signed)| {
                 shift -= width;
-                let lane = (shift / 64) as usize;
+                let lane = physical_lane((shift / 64) as usize);
                 let local = shift % 64;
                 let mask = u64::MAX >> (64 - width);
                 let sign = if *signed { 1u64 << (width - 1) } else { 0 };
                 let spill = if local != 0 && local + width > 64 {
-                    let next = lane + 1;
+                    let next = physical_lane((shift / 64) as usize + 1);
                     let right = 64 - local;
                     quote!(*__packed.add(#next) |= value >> #right;)
                 } else { TokenStream::new() };
@@ -91,7 +92,6 @@ impl Packing {
                     #spill
                 }
             }).collect::<Vec<_>>();
-        let lanes = if self.bits <= 64 { 1usize } else { 2usize };
         quote! {
             let __packed = __output_keys.add(__destination as usize * #lanes);
             for lane in 0..#lanes { *__packed.add(lane) = 0; }

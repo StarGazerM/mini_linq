@@ -10,4 +10,4 @@
 //! intermediate publications retain their existing semantics.
 
 pub use cq_gpu_sequence_core::{catalog, machine, translate, translate_arena};
-pub use cq_gpu_sequence_macros::{bind_runs, machine_grade, plan, translate, translate_arena};
+pub use cq_gpu_sequence_macros::{bind_runs, capture_constants, machine_grade, plan, translate, translate_arena};

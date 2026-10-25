@@ -1,5 +1,5 @@
 [workspace]
-members = ["tiles", "compress", "compress-host", "h05-reference", "printer-runtime", "h05-compiled", "device-columns", "device-columns-oracle", "sequence", "sequence-runtime", "datalog-runtime", "datalog", "datalog/facade", "datalog/macros", "tpch"]
+members = ["tiles", "compress", "compress-host", "h05-reference", "printer-runtime", "h05-compiled", "device-columns", "device-columns-oracle", "sequence", "sequence-runtime", "datalog-runtime", "datalog", "datalog/facade", "datalog/macros", "doop", "tpch"]
 resolver = "2"
 
 [workspace.package]
@@ -21,6 +21,8 @@ codegen-units = 1
 
 # RCCL 6e30ca6 (local branch mini-linq/dynamic-lookback-scan) removes the u32
 # lookback scan's static `__shared_mem_0`, which collided in merged PTX.
+# RCCL 8a7e87b on the same branch resets geometric pool growth after trimming
+# unused chunks, so repeated stratum release cannot inflate later allocations.
 [patch."https://github.com/StarGazerM/rccl.git"]
 rccl-memory = { path = "/data/rccl/rccl-memory" }
 rccl-cub = { path = "/data/rccl/rccl-cub" }

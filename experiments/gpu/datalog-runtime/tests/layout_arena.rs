@@ -87,15 +87,23 @@ fn candidate_finish_rejects_uninitialized_capacity_suffix() -> Result<()> {
 fn concatenate_case<W: Word>(packing: Packing) -> Result<()> {
     let pool = Pool::new(0, 0, 0)?;
     let mut arena = CandidateArena::new(pool.clone());
-    let high = if W::BITS == 128 { 1u128 << 100 } else { 0 };
+    let high = if W::BITS >= 128 { 1u128 << 100 } else { 0 };
     let groups: &[&[u128]] = &[&[high | 1, high | 7], &[], &[high | 7, high | 19]];
+    let make_word = |value| {
+        let mut word = W::from_u128(value);
+        if W::BITS > 128 { word.set_lane(W::BITS / 64 - 1, 0xa5c7_1329_ef03_6481); }
+        word
+    };
     let mut batches = Vec::new();
     for group in groups {
         let lease = arena.reserve(packing.clone(), group.len())?;
         let mut lanes = Vec::new();
         for &word in *group {
-            lanes.push(word as u64);
-            if W::BITS == 128 { lanes.push((word >> 64) as u64); }
+            let word = make_word(word);
+            for physical in 0..W::BITS / 64 {
+                let lane = if W::MS_FIRST { W::BITS / 64 - 1 - physical } else { physical };
+                lanes.push(word.lane(lane));
+            }
         }
         // SAFETY: the sole lease writer initializes all live lanes before
         // publishing exactly this prefix on the same pool stream.
@@ -105,8 +113,8 @@ fn concatenate_case<W: Word>(packing: Packing) -> Result<()> {
         }
     }
     let output = concatenate_batches::<W>(pool.clone(), &packing, &batches)?;
-    assert_eq!(output.to_host()?.iter().map(|word| word.to_u128()).collect::<Vec<_>>(),
-        vec![high | 1, high | 7, high | 7, high | 19]);
+    assert_eq!(output.to_host()?,
+        [high | 1, high | 7, high | 7, high | 19].map(make_word));
     assert_eq!(concatenate_batches::<W>(pool.clone(), &packing, &[])?.len(), 0);
     let other = Pool::new(0, 0, 0)?;
     assert!(concatenate_batches::<W>(other, &packing, &batches).is_err());
@@ -122,9 +130,8 @@ fn concatenate_case<W: Word>(packing: Packing) -> Result<()> {
     let snapshot = accepted.owned_runs();
     drop(accepted);
     let words = snapshot.iter().map(|run| run.buffer().to_host())
-        .collect::<Result<Vec<_>>>()?.into_iter().flatten()
-        .map(|word| word.to_u128()).collect::<Vec<_>>();
-    assert_eq!(words, vec![high | 1, high | 7, high | 19]);
+        .collect::<Result<Vec<_>>>()?.into_iter().flatten().collect::<Vec<_>>();
+    assert_eq!(words, [high | 1, high | 7, high | 19].map(make_word));
     Ok(())
 }
 
@@ -136,4 +143,58 @@ fn concatenate_u64_candidates_and_retain_accepted_snapshot() -> Result<()> {
 #[test]
 fn concatenate_u128_candidates_and_retain_accepted_snapshot() -> Result<()> {
     concatenate_case::<u128>(Packing::new(&[64, 64])?)
+}
+
+#[test]
+fn concatenate_wide_candidates_and_retain_accepted_snapshot() -> Result<()> {
+    concatenate_case::<[u64; 3]>(Packing::new(&[64; 3])?)?;
+    concatenate_case::<[u64; 4]>(Packing::new(&[64; 4])?)
+}
+
+#[cuda_host::cuda_module]
+mod decode_kernel {
+    use cuda_device::{kernel, launch_bounds, launch_contract, thread};
+    use gpu_datalog_runtime::{device, RunsView};
+
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub fn decode_datalog_test_layout(view: RunsView, rows: u32, output: *mut i64, ranges: *mut u32) {
+        let row = thread::index_1d().get() as u32;
+        if row >= rows { return; }
+        unsafe {
+            let (run, position) = device::locate(view, row);
+            for column in 0..view.field_count {
+                let value = device::decode(view, run, position, column);
+                *output.add((row * view.field_count + column) as usize) = value;
+            }
+            let prefix = [device::decode(view, run, position, 0)];
+            let (begin, end) = device::prefix_range(view, run, prefix.as_ptr(), 1);
+            *ranges.add(row as usize * 2) = begin;
+            *ranges.add(row as usize * 2 + 1) = end;
+        }
+    }
+}
+
+#[test]
+fn wide_layout_erased_device_decode_and_lookup() -> Result<()> {
+    let pool = Pool::new(0, 0, 0)?;
+    type Layout = DeviceLayout<(u8,), (i64, u64, u64)>;
+    let packing = Layout::derive_packing()?;
+    let rows = [[0, i64::MIN as i128, u64::MAX as i128, 7],
+        [0, -1, 0, u64::MAX as i128], [255, i64::MAX as i128, 9, 0]];
+    let words = rows.iter().map(|row| packing.pack::<[u64; 4]>(row)).collect::<Result<Vec<_>>>()?;
+    // SAFETY: these uploads are sorted and unique and no writers are retained.
+    let run = unsafe { Run::from_sorted(Buffer::from_host(pool.clone(), &words)?, words.len())? };
+    let layout = Layout::from_runs(pool.clone(), packing, vec![run])?;
+    assert_eq!(layout.view().word_bits, 256);
+    let output = Buffer::<i64>::zeroed(pool.clone(), rows.len() * 4)?;
+    let ranges = Buffer::<u32>::zeroed(pool.clone(), rows.len() * 2)?;
+    let module = unsafe { decode_kernel::load(pool.context())? };
+    module.decode_datalog_test_layout(pool.stream(),
+        &module.prepare_decode_datalog_test_layout(cuda_core::LaunchConfig1D::new(1, 256, 0))?,
+        layout.view(), rows.len() as u32, output.ptr(), ranges.ptr())?;
+    assert_eq!(output.to_host()?, rows.into_iter().flatten().map(|value| value as i64).collect::<Vec<_>>());
+    assert_eq!(ranges.to_host()?, vec![0, 2, 0, 2, 2, 3]);
+    Ok(())
 }

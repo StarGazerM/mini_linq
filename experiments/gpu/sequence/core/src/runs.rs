@@ -22,13 +22,26 @@ pub(crate) fn layout_types(ty: &Type) -> syn::Result<Option<(Vec<Type>, usize)>>
     let mut columns = fields(keys)?;
     let key_count = columns.len();
     columns.extend(fields(values)?);
-    let mut bits = 0;
-    for column in &columns { bits += scalar(column)?.0; }
-    if bits > 128 { return Err(syn::Error::new_spanned(ty, "GPU-Runs: packed layout exceeds 128 bits")); }
+    for column in &columns { scalar(column)?; }
     Ok(Some((columns, key_count)))
 }
 
+pub(crate) fn symbol(ty: &Type) -> Option<(&Type, &Type)> {
+    let Type::Path(path) = ty else { return None };
+    let segment = path.path.segments.last()?;
+    if segment.ident != "Symbol" { return None }
+    let PathArguments::AngleBracketed(arguments) = &segment.arguments else { return None };
+    let mut args = arguments.args.iter();
+    match (args.next()?, args.next()?, args.next()) {
+        (GenericArgument::Type(logical), GenericArgument::Type(codec), None) => Some((logical, codec)),
+        _ => None,
+    }
+}
+
 pub(crate) fn scalar(ty: &Type) -> syn::Result<(u32, bool, proc_macro2::TokenStream)> {
+    if symbol(ty).is_some() {
+        return Ok((32, false, quote!(::gpu_datalog_runtime::Column::U32)));
+    }
     let name = quote!(#ty).to_string();
     let (bits, signed, variant) = match name.as_str() {
         "i8" => (8, true, quote!(I8)), "u8" => (8, false, quote!(U8)),
@@ -39,6 +52,7 @@ pub(crate) fn scalar(ty: &Type) -> syn::Result<(u32, bool, proc_macro2::TokenStr
     };
     Ok((bits, signed, quote!(::gpu_datalog_runtime::Column::#variant)))
 }
+
 
 // Formal rule GPU-Runs: only declared run handles bind packed inputs; every
 // lookup uses a leading packed prefix and every physical run remains visible.
@@ -60,7 +74,8 @@ pub fn bind(source: &Program) -> syn::Result<Program> {
         for (column, ty) in &row.types {
             if let Some(source) = origin.columns.get(column) {
                 let position = layout.iter().position(|name| name == source).unwrap();
-                if *ty != types[position] { return Err(syn::Error::new_spanned(entry, "GPU-Runs: declared packed column type differs from input")); }
+                let logical = symbol(&types[position]).map_or(&types[position], |(logical, _)| logical);
+                if ty != logical { return Err(syn::Error::new_spanned(entry, "GPU-Runs: declared packed column type differs from input")); }
             }
         }
         hosts.insert(host.clone(), (keyed.ty.clone(), key_count));
@@ -93,7 +108,7 @@ mod tests {
         let (columns, keys) = layout_types(&valid).unwrap().unwrap();
         assert_eq!((columns.len(), keys), (2, 1));
         let wide: Type = syn::parse_quote!(::gpu_datalog_runtime::DeviceLayout<(i64,), (i64,u8)>);
-        assert!(layout_types(&wide).is_err());
+        assert_eq!(layout_types(&wide).unwrap().unwrap().0.len(), 3);
         let unsupported: Type = syn::parse_quote!(::gpu_datalog_runtime::DeviceLayout<(f32,), (u32,)>);
         assert!(layout_types(&unsupported).is_err());
         let ordinary: Type = syn::parse_quote!(::cq_gpu_sequence_runtime::RangeProvider);

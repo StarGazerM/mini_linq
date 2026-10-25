@@ -150,6 +150,7 @@ pub struct Rows {
     resident_hosts: BTreeSet<String>,
     run_sources: BTreeMap<String, RunSource>,
     run_providers: BTreeSet<String>,
+    expressions: BTreeMap<String, syn::Expr>,
 }
 
 impl Rows {
@@ -206,9 +207,60 @@ impl Rows {
                     })
             })
             .collect::<syn::Result<Vec<_>>>()?;
-        let mut setup = TokenStream::new();
+        let mut codecs = BTreeMap::new();
+        for entry in &program.structures.structures.entries {
+            let cq_lang_structures::Structure::Host { keyed, .. } = &entry.structure else { continue };
+            if let Some((types, _)) = crate::runs::layout_types(&keyed.ty)? {
+                for ty in types {
+                    if let Some((logical, codec)) = crate::runs::symbol(&ty) {
+                        codecs.insert(quote!(#logical).to_string(), codec.clone());
+                    }
+                }
+            }
+        }
+        let mut captures = crate::capture::Captures::default();
+        let mut expressions = BTreeMap::new();
+        for (name, definition) in &definitions {
+            let selected;
+            let (expression, input, expected) = match &definition.operator {
+                Operator::Guard(guard) => (&guard.condition, symbol_name(&guard.input), Some(syn::parse_quote!(bool))),
+                Operator::Bind(bind) => (&bind.expression, symbol_name(&bind.input), bind.annotation.as_ref().map(|a| a.ty.clone())),
+                Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) => {
+                    let mut expression: syn::Expr = syn::parse2(cq_print::expressions::relational_condition_with(&select.condition, &BTreeMap::new()))?;
+                    DeviceComparisons.visit_expr_mut(&mut expression);
+                    crate::capture::simplify_references(&mut expression);
+                    selected = expression;
+                    (&selected, symbol_name(&select.input), Some(syn::parse_quote!(bool)))
+                }
+                _ => continue,
+            };
+            let types = &analysis.structures.physical.rows[&input].types;
+            let expression = captures.expression(expression, types, expected.as_ref(), &codecs)?;
+            let device_types = captures.types(types, &codecs);
+            let lowered = match &definition.operator {
+                Operator::Guard(_) | Operator::Select(_) | Operator::Point(_, _) | Operator::Range(_, _) => crate::capture::predicate(&expression, &device_types),
+                Operator::Bind(_) => {
+                    let expected = expected.map(|ty| if codecs.contains_key(&quote!(#ty).to_string()) { syn::parse_quote!(u32) } else { ty });
+                    cq_syntax::arithmetic::expression(&expression, &device_types, expected.as_ref())
+                }
+                _ => unreachable!(),
+            };
+            if let Some(mut expression) = lowered {
+                DeviceComparisons.visit_expr_mut(&mut expression);
+                crate::capture::simplify_references(&mut expression);
+                crate::capture::unborrow(&mut expression);
+                expressions.insert(name.clone(), expression);
+            }
+        }
+        let mut physical_rows = analysis.structures.physical.rows.clone();
+        for row in physical_rows.values_mut() {
+            for ty in row.types.values_mut() {
+                if codecs.contains_key(&quote!(#ty).to_string()) { *ty = syn::parse_quote!(u32); }
+            }
+        }
+        let mut setup = captures.setup;
         let mut build = TokenStream::new();
-        let mut parameters = Vec::new();
+        let mut parameters = captures.parameters;
         let mut hosts = BTreeMap::new();
         let mut raw = BTreeMap::new();
         let mut first = true;
@@ -694,7 +746,7 @@ impl Rows {
         for (name, source) in &run_sources {
             for &(slot, _) in &source.reads {
                 let column = columns.iter().find(|(_, index)| **index == slot).unwrap().0;
-                let ty = &analysis.structures.physical.rows[name].types[column];
+                let ty = &physical_rows[name].types[column];
                 bounds.insert(column.clone(), quote!(::cq_gpu_runtime::Bounds::Inclusive {
                     min: <#ty>::MIN as i64, max: <#ty>::MAX as i64,
                 }));
@@ -715,7 +767,7 @@ impl Rows {
         }
         // Computed CQ-Arith values have their declared primitive range, not
         // the source codec's range: wrapping can cross either signed endpoint.
-        for row in analysis.structures.physical.rows.values() {
+        for row in physical_rows.values() {
             for column in &row.computed {
                 let ty = &row.types[column];
                 if matches!(
@@ -809,15 +861,20 @@ impl Rows {
             providers,
             bounds,
             definitions,
-            physical_rows: analysis.structures.physical.rows.clone(),
+            physical_rows,
             resident_hosts,
             run_sources,
             run_providers,
+            expressions,
         })
     }
 
     pub fn has_source(&self, name: &str) -> bool {
         self.sources.contains_key(name) || self.run_sources.contains_key(name)
+    }
+
+    pub fn has_runs(&self) -> bool {
+        !self.run_sources.is_empty()
     }
 
     pub fn host_dependencies(&self, name: &str) -> BTreeSet<String> {
@@ -1164,12 +1221,8 @@ impl Rows {
                             let slot = self.columns[column];
                             quote!(let #id = &(#row[#slot] as #ty);)
                         });
-                    let tokens = cq_print::expressions::relational_condition_with(
-                        &select.condition,
-                        &BTreeMap::new(),
-                    );
-                    let mut expression: syn::Expr = syn::parse2(tokens)?;
-                    DeviceComparisons.visit_expr_mut(&mut expression);
+                    let expression = self.expressions.get(&symbol_name(&definition.name))
+                        .ok_or_else(|| error("GPU-Capture: selection is not an integer device predicate"))?;
                     output.extend(quote! { if #live { #(#bindings)* #live = #expression; } });
                 }
                 Operator::Semi(_, _)
@@ -1181,11 +1234,8 @@ impl Rows {
                 Operator::Bind(bind) => {
                     let input = symbol_name(&bind.input);
                     let input_row = &self.physical_rows[&input];
-                    let mut expression = cq_syntax::arithmetic::binding(bind, &input_row.types)
-                        .ok_or_else(|| {
-                            error("T-Gpu: opaque Rust binding requires host evaluation")
-                        })?;
-                    DeviceComparisons.visit_expr_mut(&mut expression);
+                    let expression = self.expressions.get(&symbol_name(&definition.name))
+                        .ok_or_else(|| error("T-Gpu: opaque Rust binding requires host evaluation"))?;
                     let dependencies = cq_syntax::rust::free_variables(&bind.expression)
                         .dependencies(&input_row.types.keys().cloned().collect());
                     let bindings = dependencies.iter().map(|column| {
@@ -1203,12 +1253,8 @@ impl Rows {
                 Operator::Guard(guard) => {
                     let input = symbol_name(&guard.input);
                     let input_row = &self.physical_rows[&input];
-                    let mut expression =
-                        cq_syntax::arithmetic::predicate(&guard.condition, &input_row.types)
-                            .ok_or_else(|| {
-                                error("T-Gpu: opaque Rust guard requires host evaluation")
-                            })?;
-                    DeviceComparisons.visit_expr_mut(&mut expression);
+                    let expression = self.expressions.get(&symbol_name(&definition.name))
+                        .ok_or_else(|| error("T-Gpu: opaque Rust guard requires host evaluation"))?;
                     let dependencies = cq_syntax::rust::free_variables(&guard.condition)
                         .dependencies(&input_row.types.keys().cloned().collect());
                     let bindings = dependencies.iter().map(|column| {
@@ -1593,7 +1639,7 @@ fn ungroup(expression: &syn::Expr) -> &syn::Expr {
     }
 }
 
-struct DeviceComparisons;
+pub(crate) struct DeviceComparisons;
 impl VisitMut for DeviceComparisons {
     fn visit_expr_mut(&mut self, expression: &mut syn::Expr) {
         if let syn::Expr::MethodCall(method) = expression {
@@ -1603,7 +1649,7 @@ impl VisitMut for DeviceComparisons {
                         .path
                         .segments
                         .last()
-                        .is_some_and(|s| s.ident == "relational_cmp")
+                        .is_some_and(|s| s.ident == "relational_cmp" || s.ident == "relational_str_cmp")
                         && call.args.len() == 2
                     {
                         let left = &call.args[0];
@@ -1628,7 +1674,7 @@ impl VisitMut for DeviceComparisons {
                     .path
                     .segments
                     .last()
-                    .is_some_and(|s| s.ident == "relational_eq")
+                    .is_some_and(|s| s.ident == "relational_eq" || s.ident == "relational_string_eq")
                     && call.args.len() == 2
                 {
                     let left = &call.args[0];

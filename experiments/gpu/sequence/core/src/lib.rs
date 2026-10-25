@@ -3,6 +3,8 @@
 use cq_lang_sequence::{LevelNode, Machine};
 
 mod arena;
+mod capture;
+pub mod constants;
 pub mod runs;
 mod emit;
 pub mod layout;
@@ -91,11 +93,9 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
             ProviderToken {
                 ty: syn::parse_quote!(::gpu_datalog_runtime::DeviceLayout<_, _>),
                 capabilities: vec![Capability::Exact, Capability::Range, Capability::Membership],
-                elements: Some(vec![
-                    syn::parse_quote!(i8), syn::parse_quote!(i16),
-                    syn::parse_quote!(i32), syn::parse_quote!(i64),
-                    syn::parse_quote!(u8), syn::parse_quote!(u16), syn::parse_quote!(u32),
-                ]),
+                // The declared layout checks primitives and Symbol<T, Codec>
+                // columns; logical symbol types do not appear in device rows.
+                elements: None,
                 levels: levels.clone(),
             },
             ProviderToken {

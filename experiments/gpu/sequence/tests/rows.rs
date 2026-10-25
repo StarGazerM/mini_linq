@@ -91,9 +91,9 @@ fn encoded_integer_disjunction_is_a_device_or_condition() {
     assert!(generated.contains("let value = &"), "{generated}");
     assert!(
         generated.split(';').any(|statement| {
-            statement.contains("* value == * & (1i32)")
+            statement.contains("* value == 1i32")
                 && statement.contains("||")
-                && statement.contains("* value == * & (2i32)")
+                && statement.contains("* value == 2i32")
         }),
         "{generated}"
     );

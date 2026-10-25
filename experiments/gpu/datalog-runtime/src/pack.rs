@@ -7,34 +7,107 @@ mod sealed {
     pub trait Sealed {}
     impl Sealed for u64 {}
     impl Sealed for u128 {}
+    impl<const L: usize> Sealed for [u64; L] {}
 }
 
-/// The two unsigned, native device representations of packed tuples.
-pub trait Word: sealed::Sealed + Copy + Ord + Default + Debug + DeviceCopy {
+/// An unsigned packed key. Array words store their most significant lane first.
+/// Lane access numbers lanes from the least significant end for all word types.
+pub trait Word: sealed::Sealed + Copy + Ord + Debug + DeviceCopy {
     const BITS: u32;
-    /// Convert the low `Self::BITS` bits. Packing checks the width first.
-    fn from_u128(value: u128) -> Self;
-    fn to_u128(self) -> u128;
+    const MS_FIRST: bool;
+    fn zero() -> Self;
+    fn lane(&self, lane: u32) -> u64;
+    fn set_lane(&mut self, lane: u32, value: u64);
+
+    /// Lane-wise ordering avoids array intrinsics unavailable in device code.
+    #[inline(always)]
+    fn compare(&self, other: &Self) -> std::cmp::Ordering {
+        let mut lane = Self::BITS / 64;
+        while lane != 0 {
+            lane -= 1;
+            let left = self.lane(lane);
+            let right = other.lane(lane);
+            if left < right { return std::cmp::Ordering::Less; }
+            if left > right { return std::cmp::Ordering::Greater; }
+        }
+        std::cmp::Ordering::Equal
+    }
+
+    /// Zero-extend (or truncate for u64) an unsigned native key.
+    fn from_u128(value: u128) -> Self {
+        let mut word = Self::zero();
+        word.set_lane(0, value as u64);
+        if Self::BITS > 64 { word.set_lane(1, (value >> 64) as u64); }
+        word
+    }
+    /// Return the low 128 bits, truncating wider keys.
+    fn to_u128(self) -> u128 {
+        self.lane(0) as u128
+            | if Self::BITS > 64 { (self.lane(1) as u128) << 64 } else { 0 }
+    }
+    #[inline(always)]
+    fn extract(&self, shift: u32, bits: u32) -> u64 {
+        let lane = shift / 64;
+        let offset = shift % 64;
+        let mut value = self.lane(lane) >> offset;
+        if offset != 0 && bits > 64 - offset {
+            value |= self.lane(lane + 1) << (64 - offset);
+        }
+        value & (u64::MAX >> (64 - bits))
+    }
+    #[inline(always)]
+    fn insert(&mut self, shift: u32, bits: u32, value: u64) {
+        let lane = shift / 64;
+        let offset = shift % 64;
+        self.set_lane(lane, self.lane(lane) | (value << offset));
+        if offset != 0 && bits > 64 - offset {
+            self.set_lane(lane + 1, self.lane(lane + 1) | (value >> (64 - offset)));
+        }
+    }
 }
 
 impl Word for u64 {
     const BITS: u32 = 64;
-    fn from_u128(value: u128) -> Self {
-        value as u64
-    }
-    fn to_u128(self) -> u128 {
-        self as u128
-    }
+    const MS_FIRST: bool = false;
+    fn zero() -> Self { 0 }
+    #[inline(always)]
+    fn lane(&self, _lane: u32) -> u64 { *self }
+    #[inline(always)]
+    fn set_lane(&mut self, _lane: u32, value: u64) { *self = value; }
 }
 
 impl Word for u128 {
     const BITS: u32 = 128;
-    fn from_u128(value: u128) -> Self {
-        value
+    const MS_FIRST: bool = false;
+    fn zero() -> Self { 0 }
+    #[inline(always)]
+    fn lane(&self, lane: u32) -> u64 {
+        if lane == 0 { *self as u64 } else { (*self >> 64) as u64 }
     }
-    fn to_u128(self) -> u128 {
-        self
+    #[inline(always)]
+    fn set_lane(&mut self, lane: u32, value: u64) {
+        // Select whole lanes: a dynamic u128 mask can lower to a mask that
+        // clears the opposite lane on the device. Constant lane masks also
+        // avoid multiword dynamic-shift machinery.
+        if lane == 0 {
+            *self = (*self & !(u64::MAX as u128)) | value as u128;
+        } else {
+            *self = (*self as u64 as u128) | ((value as u128) << 64);
+        }
     }
+}
+
+impl<const L: usize> Word for [u64; L] {
+    const BITS: u32 = {
+        assert!(L > 0 && L <= u32::MAX as usize / 64);
+        L as u32 * 64
+    };
+    const MS_FIRST: bool = true;
+    fn zero() -> Self { [0; L] }
+    #[inline(always)]
+    fn lane(&self, lane: u32) -> u64 { self[L - 1 - lane as usize] }
+    #[inline(always)]
+    fn set_lane(&mut self, lane: u32, value: u64) { self[L - 1 - lane as usize] = value; }
 }
 
 /// A tuple column's logical integer domain, not its packed storage type.
@@ -120,7 +193,7 @@ pub struct Packing {
 }
 
 impl Packing {
-    /// Construct unsigned columns with widths in `1..=64`, totaling at most 128.
+    /// Construct unsigned columns with widths in `1..=64`.
     /// An empty schema represents the single empty tuple with key zero.
     pub fn new(widths: &[u32]) -> Result<Self> {
         Self::build(widths.iter().map(|&bits| (bits, false)))
@@ -132,13 +205,14 @@ impl Packing {
     }
 
     pub(crate) fn build(columns: impl Iterator<Item = (u32, bool)>) -> Result<Self> {
-        let mut fields = Vec::with_capacity(columns.size_hint().0.min(128));
-        let mut bits = 0;
+        let mut fields = Vec::with_capacity(columns.size_hint().0);
+        let mut bits = 0_u32;
         for (width, signed) in columns {
-            if !(1..=64).contains(&width) || width > 128 - bits {
-                return Err("packing requires 1..=64-bit columns totaling at most 128 bits".into());
+            if !(1..=64).contains(&width) {
+                return Err("packing requires 1..=64-bit columns".into());
             }
-            bits += width;
+            bits = bits.checked_add(width).filter(|&bits| bits <= u32::MAX - 63)
+                .ok_or("packing bit width exceeds metadata domain")?;
             fields.push(Field { bits: width, signed, shift: bits });
         }
         for field in &mut fields {
@@ -151,9 +225,9 @@ impl Packing {
         self.bits
     }
 
-    /// Minimal native word width: u64 through 64 total bits, otherwise u128.
+    /// Minimal storage width, rounded up to at least one complete u64 lane.
     pub fn word_bits(&self) -> u32 {
-        if self.bits <= 64 { 64 } else { 128 }
+        self.bits.div_ceil(64).max(1) * 64
     }
 
     pub fn widths(&self) -> impl ExactSizeIterator<Item = u32> + '_ {
@@ -188,50 +262,57 @@ impl Packing {
         if values.len() != self.len() {
             return Err("tuple arity differs from packing".into());
         }
-        let mut packed = 0;
+        let mut packed = W::zero();
         for (&field, &value) in self.fields.iter().zip(values) {
-            packed |= field.encode(value)? << field.shift;
+            packed.insert(field.shift, field.bits, field.encode(value)? as u64);
         }
-        Ok(W::from_u128(packed))
+        Ok(packed)
     }
 
     pub fn unpack<W: Word>(&self, packed: W) -> Result<Vec<i128>> {
         self.check_word::<W>()?;
-        let packed = packed.to_u128();
-        if packed > mask(self.bits) {
-            return Err("packed key contains bits outside its schema".into());
+        for lane in self.bits / 64..W::BITS / 64 {
+            let used = self.bits.saturating_sub(lane * 64);
+            if packed.lane(lane) & !(mask(used) as u64) != 0 {
+                return Err("packed key contains bits outside its schema".into());
+            }
         }
         Ok(self.fields.iter().map(|field| {
-            field.decode((packed >> field.shift) & mask(field.bits))
+            field.decode(packed.extract(field.shift, field.bits) as u128)
         }).collect())
     }
 
-    /// Inclusive bounds avoid an unrepresentable successor of `u128::MAX`.
+    /// Inclusive bounds avoid an unrepresentable successor of the maximum key.
     /// An empty prefix covers every key in this schema, not unused high bits.
     pub fn prefix_range<W: Word>(&self, prefix: &[i128]) -> Result<RangeInclusive<W>> {
         self.check_word::<W>()?;
         if prefix.len() > self.len() {
             return Err("prefix is longer than the tuple schema".into());
         }
-        let mut lower = 0;
+        let mut lower = W::zero();
         let mut remaining = self.bits;
         for (&field, &value) in self.fields.iter().zip(prefix) {
-            lower |= field.encode(value)? << field.shift;
+            lower.insert(field.shift, field.bits, field.encode(value)? as u64);
             remaining = field.shift;
         }
-        Ok(W::from_u128(lower)..=W::from_u128(lower | mask(remaining)))
+        let mut upper = lower;
+        for lane in 0..remaining.div_ceil(64) {
+            let bits = (remaining - lane * 64).min(64);
+            upper.set_lane(lane, upper.lane(lane) | (u64::MAX >> (64 - bits)));
+        }
+        Ok(lower..=upper)
     }
 
     fn check_order(&self, order: &[usize]) -> Result<()> {
         if order.len() != self.len() {
             return Err("permutation arity differs from packing".into());
         }
-        let mut seen = 0_u128;
+        let mut seen = vec![false; self.len()];
         for &index in order {
-            if index >= self.len() || seen & (1_u128 << index) != 0 {
+            if index >= self.len() || seen[index] {
                 return Err("column order is not a permutation".into());
             }
-            seen |= 1_u128 << index;
+            seen[index] = true;
         }
         Ok(())
     }
@@ -248,6 +329,8 @@ impl Packing {
     /// Permute column bit fields on the input buffer's stream without a host
     /// round trip. Rows retain their original order; the result is not sorted.
     /// The initialized input prefix must contain keys packed with this schema.
+    /// Every storage lane is retained, including fields crossing lane boundaries;
+    /// field widths and shifts use the same u32 metadata as host packing.
     pub fn permute_device<W: Word>(
         &self,
         input: &Buffer<W>,
@@ -264,8 +347,7 @@ impl Packing {
         if rows == 0 {
             return Ok(output);
         }
-        // At least one bit per field bounds the descriptor to 128 columns.
-        let mut descriptors = [0_u32; 128 * 3];
+        let mut descriptors = vec![0_u32; order.len() * 3];
         let mut destination_shift = self.bits;
         for (destination, &source) in order.iter().enumerate() {
             let field = self.fields[source];
@@ -316,37 +398,27 @@ mod packing_kernels {
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
     pub fn permute<W: crate::Word>(
-        input: *const u64,
-        output: *mut u64,
+        input: *const W,
+        output: *mut W,
         rows: u64,
         descriptors: *const u32,
         columns: u32,
     ) {
-        let lanes = W::BITS / 64;
         let mut row = thread::index_1d().get() as u64;
         let stride = thread::gridDim_x() as u64 * 256;
         while row < rows {
-            let offset = row as usize * lanes as usize;
-            let mut source = unsafe { *input.add(offset) } as u128;
-            if lanes == 2 {
-                source |= (unsafe { *input.add(offset + 1) } as u128) << 64;
-            }
-            let mut packed = 0_u128;
+            let source = unsafe { *input.add(row as usize) };
+            let mut packed = W::zero();
             let mut column = 0;
             while column < columns as usize {
                 let source_shift = unsafe { *descriptors.add(column * 3) };
                 let width = unsafe { *descriptors.add(column * 3 + 1) };
                 let destination_shift = unsafe { *descriptors.add(column * 3 + 2) };
-                let field = (source >> source_shift) & ((1_u128 << width) - 1);
-                packed |= field << destination_shift;
+                let field = source.extract(source_shift, width);
+                packed.insert(destination_shift, width, field);
                 column += 1;
             }
-            unsafe {
-                *output.add(offset) = packed as u64;
-                if lanes == 2 {
-                    *output.add(offset + 1) = (packed >> 64) as u64;
-                }
-            }
+            unsafe { *output.add(row as usize) = packed; }
             row += stride;
         }
     }
@@ -476,7 +548,7 @@ mod tests {
 
     #[test]
     fn invalid_layouts_values_words_and_permutations_are_rejected() {
-        for widths in [&[0][..], &[65], &[64, 64, 1]] {
+        for widths in [&[0][..], &[65]] {
             assert!(Packing::new(widths).is_err());
         }
         let wide = Packing::new(&[64, 64]).unwrap();
@@ -493,5 +565,51 @@ mod tests {
         for order in [&[0][..], &[0, 0], &[1, 2]] {
             assert!(packing.permute(order).is_err());
         }
+    }
+
+    #[test]
+    fn arbitrary_lane_packing_matches_native_words() {
+        let mut state = 0xa5c7_1e29_0b83_d641;
+        for widths in [&[64][..], &[1, 63, 64], &[64, 17, 64, 47], &[7, 64, 64, 64, 57]] {
+            let packing = Packing::new(widths).unwrap();
+            properties::<[u64; 4]>(&packing, &mut state);
+            if packing.bits() <= 192 {
+                properties::<[u64; 3]>(&packing, &mut state);
+            }
+            if packing.bits() <= 128 {
+                for _ in 0..128 {
+                    let row = tuple(&packing, &mut state);
+                    let native = packing.pack::<u128>(&row).unwrap();
+                    assert_eq!(packing.pack::<[u64; 3]>(&row).unwrap(),
+                        [0, (native >> 64) as u64, native as u64]);
+                    assert_eq!(packing.pack::<[u64; 4]>(&row).unwrap(),
+                        [0, 0, (native >> 64) as u64, native as u64]);
+                    assert_eq!(packing.pack::<[u64; 2]>(&row).unwrap(),
+                        [(native >> 64) as u64, native as u64]);
+                    if packing.bits() <= 64 {
+                        assert_eq!(packing.pack::<[u64; 1]>(&row).unwrap(),
+                            [packing.pack::<u64>(&row).unwrap()]);
+                    }
+                }
+            }
+        }
+        let signed = Packing::with_columns(&[Column::I64, Column::U8, Column::I64,
+            Column::U64, Column::I16]).unwrap();
+        properties::<[u64; 4]>(&signed, &mut state);
+        let full = Packing::new(&[64; 4]).unwrap();
+        assert_eq!(full.word_bits(), 256);
+        assert_eq!(full.prefix_range::<[u64; 4]>(&[]).unwrap(), [0; 4]..=[u64::MAX; 4]);
+        assert_eq!(full.pack::<[u64; 4]>(&[u64::MAX as i128; 4]).unwrap(), [u64::MAX; 4]);
+        assert!(full.pack::<[u64; 3]>(&[0; 4]).is_err());
+        let narrow = Packing::new(&[64, 1]).unwrap();
+        assert!(narrow.unpack([1_u64, 0, 0]).is_err());
+        assert!(narrow.unpack([0_u64, 2, 0]).is_err());
+
+        // Neither column count nor array length has the former 128-bit cap.
+        let many = Packing::new(&[1; 257]).unwrap();
+        let order = (0..257).rev().collect::<Vec<_>>();
+        assert_eq!(many.permute(&order).unwrap(), many);
+        properties::<[u64; 5]>(&many, &mut state);
+        assert_eq!(Packing::new(&[64; 33]).unwrap().pack::<[u64; 33]>(&[7; 33]).unwrap(), [7; 33]);
     }
 }

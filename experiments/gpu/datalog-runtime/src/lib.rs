@@ -8,12 +8,27 @@ pub mod arena;
 pub mod layout;
 pub mod pack;
 pub mod runs;
+mod stats;
+pub use stats::{readback_count, record_readback, trace_memory, MemoryUse};
 pub use gpu_device_columns::{Buffer, Pool};
 pub use pack::{Column, Packing, Word};
 pub use runs::{AdmissionTimings, DeviceRuns, Run, RunView};
 pub use arena::{concatenate_batches, CandidateArena, CandidateBatch, CandidateLease};
 pub use layout::{device, DeviceLayout, PackedField, PackedRunView, RunsView, Scalar, ScalarTuple};
 pub type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
+
+/// Host-side bijection between logical symbols and their device integer codes.
+///
+/// Codes must be stable for an execution, preserve equality, and decode back to
+/// the original logical value. Device kernels never receive `T` or invoke this
+/// codec: uploads and captured constants call `code`, downloads call `decode`.
+pub trait SymbolCodec<T> {
+    fn code(value: &T) -> u32;
+    fn decode(code: u32) -> T;
+}
+
+/// Type-only layout metadata for a logical column stored as a `u32` code.
+pub struct Symbol<T, C>(std::marker::PhantomData<fn() -> (T, C)>);
 
 thread_local! {
     static THREAD_POOL: std::cell::RefCell<Option<std::sync::Arc<Pool>>> =
@@ -33,4 +48,39 @@ pub fn thread_pool() -> Result<std::sync::Arc<Pool>> {
         *slot.borrow_mut() = Some(pool.clone());
         Ok(pool)
     })
+}
+
+#[cfg(test)]
+mod symbol_tests {
+    use super::SymbolCodec;
+
+    struct Text;
+    impl SymbolCodec<String> for Text {
+        fn code(value: &String) -> u32 {
+            match value.as_str() {
+                "" => 0,
+                "first" => 1,
+                "last" => u32::MAX,
+                _ => panic!("unknown test symbol"),
+            }
+        }
+
+        fn decode(code: u32) -> String {
+            match code {
+                0 => String::new(),
+                1 => "first".to_owned(),
+                u32::MAX => "last".to_owned(),
+                _ => panic!("unknown test code"),
+            }
+        }
+    }
+
+    #[test]
+    fn codecs_restore_owned_logical_values_across_the_full_code_domain() {
+        for value in ["", "first", "last"] {
+            let logical = value.to_owned();
+            assert_eq!(Text::decode(Text::code(&logical)), logical);
+        }
+        assert_eq!(Text::code(&"last".to_owned()), u32::MAX);
+    }
 }

@@ -77,3 +77,12 @@ pub fn bind_runs(input: TokenStream) -> TokenStream {
     })
     .into()
 }
+
+/// Expose literal atom arguments as checked guards before provider selection.
+#[proc_macro]
+pub fn capture_constants(input: TokenStream) -> TokenStream {
+    cq_stage::rewrite::<cq_lang_structures::physical::Program>(input.into(), |source, arguments| {
+        no_arguments(arguments)?;
+        cq_gpu_sequence_core::constants::compile(source)
+    }).into()
+}

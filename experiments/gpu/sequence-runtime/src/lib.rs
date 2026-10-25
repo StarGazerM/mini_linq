@@ -536,6 +536,25 @@ thread_local! {
         const { RefCell::new(None) };
 }
 
+/// Release this thread's idle canonicalization and range-sort device scratch.
+///
+/// Call after dropping stratum-local providers, before [`Pool::release_unused`].
+/// Published results and checked-out providers retain their own allocations.
+/// Frees follow prior uses on the matching pool's stream; this does not wait
+/// for completion. Native CUDA scratch is not included in pool memory stats.
+pub fn release_cached_scratch(pool: &Arc<Pool>) {
+    canon::release_cached_scratch(pool);
+    let scratch = RANGE_RADIX_WORKSPACE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.as_ref().is_some_and(|scratch| Arc::ptr_eq(&scratch.pool, pool)) {
+            cache.take()
+        } else {
+            None
+        }
+    });
+    drop(scratch);
+}
+
 /// Keep only the most recently used context's named build module on this thread.
 pub(crate) fn build_module(pool: &Pool) -> Result<kernels::build::LoadedModule> {
     BUILD_MODULE.with(|cache| {
@@ -551,8 +570,25 @@ pub(crate) fn build_module(pool: &Pool) -> Result<kernels::build::LoadedModule> 
 }
 
 struct RangeRadixWorkspace {
-    by_rows: Vec<(usize, rccl_cub::DeviceRadixSortBufferWorkspace)>,
+    rows: usize,
+    workspace: rccl_cub::DeviceRadixSortBufferWorkspace,
     pool: Arc<Pool>,
+}
+impl Drop for RangeRadixWorkspace {
+    fn drop(&mut self) {
+        // Match CanonScratch: consuming these controls is not exposed by RCCL.
+        // Empty replacements allocate nothing; real frees stay stream ordered.
+        fn release<T: DeviceCopy>(pool: &Pool, buffer: &mut DeviceBuffer<T>) {
+            let empty = unsafe { DeviceBuffer::uninitialized_async(pool.stream(), 0) }
+                .expect("zero-length device buffer needs no allocation");
+            let buffer = std::mem::replace(buffer, empty);
+            pool.context().record_err(unsafe { buffer.drop_async(pool.stream()) });
+        }
+        let (bins, lookback, counters) = self.workspace.__parts_mut();
+        release(&self.pool, bins);
+        release(&self.pool, lookback);
+        release(&self.pool, counters);
+    }
 }
 
 fn with_range_radix_workspace(
@@ -565,29 +601,24 @@ fn with_range_radix_workspace(
         let mut cache = cache.borrow_mut();
         if cache
             .as_ref()
-            .is_none_or(|scratch| !Arc::ptr_eq(&scratch.pool, pool))
+            .is_none_or(|scratch| !Arc::ptr_eq(&scratch.pool, pool) || scratch.rows != rows)
         {
-            // Keep workspaces for only the current pool, releasing allocations
-            // from unrelated contexts when the caller switches pools.
+            // Keep only the latest exact-row workspace, not one allocation
+            // for every relation size encountered on this thread. Free before
+            // allocating its replacement to avoid overlapping their lifetimes.
+            drop(cache.take());
+            pool.context().bind_to_thread()?;
             *cache = Some(RangeRadixWorkspace {
-                by_rows: Vec::new(),
+                rows,
+                workspace: rccl_cub::device_radix_sort_pairs_buffer_workspace::<u32, u32>(launch, rows)?,
                 pool: pool.clone(),
             });
         }
         let scratch = cache.as_mut().unwrap();
-        let index = match scratch.by_rows.iter().position(|(len, _)| *len == rows) {
-            Some(index) => index,
-            None => {
-                let workspace =
-                    rccl_cub::device_radix_sort_pairs_buffer_workspace::<u32, u32>(launch, rows)?;
-                scratch.by_rows.push((rows, workspace));
-                scratch.by_rows.len() - 1
-            }
-        };
         // RCCL clears the entire lookback allocation each pass, so retain exact
         // row-sized controls rather than clearing the largest provider's scratch.
         // The retained pool fixes the stream, so successive uses remain ordered.
-        sort(&mut scratch.by_rows[index].1)
+        sort(&mut scratch.workspace)
     })
 }
 

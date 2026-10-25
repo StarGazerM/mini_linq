@@ -9,10 +9,9 @@ fn no_arguments(args: proc_macro2::TokenStream) -> syn::Result<()> {
 
 #[proc_macro]
 pub fn device_storage(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_datalog_storage::Program>(input.into(), |source, args| {
-        no_arguments(args)?;
-        cq_gpu_datalog_core::storage::compile(source)
-    }).into()
+    cq_stage::rewrite::<cq_lang_datalog_storage::Program>(
+        input.into(), cq_gpu_datalog_core::storage::compile_with,
+    ).into()
 }
 
 #[proc_macro]

@@ -4,9 +4,106 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Expr, Type};
 
+/// Explicit, syntactically matched logical-type to host-codec declarations.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Symbols(pub Vec<(Type, Type)>);
+
+impl syn::parse::Parse for Symbols {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        if input.is_empty() { return Ok(Self::default()); }
+        let name: syn::Ident = input.parse()?;
+        if name != "symbols" { return Err(syn::Error::new_spanned(name, "expected symbols(T => Codec, ...)")); }
+        let content;
+        syn::parenthesized!(content in input);
+        let mut symbols = Self::default();
+        while !content.is_empty() {
+            let ty: Type = content.parse()?;
+            content.parse::<syn::Token![=>]>()?;
+            let codec: Type = content.parse()?;
+            if symbols.codec(&ty).is_some() {
+                return Err(syn::Error::new_spanned(ty, "duplicate symbol type"));
+            }
+            if scalar(&ty).is_ok() {
+                return Err(syn::Error::new_spanned(ty, "native device scalars cannot have symbol codecs"));
+            }
+            symbols.0.push((ty, codec));
+            if content.is_empty() { break; }
+            content.parse::<syn::Token![,]>()?;
+        }
+        if !input.is_empty() { return Err(input.error("unexpected device_storage arguments")); }
+        Ok(symbols)
+    }
+}
+
+impl Symbols {
+    pub fn codec(&self, ty: &Type) -> Option<&Type> {
+        self.0.iter().find(|(logical, _)| logical == ty).map(|(_, codec)| codec)
+    }
+
+    pub fn device_type(&self, ty: &Type) -> Type {
+        match self.codec(ty) {
+            Some(codec) => syn::parse_quote!(::gpu_datalog_runtime::Symbol<#ty, #codec>),
+            None => ty.clone(),
+        }
+    }
+
+    fn validate(&self, program: &Program) -> syn::Result<()> {
+        for (ty, _) in &self.0 {
+            if !program.incremental.strata.source.declarations.iter()
+                .any(|declaration| declaration.columns.iter().any(|column| column.ty == *ty))
+            {
+                return Err(syn::Error::new_spanned(ty, "symbol type does not occur in a relation; use its declared type spelling"));
+            }
+        }
+        Ok(())
+    }
+
+    /// Recover codecs from checked provider schema metadata, including relations
+    /// which never need a keyed layout.
+    pub fn from_program(program: &Program) -> syn::Result<Self> {
+        let mut symbols = Self::default();
+        for provider in &program.providers {
+            for ty in [&provider.canonical_set, &provider.all] {
+                let Type::Path(path) = ty else { continue };
+                let Some(segment) = path.path.segments.last() else { continue };
+                if segment.ident != "DeviceRuns" { continue; }
+                let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments else { continue };
+                let Some(syn::GenericArgument::Type(Type::Tuple(schema))) = arguments.args.iter().nth(1) else { continue };
+                for field in &schema.elems {
+                    let Some((logical, codec)) = symbol_parts(field) else { continue };
+                    if let Some(previous) = symbols.codec(logical) {
+                        if previous != codec {
+                            return Err(syn::Error::new_spanned(field, "conflicting codecs for a logical symbol type"));
+                        }
+                    } else {
+                        symbols.0.push((logical.clone(), codec.clone()));
+                    }
+                }
+            }
+        }
+        symbols.validate(program)?;
+        Ok(symbols)
+    }
+}
+
+fn symbol_parts(ty: &Type) -> Option<(&Type, &Type)> {
+    let Type::Path(path) = ty else { return None };
+    if path.qself.is_some() || path.path.segments.len() != 2
+        || path.path.segments[0].ident != "gpu_datalog_runtime"
+        || path.path.segments[1].ident != "Symbol" { return None; }
+    let syn::PathArguments::AngleBracketed(arguments) = &path.path.segments[1].arguments else { return None };
+    let mut arguments = arguments.args.iter();
+    let (Some(syn::GenericArgument::Type(logical)), Some(syn::GenericArgument::Type(codec)), None) =
+        (arguments.next(), arguments.next(), arguments.next()) else { return None };
+    Some((logical, codec))
+}
+
 /// Return the native packed width and the runtime column descriptor.
 /// The runtime also packs u64, but GPU CQ expressions cannot represent its full domain.
 pub fn scalar(ty: &Type) -> syn::Result<(u32, TokenStream)> {
+    if symbol_parts(ty).is_some() {
+        return Ok((32, quote!(::gpu_datalog_runtime::Column::U32)));
+    }
     if let Type::Path(path) = ty {
         if path.qself.is_none() && path.path.segments.len() == 1 {
             let segment = &path.path.segments[0];
@@ -37,21 +134,19 @@ fn unsupported_scalar(ty: &Type) -> syn::Error {
 
 /// Choose the minimal runtime word, including u64 for the empty tuple.
 pub fn word_type<'a>(types: impl IntoIterator<Item = &'a Type>) -> syn::Result<Type> {
-    let mut bits = 0;
+    let mut bits = 0_usize;
     for ty in types {
         let (width, _) = scalar(ty)?;
-        if width > 128 - bits {
-            return Err(syn::Error::new_spanned(
-                ty,
-                "device storage tuple exceeds 128 packed bits",
-            ));
-        }
-        bits += width;
+        bits = bits.checked_add(width as usize)
+            .ok_or_else(|| syn::Error::new_spanned(ty, "device storage tuple width overflow"))?;
     }
     Ok(if bits <= 64 {
         syn::parse_quote!(u64)
-    } else {
+    } else if bits <= 128 {
         syn::parse_quote!(u128)
+    } else {
+        let lanes = syn::Index::from(bits.div_ceil(64));
+        syn::parse_quote!([u64; #lanes])
     })
 }
 
@@ -83,9 +178,14 @@ fn default_provider(types: &[&Type], edb: bool) -> Providers {
     }
 }
 
-fn device_provider(types: &[&Type], edb: bool) -> syn::Result<Providers> {
-    let word = word_type(types.iter().copied())?;
-    let runs: Type = syn::parse_quote!(::gpu_datalog_runtime::DeviceRuns<#word>);
+fn device_provider(types: &[&Type], edb: bool, symbols: &Symbols) -> syn::Result<Providers> {
+    let device_types = types.iter().map(|ty| symbols.device_type(ty)).collect::<Vec<_>>();
+    let word = word_type(&device_types)?;
+    let runs: Type = if types.iter().any(|ty| symbols.codec(ty).is_some()) {
+        syn::parse_quote!(::gpu_datalog_runtime::DeviceRuns<#word, (#(#device_types,)*)>)
+    } else {
+        syn::parse_quote!(::gpu_datalog_runtime::DeviceRuns<#word>)
+    };
     let mut provider = default_provider(types, edb);
     if edb {
         provider.canonical_set = runs;
@@ -93,8 +193,8 @@ fn device_provider(types: &[&Type], edb: bool) -> syn::Result<Providers> {
         provider.all = runs.clone();
         provider.seen = runs.clone();
         provider.delta = runs.clone();
-        provider.next = runs;
-        let init: Expr = syn::parse_quote!(::gpu_datalog_runtime::DeviceRuns::<#word>::new(__cq_gpu_pool.clone())?);
+        provider.next = runs.clone();
+        let init: Expr = syn::parse_quote!(<#runs>::new(__cq_gpu_pool.clone())?);
         provider.all_init = init.clone();
         provider.delta_init = init.clone();
         provider.next_init = init;
@@ -114,16 +214,23 @@ fn default_layout(types: &[&Type], key: usize) -> Type {
 }
 
 pub fn compile(source: &Program) -> syn::Result<Program> {
+    compile_with(source, TokenStream::new())
+}
+
+pub fn compile_with(source: &Program, args: TokenStream) -> syn::Result<Program> {
+    let symbols: Symbols = syn::parse2(args)?;
+    symbols.validate(source)?;
     let analysis = storage::contract::check(source)?;
     let declarations = &source.incremental.strata.source.declarations;
     let mut target = source.clone();
     for (provider, declaration) in target.providers.iter_mut().zip(declarations) {
         let types: Vec<_> = declaration.columns.iter().map(|column| &column.ty).collect();
-        *provider = device_provider(&types, declaration.value.is_some())?;
+        *provider = device_provider(&types, declaration.value.is_some(), &symbols)?;
     }
     for layout in target.layouts.iter_mut().chain(&mut target.delta_layouts) {
         let declaration = &declarations[analysis.positions[&cq_syntax::symbol_name(&layout.relation)]];
-        let types: Vec<_> = layout.columns.iter().map(|&column| &declaration.columns[column].ty).collect();
+        let device_types = layout.columns.iter().map(|&column| symbols.device_type(&declaration.columns[column].ty)).collect::<Vec<_>>();
+        let types = device_types.iter().collect::<Vec<_>>();
         layout.provider = layout_type(&types, layout.key);
     }
     check(source, &target)?;
@@ -134,6 +241,7 @@ pub fn compile(source: &Program) -> syn::Result<Program> {
 /// Only default provider realizations change; every logical and provenance record stays exact.
 pub fn check(source: &Program, target: &Program) -> syn::Result<()> {
     let analysis = storage::contract::check(source)?;
+    let symbols = Symbols::from_program(target)?;
     storage::contract::check(target)?;
     if source.incremental != target.incremental
         || source.reads != target.reads
@@ -155,7 +263,7 @@ pub fn check(source: &Program, target: &Program) -> syn::Result<()> {
         if before != &default_provider(&types, edb) {
             return Err(syn::Error::new_spanned(before, "device storage requires default relation providers"));
         }
-        if after != &device_provider(&types, edb)? {
+        if after != &device_provider(&types, edb, &symbols)? {
             return Err(syn::Error::new_spanned(after, "device storage relation provider differs from its packed realization"));
         }
     }
@@ -174,6 +282,8 @@ pub fn check(source: &Program, target: &Program) -> syn::Result<()> {
         if before.provider != default_layout(&types, before.key) {
             return Err(syn::Error::new_spanned(before, "device storage requires default layout providers"));
         }
+        let device_types = types.iter().map(|ty| symbols.device_type(ty)).collect::<Vec<_>>();
+        let types = device_types.iter().collect::<Vec<_>>();
         if after.provider != layout_type(&types, before.key) {
             return Err(syn::Error::new_spanned(after, "device storage layout provider differs from its recorded heading"));
         }
@@ -184,16 +294,18 @@ pub fn check(source: &Program, target: &Program) -> syn::Result<()> {
 /// Validate the concrete realization at the printer boundary.
 pub fn check_device(program: &Program) -> syn::Result<()> {
     let analysis = storage::contract::check(program)?;
+    let symbols = Symbols::from_program(program)?;
     let declarations = &program.incremental.strata.source.declarations;
     for (provider, declaration) in program.providers.iter().zip(declarations) {
         let types = declaration.columns.iter().map(|column| &column.ty).collect::<Vec<_>>();
-        if provider != &device_provider(&types, declaration.value.is_some())? {
+        if provider != &device_provider(&types, declaration.value.is_some(), &symbols)? {
             return Err(syn::Error::new_spanned(provider, "GPU printer requires checked device_storage providers"));
         }
     }
     for layout in program.layouts.iter().chain(&program.delta_layouts) {
         let declaration = &declarations[analysis.positions[&cq_syntax::symbol_name(&layout.relation)]];
-        let types = layout.columns.iter().map(|&i| &declaration.columns[i].ty).collect::<Vec<_>>();
+        let device_types = layout.columns.iter().map(|&i| symbols.device_type(&declaration.columns[i].ty)).collect::<Vec<_>>();
+        let types = device_types.iter().collect::<Vec<_>>();
         if layout.provider != layout_type(&types, layout.key) {
             return Err(syn::Error::new_spanned(layout, "GPU printer requires checked device layout providers"));
         }
@@ -204,6 +316,73 @@ pub fn check_device(program: &Program) -> syn::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_explicit_symbol_codecs_and_rejects_ambiguous_arguments() {
+        let symbols: Symbols = syn::parse_quote!(symbols(String => TextCodec, SymbolId => ids::Codec,));
+        assert_eq!(symbols.codec(&syn::parse_quote!(String)), Some(&syn::parse_quote!(TextCodec)));
+        assert_eq!(symbols.codec(&syn::parse_quote!(SymbolId)), Some(&syn::parse_quote!(ids::Codec)));
+        assert!(syn::parse2::<Symbols>(quote!(symbols(String => A, String => B))).is_err());
+        assert!(syn::parse2::<Symbols>(quote!(symbols(u32 => A))).is_err());
+        assert!(syn::parse2::<Symbols>(quote!(symbols(String))).is_err());
+        assert!(syn::parse2::<Symbols>(quote!(symbols(String => A) extra)).is_err());
+        assert!(syn::parse2::<Symbols>(quote!(codecs(String => A))).is_err());
+    }
+
+    #[test]
+    fn symbol_storage_preserves_logic_and_checks_codec_metadata() {
+        let mut incremental = source().incremental;
+        for declaration in &mut incremental.strata.source.declarations {
+            for column in &mut declaration.columns {
+                column.ty = syn::parse_quote!(String);
+            }
+        }
+        let source = cq_datalog_storage::compile(&incremental).unwrap();
+        let target = compile_with(&source, quote!(symbols(String => TextCodec))).unwrap();
+        assert_eq!(source.incremental, target.incremental);
+        assert_eq!(target.providers[0].canonical_set, syn::parse_quote!(
+            ::gpu_datalog_runtime::DeviceRuns<u64, (::gpu_datalog_runtime::Symbol<String, TextCodec>, ::gpu_datalog_runtime::Symbol<String, TextCodec>,)>
+        ));
+        assert_eq!(Symbols::from_program(&target).unwrap().codec(&syn::parse_quote!(String)), Some(&syn::parse_quote!(TextCodec)));
+        check(&source, &target).unwrap();
+        check_device(&target).unwrap();
+        let roundtrip: Program = syn::parse2(quote!(#target)).unwrap();
+        assert_eq!(roundtrip, target);
+        assert!(compile(&source).is_err());
+        assert!(compile_with(&source, quote!(symbols(other::String => TextCodec))).is_err());
+        let mut changed = target.clone();
+        changed.providers[0].canonical_set = syn::parse_quote!(
+            ::gpu_datalog_runtime::DeviceRuns<u64, (::gpu_datalog_runtime::Symbol<String, WrongCodec>, ::gpu_datalog_runtime::Symbol<String, WrongCodec>,)>
+        );
+        assert!(check(&source, &changed).is_err());
+        assert!(check_device(&changed).is_err());
+        let mut changed = target.clone();
+        changed.layouts[0].provider = syn::parse_quote!(::gpu_datalog_runtime::DeviceLayout<(), (u32, u32,)>);
+        assert!(check(&source, &changed).is_err());
+    }
+
+    #[test]
+    fn wide_symbol_schema_uses_three_lanes_without_changing_host_types() {
+        let source = cq_datalog_storage::compile(&syn::parse_quote! {
+            struct Wide;
+            relation E(a:String,b:String,c:String,d:String,e:String) = (input);
+            relation R(a:String,b:String,c:String,d:String,e:String);
+            output R;
+            R(*a,*b,*c,*d,*e) :- E(a,b,c,d,e);
+            strata { component [R]; }
+            incremental { scheme seminaive_covering;
+                delta R = Changes;
+                variant 0 seed { R(*a,*b,*c,*d,*e) :- E(a,b,c,d,e); }
+            }
+        }).unwrap();
+        let target = compile_with(&source, quote!(symbols(String => TextCodec))).unwrap();
+        assert_eq!(source.incremental, target.incremental);
+        let schema = Symbols::from_program(&target).unwrap();
+        let types = source.incremental.strata.source.declarations[0].columns.iter()
+            .map(|column| schema.device_type(&column.ty)).collect::<Vec<_>>();
+        assert_eq!(word_type(&types).unwrap(), syn::parse_quote!([u64; 3]));
+        check_device(&target).unwrap();
+    }
 
     fn source() -> Program {
         cq_datalog_storage::compile(&syn::parse_quote! {
@@ -253,11 +432,11 @@ mod tests {
             (vec![syn::parse_quote!(i64), syn::parse_quote!(u8)], syn::parse_quote!(u128)),
             (vec![syn::parse_quote!(i64), syn::parse_quote!(i64)], syn::parse_quote!(u128)),
             (vec![syn::parse_quote!(u8); 16], syn::parse_quote!(u128)),
+            (vec![syn::parse_quote!(i64), syn::parse_quote!(i64), syn::parse_quote!(u8)], syn::parse_quote!([u64; 3])),
+            (vec![syn::parse_quote!(i64); 4], syn::parse_quote!([u64; 4])),
         ] {
             assert_eq!(word_type(&types).unwrap(), expected);
         }
-        let too_wide: Vec<Type> = vec![syn::parse_quote!(i64), syn::parse_quote!(i64), syn::parse_quote!(u8)];
-        assert!(word_type(&too_wide).is_err());
         let types: Vec<Type> = vec![syn::parse_quote!(i16), syn::parse_quote!(u32)];
         let types: Vec<_> = types.iter().collect();
         assert_eq!(layout_type(&types, 0), syn::parse_quote!(::gpu_datalog_runtime::DeviceLayout<(), (i16, u32,)>));
@@ -355,12 +534,11 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unsupported_and_overwide_relation_schemas() {
+    fn rejects_unsupported_relation_schemas() {
         for (name, message) in [
             ("bool", "supports only"),
             ("u64", "supports only"),
             ("String", "supports only"),
-            ("i64", "exceeds 128"),
         ] {
             let ty: Type = syn::parse_str(name).unwrap();
             let source = cq_datalog_storage::compile(&syn::parse_quote! {

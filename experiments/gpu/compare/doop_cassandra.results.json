@@ -1,0 +1,2152 @@
+{
+  "dataset": "/tmp/doop-data/cassandra",
+  "comparison": "exact full-tuple sets against doop-mini, all 26 outputs",
+  "untraced_evaluation_seconds": {
+    "gpu": 11.809409,
+    "mini": 4.26924,
+    "mini_par_15_threads_reference": 1.28
+  },
+  "gpu_over_mini_par_reference": 9.226101,
+  "timing_scope": "Excludes fact loading and CUDA context creation; includes input upload, layout construction, execution, output download and symbol decoding. No kernel-only phase split.",
+  "outputs": {
+    "MainClass": 1,
+    "Method_SimpleName": 42979,
+    "Method_DeclaringType": 42979,
+    "Method_Modifier": 58905,
+    "Method_ParamTypes": 42979,
+    "Method_ReturnType": 42979,
+    "Method_Descriptor": 42979,
+    "MethodLookup": 140883,
+    "MethodImplemented": 39929,
+    "DirectSubclass": 4393,
+    "Subclass": 8142,
+    "Superclass": 8142,
+    "Superinterface": 5534,
+    "SubtypeOf": 21312,
+    "SupertypeOf": 21312,
+    "SubtypeOfDifferent": 16065,
+    "MainMethodDeclaration": 1,
+    "ClassInitializer": 1246,
+    "InitializedClass": 831,
+    "Assign": 33675,
+    "VarPointsTo": 1896143,
+    "InstanceFieldPointsTo": 872636,
+    "StaticFieldPointsTo": 828,
+    "CallGraphEdge": 15113,
+    "ArrayIndexPointsTo": 16236,
+    "Reachable": 3375
+  },
+  "memory_bytes": {
+    "incorrect_permutation_baseline_before_stratum49": {
+      "current": 135365376,
+      "peak": 136877056,
+      "reserved": 267386880,
+      "cached": 132021504,
+      "accepted_footprint": 53192072,
+      "layout_footprint": 56581872,
+      "arena_footprint": 25393480,
+      "hole77_requested_rows": 929428430,
+      "hole77_requested_bytes": 7435427440
+    },
+    "corrected_pool_peaks": {
+      "current_bytes": 207963136,
+      "peak_bytes": 232744960,
+      "reserved_bytes": 528482304,
+      "cached_bytes": 333256448
+    },
+    "corrected_selected_boundaries": [
+      {
+        "stage": "stratum=48/released",
+        "current_bytes": 111547904,
+        "peak_bytes": 114066688,
+        "reserved_bytes": 132120576,
+        "cached_bytes": 20572672
+      },
+      {
+        "stage": "stratum=49/seed/before",
+        "current_bytes": 111547904,
+        "peak_bytes": 114066688,
+        "reserved_bytes": 132120576,
+        "cached_bytes": 20572672
+      },
+      {
+        "stage": "stratum=49/seed/after",
+        "current_bytes": 112356096,
+        "peak_bytes": 114066688,
+        "reserved_bytes": 132120576,
+        "cached_bytes": 19764480
+      },
+      {
+        "stage": "stratum=49/released",
+        "current_bytes": 112086528,
+        "peak_bytes": 114066688,
+        "reserved_bytes": 132120576,
+        "cached_bytes": 20034048
+      },
+      {
+        "stage": "stratum=62/released",
+        "current_bytes": 195225856,
+        "peak_bytes": 232744960,
+        "reserved_bytes": 528482304,
+        "cached_bytes": 333256448
+      }
+    ],
+    "corrected_hole77": [
+      {
+        "stratum": 49,
+        "phase": "seed",
+        "hole": 77,
+        "rows": 33667,
+        "capacity": 33667,
+        "bytes": 269336
+      }
+    ],
+    "largest_final_owners": [
+      {
+        "stage": "stratum=62/released",
+        "relation": "varpointsto",
+        "rows": 1896143,
+        "accepted_live_bytes": 15169144,
+        "accepted_bytes": 15169144,
+        "layout_live_bytes": 30338288,
+        "layout_bytes": 30338576,
+        "arena_bytes": 0
+      },
+      {
+        "stage": "stratum=62/released",
+        "relation": "instancefieldpointsto",
+        "rows": 872636,
+        "accepted_live_bytes": 13962176,
+        "accepted_bytes": 13962176,
+        "layout_live_bytes": 13962176,
+        "layout_bytes": 13962360,
+        "arena_bytes": 0
+      },
+      {
+        "stage": "stratum=62/released",
+        "relation": "instruction_method",
+        "rows": 466330,
+        "accepted_live_bytes": 3730640,
+        "accepted_bytes": 3730736,
+        "layout_live_bytes": 11191920,
+        "layout_bytes": 11192040,
+        "arena_bytes": 0
+      },
+      {
+        "stage": "stratum=62/released",
+        "relation": "var_type",
+        "rows": 479967,
+        "accepted_live_bytes": 3839736,
+        "accepted_bytes": 3839736,
+        "layout_live_bytes": 3839736,
+        "layout_bytes": 3839776,
+        "arena_bytes": 0
+      },
+      {
+        "stage": "stratum=62/released",
+        "relation": "_var_declaringmethod",
+        "rows": 479967,
+        "accepted_live_bytes": 3839736,
+        "accepted_bytes": 3839736,
+        "layout_live_bytes": 3839736,
+        "layout_bytes": 3839776,
+        "arena_bytes": 0
+      },
+      {
+        "stage": "stratum=62/released",
+        "relation": "actualparam",
+        "rows": 144559,
+        "accepted_live_bytes": 2312944,
+        "accepted_bytes": 2312944,
+        "layout_live_bytes": 2312944,
+        "layout_bytes": 2312996,
+        "arena_bytes": 0
+      },
+      {
+        "stage": "stratum=62/released",
+        "relation": "methodlookup",
+        "rows": 140883,
+        "accepted_live_bytes": 2254128,
+        "accepted_bytes": 2254224,
+        "layout_live_bytes": 2254128,
+        "layout_bytes": 2254304,
+        "arena_bytes": 0
+      },
+      {
+        "stage": "stratum=62/released",
+        "relation": "_virtualmethodinvocation",
+        "rows": 84356,
+        "accepted_live_bytes": 2024544,
+        "accepted_bytes": 2024544,
+        "layout_live_bytes": 2024544,
+        "layout_bytes": 2024620,
+        "arena_bytes": 0
+      },
+      {
+        "stage": "stratum=62/released",
+        "relation": "assigninstruction_to",
+        "rows": 161851,
+        "accepted_live_bytes": 1294808,
+        "accepted_bytes": 1294808,
+        "layout_live_bytes": 2589616,
+        "layout_bytes": 2589696,
+        "arena_bytes": 0
+      },
+      {
+        "stage": "stratum=62/released",
+        "relation": "_assignlocal",
+        "rows": 80345,
+        "accepted_live_bytes": 1928280,
+        "accepted_bytes": 1928280,
+        "layout_live_bytes": 1928280,
+        "layout_bytes": 1928356,
+        "arena_bytes": 0
+      }
+    ],
+    "scope": "Pool accounting excludes native CUDA library scratch. Layout ownership footprints may share backing buffers and are not additive physical usage."
+  },
+  "readbacks": {
+    "scope": "Per phase: metadata attempts, admission counts, layout canonicalization counts; excludes setup and final row downloads",
+    "total": 16553,
+    "phases": [
+      {
+        "stratum": 0,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 7
+      },
+      {
+        "stratum": 0,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 1,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 13
+      },
+      {
+        "stratum": 1,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 2,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 10
+      },
+      {
+        "stratum": 2,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 3,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 4
+      },
+      {
+        "stratum": 3,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 4,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 4
+      },
+      {
+        "stratum": 4,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 5,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 4
+      },
+      {
+        "stratum": 5,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 6,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 3
+      },
+      {
+        "stratum": 6,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 7,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 4
+      },
+      {
+        "stratum": 7,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 8,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 5
+      },
+      {
+        "stratum": 8,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 9,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 3
+      },
+      {
+        "stratum": 9,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 10,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 6
+      },
+      {
+        "stratum": 10,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 11,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 3
+      },
+      {
+        "stratum": 11,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 12,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 4
+      },
+      {
+        "stratum": 12,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 13,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 3
+      },
+      {
+        "stratum": 13,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 14,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 30
+      },
+      {
+        "stratum": 14,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 15,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 4
+      },
+      {
+        "stratum": 15,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 16,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 5
+      },
+      {
+        "stratum": 16,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 17,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 10
+      },
+      {
+        "stratum": 17,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 18,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 4
+      },
+      {
+        "stratum": 18,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 19,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 4
+      },
+      {
+        "stratum": 19,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 20,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 4
+      },
+      {
+        "stratum": 20,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 21,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 4
+      },
+      {
+        "stratum": 21,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 22,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 4
+      },
+      {
+        "stratum": 22,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 23,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 4
+      },
+      {
+        "stratum": 23,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 24,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 4
+      },
+      {
+        "stratum": 24,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 25,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 4
+      },
+      {
+        "stratum": 25,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 26,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 4
+      },
+      {
+        "stratum": 26,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 27,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 4
+      },
+      {
+        "stratum": 27,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 28,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 9
+      },
+      {
+        "stratum": 28,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 29,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 4
+      },
+      {
+        "stratum": 29,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 30,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 4
+      },
+      {
+        "stratum": 30,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 31,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 4
+      },
+      {
+        "stratum": 31,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 32,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 4
+      },
+      {
+        "stratum": 32,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 33,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 4
+      },
+      {
+        "stratum": 33,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 34,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 8
+      },
+      {
+        "stratum": 34,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 35,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 5
+      },
+      {
+        "stratum": 35,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 36,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 4
+      },
+      {
+        "stratum": 36,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 37,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 4
+      },
+      {
+        "stratum": 37,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 38,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 5
+      },
+      {
+        "stratum": 38,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 39,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 5
+      },
+      {
+        "stratum": 39,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 40,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 4
+      },
+      {
+        "stratum": 40,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 41,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 4
+      },
+      {
+        "stratum": 41,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 42,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 4
+      },
+      {
+        "stratum": 42,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 43,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 4
+      },
+      {
+        "stratum": 43,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 44,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 4
+      },
+      {
+        "stratum": 44,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 45,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 4
+      },
+      {
+        "stratum": 45,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 46,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 4
+      },
+      {
+        "stratum": 46,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 47,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 4
+      },
+      {
+        "stratum": 47,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 48,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 5
+      },
+      {
+        "stratum": 48,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 49,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 4
+      },
+      {
+        "stratum": 49,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 50,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 4
+      },
+      {
+        "stratum": 50,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 51,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 5
+      },
+      {
+        "stratum": 51,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 52,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 5
+      },
+      {
+        "stratum": 52,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 8
+      },
+      {
+        "stratum": 52,
+        "phase": "step",
+        "round": 2,
+        "readbacks": 8
+      },
+      {
+        "stratum": 52,
+        "phase": "step",
+        "round": 3,
+        "readbacks": 8
+      },
+      {
+        "stratum": 52,
+        "phase": "step",
+        "round": 4,
+        "readbacks": 8
+      },
+      {
+        "stratum": 52,
+        "phase": "step",
+        "round": 5,
+        "readbacks": 8
+      },
+      {
+        "stratum": 52,
+        "phase": "step",
+        "round": 6,
+        "readbacks": 7
+      },
+      {
+        "stratum": 52,
+        "phase": "step",
+        "round": 7,
+        "readbacks": 2
+      },
+      {
+        "stratum": 53,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 5
+      },
+      {
+        "stratum": 53,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 54,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 4
+      },
+      {
+        "stratum": 54,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 5
+      },
+      {
+        "stratum": 54,
+        "phase": "step",
+        "round": 2,
+        "readbacks": 5
+      },
+      {
+        "stratum": 54,
+        "phase": "step",
+        "round": 3,
+        "readbacks": 5
+      },
+      {
+        "stratum": 54,
+        "phase": "step",
+        "round": 4,
+        "readbacks": 5
+      },
+      {
+        "stratum": 54,
+        "phase": "step",
+        "round": 5,
+        "readbacks": 5
+      },
+      {
+        "stratum": 54,
+        "phase": "step",
+        "round": 6,
+        "readbacks": 1
+      },
+      {
+        "stratum": 55,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 3
+      },
+      {
+        "stratum": 55,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 56,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 5
+      },
+      {
+        "stratum": 56,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 8
+      },
+      {
+        "stratum": 56,
+        "phase": "step",
+        "round": 2,
+        "readbacks": 8
+      },
+      {
+        "stratum": 56,
+        "phase": "step",
+        "round": 3,
+        "readbacks": 8
+      },
+      {
+        "stratum": 56,
+        "phase": "step",
+        "round": 4,
+        "readbacks": 8
+      },
+      {
+        "stratum": 56,
+        "phase": "step",
+        "round": 5,
+        "readbacks": 8
+      },
+      {
+        "stratum": 56,
+        "phase": "step",
+        "round": 6,
+        "readbacks": 2
+      },
+      {
+        "stratum": 57,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 22
+      },
+      {
+        "stratum": 57,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 5
+      },
+      {
+        "stratum": 57,
+        "phase": "step",
+        "round": 2,
+        "readbacks": 5
+      },
+      {
+        "stratum": 57,
+        "phase": "step",
+        "round": 3,
+        "readbacks": 1
+      },
+      {
+        "stratum": 58,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 5
+      },
+      {
+        "stratum": 58,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 59,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 3
+      },
+      {
+        "stratum": 59,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 60,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 4
+      },
+      {
+        "stratum": 60,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 61,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 4
+      },
+      {
+        "stratum": 61,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 0
+      },
+      {
+        "stratum": 62,
+        "phase": "seed",
+        "round": 0,
+        "readbacks": 8
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 1,
+        "readbacks": 67
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 2,
+        "readbacks": 85
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 3,
+        "readbacks": 86
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 4,
+        "readbacks": 99
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 5,
+        "readbacks": 99
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 6,
+        "readbacks": 105
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 7,
+        "readbacks": 106
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 8,
+        "readbacks": 106
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 9,
+        "readbacks": 106
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 10,
+        "readbacks": 106
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 11,
+        "readbacks": 105
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 12,
+        "readbacks": 107
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 13,
+        "readbacks": 106
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 14,
+        "readbacks": 104
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 15,
+        "readbacks": 107
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 16,
+        "readbacks": 106
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 17,
+        "readbacks": 107
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 18,
+        "readbacks": 107
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 19,
+        "readbacks": 108
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 20,
+        "readbacks": 103
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 21,
+        "readbacks": 106
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 22,
+        "readbacks": 107
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 23,
+        "readbacks": 103
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 24,
+        "readbacks": 107
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 25,
+        "readbacks": 99
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 26,
+        "readbacks": 106
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 27,
+        "readbacks": 108
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 28,
+        "readbacks": 101
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 29,
+        "readbacks": 107
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 30,
+        "readbacks": 102
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 31,
+        "readbacks": 107
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 32,
+        "readbacks": 106
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 33,
+        "readbacks": 107
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 34,
+        "readbacks": 108
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 35,
+        "readbacks": 102
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 36,
+        "readbacks": 106
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 37,
+        "readbacks": 107
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 38,
+        "readbacks": 108
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 39,
+        "readbacks": 107
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 40,
+        "readbacks": 108
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 41,
+        "readbacks": 108
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 42,
+        "readbacks": 107
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 43,
+        "readbacks": 109
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 44,
+        "readbacks": 108
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 45,
+        "readbacks": 108
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 46,
+        "readbacks": 108
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 47,
+        "readbacks": 108
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 48,
+        "readbacks": 109
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 49,
+        "readbacks": 109
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 50,
+        "readbacks": 107
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 51,
+        "readbacks": 107
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 52,
+        "readbacks": 108
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 53,
+        "readbacks": 103
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 54,
+        "readbacks": 101
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 55,
+        "readbacks": 107
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 56,
+        "readbacks": 105
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 57,
+        "readbacks": 106
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 58,
+        "readbacks": 103
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 59,
+        "readbacks": 107
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 60,
+        "readbacks": 107
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 61,
+        "readbacks": 108
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 62,
+        "readbacks": 107
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 63,
+        "readbacks": 106
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 64,
+        "readbacks": 108
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 65,
+        "readbacks": 106
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 66,
+        "readbacks": 100
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 67,
+        "readbacks": 100
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 68,
+        "readbacks": 101
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 69,
+        "readbacks": 105
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 70,
+        "readbacks": 101
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 71,
+        "readbacks": 105
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 72,
+        "readbacks": 106
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 73,
+        "readbacks": 102
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 74,
+        "readbacks": 98
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 75,
+        "readbacks": 99
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 76,
+        "readbacks": 100
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 77,
+        "readbacks": 101
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 78,
+        "readbacks": 103
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 79,
+        "readbacks": 98
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 80,
+        "readbacks": 97
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 81,
+        "readbacks": 93
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 82,
+        "readbacks": 102
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 83,
+        "readbacks": 93
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 84,
+        "readbacks": 97
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 85,
+        "readbacks": 100
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 86,
+        "readbacks": 93
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 87,
+        "readbacks": 88
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 88,
+        "readbacks": 96
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 89,
+        "readbacks": 96
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 90,
+        "readbacks": 95
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 91,
+        "readbacks": 93
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 92,
+        "readbacks": 92
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 93,
+        "readbacks": 97
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 94,
+        "readbacks": 97
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 95,
+        "readbacks": 96
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 96,
+        "readbacks": 92
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 97,
+        "readbacks": 86
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 98,
+        "readbacks": 87
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 99,
+        "readbacks": 86
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 100,
+        "readbacks": 85
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 101,
+        "readbacks": 85
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 102,
+        "readbacks": 85
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 103,
+        "readbacks": 85
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 104,
+        "readbacks": 85
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 105,
+        "readbacks": 79
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 106,
+        "readbacks": 77
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 107,
+        "readbacks": 78
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 108,
+        "readbacks": 92
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 109,
+        "readbacks": 82
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 110,
+        "readbacks": 90
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 111,
+        "readbacks": 81
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 112,
+        "readbacks": 83
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 113,
+        "readbacks": 78
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 114,
+        "readbacks": 81
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 115,
+        "readbacks": 80
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 116,
+        "readbacks": 83
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 117,
+        "readbacks": 83
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 118,
+        "readbacks": 79
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 119,
+        "readbacks": 79
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 120,
+        "readbacks": 72
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 121,
+        "readbacks": 75
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 122,
+        "readbacks": 76
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 123,
+        "readbacks": 69
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 124,
+        "readbacks": 78
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 125,
+        "readbacks": 77
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 126,
+        "readbacks": 71
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 127,
+        "readbacks": 73
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 128,
+        "readbacks": 75
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 129,
+        "readbacks": 65
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 130,
+        "readbacks": 79
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 131,
+        "readbacks": 78
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 132,
+        "readbacks": 77
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 133,
+        "readbacks": 78
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 134,
+        "readbacks": 70
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 135,
+        "readbacks": 70
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 136,
+        "readbacks": 76
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 137,
+        "readbacks": 73
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 138,
+        "readbacks": 71
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 139,
+        "readbacks": 73
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 140,
+        "readbacks": 72
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 141,
+        "readbacks": 80
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 142,
+        "readbacks": 80
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 143,
+        "readbacks": 69
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 144,
+        "readbacks": 76
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 145,
+        "readbacks": 83
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 146,
+        "readbacks": 84
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 147,
+        "readbacks": 78
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 148,
+        "readbacks": 84
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 149,
+        "readbacks": 84
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 150,
+        "readbacks": 80
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 151,
+        "readbacks": 78
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 152,
+        "readbacks": 78
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 153,
+        "readbacks": 75
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 154,
+        "readbacks": 77
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 155,
+        "readbacks": 74
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 156,
+        "readbacks": 73
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 157,
+        "readbacks": 81
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 158,
+        "readbacks": 79
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 159,
+        "readbacks": 74
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 160,
+        "readbacks": 73
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 161,
+        "readbacks": 78
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 162,
+        "readbacks": 72
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 163,
+        "readbacks": 67
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 164,
+        "readbacks": 73
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 165,
+        "readbacks": 69
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 166,
+        "readbacks": 68
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 167,
+        "readbacks": 63
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 168,
+        "readbacks": 61
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 169,
+        "readbacks": 68
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 170,
+        "readbacks": 67
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 171,
+        "readbacks": 55
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 172,
+        "readbacks": 64
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 173,
+        "readbacks": 61
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 174,
+        "readbacks": 62
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 175,
+        "readbacks": 66
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 176,
+        "readbacks": 62
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 177,
+        "readbacks": 60
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 178,
+        "readbacks": 53
+      },
+      {
+        "stratum": 62,
+        "phase": "step",
+        "round": 179,
+        "readbacks": 56
+      }
+    ]
+  },
+  "external_patch": {
+    "repository": "/data/rccl",
+    "branch": "mini-linq/dynamic-lookback-scan",
+    "commit": "8a7e87b",
+    "regression": "coalescing_pool_release_resets_geometric_growth passed"
+  }
+}

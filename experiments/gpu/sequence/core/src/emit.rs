@@ -538,29 +538,19 @@ impl<'a> Compiler<'a> {
                 return Err(error("GPU-Runs: lookup keys are not a checked leading prefix"));
             }
             let run = format_ident!("__cq_run_{provider}");
-            let parts = order.iter().take(keys.len()).enumerate().map(|(index, key)| {
+            let parts = order.iter().take(keys.len()).map(|key| {
                 let slot = self.slot(key)?;
-                Ok(quote! {
-                    let __field = *#view.fields.add(#index);
-                    let __mask = (1u128 << __field.bits) - 1;
-                    let __sign = if __field.signed != 0 { 1u128 << (__field.bits - 1) } else { 0 };
-                    __lo |= (((__row[#slot] as u128) & __mask) ^ __sign) << __field.shift;
-                    __suffix = __field.shift;
-                })
+                Ok(quote!(__row[#slot]))
             }).collect::<syn::Result<Vec<_>>>()?;
-            let prefix = quote! {
-                let mut __lo = 0u128;
-                let mut __suffix = #view.bits;
-                #(#parts)*
-                let __hi = __lo | if __suffix == 128 { u128::MAX } else { (1u128 << __suffix) - 1 };
-            };
+            let count = keys.len() as u32;
+            let prefix = quote!(let __prefix: [i64; #count as usize] = [#(#parts),*];);
             return Ok(if membership {
                 quote! {
                     #prefix
                     let mut __member_found = false;
                     if __live {
                         for #run in 0..#view.run_count {
-                            let (__begin, __end) = ::gpu_datalog_runtime::device::range(#view, #run, __lo, __hi);
+                            let (__begin, __end) = ::gpu_datalog_runtime::device::prefix_range(#view, #run, __prefix.as_ptr(), #count);
                             __member_found |= __begin < __end;
                         }
                     }
@@ -569,7 +559,7 @@ impl<'a> Compiler<'a> {
                 quote! {
                     #prefix
                     let (__begin, __end) = if __live {
-                        ::gpu_datalog_runtime::device::range(#view, #run, __lo, __hi)
+                        ::gpu_datalog_runtime::device::prefix_range(#view, #run, __prefix.as_ptr(), #count)
                     } else { (0u32, 0u32) };
                 }
             });
@@ -2451,7 +2441,7 @@ pub(crate) fn translate_impl(
         };
         let packing_setup = if let Some(packing) = arena_packing.as_ref().filter(|_| final_output) {
             let bits = packing.bits;
-            let lanes = if bits <= 64 { 1usize } else { 2usize };
+            let lanes = bits.div_ceil(64).max(1) as usize;
             quote! {
                 let __cq_key_bits = #bits;
                 let __cq_key_lanes = #lanes;
@@ -2464,6 +2454,8 @@ pub(crate) fn translate_impl(
                 let __cq_key_lanes=::cq_gpu_sequence_runtime::canon::WideCanon::key_lanes(__cq_key_bits)?;
             }
         };
+        let record_readback = (arena.is_some() || compiler.rows.has_runs())
+            .then(|| quote!(::gpu_datalog_runtime::record_readback();));
         launches.push(quote! {
             #packing_setup
             #(#host_domains)*
@@ -2482,6 +2474,7 @@ pub(crate) fn translate_impl(
                     #store_rows.ptr(),#store_begin.ptr(),#store_offsets.ptr(),#key_pointer,
                     __cq_capacity as u32,#store_meta.ptr())?;
                 let __cq_counts=#store_meta.to_host()?;
+                #record_readback
                 if __cq_counts[2]!=0 {return Err("Sequence device count or fold overflow".into());}
                 let __cq_required=__cq_counts[0] as usize;
                 if __cq_required>__cq_capacity {
@@ -2681,6 +2674,7 @@ pub(crate) fn translate_impl(
     launches.push(
         output.ok_or_else(|| error("checked GPU output has no recorded publication adapter"))?,
     );
+    crate::capture::launches(&kernels, &mut launches)?;
     prune_kernel_parameters(&mut kernels, &mut launches)?;
     let output = launches.pop().expect("output launch");
     let setup = &compiler.rows.setup;

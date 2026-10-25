@@ -870,10 +870,10 @@ impl<'a> Checker<'a> {
     }
 
     fn total_physical(&self, result: &Ident, stop: Option<&str>) -> syn::Result<()> {
-        // Formal rule BE-Partial: opaque Bind/Guard code cannot be evaluated
-        // below host, including through an indirect Physical dependency. Stop
-        // at explicit map inputs and previously checked Sequence stores: their
-        // opaque results are already evaluated, including lookup providers.
+        // Formal rule BE-Partial: opaque Bind/Guard code is host-only.
+        // IF-Parameter discharges closed fragments once before dispatch.
+        // Stop at explicit map inputs and checked Sequence stores, whose
+        // opaque results have already been evaluated.
         let mut pending = vec![symbol_name(result)];
         let mut visited = BTreeSet::new();
         while let Some(name) = pending.pop() {
@@ -890,7 +890,9 @@ impl<'a> Checker<'a> {
             let Some(definition) = self.physical.get(&name) else {
                 continue;
             };
-            if self.physical_facts.opaque(&definition.operator) {
+            if self.physical_facts.opaque(&definition.operator)
+                && !self.physical_facts.capturable(&definition.operator)
+            {
                 return Err(syn::Error::new(
                     result.span(),
                     "BE-Partial: opaque Physical Rust must be evaluated at host before dispatch",

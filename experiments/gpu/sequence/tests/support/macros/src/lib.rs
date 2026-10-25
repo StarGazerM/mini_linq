@@ -109,7 +109,29 @@ pub fn h05_sequential_physical_reference(input: TokenStream) -> TokenStream {
 mod run_holes;
 
 fn arena_hole(name: &syn::Ident) -> syn::Result<syn::Expr> {
-    let structures = cq_gpu_sequence_core::runs::bind(&run_holes::fixture(&name.to_string()))?;
+    let mut structures = run_holes::fixture(&name.to_string());
+    let normalized = cq_gpu_sequence_core::constants::compile(&structures.physical)?;
+    if normalized != structures.physical {
+        let before = cq_lang_structures::physical::contract::check(&structures.physical)?;
+        let inputs: std::collections::BTreeMap<_, _> = structures.structures.entries.iter()
+            .filter_map(|entry| match &entry.structure {
+                cq_lang_structures::Structure::Host { reader, keyed, .. } if reader == "scan" =>
+                    Some((before.hosts[&entry.name.to_string()].clone(), keyed.ty.clone())),
+                _ => None,
+            }).collect();
+        structures = cq_structure_selection::compile(&normalized)?;
+        let after = cq_lang_structures::contract::check(&structures)?;
+        for entry in &mut structures.structures.entries {
+            if let cq_lang_structures::Structure::Host { reader, keyed, .. } = &mut entry.structure {
+                if reader == "scan" {
+                    if let Some(ty) = inputs.get(&after.physical.hosts[&entry.name.to_string()]) {
+                        keyed.ty = ty.clone();
+                    }
+                }
+            }
+        }
+    }
+    let structures = cq_gpu_sequence_core::runs::bind(&structures)?;
     let source = cq_sequence_lowering::compile(&structures)?;
     let machine = cq_gpu_sequence::machine();
     let mut planned = cq_sequence_plan::plan(&source, &machine, &cq_gpu_sequence::catalog())?;

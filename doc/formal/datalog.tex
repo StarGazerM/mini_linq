@@ -349,7 +349,9 @@ although it uses push loops internally, its public result is an iterator.
 Datalog's push adapter uses the public consumer form of that feature printer.
 A third interface, \code{batch}, asserts that the terminal returns an opaque
 candidate batch to a batch-capable round printer: it neither enumerates rows on
-the host nor invokes a host consumer. Host round printers reject batch holes.
+the host nor invokes a host consumer. Its key-set holes therefore declare
+owned key columns and dereference their arguments, since a batch holds values,
+not borrows of host rows. Host round printers reject batch holes.
 This check examines terminal invocations, not Rust tokens that do not yet exist.
 With $\Gamma$ the recorded registry and $\mathrm{last}(Q)$ the terminal:
 \begin{mathpar}
@@ -1115,17 +1117,19 @@ as a run (merging as above) and return it in sorted order.
  {\mathrm{set}(N)=C\setminus A\quad\mathrm{set}(A')=A\cup C}
 \end{mathpar}
 Device runs realize the same two rules over packed words. For fixed-width
-column types $\tau_1\ldots\tau_n$ with $\sum_i w_i\le 128$, packing places column
-$i$ of a layout's permutation in the next $w_i$ bits from the most significant
-end, after an order-preserving encoding $e_i$ (signed integers flip the sign
-bit; symbol codes are unsigned). Packing is injective and maps the
-lexicographic order to the integer order, so sort, uniqueness, merge and
-binary search on words coincide with those on tuples, and a key prefix $k$ of
-length $j$ selects the contiguous word range $[p(k)\cdot2^{s_j},(p(k)+1)\cdot2^{s_j})$
-with $s_j=\sum_{i>j}w_i$.
+column types $\tau_1\ldots\tau_n$ with $b=\sum_i w_i$, a word is $L=\lceil b/64\rceil$
+64-bit lanes ($u64$, $u128$, or $[u64;L]$ for $L>2$) read as one
+$64L$-bit integer, most significant lane first. Packing places column $i$ of a
+layout's permutation in the next $w_i$ bits from the most significant end,
+after an order-preserving encoding $e_i$ (signed integers flip the sign bit;
+symbol codes are unsigned). Packing is injective and maps the lexicographic
+order to the integer order, so sort, uniqueness, merge and binary search on
+words coincide with those on tuples, and a key prefix $k$ of length $j$
+selects the contiguous word range $[p(k)\cdot2^{s_j},(p(k)+1)\cdot2^{s_j})$
+with $s_j=64L-\sum_{i\le j}w_i$.
 \begin{mathpar}
 \Rule{DL-DevicePacking}{\forall i.\ e_i\text{ injective and monotone}\quad
- \sum_i w_i\le 128}
+ L=\lceil\textstyle\sum_i w_i/64\rceil}
  {\mathrm{pack}(r)<\mathrm{pack}(r')\iff r<_{\mathrm{lex}}r'\quad
  \mathrm{lookup}_L(k)=\mathrm{unpack}(\{x\in L\mid p(k)2^{s_j}\le x<(p(k)+1)2^{s_j}\})}
 \Rule{DL-DeviceRuns}{\textsc{DL-DevicePacking}\quad
@@ -1140,9 +1144,13 @@ The device Storage rewrite replaces every layout provider (EDB and IDB, full
 and delta, any key length) by \code{DeviceLayout<K, V>} and every IDB
 membership provider by \code{DeviceRuns<W>}, where $W$ is the narrowest word
 holding the relation's packed columns. It requires every column type to be a
-supported fixed-width integer, at most 128 packed bits per relation, and each
-source layout to be the default \code{HashMap} with the default hasher, so
-erasure is exact. Relations, columns, keys and maintenance are unchanged.
+supported fixed-width integer or a declared symbol type, and each source
+layout to be the default \code{HashMap} with the default hasher, so erasure is
+exact. A symbol type is named with its codec by the rewrite's
+\code{symbols(T => C, ...)} argument, where \code{C: SymbolCodec<T>} is an
+injective map to \code{u32} codes with its inverse, fixed for the process, so
+equal symbols have equal codes in every relation and round. The device sees only codes; strings never leave the host.
+Relations, columns, keys and maintenance are unchanged.
 \begin{mathpar}
 \Rule{CK-DL-DeviceStorage}{\mathrm{WF}_{\mathrm{Storage}}(s)\quad
  \mathrm{WF}_{\mathrm{Storage}}(t)\quad

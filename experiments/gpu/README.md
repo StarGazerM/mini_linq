@@ -41,11 +41,13 @@ device address-space lowering requires optimized codegen.
 
 ### Packed Datalog runtime
 
-`gpu-datalog-runtime` provides `Packing`/`Column` encodings and `DeviceRuns<u64>`
-or `DeviceRuns<u128>` on the resident-column `Pool`. Integer columns use their
-full declared width; signed columns flip the sign bit, and the first tuple
-column occupies the most significant packed bits. `prefix_range` returns
-inclusive bounds, including the maximum word without overflow.
+`gpu-datalog-runtime` provides `Packing`/`Column` encodings and `DeviceRuns<W>`
+on the resident-column `Pool`. The narrowest word is u64, u128, or `[u64; L]`
+for larger schemas. Array lanes are most-significant first; native u128 keeps
+its native in-memory lane order. Integer columns use their full declared width;
+signed columns flip the sign bit, and the first tuple column occupies the most
+significant packed bits. `prefix_range` returns inclusive bounds, including the
+maximum word without overflow.
 
 `DeviceRuns::admit` sorts, deduplicates, subtracts all accepted runs on-device,
 and returns a cheap immutable `Run` delta while accepting it internally.
@@ -74,11 +76,12 @@ A CQ input whose declared host type is `::gpu_datalog_runtime::DeviceLayout<K, V
 (`DeviceLayout::from_runs(pool, packing, runs)`) is bound as packed device runs
 (`GPU-Runs`): scans visit every run, key-prefix lookups binary-search one range
 per run with block-uniform expansion, and membership ORs over runs. Supported
-column types are i8/i16/i32/i64/u8/u16/u32, at most 128 packed bits, key = the
-leading columns. `cq_gpu_sequence::translate_arena(&mut arena)` (`GPU-Arena`)
-publishes head rows packed most-significant-first in head order into a
-`CandidateArena` and returns a `CandidateBatch` (u64 lanes, low lane first for
-128-bit words; length; packing; retained owners). The hole must be
+column types are i8/i16/i32/i64/u8/u16/u32 and codec-declared symbols (u32 on
+device), with no 128-bit tuple cap; keys occupy the leading columns.
+`cq_gpu_sequence::translate_arena(&mut arena)` (`GPU-Arena`) publishes head rows
+packed most-significant-first in head order into a `CandidateArena` and returns
+a `CandidateBatch` (u64 lanes, native low-first for u128 and most-significant
+first for larger words; length; packing; retained owners). The hole must be
 consumer-canonical: the batch is a candidate bag for `DeviceRuns::admit`.
 Sizing keeps the dispatch's output protocol, so each attempt reads its
 metadata back and the invocation ends with one stream synchronize; candidate
@@ -100,6 +103,7 @@ Datalog pipeline (`CK-DL-DeviceStorage`, `P-DL-Gpu`):
 pipeline {
     storage_rewrites = [::cq_gpu_datalog::device_storage];
     cq = pipeline {
+        physical = [::cq_gpu_sequence::capture_constants];
         structures = [::cq_gpu_datalog::bind_inputs, ::cq_gpu_sequence::bind_runs];
         sequence = ::mini_linq::passes::sequence;
         decompose = [::cq_gpu_sequence::plan];
@@ -116,12 +120,77 @@ head's candidate batches into its accepted runs, and publishes the delta into
 the recorded layouts; outputs download once. All programs on one thread share
 `gpu_datalog_runtime::thread_pool()` (device 0), so the runtime's thread-local
 caches never pin a finished program's pool.
+Candidate batches are released after admission, arenas are scoped to the
+producing stratum, and completed strata release cached Sequence scratch and
+wholly unused pool chunks. Accepted runs and layouts retain their published
+owners; trimming never invalidates live device views.
+
+Symbol columns are declared with
+`device_storage(symbols(IStr => MyCodec))`, where
+`MyCodec: gpu_datalog_runtime::SymbolCodec<IStr>` supplies a process-fixed,
+injective `code(&IStr) -> u32` mapping and its `decode(u32) -> IStr` inverse.
+Use the same type spelling as the relation declaration; the compiler does not
+resolve Rust aliases. Upload/download performs the conversion on the host.
+Closed guard, binding and selection expressions are host captures, evaluated
+once per invocation on demand for a nonempty dispatch input. Invocation-local
+`OnceCell` values retain captures across retries and dispatches; symbols use
+the column's codec, and kernels receive only integer parameters.
+`capture_constants` is a checked Physical rewrite before provider selection:
+literal atom arguments become fresh columns, equality guards, then a projection
+that removes those columns. `bind_runs` never changes the Physical program.
+
+Set `GPU_DATALOG_TRACE_ROUNDS=1` to print metadata/count readbacks for each
+stratum seed and fixpoint round. This includes candidate dispatch attempts,
+admission counts and layout canonicalization counts, not final row downloads.
+`GPU_DATALOG_TRACE_MEMORY=1` additionally records pool current/peak allocation,
+reserved/cached bytes, per-relation accepted/layout/arena ownership footprints,
+and each hole's candidate rows and retry capacities. Layout footprints include
+shared backing allocations and must not be summed as physical pool usage.
+Native CUDA library scratch outside the pool is not included in pool counters.
 
 ```sh
 cargo oxide test --arch sm_89 -- --release -p cq-gpu-datalog --test oracle
 GPU_DATALOG_PROBE_NODES=2048 GPU_DATALOG_PROBE_CASES=tc_left,tc_right,same_generation \
   cargo oxide test --arch sm_89 -- --release -p cq-gpu-datalog --test oracle timing -- --ignored --nocapture
 ```
+
+### DOOP points-to benchmark
+
+`doop-gpu` instantiates `doop_shared::doop_engine!` with the GPU pipeline above.
+It uses the shared fact loader and compares all 26 complete output tuple sets
+against `doop-mini`; it does not substitute a separate points-to program.
+The loader owns the global string dictionary and precomputes method descriptors.
+`DoopSymbols` implements `SymbolCodec<IStr>` using that dictionary's stable u32
+codes; no string operations run on the GPU.
+
+```sh
+GPU_DATALOG_TRACE_ROUNDS=1 cargo oxide run --arch sm_89 --bin doop-gpu -- /tmp/doop-data/cassandra
+```
+
+Fact loading and CUDA context creation are outside the reported evaluation
+time; input upload, device layout construction, fixpoint execution, output
+download and symbol decoding are included. Full-set comparison is outside the
+timer. The executable also prints the ratio to the previously measured
+15-thread mini-par reference (1.28 seconds), not a new parallel measurement.
+
+Cassandra validation matched all 26 outputs exactly. An untraced release run
+measured GPU evaluation **11.809409 s**, sequential mini **4.269240 s**, versus
+the prior 15-thread mini-par reference **1.28 s** (GPU/reference **9.226×**).
+These are end-to-end evaluation times, not kernel-only timings.
+
+The instrumented run recorded a **232,744,960-byte pool allocation peak** and
+**528,482,304-byte maximum pool reservation**, excluding native CUDA library
+scratch. The main recursive stratum used 179 step rounds, with 53–109 metadata
+readbacks per step; all strata totaled 16,553 metadata readbacks. Exact per-round
+counts, full output cardinalities and memory snapshots are recorded in
+[`compare/doop_cassandra.results.json`](compare/doop_cassandra.results.json).
+
+The initial 7.44-GB allocation failure was a correctness bug, not retained
+multi-gigabyte relation state: a dynamic-u128-mask device miscompilation corrupted
+permuted keys and inflated the `returnvar` join to 929,428,430 candidates.
+Constant lane shifts fix the permutation; the corrected hole emits 33,667
+candidates using 269,336 bytes. Runtime differential tests cover that regression
+and the explicit wide-row merge path required beyond RCCL's 16-byte key limit.
 
 ### Planner-driven 11-query TPC-H suite
 

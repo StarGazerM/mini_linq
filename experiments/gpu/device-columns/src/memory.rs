@@ -12,6 +12,16 @@ use std::{
 
 pub type MemoryResource = StatisticsMemoryResource<PoolMemoryResource<CudaMemoryResource>>;
 
+/// Host-side accounting for this runtime pool, excluding native CUDA scratch
+/// allocated outside it. Allocated bytes include CUDA allocation alignment.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PoolMemoryStats {
+    pub current_bytes: usize,
+    pub peak_bytes: usize,
+    pub reserved_bytes: usize,
+    pub cached_bytes: usize,
+}
+
 fn allocation_error(error: rccl_memory::MemoryError) -> Box<dyn std::error::Error> {
     let exhausted = match &error {
         rccl_memory::MemoryError::AllocationLimitExceeded { .. } => true,
@@ -55,6 +65,32 @@ impl Pool {
     }
     pub fn resource(&self) -> &MemoryResource {
         &self.memory
+    }
+    /// Snapshot live, peak-live, upstream-reserved and reusable cached bytes.
+    ///
+    /// This does not synchronize CUDA. A dropped buffer is cached once its
+    /// stream dependency is recorded, even if its last device use is pending.
+    /// Unlike the statistics adaptor's nested counters, these are pool-wide.
+    pub fn memory_stats(&self) -> PoolMemoryStats {
+        let stats = self.memory.upstream().stats();
+        PoolMemoryStats {
+            current_bytes: stats.allocated_bytes,
+            peak_bytes: stats.peak_allocated_bytes,
+            reserved_bytes: stats.pool_size,
+            cached_bytes: stats.free_bytes,
+        }
+    }
+    /// Return wholly unused upstream chunks and report the released bytes.
+    ///
+    /// Call after dropping dead owners and cached scratch at a stratum boundary.
+    /// RCCL orders frees after their recorded uses on this pool's stream.
+    /// Partly live chunks remain reserved; the synchronous CUDA upstream may
+    /// block while freeing a chunk, so this is not a hot-path operation.
+    pub fn release_unused(&self) -> Result<usize> {
+        self.memory
+            .upstream()
+            .release_unused(self.stream())
+            .map_err(allocation_error)
     }
     pub fn context(&self) -> &Arc<CudaContext> {
         &self.context
@@ -313,6 +349,17 @@ impl<T: DeviceCopy> Buffer<T> {
     }
     pub fn bytes(&self) -> usize {
         self.len * std::mem::size_of::<T>()
+    }
+    /// Requested bytes in the full allocation retained by this buffer.
+    ///
+    /// A shared slice retains its owner's whole allocation, not just its own
+    /// range. Aliases report the same backing bytes and must not be summed
+    /// without deduplicating owners. Pool alignment is not included.
+    pub fn allocated_bytes(&self) -> usize {
+        match &self.owner {
+            Some(owner) => owner.allocated_bytes(),
+            None => self.block.as_ref().unwrap().size(),
+        }
     }
     pub fn num_bytes(&self) -> usize {
         self.bytes()

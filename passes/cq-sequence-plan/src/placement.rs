@@ -731,6 +731,7 @@ fn row_predicate(operator: &Operator) -> bool {
     }
 
     match operator {
+        Operator::Guard(_) => true,
         Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) => {
             select
                 .condition
@@ -788,7 +789,8 @@ fn host_operations(program: &Program, facts: &cq_lang_sequence::Analysis) -> BTr
         .definitions
         .iter()
         .filter(|definition| {
-            facts.structures.physical.opaque(&definition.operator)
+            (facts.structures.physical.opaque(&definition.operator)
+                && !facts.structures.physical.capturable(&definition.operator))
                 || host_predicate(&definition.operator)
                 || string_row(facts, &symbol_name(&definition.name))
                 || match &definition.operator {
@@ -896,6 +898,34 @@ mod tests {
                 selected = compact selected input;
                 result = store canon map answer selected;
             }
+        }
+    }
+
+    #[test]
+    fn closed_partial_fragments_are_parameters_but_row_calls_remain_host_only() {
+        for (condition, host_only) in [
+            (quote::quote!(*a == threshold()), false),
+            (quote::quote!(opaque(a)), true),
+        ] {
+            let source: Program = syn::parse_quote! {
+                physical {
+                    relation R(a:i32);
+                    r = pipe rename R@0 {a -> a};
+                    selected = pipe guard r if (#condition);
+                    answer = pipe canon project selected keep {a};
+                    return answer as answer(a);
+                }
+                structures { r host scan = Reader []; answer canon = Canon; }
+                sequence {
+                    input = store rows r;
+                    result = store canon map answer input;
+                }
+            };
+            let facts = cq_lang_sequence::contract::check(&source).unwrap();
+            assert_eq!(
+                host_operations(&source, &facts).contains("selected"),
+                host_only
+            );
         }
     }
 

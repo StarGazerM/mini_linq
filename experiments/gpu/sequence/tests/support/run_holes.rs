@@ -134,6 +134,56 @@ pub fn fixture(name: &str) -> cq_lang_structures::Program {
                 e host scan = ::gpu_datalog_runtime::DeviceLayout<(i64,),(i64,)> [];
             }
         },
+        "capture" => syn::parse_quote! {
+            physical {
+                relation Edge(x:i32,y:u32) = (&edge);
+                consumer canonical;
+                e = pipe rename Edge@0 {x -> x,y -> y};
+                selected = pipe guard e if (*x == host_key() && allow());
+                bound = pipe bind selected with z:u32 = (host_value());
+                result = pipe project bound keep {x,z};
+                return result as answer(x,z);
+            }
+            structures {
+                e host scan = ::gpu_datalog_runtime::DeviceLayout<(i32,),(u32,)> [];
+            }
+        },
+        "constant_atom" => syn::parse_quote! {
+            physical {
+                relation Edge(x:i32,y:u32) = (&edge);
+                consumer canonical;
+                e = let rename Edge@0 {y -> y} constants {x = -7};
+                result = pipe project e keep {y};
+                return result as answer(y);
+            }
+            structures {
+                e host scan = ::gpu_datalog_runtime::DeviceLayout<(i32,),(u32,)> [];
+            }
+        },
+        "wide3_scan" => syn::parse_quote! {
+            physical {
+                relation Edge(x:i64,y:i32,z:i64) = (&edge);
+                consumer canonical;
+                e = pipe rename Edge@0 {x -> x,y -> y,z -> z};
+                result = pipe project e keep {x,y,z};
+                return result as answer(x,y,z);
+            }
+            structures {
+                e host scan = ::gpu_datalog_runtime::DeviceLayout<(i64,),(i32,i64)> [];
+            }
+        },
+        "wide4_scan" => syn::parse_quote! {
+            physical {
+                relation Edge(a:i64,b:i32,c:i64,d:i32,e:i32) = (&edge);
+                consumer canonical;
+                input = pipe rename Edge@0 {a -> a,b -> b,c -> c,d -> d,e -> e};
+                result = pipe project input keep {a,b,c,d,e};
+                return result as answer(a,b,c,d,e);
+            }
+            structures {
+                input host scan = ::gpu_datalog_runtime::DeviceLayout<(i64,),(i32,i64,i32,i32)> [];
+            }
+        },
         _ => panic!("unknown run hole {name}"),
     }
 }

@@ -26,13 +26,15 @@ fn pool() -> Result<Arc<Pool>> {
 }
 
 fn word<W: Word>(value: u64) -> W {
-    // Wide keys deliberately share low halves while differing above bit 64.
-    let value = if W::BITS == 128 {
-        ((value as u128 >> 7) << 80) | ((value & 127) as u128)
-    } else {
-        value as u128
-    };
-    W::from_u128(value)
+    // Populate every lane while preserving value order in the leading lane.
+    // Low lanes repeat, exposing implementations that ignore high lanes.
+    let mut word = W::zero();
+    for lane in 0..W::BITS / 64 {
+        word.set_lane(lane, if lane == W::BITS / 64 - 1 { value } else {
+            value.rotate_left(lane * 11) & 127
+        });
+    }
+    word
 }
 
 fn assert_run_bound<W: Word>(state: &DeviceRuns<W>) {
@@ -123,6 +125,16 @@ fn random_duplicate_batches_u128() -> Result {
     random_batches::<u128>()
 }
 
+#[test]
+fn random_duplicate_batches_three_lanes() -> Result {
+    random_batches::<[u64; 3]>()
+}
+
+#[test]
+fn random_duplicate_batches_four_lanes() -> Result {
+    random_batches::<[u64; 4]>()
+}
+
 fn empty_single_and_extremes<W: Word>() -> Result {
     let pool = pool()?;
     let mut state = DeviceRuns::<W>::new(pool.clone())?;
@@ -130,9 +142,11 @@ fn empty_single_and_extremes<W: Word>() -> Result {
     assert_eq!(state.len(), 0);
     assert!(state.to_host()?.is_empty());
     assert_run_bound(&state);
-    let zero = W::from_u128(0);
-    let max = W::from_u128(u128::MAX >> (128 - W::BITS));
-    let high = W::from_u128(1u128 << (W::BITS - 1));
+    let zero = W::zero();
+    let mut max = W::zero();
+    for lane in 0..W::BITS / 64 { max.set_lane(lane, u64::MAX); }
+    let mut high = W::zero();
+    high.set_lane(W::BITS / 64 - 1, 1_u64 << 63);
     for values in [vec![], vec![zero], vec![zero], vec![], vec![max], vec![high, max, high, zero], vec![]] {
         admit_against_cpu(&pool, &mut state, &mut accepted, &values)?;
     }
@@ -153,6 +167,12 @@ fn empty_single_and_extremes_u64() -> Result {
 #[test]
 fn empty_single_and_extremes_u128() -> Result {
     empty_single_and_extremes::<u128>()
+}
+
+#[test]
+fn empty_single_and_extremes_wide_lanes() -> Result {
+    empty_single_and_extremes::<[u64; 3]>()?;
+    empty_single_and_extremes::<[u64; 4]>()
 }
 
 fn million_rows<W: Word>() -> Result {
@@ -221,21 +241,88 @@ fn append_sorted_disjoint_u128() -> Result {
     append_disjoint_runs::<u128>()
 }
 
+#[test]
+fn append_sorted_disjoint_wide_lanes() -> Result {
+    append_disjoint_runs::<[u64; 3]>()?;
+    append_disjoint_runs::<[u64; 4]>()
+}
+
+fn merge_wide_tile_boundaries<W: Word>() -> Result {
+    let pool = pool()?;
+    for lane in 0..W::BITS / 64 {
+        for (first_len, second_len) in [
+            (1, 1), (31, 33), (32, 32), (33, 31),
+            (257, 65), (1, 8193), (8193, 2049), (8191, 8193),
+        ] {
+            for pattern in 0..3 {
+                let make_word = |value| {
+                    // Hold every other lane fixed, forcing comparisons through
+                    // each possible lane, including the least-significant one.
+                    let mut word = W::zero();
+                    for fixed in 0..W::BITS / 64 {
+                        word.set_lane(fixed, u64::MAX);
+                    }
+                    word.set_lane(lane, value);
+                    word
+                };
+                let first: Vec<_> = (0..first_len).map(|row| make_word(match pattern {
+                    0 => row * 2,
+                    1 => row,
+                    _ => second_len + row,
+                } as u64)).collect();
+                let second: Vec<_> = (0..second_len).map(|row| make_word(match pattern {
+                    0 => row * 2 + 1,
+                    1 => first_len + row,
+                    _ => row,
+                } as u64)).collect();
+                let mut expected = first.clone();
+                expected.extend_from_slice(&second);
+                expected.sort_unstable();
+                let mut state = DeviceRuns::<W>::new(pool.clone())?;
+                let first_buffer = Buffer::from_host(pool.clone(), &first)?;
+                let second_buffer = Buffer::from_host(pool.clone(), &second)?;
+                // SAFETY: both sequences increase in the selected lane; their
+                // ranks are disjoint in every pattern.
+                let snapshot = unsafe { Run::from_sorted(first_buffer, first_len)? };
+                unsafe {
+                    state.append_sorted(snapshot.clone())?;
+                    state.append_sorted(Run::from_sorted(second_buffer, second_len)?)?;
+                }
+                // All selected length ratios must exercise the actual merge,
+                // not merely the diagnostic host merge of separate runs.
+                assert_eq!(state.retained_buffers(), 1);
+                let merged = &state.owned_runs()[0];
+                assert_eq!(merged.buffer().to_host_prefix(merged.len())?, expected,
+                    "lane {lane}, lengths {first_len}/{second_len}, pattern {pattern}");
+                assert_eq!(snapshot.buffer().to_host_prefix(snapshot.len())?, first);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn append_sorted_wide_merge_tile_boundaries() -> Result {
+    merge_wide_tile_boundaries::<[u64; 3]>()?;
+    merge_wide_tile_boundaries::<[u64; 4]>()
+}
+
 #[cuda_host::cuda_module]
 mod prefix_kernel {
     use cuda_device::{kernel, launch_bounds, launch_contract, thread};
     use gpu_datalog_runtime::runs::{range, RunView};
+    use gpu_datalog_runtime::Word;
 
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub fn lookup(
-        views: *const RunView<u128>,
+    pub fn lookup<W: Word>(
+        views: *const RunView<W>,
         run_count: usize,
-        bounds: *const u128,
+        bounds: *const W,
         queries: usize,
         capacity: usize,
-        output: *mut u128,
+        output: *mut W,
         counts: *mut u64,
     ) {
         let query = thread::index_1d().get();
@@ -259,14 +346,102 @@ mod prefix_kernel {
     }
 }
 
-#[test]
-fn permuted_layout_prefix_lookup_matches_cpu() -> Result {
+fn permutation_against_cpu<W: Word>(packing: Packing) -> Result {
     let pool = pool()?;
-    let packing = Packing::new(&[40, 40, 16])?;
+    let fields = packing.packed_fields().collect::<Vec<_>>();
+    let mut random = Random(0x8b37_6ce4_a905_d12f);
+    let mut tuples = Vec::new();
+    // Extremes, each individual packed bit, and random full-width values make
+    // every lane observable independently of sorting/admission correctness.
+    for row in 0..packing.bits() as usize + 259 {
+        let values = fields.iter().map(|field| {
+            let mask = u64::MAX >> (64 - field.bits);
+            let encoded = if row == 0 {
+                0
+            } else if row == 1 {
+                mask
+            } else if row < packing.bits() as usize + 2 {
+                let bit = (row - 2) as u32;
+                if bit >= field.shift && bit - field.shift < field.bits {
+                    1_u64 << (bit - field.shift)
+                } else {
+                    0
+                }
+            } else {
+                random.next() & mask
+            };
+            encoded as i128 - if field.signed != 0 { 1_i128 << (field.bits - 1) } else { 0 }
+        }).collect::<Vec<_>>();
+        tuples.push(values);
+    }
+    let source = tuples.iter().map(|row| packing.pack::<W>(row)).collect::<Result<Vec<_>>>()?;
+    let input = Buffer::from_host(pool.clone(), &source)?;
+    let identity = (0..packing.len()).collect::<Vec<_>>();
+    let reverse = identity.iter().rev().copied().collect::<Vec<_>>();
+    let mut rotated = identity.clone();
+    if !rotated.is_empty() {
+        rotated.rotate_left(1);
+    }
+    for order in [identity, reverse, rotated] {
+        let layout = packing.permute(&order)?;
+        let mut inverse = vec![0; order.len()];
+        for (destination, &original) in order.iter().enumerate() {
+            inverse[original] = destination;
+        }
+        let expected = tuples.iter().map(|row| {
+            layout.pack::<W>(&order.iter().map(|&column| row[column]).collect::<Vec<_>>())
+        }).collect::<Result<Vec<_>>>()?;
+        // Include a short initialized prefix, so capacity is not mistaken for
+        // the row count, plus an empty launch and a partial final thread block.
+        for rows in [0, 1, source.len() - 1, source.len()] {
+            let shuffled = packing.permute_device(&input, rows, &order)?;
+            assert_eq!(shuffled.len(), rows);
+            assert_eq!(shuffled.to_host()?, expected[..rows],
+                "{}-bit permutation {order:?}, {rows} rows", W::BITS);
+            let restored = layout.permute_device(&shuffled, rows, &inverse)?;
+            assert_eq!(restored.to_host()?, source[..rows]);
+        }
+    }
+    assert_eq!(input.to_host()?, source, "permutation mutated its input");
+    Ok(())
+}
+
+#[test]
+fn native_permutation_retains_every_lane() -> Result {
+    use gpu_datalog_runtime::pack::Column;
+    permutation_against_cpu::<u64>(Packing::new(&[1, 31, 32])?)?;
+    permutation_against_cpu::<u64>(Packing::new(&[64])?)?;
+    permutation_against_cpu::<u64>(Packing::new(&[])?)?;
+    for widths in [&[40, 40, 16][..], &[63, 1, 64], &[64, 64], &[1; 128], &[]] {
+        permutation_against_cpu::<u128>(Packing::new(widths)?)?;
+    }
+    permutation_against_cpu::<u128>(Packing::with_columns(
+        &[Column::I8, Column::U64, Column::I16, Column::U32],
+    )?)
+}
+
+#[test]
+fn wide_permutation_retains_lanes_and_u32_metadata() -> Result {
+    use gpu_datalog_runtime::pack::Column;
+    permutation_against_cpu::<[u64; 2]>(Packing::new(&[40, 40, 16])?)?;
+    permutation_against_cpu::<[u64; 3]>(Packing::new(&[63, 64, 64])?)?;
+    permutation_against_cpu::<[u64; 5]>(Packing::new(&[7, 64, 64, 64, 57])?)?;
+    // Exercise shifts and column counts beyond u8, as well as all five lanes.
+    permutation_against_cpu::<[u64; 5]>(Packing::new(&[64; 5])?)?;
+    permutation_against_cpu::<[u64; 5]>(Packing::new(&[1; 257])?)?;
+    permutation_against_cpu::<[u64; 5]>(Packing::new(&[])?)?;
+    permutation_against_cpu::<[u64; 5]>(Packing::with_columns(
+        &[Column::I64, Column::U8, Column::I64, Column::U64, Column::I16],
+    )?)
+}
+
+fn permuted_layout_prefix_lookup<W: Word>(widths: &[u32]) -> Result {
+    let pool = pool()?;
+    let packing = Packing::new(widths)?;
     let order = [2, 0, 1];
     let layout = packing.permute(&order)?;
-    let mut canonical = DeviceRuns::<u128>::new(pool.clone())?;
-    let mut permuted = DeviceRuns::<u128>::new(pool.clone())?;
+    let mut canonical = DeviceRuns::<W>::new(pool.clone())?;
+    let mut permuted = DeviceRuns::<W>::new(pool.clone())?;
     let mut rows = BTreeSet::new();
     let mut random = Random(0xd9e2_051b_c76a_438f);
     for batch in 0..12 {
@@ -277,12 +452,12 @@ fn permuted_layout_prefix_lookup_matches_cpu() -> Result {
                 (1i128 << 36) + (random.next() % 13) as i128,
                 (random.next() % 7) as i128,
             ];
-            values.push(packing.pack::<u128>(&row)?);
+            values.push(packing.pack::<W>(&row)?);
             rows.insert(row);
         }
         if batch == 0 {
             for row in [[0, 0, 0], [(1i128 << 40) - 1, (1i128 << 40) - 1, 65_535]] {
-                values.push(packing.pack::<u128>(&row)?);
+                values.push(packing.pack::<W>(&row)?);
                 rows.insert(row);
             }
         }
@@ -292,11 +467,11 @@ fn permuted_layout_prefix_lookup_matches_cpu() -> Result {
         let source = fresh.buffer().to_host_prefix(fresh.len())?;
         let expected = source.iter().map(|&key| {
             let row = packing.unpack(key)?;
-            layout.pack::<u128>(&[row[2], row[0], row[1]])
+            layout.pack::<W>(&[row[2], row[0], row[1]])
         }).collect::<Result<Vec<_>>>()?;
         assert_eq!(shuffled.to_host()?, expected);
         // Sort each disjoint permuted delta before appending to the other layout.
-        let mut sorter = DeviceRuns::<u128>::new(pool.clone())?;
+        let mut sorter = DeviceRuns::<W>::new(pool.clone())?;
         let sorted = sorter.admit(&shuffled, fresh.len())?;
         // SAFETY: admission removed old canonical keys; the permutation is
         // bijective, so its sorted delta is disjoint from this layout's state.
@@ -320,18 +495,18 @@ fn permuted_layout_prefix_lookup_matches_cpu() -> Result {
     }
     let mut bounds = Vec::with_capacity(prefixes.len() * 2);
     for prefix in &prefixes {
-        let range = layout.prefix_range::<u128>(prefix)?;
+        let range = layout.prefix_range::<W>(prefix)?;
         bounds.extend([*range.start(), *range.end()]);
     }
     let views = permuted.runs();
     let device_views = Buffer::from_host(pool.clone(), &views)?;
     let device_bounds = Buffer::from_host(pool.clone(), &bounds)?;
-    let output = Buffer::<u128>::zeroed(pool.clone(), prefixes.len() * permuted.len())?;
+    let output = Buffer::<W>::zeroed(pool.clone(), prefixes.len() * permuted.len())?;
     let counts = Buffer::<u64>::zeroed(pool.clone(), prefixes.len())?;
     let module = unsafe { prefix_kernel::load(pool.context())? };
-    module.lookup(
+    module.lookup::<W>(
         pool.stream(),
-        &module.prepare_lookup(LaunchConfig1D::new(prefixes.len().div_ceil(256) as u32, 256, 0))?,
+        &module.prepare_lookup::<W>(LaunchConfig1D::new(prefixes.len().div_ceil(256) as u32, 256, 0))?,
         device_views.ptr(), views.len(), device_bounds.ptr(), prefixes.len(), permuted.len(),
         output.ptr(), counts.ptr(),
     )?;
@@ -348,6 +523,17 @@ fn permuted_layout_prefix_lookup_matches_cpu() -> Result {
         assert_eq!(actual, expected, "prefix {prefix:?}");
     }
     Ok(())
+}
+
+#[test]
+fn permuted_layout_prefix_lookup_matches_cpu() -> Result {
+    permuted_layout_prefix_lookup::<u128>(&[40, 40, 16])
+}
+
+#[test]
+fn permuted_wide_layout_prefix_lookup_matches_cpu() -> Result {
+    permuted_layout_prefix_lookup::<[u64; 3]>(&[64, 64, 16])?;
+    permuted_layout_prefix_lookup::<[u64; 4]>(&[64, 64, 64])
 }
 
 #[test]
