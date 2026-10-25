@@ -462,6 +462,8 @@ rename also receives an explicit Sequence store, so its provider is built
 before lookup emission. Native provider preservation matches result and
 key layout, not entry position: retention removes fallback entries and
 appends indexes, changing their positions.
+The native Tasks target preserves retained row-buffer types separately:
+replayable rows use the row collection ABI, not a keyed range-provider family.
 Catalog retyping also composes with a subsequent checked join reexpression.
 The endpoint proof compares surviving storage layouts modulo implementation
 types, while separately proving relational support, opaque evaluation order

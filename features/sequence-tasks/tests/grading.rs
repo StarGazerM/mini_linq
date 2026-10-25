@@ -660,6 +660,7 @@ fn catalog_retention_materializes_new_providers_and_preserves_native_entry_ident
             r host joined = Reader [a];
             s host scan = Reader [];
             s = ::cq_storage::SortedRun<_, _, _> [b];
+            s rows = ::std::vec::Vec<_>;
             result canon = ::std::collections::HashSet<_>;
         }
         sequence {
@@ -682,6 +683,10 @@ fn catalog_retention_materializes_new_providers_and_preserves_native_entry_ident
     assert!(target.structures.structures.entries.iter().any(|entry|
         entry.name == "s" && matches!(&entry.structure,
             cq_lang_sequence::structures::Structure::Built { keyed, .. } if keyed.ty == native)));
+    assert!(target.structures.structures.entries.iter().any(|entry|
+        entry.name == "s" && matches!(&entry.structure,
+            cq_lang_sequence::structures::Structure::Rows { ty, .. }
+                if *ty == syn::parse_quote!(::std::vec::Vec<_>))));
     cq_lang_sequence::check_rewrite(&source, &target).unwrap();
     let facts = check_grading(&target, &machine()).unwrap();
     translate(&target, &facts).unwrap();

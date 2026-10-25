@@ -183,6 +183,18 @@ pub fn select_providers(
     // authored tile (for example range cursors). Retarget only unavailable
     // families; do not downgrade an existing native representation.
     for original in &source.structures.structures.entries {
+        // Replayable row buffers are not keyed range providers. Keep their
+        // native row-collection ABI rather than selecting an index family.
+        if let cq_lang_sequence::structures::Structure::Rows { ty, .. } = &original.structure {
+            for selected in &mut target.structures.structures.entries {
+                if selected.name == original.name
+                    && let cq_lang_sequence::structures::Structure::Rows { ty: replacement, .. } = &mut selected.structure
+                {
+                    *replacement = ty.clone();
+                }
+            }
+            continue;
+        }
         let cq_lang_sequence::structures::Structure::Built { keyed, .. } = &original.structure else {
             continue;
         };
