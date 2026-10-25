@@ -7,6 +7,8 @@
 //! runtime worker count only schedules the independent builds.
 //! Published providers contain no locks or lazy state. Hash routing does not
 //! confer ordered/range access, even when an individual shard supports it.
+//! Eager hash buckets keep their first payload inline, so distinct-key builds
+//! do not allocate a separate vector per row. Duplicate tails retain input order.
 
 use crate::instrument::HashMap;
 use std::hash::Hash;
@@ -110,6 +112,7 @@ macro_rules! routed_read {
             type Key = K;
             type Item = <&'a $index as IndexRead>::Item;
             type Cursor = <&'a $index as IndexRead>::Cursor;
+            #[inline]
             fn lookup(&self, key: &K) -> Self::Cursor {
                 let shard: &'a $index = self.shard(key);
                 shard.lookup(key)
@@ -132,9 +135,15 @@ pub fn route_index<K: Hash + ?Sized>(key: &K, count: usize) -> usize {
 /// Eager, shareable hash buckets with the pull emitter's copy-payload ABI.
 /// Unlike the serial lazy `HashIndex`, this provider has no Rc/RefCell state.
 pub struct Index<K, V> {
-    buckets: HashMap<K, Vec<V>>,
+    buckets: HashMap<K, Bucket<V>>,
     #[cfg(feature = "counters")]
     _allocation: crate::counters_memory::Allocation,
+}
+
+#[derive(Debug)]
+struct Bucket<V> {
+    first: V,
+    tail: Vec<V>,
 }
 impl<K: std::fmt::Debug, V: std::fmt::Debug> std::fmt::Debug for Index<K, V> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -142,19 +151,41 @@ impl<K: std::fmt::Debug, V: std::fmt::Debug> std::fmt::Debug for Index<K, V> {
     }
 }
 
+impl<K, V> Index<K, V> {
+    /// Exact distinct build keys, used by conservative covering join filters.
+    pub fn keys(&self) -> impl Iterator<Item = &K> {
+        self.buckets.keys()
+    }
+
+    pub fn len(&self) -> usize {
+        self.buckets.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.buckets.is_empty()
+    }
+}
+
 impl<K: Eq + Hash, V, S: Iterator<Item = (K, V)>> Build<S> for Index<K, V> {
     fn build(source: S) -> Self {
         crate::count!(index_builds);
-        let mut buckets = HashMap::default();
+        let mut buckets: HashMap<K, Bucket<V>> = HashMap::default();
         for (key, value) in source {
             crate::count!(rows_copied);
-            buckets.entry(key).or_insert_with(Vec::new).push(value);
+            match buckets.entry(key) {
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    entry.get_mut().tail.push(value);
+                }
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(Bucket { first: value, tail: Vec::new() });
+                }
+            }
         }
         #[cfg(feature = "counters")]
         let allocation = {
             crate::counters::build_cardinality(buckets.len());
-            let bytes = buckets.capacity() * (std::mem::size_of::<(K, Vec<V>)>() + 1)
-                + buckets.values().map(|values| values.capacity() * std::mem::size_of::<V>()).sum::<usize>();
+            let bytes = buckets.capacity() * (std::mem::size_of::<(K, Bucket<V>)>() + 1)
+                + buckets.values().map(|bucket| bucket.tail.capacity() * std::mem::size_of::<V>()).sum::<usize>();
             crate::counters_memory::Allocation::new(bytes)
         };
         Self {
@@ -168,12 +199,17 @@ impl<K: Eq + Hash, V, S: Iterator<Item = (K, V)>> Build<S> for Index<K, V> {
 impl<'a, K: Eq + Hash, V: Copy> IndexRead for &'a Index<K, V> {
     type Key = K;
     type Item = V;
-    type Cursor = crate::instrument::Cursor<std::iter::Copied<std::slice::Iter<'a, V>>>;
+    type Cursor = crate::instrument::Cursor<std::iter::Chain<
+        std::option::IntoIter<V>,
+        std::iter::Copied<std::slice::Iter<'a, V>>,
+    >>;
 
     fn lookup(&self, key: &K) -> Self::Cursor {
         crate::count!(lookups);
+        let bucket = self.buckets.get(key);
         crate::instrument::cursor!(
-            self.buckets.get(key).map_or(&[][..], Vec::as_slice).iter().copied()
+            bucket.map(|bucket| bucket.first).into_iter()
+                .chain(bucket.map_or(&[][..], |bucket| bucket.tail.as_slice()).iter().copied())
         )
     }
 }
@@ -191,6 +227,16 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn singleton_buckets_do_not_allocate_payload_vectors() {
+        let index = Index::build((0..128).map(|key| (key, key * 2)));
+        assert_eq!(index.buckets.len(), 128);
+        assert!(index.buckets.values().all(|bucket| bucket.tail.capacity() == 0));
+        for key in 0..128 {
+            assert_eq!((&index).lookup(&key).collect::<Vec<_>>(), [key * 2]);
+        }
+    }
+
     #[test]
     fn projected_routing_preserves_full_lookup_keys() {
         for threads in [1, 24] {

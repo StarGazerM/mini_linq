@@ -130,7 +130,7 @@ pub fn select_from_catalog(
                 !token.levels.is_empty() && token.max_packed_bits.is_none_or(|maximum| bits.is_some_and(|bits| bits <= maximum))
             }).map(|token| &token.ty)
         } else {
-            catalog.providers.iter().find(|token| {
+            catalog.providers.iter().filter(|token| {
                 !token.levels.is_empty()
                     && accepts_elements(token, &analysis, &name)
                     && match &entry.structure {
@@ -140,6 +140,9 @@ pub fn select_from_catalog(
                         _ => true,
                     }
                     && required.iter().all(|capability| token.capabilities.contains(capability))
+            }).min_by_key(|token| match &entry.structure {
+                Structure::Built { keyed, .. } => token.ty != keyed.ty,
+                _ => true,
             }).map(|token| &token.ty)
         }.ok_or_else(|| syn::Error::new(
             entry.name.span(),
@@ -184,7 +187,10 @@ fn retain_host_indexes(
                 reads.iter().any(|(read, columns, supply)| {
                     *read == reader_name
                         && *columns == keys
-                        && *supply == structures::physical::syntax::SupplyKind::Stream
+                        && (*supply == structures::physical::syntax::SupplyKind::Stream
+                            || source.physical.program.definitions.iter().any(|definition|
+                                symbol_name(&definition.name) == *read
+                                && matches!(&definition.operator, Operator::Semi(..) | Operator::Anti(..))))
                 })
             });
         if !stream || analysis.built_on(&name, &keys).is_some() {
@@ -220,7 +226,7 @@ fn retain_host_indexes(
             && !analysis.physical.scanned.contains(&name)
             && needed[&name].len() < analysis.layouts[&name].len()
             && analysis.physical.keyed_reads[&name].iter().all(|(reader, columns, supply)| {
-                *columns == keys && *supply == structures::physical::syntax::SupplyKind::Stream
+                *columns == keys && matches!(supply, structures::physical::syntax::SupplyKind::Stream | structures::physical::syntax::SupplyKind::Const)
                     && source.physical.program.definitions.iter().any(|definition| {
                         symbol_name(&definition.name) == *reader
                             && matches!(&definition.operator, Operator::Semi(..) | Operator::Anti(..))

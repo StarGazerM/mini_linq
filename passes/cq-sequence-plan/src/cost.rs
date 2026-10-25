@@ -5,6 +5,9 @@
 //! of independent branches takes their maximum), not definition order. A tile
 //! only creates parallel parts when grading records `Distribute`; strip widths
 //! and per-lane item counts never manufacture additional processors.
+//! Key routing also has a dependency cost: one routing pass and P bucket
+//! publications. Unknown lengths cannot prove that this setup is amortized;
+//! explicit count estimates can, without becoming semantic premises.
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -24,7 +27,8 @@ pub struct Cost {
     pub dispatches: usize,
 }
 
-/// Check the grading and derive its cost, without supplying input cardinalities.
+/// Check grading and derive cost from authored count estimates where available;
+/// absent input counts remain symbolic. Estimates guide schedules, not semantics.
 pub fn cost(program: &Program, machine: &Machine) -> syn::Result<Cost> {
     let analysis = cq_lang_sequence::check_grading(program, machine)?;
     Cost::from_analysis(program, machine, &analysis)
@@ -404,6 +408,12 @@ struct Fact {
 impl Fact {
     fn evaluate(&mut self, size: &Size, level: &LevelNode, scan: bool) -> syn::Result<()> {
         self.work.add(&Sum::positions(size)?)?;
+        self.advance(size, level, scan)
+    }
+
+    /// Advance the dependency chain without inventing row-expression work for
+    /// organizational operations such as routing and publication.
+    fn advance(&mut self, size: &Size, level: &LevelNode, scan: bool) -> syn::Result<()> {
         let lanes = self.layers.iter().rev().find_map(|layer| match layer {
             Layer::KeyPart { parts } => Some(*parts),
             _ => None,
@@ -450,6 +460,26 @@ struct Evaluator<'a> {
 }
 
 impl Evaluator<'_> {
+    fn input_size(&self, name: &str) -> Size {
+        if let Some(rows) = self.program.evidence.count(name) {
+            return Size::Constant(rows as u128);
+        }
+        if let Some(definition) = self.program.structures.physical.program.definitions.iter()
+            .find(|definition| symbol_name(&definition.name) == name)
+        {
+            match &definition.operator {
+                Operator::Unit(_) => return Size::Constant(1),
+                Operator::Rename(rename) => {
+                    if let Some(rows) = self.program.evidence.count(&symbol_name(&rename.relation)) {
+                        return Size::Constant(rows as u128);
+                    }
+                }
+                _ => {}
+            }
+        }
+        Size::Input(name.into())
+    }
+
     fn term(
         &self,
         term: &Term,
@@ -460,21 +490,7 @@ impl Evaluator<'_> {
         match term {
             Term::Rows(name) => {
                 let result = symbol_name(name);
-                let size = if self
-                    .program
-                    .structures
-                    .physical
-                    .program
-                    .definitions
-                    .iter()
-                    .any(|definition| {
-                        symbol_name(&definition.name) == result
-                            && matches!(definition.operator, Operator::Unit(_))
-                    }) {
-                    Size::Constant(1)
-                } else {
-                    Size::Input(result.clone())
-                };
+                let size = self.input_size(&result);
                 let mut fact = Fact {
                     size: size.clone(),
                     result,
@@ -549,10 +565,17 @@ impl Evaluator<'_> {
             }
             Term::PartitionK { parts, inner, .. } => {
                 let mut fact = self.term(inner, owner, level, tile)?;
-                // Like Store/Tile, routing changes organization, not the number
-                // of evaluated row expressions. P is the machine's fixed
-                // distributing width, never the runtime worker count.
+                // Routing does not evaluate another row expression, but it
+                // hashes and publishes every row before a consumer can start.
+                // P bucket publications are required even for an empty input.
+                // Charge these on the dependency chain, not as fabricated
+                // work or a translator-specific size threshold.
+                let size = fact.size.clone();
                 fact.layers.push(Layer::KeyPart { parts: *parts });
+                fact.advance(&size, level, false)?;
+                let setup = Sum::atom(Atom::One, *parts as u128);
+                fact.span.add(&setup)?;
+                fact.local_span.add(&setup)?;
                 Ok(fact)
             }
             Term::Lookup {

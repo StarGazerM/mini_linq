@@ -346,10 +346,10 @@ impl<'a> Printer<'a> {
         name: &str,
         definition: &physical::Definition,
     ) -> syn::Result<TokenStream> {
-        if let Some(rows) = self.staged_rows(name) {
+        if self.input.is_none() && let Some(rows) = self.staged_rows(name) {
             return Ok(rows);
         }
-        if self.analysis.reads.contains_key(name) && self.carried_witnesses[name].is_empty() {
+        if self.input.is_none() && self.analysis.reads.contains_key(name) && self.carried_witnesses[name].is_empty() {
             let ids = self.read_ids(name)?;
             return Ok(self.buffer_stage(name, self.positional_rows(name, ids)));
         }
@@ -357,7 +357,7 @@ impl<'a> Printer<'a> {
             &definition.operator
         {
             let input_name = symbol_name(&select.input);
-            if self.carries_positions(&input_name) {
+            if self.carries_positions(&input_name) || self.input.is_some() {
                 let rows = self.scan(&select.input)?;
                 let columns = cq_print::columns_used(&select.condition)
                     .into_iter()

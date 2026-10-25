@@ -9,8 +9,9 @@
 //! Lookups count exact reads, candidate reads/counts and ordered cursor entry.
 //! Cursor steps count attempted next/seek calls at storage boundaries, including
 //! exhaustion; rows count successful scan/cursor items at those boundaries.
-//! Distinct insertions count attempts, including duplicates. Use `DistinctSet`
-//! in the caller's distinct provider to include compiler canonicalization.
+//! Distinct insertions count attempts, including duplicates. Native hash canon
+//! providers are wrapped with `DistinctSet::from_set`, preserving their hasher;
+//! custom providers can use `DistinctSet` directly to expose canonicalization.
 //! Retained bytes count runtime-owned capacities (excluding allocator overhead
 //! and heap allocations inside user keys/payloads). Reset starts a new ownership
 //! epoch. Task contexts share that epoch: transferred allocations retain their
@@ -244,13 +245,25 @@ impl Hasher for CountingHasher {
 pub type HashMap<K, V> = std::collections::HashMap<K, V, BuildHasherDefault<CountingHasher>>;
 pub type HashSet<K> = std::collections::HashSet<K, BuildHasherDefault<CountingHasher>>;
 
-pub struct DistinctSet<K>(HashSet<K>, crate::counters_memory::Allocation);
-impl<K> Default for DistinctSet<K> {
+/// Count actual canonical set insertions without replacing the selected hasher.
+pub struct DistinctSet<K, S = BuildHasherDefault<CountingHasher>>(
+    std::collections::HashSet<K, S>,
+    crate::counters_memory::Allocation,
+);
+impl<K, S: Default> Default for DistinctSet<K, S> {
     fn default() -> Self {
         Self(
-            HashSet::default(),
+            std::collections::HashSet::with_hasher(S::default()),
             crate::counters_memory::Allocation::new(0),
         )
+    }
+}
+impl<K, S> DistinctSet<K, S> {
+    /// Instrument a native set independently of operator input-row accounting.
+    /// The set and its hash state are moved, not rebuilt or rehashed.
+    pub fn from_set(set: std::collections::HashSet<K, S>) -> Self {
+        let bytes = set.capacity() * (std::mem::size_of::<K>() + 1);
+        Self(set, crate::counters_memory::Allocation::new(bytes))
     }
 }
 impl<K: Eq + std::hash::Hash> DistinctSet<K> {
@@ -260,6 +273,8 @@ impl<K: Eq + std::hash::Hash> DistinctSet<K> {
             crate::counters_memory::Allocation::new(0),
         )
     }
+}
+impl<K: Eq + std::hash::Hash, S: std::hash::BuildHasher> DistinctSet<K, S> {
     pub fn insert(&mut self, row: K) -> bool {
         record(|counts| counts.distinct_insertions += 1);
         let before = self.0.capacity();

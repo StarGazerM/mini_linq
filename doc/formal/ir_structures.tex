@@ -258,7 +258,7 @@ conditions and relational readers can reduce the surviving count further.
 \Rule{STR-JoinFilter}{
  j\in\{\mathsf{probe}[K](l,b),\mathsf{semi}[K](l,b)\}\ \text{eager}\quad
  k\in K\quad k:\code{i64}\quad
- \mathsf{exactKeyIndex}(b,K)\in\{\code{HashIndex},\code{SortedRun}\}\\
+ \mathsf{exactKeyIndex}(b,K)\in\{\code{HashIndex},\code{SortedRun},\code{sharded::Index}\}\\
  \mathsf{exclusiveSpine}_k(s,l)\quad
  \mathsf{totalBuild}(b)\quad
  \mathsf{marker}(s,k)=C\\

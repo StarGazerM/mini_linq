@@ -765,6 +765,67 @@ mod tests {
 
     #[cfg(feature = "counters")]
     #[test]
+    fn task_store_and_native_canon_match_independent_primitives() {
+        counters::reset();
+        let program = OperatorProgram::new(&[
+            OperatorLabel { result: "rows", kind: "ROWS_BUILD", key: "", inputs: &[] },
+            OperatorLabel { result: "parts", kind: "PARTITION_BUILD", key: "", inputs: &[] },
+            OperatorLabel { result: "canon", kind: "DEDUP", key: "", inputs: &["parts"] },
+        ]);
+        std::thread::scope(|threads| {
+            for _ in 0..4 {
+                let program = &program;
+                threads.spawn(move || program.task(|| {
+                    let rows: Vec<_> = program.build(0, || {
+                        program.inserting(0, [1u64, 1, 2].into_iter()).collect()
+                    });
+                    let _rows = crate::retain_rows(&rows);
+                    let part: Vec<_> = program.build(1, || {
+                        program.inserting(1, rows.iter().copied()).collect()
+                    });
+                    let _part = crate::retain_rows(&part);
+                    let mut seen = counters::DistinctSet::from_set(crate::HashSet::default());
+                    let canonical = program.inserting(2, part.into_iter())
+                        .filter(|row| seen.insert(*row));
+                    assert_eq!(program.stream(2, canonical).collect::<Vec<_>>(), [1, 2]);
+                }));
+            }
+        });
+        let records = operators();
+        let counts = counters::snapshot();
+        assert_eq!(records[0].rows_inserted, 12);
+        assert_eq!(records[1].rows_inserted, 12);
+        assert_eq!(records[2].rows_inserted, 12);
+        assert_eq!(records[2].rows_out, 8);
+        assert_eq!(counts.rows_copied, records[0].rows_inserted + records[1].rows_inserted);
+        assert_eq!(counts.distinct_insertions, records[2].rows_inserted);
+        assert_eq!(counts.bytes_retained_current, 0);
+        assert!(counts.bytes_retained_peak > 0);
+    }
+
+    #[cfg(feature = "counters")]
+    #[test]
+    fn native_canon_wrapper_preserves_hash_state_and_capacity() {
+        use std::hash::BuildHasher;
+        counters::reset();
+        let native = crate::HashSet::<u64>::with_capacity_and_hasher(
+            16, crate::HashState::default(),
+        );
+        let capacity = native.capacity();
+        let hash = native.hasher().hash_one(42u64);
+        let mut counted = counters::DistinctSet::from_set(native);
+        assert_eq!(counted.0.capacity(), capacity);
+        assert_eq!(counted.0.hasher().hash_one(42u64), hash);
+        assert_eq!(counters::snapshot().bytes_retained_current, (capacity * 9) as u64);
+        assert!(counted.insert(42));
+        assert!(!counted.insert(42));
+        assert_eq!(counters::snapshot().distinct_insertions, 2);
+        drop(counted);
+        assert_eq!(counters::snapshot().bytes_retained_current, 0);
+    }
+
+    #[cfg(feature = "counters")]
+    #[test]
     fn transferred_allocations_keep_their_epoch_until_drop() {
         counters::reset();
         let context = TaskContext::capture();

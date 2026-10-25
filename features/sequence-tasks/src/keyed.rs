@@ -98,7 +98,7 @@ pub(crate) fn global(
     emitter: &mut Emitter<'_>,
     input: &Value,
     name: &syn::Ident,
-    tile: Option<(syn::Ident, proc_macro2::TokenStream, usize)>,
+    tile: Option<super::TaskTile>,
 ) -> syn::Result<proc_macro2::TokenStream> {
     use cq_lang_sequence::structures::{physical::Operator, syntax::algebra::AggregateKind};
     let result = symbol_name(name);
@@ -143,31 +143,34 @@ pub(crate) fn global(
     let rows = &input.rows;
     let mut local = input.clone();
     local.depth = 0;
-    let (parts, binding) = if let Some((binding, source, grain)) = tile {
+    let (parts, binding, prepare) = if let Some(super::TaskTile { binding, prepare, parts }) = tile {
         local.rows = quote!((#rows).flatten());
-        (quote!({
-            use ::rayon::prelude::*;
-            (#source).collect::<::std::vec::Vec<_>>().into_par_iter()
-                .chunks(#grain).collect::<::std::vec::Vec<_>>()
-        }), quote!(let #binding = &__cq_part;))
+        (parts, quote!(let #binding = __cq_part;), prepare)
     } else {
         local.rows = quote!(__cq_part.into_iter());
         (quote!((#rows).map(|__cq_part| __cq_part.collect::<::std::vec::Vec<_>>())
-            .collect::<::std::vec::Vec<_>>()), quote!())
+            .collect::<::std::vec::Vec<_>>().into_par_iter()), quote!(), quote!())
     };
     let grouped = emitter.group_partial(name, local)?.rows;
     let grouped = quote!({
         #binding
         (#grouped).next().expect("global aggregate always has an identity row")
     });
-    let merge = quote!(
-        ::mini_linq::__tasks::combine::par_group_global_with(
-            #parts,
-            |__cq_part| #grouped,
-            || #initial,
-            |__cq_state, __cq_partial| { #(#merges)* },
-        )
-    );
+    let grouped = super::task_scope(emitter, grouped);
+    let merge = quote!({
+        use ::rayon::prelude::*;
+        #prepare
+        let __cq_task_context = ::cq_storage::profile_select! {
+            plain { () }
+            counters { ::cq_storage::counters::TaskContext::capture() }
+        };
+        let __cq_partials = (#parts).map(|__cq_part| #grouped).collect::<::std::vec::Vec<_>>();
+        let mut __cq_state = #initial;
+        for __cq_partial in __cq_partials {
+            #(#merges)*
+        }
+        __cq_state
+    });
     let merge = if let Some(index) = emitter.context().profile_index(&result) {
         let profile = emitter.context().profile_handle();
         quote!(#profile.scope(#index, || #merge))

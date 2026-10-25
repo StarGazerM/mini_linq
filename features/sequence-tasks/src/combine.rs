@@ -6,6 +6,67 @@ use std::hash::Hash;
 use std::collections::{HashMap, HashSet};
 use cq_storage::HashState;
 
+/// Dispatch contiguous hosts to borrowed tiles; non-contiguous row interfaces
+/// retain their ordinary enumeration before partitioning.
+pub struct TileSource<H>(pub H);
+
+pub trait TileRows {
+    type Row: Send;
+    fn tile_rows(self, grain: usize) -> impl IndexedParallelIterator<Item = impl Iterator<Item = Self::Row> + Send>;
+}
+
+impl<'a, T: Sync> TileRows for &&TileSource<&'a [T]>
+where
+    &'a T: cq_storage::rows::Columns,
+    <&'a T as cq_storage::rows::Columns>::Row: Send,
+{
+    type Row = <&'a T as cq_storage::rows::Columns>::Row;
+    fn tile_rows(self, grain: usize) -> impl IndexedParallelIterator<Item = impl Iterator<Item = Self::Row> + Send> {
+        self.0.par_chunks(grain).map(cq_storage::rows::Rows::rows)
+    }
+}
+
+impl<'a, T: Sync> TileRows for &&TileSource<&'a Vec<T>>
+where
+    &'a T: cq_storage::rows::Columns,
+    <&'a T as cq_storage::rows::Columns>::Row: Send,
+{
+    type Row = <&'a T as cq_storage::rows::Columns>::Row;
+    fn tile_rows(self, grain: usize) -> impl IndexedParallelIterator<Item = impl Iterator<Item = Self::Row> + Send> {
+        self.0.par_chunks(grain).map(cq_storage::rows::Rows::rows)
+    }
+}
+
+impl<'a, T: Sync, const N: usize> TileRows for &&TileSource<&'a [T; N]>
+where
+    &'a T: cq_storage::rows::Columns,
+    <&'a T as cq_storage::rows::Columns>::Row: Send,
+{
+    type Row = <&'a T as cq_storage::rows::Columns>::Row;
+    fn tile_rows(self, grain: usize) -> impl IndexedParallelIterator<Item = impl Iterator<Item = Self::Row> + Send> {
+        self.0.par_chunks(grain).map(cq_storage::rows::Rows::rows)
+    }
+}
+
+impl<'a, T: Sync> TileRows for &&TileSource<&&'a [T]>
+where
+    &'a T: cq_storage::rows::Columns,
+    <&'a T as cq_storage::rows::Columns>::Row: Send,
+{
+    type Row = <&'a T as cq_storage::rows::Columns>::Row;
+    fn tile_rows(self, grain: usize) -> impl IndexedParallelIterator<Item = impl Iterator<Item = Self::Row> + Send> {
+        self.0.par_chunks(grain).map(cq_storage::rows::Rows::rows)
+    }
+}
+
+impl<H: cq_storage::rows::Rows> TileRows for &TileSource<H>
+where H::Row: Send {
+    type Row = H::Row;
+    fn tile_rows(self, grain: usize) -> impl IndexedParallelIterator<Item = impl Iterator<Item = Self::Row> + Send> {
+        self.0.rows().collect::<Vec<_>>().into_par_iter().chunks(grain).map(Vec::into_iter)
+    }
+}
+
 /// Execute an existing serial row adapter independently in each checked part.
 pub fn map_parts<R: Send, O: Send>(
     parts: Vec<Vec<R>>, map: impl Fn(Vec<R>) -> Vec<O> + Sync + Send,
@@ -114,6 +175,15 @@ pub fn par_group_global_with<R: Send, S: Send>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn contiguous_tiles_borrow_the_original_columns() {
+        let input = [(1u32, 2u32), (3, 4), (5, 6)];
+        let source = TileSource(input.as_slice());
+        let parts: Vec<Vec<_>> = (&&source).tile_rows(2).map(Iterator::collect).collect();
+        assert_eq!(parts.iter().map(Vec::len).collect::<Vec<_>>(), [2, 1]);
+        assert!(std::ptr::eq(parts[0][0].0, &input[0].0));
+        assert!(std::ptr::eq(parts[1][0].1, &input[2].1));
+    }
     #[test]
     fn global_adapter_merges_on_host_with_empty_identity() {
         let host = std::thread::current().id();

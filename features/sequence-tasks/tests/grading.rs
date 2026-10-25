@@ -91,7 +91,7 @@ fn pool_tile_and_store_emit_indexed_parallel_buffers() {
     let analysis = check_grading(&program, &machine()).unwrap();
     let expression = translate(&program, &analysis).unwrap();
     let rendered = expression.to_token_stream().to_string();
-    assert!(rendered.contains("par_chunks (64usize)"), "{rendered}");
+    assert!(rendered.contains("tile_rows (64usize)"), "{rendered}");
     assert!(!worker_bodies(&expression).is_empty());
     assert!(rendered.contains("collect :: < :: std :: vec :: Vec < _ > >"), "{rendered}");
 }
@@ -101,13 +101,19 @@ fn pool_tile_and_store_emit_indexed_parallel_buffers() {
 fn worker_bodies(expression: &syn::Expr) -> Vec<syn::Expr> {
     #[derive(Default)]
     struct Workers(Vec<syn::Expr>);
+    fn unparen(mut expression: &syn::Expr) -> &syn::Expr {
+        while let syn::Expr::Paren(paren) = expression {
+            expression = &paren.expr;
+        }
+        expression
+    }
 
     impl VisitMut for Workers {
         fn visit_expr_method_call_mut(&mut self, call: &mut syn::ExprMethodCall) {
-            if call.method == "map"
-                && let syn::Expr::MethodCall(source) = call.receiver.as_ref()
-                && source.method == "par_chunks"
-                && let Some(syn::Expr::Closure(worker)) = call.args.first()
+            if (call.method == "map" || call.method == "fold")
+                && let syn::Expr::MethodCall(source) = unparen(call.receiver.as_ref())
+                && (source.method == "par_chunks" || source.method == "tile_rows")
+                && let Some(syn::Expr::Closure(worker)) = call.args.last()
             {
                 self.0.push(*worker.body.clone());
             }
@@ -175,7 +181,7 @@ fn distributing_tile_keeps_the_whole_segment_inside_the_worker() {
         "Iterator :: map",
         "Iterator :: filter",
         "Iterator :: flat_map",
-        "collect :: < :: std :: vec :: Vec < _ > >",
+        "__cq_buffer . extend",
     ] {
         assert!(worker.contains(adapter), "missing {adapter} inside worker: {worker}");
     }
@@ -200,7 +206,6 @@ fn pool_store_joins_task_local_rows_in_driver_order_without_deduplicating() {
     let facts = check_grading(&sequential, &machine()).unwrap();
     let pull = cq_sequence_pull::translate(&sequential, &facts).unwrap();
     let source = quote::quote! {
-        #![allow(non_snake_case, unused_variables)]
         fn main() {
             let R: &[(i32,i32)] = &[(1,10),(1,11),(2,20),(3,-30)];
             let populated: Vec<(i32,i32)> =
@@ -226,9 +231,7 @@ fn pool_store_joins_task_local_rows_in_driver_order_without_deduplicating() {
             }
         }
     };
-    let runtime = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../runtime/cq-storage/src/lib.rs");
-    cq_testkit::rustc::Runtime::new(&runtime, false).run(&source.to_string());
+    run_partition_fixture(source);
 }
 
 fn grouped_program(global: bool) -> Program {
@@ -396,9 +399,7 @@ fn joined_tiles_canonicalize_complete_valuations_before_grouping() {
             }
         }
     };
-    let runtime = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../runtime/cq-storage/src/lib.rs");
-    cq_testkit::rustc::Runtime::new(&runtime, false).run(&source.to_string());
+    run_partition_fixture(source);
 }
 
 fn run_partition_fixture(source: proc_macro2::TokenStream) {
@@ -450,7 +451,7 @@ fn key_partitioned_groups_preserve_exact_valuations_and_empty_global_identity() 
         assert!(rendered.contains("combine :: route_by"), "{rendered}");
         assert!(rendered.contains("combine :: map_parts"), "{rendered}");
         if global {
-            assert!(rendered.contains("combine :: par_group_global_with"), "{rendered}");
+            assert!(rendered.contains("let __cq_partials"), "{rendered}");
         }
         expression
     };
@@ -519,7 +520,7 @@ fn globally_unique_tiles_fold_partial_aggregates_with_one_empty_identity() {
     assert_eq!(facts.tilings["partials"], vec![cq_lang_sequence::Tiling::Distribute]);
     let expression = translate(&program, &facts).unwrap();
     let rendered = expression.to_token_stream().to_string();
-    assert!(rendered.contains("combine :: par_group_global_with"), "{rendered}");
+    assert!(rendered.contains("let __cq_partials"), "{rendered}");
     assert!(!rendered.contains("combine :: route_by"), "{rendered}");
     run_partition_fixture(quote::quote! {
         fn main() {
@@ -690,4 +691,73 @@ fn catalog_retention_materializes_new_providers_and_preserves_native_entry_ident
     cq_lang_sequence::check_rewrite(&source, &target).unwrap();
     let facts = check_grading(&target, &machine()).unwrap();
     translate(&target, &facts).unwrap();
+}
+
+#[test]
+fn base_relation_tile_uses_borrowed_rows_and_keeps_the_joined_answer() {
+    let mut source = segment_program();
+    source.sequence.definitions.retain(|definition| definition.name != "input" && definition.name != "result");
+    source.graded.as_mut().unwrap().grades.retain(|grade| grade.name != "input" && grade.name != "result");
+    fn inline(term: &mut cq_lang_sequence::Term) {
+        use cq_lang_sequence::Term;
+        match term {
+            Term::Ref(name) if name == "input" => *term = syn::parse_quote!(rows l),
+            Term::Map(_, inner) | Term::Compact(_, inner) | Term::Flatten(inner)
+            | Term::Lookup { inner, .. } | Term::Tile { inner, .. } | Term::Store { inner, .. } => inline(inner),
+            _ => {}
+        }
+    }
+    inline(&mut source.sequence.definitions.last_mut().unwrap().term);
+    let analysis = check_grading(&source, &machine()).unwrap();
+    let rendered = translate(&source, &analysis).unwrap().to_token_stream().to_string();
+    assert!(rendered.contains("TileSource"), "{rendered}");
+    assert!(rendered.contains("tile_rows"), "{rendered}");
+    assert!(!rendered.contains("let __cq_driver = ("));
+    assert!(!rendered.contains("Iterator :: collect :: < :: std :: vec :: Vec < _ > >"));
+}
+
+#[test]
+fn paired_flatten_fuses_the_following_stream_until_publication() {
+    let mut source = segment_program();
+    source.sequence.definitions.iter_mut().find(|definition| definition.name == "parts").unwrap().term =
+        syn::parse_quote!(store map projected map mapped compact selected
+            flatten lookup r [a] flatten tile 64 input);
+    let analysis = check_grading(&source, &machine()).unwrap();
+    let expression = translate(&source, &analysis).unwrap();
+    let workers = worker_bodies(&expression);
+    assert_eq!(workers.len(), 1);
+    let body = workers[0].to_token_stream().to_string();
+    assert!(body.contains("IndexRead :: lookup") || body.contains("RangeCursor :: range"), "{body}");
+    assert!(body.contains("100"), "{body}");
+    assert!(!expression.to_token_stream().to_string().contains("__cq_sequence_store_input"));
+}
+
+#[test]
+fn task_catalog_retains_membership_fallbacks_before_shared_reads() {
+    let source: Program = syn::parse_quote! {
+        physical {
+            relation L(a:i32); relation R(a:i32,b:i32);
+            consumer canonical;
+            l = pipe rename L@0 {a -> a};
+            r = pipe rename R@1 {a -> a,b -> b};
+            result = pipe anti eager [a] l,r;
+            return result as answer(a);
+        }
+        structures {
+            l host scan = Reader [];
+            r host scan = Reader [];
+            r host result = ::cq_storage::dispatch::KeySet<_> [a];
+        }
+        sequence {
+            l = rows l; r = rows r;
+            result = compact result lookup r[a] l;
+            output_rows = store result;
+        }
+    };
+    let target = cq_sequence_tasks::select_providers(&source, &cq_sequence_tasks::catalog()).unwrap();
+    assert!(target.sequence.definitions.iter().any(|definition|
+        definition.name == "r" && matches!(definition.term, cq_lang_sequence::Term::Store { .. })));
+    assert!(target.structures.structures.entries.iter().any(|entry|
+        entry.name == "r" && matches!(&entry.structure,
+            cq_lang_sequence::structures::Structure::Built { .. })));
 }

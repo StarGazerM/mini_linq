@@ -287,10 +287,31 @@ impl<'a> RowEmitter<'a> {
             let nested = cq_print::group(&fields);
             quote!(&#nested)
         };
+        // Catalog-selected native sets do not count insertion attempts themselves.
+        // Keep opaque authored providers on their existing protocol: a counted
+        // custom provider must not receive a second instrumentation wrapper.
+        let native_hash_set = matches!(ty, syn::Type::Path(path)
+            if path.qself.is_none() && (
+                path.path.segments.len() == 2
+                    && path.path.segments[0].ident == "cq_storage"
+                    && path.path.segments[1].ident == "HashSet"
+                || path.path.segments.len() == 3
+                    && path.path.segments[0].ident == "std"
+                    && path.path.segments[1].ident == "collections"
+                    && path.path.segments[2].ident == "HashSet"
+            ));
+        let constructor = if native_hash_set {
+            quote!(::cq_storage::profile_select! {
+                plain { <#ty>::new() }
+                counters { ::cq_storage::counters::DistinctSet::from_set(<#ty>::new()) }
+            })
+        } else {
+            quote!(<#ty>::new())
+        };
         quote! {{
             #[allow(unused_imports)]
             use ::cq_storage::HashSetConstructor as _;
-            let mut __cq_seen = <#ty>::new();
+            let mut __cq_seen = #constructor;
             ::core::iter::Iterator::filter(#rows, move |__cq_row| {
                 ::cq_storage::require::leibniz(#key);
                 __cq_seen.insert(::core::clone::Clone::clone(#key))

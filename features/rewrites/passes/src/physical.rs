@@ -223,7 +223,7 @@ pub fn lazy_semijoins(source: &ir::Program, arguments: TokenStream) -> syn::Resu
     Ok(target)
 }
 
-/// Retain reusable host renames that serve integral keyed stream reads.
+/// Retain reusable host renames serving integral stream or eager membership reads.
 ///
 /// This records only a Physical mode decision. Key columns, predicates and
 /// reader order are unchanged; selection subsequently chooses the providers.
@@ -245,7 +245,12 @@ pub fn build_host_reads(source: &ir::Program, arguments: TokenStream) -> syn::Re
             .get(&name)
             .into_iter()
             .flatten()
-            .filter(|(_, _, supply)| *supply == ir::syntax::SupplyKind::Stream)
+            .filter(|(reader, _, supply)| {
+                *supply == ir::syntax::SupplyKind::Stream
+                    || source.program.definitions.iter().any(|definition|
+                        symbol_name(&definition.name) == *reader
+                            && matches!(&definition.operator, Operator::Semi(..) | Operator::Anti(..)))
+            })
             .collect::<Vec<_>>();
         if reads.is_empty()
             || !reads.iter().all(|(_, keys, _)| {

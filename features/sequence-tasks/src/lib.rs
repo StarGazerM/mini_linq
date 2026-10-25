@@ -23,7 +23,7 @@ use quote::{format_ident, quote};
 pub struct Config {
     /// `None` uses the calling Rayon's pool (including RAYON_NUM_THREADS).
     pub threads: Option<usize>,
-    /// Contiguous driver rows owned by one task.
+    /// Rows per task-local key-routing chunk; contiguous tile sizes are planned.
     pub grain: usize,
     /// Logical partition count fixed before execution, independent of workers.
     pub partitions: usize,
@@ -99,7 +99,7 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
     // Shared reads must not capture the serial lazy Rc/RefCell providers.
     catalog.providers.retain(|token| !matches!(&token.ty, syn::Type::Path(path)
         if path.path.segments.last().is_some_and(|segment|
-            segment.ident == "HashIndex" || segment.ident == "Trie")));
+            segment.ident == "HashIndex" || segment.ident == "Trie" || segment.ident == "KeySet")));
     catalog.providers.insert(0, cq_lang_sequence::ProviderToken {
         ty: syn::parse_quote!(::cq_storage::sharded::Index<_, _>),
         capabilities: vec![cq_lang_sequence::Capability::Exact, cq_lang_sequence::Capability::Membership],
@@ -176,9 +176,22 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
 pub fn select_providers(
     source: &Program, catalog: &cq_lang_sequence::Catalog,
 ) -> syn::Result<Program> {
+    // Instantiate supported authored families before checked selection. A
+    // transient retype can invalidate obligations such as exact join filters.
+    let mut native = catalog.clone();
+    for entry in &source.structures.structures.entries {
+        if let cq_lang_sequence::structures::Structure::Built { keyed, .. } = &entry.structure
+            && let Some(token) = catalog.providers.iter().find(|token|
+                cq_sequence_plan::matches_type(&token.ty, &keyed.ty))
+        {
+            let mut token = token.clone();
+            token.ty = keyed.ty.clone();
+            native.providers.push(token);
+        }
+    }
     let mut target = source.clone();
     target.structures =
-        cq_sequence_rewrite_passes::select_from_catalog(&source.structures, catalog)?;
+        cq_sequence_rewrite_passes::select_from_catalog(&source.structures, &native)?;
     // A legal authored provider may supply stronger capabilities needed by an
     // authored tile (for example range cursors). Retarget only unavailable
     // families; do not downgrade an existing native representation.
@@ -194,25 +207,6 @@ pub fn select_providers(
                 }
             }
             continue;
-        }
-        let cq_lang_sequence::structures::Structure::Built { keyed, .. } = &original.structure else {
-            continue;
-        };
-        if !catalog.providers.iter().any(|token|
-            cq_sequence_plan::matches_type(&token.ty, &keyed.ty)) {
-            continue;
-        }
-        // Retention removes keyed Host entries and appends Built entries:
-        // entry positions are not stable identities across selection.
-        for selected in &mut target.structures.structures.entries {
-            if selected.name == original.name
-                && let cq_lang_sequence::structures::Structure::Built { keyed: replacement, .. } = &mut selected.structure
-                && keyed.levels == replacement.levels
-                && keyed.membership == replacement.membership
-                && keyed.filtered == replacement.filtered
-            {
-                replacement.ty = keyed.ty.clone();
-            }
         }
     }
     for (old, retained) in source.structures.physical.program.definitions.iter()
@@ -292,10 +286,11 @@ fn translate_mode(
             }
         }
     }
-    // A distributing tile binds a symbolic one-part iterator. Row adapters
-    // compose beneath it unchanged; the paired flatten or pool store discharges
-    // the binding into a Rayon closure.
+    // A distributing tile binds a symbolic one-part iterator. Streaming row
+    // adapters compose through its paired flatten and named pipes. A Store or
+    // non-distributive constructor joins the task buffers before proceeding.
     let mut partitions = Vec::new();
+    let mut next_driver = 0usize;
     let translate = if profile {
         cq_sequence_pull::translate_profile_with
     } else {
@@ -315,9 +310,49 @@ fn translate_mode(
                 if input.depth != 0 {
                     return Err(syn::Error::new_spanned(program, "Tasks distributing driver must be flat"));
                 }
-                let binding = format_ident!("__cq_task_driver_{}", partitions.len());
-                partitions.push((binding.clone(), input.rows.clone(), *n));
-                output.rows = quote!(::core::iter::once(#binding.iter().cloned()));
+                let binding = format_ident!("__cq_task_driver_{}", next_driver);
+                next_driver += 1;
+                let context = emitter.context();
+                let host_result = input.result.as_ref().filter(|result|
+                    inner_term(term).is_some_and(|inner| base_rows(inner, program))
+                    && context.physical_analysis.hosts.contains_key(*result)
+                    && !context.analysis.selections.contains_key(*result)
+                    && context.join_filter_ids(result).is_none()
+                );
+                let positional = host_result.filter(|result| context.carries_positions(result));
+                if let Some(result) = positional {
+                    let host = cq_print::Context::positional_host(&context.physical_analysis.hosts[result]);
+                    let ids = quote!(::cq_storage::PositionalRows::position_range(
+                        #host, #binding * #n..(#binding + 1) * #n));
+                    let rows = context.profile_stream(result, context.positional_rows(result, ids));
+                    partitions.push(TaskTile {
+                        binding,
+                        prepare: quote!(),
+                        parts: quote!((0..::cq_storage::PositionalRows::len(#host).div_ceil(#n)).into_par_iter()),
+                    });
+                    output.rows = quote!(::core::iter::once(#rows));
+                } else if let Some(result) = host_result {
+                    let host = &context.hosts[&context.physical_analysis.hosts[result]].value;
+                    let rows = context.profile_stream(result, context.host_scan_from(result, Some(quote!(#binding))));
+                    partitions.push(TaskTile {
+                        binding,
+                        prepare: quote! {
+                            use ::mini_linq::__tasks::combine::TileRows as _;
+                            let __cq_driver = ::mini_linq::__tasks::combine::TileSource(#host);
+                        },
+                        parts: quote!((&&__cq_driver).tile_rows(#n)),
+                    });
+                    output.rows = quote!(::core::iter::once(#rows));
+                } else {
+                    let source = &input.rows;
+                    partitions.push(TaskTile {
+                        binding: binding.clone(),
+                        prepare: quote!(let __cq_driver = (#source).collect::<::std::vec::Vec<_>>();),
+                        parts: quote!(__cq_driver.par_chunks(#n)),
+                    });
+                    output.rows = quote!(::core::iter::once(#binding.iter().cloned()));
+                }
+                output.partitioned = true;
             } else if let Term::PartitionK { keys, parts, .. } = term {
                 let input = child.expect("checked key partition");
                 output.rows = keyed::partition(emitter, input, keys, *parts, config.grain)?;
@@ -341,34 +376,66 @@ fn translate_mode(
                     keyed::group(emitter, input, name)?
                 };
                 output.depth = usize::from(!global);
-            } else if (matches!(term, Term::Flatten(_)) && output.depth == 0)
-                || (matches!(term, Term::Store { .. }) && output.depth == 1)
+                output.partitioned = !global && output.partitioned;
+            } else if matches!(term, Term::Store { .. } | Term::Canon(_) | Term::Group(_, _) | Term::Fold(_, _))
+                || program.sequence.definitions.last().is_some_and(|definition|
+                    std::ptr::eq(&definition.term, term))
             {
-                if let Some((binding, source, grain)) = partitions.pop() {
-                    let nested = output.depth == 1;
-                    let rows = &output.rows;
-                    let local = if nested {
-                        quote!((#rows).flatten().collect::<::std::vec::Vec<_>>())
+                let input = if matches!(term, Term::Store { .. } | Term::Canon(_) | Term::Group(_, _) | Term::Fold(_, _)) {
+                    child.unwrap_or(output)
+                } else {
+                    &*output
+                };
+                if let Some(index) = partitions.iter().position(|tile: &TaskTile|
+                    uses_binding(&input.rows, &tile.binding))
+                {
+                    let tile = partitions.remove(index);
+                    let mut input = input.clone();
+                    input.partitioned = false;
+                    output.partitioned = false;
+                    if let Term::Group(name, _) = term
+                        && matches!(&emitter.context().physical[&cq_lang_sequence::structures::symbol_name(name)].operator,
+                            cq_lang_sequence::structures::physical::Operator::Group(group) if group.keys.is_empty())
+                    {
+                        let rows = &input.rows;
+                        input.rows = quote!(::core::iter::once(#rows));
+                        output.rows = keyed::global(emitter, &input, name, Some(tile))?;
                     } else {
-                        quote!((#rows).collect::<::std::vec::Vec<_>>())
-                    };
-                    let local = task_scope(emitter, local);
-                    let joined = if nested {
-                        quote!(__cq_parts.into_iter().map(::std::vec::Vec::into_iter))
-                    } else {
-                        quote!(__cq_parts.into_iter().flatten())
-                    };
-                    output.rows = quote!({
-                        use ::rayon::prelude::*;
-                        let __cq_driver = (#source).collect::<::std::vec::Vec<_>>();
-                        let __cq_parts = __cq_driver.par_chunks(#grain)
-                            .map(|#binding| #local)
-                            .collect::<::std::vec::Vec<_>>();
-                        #joined
-                    });
+                        let nested = input.depth > 0;
+                        let mut local = input.rows.clone();
+                        if nested {
+                            local = quote!((#local).flatten());
+                        }
+                        if matches!(term, Term::Store { .. })
+                            && !nested
+                            && program.sequence.definitions.last().is_some_and(|definition|
+                                std::ptr::eq(&definition.term, term))
+                            && let Some(result) = &output.result
+                        {
+                            local = emitter.own_task_answer(result, local);
+                        }
+                        input.rows = join_tile(emitter, tile, local, nested);
+                        output.rows = match term {
+                            Term::Canon(_) => emitter.canon(input)?.rows,
+                            Term::Group(name, _) => emitter.group(name, input)?.rows,
+                            Term::Fold(monoid, _) => emitter.fold(monoid, input)?.rows,
+                            _ => input.rows,
+                        };
+                    }
                 }
             }
-            if matches!(term, Term::Store { .. }) && partition_inputs.contains(owner) {
+            if matches!(term, Term::Store { .. }) && output.depth == 0
+                && base_rows(term, program)
+                && output.result.as_ref().is_some_and(|result|
+                    emitter.context().physical_analysis.hosts.contains_key(result)
+                    && analysis.structures.built.get(result).is_none_or(Vec::is_empty)
+                    && !analysis.structures.selections.contains_key(result))
+            {
+                // An immutable base relation is already resident storage. The
+                // checked Store publishes that borrow; it need not clone rows.
+                output.rows = child.expect("checked base store").rows.clone();
+                emitter.mark_target_published(owner);
+            } else if matches!(term, Term::Store { .. }) && partition_inputs.contains(owner) {
                 let label = format!("{owner}.rows");
                 emitter.context_mut().profile_label(
                     &label, "ROWS_BUILD", "", output.result.iter().cloned().collect(),
@@ -380,6 +447,9 @@ fn translate_mode(
                 let binding = format_ident!("__cq_key_source_{}", owner);
                 emitter.context_mut().statements.push(syn::parse_quote!(
                     let #binding = #build;
+                ));
+                emitter.context_mut().statements.push(syn::parse_quote!(
+                    let _retain = ::cq_storage::retain_rows(&#binding);
                 ));
                 emitter.context_mut().bound = true;
                 emitter.mark_target_published(owner);
@@ -407,6 +477,9 @@ fn translate_mode(
                 emitter.context_mut().statements.push(syn::parse_quote!(
                     let #binding = #build;
                 ));
+                emitter.context_mut().statements.push(syn::parse_quote!(
+                    let _retain_parts = #binding.iter().map(::cq_storage::retain_rows).collect::<::std::vec::Vec<_>>();
+                ));
                 let keys = keys.iter().map(cq_lang_sequence::structures::symbol_name).collect::<Vec<_>>();
                 let repr = emitter.context_mut().materialize_partitioned(
                     &result, quote!(#binding), &keys,
@@ -432,12 +505,87 @@ fn translate_mode(
             })
         } else {
             syn::parse_quote!({
+                let __cq_task_context = ::cq_storage::profile_select! {
+                    plain { () }
+                    counters { ::cq_storage::counters::TaskContext::capture() }
+                };
                 ::rayon::ThreadPoolBuilder::new().num_threads(#threads).build()
-                    .expect("create CQ task pool").install(|| #expression)
+                    .expect("create CQ task pool").install(|| ::cq_storage::profile_select! {
+                        plain { #expression }
+                        counters { __cq_task_context.run(|| #expression) }
+                    })
             })
         };
     }
     Ok(syn::parse_quote!((#expression).into_iter()))
+}
+
+pub(crate) struct TaskTile {
+    binding: syn::Ident,
+    prepare: proc_macro2::TokenStream,
+    parts: proc_macro2::TokenStream,
+}
+
+fn inner_term(term: &Term) -> Option<&Term> {
+    match term {
+        Term::Tile { inner, .. } => Some(inner),
+        _ => None,
+    }
+}
+
+fn base_rows(term: &Term, program: &Program) -> bool {
+    match term {
+        Term::Rows(_) => true,
+        Term::Store { inner, .. } => base_rows(inner, program),
+        Term::Ref(name) => program.sequence.definitions.iter()
+            .find(|definition| definition.name == *name)
+            .is_some_and(|definition| base_rows(&definition.term, program)),
+        _ => false,
+    }
+}
+
+fn uses_binding(tokens: &proc_macro2::TokenStream, binding: &syn::Ident) -> bool {
+    tokens.clone().into_iter().any(|token| match token {
+        proc_macro2::TokenTree::Ident(ident) => ident == *binding,
+        proc_macro2::TokenTree::Group(group) => uses_binding(&group.stream(), binding),
+        _ => false,
+    })
+}
+
+fn join_tile(
+    emitter: &cq_sequence_pull::Emitter<'_>,
+    tile: TaskTile,
+    rows: proc_macro2::TokenStream,
+    nested: bool,
+) -> proc_macro2::TokenStream {
+    let TaskTile { binding, prepare, parts } = tile;
+    let workers = if nested {
+        let local = task_scope(emitter, quote!((#rows).collect::<::std::vec::Vec<_>>()));
+        quote!((#parts).map(|#binding| #local))
+    } else {
+        let local = task_scope(emitter, quote!({
+            __cq_buffer.extend(#rows);
+            __cq_buffer
+        }));
+        // A scheduler task may consume several logical tiles. Preserve their
+        // order while growing one buffer, rather than allocating per tile.
+        quote!((#parts).fold(::std::vec::Vec::new, |mut __cq_buffer, #binding| #local))
+    };
+    let joined = if nested {
+        quote!(__cq_parts.into_iter().map(::std::vec::Vec::into_iter))
+    } else {
+        quote!(__cq_parts.into_iter().flatten())
+    };
+    quote!({
+        use ::rayon::prelude::*;
+        #prepare
+        let __cq_task_context = ::cq_storage::profile_select! {
+            plain { () }
+            counters { ::cq_storage::counters::TaskContext::capture() }
+        };
+        let __cq_parts = (#workers).collect::<::std::vec::Vec<_>>();
+        #joined
+    })
 }
 
 /// Capture the caller's primitive-counter epoch before entering Rayon. Operator
@@ -451,7 +599,10 @@ pub(crate) fn task_scope(
         let profile = emitter.context().profile_handle();
         quote!(#profile.task(|| #body))
     } else {
-        body
+        quote!(::cq_storage::profile_select! {
+            plain { #body }
+            counters { __cq_task_context.run(|| #body) }
+        })
     }
 }
 

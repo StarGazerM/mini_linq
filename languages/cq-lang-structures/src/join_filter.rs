@@ -72,8 +72,14 @@ pub fn join_filter_candidates(
                     && path.path.segments.len() == 2
                     && path.path.segments[0].ident == "cq_storage"
                     && path.path.segments[1].ident == "SortedRun");
+            let eager_hash = matches!(ty, syn::Type::Path(path)
+                if path.qself.is_none()
+                    && path.path.segments.len() == 3
+                    && path.path.segments[0].ident == "cq_storage"
+                    && path.path.segments[1].ident == "sharded"
+                    && path.path.segments[2].ident == "Index");
             levels != 1
-                || !(*ty == syn::parse_quote!(::cq_storage::HashIndex<'_, _, _>) || sorted_run)
+                || !(*ty == syn::parse_quote!(::cq_storage::HashIndex<'_, _, _>) || sorted_run || eager_hash)
         })
     {
         return Vec::new();

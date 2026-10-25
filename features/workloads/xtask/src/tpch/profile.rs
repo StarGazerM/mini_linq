@@ -131,11 +131,12 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
         let candidate = raw["candidate_insertions"]
             .as_u64()
             .ok_or("missing candidate count")?;
-        if Some(bag) != raw["rows_copied"].as_u64()
-            || Some(sets + candidate) != raw["distinct_insertions"].as_u64()
+        let copied = raw["rows_copied"].as_u64().ok_or("missing copied row count")?;
+        let distinct = raw["distinct_insertions"].as_u64().ok_or("missing distinct insertion count")?;
+        if bag != copied || sets + candidate != distinct
         {
             return Err(format!(
-                "{} / {config}: independent primitive build counts disagree",
+                "{} / {config}: independent primitive build counts disagree: bag {bag}/{copied} copied; set {sets} + candidates {candidate}/{distinct} distinct attempts",
                 q.name
             )
             .into());

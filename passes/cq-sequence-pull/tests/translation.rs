@@ -150,6 +150,24 @@ fn simple(body: TokenStream) -> Program {
 }
 
 #[test]
+fn sequence_owned_store_keeps_independent_row_accounting_live() {
+    let program = simple(quote! {
+        input = store rows r;
+        out = store canon input;
+    });
+    let analysis = contract::check(&program).unwrap();
+    for output in [
+        cq_sequence_pull::translate(&program, &analysis).unwrap(),
+        cq_sequence_pull::translate_profile(&program, &analysis).unwrap(),
+    ] {
+        let printed = output.to_token_stream().to_string();
+        assert!(printed.contains(
+            "let __cq_sequence_store_input_allocation = :: cq_storage :: retain_rows (& __cq_sequence_store_input)"
+        ), "{printed}");
+    }
+}
+
+#[test]
 fn sequential_and_tasks_share_the_sequence_answer_contract() {
     use cq_testkit::conformance::{Target, assert_conformant};
     let program = simple(quote! {

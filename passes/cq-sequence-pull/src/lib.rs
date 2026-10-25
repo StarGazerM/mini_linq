@@ -152,6 +152,9 @@ pub struct Value {
     pub result: Option<String>,
     pub depth: usize,
     pub stored: bool,
+    /// A target restricts this iterator to one partition; adapters must not
+    /// replace it with a scan of the complete host representation.
+    pub partitioned: bool,
 }
 
 impl Value {
@@ -169,6 +172,7 @@ pub struct Emitter<'a> {
     target_published: std::collections::BTreeSet<String>,
     owner: String,
     pull: bool,
+    owned_answer: bool,
 }
 
 impl<'a> Emitter<'a> {
@@ -183,6 +187,7 @@ impl<'a> Emitter<'a> {
             target_published: std::collections::BTreeSet::new(),
             owner: String::new(),
             pull: false,
+            owned_answer: false,
         }
     }
 
@@ -197,6 +202,13 @@ impl<'a> Emitter<'a> {
     /// A target hook has already emitted this store's binding and providers.
     pub fn mark_target_published(&mut self, owner: &str) {
         self.target_published.insert(owner.to_owned());
+    }
+
+    /// A target's final task buffers already contain the owned answer head.
+    /// Keep their joined iterator instead of copying into another host buffer.
+    pub fn own_task_answer(&mut self, result: &str, rows: TokenStream) -> TokenStream {
+        self.owned_answer = true;
+        self.adapters.head(result, &self.program.structures.physical.program.head, rows)
     }
 
     fn register(&mut self, name: &str) {
@@ -238,6 +250,7 @@ impl<'a> Emitter<'a> {
             result: Some(result),
             depth: 0,
             stored: false,
+            partitioned: false,
         })
     }
 
@@ -275,6 +288,7 @@ impl<'a> Emitter<'a> {
     }
 
     fn map(&mut self, name: &Ident, mut input: Value, expand: bool) -> syn::Result<Value> {
+        let partition = input.partitioned;
         let result = symbol_name(name);
         if input.result.as_ref() == Some(&result) {
             input.stored = false;
@@ -296,6 +310,7 @@ impl<'a> Emitter<'a> {
                 result: Some(result),
                 depth: usize::from(nested),
                 stored: false,
+                partitioned: partition,
             });
         }
         if self.analysis.structures.selections.contains_key(&result) {
@@ -307,14 +322,16 @@ impl<'a> Emitter<'a> {
                 result: Some(result),
                 depth: 0,
                 stored: false,
+                partitioned: partition,
             });
         }
-        if let Some(ids) = self.adapters.positions(&result)? {
+        if !partition && let Some(ids) = self.adapters.positions(&result)? {
             return Ok(Value {
                 rows: self.context().positional_rows(&result, ids),
                 result: Some(result),
                 depth: 0,
                 stored: false,
+                partitioned: false,
             });
         }
         let definition = self.context().physical[&result];
@@ -323,7 +340,7 @@ impl<'a> Emitter<'a> {
             if input.result.as_deref() != Some(&parent_name) {
                 input = self.map(parent, input, expand)?;
             }
-            let positional = self.analysis.structures.reads.contains_key(&result)
+            let positional = !partition && self.analysis.structures.reads.contains_key(&result)
                 && matches!(
                     self.context().reprs.get(&parent_name),
                     Some(Repr::Host | Repr::Positions(_) | Repr::Selection { .. })
@@ -364,6 +381,7 @@ impl<'a> Emitter<'a> {
             result: Some(result),
             depth: usize::from(nested),
             stored: false,
+            partitioned: partition,
         })
     }
 
@@ -478,6 +496,7 @@ impl<'a> Emitter<'a> {
                 result: Some(result),
                 depth: 0,
                 stored: false,
+                partitioned: false,
             });
         }
         let mut chain = None;
@@ -494,6 +513,7 @@ impl<'a> Emitter<'a> {
             result: Some(result),
             depth: 0,
             stored: false,
+            partitioned: false,
         })
     }
     fn choose<'t>(&self, arms: &'t [(Guard, Term)]) -> syn::Result<&'t Term> {
@@ -572,6 +592,7 @@ impl<'a> Emitter<'a> {
                 result: Some(result),
                 depth: 1,
                 stored: false,
+                partitioned: input.partitioned,
             });
         }
         if self
@@ -662,6 +683,7 @@ impl<'a> Emitter<'a> {
             result: Some(result),
             depth: 1,
             stored: false,
+            partitioned: input.partitioned,
         })
     }
 
@@ -700,10 +722,11 @@ impl<'a> Emitter<'a> {
             result: Some(result),
             depth: 0,
             stored: false,
+            partitioned: input.partitioned,
         })
     }
 
-    fn fold(&self, monoid: &Monoid, input: Value) -> syn::Result<Value> {
+    pub fn fold(&self, monoid: &Monoid, input: Value) -> syn::Result<Value> {
         let rows = input.rows;
         let value = match monoid {
             Monoid::Count => quote!(::core::iter::Iterator::fold(#rows, 0usize, |n, _| n + 1)),
@@ -723,6 +746,7 @@ impl<'a> Emitter<'a> {
             result: None,
             depth: 0,
             stored: false,
+            partitioned: input.partitioned,
         })
     }
 
@@ -766,13 +790,13 @@ impl<'a> Emitter<'a> {
         Ok(input)
     }
 
-    fn store(&self, mut input: Value) -> Value {
+    fn store(&self, mut input: Value, nested: bool) -> Value {
         let physical_store = input.result.as_ref().is_some_and(|result| {
             input.depth == 0
                 && self.analysis.structures.physical.modes[result]
                     != cq_lang_structures::physical::ModeKind::Pipe
         });
-        if !physical_store {
+        if nested && !physical_store {
             let rows = input.rows;
             input.rows = quote!(::core::iter::IntoIterator::into_iter(::core::iter::Iterator::collect::<::std::vec::Vec<_>>(#rows)));
         }
@@ -835,6 +859,12 @@ impl<'a> Emitter<'a> {
                 self.context_mut()
                     .statements
                     .push(syn::parse_quote!(let #id = #build;));
+                // Sequence-owned stores need the same independent primitive and
+                // capacity accounting as Physical-owned row providers.
+                let allocation = format_ident!("__cq_sequence_store_{}_allocation", name);
+                self.context_mut().statements.push(syn::parse_quote!(
+                    let #allocation = ::cq_storage::retain_rows(&#id);
+                ));
                 value.rows = quote!(::core::iter::Iterator::cloned(#id.iter()));
                 if let Some(result) = &value.result
                     && value.depth == 0
@@ -876,9 +906,11 @@ impl<'a> Emitter<'a> {
             value.result.iter().cloned().collect(),
         );
         rows = self.context().profile_input(&answer, rows);
-        if let Some(result) = value.result {
-            let head = &self.program.structures.physical.program.head;
-            rows = self.adapters.head(&result, head, rows);
+        if !self.owned_answer {
+            if let Some(result) = value.result {
+                let head = &self.program.structures.physical.program.head;
+                rows = self.adapters.head(&result, head, rows);
+            }
         }
         rows = self.context().profile_stream(&answer, rows);
         // Target interpreters eagerly join their answer. Measure preparation
@@ -897,7 +929,9 @@ impl<'a> Emitter<'a> {
         let registration = self.context().profile_registration();
         let context = self.context();
         let statements = &context.statements;
-        let rows = if self.pull {
+        let rows = if self.owned_answer {
+            rows
+        } else if self.pull {
             if context.bound {
                 quote!(::core::iter::IntoIterator::into_iter(
                     ::core::iter::Iterator::collect::<::std::vec::Vec<_>>(#rows)))
@@ -1080,7 +1114,7 @@ fn translate_with_profile(
                 emitter.canon(rows)
             })?,
             Term::Store { .. } => emitter.lift(input(), input().depth, &mut |emitter, rows| {
-                Ok(emitter.store(rows))
+                Ok(emitter.store(rows, input().depth > 0))
             })?,
             Term::Union(arms) => {
                 let fused = emitter.analysis.results.get(owner).is_some_and(|result| {
@@ -1105,6 +1139,7 @@ fn translate_with_profile(
                 term(emitter, alternative, owner, tiles, false, hook)?
             }
         };
+        value.partitioned |= child.as_ref().is_some_and(|input| input.partitioned);
         hook(node, emitter, child.as_ref(), &mut value, owner, tiles)?;
         Ok(value)
     }

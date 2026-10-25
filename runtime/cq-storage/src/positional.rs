@@ -31,6 +31,10 @@ pub trait PositionalRows: Rows {
     fn positions(self) -> impl Iterator<Item = RowId> {
         (0..self.len()).map(RowId)
     }
+    /// Borrow a contiguous range of base-relative positions without buffering.
+    fn position_range(self, range: std::ops::Range<usize>) -> impl Iterator<Item = RowId> {
+        (range.start.min(self.len())..range.end.min(self.len())).map(RowId)
+    }
     fn is_empty(self) -> bool {
         self.len() == 0
     }

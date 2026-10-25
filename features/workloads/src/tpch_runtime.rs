@@ -13,6 +13,7 @@ macro_rules! configuration {
     (default, $d:tt, { $($stages:tt)* }, { $($body:tt)* }) => {
         crate::tpch_runtime::configuration!(@named default, $d, { $($stages)* }, { $($body)* });
         crate::tpch_runtime::configuration!(@named par, $d, {
+            $($stages)*
             decompose = [::mini_linq::passes::plan_tasks];
             grade = ::mini_linq::passes::tasks;
             print = ::mini_linq::passes::translate_tasks;

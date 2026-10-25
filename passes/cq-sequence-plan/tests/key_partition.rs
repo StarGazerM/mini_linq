@@ -79,7 +79,7 @@ fn replay(source: &Program, planned: &cq_sequence_plan::Planned) {
 fn grouped_tpch_plan_prints_fixed_partition_and_replays() {
     let source = grouped(false);
     let machine = machine(Some(8));
-    let planned = decompose(&source, &machine, &catalog()).unwrap();
+    let planned = decompose_with_key_partitions(&source, &machine, &catalog(), &[policy("result", true)]).unwrap();
     let printed = planned.program.to_token_stream().to_string();
     println!("Grouped TPC-H Q1-shaped Sequence plan:\n{printed}");
     assert!(printed.contains("partition_k [returnflag , linestatus] (8)"), "{printed}");
@@ -91,14 +91,16 @@ fn grouped_tpch_plan_prints_fixed_partition_and_replays() {
 }
 
 #[test]
-fn cost_selects_parallel_collectives_and_advice_can_force_or_forbid() {
+fn unknown_cardinality_retains_serial_collectives_unless_advice_forces() {
     let source = grouped(false);
     let machine = machine(Some(8));
     let forced = decompose_with_key_partitions(&source, &machine, &catalog(), &[policy("result", true)]).unwrap();
     let forbidden = decompose_with_key_partitions(&source, &machine, &catalog(), &[policy("result", false)]).unwrap();
     assert!(forced.trace.iter().any(|a| matches!(a, Advice::KeyPartition(_))));
     assert!(!forbidden.trace.iter().any(|a| matches!(a, Advice::KeyPartition(_))));
-    assert!(cost(&forced.program, &machine).unwrap().better_than(&cost(&forbidden.program, &machine).unwrap()));
+    assert!(!cost(&forced.program, &machine).unwrap().better_than(&cost(&forbidden.program, &machine).unwrap()));
+    let automatic = decompose(&source, &machine, &catalog()).unwrap();
+    assert!(!automatic.trace.iter().any(|a| matches!(a, Advice::KeyPartition(_))));
     replay(&source, &forced);
     replay(&source, &forbidden);
 }
@@ -148,9 +150,8 @@ fn canon_partition_and_machine_width_are_explicit() {
     }
 }
 
-#[test]
-fn provider_store_retains_parts_and_records_routed_provider_type() {
-    let source: Program = syn::parse_quote! {
+fn provider_program() -> Program {
+    syn::parse_quote! {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32);
             l = pipe rename L@0 {a -> a};
@@ -164,7 +165,12 @@ fn provider_store_retains_parts_and_records_routed_provider_type() {
             input = store rows l;
             result = store canon flatten lookup r [a] input;
         }
-    };
+    }
+}
+
+#[test]
+fn provider_store_retains_parts_and_records_routed_provider_type() {
+    let source = provider_program();
     let planned = decompose_with_key_partitions(&source, &machine(Some(4)), &catalog(), &[policy("provider", true)]).unwrap();
     let provider = planned.program.sequence.definitions.iter().find(|d| d.name == "provider").unwrap();
     assert!(matches!(&provider.term, Term::Store { inner, .. } if matches!(inner.as_ref(), Term::PartitionK { parts: 4, .. })));
@@ -172,10 +178,26 @@ fn provider_store_retains_parts_and_records_routed_provider_type() {
     replay(&source, &planned);
     assert!(key_partition(&source, quote!(provider, staged, [b], 4)).is_err());
     let automatic = decompose(&source, &machine(Some(4)), &catalog()).unwrap();
-    assert!(automatic.trace.iter().any(|a| matches!(a, Advice::KeyPartition(k) if k.name == "provider")),
-        "automatic={} cost={:?}; forced={} cost={:?}",
-        automatic.program.to_token_stream(), cost(&automatic.program, &machine(Some(4))).unwrap(),
-        planned.program.to_token_stream(), cost(&planned.program, &machine(Some(4))).unwrap());
+    assert!(!automatic.trace.iter().any(|a| matches!(a, Advice::KeyPartition(k) if k.name == "provider")));
+}
+
+#[test]
+fn routing_setup_keeps_small_providers_serial_and_amortizes_large_builds() {
+    for rows in [0usize, 1, 4, 4096] {
+        let mut source = provider_program();
+        source.evidence = syn::parse2(quote!(evidence { count R = #rows; count L = 1; })).unwrap();
+        let machine = machine(Some(4));
+        let automatic = decompose(&source, &machine, &catalog()).unwrap();
+        assert_eq!(
+            automatic.trace.iter().any(|a| matches!(a, Advice::KeyPartition(k) if k.name == "provider")),
+            rows == 4096,
+            "rows={rows}: {}", automatic.program.to_token_stream(),
+        );
+        replay(&source, &automatic);
+        if rows <= 4 {
+            assert!(!automatic.program.to_token_stream().to_string().contains("Sharded < Index >"));
+        }
+    }
 }
 
 #[test]
@@ -206,8 +228,8 @@ fn global_groups_route_full_valuations_and_merge_to_one_row() {
     let facts = cq_lang_sequence::check_grading(&forced.program, &machine).unwrap();
     assert_eq!(facts.shapes["result"], vec![cq_lang_sequence::Len::Lit(1)]);
     assert_eq!(facts.lengths["result"], cq_lang_sequence::Len::Lit(1));
-    assert!(cost(&forced.program, &machine).unwrap().better_than(&cost(&forbidden.program, &machine).unwrap()));
-    assert!(decompose(&source, &machine, &catalog()).unwrap().trace.iter().any(|a| matches!(a, Advice::KeyPartition(_))));
+    assert!(!cost(&forced.program, &machine).unwrap().better_than(&cost(&forbidden.program, &machine).unwrap()));
+    assert!(!decompose(&source, &machine, &catalog()).unwrap().trace.iter().any(|a| matches!(a, Advice::KeyPartition(_))));
     assert!(!forbidden.trace.iter().any(|a| matches!(a, Advice::KeyPartition(_))));
     println!("Global TPC-H-shaped aggregate plan:\n{}", forced.program.to_token_stream());
     replay(&source, &forced);

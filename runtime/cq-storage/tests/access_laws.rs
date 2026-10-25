@@ -204,3 +204,21 @@ fn codec_full_width_overflow_and_nonclone_keys_are_exact() {
     let empty = AdaptiveKeySet::<i64, _, 64>::from_keys([], I64Codec);
     assert_eq!(empty.retained_bytes(), 0);
 }
+
+#[test]
+fn immutable_adaptive_forms_support_shared_task_reads() {
+    use cq_storage::{AdaptiveKeySet, ExactMembership, I64Codec, NoDense};
+    let dense = AdaptiveKeySet::<_, _, 64>::from_keys([1i64, 3], I64Codec);
+    let hashed = AdaptiveKeySet::<_, _, 64>::from_keys([1i64, 3], NoDense);
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..4).map(|key| {
+            let dense = &dense;
+            let hashed = &hashed;
+            scope.spawn(move || (dense.contains(&key), hashed.contains(&key)))
+        }).collect();
+        for (key, worker) in workers.into_iter().enumerate() {
+            let expected = key == 1 || key == 3;
+            assert_eq!(worker.join().unwrap(), (expected, expected));
+        }
+    });
+}

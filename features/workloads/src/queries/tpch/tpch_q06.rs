@@ -12,6 +12,7 @@ pub const EXPORTS: &[(&str, &str)] = &[(
 )];
 pub const CONFIGS: &[&str] = &[
     "default",
+    "par",
     "no-reduce",
     "generic-smallest",
     "staged",
@@ -105,6 +106,7 @@ crate::tpch_runtime::configuration!(staged, $,
 pub fn run(data: &Data, config: &str) -> Vec<Answer> {
     match config {
         "default" => default::execute(data),
+        "par" => par::execute(data),
         "staged" => staged::execute(data),
         "no-reduce" => no_reduce::execute(data),
         "generic-smallest" => generic_smallest::execute(data),

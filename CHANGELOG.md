@@ -7,6 +7,15 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Preserve authored relational order and selection stages in the CPU Tasks
+  configuration. Contiguous host tiles borrow input rows (positional tiles
+  enumerate base-relative ranges); named stream adapters remain inside their
+  task through publication, with one buffer per scheduler task. Terminal task
+  buffers retain their joined answer iterator instead of making another host
+  copy. Task profiling accounts for retained Sequence buffers and native
+  canonical sets. PL-Cost charges key routing and bucket publication before
+  selecting routed providers; eager indexes keep singleton payloads inline,
+  and adaptive membership's immutable fallback keys support shared task reads.
 - Legacy GPU Datalog workspace removed.
 - Retire Datalog-side hooks kept only for the (already broken) legacy GPU
   Datalog bridge: `KeyRepresentation`, `LayoutRealization`, device-owned
