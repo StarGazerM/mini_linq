@@ -973,6 +973,31 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
     Ok(())
 }
 
+/// Compare an entry's semantic layout while allowing its storage type to change.
+/// Host readers and all non-storage syntax remain exact, including opaque tokens.
+pub fn storage_layout_eq(left: &Entry, right: &Entry) -> bool {
+    if left.name != right.name
+        || std::mem::discriminant(&left.structure) != std::mem::discriminant(&right.structure) {
+        return false;
+    }
+    let mut normalized = left.clone();
+    match (&mut normalized.structure, &right.structure) {
+        (Structure::Built { keyed: left, .. }, Structure::Built { keyed: right, .. }) =>
+            left.ty = right.ty.clone(),
+        (Structure::Dedup { ty: left, .. }, Structure::Dedup { ty: right, .. })
+        | (Structure::HeadDedup { ty: left, .. }, Structure::HeadDedup { ty: right, .. })
+        | (Structure::Rows { ty: left, .. }, Structure::Rows { ty: right, .. })
+        | (Structure::Selection { ty: left, .. }, Structure::Selection { ty: right, .. })
+        | (Structure::KeySet { ty: left, .. }, Structure::KeySet { ty: right, .. }) =>
+            *left = right.clone(),
+        (Structure::JoinFilter { filter: left, .. }, Structure::JoinFilter { filter: right, .. }) =>
+            left.ty = right.ty.clone(),
+        _ => {}
+    }
+    normalized == *right
+        && normalized.to_token_stream().to_string() == right.to_token_stream().to_string()
+}
+
 /// Check catalog retention across the Physical/Structures boundary.
 ///
 /// Unlike an ordinary Structures rewrite, this permits checked host renames
@@ -1001,24 +1026,7 @@ pub fn check_retention_rewrite(source: &Program, target: &Program) -> syn::Resul
         return error(target, "catalog retention must preserve all non-mode Physical syntax exactly");
     }
     physical::check_rewrite(&source.physical, &target.physical)?;
-    let same_entry = |left: &Entry, right: &Entry| {
-        let mut normalized = left.clone();
-        match (&mut normalized.structure, &right.structure) {
-            (Structure::Built { keyed: left, .. }, Structure::Built { keyed: right, .. }) =>
-                left.ty = right.ty.clone(),
-            (Structure::Dedup { ty: left, .. }, Structure::Dedup { ty: right, .. })
-            | (Structure::HeadDedup { ty: left, .. }, Structure::HeadDedup { ty: right, .. })
-            | (Structure::Rows { ty: left, .. }, Structure::Rows { ty: right, .. })
-            | (Structure::Selection { ty: left, .. }, Structure::Selection { ty: right, .. })
-            | (Structure::KeySet { ty: left, .. }, Structure::KeySet { ty: right, .. }) =>
-                *left = right.clone(),
-            (Structure::JoinFilter { filter: left, .. }, Structure::JoinFilter { filter: right, .. }) =>
-                left.ty = right.ty.clone(),
-            _ => {}
-        }
-        normalized == *right
-            && normalized.to_token_stream().to_string() == right.to_token_stream().to_string()
-    };
+    let same_entry = storage_layout_eq;
     for entry in &source.structures.entries {
         if target.structures.entries.iter().any(|other| same_entry(entry, other)) {
             continue;

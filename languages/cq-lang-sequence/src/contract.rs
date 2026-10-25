@@ -1323,7 +1323,11 @@ fn check_rewrite_in(source: &Program, target: &Program, context: &Checker) -> sy
             {
                 return true;
             }
-            target.structures.structures.entries.contains(entry)
+            // Catalog retyping and relational reexpression may occur in the
+            // same composed pass. Compare the surviving layout, not the
+            // selected storage implementation, while keeping readers exact.
+            target.structures.structures.entries.iter()
+                .any(|target| cq_lang_structures::storage_layout_eq(entry, target))
         });
     // Catalog selection may retain host renames and replace their keyed
     // fallbacks, while preserving opaque syntax and the original scans.
