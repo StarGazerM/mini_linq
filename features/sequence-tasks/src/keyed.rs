@@ -29,11 +29,12 @@ pub(crate) fn canon(emitter: &mut Emitter<'_>, input: &Value) -> syn::Result<pro
     local.rows = quote!(__cq_part.into_iter());
     local.depth = 0;
     let canonical = emitter.canon(local)?.rows;
+    let canonical = quote!((#canonical).collect::<::std::vec::Vec<_>>());
     Ok(quote!({
         let __cq_parts = (#rows).map(|__cq_part| __cq_part.collect::<::std::vec::Vec<_>>())
             .collect::<::std::vec::Vec<_>>();
         ::mini_linq::__tasks::combine::map_parts(__cq_parts, |__cq_part| {
-            (#canonical).collect::<::std::vec::Vec<_>>()
+            #canonical
         }).into_iter().map(::std::vec::Vec::into_iter)
     }))
 }
@@ -46,11 +47,12 @@ pub(crate) fn group(
     local.rows = quote!(__cq_part.into_iter());
     local.depth = 0;
     let grouped = emitter.group(name, local)?.rows;
+    let grouped = quote!((#grouped).collect::<::std::vec::Vec<_>>());
     Ok(quote!({
         let __cq_parts = (#rows).map(|__cq_part| __cq_part.collect::<::std::vec::Vec<_>>())
             .collect::<::std::vec::Vec<_>>();
         ::mini_linq::__tasks::combine::map_parts(__cq_parts, |__cq_part| {
-            (#grouped).collect::<::std::vec::Vec<_>>()
+            #grouped
         }).into_iter().map(::std::vec::Vec::into_iter)
     }))
 }
@@ -153,16 +155,24 @@ pub(crate) fn global(
         (quote!((#rows).map(|__cq_part| __cq_part.collect::<::std::vec::Vec<_>>())
             .collect::<::std::vec::Vec<_>>()), quote!())
     };
-    let grouped = emitter.group(name, local)?.rows;
-    Ok(quote!(::core::iter::once(
+    let grouped = emitter.group_partial(name, local)?.rows;
+    let grouped = quote!({
+        #binding
+        (#grouped).next().expect("global aggregate always has an identity row")
+    });
+    let merge = quote!(
         ::mini_linq::__tasks::combine::par_group_global_with(
             #parts,
-            |__cq_part| {
-                #binding
-                (#grouped).next().expect("global aggregate always has an identity row")
-            },
+            |__cq_part| #grouped,
             || #initial,
             |__cq_state, __cq_partial| { #(#merges)* },
         )
-    )))
+    );
+    let merge = if let Some(index) = emitter.context().profile_index(&result) {
+        let profile = emitter.context().profile_handle();
+        quote!(#profile.scope(#index, || #merge))
+    } else {
+        merge
+    };
+    Ok(emitter.context().profile_output(&result, quote!(::core::iter::once(#merge))))
 }

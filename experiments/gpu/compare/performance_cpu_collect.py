@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Collect existing CPU profiles or isolated, exact plain-only par t1/t24 runs.
+"""Collect retained CPU profiles or isolated exact parallel plain/profile pairs.
 
 Parallel protocol (run serially): all --par --threads 1|24 --sf 0.1|1|10
 --cap-seconds 100. SF0.1 verifies one untimed answer; SF1/SF10 use one warmup
-and five timed runs. Artifacts use performance_cpu_par_t{threads}_sf{sf}
-and performance_cpu_raw/par/t{threads}/sf{sf}; existing CPU data is untouched.
+and five runs per timed mode, reduced to three above ten seconds.
+--default-spotcheck verifies five SF0.1 queries in separate artifacts.
 """
 import argparse
 import csv
@@ -29,6 +29,7 @@ SLOW_SECONDS = 60
 PROFILE_WINNERS_ONLY = False
 CONFIGS = ['default', 'le', 'le_runs', 'advised']
 PAR = False
+DEFAULT_SPOTCHECK = False
 THREADS = None
 DATABASE = None
 WORK = ROOT / 'features/workloads'
@@ -41,24 +42,38 @@ RAW = OUT / 'performance_cpu_raw'
 ENV = dict(os.environ, CARGO_BUILD_JOBS='1', CARGO_TARGET_DIR=str(CACHE / 'target'))
 
 
+def isolated():
+    return PAR or DEFAULT_SPOTCHECK
+
+
+def isolated_configuration():
+    return 'par' if PAR else 'default'
+
+
+def verification_only():
+    return isolated() and SF == 0.1
+
+
 def save(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2) + '\n')
 
 
 def artifact_name(kind=''):
-    prefix = f'performance_cpu_par_t{THREADS}' if PAR else 'performance_cpu'
+    prefix = (f'performance_cpu_par_t{THREADS}' if PAR else
+              f'performance_cpu_default_spotcheck_t{THREADS}' if DEFAULT_SPOTCHECK else 'performance_cpu')
     return f'{prefix}{("_" + kind) if kind else ""}_sf{SF}'
 
 
 def crate_directory(name):
-    return (CACHE_ROOT if PAR else CACHE) / 'crates' / name
+    return (CACHE_ROOT if isolated() else CACHE) / 'crates' / name
 
 
 @cache
 def compiler_fingerprint():
     """Hash compiler/runtime inputs once per invocation, including new sources."""
-    paths = [ROOT / 'Cargo.toml', ROOT / 'Cargo.lock', ROOT / 'rust-toolchain.toml']
+    paths = [ROOT / name for name in ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'rust-toolchain']
+             if (ROOT / name).is_file()]
     for root in ['facade', 'features', 'languages', 'passes', 'runtime', 'testkit', '.cargo']:
         for directory, children, files in os.walk(ROOT / root):
             children[:] = sorted(child for child in children if child not in ['target', '.git'])
@@ -73,11 +88,11 @@ def compiler_fingerprint():
 
 
 def validate_raw_stamp(name, stamp, required=False):
-    if not PAR:
+    if not isolated():
         return
     path = RAW / name / 'source_stamp.json'
     recorded = json.loads(path.read_text()) if path.exists() else None
-    if (required or (RAW / name / 'par').exists()) and recorded != stamp:
+    if (required or (RAW / name / isolated_configuration()).exists()) and recorded != stamp:
         raise RuntimeError(f'{RAW / name}: parallel artifacts have missing/stale source fingerprints; archive this query directory before recollecting')
 
 
@@ -97,20 +112,19 @@ def build():
         'cq-ext-correlated': 'features/extensions/cq-ext-correlated',
     }
     CACHE.mkdir(parents=True, exist_ok=True)
-    log = OUT / (artifact_name('build') + '.log') if PAR else OUT / 'performance_cpu_build.log'
-    workers = [(None, 'timing-worker')]
-    if not PAR:
-        workers += [('counters', 'counting-worker'), ('profile', 'profile-worker')]
+    log = OUT / (artifact_name('build') + '.log') if isolated() else OUT / 'performance_cpu_build.log'
+    workers = [(None, 'timing-worker'), ('counters', 'counting-worker'), ('profile', 'profile-worker')]
     for name in NAMES:
-        stamp = build_stamp(name) if PAR else None
+        stamp = build_stamp(name) if isolated() else None
         validate_raw_stamp(name, stamp)
-        if all((RAW / name / c / ('plain.json' if PAR else 'profile.json')).exists() or (RAW / name / c / 'status.json').exists() for c in CONFIGS):
+        terminal = 'plain.json' if verification_only() else 'profile.json'
+        if all((RAW / name / c / terminal).exists() or (RAW / name / c / 'status.json').exists() for c in CONFIGS):
             continue
         if stamp is None:
             stamp = build_stamp(name)
         crate = crate_directory(name)
         other = CACHE_ROOT / f'sf{10 if SF == 1 else 1}' / 'crates' / name
-        if not PAR and not (crate / 'build_stamp.json').exists() and (other / 'build_stamp.json').exists() and json.loads((other / 'build_stamp.json').read_text()) == stamp:
+        if not isolated() and not (crate / 'build_stamp.json').exists() and (other / 'build_stamp.json').exists() and json.loads((other / 'build_stamp.json').read_text()) == stamp:
             shutil.copytree(other, crate, dirs_exist_ok=True)
         if (crate / 'build_stamp.json').exists() and json.loads((crate / 'build_stamp.json').read_text()) == stamp and all(
             (crate / binary).exists() for _, binary in workers
@@ -118,7 +132,7 @@ def build():
             description = json.loads(subprocess.check_output([crate / 'timing-worker', 'describe']))
             assert set(CONFIGS) <= set(description['configs']), (name, description['configs'])
             save(RAW / name / 'description.json', description)
-            if PAR:
+            if isolated():
                 save(RAW / name / 'source_stamp.json', stamp)
             continue
         (crate / 'src').mkdir(parents=True, exist_ok=True)
@@ -146,7 +160,7 @@ def build():
         assert set(CONFIGS) <= set(description['configs']), (name, description['configs'])
         save(RAW / name / 'description.json', description)
         save(crate / 'build_stamp.json', stamp)
-        if PAR:
+        if isolated():
             save(RAW / name / 'source_stamp.json', stamp)
         print('BUILT', name, description['configs'], flush=True)
 
@@ -156,7 +170,7 @@ def build_stamp(name):
              WORK / 'xtask/src/tpch/comparison.rs', CACHE_ROOT / 'adaptive-worker.rs',
              WORK / 'src/queries/retail/tpch' / (name + '.rs'), Path(__file__)]
     stamp = {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
-    if PAR:
+    if isolated():
         stamp['compiler_runtime_sha256'] = compiler_fingerprint()
     return stamp
 
@@ -167,7 +181,7 @@ def prepare():
     db = duckdb.connect(database, read_only=True)
     db.execute('SET threads=1')
     for name in NAMES:
-        if PAR:
+        if isolated():
             validate_raw_stamp(name, build_stamp(name), required=True)
         raw = RAW / name
         description = json.loads((raw / 'description.json').read_text())
@@ -197,10 +211,11 @@ def prepare():
         'rustc': subprocess.check_output(['rustc', '--version'], text=True).strip(),
         'machine': os.uname()._asdict() if hasattr(os.uname(), '_asdict') else list(os.uname()),
         'affinity': sorted(os.sched_getaffinity(0)), 'runs': RUNS, 'cap_seconds': CAP_SECONDS, 'query_names': NAMES,
-        **({'configuration': 'par', 'rayon_num_threads': THREADS, 'plain_only': True,
-            'verification_only': SF == 0.1, 'runs': 0 if SF == 0.1 else RUNS} if PAR else {}),
+        **({'configuration': isolated_configuration(), 'rayon_num_threads': THREADS,
+            'plain_only': verification_only(), 'slow_seconds': SLOW_SECONDS,
+            'verification_only': verification_only(), 'runs': 0 if verification_only() else RUNS} if isolated() else {}),
         **({'compiler_runtime_sha256': compiler_fingerprint(),
-            'git_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()} if PAR else {}),
+            'git_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()} if isolated() else {}),
         'source_sha256': {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in [SOURCE, WORK / 'src/tpch_runtime.rs', WORK / 'xtask/src/tpch/worker.rs'] + [WORK / 'src/queries/retail/tpch' / (n + '.rs') for n in NAMES]},
     })
 
@@ -208,34 +223,35 @@ def prepare():
 def adaptive():
     """Only alter generated measurement controls; preserve query and planner sources."""
     source = (WORK / 'xtask/src/tpch/worker.rs').read_text()
-    if PAR:
-        worker = CACHE_ROOT / 'adaptive-worker.rs'
-        worker.parent.mkdir(parents=True, exist_ok=True)
-        worker.write_text(source)
-        save(OUT / (artifact_name('adaptive') + '.json'), {
-            'generated_worker_sha256': hashlib.sha256(source.encode()).hexdigest(),
-            'policy': 'One exact untimed execution at SF0.1; one exact warmup and five exact plain samples at SF1/SF10; 100-second process wall cap per query.',
-            'changes': 'None. Unmodified authored worker, without counters or profile features.',
-        })
-        return
     source = source.replace('    let warm = query::run(&data, &args[1]);',
-                            '    let warm_started = Instant::now();\n    let warm = query::run(&data, &args[1]);\n    let runs = if runs > 0 && warm_started.elapsed().as_secs_f64() > 60.0 { 3 } else { runs };')
+                            '    let warm_started = Instant::now();\n    let warm = query::run(&data, &args[1]);\n    let warm_ms = warm_started.elapsed().as_secs_f64() * 1000.0;\n    let runs = if runs > 0 && warm_ms > 60000.0 { 3 } else { runs };')
     source = source.replace('    times.sort_by(f64::total_cmp);',
-                            '    let runs = times.len();\n    times.sort_by(f64::total_cmp);')
+                            '    if times.iter().any(|&ms| ms > 60000.0) { times.truncate(3); }\n    let runs = times.len();\n    times.sort_by(f64::total_cmp);')
     source = source.replace('    for _ in 0..runs {\n        let start = Instant::now();',
                             '    for _ in 0..runs {\n        if times.len() >= 3 && times.iter().any(|&ms| ms > 60000.0) { break; }\n        let start = Instant::now();')
     source = source.replace('    for _ in 0..runs {\n        counters::reset();',
                             '    for _ in 0..runs {\n        if samples.len() >= 3 && samples.iter().any(|s: &(f64, serde_json::Value)| s.0 > 60000.0) { break; }\n        counters::reset();')
     source = source.replace('    samples.sort_by(|a, b| a.0.total_cmp(&b.0));',
-                            '    let runs = samples.len();\n    samples.sort_by(|a, b| a.0.total_cmp(&b.0));')
+                            '    if samples.iter().any(|s| s.0 > 60000.0) { samples.truncate(3); }\n    let runs = samples.len();\n    samples.sort_by(|a, b| a.0.total_cmp(&b.0));')
     source = source.replace('> 60.0', f'> {float(SLOW_SECONDS)}').replace('> 60000.0', f'> {float(SLOW_SECONDS * 1000)}')
+    if isolated():
+        # Tasks buffers/canonicalization do not map one-to-one onto the
+        # sequential bag/set insertion categories. Keep their actual counters,
+        # but do not claim that inapplicable primitive agreement was verified.
+        source = source.replace(
+            '        if counters::STORAGE_COUNTERS_ENABLED\n',
+            '        let primitive_build_counts_verifiable = counters::STORAGE_COUNTERS_ENABLED\n'
+            '            && !records.iter().any(|r| r.label.kind == "TASKS_BUILD_WALL");\n'
+            '        if primitive_build_counts_verifiable\n')
+        source = source.replace('"build_rows_verified":counters::STORAGE_COUNTERS_ENABLED',
+                                '"build_rows_verified":primitive_build_counts_verifiable')
     worker = CACHE_ROOT / 'adaptive-worker.rs'
     worker.parent.mkdir(parents=True, exist_ok=True)
     worker.write_text(source)
     save(OUT / (artifact_name('adaptive') + '.json'), {
         'generated_worker_sha256': hashlib.sha256(source.encode()).hexdigest(),
-        'policy': f'{CAP_SECONDS}-second combined wall budget per configuration; warm query >{SLOW_SECONDS}s selects three timed runs, otherwise stop after three when a timed sample exceeds {SLOW_SECONDS}s. No plain-run pruning. Profile winners only: {PROFILE_WINNERS_ONLY}. Completed measurements are retained.',
-        'changes': 'Only warm clock, sample count, loop stopping and effective median index in generated worker. Authored worker, query sources and compiler/plans unchanged.',
+        'policy': f'{CAP_SECONDS}-second combined wall budget per configuration; SF0.1 is untimed exactness only. Otherwise one exact warmup per mode and five timed runs, reduced to the first three when any warm/timed query exceeds {SLOW_SECONDS}s. Profile winners only: {PROFILE_WINNERS_ONLY}. Completed measurements are retained.',
+        'changes': 'Generated warm clock, adaptive sample count, loop stopping and effective median index. If a fourth/fifth sample triggers reduction, retain the first three rather than an even sample count. Isolated workers retain actual Tasks primitive counters but mark sequential bag/set agreement inapplicable; exact answers, counted operator graph and root wall checks remain mandatory. Authored worker, query sources and plans unchanged.',
     })
 
 
@@ -243,7 +259,7 @@ def measure():
     for name in NAMES:
         raw = RAW / name
         crate = crate_directory(name)
-        if PAR:
+        if isolated():
             stamp = build_stamp(name)
             validate_raw_stamp(name, stamp, required=True)
             if json.loads((crate / 'build_stamp.json').read_text()) != stamp:
@@ -252,15 +268,17 @@ def measure():
         def run_modes(config, modes):
             directory = raw / config
             directory.mkdir(parents=True, exist_ok=True)
-            if (directory / ('plain.json' if PAR else 'profile.json')).exists() or (directory / 'status.json').exists():
+            terminal = 'plain.json' if verification_only() else 'profile.json'
+            if (directory / terminal).exists() or (directory / 'status.json').exists():
                 return
             budget_path = directory / 'budget.json'
             budget = json.loads(budget_path.read_text()) if budget_path.exists() else {
                 'wall_seconds': 0, 'cap_seconds': CAP_SECONDS,
                 'slow_seconds': SLOW_SECONDS, 'profile_winners_only': PROFILE_WINNERS_ONLY,
                 'retained_plain_before_policy_change': (directory / 'plain.json').exists(),
-                **({'configuration': 'par', 'rayon_num_threads': THREADS, 'plain_only': True,
-                    'verification_only': SF == 0.1, 'runs': 0 if SF == 0.1 else RUNS} if PAR else {}),
+                **({'configuration': isolated_configuration(), 'rayon_num_threads': THREADS,
+                    'plain_only': verification_only(), 'verification_only': verification_only(),
+                    'runs': 0 if verification_only() else RUNS} if isolated() else {}),
             }
             for kind, binary, runs in modes:
                 if (directory / (kind + '.json')).exists():
@@ -279,11 +297,11 @@ def measure():
                     save(budget_path, budget)
             print('MEASURED', SF, name, config, [m[0] for m in modes], flush=True)
 
-        plain = [('plain', 'timing-worker', 0 if PAR and SF == 0.1 else RUNS)]
-        if PAR:
-            run_modes('par', plain)
-            continue
+        plain = [('plain', 'timing-worker', 0 if verification_only() else RUNS)]
         profile = [('counts', 'counting-worker', 0), ('profile', 'profile-worker', RUNS)]
+        if isolated():
+            run_modes(isolated_configuration(), plain if verification_only() else plain + profile)
+            continue
         if not PROFILE_WINNERS_ONLY:
             for config in CONFIGS:
                 run_modes(config, plain + profile)
@@ -301,34 +319,57 @@ def measure():
                 save(raw / config / 'status.json', {'status': 'plain_only_not_selected', 'correctness': 'ok', 'reason': 'Profile omitted by user-authorized column-winner policy; all plain candidates measured.'})
 
 
-def consolidate_par():
+def consolidate_isolated():
     rows = []
-    for name in CATALOG_NAMES:
-        if (RAW / name / 'par').exists():
+    config = isolated_configuration()
+    for name in CATALOG_NAMES if PAR else NAMES:
+        directory = RAW / name / config
+        if directory.exists():
             validate_raw_stamp(name, build_stamp(name), required=True)
-        directory = RAW / name / 'par'
-        path = directory / 'plain.json'
-        plain = json.loads(path.read_text()) if path.exists() else None
+        metrics = {kind: json.loads((directory / (kind + '.json')).read_text())
+                   if (directory / (kind + '.json')).exists() else None
+                   for kind in ['plain', 'counts', 'profile']}
+        plain, counts, profile = [metrics[k] for k in ['plain', 'counts', 'profile']]
         path = directory / 'status.json'
         status = json.loads(path.read_text()) if path.exists() else {
-            'status': 'complete' if plain else 'missing',
+            'status': 'complete' if plain and (verification_only() or profile) else 'missing',
         }
         if plain:
             assert not plain['instrumented']
-            if SF == 0.1:
+            if verification_only():
                 assert plain['verified']
             else:
-                assert len(plain['samples_ms']) == RUNS
+                assert len(plain['samples_ms']) in [3, 5]
+        build = None
+        if profile:
+            assert plain and counts and counts['verified'] and profile['verified']
+            assert len(profile['samples_ms']) in [3, 5]
+            assert counts['operator_rows'] == profile['operator_rows']
+            assert profile['top_level_clock_verified']
+            match = re.search(r'^TASKS_BUILD_WALL_TOTAL t=([0-9.]+)ms$', profile['tree'], re.MULTILINE)
+            assert match, (name, 'missing measured Tasks build interval union')
+            build = float(match[1])
+            assert 0 <= build <= profile['median_ms'], (name, build, profile['median_ms'])
         path = directory / 'budget.json'
         rows.append({
-            'sf': SF, 'query': name, 'configuration': 'par', 'threads': THREADS,
+            'sf': SF, 'query': name, 'configuration': config, 'threads': THREADS,
             'status': status['status'], 'status_details': status,
             'correctness': 'ok' if plain else 'unavailable',
-            'verification_only': SF == 0.1,
+            'verification_only': verification_only(),
             'runs': len(plain.get('samples_ms', [])) if plain else 0,
+            'profile_runs': len(profile['samples_ms']) if profile else 0,
             'answer_rows': plain['answer_rows'] if plain else None,
             'uninstrumented_total_median_ms': plain.get('median_ms') if plain else None,
             'uninstrumented_samples_ms': plain.get('samples_ms', []) if plain else [],
+            'profile_total_median_ms': profile['median_ms'] if profile else None,
+            'profile_build_at_median_total_ms': build,
+            'profile_query_residual_at_median_total_ms': profile['median_ms'] - build if profile else None,
+            'profile_samples_ms': profile['samples_ms'] if profile else [],
+            'profile_overhead_percent': 100 * (profile['median_ms'] / plain['median_ms'] - 1) if profile and plain['median_ms'] > 0 else None,
+            'profile_operator_graph_verified': True if profile else None,
+            'profile_top_level_clock_verified': profile['top_level_clock_verified'] if profile else None,
+            'primitive_build_counts_verified': profile['build_rows_verified'] if profile else None,
+            'build_scope_kinds': ['TASKS_BUILD_WALL'] if profile else [],
             'load_ms': plain.get('load_ms') if plain else None,
             'zone_build_ms': plain.get('zone_build_ms') if plain else None,
             'peak_rss_kib': plain.get('peak_rss_kib') if plain else None,
@@ -336,30 +377,34 @@ def consolidate_par():
             'raw_directory': str(directory.relative_to(ROOT)),
         })
     save(OUT / (artifact_name() + '.json'), {
-        'schema_version': 1, 'sf': SF, 'configuration': 'par', 'threads': THREADS,
+        'schema_version': 2, 'sf': SF, 'configuration': config, 'threads': THREADS,
         'compiler_runtime_sha256': compiler_fingerprint(),
         'methodology': {
-            'scope': 'All 27 catalog queries; fixed par configuration; no selection or instrumented modes.',
-            'invocations': 'One untimed exact execution at SF0.1; one warmup plus five timed runs at SF1/SF10.',
-            'cap_seconds': CAP_SECONDS, 'rayon_num_threads': THREADS,
+            'scope': 'All 27 catalog queries; fixed par configuration, no plan selection.' if PAR else 'Five isolated untimed default exactness spotchecks.',
+            'invocations': 'One untimed exact execution at SF0.1. SF1/SF10: one warmup and five plain samples; independent untimed counts; one warmup and five profile samples. Any warm/timed execution above ten seconds reduces that mode to its first three samples.',
+            'cap_seconds': CAP_SECONDS, 'slow_seconds': SLOW_SECONDS, 'rayon_num_threads': THREADS,
             'correctness': 'Every warm and timed result matches the authored DuckDB SQL as a normalized exact set; DECIMAL trailing-zero normalization only.',
             'plain_boundary': 'query::run including query-local construction; excludes loading, canonicalization, comparison and final answer destruction.',
-            'timeout': 'Process wall budget includes loading, warmup, timed runs and exact checks; never a numeric query timing.',
+            'profile_phase_labels': {'profile_build_at_median_total_ms': 'setup+build', 'profile_query_residual_at_median_total_ms': 'final evaluation'},
+            'profile_boundary': 'Setup+build and final evaluation come from the same median-total profile execution, never from plain total. TASKS_BUILD_WALL_TOTAL measures the wall-time union of setup/publication intervals across all Tasks programs in that execution; nested/concurrent intervals count once. Setup+build includes upstream scans, routing and joins needed to publish stores. Final evaluation is profile total minus that union, including boundary/teardown residual. Per-program TASKS_QUERY_WALL spans remain raw diagnostics, not an additive split. Uninstrumented whole-query totals are primary for performance comparisons.',
+            'limitations': 'Task-local/lazy construction during final evaluation remains there unless it enters an explicit build interval. Ordinary inclusive operator task spans may overlap and exceed root wall time; they are never summed into this split. Parallel setup+build is not identical to default/LE/advised exclusive build (BUILD_EXCLUSIVE_TOTAL) and is not exclusive index insertion. Sequential primitive bag/set agreement is inapplicable to Tasks buffers/canonicalization and is marked unverified; actual counters, exact answers and independent counted operator graph checks are retained.',
+            'timeout': 'Combined configuration wall budget includes loading, warmup, timed runs and exact checks across plain/counts/profile; never a numeric query timing. Completed exact plain metrics survive later counting/profile timeout; missing phases remain null.',
         },
         'rows': rows,
     })
-    columns = [k for k in rows[0] if k not in ['status_details', 'measurement_policy', 'uninstrumented_samples_ms']]
+    columns = [k for k in rows[0] if k not in ['status_details', 'measurement_policy'] and not k.endswith('_samples_ms')]
     with (OUT / (artifact_name() + '.tsv')).open('w') as stream:
         writer = csv.DictWriter(stream, fieldnames=columns, delimiter='\t', extrasaction='ignore')
         writer.writeheader()
         writer.writerows(rows)
     print(json.dumps({'sf': SF, 'threads': THREADS, 'queries': len(rows),
-                      'exact_complete': sum(r['correctness'] == 'ok' for r in rows)}))
+                      'exact_complete': sum(r['correctness'] == 'ok' for r in rows),
+                      'profile_complete': sum(r['profile_runs'] > 0 for r in rows)}))
 
 
 def consolidate():
-    if PAR:
-        consolidate_par()
+    if isolated():
+        consolidate_isolated()
         return
     planner = {
         'default': 'written_coarse', 'no-reduce': 'written_coarse_no_reduce',
@@ -457,11 +502,11 @@ def consolidate():
 
 def cleanup():
     removed = []
-    answer_paths = (path for name in NAMES for path in (RAW / name).rglob('*.answers.json')) if PAR else RAW.rglob('*.answers.json')
+    answer_paths = (path for name in NAMES for path in (RAW / name).rglob('*.answers.json')) if isolated() else RAW.rglob('*.answers.json')
     for path in answer_paths:
         removed.append(str(path.relative_to(ROOT)))
         path.unlink()
-    oracle_paths = [RAW / name / 'oracle.json' for name in NAMES] if PAR else RAW.glob('*/oracle.json')
+    oracle_paths = [RAW / name / 'oracle.json' for name in NAMES] if isolated() else RAW.glob('*/oracle.json')
     for path in oracle_paths:
         if not path.exists():
             continue
@@ -479,42 +524,55 @@ if __name__ == '__main__':
     parser.add_argument('--sf', choices=['0.1', '1', '10'], required=True)
     parser.add_argument('--runs', type=int, choices=[5], default=5)
     parser.add_argument('--cap-seconds', type=int, default=None)
-    parser.add_argument('--slow-seconds', type=int, default=60)
+    parser.add_argument('--slow-seconds', type=int, default=None)
     parser.add_argument('--profile-winners-only', action='store_true')
-    parser.add_argument('--par', action='store_true', help='Fixed par config, plain-only, isolated artifacts; SF0.1 verifies without timing')
-    parser.add_argument('--threads', type=int, choices=[1, 24], help='Required with --par; sets RAYON_NUM_THREADS explicitly')
-    parser.add_argument('--query', action='append', choices=CATALOG_NAMES, help='Repeat to select a par smoke subset; consolidation still includes all catalog queries')
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--par', action='store_true', help='Fixed par config, isolated plain/profile pairs; SF0.1 verifies without timing')
+    mode.add_argument('--default-spotcheck', action='store_true', help='Untimed SF0.1 default exactness for five queries, isolated from CPU measurements')
+    parser.add_argument('--threads', type=int, choices=[1, 24], help='Required with --par; defaults to 1 for --default-spotcheck')
+    parser.add_argument('--query', action='append', choices=CATALOG_NAMES, help='Repeat for an isolated subset; default spotcheck requires exactly five distinct queries (default: h01,h02,h06,h13,h19)')
     parser.add_argument('--database', type=Path, help='Explicit DuckDB oracle/export database override; recorded in environment metadata')
     args = parser.parse_args()
-    PAR, THREADS = args.par, args.threads
+    PAR, DEFAULT_SPOTCHECK, THREADS = args.par, args.default_spotcheck, args.threads
     DATABASE = args.database.resolve() if args.database is not None else None
+    if DEFAULT_SPOTCHECK:
+        THREADS = THREADS or 1
+        if args.sf != '0.1':
+            parser.error('--default-spotcheck requires --sf 0.1')
+        NAMES = ['retail_h01', 'retail_h02', 'retail_h06', 'retail_h13', 'retail_h19']
     if args.query:
-        if not PAR:
-            parser.error('--query subsets require --par')
+        if not isolated():
+            parser.error('--query subsets require --par or --default-spotcheck')
         NAMES = [name for name in CATALOG_NAMES if name in args.query]
-    if PAR != (THREADS is not None):
-        parser.error('--par and --threads must be supplied together')
-    if args.sf == '0.1' and not PAR:
-        parser.error('SF0.1 is the --par exactness phase')
-    if PAR and args.profile_winners_only:
-        parser.error('--par never collects instrumented profiles')
+    if DEFAULT_SPOTCHECK and len(NAMES) != 5:
+        parser.error('--default-spotcheck requires exactly five distinct queries')
+    if isolated() != (THREADS is not None):
+        parser.error('--threads requires an isolated mode; --par requires --threads')
+    if args.sf == '0.1' and not isolated():
+        parser.error('SF0.1 requires --par or --default-spotcheck')
+    if isolated() and args.profile_winners_only:
+        parser.error('Isolated protocols do not select profile winners')
     if args.cap_seconds is None:
-        args.cap_seconds = 100 if PAR else 600
-    if args.cap_seconds <= 0 or (PAR and args.cap_seconds != 100):
-        parser.error('--cap-seconds must be positive; the par protocol requires 100')
+        args.cap_seconds = 100 if isolated() else 600
+    if args.cap_seconds <= 0 or (isolated() and args.cap_seconds != 100):
+        parser.error('--cap-seconds must be positive; isolated protocols require 100')
+    if args.slow_seconds is None:
+        args.slow_seconds = 10 if isolated() else 60
+    if args.slow_seconds <= 0 or (isolated() and args.slow_seconds != 10):
+        parser.error('--slow-seconds must be positive; isolated protocols require 10')
     SF = 0.1 if args.sf == '0.1' else int(args.sf)
     RUNS, CAP_SECONDS = args.runs, args.cap_seconds
     SLOW_SECONDS, PROFILE_WINNERS_ONLY = args.slow_seconds, args.profile_winners_only
-    if PAR:
-        CONFIGS = ['par']
+    if isolated():
+        CONFIGS = [isolated_configuration()]
         CACHE_ROOT = CACHE_ROOT / 'par'
         ENV['RAYON_NUM_THREADS'] = str(THREADS)
         for key in ['CQ_OPERATOR_PROFILE', 'CQ_OPERATOR_COUNTS']:
             ENV.pop(key, None)
     CACHE = CACHE_ROOT / f'sf{SF}'
     RAW = OUT / 'performance_cpu_raw'
-    if PAR:
-        RAW = RAW / 'par' / f't{THREADS}'
+    if isolated():
+        RAW = RAW / ('par' if PAR else 'default_spotcheck') / f't{THREADS}'
     RAW = RAW / f'sf{SF}'
     CACHE.mkdir(parents=True, exist_ok=True)
     # Parallel binaries/target are shared across scales and threads; data is scale-specific.

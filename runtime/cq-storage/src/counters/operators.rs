@@ -1,10 +1,14 @@
 //! Stream times are inclusive pipeline spans from first demand to exhaustion or
 //! drop, including upstream and downstream work between demands. They are not
-//! exclusive CPU times and must not be summed. No read-ahead or per-row clock
-//! reads: two clock reads per stream lifetime/build, local increments per row.
-use std::cell::{Cell, RefCell};
+//! exclusive CPU times and must not be summed. Parallel invocations accumulate
+//! into the originating query's graph through shared handles. Counts remain
+//! local to each cursor and merge at exhaustion/drop, not on every row.
+//! `TASKS_BUILD_WALL_TOTAL` is the measured union of setup/publication phases
+//! across this query epoch. It includes upstream production, routing and joins;
+//! it is not the sum of operator builds or exclusive index-insertion time.
+use std::cell::RefCell;
 use std::fmt::Write;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex, atomic::{AtomicBool, AtomicU64, Ordering}};
 use std::time::{Duration, Instant};
 
 /// Static identity of a Physical result or concrete build.
@@ -29,108 +33,134 @@ pub struct OperatorRecord {
     pub calls: u64,
     /// Build time spent producing the build's input rows (timing builds only;
     /// the input is drained before insertion). `elapsed - source_elapsed` is
-    /// the exclusive construction time, comparable to a hash join's build.
+    /// cumulative construction time across invocations. Parallel invocations
+    /// can overlap: this difference is not an elapsed wall-time phase.
     pub source_elapsed: Duration,
 }
-struct State {
+pub(super) struct State {
     id: usize,
     program: usize,
     label: OperatorLabel,
-    rows_in: Cell<u64>,
-    rows_out: Cell<u64>,
-    inserted: Cell<u64>,
-    elapsed: Cell<Duration>,
-    calls: Cell<u64>,
-    alias: Cell<Option<usize>>,
-    stored_rows: Cell<Option<u64>>,
-    time_source: Cell<Option<usize>>,
-    source_elapsed: Cell<Duration>,
+    metrics: Mutex<Metrics>,
 }
-type BuildContext = Option<(Rc<State>, Rc<Cell<bool>>)>;
+#[derive(Clone, Default)]
+struct Metrics {
+    rows_in: u64,
+    rows_out: u64,
+    inserted: u64,
+    elapsed: Duration,
+    calls: u64,
+    alias: Option<usize>,
+    stored_rows: Option<u64>,
+    time_source: Option<usize>,
+    source_elapsed: Duration,
+}
+impl State {
+    fn update(&self, update: impl FnOnce(&mut Metrics)) {
+        update(&mut self.metrics.lock().unwrap_or_else(|error| error.into_inner()));
+    }
+    fn snapshot(&self) -> Metrics {
+        self.metrics.lock().unwrap_or_else(|error| error.into_inner()).clone()
+    }
+}
+pub(super) type BuildContext = Option<(Arc<State>, Arc<AtomicBool>)>;
 thread_local! {
-static ACTIVE_BUILD: RefCell<BuildContext> = const { RefCell::new(None) };
-static OPERATORS: RefCell<Vec<Rc<State>>> = const { RefCell::new(Vec::new()) }; }
-pub(super) fn reset_operators() {
-    OPERATORS.with(|ops| ops.borrow_mut().clear());
+    static ACTIVE_BUILD: RefCell<BuildContext> = const { RefCell::new(None) };
+}
+pub(super) fn capture_build() -> BuildContext {
+    ACTIVE_BUILD.with(|active| active.borrow().clone())
+}
+pub(super) fn replace_build(context: BuildContext) -> BuildContext {
+    ACTIVE_BUILD.with(|active| active.replace(context))
 }
 /// Snapshot in registration order, including unvisited results. Exhaust/drop
 /// iterators first to close their spans. Reset isolates subsequent executions.
 pub fn operators() -> Vec<OperatorRecord> {
-    OPERATORS.with(|ops| {
-        let ops = ops.borrow();
+    let context = super::TaskContext::capture();
+    let mut records: Vec<_> = {
+        let ops = context.0.operators.lock().unwrap_or_else(|error| error.into_inner());
         ops.iter()
             .map(|s| {
-                let mut source = s;
-                while let Some(i) = source.alias.get() {
-                    source = &ops[i];
+                let own = s.snapshot();
+                let mut source = own.clone();
+                while let Some(i) = source.alias {
+                    source = ops[i].snapshot();
                 }
-                let time = source.time_source.get().map_or(source, |i| &ops[i]);
+                let time = source.time_source.map_or_else(|| source.clone(), |i| ops[i].snapshot());
                 OperatorRecord {
                     id: s.id,
                     program: s.program,
                     label: s.label,
-                    rows_in: if s.alias.get().is_some() {
-                        source.rows_out.get()
-                    } else {
-                        s.rows_in.get()
-                    },
-                    rows_out: source.rows_out.get(),
-                    rows_inserted: s.inserted.get(),
-                    elapsed: time.elapsed.get(),
-                    calls: time.calls.get(),
-                    source_elapsed: time.source_elapsed.get(),
+                    rows_in: if own.alias.is_some() { source.rows_out } else { own.rows_in },
+                    rows_out: source.rows_out,
+                    rows_inserted: own.inserted,
+                    elapsed: time.elapsed,
+                    calls: time.calls,
+                    source_elapsed: time.source_elapsed,
                 }
             })
             .collect()
-    })
+    };
+    if let Some(elapsed) = context.build_wall() {
+        records.push(OperatorRecord {
+            id: records.len(),
+            program: 0,
+            label: OperatorLabel {
+                result: "__cq_tasks_build_wall_total",
+                kind: "TASKS_BUILD_WALL_TOTAL",
+                key: "",
+                inputs: &[],
+            },
+            rows_in: 0,
+            rows_out: 0,
+            rows_inserted: 0,
+            elapsed,
+            calls: 1,
+            source_elapsed: Duration::ZERO,
+        });
+    }
+    records
 }
-/// Handles cloned per iterator, never per row. Registration alone accesses TLS.
+/// Shared handles cloned per iterator/task, never looked up through TLS per row.
 #[derive(Clone)]
-pub struct OperatorProgram(Rc<Vec<Rc<State>>>);
+pub struct OperatorProgram(Arc<Vec<Arc<State>>>, super::TaskContext);
 impl OperatorProgram {
     pub fn new(labels: &[OperatorLabel]) -> Self {
-        OPERATORS.with(|ops| {
-            let mut ops = ops.borrow_mut();
+        let context = super::TaskContext::capture();
+        let states = {
+            let mut ops = context.0.operators.lock().unwrap_or_else(|error| error.into_inner());
             let program = ops.len();
-            let states = labels
+            labels
                 .iter()
                 .map(|&label| {
-                    let state = Rc::new(State {
+                    let state = Arc::new(State {
                         id: ops.len(),
                         program,
                         label,
-                        rows_in: Cell::new(0),
-                        rows_out: Cell::new(0),
-                        inserted: Cell::new(0),
-                        elapsed: Cell::new(Duration::ZERO),
-                        calls: Cell::new(0),
-                        alias: Cell::new(None),
-                        stored_rows: Cell::new(None),
-                        time_source: Cell::new(None),
-                        source_elapsed: Cell::new(Duration::ZERO),
+                        metrics: Mutex::new(Metrics::default()),
                     });
                     ops.push(state.clone());
                     state
                 })
-                .collect();
-            Self(Rc::new(states))
-        })
+                .collect()
+        };
+        Self(Arc::new(states), context)
     }
     /// A Physical alias shares its source's produced cardinality and span.
     pub fn alias(&self, index: usize, source: usize) {
         let mut candidate = source;
         loop {
             assert_ne!(index, candidate, "operator aliases must be acyclic");
-            match self.0[candidate].alias.get() {
+            match self.0[candidate].snapshot().alias {
                 Some(id) => candidate = id - self.0[0].program,
                 None => break,
             }
         }
-        self.0[index].alias.set(Some(self.0[source].id));
+        self.0[index].update(|metrics| metrics.alias = Some(self.0[source].id));
     }
     /// Fused boundaries share one measured inclusive pipeline span.
     pub fn share_time(&self, index: usize, source: usize) {
-        self.0[index].time_source.set(Some(self.0[source].id));
+        self.0[index].update(|metrics| metrics.time_source = Some(self.0[source].id));
     }
     pub fn stream<I: Iterator>(&self, index: usize, source: I) -> OperatorStream<I> {
         OperatorStream {
@@ -185,12 +215,27 @@ impl OperatorProgram {
             count: 0,
         }
     }
+    /// Merge task-local primitive counters into the originating query epoch.
+    pub fn task<T>(&self, run: impl FnOnce() -> T) -> T {
+        self.1.run(run)
+    }
+    /// Start a host phase without extending a borrow across generated bindings.
+    pub fn start_scope(&self, index: usize) -> OperatorScope {
+        let build = (self.0[index].label.kind == "TASKS_BUILD_WALL").then(|| {
+            self.1.start_build();
+            self.1.clone()
+        });
+        OperatorScope {
+            clock: Some(OperatorClock {
+                state: self.0[index].clone(),
+                started: Instant::now(),
+            }),
+            build,
+        }
+    }
     /// Time an execution boundary without treating nested lazy builds as its own.
     pub fn scope<T>(&self, index: usize, run: impl FnOnce() -> T) -> T {
-        let clock = DeferredClock(Some(OperatorClock {
-            state: self.0[index].clone(),
-            started: Instant::now(),
-        }));
+        let clock = self.start_scope(index);
         let result = run();
         drop(clock);
         result
@@ -208,14 +253,14 @@ impl OperatorProgram {
     ) -> OperatorPredicate<P> {
         OperatorPredicate {
             predicate,
-            count: Cell::new(0),
+            count: AtomicU64::new(0),
             state: self.0[index].clone(),
             source: source.map(|i| self.0[i].clone()),
         }
     }
     /// One clock pair around synchronous initialization, including upstream work.
     pub fn build<T>(&self, index: usize, build: impl FnOnce() -> T) -> T {
-        let deferred = Rc::new(Cell::new(false));
+        let deferred = Arc::new(AtomicBool::new(false));
         let previous = ACTIVE_BUILD
             .with(|active| active.replace(Some((self.0[index].clone(), deferred.clone()))));
         let guard = ActiveBuild {
@@ -236,62 +281,76 @@ impl OperatorProgram {
     pub fn rows(&self, _index: usize, _input: u64, _output: u64, _inserted: u64) {}
     #[cfg(feature = "counters")]
     pub fn rows(&self, index: usize, input: u64, output: u64, inserted: u64) {
-        let s = &self.0[index];
-        s.rows_in.set(s.rows_in.get() + input);
-        s.rows_out.set(s.rows_out.get() + output);
-        s.inserted.set(s.inserted.get() + inserted);
+        self.0[index].update(|metrics| {
+            metrics.rows_in += input;
+            metrics.rows_out += output;
+            metrics.inserted += inserted;
+        });
+    }
+}
+/// An elapsed wall scope. Task build phases additionally feed a session-wide
+/// interval union, so nested or concurrent programs never double-count build.
+pub struct OperatorScope {
+    clock: Option<OperatorClock>,
+    build: Option<super::TaskContext>,
+}
+impl Drop for OperatorScope {
+    fn drop(&mut self) {
+        if let Some(context) = self.build.take() {
+            context.finish_build();
+        }
+        if let Some(clock) = self.clock.take() {
+            clock.finish();
+        }
     }
 }
 struct ActiveBuild {
     previous: BuildContext,
-    deferred: Rc<Cell<bool>>,
+    deferred: Arc<AtomicBool>,
     clock: Option<OperatorClock>,
 }
 impl Drop for ActiveBuild {
     fn drop(&mut self) {
         ACTIVE_BUILD.with(|active| active.replace(self.previous.take()));
-        if let Some(clock) = self.clock.take().filter(|_| !self.deferred.get()) {
+        if let Some(clock) = self.clock.take().filter(|_| !self.deferred.load(Ordering::Relaxed)) {
             clock.finish();
         }
     }
 }
 struct OperatorClock {
-    state: Rc<State>,
+    state: Arc<State>,
     started: Instant,
 }
 impl OperatorClock {
     fn finish(self) {
-        self.state
-            .elapsed
-            .set(self.state.elapsed.get() + self.started.elapsed());
-        self.state.calls.set(self.state.calls.get() + 1);
-        if self.state.label.kind.ends_with("_BUILD") {
-            self.state.rows_out.set(
-                self.state
-                    .stored_rows
-                    .get()
-                    .unwrap_or(self.state.inserted.get()),
-            );
-        }
+        let elapsed = self.started.elapsed();
+        self.state.update(|metrics| {
+            metrics.elapsed += elapsed;
+            metrics.calls += 1;
+            if self.state.label.kind.ends_with("_BUILD") {
+                metrics.rows_out = metrics.stored_rows.unwrap_or(metrics.inserted);
+            }
+        });
     }
 }
 /// Demand-preserving counter for an input or insertion stream.
 pub struct OperatorInput<I> {
     source: Option<I>,
-    state: Rc<State>,
+    state: Arc<State>,
     insert: bool,
     count: u64,
 }
 impl<I> OperatorInput<I> {
     fn flush(&mut self) {
-        self.state
-            .rows_in
-            .set(self.state.rows_in.get() + self.count);
-        if self.insert {
-            self.state
-                .inserted
-                .set(self.state.inserted.get() + self.count);
+        if self.count == 0 {
+            return;
         }
+        self.state.update(|metrics| {
+            metrics.rows_in += self.count;
+            if self.insert {
+                metrics.inserted += self.count;
+            }
+        });
         self.count = 0;
     }
 }
@@ -331,7 +390,7 @@ impl<I: Iterator> Iterator for OperatorInput<I> {
 pub struct OperatorDrained<I: Iterator> {
     source: Option<I>,
     rows: std::vec::IntoIter<I::Item>,
-    state: Rc<State>,
+    state: Arc<State>,
 }
 impl<I: Iterator> Iterator for OperatorDrained<I> {
     type Item = I::Item;
@@ -340,9 +399,8 @@ impl<I: Iterator> Iterator for OperatorDrained<I> {
         if let Some(source) = self.source.take() {
             let started = Instant::now();
             let rows: Vec<_> = source.collect();
-            self.state
-                .source_elapsed
-                .set(self.state.source_elapsed.get() + started.elapsed());
+            let elapsed = started.elapsed();
+            self.state.update(|metrics| metrics.source_elapsed += elapsed);
             self.rows = rows.into_iter();
         }
         self.rows.next()
@@ -351,21 +409,23 @@ impl<I: Iterator> Iterator for OperatorDrained<I> {
 /// Cumulative inclusive span; does not force a row the consumer did not request.
 pub struct OperatorStream<I> {
     source: Option<I>,
-    state: Rc<State>,
+    state: Arc<State>,
     started: Option<Instant>,
     count: u64,
 }
 impl<I> OperatorStream<I> {
     fn finish(&mut self) {
-        if let Some(started) = self.started.take() {
-            self.state
-                .elapsed
-                .set(self.state.elapsed.get() + started.elapsed());
-            self.state.calls.set(self.state.calls.get() + 1);
+        let elapsed = self.started.take().map(|started| started.elapsed());
+        if elapsed.is_none() && self.count == 0 {
+            return;
         }
-        self.state
-            .rows_out
-            .set(self.state.rows_out.get() + self.count);
+        self.state.update(|metrics| {
+            if let Some(elapsed) = elapsed {
+                metrics.elapsed += elapsed;
+                metrics.calls += 1;
+            }
+            metrics.rows_out += self.count;
+        });
         self.count = 0;
     }
 }
@@ -491,45 +551,35 @@ pub fn render_operators(records: &[OperatorRecord]) -> String {
         exclusive.as_secs_f64() * 1000.
     )
     .unwrap();
+    if let Some(total) = records.iter().find(|record| record.label.kind == "TASKS_BUILD_WALL_TOTAL") {
+        writeln!(out, "TASKS_BUILD_WALL_TOTAL t={:.9}ms", total.elapsed.as_secs_f64() * 1000.).unwrap();
+    }
     out
 }
 
-/// A portable identity: a storage handle keeps its existing auto traits.
-/// Moving a deferred build to another thread excludes it from the old epoch.
+/// Shared identity of the registered build. A deferred provider can migrate to
+/// a worker without losing attribution; resetting drops the old registry, so
+/// subsequent work on an old handle cannot contaminate a new query epoch.
 #[derive(Clone)]
-pub(crate) struct DeferredBuild {
-    id: usize,
-    epoch: u64,
-    thread: std::thread::ThreadId,
-}
+pub(crate) struct DeferredBuild(Arc<State>);
 pub(crate) fn defer_build() -> Option<DeferredBuild> {
     ACTIVE_BUILD.with(|active| {
         active.borrow().as_ref().map(|(state, deferred)| {
-            deferred.set(true);
-            DeferredBuild {
-                id: state.id,
-                epoch: super::epoch(),
-                thread: std::thread::current().id(),
-            }
+            deferred.store(true, Ordering::Relaxed);
+            DeferredBuild(state.clone())
         })
     })
 }
 pub(crate) struct DeferredClock(Option<OperatorClock>);
 impl DeferredBuild {
-    fn state(&self) -> Option<Rc<State>> {
-        if self.thread != std::thread::current().id() || self.epoch != super::epoch() {
-            return None;
-        }
-        OPERATORS.with(|ops| ops.borrow().get(self.id).cloned())
-    }
     pub(crate) fn cardinality(&self, rows: usize) {
-        if let Some(state) = self.state() {
-            state.stored_rows.set(Some(rows as u64));
-        }
+        self.0.update(|metrics| {
+            metrics.stored_rows = Some(metrics.stored_rows.unwrap_or(0) + rows as u64);
+        });
     }
     pub(crate) fn start(&self) -> DeferredClock {
-        DeferredClock(self.state().map(|state| OperatorClock {
-            state,
+        DeferredClock(Some(OperatorClock {
+            state: self.0.clone(),
             started: Instant::now(),
         }))
     }
@@ -545,26 +595,23 @@ impl Drop for DeferredClock {
 /// Counts tested positions while preserving block pruning and predicate order.
 pub struct OperatorPredicate<P> {
     predicate: P,
-    count: Cell<u64>,
-    state: Rc<State>,
-    source: Option<Rc<State>>,
+    count: AtomicU64,
+    state: Arc<State>,
+    source: Option<Arc<State>>,
 }
 impl<P> Drop for OperatorPredicate<P> {
     fn drop(&mut self) {
-        self.state
-            .rows_in
-            .set(self.state.rows_in.get() + self.count.get());
+        let count = *self.count.get_mut();
+        self.state.update(|metrics| metrics.rows_in += count);
         if let Some(source) = &self.source {
-            source
-                .rows_out
-                .set(source.rows_out.get() + self.count.get());
+            source.update(|metrics| metrics.rows_out += count);
         }
     }
 }
 impl<K, P: crate::ReadPredicate<K>> crate::ReadPredicate<K> for OperatorPredicate<P> {
     #[inline]
     fn test(&self, key: &K) -> bool {
-        self.count.set(self.count.get() + 1);
+        self.count.fetch_add(1, Ordering::Relaxed);
         self.predicate.test(key)
     }
     fn any_in(&self, lo: &K, hi: &K) -> bool {
@@ -575,14 +622,15 @@ impl<K, P: crate::ReadPredicate<K>> crate::ReadPredicate<K> for OperatorPredicat
 /// Row-only cursor boundary, suitable for repeated keyed reads without clocks.
 pub struct OperatorOutput<I> {
     source: Option<I>,
-    state: Rc<State>,
+    state: Arc<State>,
     count: u64,
 }
 impl<I> OperatorOutput<I> {
     fn flush(&mut self) {
-        self.state
-            .rows_out
-            .set(self.state.rows_out.get() + self.count);
+        if self.count == 0 {
+            return;
+        }
+        self.state.update(|metrics| metrics.rows_out += self.count);
         self.count = 0;
     }
 }
@@ -636,7 +684,143 @@ impl<I: crate::OrderedCursor> crate::OrderedCursor for OperatorInput<I> {
 pub(crate) fn build_cardinality(rows: usize) {
     ACTIVE_BUILD.with(|active| {
         if let Some((state, _)) = &*active.borrow() {
-            state.stored_rows.set(Some(rows as u64));
+            state.update(|metrics| {
+                metrics.stored_rows = Some(metrics.stored_rows.unwrap_or(0) + rows as u64);
+            });
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::counters::{self, TaskContext};
+
+    const SCAN: OperatorLabel = OperatorLabel {
+        result: "scan", kind: "SCAN", key: "", inputs: &[],
+    };
+    const BUILD: OperatorLabel = OperatorLabel {
+        result: "build", kind: "TASKS_BUILD_WALL", key: "", inputs: &[],
+    };
+
+    #[test]
+    fn profile_handles_preserve_send_sync() {
+        fn shareable<T: Send + Sync>() {}
+        shareable::<OperatorProgram>();
+        shareable::<OperatorInput<std::ops::Range<u64>>>();
+        shareable::<OperatorOutput<std::ops::Range<u64>>>();
+        shareable::<OperatorStream<std::ops::Range<u64>>>();
+        shareable::<OperatorDrained<std::ops::Range<u64>>>();
+        shareable::<OperatorPredicate<()>>();
+        shareable::<DeferredBuild>();
+        shareable::<OperatorScope>();
+        shareable::<TaskContext>();
+    }
+
+    #[test]
+    fn task_registration_and_spans_reach_the_originating_epoch() {
+        counters::reset();
+        let context = TaskContext::capture();
+        std::thread::scope(|threads| {
+            threads.spawn(|| context.run(|| {
+                let program = OperatorProgram::new(&[SCAN]);
+                assert_eq!(program.stream(0, 0..4).sum::<u64>(), 6);
+            })).join().unwrap();
+        });
+        let records = operators();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].calls, 1);
+        assert!(records[0].elapsed > Duration::ZERO);
+    }
+
+    #[cfg(feature = "counters")]
+    #[test]
+    fn worker_rows_and_primitive_costs_merge_once() {
+        counters::reset();
+        counters::record(|counts| counts.lookups += 1);
+        let program = OperatorProgram::new(&[SCAN, OperatorLabel {
+            result: "index", kind: "INDEX_BUILD", key: "", inputs: &["scan"],
+        }]);
+        std::thread::scope(|threads| {
+            for _ in 0..4 {
+                let program = &program;
+                threads.spawn(move || program.task(|| {
+                    counters::record(|counts| counts.lookups += 3);
+                    program.task(|| counters::record(|counts| counts.lookups += 2));
+                    assert_eq!(program.stream(0, 0..3).sum::<u64>(), 3);
+                    let rows: Vec<_> = program.build(1, || program.inserting(1, 0..2).collect());
+                    assert_eq!(rows, [0, 1]);
+                }));
+            }
+        });
+        let records = operators();
+        assert_eq!(records[0].rows_out, 12);
+        assert_eq!(records[0].calls, 4);
+        assert_eq!(records[1].rows_inserted, 8);
+        assert_eq!(records[1].rows_out, 8);
+        assert_eq!(records[1].calls, 4);
+        assert_eq!(counters::snapshot().lookups, 21);
+        assert_eq!(counters::snapshot().lookups, 21);
+    }
+
+    #[cfg(feature = "counters")]
+    #[test]
+    fn transferred_allocations_keep_their_epoch_until_drop() {
+        counters::reset();
+        let context = TaskContext::capture();
+        let allocation = std::thread::scope(|threads| {
+            threads.spawn(|| context.run(|| crate::counters_memory::Allocation::new(128)))
+                .join().unwrap()
+        });
+        assert_eq!(counters::snapshot().bytes_retained_current, 128);
+        assert_eq!(counters::snapshot().bytes_retained_peak, 128);
+        drop(allocation);
+        assert_eq!(counters::snapshot().bytes_retained_current, 0);
+        let old = crate::counters_memory::Allocation::new(64);
+        counters::reset();
+        drop(old);
+        assert_eq!(counters::snapshot().bytes_retained_current, 0);
+        assert_eq!(counters::snapshot().bytes_retained_peak, 0);
+    }
+
+    #[test]
+    fn build_wall_is_one_union_across_nested_and_concurrent_programs() {
+        counters::reset();
+        let context = TaskContext::capture();
+        let outer = OperatorProgram::new(&[BUILD]);
+        let clock = outer.start_scope(0);
+        let first_start = context.0.build.lock().unwrap().started;
+        let barrier = std::sync::Barrier::new(3);
+        std::thread::scope(|threads| {
+            for _ in 0..2 {
+                let context = &context;
+                let barrier = &barrier;
+                threads.spawn(move || context.run(|| {
+                    let nested = OperatorProgram::new(&[BUILD]);
+                    let clock = nested.start_scope(0);
+                    barrier.wait();
+                    barrier.wait();
+                    drop(clock);
+                }));
+            }
+            barrier.wait();
+            {
+                let build = context.0.build.lock().unwrap();
+                assert_eq!(build.active, 3);
+                assert_eq!(build.started, first_start);
+                assert_eq!(build.elapsed, Duration::ZERO);
+            }
+            barrier.wait();
+        });
+        drop(clock);
+        let records = operators();
+        let totals: Vec<_> = records.iter()
+            .filter(|record| record.label.kind == "TASKS_BUILD_WALL_TOTAL").collect();
+        assert_eq!(totals.len(), 1);
+        assert!(totals[0].elapsed > Duration::ZERO);
+        assert_eq!(Some(totals[0].elapsed), context.build_wall());
+        assert!(render_operators(&records).lines().any(|line| line.starts_with("TASKS_BUILD_WALL_TOTAL t=")));
+        counters::reset();
+        assert!(operators().is_empty());
+    }
 }

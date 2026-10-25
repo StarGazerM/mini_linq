@@ -666,6 +666,15 @@ impl<'a> Emitter<'a> {
     }
 
     pub fn group(&mut self, name: &Ident, input: Value) -> syn::Result<Value> {
+        self.group_with_output(name, input, false)
+    }
+
+    /// A task-local global aggregate produces partials, not final Group rows.
+    pub fn group_partial(&mut self, name: &Ident, input: Value) -> syn::Result<Value> {
+        self.group_with_output(name, input, true)
+    }
+
+    fn group_with_output(&mut self, name: &Ident, input: Value, partial: bool) -> syn::Result<Value> {
         let result = symbol_name(name);
         self.register(&result);
         let Operator::Group(group) = &self.context().physical[&result].operator else {
@@ -675,10 +684,17 @@ impl<'a> Emitter<'a> {
             ));
         };
         let operand = symbol_name(&group.input);
+        let output = if partial {
+            let label = format!("{result}.partial");
+            self.context_mut().profile_label(&label, "GROUP_PARTIAL", "", vec![operand.clone()]);
+            label
+        } else {
+            result.clone()
+        };
         let rows = self
             .adapters
             .operator(&result, Some((operand, input.rows)))?;
-        let rows = self.context().profile_stream(&result, rows);
+        let rows = self.context().profile_stream(&output, rows);
         Ok(Value {
             rows,
             result: Some(result),
@@ -865,9 +881,20 @@ impl<'a> Emitter<'a> {
             rows = self.adapters.head(&result, head, rows);
         }
         rows = self.context().profile_stream(&answer, rows);
-        if let Some(registration) = self.context().profile_registration() {
-            self.context_mut().statements.insert(0, registration);
-        }
+        // Target interpreters eagerly join their answer. Measure preparation
+        // and final evaluation at the host, never by adding concurrent spans.
+        let phases = if !self.pull && self.context().profile.is_some() {
+            let build = self.context_mut().profile_label(
+                "__cq_tasks_build", "TASKS_BUILD_WALL", "", Vec::new(),
+            );
+            let query = self.context_mut().profile_label(
+                "__cq_tasks_query", "TASKS_QUERY_WALL", "", vec![answer],
+            );
+            Some((build, query))
+        } else {
+            None
+        };
+        let registration = self.context().profile_registration();
         let context = self.context();
         let statements = &context.statements;
         let rows = if self.pull {
@@ -880,7 +907,18 @@ impl<'a> Emitter<'a> {
         } else {
             quote!(::core::iter::Iterator::collect::<::std::vec::Vec<_>>(#rows))
         };
-        let mut output = syn::parse2(quote!({ #(#statements)* #rows }))?;
+        let mut output = if let Some((build, query)) = phases {
+            let profile = context.profile_handle();
+            syn::parse2(quote!({
+                #registration
+                let __cq_build_clock = #profile.start_scope(#build);
+                #(#statements)*
+                ::core::mem::drop(__cq_build_clock);
+                #profile.scope(#query, || #rows)
+            }))?
+        } else {
+            syn::parse2(quote!({ #registration #(#statements)* #rows }))?
+        };
         cq_print::own_captures(&mut output, &context.owned);
         Ok(output)
     }
@@ -926,6 +964,24 @@ pub fn translate_with(
     ) -> syn::Result<()>,
 ) -> syn::Result<syn::Expr> {
     translate_with_profile(program, analysis, false, false, hook)
+}
+
+/// Target-hook interpretation with real operator counters and disjoint host
+/// preparation/final-evaluation wall scopes. Unlike operator spans, these
+/// phases include each concurrent segment only once, including its join.
+pub fn translate_profile_with(
+    program: &Program,
+    analysis: &Analysis,
+    hook: impl FnMut(
+        &Term,
+        &mut Emitter<'_>,
+        Option<&Value>,
+        &mut Value,
+        &str,
+        usize,
+    ) -> syn::Result<()>,
+) -> syn::Result<syn::Expr> {
+    translate_with_profile(program, analysis, true, false, hook)
 }
 
 fn translate_with_profile(

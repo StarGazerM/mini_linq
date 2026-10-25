@@ -664,10 +664,13 @@ impl<'a> Context<'a> {
                     syn::Index::from(levels[0].iter().position(|key| key == column).expect("checked routing key"))
                 }).collect::<Vec<_>>();
                 let key_types = levels[0].iter().map(|_| quote!(_)).collect::<Vec<_>>();
+                let part_rows = self.profile_inserting(
+                    &build_name,
+                    quote!(__cq_part.iter().cloned().map(|#pattern| #nested)),
+                );
                 quote!(::cq_storage::sharded::Sharded::<#inner, _>::build_parts_with_router(
                     (#parts).iter().map(|__cq_part| {
-                        __cq_part.iter().cloned().map(|#pattern| #nested)
-                            .collect::<::std::vec::Vec<_>>()
+                        (#part_rows).collect::<::std::vec::Vec<_>>()
                     }).collect::<::std::vec::Vec<_>>(),
                     |__cq_key: &(#(#key_types,)*), __cq_count| {
                         ::cq_storage::sharded::route_index(&(#(&__cq_key.#fields,)*), __cq_count)

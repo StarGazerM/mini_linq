@@ -1,5 +1,5 @@
-//! Opt-in deterministic query costs, isolated by thread. Reset after fixtures
-//! and oracle construction and snapshot after exhausting a fresh query.
+//! Opt-in deterministic query costs. Reset after fixtures and oracle construction
+//! and snapshot after exhausting a fresh query and joining all its tasks.
 //!
 //! Hash computations count hasher `finish` calls, including table growth, in
 //! the fixed-hasher collections below and runtime internal hash collections.
@@ -13,8 +13,11 @@
 //! in the caller's distinct provider to include compiler canonicalization.
 //! Retained bytes count runtime-owned capacities (excluding allocator overhead
 //! and heap allocations inside user keys/payloads). Reset starts a new ownership
-//! epoch; older allocations and allocations moved to another thread are excluded.
-//! Keyset staging peak is the largest distinct staging-set ownership estimate.
+//! epoch. Task contexts share that epoch: transferred allocations retain their
+//! attribution, and worker event counts merge once per joined task. Retained
+//! peak is the shared epoch's actual tracked-capacity high-water mark, not a
+//! sum of worker peaks. Keyset staging peak is the largest individual staging
+//! set estimate, not simultaneous staging memory.
 //! Fixture construction and independent BTreeSet oracles are not query costs.
 mod operators;
 #[cfg(feature = "counters")]
@@ -22,11 +25,13 @@ pub(crate) use operators::build_cardinality;
 pub(crate) use operators::{DeferredBuild, defer_build};
 pub use operators::{
     OperatorDrained, OperatorInput, OperatorLabel, OperatorOutput, OperatorPredicate,
-    OperatorProgram, OperatorRecord, OperatorStream, operators, render_operators,
+    OperatorProgram, OperatorRecord, OperatorScope, OperatorStream, operators, render_operators,
 };
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::hash::{BuildHasherDefault, Hasher};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Snapshot {
@@ -52,8 +57,118 @@ pub struct Snapshot {
     /// than compiler-emitted dedup/keyset builds.
     pub candidate_insertions: u64,
 }
+impl Snapshot {
+    fn merge(&mut self, other: Self) {
+        self.blocks_considered += other.blocks_considered;
+        self.blocks_visited += other.blocks_visited;
+        self.blocks_skipped += other.blocks_skipped;
+        self.blocks_skipped_metadata += other.blocks_skipped_metadata;
+        self.blocks_skipped_empty_selection += other.blocks_skipped_empty_selection;
+        self.rows_tested += other.rows_tested;
+        self.join_filter_tested += other.join_filter_tested;
+        self.join_filter_passed += other.join_filter_passed;
+        self.rows_copied += other.rows_copied;
+        self.keyset_staging_bytes_peak = self.keyset_staging_bytes_peak.max(other.keyset_staging_bytes_peak);
+        self.hash_computations += other.hash_computations;
+        self.index_builds += other.index_builds;
+        self.lookups += other.lookups;
+        self.cursor_steps += other.cursor_steps;
+        self.rows_enumerated += other.rows_enumerated;
+        self.distinct_insertions += other.distinct_insertions;
+        self.candidate_insertions += other.candidate_insertions;
+    }
+}
+
+#[derive(Default)]
+struct SharedCounts {
+    counts: Mutex<Snapshot>,
+    memory: Mutex<(u64, u64)>,
+    build: Mutex<BuildWall>,
+    operators: Mutex<Vec<Arc<operators::State>>>,
+}
+#[derive(Default)]
+struct BuildWall {
+    visited: bool,
+    active: usize,
+    started: Option<Instant>,
+    elapsed: Duration,
+}
+
+/// A query epoch carried into synchronous Rayon work. Event increments stay
+/// thread-local; each task restores its caller's counters and merges once,
+/// including when a worker executes nested work or unwinds.
+#[derive(Clone, Default)]
+pub struct TaskContext(Arc<SharedCounts>, operators::BuildContext);
+impl TaskContext {
+    pub fn capture() -> Self {
+        TASK_CONTEXT.with(|context| Self(context.borrow().0.clone(), operators::capture_build()))
+    }
+    pub fn run<T>(&self, run: impl FnOnce() -> T) -> T {
+        struct Restore {
+            previous: TaskContext,
+            build: operators::BuildContext,
+            #[cfg(feature = "counters")]
+            counts: Snapshot,
+        }
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                #[cfg(feature = "counters")]
+                {
+                    let counts = COUNTS.with(|counts| counts.replace(self.counts));
+                    let current = TaskContext::capture();
+                    current.0.counts.lock().unwrap_or_else(|error| error.into_inner()).merge(counts);
+                }
+                TASK_CONTEXT.with(|context| {
+                    *context.borrow_mut() = self.previous.clone();
+                });
+                operators::replace_build(self.build.take());
+            }
+        }
+        let restore = Restore {
+            previous: TASK_CONTEXT.with(|context| context.replace(self.clone())),
+            build: operators::replace_build(self.1.clone()),
+            #[cfg(feature = "counters")]
+            counts: COUNTS.with(|counts| counts.replace(Snapshot::default())),
+        };
+        let result = run();
+        drop(restore);
+        result
+    }
+    #[cfg(feature = "counters")]
+    pub(crate) fn grow(&self, bytes: usize) {
+        let mut memory = self.0.memory.lock().unwrap_or_else(|error| error.into_inner());
+        memory.0 += bytes as u64;
+        memory.1 = memory.1.max(memory.0);
+    }
+    #[cfg(feature = "counters")]
+    pub(crate) fn shrink(&self, bytes: usize) {
+        self.0.memory.lock().unwrap_or_else(|error| error.into_inner()).0 -= bytes as u64;
+    }
+    pub(super) fn start_build(&self) {
+        let mut build = self.0.build.lock().unwrap_or_else(|error| error.into_inner());
+        build.visited = true;
+        if build.active == 0 {
+            build.started = Some(Instant::now());
+        }
+        build.active += 1;
+    }
+    pub(super) fn finish_build(&self) {
+        let mut build = self.0.build.lock().unwrap_or_else(|error| error.into_inner());
+        build.active -= 1;
+        if build.active == 0 {
+            let elapsed = build.started.take().expect("active build phase").elapsed();
+            build.elapsed += elapsed;
+        }
+    }
+    fn build_wall(&self) -> Option<Duration> {
+        let build = self.0.build.lock().unwrap_or_else(|error| error.into_inner());
+        build.visited.then(|| {
+            build.elapsed + build.started.map_or(Duration::ZERO, |start| start.elapsed())
+        })
+    }
+}
 thread_local! {
-    static EPOCH: Cell<u64> = const { Cell::new(0) };
+    static TASK_CONTEXT: RefCell<TaskContext> = RefCell::new(TaskContext::default());
     static COUNTS: Cell<Snapshot> = const { Cell::new(Snapshot {
         blocks_considered: 0,
         blocks_visited: 0,
@@ -71,16 +186,18 @@ thread_local! {
         cursor_steps: 0, rows_enumerated: 0, distinct_insertions: 0, candidate_insertions: 0,
     }) };
 }
-pub(crate) fn epoch() -> u64 {
-    EPOCH.with(Cell::get)
-}
 pub fn reset() {
-    operators::reset_operators();
-    EPOCH.with(|epoch| epoch.set(epoch.get().wrapping_add(1)));
+    TASK_CONTEXT.with(|context| *context.borrow_mut() = TaskContext::default());
     COUNTS.with(|counts| counts.set(Snapshot::default()));
 }
 pub fn snapshot() -> Snapshot {
-    COUNTS.with(Cell::get)
+    let mut counts = COUNTS.with(Cell::get);
+    let context = TaskContext::capture();
+    counts.merge(*context.0.counts.lock().unwrap_or_else(|error| error.into_inner()));
+    let memory = context.0.memory.lock().unwrap_or_else(|error| error.into_inner());
+    counts.bytes_retained_current = memory.0;
+    counts.bytes_retained_peak = memory.1;
+    counts
 }
 /// Primitive costs are validated separately when profiling wall time.
 pub const STORAGE_COUNTERS_ENABLED: bool = cfg!(feature = "counters");

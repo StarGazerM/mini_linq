@@ -36,11 +36,16 @@ pub fn tasks(input: TokenStream) -> TokenStream {
     }).into()
 }
 
-/// Return joined owned answers through the ordinary Pull iterator ABI.
+/// Return joined owned answers, selecting the runtime's plain/profile build.
 #[proc_macro]
 pub fn translate_tasks(input: TokenStream) -> TokenStream {
     cq_stage::pass::<cq_lang_sequence::Program, syn::Expr>(input.into(), |source, _| {
         let analysis = cq_lang_sequence::check_grading(source, &cq_sequence_tasks::machine())?;
-        cq_sequence_tasks::translate(source, &analysis)
+        let plain = cq_sequence_tasks::translate(source, &analysis)?;
+        let profile = cq_sequence_tasks::translate_profile(source, &analysis)?;
+        Ok(syn::parse_quote!(::cq_storage::profile_select! {
+            plain { (#plain).into_iter() }
+            counters { (#profile).into_iter() }
+        }))
     }).into()
 }

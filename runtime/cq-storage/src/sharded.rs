@@ -8,12 +8,12 @@
 //! Published providers contain no locks or lazy state. Hash routing does not
 //! confer ordered/range access, even when an individual shard supports it.
 
-use std::collections::HashMap;
+use crate::instrument::HashMap;
 use std::hash::Hash;
 
 use rayon::prelude::*;
 
-use crate::{Build, ExactMembership, HashState, IndexRead};
+use crate::{Build, ExactMembership, IndexRead};
 
 /// Routing policy recorded with a provider; must match its input partition.
 pub trait Router<K: ?Sized> {
@@ -48,7 +48,7 @@ impl<I> Sharded<I> {
     /// Build one index per already routed part, without rerouting or copying.
     pub fn build_parts<K: Send, V: Send>(parts: Vec<Vec<(K, V)>>) -> Self
     where I: Build<std::vec::IntoIter<(K, V)>> + Send {
-        Self::from_parts(parts.into_par_iter().map(|part| I::build(part.into_iter())).collect())
+        Self::build_parts_with_router(parts, FullKey)
     }
 }
 
@@ -64,8 +64,15 @@ impl<I, F> Sharded<I, F> {
         parts: Vec<Vec<(K, V)>>, router: F,
     ) -> Self
     where I: Build<std::vec::IntoIter<(K, V)>> + Send {
+        #[cfg(any(feature = "counters", feature = "operator-timing"))]
+        let context = crate::counters::TaskContext::capture();
         Self::from_parts_with_router(
-            parts.into_par_iter().map(|part| I::build(part.into_iter())).collect(),
+            parts.into_par_iter().map(|part| {
+                #[cfg(any(feature = "counters", feature = "operator-timing"))]
+                { context.run(|| I::build(part.into_iter())) }
+                #[cfg(not(any(feature = "counters", feature = "operator-timing")))]
+                { I::build(part.into_iter()) }
+            }).collect(),
             router,
         )
     }
@@ -118,36 +125,56 @@ routed_read!([K, V] std::collections::BTreeMap<K, Vec<V>>);
 #[inline]
 pub fn route_index<K: Hash + ?Sized>(key: &K, count: usize) -> usize {
     assert!(count > 0, "key partition count must be positive");
+    crate::count!(hash_computations);
     (ahash::RandomState::with_seeds(0, 0, 0, 0).hash_one(key) % count as u64) as usize
 }
 
 /// Eager, shareable hash buckets with the pull emitter's copy-payload ABI.
 /// Unlike the serial lazy `HashIndex`, this provider has no Rc/RefCell state.
-#[derive(Debug)]
 pub struct Index<K, V> {
-    buckets: HashMap<K, Vec<V>, HashState>,
+    buckets: HashMap<K, Vec<V>>,
+    #[cfg(feature = "counters")]
+    _allocation: crate::counters_memory::Allocation,
+}
+impl<K: std::fmt::Debug, V: std::fmt::Debug> std::fmt::Debug for Index<K, V> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_struct("Index").field("buckets", &self.buckets).finish()
+    }
 }
 
 impl<K: Eq + Hash, V, S: Iterator<Item = (K, V)>> Build<S> for Index<K, V> {
     fn build(source: S) -> Self {
         crate::count!(index_builds);
-        let mut buckets = HashMap::with_hasher(HashState::default());
+        let mut buckets = HashMap::default();
         for (key, value) in source {
             crate::count!(rows_copied);
             buckets.entry(key).or_insert_with(Vec::new).push(value);
         }
-        Self { buckets }
+        #[cfg(feature = "counters")]
+        let allocation = {
+            crate::counters::build_cardinality(buckets.len());
+            let bytes = buckets.capacity() * (std::mem::size_of::<(K, Vec<V>)>() + 1)
+                + buckets.values().map(|values| values.capacity() * std::mem::size_of::<V>()).sum::<usize>();
+            crate::counters_memory::Allocation::new(bytes)
+        };
+        Self {
+            buckets,
+            #[cfg(feature = "counters")]
+            _allocation: allocation,
+        }
     }
 }
 
 impl<'a, K: Eq + Hash, V: Copy> IndexRead for &'a Index<K, V> {
     type Key = K;
     type Item = V;
-    type Cursor = std::iter::Copied<std::slice::Iter<'a, V>>;
+    type Cursor = crate::instrument::Cursor<std::iter::Copied<std::slice::Iter<'a, V>>>;
 
     fn lookup(&self, key: &K) -> Self::Cursor {
         crate::count!(lookups);
-        self.buckets.get(key).map_or(&[][..], Vec::as_slice).iter().copied()
+        crate::instrument::cursor!(
+            self.buckets.get(key).map_or(&[][..], Vec::as_slice).iter().copied()
+        )
     }
 }
 
@@ -204,5 +231,35 @@ mod tests {
                 }
             });
         }
+    }
+    #[cfg(feature = "counters")]
+    #[test]
+    fn profile_accumulates_shard_builds_cardinality_and_cursor_work() {
+        use crate::counters::{self, OperatorLabel, OperatorProgram};
+        counters::reset();
+        let profile = OperatorProgram::new(&[OperatorLabel {
+            result: "shards", kind: "INDEX_BUILD", key: "k", inputs: &[],
+        }]);
+        let index = profile.build(0, || {
+            let mut parts = vec![Vec::new(); 7];
+            for pair in profile.inserting(0, [(1u64, 7u64), (1, 8), (9, 3)].into_iter()) {
+                parts[route_index(&pair.0, 7)].push(pair);
+            }
+            Sharded::<Index<u64, u64>>::build_parts(parts)
+        });
+        assert_eq!((&index).lookup(&1).collect::<Vec<_>>(), [7, 8]);
+        let counts = counters::snapshot();
+        assert_eq!(counts.index_builds, 7);
+        assert_eq!(counts.rows_copied, 3);
+        assert_eq!(counts.lookups, 1);
+        assert_eq!(counts.cursor_steps, 3);
+        assert_eq!(counts.rows_enumerated, 2);
+        assert!(counts.hash_computations > 0);
+        assert!(counts.bytes_retained_current > 0);
+        let operators = counters::operators();
+        assert_eq!(operators[0].rows_inserted, 3);
+        assert_eq!(operators[0].rows_out, 2);
+        drop(index);
+        assert_eq!(counters::snapshot().bytes_retained_current, 0);
     }
 }

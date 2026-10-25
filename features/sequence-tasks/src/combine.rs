@@ -10,7 +10,13 @@ use cq_storage::HashState;
 pub fn map_parts<R: Send, O: Send>(
     parts: Vec<Vec<R>>, map: impl Fn(Vec<R>) -> Vec<O> + Sync + Send,
 ) -> Vec<Vec<O>> {
-    parts.into_par_iter().map(map).collect()
+    cq_storage::profile_select! {
+        plain { parts.into_par_iter().map(map).collect() }
+        counters {{
+            let context = cq_storage::counters::TaskContext::capture();
+            parts.into_par_iter().map(|part| context.run(|| map(part))).collect()
+        }}
+    }
 }
 
 /// Canonicalize without removing the partition dimension.
@@ -29,12 +35,22 @@ pub fn route_by<R: Send>(
     chunks: Vec<Vec<R>>, count: usize, router: impl Fn(&R, usize) -> usize + Sync,
 ) -> Vec<Vec<R>> {
     assert!(count > 0, "key partition count must be positive");
+    let _context = cq_storage::profile_select! {
+        plain { () }
+        counters { cq_storage::counters::TaskContext::capture() }
+    };
     let buckets: Vec<Vec<Vec<R>>> = chunks.into_par_iter().map(|chunk| {
-        let mut buckets: Vec<_> = (0..count).map(|_| Vec::new()).collect();
-        for row in chunk {
-            buckets[router(&row, count)].push(row);
+        let route = || {
+            let mut buckets: Vec<_> = (0..count).map(|_| Vec::new()).collect();
+            for row in chunk {
+                buckets[router(&row, count)].push(row);
+            }
+            buckets
+        };
+        cq_storage::profile_select! {
+            plain { route() }
+            counters { _context.run(route) }
         }
-        buckets
     }).collect();
     let mut owners: Vec<Vec<Vec<R>>> = (0..count).map(|_| Vec::with_capacity(buckets.len())).collect();
     for buckets in buckets {
@@ -57,11 +73,11 @@ pub fn par_group<K: Eq + Hash + Send, S: Send, R: Send>(
     parts: Vec<Vec<R>>, key: impl Fn(&R) -> K + Sync,
     init: impl Fn() -> S + Sync, step: impl Fn(&mut S, R) + Sync,
 ) -> Vec<(K, S)> {
-    parts.into_par_iter().map(|part| {
+    map_parts(parts, |part| {
         let mut groups = HashMap::<K, S, HashState>::default();
         for row in part { step(groups.entry(key(&row)).or_insert_with(&init), row); }
         groups.into_iter().collect::<Vec<_>>()
-    }).collect::<Vec<_>>().into_iter().flatten().collect()
+    }).into_iter().flatten().collect()
 }
 
 /// Partial monoid folds followed by one host fold, including the empty identity.
@@ -83,7 +99,13 @@ pub fn par_group_global_with<R: Send, S: Send>(
     parts: Vec<Vec<R>>, fold: impl Fn(Vec<R>) -> S + Sync + Send,
     init: impl Fn() -> S, merge: impl Fn(&mut S, S),
 ) -> S {
-    let partials: Vec<S> = parts.into_par_iter().map(fold).collect();
+    let partials: Vec<S> = cq_storage::profile_select! {
+        plain { parts.into_par_iter().map(fold).collect() }
+        counters {{
+            let context = cq_storage::counters::TaskContext::capture();
+            parts.into_par_iter().map(|part| context.run(|| fold(part))).collect()
+        }}
+    };
     let mut state = init();
     for partial in partials { merge(&mut state, partial); }
     state

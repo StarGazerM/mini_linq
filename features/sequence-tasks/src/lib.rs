@@ -7,6 +7,13 @@
 //! propagates a task panic to that join rather than publishing partial output.
 //! Key-disjoint partitions support local canon and keyed folds; global monoids
 //! combine task-local partials at the host, never as a pool collective.
+//!
+//! Profiling retains the same tile/partition/Group interpretation. Operator
+//! spans accumulate all worker invocations (and can overlap); `TASKS_BUILD_WALL`
+//! measures host setup/publication and `TASKS_QUERY_WALL` final joined answer
+//! evaluation. These disjoint wall phases include upstream work and are not an
+//! exclusive index-insertion split. Deferred builds belong to the phase that
+//! demands them. Runtime task contexts merge primitive worker costs at joins.
 
 use cq_lang_sequence::{Analysis, LevelNode, Machine, Program, Term, Tiling};
 use quote::{format_ident, quote};
@@ -199,10 +206,33 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
     translate_with(program, analysis, Config::default())
 }
 
+/// Instrument the same checked Tasks interpretation, including worker work.
+pub fn translate_profile(program: &Program, analysis: &Analysis) -> syn::Result<syn::Expr> {
+    translate_profile_with(program, analysis, Config::default())
+}
+
+/// Profile a target with explicit scheduling parameters.
+pub fn translate_profile_with(
+    program: &Program,
+    analysis: &Analysis,
+    config: Config,
+) -> syn::Result<syn::Expr> {
+    translate_mode(program, analysis, config, true)
+}
+
 pub fn translate_with(
     program: &Program,
     analysis: &Analysis,
     config: Config,
+) -> syn::Result<syn::Expr> {
+    translate_mode(program, analysis, config, false)
+}
+
+fn translate_mode(
+    program: &Program,
+    analysis: &Analysis,
+    config: Config,
+    profile: bool,
 ) -> syn::Result<syn::Expr> {
     let mut tiles = std::collections::BTreeMap::new();
     let mut partition_inputs = std::collections::BTreeSet::new();
@@ -221,10 +251,17 @@ pub fn translate_with(
     // compose beneath it unchanged; the paired flatten or pool store discharges
     // the binding into a Rayon closure.
     let mut partitions = Vec::new();
-    let mut expression = cq_sequence_pull::translate_with(
+    let translate = if profile {
+        cq_sequence_pull::translate_profile_with
+    } else {
+        cq_sequence_pull::translate_with
+    };
+    let mut expression = translate(
         program,
         analysis,
-        |term, emitter, child, output, owner, _| {
+        |term: &Term, emitter: &mut cq_sequence_pull::Emitter<'_>,
+         child: Option<&cq_sequence_pull::Value>, output: &mut cq_sequence_pull::Value,
+         owner: &str, _: usize| {
             if let Term::Tile { n, .. } = term
                 && tiles.get(&(term as *const Term))
                     .is_some_and(|kind| **kind == Tiling::Distribute)
@@ -270,6 +307,7 @@ pub fn translate_with(
                     } else {
                         quote!((#rows).collect::<::std::vec::Vec<_>>())
                     };
+                    let local = task_scope(emitter, local);
                     let joined = if nested {
                         quote!(__cq_parts.into_iter().map(::std::vec::Vec::into_iter))
                     } else {
@@ -286,10 +324,17 @@ pub fn translate_with(
                 }
             }
             if matches!(term, Term::Store { .. }) && partition_inputs.contains(owner) {
-                let rows = &output.rows;
+                let label = format!("{owner}.rows");
+                emitter.context_mut().profile_label(
+                    &label, "ROWS_BUILD", "", output.result.iter().cloned().collect(),
+                );
+                let rows = emitter.context().profile_inserting(&label, output.rows.clone());
+                let build = emitter.context().profile_build(
+                    &label, quote!((#rows).collect::<::std::vec::Vec<_>>()),
+                );
                 let binding = format_ident!("__cq_key_source_{}", owner);
                 emitter.context_mut().statements.push(syn::parse_quote!(
-                    let #binding = (#rows).collect::<::std::vec::Vec<_>>();
+                    let #binding = #build;
                 ));
                 emitter.context_mut().bound = true;
                 emitter.mark_target_published(owner);
@@ -301,12 +346,21 @@ pub fn translate_with(
                     providers.iter().any(|(_, ty)| matches!(ty, syn::Type::Path(path)
                         if path.path.segments.last().is_some_and(|segment| segment.ident == "Sharded"))))
             {
+                let label = format!("{owner}.parts");
+                emitter.context_mut().profile_label(
+                    &label, "PARTITION_BUILD", "", vec![result.clone()],
+                );
                 let rows = &output.rows;
+                let part = emitter.context().profile_inserting(&label, quote!(__cq_part));
+                let build = emitter.context().profile_build(
+                    &label,
+                    quote!((#rows).map(|__cq_part|
+                        (#part).collect::<::std::vec::Vec<_>>())
+                        .collect::<::std::vec::Vec<_>>()),
+                );
                 let binding = format_ident!("__cq_key_parts_{}", owner);
                 emitter.context_mut().statements.push(syn::parse_quote!(
-                    let #binding = (#rows).map(|__cq_part|
-                        __cq_part.collect::<::std::vec::Vec<_>>())
-                        .collect::<::std::vec::Vec<_>>();
+                    let #binding = #build;
                 ));
                 let keys = keys.iter().map(cq_lang_sequence::structures::symbol_name).collect::<Vec<_>>();
                 let repr = emitter.context_mut().materialize_partitioned(
@@ -324,12 +378,36 @@ pub fn translate_with(
         return Err(syn::Error::new_spanned(program, "Tasks partition lacks a joined flatten or pool store"));
     }
     if let Some(threads) = config.threads {
-        expression = syn::parse_quote!({
-            ::rayon::ThreadPoolBuilder::new().num_threads(#threads).build()
-                .expect("create CQ task pool").install(|| #expression)
-        });
+        expression = if profile {
+            syn::parse_quote!({
+                let __cq_task_context = ::cq_storage::counters::TaskContext::capture();
+                ::rayon::ThreadPoolBuilder::new().num_threads(#threads).build()
+                    .expect("create CQ task pool")
+                    .install(|| __cq_task_context.run(|| #expression))
+            })
+        } else {
+            syn::parse_quote!({
+                ::rayon::ThreadPoolBuilder::new().num_threads(#threads).build()
+                    .expect("create CQ task pool").install(|| #expression)
+            })
+        };
     }
     Ok(syn::parse_quote!((#expression).into_iter()))
+}
+
+/// Capture the caller's primitive-counter epoch before entering Rayon. Operator
+/// handles already share their own state; primitive counters stay task-local
+/// on the hot path and merge once when this synchronous task returns.
+pub(crate) fn task_scope(
+    emitter: &cq_sequence_pull::Emitter<'_>,
+    body: proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
+    if emitter.context().profile.is_some() {
+        let profile = emitter.context().profile_handle();
+        quote!(#profile.task(|| #body))
+    } else {
+        body
+    }
 }
 
 fn tile_nodes(term: &Term, output: &mut Vec<*const Term>) {

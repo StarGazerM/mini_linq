@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render retained CPU/GPU/DuckDB metrics plus exact plain-only par t1/t24.
+"""Render retained CPU/GPU/DuckDB metrics plus exact paired par t1/t24 profiles.
 
 Optional par inputs: performance_cpu_par_t{1,24}_sf{0.1,1,10}.json.
 Existing results remain available when par artifacts are missing. Common-set
@@ -73,6 +73,17 @@ def main():
                     + table(['Configuration', 'Exact completed', 'Rows collected (of 27)', 'Unavailable'], exactness)
                     + '\n\n### Per-query SF0.1 exactness matrix\n\nCells show correctness / collection status; missing evidence is explicitly unavailable.\n\n'
                     + table(['Query', 'CPU-par t1 correctness / status', 'CPU-par t24 correctness / status'], exactness_matrix))
+    spotchecks = []
+    for threads in [1, 24]:
+        path = OUT / f'performance_cpu_default_spotcheck_t{threads}_sf0.1.json'
+        if path.exists():
+            document = json.loads(path.read_text())
+            assert document['sf'] == 0.1 and document['configuration'] == 'default'
+            spotchecks.extend([r['query'].removeprefix('retail_'), f'default t{threads}',
+                               r['correctness'], status_text(r)] for r in document['rows'])
+    sections.append('### Default SF0.1 exactness spotcheck\n\nFive untimed default-query checks use isolated evidence, never the retained CPU performance measurements.\n\n'
+                    + (table(['Query', 'Configuration', 'Correctness', 'Status'], spotchecks)
+                       if spotchecks else 'Not collected.'))
     for sf in [1, 10]:
         cpu = cpu_by_sf[sf]
         duck = {r['gpu_query']: r['raw_timing']['threads'] for r in load(f'performance_duck_trash_sf{sf}.json')['results']}
@@ -105,15 +116,26 @@ def main():
                 value = row[f'cpu_{label}_uninstrumented_total_ms']
                 plain.append(number(value) if value is not None else status)
             row['cpu_le_search_complete'] = selection['le_search_complete']
-            for threads in [1, 24]:
+            for threads in [24, 1]:
                 c = par[threads].get(selection['query'])
-                exact = bool(c and c['status'] == 'complete' and c['correctness'] == 'ok')
+                exact = bool(c and c['correctness'] == 'ok')
                 value = c['uninstrumented_total_median_ms'] if exact else None
                 row[f'cpu_par_t{threads}_configuration'] = 'par'
                 row[f'cpu_par_t{threads}_status'] = status_text(c) if c else 'missing'
                 row[f'cpu_par_t{threads}_exact'] = exact
                 row[f'cpu_par_t{threads}_uninstrumented_total_ms'] = value
                 row[f'cpu_par_t{threads}_runs'] = c['runs'] if c else 0
+                row[f'cpu_par_t{threads}_profile_runs'] = c.get('profile_runs', 0) if c else 0
+                for output, field in [('build', 'profile_build_at_median_total_ms'),
+                                      ('query', 'profile_query_residual_at_median_total_ms'),
+                                      ('total', 'profile_total_median_ms')]:
+                    row[f'cpu_par_t{threads}_profile_{output}_ms'] = c.get(field) if exact else None
+                values = [row[f'cpu_par_t{threads}_profile_{p}_ms'] for p in ['build', 'query', 'total']]
+                formatted = [number(v) for v in values]
+                if values[2] is None:
+                    formatted[2] = (row[f'cpu_par_t{threads}_status']
+                                    if not c or c['status'] != 'complete' else 'profile unavailable')
+                phases.extend(formatted)
                 plain.append(number(value) if value is not None else row[f'cpu_par_t{threads}_status'])
             for threads in [1, 24]:
                 value = duck[query][str(threads)]['median_seconds'] * 1000
@@ -126,18 +148,25 @@ def main():
         headers = ['Query', 'GPU build', 'GPU query', 'GPU total']
         for label in ['LE', 'advised', 'default']:
             headers.extend([f'CPU-{label} build', f'CPU-{label} query', f'CPU-{label} total'])
+        for threads in [24, 1]:
+            headers.extend([f'CPU-par t{threads} setup+build', f'CPU-par t{threads} final evaluation', f'CPU-par t{threads} total'])
         headers.extend(['DuckDB t1', 'DuckDB t24'])
         statuses = {status: sum(r['status'] == status for r in cpu['rows']) for status in sorted({r['status'] for r in cpu['rows']})}
         three = sum(r['runs'] == 3 or r['profile_runs'] == 3 for r in cpu['rows'])
         coverage = ', '.join(f'{n} {s}' for s, n in statuses.items())
+        par_coverage = '; '.join(
+            f"par t{threads}: {sum(r['correctness'] == 'ok' and r.get('uninstrumented_total_median_ms') is not None for r in par[threads].values())} exact plain, "
+            f"{sum(r.get('profile_total_median_ms') is not None for r in par[threads].values())} paired profiles, "
+            f"{sum(r['status'] == 'timeout' for r in par[threads].values())} configuration-budget timeouts"
+            for threads in [24, 1])
         sections.append(
-            f"## SF{sf}: phase comparison\n\nAll values are milliseconds. CPU build/query/total are paired **instrumented profile** measurements; GPU and DuckDB are ordinary timings. CPU-LE is selected by the minimum **plain** median of `le` and `le_runs`.\n\n"
+            f"## SF{sf}: phase comparison\n\nAll values are milliseconds. CPU phase columns are paired **instrumented profile** measurements; GPU and DuckDB are ordinary timings. Parallel **setup+build / final evaluation** are not the same accounting as default/LE/advised exclusive build / query residual. Final evaluation includes boundary/teardown residual. **Uninstrumented whole-query totals are primary** for speedups. CPU-LE is selected by the minimum plain median of `le` and `le_runs`.\n\n"
             + table(headers, phase_rows)
-            + f"\n\nCoverage: {len(cpu['rows'])} configurations attempted across 27 queries; {coverage}; {three} configurations used three runs in at least one completed mode.\n\n### SF{sf} uninstrumented CPU totals\n\nThese whole-query medians include index construction and determine the primary CPU speedups.\n\n"
-            + table(['Query', 'CPU-LE total', 'CPU-advised total', 'CPU-default total', 'CPU-par t1 total', 'CPU-par t24 total', 'DuckDB t1', 'DuckDB t24'], plain_rows)
+            + f"\n\nCoverage: {len(cpu['rows'])} retained sequential configurations across 27 queries; {coverage}; {three} configurations used three runs in at least one completed mode. Parallel coverage (of 27 each): {par_coverage}.\n\n### SF{sf} uninstrumented CPU totals\n\nThese whole-query medians include construction and determine primary CPU speedups. Completed exact plain results remain shown when a later profile/counting mode times out.\n\n"
+            + table(['Query', 'CPU-LE total', 'CPU-advised total', 'CPU-default total', 'CPU-par t24 total', 'CPU-par t1 total', 'DuckDB t1', 'DuckDB t24'], plain_rows)
         )
         primary_fields = ['cpu_default_uninstrumented_total_ms', 'cpu_par_t1_uninstrumented_total_ms', 'cpu_par_t24_uninstrumented_total_ms', 'duckdb_t1_ms', 'duckdb_t24_ms']
-        fields = ['duckdb_t1_ms', 'duckdb_t24_ms', 'cpu_par_t1_uninstrumented_total_ms', 'cpu_par_t24_uninstrumented_total_ms'] + [f'cpu_{label}_{mode}_total_ms' for mode in ['uninstrumented', 'profile'] for label in ['le', 'advised', 'default']]
+        fields = ['duckdb_t1_ms', 'duckdb_t24_ms'] + [f'cpu_par_t{threads}_{mode}_total_ms' for threads in [24, 1] for mode in ['uninstrumented', 'profile']] + [f'cpu_{label}_{mode}_total_ms' for mode in ['uninstrumented', 'profile'] for label in ['le', 'advised', 'default']]
         for field in fields:
             eligible = [r for r in comparisons if r['sf'] == sf and r['gpu_exact'] and r[field] is not None and r[field] > 0]
             summaries.append({'sf': sf, 'comparator': field, 'queries': [r['query'] for r in eligible], 'n': len(eligible), 'geometric_mean_speedup': math.exp(sum(math.log(r[field] / r['gpu_total_ms']) for r in eligible) / len(eligible)) if eligible else None})
@@ -214,9 +243,12 @@ Boundaries: [`worker.rs`](../../../features/workloads/xtask/src/tpch/worker.rs),
 
 ### CPU: fixed parallel configuration
 
-CPU-par always selects the authored **`par`** configuration, never the best of multiple plans. Each scale and thread count has isolated measurement artifacts: `RAYON_NUM_THREADS=1` or `24`, raw data under `performance_cpu_raw/par/t{threads}/sf{sf}`, consolidated `performance_cpu_par_t{threads}_sf{sf}.json` and `.tsv`. Scale/thread-independent binaries and Cargo output are shared under `/tmp/mini-linq-performance-cpu/par`; exported data remains scale-specific. Cache stamps hash compiler/runtime Rust sources and Cargo inputs, including Tasks, pull, IR, planner, printer, storage and facade. Existing raw results must match their source stamps before reuse; stale evidence is rejected rather than silently overwritten. Generated consumers depend directly on Rayon because emitted task code uses `::rayon`. Only the plain timing worker is built; no counters, operator profiles or instrumentation overhead are collected.
+CPU-par always selects the authored **`par`** configuration, never the best of multiple plans. Each scale and thread count has isolated measurement artifacts: `RAYON_NUM_THREADS=1` or `24`, raw data under `performance_cpu_raw/par/t{threads}/sf{sf}`, consolidated `performance_cpu_par_t{threads}_sf{sf}.json` and `.tsv`. Scale/thread-independent timing, counting and profile binaries and Cargo output are shared under `/tmp/mini-linq-performance-cpu/par`; exported data remains scale-specific. Cache stamps hash compiler/runtime Rust sources and existing Cargo/toolchain inputs, including Tasks, pull, IR, planner, printer, storage and facade. Existing raw results must match their source stamps before reuse; stale evidence is rejected rather than silently overwritten. Generated consumers depend directly on Rayon because emitted task code uses `::rayon`.
 
-SF0.1 runs one untimed exact comparison for every query at each thread count. SF1/SF10 use one exact warmup and five plain timed runs, each checked against the same authored SQL with the exact normalized-set comparison described above. The fixed **100-second process wall cap** includes loading, warmup, measurement and comparisons. A timeout or mismatch has no numeric median. Query-local task scheduling and construction are included in plain totals; input loading and answer comparison are excluded. Parallel environment, source hashes and command logs are retained separately from the original CPU evidence. Missing artifacts remain explicitly unavailable.
+SF0.1 runs one untimed exact comparison for every query at each thread count. A separate `--default-spotcheck` checks h01, h02, h06, h13 and h19 by default, with isolated `performance_cpu_default_spotcheck_t{threads}_sf0.1` artifacts; it never changes the existing CPU measurements. SF1/SF10 run one exact warmup and five plain timed runs, an independent untimed counting run, then one exact profile warmup and five profile timed runs. Any warmup or timed query above **10 seconds** reduces that timed mode to the first **three** samples (including when the fourth/fifth sample triggers reduction). Every result is checked against the same authored SQL with exact normalized-set comparison. The **100-second combined configuration wall cap** includes all worker loading, warmup, measurement and comparisons across plain/counts/profile. Completed exact plain metrics remain valid if counting or profiling subsequently times out; unavailable phases stay null, never estimated. Query-local task scheduling and construction are included in totals; input loading and answer comparison are excluded. Parallel environment, source hashes and command logs are retained separately from the original CPU evidence.
+
+Parallel **setup+build** uses `TASKS_BUILD_WALL_TOTAL`, the measured host-wall **union** of generated setup/publication intervals across all Tasks programs during that same query execution. Nested/concurrent build intervals count once, never once per task. Setup+build includes upstream scans, partition routing and joins needed to publish stores, not just exclusive index insertion. **Final evaluation** is the same median profile total minus that measured union, including boundary/teardown overhead. Per-program `TASKS_QUERY_WALL` final evaluation/collection spans remain raw diagnostics, not an additive wall split. Task-local/lazy construction during final evaluation remains there unless it enters an explicit build interval. Ordinary operator spans can overlap across tasks and exceed root wall time; they are **never summed** for the parallel wall split. **Parallel setup+build is not identical to default/LE/advised exclusive build** (`BUILD_EXCLUSIVE_TOTAL`). Internal JSON fields retain `profile_build` / `profile_query_residual` naming, with these parallel-specific definitions. Phase values never split an uninstrumented total, and no missing phase is inferred from plain timing. **Uninstrumented whole-query totals remain the primary comparison.**
+
 
 
 ### DuckDB
@@ -238,19 +270,21 @@ python3 experiments/gpu/compare/performance_cpu_collect.py consolidate --sf 10 -
 python3 experiments/gpu/compare/performance_cpu_collect.py cleanup --sf 10
 # Parallel protocol: complete SF0.1 exactness first, then time SF1/SF10.
 # Run serially; do not overlap builds or measurements:
-for threads in 1 24; do
+for threads in 24 1; do
   python3 experiments/gpu/compare/performance_cpu_collect.py all --par --threads "$threads" --sf 0.1 --cap-seconds 100 \
     --database features/workloads/target/bench/data/tpch-0.1/dbgen.duckdb
 done
+python3 experiments/gpu/compare/performance_cpu_collect.py all --default-spotcheck --sf 0.1 --cap-seconds 100 \
+  --database features/workloads/target/bench/data/tpch-0.1/dbgen.duckdb
 for sf in 1 10; do
-  for threads in 1 24; do
+  for threads in 24 1; do
     python3 experiments/gpu/compare/performance_cpu_collect.py all --par --threads "$threads" --sf "$sf" --runs 5 --cap-seconds 100
   done
 done
 python3 experiments/gpu/compare/performance_report.py
 ```
 
-`--database PATH` explicitly overrides the oracle/export database and records its resolved path in environment metadata; otherwise the existing `/data/tpch-gpu/sf{sf}/dbgen.duckdb` convention is unchanged. The SF0.1 command assumes the xtask-generated database already exists. For an initial parallel smoke subset, add repeatable `--query retail_hXX`; consolidation still preserves every catalog row, marking uncollected queries missing. This does not replace full 27-query exactness.
+`--database PATH` explicitly overrides the oracle/export database and records its resolved path in environment metadata; otherwise the existing `/data/tpch-gpu/sf{sf}/dbgen.duckdb` convention is unchanged. The SF0.1 commands assume the xtask-generated database already exists. For an initial parallel smoke subset, add repeatable `--query retail_hXX`; consolidation still preserves every catalog row, marking uncollected queries missing. This does not replace full 27-query exactness. `--default-spotcheck` accepts exactly five distinct `--query` overrides and defaults to one thread. Freeze compiler/runtime and worker sources before collecting; run every command serially, without concurrent builds or measurements.
 
 The collector also exposes `adaptive`, `build`, `prepare`, `measure`, `consolidate`, and `cleanup` phases. Cleanup removes duplicate answers/oracles after exact checks while preserving measurement evidence; prepare regenerates the oracles. GPU reproduction (inside `experiments/gpu`):
 
