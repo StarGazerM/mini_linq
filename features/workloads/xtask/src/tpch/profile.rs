@@ -50,7 +50,7 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
                         .strip_prefix("workloads/")
                         .unwrap_or(c.rust_path),
                 ),
-                Some(&evidence.join("workers")),
+                &evidence.join("workers"),
             )
         })
         .collect::<Result<Vec<_>>>()?;
@@ -76,7 +76,10 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
         )?;
         let raw = execute_worker_binary(
             &q,
-            &q.built.count_binary,
+            q.built
+                .count_binary
+                .as_ref()
+                .ok_or("missing counting worker")?,
             &directory,
             &config,
             0,
@@ -131,10 +134,13 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
         let candidate = raw["candidate_insertions"]
             .as_u64()
             .ok_or("missing candidate count")?;
-        let copied = raw["rows_copied"].as_u64().ok_or("missing copied row count")?;
-        let distinct = raw["distinct_insertions"].as_u64().ok_or("missing distinct insertion count")?;
-        if bag != copied || sets + candidate != distinct
-        {
+        let copied = raw["rows_copied"]
+            .as_u64()
+            .ok_or("missing copied row count")?;
+        let distinct = raw["distinct_insertions"]
+            .as_u64()
+            .ok_or("missing distinct insertion count")?;
+        if bag != copied || sets + candidate != distinct {
             return Err(format!(
                 "{} / {config}: independent primitive build counts disagree: bag {bag}/{copied} copied; set {sets} + candidates {candidate}/{distinct} distinct attempts",
                 q.name

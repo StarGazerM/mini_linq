@@ -483,7 +483,11 @@ impl Parse for Term {
             if !parts.is_empty() {
                 return Err(parts.error("partition_k expects one partition count"));
             }
-            Ok(Self::PartitionK { keys, parts: count, inner: input.parse()? })
+            Ok(Self::PartitionK {
+                keys,
+                parts: count,
+                inner: input.parse()?,
+            })
         } else if input.peek(kw::tile) {
             input.parse::<kw::tile>()?;
             let n = parse_usize(input)?;

@@ -220,7 +220,10 @@ impl<'a> Emitter<'a> {
 
     /// The contract's proof-derived interpretation of this exact Group node.
     pub fn is_partial_group(&self, term: &Term) -> bool {
-        *self.partial_groups.get(&(term as *const Term)).expect("checked Group interpretation")
+        *self
+            .partial_groups
+            .get(&(term as *const Term))
+            .expect("checked Group interpretation")
     }
 
     /// Publish the exact count of an already evaluated Sequence store.
@@ -230,10 +233,16 @@ impl<'a> Emitter<'a> {
 
     /// Re-publish an immutable flat row view already owned by an ancestor.
     pub fn alias_store(&mut self, name: &str, source: &str) -> bool {
-        if !self.values.get(source).is_some_and(|value| value.stored && value.depth == 0) {
+        if !self
+            .values
+            .get(source)
+            .is_some_and(|value| value.stored && value.depth == 0)
+        {
             return false;
         }
-        let Some(length) = self.lengths.get(source).cloned() else { return false };
+        let Some(length) = self.lengths.get(source).cloned() else {
+            return false;
+        };
         self.lengths.insert(name.to_owned(), length);
         self.mark_target_published(name);
         true
@@ -252,7 +261,11 @@ impl<'a> Emitter<'a> {
                 if let Some(length) = self.lengths.get(name) {
                     return Ok(length.clone());
                 }
-                if let Some(value) = self.values.get(name).filter(|value| value.stored && value.depth == 0) {
+                if let Some(value) = self
+                    .values
+                    .get(name)
+                    .filter(|value| value.stored && value.depth == 0)
+                {
                     let rows = &value.rows;
                     return Ok(quote!((#rows).count()));
                 }
@@ -268,11 +281,15 @@ impl<'a> Emitter<'a> {
                         }
                     }));
                 }
-                Err(syn::Error::new(proc_macro2::Span::call_site(),
-                    format!("runtime choice length `{name}` has no published flat store")))
+                Err(syn::Error::new(
+                    proc_macro2::Span::call_site(),
+                    format!("runtime choice length `{name}` has no published flat store"),
+                ))
             }
-            _ => Err(syn::Error::new(proc_macro2::Span::call_site(),
-                "runtime choice requires a recorded input length, literal, or sum")),
+            _ => Err(syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "runtime choice requires a recorded input length, literal, or sum",
+            )),
         }
     }
 
@@ -294,7 +311,8 @@ impl<'a> Emitter<'a> {
     /// Keep their joined iterator instead of copying into another host buffer.
     pub fn own_task_answer(&mut self, result: &str, rows: TokenStream) -> TokenStream {
         self.owned_answer = true;
-        self.adapters.head(result, &self.program.structures.physical.program.head, rows)
+        self.adapters
+            .head(result, &self.program.structures.physical.program.head, rows)
     }
 
     fn register(&mut self, name: &str) {
@@ -426,7 +444,8 @@ impl<'a> Emitter<'a> {
             if input.result.as_deref() != Some(&parent_name) {
                 input = self.map(parent, input, expand)?;
             }
-            let positional = !partition && self.analysis.structures.reads.contains_key(&result)
+            let positional = !partition
+                && self.analysis.structures.reads.contains_key(&result)
                 && matches!(
                     self.context().reprs.get(&parent_name),
                     Some(Repr::Host | Repr::Positions(_) | Repr::Selection { .. })
@@ -508,13 +527,25 @@ impl<'a> Emitter<'a> {
         input
     }
     /// Serial interpretation of the same fixed key routing used by task targets.
-    pub fn partition_k(&mut self, keys: &[Ident], parts: usize, mut input: Value) -> syn::Result<Value> {
-        let result = input.result.as_ref().ok_or_else(|| syn::Error::new(
-            proc_macro2::Span::call_site(), "partition_k requires row provenance"))?;
+    pub fn partition_k(
+        &mut self,
+        keys: &[Ident],
+        parts: usize,
+        mut input: Value,
+    ) -> syn::Result<Value> {
+        let result = input.result.as_ref().ok_or_else(|| {
+            syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "partition_k requires row provenance",
+            )
+        })?;
         self.register(result);
         let columns: Vec<_> = keys.iter().map(symbol_name).collect();
         let pattern = self.context().bind_columns(result, &columns, false);
-        let key: Vec<_> = columns.iter().map(|column| self.context().access(result, column)).collect();
+        let key: Vec<_> = columns
+            .iter()
+            .map(|column| self.context().access(result, column))
+            .collect();
         let key = cq_print::group(&key);
         let rows = input.rows;
         input.rows = quote!({
@@ -532,7 +563,6 @@ impl<'a> Emitter<'a> {
         input.partitioned = true;
         Ok(input)
     }
-
 
     // Row-layout conversion is shared by union injection and checked
     // equivalent-result aliases. It changes carriers, never query decisions.
@@ -793,17 +823,27 @@ impl<'a> Emitter<'a> {
 
     /// Reuse the native Group row updates in one scheduler-task accumulator.
     pub fn group_accumulate(
-        &mut self, name: &Ident, input: Value, table: TokenStream,
+        &mut self,
+        name: &Ident,
+        input: Value,
+        table: TokenStream,
     ) -> syn::Result<TokenStream> {
         let result = symbol_name(name);
         self.register(&result);
         let Operator::Group(group) = &self.context().physical[&result].operator else {
-            return Err(syn::Error::new_spanned(name, "group lacks Physical group provenance"));
+            return Err(syn::Error::new_spanned(
+                name,
+                "group lacks Physical group provenance",
+            ));
         };
         let operand = symbol_name(&group.input);
         let label = format!("{result}.partial");
-        let index = self.context_mut().profile_label(&label, "GROUP_PARTIAL", "", vec![operand.clone()]);
-        let body = self.adapters.accumulate_group(&result, (operand, input.rows), table)?;
+        let index =
+            self.context_mut()
+                .profile_label(&label, "GROUP_PARTIAL", "", vec![operand.clone()]);
+        let body = self
+            .adapters
+            .accumulate_group(&result, (operand, input.rows), table)?;
         Ok(if self.context().profile.is_some() {
             let profile = self.context().profile_handle();
             quote!(#profile.scope(#index, || #body))
@@ -812,7 +852,12 @@ impl<'a> Emitter<'a> {
         })
     }
 
-    fn group_with_output(&mut self, name: &Ident, input: Value, partial: bool) -> syn::Result<Value> {
+    fn group_with_output(
+        &mut self,
+        name: &Ident,
+        input: Value,
+        partial: bool,
+    ) -> syn::Result<Value> {
         let result = symbol_name(name);
         self.register(&result);
         let Operator::Group(group) = &self.context().physical[&result].operator else {
@@ -824,7 +869,8 @@ impl<'a> Emitter<'a> {
         let operand = symbol_name(&group.input);
         let output = if partial {
             let label = format!("{result}.partial");
-            self.context_mut().profile_label(&label, "GROUP_PARTIAL", "", vec![operand.clone()]);
+            self.context_mut()
+                .profile_label(&label, "GROUP_PARTIAL", "", vec![operand.clone()]);
             label
         } else {
             result.clone()
@@ -1033,10 +1079,16 @@ impl<'a> Emitter<'a> {
         // and final evaluation at the host, never by adding concurrent spans.
         let phases = if !self.pull && self.context().profile.is_some() {
             let build = self.context_mut().profile_label(
-                "__cq_tasks_build", "TASKS_BUILD_WALL", "", Vec::new(),
+                "__cq_tasks_build",
+                "TASKS_BUILD_WALL",
+                "",
+                Vec::new(),
             );
             let query = self.context_mut().profile_label(
-                "__cq_tasks_query", "TASKS_QUERY_WALL", "", vec![answer],
+                "__cq_tasks_query",
+                "TASKS_QUERY_WALL",
+                "",
+                vec![answer],
             );
             Some((build, query))
         } else {
@@ -1216,7 +1268,9 @@ fn translate_with_profile(
                     let flat = emitter.flatten(input());
                     emitter.group(name, flat)?
                 } else {
-                    emitter.lift(input(), input().depth, &mut |emitter, rows| emitter.group(name, rows))?
+                    emitter.lift(input(), input().depth, &mut |emitter, rows| {
+                        emitter.group(name, rows)
+                    })?
                 }
             }
             Term::Fold(monoid, _) => {
@@ -1261,11 +1315,15 @@ fn translate_with_profile(
                     let statements = emitter.context_mut().statements.split_off(start);
                     values.push((guard, condition, value, statements));
                 }
-                let depth = values.iter().map(|(_, _, value, _)| value.depth).min()
+                let depth = values
+                    .iter()
+                    .map(|(_, _, value, _)| value.depth)
+                    .min()
                     .expect("checked nonempty choice");
                 let result = values[0].2.result.clone();
                 let stored = values.iter().any(|(_, _, value, _)| value.stored);
-                let mut selected = quote!(::core::unreachable!("checked exhaustive Sequence choice"));
+                let mut selected =
+                    quote!(::core::unreachable!("checked exhaustive Sequence choice"));
                 for (guard, condition, mut value, statements) in values.into_iter().rev() {
                     while value.depth > depth {
                         value = emitter.flatten(value);
@@ -1348,7 +1406,10 @@ fn collect_choice_rows(rows: TokenStream, depth: usize) -> TokenStream {
     if depth == 0 {
         quote!((#rows).collect::<::std::vec::Vec<_>>())
     } else {
-        let part = collect_choice_rows(quote!(::core::iter::IntoIterator::into_iter(__cq_choice_part)), depth - 1);
+        let part = collect_choice_rows(
+            quote!(::core::iter::IntoIterator::into_iter(__cq_choice_part)),
+            depth - 1,
+        );
         quote!((#rows).map(|__cq_choice_part| #part).collect::<::std::vec::Vec<_>>())
     }
 }
@@ -1367,15 +1428,25 @@ fn group_nodes(term: &Term, output: &mut Vec<*const Term>) {
         output.push(term as *const Term);
     }
     match term {
-        Term::Map(_, inner) | Term::Compact(_, inner) | Term::Flatten(inner)
-        | Term::Fold(_, inner) | Term::Group(_, inner) | Term::Canon(inner)
-        | Term::Store { inner, .. } | Term::Tile { inner, .. }
-        | Term::PartitionK { inner, .. } | Term::Lookup { inner, .. } => group_nodes(inner, output),
+        Term::Map(_, inner)
+        | Term::Compact(_, inner)
+        | Term::Flatten(inner)
+        | Term::Fold(_, inner)
+        | Term::Group(_, inner)
+        | Term::Canon(inner)
+        | Term::Store { inner, .. }
+        | Term::Tile { inner, .. }
+        | Term::PartitionK { inner, .. }
+        | Term::Lookup { inner, .. } => group_nodes(inner, output),
         Term::Choose(arms) => {
-            for (_, arm) in arms { group_nodes(arm, output); }
+            for (_, arm) in arms {
+                group_nodes(arm, output);
+            }
         }
         Term::Union(arms) => {
-            for arm in arms { group_nodes(arm, output); }
+            for arm in arms {
+                group_nodes(arm, output);
+            }
         }
         Term::Rows(_) | Term::Ref(_) => {}
     }

@@ -285,19 +285,18 @@ mod cpu {
         for &target in targets {
             let (expression, canonical) = translate_with_catalog(program, target, catalog)
                 .unwrap_or_else(|error| panic!("{error}"));
-            let (adapters, dependencies) = if target == Target::Tasks {
-                (quote! {
-                    extern crate self as mini_linq;
-                    pub mod __tasks { pub use cq_sequence_tasks::combine; }
-                }, vec![crate::rustc::linked_dependency::<cq_sequence_tasks::Config>(
-                    "cq_sequence_tasks", "cq_sequence_tasks::Config",
-                )])
+            let dependencies = if target == Target::Tasks {
+                vec![
+                    crate::rustc::linked_dependency::<cq_sequence_tasks::Config>(
+                        "cq_sequence_tasks",
+                        "cq_sequence_tasks::Config",
+                    ),
+                ]
             } else {
-                (quote!(), Vec::new())
+                Vec::new()
             };
             let generated = quote! {
                 #![allow(non_snake_case, unused_variables)]
-                #adapters
                 fn main() {
                     #setup
                     for row in #expression {
@@ -306,7 +305,8 @@ mod cpu {
                 }
             };
             eprintln!("conformance: compiling {target:?}");
-            let output = runtime.run_with_dependencies(&generated.to_token_stream().to_string(), &dependencies);
+            let output = runtime
+                .run_with_dependencies(&generated.to_token_stream().to_string(), &dependencies);
             let rows: Vec<_> = String::from_utf8(output.stdout)
                 .expect("UTF-8 answer rows")
                 .lines()

@@ -52,32 +52,38 @@ fn node(name: &str, collaborative: bool, dynamic: bool, children: Vec<LevelNode>
 }
 
 fn sequential() -> Machine {
-    Machine { key_partition_threshold: 65536, layout: None,
-    name: syn::parse_quote!(target),
-    items: 1,
-    root: node("host", false, false, vec![]), }
+    Machine {
+        layout: None,
+        name: syn::parse_quote!(target),
+        items: 1,
+        key_partition_threshold: 65536,
+        root: node("host", false, false, vec![]),
+    }
 }
 
 fn gpu() -> Machine {
-    Machine { key_partition_threshold: 65536, layout: None,
-    name: syn::parse_quote!(target),
-    items: 4,
-    root: node(
-        "host",
-        false,
-        false,
-        vec![node(
-            "device",
+    Machine {
+        layout: None,
+        name: syn::parse_quote!(target),
+        items: 4,
+        key_partition_threshold: 65536,
+        root: node(
+            "host",
             false,
-            true,
+            false,
             vec![node(
-                "block",
-                true,
+                "device",
                 false,
-                vec![node("lane", false, false, vec![])],
+                true,
+                vec![node(
+                    "block",
+                    true,
+                    false,
+                    vec![node("lane", false, false, vec![])],
+                )],
             )],
-        )],
-    ), }
+        ),
+    }
 }
 
 fn grade(program: &mut Program, grades: proc_macro2::TokenStream) {
@@ -131,8 +137,21 @@ fn every_grammar_form_round_trips() {
 #[test]
 fn constructor_names_remain_definition_names_and_references() {
     for spelling in [
-        "rows", "map", "flatten", "compact", "tile", "lookup", "fold", "group", "canon", "store",
-        "union", "choose", "capacity", "output", "partition_k",
+        "rows",
+        "map",
+        "flatten",
+        "compact",
+        "tile",
+        "lookup",
+        "fold",
+        "group",
+        "canon",
+        "store",
+        "union",
+        "choose",
+        "capacity",
+        "output",
+        "partition_k",
     ] {
         let name: syn::Ident = syn::parse_str(spelling).unwrap();
         let sequence: Sequence = syn::parse2(quote! {
@@ -568,20 +587,23 @@ fn ungraded_programs_default_to_host_only() {
 
 #[test]
 fn leaf_flatten_is_sequential_but_parent_fold_needs_collaboration() {
-    let tasks = Machine { key_partition_threshold: 65536, layout: None,
-    name: syn::parse_quote!(target),
-    items: 1,
-    root: node(
-        "host",
-        false,
-        false,
-        vec![node(
-            "pool",
+    let tasks = Machine {
+        layout: None,
+        name: syn::parse_quote!(target),
+        items: 1,
+        key_partition_threshold: 65536,
+        root: node(
+            "host",
             false,
             false,
-            vec![node("task", false, false, vec![])],
-        )],
-    ), };
+            vec![node(
+                "pool",
+                false,
+                false,
+                vec![node("task", false, false, vec![])],
+            )],
+        ),
+    };
     let mut p = lookup_program(quote!(a = flatten lookup r [a] rows l;));
     grade(&mut p, quote!(a at pool.task;));
     assert!(check_grading(&p, &tasks).unwrap().collectives.is_empty());
@@ -1013,9 +1035,12 @@ fn grouped_fold_requires_complete_globally_distinct_valuations() {
     }
     // Global canonicalization establishes uniqueness across the contiguous
     // parts; this is now a legal keyed partial fold with a flat merged result.
-    let accepted = grouped_program(quote!(k), quote!(
-        r = canon rows r; groups = group grouped tile 2 r;
-    ));
+    let accepted = grouped_program(
+        quote!(k),
+        quote!(
+            r = canon rows r; groups = group grouped tile 2 r;
+        ),
+    );
     let facts = contract::check(&accepted).unwrap();
     assert_eq!(facts.partial_groups["groups"], [true]);
     assert_eq!(facts.shapes["groups"].len(), 1);
@@ -1196,21 +1221,36 @@ fn shared_choices_reuse_provider_obligations_without_repeating_reads() {
 }
 
 fn key_pool() -> Machine {
-    let mut pool = node("pool", false, true, vec![node("task", false, false, vec![])]);
+    let mut pool = node(
+        "pool",
+        false,
+        true,
+        vec![node("task", false, false, vec![])],
+    );
     pool.width = Some(4);
-    Machine { key_partition_threshold: 65536, root: node("host", false, false, vec![pool]), ..sequential() }
+    Machine {
+        key_partition_threshold: 65536,
+        root: node("host", false, false, vec![pool]),
+        ..sequential()
+    }
 }
 
 #[test]
 fn key_partition_roundtrip_canon_and_group_laws() {
-    let source = grouped_program(quote!(k), quote!(
-        input = store rows r;
-        out = store group grouped canon input;
-    ));
-    let mut target = grouped_program(quote!(k), quote!(
-        input = store rows r;
-        out = store flatten group grouped canon partition_k[k](4) input;
-    ));
+    let source = grouped_program(
+        quote!(k),
+        quote!(
+            input = store rows r;
+            out = store group grouped canon input;
+        ),
+    );
+    let mut target = grouped_program(
+        quote!(k),
+        quote!(
+            input = store rows r;
+            out = store flatten group grouped canon partition_k[k](4) input;
+        ),
+    );
     let printed = target.to_token_stream();
     assert_eq!(target, syn::parse2::<Program>(printed).unwrap());
     contract::check_rewrite(&source, &target).unwrap();
@@ -1230,9 +1270,18 @@ fn key_partition_roundtrip_canon_and_group_laws() {
 
 #[test]
 fn key_partition_rejects_missing_ancestor_store_and_invalid_width() {
-    reject(&program(quote!(out = partition_k[a](4) rows r;)), "BE-KeyPart");
-    reject(&program(quote!(input = rows r; out = partition_k[a](4) input;)), "BE-KeyPart");
-    reject(&program(quote!(input = store rows r; out = partition_k[a](0) input;)), "BE-KeyPart");
+    reject(
+        &program(quote!(out = partition_k[a](4) rows r;)),
+        "BE-KeyPart",
+    );
+    reject(
+        &program(quote!(input = rows r; out = partition_k[a](4) input;)),
+        "BE-KeyPart",
+    );
+    reject(
+        &program(quote!(input = store rows r; out = partition_k[a](0) input;)),
+        "BE-KeyPart",
+    );
     let mut p = program(quote!(input = store rows r; out = partition_k[a](4) input;));
     grade(&mut p, quote!(input at pool; out at pool;));
     reject_grade(&p, &key_pool(), "BE-KeyPart");
@@ -1254,7 +1303,10 @@ fn runtime_provider_cover_keeps_routing_and_grades_both_branches() {
         ];
         out = flatten lookup r[a] rows l;
     ));
-    grade(&mut p, quote!(input at host; provider at pool; out at host;));
+    grade(
+        &mut p,
+        quote!(input at host; provider at pool; out at host;),
+    );
     let facts = check_grading(&p, &key_pool()).unwrap();
     assert_eq!(facts.shapes["provider"][0], Len::Unknown(None));
     assert_eq!(p, syn::parse2(p.to_token_stream()).unwrap());
@@ -1262,35 +1314,52 @@ fn runtime_provider_cover_keeps_routing_and_grades_both_branches() {
     let mut wrong_width = key_pool();
     wrong_width.root.children[0].width = Some(8);
     reject_grade(&p, &wrong_width, "BE-KeyPart");
-    grade(&mut p, quote!(input at pool; provider at pool; out at host;));
+    grade(
+        &mut p,
+        quote!(input at pool; provider at pool; out at host;),
+    );
     reject_grade(&p, &key_pool(), "BE-KeyPart");
 }
 
 #[test]
 fn key_partition_rejects_undetermined_valuation_group_and_lookup_keys() {
-    reject(&program(quote!(
-        input = store rows r;
-        out = canon partition_k[missing](4) input;
-    )), "BE-KeyPart");
-    reject(&grouped_program(quote!(k), quote!(
-        input = store rows r;
-        out = flatten group grouped canon partition_k[value](4) input;
-    )), "BE-KeyPartGroup");
-    reject(&lookup_program(quote!(
-        input = store rows r;
-        provider = store partition_k[b](4) input;
-        out = flatten lookup r[a] rows l;
-    )), "BE-KeyPartProvider");
+    reject(
+        &program(quote!(
+            input = store rows r;
+            out = canon partition_k[missing](4) input;
+        )),
+        "BE-KeyPart",
+    );
+    reject(
+        &grouped_program(
+            quote!(k),
+            quote!(
+                input = store rows r;
+                out = flatten group grouped canon partition_k[value](4) input;
+            ),
+        ),
+        "BE-KeyPartGroup",
+    );
+    reject(
+        &lookup_program(quote!(
+            input = store rows r;
+            provider = store partition_k[b](4) input;
+            out = flatten lookup r[a] rows l;
+        )),
+        "BE-KeyPartProvider",
+    );
     contract::check(&lookup_program(quote!(
         input = store rows r;
         provider = store partition_k[](4) input;
         out = flatten lookup r[a] rows l;
-    ))).unwrap();
+    )))
+    .unwrap();
     contract::check(&lookup_program(quote!(
         input = store rows r;
         provider = store partition_k[a](4) input;
         out = flatten lookup r[a] rows l;
-    ))).unwrap();
+    )))
+    .unwrap();
 }
 
 #[test]
@@ -1323,15 +1392,21 @@ fn key_partition_canon_rejects_projection_losing_the_routing_key() {
 
 #[test]
 fn key_partition_does_not_promote_subtile_canon_to_complete_valuations() {
-    reject(&grouped_program(quote!(k), quote!(
-        input = store rows r;
-        out = flatten group grouped flatten canon tile 2 partition_k[k](4) input;
-    )), "BE-Group");
+    reject(
+        &grouped_program(
+            quote!(k),
+            quote!(
+                input = store rows r;
+                out = flatten group grouped flatten canon tile 2 partition_k[k](4) input;
+            ),
+        ),
+        "BE-Group",
+    );
 }
 
 #[test]
 fn key_partition_provider_accepts_projected_and_reordered_lookup_keys() {
-    for routing in [quote!(b), quote!(b,a)] {
+    for routing in [quote!(b), quote!(b, a)] {
         let p: Program = syn::parse2(quote! {
             physical {
                 relation L(a:i32,b:i32); relation R(a:i32,b:i32,c:i32);
@@ -1349,30 +1424,40 @@ fn key_partition_provider_accepts_projected_and_reordered_lookup_keys() {
                 provider = store partition_k[#routing](4) input;
                 out = flatten lookup r[a,b] rows l;
             }
-        }).unwrap();
+        })
+        .unwrap();
         contract::check(&p).unwrap();
     }
 }
 
 #[test]
 fn global_partial_group_accepts_key_canon_or_globally_unique_tiles() {
-    let mut routed = grouped_program(quote!(), quote!(
-        input = store rows r;
-        out = store group grouped canon partition_k[k,witness,value](4) input;
-    ));
+    let mut routed = grouped_program(
+        quote!(),
+        quote!(
+            input = store rows r;
+            out = store group grouped canon partition_k[k,witness,value](4) input;
+        ),
+    );
     grade(&mut routed, quote!(input at host; out at pool;));
     let facts = check_grading(&routed, &key_pool()).unwrap();
     assert_eq!(facts.shapes["out"], vec![Len::Lit(1)]);
-    let source = grouped_program(quote!(), quote!(
-        input = store rows r;
-        out = store group grouped canon input;
-    ));
+    let source = grouped_program(
+        quote!(),
+        quote!(
+            input = store rows r;
+            out = store group grouped canon input;
+        ),
+    );
     contract::check_rewrite(&source, &routed).unwrap();
 
-    let mut tiled = grouped_program(quote!(), quote!(
-        input = store rows r;
-        out = store group grouped tile 4 input;
-    ));
+    let mut tiled = grouped_program(
+        quote!(),
+        quote!(
+            input = store rows r;
+            out = store group grouped tile 4 input;
+        ),
+    );
     tiled.evidence = syn::parse_quote!(evidence { R(witness) key; });
     grade(&mut tiled, quote!(input at host; out at pool;));
     let facts = check_grading(&tiled, &key_pool()).unwrap();
@@ -1381,38 +1466,59 @@ fn global_partial_group_accepts_key_canon_or_globally_unique_tiles() {
 
 #[test]
 fn keyed_partial_groups_merge_globally_unique_contiguous_parts() {
-    let mut tiled = grouped_program(quote!(k), quote!(
-        input = store rows r;
-        out = store group grouped tile 4 input;
-    ));
+    let mut tiled = grouped_program(
+        quote!(k),
+        quote!(
+            input = store rows r;
+            out = store group grouped tile 4 input;
+        ),
+    );
     tiled.evidence = syn::parse_quote!(evidence { R(witness) key; });
     grade(&mut tiled, quote!(input at host; out at pool;));
     let facts = check_grading(&tiled, &key_pool()).unwrap();
     assert_eq!(facts.shapes["out"], vec![Len::Scan("out".into())]);
     assert_eq!(facts.partial_groups["out"], [true]);
-    let mut source = grouped_program(quote!(k), quote!(
-        input = store rows r;
-        out = store group grouped input;
-    ));
+    let mut source = grouped_program(
+        quote!(k),
+        quote!(
+            input = store rows r;
+            out = store group grouped input;
+        ),
+    );
     source.evidence = tiled.evidence.clone();
     contract::check_rewrite(&source, &tiled).unwrap();
 
     // Empty keyed input yields no groups, unlike the unkeyed identity row.
     tiled.evidence = syn::parse_quote!(evidence { R(witness) key; count R = 0; });
-    assert_ne!(check_grading(&tiled, &key_pool()).unwrap().lengths["out"], Len::Lit(1));
+    assert_ne!(
+        check_grading(&tiled, &key_pool()).unwrap().lengths["out"],
+        Len::Lit(1)
+    );
     for input in [quote!(tile 4 input), quote!(canon tile 4 input)] {
-        reject(&grouped_program(quote!(k), quote!(
-            input = store rows r;
-            out = store group grouped #input;
-        )), "BE-GroupPartial");
+        reject(
+            &grouped_program(
+                quote!(k),
+                quote!(
+                    input = store rows r;
+                    out = store group grouped #input;
+                ),
+            ),
+            "BE-GroupPartial",
+        );
     }
     // Key routing still represents independent groups, not host map merging.
-    let routed = grouped_program(quote!(k), quote!(
-        input = store rows r;
-        out = store group grouped canon partition_k[k](4) input;
-    ));
+    let routed = grouped_program(
+        quote!(k),
+        quote!(
+            input = store rows r;
+            out = store group grouped canon partition_k[k](4) input;
+        ),
+    );
     assert_eq!(contract::check(&routed).unwrap().shapes["out"].len(), 2);
-    assert_eq!(contract::check(&routed).unwrap().partial_groups["out"], [false]);
+    assert_eq!(
+        contract::check(&routed).unwrap().partial_groups["out"],
+        [false]
+    );
 }
 
 #[test]
@@ -1432,17 +1538,25 @@ fn partial_group_metadata_uses_constructor_preorder_and_definition_ownership() {
         }
         evidence { key R [witness]; }
     };
-    assert_eq!(contract::check(&p).unwrap().partial_groups["output_rows"], [false, true]);
+    assert_eq!(
+        contract::check(&p).unwrap().partial_groups["output_rows"],
+        [false, true]
+    );
     p.sequence.definitions[1].term = syn::parse_quote!(store group all_rows choose [
         len input < 1 => group by_key tile 4 input,
         else => group by_key input
     ]);
-    p.sequence.definitions.push(syn::parse_quote!(alias = output_rows;));
+    p.sequence
+        .definitions
+        .push(syn::parse_quote!(alias = output_rows;));
     let facts = contract::check(&p).unwrap();
     assert_eq!(facts.partial_groups["output_rows"], [false, true, false]);
     assert!(!facts.partial_groups.contains_key("input"));
     assert!(!facts.partial_groups.contains_key("alias"));
-    grade(&mut p, quote!(input at host; output_rows at host; alias at host;));
+    grade(
+        &mut p,
+        quote!(input at host; output_rows at host; alias at host;),
+    );
     let graded = check_grading(&p, &sequential()).unwrap();
     assert_eq!(graded.partial_groups, facts.partial_groups);
 }
@@ -1454,16 +1568,26 @@ fn global_partial_group_rejects_nonunique_tiles_even_with_local_canon() {
         quote!(canon tile 4 input),
         quote!(partition_k[k](4) input),
     ] {
-        reject(&grouped_program(quote!(), quote!(
-            input = store rows r;
-            out = store group grouped #input;
-        )), "BE-GroupPartial");
+        reject(
+            &grouped_program(
+                quote!(),
+                quote!(
+                    input = store rows r;
+                    out = store group grouped #input;
+                ),
+            ),
+            "BE-GroupPartial",
+        );
     }
     // Canonicalizing globally before contiguous tiling is also sound.
-    contract::check(&grouped_program(quote!(), quote!(
-        input = store canon rows r;
-        out = store group grouped tile 4 input;
-    ))).unwrap();
+    contract::check(&grouped_program(
+        quote!(),
+        quote!(
+            input = store canon rows r;
+            out = store group grouped tile 4 input;
+        ),
+    ))
+    .unwrap();
 }
 
 #[test]
@@ -1474,7 +1598,9 @@ fn storage_type_rewrites_preserve_adapters_and_key_layouts() {
     let mut target = source.clone();
     for entry in &mut target.structures.structures.entries {
         match &mut entry.structure {
-            structures::Structure::Built { keyed, .. } => keyed.ty = syn::parse_quote!(NativeProvider),
+            structures::Structure::Built { keyed, .. } => {
+                keyed.ty = syn::parse_quote!(NativeProvider)
+            }
             structures::Structure::Dedup { ty, .. } => *ty = syn::parse_quote!(NativeCanon),
             _ => {}
         }
@@ -1496,13 +1622,20 @@ fn task_local_nested_lookup_flatten_requires_only_exact_provider_access() {
         input = store rows l;
         out = store flatten flatten lookup r[a] tile 4 input;
     ));
-    grade(&mut p, quote!(
-        source at host; provider at pool; input at host; out at pool;
-    ));
+    grade(
+        &mut p,
+        quote!(
+            source at host; provider at pool; input at host; out at pool;
+        ),
+    );
     let key = ("r".into(), vec!["a".into()]);
     let facts = check_grading(&p, &key_pool()).unwrap();
     assert_eq!(facts.capabilities[&key], Capability::Exact);
     assert!(facts.obligations.iter().all(|obligation| !matches!(
-        obligation, Obligation::Provider { capability: Capability::Range, .. }
+        obligation,
+        Obligation::Provider {
+            capability: Capability::Range,
+            ..
+        }
     )));
 }

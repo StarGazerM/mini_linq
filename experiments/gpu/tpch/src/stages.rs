@@ -41,7 +41,6 @@ fn binding(pattern: &syn::Pat) -> Option<&Ident> {
     }
 }
 
-
 fn compiled(expression: &syn::Expr) -> Result<Option<Stage>> {
     match expression {
         syn::Expr::Macro(mac)
@@ -249,7 +248,8 @@ impl Program {
         index: usize,
         types: &BTreeMap<String, Vec<(Ident, syn::Type)>>,
     ) -> Result<Kernel> {
-        let mut kernel = Kernel::standalone_program(&self.file, self.stages[index].program.clone(), types)?;
+        let mut kernel =
+            Kernel::standalone_program(&self.file, self.stages[index].program.clone(), types)?;
         kernel.evidence = self.stages[index].evidence.clone();
         Ok(kernel)
     }

@@ -28,17 +28,17 @@ fn node(
 fn machines() -> Vec<Machine> {
     vec![
         Machine {
-            key_partition_threshold: 65536,
             layout: None,
             name: syn::parse_quote!(sequential),
             items: 1,
+            key_partition_threshold: 65536,
             root: node("host", false, false, None, vec![]),
         },
         Machine {
-            key_partition_threshold: 65536,
             layout: None,
             name: syn::parse_quote!(tasks),
             items: 1,
+            key_partition_threshold: 65536,
             root: node(
                 "host",
                 false,
@@ -54,10 +54,10 @@ fn machines() -> Vec<Machine> {
             ),
         },
         Machine {
-            key_partition_threshold: 65536,
             layout: None,
             name: syn::parse_quote!(gpu),
             items: 4,
+            key_partition_threshold: 65536,
             root: node(
                 "host",
                 false,

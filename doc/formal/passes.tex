@@ -839,6 +839,10 @@ block-skipping read, the others on its surviving positions, in decision order.
 Host block bounds use the provider's conservative \code{any_in}; an absent bound
 never skips a block. Each covering exact operator is unchanged, so conservative false
 positives only perform extra probes. No opaque guard or bind is crossed.
+A scan read before some covering provider is built (for example a retained
+host publication ordered ahead of that build) applies only the filters already
+built: an omitted filter is the trivial conservative filter that passes every
+key, so the covering exact operators still decide membership.
 \textsc{IF-JoinFilterAbandon} decides at runtime whether to construct the
 filters of a build at all: a build whose distinct keys exceed 35\% of the rows
 of its positional source occurrence constructs none (the creation threshold of
@@ -859,7 +863,8 @@ exact operators decide membership either way.
 
 \Rule{IF-JoinFilter}{
  F_i=\mathsf{buildFilter}_{T_i}(\pi_{k_i}\mathsf{keys}(\mathsf{index}_{b_i}))\quad
- \mathsf{STR\text{-}JoinFilter}(s,F_i,b_i,k_i,j_i)\ (1\le i\le n)\\
+ \mathsf{STR\text{-}JoinFilter}(s,F_i,b_i,k_i,j_i)\quad
+ \mathsf{builtBefore}(b_i,s)\ (1\le i\le n)\\
  \mathsf{keepBlock}(B)=
  \mathsf{staticMayMatch}(B)\land F_1.\mathsf{anyIn}(\mathsf{bounds}_{k_1}(B))
 }{

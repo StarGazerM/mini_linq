@@ -370,17 +370,7 @@ mod tests {
 
         let pull = pull_program();
         let parallel = cq_datalog_partition::compile_sharded(&pull).unwrap();
-        let machine = cq_lang_sequence::Machine { key_partition_threshold: 65536, layout: None,
-        name: syn::parse_quote!(sequential),
-        items: 1,
-        root: cq_lang_sequence::LevelNode {
-            shared_bytes: None,
-            name: syn::parse_quote!(host),
-            collaborative: false,
-            dynamic: false,
-            width: None,
-            children: vec![],
-        }, };
+        let machine = cq_sequence_pull::machine();
         assert!(!pull.context.strata[0].keys.is_empty());
         assert!(
             pull.context.strata[0]

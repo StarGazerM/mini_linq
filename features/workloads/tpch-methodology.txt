@@ -35,9 +35,12 @@ forwarded to the checked sequence lowering phase for every CPU configuration.
 The GPU importer preserves the same stage-local evidence and merges it with
 its existing manifest and planning evidence before Sequence planning.
 
-Every fresh executable/configuration is checked against authored DuckDB SQL on
-SF 0.1 before any query measurements, including invocations requesting SF 1.
-The requested scale is also checked before each configuration's measured runs.
+For SF 1 and SF 10, every executable/configuration is checked against authored
+DuckDB SQL on SF 0.1 before any query measurements. At SF 0.1 the timed workers
+check exact answers before sampling. The requested scale is also checked before
+each configuration's measured runs. `--runs 0` only verifies: one untimed
+exact execution per selected configuration at the requested scale, without
+counting workers or DuckDB timing. `--config a,b` runs exactly those names.
 Comparison uses sets of complete output tuples. Only columns typed DECIMAL by
 DuckDB normalize trailing fractional zeroes; VARCHAR values are unchanged.
 No float tolerance is used. Q6/Q19 keep lineitem primary keys through distinct
@@ -99,8 +102,9 @@ intermediate allocation are timed.
 Compilation
 A generated isolated binary crate per query contains its configurations plus
 the shared worker. Cargo release --timings supplies that binary unit's duration,
-excluding separate dependency units. The source is freshly rewritten before
-each measurement so an up-to-date no-op build cannot report a compile time.
+excluding separate dependency units. Proc macros (the compiler) build at
+opt-level 3. Generated sources are stable, so an unchanged worker is reused and
+reports compile_unit_ms NA; edit any input to obtain a fresh compile time.
 This duration includes macro expansion, Rust checking, optimization/codegen and
 linking; it is not an isolated measurement of proc-macro CPU time. Dependency
 versions are seeded from the repository lock and the release build is locked.

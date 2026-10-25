@@ -247,9 +247,13 @@ pub fn build_host_reads(source: &ir::Program, arguments: TokenStream) -> syn::Re
             .flatten()
             .filter(|(reader, _, supply)| {
                 *supply == ir::syntax::SupplyKind::Stream
-                    || source.program.definitions.iter().any(|definition|
+                    || source.program.definitions.iter().any(|definition| {
                         symbol_name(&definition.name) == *reader
-                            && matches!(&definition.operator, Operator::Semi(..) | Operator::Anti(..)))
+                            && matches!(
+                                &definition.operator,
+                                Operator::Semi(..) | Operator::Anti(..)
+                            )
+                    })
             })
             .collect::<Vec<_>>();
         if reads.is_empty()

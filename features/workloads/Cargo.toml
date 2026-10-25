@@ -40,6 +40,8 @@ cq-staging = { version = "0.1.0", path = "../../passes/cq-staging" }
 cq-lang-sequence = { version = "0.1.0", path = "../../languages/cq-lang-sequence" }
 cq-sequence-lowering = { version = "0.1.0", path = "../../passes/cq-sequence-lowering" }
 cq-sequence-pull = { version = "0.1.0", path = "../../passes/cq-sequence-pull" }
+cq-sequence-tasks = { path = "../sequence-tasks" }
+cq-sequence-tasks-macros = { path = "../sequence-tasks/macros" }
 cq-planners = { path = "../planners" }
 cq-planners-plan = { path = "../planners/plan" }
 cq-rewrites = { path = "../rewrites" }
@@ -81,7 +83,6 @@ debug = 0
 debug = 0
 
 [dependencies]
-rayon = "1"
 cq-workload-authored = { path = "authored" }
 cq-testkit.workspace = true
 cq-load.workspace = true
@@ -111,6 +112,10 @@ cq-lang-structures.workspace = true
 [dev-dependencies]
 cq-testkit = { workspace = true, features = ["duckdb"] }
 cq-load = { workspace = true, features = ["parquet"] }
+# Generated `par` configurations link the Tasks runtime and Rayon.
+cq-sequence-tasks.workspace = true
+cq-sequence-tasks-macros.workspace = true
+rayon = "1"
 
 [features]
 default = []

@@ -7,8 +7,6 @@ license.workspace = true
 
 [dependencies]
 mini-linq-macros = { path = "../mini-linq-macros", version = "0.1.0" }
-cq-sequence-tasks = { path = "../../features/sequence-tasks" }
-cq-sequence-tasks-macros = { path = "../../features/sequence-tasks/macros" }
 
 [dev-dependencies]
 cq-testkit.workspace = true

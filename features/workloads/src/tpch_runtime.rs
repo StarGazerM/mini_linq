@@ -14,9 +14,9 @@ macro_rules! configuration {
         crate::tpch_runtime::configuration!(@named default, $d, { $($stages)* }, { $($body)* });
         crate::tpch_runtime::configuration!(@named par, $d, {
             $($stages)*
-            decompose = [::mini_linq::passes::plan_tasks];
-            grade = ::mini_linq::passes::tasks;
-            print = ::mini_linq::passes::translate_tasks;
+            decompose = [::cq_sequence_tasks_macros::plan];
+            grade = ::cq_sequence_tasks_macros::tasks;
+            print = ::cq_sequence_tasks_macros::translate_tasks;
         }, { $($body)* });
         crate::tpch_runtime::configuration!(@named no_reduce, $d, {
             plan = ::mini_linq::passes::plan(no_reduce);
@@ -69,9 +69,9 @@ macro_rules! standalone_configs {
         pub const CONFIGS: &[&str] = &["default", "par", "no-reduce", "le", "le_runs", "advised"];
         crate::tpch_runtime::standalone_configuration!(default, $d, {}, [], { $($body)* });
         crate::tpch_runtime::standalone_configuration!(par, $d, {
-            decompose = [::mini_linq::passes::plan_tasks];
-            grade = ::mini_linq::passes::tasks;
-            print = ::mini_linq::passes::translate_tasks;
+            decompose = [::cq_sequence_tasks_macros::plan];
+            grade = ::cq_sequence_tasks_macros::tasks;
+            print = ::cq_sequence_tasks_macros::translate_tasks;
         }, [], { $($body)* });
         crate::tpch_runtime::standalone_configuration!(no_reduce, $d, {
             plan = ::mini_linq::passes::plan(no_reduce);

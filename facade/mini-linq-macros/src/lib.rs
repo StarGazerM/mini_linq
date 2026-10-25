@@ -127,7 +127,6 @@ fn sequence_pipeline(config: cq_stage::Configuration) -> syn::Result<cq_stage::P
             "complete Sequence input accepts only plan, decompose, grade and print phases",
         ));
     }
-    let authored_advice = !config.decompose.is_empty();
     let mut passes = config.decompose;
     passes.push(config.plan.unwrap_or_else(|| {
         syn::parse_quote!(::mini_linq::passes::plan_sequential(preserve_order))

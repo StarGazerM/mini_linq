@@ -13,20 +13,7 @@ pub fn repeated(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         if argument != "twice" {
             return Err(syn::Error::new_spanned(argument, "expected twice"));
         }
-        let analysis = cq_lang_sequence::check_grading(
-            source,
-            &cq_lang_sequence::Machine { key_partition_threshold: 65536, layout: None,
-            name: syn::parse_quote!(sequential),
-            items: 1,
-            root: cq_lang_sequence::LevelNode {
-                shared_bytes: None,
-                name: syn::parse_quote!(host),
-                collaborative: false,
-                dynamic: false,
-                width: None,
-                children: vec![],
-            }, },
-        )?;
+        let analysis = cq_lang_sequence::check_grading(source, &cq_sequence_pull::machine())?;
         let printed = cq_sequence_pull::translate(source, &analysis)?;
         syn::parse2(quote!({
             let rows = (#printed).collect::<::std::vec::Vec<_>>();

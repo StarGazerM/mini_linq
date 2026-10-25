@@ -59,17 +59,7 @@ pub fn h05_physical_reference(input: TokenStream) -> TokenStream {
         let authored = fixture(name)?;
         let structures = cq_structure_selection::compile(&authored.structures.physical)?;
         let program = cq_sequence_lowering::compile(&structures)?;
-        let machine = cq_lang_sequence::Machine { key_partition_threshold: 65536, layout: None,
-        name: syn::parse_quote!(sequential),
-        items: 1,
-        root: cq_lang_sequence::LevelNode {
-            shared_bytes: None,
-            name: syn::parse_quote!(host),
-            collaborative: false,
-            dynamic: false,
-            width: None,
-            children: vec![],
-        }, };
+        let machine = cq_sequence_pull::machine();
         let analysis = cq_lang_sequence::check_grading(&program, &machine)?;
         cq_sequence_pull::translate(&program, &analysis)
     })();
@@ -105,17 +95,7 @@ pub fn h05_sequential_physical_reference(input: TokenStream) -> TokenStream {
         let gpu = h05_program::program_with_capacity(capacity.base10_parse()?);
         let structures = cq_structure_selection::compile(&gpu.structures.physical)?;
         let program = cq_sequence_lowering::compile(&structures)?;
-        let machine = cq_lang_sequence::Machine { key_partition_threshold: 65536, layout: None,
-        name: syn::parse_quote!(sequential),
-        items: 1,
-        root: cq_lang_sequence::LevelNode {
-            shared_bytes: None,
-            name: syn::parse_quote!(host),
-            collaborative: false,
-            dynamic: false,
-            width: None,
-            children: vec![],
-        }, };
+        let machine = cq_sequence_pull::machine();
         let analysis = cq_lang_sequence::check_grading(&program, &machine)?;
         cq_sequence_pull::translate(&program, &analysis)
     })();

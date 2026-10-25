@@ -105,10 +105,7 @@ fn h13_counts_zero_and_obeys_ordered_comment_pattern() {
     // Match the authored dbgen key premises, retaining two orders per customer.
     let rows = vec![vec![1, 1, 0], vec![2, 1, 0],
         vec![3, 2, 1], vec![4, 3, 2], vec![5, 4, 3], vec![6, 99, 0]];
-    for (rows, config) in [rows.clone(), rows.into_iter().rev().collect(), vec![]]
-        .into_iter()
-        .flat_map(|rows| h13::CONFIGS.iter().map(move |config| (rows.clone(), config)))
-    {
+    for rows in [rows.clone(), rows.into_iter().rev().collect(), vec![]] {
         let data = h13::Data {
             customer: vec![(1,), (2,), (3,), (4,), (5,)],
             orders: rows.iter().map(|r| (i64::from(r[0]), i64::from(r[1]),
@@ -120,10 +117,19 @@ fn h13_counts_zero_and_obeys_ordered_comment_pattern() {
                     WHEN 2 THEN 'requests special' ELSE 'specialspecialrequests' END AS o_comment
                 FROM "mini-linq/raw/0") {}"#, h13::SQL);
         let expected = evaluate_sql(&[raw(rows.clone(), 3)], &sql).unwrap();
-        let actual = h13::run(&data, config).into_iter()
-            .map(|(customer, count)| vec![integer(customer), i32::try_from(count).unwrap()])
-            .collect::<Vec<_>>();
-        assert_answers_equal("DuckDB H13", expected, "count plus anti-join H13", actual, true);
+        for config in h13::CONFIGS {
+            let actual = h13::run(&data, config)
+                .into_iter()
+                .map(|(customer, count)| vec![integer(customer), i32::try_from(count).unwrap()])
+                .collect::<Vec<_>>();
+            assert_answers_equal(
+                "DuckDB H13",
+                &expected,
+                "count plus anti-join H13",
+                &actual,
+                true,
+            );
+        }
     }
     let empty = h13::Data { customer: vec![], orders: vec![] };
     assert!(h13::run(&empty, "default").is_empty());

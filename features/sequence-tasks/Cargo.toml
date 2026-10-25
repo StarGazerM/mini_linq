@@ -33,6 +33,7 @@ rayon = "1"
 [dev-dependencies]
 cq-testkit = { path = "../../testkit/cq-testkit", features = ["sequence-conformance"] }
 cq-structure-selection = { path = "../../passes/cq-structure-selection" }
+cq-load = { path = "../../runtime/cq-load", default-features = false }
 
 [package.metadata.cq]
 source = "cq-lang-sequence"

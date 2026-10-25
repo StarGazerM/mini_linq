@@ -9,17 +9,20 @@ fn accept(source: &cq_lang_structures::Program) -> Program {
     cq_lang_sequence::contract::check(&target).unwrap();
     cq_lang_sequence::check_grading(
         &target,
-        &Machine { key_partition_threshold: 65536, layout: None,
-        name: syn::parse_quote!(sequential),
-        items: 1,
-        root: LevelNode {
-            shared_bytes: None,
-            name: syn::parse_quote!(host),
-            collaborative: false,
-            dynamic: false,
-            width: None,
-            children: vec![],
-        }, },
+        &Machine {
+            layout: None,
+            name: syn::parse_quote!(sequential),
+            items: 1,
+            key_partition_threshold: 65536,
+            root: LevelNode {
+                shared_bytes: None,
+                name: syn::parse_quote!(host),
+                collaborative: false,
+                dynamic: false,
+                width: None,
+                children: vec![],
+            },
+        },
     )
     .unwrap();
     check(source, &target).unwrap();

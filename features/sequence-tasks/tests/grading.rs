@@ -9,7 +9,7 @@ fn program(sequence: proc_macro2::TokenStream, grades: proc_macro2::TokenStream)
             relation R(a:i32);
             r = pipe canon rename R@0 {a -> a};
             return r as answer(a);
-        } structures { r host scan = Reader []; r canon = ::std::collections::HashSet<_>; }
+        } structures { r host scan = ::core::iter::Map<_, _> []; r canon = ::std::collections::HashSet<_>; }
         sequence { #sequence }
         graded tasks { #grades }
     })
@@ -93,7 +93,10 @@ fn pool_tile_and_store_emit_indexed_parallel_buffers() {
     let rendered = expression.to_token_stream().to_string();
     assert!(rendered.contains("tile_rows (64usize)"), "{rendered}");
     assert!(!worker_bodies(&expression).is_empty());
-    assert!(rendered.contains("collect :: < :: std :: vec :: Vec < _ > >"), "{rendered}");
+    assert!(
+        rendered.contains("collect :: < :: std :: vec :: Vec < _ > >"),
+        "{rendered}"
+    );
 }
 
 // Inspect the closure passed to the indexed parallel iterator, not merely the
@@ -172,7 +175,10 @@ fn segment_program() -> Program {
 fn distributing_tile_keeps_the_whole_segment_inside_the_worker() {
     let program = segment_program();
     let analysis = check_grading(&program, &machine()).unwrap();
-    assert_eq!(analysis.tilings["parts"], vec![cq_lang_sequence::Tiling::Distribute]);
+    assert_eq!(
+        analysis.tilings["parts"],
+        vec![cq_lang_sequence::Tiling::Distribute]
+    );
     let expression = translate(&program, &analysis).unwrap();
     let workers = worker_bodies(&expression);
     assert_eq!(workers.len(), 1, "{}", expression.to_token_stream());
@@ -183,7 +189,10 @@ fn distributing_tile_keeps_the_whole_segment_inside_the_worker() {
         "Iterator :: flat_map",
         "__cq_buffer . extend",
     ] {
-        assert!(worker.contains(adapter), "missing {adapter} inside worker: {worker}");
+        assert!(
+            worker.contains(adapter),
+            "missing {adapter} inside worker: {worker}"
+        );
     }
     assert!(
         worker.contains("IndexRead :: lookup") || worker.contains("RangeCursor :: range"),
@@ -191,7 +200,10 @@ fn distributing_tile_keeps_the_whole_segment_inside_the_worker() {
     );
     // This total scalar expression belongs only to Map, so a parallel lookup
     // followed by a serial map cannot satisfy the worker-local assertion.
-    assert!(worker.contains("100"), "mapped scalar escaped the worker: {worker}");
+    assert!(
+        worker.contains("100"),
+        "mapped scalar escaped the worker: {worker}"
+    );
 }
 
 #[test]
@@ -350,7 +362,10 @@ fn joined_tiles_canonicalize_complete_valuations_before_grouping() {
             }
         });
         let facts = check_grading(&program, &machine()).unwrap();
-        assert_eq!(facts.tilings["parts"], vec![cq_lang_sequence::Tiling::Distribute]);
+        assert_eq!(
+            facts.tilings["parts"],
+            vec![cq_lang_sequence::Tiling::Distribute]
+        );
         let expression = translate(&program, &facts).unwrap();
         assert_eq!(worker_bodies(&expression).len(), 1);
         expression
@@ -405,18 +420,20 @@ fn joined_tiles_canonicalize_complete_valuations_before_grouping() {
 fn run_partition_fixture(source: proc_macro2::TokenStream) {
     let runtime = cq_testkit::rustc::Runtime::with_dependencies(vec![
         cq_testkit::rustc::linked_dependency::<cq_sequence_tasks::Config>(
-            "cq_sequence_tasks", "cq_sequence_tasks::Config",
+            "cq_sequence_tasks",
+            "cq_sequence_tasks::Config",
         ),
         cq_testkit::rustc::linked_dependency::<cq_storage::sharded::FullKey>(
-            "cq_storage", "cq_storage::sharded::FullKey",
+            "cq_storage",
+            "cq_storage::sharded::FullKey",
+        ),
+        cq_testkit::rustc::linked_dependency::<cq_load::ColumnAt<0>>(
+            "cq_load",
+            "cq_load::ColumnAt<0>",
         ),
     ]);
-    // Match the consumer's runtime namespace while linking the real task and
-    // storage implementations, not a fixture-specific substitute.
     let source = quote::quote! {
         #![allow(non_snake_case, unused_variables)]
-        extern crate self as mini_linq;
-        pub mod __tasks { pub use cq_sequence_tasks::combine; }
         #source
     };
     runtime.run(&source.to_string());
@@ -516,8 +533,14 @@ fn globally_unique_tiles_fold_partial_aggregates_with_one_empty_identity() {
         graded tasks { input at host; partials at pool; output_rows at host; }
     });
     let facts = check_grading(&program, &machine()).unwrap();
-    assert_eq!(facts.shapes["partials"], vec![cq_lang_sequence::Len::Lit(1)]);
-    assert_eq!(facts.tilings["partials"], vec![cq_lang_sequence::Tiling::Distribute]);
+    assert_eq!(
+        facts.shapes["partials"],
+        vec![cq_lang_sequence::Len::Lit(1)]
+    );
+    assert_eq!(
+        facts.tilings["partials"],
+        vec![cq_lang_sequence::Tiling::Distribute]
+    );
     let expression = translate(&program, &facts).unwrap();
     let rendered = expression.to_token_stream().to_string();
     assert!(rendered.contains("let __cq_partials"), "{rendered}");
@@ -602,7 +625,7 @@ fn routed_provider_program(routing: proc_macro2::TokenStream, named: bool) -> Pr
 #[test]
 fn routed_providers_keep_subset_and_reordered_keys_through_named_publication() {
     let mut checks = Vec::new();
-    for routing in [quote::quote!(b), quote::quote!(b,a)] {
+    for routing in [quote::quote!(b), quote::quote!(b, a)] {
         for named in [false, true] {
             let program = routed_provider_program(routing.clone(), named);
             let facts = check_grading(&program, &machine()).unwrap();
@@ -677,17 +700,38 @@ fn catalog_retention_materializes_new_providers_and_preserves_native_entry_ident
             result at host; output_rows at host;
         }
     };
-    let target = cq_sequence_tasks::select_providers(&source, &cq_sequence_tasks::catalog()).unwrap();
-    assert!(target.sequence.definitions.iter().any(|definition|
-        definition.name == "r" && matches!(definition.term, cq_lang_sequence::Term::Store { .. })));
+    let target =
+        cq_sequence_tasks::select_providers(&source, &cq_sequence_tasks::catalog()).unwrap();
+    assert!(
+        target
+            .sequence
+            .definitions
+            .iter()
+            .any(|definition| definition.name == "r"
+                && matches!(definition.term, cq_lang_sequence::Term::Store { .. }))
+    );
     let native: syn::Type = syn::parse_quote!(::cq_storage::SortedRun<_, _, _>);
-    assert!(target.structures.structures.entries.iter().any(|entry|
-        entry.name == "s" && matches!(&entry.structure,
-            cq_lang_sequence::structures::Structure::Built { keyed, .. } if keyed.ty == native)));
-    assert!(target.structures.structures.entries.iter().any(|entry|
-        entry.name == "s" && matches!(&entry.structure,
+    assert!(
+        target
+            .structures
+            .structures
+            .entries
+            .iter()
+            .any(|entry| entry.name == "s"
+                && matches!(&entry.structure,
+            cq_lang_sequence::structures::Structure::Built { keyed, .. } if keyed.ty == native))
+    );
+    assert!(
+        target
+            .structures
+            .structures
+            .entries
+            .iter()
+            .any(|entry| entry.name == "s"
+                && matches!(&entry.structure,
             cq_lang_sequence::structures::Structure::Rows { ty, .. }
-                if *ty == syn::parse_quote!(::std::vec::Vec<_>))));
+                if *ty == syn::parse_quote!(::std::vec::Vec<_>)))
+    );
     cq_lang_sequence::check_rewrite(&source, &target).unwrap();
     let facts = check_grading(&target, &machine()).unwrap();
     translate(&target, &facts).unwrap();
@@ -696,20 +740,35 @@ fn catalog_retention_materializes_new_providers_and_preserves_native_entry_ident
 #[test]
 fn base_relation_tile_uses_borrowed_rows_and_keeps_the_joined_answer() {
     let mut source = segment_program();
-    source.sequence.definitions.retain(|definition| definition.name != "input" && definition.name != "result");
-    source.graded.as_mut().unwrap().grades.retain(|grade| grade.name != "input" && grade.name != "result");
+    source
+        .sequence
+        .definitions
+        .retain(|definition| definition.name != "input" && definition.name != "result");
+    source
+        .graded
+        .as_mut()
+        .unwrap()
+        .grades
+        .retain(|grade| grade.name != "input" && grade.name != "result");
     fn inline(term: &mut cq_lang_sequence::Term) {
         use cq_lang_sequence::Term;
         match term {
             Term::Ref(name) if name == "input" => *term = syn::parse_quote!(rows l),
-            Term::Map(_, inner) | Term::Compact(_, inner) | Term::Flatten(inner)
-            | Term::Lookup { inner, .. } | Term::Tile { inner, .. } | Term::Store { inner, .. } => inline(inner),
+            Term::Map(_, inner)
+            | Term::Compact(_, inner)
+            | Term::Flatten(inner)
+            | Term::Lookup { inner, .. }
+            | Term::Tile { inner, .. }
+            | Term::Store { inner, .. } => inline(inner),
             _ => {}
         }
     }
     inline(&mut source.sequence.definitions.last_mut().unwrap().term);
     let analysis = check_grading(&source, &machine()).unwrap();
-    let rendered = translate(&source, &analysis).unwrap().to_token_stream().to_string();
+    let rendered = translate(&source, &analysis)
+        .unwrap()
+        .to_token_stream()
+        .to_string();
     assert!(rendered.contains("TileSource"), "{rendered}");
     assert!(rendered.contains("tile_rows"), "{rendered}");
     assert!(!rendered.contains("let __cq_driver = ("));
@@ -719,17 +778,30 @@ fn base_relation_tile_uses_borrowed_rows_and_keeps_the_joined_answer() {
 #[test]
 fn paired_flatten_fuses_the_following_stream_until_publication() {
     let mut source = segment_program();
-    source.sequence.definitions.iter_mut().find(|definition| definition.name == "parts").unwrap().term =
-        syn::parse_quote!(store map projected map mapped compact selected
+    source
+        .sequence
+        .definitions
+        .iter_mut()
+        .find(|definition| definition.name == "parts")
+        .unwrap()
+        .term = syn::parse_quote!(store map projected map mapped compact selected
             flatten lookup r [a] flatten tile 64 input);
     let analysis = check_grading(&source, &machine()).unwrap();
     let expression = translate(&source, &analysis).unwrap();
     let workers = worker_bodies(&expression);
     assert_eq!(workers.len(), 1);
     let body = workers[0].to_token_stream().to_string();
-    assert!(body.contains("IndexRead :: lookup") || body.contains("RangeCursor :: range"), "{body}");
+    assert!(
+        body.contains("IndexRead :: lookup") || body.contains("RangeCursor :: range"),
+        "{body}"
+    );
     assert!(body.contains("100"), "{body}");
-    assert!(!expression.to_token_stream().to_string().contains("__cq_sequence_store_input"));
+    assert!(
+        !expression
+            .to_token_stream()
+            .to_string()
+            .contains("__cq_sequence_store_input")
+    );
 }
 
 #[test]
@@ -754,12 +826,28 @@ fn task_catalog_retains_membership_fallbacks_before_shared_reads() {
             output_rows = store result;
         }
     };
-    let target = cq_sequence_tasks::select_providers(&source, &cq_sequence_tasks::catalog()).unwrap();
-    assert!(target.sequence.definitions.iter().any(|definition|
-        definition.name == "r" && matches!(definition.term, cq_lang_sequence::Term::Store { .. })));
-    assert!(target.structures.structures.entries.iter().any(|entry|
-        entry.name == "r" && matches!(&entry.structure,
-            cq_lang_sequence::structures::Structure::Built { .. })));
+    let target =
+        cq_sequence_tasks::select_providers(&source, &cq_sequence_tasks::catalog()).unwrap();
+    assert!(
+        target
+            .sequence
+            .definitions
+            .iter()
+            .any(|definition| definition.name == "r"
+                && matches!(definition.term, cq_lang_sequence::Term::Store { .. }))
+    );
+    assert!(
+        target
+            .structures
+            .structures
+            .entries
+            .iter()
+            .any(|entry| entry.name == "r"
+                && matches!(
+                    &entry.structure,
+                    cq_lang_sequence::structures::Structure::Built { .. }
+                ))
+    );
 }
 
 #[test]
@@ -784,27 +872,43 @@ fn membership_projected_probes_keep_native_keysets() {
             output_rows = store result;
         }
     };
-    let target = cq_sequence_tasks::select_providers(&source, &cq_sequence_tasks::catalog()).unwrap();
+    let target =
+        cq_sequence_tasks::select_providers(&source, &cq_sequence_tasks::catalog()).unwrap();
     let native: syn::Type = syn::parse_quote!(::cq_storage::AdaptiveKeySet<_, ::cq_storage::BorrowedI64TupleCodec, 16777216>);
-    assert!(target.structures.structures.entries.iter().any(|entry|
-        entry.name == "r" && matches!(&entry.structure,
-            cq_lang_sequence::structures::Structure::Built { keyed, .. } if keyed.ty == native)));
+    assert!(
+        target
+            .structures
+            .structures
+            .entries
+            .iter()
+            .any(|entry| entry.name == "r"
+                && matches!(&entry.structure,
+            cq_lang_sequence::structures::Structure::Built { keyed, .. } if keyed.ty == native))
+    );
 }
 
 #[test]
 fn adaptive_provider_guard_selects_identity_and_routed_builds_at_runtime() {
     use cq_lang_sequence::{Guard, Len, Term};
-    let mut program = routed_provider_program(quote::quote!(a,b), false);
+    let mut program = routed_provider_program(quote::quote!(a, b), false);
     let part = |parts| Term::PartitionK {
         keys: vec![syn::parse_quote!(a), syn::parse_quote!(b)],
         parts,
         inner: Box::new(Term::Ref(syn::parse_quote!(provider_input))),
     };
-    program.sequence.definitions.iter_mut().find(|definition| definition.name == "provider").unwrap().term =
-        Term::Store { capacity: None, inner: Box::new(Term::Choose(vec![
+    program
+        .sequence
+        .definitions
+        .iter_mut()
+        .find(|definition| definition.name == "provider")
+        .unwrap()
+        .term = Term::Store {
+        capacity: None,
+        inner: Box::new(Term::Choose(vec![
             (Guard::Lt(Len::Input("provider_input".into()), 4), part(1)),
             (Guard::Else, part(64)),
-        ])) };
+        ])),
+    };
     let facts = check_grading(&program, &machine()).unwrap();
     let mut expression = translate(&program, &facts).unwrap();
     struct ObserveBuild;
@@ -887,7 +991,12 @@ fn keyed_partial_maps_merge_at_host_and_preserve_empty_input() {
             assert_eq!(sequential, expected);
         });
         program.evidence = Default::default();
-        assert!(check_grading(&program, &machine()).unwrap_err().to_string().contains("BE-GroupPartial"));
+        assert!(
+            check_grading(&program, &machine())
+                .unwrap_err()
+                .to_string()
+                .contains("BE-GroupPartial")
+        );
     }
     run_partition_fixture(quote::quote! {
         fn main() {
@@ -910,6 +1019,387 @@ fn keyed_partial_maps_merge_at_host_and_preserve_empty_input() {
                     }
                 });
             }
+        }
+    });
+}
+
+fn late_covering_program(input: proc_macro2::TokenStream) -> Program {
+    let physical = syn::parse_quote! {
+        physical {
+            relation L(a:i64,b:i64); relation R(c:i64,d:i64);
+            l = pipe rename L@0 {a -> x,b -> y};
+            r = pipe rename R@1 {c -> x,d -> z};
+            s = pipe range select r if (z > 1);
+            b = let project s keep {x,z};
+            j = pipe probe first [x] l,b;
+            out = pipe canon project j keep {x,y,z};
+            return out as answer(x,y,z);
+        }
+    };
+    let structures =
+        cq_structure_selection::compile_with(&physical, quote::quote!(positional(L, R))).unwrap();
+    let source = syn::parse2(quote::quote! {
+        #structures
+        sequence {
+            input = store #input;
+            b = store map b map s rows r;
+            result = store canon map out flatten lookup b [x] input;
+        }
+        graded tasks { input at host; b at host; result at host; }
+    })
+    .unwrap();
+    cq_sequence_tasks::select_providers(&source, &cq_sequence_tasks::catalog()).unwrap()
+}
+
+#[test]
+fn retained_scans_never_use_join_filters_before_the_covering_build() {
+    use std::collections::BTreeSet;
+
+    struct Bindings {
+        filters: BTreeSet<String>,
+        declared: BTreeSet<String>,
+    }
+    impl VisitMut for Bindings {
+        fn visit_local_mut(&mut self, local: &mut syn::Local) {
+            // Rust evaluates an initializer before introducing its new binding.
+            if let Some(initializer) = &mut local.init {
+                self.visit_expr_mut(&mut initializer.expr);
+            }
+            if let syn::Pat::Ident(binding) = &local.pat {
+                self.declared.insert(binding.ident.to_string());
+            }
+        }
+
+        fn visit_expr_path_mut(&mut self, path: &mut syn::ExprPath) {
+            if let Some(ident) = path.path.get_ident() {
+                let name = ident.to_string();
+                assert!(
+                    !self.filters.contains(&name) || self.declared.contains(&name),
+                    "join filter used before publication: {name}",
+                );
+            }
+            visit_mut::visit_expr_path_mut(self, path);
+        }
+
+        fn visit_block_mut(&mut self, block: &mut syn::Block) {
+            let outer = self.declared.clone();
+            visit_mut::visit_block_mut(self, block);
+            self.declared = outer;
+        }
+    }
+
+    // The second form is an eager pipeline store, not the borrowed base-store
+    // fast path. Both precede the covering provider in Sequence order.
+    for input in [quote::quote!(rows l), quote::quote!(map l rows l)] {
+        let program = late_covering_program(input);
+        let facts = check_grading(&program, &machine()).unwrap();
+        assert!(!facts.structures.join_filters["l"].is_empty());
+        let context = cq_print::Context::new(&program.structures, &facts.structures);
+        let filters = facts
+            .structures
+            .join_filters
+            .iter()
+            .flat_map(|(scan, filters)| {
+                let context = &context;
+                filters.iter().map(move |filter| {
+                    context
+                        .join_filter_ident(
+                            scan,
+                            &filter.covering.to_string(),
+                            &filter.key.columns.first().unwrap().to_string(),
+                        )
+                        .to_string()
+                })
+            })
+            .collect();
+        let mut expression = translate(&program, &facts).unwrap();
+        Bindings {
+            filters,
+            declared: BTreeSet::new(),
+        }
+        .visit_expr_mut(&mut expression);
+    }
+}
+
+#[test]
+fn covering_filters_reject_families_without_routed_key_enumeration() {
+    let mut source = late_covering_program(quote::quote!(rows l));
+    source.graded = None;
+    cq_lang_sequence::contract::check(&source).unwrap();
+    let families: [syn::Type; 3] = [
+        syn::parse_quote!(::std::collections::BTreeMap<_, ::std::vec::Vec<_>>),
+        syn::parse_quote!(::cq_storage::HashSet<_>),
+        syn::parse_quote!(::cq_storage::AdaptiveKeySet<_, ::cq_storage::BorrowedI64TupleCodec, 64>),
+    ];
+    for ty in families {
+        for routed in [false, true] {
+            let mut invalid = source.clone();
+            for entry in &mut invalid.structures.structures.entries {
+                if entry.name == "b"
+                    && let cq_lang_sequence::structures::Structure::Built { keyed, .. } =
+                        &mut entry.structure
+                {
+                    keyed.ty = if routed {
+                        syn::parse_quote!(::cq_storage::sharded::Sharded<#ty>)
+                    } else {
+                        ty.clone()
+                    };
+                }
+            }
+            let error = cq_lang_sequence::contract::check(&invalid).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("join filter requires an exact covering"),
+                "{error}"
+            );
+            assert!(
+                cq_sequence_plan::decompose(&invalid, &machine(), &cq_sequence_tasks::catalog())
+                    .is_err()
+            );
+        }
+    }
+}
+
+#[test]
+fn tiled_folds_count_rows_within_each_tile_not_joined_tile_iterators() {
+    let program = program(
+        quote::quote! {
+            input = store rows r;
+            result = store fold count tile 2 input;
+        },
+        quote::quote!(input at host; result at pool;),
+    );
+    let facts = check_grading(&program, &machine()).unwrap();
+    assert_eq!(
+        facts.tilings["result"],
+        vec![cq_lang_sequence::Tiling::Distribute]
+    );
+    let tasks = translate(&program, &facts).unwrap();
+    run_partition_fixture(quote::quote! {
+        fn main() {
+            for R in [&[][..], &[(1i32,)][..], &[(1,), (2,), (3,), (4,), (5,)][..]] {
+                let actual: Vec<usize> = (#tasks).collect();
+                let expected: Vec<usize> = R.chunks(2).map(<[_]>::len).collect();
+                assert_eq!(actual, expected);
+            }
+        }
+    });
+}
+
+fn constant_key_provider_program() -> Program {
+    let physical = syn::parse_quote! {
+        physical {
+            relation L(a:i32,b:i32); relation R(a:i32,b:i32,c:i32);
+            consumer canonical;
+            l = pipe rename L@0 {a -> a,b -> b};
+            raw = pipe rename R@1 {a -> a,b -> b,c -> c};
+            r = let point select raw if (a = 7);
+            joined = pipe probe first [a,b] l,r;
+            return joined as answer(a,b,c);
+        }
+    };
+    let structures = cq_structure_selection::compile(&physical).unwrap();
+    let source = syn::parse_quote! {
+        #structures
+        sequence {
+            provider = store map r rows raw;
+            input = rows l;
+            result = store flatten lookup r [a,b] input;
+        }
+    };
+    cq_sequence_tasks::select_providers(&source, &cq_sequence_tasks::catalog()).unwrap()
+}
+
+#[test]
+fn planner_does_not_route_on_constant_bound_provider_keys() {
+    let source = constant_key_provider_program();
+    let facts = cq_lang_sequence::contract::check(&source).unwrap();
+    assert!(
+        facts.structures.filtered["r"]
+            .constants
+            .iter()
+            .any(|binding| binding.column == "a")
+    );
+    let planned =
+        cq_sequence_plan::decompose(&source, &machine(), &cq_sequence_tasks::catalog()).unwrap();
+    assert!(!planned.trace.iter().any(|advice| {
+        matches!(advice, cq_sequence_plan::Advice::KeyPartition(partition)
+            if partition.name == "provider")
+    }));
+    assert!(
+        cq_sequence_plan::decompose_with_key_partitions(
+            &source,
+            &machine(),
+            &cq_sequence_tasks::catalog(),
+            &[cq_sequence_plan::KeyPartitionPolicy {
+                name: syn::parse_quote!(provider),
+                select: true,
+            }],
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn routed_provider_projects_the_stored_key_after_constant_elision() {
+    let mut program = constant_key_provider_program();
+    for entry in &mut program.structures.structures.entries {
+        if entry.name == "r"
+            && let cq_lang_sequence::structures::Structure::Built { keyed, .. } =
+                &mut entry.structure
+        {
+            keyed.ty = syn::parse_quote!(
+                ::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>, _>
+            );
+        }
+    }
+    program.sequence = syn::parse_quote! {
+        sequence {
+            provider_input = store map r rows raw;
+            provider = store partition_k[b](64) provider_input;
+            input = rows l;
+            result = store flatten lookup r [a,b] input;
+        }
+    };
+    program.graded = Some(syn::parse_quote! {
+        graded tasks {
+            provider_input at host; provider at pool; input at host; result at host;
+        }
+    });
+    let facts = check_grading(&program, &machine()).unwrap();
+    let expression = translate(&program, &facts).unwrap();
+    run_partition_fixture(quote::quote! {
+        fn main() {
+            let probes = [(7, 2), (8, 2), (7, 3), (7, 9)];
+            let values = [(7, 2, 10), (8, 2, 20), (7, 2, 11), (7, 3, 30)];
+            for L in [&probes[..], &[][..]] {
+                for R in [&values[..], &[][..]] {
+                    let actual: Vec<_> = (#expression).map(|(a,b,c)| (*a,*b,*c)).collect();
+                    let expected: Vec<_> = L.iter().flat_map(|&(a,b)| {
+                        R.iter().filter_map(move |&(ra,rb,c)| {
+                            (ra == 7 && ra == a && rb == b).then_some((a,b,c))
+                        })
+                    }).collect();
+                    assert_eq!(actual, expected);
+                }
+            }
+        }
+    });
+}
+
+#[test]
+fn nested_tiles_keep_canonicalization_at_the_innermost_rows() {
+    let program = program(
+        quote::quote! {
+            input = store rows r;
+            result = store canon tile 2 tile 4 input;
+        },
+        quote::quote!(input at host; result at pool;),
+    );
+    let facts = check_grading(&program, &machine()).unwrap();
+    assert!(facts.tilings["result"].contains(&cq_lang_sequence::Tiling::Distribute));
+    let tasks = translate(&program, &facts).unwrap();
+    let mut sequential = program.clone();
+    sequential.graded = Some(syn::parse_quote! {
+        graded tasks { input at host; result at host; }
+    });
+    let sequential_facts = check_grading(&sequential, &machine()).unwrap();
+    let pull = cq_sequence_pull::translate(&sequential, &sequential_facts).unwrap();
+    run_partition_fixture(quote::quote! {
+        fn main() {
+            for R in [&[][..], &[(1i32,)][..], &[(1,), (1,), (2,), (2,), (1,)][..]] {
+                let actual: Vec<_> = (#tasks).map(|(a,)| *a).collect();
+                let expected: Vec<_> = (#pull).map(|(a,)| *a).collect();
+                assert_eq!(actual, expected);
+            }
+        }
+    });
+}
+
+#[test]
+fn literal_filtered_host_tiles_retain_the_source_predicate() {
+    let physical = syn::parse_quote! {
+        physical {
+            relation R(tag:i32,a:i32);
+            consumer canonical;
+            r = let rename R@0 {a -> a} constants {tag = 7};
+            return r as answer(a);
+        }
+    };
+    let structures = cq_structure_selection::compile(&physical).unwrap();
+    let program = syn::parse_quote! {
+        #structures
+        sequence {
+            input = store rows r;
+            result = store tile 2 input;
+        }
+        graded tasks { input at host; result at pool; }
+    };
+    let facts = check_grading(&program, &machine()).unwrap();
+    let expression = translate(&program, &facts).unwrap();
+    assert!(!worker_bodies(&expression).is_empty());
+    run_partition_fixture(quote::quote! {
+        fn main() {
+            let R = &[(7i32, 1i32), (8, 2), (7, 3), (9, 4), (7, 5)][..];
+            let actual: Vec<_> = (#expression).map(|(a,)| *a).collect();
+            assert_eq!(actual, [1, 3, 5]);
+        }
+    });
+}
+
+#[test]
+fn flattened_key_covers_restore_positional_reads() {
+    let physical = syn::parse_quote! {
+        physical {
+            relation R(a:i64);
+            r = pipe rename R@0 {a -> a};
+            selected = pipe range select r if (a > 1);
+            out = pipe canon project selected keep {a};
+            return out as answer(a);
+        }
+    };
+    let structures =
+        cq_structure_selection::compile_with(&physical, quote::quote!(positional(R))).unwrap();
+    let program = syn::parse_quote! {
+        #structures
+        sequence {
+            input = store rows r;
+            parts = store partition_k[a](64) input;
+            joined = store parts;
+            result = store canon map out map selected flatten joined;
+        }
+        graded tasks { input at host; parts at pool; joined at host; result at host; }
+    };
+    let facts = check_grading(&program, &machine()).unwrap();
+    assert!(facts.structures.reads.contains_key("selected"));
+    let mut expression = translate(&program, &facts).unwrap();
+    struct Reads(usize);
+    impl VisitMut for Reads {
+        fn visit_expr_path_mut(&mut self, path: &mut syn::ExprPath) {
+            if path
+                .path
+                .segments
+                .iter()
+                .any(|segment| segment.ident == "BlockRead")
+            {
+                self.0 += 1;
+            }
+            visit_mut::visit_expr_path_mut(self, path);
+        }
+    }
+    let mut reads = Reads(0);
+    reads.visit_expr_mut(&mut expression);
+    assert!(
+        reads.0 > 0,
+        "completed key cover still suppresses positional reads"
+    );
+    run_partition_fixture(quote::quote! {
+        fn main() {
+            let R = &[(0i64,), (2,), (2,), (3,), (1,)][..];
+            let mut actual: Vec<_> = (#expression).map(|(a,)| *a).collect();
+            actual.sort();
+            assert_eq!(actual, [2, 3]);
         }
     });
 }

@@ -391,7 +391,7 @@ Laws:
   `key_partition(provider, published, [keys], P, threshold 65536)`.
   Policy `select true` forces fixed routing without a guard; `select false`
   keeps native storage. Authored grades remain authoritative.
-  Tasks author syntax is `plan_tasks(threshold 65536,
+  Tasks author syntax is `cq_sequence_tasks_macros::plan(threshold 65536,
   key_partition(provider, select true))`; `threshold` configures the machine,
   and omitted policies remain adaptive. The translator evaluates the recorded
   guard, never a target-local threshold.

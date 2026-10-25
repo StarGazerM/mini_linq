@@ -407,7 +407,9 @@ impl<'a> Compiler<'a> {
                 }
                 Ok(chains)
             }
-            Term::PartitionK { .. } => Err(error("T-Gpu: key partition requires a routed-pool target")),
+            Term::PartitionK { .. } => {
+                Err(error("T-Gpu: key partition requires a routed-pool target"))
+            }
             Term::Flatten(inner)
             | Term::Canon(inner)
             | Term::Store { inner, .. }

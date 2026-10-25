@@ -757,18 +757,31 @@ impl Checked<'_> {
                     return fail(term, "BE-KeyPart", "partition count must be positive");
                 }
                 let Term::Ref(source) = inner.as_ref() else {
-                    return fail(term, "BE-KeyPart", "partition input must name an ancestor store");
+                    return fail(
+                        term,
+                        "BE-KeyPart",
+                        "partition input must name an ancestor store",
+                    );
                 };
                 if !self.analysis.stores.contains_key(&symbol_name(source)) {
-                    return fail(term, "BE-KeyPart", "partition input must name an ancestor store");
+                    return fail(
+                        term,
+                        "BE-KeyPart",
+                        "partition input must name an ancestor store",
+                    );
                 }
                 let mut fact = self.term(inner, owner)?;
                 let heading = self.heading(&fact.meaning);
                 let columns: Vec<_> = keys.iter().map(symbol_name).collect();
-                if fact.max_depth != 0 || columns.iter().any(|key| !heading.contains(key))
+                if fact.max_depth != 0
+                    || columns.iter().any(|key| !heading.contains(key))
                     || columns.iter().collect::<BTreeSet<_>>().len() != columns.len()
                 {
-                    return fail(term, "BE-KeyPart", "routing key must be distinct columns determined by the flat valuation");
+                    return fail(
+                        term,
+                        "BE-KeyPart",
+                        "routing key must be distinct columns determined by the flat valuation",
+                    );
                 }
                 fact.depth = 1;
                 fact.max_depth = 1;
@@ -942,7 +955,11 @@ impl Checked<'_> {
             Term::Group(name, inner) => {
                 // Formal rule BE-Group: Fold each key's complete distinct valuation set at host.
                 let group_slot = {
-                    let modes = self.analysis.partial_groups.entry(owner.into()).or_default();
+                    let modes = self
+                        .analysis
+                        .partial_groups
+                        .entry(owner.into())
+                        .or_default();
                     let slot = modes.len();
                     modes.push(false);
                     slot
@@ -959,17 +976,28 @@ impl Checked<'_> {
                     );
                 }
                 // Formal rule BE-KeyPartGroup: Equal group keys route to one part.
-                if let Some(keys) = &fact.partition && !group.keys.is_empty() {
+                if let Some(keys) = &fact.partition
+                    && !group.keys.is_empty()
+                {
                     let group_keys: Vec<_> = group.keys.iter().map(symbol_name).collect();
                     if keys.iter().any(|key| !group_keys.contains(key)) {
-                        return fail(term, "BE-KeyPartGroup", "group key must determine the routing key");
+                        return fail(
+                            term,
+                            "BE-KeyPartGroup",
+                            "group key must determine the routing key",
+                        );
                     }
                 }
                 // Formal rule BE-GroupPartial: Globally distinct parts fold locally and merge once at host.
-                let partial = fact.partitioned && fact.max_depth == 1
+                let partial = fact.partitioned
+                    && fact.max_depth == 1
                     && (group.keys.is_empty() || fact.partition.is_none());
                 if partial && fact.unique.is_none() {
-                    return fail(term, "BE-GroupPartial", "partial folds require valuations distinct across parts: a global key or key-routed canon");
+                    return fail(
+                        term,
+                        "BE-GroupPartial",
+                        "partial folds require valuations distinct across parts: a global key or key-routed canon",
+                    );
                 }
                 if !partial && fact.max_depth != usize::from(fact.partition.is_some()) {
                     return fail(
@@ -1004,7 +1032,9 @@ impl Checked<'_> {
                 fact.unique = Some(group.keys.iter().map(symbol_name).collect());
                 fact.meaning = Meaning::Result(symbol_name(name));
                 fact.materializes = true;
-                self.analysis.partial_groups.get_mut(owner)
+                self.analysis
+                    .partial_groups
+                    .get_mut(owner)
                     .expect("reserved Group constructor slot")[group_slot] = partial;
                 Ok(fact)
             }
@@ -1047,12 +1077,20 @@ impl Checked<'_> {
                 fact.len = Len::Scan(owner.into());
                 // Formal rule BE-KeyPartCanon: Equal complete valuations route to one part.
                 let heading = self.heading(&fact.meaning);
-                if fact.partition.as_ref().is_some_and(|keys| keys.iter().any(|key| !heading.contains(key))) {
-                    return fail(term, "BE-KeyPartCanon", "complete valuation must determine the routing key");
+                if fact
+                    .partition
+                    .as_ref()
+                    .is_some_and(|keys| keys.iter().any(|key| !heading.contains(key)))
+                {
+                    return fail(
+                        term,
+                        "BE-KeyPartCanon",
+                        "complete valuation must determine the routing key",
+                    );
                 }
                 fact.unique = (fact.depth == 0
                     || (fact.depth == 1 && fact.max_depth == 1 && fact.partition.is_some()))
-                    .then_some(heading);
+                .then_some(heading);
                 *fact.shape.last_mut().expect("row level") = fact.len.clone();
                 Ok(fact)
             }
@@ -1127,10 +1165,19 @@ impl Checked<'_> {
     ) -> syn::Result<()> {
         self.require_store(provider)?;
         // Formal rule BE-KeyPartProvider: A lookup key determines the provider's routing key.
-        for fact in self.facts.values().filter(|fact| fact.materializes
-            && fact.meaning == Meaning::Result(symbol_name(provider))) {
-            if fact.partition.as_ref().is_some_and(|routing| routing.iter().any(|key| !keys.contains(key))) {
-                return fail(provider, "BE-KeyPartProvider", "lookup key must determine the stored provider routing key");
+        for fact in self.facts.values().filter(|fact| {
+            fact.materializes && fact.meaning == Meaning::Result(symbol_name(provider))
+        }) {
+            if fact
+                .partition
+                .as_ref()
+                .is_some_and(|routing| routing.iter().any(|key| !keys.contains(key)))
+            {
+                return fail(
+                    provider,
+                    "BE-KeyPartProvider",
+                    "lookup key must determine the stored provider routing key",
+                );
             }
         }
         self.provider_capability(provider, keys, required)
@@ -1336,14 +1383,20 @@ fn check_rewrite_in(source: &Program, target: &Program, context: &Checker) -> sy
             // Catalog retyping and relational reexpression may occur in the
             // same composed pass. Compare the surviving layout, not the
             // selected storage implementation, while keeping readers exact.
-            target.structures.structures.entries.iter()
+            target
+                .structures
+                .structures
+                .entries
+                .iter()
                 .any(|target| cq_lang_structures::storage_layout_eq(entry, target))
         });
     // Catalog selection may retain host renames and replace their keyed
     // fallbacks, while preserving opaque syntax and the original scans.
     let storage_retyped = !unchanged
-        && cq_lang_structures::check_retention_rewrite(&source.structures, &target.structures).is_ok();
-    if !unchanged && !storage_retyped
+        && cq_lang_structures::check_retention_rewrite(&source.structures, &target.structures)
+            .is_ok();
+    if !unchanged
+        && !storage_retyped
         && (source.structures.physical == target.structures.physical
             || !preserves_adapters
             || !lookup_semantics::reexpression(

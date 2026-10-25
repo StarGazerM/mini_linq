@@ -17,10 +17,13 @@ fn machine() -> Machine {
             children,
         }
     }
-    Machine { key_partition_threshold: 65536, name: syn::parse_quote!(gpu),
-    items: 1,
-    layout: None,
-    root: node("host", vec![node("device", vec![node("block", vec![])])]), }
+    Machine {
+        name: syn::parse_quote!(gpu),
+        items: 1,
+        key_partition_threshold: 65536,
+        layout: None,
+        root: node("host", vec![node("device", vec![node("block", vec![])])]),
+    }
 }
 
 fn catalog() -> Catalog {
@@ -295,7 +298,8 @@ fn catalog_retention_and_canon_retyping_cross_the_sequence_boundary() {
 
     let mut changed_reader = selected.clone();
     if let structures::Structure::Host { keyed, .. } =
-        &mut changed_reader.structures.entries[0].structure {
+        &mut changed_reader.structures.entries[0].structure
+    {
         keyed.ty = syn::parse_quote!(DifferentReader);
     }
     assert!(structures::check_retention_rewrite(&source, &changed_reader).is_err());

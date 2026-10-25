@@ -18,7 +18,8 @@ struct Options {
     sf: String,
     runs: usize,
     query: Option<String>,
-    config: Option<String>,
+    /// Exactly the configurations to run (comma-separated on the command line).
+    config: Option<Vec<String>>,
     reduction_comparison: bool,
     cap_seconds: Option<u64>,
 }
@@ -40,10 +41,12 @@ impl Options {
                     query = Some(args.next().ok_or("--query requires a catalog query")?)
                 }
                 "--config" if config.is_none() => {
-                    config = Some(
-                        args.next()
-                            .ok_or("--config requires a configuration name")?,
-                    )
+                    let names = args.next().ok_or("--config requires configuration names")?;
+                    let names: Vec<String> = names.split(',').map(str::to_owned).collect();
+                    if names.iter().any(String::is_empty) {
+                        return Err("--config requires comma-separated configuration names".into());
+                    }
+                    config = Some(names);
                 }
                 "--sf" if sf.is_none() => sf = Some(args.next().ok_or("--sf requires 0.1, 1 or 10")?),
                 "--cap-seconds" if cap_seconds.is_none() => {
@@ -56,7 +59,7 @@ impl Options {
                 "--runs" if runs.is_none() => {
                     runs = Some(
                         args.next()
-                            .ok_or("--runs requires a positive odd integer")?
+                            .ok_or("--runs requires zero (verify only) or a positive odd integer")?
                             .parse::<usize>()?,
                     )
                 }
@@ -72,8 +75,8 @@ impl Options {
             return Err("TPC-H-derived bench requires --tpch --sf 0.1|1|10".into());
         }
         let runs = runs.unwrap_or(5);
-        if runs == 0 || runs % 2 == 0 {
-            return Err("--runs must be a positive odd integer".into());
+        if runs != 0 && runs % 2 == 0 {
+            return Err("--runs must be zero (verify only) or a positive odd integer".into());
         }
         if config.is_some() && reduction_comparison {
             return Err("--config and --reduction-comparison are mutually exclusive".into());
@@ -97,20 +100,23 @@ struct Query {
     built: compile::Built,
 }
 
-fn describe(root: &Path, source: &Path) -> Result<Query> {
-    describe_in(root, source, None)
+fn describe(root: &Path, source: &Path, counting: bool) -> Result<Query> {
+    describe_with(source, |name| compile::build(root, source, name, counting))
 }
-fn describe_in(root: &Path, source: &Path, cache: Option<&Path>) -> Result<Query> {
+fn describe_in(root: &Path, source: &Path, cache: &Path) -> Result<Query> {
+    describe_with(source, |name| compile::build_in(root, source, name, cache, true, true))
+}
+fn describe_with(
+    source: &Path,
+    build: impl FnOnce(&str) -> Result<compile::Built>,
+) -> Result<Query> {
     let name = source
         .file_stem()
         .unwrap()
         .to_str()
         .ok_or("non-UTF8 query filename")?;
     eprintln!("building TPC-H-derived query {name} in release...");
-    let built = match cache {
-        Some(cache) => compile::build_in(root, source, name, cache, true)?,
-        None => compile::build(root, source, name)?,
-    };
+    let built = build(name)?;
     let output = std::process::Command::new(&built.binary)
         .arg("describe")
         .output()?;
@@ -181,6 +187,8 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
             return Err(format!("unknown TPC query {name}").into());
         }
     }
+    // Verification only needs the timing worker; measurement adds counters.
+    let verify_only = options.runs == 0;
     let mut queries = cq_workloads::tpch::CASES
         .iter()
         .filter(|case| options.query.as_ref().is_none_or(|name| case.name == name))
@@ -192,17 +200,16 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
                         .strip_prefix("workloads/")
                         .unwrap_or(case.rust_path),
                 ),
+                !verify_only,
             )
         })
         .collect::<Result<Vec<_>>>()?;
-    if let Some(config) = &options.config {
+    if let Some(configs) = &options.config {
         for query in &mut queries {
-            if !query.configs.contains(config) {
-                return Err(format!("{} has no configuration {config}", query.name).into());
+            if let Some(missing) = configs.iter().find(|config| !query.configs.contains(config)) {
+                return Err(format!("{} has no configuration {missing}", query.name).into());
             }
-            query
-                .configs
-                .retain(|name| name == "default" || name == config);
+            query.configs.retain(|name| configs.contains(name));
         }
     } else if options.reduction_comparison {
         for query in &mut queries {
@@ -215,44 +222,26 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
             query.configs.retain(|config| config != "no-reduce");
         }
     }
-    // Gate every query/configuration on SF 0.1 before any timed measurements,
-    // even when this invocation requests SF 1. Use the freshly compiled workers.
-    let small = if options.sf == "0.1" {
-        None
-    } else {
-        Some(data::dbgen(&root, "0.1")?)
-    };
-    let verification_database = small.as_ref().unwrap_or(&database);
-    let mut gate_timeouts = BTreeSet::new();
-    for query in &queries {
-        let directory = data::export(verification_database, &query.name, &query.exports)?;
-        let (oracle, _) = data::preload(&directory, &query.exports)?;
-        oracle.execute_batch("SET threads=1")?;
-        let expected = answer_set(&oracle, &query.sql)?;
-        for config in &query.configs {
-            let artifact = bench
-                .join("verification/sf-0.1")
-                .join(&query.name)
-                .join(config);
-            let deadline = options.cap_seconds.map(|s| Instant::now() + std::time::Duration::from_secs(s));
-            if execute_worker_limited(query, &query.built.binary, &directory, config, 0, &artifact, &expected, deadline)?.is_none() {
-                gate_timeouts.insert((query.name.clone(), config.clone()));
-                continue;
-            }
-            eprintln!(
-                "verified TPC-H-derived {}/{} SF 0.1: {} rows",
-                query.name,
-                config,
-                expected.rows.len()
-            );
+    if verify_only {
+        let timeouts = verify_all(&bench, &database, &options.sf, &queries, options.cap_seconds)?;
+        if !timeouts.is_empty() {
+            return Err(format!("unverified within --cap-seconds: {timeouts:?}").into());
         }
+        println!("all selected configurations matched DuckDB exactly at SF {}", options.sf);
+        return Ok(());
     }
+    // Gate every query/configuration on SF 0.1 before timing a larger scale.
+    // At SF 0.1 the timed workers check exact answers before any sample.
+    let gate_timeouts = match options.sf.as_str() {
+        "0.1" => BTreeSet::new(),
+        _ => verify_all(&bench, &data::dbgen(&root, "0.1")?, "0.1", &queries, options.cap_seconds)?,
+    };
     let mut suffix = options
         .query
         .as_ref()
         .map_or(String::new(), |name| format!("-{name}"));
-    if let Some(config) = &options.config {
-        suffix.push_str(&format!("-config-{config}"));
+    if let Some(configs) = &options.config {
+        suffix.push_str(&format!("-config-{}", configs.join(",")));
     }
     if options.reduction_comparison {
         suffix.push_str("-reduction-comparison");
@@ -292,6 +281,8 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
         }
         let duck_default = duck_time(&oracle, &query.sql, options.runs)?;
         let mut configs = Vec::new();
+        let unit_ms = query.built.unit_ms.map_or_else(|| "NA".to_owned(), |ms| format!("{ms:.6}"));
+        let count_binary = query.built.count_binary.as_ref().ok_or("missing counting worker")?;
         for config in &query.configs {
             let artifact = bench
                 .join("runs")
@@ -311,11 +302,11 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
                     &directory, config, options.runs, &artifact, &expected, deadline)? else {
                     return Ok(None);
                 };
-                let Some(counted) = execute_worker_limited(query, &query.built.count_binary,
+                let Some(counted) = execute_worker_limited(query, count_binary,
                     &directory, config, 0, &artifact.with_extension("counts"), &expected, deadline)? else {
                     return Ok(None);
                 };
-                let Some(repeated) = execute_worker_limited(query, &query.built.count_binary,
+                let Some(repeated) = execute_worker_limited(query, count_binary,
                     &directory, config, 0, &artifact.with_extension("counts-repeat"), &expected, deadline)? else {
                     return Ok(None);
                 };
@@ -332,7 +323,7 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
                 row[9] = format!("{:.6}", duck_one.0);
                 row[10] = format!("{:.6}", duck_default.0);
                 row[11] = database.default_threads.to_string();
-                row[12] = query.built.unit_ms.to_string();
+                row[12] = unit_ms.clone();
                 row[30] = "timeout".into();
                 row[33] = format!("{:.6}", duck_one_execute.0);
                 table.push_str(&row.join("\t"));
@@ -424,7 +415,7 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
             let passed = measured["join_filter_passed"]
                 .as_u64()
                 .ok_or("missing join_filter_passed counter")?;
-            table.push_str(&format!("TPC-H-derived\t{}\t{}\t{config}\t{}\t{}\t{load:.6}\t{median:.6}\t{duck_load_ms:.6}\t{:.6}\t{:.6}\t{}\t{:.6}\t{counters}\tpass\t{tested}\t{passed}\t{:.6}\n", options.sf, query.name, options.runs, expected.rows.len(), duck_one.0, duck_default.0, database.default_threads, query.built.unit_ms, duck_one_execute.0));
+            table.push_str(&format!("TPC-H-derived\t{}\t{}\t{config}\t{}\t{}\t{load:.6}\t{median:.6}\t{duck_load_ms:.6}\t{:.6}\t{:.6}\t{}\t{unit_ms}\t{counters}\tpass\t{tested}\t{passed}\t{:.6}\n", options.sf, query.name, options.runs, expected.rows.len(), duck_one.0, duck_default.0, database.default_threads, duck_one_execute.0));
             std::fs::write(&pending, &table)?;
             configs.push(serde_json::json!({"configuration":config,"metrics":measured}));
         }
@@ -451,9 +442,9 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
         "cap_seconds":options.cap_seconds,
         "duckdb_version":database.version,"duckdb_default_threads":database.default_threads,
         "rustc":String::from_utf8_lossy(&rustc.stdout).trim(),
-        "compile_method":"Cargo --release --timings per-query binary unit (all authored configurations); macro expansion + optimization + linking; dependency units excluded; not isolated proc-macro CPU time",
+        "compile_method":"Cargo --release --timings per-query binary unit (all authored configurations; proc macros at opt-level 3); macro expansion + optimization + linking; dependency units excluded; not isolated proc-macro CPU time; null/NA when Cargo reused an up-to-date worker",
         "query_boundary":"fresh query initialization, index construction, full typed result materialization; excludes load, serialization, canonical set comparison and result drop; duckdb_1_median_ms includes prepare/optimization and Arrow result materialization; duckdb_1_execute_median_ms prepares once untimed and times execution plus Arrow result materialization (MiniLinq plans at compile time)",
-        "sf_0_1_gate":"all freshly compiled query/configuration workers checked before timing either scale",
+        "sf_0_1_gate":"SF 1/10: every query/configuration worker checked at SF 0.1 before timing; SF 0.1: timed workers check exact answers before sampling",
         "memory_method":"Linux /proc/self/status VmHWM per configuration worker process, includes load, warmup, answers and correctness; not incremental query-only memory; NA elsewhere",
         "counter_scope":"cq-storage instrumentation disabled in timed binary; counters collected in a separately compiled binary and untimed execution; extension aggregate folds and uninstrumented host work are not counted; DuckDB lacks equivalent instrumentation",
         "cpu_model":std::fs::read_to_string("/proc/cpuinfo").ok().and_then(|text| text.lines().find_map(|line| line.strip_prefix("model name").and_then(|v|v.split_once(':').map(|(_,v)|v.trim().to_owned())))),
@@ -468,6 +459,43 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
         path.display()
     );
     Ok(())
+}
+
+/// Check every selected worker once, untimed, against DuckDB at one scale.
+/// Returns the query/configuration pairs that exceeded the cap.
+fn verify_all(
+    bench: &Path,
+    database: &data::Database,
+    sf: &str,
+    queries: &[Query],
+    cap_seconds: Option<u64>,
+) -> Result<BTreeSet<(String, String)>> {
+    let mut timeouts = BTreeSet::new();
+    for query in queries {
+        let directory = data::export(database, &query.name, &query.exports)?;
+        let (oracle, _) = data::preload(&directory, &query.exports)?;
+        oracle.execute_batch("SET threads=1")?;
+        let expected = answer_set(&oracle, &query.sql)?;
+        for config in &query.configs {
+            let artifact = bench
+                .join(format!("verification/sf-{sf}"))
+                .join(&query.name)
+                .join(config);
+            let deadline = cap_seconds.map(|s| Instant::now() + std::time::Duration::from_secs(s));
+            if execute_worker_limited(query, &query.built.binary, &directory, config, 0, &artifact, &expected, deadline)?.is_none() {
+                eprintln!("{} / {config}: SF {sf} verification timeout", query.name);
+                timeouts.insert((query.name.clone(), config.clone()));
+                continue;
+            }
+            eprintln!(
+                "verified TPC-H-derived {}/{} SF {sf}: {} rows",
+                query.name,
+                config,
+                expected.rows.len()
+            );
+        }
+    }
+    Ok(timeouts)
 }
 
 fn execute_worker(
@@ -670,18 +698,18 @@ mod tests {
             }
         );
         assert_eq!(
-            parse(&["--tpch", "--sf", "1", "--runs", "5", "--config", "le"])
+            parse(&["--tpch", "--sf", "1", "--runs", "5", "--config", "default,le"])
                 .unwrap()
-                .config
-                .as_deref(),
-            Some("le"),
+                .config,
+            Some(vec!["default".to_owned(), "le".to_owned()]),
         );
+        assert_eq!(parse(&["--tpch", "--sf", "1", "--runs", "0"]).unwrap().runs, 0);
         assert_eq!(parse(&["--tpch", "--sf", "10", "--runs", "1", "--cap-seconds", "2"]).unwrap().cap_seconds, Some(2));
         for args in [
             vec!["--tpch"],
             vec!["--tpch", "--sf", "2"],
             vec!["--tpch", "--sf", "1", "--runs", "2"],
-            vec!["--tpch", "--sf", "1", "--runs", "0"],
+            vec!["--tpch", "--sf", "1", "--config", "default,"],
             vec!["--tpch", "--sf", "1", "--cap-seconds", "0"],
             vec!["--tpch", "--sf", "1", "--cap-seconds"],
             vec!["--tpch", "--sf", "1", "--sf", "1"],

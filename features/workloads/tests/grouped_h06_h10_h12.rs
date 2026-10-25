@@ -2,6 +2,10 @@ use cq_load::{Date, Decimal, Load};
 use cq_testkit::conformance::assert_answers_equal;
 use cq_testkit::duckdb::{RelationData, evaluate_sql};
 
+#[allow(dead_code, unused_imports, unused_macros)]
+#[path = "../src/tpch_runtime.rs"]
+mod tpch_runtime;
+
 #[allow(dead_code)]
 #[path = "../src/queries/retail/tpch/retail_h06.rs"]
 mod h06;

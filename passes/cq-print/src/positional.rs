@@ -12,7 +12,27 @@ impl Context<'_> {
             span = proc_macro2::Span::mixed_site()
         )
     }
-    /// The scan occurrence's filters as `(predicate, key marker)`, in decision order.
+    /// Bind identity predicates before any source can be eagerly published.
+    /// Covering builds shadow these bindings with their constructed filters.
+    /// Lazy pipelines emitted earlier resolve the shadow at their eventual use.
+    pub(crate) fn prepare_join_filters(&mut self) {
+        for (scan, filters) in &self.analysis.join_filters {
+            for filter in filters {
+                let key = symbol_name(filter.key.columns.first().expect("checked key"));
+                let id = self.join_filter_ident(scan, &symbol_name(&filter.covering), &key);
+                let ty = &filter.ty;
+                self.statements.push(syn::parse_quote! {
+                    #[allow(unused_variables)]
+                    let #id = &::cq_storage::JoinFilterPredicate::<#ty>(
+                        ::core::option::Option::None
+                    );
+                });
+                self.bound = true;
+            }
+        }
+    }
+
+    /// The scan's predicates, with unbuilt filters represented by identity bindings.
     fn join_filters_of(&self, name: &str) -> Option<(String, Vec<(Ident, syn::Type)>)> {
         let origin = self.analysis.lineage.get(name)?;
         let filters = self.analysis.join_filters.get(&origin.occurrence)?;
@@ -38,7 +58,7 @@ impl Context<'_> {
             quote!(::core::iter::Iterator::filter(#ids, move |&__cq_id| ::cq_storage::ReadPredicate::test(#id, &::cq_storage::Column::key(<#marker>::default(), #host, __cq_id))))
         })
     }
-    /// Formal rule IF-JoinFilter: Filter scan positions conservatively by every recorded filter and retain each covering exact operator unchanged.
+    /// Formal rule IF-JoinFilter: Filter scan positions conservatively by every already-built recorded filter and retain each covering exact operator unchanged.
     pub fn join_filter_ids(&self, name: &str) -> Option<TokenStream> {
         let (base, filters) = self.join_filters_of(name)?;
         let host = Self::positional_host(&base);

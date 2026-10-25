@@ -159,7 +159,11 @@ fn routed_filter_requires_an_enumerable_exact_native_family() {
         quote!(::cq_storage::sharded::Sharded<MembershipOnly>),
         quote!(::cq_storage::sharded::Sharded<::cq_storage::HashIndex<'_, _, _>>),
         quote!(::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>, UnknownRouter>),
-        quote!(::cq_storage::sharded::Sharded<::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>>>),
+        quote!(
+            ::cq_storage::sharded::Sharded<
+                ::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>>,
+            >
+        ),
     ] {
         assert!(retype(&before, quote!(b => #ty)).is_err(), "{ty}");
     }

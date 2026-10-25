@@ -365,10 +365,15 @@ impl<'a> Printer<'a> {
         name: &str,
         definition: &physical::Definition,
     ) -> syn::Result<TokenStream> {
-        if !self.partitioned && let Some(rows) = self.staged_rows(name) {
+        if !self.partitioned
+            && let Some(rows) = self.staged_rows(name)
+        {
             return Ok(rows);
         }
-        if !self.partitioned && self.analysis.reads.contains_key(name) && self.carried_witnesses[name].is_empty() {
+        if !self.partitioned
+            && self.analysis.reads.contains_key(name)
+            && self.carried_witnesses[name].is_empty()
+        {
             let ids = self.read_ids(name)?;
             return Ok(self.buffer_stage(name, self.positional_rows(name, ids)));
         }

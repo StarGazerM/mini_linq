@@ -216,7 +216,12 @@ fn operator_profile(
         let counts = counters::snapshot();
         let bag_insertions: u64 = records
             .iter()
-            .filter(|r| matches!(r.label.kind, "INDEX_BUILD" | "ROWS_BUILD" | "PARTITION_BUILD"))
+            .filter(|r| {
+                matches!(
+                    r.label.kind,
+                    "INDEX_BUILD" | "ROWS_BUILD" | "PARTITION_BUILD"
+                )
+            })
             .map(|r| r.rows_inserted)
             .sum();
         let set_insertions: u64 = records

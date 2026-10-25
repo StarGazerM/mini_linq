@@ -765,17 +765,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-sequence-tasks-macros"
-version = "0.1.0"
-dependencies = [
- "cq-lang-sequence",
- "cq-sequence-plan",
- "cq-sequence-tasks",
- "cq-stage",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "cq-stage"
 version = "0.1.0"
 dependencies = [
@@ -905,7 +894,6 @@ dependencies = [
  "mini-linq",
  "proc-macro2",
  "quote",
- "rayon",
  "syn 2.0.119",
 ]
 
@@ -1420,8 +1408,6 @@ dependencies = [
  "cq-represent",
  "cq-sequence-lowering",
  "cq-sequence-pull",
- "cq-sequence-tasks",
- "cq-sequence-tasks-macros",
  "cq-staging",
  "cq-storage",
  "cq-structure-selection",

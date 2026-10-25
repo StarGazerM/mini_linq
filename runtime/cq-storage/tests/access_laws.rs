@@ -211,11 +211,13 @@ fn immutable_adaptive_forms_support_shared_task_reads() {
     let dense = AdaptiveKeySet::<_, _, 64>::from_keys([1i64, 3], I64Codec);
     let hashed = AdaptiveKeySet::<_, _, 64>::from_keys([1i64, 3], NoDense);
     std::thread::scope(|scope| {
-        let workers: Vec<_> = (0..4).map(|key| {
-            let dense = &dense;
-            let hashed = &hashed;
-            scope.spawn(move || (dense.contains(&key), hashed.contains(&key)))
-        }).collect();
+        let workers: Vec<_> = (0..4)
+            .map(|key| {
+                let dense = &dense;
+                let hashed = &hashed;
+                scope.spawn(move || (dense.contains(&key), hashed.contains(&key)))
+            })
+            .collect();
         for (key, worker) in workers.into_iter().enumerate() {
             let expected = key == 1 || key == 3;
             assert_eq!(worker.join().unwrap(), (expected, expected));

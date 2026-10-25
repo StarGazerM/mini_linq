@@ -64,7 +64,10 @@ pub(crate) fn provider_available(
             && token.elements.as_ref().is_none_or(|accepted| {
                 analysis.structures.layouts[provider].iter().all(|column| {
                     accepted.iter().any(|ty| {
-                        matches_type(ty, &analysis.structures.physical.rows[provider].types[column])
+                        matches_type(
+                            ty,
+                            &analysis.structures.physical.rows[provider].types[column],
+                        )
                     })
                 })
             })

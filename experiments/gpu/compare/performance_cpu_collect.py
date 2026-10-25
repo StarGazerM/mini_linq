@@ -39,7 +39,7 @@ if 'retail_h14' not in NAMES:
     NAMES.insert(NAMES.index('retail_h15'), 'retail_h14')
 CATALOG_NAMES = NAMES.copy()
 RAW = OUT / 'performance_cpu_raw'
-ENV = dict(os.environ, CARGO_BUILD_JOBS='1', CARGO_TARGET_DIR=str(CACHE / 'target'))
+ENV = dict(os.environ, CARGO_TARGET_DIR=str(CACHE / 'target'))
 
 
 def isolated():
@@ -110,9 +110,12 @@ def build():
         'cq-rewrites': 'features/rewrites', 'cq-join-filters': 'features/join-filters',
         'cq-ext-aggregate': 'features/extensions/cq-ext-aggregate',
         'cq-ext-correlated': 'features/extensions/cq-ext-correlated',
+        'cq-sequence-tasks': 'features/sequence-tasks',
+        'cq-sequence-tasks-macros': 'features/sequence-tasks/macros',
     }
     CACHE.mkdir(parents=True, exist_ok=True)
-    log = OUT / (artifact_name('build') + '.log') if isolated() else OUT / 'performance_cpu_build.log'
+    # Build logs are disposable cache artifacts, not reviewed evidence.
+    log = CACHE / (artifact_name('build') + '.log')
     workers = [(None, 'timing-worker'), ('counters', 'counting-worker'), ('profile', 'profile-worker')]
     for name in NAMES:
         stamp = build_stamp(name) if isolated() else None
@@ -136,7 +139,8 @@ def build():
                 save(RAW / name / 'source_stamp.json', stamp)
             continue
         (crate / 'src').mkdir(parents=True, exist_ok=True)
-        manifest = f'[package]\nname = "tpch-derived-{name}"\nversion = "0.0.0"\nedition = "2024"\n[workspace]\n[features]\ncounters = ["cq-storage/counters"]\nprofile = ["cq-storage/operator-timing"]\n[dependencies]\n'
+        # Own workspace: repository profiles do not apply. Optimize the compiler macros.
+        manifest = f'[package]\nname = "tpch-derived-{name}"\nversion = "0.0.0"\nedition = "2024"\n[workspace]\n[profile.release.build-override]\nopt-level = 3\n[features]\ncounters = ["cq-storage/counters"]\nprofile = ["cq-storage/operator-timing"]\n[dependencies]\n'
         for dep, path in dependencies.items():
             features = ', features = ["parquet"]' if dep == 'cq-load' else ''
             manifest += f'{dep} = {{ path = "{ROOT / path}"{features} }}\n'
@@ -220,30 +224,38 @@ def prepare():
     })
 
 
+def replace_once(source, old, new):
+    """Fail instead of silently generating an unpatched worker after worker.rs edits."""
+    if source.count(old) != 1:
+        raise RuntimeError(f'adaptive worker anchor must occur once in worker.rs: {old!r}')
+    return source.replace(old, new)
+
+
 def adaptive():
     """Only alter generated measurement controls; preserve query and planner sources."""
     source = (WORK / 'xtask/src/tpch/worker.rs').read_text()
-    source = source.replace('    let warm = query::run(&data, &args[1]);',
+    source = replace_once(source, '    let warm = query::run(&data, &args[1]);',
                             '    let warm_started = Instant::now();\n    let warm = query::run(&data, &args[1]);\n    let warm_ms = warm_started.elapsed().as_secs_f64() * 1000.0;\n    let runs = if runs > 0 && warm_ms > 60000.0 { 3 } else { runs };')
-    source = source.replace('    times.sort_by(f64::total_cmp);',
+    source = replace_once(source, '    times.sort_by(f64::total_cmp);',
                             '    if times.iter().any(|&ms| ms > 60000.0) { times.truncate(3); }\n    let runs = times.len();\n    times.sort_by(f64::total_cmp);')
-    source = source.replace('    for _ in 0..runs {\n        let start = Instant::now();',
+    source = replace_once(source, '    for _ in 0..runs {\n        let start = Instant::now();',
                             '    for _ in 0..runs {\n        if times.len() >= 3 && times.iter().any(|&ms| ms > 60000.0) { break; }\n        let start = Instant::now();')
-    source = source.replace('    for _ in 0..runs {\n        counters::reset();',
+    source = replace_once(source, '    for _ in 0..runs {\n        counters::reset();',
                             '    for _ in 0..runs {\n        if samples.len() >= 3 && samples.iter().any(|s: &(f64, serde_json::Value)| s.0 > 60000.0) { break; }\n        counters::reset();')
-    source = source.replace('    samples.sort_by(|a, b| a.0.total_cmp(&b.0));',
+    source = replace_once(source, '    samples.sort_by(|a, b| a.0.total_cmp(&b.0));',
                             '    if samples.iter().any(|s| s.0 > 60000.0) { samples.truncate(3); }\n    let runs = samples.len();\n    samples.sort_by(|a, b| a.0.total_cmp(&b.0));')
     source = source.replace('> 60.0', f'> {float(SLOW_SECONDS)}').replace('> 60000.0', f'> {float(SLOW_SECONDS * 1000)}')
     if isolated():
         # Tasks buffers/canonicalization do not map one-to-one onto the
         # sequential bag/set insertion categories. Keep their actual counters,
         # but do not claim that inapplicable primitive agreement was verified.
-        source = source.replace(
+        source = replace_once(
+            source,
             '        if counters::STORAGE_COUNTERS_ENABLED\n',
             '        let primitive_build_counts_verifiable = counters::STORAGE_COUNTERS_ENABLED\n'
             '            && !records.iter().any(|r| r.label.kind == "TASKS_BUILD_WALL");\n'
             '        if primitive_build_counts_verifiable\n')
-        source = source.replace('"build_rows_verified":counters::STORAGE_COUNTERS_ENABLED',
+        source = replace_once(source, '"build_rows_verified":counters::STORAGE_COUNTERS_ENABLED',
                                 '"build_rows_verified":primitive_build_counts_verifiable')
     worker = CACHE_ROOT / 'adaptive-worker.rs'
     worker.parent.mkdir(parents=True, exist_ok=True)

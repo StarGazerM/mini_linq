@@ -472,26 +472,49 @@ impl<'a> Checker<'a> {
             }
             Term::PartitionK { parts, inner, .. } => {
                 // Formal rule BE-KeyPart: Exchange reads an ancestor store into a fixed separated pool.
-                let pool = self.levels.iter().enumerate().filter(|(_, candidate)|
-                    self.levels[level].path.starts_with(&candidate.path)
-                    && candidate.path.len() > 1 && !candidate.model.collaborative
-                    && (*parts == 1 || candidate.model.width == Some(*parts))
-                    && candidate.model.width.is_some_and(|width| width > 0)
-                    && !candidate.children.is_empty())
+                let pool = self
+                    .levels
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, candidate)| {
+                        self.levels[level].path.starts_with(&candidate.path)
+                            && candidate.path.len() > 1
+                            && !candidate.model.collaborative
+                            && (*parts == 1 || candidate.model.width == Some(*parts))
+                            && candidate.model.width.is_some_and(|width| width > 0)
+                            && !candidate.children.is_empty()
+                    })
                     .max_by_key(|(_, candidate)| candidate.path.len())
                     .map(|(index, _)| index)
-                    .ok_or_else(|| self.error(owner, "BE-KeyPart: partition count must match a separated distributing pool"))?;
+                    .ok_or_else(|| {
+                        self.error(
+                            owner,
+                            "BE-KeyPart: partition count must match a separated distributing pool",
+                        )
+                    })?;
                 let Term::Ref(name) = inner.as_ref() else {
                     return Err(self.error(owner, "BE-KeyPart: input must name an ancestor store"));
                 };
                 let source = self.definitions[&symbol_name(name)];
                 let source_path = &self.levels[self.grades[source]].path;
                 let pool_path = &self.levels[pool].path;
-                if source_path.len() >= pool_path.len() || !pool_path.starts_with(source_path)
-                    || !self.is_stored(self.roots[source]) {
-                    return Err(self.error(owner, "BE-KeyPart: input must be stored at a strict ancestor of the pool"));
+                if source_path.len() >= pool_path.len()
+                    || !pool_path.starts_with(source_path)
+                    || !self.is_stored(self.roots[source])
+                {
+                    return Err(self.error(
+                        owner,
+                        "BE-KeyPart: input must be stored at a strict ancestor of the pool",
+                    ));
                 }
-                inputs.push(self.visit(inner, owner, self.grades[source], tiled, uniform, false)?);
+                inputs.push(self.visit(
+                    inner,
+                    owner,
+                    self.grades[source],
+                    tiled,
+                    uniform,
+                    false,
+                )?);
             }
             Term::Tile { inner, .. } => {
                 let kind = if self
@@ -512,8 +535,10 @@ impl<'a> Checker<'a> {
                 let slot = self.group_cursors[owner];
                 self.group_cursors[owner] += 1;
                 let partial = self.partial_groups[&self.name(owner)][slot];
-                if level != 0 && !partial
-                    && (!self.levels[level].children.is_empty() || !self.key_partitioned(inner)) {
+                if level != 0
+                    && !partial
+                    && (!self.levels[level].children.is_empty() || !self.key_partitioned(inner))
+                {
                     return Err(self.error(
                         owner,
                         "BE-Group: grouped folds must execute at the host join",
@@ -711,8 +736,10 @@ impl<'a> Checker<'a> {
             Term::Choose(arms) => {
                 // A choice of fixed covers reads already published rows. Its
                 // outer part count varies, but each branch's allocation is known.
-                if !arms.is_empty() && arms.iter().all(|(_, arm)|
-                    matches!(arm, Term::PartitionK { .. }))
+                if !arms.is_empty()
+                    && arms
+                        .iter()
+                        .all(|(_, arm)| matches!(arm, Term::PartitionK { .. }))
                 {
                     return false;
                 }
@@ -794,20 +821,28 @@ impl<'a> Checker<'a> {
         }
     }
 
-
     fn key_partitioned(&self, term: &Term) -> bool {
         match term {
             Term::PartitionK { .. } => true,
-            Term::Canon(inner) | Term::Store { inner, .. }
-            | Term::Map(_, inner) | Term::Compact(_, inner) => self.key_partitioned(inner),
+            Term::Canon(inner)
+            | Term::Store { inner, .. }
+            | Term::Map(_, inner)
+            | Term::Compact(_, inner) => self.key_partitioned(inner),
             Term::Flatten(inner) if matches!(inner.as_ref(), Term::Lookup { .. }) => {
-                let Term::Lookup { inner, .. } = inner.as_ref() else { unreachable!() };
+                let Term::Lookup { inner, .. } = inner.as_ref() else {
+                    unreachable!()
+                };
                 self.key_partitioned(inner)
             }
-            Term::Ref(name) => self.definitions.get(&symbol_name(name))
-                .is_some_and(|&index| self.key_partitioned(&self.program.sequence.definitions[index].term)),
-            Term::Choose(arms) => !arms.is_empty()
-                && arms.iter().all(|(_, arm)| self.key_partitioned(arm)),
+            Term::Ref(name) => self
+                .definitions
+                .get(&symbol_name(name))
+                .is_some_and(|&index| {
+                    self.key_partitioned(&self.program.sequence.definitions[index].term)
+                }),
+            Term::Choose(arms) => {
+                !arms.is_empty() && arms.iter().all(|(_, arm)| self.key_partitioned(arm))
+            }
             _ => false,
         }
     }

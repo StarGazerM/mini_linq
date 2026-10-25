@@ -27,11 +27,15 @@ pub trait Router<K: ?Sized> {
 pub struct FullKey;
 
 impl<K: Hash + ?Sized> Router<K> for FullKey {
-    fn route(&self, key: &K, count: usize) -> usize { route_index(key, count) }
+    fn route(&self, key: &K, count: usize) -> usize {
+        route_index(key, count)
+    }
 }
 
 impl<K: ?Sized, F: Fn(&K, usize) -> usize> Router<K> for F {
-    fn route(&self, key: &K, count: usize) -> usize { self(key, count) }
+    fn route(&self, key: &K, count: usize) -> usize {
+        self(key, count)
+    }
 }
 
 /// A plan-sized family of immutable indexes with deterministic key routing.
@@ -50,7 +54,9 @@ impl<I> Sharded<I> {
 
     /// Build one index per already routed part, without rerouting or copying.
     pub fn build_parts<K: Send, V: Send>(parts: Vec<Vec<(K, V)>>) -> Self
-    where I: Build<std::vec::IntoIter<(K, V)>> + Send {
+    where
+        I: Build<std::vec::IntoIter<(K, V)>> + Send,
+    {
         Self::build_parts_with_router(parts, FullKey)
     }
 }
@@ -58,15 +64,22 @@ impl<I> Sharded<I> {
 impl<I, F> Sharded<I, F> {
     /// Wrap parts with the routing policy used to partition their source.
     pub fn from_parts_with_router(shards: Vec<I>, router: F) -> Self {
-        assert!(!shards.is_empty(), "routed provider needs positive partition count");
-        Self { shards, router, release: Vec::clear }
+        assert!(
+            !shards.is_empty(),
+            "routed provider needs positive partition count"
+        );
+        Self {
+            shards,
+            router,
+            release: Vec::clear,
+        }
     }
 
     /// Build already routed parts and retain the lookup-key projection policy.
-    pub fn build_parts_with_router<K: Send, V: Send>(
-        parts: Vec<Vec<(K, V)>>, router: F,
-    ) -> Self
-    where I: Build<std::vec::IntoIter<(K, V)>> + Send {
+    pub fn build_parts_with_router<K: Send, V: Send>(parts: Vec<Vec<(K, V)>>, router: F) -> Self
+    where
+        I: Build<std::vec::IntoIter<(K, V)>> + Send,
+    {
         if parts.len() == 1 {
             let part = parts.into_iter().next().expect("singleton cover");
             return Self::from_parts_with_router(vec![I::build(part.into_iter())], router);
@@ -74,14 +87,22 @@ impl<I, F> Sharded<I, F> {
         #[cfg(any(feature = "counters", feature = "operator-timing"))]
         let context = crate::counters::TaskContext::capture();
         Self::from_parts_with_router(
-            parts.into_par_iter().map(|part| {
-                #[cfg(any(feature = "counters", feature = "operator-timing"))]
-                { context.run(|| I::build(part.into_iter())) }
-                #[cfg(not(any(feature = "counters", feature = "operator-timing")))]
-                { I::build(part.into_iter()) }
-            }).collect(),
+            parts
+                .into_par_iter()
+                .map(|part| {
+                    #[cfg(any(feature = "counters", feature = "operator-timing"))]
+                    {
+                        context.run(|| I::build(part.into_iter()))
+                    }
+                    #[cfg(not(any(feature = "counters", feature = "operator-timing")))]
+                    {
+                        I::build(part.into_iter())
+                    }
+                })
+                .collect(),
             router,
-        ).with_parallel_release()
+        )
+        .with_parallel_release()
     }
 
     /// Build each recorded row part directly, without first copying all pairs
@@ -99,15 +120,29 @@ impl<I, F> Sharded<I, F> {
         }
         #[cfg(any(feature = "counters", feature = "operator-timing"))]
         let context = crate::counters::TaskContext::capture();
-        Self::from_parts_with_router(parts.par_iter().map(|part| {
-            #[cfg(any(feature = "counters", feature = "operator-timing"))]
-            { context.run(|| build(part)) }
-            #[cfg(not(any(feature = "counters", feature = "operator-timing")))]
-            { build(part) }
-        }).collect(), router).with_parallel_release()
+        Self::from_parts_with_router(
+            parts
+                .par_iter()
+                .map(|part| {
+                    #[cfg(any(feature = "counters", feature = "operator-timing"))]
+                    {
+                        context.run(|| build(part))
+                    }
+                    #[cfg(not(any(feature = "counters", feature = "operator-timing")))]
+                    {
+                        build(part)
+                    }
+                })
+                .collect(),
+            router,
+        )
+        .with_parallel_release()
     }
 
-    fn with_parallel_release(mut self) -> Self where I: Send {
+    fn with_parallel_release(mut self) -> Self
+    where
+        I: Send,
+    {
         self.release = release_parallel::<I>;
         self
     }
@@ -117,7 +152,10 @@ impl<I, F> Sharded<I, F> {
     }
 
     #[inline]
-    fn shard<K: ?Sized>(&self, key: &K) -> &I where F: Router<K> {
+    fn shard<K: ?Sized>(&self, key: &K) -> &I
+    where
+        F: Router<K>,
+    {
         if self.shards.len() == 1 {
             &self.shards[0]
         } else {
@@ -143,9 +181,13 @@ fn release_parallel<I: Send>(shards: &mut Vec<I>) {
     let context = crate::counters::TaskContext::capture();
     std::mem::take(shards).into_par_iter().for_each(|shard| {
         #[cfg(any(feature = "counters", feature = "operator-timing"))]
-        { context.run(|| drop(shard)); }
+        {
+            context.run(|| drop(shard));
+        }
         #[cfg(not(any(feature = "counters", feature = "operator-timing")))]
-        { drop(shard); }
+        {
+            drop(shard);
+        }
     });
 }
 
@@ -234,7 +276,10 @@ struct Bucket<V> {
 }
 impl<K: std::fmt::Debug, V: std::fmt::Debug> std::fmt::Debug for Index<K, V> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.debug_struct("Index").field("buckets", &self.buckets).finish()
+        formatter
+            .debug_struct("Index")
+            .field("buckets", &self.buckets)
+            .finish()
     }
 }
 
@@ -264,7 +309,10 @@ impl<K: Eq + Hash, V, S: Iterator<Item = (K, V)>> Build<S> for Index<K, V> {
                     entry.get_mut().tail.push(value);
                 }
                 std::collections::hash_map::Entry::Vacant(entry) => {
-                    entry.insert(Bucket { first: value, tail: Vec::new() });
+                    entry.insert(Bucket {
+                        first: value,
+                        tail: Vec::new(),
+                    });
                 }
             }
         }
@@ -272,7 +320,10 @@ impl<K: Eq + Hash, V, S: Iterator<Item = (K, V)>> Build<S> for Index<K, V> {
         let allocation = {
             crate::counters::build_cardinality(buckets.len());
             let bytes = buckets.capacity() * (std::mem::size_of::<(K, Bucket<V>)>() + 1)
-                + buckets.values().map(|bucket| bucket.tail.capacity() * std::mem::size_of::<V>()).sum::<usize>();
+                + buckets
+                    .values()
+                    .map(|bucket| bucket.tail.capacity() * std::mem::size_of::<V>())
+                    .sum::<usize>();
             crate::counters_memory::Allocation::new(bytes)
         };
         Self {
@@ -286,17 +337,20 @@ impl<K: Eq + Hash, V, S: Iterator<Item = (K, V)>> Build<S> for Index<K, V> {
 impl<'a, K: Eq + Hash, V: Copy> IndexRead for &'a Index<K, V> {
     type Key = K;
     type Item = V;
-    type Cursor = crate::instrument::Cursor<std::iter::Chain<
-        std::option::IntoIter<V>,
-        std::iter::Copied<std::slice::Iter<'a, V>>,
-    >>;
+    type Cursor = crate::instrument::Cursor<
+        std::iter::Chain<std::option::IntoIter<V>, std::iter::Copied<std::slice::Iter<'a, V>>>,
+    >;
 
     fn lookup(&self, key: &K) -> Self::Cursor {
         crate::count!(lookups);
         let bucket = self.buckets.get(key);
         crate::instrument::cursor!(
-            bucket.map(|bucket| bucket.first).into_iter()
-                .chain(bucket.map_or(&[][..], |bucket| bucket.tail.as_slice()).iter().copied())
+            bucket.map(|bucket| bucket.first).into_iter().chain(
+                bucket
+                    .map_or(&[][..], |bucket| bucket.tail.as_slice())
+                    .iter()
+                    .copied()
+            )
         )
     }
 }
@@ -337,7 +391,10 @@ mod tests {
 
     #[test]
     fn parallel_provider_release_joins_all_native_destructors() {
-        use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
         struct Native(Arc<AtomicUsize>);
         impl Drop for Native {
             fn drop(&mut self) {
@@ -346,18 +403,31 @@ mod tests {
             }
         }
         let count = Arc::new(AtomicUsize::new(0));
-        rayon::ThreadPoolBuilder::new().num_threads(4).build().unwrap().install(|| {
-            let parts: Vec<Vec<u8>> = (0..64).map(|_| Vec::new()).collect();
-            let provider = Sharded::build_from_parts_with_router(&parts, |_| Native(count.clone()), FullKey);
-            drop(provider);
-        });
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap()
+            .install(|| {
+                let parts: Vec<Vec<u8>> = (0..64).map(|_| Vec::new()).collect();
+                let provider = Sharded::build_from_parts_with_router(
+                    &parts,
+                    |_| Native(count.clone()),
+                    FullKey,
+                );
+                drop(provider);
+            });
         assert_eq!(count.load(Ordering::Relaxed), 64);
     }
     #[test]
     fn singleton_buckets_do_not_allocate_payload_vectors() {
         let index = Index::build((0..128).map(|key| (key, key * 2)));
         assert_eq!(index.buckets.len(), 128);
-        assert!(index.buckets.values().all(|bucket| bucket.tail.capacity() == 0));
+        assert!(
+            index
+                .buckets
+                .values()
+                .all(|bucket| bucket.tail.capacity() == 0)
+        );
         for key in 0..128 {
             assert_eq!((&index).lookup(&key).collect::<Vec<_>>(), [key * 2]);
         }
@@ -366,42 +436,62 @@ mod tests {
     #[test]
     fn projected_routing_preserves_full_lookup_keys() {
         for threads in [1, 24] {
-            rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(|| {
-                for count in [1, 7, 32] {
-                    let rows = [((2u64, 7u64), 3u64), ((2, 8), 4), ((2, 7), 3), ((9, 7), 5)];
-                    let router = |key: &(u64, u64), n| route_index(&(key.1,), n);
-                    let mut parts: Vec<_> = (0..count).map(|_| vec![]).collect();
-                    for row in rows { parts[router(&row.0, count)].push(row); }
-                    let index = Sharded::<Index<(u64,u64),u64>, _>::build_parts_with_router(parts.clone(), router);
-                    let seen = Sharded::<crate::HashSet<(u64,u64)>, _>::build_parts_with_router(parts, router);
-                    for key in [(2,7), (2,8), (9,7), (9,8), (0,0)] {
-                        let expected: Vec<_> = rows.iter().filter(|r| r.0 == key).map(|r| r.1).collect();
-                        assert_eq!((&index).lookup(&key).collect::<Vec<_>>(), expected);
-                        assert_eq!(seen.contains(&key), !expected.is_empty());
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap()
+                .install(|| {
+                    for count in [1, 7, 32] {
+                        let rows = [((2u64, 7u64), 3u64), ((2, 8), 4), ((2, 7), 3), ((9, 7), 5)];
+                        let router = |key: &(u64, u64), n| route_index(&(key.1,), n);
+                        let mut parts: Vec<_> = (0..count).map(|_| vec![]).collect();
+                        for row in rows {
+                            parts[router(&row.0, count)].push(row);
+                        }
+                        let index = Sharded::<Index<(u64, u64), u64>, _>::build_parts_with_router(
+                            parts.clone(),
+                            router,
+                        );
+                        let seen =
+                            Sharded::<crate::HashSet<(u64, u64)>, _>::build_parts_with_router(
+                                parts, router,
+                            );
+                        for key in [(2, 7), (2, 8), (9, 7), (9, 8), (0, 0)] {
+                            let expected: Vec<_> =
+                                rows.iter().filter(|r| r.0 == key).map(|r| r.1).collect();
+                            assert_eq!((&index).lookup(&key).collect::<Vec<_>>(), expected);
+                            assert_eq!(seen.contains(&key), !expected.is_empty());
+                        }
                     }
-                }
-            });
+                });
         }
     }
     #[test]
     fn routed_hits_misses_duplicates_and_empty() {
         for threads in [1, 24] {
-            rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(|| {
-                for count in [1, 7, 32] {
-                    for rows in [vec![], vec![(1u64, 2u64), (1, 2), (1, 3), (9, 4)]] {
-                        let mut parts: Vec<_> = (0..count).map(|_| vec![]).collect();
-                        for &pair in &rows { parts[route_index(&pair.0, count)].push(pair); }
-                        let index = Sharded::<Index<u64,u64>>::build_parts(parts.clone());
-                        let seen = Sharded::<crate::HashSet<u64>>::build_parts(parts);
-                        assert_eq!(index.shard_count(), count);
-                        for key in 0..12 {
-                            let expected: Vec<_> = rows.iter().filter(|r| r.0 == key).map(|r| r.1).collect();
-                            assert_eq!((&index).lookup(&key).collect::<Vec<_>>(), expected);
-                            assert_eq!(seen.contains(&key), !expected.is_empty());
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap()
+                .install(|| {
+                    for count in [1, 7, 32] {
+                        for rows in [vec![], vec![(1u64, 2u64), (1, 2), (1, 3), (9, 4)]] {
+                            let mut parts: Vec<_> = (0..count).map(|_| vec![]).collect();
+                            for &pair in &rows {
+                                parts[route_index(&pair.0, count)].push(pair);
+                            }
+                            let index = Sharded::<Index<u64, u64>>::build_parts(parts.clone());
+                            let seen = Sharded::<crate::HashSet<u64>>::build_parts(parts);
+                            assert_eq!(index.shard_count(), count);
+                            for key in 0..12 {
+                                let expected: Vec<_> =
+                                    rows.iter().filter(|r| r.0 == key).map(|r| r.1).collect();
+                                assert_eq!((&index).lookup(&key).collect::<Vec<_>>(), expected);
+                                assert_eq!(seen.contains(&key), !expected.is_empty());
+                            }
                         }
                     }
-                }
-            });
+                });
         }
     }
     #[cfg(feature = "counters")]
@@ -410,7 +500,10 @@ mod tests {
         use crate::counters::{self, OperatorLabel, OperatorProgram};
         counters::reset();
         let profile = OperatorProgram::new(&[OperatorLabel {
-            result: "shards", kind: "INDEX_BUILD", key: "k", inputs: &[],
+            result: "shards",
+            kind: "INDEX_BUILD",
+            key: "k",
+            inputs: &[],
         }]);
         let index = profile.build(0, || {
             let mut parts = vec![Vec::new(); 7];

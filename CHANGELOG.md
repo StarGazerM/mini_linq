@@ -7,6 +7,25 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- TPC-H bench dev loop: generated worker sources are stable (no forced
+  rebuilds; `compile_unit_ms` is NA for reused workers), per-query crates build
+  their compiler proc macros at opt-level 3, `--runs 0` verifies exactness only
+  (timing worker, no counting/DuckDB timing), `--config a,b` runs exactly those
+  configurations, and SF 0.1 measurement skips the duplicate pre-gate. The CPU
+  report collector no longer pins `CARGO_BUILD_JOBS=1`, keeps build logs in its
+  cache, and fails if its generated-worker patch anchors drift.
+- The facade no longer depends on or re-exports the Tasks feature: generated
+  Tasks code names `cq_sequence_tasks::combine` directly and consumers select
+  `cq_sequence_tasks_macros::{plan, tasks, translate_tasks}`.
+- Join-filter bindings start as identity predicates and are shadowed when their
+  covering provider is built, so publications read before that build stay
+  exact (IF-JoinFilter `builtBefore`). Routed-provider routers use the stored
+  key after constant elision; nested tiles re-apply collectives to joined rows.
+- Test infrastructure: sequential machine fixtures use
+  `cq_sequence_pull::machine()`, grouped TPC-H tests evaluate each DuckDB oracle
+  once per dataset (and all four grouped suites compile again), linked
+  fixture artifacts are memoized per process, and stale feature lockfiles are
+  refreshed.
 - Add checked runtime choices for Tasks provider builds using published input
   length and a machine-supplied threshold, with authoritative force/forbid
   advice. Singleton covers build and read native providers without routing;

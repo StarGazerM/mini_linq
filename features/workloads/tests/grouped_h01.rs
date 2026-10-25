@@ -19,10 +19,7 @@ fn h01_grouped_head_matches_duckdb_distinct_join() {
         vec![2, 1, 78, 79, 300, 700, 0],
         vec![3, 1, 65, 70, 900, 9900, 1],
     ];
-    for (rows, config) in [raw.clone(), raw.into_iter().rev().collect(), Vec::new()]
-        .into_iter()
-        .flat_map(|rows| h01::CONFIGS.iter().map(move |config| (rows.clone(), config)))
-    {
+    for rows in [raw.clone(), raw.into_iter().rev().collect(), Vec::new()] {
         let data = h01::Data {
             lineitem: rows
                 .iter()
@@ -44,18 +41,6 @@ fn h01_grouped_head_matches_duckdb_distinct_join() {
                 })
                 .collect(),
         };
-        let actual = h01::run(&data, config)
-            .into_iter()
-            .map(|(flag, status, quantity, price, count)| {
-                vec![
-                    flag.as_bytes()[0] as i32,
-                    status.as_bytes()[0] as i32,
-                    i32::try_from(quantity).unwrap(),
-                    i32::try_from(price).unwrap(),
-                    i32::try_from(count).unwrap(),
-                ]
-            })
-            .collect::<Vec<_>>();
         let sql = format!(
             r#"WITH lineitem AS (
             SELECT c0 AS l_orderkey, c1 AS l_linenumber,
@@ -77,6 +62,20 @@ fn h01_grouped_head_matches_duckdb_distinct_join() {
             &sql,
         )
         .expect("DuckDB H01 oracle");
-        assert_answers_equal("DuckDB H01", expected, "grouped CQ H01", actual, true);
+        for config in h01::CONFIGS {
+            let actual = h01::run(&data, config)
+                .into_iter()
+                .map(|(flag, status, quantity, price, count)| {
+                    vec![
+                        flag.as_bytes()[0] as i32,
+                        status.as_bytes()[0] as i32,
+                        i32::try_from(quantity).unwrap(),
+                        i32::try_from(price).unwrap(),
+                        i32::try_from(count).unwrap(),
+                    ]
+                })
+                .collect::<Vec<_>>();
+            assert_answers_equal("DuckDB H01", &expected, "grouped CQ H01", &actual, true);
+        }
     }
 }

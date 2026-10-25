@@ -830,10 +830,13 @@ mod tests {
                 children,
             }
         }
-        Machine { key_partition_threshold: 65536, name: syn::parse_quote!(gpu),
-        items: 1,
-        layout: None,
-        root: node("host", vec![node("device", vec![node("block", vec![])])]), }
+        Machine {
+            name: syn::parse_quote!(gpu),
+            items: 1,
+            key_partition_threshold: 65536,
+            layout: None,
+            root: node("host", vec![node("device", vec![node("block", vec![])])]),
+        }
     }
 
     fn membership() -> Program {

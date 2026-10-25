@@ -104,9 +104,14 @@ pub(crate) fn advise(
         // Segment introduces an inline Store. BE-Boundary requires every
         // separated Store to be named, so only a collaborative grade admits
         // this local offsets publication; a task/pool keeps the plain schedule.
-        let collaborative = grade.level.iter().skip(1).try_fold(&machine.root, |level, name| {
-            level.children.iter().find(|child| child.name == *name)
-        }).is_some_and(|level| level.collaborative);
+        let collaborative = grade
+            .level
+            .iter()
+            .skip(1)
+            .try_fold(&machine.root, |level, name| {
+                level.children.iter().find(|child| child.name == *name)
+            })
+            .is_some_and(|level| level.collaborative);
         if !collaborative {
             continue;
         }
@@ -157,7 +162,11 @@ fn unstored_input(program: &Program, term: &Term) -> Option<syn::Ident> {
         | Term::Group(_, inner)
         | Term::Canon(inner)
         | Term::Store { inner, .. } => unstored_input(program, inner),
-        Term::Tile { .. } | Term::PartitionK { .. } | Term::Union(_) | Term::Choose(_) | Term::Rows(_) => None,
+        Term::Tile { .. }
+        | Term::PartitionK { .. }
+        | Term::Union(_)
+        | Term::Choose(_)
+        | Term::Rows(_) => None,
     }
 }
 
@@ -176,8 +185,9 @@ fn has_tile(program: &Program, term: &Term) -> bool {
         Term::Ref(name) => producer(program, name).is_some_and(|term| match term {
             // A published nested cover already supplies the parts for a
             // partial fold, unlike an ordinary flat stored producer.
-            Term::Store { inner, .. } => matches!(inner.as_ref(),
-                Term::Tile { .. } | Term::PartitionK { .. }),
+            Term::Store { inner, .. } => {
+                matches!(inner.as_ref(), Term::Tile { .. } | Term::PartitionK { .. })
+            }
             term => has_tile(program, term),
         }),
         Term::Map(_, inner)

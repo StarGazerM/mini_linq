@@ -12,38 +12,41 @@ pub use emit::translate;
 /// Host publication over separated, dynamically scheduled device blocks.
 /// Each block is collaborative; lanes are sequential leaves (no warp level).
 pub fn machine() -> Machine {
-    Machine { key_partition_threshold: 65536, name: syn::parse_quote!(gpu),
-    items: 4,
-    layout: Some(layout::shared_bytes),
-    root: LevelNode {
-        name: syn::parse_quote!(host),
-        collaborative: false,
-        dynamic: false,
-        width: None,
-        shared_bytes: None,
-        children: vec![LevelNode {
-            name: syn::parse_quote!(device),
+    Machine {
+        name: syn::parse_quote!(gpu),
+        items: 4,
+        key_partition_threshold: 65536,
+        layout: Some(layout::shared_bytes),
+        root: LevelNode {
+            name: syn::parse_quote!(host),
             collaborative: false,
-            dynamic: true,
+            dynamic: false,
             width: None,
             shared_bytes: None,
             children: vec![LevelNode {
-                name: syn::parse_quote!(block),
-                collaborative: true,
-                dynamic: false,
-                width: Some(256),
-                shared_bytes: Some(101_376),
+                name: syn::parse_quote!(device),
+                collaborative: false,
+                dynamic: true,
+                width: None,
+                shared_bytes: None,
                 children: vec![LevelNode {
-                    name: syn::parse_quote!(lane),
-                    collaborative: false,
+                    name: syn::parse_quote!(block),
+                    collaborative: true,
                     dynamic: false,
-                    width: None,
-                    shared_bytes: None,
-                    children: vec![],
+                    width: Some(256),
+                    shared_bytes: Some(101_376),
+                    children: vec![LevelNode {
+                        name: syn::parse_quote!(lane),
+                        collaborative: false,
+                        dynamic: false,
+                        width: None,
+                        shared_bytes: None,
+                        children: vec![],
+                    }],
                 }],
             }],
-        }],
-    }, }
+        },
+    }
 }
 
 /// Resident range reads, order-preserving codes and flat packed publication.

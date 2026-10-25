@@ -302,7 +302,7 @@ impl<'a> Context<'a> {
                 candidate_reads.entry(name).or_default().push(prefix);
             }
         }
-        Context {
+        let mut context = Context {
             profile: None,
             physical_analysis: &analysis.physical,
             analysis,
@@ -329,7 +329,9 @@ impl<'a> Context<'a> {
                 matches!(&d.operator,
                 Operator::Probe(_, k) if matches!(k.choice, Some(physical::Choice::Smallest(_))))
             }),
-        }
+        };
+        context.prepare_join_filters();
+        context
     }
 
     pub fn relational_condition(
@@ -518,9 +520,16 @@ impl<'a> Context<'a> {
         for (levels, ty) in self.analysis.built.get(name).into_iter().flatten() {
             let sharded = matches!(ty, syn::Type::Path(path)
                 if path.path.segments.last().is_some_and(|segment| segment.ident == "Sharded"));
-            if sharded && !levels.first().is_some_and(|key| routing.iter().all(|column| key.contains(column))) {
-                return error(&self.physical[name].name,
-                    "Tasks provider routing must be determined by its outer lookup key");
+            if sharded
+                && !levels.first().is_some_and(|key| {
+                    let stored = self.stored_key(name, key);
+                    routing.iter().all(|column| stored.contains(column))
+                })
+            {
+                return error(
+                    &self.physical[name].name,
+                    "Tasks provider routing must be determined by its outer lookup key",
+                );
             }
         }
         let rows = quote!((#parts).iter().flatten().cloned());
@@ -655,15 +664,31 @@ impl<'a> Context<'a> {
             let sharded = matches!(ty, syn::Type::Path(path)
                 if path.path.segments.last().is_some_and(|segment| segment.ident == "Sharded"));
             let build = if sharded {
-                let (parts, routing) = parts.as_ref().expect("Sharded provider requires a Sequence key partition");
-                let syn::Type::Path(path) = ty else { unreachable!() };
+                let (parts, routing) = parts
+                    .as_ref()
+                    .expect("Sharded provider requires a Sequence key partition");
+                let syn::Type::Path(path) = ty else {
+                    unreachable!()
+                };
                 let syn::PathArguments::AngleBracketed(arguments) =
-                    &path.path.segments.last().unwrap().arguments else { unreachable!() };
+                    &path.path.segments.last().unwrap().arguments
+                else {
+                    unreachable!()
+                };
                 let inner = arguments.args.first().expect("checked sharded provider");
-                let fields = routing.iter().map(|column| {
-                    syn::Index::from(levels[0].iter().position(|key| key == column).expect("checked routing key"))
-                }).collect::<Vec<_>>();
-                let key_types = levels[0].iter().map(|_| quote!(_)).collect::<Vec<_>>();
+                let stored_key = self.stored_key(name, &levels[0]);
+                let fields = routing
+                    .iter()
+                    .map(|column| {
+                        syn::Index::from(
+                            stored_key
+                                .iter()
+                                .position(|key| key == column)
+                                .expect("checked routing key"),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let key_types = stored_key.iter().map(|_| quote!(_)).collect::<Vec<_>>();
                 let part_rows = self.profile_inserting(
                     &build_name,
                     quote!(__cq_part.iter().cloned().map(|#pattern| #nested)),

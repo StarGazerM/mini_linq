@@ -20,7 +20,10 @@ impl syn::parse::Parse for PlanningOptions {
                 let value: syn::LitInt = input.parse()?;
                 let value = value.base10_parse::<usize>()?;
                 if value == 0 {
-                    return Err(syn::Error::new_spanned(option, "provider partition threshold must be positive"));
+                    return Err(syn::Error::new_spanned(
+                        option,
+                        "provider partition threshold must be positive",
+                    ));
                 }
                 threshold = Some(value);
             } else if option == "key_partition" {
@@ -28,15 +31,18 @@ impl syn::parse::Parse for PlanningOptions {
                 syn::parenthesized!(policy in input);
                 policies.push(policy.parse()?);
             } else {
-                return Err(syn::Error::new_spanned(option,
-                    "expected threshold N or key_partition(name, select true|false)"));
+                return Err(syn::Error::new_spanned(
+                    option,
+                    "expected threshold N or key_partition(name, select true|false)",
+                ));
             }
             if !input.is_empty() {
                 input.parse::<syn::Token![,]>()?;
             }
         }
         Ok(Self {
-            threshold: threshold.unwrap_or(cq_sequence_tasks::Config::default().key_partition_threshold),
+            threshold: threshold
+                .unwrap_or(cq_sequence_tasks::Config::default().key_partition_threshold),
             policies,
         })
     }
@@ -73,7 +79,8 @@ pub fn tasks(input: TokenStream) -> TokenStream {
     cq_stage::rewrite::<cq_lang_sequence::Program>(input.into(), |source, _| {
         cq_lang_sequence::check_grading(source, &cq_sequence_tasks::machine())?;
         Ok(source.clone())
-    }).into()
+    })
+    .into()
 }
 
 /// Return joined owned answers, selecting the runtime's plain/profile build.
@@ -87,7 +94,8 @@ pub fn translate_tasks(input: TokenStream) -> TokenStream {
             plain { (#plain).into_iter() }
             counters { (#profile).into_iter() }
         }))
-    }).into()
+    })
+    .into()
 }
 
 #[cfg(test)]
@@ -97,8 +105,9 @@ mod tests {
     #[test]
     fn machine_threshold_and_author_overrides_parse() {
         let options: PlanningOptions = syn::parse_str(
-            "threshold 8192, key_partition(small, select false), key_partition(big, select true)"
-        ).unwrap();
+            "threshold 8192, key_partition(small, select false), key_partition(big, select true)",
+        )
+        .unwrap();
         assert_eq!(options.threshold, 8192);
         assert!(!options.policies[0].select);
         assert!(options.policies[1].select);

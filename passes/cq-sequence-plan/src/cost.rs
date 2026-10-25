@@ -51,9 +51,14 @@ impl Cost {
             analysis,
             facts: BTreeMap::new(),
             key_inputs,
-            scheduler_parts: machine.root.children.iter()
+            scheduler_parts: machine
+                .root
+                .children
+                .iter()
                 .find(|level| !level.collaborative && !level.children.is_empty())
-                .and_then(|level| level.width).unwrap_or(1).max(1),
+                .and_then(|level| level.width)
+                .unwrap_or(1)
+                .max(1),
         };
         let mut work = Sum::default();
         let mut ends = Vec::new();
@@ -420,17 +425,26 @@ impl Fact {
     /// Advance the dependency chain without inventing row-expression work for
     /// organizational operations such as routing and publication.
     fn advance(&mut self, size: &Size, level: &LevelNode, scan: bool) -> syn::Result<()> {
-        let lanes = self.layers.iter().rev().find_map(|layer| match layer {
-            Layer::KeyPart { lanes, .. } => Some(*lanes),
-            _ => None,
-        }).unwrap_or_else(|| level.width.unwrap_or(1)).max(1);
+        let lanes = self
+            .layers
+            .iter()
+            .rev()
+            .find_map(|layer| match layer {
+                Layer::KeyPart { lanes, .. } => Some(*lanes),
+                _ => None,
+            })
+            .unwrap_or_else(|| level.width.unwrap_or(1))
+            .max(1);
         self.advance_with_lanes(size, lanes, scan)
     }
 
     fn advance_with_lanes(&mut self, size: &Size, lanes: usize, scan: bool) -> syn::Result<()> {
         // A one-part covering view contains the entire input, not a smaller
         // maximum bucket. Normalize the identity before symbolic comparison.
-        let partition = self.partition.as_ref().filter(|partition| partition.rows != 1);
+        let partition = self
+            .partition
+            .as_ref()
+            .filter(|partition| partition.rows != 1);
         let depth = if lanes == 1 {
             Sum::positions(size)?
         } else if matches!(size, Size::Constant(0)) {
@@ -478,13 +492,20 @@ impl Evaluator<'_> {
         if let Some(rows) = self.program.evidence.count(name) {
             return Size::Constant(rows as u128);
         }
-        if let Some(definition) = self.program.structures.physical.program.definitions.iter()
+        if let Some(definition) = self
+            .program
+            .structures
+            .physical
+            .program
+            .definitions
+            .iter()
             .find(|definition| symbol_name(&definition.name) == name)
         {
             match &definition.operator {
                 Operator::Unit(_) => return Size::Constant(1),
                 Operator::Rename(rename) => {
-                    if let Some(rows) = self.program.evidence.count(&symbol_name(&rename.relation)) {
+                    if let Some(rows) = self.program.evidence.count(&symbol_name(&rename.relation))
+                    {
                         return Size::Constant(rows as u128);
                     }
                 }
@@ -540,10 +561,19 @@ impl Evaluator<'_> {
                 };
                 let mut fact = self.term(inner, owner, producer, tile)?;
                 if !self.key_inputs.contains(owner)
-                    && self.program.structures.structures.entries.iter().any(|entry| {
-                        symbol_name(&entry.name) == fact.result
-                            && matches!(entry.structure, cq_lang_sequence::structures::Structure::Built { .. })
-                    })
+                    && self
+                        .program
+                        .structures
+                        .structures
+                        .entries
+                        .iter()
+                        .any(|entry| {
+                            symbol_name(&entry.name) == fact.result
+                                && matches!(
+                                    entry.structure,
+                                    cq_lang_sequence::structures::Structure::Built { .. }
+                                )
+                        })
                 {
                     // Building an index evaluates one insertion per row.
                     // A routing publication holds raw rows, not a second index.
@@ -590,7 +620,11 @@ impl Evaluator<'_> {
                     return Ok(fact);
                 }
                 let size = fact.size.clone();
-                let collective = self.program.sequence.definitions.iter()
+                let collective = self
+                    .program
+                    .sequence
+                    .definitions
+                    .iter()
                     .find(|definition| symbol_name(&definition.name) == owner)
                     .is_some_and(|definition| streamed_collective(&definition.term));
                 if collective && !matches!(size, Size::Constant(_)) {
@@ -600,12 +634,16 @@ impl Evaluator<'_> {
                     // Retained providers cannot use this estimate: their build
                     // may be tiny compared with the stream probing them.
                     fact.layers.push(Layer::KeyPart {
-                        parts: *parts, lanes: (*parts / 2).max(1),
+                        parts: *parts,
+                        lanes: (*parts / 2).max(1),
                     });
                 } else {
                     // Known inputs and retained providers pay the complete
                     // routing pass plus every bucket publication, even empty.
-                    fact.layers.push(Layer::KeyPart { parts: *parts, lanes: *parts });
+                    fact.layers.push(Layer::KeyPart {
+                        parts: *parts,
+                        lanes: *parts,
+                    });
                     fact.advance(&size, level, false)?;
                     let setup = Sum::atom(Atom::One, *parts as u128);
                     fact.span.add(&setup)?;
@@ -724,12 +762,23 @@ impl Evaluator<'_> {
                 if fact.layers.is_empty() {
                     fact.partition = None;
                 }
-                let global = self.program.structures.physical.program.definitions.iter()
+                let global = self
+                    .program
+                    .structures
+                    .physical
+                    .program
+                    .definitions
+                    .iter()
                     .find(|definition| definition.name == *name)
-                    .is_some_and(|definition| matches!(&definition.operator,
-                        Operator::Group(group) if group.keys.is_empty()));
-                let contiguous = !fact.layers.is_empty() && fact.layers.iter()
-                    .all(|layer| !matches!(layer, Layer::KeyPart { .. }));
+                    .is_some_and(|definition| {
+                        matches!(&definition.operator,
+                        Operator::Group(group) if group.keys.is_empty())
+                    });
+                let contiguous = !fact.layers.is_empty()
+                    && fact
+                        .layers
+                        .iter()
+                        .all(|layer| !matches!(layer, Layer::KeyPart { .. }));
                 let partial = !fact.layers.is_empty() && (global || contiguous);
                 let size = fact.size.clone();
                 let amortized_merge = partial && global && !matches!(size, Size::Constant(_));
@@ -739,11 +788,20 @@ impl Evaluator<'_> {
                     // With unknown input size, a scalar host merge follows
                     // routing's amortized-bandwidth convention: charge it by
                     // halving fold throughput, rather than dropping its cost.
-                    let lanes = fact.layers.iter().rev().find_map(|layer| match layer {
-                        Layer::KeyPart { lanes, .. } => Some(*lanes),
-                        _ => None,
-                    }).unwrap_or(self.scheduler_parts);
-                    let lanes = if amortized_merge { (lanes / 2).max(1) } else { lanes };
+                    let lanes = fact
+                        .layers
+                        .iter()
+                        .rev()
+                        .find_map(|layer| match layer {
+                            Layer::KeyPart { lanes, .. } => Some(*lanes),
+                            _ => None,
+                        })
+                        .unwrap_or(self.scheduler_parts);
+                    let lanes = if amortized_merge {
+                        (lanes / 2).max(1)
+                    } else {
+                        lanes
+                    };
                     fact.partition = None;
                     fact.work.add(&Sum::positions(&size)?)?;
                     fact.advance_with_lanes(&size, lanes, true)?;
@@ -754,7 +812,9 @@ impl Evaluator<'_> {
                 let groups = if global {
                     Size::Constant(1)
                 } else {
-                    self.program.evidence.count(&fact.result)
+                    self.program
+                        .evidence
+                        .count(&fact.result)
                         .or_else(|| self.program.evidence.count(owner))
                         .map(|count| Size::Constant(count as u128))
                         .unwrap_or_else(|| Size::Scan(format!("group({})", fact.result)))
@@ -765,14 +825,18 @@ impl Evaluator<'_> {
                     // routing charges organizational work. Unknown groups stay
                     // symbolic; no cardinality sample makes this merge free.
                     let merge = if let Size::Constant(groups) = &groups {
-                        let mut states = groups.checked_mul(self.scheduler_parts as u128)
+                        let mut states = groups
+                            .checked_mul(self.scheduler_parts as u128)
                             .ok_or_else(overflow)?;
                         if !global && let Size::Constant(rows) = &size {
                             states = states.min(*rows);
                         }
                         Sum::atom(Atom::One, states)
                     } else {
-                        Sum::atom(Atom::Positions(groups.clone()), self.scheduler_parts as u128)
+                        Sum::atom(
+                            Atom::Positions(groups.clone()),
+                            self.scheduler_parts as u128,
+                        )
                     };
                     fact.span.add(&merge)?;
                     fact.local_span.add(&merge)?;
@@ -867,7 +931,6 @@ fn streamed_collective(term: &Term) -> bool {
     }
 }
 
-
 fn partition_inputs(term: &Term, inputs: &mut BTreeSet<String>) {
     match term {
         Term::PartitionK { inner, .. } => {
@@ -876,15 +939,24 @@ fn partition_inputs(term: &Term, inputs: &mut BTreeSet<String>) {
             }
             partition_inputs(inner, inputs);
         }
-        Term::Map(_, t) | Term::Compact(_, t) | Term::Flatten(t)
-        | Term::Fold(_, t) | Term::Group(_, t) | Term::Canon(t)
-        | Term::Tile { inner: t, .. } | Term::Store { inner: t, .. }
+        Term::Map(_, t)
+        | Term::Compact(_, t)
+        | Term::Flatten(t)
+        | Term::Fold(_, t)
+        | Term::Group(_, t)
+        | Term::Canon(t)
+        | Term::Tile { inner: t, .. }
+        | Term::Store { inner: t, .. }
         | Term::Lookup { inner: t, .. } => partition_inputs(t, inputs),
         Term::Union(arms) => {
-            for term in arms { partition_inputs(term, inputs); }
+            for term in arms {
+                partition_inputs(term, inputs);
+            }
         }
         Term::Choose(arms) => {
-            for (_, term) in arms { partition_inputs(term, inputs); }
+            for (_, term) in arms {
+                partition_inputs(term, inputs);
+            }
         }
         Term::Rows(_) | Term::Ref(_) => {}
     }
@@ -979,17 +1051,20 @@ mod tests {
     use quote::quote;
 
     fn sequential() -> Machine {
-        Machine { key_partition_threshold: 65536, layout: None,
-        name: syn::parse_quote!(target),
-        items: 1,
-        root: LevelNode {
-            shared_bytes: None,
-            name: syn::parse_quote!(host),
-            collaborative: false,
-            dynamic: false,
-            width: None,
-            children: Vec::new(),
-        }, }
+        Machine {
+            layout: None,
+            name: syn::parse_quote!(target),
+            items: 1,
+            key_partition_threshold: 65536,
+            root: LevelNode {
+                shared_bytes: None,
+                name: syn::parse_quote!(host),
+                collaborative: false,
+                dynamic: false,
+                width: None,
+                children: Vec::new(),
+            },
+        }
     }
 
     fn program(body: proc_macro2::TokenStream) -> Program {
@@ -1052,7 +1127,10 @@ mod tests {
                         size: size.clone(),
                         result: "r".into(),
                         layers: Vec::new(),
-                        partition: Some(Partition { driver: Size::Input("r".into()), rows: parts }),
+                        partition: Some(Partition {
+                            driver: Size::Input("r".into()),
+                            rows: parts,
+                        }),
                         work: Sum::default(),
                         span: Sum::default(),
                         local_span: Sum::default(),

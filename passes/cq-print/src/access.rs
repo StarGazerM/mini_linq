@@ -167,7 +167,9 @@ impl<'a> Context<'a> {
                         )).point(&(#(#values,)*))
                     })
                 } else {
-                    source.clone().unwrap_or_else(|| quote!(::cq_storage::rows::Rows::rows(#value)))
+                    source
+                        .clone()
+                        .unwrap_or_else(|| quote!(::cq_storage::rows::Rows::rows(#value)))
                 };
                 return quote! {{
                     let __cq_scan: #ty = ::core::iter::Iterator::map(

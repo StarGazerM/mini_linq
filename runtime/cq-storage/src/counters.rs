@@ -69,7 +69,9 @@ impl Snapshot {
         self.join_filter_tested += other.join_filter_tested;
         self.join_filter_passed += other.join_filter_passed;
         self.rows_copied += other.rows_copied;
-        self.keyset_staging_bytes_peak = self.keyset_staging_bytes_peak.max(other.keyset_staging_bytes_peak);
+        self.keyset_staging_bytes_peak = self
+            .keyset_staging_bytes_peak
+            .max(other.keyset_staging_bytes_peak);
         self.hash_computations += other.hash_computations;
         self.index_builds += other.index_builds;
         self.lookups += other.lookups;
@@ -117,7 +119,12 @@ impl TaskContext {
                 {
                     let counts = COUNTS.with(|counts| counts.replace(self.counts));
                     let current = TaskContext::capture();
-                    current.0.counts.lock().unwrap_or_else(|error| error.into_inner()).merge(counts);
+                    current
+                        .0
+                        .counts
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .merge(counts);
                 }
                 TASK_CONTEXT.with(|context| {
                     *context.borrow_mut() = self.previous.clone();
@@ -137,16 +144,28 @@ impl TaskContext {
     }
     #[cfg(feature = "counters")]
     pub(crate) fn grow(&self, bytes: usize) {
-        let mut memory = self.0.memory.lock().unwrap_or_else(|error| error.into_inner());
+        let mut memory = self
+            .0
+            .memory
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         memory.0 += bytes as u64;
         memory.1 = memory.1.max(memory.0);
     }
     #[cfg(feature = "counters")]
     pub(crate) fn shrink(&self, bytes: usize) {
-        self.0.memory.lock().unwrap_or_else(|error| error.into_inner()).0 -= bytes as u64;
+        self.0
+            .memory
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .0 -= bytes as u64;
     }
     pub(super) fn start_build(&self) {
-        let mut build = self.0.build.lock().unwrap_or_else(|error| error.into_inner());
+        let mut build = self
+            .0
+            .build
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         build.visited = true;
         if build.active == 0 {
             build.started = Some(Instant::now());
@@ -154,7 +173,11 @@ impl TaskContext {
         build.active += 1;
     }
     pub(super) fn finish_build(&self) {
-        let mut build = self.0.build.lock().unwrap_or_else(|error| error.into_inner());
+        let mut build = self
+            .0
+            .build
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         build.active -= 1;
         if build.active == 0 {
             let elapsed = build.started.take().expect("active build phase").elapsed();
@@ -162,9 +185,16 @@ impl TaskContext {
         }
     }
     fn build_wall(&self) -> Option<Duration> {
-        let build = self.0.build.lock().unwrap_or_else(|error| error.into_inner());
+        let build = self
+            .0
+            .build
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         build.visited.then(|| {
-            build.elapsed + build.started.map_or(Duration::ZERO, |start| start.elapsed())
+            build.elapsed
+                + build
+                    .started
+                    .map_or(Duration::ZERO, |start| start.elapsed())
         })
     }
 }
@@ -194,8 +224,18 @@ pub fn reset() {
 pub fn snapshot() -> Snapshot {
     let mut counts = COUNTS.with(Cell::get);
     let context = TaskContext::capture();
-    counts.merge(*context.0.counts.lock().unwrap_or_else(|error| error.into_inner()));
-    let memory = context.0.memory.lock().unwrap_or_else(|error| error.into_inner());
+    counts.merge(
+        *context
+            .0
+            .counts
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()),
+    );
+    let memory = context
+        .0
+        .memory
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     counts.bytes_retained_current = memory.0;
     counts.bytes_retained_peak = memory.1;
     counts

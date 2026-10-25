@@ -8,7 +8,10 @@
 //! it is not the sum of operator builds or exclusive index-insertion time.
 use std::cell::RefCell;
 use std::fmt::Write;
-use std::sync::{Arc, Mutex, atomic::{AtomicBool, AtomicU64, Ordering}};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, AtomicU64, Ordering},
+};
 use std::time::{Duration, Instant};
 
 /// Static identity of a Physical result or concrete build.
@@ -57,10 +60,18 @@ struct Metrics {
 }
 impl State {
     fn update(&self, update: impl FnOnce(&mut Metrics)) {
-        update(&mut self.metrics.lock().unwrap_or_else(|error| error.into_inner()));
+        update(
+            &mut self
+                .metrics
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()),
+        );
     }
     fn snapshot(&self) -> Metrics {
-        self.metrics.lock().unwrap_or_else(|error| error.into_inner()).clone()
+        self.metrics
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
     }
 }
 pub(super) type BuildContext = Option<(Arc<State>, Arc<AtomicBool>)>;
@@ -78,7 +89,11 @@ pub(super) fn replace_build(context: BuildContext) -> BuildContext {
 pub fn operators() -> Vec<OperatorRecord> {
     let context = super::TaskContext::capture();
     let mut records: Vec<_> = {
-        let ops = context.0.operators.lock().unwrap_or_else(|error| error.into_inner());
+        let ops = context
+            .0
+            .operators
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         ops.iter()
             .map(|s| {
                 let own = s.snapshot();
@@ -86,12 +101,18 @@ pub fn operators() -> Vec<OperatorRecord> {
                 while let Some(i) = source.alias {
                     source = ops[i].snapshot();
                 }
-                let time = source.time_source.map_or_else(|| source.clone(), |i| ops[i].snapshot());
+                let time = source
+                    .time_source
+                    .map_or_else(|| source.clone(), |i| ops[i].snapshot());
                 OperatorRecord {
                     id: s.id,
                     program: s.program,
                     label: s.label,
-                    rows_in: if own.alias.is_some() { source.rows_out } else { own.rows_in },
+                    rows_in: if own.alias.is_some() {
+                        source.rows_out
+                    } else {
+                        own.rows_in
+                    },
                     rows_out: source.rows_out,
                     rows_inserted: own.inserted,
                     elapsed: time.elapsed,
@@ -128,7 +149,11 @@ impl OperatorProgram {
     pub fn new(labels: &[OperatorLabel]) -> Self {
         let context = super::TaskContext::capture();
         let states = {
-            let mut ops = context.0.operators.lock().unwrap_or_else(|error| error.into_inner());
+            let mut ops = context
+                .0
+                .operators
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
             let program = ops.len();
             labels
                 .iter()
@@ -312,7 +337,11 @@ struct ActiveBuild {
 impl Drop for ActiveBuild {
     fn drop(&mut self) {
         ACTIVE_BUILD.with(|active| active.replace(self.previous.take()));
-        if let Some(clock) = self.clock.take().filter(|_| !self.deferred.load(Ordering::Relaxed)) {
+        if let Some(clock) = self
+            .clock
+            .take()
+            .filter(|_| !self.deferred.load(Ordering::Relaxed))
+        {
             clock.finish();
         }
     }
@@ -400,7 +429,8 @@ impl<I: Iterator> Iterator for OperatorDrained<I> {
             let started = Instant::now();
             let rows: Vec<_> = source.collect();
             let elapsed = started.elapsed();
-            self.state.update(|metrics| metrics.source_elapsed += elapsed);
+            self.state
+                .update(|metrics| metrics.source_elapsed += elapsed);
             self.rows = rows.into_iter();
         }
         self.rows.next()
@@ -551,8 +581,16 @@ pub fn render_operators(records: &[OperatorRecord]) -> String {
         exclusive.as_secs_f64() * 1000.
     )
     .unwrap();
-    if let Some(total) = records.iter().find(|record| record.label.kind == "TASKS_BUILD_WALL_TOTAL") {
-        writeln!(out, "TASKS_BUILD_WALL_TOTAL t={:.9}ms", total.elapsed.as_secs_f64() * 1000.).unwrap();
+    if let Some(total) = records
+        .iter()
+        .find(|record| record.label.kind == "TASKS_BUILD_WALL_TOTAL")
+    {
+        writeln!(
+            out,
+            "TASKS_BUILD_WALL_TOTAL t={:.9}ms",
+            total.elapsed.as_secs_f64() * 1000.
+        )
+        .unwrap();
     }
     out
 }
@@ -697,10 +735,16 @@ mod tests {
     use crate::counters::{self, TaskContext};
 
     const SCAN: OperatorLabel = OperatorLabel {
-        result: "scan", kind: "SCAN", key: "", inputs: &[],
+        result: "scan",
+        kind: "SCAN",
+        key: "",
+        inputs: &[],
     };
     const BUILD: OperatorLabel = OperatorLabel {
-        result: "build", kind: "TASKS_BUILD_WALL", key: "", inputs: &[],
+        result: "build",
+        kind: "TASKS_BUILD_WALL",
+        key: "",
+        inputs: &[],
     };
 
     #[test]
@@ -722,10 +766,15 @@ mod tests {
         counters::reset();
         let context = TaskContext::capture();
         std::thread::scope(|threads| {
-            threads.spawn(|| context.run(|| {
-                let program = OperatorProgram::new(&[SCAN]);
-                assert_eq!(program.stream(0, 0..4).sum::<u64>(), 6);
-            })).join().unwrap();
+            threads
+                .spawn(|| {
+                    context.run(|| {
+                        let program = OperatorProgram::new(&[SCAN]);
+                        assert_eq!(program.stream(0, 0..4).sum::<u64>(), 6);
+                    })
+                })
+                .join()
+                .unwrap();
         });
         let records = operators();
         assert_eq!(records.len(), 1);
@@ -738,19 +787,28 @@ mod tests {
     fn worker_rows_and_primitive_costs_merge_once() {
         counters::reset();
         counters::record(|counts| counts.lookups += 1);
-        let program = OperatorProgram::new(&[SCAN, OperatorLabel {
-            result: "index", kind: "INDEX_BUILD", key: "", inputs: &["scan"],
-        }]);
+        let program = OperatorProgram::new(&[
+            SCAN,
+            OperatorLabel {
+                result: "index",
+                kind: "INDEX_BUILD",
+                key: "",
+                inputs: &["scan"],
+            },
+        ]);
         std::thread::scope(|threads| {
             for _ in 0..4 {
                 let program = &program;
-                threads.spawn(move || program.task(|| {
-                    counters::record(|counts| counts.lookups += 3);
-                    program.task(|| counters::record(|counts| counts.lookups += 2));
-                    assert_eq!(program.stream(0, 0..3).sum::<u64>(), 3);
-                    let rows: Vec<_> = program.build(1, || program.inserting(1, 0..2).collect());
-                    assert_eq!(rows, [0, 1]);
-                }));
+                threads.spawn(move || {
+                    program.task(|| {
+                        counters::record(|counts| counts.lookups += 3);
+                        program.task(|| counters::record(|counts| counts.lookups += 2));
+                        assert_eq!(program.stream(0, 0..3).sum::<u64>(), 3);
+                        let rows: Vec<_> =
+                            program.build(1, || program.inserting(1, 0..2).collect());
+                        assert_eq!(rows, [0, 1]);
+                    })
+                });
             }
         });
         let records = operators();
@@ -768,27 +826,44 @@ mod tests {
     fn task_store_and_native_canon_match_independent_primitives() {
         counters::reset();
         let program = OperatorProgram::new(&[
-            OperatorLabel { result: "rows", kind: "ROWS_BUILD", key: "", inputs: &[] },
-            OperatorLabel { result: "parts", kind: "PARTITION_BUILD", key: "", inputs: &[] },
-            OperatorLabel { result: "canon", kind: "DEDUP", key: "", inputs: &["parts"] },
+            OperatorLabel {
+                result: "rows",
+                kind: "ROWS_BUILD",
+                key: "",
+                inputs: &[],
+            },
+            OperatorLabel {
+                result: "parts",
+                kind: "PARTITION_BUILD",
+                key: "",
+                inputs: &[],
+            },
+            OperatorLabel {
+                result: "canon",
+                kind: "DEDUP",
+                key: "",
+                inputs: &["parts"],
+            },
         ]);
         std::thread::scope(|threads| {
             for _ in 0..4 {
                 let program = &program;
-                threads.spawn(move || program.task(|| {
-                    let rows: Vec<_> = program.build(0, || {
-                        program.inserting(0, [1u64, 1, 2].into_iter()).collect()
-                    });
-                    let _rows = crate::retain_rows(&rows);
-                    let part: Vec<_> = program.build(1, || {
-                        program.inserting(1, rows.iter().copied()).collect()
-                    });
-                    let _part = crate::retain_rows(&part);
-                    let mut seen = counters::DistinctSet::from_set(crate::HashSet::default());
-                    let canonical = program.inserting(2, part.into_iter())
-                        .filter(|row| seen.insert(*row));
-                    assert_eq!(program.stream(2, canonical).collect::<Vec<_>>(), [1, 2]);
-                }));
+                threads.spawn(move || {
+                    program.task(|| {
+                        let rows: Vec<_> = program.build(0, || {
+                            program.inserting(0, [1u64, 1, 2].into_iter()).collect()
+                        });
+                        let _rows = crate::retain_rows(&rows);
+                        let part: Vec<_> = program
+                            .build(1, || program.inserting(1, rows.iter().copied()).collect());
+                        let _part = crate::retain_rows(&part);
+                        let mut seen = counters::DistinctSet::from_set(crate::HashSet::default());
+                        let canonical = program
+                            .inserting(2, part.into_iter())
+                            .filter(|row| seen.insert(*row));
+                        assert_eq!(program.stream(2, canonical).collect::<Vec<_>>(), [1, 2]);
+                    })
+                });
             }
         });
         let records = operators();
@@ -797,7 +872,10 @@ mod tests {
         assert_eq!(records[1].rows_inserted, 12);
         assert_eq!(records[2].rows_inserted, 12);
         assert_eq!(records[2].rows_out, 8);
-        assert_eq!(counts.rows_copied, records[0].rows_inserted + records[1].rows_inserted);
+        assert_eq!(
+            counts.rows_copied,
+            records[0].rows_inserted + records[1].rows_inserted
+        );
         assert_eq!(counts.distinct_insertions, records[2].rows_inserted);
         assert_eq!(counts.bytes_retained_current, 0);
         assert!(counts.bytes_retained_peak > 0);
@@ -808,15 +886,17 @@ mod tests {
     fn native_canon_wrapper_preserves_hash_state_and_capacity() {
         use std::hash::BuildHasher;
         counters::reset();
-        let native = crate::HashSet::<u64>::with_capacity_and_hasher(
-            16, crate::HashState::default(),
-        );
+        let native =
+            crate::HashSet::<u64>::with_capacity_and_hasher(16, crate::HashState::default());
         let capacity = native.capacity();
         let hash = native.hasher().hash_one(42u64);
         let mut counted = counters::DistinctSet::from_set(native);
         assert_eq!(counted.0.capacity(), capacity);
         assert_eq!(counted.0.hasher().hash_one(42u64), hash);
-        assert_eq!(counters::snapshot().bytes_retained_current, (capacity * 9) as u64);
+        assert_eq!(
+            counters::snapshot().bytes_retained_current,
+            (capacity * 9) as u64
+        );
         assert!(counted.insert(42));
         assert!(!counted.insert(42));
         assert_eq!(counters::snapshot().distinct_insertions, 2);
@@ -830,8 +910,10 @@ mod tests {
         counters::reset();
         let context = TaskContext::capture();
         let allocation = std::thread::scope(|threads| {
-            threads.spawn(|| context.run(|| crate::counters_memory::Allocation::new(128)))
-                .join().unwrap()
+            threads
+                .spawn(|| context.run(|| crate::counters_memory::Allocation::new(128)))
+                .join()
+                .unwrap()
         });
         assert_eq!(counters::snapshot().bytes_retained_current, 128);
         assert_eq!(counters::snapshot().bytes_retained_peak, 128);
@@ -856,13 +938,15 @@ mod tests {
             for _ in 0..2 {
                 let context = &context;
                 let barrier = &barrier;
-                threads.spawn(move || context.run(|| {
-                    let nested = OperatorProgram::new(&[BUILD]);
-                    let clock = nested.start_scope(0);
-                    barrier.wait();
-                    barrier.wait();
-                    drop(clock);
-                }));
+                threads.spawn(move || {
+                    context.run(|| {
+                        let nested = OperatorProgram::new(&[BUILD]);
+                        let clock = nested.start_scope(0);
+                        barrier.wait();
+                        barrier.wait();
+                        drop(clock);
+                    })
+                });
             }
             barrier.wait();
             {
@@ -875,12 +959,18 @@ mod tests {
         });
         drop(clock);
         let records = operators();
-        let totals: Vec<_> = records.iter()
-            .filter(|record| record.label.kind == "TASKS_BUILD_WALL_TOTAL").collect();
+        let totals: Vec<_> = records
+            .iter()
+            .filter(|record| record.label.kind == "TASKS_BUILD_WALL_TOTAL")
+            .collect();
         assert_eq!(totals.len(), 1);
         assert!(totals[0].elapsed > Duration::ZERO);
         assert_eq!(Some(totals[0].elapsed), context.build_wall());
-        assert!(render_operators(&records).lines().any(|line| line.starts_with("TASKS_BUILD_WALL_TOTAL t=")));
+        assert!(
+            render_operators(&records)
+                .lines()
+                .any(|line| line.starts_with("TASKS_BUILD_WALL_TOTAL t="))
+        );
         counters::reset();
         assert!(operators().is_empty());
     }

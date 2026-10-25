@@ -1,6 +1,7 @@
 //! Sequence interpretation for an ordered, dynamically scheduled Rayon task pool.
 //!
-//! Generated expressions require `rayon` and `cq-storage` in the consumer. The
+//! Generated expressions require `rayon`, `cq-storage` and this crate (its
+//! [`combine`] runtime) in the consumer. The
 //! caller supplies facts checked against [`machine`]; translation never repeats
 //! analysis. Host and task-local constructors reuse the sequential interpreter.
 //! Pool chunks own their buffers and publish in chunk order at the join. Rayon
@@ -35,7 +36,12 @@ impl Default for Config {
     fn default() -> Self {
         // A routing task fills about 1K rows per logical bucket, avoiding a
         // tiny allocation for every (1K-row chunk, partition) pair.
-        Self { threads: None, grain: 64 * 1024, partitions: 64, key_partition_threshold: 64 * 1024 }
+        Self {
+            threads: None,
+            grain: 64 * 1024,
+            partitions: 64,
+            key_partition_threshold: 64 * 1024,
+        }
     }
 }
 
@@ -51,8 +57,14 @@ pub fn machine() -> Machine {
 
 pub fn machine_with(config: Config) -> Machine {
     assert!(config.grain > 0, "task grain must be positive");
-    assert!(config.threads != Some(0), "task thread count must be positive");
-    assert!(config.key_partition_threshold > 0, "provider partition threshold must be positive");
+    assert!(
+        config.threads != Some(0),
+        "task thread count must be positive"
+    );
+    assert!(
+        config.key_partition_threshold > 0,
+        "provider partition threshold must be positive"
+    );
     let mut machine = machine_with_width(config.partitions);
     machine.key_partition_threshold = config.key_partition_threshold;
     machine
@@ -105,15 +117,23 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
         token.levels = levels.clone();
     }
     // Shared reads must not capture the serial lazy Rc/RefCell providers.
-    catalog.providers.retain(|token| !matches!(&token.ty, syn::Type::Path(path)
+    catalog.providers.retain(|token| {
+        !matches!(&token.ty, syn::Type::Path(path)
         if path.path.segments.last().is_some_and(|segment|
-            segment.ident == "HashIndex" || segment.ident == "Trie" || segment.ident == "KeySet")));
-    catalog.providers.insert(0, cq_lang_sequence::ProviderToken {
-        ty: syn::parse_quote!(::cq_storage::sharded::Index<_, _>),
-        capabilities: vec![cq_lang_sequence::Capability::Exact, cq_lang_sequence::Capability::Membership],
-        levels: levels.clone(),
-        elements: None,
+            segment.ident == "HashIndex" || segment.ident == "Trie" || segment.ident == "KeySet"))
     });
+    catalog.providers.insert(
+        0,
+        cq_lang_sequence::ProviderToken {
+            ty: syn::parse_quote!(::cq_storage::sharded::Index<_, _>),
+            capabilities: vec![
+                cq_lang_sequence::Capability::Exact,
+                cq_lang_sequence::Capability::Membership,
+            ],
+            levels: levels.clone(),
+            elements: None,
+        },
+    );
     // Hash sharding retains exact probes, but not a shard's global ordering.
     // The synchronous pool join publishes native memory to host and task readers.
     use cq_lang_sequence::{Capability, ProviderToken};
@@ -123,7 +143,9 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
             vec![Capability::Membership],
         ),
         (
-            syn::parse_quote!(::cq_storage::sharded::Sharded<::cq_storage::AdaptiveKeySet<_, _, _>>),
+            syn::parse_quote!(
+                ::cq_storage::sharded::Sharded<::cq_storage::AdaptiveKeySet<_, _, _>>
+            ),
             vec![Capability::Membership],
         ),
         (
@@ -147,7 +169,9 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
             vec![Capability::Exact, Capability::Membership],
         ),
         (
-            syn::parse_quote!(::cq_storage::sharded::Sharded<::std::collections::BTreeMap<_, ::std::vec::Vec<_>>>),
+            syn::parse_quote!(
+                ::cq_storage::sharded::Sharded<::std::collections::BTreeMap<_, ::std::vec::Vec<_>>>
+            ),
             vec![Capability::Exact, Capability::Membership],
         ),
     ] {
@@ -185,7 +209,8 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
 
 /// Select native shareable representations through checked Structures rewrites.
 pub fn select_providers(
-    source: &Program, catalog: &cq_lang_sequence::Catalog,
+    source: &Program,
+    catalog: &cq_lang_sequence::Catalog,
 ) -> syn::Result<Program> {
     // Instantiate supported authored families before checked selection. A
     // transient retype can invalidate obligations such as exact join filters.
@@ -197,8 +222,10 @@ pub fn select_providers(
             cq_lang_sequence::structures::Structure::JoinFilter { filter, .. } => &filter.ty,
             _ => continue,
         };
-        if let Some(token) = catalog.providers.iter().find(|token|
-                cq_sequence_plan::matches_type(&token.ty, ty))
+        if let Some(token) = catalog
+            .providers
+            .iter()
+            .find(|token| cq_sequence_plan::matches_type(&token.ty, ty))
         {
             let mut token = token.clone();
             token.ty = ty.clone();
@@ -208,44 +235,62 @@ pub fn select_providers(
     let mut target = source.clone();
     target.structures =
         cq_sequence_rewrite_passes::select_from_catalog(&source.structures, &native)?;
-    // A legal authored provider may supply stronger capabilities needed by an
-    // authored tile (for example range cursors). Retarget only unavailable
-    // families; do not downgrade an existing native representation.
     for original in &source.structures.structures.entries {
         // Replayable row buffers are not keyed range providers. Keep their
         // native row-collection ABI rather than selecting an index family.
         if let cq_lang_sequence::structures::Structure::Rows { ty, .. } = &original.structure {
             for selected in &mut target.structures.structures.entries {
                 if selected.name == original.name
-                    && let cq_lang_sequence::structures::Structure::Rows { ty: replacement, .. } = &mut selected.structure
+                    && let cq_lang_sequence::structures::Structure::Rows {
+                        ty: replacement, ..
+                    } = &mut selected.structure
                 {
                     *replacement = ty.clone();
                 }
             }
-            continue;
         }
     }
-    for (old, retained) in source.structures.physical.program.definitions.iter()
-        .zip(&target.structures.physical.program.definitions) {
+    for (old, retained) in source
+        .structures
+        .physical
+        .program
+        .definitions
+        .iter()
+        .zip(&target.structures.physical.program.definitions)
+    {
         if old.mode == retained.mode {
             continue;
         }
         // Catalog retention changes a host rename's mode, but Sequence was
         // lowered before selection. Its publication must become explicit too.
-        if let Some(definition) = target.sequence.definitions.iter_mut()
-            .find(|definition| definition.name == retained.name) {
+        if let Some(definition) = target
+            .sequence
+            .definitions
+            .iter_mut()
+            .find(|definition| definition.name == retained.name)
+        {
             if !matches!(definition.term, Term::Store { .. }) {
                 let inner = std::mem::replace(&mut definition.term, Term::Union(Vec::new()));
-                definition.term = Term::Store { capacity: None, inner: Box::new(inner) };
+                definition.term = Term::Store {
+                    capacity: None,
+                    inner: Box::new(inner),
+                };
             }
         } else {
-            target.sequence.definitions.insert(0, cq_lang_sequence::Definition {
-                name: retained.name.clone(),
-                term: Term::Store { capacity: None, inner: Box::new(Term::Rows(retained.name.clone())) },
-            });
+            target.sequence.definitions.insert(
+                0,
+                cq_lang_sequence::Definition {
+                    name: retained.name.clone(),
+                    term: Term::Store {
+                        capacity: None,
+                        inner: Box::new(Term::Rows(retained.name.clone())),
+                    },
+                },
+            );
             if let Some(graded) = &mut target.graded {
                 graded.grades.push(cq_lang_sequence::Grade {
-                    name: retained.name.clone(), level: vec![syn::parse_quote!(host)],
+                    name: retained.name.clone(),
+                    level: vec![syn::parse_quote!(host)],
                 });
             }
         }
@@ -316,32 +361,41 @@ fn translate_mode(
     let mut expression = translate(
         program,
         analysis,
-        |term: &Term, emitter: &mut cq_sequence_pull::Emitter<'_>,
-         child: Option<&cq_sequence_pull::Value>, output: &mut cq_sequence_pull::Value,
-         owner: &str, _: usize| {
+        |term: &Term,
+         emitter: &mut cq_sequence_pull::Emitter<'_>,
+         child: Option<&cq_sequence_pull::Value>,
+         output: &mut cq_sequence_pull::Value,
+         owner: &str,
+         _: usize| {
             if let Term::Tile { n, .. } = term
-                && tiles.get(&(term as *const Term))
+                && tiles
+                    .get(&(term as *const Term))
                     .is_some_and(|kind| **kind == Tiling::Distribute)
             {
                 let input = child.expect("checked tile");
                 if input.depth != 0 {
-                    return Err(syn::Error::new_spanned(program, "Tasks distributing driver must be flat"));
+                    return Err(syn::Error::new_spanned(
+                        program,
+                        "Tasks distributing driver must be flat",
+                    ));
                 }
                 let binding = format_ident!("__cq_task_driver_{}", next_driver);
                 next_driver += 1;
                 let context = emitter.context();
-                let host_result = input.result.as_ref().filter(|result|
+                let host_result = input.result.as_ref().filter(|result| {
                     inner_term(term).is_some_and(|inner| base_rows(inner, program))
-                    && context.physical_analysis.hosts.contains_key(*result)
-                    && !context.analysis.selections.contains_key(*result)
-                    && context.join_filter_ids(result).is_none()
-                    && matches!(&context.physical[*result].operator,
+                        && context.physical_analysis.hosts.contains_key(*result)
+                        && !context.analysis.selections.contains_key(*result)
+                        && context.join_filter_ids(result).is_none()
+                        && matches!(&context.physical[*result].operator,
                         cq_lang_sequence::structures::physical::Operator::Rename(rename)
-                            if rename.constants.is_none())
-                );
+                            if !context.carries_positions(result) || rename.constants.is_none())
+                });
                 let positional = host_result.filter(|result| context.carries_positions(result));
                 if let Some(result) = positional {
-                    let host = cq_print::Context::positional_host(&context.physical_analysis.hosts[result]);
+                    let host = cq_print::Context::positional_host(
+                        &context.physical_analysis.hosts[result],
+                    );
                     let ids = quote!(::cq_storage::PositionalRows::position_range(
                         #host, #binding * #n..(#binding + 1) * #n));
                     let rows = context.profile_stream(result, context.positional_rows(result, ids));
@@ -353,12 +407,15 @@ fn translate_mode(
                     output.rows = quote!(::core::iter::once(#rows));
                 } else if let Some(result) = host_result {
                     let host = &context.hosts[&context.physical_analysis.hosts[result]].value;
-                    let rows = context.profile_stream(result, context.host_scan_from(result, Some(quote!(#binding))));
+                    let rows = context.profile_stream(
+                        result,
+                        context.host_scan_from(result, Some(quote!(#binding))),
+                    );
                     partitions.push(TaskTile {
                         binding,
                         prepare: quote! {
-                            use ::mini_linq::__tasks::combine::TileRows as _;
-                            let __cq_driver = ::mini_linq::__tasks::combine::TileSource(#host);
+                            use ::cq_sequence_tasks::combine::TileRows as _;
+                            let __cq_driver = ::cq_sequence_tasks::combine::TileSource(#host);
                             let __cq_driver_ref = &&__cq_driver;
                         },
                         parts: quote!(__cq_driver_ref.tile_rows(#n)),
@@ -377,12 +434,13 @@ fn translate_mode(
             } else if let Term::PartitionK { keys, parts, inner } = term {
                 let input = child.expect("checked key partition");
                 let stored = match inner.as_ref() {
-                    Term::Ref(name) => stored_sources.get(&cq_lang_sequence::structures::symbol_name(name)),
+                    Term::Ref(name) => {
+                        stored_sources.get(&cq_lang_sequence::structures::symbol_name(name))
+                    }
                     _ => None,
                 };
                 output.rows = keyed::partition(emitter, input, keys, *parts, config.grain, stored)?;
-            } else if matches!(term, Term::Canon(_))
-                && child.is_some_and(|input| input.depth == 1)
+            } else if matches!(term, Term::Canon(_)) && child.is_some_and(|input| input.depth == 1)
             {
                 output.rows = keyed::canon(emitter, child.unwrap())?;
             } else if let Term::Group(name, _) = term
@@ -397,7 +455,9 @@ fn translate_mode(
                 );
                 let partial = emitter.is_partial_group(term);
                 let tile = if partial {
-                    partitions.iter().position(|tile: &TaskTile| uses_binding(&input.rows, &tile.binding))
+                    partitions
+                        .iter()
+                        .position(|tile: &TaskTile| uses_binding(&input.rows, &tile.binding))
                         .map(|index| partitions.remove(index))
                 } else {
                     None
@@ -411,17 +471,26 @@ fn translate_mode(
                 };
                 output.depth = usize::from(!partial);
                 output.partitioned = !partial && output.partitioned;
-            } else if matches!(term, Term::Store { .. } | Term::Canon(_) | Term::Group(_, _) | Term::Fold(_, _))
-                || program.sequence.definitions.last().is_some_and(|definition|
-                    std::ptr::eq(&definition.term, term))
+            } else if matches!(
+                term,
+                Term::Store { .. } | Term::Canon(_) | Term::Group(_, _) | Term::Fold(_, _)
+            ) || program
+                .sequence
+                .definitions
+                .last()
+                .is_some_and(|definition| std::ptr::eq(&definition.term, term))
             {
-                let input = if matches!(term, Term::Store { .. } | Term::Canon(_) | Term::Group(_, _) | Term::Fold(_, _)) {
+                let input = if matches!(
+                    term,
+                    Term::Store { .. } | Term::Canon(_) | Term::Group(_, _) | Term::Fold(_, _)
+                ) {
                     child.unwrap_or(output)
                 } else {
                     &*output
                 };
-                if let Some(index) = partitions.iter().position(|tile: &TaskTile|
-                    uses_binding(&input.rows, &tile.binding))
+                if let Some(index) = partitions
+                    .iter()
+                    .position(|tile: &TaskTile| uses_binding(&input.rows, &tile.binding))
                 {
                     let tile = partitions.remove(index);
                     let mut input = input.clone();
@@ -434,8 +503,11 @@ fn translate_mode(
                     }
                     if matches!(term, Term::Store { .. })
                         && !nested
-                        && program.sequence.definitions.last().is_some_and(|definition|
-                            std::ptr::eq(&definition.term, term))
+                        && program
+                            .sequence
+                            .definitions
+                            .last()
+                            .is_some_and(|definition| std::ptr::eq(&definition.term, term))
                         && let Some(result) = &output.result
                         && !analysis.structures.head_dedup.contains_key(result)
                     {
@@ -443,12 +515,39 @@ fn translate_mode(
                     }
                     input.rows = join_tile(emitter, tile, local, nested);
                     output.rows = match term {
-                        Term::Canon(_) => emitter.canon(input)?.rows,
-                        Term::Group(name, _) => emitter.group(name, input)?.rows,
-                        Term::Fold(monoid, _) => emitter.fold(monoid, input)?.rows,
+                        Term::Canon(_) => {
+                            let depth = input.depth;
+                            emitter
+                                .lift(input, depth, &mut |emitter, rows| emitter.canon(rows))?
+                                .rows
+                        }
+                        Term::Group(name, _) => {
+                            let depth = input.depth;
+                            emitter
+                                .lift(input, depth, &mut |emitter, rows| emitter.group(name, rows))?
+                                .rows
+                        }
+                        Term::Fold(monoid, _) => {
+                            let depth = input.depth;
+                            emitter
+                                .lift(input, depth, &mut |emitter, rows| {
+                                    emitter.fold(monoid, rows)
+                                })?
+                                .rows
+                        }
                         _ => input.rows,
                     };
                 }
+            }
+            if matches!(term, Term::Flatten(_))
+                && output.depth == 0
+                && !partitions
+                    .iter()
+                    .any(|tile| uses_binding(&output.rows, &tile.binding))
+            {
+                // A completed key cover is no longer a worker-local slice.
+                // Symbolic distributing tiles remain partitioned until joined.
+                output.partitioned = false;
             }
             let routed_provider = output.result.as_ref().is_some_and(|result|
                 analysis.structures.built.get(result).is_some_and(|providers|
@@ -459,12 +558,7 @@ fn translate_mode(
                 && output.result.as_ref().is_some_and(|result|
                     emitter.context().physical_analysis.hosts.contains_key(result)
                     && (routed_provider || analysis.structures.built.get(result).is_none_or(Vec::is_empty))
-                    && !analysis.structures.selections.contains_key(result)
-                    && (!(partition_inputs.contains(owner) || routed_provider)
-                        || (emitter.context().join_filter_ids(result).is_none()
-                            && matches!(&emitter.context().physical[result].operator,
-                                cq_lang_sequence::structures::physical::Operator::Rename(rename)
-                                    if rename.constants.is_none()))))
+                    && !analysis.structures.selections.contains_key(result))
             {
                 // An immutable base relation is already resident storage. The
                 // checked Store publishes that borrow; it need not clone rows.
@@ -557,7 +651,10 @@ fn translate_mode(
         },
     )?;
     if !partitions.is_empty() {
-        return Err(syn::Error::new_spanned(program, "Tasks partition lacks a joined flatten or pool store"));
+        return Err(syn::Error::new_spanned(
+            program,
+            "Tasks partition lacks a joined flatten or pool store",
+        ));
     }
     if let Some(threads) = config.threads {
         expression = if profile {
@@ -601,7 +698,10 @@ fn base_rows(term: &Term, program: &Program) -> bool {
     match term {
         Term::Rows(_) => true,
         Term::Store { inner, .. } => base_rows(inner, program),
-        Term::Ref(name) => program.sequence.definitions.iter()
+        Term::Ref(name) => program
+            .sequence
+            .definitions
+            .iter()
             .find(|definition| definition.name == *name)
             .is_some_and(|definition| base_rows(&definition.term, program)),
         _ => false,
@@ -622,15 +722,22 @@ fn join_tile(
     rows: proc_macro2::TokenStream,
     nested: bool,
 ) -> proc_macro2::TokenStream {
-    let TaskTile { binding, prepare, parts } = tile;
+    let TaskTile {
+        binding,
+        prepare,
+        parts,
+    } = tile;
     let workers = if nested {
         let local = task_scope(emitter, quote!((#rows).collect::<::std::vec::Vec<_>>()));
         quote!((#parts).map(|#binding| #local))
     } else {
-        let local = task_scope(emitter, quote!({
-            __cq_buffer.extend(#rows);
-            __cq_buffer
-        }));
+        let local = task_scope(
+            emitter,
+            quote!({
+                __cq_buffer.extend(#rows);
+                __cq_buffer
+            }),
+        );
         // A scheduler task may consume several logical tiles. Preserve their
         // order while growing one buffer, rather than allocating per tile.
         quote!((#parts).fold(::std::vec::Vec::new, |mut __cq_buffer, #binding| #local))

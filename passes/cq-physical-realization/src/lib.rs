@@ -233,14 +233,22 @@ impl<'a> RowEmitter<'a> {
     ) -> syn::Result<TokenStream> {
         let definition = self.printer.physical[name];
         let Operator::Group(group) = &definition.operator else {
-            return error(&definition.name, "group accumulator requires Group provenance");
+            return error(
+                &definition.name,
+                "group accumulator requires Group provenance",
+            );
         };
         if group.keys.is_empty() {
-            return error(&definition.name, "keyed group accumulator requires nonempty keys");
+            return error(
+                &definition.name,
+                "keyed group accumulator requires nonempty keys",
+            );
         }
         let previous = self.printer.consumer.replace(name.to_owned());
         let previous_input = std::mem::replace(&mut self.printer.input, Some(input));
-        let result = self.printer.group_with_accumulator(name, group, Some(&table));
+        let result = self
+            .printer
+            .group_with_accumulator(name, group, Some(&table));
         self.printer.consumer = previous;
         self.printer.input = previous_input;
         result
@@ -327,15 +335,15 @@ impl<'a> RowEmitter<'a> {
         // Keep opaque authored providers on their existing protocol: a counted
         // custom provider must not receive a second instrumentation wrapper.
         let native_hash_set = matches!(ty, syn::Type::Path(path)
-            if path.qself.is_none() && (
-                path.path.segments.len() == 2
-                    && path.path.segments[0].ident == "cq_storage"
-                    && path.path.segments[1].ident == "HashSet"
-                || path.path.segments.len() == 3
-                    && path.path.segments[0].ident == "std"
-                    && path.path.segments[1].ident == "collections"
-                    && path.path.segments[2].ident == "HashSet"
-            ));
+        if path.qself.is_none() && (
+            path.path.segments.len() == 2
+                && path.path.segments[0].ident == "cq_storage"
+                && path.path.segments[1].ident == "HashSet"
+            || path.path.segments.len() == 3
+                && path.path.segments[0].ident == "std"
+                && path.path.segments[1].ident == "collections"
+                && path.path.segments[2].ident == "HashSet"
+        ));
         let constructor = if native_hash_set {
             quote!(::cq_storage::profile_select! {
                 plain { <#ty>::new() }

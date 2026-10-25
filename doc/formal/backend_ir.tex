@@ -187,6 +187,10 @@ equal keys must always route together. Empty parts are retained.
 The case $P=1$ is the identity cover $B_0=B$, with no hash routing.
 Here equalities forget enumeration order but preserve bag multiplicities;
 canon compares complete valuations, never just routing or aggregate columns.
+Provider routing projects the physically stored lookup tuple: constant-bound
+columns omitted by filtered layouts are not routing coordinates. Structures
+rejects covering join filters over provider families lacking exact key
+enumeration, including unsupported routed families.
 The group law uses the same complete-valuation canonicalization and declared
 monoids as BE-Group. Since $G\to K$, no group crosses a part boundary.
 An unkeyed aggregate uses BE-GroupPartial rather than BE-KeyPartGroup.
@@ -826,6 +830,14 @@ the contiguous tile grain and is not the Rayon worker count. Changing the
 runtime thread count changes scheduling only. Keyed group and routed point
 providers realize BE-KeyPartGroup and BE-KeyPartProvider only where the
 checked Sequence records them; the translator introduces no partition plan.
+Joining task buffers preserves every surviving sequence dimension. Fold,
+Canon, and Group remain lifted over those dimensions, rather than consuming
+tile iterators as rows. Flattening a completed key cover restores ordinary
+host reads; flattening a symbolic worker-local tile does not, until its join.
+An early retained host publication uses an identity join predicate until its
+covering provider is built (IF-JoinFilter). The build shadows that initial
+binding, so subsequently evaluated lazy pipelines use the constructed filter.
+The exact covering operator still rejects the same nonmatching rows.
 
 The parallel Datalog extension (Section~\ref{sec:datalog-languages}) is the
 task interpretation at the granularity of rule holes: its partitioned

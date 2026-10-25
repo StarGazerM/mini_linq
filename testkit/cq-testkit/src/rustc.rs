@@ -2,18 +2,39 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-/// Locate the Cargo artifact with the exact type identity linked into this test.
+/// Locate and memoize the Cargo artifact with the exact type identity linked into this test.
 /// Callers with custom providers must pass both their provider crate and its
 /// storage crate to `Runtime::with_dependencies`.
 pub fn linked_dependency<T: 'static>(name: &str, type_name: &str) -> (String, PathBuf) {
+    type Key = (PathBuf, String, String, String);
+    static ARTIFACTS: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<Key, PathBuf>>,
+    > = std::sync::OnceLock::new();
+
     let executable = std::env::current_exe().expect("test executable path");
-    let artifact = crate::linked_runtime_backend(
-        executable.parent().expect("Cargo dependency directory"),
-        name,
-        type_name,
-        &format!("{:?}", std::any::TypeId::of::<T>()),
-    )
-    .unwrap_or_else(|error| panic!("{error}"));
+    let dependencies = executable.parent().expect("Cargo dependency directory");
+    let key = (
+        dependencies.to_owned(),
+        name.to_owned(),
+        type_name.to_owned(),
+        format!("{:?}", std::any::TypeId::of::<T>()),
+    );
+    let mut artifacts = ARTIFACTS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(artifact) = artifacts.get(&key) {
+        return (name.to_owned(), artifact.clone());
+    }
+    let selected = crate::linked_runtime_backend(dependencies, name, type_name, &key.3);
+    let artifact = match selected {
+        Ok(artifact) => artifact,
+        Err(error) => {
+            drop(artifacts);
+            panic!("{error}");
+        }
+    };
+    artifacts.insert(key, artifact.clone());
     (name.to_owned(), artifact)
 }
 
@@ -71,7 +92,9 @@ impl Runtime {
 
     /// Link target-owned runtime adapters in addition to this fixture's providers.
     pub fn compile_with_dependencies(
-        &self, source: &str, dependencies: &[(String, PathBuf)],
+        &self,
+        source: &str,
+        dependencies: &[(String, PathBuf)],
     ) -> Output {
         let path = self.directory.join("main.rs");
         std::fs::write(&path, source).unwrap();
@@ -95,7 +118,9 @@ impl Runtime {
     }
 
     pub fn run_with_dependencies(
-        &self, source: &str, dependencies: &[(String, PathBuf)],
+        &self,
+        source: &str,
+        dependencies: &[(String, PathBuf)],
     ) -> Output {
         success(&self.compile_with_dependencies(source, dependencies));
         let output = Command::new(self.directory.join("run")).output().unwrap();

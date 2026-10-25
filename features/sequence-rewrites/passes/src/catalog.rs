@@ -56,7 +56,9 @@ pub fn select_from_catalog(
                             }
                             Capability::Membership
                         }
-                        Some(Operator::Probe(..)) if keyed.membership.is_some() => Capability::Membership,
+                        Some(Operator::Probe(..)) if keyed.membership.is_some() => {
+                            Capability::Membership
+                        }
                         Some(Operator::Merge(..)) => Capability::Ordered,
                         _ => Capability::Exact,
                     };
@@ -191,9 +193,18 @@ fn retain_host_indexes(
                     *read == reader_name
                         && *columns == keys
                         && (*supply == structures::physical::syntax::SupplyKind::Stream
-                            || source.physical.program.definitions.iter().any(|definition|
-                                symbol_name(&definition.name) == *read
-                                && matches!(&definition.operator, Operator::Semi(..) | Operator::Anti(..))))
+                            || source
+                                .physical
+                                .program
+                                .definitions
+                                .iter()
+                                .any(|definition| {
+                                    symbol_name(&definition.name) == *read
+                                        && matches!(
+                                            &definition.operator,
+                                            Operator::Semi(..) | Operator::Anti(..)
+                                        )
+                                }))
                 })
             });
         if !stream || analysis.built_on(&name, &keys).is_some() {
