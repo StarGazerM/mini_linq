@@ -262,11 +262,16 @@ name = "cq-sequence-tasks"
 version = "0.1.0"
 dependencies = [
  "cq-lang-sequence",
+ "cq-print",
+ "cq-sequence-plan",
  "cq-sequence-pull",
+ "cq-sequence-rewrite-passes",
+ "cq-storage",
  "cq-structure-selection",
  "cq-testkit",
  "proc-macro2",
  "quote",
+ "rayon",
  "syn 2.0.119",
 ]
 
@@ -302,6 +307,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-storage"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "hashbrown",
+ "rayon",
 ]
 
 [[package]]
@@ -407,6 +421,8 @@ checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 name = "mini-linq"
 version = "0.1.0"
 dependencies = [
+ "cq-sequence-tasks",
+ "cq-sequence-tasks-macros",
  "mini-linq-macros",
 ]
 

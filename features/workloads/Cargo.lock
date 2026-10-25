@@ -693,8 +693,10 @@ version = "0.1.0"
 dependencies = [
  "cq-lang-sequence",
  "cq-sequence-pull",
+ "cq-storage",
  "proc-macro2",
  "quote",
+ "rayon",
  "syn 2.0.119",
 ]
 
@@ -704,6 +706,7 @@ version = "0.1.0"
 dependencies = [
  "cq-lang-sequence",
  "cq-sequence-plan",
+ "cq-sequence-rewrite-passes",
  "cq-sequence-tasks",
  "cq-stage",
  "syn 2.0.119",
@@ -734,6 +737,7 @@ version = "0.1.0"
 dependencies = [
  "ahash",
  "hashbrown 0.15.5",
+ "rayon",
 ]
 
 [[package]]

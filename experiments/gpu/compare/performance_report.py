@@ -51,16 +51,30 @@ def table(headers, rows):
 def main():
     gpu = {(r['sf'], r['query']): r for r in load('performance_gpu_summary.json')['results'] if r.get('exact')}
     comparisons, summaries, common_summaries, sections = [], [], [], []
+    cpu_by_sf = {sf: load(f'performance_cpu_sf{sf}.json') for sf in [1, 10]}
+    exact_by_threads = {threads: load_par(0.1, threads) for threads in [1, 24]}
     exactness = []
     for threads in [1, 24]:
-        rows = list(load_par(0.1, threads).values())
+        rows = list(exact_by_threads[threads].values())
         complete = [r for r in rows if r['status'] == 'complete' and r['correctness'] == 'ok']
         exactness.append([f'par t{threads}', len(complete), len(rows),
                           ', '.join(r['query'].removeprefix('retail_') + ': ' + status_text(r) for r in rows if r not in complete) or ('none' if rows else 'not collected')])
+    exactness_matrix = []
+    catalog = sorted({s['query'] for s in cpu_by_sf[1]['selections']},
+                     key=lambda query: (not query.startswith('retail_h'), query))
+    for query in catalog:
+        cells = [query.removeprefix('retail_')]
+        for threads in [1, 24]:
+            result = exact_by_threads[threads].get(query)
+            cells.append(f"{result['correctness']} / {status_text(result)}"
+                         if result else 'unavailable / missing')
+        exactness_matrix.append(cells)
     sections.append('## Parallel SF0.1 exactness\n\nOne untimed execution per query and thread count, compared as an exact normalized set against authored DuckDB SQL. This is correctness evidence, not timing data.\n\n'
-                    + table(['Configuration', 'Exact completed', 'Rows collected (of 27)', 'Unavailable'], exactness))
+                    + table(['Configuration', 'Exact completed', 'Rows collected (of 27)', 'Unavailable'], exactness)
+                    + '\n\n### Per-query SF0.1 exactness matrix\n\nCells show correctness / collection status; missing evidence is explicitly unavailable.\n\n'
+                    + table(['Query', 'CPU-par t1 correctness / status', 'CPU-par t24 correctness / status'], exactness_matrix))
     for sf in [1, 10]:
-        cpu = load(f'performance_cpu_sf{sf}.json')
+        cpu = cpu_by_sf[sf]
         duck = {r['gpu_query']: r['raw_timing']['threads'] for r in load(f'performance_duck_trash_sf{sf}.json')['results']}
         par = {threads: load_par(sf, threads) for threads in [1, 24]}
         phase_rows, plain_rows = [], []

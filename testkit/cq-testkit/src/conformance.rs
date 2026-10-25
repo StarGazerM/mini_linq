@@ -84,7 +84,11 @@ mod cpu {
             .extend(additions.providers.iter().cloned());
         catalog.codecs.extend(additions.codecs.iter().cloned());
         catalog.canons.extend(additions.canons.iter().cloned());
-        let planned = cq_sequence_plan::plan(program, &machine, &catalog)?;
+        let source = match target {
+            Target::Tasks => cq_sequence_tasks::select_providers(program, &catalog)?,
+            Target::Sequential => program.clone(),
+        };
+        let planned = cq_sequence_plan::plan(&source, &machine, &catalog)?;
         let analysis = cq_lang_sequence::check_grading(&planned.program, &machine)?;
         Ok((planned.program, analysis))
     }
@@ -281,8 +285,19 @@ mod cpu {
         for &target in targets {
             let (expression, canonical) = translate_with_catalog(program, target, catalog)
                 .unwrap_or_else(|error| panic!("{error}"));
+            let (adapters, dependencies) = if target == Target::Tasks {
+                (quote! {
+                    extern crate self as mini_linq;
+                    pub mod __tasks { pub use cq_sequence_tasks::combine; }
+                }, vec![crate::rustc::linked_dependency::<cq_sequence_tasks::Config>(
+                    "cq_sequence_tasks", "cq_sequence_tasks::Config",
+                )])
+            } else {
+                (quote!(), Vec::new())
+            };
             let generated = quote! {
                 #![allow(non_snake_case, unused_variables)]
+                #adapters
                 fn main() {
                     #setup
                     for row in #expression {
@@ -291,7 +306,7 @@ mod cpu {
                 }
             };
             eprintln!("conformance: compiling {target:?}");
-            let output = runtime.run(&generated.to_token_stream().to_string());
+            let output = runtime.run_with_dependencies(&generated.to_token_stream().to_string(), &dependencies);
             let rows: Vec<_> = String::from_utf8(output.stdout)
                 .expect("UTF-8 answer rows")
                 .lines()

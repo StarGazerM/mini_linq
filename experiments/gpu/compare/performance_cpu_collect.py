@@ -199,7 +199,8 @@ def prepare():
         'affinity': sorted(os.sched_getaffinity(0)), 'runs': RUNS, 'cap_seconds': CAP_SECONDS, 'query_names': NAMES,
         **({'configuration': 'par', 'rayon_num_threads': THREADS, 'plain_only': True,
             'verification_only': SF == 0.1, 'runs': 0 if SF == 0.1 else RUNS} if PAR else {}),
-        **({'compiler_runtime_sha256': compiler_fingerprint()} if PAR else {}),
+        **({'compiler_runtime_sha256': compiler_fingerprint(),
+            'git_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()} if PAR else {}),
         'source_sha256': {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in [SOURCE, WORK / 'src/tpch_runtime.rs', WORK / 'xtask/src/tpch/worker.rs'] + [WORK / 'src/queries/retail/tpch' / (n + '.rs') for n in NAMES]},
     })
 

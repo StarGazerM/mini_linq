@@ -165,6 +165,33 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
     catalog
 }
 
+/// Select native shareable representations through checked Structures rewrites.
+pub fn select_providers(
+    source: &Program, catalog: &cq_lang_sequence::Catalog,
+) -> syn::Result<Program> {
+    let mut target = source.clone();
+    target.structures =
+        cq_sequence_rewrite_passes::select_from_catalog(&source.structures, catalog)?;
+    // A legal authored provider may supply stronger capabilities needed by an
+    // authored tile (for example range cursors). Retarget only unavailable
+    // families; do not downgrade an existing native representation.
+    for (original, selected) in source.structures.structures.entries.iter()
+        .zip(&mut target.structures.structures.entries)
+    {
+        if let (
+            cq_lang_sequence::structures::Structure::Built { keyed: original, .. },
+            cq_lang_sequence::structures::Structure::Built { keyed: selected, .. },
+        ) = (&original.structure, &mut selected.structure)
+            && catalog.providers.iter().any(|token|
+                cq_sequence_plan::matches_type(&token.ty, &original.ty))
+        {
+            selected.ty = original.ty.clone();
+        }
+    }
+    cq_lang_sequence::structures::check_rewrite(&source.structures, &target.structures)?;
+    Ok(target)
+}
+
 /// Translate checked partitions into joined, owned output.
 // Formal rule T-Tasks: defer the entire partition-local iterator pipeline into
 // the worker closure, then join before any global canonicalization/publication.
@@ -268,7 +295,7 @@ pub fn translate_with(
                 emitter.mark_target_published(owner);
                 output.rows = quote!(#binding.iter().cloned());
             } else if matches!(term, Term::Store { .. }) && output.depth == 1
-                && let Some((keys, _)) = keyed::partition_source(term)
+                && let Some(keys) = keyed::partition_keys(term, program)
                 && let Some(result) = output.result.clone()
                 && analysis.structures.built.get(&result).is_some_and(|providers|
                     providers.iter().any(|(_, ty)| matches!(ty, syn::Type::Path(path)

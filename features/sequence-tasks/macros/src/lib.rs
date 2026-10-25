@@ -16,9 +16,7 @@ pub fn plan(input: TokenStream) -> TokenStream {
             ));
         }
         let catalog = cq_sequence_tasks::catalog();
-        let mut source = source.clone();
-        source.structures =
-            cq_sequence_rewrite_passes::select_from_catalog(&source.structures, &catalog)?;
+        let source = cq_sequence_tasks::select_providers(source, &catalog)?;
         Ok(cq_sequence_plan::plan(
             &source,
             &cq_sequence_tasks::machine(),

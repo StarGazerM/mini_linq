@@ -7,6 +7,7 @@ use quote::quote;
 use syn::Ident;
 
 mod catalog;
+pub use catalog::matches_type;
 pub mod cost;
 pub use cost::{Cost, cost};
 mod advice;

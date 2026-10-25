@@ -515,8 +515,10 @@ impl<'a> Context<'a> {
         parts: TokenStream,
         routing: &[String],
     ) -> syn::Result<Repr> {
-        for (levels, _) in self.analysis.built.get(name).into_iter().flatten() {
-            if !levels.first().is_some_and(|key| routing.iter().all(|column| key.contains(column))) {
+        for (levels, ty) in self.analysis.built.get(name).into_iter().flatten() {
+            let sharded = matches!(ty, syn::Type::Path(path)
+                if path.path.segments.last().is_some_and(|segment| segment.ident == "Sharded"));
+            if sharded && !levels.first().is_some_and(|key| routing.iter().all(|column| key.contains(column))) {
                 return error(&self.physical[name].name,
                     "Tasks provider routing must be determined by its outer lookup key");
             }

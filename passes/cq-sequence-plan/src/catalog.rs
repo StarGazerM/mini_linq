@@ -118,7 +118,8 @@ fn provider_levels(analysis: &Analysis, provider: &str) -> Vec<Vec<String>> {
     levels
 }
 
-pub(crate) fn matches_type(pattern: &Type, actual: &Type) -> bool {
+/// Match a concrete runtime type against a catalog family with generic holes.
+pub fn matches_type(pattern: &Type, actual: &Type) -> bool {
     match (pattern, actual) {
         (Type::Infer(_), _) => true,
         (Type::Path(pattern), Type::Path(actual)) if pattern.qself == actual.qself => {

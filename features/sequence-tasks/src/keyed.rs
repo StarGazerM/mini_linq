@@ -55,13 +55,17 @@ pub(crate) fn group(
     }))
 }
 
-pub(crate) fn partition_source(term: &Term) -> Option<(&[syn::Ident], &syn::Ident)> {
+pub(crate) fn partition_keys<'a>(
+    term: &'a Term, program: &'a cq_lang_sequence::Program,
+) -> Option<&'a [syn::Ident]> {
     match term {
-        Term::PartitionK { keys, inner, .. } => match inner.as_ref() {
-            Term::Ref(name) => Some((keys, name)),
-            _ => None,
-        },
-        Term::Store { inner, .. } => partition_source(inner),
+        Term::PartitionK { keys, .. } => Some(keys),
+        Term::Ref(name) => program.sequence.definitions.iter()
+            .find(|definition| definition.name == *name)
+            .and_then(|definition| partition_keys(&definition.term, program)),
+        Term::Store { inner, .. } | Term::Canon(inner)
+        | Term::Map(_, inner) | Term::Compact(_, inner) | Term::Group(_, inner)
+        | Term::Lookup { inner, .. } => partition_keys(inner, program),
         _ => None,
     }
 }

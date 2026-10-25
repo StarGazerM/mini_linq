@@ -66,10 +66,17 @@ impl Runtime {
     }
 
     pub fn compile(&self, source: &str) -> Output {
+        self.compile_with_dependencies(source, &[])
+    }
+
+    /// Link target-owned runtime adapters in addition to this fixture's providers.
+    pub fn compile_with_dependencies(
+        &self, source: &str, dependencies: &[(String, PathBuf)],
+    ) -> Output {
         let path = self.directory.join("main.rs");
         std::fs::write(&path, source).unwrap();
         let mut compiler = crate::runtime_rustc();
-        for (name, artifact) in &self.dependencies {
+        for (name, artifact) in self.dependencies.iter().chain(dependencies) {
             compiler
                 .arg("--extern")
                 .arg(format!("{name}={}", artifact.display()));
@@ -84,7 +91,13 @@ impl Runtime {
     }
 
     pub fn run(&self, source: &str) -> Output {
-        success(&self.compile(source));
+        self.run_with_dependencies(source, &[])
+    }
+
+    pub fn run_with_dependencies(
+        &self, source: &str, dependencies: &[(String, PathBuf)],
+    ) -> Output {
+        success(&self.compile_with_dependencies(source, dependencies));
         let output = Command::new(self.directory.join("run")).output().unwrap();
         success(&output);
         output

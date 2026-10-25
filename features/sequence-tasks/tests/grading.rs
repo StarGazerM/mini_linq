@@ -124,12 +124,14 @@ fn segment_program() -> Program {
     let physical = syn::parse_quote! {
         physical {
             relation L(a:i32,x:i32); relation R(a:i32,b:i32);
+            consumer canonical;
             l = pipe rename L@0 {a -> a,x -> x};
             r = let rename R@1 {a -> a,b -> b};
             joined = pipe probe first [a] l,r;
             selected = pipe select joined if (b > 0);
             mapped = pipe bind selected with n:i32 = (*b * 100 + 1);
-            return mapped as answer(a,n);
+            projected = pipe project mapped keep {a,n};
+            return projected as answer(a,n);
         }
     };
     let mut structures = cq_structure_selection::compile(&physical).unwrap();
@@ -153,7 +155,7 @@ fn segment_program() -> Program {
             r = store rows r;
             input = store rows l;
             parts = store capacity 4096 flatten
-                map mapped compact selected flatten lookup r [a] tile 64 input;
+                map projected map mapped compact selected flatten lookup r [a] tile 64 input;
             result = store parts;
         }
         graded tasks { r at host; input at host; parts at pool; result at host; }
@@ -397,4 +399,245 @@ fn joined_tiles_canonicalize_complete_valuations_before_grouping() {
     let runtime = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../runtime/cq-storage/src/lib.rs");
     cq_testkit::rustc::Runtime::new(&runtime, false).run(&source.to_string());
+}
+
+fn run_partition_fixture(source: proc_macro2::TokenStream) {
+    let runtime = cq_testkit::rustc::Runtime::with_dependencies(vec![
+        cq_testkit::rustc::linked_dependency::<cq_sequence_tasks::Config>(
+            "cq_sequence_tasks", "cq_sequence_tasks::Config",
+        ),
+        cq_testkit::rustc::linked_dependency::<cq_storage::sharded::FullKey>(
+            "cq_storage", "cq_storage::sharded::FullKey",
+        ),
+    ]);
+    // Match the consumer's runtime namespace while linking the real task and
+    // storage implementations, not a fixture-specific substitute.
+    let source = quote::quote! {
+        #![allow(non_snake_case, unused_variables)]
+        extern crate self as mini_linq;
+        pub mod __tasks { pub use cq_sequence_tasks::combine; }
+        #source
+    };
+    runtime.run(&source.to_string());
+}
+
+#[test]
+fn key_partitioned_groups_preserve_exact_valuations_and_empty_global_identity() {
+    let keyed = grouped_program(false);
+    let global = grouped_program(true);
+    let translate_partitioned = |mut program: Program, global: bool| {
+        let body = if global {
+            quote::quote!(group grouped canon partition_k[k,witness,value](64) input)
+        } else {
+            quote::quote!(flatten group grouped canon partition_k[k](64) input)
+        };
+        program.sequence = syn::parse_quote! {
+            sequence {
+                input = store rows r;
+                parts = store #body;
+                output_rows = store parts;
+            }
+        };
+        program.graded = Some(syn::parse_quote! {
+            graded tasks { input at host; parts at pool; output_rows at host; }
+        });
+        let facts = check_grading(&program, &machine()).unwrap();
+        if global {
+            assert_eq!(facts.shapes["parts"], vec![cq_lang_sequence::Len::Lit(1)]);
+        }
+        let expression = translate(&program, &facts).unwrap();
+        let rendered = expression.to_token_stream().to_string();
+        assert!(rendered.contains("combine :: route_by"), "{rendered}");
+        assert!(rendered.contains("combine :: map_parts"), "{rendered}");
+        if global {
+            assert!(rendered.contains("combine :: par_group_global_with"), "{rendered}");
+        }
+        expression
+    };
+    let keyed_tasks = translate_partitioned(keyed.clone(), false);
+    let global_tasks = translate_partitioned(global.clone(), true);
+    let keyed_facts = check_grading(&keyed, &machine()).unwrap();
+    let global_facts = check_grading(&global, &machine()).unwrap();
+    let keyed_pull = cq_sequence_pull::translate(&keyed, &keyed_facts).unwrap();
+    let global_pull = cq_sequence_pull::translate(&global, &global_facts).unwrap();
+    run_partition_fixture(quote::quote! {
+        fn main() {
+            // Duplicates span several routing chunks; only two of the 64
+            // logical key partitions can be occupied by the keyed fold.
+            let populated: Vec<(i32,i32,i64)> = (0..4099).map(|index| match index % 4 {
+                0 | 1 => (1,10,7),
+                2 => (1,11,7),
+                _ => (2,20,-2),
+            }).collect();
+            for threads in [1,24] {
+                let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+                for rows in [&populated[..], &[][..]] {
+                    let mut actual: Vec<(i32,usize,i64,Option<i64>,Option<i64>)> =
+                        pool.install(|| (#keyed_tasks).into_iter()
+                            .map(|(k,n,s,l,h)| (*k,n,s,l,h)).collect());
+                    let mut expected: Vec<_> = (#keyed_pull).into_iter()
+                        .map(|(k,n,s,l,h)| (*k,n,s,l,h)).collect();
+                    actual.sort();
+                    expected.sort();
+                    assert_eq!(actual, expected);
+                    let actual_global: Vec<(usize,i64,Option<i64>,Option<i64>)> =
+                        pool.install(|| (#global_tasks).into_iter().collect());
+                    let expected_global: Vec<_> = (#global_pull).into_iter().collect();
+                    assert_eq!(actual_global, expected_global);
+                    if rows.is_empty() {
+                        assert!(actual.is_empty());
+                        assert_eq!(actual_global, vec![(0,0,None,None)]);
+                    } else {
+                        assert_eq!(
+                            actual,
+                            vec![(1,2,14,Some(7),Some(7)), (2,1,-2,Some(-2),Some(-2))]
+                        );
+                        assert_eq!(actual_global, vec![(3,12,Some(-2),Some(7))]);
+                    }
+                }
+            }
+        }
+    });
+}
+
+#[test]
+fn globally_unique_tiles_fold_partial_aggregates_with_one_empty_identity() {
+    let mut program = grouped_program(true);
+    program.evidence = syn::parse_quote!(evidence { rows(witness) key; });
+    program.sequence = syn::parse_quote! {
+        sequence {
+            input = store rows r;
+            partials = store group grouped tile 64 input;
+            output_rows = store partials;
+        }
+    };
+    program.graded = Some(syn::parse_quote! {
+        graded tasks { input at host; partials at pool; output_rows at host; }
+    });
+    let facts = check_grading(&program, &machine()).unwrap();
+    assert_eq!(facts.shapes["partials"], vec![cq_lang_sequence::Len::Lit(1)]);
+    assert_eq!(facts.tilings["partials"], vec![cq_lang_sequence::Tiling::Distribute]);
+    let expression = translate(&program, &facts).unwrap();
+    let rendered = expression.to_token_stream().to_string();
+    assert!(rendered.contains("combine :: par_group_global_with"), "{rendered}");
+    assert!(!rendered.contains("combine :: route_by"), "{rendered}");
+    run_partition_fixture(quote::quote! {
+        fn main() {
+            let populated: Vec<(i32,i32,i64)> =
+                (0..131).map(|index| (0,index,i64::from(index % 5 - 2))).collect();
+            for threads in [1,24] {
+                let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+                for rows in [&populated[..], &[][..]] {
+                    let actual: Vec<(usize,i64,Option<i64>,Option<i64>)> =
+                        pool.install(|| (#expression).into_iter().collect());
+                    if rows.is_empty() {
+                        assert_eq!(actual, vec![(0,0,None,None)]);
+                    } else {
+                        assert_eq!(actual, vec![(131,-2,Some(-2),Some(2))]);
+                    }
+                }
+            }
+        }
+    });
+}
+
+fn routed_provider_program(routing: proc_macro2::TokenStream, named: bool) -> Program {
+    let physical = syn::parse_quote! {
+        physical {
+            relation L(a:i32,b:i32); relation R(a:i32,b:i32,c:i32);
+            consumer canonical;
+            l = pipe rename L@0 {a -> a,b -> b};
+            r = let rename R@1 {a -> a,b -> b,c -> c};
+            joined = pipe probe first [a,b] l,r;
+            return joined as answer(a,b,c);
+        }
+    };
+    let mut structures = cq_structure_selection::compile(&physical).unwrap();
+    let authored: Program = syn::parse_quote! {
+        #physical
+        structures {
+            r = ::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>, _> [a,b];
+        }
+        sequence { result = rows l; }
+    };
+    for provider in authored.structures.structures.entries {
+        structures.structures.entries.retain(|entry| {
+            entry.name != provider.name
+                || std::mem::discriminant(&entry.structure)
+                    != std::mem::discriminant(&provider.structure)
+        });
+        structures.structures.entries.push(provider);
+    }
+    let (provider, grade) = if named {
+        (
+            quote::quote! {
+                routed = partition_k[#routing](64) provider_input;
+                provider = store routed;
+            },
+            quote::quote!(routed at pool.task;),
+        )
+    } else {
+        (
+            quote::quote!(provider = store partition_k[#routing](64) provider_input;),
+            quote::quote!(),
+        )
+    };
+    syn::parse_quote! {
+        #structures
+        sequence {
+            provider_input = store rows r;
+            #provider
+            input = store rows l;
+            parts = store capacity 8192 flatten flatten lookup r [a,b] tile 64 input;
+            result = store parts;
+        }
+        graded tasks {
+            provider_input at host; #grade provider at pool;
+            input at host; parts at pool; result at host;
+        }
+    }
+}
+
+#[test]
+fn routed_providers_keep_subset_and_reordered_keys_through_named_publication() {
+    let mut checks = Vec::new();
+    for routing in [quote::quote!(b), quote::quote!(b,a)] {
+        for named in [false, true] {
+            let program = routed_provider_program(routing.clone(), named);
+            let facts = check_grading(&program, &machine()).unwrap();
+            assert_eq!(
+                facts.capabilities[&("r".into(), vec!["a".into(), "b".into()])],
+                cq_lang_sequence::Capability::Exact,
+            );
+            let expression = translate(&program, &facts).unwrap();
+            let description = format!("routing [{routing}], named={named}");
+            checks.push(quote::quote! {
+                let actual: Vec<(i32,i32,i32)> = pool.install(|| {
+                    (#expression).into_iter().map(|(a,b,c)| (*a,*b,*c)).collect()
+                });
+                assert_eq!(actual, expected, #description);
+            });
+        }
+    }
+    run_partition_fixture(quote::quote! {
+        fn main() {
+            let probes: Vec<(i32,i32)> = (0..131).map(|i| (i % 4,i % 7)).collect();
+            let values: Vec<(i32,i32,i32)> = (0..131).map(|i| (i % 3,i % 5,i % 7)).collect();
+            for threads in [1,24] {
+                let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+                for L in [&probes[..], &[][..]] {
+                    for R in [&values[..], &[][..]] {
+                        let expected: Vec<(i32,i32,i32)> = L.iter().flat_map(|&(a,b)| {
+                            R.iter().filter_map(move |&(ra,rb,c)| {
+                                (ra == a && rb == b).then_some((a,b,c))
+                            })
+                        }).collect();
+                        // Compare raw ordered rows: neither wrong routing nor
+                        // lost duplicate payloads can hide behind set equality.
+                        #(#checks)*
+                    }
+                }
+            }
+        }
+    });
 }
