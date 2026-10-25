@@ -9,6 +9,7 @@ proc-macro = true
 
 [dependencies]
 cq-gpu-sequence = { path = "../../.." }
+cq-gpu-sequence-core = { path = "../../../core" }
 cq-lang-sequence = { path = "../../../../../../languages/cq-lang-sequence" }
 cq-lang-structures = { path = "../../../../../../languages/cq-lang-structures" }
 cq-sequence-plan = { path = "../../../../../../passes/cq-sequence-plan" }

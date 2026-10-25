@@ -141,6 +141,7 @@ dependencies = [
  "cuda-host",
  "gpu-compress",
  "gpu-compress-host",
+ "gpu-datalog-runtime",
  "proc-macro2",
  "quote",
  "serde_json",
@@ -166,6 +167,7 @@ version = "0.1.0"
 dependencies = [
  "cq-gpu-sequence-core",
  "cq-lang-sequence",
+ "cq-lang-structures",
  "cq-sequence-plan",
  "cq-stage",
  "proc-macro2",
@@ -194,6 +196,7 @@ name = "cq-gpu-sequence-test-macros"
 version = "0.1.0"
 dependencies = [
  "cq-gpu-sequence",
+ "cq-gpu-sequence-core",
  "cq-lang-sequence",
  "cq-lang-structures",
  "cq-sequence-lowering",

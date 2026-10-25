@@ -2,12 +2,15 @@
 
 use cq_lang_sequence::{LevelNode, Machine};
 
+mod arena;
+pub mod runs;
 mod emit;
 pub mod layout;
 mod reduce;
 mod rows;
 
 pub use emit::translate;
+pub use arena::translate_arena;
 
 /// Host publication over separated, dynamically scheduled device blocks.
 /// Each block is collaborative; lanes are sequential leaves (no warp level).
@@ -82,6 +85,16 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
                     syn::parse_quote!(u16),
                     syn::parse_quote!(u32),
                     syn::parse_quote!(bool),
+                ]),
+                levels: levels.clone(),
+            },
+            ProviderToken {
+                ty: syn::parse_quote!(::gpu_datalog_runtime::DeviceLayout<_, _>),
+                capabilities: vec![Capability::Exact, Capability::Range, Capability::Membership],
+                elements: Some(vec![
+                    syn::parse_quote!(i8), syn::parse_quote!(i16),
+                    syn::parse_quote!(i32), syn::parse_quote!(i64),
+                    syn::parse_quote!(u8), syn::parse_quote!(u16), syn::parse_quote!(u32),
                 ]),
                 levels: levels.clone(),
             },

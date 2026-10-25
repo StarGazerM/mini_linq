@@ -131,7 +131,7 @@ impl Packing {
         Self::build(columns.iter().map(|column| (column.bits(), column.is_signed())))
     }
 
-    fn build(columns: impl Iterator<Item = (u32, bool)>) -> Result<Self> {
+    pub(crate) fn build(columns: impl Iterator<Item = (u32, bool)>) -> Result<Self> {
         let mut fields = Vec::with_capacity(columns.size_hint().0.min(128));
         let mut bits = 0;
         for (width, signed) in columns {
@@ -158,6 +158,13 @@ impl Packing {
 
     pub fn widths(&self) -> impl ExactSizeIterator<Item = u32> + '_ {
         self.fields.iter().map(|field| field.bits)
+    }
+
+    /// Device field descriptors in this packing's most-significant-first order.
+    pub fn packed_fields(&self) -> impl ExactSizeIterator<Item = crate::layout::PackedField> + '_ {
+        self.fields.iter().map(|field| crate::layout::PackedField {
+            bits: field.bits, shift: field.shift, signed: field.signed as u32,
+        })
     }
 
     pub fn len(&self) -> usize {

@@ -1004,6 +1004,30 @@ same membership probe; neither expands witnesses. Empty provider ranges,
 absent directory keys, and existential wildcard columns follow the same
 equation. The translator reads this polarity, rather than choosing it.
 
+\paragraph{Packed-run inputs and candidate arenas.}
+A checked binding records that a host input is a collection of device runs
+of packed words (\textsc{DL-DevicePacking}) in a stated column permutation;
+it is never inferred from a built index. Scanning visits every run; a lookup
+of a key prefix takes one contiguous word range per run, and expansion loops
+over runs uniformly across the block, flattening each run's ranges as in the
+segmented-flatten lemma. Membership is the disjunction over runs.
+\begin{mathpar}
+\Rule{GPU-Runs}{\text{input bound to runs }\rho_1\ldots\rho_m\text{ with packing }p\quad
+ \textsc{STR-RunRead}}
+ {\mathsf{lookup}(k)=\biguplus_j\mathrm{unpack}_p(\rho_j[\mathrm{range}_p(k)])\quad
+  \mathsf{member}(k)=\bigvee_j\rho_j[\mathrm{range}_p(k)]\neq\emptyset}
+\end{mathpar}
+An arena terminal publishes the hole's head rows packed in the head's
+canonical column order into a caller-owned device buffer and returns it with
+its length. It is a candidate bag: canonicalization belongs to admission
+(\textsc{DL-DeviceRuns}). Sizing follows the dispatch's recorded output
+protocol, so a batch is never truncated.
+\begin{mathpar}
+\Rule{GPU-Arena}{\mathsf{run}_{\rm gpu}(t)\text{ as T-Gpu}\quad
+ \text{output protocol discharges BE-Length}}
+ {\mathrm{unpack}(\mathrm{arena})\equiv_{\mathrm{bag}}\sem{t}}
+\end{mathpar}
+
 
 \subsection{Grouped folds}
 \label{sec:grouped-fold}

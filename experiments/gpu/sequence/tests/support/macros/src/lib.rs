@@ -104,3 +104,49 @@ pub fn h05_sequential_physical_reference(input: TokenStream) -> TokenStream {
         Err(error) => error.into_compile_error().into(),
     }
 }
+
+#[path = "../../run_holes.rs"]
+mod run_holes;
+
+fn arena_hole(name: &syn::Ident) -> syn::Result<syn::Expr> {
+    let structures = cq_gpu_sequence_core::runs::bind(&run_holes::fixture(&name.to_string()))?;
+    let source = cq_sequence_lowering::compile(&structures)?;
+    let machine = cq_gpu_sequence::machine();
+    let mut planned = cq_sequence_plan::plan(&source, &machine, &cq_gpu_sequence::catalog())?;
+    // Deliberately under-size the terminal so fanout exercises metadata retry.
+    let terminal = planned.program.sequence.definitions.last_mut().unwrap();
+    let cq_lang_sequence::Term::Store { capacity, .. } = &mut terminal.term else {
+        return Err(syn::Error::new_spanned(name, "expected a planned terminal store"));
+    };
+    *capacity = Some(1);
+    planned.program.sequence.output = Some(cq_lang_sequence::OutputProtocol::Reserve);
+    let analysis = cq_lang_sequence::check_grading(&planned.program, &machine)?;
+    cq_gpu_sequence_core::translate_arena(
+        &planned.program,
+        &analysis,
+        &syn::parse_quote!(&mut arena),
+    )
+}
+
+/// Exercise the complete Structures-to-arena production pipeline.
+#[proc_macro]
+pub fn planned_arena_hole(input: TokenStream) -> TokenStream {
+    let name = syn::parse_macro_input!(input as syn::Ident);
+    match arena_hole(&name) {
+        Ok(expression) => expression.into_token_stream().into(),
+        Err(error) => error.into_compile_error().into(),
+    }
+}
+
+/// Expose the exact first-hole expansion for the acceptance source artifact.
+#[proc_macro]
+pub fn arena_hole_source(input: TokenStream) -> TokenStream {
+    let name = syn::parse_macro_input!(input as syn::Ident);
+    match arena_hole(&name) {
+        Ok(expression) => syn::LitStr::new(
+            &expression.into_token_stream().to_string(),
+            name.span(),
+        ).into_token_stream().into(),
+        Err(error) => error.into_compile_error().into(),
+    }
+}

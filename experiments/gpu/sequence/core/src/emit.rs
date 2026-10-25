@@ -34,6 +34,7 @@ fn parameter_layout(ty: &syn::Type) -> syn::Result<(usize, usize)> {
             "usize" | "isize" | "u64" | "i64" | "f64" => return Ok((8, 8)),
             "ColumnView" => return Ok((40, 8)),
             "RangeView" => return Ok((64, 8)),
+            "RunsView" => return Ok((32, 8)),
             _ => {}
         }
     }
@@ -532,6 +533,47 @@ impl<'a> Compiler<'a> {
         membership: bool,
     ) -> syn::Result<TokenStream> {
         let (view, payload, order) = self.rows.provider(provider)?;
+        if self.rows.run_provider(provider) {
+            if order.len() < keys.len() || order[..keys.len()].iter().any(|key| !keys.contains(key)) {
+                return Err(error("GPU-Runs: lookup keys are not a checked leading prefix"));
+            }
+            let run = format_ident!("__cq_run_{provider}");
+            let parts = order.iter().take(keys.len()).enumerate().map(|(index, key)| {
+                let slot = self.slot(key)?;
+                Ok(quote! {
+                    let __field = *#view.fields.add(#index);
+                    let __mask = (1u128 << __field.bits) - 1;
+                    let __sign = if __field.signed != 0 { 1u128 << (__field.bits - 1) } else { 0 };
+                    __lo |= (((__row[#slot] as u128) & __mask) ^ __sign) << __field.shift;
+                    __suffix = __field.shift;
+                })
+            }).collect::<syn::Result<Vec<_>>>()?;
+            let prefix = quote! {
+                let mut __lo = 0u128;
+                let mut __suffix = #view.bits;
+                #(#parts)*
+                let __hi = __lo | if __suffix == 128 { u128::MAX } else { (1u128 << __suffix) - 1 };
+            };
+            return Ok(if membership {
+                quote! {
+                    #prefix
+                    let mut __member_found = false;
+                    if __live {
+                        for #run in 0..#view.run_count {
+                            let (__begin, __end) = ::gpu_datalog_runtime::device::range(#view, #run, __lo, __hi);
+                            __member_found |= __begin < __end;
+                        }
+                    }
+                }
+            } else {
+                quote! {
+                    #prefix
+                    let (__begin, __end) = if __live {
+                        ::gpu_datalog_runtime::device::range(#view, #run, __lo, __hi)
+                    } else { (0u32, 0u32) };
+                }
+            });
+        }
         if order.is_empty() && keys.is_empty() {
             return Ok(quote! {
                 let (mut __begin, mut __end) = (0u32, #view.len);
@@ -598,6 +640,17 @@ impl<'a> Compiler<'a> {
 
     fn payload(&self, provider: &str, position: TokenStream) -> syn::Result<TokenStream> {
         let (view, payload, _) = self.rows.provider(provider)?;
+        if self.rows.run_provider(provider) {
+            let run = format_ident!("__cq_run_{provider}");
+            let assignments = payload.iter().enumerate().map(|(index,column)| {
+                let slot = self.slot(column)?;
+                Ok(quote! {
+                    __row[#slot] = ::gpu_datalog_runtime::device::decode(
+                        #view, #run, (#position) as u32, #index as u32);
+                })
+            }).collect::<syn::Result<Vec<_>>>()?;
+            return Ok(quote!(#(#assignments)*));
+        }
         let assignments = payload.iter().enumerate().map(|(index,column)| {
             let slot=self.slot(column)?;
             let decode = if self.rows.dense.contains(&slot) { format_ident!("decode_u32") } else { format_ident!("decode") };
@@ -612,6 +665,7 @@ struct Kernel<'c, 'p> {
     shared: crate::layout::SharedLayout,
     virtual_range: Option<String>,
     packed_columns: Option<Vec<String>>,
+    arena_packing: Option<&'c crate::arena::Packing>,
     publication_columns: BTreeSet<usize>,
     sink: Option<TokenStream>,
     scalar_output: bool,
@@ -902,7 +956,7 @@ impl Kernel<'_, '_> {
                             #payload
                         },
                     })?;
-                Ok(quote! {
+                let expansion = quote! {
                     #lookup
                     #shared
                     let #begins = __shared.add(#begin_offset).cast::<u32>();
@@ -924,7 +978,16 @@ impl Kernel<'_, '_> {
                         __child_base += #tile as u64;
                     }
                     ::cuda_device::thread::sync_threads();
-                })
+                };
+                if self.compiler.rows.run_provider(provider) {
+                    let view = self.compiler.rows.provider(provider)?.0;
+                    let run = format_ident!("__cq_run_{provider}");
+                    // Run bounds are uniform descriptor metadata: every lane
+                    // executes every run's existing segmented collective.
+                    Ok(quote! { for #run in 0..#view.run_count { #expansion } })
+                } else {
+                    Ok(expansion)
+                }
             }
             Operation::Fold(_) => Err(error("scalar row template cannot cross a reduction scope")),
             _ => self.scalar_operations(rest, row),
@@ -1058,6 +1121,12 @@ impl Kernel<'_, '_> {
     }
 
     fn output_write(&self) -> syn::Result<TokenStream> {
+        if let Some(packing) = self.arena_packing {
+            let slots = self.compiler.rows.output_columns.iter()
+                .map(|column| self.compiler.slot(column))
+                .collect::<syn::Result<Vec<_>>>()?;
+            return Ok(packing.write(&slots));
+        }
         let width = self.compiler.rows.width;
         let write = if let Some(columns) = &self.packed_columns {
             let parts = columns
@@ -1197,6 +1266,14 @@ fn canon_type<'a>(analysis: &'a Analysis, publication: &str) -> syn::Result<&'a 
 /// Translate only checked scheduling facts; no planner is consulted here.
 // Formal rule T-Gpu: Interpret checked Sequence constructors at their recorded GPU grades.
 pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Expr> {
+    translate_impl(program, analysis, None)
+}
+
+pub(crate) fn translate_impl(
+    program: &Program,
+    analysis: &Analysis,
+    arena: Option<&syn::Expr>,
+) -> syn::Result<syn::Expr> {
     if program
         .graded
         .as_ref()
@@ -1214,6 +1291,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
         }
     }
     let rows = Rows::new(program, analysis)?;
+    let arena_packing = arena.map(|_| rows.output_types().and_then(crate::arena::Packing::new)).transpose()?;
     let mut compiler = Compiler {
         program,
         analysis,
@@ -1295,13 +1373,16 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
         .definitions
         .get(final_name)
         .and_then(|term| grouped_boundary(term, &compiler.definitions));
+    if arena.is_some() && (final_group.is_some() || final_fold.is_some()) {
+        return Err(error("GPU arena terminal requires raw candidate rows, not a group or fold"));
+    }
     let mut packing = Vec::new();
     for (i, column) in compiler
         .rows
         .output_columns
         .iter()
         .enumerate()
-        .filter(|_| final_group.is_none())
+        .filter(|_| final_group.is_none() && arena.is_none())
     {
         let bounds = match final_fold {
             Some(Monoid::Count) => quote!(::cq_gpu_runtime::Bounds::Inclusive {
@@ -1508,6 +1589,9 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
         });
         let index = compiler.stored.len();
         let Some(dispatch) = dispatch else {
+            if arena.is_some() && publication == final_name {
+                return Err(error("GPU arena terminal requires a recorded device row dispatch"));
+            }
             if analysis
                 .levels
                 .get(&publication)
@@ -1879,6 +1963,9 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                 .iter()
                 .any(|op| matches!(op, Operation::Canon))
         });
+        if arena.is_some() && final_output && canonical {
+            return Err(error("GPU arena terminal publishes raw candidates; terminal canon requires a separate publication"));
+        }
         let provider = canonical
             .then(|| canon_type(analysis, &publication))
             .transpose()?;
@@ -1991,7 +2078,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                         .any(|op| matches!(op, Operation::Flatten))
                 {
                     if let Operation::Lookup { provider, .. } = &ops[at] {
-                        Some(provider.clone())
+                        (!compiler.rows.run_provider(provider)).then(|| provider.clone())
                     } else {
                         None
                     }
@@ -2122,6 +2209,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
             shared: crate::layout::SharedLayout::new(),
             virtual_range: virtual_range.clone(),
             packed_columns: packed_columns.clone(),
+            arena_packing: if final_output { arena_packing.as_ref() } else { None },
             publication_columns: chains
                 .iter()
                 .flat_map(|chain| {
@@ -2351,11 +2439,33 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
         } else {
             0usize
         };
+        let key_allocation = if arena.is_some() && final_output {
+            quote!(let #output_keys = __cq_arena.reserve(__cq_arena_packing.clone(), __cq_capacity)?;)
+        } else {
+            quote!(let #output_keys=unsafe {::cq_gpu_runtime::Buffer::<u64>::uninitialized(__cq_pool.clone(),__cq_capacity*#key_width*__cq_key_lanes)?};)
+        };
+        let key_pointer = if arena.is_some() && final_output {
+            quote!(#output_keys.buffer().ptr())
+        } else {
+            quote!(#output_keys.ptr())
+        };
+        let packing_setup = if let Some(packing) = arena_packing.as_ref().filter(|_| final_output) {
+            let bits = packing.bits;
+            let lanes = if bits <= 64 { 1usize } else { 2usize };
+            quote! {
+                let __cq_key_bits = #bits;
+                let __cq_key_lanes = #lanes;
+            }
+        } else {
+            quote! {
+                let mut __cq_key_bits=0u32;
+                let mut __cq_fields=::std::vec::Vec::<::cq_gpu_sequence_runtime::canon::PackedField>::new();
+                #(#local_packing)*
+                let __cq_key_lanes=::cq_gpu_sequence_runtime::canon::WideCanon::key_lanes(__cq_key_bits)?;
+            }
+        };
         launches.push(quote! {
-            let mut __cq_key_bits=0u32;
-            let mut __cq_fields=::std::vec::Vec::<::cq_gpu_sequence_runtime::canon::PackedField>::new();
-            #(#local_packing)*
-            let __cq_key_lanes=::cq_gpu_sequence_runtime::canon::WideCanon::key_lanes(__cq_key_bits)?;
+            #packing_setup
             #(#host_domains)*
             let __cq_prepared=__cq_module.#prepare_name(::cuda_core::LaunchConfig1D::new(#grid,256,#shared_u32))?;
             let mut __cq_capacity=#initial;
@@ -2366,10 +2476,10 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                 let #store_begin=unsafe {::cq_gpu_runtime::Buffer::<u32>::uninitialized(__cq_pool.clone(),__cq_capacity*#range_width)?};
                 let #store_offsets=unsafe {::cq_gpu_runtime::Buffer::<u32>::uninitialized(__cq_pool.clone(),
                     __cq_capacity.checked_add(1).ok_or("Sequence offset allocation overflow")?*#range_width)?};
-                let #output_keys=unsafe {::cq_gpu_runtime::Buffer::<u64>::uninitialized(__cq_pool.clone(),__cq_capacity*#key_width*__cq_key_lanes)?};
+                #key_allocation
                 let #store_meta=::cq_gpu_runtime::Buffer::<u32>::zeroed(__cq_pool.clone(),#meta_words)?;
                 __cq_module.#kernel_name(__cq_pool.stream(),&__cq_prepared,#(#arguments,)*
-                    #store_rows.ptr(),#store_begin.ptr(),#store_offsets.ptr(),#output_keys.ptr(),
+                    #store_rows.ptr(),#store_begin.ptr(),#store_offsets.ptr(),#key_pointer,
                     __cq_capacity as u32,#store_meta.ptr())?;
                 let __cq_counts=#store_meta.to_host()?;
                 if __cq_counts[2]!=0 {return Err("Sequence device count or fold overflow".into());}
@@ -2382,7 +2492,11 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
             };
         });
         if final_output {
-            output = Some(if canonical {
+            output = Some(if arena.is_some() {
+                quote! {
+                    let __cq_result = unsafe { #output_keys.finish(#store_length, __cq_run_owners)? };
+                }
+            } else if canonical {
                 quote! {
                     let mut __cq_canon=<#provider>::new(&__cq_pool,#store_length)?;
                     let __cq_keys=unsafe {__cq_canon.canonicalize(&#output_keys,#store_length,__cq_key_bits)?};
@@ -2503,6 +2617,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                 shared: crate::layout::SharedLayout::new(),
                 virtual_range: None,
                 packed_columns: Some(compiler.rows.output_columns.clone()),
+                arena_packing: None,
                 publication_columns: BTreeSet::new(),
                 sink: None,
                 scalar_output: false,
@@ -2570,6 +2685,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
     let output = launches.pop().expect("output launch");
     let setup = &compiler.rows.setup;
     let build = &compiler.rows.build;
+    let arena_setup = arena.zip(arena_packing.as_ref()).map(|(expression, packing)| packing.setup(expression));
     syn::parse2(quote!({
         #[::cuda_device::cuda_module]
         mod #module_name {
@@ -2578,6 +2694,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
         }
         (|| -> ::cq_gpu_sequence_runtime::Result<_> {
             #setup
+            #arena_setup
             ::std::thread_local! {
                 static __CQ_SEQUENCE_MODULE: ::std::cell::RefCell<Option<(
                     ::std::sync::Arc<::cuda_core::CudaContext>,
@@ -3028,6 +3145,7 @@ mod tests {
                         shared: crate::layout::SharedLayout::new(),
                         virtual_range: None,
                         packed_columns: Some(vec!["a".into()]),
+                        arena_packing: None,
                         publication_columns: BTreeSet::new(),
                         sink: None,
                         scalar_output: false,

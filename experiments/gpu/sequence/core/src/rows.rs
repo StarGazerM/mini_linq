@@ -14,21 +14,26 @@ use syn::visit_mut::VisitMut;
 use syn::{Ident, Type};
 
 #[derive(Clone)]
-struct Interval {
+pub(crate) struct Interval {
     column: String,
     start: TokenStream,
     end: TokenStream,
 }
 #[derive(Clone)]
-struct Origin {
-    host: String,
-    columns: BTreeMap<String, String>,
-    selection: Option<Interval>,
+pub(crate) struct Origin {
+    pub(crate) host: String,
+    pub(crate) columns: BTreeMap<String, String>,
+    pub(crate) selection: Option<Interval>,
 }
 struct Source {
     reads: Vec<(usize, TokenStream)>,
     length: TokenStream,
     positions: Option<Ident>,
+}
+struct RunSource {
+    view: Ident,
+    reads: Vec<(usize, usize)>,
+    length: TokenStream,
 }
 struct Provider {
     view: Ident,
@@ -141,6 +146,8 @@ pub struct Rows {
     definitions: BTreeMap<String, Definition>,
     types: BTreeMap<String, BTreeMap<String, Type>>,
     resident_hosts: BTreeSet<String>,
+    run_sources: BTreeMap<String, RunSource>,
+    run_providers: BTreeSet<String>,
 }
 
 impl Rows {
@@ -203,15 +210,29 @@ impl Rows {
         let mut hosts = BTreeMap::new();
         let mut raw = BTreeMap::new();
         let mut first = true;
+        let mut run_hosts = BTreeMap::new();
+        setup.extend(quote! {
+            let mut __cq_run_owners: ::std::vec::Vec<::std::sync::Arc<dyn ::std::any::Any>> = ::std::vec::Vec::new();
+        });
         for input in physical.inputs() {
             let name = symbol_name(&input.name);
-            let resident = program.structures.structures.entries.iter().any(|entry| {
-                analysis.structures.physical.hosts.get(&symbol_name(&entry.name)) == Some(&name)
-                    && matches!(&entry.structure,
-                        cq_lang_structures::Structure::Host { reader, keyed, .. }
-                        if reader == "scan" && matches!(&keyed.ty, Type::Path(path)
-                            if path.path.segments.last().is_some_and(|segment| segment.ident == "DeviceColumns")))
-            });
+            let mut run_binding = None;
+            let mut resident = false;
+            for entry in &program.structures.structures.entries {
+                if analysis.structures.physical.hosts.get(&symbol_name(&entry.name)) != Some(&name) {
+                    continue;
+                }
+                if let cq_lang_structures::Structure::Host { reader, keyed, .. } = &entry.structure {
+                    if reader != "scan" { continue; }
+                    if let Some((types, keys)) = crate::runs::layout_types(&keyed.ty)? {
+                        run_binding = Some((types, keys));
+                        resident = true;
+                    } else if matches!(&keyed.ty, Type::Path(path)
+                        if path.path.segments.last().is_some_and(|segment| segment.ident == "DeviceColumns")) {
+                        resident = true;
+                    }
+                }
+            }
             if !resident {
                 continue;
             }
@@ -233,9 +254,28 @@ impl Rows {
                 setup.extend(quote! {
                     let __cq_pool = #id.pool().clone();
                     let mut __cq_dictionary = ::cq_gpu_runtime::Dictionary::default();
-                    let mut __cq_statuses = ::std::vec::Vec::new();
+                    let mut __cq_statuses = ::std::vec::Vec::<
+                        ::std::sync::Arc<::cq_gpu_runtime::Buffer<::cq_gpu_sequence_runtime::OutputCount>>
+                    >::new();
                 });
                 first = false;
+            }
+            if let Some((types, keys)) = run_binding {
+                let schema = types.iter().map(|ty| crate::runs::scalar(ty).map(|s| s.2))
+                    .collect::<syn::Result<Vec<_>>>()?;
+                let view = format_ident!("__cq_sequence_runs_{name}");
+                setup.extend(quote! {
+                    if !::std::sync::Arc::ptr_eq(&__cq_pool, #id.pool()) {
+                        return Err("T-Gpu: resident inputs must share a pool and stream".into());
+                    }
+                    #id.validate(&[#(#schema),*])?;
+                    let #length = #id.len();
+                    __cq_run_owners.push(#id.owner());
+                });
+                parameters.push((view.clone(), syn::parse_quote!(::gpu_datalog_runtime::RunsView), quote!(#id.view())));
+                run_hosts.insert(name.clone(), (view, types, keys));
+                hosts.insert(name, (id, length));
+                continue;
             }
             setup.extend(quote! {
                 if !::std::sync::Arc::ptr_eq(&__cq_pool, #id.pool()) {
@@ -295,6 +335,8 @@ impl Rows {
         });
         let mut sources = BTreeMap::new();
         let mut providers = BTreeMap::new();
+        let mut run_sources = BTreeMap::new();
+        let mut run_providers = BTreeSet::new();
         let mut bound_sources: BTreeMap<String, BTreeSet<(String, usize)>> = BTreeMap::new();
         // Only host stores and dispatch inputs need resident source adapters.
         // Intermediate map/compact results execute their predicates per lane;
@@ -410,6 +452,41 @@ impl Rows {
                 origin
             };
             let (host, host_length) = &hosts[&origin.host];
+            if let Some((view, types, key_count)) = run_hosts.get(&origin.host) {
+                if origin.selection.is_some() {
+                    return Err(error("GPU-Runs: source selection must execute as a Sequence predicate"));
+                }
+                let layout = &analysis.structures.host_layouts[&origin.host];
+                let payload = layout.iter().map(|source| {
+                    origin.columns.iter().find(|(_, original)| *original == source)
+                        .map(|(column, _)| column.clone())
+                        .ok_or_else(|| error("GPU-Runs: supplied layout lost a packed column"))
+                }).collect::<syn::Result<Vec<_>>>()?;
+                let reads = payload.iter().enumerate().map(|(index,column)| {
+                    let slot = columns[column];
+                    (slot,index)
+                }).collect();
+                run_sources.insert(name.clone(), RunSource {
+                    view: view.clone(), reads, length: quote!(#host_length),
+                });
+                if let Some(layouts) = analysis.structures.built.get(name) {
+                    if layouts.len() != 1 {
+                        return Err(error("GPU-Runs: name each supplied provider layout separately"));
+                    }
+                    let (levels, ty) = &layouts[0];
+                    if crate::runs::layout_types(ty)?.is_none() {
+                        return Err(error("GPU-Runs: run provider requires the checked bind pass"));
+                    }
+                    let keys: Vec<_> = levels.iter().flatten().cloned().collect();
+                    if keys.len() > *key_count || keys.iter().zip(&payload).any(|(key,column)| key != column) {
+                        return Err(error("GPU-Runs: provider key is not a packed leading prefix"));
+                    }
+                    providers.insert(name.clone(), Provider { view: view.clone(), payload, keys });
+                    run_providers.insert(name.clone());
+                }
+                let _ = types;
+                continue;
+            }
             let fields = &raw[&origin.host];
             for (column, source) in &origin.columns {
                 bound_sources
@@ -591,6 +668,15 @@ impl Rows {
             }
         }
         let mut bounds = BTreeMap::new();
+        for (name, source) in &run_sources {
+            for &(slot, _) in &source.reads {
+                let column = columns.iter().find(|(_, index)| **index == slot).unwrap().0;
+                let ty = &analysis.structures.physical.rows[name].types[column];
+                bounds.insert(column.clone(), quote!(::cq_gpu_runtime::Bounds::Inclusive {
+                    min: <#ty>::MIN as i64, max: <#ty>::MAX as i64,
+                }));
+            }
+        }
         for (column, origins) in bound_sources {
             let values = origins.iter().map(|(host, index)| {
                 let host = &hosts[host].0;
@@ -709,11 +795,13 @@ impl Rows {
             definitions,
             types,
             resident_hosts,
+            run_sources,
+            run_providers,
         })
     }
 
     pub fn has_source(&self, name: &str) -> bool {
-        self.sources.contains_key(name)
+        self.sources.contains_key(name) || self.run_sources.contains_key(name)
     }
 
     pub fn host_dependencies(&self, name: &str) -> BTreeSet<String> {
@@ -809,6 +897,19 @@ impl Rows {
         position: TokenStream,
         row: TokenStream,
     ) -> syn::Result<TokenStream> {
+        if let Some(source) = self.run_sources.get(name) {
+            let view = &source.view;
+            let reads = source.reads.iter().map(|(slot,column)| quote! {
+                #row[#slot] = unsafe { ::gpu_datalog_runtime::device::decode(
+                    #view, __run_index, __run_position, #column as u32) };
+            });
+            return Ok(quote! {
+                let (__run_index, __run_position) = unsafe {
+                    ::gpu_datalog_runtime::device::locate(#view, (#position) as u32)
+                };
+                #(#reads)*
+            });
+        }
         let source = self.sources.get(name).ok_or_else(|| {
             error(format!(
                 "T-Gpu: {name} has no resident source; materialize its Sequence producer"
@@ -827,6 +928,7 @@ impl Rows {
         Ok(quote!(#(#reads)*))
     }
     pub fn source_len(&self, name: &str) -> syn::Result<TokenStream> {
+        if let Some(source) = self.run_sources.get(name) { return Ok(source.length.clone()); }
         self.sources
             .get(name)
             .map(|s| s.length.clone())
@@ -853,6 +955,13 @@ impl Rows {
                     "T-Gpu: {name} has no recorded resident range layout"
                 ))
             })
+    }
+    pub fn run_provider(&self, name: &str) -> bool { self.run_providers.contains(name) }
+    pub fn output_types(&self) -> syn::Result<Vec<Type>> {
+        self.output_columns.iter().map(|column| {
+            self.types.values().find_map(|row| row.get(column)).cloned()
+                .ok_or_else(|| error(format!("GPU-Arena: output column {column} has no declared type")))
+        }).collect()
     }
     /// Realize the recorded provider only after its device store has published
     /// its live count. Descriptors borrow the stored layout without transposing
@@ -1308,7 +1417,7 @@ fn host_dependencies_from(
     result
 }
 
-fn origin(name: &str, definitions: &BTreeMap<String, Definition>) -> syn::Result<Option<Origin>> {
+pub(crate) fn origin(name: &str, definitions: &BTreeMap<String, Definition>) -> syn::Result<Option<Origin>> {
     let definition = &definitions[name];
     match &definition.operator {
         Operator::Rename(rename) => {

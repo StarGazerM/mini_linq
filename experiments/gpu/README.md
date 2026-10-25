@@ -68,6 +68,26 @@ Timing is opt-in: `enable_timing(true)` records CUDA events, and the explicit
 merge milliseconds. `to_host()` is an explicit diagnostic sorted download,
 not part of the admission path.
 
+### Run-bound hole inputs and candidate arenas
+
+A CQ input whose declared host type is `::gpu_datalog_runtime::DeviceLayout<K, V>`
+(`DeviceLayout::from_runs(pool, packing, runs)`) is bound as packed device runs
+(`GPU-Runs`): scans visit every run, key-prefix lookups binary-search one range
+per run with block-uniform expansion, and membership ORs over runs. Supported
+column types are i8/i16/i32/i64/u8/u16/u32, at most 128 packed bits, key = the
+leading columns. `cq_gpu_sequence::translate_arena(&mut arena)` (`GPU-Arena`)
+publishes head rows packed most-significant-first in head order into a
+`CandidateArena` and returns a `CandidateBatch` (u64 lanes, low lane first for
+128-bit words; length; packing; retained owners). The hole must be
+consumer-canonical: the batch is a candidate bag for `DeviceRuns::admit`.
+Sizing keeps the dispatch's output protocol, so each attempt reads its
+metadata back and the invocation ends with one stream synchronize; candidate
+rows are never downloaded.
+
+```sh
+cargo oxide test --arch sm_89 -- --release -p cq-gpu-sequence --test run_holes
+```
+
 ### Planner-driven 11-query TPC-H suite
 
 `tpch` is one crate with one binary, `cq-gpu-tpch`. It imports the CPU

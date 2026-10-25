@@ -11,7 +11,7 @@ pub use cq_gpu_runtime::{Bounds, Buffer, Codec, ColumnView, DeviceColumns, Encod
 use cuda_core::{CudaContext, CudaStream, DeviceBuffer, DeviceCopy, LaunchConfig1D};
 use gpu_compress::{Catalog, Domain};
 use gpu_compress_host::Kind;
-pub use gpu_device_columns::MemoryResource;
+pub use gpu_device_columns::{MemoryResource, OutputCount};
 use rccl_cub::DoubleBuffer;
 use rccl_thrust::prelude::*;
 use rccl_thrust::{
