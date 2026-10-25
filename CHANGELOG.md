@@ -7,6 +7,14 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Sorted-run storage, CPU reference for device runs (`DL-RunLayout`,
+  `DL-RunAdmission`, realizing `STR-RunRead`/`STR-RunCompact`):
+  `RunLayout<K, V>` (immutable (key, payload)-sorted runs, ratio-4 leveled
+  merge) and `RunSeen<T, S>` (sort, dedup, anti-join against accepted runs,
+  append). Selected by `shard_storage(layouts(runs), seen(runs))`; exact on the
+  oracle and DOOP cassandra. Not a CPU default: cassandra 15 threads 3.11 s
+  (evaluation 82%, per-run binary-search probes); `seen(runs)` alone 1.73 s vs
+  1.28 s hashed.
 - Sharded native layouts (`DL-ShardedLayout`): `ShardedLayout<K, V, S>` splits a
   grouped layout map into hash-routed disjoint shards; bulk publication fills
   each shard by one task. `shard_storage(layouts(sharded))` rewrites keyed IDB

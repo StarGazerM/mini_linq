@@ -417,6 +417,9 @@ approval.
   readers. Sharded native layouts (`shard_storage(layouts(sharded))`,
   `DL-ShardedLayout`) cut publication from 42% to 20% of step time: DOOP
   cassandra 15 threads 1.28 s compute, exact; evaluation (65%) now dominates.
+  Sorted-run providers (`layouts(runs)`, `seen(runs)`; `DL-RunLayout`,
+  `DL-RunAdmission`) are the exact CPU reference for GPU Datalog storage
+  (3.11 s on cassandra; not a CPU default).
 - Open: reach chain at 15 threads below sequential; nested CQ code in one
   codegen unit; rule-local aggregates; FlowLog comparison; partial-Rust
   multi-round refinement; surface sugar (disjunction, facts, rule macros).

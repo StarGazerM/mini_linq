@@ -1,7 +1,9 @@
-//! Sharded seen admission and exclusive whole-layout publication certificates.
+//! Sharded or sorted-run admission and exclusive whole-layout publication certificates.
 //! Hybrid execution uses a separate wrapper and never extends the base Round
 //! language. Layout ownership and opaque queues are preserved; keyed IDB layout
-//! providers may opt into sharding. The standard Sequence tail may use push.
+//! providers may opt into sharding or sorted runs independently of admission.
+//! Run layouts require the default storage hasher for exact checked erasure;
+//! run admission retains its source hasher. The standard Sequence tail may use push.
 //! Scan substitution renames its discharged host fact and lower packet together;
 //! all other facts and the Round admission-owner lists remain unchanged.
 use cq_datalog_support::Fresh;

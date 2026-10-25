@@ -224,14 +224,24 @@ mod tests {
 
     #[test]
     fn sharded_publication_bulk_fills_outside_shared_hashmap_loop() {
+        assert_bulk_publication(syn::parse_quote!(
+            ::cq_datalog_parallel_runtime::ShardedLayout<(u32,), (u32, u32)>
+        ));
+    }
+
+    #[test]
+    fn run_publication_bulk_fills_outside_shared_hashmap_loop() {
+        assert_bulk_publication(syn::parse_quote!(
+            ::cq_datalog_parallel_runtime::RunLayout<(u32,), (u32, u32)>
+        ));
+    }
+
+    fn assert_bulk_publication(provider: syn::Type) {
         let map = layout(
             syn::parse_quote!(::std::collections::HashMap<(u32,), Vec<(u32, u32)>>),
             syn::parse_quote!(map),
         );
-        let sharded = layout(
-            syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedLayout<(u32,), (u32, u32)>),
-            syn::parse_quote!(sharded),
-        );
+        let sharded = layout(provider, syn::parse_quote!(sharded));
         let insert = cq_datalog_print::insert_layout(&map, false);
         let bulk = quote!(
             sharded.extend_from(
@@ -256,10 +266,16 @@ mod tests {
 
     #[test]
     fn sharded_delta_clears_and_preserves_empty_payload_tuple() {
-        let mut layout = layout(
-            syn::parse_quote!(ShardedLayout<(u32, u32, u32), ()>),
-            syn::parse_quote!(sharded),
-        );
+        assert_bulk_delta(syn::parse_quote!(ShardedLayout<(u32, u32, u32), ()>));
+    }
+
+    #[test]
+    fn run_delta_clears_and_preserves_empty_payload_tuple() {
+        assert_bulk_delta(syn::parse_quote!(RunLayout<(u32, u32, u32), ()>));
+    }
+
+    fn assert_bulk_delta(provider: syn::Type) {
+        let mut layout = layout(provider, syn::parse_quote!(sharded));
         layout.key = 3;
         assert_eq!(
             cq_datalog_print::delta_rebuild(&layout, &syn::parse_quote!(delta)).to_string(),
@@ -267,14 +283,12 @@ mod tests {
                 sharded.clear();
                 sharded.extend_from(
                     &delta,
-                    |row| {
-                        (
-                            ::core::clone::Clone::clone(&row.1),
-                            ::core::clone::Clone::clone(&row.0),
-                            ::core::clone::Clone::clone(&row.2),
-                        )
-                    },
-                    |row| (),
+                    |row| (
+                        ::core::clone::Clone::clone(&row.1),
+                        ::core::clone::Clone::clone(&row.0),
+                        ::core::clone::Clone::clone(&row.2),
+                    ),
+                    |row| ()
                 );
             })
             .to_string(),
@@ -292,14 +306,21 @@ mod tests {
 
     #[test]
     fn provider_detection_uses_only_last_path_segment() {
-        let layout = layout(
+        for provider in [
             syn::parse_quote!(ShardedLayout::HashMap<(u32,), Vec<(u32, u32)>>),
-            syn::parse_quote!(map),
-        );
-        let printed =
-            cq_datalog_print::full_insert([&layout], &syn::parse_quote!(next)).to_string();
-        assert!(printed.contains("entry"));
-        assert!(!printed.contains("extend_from"));
+            syn::parse_quote!(RunLayout::HashMap<(u32,), Vec<(u32, u32)>>),
+            syn::parse_quote!(HashMap<(u32,), Vec<RunLayout>>),
+        ] {
+            let layout = layout(provider, syn::parse_quote!(map));
+            let printed =
+                cq_datalog_print::full_insert([&layout], &syn::parse_quote!(next)).to_string();
+            assert!(printed.contains("entry"));
+            assert!(!printed.contains("extend_from"));
+            let delta =
+                cq_datalog_print::delta_rebuild(&layout, &syn::parse_quote!(delta)).to_string();
+            assert!(delta.contains("Default"));
+            assert!(!delta.contains("clear"));
+        }
     }
 
     #[test]

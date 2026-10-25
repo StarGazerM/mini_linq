@@ -35,6 +35,7 @@ enum Provider<'a> {
     Layout(&'a Type, &'a Type),
     Set(&'a Type),
     Sharded(&'a Type),
+    Runs(&'a Type),
     Other,
 }
 
@@ -61,8 +62,9 @@ fn provider(ty: &Type) -> syn::Result<Provider<'_>> {
     let set = path_is(path, &["std", "collections", "HashSet"]);
     let alias = path_is(path, &["cq_storage", "HashSet"]);
     let sharded = path_is(path, &["cq_datalog_parallel_runtime", "ShardedSeen"]);
+    let runs = path_is(path, &["cq_datalog_parallel_runtime", "RunSeen"]);
     let layout = path_is(path, &["cq_datalog_parallel_runtime", "ShardedLayout"]);
-    if !map && !set && !alias && !sharded && !layout {
+    if !map && !set && !alias && !sharded && !layout && !runs {
         return Ok(Provider::Other);
     }
     let malformed = || {
@@ -112,6 +114,8 @@ fn provider(ty: &Type) -> syn::Result<Provider<'_>> {
         })
     } else if sharded {
         Ok(Provider::Sharded(first))
+    } else if runs {
+        Ok(Provider::Runs(first))
     } else {
         Ok(Provider::Set(first))
     }
@@ -144,6 +148,13 @@ fn select(ty: &mut Type, choice: Choice) -> syn::Result<()> {
         ),
         (Provider::Sharded(row), Choice::Keyed) => syn::parse_quote!(
             ::cq_datalog_parallel_runtime::ShardedSeen<#row>
+        ),
+        (Provider::Runs(row), Choice::Fx) => syn::parse_quote!(
+            ::cq_datalog_parallel_runtime::RunSeen<#row,
+                ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>>
+        ),
+        (Provider::Runs(row), Choice::Keyed) => syn::parse_quote!(
+            ::cq_datalog_parallel_runtime::RunSeen<#row>
         ),
         (Provider::Other, _) => return Ok(()),
     };
@@ -236,6 +247,18 @@ fn check_provider(source: &Type, target: &Type, choice: Choice) -> syn::Result<(
             ),
             (Provider::Sharded(row), Choice::Keyed) => (
                 &["cq_datalog_parallel_runtime", "ShardedSeen"],
+                (*row, None),
+                None,
+            ),
+            (Provider::Runs(row), Choice::Fx) => (
+                &["cq_datalog_parallel_runtime", "RunSeen"],
+                (*row, None),
+                Some(syn::parse_quote!(
+                    ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>
+                )),
+            ),
+            (Provider::Runs(row), Choice::Keyed) => (
+                &["cq_datalog_parallel_runtime", "RunSeen"],
                 (*row, None),
                 None,
             ),

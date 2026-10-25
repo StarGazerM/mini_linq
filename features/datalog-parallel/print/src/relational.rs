@@ -218,13 +218,26 @@ mod tests {
 
     #[test]
     fn sharded_publication_reborrows_guarded_layouts_and_delta() {
+        assert_bulk_publication_reborrows(syn::parse_quote!(
+            ::cq_datalog_parallel_runtime::ShardedLayout<(u32,), (u32,)>
+        ));
+    }
+
+    #[test]
+    fn run_publication_reborrows_guarded_layouts_and_delta() {
+        assert_bulk_publication_reborrows(syn::parse_quote!(
+            ::cq_datalog_parallel_runtime::RunLayout<(u32,), (u32,)>
+        ));
+    }
+
+    fn assert_bulk_publication_reborrows(provider: syn::Type) {
         let layout = round::Layout {
             relation: 0,
             columns: vec![0, 1],
             key: 1,
             name: syn::parse_quote!(layout),
             host: syn::parse_quote!(full),
-            provider: syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedLayout<(u32,), (u32,)>),
+            provider,
             maintenance: syn::parse_quote!(insert),
         };
         let mut delta_layout = layout.clone();

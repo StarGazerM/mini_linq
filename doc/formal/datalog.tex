@@ -1059,7 +1059,10 @@ membership. With the argument \code{layouts(sharded)} it additionally replaces
 every IDB full or delta layout whose key is nonempty, from
 \code{HashMap<K, Vec<V>, S>} to \code{ShardedLayout<K, V, S>}, preserving the
 key, payload and hasher types and the layout's relation, columns, key length
-and maintenance. Unit-key scan layouts, EDB layouts, other Storage records and
+and maintenance. With \code{layouts(runs)} it instead replaces them with
+\code{RunLayout<K, V>}, and with \code{seen(runs)} canonical membership becomes
+\code{RunSeen<T, S>}, keeping $S$ for task-local deduplication only.
+Unit-key scan layouts, EDB layouts, other Storage records and
 CQ queues are unchanged.
 A Round-to-extension pass records the small-work threshold, partition grain,
 admission shard-count policy and ownership/publication certificate. None of
@@ -1068,7 +1071,7 @@ these parallel choices belongs to the base language or default expansion.
 \Rule{CK-DL-ShardStorage}{\mathrm{WF}_{\mathrm{Storage}}(s)\quad
  \mathrm{WF}_{\mathrm{Storage}}(t)\quad
  t\text{ changes only canonical IDB membership providers and, optionally,}\\
- \text{nonempty-key IDB layout maps to sharded layouts with equal }K,V,S}
+ \text{nonempty-key IDB layout maps to sharded or run layouts with equal }K,V(,S)}
  {\mathrm{check}_{\mathrm{shardStorage}}(s,t)}
 \end{mathpar}
 A sharded layout holds $S$ disjoint grouped maps; key $k$ lives only in shard
@@ -1085,6 +1088,29 @@ access, appending in row order within each bucket.
 So every read trait (keyed lookup, candidates, membership, scan) answers as
 the replaced \code{HashMap} would, and DL-LayoutPublication still holds with
 one owner task per layout; only that task's insertion is internally parallel.
+A run layout realizes \textsc{STR-RunRead} and \textsc{STR-RunCompact} on the
+host, as the CPU reference for device runs. It is a sequence of immutable runs
+$\rho_1\cdots\rho_m$, each sorted by $(\mathrm{key},\mathrm{payload})$, so its
+column types must be totally ordered; lookup of $k$ concatenates the
+contiguous $k$-range of every run. Publication sorts the new rows into one run
+and appends it, then merges the last two runs while the earlier is at most
+$r$ times the later, for the leveled capacity ratio $r$ (default four), so
+$m=O(\log_r|L|)$. The ratio changes only cost.
+\begin{mathpar}
+\Rule{DL-RunLayout}{L=\rho_1\cdots\rho_m\quad
+ \rho_{m+1}=\mathrm{sort}(\mathrm{layout}(N))\quad
+ L'=\mathrm{merge}^{*}(\rho_1\cdots\rho_{m+1})}
+ {\mathrm{lookup}_{L'}(k)\equiv_{\mathrm{bag}}\mathrm{lookup}_{L}(k)\uplus\mathrm{lookup}_{\mathrm{layout}(N)}(k)}
+\end{mathpar}
+Run admission is the device algorithm: sort and deduplicate the candidates,
+remove those found by binary search in an accepted run, append the remainder
+as a run (merging as above) and return it in sorted order.
+\begin{mathpar}
+\Rule{DL-RunAdmission}{U=\mathrm{unique}(\mathrm{sort}(C))\quad
+ N=[r\in U\mid\forall i.\ r\notin\rho_i]\quad
+ A'=A\uplus N}
+ {\mathrm{set}(N)=C\setminus A\quad\mathrm{set}(A')=A\cup C}
+\end{mathpar}
 Let $S$ be a power of two at least the worker count and let
 $h_S(x)=h(x)\mathbin{\&}(S-1)$. Canonical admission uses the full tuple:
 $C_i=\{r\in C\mid h_S(r)=i\}$, so equal tuples always share a shard.

@@ -453,12 +453,12 @@ pub fn publication(context: &RoundContext, stratum: &Stratum) -> Vec<TokenStream
         })
         .collect()
 }
-/// Insert admitted rows with one shared HashMap loop and one bulk call per sharded layout.
+/// Insert admitted rows with one shared HashMap loop and one bulk call per bulk layout.
 pub fn full_insert<'a>(layouts: impl IntoIterator<Item = &'a Layout>, next: &Ident) -> TokenStream {
     let mut updates = Vec::new();
     let mut bulk = Vec::new();
     for layout in layouts {
-        if sharded_layout(layout) {
+        if bulk_layout(layout) {
             bulk.push(extend_layout(layout, next));
         } else {
             updates.push(insert_layout(layout, false));
@@ -486,10 +486,10 @@ pub fn delta_swap(relation: &round::Relation) -> TokenStream {
     let next = &relation.next;
     quote!(#delta = #next;)
 }
-/// Replace a delta's rows, retaining sharded host capacity across rounds.
+/// Replace a delta's rows, retaining bulk layout host capacity across rounds.
 pub fn delta_rebuild(layout: &Layout, delta: &Ident) -> TokenStream {
     let host = &layout.host;
-    if sharded_layout(layout) {
+    if bulk_layout(layout) {
         let extend = extend_layout(layout, delta);
         return quote!({
             #host.clear();
@@ -643,9 +643,10 @@ pub fn round_body(
     });
     quote!(#(#allocate)* #(#bodies)*)
 }
-fn sharded_layout(layout: &Layout) -> bool {
+fn bulk_layout(layout: &Layout) -> bool {
     matches!(&layout.provider, syn::Type::Path(provider)
-        if provider.path.segments.last().is_some_and(|segment| segment.ident == "ShardedLayout"))
+        if provider.path.segments.last().is_some_and(|segment|
+            segment.ident == "ShardedLayout" || segment.ident == "RunLayout"))
 }
 
 fn layout_columns(layout: &Layout, borrowed_columns: bool) -> Vec<TokenStream> {
@@ -672,12 +673,12 @@ fn extend_layout(layout: &Layout, rows: &Ident) -> TokenStream {
 
 // Every full layout is immutable while the round's holes run. Only admitted
 // rows reach publication, so no repeated whole-IDB scans or rebuilds occur.
-// EDB bindings remain HashMaps; sharded IDBs use bulk publication above.
+// EDB bindings remain HashMaps; sharded and sorted-run IDBs use bulk publication above.
 pub fn insert_layout(layout: &Layout, borrowed_columns: bool) -> TokenStream {
     let host = &layout.host;
     let columns = layout_columns(layout, borrowed_columns);
     let (keys, values) = columns.split_at(layout.key);
-    if sharded_layout(layout) {
+    if bulk_layout(layout) {
         quote!(#host.push((#(#keys,)*), (#(#values,)*));)
     } else {
         quote!(#host.entry((#(#keys,)*)).or_default().push((#(#values,)*));)
