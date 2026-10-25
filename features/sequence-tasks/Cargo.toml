@@ -21,6 +21,7 @@ description = "Checked Sequence translation for ordered Rayon tasks"
 [dependencies]
 cq-lang-sequence.workspace = true
 cq-sequence-pull.workspace = true
+cq-print = { path = "../../passes/cq-print" }
 proc-macro2.workspace = true
 quote.workspace = true
 syn.workspace = true

@@ -1,5 +1,6 @@
 //! Task realizations of the checked key-partition constructors.
 use cq_lang_sequence::Term;
+use cq_lang_sequence::structures::symbol_name;
 use cq_sequence_pull::{Emitter, Value};
 use quote::quote;
 
@@ -9,26 +10,32 @@ pub(crate) fn partition(
     let result = input.result.as_ref().ok_or_else(|| syn::Error::new(
         proc_macro2::Span::call_site(), "Tasks key partition lacks row provenance"))?;
     let pattern = emitter.context().pattern(result);
-    let keys = keys.iter().map(|key| emitter.context().access(result, &key.to_string())).collect::<Vec<_>>();
+    let keys = keys.iter().map(|key| emitter.context().access(result, &symbol_name(key))).collect::<Vec<_>>();
+    let key = cq_print::group(&keys);
     let rows = &input.rows;
     Ok(quote!({
         use ::rayon::prelude::*;
         let __cq_chunks = (#rows).collect::<::std::vec::Vec<_>>()
             .into_par_iter().chunks(#grain).collect::<::std::vec::Vec<_>>();
         ::mini_linq::__tasks::combine::route_by(__cq_chunks, #parts, |#pattern, __cq_count| {
-            ::cq_storage::sharded::route_index(&(#(#keys,)*), __cq_count)
+            ::cq_storage::sharded::route_index(&#key, __cq_count)
         }).into_iter().map(::std::vec::Vec::into_iter)
     }))
 }
 
-pub(crate) fn canon(input: &Value) -> proc_macro2::TokenStream {
+pub(crate) fn canon(emitter: &mut Emitter<'_>, input: &Value) -> syn::Result<proc_macro2::TokenStream> {
     let rows = &input.rows;
-    quote!({
+    let mut local = input.clone();
+    local.rows = quote!(__cq_part.into_iter());
+    local.depth = 0;
+    let canonical = emitter.canon(local)?.rows;
+    Ok(quote!({
         let __cq_parts = (#rows).map(|__cq_part| __cq_part.collect::<::std::vec::Vec<_>>())
             .collect::<::std::vec::Vec<_>>();
-        ::mini_linq::__tasks::combine::canon_parts(__cq_parts)
-            .into_iter().map(::std::vec::Vec::into_iter)
-    })
+        ::mini_linq::__tasks::combine::map_parts(__cq_parts, |__cq_part| {
+            (#canonical).collect::<::std::vec::Vec<_>>()
+        }).into_iter().map(::std::vec::Vec::into_iter)
+    }))
 }
 
 pub(crate) fn group(
@@ -63,7 +70,7 @@ pub(crate) fn ancestors(term: &Term, names: &mut std::collections::BTreeSet<Stri
     match term {
         Term::PartitionK { inner, .. } => {
             if let Term::Ref(name) = inner.as_ref() {
-                names.insert(name.to_string());
+                names.insert(symbol_name(name));
             }
             ancestors(inner, names);
         }
@@ -88,12 +95,12 @@ pub(crate) fn global(
     tile: Option<(syn::Ident, proc_macro2::TokenStream, usize)>,
 ) -> syn::Result<proc_macro2::TokenStream> {
     use cq_lang_sequence::structures::{physical::Operator, syntax::algebra::AggregateKind};
-    let result = name.to_string();
+    let result = symbol_name(name);
     let Operator::Group(group) = &emitter.context().physical[&result].operator else {
         return Err(syn::Error::new_spanned(name, "Tasks partial fold lacks group provenance"));
     };
     let initial = emitter.context().carrier(&result, |column| {
-        let aggregate = group.aggregates.iter().find(|aggregate| aggregate.name == column)
+        let aggregate = group.aggregates.iter().find(|aggregate| symbol_name(&aggregate.name) == column)
             .expect("checked global aggregate column");
         match aggregate.kind {
             AggregateKind::Count => quote!(0usize),
@@ -106,7 +113,7 @@ pub(crate) fn global(
     });
     let merges = emitter.context().carried(&result).iter().enumerate().map(|(index, column)| {
         let field = syn::Index::from(index);
-        let aggregate = group.aggregates.iter().find(|aggregate| aggregate.name == column)
+        let aggregate = group.aggregates.iter().find(|aggregate| symbol_name(&aggregate.name) == *column)
             .expect("checked global aggregate column");
         match aggregate.kind {
             AggregateKind::Count | AggregateKind::Sum =>

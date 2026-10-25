@@ -205,12 +205,12 @@ pub fn translate_with(
             } else if matches!(term, Term::Canon(_))
                 && child.is_some_and(|input| input.depth == 1)
             {
-                output.rows = keyed::canon(child.unwrap());
+                output.rows = keyed::canon(emitter, child.unwrap())?;
             } else if let Term::Group(name, _) = term
                 && child.is_some_and(|input| input.depth == 1)
             {
                 let input = child.unwrap();
-                let result = name.to_string();
+                let result = cq_lang_sequence::structures::symbol_name(name);
                 let global = matches!(
                     &emitter.context().physical[&result].operator,
                     cq_lang_sequence::structures::physical::Operator::Group(group)
@@ -271,7 +271,7 @@ pub fn translate_with(
                         __cq_part.collect::<::std::vec::Vec<_>>())
                         .collect::<::std::vec::Vec<_>>();
                 ));
-                let keys = keys.iter().map(ToString::to_string).collect::<Vec<_>>();
+                let keys = keys.iter().map(cq_lang_sequence::structures::symbol_name).collect::<Vec<_>>();
                 let repr = emitter.context_mut().materialize_partitioned(
                     &result, quote!(#binding), &keys,
                 )?;
