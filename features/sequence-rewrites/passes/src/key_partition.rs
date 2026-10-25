@@ -1,4 +1,6 @@
 //! Checked key-disjoint decomposition; routing choices remain explicit advice.
+//! A single-use named Canon feeding Group moves inside the same key-disjoint
+//! parts as an inline Canon. Shared producers and explicit stores stay intact.
 use cq_lang_sequence::{Definition, Program, Term};
 use cq_syntax::symbol_name;
 use proc_macro2::TokenStream;
@@ -38,6 +40,47 @@ impl ToTokens for KeyPartition {
         tokens.extend(quote!(#name, #input, [#(#keys),*], #parts));
     }
 }
+fn references(term: &Term, counts: &mut std::collections::BTreeMap<String, usize>) {
+    match term {
+        Term::Ref(name) => *counts.entry(symbol_name(name)).or_default() += 1,
+        Term::Map(_, inner) | Term::Compact(_, inner) | Term::Flatten(inner)
+        | Term::Fold(_, inner) | Term::Group(_, inner) | Term::Canon(inner)
+        | Term::Tile { inner, .. } | Term::PartitionK { inner, .. }
+        | Term::Store { inner, .. } | Term::Lookup { inner, .. } => references(inner, counts),
+        Term::Union(arms) => {
+            for term in arms { references(term, counts); }
+        }
+        Term::Choose(arms) => {
+            for (_, term) in arms { references(term, counts); }
+        }
+        Term::Rows(_) => {}
+    }
+}
+
+/// Move, rather than duplicate, a pure single-use canonicalizer. Keeping its
+/// named raw producer avoids changing other pipeline names or their grades.
+/// A retained or shared canonical result is an existing reuse boundary.
+fn canonical_input(
+    term: &Term,
+    source: &Program,
+    counts: &std::collections::BTreeMap<String, usize>,
+    updates: &mut Vec<(usize, Term)>,
+) -> Option<Term> {
+    match term {
+        Term::Canon(inner) => Some(*inner.clone()),
+        Term::Ref(name) if counts.get(&symbol_name(name)) == Some(&1) => {
+            let index = super::definition(source, name).ok()?;
+            let definition = &source.sequence.definitions[index];
+            let raw = canonical_input(&definition.term, source, counts, updates)?;
+            if raw != definition.term {
+                updates.push((index, raw));
+            }
+            Some(term.clone())
+        }
+        _ => None,
+    }
+}
+
 
 pub fn key_partition(source: &Program, arguments: TokenStream) -> syn::Result<Program> {
     key_partition_in(&mut Default::default(), source, &syn::parse2(arguments)?)
@@ -58,7 +101,17 @@ pub fn key_partition_in(
     if source.sequence.definitions.iter().any(|d| d.name == advice.input) {
         return Err(syn::Error::new_spanned(&advice.input, "key partition publication name already exists"));
     }
-    fn split(term: &Term, advice: &KeyPartition, source: &Program) -> syn::Result<(Term, Term)> {
+    let mut counts = std::collections::BTreeMap::new();
+    for definition in &source.sequence.definitions {
+        references(&definition.term, &mut counts);
+    }
+    fn split(
+        term: &Term,
+        advice: &KeyPartition,
+        source: &Program,
+        counts: &std::collections::BTreeMap<String, usize>,
+        updates: &mut Vec<(usize, Term)>,
+    ) -> syn::Result<(Term, Term)> {
         let routed = || Term::PartitionK {
             keys: advice.keys.clone(),
             parts: advice.parts,
@@ -83,16 +136,17 @@ pub fn key_partition_in(
                 if advice.keys.is_empty() {
                     return Err(syn::Error::new_spanned(&advice.name, "BE-KeyPartGroup: keyed groups require routing keys"));
                 }
-                let (input, routed) = match inner.as_ref() {
-                    Term::Canon(input) => (*input.clone(), Term::Canon(Box::new(routed()))),
-                    input => (input.clone(), if global { Term::Canon(Box::new(routed())) } else { routed() }),
+                let (input, routed) = if let Some(input) = canonical_input(inner, source, counts, updates) {
+                    (input, Term::Canon(Box::new(routed())))
+                } else {
+                    (*inner.clone(), if global { Term::Canon(Box::new(routed())) } else { routed() })
                 };
                 let grouped = Term::Group(group.clone(), Box::new(routed));
                 Ok((input, if global { grouped } else { Term::Flatten(Box::new(grouped)) }))
             }
             Term::Store { capacity, inner } => {
                 let (input, output) = if matches!(inner.as_ref(), Term::Canon(_) | Term::Group(_, _)) {
-                    split(inner, advice, source)?
+                    split(inner, advice, source, counts, updates)?
                 } else {
                     if advice.keys.is_empty() {
                         return Err(syn::Error::new_spanned(&advice.name, "BE-KeyPartProvider: provider routing keys must be nonempty"));
@@ -104,7 +158,10 @@ pub fn key_partition_in(
             _ => Err(syn::Error::new_spanned(&advice.name, "key_partition requires Canon with routing keys, Group, or provider Store")),
         }
     }
-    let (input, output) = split(&source.sequence.definitions[index].term, advice, source)?;
+    let mut updates = Vec::new();
+    let (input, output) = split(
+        &source.sequence.definitions[index].term, advice, source, &counts, &mut updates,
+    )?;
     let output = if matches!(output, Term::Store { .. }) {
         output
     } else {
@@ -143,6 +200,9 @@ pub fn key_partition_in(
         provider = result.cloned();
     }
     let mut target = source.clone();
+    for (index, term) in updates {
+        target.sequence.definitions[index].term = term;
+    }
     if let Some(provider) = provider {
         let mut found = false;
         for (entry_index, entry) in source.structures.structures.entries.iter().enumerate() {

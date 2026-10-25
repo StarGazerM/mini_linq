@@ -92,9 +92,13 @@ pub fn route<R: Send, K: Hash>(chunks: Vec<Vec<R>>, count: usize, key: impl Fn(&
 
 /// Route with a borrowing key projection, avoiding owned key copies solely
 /// for hashing. The router must return an index below the plan's positive count.
-pub fn route_by<R: Send>(
-    chunks: Vec<Vec<R>>, count: usize, router: impl Fn(&R, usize) -> usize + Sync,
-) -> Vec<Vec<R>> {
+pub fn route_by<R: Send, Chunks, Chunk>(
+    chunks: Chunks, count: usize, router: impl Fn(&R, usize) -> usize + Sync,
+) -> Vec<Vec<R>>
+where
+    Chunks: IntoParallelIterator<Item = Chunk>,
+    Chunk: IntoIterator<Item = R> + Send,
+{
     assert!(count > 0, "key partition count must be positive");
     let _context = cq_storage::profile_select! {
         plain { () }

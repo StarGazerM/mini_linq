@@ -61,6 +61,20 @@ fn grouped(global: bool) -> Program {
     }
 }
 
+fn named_grouped(global: bool) -> Program {
+    let mut source = grouped(global);
+    source.sequence.definitions.insert(1, cq_lang_sequence::Definition {
+        name: syn::parse_quote!(distinct),
+        term: syn::parse_quote!(canon input),
+    });
+    source.sequence.definitions.insert(2, cq_lang_sequence::Definition {
+        name: syn::parse_quote!(alias),
+        term: syn::parse_quote!(distinct),
+    });
+    source.sequence.definitions.last_mut().unwrap().term = syn::parse_quote!(store group totals alias);
+    source
+}
+
 fn policy(name: &str, select: bool) -> KeyPartitionPolicy {
     KeyPartitionPolicy { name: syn::parse_str(name).unwrap(), select }
 }
@@ -79,7 +93,7 @@ fn replay(source: &Program, planned: &cq_sequence_plan::Planned) {
 fn grouped_tpch_plan_prints_fixed_partition_and_replays() {
     let source = grouped(false);
     let machine = machine(Some(8));
-    let planned = decompose_with_key_partitions(&source, &machine, &catalog(), &[policy("result", true)]).unwrap();
+    let planned = decompose(&source, &machine, &catalog()).unwrap();
     let printed = planned.program.to_token_stream().to_string();
     println!("Grouped TPC-H Q1-shaped Sequence plan:\n{printed}");
     assert!(printed.contains("partition_k [returnflag , linestatus] (8)"), "{printed}");
@@ -91,18 +105,69 @@ fn grouped_tpch_plan_prints_fixed_partition_and_replays() {
 }
 
 #[test]
-fn unknown_cardinality_retains_serial_collectives_unless_advice_forces() {
+fn cost_selects_streamed_collectives_and_advice_can_force_or_forbid() {
     let source = grouped(false);
     let machine = machine(Some(8));
     let forced = decompose_with_key_partitions(&source, &machine, &catalog(), &[policy("result", true)]).unwrap();
     let forbidden = decompose_with_key_partitions(&source, &machine, &catalog(), &[policy("result", false)]).unwrap();
     assert!(forced.trace.iter().any(|a| matches!(a, Advice::KeyPartition(_))));
     assert!(!forbidden.trace.iter().any(|a| matches!(a, Advice::KeyPartition(_))));
-    assert!(!cost(&forced.program, &machine).unwrap().better_than(&cost(&forbidden.program, &machine).unwrap()));
+    assert!(cost(&forced.program, &machine).unwrap().better_than(&cost(&forbidden.program, &machine).unwrap()));
     let automatic = decompose(&source, &machine, &catalog()).unwrap();
-    assert!(!automatic.trace.iter().any(|a| matches!(a, Advice::KeyPartition(_))));
+    assert!(automatic.trace.iter().any(|a| matches!(a, Advice::KeyPartition(_))));
     replay(&source, &forced);
     replay(&source, &forbidden);
+}
+
+#[test]
+fn known_small_collectives_pay_setup_and_large_collectives_amortize_it() {
+    for global in [false, true] {
+        for rows in [0usize, 1, 4, 4096] {
+            let mut source = grouped(global);
+            source.evidence = syn::parse2(quote!(evidence { count Lineitem = #rows; })).unwrap();
+            let planned = decompose(&source, &machine(Some(8)), &catalog()).unwrap();
+            assert_eq!(
+                planned.trace.iter().any(|a| matches!(a, Advice::KeyPartition(_))),
+                rows == 4096,
+                "global={global}, rows={rows}: {}", planned.program.to_token_stream(),
+            );
+            replay(&source, &planned);
+        }
+    }
+}
+
+#[test]
+fn grouped_named_canon_moves_inside_routed_parts_and_replays() {
+    for global in [false, true] {
+        let source = named_grouped(global);
+        let machine = machine(Some(8));
+        let planned = decompose(&source, &machine, &catalog()).unwrap();
+        assert!(planned.trace.iter().any(|a| matches!(a, Advice::KeyPartition(k) if k.name == "result")));
+        let distinct = planned.program.sequence.definitions.iter().find(|d| d.name == "distinct").unwrap();
+        assert!(matches!(&distinct.term, Term::Ref(name) if name == "input"),
+            "named Canon must not execute before routing: {}", planned.program.to_token_stream());
+        assert!(planned.program.to_token_stream().to_string().contains("group totals canon partition_k"));
+        replay(&source, &planned);
+    }
+}
+
+#[test]
+fn group_partition_preserves_shared_and_stored_canonical_producers() {
+    for stored in [false, true] {
+        let mut source = named_grouped(false);
+        if stored {
+            source.sequence.definitions[1].term = syn::parse_quote!(store canon input);
+        } else {
+            source.sequence.definitions.insert(3, cq_lang_sequence::Definition {
+                name: syn::parse_quote!(other_consumer),
+                term: syn::parse_quote!(store distinct),
+            });
+        }
+        let original = source.sequence.definitions[1].term.clone();
+        let target = key_partition(&source, quote!(result, staged, [returnflag, linestatus], 8)).unwrap();
+        assert_eq!(target.sequence.definitions[1].term, original);
+        assert!(!target.to_token_stream().to_string().contains("group totals canon partition_k"));
+    }
 }
 
 #[test]
@@ -147,6 +212,23 @@ fn canon_partition_and_machine_width_are_explicit() {
         let planned = decompose_with_key_partitions(&source, &machine(Some(parts)), &catalog(), &[policy("result", true)]).unwrap();
         assert!(planned.trace.iter().any(|a| matches!(a, Advice::KeyPartition(k) if k.parts == parts && k.keys.len() == 2)));
         replay(&source, &planned);
+        let unpartitioned = decompose_with_key_partitions(
+            &source, &machine(Some(parts)), &catalog(), &[policy("result", false)],
+        ).unwrap();
+        let routed_cost = cost(&planned.program, &machine(Some(parts))).unwrap();
+        let global_cost = cost(&unpartitioned.program, &machine(Some(parts))).unwrap();
+        assert_eq!(
+            routed_cost.better_than(&global_cost),
+            parts >= 4,
+            "flattened tiles still require global Canon: routed={routed_cost}; global={global_cost}",
+        );
+        let automatic = decompose(&source, &machine(Some(parts)), &catalog()).unwrap();
+        assert_eq!(
+            automatic.trace.iter().any(|a| matches!(a, Advice::KeyPartition(_))),
+            parts >= 4,
+            "routing must consume bandwidth: parts={parts}",
+        );
+        replay(&source, &automatic);
     }
 }
 
@@ -228,8 +310,8 @@ fn global_groups_route_full_valuations_and_merge_to_one_row() {
     let facts = cq_lang_sequence::check_grading(&forced.program, &machine).unwrap();
     assert_eq!(facts.shapes["result"], vec![cq_lang_sequence::Len::Lit(1)]);
     assert_eq!(facts.lengths["result"], cq_lang_sequence::Len::Lit(1));
-    assert!(!cost(&forced.program, &machine).unwrap().better_than(&cost(&forbidden.program, &machine).unwrap()));
-    assert!(!decompose(&source, &machine, &catalog()).unwrap().trace.iter().any(|a| matches!(a, Advice::KeyPartition(_))));
+    assert!(cost(&forced.program, &machine).unwrap().better_than(&cost(&forbidden.program, &machine).unwrap()));
+    assert!(decompose(&source, &machine, &catalog()).unwrap().trace.iter().any(|a| matches!(a, Advice::KeyPartition(_))));
     assert!(!forbidden.trace.iter().any(|a| matches!(a, Advice::KeyPartition(_))));
     println!("Global TPC-H-shaped aggregate plan:\n{}", forced.program.to_token_stream());
     replay(&source, &forced);

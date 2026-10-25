@@ -5,9 +5,11 @@
 //! of independent branches takes their maximum), not definition order. A tile
 //! only creates parallel parts when grading records `Distribute`; strip widths
 //! and per-lane item counts never manufacture additional processors.
-//! Key routing also has a dependency cost: one routing pass and P bucket
-//! publications. Unknown lengths cannot prove that this setup is amortized;
-//! explicit count estimates can, without becoming semantic premises.
+//! Retained provider routing pays a routing pass and P bucket publications;
+//! unknown lengths cannot prove that this setup is amortized. Streamed
+//! collectives instead use amortized routing bandwidth when counts are unknown:
+//! routing plus consumption halves their effective lanes. Known counts retain
+//! the explicit setup cost, including for empty and singleton collectives.
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -389,7 +391,7 @@ fn atom_leq(left: &Atom, right: &Atom, budget: &mut usize) -> bool {
 enum Layer {
     Tile { parents: Size },
     Bucket { parents: Size },
-    KeyPart { parts: usize },
+    KeyPart { parts: usize, lanes: usize },
 }
 
 #[derive(Clone)]
@@ -415,7 +417,7 @@ impl Fact {
     /// organizational operations such as routing and publication.
     fn advance(&mut self, size: &Size, level: &LevelNode, scan: bool) -> syn::Result<()> {
         let lanes = self.layers.iter().rev().find_map(|layer| match layer {
-            Layer::KeyPart { parts } => Some(*parts),
+            Layer::KeyPart { lanes, .. } => Some(*lanes),
             _ => None,
         }).unwrap_or_else(|| level.width.unwrap_or(1)).max(1);
         let depth = if lanes == 1 && self.partition.is_none() {
@@ -565,17 +567,28 @@ impl Evaluator<'_> {
             }
             Term::PartitionK { parts, inner, .. } => {
                 let mut fact = self.term(inner, owner, level, tile)?;
-                // Routing does not evaluate another row expression, but it
-                // hashes and publishes every row before a consumer can start.
-                // P bucket publications are required even for an empty input.
-                // Charge these on the dependency chain, not as fabricated
-                // work or a translator-specific size threshold.
                 let size = fact.size.clone();
-                fact.layers.push(Layer::KeyPart { parts: *parts });
-                fact.advance(&size, level, false)?;
-                let setup = Sum::atom(Atom::One, *parts as u128);
-                fact.span.add(&setup)?;
-                fact.local_span.add(&setup)?;
+                let collective = self.program.sequence.definitions.iter()
+                    .find(|definition| symbol_name(&definition.name) == owner)
+                    .is_some_and(|definition| streamed_collective(&definition.term));
+                if collective && !matches!(size, Size::Constant(_)) {
+                    // A streamed collective consumes every routed row. Charge
+                    // its routing pass in amortized bandwidth, rather than
+                    // requiring a literal row count to exploit any parallelism.
+                    // Retained providers cannot use this estimate: their build
+                    // may be tiny compared with the stream probing them.
+                    fact.layers.push(Layer::KeyPart {
+                        parts: *parts, lanes: (*parts / 2).max(1),
+                    });
+                } else {
+                    // Known inputs and retained providers pay the complete
+                    // routing pass plus every bucket publication, even empty.
+                    fact.layers.push(Layer::KeyPart { parts: *parts, lanes: *parts });
+                    fact.advance(&size, level, false)?;
+                    let setup = Sum::atom(Atom::One, *parts as u128);
+                    fact.span.add(&setup)?;
+                    fact.local_span.add(&setup)?;
+                }
                 Ok(fact)
             }
             Term::Lookup {
@@ -683,6 +696,12 @@ impl Evaluator<'_> {
             }
             Term::Group(name, inner) => {
                 let mut fact = self.term(inner, owner, level, tile)?;
+                // A scalar collective consumes the joined stream, not each
+                // previously flattened tile independently. Only an explicit
+                // nesting layer gives it partition-local inputs.
+                if fact.layers.is_empty() {
+                    fact.partition = None;
+                }
                 let size = fact.size.clone();
                 fact.evaluate(&size, level, true)?;
                 fact.result = symbol_name(name);
@@ -704,6 +723,11 @@ impl Evaluator<'_> {
             }
             Term::Fold(_, inner) | Term::Canon(inner) => {
                 let mut fact = self.term(inner, owner, level, tile)?;
+                if matches!(term, Term::Canon(_)) && fact.layers.is_empty() {
+                    // Contiguous tiles do not establish key disjointness:
+                    // canonicalizing their flattened stream is a global pass.
+                    fact.partition = None;
+                }
                 let size = fact.size.clone();
                 fact.evaluate(&size, level, true)?;
                 fact.size = if matches!(term, Term::Fold(_, _)) {
@@ -712,7 +736,7 @@ impl Evaluator<'_> {
                         Some(Layer::Tile { parents } | Layer::Bucket { parents, .. }) => {
                             parents.clone()
                         }
-                        Some(Layer::KeyPart { parts }) => Size::Constant(*parts as u128),
+                        Some(Layer::KeyPart { parts, .. }) => Size::Constant(*parts as u128),
                     }
                 } else {
                     Size::Scan(format!("canon({})", fact.result))
@@ -772,6 +796,14 @@ impl Evaluator<'_> {
         }
     }
 }
+fn streamed_collective(term: &Term) -> bool {
+    match term {
+        Term::Canon(_) | Term::Group(_, _) => true,
+        Term::Store { inner, .. } | Term::Flatten(inner) => streamed_collective(inner),
+        _ => false,
+    }
+}
+
 
 fn partition_inputs(term: &Term, inputs: &mut BTreeSet<String>) {
     match term {

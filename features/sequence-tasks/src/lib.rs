@@ -31,7 +31,9 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Self { threads: None, grain: 1024, partitions: 64 }
+        // A routing task fills about 1K rows per logical bucket, avoiding a
+        // tiny allocation for every (1K-row chunk, partition) pair.
+        Self { threads: None, grain: 64 * 1024, partitions: 64 }
     }
 }
 
@@ -290,6 +292,7 @@ fn translate_mode(
     // adapters compose through its paired flatten and named pipes. A Store or
     // non-distributive constructor joins the task buffers before proceeding.
     let mut partitions = Vec::new();
+    let mut stored_sources = std::collections::BTreeMap::<String, syn::Ident>::new();
     let mut next_driver = 0usize;
     let translate = if profile {
         cq_sequence_pull::translate_profile_with
@@ -353,9 +356,13 @@ fn translate_mode(
                     output.rows = quote!(::core::iter::once(#binding.iter().cloned()));
                 }
                 output.partitioned = true;
-            } else if let Term::PartitionK { keys, parts, .. } = term {
+            } else if let Term::PartitionK { keys, parts, inner } = term {
                 let input = child.expect("checked key partition");
-                output.rows = keyed::partition(emitter, input, keys, *parts, config.grain)?;
+                let stored = match inner.as_ref() {
+                    Term::Ref(name) => stored_sources.get(&cq_lang_sequence::structures::symbol_name(name)),
+                    _ => None,
+                };
+                output.rows = keyed::partition(emitter, input, keys, *parts, config.grain, stored)?;
             } else if matches!(term, Term::Canon(_))
                 && child.is_some_and(|input| input.depth == 1)
             {
@@ -411,6 +418,7 @@ fn translate_mode(
                             && program.sequence.definitions.last().is_some_and(|definition|
                                 std::ptr::eq(&definition.term, term))
                             && let Some(result) = &output.result
+                            && !analysis.structures.head_dedup.contains_key(result)
                         {
                             local = emitter.own_task_answer(result, local);
                         }
@@ -445,6 +453,7 @@ fn translate_mode(
                     &label, quote!((#rows).collect::<::std::vec::Vec<_>>()),
                 );
                 let binding = format_ident!("__cq_key_source_{}", owner);
+                stored_sources.insert(owner.to_owned(), binding.clone());
                 emitter.context_mut().statements.push(syn::parse_quote!(
                     let #binding = #build;
                 ));

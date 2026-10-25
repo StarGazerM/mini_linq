@@ -6,18 +6,22 @@ use quote::quote;
 
 pub(crate) fn partition(
     emitter: &Emitter<'_>, input: &Value, keys: &[syn::Ident], parts: usize, grain: usize,
+    stored: Option<&syn::Ident>,
 ) -> syn::Result<proc_macro2::TokenStream> {
     let result = input.result.as_ref().ok_or_else(|| syn::Error::new(
         proc_macro2::Span::call_site(), "Tasks key partition lacks row provenance"))?;
     let pattern = emitter.context().pattern(result);
     let keys = keys.iter().map(|key| emitter.context().access(result, &symbol_name(key))).collect::<Vec<_>>();
     let key = cq_print::group(&keys);
-    let rows = &input.rows;
+    let chunks = if let Some(stored) = stored {
+        quote!(#stored.par_chunks(#grain).map(|__cq_chunk| __cq_chunk.iter().cloned()))
+    } else {
+        let rows = &input.rows;
+        quote!((#rows).collect::<::std::vec::Vec<_>>().into_par_iter().chunks(#grain))
+    };
     Ok(quote!({
         use ::rayon::prelude::*;
-        let __cq_chunks = (#rows).collect::<::std::vec::Vec<_>>()
-            .into_par_iter().chunks(#grain).collect::<::std::vec::Vec<_>>();
-        ::mini_linq::__tasks::combine::route_by(__cq_chunks, #parts, |#pattern, __cq_count| {
+        ::mini_linq::__tasks::combine::route_by(#chunks, #parts, |#pattern, __cq_count| {
             ::cq_storage::sharded::route_index(&#key, __cq_count)
         }).into_iter().map(::std::vec::Vec::into_iter)
     }))
