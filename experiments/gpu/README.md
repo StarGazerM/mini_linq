@@ -83,6 +83,9 @@ consumer-canonical: the batch is a candidate bag for `DeviceRuns::admit`.
 Sizing keeps the dispatch's output protocol, so each attempt reads its
 metadata back and the invocation ends with one stream synchronize; candidate
 rows are never downloaded.
+Declared run layouts also realize native keyed Host fallbacks: scan and keyed
+reader records remain distinct, and lookups reuse the supplied runs without
+building another index.
 
 ```sh
 cargo oxide test --arch sm_89 -- --release -p cq-gpu-sequence --test run_holes

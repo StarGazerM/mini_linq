@@ -111,6 +111,10 @@ fn anti_membership_checks_all_blocked_runs_without_multiplying_rows() -> Result 
     let mut arena = gpu_datalog_runtime::CandidateArena::new(pool);
     let result = cq_gpu_sequence_test_macros::planned_arena_hole!(anti);
     assert_eq!(bag(result.buffer(), result.len(), result.packing())?, expected);
+    let native = fixtures::fixture("native_anti");
+    assert!(cq_lang_structures::contract::check(&native)?.built.is_empty());
+    let result = cq_gpu_sequence_test_macros::planned_arena_hole!(native_anti);
+    assert_eq!(bag(result.buffer(), result.len(), result.packing())?, expected);
     Ok(())
 }
 
@@ -184,4 +188,38 @@ fn run_binding_rejects_lookup_key_outside_recorded_layout() {
     source.structures.entries[2] =
         syn::parse_quote!(e = ::cq_gpu_sequence_runtime::RangeProvider [missing][z];);
     assert!(cq_gpu_sequence_core::runs::bind(&source).is_err());
+}
+
+#[test]
+fn native_host_lookup_uses_supplied_runs_without_building() -> Result {
+    let pool = Pool::new(0, 0, 0)?;
+    let dp = Packing::with_columns(&[Column::I32, Column::I32])?;
+    let ep = Packing::with_columns(&[Column::I32, Column::U32])?;
+    let left = vec![vec![vec![-13, -7], vec![2, 9]]];
+    let right = vec![vec![vec![-7, 0], vec![9, 4]], vec![vec![-7, 8]], vec![]];
+    let delta = DeviceLayout::<(i32,), (i32,)>::from_runs(
+        pool.clone(), dp.clone(), runs(&pool, &dp, &left)?)?;
+    let edge = DeviceLayout::<(i32,), (u32,)>::from_runs(
+        pool.clone(), ep.clone(), runs(&pool, &ep, &right)?)?;
+    let mut arena = gpu_datalog_runtime::CandidateArena::new(pool);
+    let result = cq_gpu_sequence_test_macros::planned_arena_hole!(native_linear);
+    assert_eq!(bag(result.buffer(), result.len(), result.packing())?, join(&left, &right));
+    Ok(())
+}
+
+#[test]
+fn native_host_lookup_rejects_keys_outside_declared_prefix() {
+    let mut source = fixtures::fixture("native_linear");
+    source.structures.entries[1] =
+        syn::parse_quote!(e host scan = ::gpu_datalog_runtime::DeviceLayout<(),(i32,u32)> [];);
+    source.structures.entries[2] =
+        syn::parse_quote!(e host joined = ::gpu_datalog_runtime::DeviceLayout<(),(i32,u32)> [y];);
+    let bound = cq_gpu_sequence_core::runs::bind(&source).unwrap();
+    let sequence = cq_sequence_lowering::compile(&bound).unwrap();
+    let machine = cq_gpu_sequence::machine();
+    let planned = cq_sequence_plan::plan(&sequence, &machine, &cq_gpu_sequence::catalog()).unwrap();
+    let analysis = cq_lang_sequence::check_grading(&planned.program, &machine).unwrap();
+    let error = cq_gpu_sequence_core::translate_arena(
+        &planned.program, &analysis, &syn::parse_quote!(&mut arena)).unwrap_err();
+    assert!(error.to_string().contains("native lookup key is not a packed leading prefix"));
 }

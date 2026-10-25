@@ -1,5 +1,5 @@
 //! Caller-owned reusable candidate storage. Publication never downloads rows.
-use crate::{Buffer, Packing, Pool, Result};
+use crate::{Buffer, Packing, Pool, Result, Word};
 use std::{any::Any, sync::Arc};
 
 /// Reusable storage for generated Sequence terminals on one pool stream.
@@ -107,6 +107,57 @@ impl CandidateBatch {
     pub fn pool(&self) -> &Arc<Pool> { self.storage.buffer.pool() }
     pub fn buffer(&self) -> &Buffer<u64> { &self.storage.buffer }
     pub fn owner(&self) -> Arc<dyn Any> { self.storage.clone() }
+}
+
+/// Concatenate candidate bags on the pool stream without downloading rows.
+///
+/// `W` must be the packing's native word width: `u64` through 64 bits, otherwise
+/// `u128`. Batch order and duplicates are preserved; admission remains separate.
+/// The returned allocation is initialized by stream-ordered device copies.
+pub fn concatenate_batches<W: Word>(
+    pool: Arc<Pool>,
+    packing: &Packing,
+    batches: &[CandidateBatch],
+) -> Result<Buffer<W>> {
+    if W::BITS != packing.word_bits() {
+        return Err("candidate concatenation word width differs from packing".into());
+    }
+    let mut rows = 0usize;
+    for batch in batches {
+        if !Arc::ptr_eq(&pool, batch.pool()) {
+            return Err("candidate concatenation pool differs from batch".into());
+        }
+        if batch.packing() != packing {
+            return Err("candidate concatenation packing differs from batch".into());
+        }
+        rows = rows.checked_add(batch.len()).filter(|&rows| rows <= u32::MAX as usize)
+            .ok_or("candidate concatenation exceeds u32 positions")?;
+    }
+    let bytes_per_word = std::mem::size_of::<W>();
+    rows.checked_mul(bytes_per_word).ok_or("candidate concatenation byte count overflow")?;
+    // SAFETY: the disjoint copies below initialize exactly the allocated prefix
+    // before any subsequent operation on the same stream can consume it.
+    let output = unsafe { Buffer::<W>::uninitialized(pool.clone(), rows)? };
+    let mut offset = 0usize;
+    for batch in batches {
+        let bytes = batch.len() * bytes_per_word;
+        if bytes != 0 {
+            // SAFETY: exact packing/word widths make the low-u64-first lanes
+            // byte-identical to W on CUDA. Both buffers share this pool stream;
+            // slices are initialized and disjoint, and pool frees/reuse follow
+            // the copy in stream order even when callers drop the input batch.
+            unsafe {
+                cuda_core::memory::memcpy_dtod_async(
+                    output.cu_deviceptr() + offset as u64,
+                    batch.buffer().cu_deviceptr(),
+                    bytes,
+                    pool.stream().cu_stream(),
+                )?;
+            }
+        }
+        offset += bytes;
+    }
+    Ok(output)
 }
 
 #[cfg(test)]

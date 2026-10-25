@@ -164,3 +164,25 @@ fn configuration_records_the_alias_declaration_for_independent_round_checks() {
         .unwrap();
     assert!(cq_datalog_fork::compile_with(&storage, fork.arguments.clone()).is_err());
 }
+
+#[test]
+fn configuration_records_batch_terminal_through_fork() {
+    let source: cq_lang_datalog_source::Program = syn::parse2(source()).unwrap();
+    let strata = cq_datalog_stratify::compile(&source).unwrap();
+    let incremental = cq_datalog_incremental::compile(&strata).unwrap();
+    let storage = cq_datalog_storage::compile(&incremental).unwrap();
+    let config: DatalogConfiguration = syn::parse_quote! { pipeline {
+        terminals = [::cq_gpu_sequence::translate_arena => batch];
+        cq = pipeline { print = ::cq_gpu_sequence::translate_arena; };
+    } };
+    let queue = config.resolve(DatalogConfiguration::defaults()).unwrap();
+    let fork = queue.passes.iter()
+        .find(|pass| pass.path.segments.last().unwrap().ident == "fork")
+        .unwrap();
+    let target = cq_datalog_fork::compile_with(&storage, fork.arguments.clone()).unwrap();
+    assert!(!target.holes.is_empty());
+    assert!(target.holes.iter().all(|hole|
+        hole.interface == cq_lang_datalog_round::HoleInterface::Batch));
+    let replay: cq_lang_datalog_round::Program = syn::parse2(quote!(#target)).unwrap();
+    assert_eq!(target, replay);
+}

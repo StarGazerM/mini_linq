@@ -18,6 +18,26 @@ pub fn fixture(name: &str) -> cq_lang_structures::Program {
                 e = ::cq_gpu_sequence_runtime::RangeProvider [y];
             }
         },
+        "native_linear" => syn::parse_quote! {
+            physical {
+                relation Delta(x:i32,y:i32) = (&delta);
+                relation Edge(y:i32,z:u32) = (&edge);
+                consumer canonical;
+                d = pipe rename Delta@0 {x -> x,y -> y};
+                e = pipe rename Edge@1 {y -> y,z -> z};
+                joined = pipe probe first [y] d,e;
+                // Match Datalog's owned scalar head projections.
+                owned_x = pipe bind joined with out_x:i32 = (*x);
+                owned_z = pipe bind owned_x with out_z:u32 = (*z);
+                result = pipe project owned_z keep {out_x,out_z};
+                return result as answer(out_x,out_z);
+            }
+            structures {
+                d host scan = ::gpu_datalog_runtime::DeviceLayout<(i32,),(i32,)> [];
+                e host scan = ::gpu_datalog_runtime::DeviceLayout<(i32,),(u32,)> [];
+                e host joined = ::gpu_datalog_runtime::DeviceLayout<(i32,),(u32,)> [y];
+            }
+        },
         "nonlinear" => syn::parse_quote! {
             physical {
                 relation Delta(x:i32,y:i32) = (&delta);
@@ -71,6 +91,23 @@ pub fn fixture(name: &str) -> cq_lang_structures::Program {
                 d host scan = ::gpu_datalog_runtime::DeviceLayout<(i32,),(i32,)> [];
                 b host scan = ::gpu_datalog_runtime::DeviceLayout<(i32,),()> [];
                 b = ::cq_gpu_sequence_runtime::RangeProvider [x];
+            }
+        },
+        "native_anti" => syn::parse_quote! {
+            physical {
+                relation Delta(x:i32,y:i32) = (&delta);
+                relation Blocked(x:i32) = (&blocked);
+                consumer canonical;
+                d = pipe rename Delta@0 {x -> x,y -> y};
+                b = pipe rename Blocked@1 {x -> x};
+                allowed = pipe anti eager [x] d,b;
+                result = pipe project allowed keep {x,y};
+                return result as answer(x,y);
+            }
+            structures {
+                d host scan = ::gpu_datalog_runtime::DeviceLayout<(i32,),(i32,)> [];
+                b host scan = ::gpu_datalog_runtime::DeviceLayout<(i32,),()> [];
+                b host allowed = ::gpu_datalog_runtime::DeviceLayout<(i32,),()> [x];
             }
         },
         "scan" => syn::parse_quote! {

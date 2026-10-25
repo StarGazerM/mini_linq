@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use cq_lang_sequence::{Analysis, Obligation, Program};
-use cq_lang_structures::physical::{Definition, Operator, symbol_name};
+use cq_lang_structures::physical::{Definition, Operator, Row, symbol_name};
 use cq_lang_structures::syntax as cq_syntax;
 use cq_lang_structures::syntax::{
     EqualityValue,
@@ -132,6 +132,8 @@ fn row_slot(expression: &syn::Expr) -> Option<usize> {
 
 /// Physical adapters only: layouts and predicates are already recorded by the
 /// Structures prefix. This module never schedules a Sequence constructor.
+/// Scalar locals reuse checked column identifiers, including their macro hygiene;
+/// rebuilding them from column-name strings disconnects generated CQ variables.
 pub struct Rows {
     pub width: usize,
     pub columns: BTreeMap<String, usize>,
@@ -144,7 +146,7 @@ pub struct Rows {
     providers: BTreeMap<String, Provider>,
     bounds: BTreeMap<String, TokenStream>,
     definitions: BTreeMap<String, Definition>,
-    types: BTreeMap<String, BTreeMap<String, Type>>,
+    physical_rows: BTreeMap<String, Row>,
     resident_hosts: BTreeSet<String>,
     run_sources: BTreeMap<String, RunSource>,
     run_providers: BTreeSet<String>,
@@ -475,7 +477,7 @@ impl Rows {
                     }
                     let (levels, ty) = &layouts[0];
                     if crate::runs::layout_types(ty)?.is_none() {
-                        return Err(error("GPU-Runs: run provider requires the checked bind pass"));
+                        return Err(syn::Error::new_spanned(ty, format!("GPU-Runs: provider `{name}` requires the checked run binding, found {}", quote!(#ty))));
                     }
                     let keys: Vec<_> = levels.iter().flatten().cloned().collect();
                     if keys.len() > *key_count || keys.iter().zip(&payload).any(|(key,column)| key != column) {
@@ -483,6 +485,27 @@ impl Rows {
                     }
                     providers.insert(name.clone(), Provider { view: view.clone(), payload, keys });
                     run_providers.insert(name.clone());
+                } else {
+                    // A supplied device layout also realizes native host-read
+                    // fallbacks. These do not need a computed Built index.
+                    let mut width = None;
+                    for ((result, reader, keys), ty) in &analysis.structures.fallbacks {
+                        if result != name || reader == "scan" { continue; }
+                        if crate::runs::layout_types(ty)?.is_none() {
+                            return Err(error("GPU-Runs: native lookup requires a declared run layout"));
+                        }
+                        if keys.len() > *key_count
+                            || payload[..keys.len()].iter().any(|key| !keys.contains(key)) {
+                            return Err(error("GPU-Runs: native lookup key is not a packed leading prefix"));
+                        }
+                        width = Some(width.unwrap_or(0).max(keys.len()));
+                    }
+                    if let Some(width) = width {
+                        providers.insert(name.clone(), Provider {
+                            view: view.clone(), keys: payload[..width].to_vec(), payload,
+                        });
+                        run_providers.insert(name.clone());
+                    }
                 }
                 let _ = types;
                 continue;
@@ -746,13 +769,6 @@ impl Rows {
             let __cq_timing_built = __cq_pool.stream().record_event(
                 Some(::cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
         });
-        let types = analysis
-            .structures
-            .physical
-            .rows
-            .iter()
-            .map(|(name, row)| (name.clone(), row.types.clone()))
-            .collect();
         let codec_columns: BTreeSet<_> = analysis
             .obligations
             .iter()
@@ -793,7 +809,7 @@ impl Rows {
             providers,
             bounds,
             definitions,
-            types,
+            physical_rows: analysis.structures.physical.rows.clone(),
             resident_hosts,
             run_sources,
             run_providers,
@@ -959,7 +975,7 @@ impl Rows {
     pub fn run_provider(&self, name: &str) -> bool { self.run_providers.contains(name) }
     pub fn output_types(&self) -> syn::Result<Vec<Type>> {
         self.output_columns.iter().map(|column| {
-            self.types.values().find_map(|row| row.get(column)).cloned()
+            self.physical_rows.values().find_map(|row| row.types.get(column)).cloned()
                 .ok_or_else(|| error(format!("GPU-Arena: output column {column} has no declared type")))
         }).collect()
     }
@@ -1139,11 +1155,12 @@ impl Rows {
                     }
                     let mut uses = Uses(BTreeSet::new());
                     uses.visit_expr_mut(&mut syn::parse2(tokens)?);
-                    let bindings = self.types[&input]
+                    let input_row = &self.physical_rows[&input];
+                    let bindings = input_row.types
                         .iter()
                         .filter(|(column, _)| uses.0.contains(*column))
                         .map(|(column, ty)| {
-                            let id = Ident::new(column, proc_macro2::Span::call_site());
+                            let id = &input_row.bindings[column];
                             let slot = self.columns[column];
                             quote!(let #id = &(#row[#slot] as #ty);)
                         });
@@ -1163,16 +1180,17 @@ impl Rows {
                 }
                 Operator::Bind(bind) => {
                     let input = symbol_name(&bind.input);
-                    let mut expression = cq_syntax::arithmetic::binding(bind, &self.types[&input])
+                    let input_row = &self.physical_rows[&input];
+                    let mut expression = cq_syntax::arithmetic::binding(bind, &input_row.types)
                         .ok_or_else(|| {
                             error("T-Gpu: opaque Rust binding requires host evaluation")
                         })?;
                     DeviceComparisons.visit_expr_mut(&mut expression);
                     let dependencies = cq_syntax::rust::free_variables(&bind.expression)
-                        .dependencies(&self.types[&input].keys().cloned().collect());
+                        .dependencies(&input_row.types.keys().cloned().collect());
                     let bindings = dependencies.iter().map(|column| {
-                        let id = Ident::new(column, proc_macro2::Span::call_site());
-                        let ty = &self.types[&input][column];
+                        let id = &input_row.bindings[column];
+                        let ty = &input_row.types[column];
                         let slot = self.columns[column];
                         quote!(let #id = &(#row[#slot] as #ty);)
                     });
@@ -1184,17 +1202,18 @@ impl Rows {
                 }
                 Operator::Guard(guard) => {
                     let input = symbol_name(&guard.input);
+                    let input_row = &self.physical_rows[&input];
                     let mut expression =
-                        cq_syntax::arithmetic::predicate(&guard.condition, &self.types[&input])
+                        cq_syntax::arithmetic::predicate(&guard.condition, &input_row.types)
                             .ok_or_else(|| {
                                 error("T-Gpu: opaque Rust guard requires host evaluation")
                             })?;
                     DeviceComparisons.visit_expr_mut(&mut expression);
                     let dependencies = cq_syntax::rust::free_variables(&guard.condition)
-                        .dependencies(&self.types[&input].keys().cloned().collect());
+                        .dependencies(&input_row.types.keys().cloned().collect());
                     let bindings = dependencies.iter().map(|column| {
-                        let id = Ident::new(column, proc_macro2::Span::call_site());
-                        let ty = &self.types[&input][column];
+                        let id = &input_row.bindings[column];
+                        let ty = &input_row.types[column];
                         let slot = self.columns[column];
                         quote!(let #id = &(#row[#slot] as #ty);)
                     });

@@ -11,6 +11,6 @@ pub mod runs;
 pub use gpu_device_columns::{Buffer, Pool};
 pub use pack::{Column, Packing, Word};
 pub use runs::{AdmissionTimings, DeviceRuns, Run, RunView};
-pub use arena::{CandidateArena, CandidateBatch, CandidateLease};
+pub use arena::{concatenate_batches, CandidateArena, CandidateBatch, CandidateLease};
 pub use layout::{device, DeviceLayout, PackedField, PackedRunView, RunsView, Scalar, ScalarTuple};
 pub type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;

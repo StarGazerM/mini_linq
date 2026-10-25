@@ -347,6 +347,9 @@ obligation; it is not Rust alias resolution or a proof of printer equivalence.
 The argument-free \code{own\_push::push!} is not a push-interface terminal:
 although it uses push loops internally, its public result is an iterator.
 Datalog's push adapter uses the public consumer form of that feature printer.
+A third interface, \code{batch}, asserts that the terminal returns an opaque
+candidate batch to a batch-capable round printer: it neither enumerates rows on
+the host nor invokes a host consumer. Host round printers reject batch holes.
 This check examines terminal invocations, not Rust tokens that do not yet exist.
 With $\Gamma$ the recorded registry and $\mathrm{last}(Q)$ the terminal:
 \begin{mathpar}
@@ -1131,6 +1134,40 @@ with $s_j=\sum_{i>j}w_i$.
 \end{mathpar}
 Live counts may be read back to size sorts and to test termination; such
 readbacks are recorded realization cost, not semantic steps.
+
+\paragraph{Device realization (extension).}
+The device Storage rewrite replaces every layout provider (EDB and IDB, full
+and delta, any key length) by \code{DeviceLayout<K, V>} and every IDB
+membership provider by \code{DeviceRuns<W>}, where $W$ is the narrowest word
+holding the relation's packed columns. It requires every column type to be a
+supported fixed-width integer, at most 128 packed bits per relation, and each
+source layout to be the default \code{HashMap} with the default hasher, so
+erasure is exact. Relations, columns, keys and maintenance are unchanged.
+\begin{mathpar}
+\Rule{CK-DL-DeviceStorage}{\mathrm{WF}_{\mathrm{Storage}}(s)\quad
+ \mathrm{WF}_{\mathrm{Storage}}(t)\quad
+ \text{substituting back the default providers in }t\text{ gives }s\quad
+ \textsc{DL-DevicePacking}\text{ premises hold for every relation}}
+ {\mathrm{check}_{\mathrm{deviceStorage}}(s,t)}
+\end{mathpar}
+The device round printer consumes the same Round and Schedule records as the
+host printers. Inputs are uploaded once into their layouts. Each round issues
+the holes of every wave in wave order, each writing its head's candidate
+batches; after the last wave every head admits its batches into its accepted
+runs (\textsc{DL-DeviceRuns}), yielding the delta. Publication then follows the
+recorded operations: \code{full\_layouts} permutes the delta into each layout's
+packing, sorts it and appends it as a run (disjoint because it was admitted);
+\code{all\_extend} is the admission itself; \code{delta\_swap} retains the delta
+run; \code{delta\_rebuild} builds each delta layout from it. Termination tests
+the sum of the fresh counts. Outputs unpack the accepted runs. Issuing waves in
+order on one stream is exact by \textsc{DL-WaveCommute}; concurrent streams per
+wave would change only cost.
+\begin{mathpar}
+\Rule{P-DL-Gpu}{\mathrm{WF}_{\mathrm{Round}}(r)\quad
+ \text{every hole has the batch interface}\quad
+ \textsc{CK-DL-DeviceStorage}\quad\textsc{GPU-Arena}}
+ {\mathrm{unpack}(\mathrm{print}_{\mathrm{gpu}}(r))=\mathrm{print}_{\mathrm{rounds}}(r)\text{ as relations}}
+\end{mathpar}
 Let $S$ be a power of two at least the worker count and let
 $h_S(x)=h(x)\mathbin{\&}(S-1)$. Canonical admission uses the full tuple:
 $C_i=\{r\in C\mid h_S(r)=i\}$, so equal tuples always share a shard.

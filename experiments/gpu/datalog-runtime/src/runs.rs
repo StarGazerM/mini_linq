@@ -123,6 +123,8 @@ impl<W: Word> DeviceRuns<W> {
     pub fn len(&self) -> usize { self.rows }
     pub fn is_empty(&self) -> bool { self.rows == 0 }
     pub fn runs(&self) -> Vec<RunView<W>> { self.accepted.iter().map(Run::view).collect() }
+    /// Retain a snapshot of accepted immutable runs, independent of later merges.
+    pub fn owned_runs(&self) -> Vec<Run<W>> { self.accepted.clone() }
     pub fn enable_timing(&mut self, enabled: bool) { self.timing_enabled = enabled; }
     /// Explicitly synchronize the last profiled admission and read CUDA event times.
     pub fn last_timings(&self) -> Result<AdmissionTimings> {

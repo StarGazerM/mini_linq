@@ -192,6 +192,8 @@ impl Hole {
 pub enum HoleInterface {
     Pull,
     Push,
+    /// Write candidates into a caller-owned batch arena.
+    Batch,
 }
 
 impl syn::parse::Parse for HoleInterface {
@@ -200,9 +202,10 @@ impl syn::parse::Parse for HoleInterface {
         match name.to_string().as_str() {
             "pull" => Ok(Self::Pull),
             "push" => Ok(Self::Push),
+            "batch" => Ok(Self::Batch),
             _ => Err(syn::Error::new_spanned(
                 name,
-                "expected pull or push interface",
+                "expected pull, push or batch interface",
             )),
         }
     }
@@ -212,6 +215,7 @@ impl ToTokens for HoleInterface {
         tokens.extend(match self {
             Self::Pull => quote!(pull),
             Self::Push => quote!(push),
+            Self::Batch => quote!(batch),
         });
     }
 }

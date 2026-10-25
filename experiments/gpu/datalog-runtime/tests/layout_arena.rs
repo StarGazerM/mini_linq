@@ -1,4 +1,4 @@
-use gpu_datalog_runtime::{Buffer, CandidateArena, Column, DeviceLayout, Packing, Pool, Result, Run};
+use gpu_datalog_runtime::{concatenate_batches, Buffer, CandidateArena, Column, DeviceLayout, DeviceRuns, Packing, Pool, Result, Run, Word};
 use std::{any::Any, sync::Arc};
 
 #[test]
@@ -82,4 +82,58 @@ fn candidate_finish_rejects_uninitialized_capacity_suffix() -> Result<()> {
     // SAFETY: finish rejects the invalid length before touching any storage.
     assert!(unsafe { lease.finish(1, vec![]) }.is_err());
     Ok(())
+}
+
+fn concatenate_case<W: Word>(packing: Packing) -> Result<()> {
+    let pool = Pool::new(0, 0, 0)?;
+    let mut arena = CandidateArena::new(pool.clone());
+    let high = if W::BITS == 128 { 1u128 << 100 } else { 0 };
+    let groups: &[&[u128]] = &[&[high | 1, high | 7], &[], &[high | 7, high | 19]];
+    let mut batches = Vec::new();
+    for group in groups {
+        let lease = arena.reserve(packing.clone(), group.len())?;
+        let mut lanes = Vec::new();
+        for &word in *group {
+            lanes.push(word as u64);
+            if W::BITS == 128 { lanes.push((word >> 64) as u64); }
+        }
+        // SAFETY: the sole lease writer initializes all live lanes before
+        // publishing exactly this prefix on the same pool stream.
+        unsafe {
+            lease.buffer().write_async(&lanes)?;
+            batches.push(lease.finish(group.len(), vec![])?);
+        }
+    }
+    let output = concatenate_batches::<W>(pool.clone(), &packing, &batches)?;
+    assert_eq!(output.to_host()?.iter().map(|word| word.to_u128()).collect::<Vec<_>>(),
+        vec![high | 1, high | 7, high | 7, high | 19]);
+    assert_eq!(concatenate_batches::<W>(pool.clone(), &packing, &[])?.len(), 0);
+    let other = Pool::new(0, 0, 0)?;
+    assert!(concatenate_batches::<W>(other, &packing, &batches).is_err());
+    let different = Packing::new(&[8])?;
+    assert!(concatenate_batches::<W>(pool.clone(), &different, &batches).is_err());
+    if W::BITS == 64 {
+        assert!(concatenate_batches::<u128>(pool.clone(), &packing, &batches).is_err());
+    } else {
+        assert!(concatenate_batches::<u64>(pool.clone(), &packing, &batches).is_err());
+    }
+    let mut accepted = DeviceRuns::<W>::new(pool)?;
+    accepted.admit(&output, output.len())?;
+    let snapshot = accepted.owned_runs();
+    drop(accepted);
+    let words = snapshot.iter().map(|run| run.buffer().to_host())
+        .collect::<Result<Vec<_>>>()?.into_iter().flatten()
+        .map(|word| word.to_u128()).collect::<Vec<_>>();
+    assert_eq!(words, vec![high | 1, high | 7, high | 19]);
+    Ok(())
+}
+
+#[test]
+fn concatenate_u64_candidates_and_retain_accepted_snapshot() -> Result<()> {
+    concatenate_case::<u64>(Packing::new(&[32, 32])?)
+}
+
+#[test]
+fn concatenate_u128_candidates_and_retain_accepted_snapshot() -> Result<()> {
+    concatenate_case::<u128>(Packing::new(&[64, 64])?)
 }

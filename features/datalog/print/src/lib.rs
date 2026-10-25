@@ -25,7 +25,20 @@ use std::collections::BTreeSet;
 use syn::Ident;
 mod codegen;
 
+/// Host realization supports iterator and consumer holes, not device batches.
+pub fn check_host_interfaces(program: &Program) -> syn::Result<()> {
+    for hole in &program.holes {
+        ensure(
+            hole.interface != HoleInterface::Batch,
+            hole,
+            "host Datalog printers do not support batch holes; use a batch-capable printer",
+        )?;
+    }
+    Ok(())
+}
+
 pub fn splice(program: &Program) -> syn::Result<Vec<TokenStream>> {
+    check_host_interfaces(program)?;
     splice_with(program, |hole| {
         let mut pipeline = hole.pipeline.clone();
         if hole.interface == HoleInterface::Push {
@@ -64,6 +77,9 @@ pub fn consume_hole(
             let #name = #consumer;
             #invocation;
         }),
+        HoleInterface::Batch => quote!(compile_error!(
+            "host Datalog printers do not support batch holes"
+        )),
     }
 }
 
@@ -91,6 +107,9 @@ pub fn collect_hole(
                 #rows
             })
         }
+        HoleInterface::Batch => quote!(compile_error!(
+            "host Datalog printers do not support batch holes"
+        )),
     }
 }
 /// Splice one caller-owned expansion per checked hole, in recorded order.
@@ -192,6 +211,7 @@ fn render_admitted(
     mut publish: impl FnMut(&RoundContext, &Stratum) -> Vec<TokenStream>,
     mut step_loop: impl FnMut(usize, &Stratum, TokenStream) -> syn::Result<TokenStream>,
 ) -> syn::Result<syn::Expr> {
+    check_host_interfaces(program)?;
     ensure(
         holes.len() == program.holes.len(),
         program,

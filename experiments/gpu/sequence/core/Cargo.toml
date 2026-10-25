@@ -11,3 +11,6 @@ cq-physical-realization = { path = "../../../../passes/cq-physical-realization" 
 proc-macro2 = "1"
 quote = "1"
 syn = { version = "2", features = ["full", "visit", "visit-mut"] }
+
+[dev-dependencies]
+proc-macro2 = { version = "1", features = ["span-locations"] }

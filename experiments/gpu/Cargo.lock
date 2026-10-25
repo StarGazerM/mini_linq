@@ -104,6 +104,196 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-datalog"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-configuration",
+ "cq-datalog-macros",
+ "cq-lang-datalog-incremental",
+ "cq-lang-datalog-round",
+ "cq-lang-datalog-source",
+ "cq-lang-datalog-storage",
+ "cq-lang-datalog-strata",
+ "cq-storage",
+ "own-push",
+ "rustc-hash",
+]
+
+[[package]]
+name = "cq-datalog-configuration"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-fork",
+ "cq-lang-datalog-round",
+ "cq-stage",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-fork"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-support",
+ "cq-lang-datalog-round",
+ "cq-lang-datalog-storage",
+ "cq-stage",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-incremental"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-support",
+ "cq-lang-datalog-incremental",
+ "cq-lang-datalog-strata",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-macros"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-configuration",
+ "cq-datalog-fork",
+ "cq-datalog-incremental",
+ "cq-datalog-print-rounds",
+ "cq-datalog-storage",
+ "cq-datalog-stratify",
+ "cq-datalog-surface-if-let",
+ "cq-lang-datalog-incremental",
+ "cq-lang-datalog-round",
+ "cq-lang-datalog-source",
+ "cq-lang-datalog-storage",
+ "cq-lang-datalog-strata",
+ "cq-stage",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-parallel"
+version = "0.1.0"
+dependencies = [
+ "cq-datalog-partition",
+ "cq-datalog-rayon-print",
+ "cq-lang-datalog-round",
+ "cq-stage",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-parallel-runtime"
+version = "0.1.0"
+dependencies = [
+ "cq-storage",
+ "hashbrown 0.15.5",
+ "rayon",
+]
+
+[[package]]
+name = "cq-datalog-partition"
+version = "0.1.0"
+dependencies = [
+ "cq-datalog-support",
+ "cq-lang-datalog-round",
+ "cq-stage",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-print"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-support",
+ "cq-lang-datalog-round",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-print-rounds"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-print",
+ "cq-lang-datalog-round",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-rayon-print"
+version = "0.1.0"
+dependencies = [
+ "cq-datalog-partition",
+ "cq-datalog-print",
+ "cq-lang-datalog-round",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-storage"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-support",
+ "cq-lang-datalog-incremental",
+ "cq-lang-datalog-storage",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-stratify"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-support",
+ "cq-lang-datalog-source",
+ "cq-lang-datalog-strata",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-support"
+version = "0.0.0"
+dependencies = [
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-surface-if-let"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-support",
+ "cq-lang-datalog-source",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "cq-elaborate"
 version = "0.1.0"
 dependencies = [
@@ -111,6 +301,61 @@ dependencies = [
  "cq-lang-vo",
  "proc-macro2",
  "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-gpu-datalog"
+version = "0.1.0"
+dependencies = [
+ "cq-datalog",
+ "cq-gpu-datalog-core",
+ "cq-gpu-datalog-macros",
+ "cq-gpu-runtime",
+ "cq-gpu-sequence",
+ "cq-gpu-sequence-runtime",
+ "cq-storage",
+ "cuda-core",
+ "cuda-device",
+ "cuda-host",
+ "gpu-compress",
+ "gpu-compress-host",
+ "gpu-datalog-runtime",
+ "mini-linq",
+ "oracle-mini",
+ "oracle-mini-par",
+ "oracle-shared",
+ "rayon",
+]
+
+[[package]]
+name = "cq-gpu-datalog-core"
+version = "0.1.0"
+dependencies = [
+ "cq-datalog-fork",
+ "cq-datalog-print",
+ "cq-datalog-storage",
+ "cq-datalog-support",
+ "cq-lang-datalog-round",
+ "cq-lang-datalog-storage",
+ "cq-lang-structures",
+ "cq-stage",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-gpu-datalog-macros"
+version = "0.1.0"
+dependencies = [
+ "cq-gpu-datalog-core",
+ "cq-lang-datalog-round",
+ "cq-lang-datalog-storage",
+ "cq-lang-structures",
+ "cq-stage",
+ "proc-macro2",
  "syn 2.0.119",
 ]
 
@@ -267,6 +512,73 @@ dependencies = [
  "quote",
  "syn 2.0.119",
  "syn_derive",
+]
+
+[[package]]
+name = "cq-lang-datalog-incremental"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-support",
+ "cq-lang-datalog-strata",
+ "cq-stage",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-lang-datalog-round"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-support",
+ "cq-lang-cq",
+ "cq-lang-datalog-storage",
+ "cq-stage",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-lang-datalog-source"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-support",
+ "cq-lang-cq",
+ "cq-stage",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-lang-datalog-storage"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-support",
+ "cq-lang-cq",
+ "cq-lang-datalog-incremental",
+ "cq-stage",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-lang-datalog-strata"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-support",
+ "cq-lang-datalog-source",
+ "cq-stage",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -580,9 +892,9 @@ dependencies = [
 
 [[package]]
 name = "crc32fast"
-version = "1.5.2"
+version = "1.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "01a7799fd6b852db0e61728dde9a204c423b44d689dbd432522543614b490e78"
+checksum = "0ba106e844045ddc02c20768ac4b0b7cb45f2cc2ecbd833ac9f5dacb183c2055"
 dependencies = [
  "cfg-if",
 ]
@@ -1079,6 +1391,50 @@ name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
+
+[[package]]
+name = "oracle-mini"
+version = "0.1.0"
+dependencies = [
+ "cq-datalog",
+ "cq-storage",
+ "mini-linq",
+ "oracle-shared",
+]
+
+[[package]]
+name = "oracle-mini-par"
+version = "0.1.0"
+dependencies = [
+ "cq-datalog",
+ "cq-datalog-parallel",
+ "cq-datalog-parallel-runtime",
+ "cq-storage",
+ "mini-linq",
+ "oracle-shared",
+ "rayon",
+]
+
+[[package]]
+name = "oracle-shared"
+version = "0.1.0"
+dependencies = [
+ "cq-storage",
+ "cq-testkit",
+]
+
+[[package]]
+name = "own-push"
+version = "0.0.0"
+dependencies = [
+ "cq-lang-structures",
+ "cq-physical-realization",
+ "cq-print",
+ "cq-stage",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
 
 [[package]]
 name = "oxide-artifacts"

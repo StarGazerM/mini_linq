@@ -342,6 +342,7 @@ pub(crate) fn check_storage_with_analysis(
                 "fork repeated columns must refer to distinct projected first occurrences",
             )?;
             let hole = checked_hole(source, target, key.hole, &mut used_holes)?;
+            let batch = target.holes[key.hole].interface == HoleInterface::Batch;
             add_name(&hole.name)?;
             let literal_count = key
                 .filters
@@ -398,12 +399,21 @@ pub(crate) fn check_storage_with_analysis(
                     .map(|&i| {
                         let mut column = declaration.columns[i].clone();
                         column.name = variables[i].expect("checked key variable").clone();
-                        let ty = &column.ty;
-                        column.ty = syn::parse_quote!(&#ty);
+                        if !batch {
+                            let ty = &column.ty;
+                            column.ty = syn::parse_quote!(&#ty);
+                        }
                         column
                     })
                     .collect();
-                key.columns.iter().map(|&i| atom.args[i].clone()).collect()
+                key.columns.iter().map(|&i| {
+                    let argument = &atom.args[i];
+                    if batch {
+                        syn::parse_quote!(*#argument)
+                    } else {
+                        argument.clone()
+                    }
+                }).collect()
             };
             let mut expected_declarations = required_inputs(context, &[], &hole.query);
             expected_declarations.push(output);

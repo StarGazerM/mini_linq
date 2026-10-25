@@ -9,6 +9,7 @@
 //! a single worker retains the recorded synchronous step realization.
 //! Standard rule tasks use the registered push adapter to feed the collector
 //! directly; custom pull terminals retain iteration through their authored API.
+//! Batch terminals require a batch-capable printer and are rejected here.
 use cq_lang_datalog_round::{self as round, InputSource, RoundContext, RuleHole};
 #[cfg(feature = "hole-timing")]
 use cq_lang_datalog_round::{Execution, Program};
@@ -21,6 +22,7 @@ mod publication;
 mod relational;
 
 pub fn compile(program: &cq_datalog_partition::ShardedProgram) -> syn::Result<syn::Expr> {
+    cq_datalog_print::check_host_interfaces(&program.round)?;
     let source = round::erase(&program.round)?;
     cq_datalog_partition::check_sharded(&source, program)?;
     let holes = cq_datalog_print::splice(&program.round)?;
@@ -671,6 +673,16 @@ mod tests {
         let relation = &context.relations[late.relation];
         let all = &relation.all;
         assert!(barrier.contains(&quote!(#all.extend).to_string()));
+    }
+
+    #[test]
+    fn host_printer_rejects_batch_holes() {
+        let mut program = program();
+        program.round.terminals.0.push(syn::parse_quote!(custom::batch => batch));
+        let hole = &mut program.round.holes[0];
+        hole.interface = round::HoleInterface::Batch;
+        hole.pipeline.passes.last_mut().unwrap().path = syn::parse_quote!(custom::batch);
+        assert!(compile(&program).unwrap_err().to_string().contains("do not support batch holes"));
     }
 
     /// Canonical admission and certified host inputs belong to Round, not to

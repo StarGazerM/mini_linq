@@ -2745,6 +2745,81 @@ mod tests {
     use quote::ToTokens;
 
     #[test]
+    fn datalog_key_projections_preserve_fresh_column_binding_spans() {
+        use syn::visit::Visit;
+
+        // Fork's Batch key holes use mixed-site variables, the same names in
+        // their declared output columns, and owned dereference projections.
+        // Distinct source locations make rebuilding a call-site binder fail
+        // deterministically even outside a running procedural macro.
+        let mut keys = [
+            syn::parse_str::<syn::Ident>("__cq_datalog_column_0").unwrap(),
+            syn::parse_str::<syn::Ident>("__cq_datalog_column_1").unwrap(),
+        ];
+        for key in &mut keys {
+            key.set_span(Span::mixed_site().located_at(key.span()));
+        }
+        let [key0, key1] = &keys;
+        for (predicate, selected) in [
+            (quote!(select r if (#key0 > 0)), quote!(compact filtered flatten tile 256 input)),
+            (quote!(guard r if (*#key0 > 0 && *#key1 > 0)), quote!(map filtered flatten tile 256 input)),
+        ] {
+            // Physical output bindings have distinct temporary attributes;
+            // the declared head names still coincide with the input variables.
+            let program: Program = syn::parse2(quote! {
+                physical {
+                    relation R(a:i32,b:i32) = (&data.r);
+                    relation answer(#key0:i32,#key1:i32);
+                    r = pipe rename R@0 {a -> #key0,b -> #key1};
+                    filtered = pipe #predicate;
+                    first = pipe bind filtered with out0:i32 = (*#key0);
+                    second = pipe bind first with out1:i32 = (*#key1);
+                    result = pipe canon project second keep {out0,out1};
+                    return result as answer(out0,out1);
+                }
+                structures {
+                    r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(i32,i32)> [];
+                    result canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                }
+                sequence {
+                    input = store rows r;
+                    selected = #selected;
+                    output_rows = store canon map result selected;
+                    output count;
+                }
+                graded gpu {
+                    input at host;
+                    selected at host.device.block;
+                    output_rows at host.device;
+                }
+            }).unwrap();
+            let analysis =
+                cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
+            let generated = translate(&program, &analysis).unwrap();
+
+            struct Bindings<'a> {
+                keys: &'a [syn::Ident; 2],
+                counts: [usize; 2],
+            }
+            impl<'ast> Visit<'ast> for Bindings<'_> {
+                fn visit_pat_ident(&mut self, pattern: &'ast syn::PatIdent) {
+                    for (index, key) in self.keys.iter().enumerate() {
+                        if pattern.ident == *key {
+                            assert_eq!(pattern.ident.span().start(), key.span().start());
+                            assert_eq!(pattern.ident.span().end(), key.span().end());
+                            self.counts[index] += 1;
+                        }
+                    }
+                    syn::visit::visit_pat_ident(self, pattern);
+                }
+            }
+            let mut bindings = Bindings { keys: &keys, counts: [0; 2] };
+            bindings.visit_expr(&generated);
+            assert!(bindings.counts.iter().all(|count| *count > 0));
+        }
+    }
+
+    #[test]
     fn rejects_a_legitimately_oversized_live_signature() {
         let names: Vec<_> = (0..513).map(|index| format_ident!("p{index}")).collect();
         let mut kernels = vec![quote! {

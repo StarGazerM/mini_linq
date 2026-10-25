@@ -450,7 +450,11 @@ fn construct(
                                 .iter()
                                 .map(|&i| {
                                     let variable = &variables[i];
-                                    quote!(#variable)
+                                    if interface == HoleInterface::Batch {
+                                        quote!(*#variable)
+                                    } else {
+                                        quote!(#variable)
+                                    }
                                 })
                                 .collect(),
                             key.columns
@@ -461,7 +465,13 @@ fn construct(
                                         [relation]
                                         .columns[i]
                                         .ty;
-                                    quote!(#variable: &#ty)
+                                    // Batch arenas own their scalar key columns;
+                                    // host key sets retain borrowed projections.
+                                    if interface == HoleInterface::Batch {
+                                        quote!(#variable: #ty)
+                                    } else {
+                                        quote!(#variable: &#ty)
+                                    }
                                 })
                                 .collect(),
                         )

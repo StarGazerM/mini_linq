@@ -474,6 +474,24 @@ fn push_program() -> Program {
 }
 
 #[test]
+fn host_printer_rejects_batch_but_custom_splicing_accepts_it() {
+    let mut program = push_program();
+    program.terminals = syn::parse_quote!([custom::batch => batch]);
+    for hole in &mut program.holes {
+        hole.interface = HoleInterface::Batch;
+        hole.pipeline.passes.last_mut().unwrap().path = syn::parse_quote!(custom::batch);
+    }
+    round::contract::check(&program).unwrap();
+    assert!(compile(&program).unwrap_err().to_string().contains("do not support batch holes"));
+    assert!(splice(&program).unwrap_err().to_string().contains("do not support batch holes"));
+    assert_eq!(splice_with(&program, |_| Ok(quote!(batch()))).unwrap().len(), program.holes.len());
+    assert!(consume_hole(HoleInterface::Batch, &quote!(batch()), quote!(consumer))
+        .to_string().contains("compile_error"));
+    assert!(collect_hole(HoleInterface::Batch, &quote!(batch()), quote!(Vec<Row>))
+        .to_string().contains("compile_error"));
+}
+
+#[test]
 fn push_rule_and_key_holes_receive_consumers_without_iterator_adapters() {
     let program = push_program();
     let holes = splice(&program).unwrap();
