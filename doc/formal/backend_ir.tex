@@ -448,11 +448,15 @@ for a row carrying a \code{String}; a compatible host token or a rejection
 is required.
 Each substitution uses the existing source/target Structures retype checks;
 an absent token or inadmissible retention rejects with the obligation.
-Sequence rewrite equality also accepts these type-only substitutions for
-built providers, retained rows and canon implementations, checked by the
-Structures rewrite contract. Physical syntax, host adapters, key layouts
-and canonical boundaries must remain identical; this is not permission
-to replace an opaque reader or predicate.
+Sequence rewrite equality also accepts checked catalog retention:
+host renames alone may change from \code{pipe} to \code{let}, with
+their keyed fallbacks replaced by built indexes. The dedicated
+\code{check\_retention\_rewrite} checks both endpoints and the Physical
+rewrite contract, requiring identical non-mode Physical syntax and order,
+original host scans, existing key layouts and canonical boundaries.
+Provider, retained-row, membership-state and canon implementation types
+may change. Ordinary Structures rewrites still require exact Physical
+syntax; neither boundary permits replacing an opaque reader or predicate.
 Placement propagates opaque evaluation and its unstored feeds to host before
 assigning descendant work. String-literal predicates and operations reading
 or producing String-bearing rows likewise stay host through the projection

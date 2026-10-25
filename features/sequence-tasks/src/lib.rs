@@ -195,7 +195,7 @@ pub fn select_providers(
             selected.ty = original.ty.clone();
         }
     }
-    cq_lang_sequence::structures::check_rewrite(&source.structures, &target.structures)?;
+    cq_lang_sequence::structures::check_retention_rewrite(&source.structures, &target.structures)?;
     Ok(target)
 }
 

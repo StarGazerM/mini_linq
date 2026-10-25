@@ -1325,26 +1325,10 @@ fn check_rewrite_in(source: &Program, target: &Program, context: &Checker) -> sy
             }
             target.structures.structures.entries.contains(entry)
         });
-    // A target may replace storage implementations without changing any
-    // host adapter, key layout, canonical boundary, or Physical computation.
-    let storage_retyped = !unchanged && source.structures.physical == target.structures.physical
-        && source.structures.structures.entries.len() == target.structures.structures.entries.len()
-        && source.structures.structures.entries.iter()
-            .zip(&target.structures.structures.entries).all(|(left, right)| {
-                use cq_lang_structures::Structure;
-                let mut normalized = left.clone();
-                match (&mut normalized.structure, &right.structure) {
-                    (Structure::Built { keyed: left, .. }, Structure::Built { keyed: right, .. }) =>
-                        left.ty = right.ty.clone(),
-                    (Structure::Dedup { ty: left, .. }, Structure::Dedup { ty: right, .. })
-                    | (Structure::HeadDedup { ty: left, .. }, Structure::HeadDedup { ty: right, .. })
-                    | (Structure::Rows { ty: left, .. }, Structure::Rows { ty: right, .. }) =>
-                        *left = right.clone(),
-                    _ => {}
-                }
-                normalized == *right
-            })
-        && cq_lang_structures::check_rewrite(&source.structures, &target.structures).is_ok();
+    // Catalog selection may retain host renames and replace their keyed
+    // fallbacks, while preserving opaque syntax and the original scans.
+    let storage_retyped = !unchanged
+        && cq_lang_structures::check_retention_rewrite(&source.structures, &target.structures).is_ok();
     if !unchanged && !storage_retyped
         && (source.structures.physical == target.structures.physical
             || !preserves_adapters

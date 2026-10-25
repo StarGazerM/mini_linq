@@ -154,7 +154,9 @@ pub fn select_from_catalog(
                 )
             })?;
     }
-    retain_host_indexes(&target, catalog)
+    let target = retain_host_indexes(&target, catalog)?;
+    structures::check_retention_rewrite(source, &target)?;
+    Ok(target)
 }
 
 fn retain_host_indexes(

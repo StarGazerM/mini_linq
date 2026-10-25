@@ -277,3 +277,35 @@ fn automatic_h07_keeps_numeric_forwards_legal_before_string_readers() {
     );
     assert_replay(&source, &planned);
 }
+
+#[test]
+fn catalog_retention_and_canon_retyping_cross_the_sequence_boundary() {
+    let source = string_reader(false);
+    let mut selected = select_from_catalog(&source, &catalog()).unwrap();
+    for entry in &mut selected.structures.entries {
+        if let structures::Structure::Dedup { ty, .. } = &mut entry.structure {
+            *ty = syn::parse_quote!(NativeCanon);
+        }
+    }
+    // The ordinary Structures-only contract remains exact.
+    assert!(structures::check_rewrite(&source, &selected).is_err());
+    structures::check_retention_rewrite(&source, &selected).unwrap();
+    let sequence = cq_sequence_lowering::compile(&source).unwrap();
+    let mut target = sequence.clone();
+    target.structures = selected.clone();
+    check_rewrite(&sequence, &target).unwrap();
+
+    let mut changed_reader = selected.clone();
+    if let structures::Structure::Host { keyed, .. } =
+        &mut changed_reader.structures.entries[0].structure {
+        keyed.ty = syn::parse_quote!(DifferentReader);
+    }
+    assert!(structures::check_retention_rewrite(&source, &changed_reader).is_err());
+    let mut changed_order = selected.clone();
+    changed_order.physical.program.definitions.swap(0, 1);
+    assert!(structures::check_retention_rewrite(&source, &changed_order).is_err());
+    let mut changed_mode = selected;
+    changed_mode.physical.program.definitions[2].mode =
+        structures::physical::Mode::Let(Default::default());
+    assert!(structures::check_retention_rewrite(&source, &changed_mode).is_err());
+}
