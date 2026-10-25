@@ -36,6 +36,8 @@ rccl-thrust = { path = "/data/rccl/rccl-thrust" }
 # Anonymous static shared globals are namespaced per bundle before deduplication.
 # Datalog's u128 pair-sort kernels otherwise collide with Sequence runtime's
 # unrelated `__shared_mem_0/1` arrays.
+# cuda-oxide ad3a9a1c legalizes i128 shifts into safe i64 halves before LLVM
+# NVPTX expansion, fixing dynamic u128 lane masks at shift 0.
 [patch."https://github.com/StarGazerM/cuda-oxide.git"]
 cuda-artifact-finalizer = { path = "/data/cuda-oxide/cuda-oxide/crates/cuda-artifact-finalizer" }
 cuda-bindings = { path = "/data/cuda-oxide/cuda-bindings" }

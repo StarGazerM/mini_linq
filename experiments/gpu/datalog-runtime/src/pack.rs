@@ -86,14 +86,8 @@ impl Word for u128 {
     }
     #[inline(always)]
     fn set_lane(&mut self, lane: u32, value: u64) {
-        // Select whole lanes: a dynamic u128 mask can lower to a mask that
-        // clears the opposite lane on the device. Constant lane masks also
-        // avoid multiword dynamic-shift machinery.
-        if lane == 0 {
-            *self = (*self & !(u64::MAX as u128)) | value as u128;
-        } else {
-            *self = (*self as u64 as u128) | ((value as u128) << 64);
-        }
+        let shift = lane * 64;
+        *self = (*self & !((u64::MAX as u128) << shift)) | ((value as u128) << shift);
     }
 }
 
