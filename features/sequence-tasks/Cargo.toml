@@ -24,6 +24,8 @@ cq-sequence-pull.workspace = true
 proc-macro2.workspace = true
 quote.workspace = true
 syn.workspace = true
+cq-storage = { path = "../../runtime/cq-storage" }
+rayon = "1"
 
 [dev-dependencies]
 cq-testkit = { path = "../../testkit/cq-testkit", features = ["sequence-conformance"] }

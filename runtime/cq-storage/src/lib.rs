@@ -99,6 +99,8 @@ mod ordered;
 pub mod rows;
 mod sorted_run;
 pub mod sequence;
+pub mod sharded;
+pub use sharded::Sharded;
 mod trie;
 
 pub use answers::{Answers, GroupedAnswers, SingleGroup};

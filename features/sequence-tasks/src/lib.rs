@@ -5,7 +5,8 @@
 //! analysis. Host and task-local constructors reuse the sequential interpreter.
 //! Pool chunks own their buffers and publish in chunk order at the join. Rayon
 //! propagates a task panic to that join rather than publishing partial output.
-//! Grouped folds join canonical valuations before parallel keyed aggregation.
+//! Key-disjoint partitions support local canon and keyed folds; global monoids
+//! combine task-local partials at the host.
 
 use cq_lang_sequence::{Analysis, LevelNode, Machine, Program, Term, Tiling};
 use quote::{format_ident, quote};
@@ -24,6 +25,8 @@ impl Default for Config {
         Self { threads: None, grain: 1024 }
     }
 }
+
+pub mod combine;
 
 /// The host owns a separated dynamic pool of sequential tasks.
 pub fn machine() -> Machine {
@@ -74,6 +77,47 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
     ];
     for token in &mut catalog.providers {
         token.levels = levels.clone();
+    }
+    // Hash sharding retains exact probes, but not a shard's global ordering.
+    // Providers are published at the pool join and read by sequential tasks.
+    let task = vec![vec!["host".into(), "pool".into(), "task".into()]];
+    use cq_lang_sequence::{Capability, ProviderToken};
+    for (ty, capabilities) in [
+        (
+            syn::parse_quote!(::cq_storage::sharded::Sharded<::cq_storage::HashSet<_>>),
+            vec![Capability::Membership],
+        ),
+        (
+            syn::parse_quote!(::cq_storage::sharded::Sharded<::std::collections::HashSet<_>>),
+            vec![Capability::Membership],
+        ),
+        (
+            syn::parse_quote!(::cq_storage::sharded::Sharded<::std::collections::HashSet<_, _>>),
+            vec![Capability::Membership],
+        ),
+        (
+            syn::parse_quote!(::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>>),
+            vec![Capability::Exact, Capability::Membership],
+        ),
+        (
+            syn::parse_quote!(::cq_storage::sharded::Sharded<::cq_storage::SortedRun<_, _>>),
+            vec![Capability::Exact, Capability::Membership],
+        ),
+        (
+            syn::parse_quote!(::cq_storage::sharded::Sharded<::cq_storage::SortedRun<_, _, _>>),
+            vec![Capability::Exact, Capability::Membership],
+        ),
+        (
+            syn::parse_quote!(::cq_storage::sharded::Sharded<::std::collections::BTreeMap<_, ::std::vec::Vec<_>>>),
+            vec![Capability::Exact, Capability::Membership],
+        ),
+    ] {
+        catalog.providers.push(ProviderToken {
+            ty,
+            capabilities,
+            levels: task.clone(),
+            elements: None,
+        });
     }
     for token in &mut catalog.codecs {
         token.levels = levels.clone();
