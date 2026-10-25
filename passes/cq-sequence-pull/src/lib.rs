@@ -403,13 +403,14 @@ impl<'a> Emitter<'a> {
         let columns: Vec<_> = keys.iter().map(symbol_name).collect();
         let pattern = self.context().bind_columns(result, &columns, false);
         let key: Vec<_> = columns.iter().map(|column| self.context().access(result, column)).collect();
+        let key = cq_print::group(&key);
         let rows = input.rows;
         input.rows = quote!({
             let mut __cq_parts: ::std::vec::Vec<::std::vec::Vec<_>> =
                 (0..#parts).map(|_| ::std::vec::Vec::new()).collect();
             for __cq_row in #rows {
                 let #pattern = &__cq_row;
-                let __cq_part = ::cq_storage::sharded::route_index(&(#(#key,)*), #parts);
+                let __cq_part = ::cq_storage::sharded::route_index(&#key, #parts);
                 __cq_parts[__cq_part].push(__cq_row);
             }
             __cq_parts.into_iter()
