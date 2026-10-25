@@ -509,16 +509,27 @@ impl<'a> Context<'a> {
 
     /// Publish providers from the key-disjoint parts recorded by Sequence.
     /// The caller owns the parts binding for the lifetime of every provider.
-    pub fn materialize_partitioned(&mut self, name: &str, parts: TokenStream) -> Repr {
+    pub fn materialize_partitioned(
+        &mut self,
+        name: &str,
+        parts: TokenStream,
+        routing: &[String],
+    ) -> syn::Result<Repr> {
+        for (levels, _) in self.analysis.built.get(name).into_iter().flatten() {
+            if !levels.first().is_some_and(|key| routing.iter().all(|column| key.contains(column))) {
+                return error(&self.physical[name].name,
+                    "Tasks provider routing must be determined by its outer lookup key");
+            }
+        }
         let rows = quote!((#parts).iter().flatten().cloned());
-        self.materialize_from(name, rows, Some(parts))
+        Ok(self.materialize_from(name, rows, Some((parts, routing))))
     }
 
     fn materialize_from(
         &mut self,
         name: &str,
         source: TokenStream,
-        parts: Option<TokenStream>,
+        parts: Option<(TokenStream, &[String])>,
     ) -> Repr {
         let structures: Vec<(Vec<Vec<String>>, syn::Type)> =
             self.analysis.built.get(name).cloned().unwrap_or_default();
@@ -642,12 +653,23 @@ impl<'a> Context<'a> {
             let sharded = matches!(ty, syn::Type::Path(path)
                 if path.path.segments.last().is_some_and(|segment| segment.ident == "Sharded"));
             let build = if sharded {
-                let parts = parts.as_ref().expect("Sharded provider requires a Sequence key partition");
-                quote!(<#ty>::build_parts(
+                let (parts, routing) = parts.as_ref().expect("Sharded provider requires a Sequence key partition");
+                let syn::Type::Path(path) = ty else { unreachable!() };
+                let syn::PathArguments::AngleBracketed(arguments) =
+                    &path.path.segments.last().unwrap().arguments else { unreachable!() };
+                let inner = arguments.args.first().expect("checked sharded provider");
+                let fields = routing.iter().map(|column| {
+                    syn::Index::from(levels[0].iter().position(|key| key == column).expect("checked routing key"))
+                }).collect::<Vec<_>>();
+                let key_types = levels[0].iter().map(|_| quote!(_)).collect::<Vec<_>>();
+                quote!(::cq_storage::sharded::Sharded::<#inner, _>::build_parts_with_router(
                     (#parts).iter().map(|__cq_part| {
                         __cq_part.iter().cloned().map(|#pattern| #nested)
                             .collect::<::std::vec::Vec<_>>()
-                    }).collect::<::std::vec::Vec<_>>()
+                    }).collect::<::std::vec::Vec<_>>(),
+                    |__cq_key: &(#(#key_types,)*), __cq_count| {
+                        ::cq_storage::sharded::route_index(&(#(&__cq_key.#fields,)*), __cq_count)
+                    }
                 ))
             } else if let Some(selection) = selection.as_ref().filter(|_| !bare) {
                 let host_pattern = self.positional_pattern(name);

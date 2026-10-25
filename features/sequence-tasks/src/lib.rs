@@ -27,6 +27,7 @@ impl Default for Config {
 }
 
 pub mod combine;
+mod keyed;
 
 /// The host owns a separated dynamic pool of sequential tasks.
 pub fn machine() -> Machine {
@@ -167,7 +168,9 @@ pub fn translate_with(
     config: Config,
 ) -> syn::Result<syn::Expr> {
     let mut tiles = std::collections::BTreeMap::new();
+    let mut partition_inputs = std::collections::BTreeSet::new();
     for definition in &program.sequence.definitions {
+        keyed::ancestors(&definition.term, &mut partition_inputs);
         let name = syn::ext::IdentExt::unraw(&definition.name).to_string();
         let mut nodes = Vec::new();
         tile_nodes(&definition.term, &mut nodes);
@@ -184,7 +187,7 @@ pub fn translate_with(
     let mut expression = cq_sequence_pull::translate_with(
         program,
         analysis,
-        |term, _emitter, child, output, _, _| {
+        |term, emitter, child, output, owner, _| {
             if let Term::Tile { n, .. } = term
                 && tiles.get(&(term as *const Term))
                     .is_some_and(|kind| **kind == Tiling::Distribute)
@@ -196,6 +199,29 @@ pub fn translate_with(
                 let binding = format_ident!("__cq_task_driver_{}", partitions.len());
                 partitions.push((binding.clone(), input.rows.clone(), *n));
                 output.rows = quote!(::core::iter::once(#binding.iter().cloned()));
+            } else if let Term::PartitionK { keys, parts, .. } = term {
+                let input = child.expect("checked key partition");
+                output.rows = keyed::partition(emitter, input, keys, *parts, config.grain)?;
+            } else if matches!(term, Term::Canon(_))
+                && child.is_some_and(|input| input.depth == 1)
+            {
+                output.rows = keyed::canon(child.unwrap());
+            } else if let Term::Group(name, _) = term
+                && child.is_some_and(|input| input.depth == 1)
+            {
+                let input = child.unwrap();
+                let result = name.to_string();
+                let global = matches!(
+                    &emitter.context().physical[&result].operator,
+                    cq_lang_sequence::structures::physical::Operator::Group(group)
+                        if group.keys.is_empty()
+                );
+                output.rows = if global {
+                    keyed::global(emitter, input, name, partitions.pop())?
+                } else {
+                    keyed::group(emitter, input, name)?
+                };
+                output.depth = usize::from(!global);
             } else if (matches!(term, Term::Flatten(_)) && output.depth == 0)
                 || (matches!(term, Term::Store { .. }) && output.depth == 1)
             {
@@ -221,6 +247,38 @@ pub fn translate_with(
                         #joined
                     });
                 }
+            }
+            if matches!(term, Term::Store { .. }) && partition_inputs.contains(owner) {
+                let rows = &output.rows;
+                let binding = format_ident!("__cq_key_source_{}", owner);
+                emitter.context_mut().statements.push(syn::parse_quote!(
+                    let #binding = (#rows).collect::<::std::vec::Vec<_>>();
+                ));
+                emitter.context_mut().bound = true;
+                emitter.mark_target_published(owner);
+                output.rows = quote!(#binding.iter().cloned());
+            } else if matches!(term, Term::Store { .. }) && output.depth == 1
+                && let Some((keys, _)) = keyed::partition_source(term)
+                && let Some(result) = output.result.clone()
+                && analysis.structures.built.get(&result).is_some_and(|providers|
+                    providers.iter().any(|(_, ty)| matches!(ty, syn::Type::Path(path)
+                        if path.path.segments.last().is_some_and(|segment| segment.ident == "Sharded"))))
+            {
+                let rows = &output.rows;
+                let binding = format_ident!("__cq_key_parts_{}", owner);
+                emitter.context_mut().statements.push(syn::parse_quote!(
+                    let #binding = (#rows).map(|__cq_part|
+                        __cq_part.collect::<::std::vec::Vec<_>>())
+                        .collect::<::std::vec::Vec<_>>();
+                ));
+                let keys = keys.iter().map(ToString::to_string).collect::<Vec<_>>();
+                let repr = emitter.context_mut().materialize_partitioned(
+                    &result, quote!(#binding), &keys,
+                )?;
+                emitter.context_mut().reprs.insert(result, repr);
+                emitter.context_mut().bound = true;
+                emitter.mark_target_published(owner);
+                output.rows = quote!(#binding.iter().cloned().map(::std::vec::Vec::into_iter));
             }
             Ok(())
         },
@@ -250,6 +308,7 @@ fn tile_nodes(term: &Term, output: &mut Vec<*const Term>) {
         | Term::Canon(inner)
         | Term::Store { inner, .. }
         | Term::Tile { inner, .. }
+        | Term::PartitionK { inner, .. }
         | Term::Lookup { inner, .. } => tile_nodes(inner, output),
         Term::Choose(arms) => {
             for (_, arm) in arms {
