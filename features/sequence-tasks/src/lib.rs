@@ -182,20 +182,53 @@ pub fn select_providers(
     // A legal authored provider may supply stronger capabilities needed by an
     // authored tile (for example range cursors). Retarget only unavailable
     // families; do not downgrade an existing native representation.
-    for (original, selected) in source.structures.structures.entries.iter()
-        .zip(&mut target.structures.structures.entries)
-    {
-        if let (
-            cq_lang_sequence::structures::Structure::Built { keyed: original, .. },
-            cq_lang_sequence::structures::Structure::Built { keyed: selected, .. },
-        ) = (&original.structure, &mut selected.structure)
-            && catalog.providers.iter().any(|token|
-                cq_sequence_plan::matches_type(&token.ty, &original.ty))
-        {
-            selected.ty = original.ty.clone();
+    for original in &source.structures.structures.entries {
+        let cq_lang_sequence::structures::Structure::Built { keyed, .. } = &original.structure else {
+            continue;
+        };
+        if !catalog.providers.iter().any(|token|
+            cq_sequence_plan::matches_type(&token.ty, &keyed.ty)) {
+            continue;
+        }
+        // Retention removes keyed Host entries and appends Built entries:
+        // entry positions are not stable identities across selection.
+        for selected in &mut target.structures.structures.entries {
+            if selected.name == original.name
+                && let cq_lang_sequence::structures::Structure::Built { keyed: replacement, .. } = &mut selected.structure
+                && keyed.levels == replacement.levels
+                && keyed.membership == replacement.membership
+                && keyed.filtered == replacement.filtered
+            {
+                replacement.ty = keyed.ty.clone();
+            }
         }
     }
-    cq_lang_sequence::structures::check_retention_rewrite(&source.structures, &target.structures)?;
+    for (old, retained) in source.structures.physical.program.definitions.iter()
+        .zip(&target.structures.physical.program.definitions) {
+        if old.mode == retained.mode {
+            continue;
+        }
+        // Catalog retention changes a host rename's mode, but Sequence was
+        // lowered before selection. Its publication must become explicit too.
+        if let Some(definition) = target.sequence.definitions.iter_mut()
+            .find(|definition| definition.name == retained.name) {
+            if !matches!(definition.term, Term::Store { .. }) {
+                let inner = std::mem::replace(&mut definition.term, Term::Union(Vec::new()));
+                definition.term = Term::Store { capacity: None, inner: Box::new(inner) };
+            }
+        } else {
+            target.sequence.definitions.insert(0, cq_lang_sequence::Definition {
+                name: retained.name.clone(),
+                term: Term::Store { capacity: None, inner: Box::new(Term::Rows(retained.name.clone())) },
+            });
+            if let Some(graded) = &mut target.graded {
+                graded.grades.push(cq_lang_sequence::Grade {
+                    name: retained.name.clone(), level: vec![syn::parse_quote!(host)],
+                });
+            }
+        }
+    }
+    cq_lang_sequence::check_rewrite(source, &target)?;
     Ok(target)
 }
 

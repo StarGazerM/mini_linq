@@ -641,3 +641,48 @@ fn routed_providers_keep_subset_and_reordered_keys_through_named_publication() {
         }
     });
 }
+
+#[test]
+fn catalog_retention_materializes_new_providers_and_preserves_native_entry_identity() {
+    let source: Program = syn::parse_quote! {
+        physical {
+            relation L(a:i32); relation R(a:i32,b:i32); relation S(b:i32,c:i32);
+            l = pipe rename L@0 {a -> a};
+            r = pipe rename R@1 {a -> a,b -> b};
+            s = let rename S@2 {b -> b,c -> c};
+            joined = pipe probe first [a] l,r;
+            result = pipe canon probe first [b] joined,s;
+            return result as answer(a,b,c);
+        }
+        structures {
+            l host scan = Reader [];
+            r host scan = Reader [];
+            r host joined = Reader [a];
+            s host scan = Reader [];
+            s = ::cq_storage::SortedRun<_, _, _> [b];
+            result canon = ::std::collections::HashSet<_>;
+        }
+        sequence {
+            l = rows l;
+            r = rows r;
+            s = store rows s;
+            joined = flatten lookup r[a] l;
+            result = canon flatten lookup s[b] joined;
+            output_rows = store result;
+        }
+        graded tasks {
+            l at host; r at host; s at host; joined at host;
+            result at host; output_rows at host;
+        }
+    };
+    let target = cq_sequence_tasks::select_providers(&source, &cq_sequence_tasks::catalog()).unwrap();
+    assert!(target.sequence.definitions.iter().any(|definition|
+        definition.name == "r" && matches!(definition.term, cq_lang_sequence::Term::Store { .. })));
+    let native: syn::Type = syn::parse_quote!(::cq_storage::SortedRun<_, _, _>);
+    assert!(target.structures.structures.entries.iter().any(|entry|
+        entry.name == "s" && matches!(&entry.structure,
+            cq_lang_sequence::structures::Structure::Built { keyed, .. } if keyed.ty == native)));
+    cq_lang_sequence::check_rewrite(&source, &target).unwrap();
+    let facts = check_grading(&target, &machine()).unwrap();
+    translate(&target, &facts).unwrap();
+}

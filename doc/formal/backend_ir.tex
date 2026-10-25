@@ -457,6 +457,11 @@ original host scans, existing key layouts and canonical boundaries.
 Provider, retained-row, membership-state and canon implementation types
 may change. Ordinary Structures rewrites still require exact Physical
 syntax; neither boundary permits replacing an opaque reader or predicate.
+When catalog selection follows Sequence lowering, each newly retained
+rename also receives an explicit Sequence store, so its provider is built
+before lookup emission. Native provider preservation matches result and
+key layout, not entry position: retention removes fallback entries and
+appends indexes, changing their positions.
 Placement propagates opaque evaluation and its unstored feeds to host before
 assigning descendant work. String-literal predicates and operations reading
 or producing String-bearing rows likewise stay host through the projection
