@@ -761,3 +761,32 @@ fn task_catalog_retains_membership_fallbacks_before_shared_reads() {
         entry.name == "r" && matches!(&entry.structure,
             cq_lang_sequence::structures::Structure::Built { .. })));
 }
+
+#[test]
+fn membership_projected_probes_keep_native_keysets() {
+    let source: Program = syn::parse_quote! {
+        physical {
+            relation L(a:i64); relation R(a:i64);
+            consumer canonical;
+            l = pipe rename L@0 {a -> a};
+            r = let rename R@1 {a -> a};
+            result = pipe probe first [a] l,r;
+            return result as answer(a);
+        }
+        structures {
+            l host scan = Reader []; r host scan = Reader [];
+            r = ::cq_storage::AdaptiveKeySet<_, ::cq_storage::BorrowedI64TupleCodec, 16777216>
+                [a] membership payload [a] constants {};
+        }
+        sequence {
+            l = rows l; r = store rows r;
+            result = compact result lookup r[a] l;
+            output_rows = store result;
+        }
+    };
+    let target = cq_sequence_tasks::select_providers(&source, &cq_sequence_tasks::catalog()).unwrap();
+    let native: syn::Type = syn::parse_quote!(::cq_storage::AdaptiveKeySet<_, ::cq_storage::BorrowedI64TupleCodec, 16777216>);
+    assert!(target.structures.structures.entries.iter().any(|entry|
+        entry.name == "r" && matches!(&entry.structure,
+            cq_lang_sequence::structures::Structure::Built { keyed, .. } if keyed.ty == native)));
+}

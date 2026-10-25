@@ -56,6 +56,7 @@ pub fn select_from_catalog(
                             }
                             Capability::Membership
                         }
+                        Some(Operator::Probe(..)) if keyed.membership.is_some() => Capability::Membership,
                         Some(Operator::Merge(..)) => Capability::Ordered,
                         _ => Capability::Exact,
                     };
