@@ -224,6 +224,28 @@ impl<'a> RowEmitter<'a> {
         result
     }
 
+    /// Fold a checked keyed Group into a caller-owned task accumulator.
+    pub fn accumulate_group(
+        &mut self,
+        name: &str,
+        input: (String, TokenStream),
+        table: TokenStream,
+    ) -> syn::Result<TokenStream> {
+        let definition = self.printer.physical[name];
+        let Operator::Group(group) = &definition.operator else {
+            return error(&definition.name, "group accumulator requires Group provenance");
+        };
+        if group.keys.is_empty() {
+            return error(&definition.name, "keyed group accumulator requires nonempty keys");
+        }
+        let previous = self.printer.consumer.replace(name.to_owned());
+        let previous_input = std::mem::replace(&mut self.printer.input, Some(input));
+        let result = self.printer.group_with_accumulator(name, group, Some(&table));
+        self.printer.consumer = previous;
+        self.printer.input = previous_input;
+        result
+    }
+
     /// Emit the recorded smallest candidate pair at its consuming boundary.
     /// Canon and storage remain the surrounding Sequence constructors.
     pub fn intersection(&mut self, name: &str) -> syn::Result<Option<TokenStream>> {

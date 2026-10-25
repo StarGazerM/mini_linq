@@ -6,6 +6,15 @@ impl<'a> Printer<'a> {
     /// Consume every canonical valuation before publishing any group result.
     /// Equal argument values from different valuations contribute separately.
     fn group(&mut self, name: &str, group: &cq::algebra::Group) -> syn::Result<TokenStream> {
+        self.group_with_accumulator(name, group, None)
+    }
+
+    pub(super) fn group_with_accumulator(
+        &mut self,
+        name: &str,
+        group: &cq::algebra::Group,
+        accumulator: Option<&TokenStream>,
+    ) -> syn::Result<TokenStream> {
         use cq::algebra::AggregateKind;
         let input = self.scan(&group.input)?;
         let input_name = symbol_name(&group.input);
@@ -126,6 +135,16 @@ impl<'a> Printer<'a> {
                 }
                 ::core::iter::once(#row)
             }));
+        }
+        if let Some(table) = accumulator {
+            return Ok(quote! {
+                for #pattern in #input {
+                    #(#arguments)*
+                    let #state: &mut (#(#types,)*) = (#table).entry((#(#key_values,)*))
+                        .or_insert_with(|| (#(#identities,)*));
+                    #(#updates)*
+                }
+            });
         }
         Ok(quote!({
             let mut #table: ::std::collections::HashMap<_, (#(#types,)*)> =

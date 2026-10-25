@@ -331,6 +331,9 @@ pub struct Analysis {
     pub shapes: BTreeMap<String, Vec<Len>>,
     /// Tile interpretations in constructor preorder, grouped by definition.
     pub tilings: BTreeMap<String, Vec<Tiling>>,
+    /// Checked host-merged partial-fold modes for Group constructors in preorder,
+    /// grouped by owning definition. Ref uses retain their producer's entries.
+    pub partial_groups: BTreeMap<String, Vec<bool>>,
     pub views: BTreeSet<String>,
     pub stores: BTreeMap<String, Len>,
     pub capabilities: BTreeMap<(String, Vec<String>), Capability>,

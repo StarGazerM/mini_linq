@@ -670,3 +670,149 @@ fn selected_provider_publication_precedes_every_keyed_consumer() {
     assert!(error.to_string().contains("must precede every keyed read"));
 }
 
+#[test]
+fn unique_keyed_groups_stream_tiles_through_single_use_valuation_spines() {
+    let mut source = grouped(false);
+    source.structures.physical.program.definitions.insert(1, syn::parse_quote!(
+        selected = pipe select lineitem if (quantity > 0);
+    ));
+    let totals = source.structures.physical.program.definitions.iter_mut()
+        .find(|definition| definition.name == "totals").unwrap();
+    let cq_lang_sequence::structures::physical::Operator::Group(group) = &mut totals.operator
+        else { panic!("group fixture") };
+    group.input = syn::parse_quote!(selected);
+    source.evidence = syn::parse_quote!(evidence { key Lineitem [orderkey, linenumber]; });
+    source.sequence.definitions = vec![
+        syn::parse_quote!(input = rows lineitem;),
+        syn::parse_quote!(filtered = compact selected input;),
+        syn::parse_quote!(valuations = map selected filtered;),
+        syn::parse_quote!(result = store group totals valuations;),
+    ];
+    let rewritten = key_partition(&source, quote!(result, unused, [], 8)).unwrap();
+    assert_eq!(rewritten.sequence.definitions.len(), source.sequence.definitions.len());
+    assert_eq!(rewritten.sequence.definitions[0].term, syn::parse_quote!(tile 8 rows lineitem));
+    assert_eq!(rewritten.sequence.definitions[1].term, source.sequence.definitions[1].term);
+    assert_eq!(rewritten.sequence.definitions[2].term, source.sequence.definitions[2].term);
+    assert_eq!(cq_lang_sequence::contract::check(&rewritten).unwrap().shapes["result"].len(), 1);
+    let planned = decompose(&source, &machine(Some(8)), &catalog()).unwrap();
+    assert!(planned.trace.iter().any(|advice| matches!(advice, Advice::KeyPartition(k)
+        if k.name == "result" && k.keys.is_empty())));
+    assert!(!planned.program.sequence.definitions.iter()
+        .any(|definition| definition.name.to_string().starts_with("__cq_key_input_result")));
+    assert!(!planned.program.to_token_stream().to_string().contains("partition_k"));
+    let facts = cq_lang_sequence::check_grading(&planned.program, &machine(Some(8))).unwrap();
+    for view in ["input", "filtered", "valuations"] {
+        assert_eq!(facts.levels[view], vec!["host".to_owned(), "pool".to_owned(), "task".to_owned()]);
+    }
+    replay(&source, &planned);
+}
+
+#[test]
+fn streaming_partial_group_preserves_existing_stores_and_rejects_shared_pipes() {
+    let mut source = grouped(false);
+    source.evidence = syn::parse_quote!(evidence { key Lineitem [orderkey, linenumber]; });
+    source.sequence.definitions.last_mut().unwrap().term = syn::parse_quote!(store group totals input);
+    let rewritten = key_partition(&source, quote!(result, unused, [], 8)).unwrap();
+    assert_eq!(rewritten.sequence.definitions[0], source.sequence.definitions[0]);
+    assert_eq!(rewritten.sequence.definitions[1].term,
+        syn::parse_quote!(store group totals tile 8 input));
+    source.sequence.definitions[0].term = syn::parse_quote!(rows lineitem);
+    source.sequence.definitions.insert(1, syn::parse_quote!(other = map lineitem input;));
+    assert!(key_partition(&source, quote!(result, unused, [], 8)).is_err());
+    assert!(key_partition(&grouped(false), quote!(result, unused, [], 8)).is_err());
+}
+
+#[test]
+fn opaque_partial_group_publishes_host_owned_parts_without_totality_claims() {
+    let mut source = grouped(false);
+    source.structures.physical.program.definitions.insert(1, syn::parse_quote!(
+        mapped = pipe bind lineitem with extra:i64 = (opaque_fn(*quantity));
+    ));
+    let totals = source.structures.physical.program.definitions.iter_mut()
+        .find(|definition| definition.name == "totals").unwrap();
+    let cq_lang_sequence::structures::physical::Operator::Group(group) = &mut totals.operator
+        else { panic!("group fixture") };
+    group.input = syn::parse_quote!(mapped);
+    source.evidence = syn::parse_quote!(evidence { key Lineitem [orderkey, linenumber]; });
+    source.sequence.definitions = vec![
+        syn::parse_quote!(input = store rows lineitem;),
+        syn::parse_quote!(valuations = map mapped input;),
+        syn::parse_quote!(result = store group totals valuations;),
+    ];
+    let target = key_partition(&source, quote!(result, host_parts, [], 8)).unwrap();
+    assert_eq!(target.sequence.definitions[1], source.sequence.definitions[1]);
+    assert_eq!(target.sequence.definitions[2].term,
+        syn::parse_quote!(store tile 8 valuations));
+    assert_eq!(target.sequence.definitions[3].term,
+        syn::parse_quote!(store group totals host_parts));
+    assert_eq!(target.structures.physical, source.structures.physical);
+
+    let machine = machine(Some(8));
+    let planned = decompose_with_key_partitions(
+        &source, &machine, &catalog(), &[policy("result", true)],
+    ).unwrap();
+    let partial = planned.trace.iter().find_map(|advice| match advice {
+        Advice::KeyPartition(advice) if advice.name == "result" => Some(advice),
+        _ => None,
+    }).unwrap();
+    assert!(partial.keys.is_empty());
+    let facts = cq_lang_sequence::check_grading(&planned.program, &machine).unwrap();
+    assert_eq!(facts.levels["valuations"], vec!["host".to_owned()]);
+    assert_eq!(facts.levels[&partial.input.to_string()], vec!["host".to_owned()]);
+    assert_eq!(facts.shapes[&partial.input.to_string()].len(), 2);
+    assert_eq!(facts.shapes["result"].len(), 1);
+    let result = planned.program.sequence.definitions.iter().find(|d| d.name == "result").unwrap();
+    let input = &partial.input;
+    assert_eq!(result.term, syn::parse_quote!(store group totals #input));
+    replay(&source, &planned);
+}
+
+#[test]
+fn keyed_group_cost_compares_partial_map_merge_with_key_routing() {
+    let machine = machine(Some(8));
+    for groups in [1usize, 4096] {
+        let mut source = grouped(false);
+        source.sequence.definitions.last_mut().unwrap().term = syn::parse_quote!(store group totals input);
+        source.evidence = syn::parse2(quote!(evidence {
+            key Lineitem [orderkey, linenumber];
+            count Lineitem = 4096;
+            count totals = #groups;
+        })).unwrap();
+        let mut partial = key_partition(&source, quote!(result, unused, [], 8)).unwrap();
+        partial.graded = Some(syn::parse_quote!(graded tasks { input at host; result at host.pool; }));
+        let mut routed = key_partition(&source,
+            quote!(result, staged, [returnflag, linestatus], 8)).unwrap();
+        routed.graded = Some(syn::parse_quote!(graded tasks {
+            input at host; staged at host; result at host.pool;
+        }));
+        let partial_cost = cost(&partial, &machine).unwrap();
+        let routed_cost = cost(&routed, &machine).unwrap();
+        assert_eq!(partial_cost.better_than(&routed_cost), groups == 1,
+            "groups={groups}: partial={partial_cost}, routed={routed_cost}");
+        assert_eq!(routed_cost.better_than(&partial_cost), groups == 4096);
+        let planned = decompose_with_key_partitions(
+            &source, &machine, &catalog(), &[policy("result", true)],
+        ).unwrap();
+        let chosen = planned.trace.iter().find_map(|advice| match advice {
+            Advice::KeyPartition(advice) if advice.name == "result" => Some(advice),
+            _ => None,
+        }).unwrap();
+        assert_eq!(chosen.keys.is_empty(), groups == 1);
+        replay(&source, &planned);
+    }
+}
+
+#[test]
+fn unknown_partial_map_merge_is_symbolic_not_free() {
+    let mut source = grouped(false);
+    source.evidence = syn::parse_quote!(evidence { key Lineitem [orderkey, linenumber]; });
+    let planned = decompose(&source, &machine(Some(8)), &catalog()).unwrap();
+    assert!(planned.trace.iter().any(|advice| matches!(advice, Advice::KeyPartition(k)
+        if k.name == "result" && k.keys.is_empty())));
+    let cost = cost(&planned.program, &machine(Some(8))).unwrap().to_string();
+    assert_eq!(planned.program.sequence.output, Some(cq_lang_sequence::OutputProtocol::Reserve));
+    assert!(cost.contains("8*scan(group(totals))"), "{cost}");
+    let unproved = decompose(&grouped(false), &machine(Some(8)), &catalog()).unwrap();
+    assert!(unproved.trace.iter().any(|advice| matches!(advice, Advice::KeyPartition(k)
+        if k.name == "result" && !k.keys.is_empty())));
+}

@@ -172,6 +172,7 @@ pub struct Emitter<'a> {
     values: BTreeMap<String, Value>,
     target_published: std::collections::BTreeSet<String>,
     lengths: BTreeMap<String, TokenStream>,
+    partial_groups: BTreeMap<*const Term, bool>,
     owner: String,
     pull: bool,
     owned_answer: bool,
@@ -181,6 +182,15 @@ impl<'a> Emitter<'a> {
     pub fn new(program: &'a Program, analysis: &'a Analysis) -> Self {
         let mut context = Context::new(&program.structures, &analysis.structures);
         context.certify_host_sets(&program.structures);
+        let mut partial_groups = BTreeMap::new();
+        for definition in &program.sequence.definitions {
+            let mut nodes = Vec::new();
+            group_nodes(&definition.term, &mut nodes);
+            let flags = analysis.partial_groups.get(&symbol_name(&definition.name));
+            for (node, flag) in nodes.into_iter().zip(flags.into_iter().flatten()) {
+                partial_groups.insert(node, *flag);
+            }
+        }
         Self {
             analysis,
             program,
@@ -188,6 +198,7 @@ impl<'a> Emitter<'a> {
             values: BTreeMap::new(),
             target_published: std::collections::BTreeSet::new(),
             lengths: BTreeMap::new(),
+            partial_groups,
             owner: String::new(),
             pull: false,
             owned_answer: false,
@@ -205,6 +216,11 @@ impl<'a> Emitter<'a> {
     /// A target hook has already emitted this store's binding and providers.
     pub fn mark_target_published(&mut self, owner: &str) {
         self.target_published.insert(owner.to_owned());
+    }
+
+    /// The contract's proof-derived interpretation of this exact Group node.
+    pub fn is_partial_group(&self, term: &Term) -> bool {
+        *self.partial_groups.get(&(term as *const Term)).expect("checked Group interpretation")
     }
 
     /// Publish the exact count of an already evaluated Sequence store.
@@ -468,6 +484,9 @@ impl<'a> Emitter<'a> {
         input.rows =
             quote!(::core::iter::Iterator::flat_map(#rows, ::core::iter::IntoIterator::into_iter));
         input.depth = input.depth.saturating_sub(1);
+        if self.pull && input.depth == 0 {
+            input.partitioned = false;
+        }
         input.stored = false;
         input
     }
@@ -485,6 +504,7 @@ impl<'a> Emitter<'a> {
         });
         input.depth += 1;
         input.stored = false;
+        input.partitioned = true;
         input
     }
     /// Serial interpretation of the same fixed key routing used by task targets.
@@ -509,6 +529,7 @@ impl<'a> Emitter<'a> {
         });
         input.depth += 1;
         input.stored = false;
+        input.partitioned = true;
         Ok(input)
     }
 
@@ -768,6 +789,27 @@ impl<'a> Emitter<'a> {
     /// A task-local global aggregate produces partials, not final Group rows.
     pub fn group_partial(&mut self, name: &Ident, input: Value) -> syn::Result<Value> {
         self.group_with_output(name, input, true)
+    }
+
+    /// Reuse the native Group row updates in one scheduler-task accumulator.
+    pub fn group_accumulate(
+        &mut self, name: &Ident, input: Value, table: TokenStream,
+    ) -> syn::Result<TokenStream> {
+        let result = symbol_name(name);
+        self.register(&result);
+        let Operator::Group(group) = &self.context().physical[&result].operator else {
+            return Err(syn::Error::new_spanned(name, "group lacks Physical group provenance"));
+        };
+        let operand = symbol_name(&group.input);
+        let label = format!("{result}.partial");
+        let index = self.context_mut().profile_label(&label, "GROUP_PARTIAL", "", vec![operand.clone()]);
+        let body = self.adapters.accumulate_group(&result, (operand, input.rows), table)?;
+        Ok(if self.context().profile.is_some() {
+            let profile = self.context().profile_handle();
+            quote!(#profile.scope(#index, || #body))
+        } else {
+            body
+        })
     }
 
     fn group_with_output(&mut self, name: &Ident, input: Value, partial: bool) -> syn::Result<Value> {
@@ -1170,9 +1212,7 @@ fn translate_with_profile(
                 })?
             }
             Term::Group(name, _) => {
-                let global = matches!(&emitter.context().physical[&symbol_name(name)].operator,
-                    Operator::Group(group) if group.keys.is_empty());
-                if global && input().depth != 0 {
+                if emitter.is_partial_group(node) {
                     let flat = emitter.flatten(input());
                     emitter.group(name, flat)?
                 } else {
@@ -1319,5 +1359,24 @@ fn choice_rows(rows: TokenStream, depth: usize) -> TokenStream {
     } else {
         let part = choice_rows(quote!(__cq_choice_part), depth - 1);
         quote!((#rows).into_iter().map(|__cq_choice_part| #part))
+    }
+}
+
+fn group_nodes(term: &Term, output: &mut Vec<*const Term>) {
+    if matches!(term, Term::Group(..)) {
+        output.push(term as *const Term);
+    }
+    match term {
+        Term::Map(_, inner) | Term::Compact(_, inner) | Term::Flatten(inner)
+        | Term::Fold(_, inner) | Term::Group(_, inner) | Term::Canon(inner)
+        | Term::Store { inner, .. } | Term::Tile { inner, .. }
+        | Term::PartitionK { inner, .. } | Term::Lookup { inner, .. } => group_nodes(inner, output),
+        Term::Choose(arms) => {
+            for (_, arm) in arms { group_nodes(arm, output); }
+        }
+        Term::Union(arms) => {
+            for arm in arms { group_nodes(arm, output); }
+        }
+        Term::Rows(_) | Term::Ref(_) => {}
     }
 }

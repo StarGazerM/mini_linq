@@ -211,6 +211,7 @@ fn analyze_in(
             lengths: BTreeMap::new(),
             shapes: BTreeMap::new(),
             tilings: BTreeMap::new(),
+            partial_groups: BTreeMap::new(),
             views: BTreeSet::new(),
             stores: BTreeMap::new(),
             capabilities: BTreeMap::new(),
@@ -940,6 +941,12 @@ impl Checked<'_> {
             }
             Term::Group(name, inner) => {
                 // Formal rule BE-Group: Fold each key's complete distinct valuation set at host.
+                let group_slot = {
+                    let modes = self.analysis.partial_groups.entry(owner.into()).or_default();
+                    let slot = modes.len();
+                    modes.push(false);
+                    slot
+                };
                 let mut fact = self.term(inner, owner)?;
                 let Operator::Group(group) = &self.physical(name)?.operator else {
                     return fail(name, "BE-Group", "group must name a Physical group");
@@ -959,9 +966,10 @@ impl Checked<'_> {
                     }
                 }
                 // Formal rule BE-GroupPartial: Globally distinct parts fold locally and merge once at host.
-                let partial = group.keys.is_empty() && fact.partitioned && fact.max_depth == 1;
+                let partial = fact.partitioned && fact.max_depth == 1
+                    && (group.keys.is_empty() || fact.partition.is_none());
                 if partial && fact.unique.is_none() {
-                    return fail(term, "BE-GroupPartial", "partial global folds require valuations distinct across parts: a global key or per-key-part canon");
+                    return fail(term, "BE-GroupPartial", "partial folds require valuations distinct across parts: a global key or key-routed canon");
                 }
                 if !partial && fact.max_depth != usize::from(fact.partition.is_some()) {
                     return fail(
@@ -996,6 +1004,8 @@ impl Checked<'_> {
                 fact.unique = Some(group.keys.iter().map(symbol_name).collect());
                 fact.meaning = Meaning::Result(symbol_name(name));
                 fact.materializes = true;
+                self.analysis.partial_groups.get_mut(owner)
+                    .expect("reserved Group constructor slot")[group_slot] = partial;
                 Ok(fact)
             }
             Term::Fold(monoid, inner) => {

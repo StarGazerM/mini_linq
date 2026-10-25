@@ -13,6 +13,10 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   routed covers build directly from row parts and release their providers in
   the pool. Shared H01/H13 sources now carry dbgen key evidence through both
   CPU and GPU pipelines, removing unnecessary complete-valuation canonicalization.
+- Extend checked partial grouping to finite-map monoids over globally unique
+  valuations. Tasks stream total producer spines into bounded-count local
+  accumulator maps and merge them at host; PL-Cost retains key-routed grouping
+  as an alternative when merging many groups would dominate.
 - Preserve authored relational order and selection stages in the CPU Tasks
   configuration. Contiguous host tiles borrow input rows (positional tiles
   enumerate base-relative ranges); named stream adapters remain inside their

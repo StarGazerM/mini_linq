@@ -8,11 +8,12 @@ use quote::{ToTokens, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::{Ident, LitInt, Token, bracketed};
 
-/// Replayable routing advice. Empty keys select contiguous tiles only for a
-/// globally unique unkeyed Group; other groups route complete valuation keys.
+/// Replayable routing advice. Empty keys select contiguous partial folds of a
+/// globally unique Group: total spines stream; opaque spines publish host parts.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KeyPartition {
     pub name: Ident,
+    /// Fresh routed/host-parts publication name; unused for total streaming folds.
     pub input: Ident,
     pub keys: Vec<Ident>,
     pub parts: usize,
@@ -55,6 +56,13 @@ impl ToTokens for KeyPartition {
     }
 }
 fn references(term: &Term, counts: &mut std::collections::BTreeMap<String, usize>) {
+    fn length(len: &Len, counts: &mut std::collections::BTreeMap<String, usize>) {
+        match len {
+            Len::Input(name) => *counts.entry(name.clone()).or_default() += 1,
+            Len::Add(left, right) => { length(left, counts); length(right, counts); }
+            _ => {}
+        }
+    }
     match term {
         Term::Ref(name) => *counts.entry(symbol_name(name)).or_default() += 1,
         Term::Map(_, inner) | Term::Compact(_, inner) | Term::Flatten(inner)
@@ -65,7 +73,10 @@ fn references(term: &Term, counts: &mut std::collections::BTreeMap<String, usize
             for term in arms { references(term, counts); }
         }
         Term::Choose(arms) => {
-            for (_, term) in arms { references(term, counts); }
+            for (guard, term) in arms {
+                if let Guard::Lt(len, _) | Guard::Ge(len, _) = guard { length(len, counts); }
+                references(term, counts);
+            }
         }
         Term::Rows(_) => {}
     }
@@ -132,6 +143,65 @@ fn canonical_input(
     }
 }
 
+fn tile_group_spine(
+    term: &Term,
+    source: &Program,
+    counts: &std::collections::BTreeMap<String, usize>,
+    parts: usize,
+    updates: &mut Vec<(usize, Term)>,
+) -> syn::Result<Term> {
+    let tile = |inner| Term::Tile { n: parts, items: None, inner: Box::new(inner) };
+    match term {
+        Term::Rows(_) => Ok(tile(term.clone())),
+        Term::Ref(name) => {
+            let index = super::definition(source, name)?;
+            let producer = &source.sequence.definitions[index].term;
+            if matches!(producer, Term::Store { .. }) {
+                return Ok(tile(term.clone()));
+            }
+            if counts.get(&symbol_name(name)) != Some(&1) {
+                return Err(syn::Error::new_spanned(name,
+                    "BE-GroupPartial: streaming tiles require a single-use pipe or named store boundary"));
+            }
+            let changed = tile_group_spine(producer, source, counts, parts, updates)?;
+            updates.push((index, changed));
+            Ok(term.clone())
+        }
+        Term::Map(_, _) | Term::Compact(_, _) | Term::Flatten(_) | Term::Lookup { .. } => {
+            let mut changed = term.clone();
+            let (Term::Map(_, inner) | Term::Compact(_, inner) | Term::Flatten(inner)
+                | Term::Lookup { inner, .. }) = &mut changed else { unreachable!() };
+            **inner = tile_group_spine(inner, source, counts, parts, updates)?;
+            Ok(changed)
+        }
+        _ => Err(syn::Error::new_spanned(term,
+            "BE-GroupPartial: streaming tiles require a map/compact/lookup spine ending at rows or a named store")),
+    }
+}
+
+fn streaming_partial_group(
+    term: &Term,
+    source: &Program,
+    counts: &std::collections::BTreeMap<String, usize>,
+    parts: usize,
+    host_input: Option<&Ident>,
+    updates: &mut Vec<(usize, Term)>,
+) -> syn::Result<Term> {
+    match term {
+        Term::Group(group, input) => Ok(Term::Group(group.clone(), Box::new(
+            if let Some(name) = host_input { Term::Ref(name.clone()) }
+            else { tile_group_spine(input, source, counts, parts, updates)? }
+        ))),
+        Term::Store { capacity, inner } => Ok(Term::Store {
+            capacity: *capacity,
+            inner: Box::new(streaming_partial_group(inner, source, counts, parts, host_input, updates)?),
+        }),
+        _ => Err(syn::Error::new_spanned(term,
+            "BE-GroupPartial: empty routing keys require a globally unique Group")),
+    }
+}
+
+
 pub fn key_partition(source: &Program, arguments: TokenStream) -> syn::Result<Program> {
     key_partition_in(&mut Default::default(), source, &syn::parse2(arguments)?)
 }
@@ -143,7 +213,7 @@ pub fn key_partition_in(
     source: &Program,
     advice: &KeyPartition,
 ) -> syn::Result<Program> {
-    checker.check_shared(source)?;
+    let analysis = checker.check_shared(source)?;
     let index = super::definition(source, &advice.name)?;
     if advice.parts == 0 {
         return Err(syn::Error::new_spanned(&advice.name, "BE-KeyPart: positive partition geometry required"));
@@ -157,12 +227,72 @@ pub fn key_partition_in(
     ) {
         return Err(syn::Error::new_spanned(&advice.name, "BE-KeyPartProvider: runtime threshold requires a provider Store"));
     }
-    if source.sequence.definitions.iter().any(|d| d.name == advice.input) {
+    if !advice.keys.is_empty() && source.sequence.definitions.iter().any(|d| d.name == advice.input) {
         return Err(syn::Error::new_spanned(&advice.input, "key partition publication name already exists"));
     }
     let mut counts = std::collections::BTreeMap::new();
     for definition in &source.sequence.definitions {
         references(&definition.term, &mut counts);
+    }
+    if advice.keys.is_empty() {
+        fn group(term: &Term) -> Option<(&Ident, &Term)> {
+            match term {
+                Term::Group(name, input) => Some((name, input)),
+                Term::Store { inner, .. } => group(inner),
+                _ => None,
+            }
+        }
+        let (group_name, group_input) = group(&source.sequence.definitions[index].term)
+            .ok_or_else(|| syn::Error::new_spanned(&advice.name,
+                "BE-GroupPartial: empty routing keys require a globally unique Group"))?;
+        let physical = &source.structures.physical.program.definitions;
+        let group_definition = physical.iter().find(|d| d.name == *group_name).expect("checked group");
+        let cq_lang_sequence::structures::physical::Operator::Group(group) = &group_definition.operator
+            else { unreachable!("checked group") };
+        // Match BE-Partial's materialized boundaries. Existing stored providers
+        // and row results have already evaluated their opaque dependencies.
+        let stored: std::collections::BTreeSet<_> = source.sequence.definitions.iter().take(index)
+            .filter(|d| matches!(d.term, Term::Store { .. }))
+            .filter_map(|d| analysis.results.get(&symbol_name(&d.name))).collect();
+        let mut pending = vec![symbol_name(&group.input)];
+        let mut seen = std::collections::BTreeSet::new();
+        let mut host_owned = false;
+        while let Some(name) = pending.pop() {
+            if stored.contains(&name) || !seen.insert(name.clone()) { continue; }
+            let Some(definition) = physical.iter().find(|d| symbol_name(&d.name) == name)
+                else { continue };
+            if analysis.structures.physical.opaque(&definition.operator) {
+                host_owned = true;
+                break;
+            }
+            pending.extend(definition.operator.operands().into_iter().map(symbol_name));
+        }
+        if host_owned && source.sequence.definitions.iter().any(|d| d.name == advice.input) {
+            return Err(syn::Error::new_spanned(&advice.input, "key partition publication name already exists"));
+        }
+        let mut updates = Vec::new();
+        let output = streaming_partial_group(
+            &source.sequence.definitions[index].term, source, &counts, advice.parts,
+            host_owned.then_some(&advice.input), &mut updates,
+        )?;
+        let mut target = source.clone();
+        for (index, term) in updates {
+            target.sequence.definitions[index].term = term;
+        }
+        target.sequence.definitions[index].term = if matches!(output, Term::Store { .. }) {
+            output
+        } else {
+            Term::Store { capacity: None, inner: Box::new(output) }
+        };
+        if host_owned {
+            target.sequence.definitions.insert(index, Definition {
+                name: advice.input.clone(),
+                term: Term::Store { capacity: None, inner: Box::new(Term::Tile {
+                    n: advice.parts, items: None, inner: Box::new(group_input.clone()),
+                }) },
+            });
+        }
+        return super::checked_in(checker, source, target);
     }
     fn split(
         term: &Term,
@@ -177,7 +307,7 @@ pub fn key_partition_in(
             inner: Box::new(Term::Ref(advice.input.clone())),
         };
         match term {
-            Term::Canon(inner) if !advice.keys.is_empty() => Ok((
+            Term::Canon(inner) => Ok((
                 *inner.clone(),
                 Term::Flatten(Box::new(Term::Canon(Box::new(routed())))),
             )),
@@ -186,15 +316,6 @@ pub fn key_partition_in(
                     .find(|definition| definition.name == *group)
                     .is_some_and(|definition| matches!(&definition.operator,
                         cq_lang_sequence::structures::physical::Operator::Group(group) if group.keys.is_empty()));
-                if global && advice.keys.is_empty() {
-                    return Ok((*inner.clone(), Term::Group(group.clone(), Box::new(Term::Tile {
-                        n: advice.parts, items: None,
-                        inner: Box::new(Term::Ref(advice.input.clone())),
-                    }))));
-                }
-                if advice.keys.is_empty() {
-                    return Err(syn::Error::new_spanned(&advice.name, "BE-KeyPartGroup: keyed groups require routing keys"));
-                }
                 let (input, routed) = if let Some(input) = canonical_input(inner, source, counts, updates) {
                     (input, Term::Canon(Box::new(routed())))
                 } else {
@@ -207,9 +328,6 @@ pub fn key_partition_in(
                 let (input, output) = if matches!(inner.as_ref(), Term::Canon(_) | Term::Group(_, _)) {
                     split(inner, advice, source, counts, updates)?
                 } else {
-                    if advice.keys.is_empty() {
-                        return Err(syn::Error::new_spanned(&advice.name, "BE-KeyPartProvider: provider routing keys must be nonempty"));
-                    }
                     let output = if let Some(threshold) = advice.threshold {
                         Term::Choose(vec![
                             (Guard::Lt(Len::Input(symbol_name(&advice.input)), threshold),

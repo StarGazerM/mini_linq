@@ -844,3 +844,72 @@ fn adaptive_provider_guard_selects_identity_and_routed_builds_at_runtime() {
         }
     });
 }
+
+#[test]
+fn keyed_partial_maps_merge_at_host_and_preserve_empty_input() {
+    let mut executions = Vec::new();
+    for stored_parts in [false, true] {
+        let mut program = grouped_program(false);
+        program.evidence = syn::parse_quote!(evidence { rows(witness) key; });
+        program.sequence = if stored_parts {
+            syn::parse_quote!(sequence {
+                input = store tile 64 rows r;
+                partials = store group grouped input;
+                output_rows = store partials;
+            })
+        } else {
+            syn::parse_quote!(sequence {
+                input = store rows r;
+                partials = store group grouped tile 64 input;
+                output_rows = store partials;
+            })
+        };
+        program.graded = Some(syn::parse_quote! {
+            graded tasks { input at host; partials at pool; output_rows at host; }
+        });
+        let facts = check_grading(&program, &machine()).unwrap();
+        assert_eq!(facts.partial_groups["partials"], vec![true]);
+        assert_eq!(facts.shapes["partials"].len(), 1);
+        let tasks = translate(&program, &facts).unwrap();
+        cq_sequence_tasks::translate_profile(&program, &facts).unwrap();
+        let mut sequential = program.clone();
+        sequential.graded = Some(syn::parse_quote! {
+            graded tasks { input at host; partials at host; output_rows at host; }
+        });
+        let sequential_facts = check_grading(&sequential, &machine()).unwrap();
+        let pull = cq_sequence_pull::translate(&sequential, &sequential_facts).unwrap();
+        executions.push(quote::quote! {
+            let mut actual: Vec<_> = (#tasks).map(|(key,n,sum,low,high)| (*key,n,sum,low,high)).collect();
+            actual.sort();
+            assert_eq!(actual, expected);
+            let mut sequential: Vec<_> = (#pull).map(|(key,n,sum,low,high)| (*key,n,sum,low,high)).collect();
+            sequential.sort();
+            assert_eq!(sequential, expected);
+        });
+        program.evidence = Default::default();
+        assert!(check_grading(&program, &machine()).unwrap_err().to_string().contains("BE-GroupPartial"));
+    }
+    run_partition_fixture(quote::quote! {
+        fn main() {
+            let populated: Vec<(i32,i32,i64)> = (0..4097).map(|i| (i%5,i,i64::from(i%7-3))).collect();
+            for threads in [1,24] {
+                rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(|| {
+                    for length in [0,1,63,64,65,4097] {
+                        let rows = &populated[..length];
+                        let mut expected = ::std::collections::BTreeMap::<i32,(usize,i64,Option<i64>,Option<i64>)>::new();
+                        for &(key,_,value) in rows {
+                            let (n,sum,low,high) = expected.entry(key).or_default();
+                            *n += 1;
+                            *sum += value;
+                            *low = Some(low.map_or(value, |previous| previous.min(value)));
+                            *high = Some(high.map_or(value, |previous| previous.max(value)));
+                        }
+                        let expected: Vec<_> = expected.into_iter().map(|(key,(n,sum,low,high))|
+                            (key,n,sum,low,high)).collect();
+                        #(#executions)*
+                    }
+                });
+            }
+        }
+    });
+}

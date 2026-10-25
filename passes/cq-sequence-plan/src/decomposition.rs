@@ -173,8 +173,13 @@ fn producer<'a>(program: &'a Program, name: &syn::Ident) -> Option<&'a Term> {
 fn has_tile(program: &Program, term: &Term) -> bool {
     match term {
         Term::Tile { .. } | Term::PartitionK { .. } => true,
-        Term::Ref(name) => producer(program, name)
-            .is_some_and(|term| !matches!(term, Term::Store { .. }) && has_tile(program, term)),
+        Term::Ref(name) => producer(program, name).is_some_and(|term| match term {
+            // A published nested cover already supplies the parts for a
+            // partial fold, unlike an ordinary flat stored producer.
+            Term::Store { inner, .. } => matches!(inner.as_ref(),
+                Term::Tile { .. } | Term::PartitionK { .. }),
+            term => has_tile(program, term),
+        }),
         Term::Map(_, inner)
         | Term::Flatten(inner)
         | Term::Compact(_, inner)

@@ -395,6 +395,13 @@ Laws:
   key_partition(provider, select true))`; `threshold` configures the machine,
   and omitted policies remain adaptive. The translator evaluates the recorded
   guard, never a target-local threshold.
+  For globally unique grouped valuations, keyed partial folds may instead use
+  contiguous tiles: each scheduler task accumulates a finite map and the host
+  merges maps pointwise with the declared monoids. Total single-use producer
+  spines stream directly from their driver; opaque producers retain explicit
+  host publications. Key-routed grouping remains a competing candidate, and
+  its cost is compared with the nonzero host-map merge cost. Missing global
+  uniqueness cannot justify per-tile canonicalization alone.
   Provider eligibility uses the completed schedule's grading obligations:
   distributed/segmented range reads keep native providers rather than granting
   range capability to a hash-routed family.

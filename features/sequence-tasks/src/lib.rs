@@ -356,8 +356,9 @@ fn translate_mode(
                         prepare: quote! {
                             use ::mini_linq::__tasks::combine::TileRows as _;
                             let __cq_driver = ::mini_linq::__tasks::combine::TileSource(#host);
+                            let __cq_driver_ref = &&__cq_driver;
                         },
-                        parts: quote!((&&__cq_driver).tile_rows(#n)),
+                        parts: quote!(__cq_driver_ref.tile_rows(#n)),
                     });
                     output.rows = quote!(::core::iter::once(#rows));
                 } else {
@@ -391,13 +392,22 @@ fn translate_mode(
                     cq_lang_sequence::structures::physical::Operator::Group(group)
                         if group.keys.is_empty()
                 );
-                output.rows = if global {
-                    keyed::global(emitter, input, name, partitions.pop())?
+                let partial = emitter.is_partial_group(term);
+                let tile = if partial {
+                    partitions.iter().position(|tile: &TaskTile| uses_binding(&input.rows, &tile.binding))
+                        .map(|index| partitions.remove(index))
+                } else {
+                    None
+                };
+                output.rows = if partial && global {
+                    keyed::global(emitter, input, name, tile)?
+                } else if partial {
+                    keyed::partial(emitter, input, name, tile, config.partitions)?
                 } else {
                     keyed::group(emitter, input, name)?
                 };
-                output.depth = usize::from(!global);
-                output.partitioned = !global && output.partitioned;
+                output.depth = usize::from(!partial);
+                output.partitioned = !partial && output.partitioned;
             } else if matches!(term, Term::Store { .. } | Term::Canon(_) | Term::Group(_, _) | Term::Fold(_, _))
                 || program.sequence.definitions.last().is_some_and(|definition|
                     std::ptr::eq(&definition.term, term))
@@ -414,36 +424,27 @@ fn translate_mode(
                     let mut input = input.clone();
                     input.partitioned = false;
                     output.partitioned = false;
-                    if let Term::Group(name, _) = term
-                        && matches!(&emitter.context().physical[&cq_lang_sequence::structures::symbol_name(name)].operator,
-                            cq_lang_sequence::structures::physical::Operator::Group(group) if group.keys.is_empty())
-                    {
-                        let rows = &input.rows;
-                        input.rows = quote!(::core::iter::once(#rows));
-                        output.rows = keyed::global(emitter, &input, name, Some(tile))?;
-                    } else {
-                        let nested = input.depth > 0;
-                        let mut local = input.rows.clone();
-                        if nested {
-                            local = quote!((#local).flatten());
-                        }
-                        if matches!(term, Term::Store { .. })
-                            && !nested
-                            && program.sequence.definitions.last().is_some_and(|definition|
-                                std::ptr::eq(&definition.term, term))
-                            && let Some(result) = &output.result
-                            && !analysis.structures.head_dedup.contains_key(result)
-                        {
-                            local = emitter.own_task_answer(result, local);
-                        }
-                        input.rows = join_tile(emitter, tile, local, nested);
-                        output.rows = match term {
-                            Term::Canon(_) => emitter.canon(input)?.rows,
-                            Term::Group(name, _) => emitter.group(name, input)?.rows,
-                            Term::Fold(monoid, _) => emitter.fold(monoid, input)?.rows,
-                            _ => input.rows,
-                        };
+                    let nested = input.depth > 0;
+                    let mut local = input.rows.clone();
+                    if nested {
+                        local = quote!((#local).flatten());
                     }
+                    if matches!(term, Term::Store { .. })
+                        && !nested
+                        && program.sequence.definitions.last().is_some_and(|definition|
+                            std::ptr::eq(&definition.term, term))
+                        && let Some(result) = &output.result
+                        && !analysis.structures.head_dedup.contains_key(result)
+                    {
+                        local = emitter.own_task_answer(result, local);
+                    }
+                    input.rows = join_tile(emitter, tile, local, nested);
+                    output.rows = match term {
+                        Term::Canon(_) => emitter.canon(input)?.rows,
+                        Term::Group(name, _) => emitter.group(name, input)?.rows,
+                        Term::Fold(monoid, _) => emitter.fold(monoid, input)?.rows,
+                        _ => input.rows,
+                    };
                 }
             }
             let routed_provider = output.result.as_ref().is_some_and(|result|

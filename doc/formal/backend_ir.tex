@@ -176,9 +176,8 @@ equal keys must always route together. Empty parts are retained.
 \Rule{BE-GroupPartial}{D=\iota(\mathrm{supp}\,\alpha t)
  \quad\biguplus_{p<P}D_p=D
  \quad(M_i,\oplus_i,e_i^0)_i\text{ commutative monoids}}
- {\mathsf{group}_{\varnothing;(e_i,M_i)_i}(D)
- =[((),(\textstyle\bigoplus_{p<P}^{M_i}
-       \mathsf{fold}_{M_i}(\mathsf{map}_{e_i}D_p))_i)]}
+ {\mathsf{group}_{G;(e_i,M_i)_i}(D)
+ =\mathsf{merge}_G\bigl([\mathsf{group}_{G;(e_i,M_i)_i}(D_p)]_{p<P}\bigr)}
 
 \Rule{BE-KeyPartProvider}{[B_p]_{p<P}=\mathsf{partition}_{K,P}(t)
  \quad L\to K\quad K=h\circ L\quad I_p=\mathsf{build}_L(B_p)}
@@ -190,9 +189,13 @@ Here equalities forget enumeration order but preserve bag multiplicities;
 canon compares complete valuations, never just routing or aggregate columns.
 The group law uses the same complete-valuation canonicalization and declared
 monoids as BE-Group. Since $G\to K$, no group crosses a part boundary.
-An unkeyed aggregate uses BE-GroupPartial rather than BE-KeyPartGroup:
-per-part monoid folds are combined by one host fold, yielding a flat
-singleton result, including the monoid identity on empty input.
+An unkeyed aggregate uses BE-GroupPartial rather than BE-KeyPartGroup.
+A keyed aggregate over globally unique contiguous parts also uses
+BE-GroupPartial: the product aggregate monoid is lifted to finite maps from
+group keys, with pointwise combination and the empty map as identity.
+The host merges these maps and emits one flat row per present key. Absent
+keys emit no rows, including on empty keyed input. The unkeyed case instead
+combines scalar partial states and always emits its single identity row.
 The checked premise is global uniqueness of complete valuations across
 all parts, not merely uniqueness within each part. It is established either
 by BE-KeyPartCanon (routing determined by the complete valuation followed
@@ -200,11 +203,29 @@ by per-part canon), or by BE-GroupKey's proof that the original valuations
 are globally distinct. The latter permits ordinary contiguous tiles without
 canon. Raw tiles without such a uniqueness proof are rejected: per-tile
 canon alone cannot eliminate duplicates crossing tile boundaries.
-Both \code{Tile} and \code{PartitionK} at the pool may therefore feed an
-unkeyed group with this partial-fold interpretation. The host merge folds
-partial aggregate states with the same monoid operations, not by evaluating
-the original row expressions again or by counting partial rows. Empty parts
-contribute identities; zero parts still yield exactly one identity answer.
+Both \code{Tile} and \code{PartitionK} may feed an unkeyed partial fold.
+A keyed \code{Tile} partial fold merges finite maps; a keyed
+\code{PartitionK} retains BE-KeyPartGroup's independent-group cover.
+The host merge combines aggregate states with the same monoid operations,
+not by evaluating original row expressions again or counting partial rows.
+The checker records each Group's proven partial mode in
+\code{Analysis.partial\_groups}, by owning Sequence definition and constructor
+preorder (reserving the slot before checking the Group input).
+Grading and target interpretations consume these checked modes, rather than
+rediscovering routing provenance through nested Lookup, Flatten or Choose terms.
+For globally unique inputs with total pipelines, checked empty-key partition advice lifts
+\code{Tile} through a single-use map/compact/lookup pipe spine to its raw
+driver or existing named Store boundary. It introduces no new full-valuation
+publication, changes no shared pipe, and retains the ordinary totality and
+grade checks on every streamed operation.
+Unauthored single-use views on that spine are graded at the pool's producer
+along with the streamed work; moving only the Group would leave illegal
+unstored host references. Authored grades and stored boundaries are preserved.
+An opaque pipeline instead publishes \code{parts = store tile N t} at host,
+then a pool-graded partial Group consumes that ancestor-stored nested cover.
+Every opaque operation remains host-owned, with unchanged expression and
+domain order; no totality assertion is introduced. This is an ordinary explicit
+parts publication, not a claim of bounded-memory or incremental execution.
 The provider law concerns exact point buckets (and hence membership), with
 the same routing function and partition count at build and lookup. It does
 not license a range lookup spanning several routing keys to read one part,
@@ -412,6 +433,25 @@ span, stores and dispatches. An inversion is a Lookup evaluated after an
 upstream Expand in the same pipeline; retained references begin new pipelines.
 Bounds and coefficient dominance establish comparisons; unresolved
 comparisons, like equal costs, retain the earlier candidate.
+For a BE-GroupKey-proven keyed group, both contiguous partial-map folding
+and group-key routing remain candidates. The former is enumerated first,
+then the native schedule and routed alternatives; cardinality uncertainty
+uses the same stable incomparability rule, not a query-specific estimate.
+Partial folding owns one accumulator map per machine scheduler partition,
+not per logical tile. Its fold span uses that scheduler width. Host merge
+adds serial dependency span for up to $P\,|G|$ partial aggregate states,
+capped by the input count when both estimates are available for keyed groups.
+Authored group/output count evidence supplies $|G|$ when present; otherwise
+the charge remains the symbolic $P\,\mathsf{scan}(\mathsf{group})$, never zero.
+For an unkeyed scalar partial fold with unknown input size, the fixed host-merge
+setup instead follows the existing amortized-routing convention: halving
+effective fold throughput charges its bandwidth without making a false
+all-cardinalities dominance claim about a constant setup term. Known input
+counts retain the explicit scalar merge charge. Keyed groups reserve their
+variable-length output, avoiding a second count-pass evaluation of the fold.
+Like routing, merging states is organizational span rather than repeated
+evaluation of original row expressions. Many-group estimates can therefore
+select key routing over partial-map merging without changing either meaning.
 For an eligible native exact-key provider Store, the automatic schedule retains
 an explicit runtime BE-Choose before this cost comparison: a positive machine
 parameter $\theta$ selects $\mathsf{partition}_{K,1}(t)$ when the published

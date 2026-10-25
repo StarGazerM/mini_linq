@@ -51,6 +51,9 @@ impl Cost {
             analysis,
             facts: BTreeMap::new(),
             key_inputs,
+            scheduler_parts: machine.root.children.iter()
+                .find(|level| !level.collaborative && !level.children.is_empty())
+                .and_then(|level| level.width).unwrap_or(1).max(1),
         };
         let mut work = Sum::default();
         let mut ends = Vec::new();
@@ -420,6 +423,10 @@ impl Fact {
             Layer::KeyPart { lanes, .. } => Some(*lanes),
             _ => None,
         }).unwrap_or_else(|| level.width.unwrap_or(1)).max(1);
+        self.advance_with_lanes(size, lanes, scan)
+    }
+
+    fn advance_with_lanes(&mut self, size: &Size, lanes: usize, scan: bool) -> syn::Result<()> {
         let depth = if lanes == 1 && self.partition.is_none() {
             Sum::positions(size)?
         } else if matches!(size, Size::Constant(0)) {
@@ -459,6 +466,7 @@ struct Evaluator<'a> {
     analysis: &'a Analysis,
     facts: BTreeMap<String, Fact>,
     key_inputs: BTreeSet<String>,
+    scheduler_parts: usize,
 }
 
 impl Evaluator<'_> {
@@ -708,23 +716,64 @@ impl Evaluator<'_> {
                 if fact.layers.is_empty() {
                     fact.partition = None;
                 }
-                let size = fact.size.clone();
-                fact.evaluate(&size, level, true)?;
-                fact.result = symbol_name(name);
                 let global = self.program.structures.physical.program.definitions.iter()
                     .find(|definition| definition.name == *name)
                     .is_some_and(|definition| matches!(&definition.operator,
                         Operator::Group(group) if group.keys.is_empty()));
-                fact.size = if global {
-                    // Partial monoids merge at host into exactly one row,
-                    // including the empty-input identity. No partition layer
-                    // escapes to consumers of a global aggregate.
-                    fact.layers.clear();
+                let contiguous = !fact.layers.is_empty() && fact.layers.iter()
+                    .all(|layer| !matches!(layer, Layer::KeyPart { .. }));
+                let partial = !fact.layers.is_empty() && (global || contiguous);
+                let size = fact.size.clone();
+                let amortized_merge = partial && global && !matches!(size, Size::Constant(_));
+                if contiguous || amortized_merge {
+                    // One accumulator per scheduler task owns all its logical
+                    // tiles; tile grain does not create additional processors.
+                    // With unknown input size, a scalar host merge follows
+                    // routing's amortized-bandwidth convention: charge it by
+                    // halving fold throughput, rather than dropping its cost.
+                    let lanes = fact.layers.iter().rev().find_map(|layer| match layer {
+                        Layer::KeyPart { lanes, .. } => Some(*lanes),
+                        _ => None,
+                    }).unwrap_or(self.scheduler_parts);
+                    let lanes = if amortized_merge { (lanes / 2).max(1) } else { lanes };
                     fact.partition = None;
+                    fact.work.add(&Sum::positions(&size)?)?;
+                    fact.advance_with_lanes(&size, lanes, true)?;
+                } else {
+                    fact.evaluate(&size, level, true)?;
+                }
+                fact.result = symbol_name(name);
+                let groups = if global {
                     Size::Constant(1)
                 } else {
-                    Size::Scan(format!("group({})", fact.result))
+                    self.program.evidence.count(&fact.result)
+                        .or_else(|| self.program.evidence.count(owner))
+                        .map(|count| Size::Constant(count as u128))
+                        .unwrap_or_else(|| Size::Scan(format!("group({})", fact.result)))
                 };
+                if partial && !amortized_merge {
+                    // Host merge combines aggregate states, not original row
+                    // expressions. Charge its serial dependency span just as
+                    // routing charges organizational work. Unknown groups stay
+                    // symbolic; no cardinality sample makes this merge free.
+                    let merge = if let Size::Constant(groups) = &groups {
+                        let mut states = groups.checked_mul(self.scheduler_parts as u128)
+                            .ok_or_else(overflow)?;
+                        if !global && let Size::Constant(rows) = &size {
+                            states = states.min(*rows);
+                        }
+                        Sum::atom(Atom::One, states)
+                    } else {
+                        Sum::atom(Atom::Positions(groups.clone()), self.scheduler_parts as u128)
+                    };
+                    fact.span.add(&merge)?;
+                    fact.local_span.add(&merge)?;
+                }
+                if global || partial {
+                    fact.layers.clear();
+                    fact.partition = None;
+                }
+                fact.size = groups;
                 Ok(fact)
             }
             Term::Fold(_, inner) | Term::Canon(inner) => {
@@ -957,6 +1006,7 @@ mod tests {
             analysis: &analysis,
             facts: BTreeMap::new(),
             key_inputs: BTreeSet::new(),
+            scheduler_parts: 1,
         };
         let level = sequential().root;
         let delayed: Term = syn::parse_quote!(flatten lookup r [a] flatten lookup r [a] rows r);

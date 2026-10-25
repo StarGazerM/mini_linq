@@ -33,7 +33,8 @@ struct Checker<'a> {
     nodes: Vec<Node<'a>>,
     collectives: Vec<(String, Monoid, Vec<String>)>,
     lengths: &'a BTreeMap<String, Len>,
-    shapes: &'a BTreeMap<String, Vec<Len>>,
+    partial_groups: &'a BTreeMap<String, Vec<bool>>,
+    group_cursors: Vec<usize>,
     results: &'a BTreeMap<String, String>,
     tilings: BTreeMap<String, Vec<crate::Tiling>>,
     parts: BTreeMap<String, Option<usize>>,
@@ -168,7 +169,8 @@ pub(crate) fn check_grading_in(
         nodes: Vec::new(),
         collectives: Vec::new(),
         lengths: &analysis.lengths,
-        shapes: &analysis.shapes,
+        partial_groups: &analysis.partial_groups,
+        group_cursors: vec![0; program.sequence.definitions.len()],
         results: &analysis.results,
         tilings: BTreeMap::new(),
         parts: BTreeMap::new(),
@@ -506,10 +508,10 @@ impl<'a> Checker<'a> {
                 kinds.push(kind);
                 inputs.push(self.visit(inner, owner, level, tiled, uniform, false)?);
             }
-            Term::Group(name, inner) => {
-                let partial = matches!(&self.physical[&symbol_name(name)].operator,
-                    cq_lang_structures::physical::Operator::Group(group) if group.keys.is_empty())
-                    && self.nested_parts(inner);
+            Term::Group(_, inner) => {
+                let slot = self.group_cursors[owner];
+                self.group_cursors[owner] += 1;
+                let partial = self.partial_groups[&self.name(owner)][slot];
                 if level != 0 && !partial
                     && (!self.levels[level].children.is_empty() || !self.key_partitioned(inner)) {
                     return Err(self.error(
@@ -793,21 +795,15 @@ impl<'a> Checker<'a> {
     }
 
 
-    fn nested_parts(&self, term: &Term) -> bool {
-        match term {
-            Term::Tile { .. } | Term::PartitionK { .. } => true,
-            Term::Canon(inner) | Term::Store { inner, .. }
-            | Term::Map(_, inner) | Term::Compact(_, inner) => self.nested_parts(inner),
-            Term::Ref(name) => self.shapes.get(&symbol_name(name)).is_some_and(|shape| shape.len() > 1),
-            Term::Choose(arms) => arms.iter().all(|(_, arm)| self.nested_parts(arm)),
-            _ => false,
-        }
-    }
-
     fn key_partitioned(&self, term: &Term) -> bool {
         match term {
             Term::PartitionK { .. } => true,
-            Term::Canon(inner) | Term::Store { inner, .. } => self.key_partitioned(inner),
+            Term::Canon(inner) | Term::Store { inner, .. }
+            | Term::Map(_, inner) | Term::Compact(_, inner) => self.key_partitioned(inner),
+            Term::Flatten(inner) if matches!(inner.as_ref(), Term::Lookup { .. }) => {
+                let Term::Lookup { inner, .. } = inner.as_ref() else { unreachable!() };
+                self.key_partitioned(inner)
+            }
             Term::Ref(name) => self.definitions.get(&symbol_name(name))
                 .is_some_and(|&index| self.key_partitioned(&self.program.sequence.definitions[index].term)),
             Term::Choose(arms) => !arms.is_empty()

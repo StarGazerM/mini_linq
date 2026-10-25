@@ -999,17 +999,26 @@ fn grouped_fold_records_result_cardinality_and_store_owner() {
 }
 
 #[test]
-fn grouped_fold_requires_complete_distinct_flat_valuations() {
+fn grouped_fold_requires_complete_globally_distinct_valuations() {
     for body in [
         quote!(r = rows r; groups = group grouped r;),
         quote!(r = canon rows r; groups = map grouped r;),
         quote!(r = canon rows r; groups = group r r;),
-        quote!(r = canon rows r; groups = group grouped tile 2 r;),
+        quote!(r = rows r; groups = group grouped tile 2 r;),
+        quote!(r = rows r; groups = group grouped canon tile 2 r;),
         quote!(r = canon rows r; groups = group grouped fold count r;),
         quote!(r = flatten canon tile 2 rows r; groups = group grouped r;),
     ] {
         reject(&grouped_program(quote!(k), body), "BE-Group");
     }
+    // Global canonicalization establishes uniqueness across the contiguous
+    // parts; this is now a legal keyed partial fold with a flat merged result.
+    let accepted = grouped_program(quote!(k), quote!(
+        r = canon rows r; groups = group grouped tile 2 r;
+    ));
+    let facts = contract::check(&accepted).unwrap();
+    assert_eq!(facts.partial_groups["groups"], [true]);
+    assert_eq!(facts.shapes["groups"].len(), 1);
 }
 
 #[test]
@@ -1368,6 +1377,74 @@ fn global_partial_group_accepts_key_canon_or_globally_unique_tiles() {
     grade(&mut tiled, quote!(input at host; out at pool;));
     let facts = check_grading(&tiled, &key_pool()).unwrap();
     assert_eq!(facts.shapes["out"], vec![Len::Lit(1)]);
+}
+
+#[test]
+fn keyed_partial_groups_merge_globally_unique_contiguous_parts() {
+    let mut tiled = grouped_program(quote!(k), quote!(
+        input = store rows r;
+        out = store group grouped tile 4 input;
+    ));
+    tiled.evidence = syn::parse_quote!(evidence { R(witness) key; });
+    grade(&mut tiled, quote!(input at host; out at pool;));
+    let facts = check_grading(&tiled, &key_pool()).unwrap();
+    assert_eq!(facts.shapes["out"], vec![Len::Scan("out".into())]);
+    assert_eq!(facts.partial_groups["out"], [true]);
+    let mut source = grouped_program(quote!(k), quote!(
+        input = store rows r;
+        out = store group grouped input;
+    ));
+    source.evidence = tiled.evidence.clone();
+    contract::check_rewrite(&source, &tiled).unwrap();
+
+    // Empty keyed input yields no groups, unlike the unkeyed identity row.
+    tiled.evidence = syn::parse_quote!(evidence { R(witness) key; count R = 0; });
+    assert_ne!(check_grading(&tiled, &key_pool()).unwrap().lengths["out"], Len::Lit(1));
+    for input in [quote!(tile 4 input), quote!(canon tile 4 input)] {
+        reject(&grouped_program(quote!(k), quote!(
+            input = store rows r;
+            out = store group grouped #input;
+        )), "BE-GroupPartial");
+    }
+    // Key routing still represents independent groups, not host map merging.
+    let routed = grouped_program(quote!(k), quote!(
+        input = store rows r;
+        out = store group grouped canon partition_k[k](4) input;
+    ));
+    assert_eq!(contract::check(&routed).unwrap().shapes["out"].len(), 2);
+    assert_eq!(contract::check(&routed).unwrap().partial_groups["out"], [false]);
+}
+
+#[test]
+fn partial_group_metadata_uses_constructor_preorder_and_definition_ownership() {
+    let mut p: Program = syn::parse_quote! {
+        physical {
+            relation R(k:i32, witness:i64, value:i64);
+            r = pipe canon rename R@0 {k -> k, witness -> witness, value -> value};
+            by_key = pipe canon group r by [k] { subtotal:i64 = sum(value); };
+            all_rows = pipe group by_key by [] { grand_total:i64 = sum(subtotal); };
+            return all_rows as answer(grand_total);
+        }
+        structures { r host scan = Reader []; r canon = Canon; by_key canon = Canon; }
+        sequence {
+            input = store rows r;
+            output_rows = store group all_rows group by_key tile 4 input;
+        }
+        evidence { key R [witness]; }
+    };
+    assert_eq!(contract::check(&p).unwrap().partial_groups["output_rows"], [false, true]);
+    p.sequence.definitions[1].term = syn::parse_quote!(store group all_rows choose [
+        len input < 1 => group by_key tile 4 input,
+        else => group by_key input
+    ]);
+    p.sequence.definitions.push(syn::parse_quote!(alias = output_rows;));
+    let facts = contract::check(&p).unwrap();
+    assert_eq!(facts.partial_groups["output_rows"], [false, true, false]);
+    assert!(!facts.partial_groups.contains_key("input"));
+    assert!(!facts.partial_groups.contains_key("alias"));
+    grade(&mut p, quote!(input at host; output_rows at host; alias at host;));
+    let graded = check_grading(&p, &sequential()).unwrap();
+    assert_eq!(graded.partial_groups, facts.partial_groups);
 }
 
 #[test]

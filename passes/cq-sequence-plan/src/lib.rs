@@ -341,16 +341,20 @@ fn decompose_in(
         });
         let facts = checker.check_shared(&prepared.program)?;
         let partition_choices = key_partition::choices(&prepared.program, &facts, policies);
+        let keyed_partials = key_partition::has_keyed_partials(checker, &prepared.program);
         for &(width, items) in &schedules {
             let mut best: Option<(Cost, Planned)> = None;
             for segmented in [true, false] {
                 if segmented && (!parallel || width.is_none() || !segmentable) {
                     continue;
                 }
-                for (keyed, candidate_policies) in std::iter::once((false, policies))
-                    .chain(partition_choices.iter().map(|choice| (true, choice.as_slice()))) {
+                for (keyed, candidate_policies, partial_groups) in partition_choices.iter()
+                    .filter(|_| keyed_partials).map(|choice| (true, choice.as_slice(), true))
+                    .chain(std::iter::once((false, policies, false)))
+                    .chain(partition_choices.iter().map(|choice| (true, choice.as_slice(), false))) {
                 match candidate(
-                    checker, &prepared, machine, catalog, width, items, segmented, program, candidate_policies, keyed,
+                    checker, &prepared, machine, catalog, width, items, segmented, program,
+                    candidate_policies, keyed, partial_groups,
                 ) {
                     Ok((analysis, planned)) => {
                         let cost = Cost::from_analysis(&planned.program, machine, &analysis)?;
@@ -484,16 +488,17 @@ fn candidate(
     authored: &Program,
     policies: &[KeyPartitionPolicy],
     keyed: bool,
+    partial_groups: bool,
 ) -> syn::Result<(Analysis, Planned)> {
     let mut planned = source.clone();
-    key_partition::apply(checker, &mut planned, authored, machine, catalog, policies, keyed, false)?;
+    key_partition::apply(checker, &mut planned, authored, machine, catalog, policies, keyed, false, partial_groups)?;
     if !machine.root.children.is_empty() {
         let mut decomposed =
             decomposition::advise(checker, &planned.program, machine, width, items, segmented)?;
         planned.trace.append(&mut decomposed.trace);
         planned.program = decomposed.program;
     }
-    key_partition::apply(checker, &mut planned, authored, machine, catalog, policies, keyed, true)?;
+    key_partition::apply(checker, &mut planned, authored, machine, catalog, policies, keyed, true, partial_groups)?;
     // Formal rule PL-Precedence: Recorded grades, tiles and output are never replaced by generated advice.
     if source.program.sequence.output.is_none() {
         let last =
@@ -606,6 +611,10 @@ fn variable_output(term: &Term, program: &Program) -> bool {
     match term {
         Term::Canon(_) | Term::Compact(_, _) => true,
         Term::Rows(_) => false,
+        Term::Group(name, inner) => program.structures.physical.program.definitions.iter()
+            .any(|definition| definition.name == *name && matches!(&definition.operator,
+                cq_lang_sequence::structures::physical::Operator::Group(group)
+                    if !group.keys.is_empty())) || variable_output(inner, program),
         Term::Ref(name) => program
             .sequence
             .definitions
@@ -615,7 +624,6 @@ fn variable_output(term: &Term, program: &Program) -> bool {
         Term::Map(_, t)
         | Term::Flatten(t)
         | Term::Fold(_, t)
-        | Term::Group(_, t)
         | Term::PartitionK { inner: t, .. }
         | Term::Tile { inner: t, .. }
         | Term::Store { inner: t, .. }

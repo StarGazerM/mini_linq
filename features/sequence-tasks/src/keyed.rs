@@ -106,6 +106,115 @@ pub(crate) fn ancestors(term: &Term, names: &mut std::collections::BTreeSet<Stri
     }
 }
 
+/// Fold each scheduler task directly into a finite map, then merge maps on host.
+/// The checked Tile premise proves complete valuations distinct across tasks.
+pub(crate) fn partial(
+    emitter: &mut Emitter<'_>,
+    input: &Value,
+    name: &syn::Ident,
+    tile: Option<super::TaskTile>,
+    workers: usize,
+) -> syn::Result<proc_macro2::TokenStream> {
+    use cq_lang_sequence::structures::{physical::Operator, syntax::algebra::AggregateKind};
+    let result = symbol_name(name);
+    let Operator::Group(group) = &emitter.context().physical[&result].operator else {
+        return Err(syn::Error::new_spanned(name, "Tasks partial map lacks Group provenance"));
+    };
+    let types = group.aggregates.iter().map(|aggregate| aggregate.ty.clone()).collect::<Vec<_>>();
+    let identities = group.aggregates.iter().map(|aggregate| match aggregate.kind {
+        AggregateKind::Count => quote!(0usize),
+        AggregateKind::Sum => {
+            let ty = &aggregate.ty;
+            quote!(<#ty as ::core::default::Default>::default())
+        }
+        AggregateKind::Min | AggregateKind::Max => quote!(::core::option::Option::None),
+    }).collect::<Vec<_>>();
+    let merges = group.aggregates.iter().enumerate().map(|(position, aggregate)| {
+        let field = syn::Index::from(position);
+        match aggregate.kind {
+            AggregateKind::Count | AggregateKind::Sum =>
+                quote!(__cq_state.#field += __cq_partial.#field;),
+            AggregateKind::Min | AggregateKind::Max => {
+                let compare = if aggregate.kind == AggregateKind::Min {
+                    quote!(__cq_value < *__cq_previous)
+                } else {
+                    quote!(__cq_value > *__cq_previous)
+                };
+                quote! {
+                    if let ::core::option::Option::Some(__cq_value) = __cq_partial.#field {
+                        if __cq_state.#field.as_ref().is_none_or(|__cq_previous| #compare) {
+                            __cq_state.#field = ::core::option::Option::Some(__cq_value);
+                        }
+                    }
+                }
+            }
+        }
+    }).collect::<Vec<_>>();
+    let row = emitter.context().carrier(&result, |column| {
+        if let Some(position) = group.keys.iter().position(|key| symbol_name(key) == column) {
+            let field = syn::Index::from(position);
+            quote!(__cq_keys.#field)
+        } else {
+            let field = syn::Index::from(group.aggregates.iter()
+                .position(|aggregate| symbol_name(&aggregate.name) == column)
+                .expect("checked group output"));
+            quote!(__cq_state.#field)
+        }
+    });
+    let rows = &input.rows;
+    let mut local = input.clone();
+    local.depth = 0;
+    let (binding, prepare, parts) = if let Some(super::TaskTile { binding, prepare, parts }) = tile {
+        local.rows = quote!((#rows).flatten());
+        (binding, prepare, parts)
+    } else {
+        let binding = syn::parse_quote!(__cq_group_part);
+        local.rows = quote!(::core::iter::IntoIterator::into_iter(#binding));
+        (
+            binding,
+            quote!(let __cq_group_input = (#rows)
+                .map(|part| part.collect::<::std::vec::Vec<_>>()).collect::<::std::vec::Vec<_>>();),
+            quote!(__cq_group_input.into_par_iter()),
+        )
+    };
+    let table = quote::format_ident!("__cq_task_groups", span = proc_macro2::Span::mixed_site());
+    let updates = emitter.group_accumulate(name, local, quote!(#table))?;
+    let updates = super::task_scope(emitter, quote!({
+        let () = #updates;
+        #table
+    }));
+    let merged = quote!({
+        use ::rayon::prelude::*;
+        #prepare
+        let __cq_task_context = ::cq_storage::profile_select! {
+            plain { () }
+            counters { ::cq_storage::counters::TaskContext::capture() }
+        };
+        let __cq_tiles = #parts;
+        let __cq_tiles_per_task = __cq_tiles.len().div_ceil(#workers).max(1);
+        let __cq_partials = __cq_tiles.fold_chunks(
+            __cq_tiles_per_task,
+            ::std::collections::HashMap::<_, (#(#types,)*)>::new,
+            |mut #table, #binding| #updates,
+        ).collect::<::std::vec::Vec<_>>();
+        let mut #table = ::std::collections::HashMap::<_, (#(#types,)*)>::new();
+        for __cq_map in __cq_partials {
+            for (__cq_keys, __cq_partial) in __cq_map {
+                let __cq_state = #table.entry(__cq_keys).or_insert_with(|| (#(#identities,)*));
+                #(#merges)*
+            }
+        }
+        #table.into_iter().map(|(__cq_keys, __cq_state)| #row)
+    });
+    let merged = if let Some(index) = emitter.context().profile_index(&result) {
+        let profile = emitter.context().profile_handle();
+        quote!(#profile.scope(#index, || #merged))
+    } else {
+        merged
+    };
+    Ok(emitter.context().profile_output(&result, merged))
+}
+
 pub(crate) fn global(
     emitter: &mut Emitter<'_>,
     input: &Value,

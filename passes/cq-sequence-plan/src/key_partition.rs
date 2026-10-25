@@ -99,6 +99,7 @@ pub(crate) fn apply(
     policies: &[KeyPartitionPolicy],
     enabled: bool,
     providers: bool,
+    partial_groups: bool,
 ) -> syn::Result<()> {
     let applies = |policy: &&KeyPartitionPolicy| policy.select
         && authored.sequence.definitions.iter().find(|d| d.name == policy.name)
@@ -134,8 +135,9 @@ pub(crate) fn apply(
         let provider = provider_store(&definition.term);
         if provider != providers || (!enabled && !provider) { continue; }
         let Some(mut keys) = keys(&planned.program, &facts, &definition.name, &definition.term) else { continue };
-        let global = global_group(&planned.program, &definition.term);
-        if global {
+        if group_name(&definition.term).is_some()
+            && (partial_groups || !keyed_group(&planned.program, &definition.term))
+        {
             let name = &definition.name;
             // The earlier checked BE-GroupKey pass removes all unnecessary
             // canonicalizers. An unchanged replay proves that tiles need no
@@ -227,15 +229,53 @@ pub(crate) fn apply(
     for candidate in candidates {
         let input = candidate.input.clone();
         let name = candidate.name.clone();
+        let partial = candidate.keys.is_empty();
         super::push(checker, planned, Advice::KeyPartition(candidate))?;
-        super::push(checker, planned, Advice::Grade {
-            name: input, level: vec![machine.root.name.clone()], machine: machine.name.clone(),
-        })?;
+        if planned.program.sequence.definitions.iter().any(|d| d.name == input) {
+            super::push(checker, planned, Advice::Grade {
+                name: input, level: vec![machine.root.name.clone()], machine: machine.name.clone(),
+            })?;
+        }
+        if partial {
+            let mut producer = vec![machine.root.name.clone(), pool.name.clone()];
+            if let [child] = pool.children.as_slice() { producer.push(child.name.clone()); }
+            for view in partial_views(&planned.program, &name) {
+                if authored.graded.iter().flat_map(|g| &g.grades).any(|g| g.name == view) {
+                    continue;
+                }
+                super::push(checker, planned, Advice::Grade {
+                    name: view, level: producer.clone(), machine: machine.name.clone(),
+                })?;
+            }
+        }
         super::push(checker, planned, Advice::Grade {
             name, level: vec![machine.root.name.clone(), pool.name.clone()], machine: machine.name.clone(),
         })?;
     }
     Ok(())
+}
+
+fn partial_views(program: &Program, name: &Ident) -> Vec<Ident> {
+    fn visit(program: &Program, term: &Term, views: &mut Vec<Ident>) {
+        match term {
+            Term::Ref(name) => {
+                let definition = program.sequence.definitions.iter().find(|d| d.name == *name)
+                    .expect("checked reference");
+                if matches!(definition.term, Term::Store { .. }) { return; }
+                views.push(name.clone());
+                visit(program, &definition.term, views);
+            }
+            Term::Map(_, inner) | Term::Compact(_, inner) | Term::Flatten(inner)
+            | Term::Tile { inner, .. } | Term::Lookup { inner, .. } => visit(program, inner, views),
+            _ => {}
+        }
+    }
+    let mut term = &program.sequence.definitions.iter().find(|d| d.name == *name)
+        .expect("checked group definition").term;
+    while let Term::Store { inner, .. } = term { term = inner; }
+    let mut views = Vec::new();
+    if let Term::Group(_, inner) = term { visit(program, inner, &mut views); }
+    views
 }
 
 fn provider_store(term: &Term) -> bool {
@@ -299,31 +339,34 @@ fn keys(program: &Program, facts: &Analysis, name: &Ident, term: &Term) -> Optio
     }
 }
 
-fn global_group(program: &Program, term: &Term) -> bool {
+fn group_name(term: &Term) -> Option<&Ident> {
     match term {
-        Term::Group(name, _) => program.structures.physical.program.definitions.iter()
-            .find(|definition| definition.name == *name)
-            .is_some_and(|definition| matches!(&definition.operator,
-                Operator::Group(group) if group.keys.is_empty())),
-        Term::Store { inner, .. } => global_group(program, inner),
-        _ => false,
+        Term::Group(name, _) => Some(name),
+        Term::Store { inner, .. } => group_name(inner),
+        _ => None,
     }
 }
 
-fn lookup_keys<'a>(term: &'a Term, result: &str, reads: &mut Vec<&'a [Ident]>) {
-    match term {
-        Term::Lookup { provider, keys, inner } => {
-            if symbol_name(provider) == result { reads.push(keys); }
-            lookup_keys(inner, result, reads);
-        }
-        Term::Map(_, t) | Term::Compact(_, t) | Term::Flatten(t) | Term::Fold(_, t)
-        | Term::Group(_, t) | Term::Canon(t) | Term::Tile { inner: t, .. }
-        | Term::PartitionK { inner: t, .. } | Term::Store { inner: t, .. } => lookup_keys(t, result, reads),
-        Term::Union(arms) => { for t in arms { lookup_keys(t, result, reads); } }
-        Term::Choose(arms) => { for (_, t) in arms { lookup_keys(t, result, reads); } }
-        Term::Rows(_) | Term::Ref(_) => {}
-    }
+fn keyed_group(program: &Program, term: &Term) -> bool {
+    group_name(term).is_some_and(|name|
+        program.structures.physical.program.definitions.iter().any(|definition|
+            definition.name == *name && matches!(&definition.operator,
+                Operator::Group(group) if !group.keys.is_empty())))
 }
+
+pub(crate) fn has_keyed_partials(
+    checker: &mut cq_lang_sequence::contract::Checker,
+    program: &Program,
+) -> bool {
+    program.sequence.definitions.iter().any(|definition| {
+        let name = &definition.name;
+        keyed_group(program, &definition.term)
+            && cq_sequence_rewrite_passes::group_without_canon_in(
+                checker, program, quote::quote!(#name),
+            ).is_ok_and(|target| target == *program)
+    })
+}
+
 
 pub(crate) fn contains_partition(term: &Term) -> bool {
     match term {
