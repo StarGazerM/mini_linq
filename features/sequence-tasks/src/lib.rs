@@ -335,6 +335,9 @@ fn translate_mode(
                     && context.physical_analysis.hosts.contains_key(*result)
                     && !context.analysis.selections.contains_key(*result)
                     && context.join_filter_ids(result).is_none()
+                    && matches!(&context.physical[*result].operator,
+                        cq_lang_sequence::structures::physical::Operator::Rename(rename)
+                            if rename.constants.is_none())
                 );
                 let positional = host_result.filter(|result| context.carries_positions(result));
                 if let Some(result) = positional {
@@ -457,10 +460,11 @@ fn translate_mode(
                     emitter.context().physical_analysis.hosts.contains_key(result)
                     && (routed_provider || analysis.structures.built.get(result).is_none_or(Vec::is_empty))
                     && !analysis.structures.selections.contains_key(result)
-                    && emitter.context().join_filter_ids(result).is_none()
-                    && matches!(&emitter.context().physical[result].operator,
-                        cq_lang_sequence::structures::physical::Operator::Rename(rename)
-                            if rename.constants.is_none()))
+                    && (!(partition_inputs.contains(owner) || routed_provider)
+                        || (emitter.context().join_filter_ids(result).is_none()
+                            && matches!(&emitter.context().physical[result].operator,
+                                cq_lang_sequence::structures::physical::Operator::Rename(rename)
+                                    if rename.constants.is_none()))))
             {
                 // An immutable base relation is already resident storage. The
                 // checked Store publishes that borrow; it need not clone rows.
@@ -499,7 +503,11 @@ fn translate_mode(
                     &label, quote!((#rows).collect::<::std::vec::Vec<_>>()),
                 );
                 let binding = format_ident!("__cq_key_source_{}", owner);
-                stored_sources.insert(owner.to_owned(), binding.clone());
+                // A publication may rehead an equivalent Physical result.
+                // Reuse the raw slice only when its carrier is unchanged.
+                if analysis.results.get(owner) == output.result.as_ref() {
+                    stored_sources.insert(owner.to_owned(), binding.clone());
+                }
                 emitter.context_mut().statements.push(syn::parse_quote!(
                     let #binding = #build;
                 ));

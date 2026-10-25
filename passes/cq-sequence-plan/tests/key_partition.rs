@@ -816,3 +816,58 @@ fn unknown_partial_map_merge_is_symbolic_not_free() {
     assert!(unproved.trace.iter().any(|advice| matches!(advice, Advice::KeyPartition(k)
         if k.name == "result" && !k.keys.is_empty())));
 }
+
+#[test]
+fn adaptive_provider_publication_preserves_task_owned_pipe_execution() {
+    // A row-dependent comparison places the native provider at the pool.
+    // A constant bound is a host descriptor and would make the authored task
+    // pipe illegal before adaptive routing is considered.
+    let source: Program = syn::parse_quote! {
+        physical {
+            relation L(a:i32); relation R(a:i32,b:i32);
+            l = pipe rename L@0 {a -> a};
+            r = pipe rename R@1 {a -> a,b -> b};
+            selected = let select r if (b > a);
+            joined = pipe canon probe first [a] l,selected;
+            return joined as answer(a,b);
+        }
+        structures {
+            l host scan = Reader []; r host scan = Reader [];
+            selected = Index [a]; joined canon = Canonical;
+        }
+        sequence {
+            raw = store rows r;
+            task_pipe = map r raw;
+            provider = store compact selected task_pipe;
+            input = store rows l;
+            result = store canon flatten lookup selected [a] input;
+        }
+        graded tasks { task_pipe at host.pool.task; }
+    };
+    let machine = machine(Some(4));
+    for forced in [false, true] {
+        let mut policies = vec![policy("result", false)];
+        if forced { policies.push(policy("provider", true)); }
+        let planned = decompose_with_key_partitions(&source, &machine, &catalog(), &policies).unwrap();
+        let partition = planned.trace.iter().find_map(|advice| match advice {
+            Advice::KeyPartition(advice) if advice.name == "provider" => Some(advice),
+            _ => None,
+        }).unwrap();
+        let producer = planned.trace.iter().find_map(|advice| match advice {
+            Advice::Publish { name, producer } if *name == partition.input => Some(producer),
+            _ => None,
+        }).expect("below-host raw producer needs a checked host publication");
+        let raw_input = planned.program.sequence.definitions.iter()
+            .find(|d| d.name == partition.input).unwrap();
+        assert_eq!(raw_input.term, syn::parse_quote!(store #producer));
+        let producer_definition = planned.program.sequence.definitions.iter()
+            .find(|d| d.name == *producer).unwrap();
+        assert!(!matches!(producer_definition.term, Term::Store { .. }));
+        let facts = cq_lang_sequence::check_grading(&planned.program, &machine).unwrap();
+        let task = vec!["host".to_owned(), "pool".to_owned(), "task".to_owned()];
+        assert_eq!(facts.levels["task_pipe"], task);
+        assert_eq!(facts.levels[&producer.to_string()], task);
+        assert_eq!(facts.levels[&partition.input.to_string()], vec!["host".to_owned()]);
+        replay(&source, &planned);
+    }
+}

@@ -230,8 +230,22 @@ pub(crate) fn apply(
         let input = candidate.input.clone();
         let name = candidate.name.clone();
         let partial = candidate.keys.is_empty();
+        let producer_level = (!partial).then(|| publication_producer_level(
+            &planned.program, machine, &name,
+        )).flatten();
         super::push(checker, planned, Advice::KeyPartition(candidate))?;
         if planned.program.sequence.definitions.iter().any(|d| d.name == input) {
+            if let Some(level) = producer_level {
+                let mut fresh = format!("__cq_key_producer_{}", symbol_name(&name));
+                while !names.insert(fresh.clone()) { fresh.push('_'); }
+                let producer = Ident::new(&fresh, name.span());
+                super::push(checker, planned, Advice::Publish {
+                    name: input.clone(), producer: producer.clone(),
+                })?;
+                super::push(checker, planned, Advice::Grade {
+                    name: producer, level, machine: machine.name.clone(),
+                })?;
+            }
             super::push(checker, planned, Advice::Grade {
                 name: input, level: vec![machine.root.name.clone()], machine: machine.name.clone(),
             })?;
@@ -253,6 +267,28 @@ pub(crate) fn apply(
         })?;
     }
     Ok(())
+}
+
+fn publication_producer_level(program: &Program, machine: &Machine, name: &Ident) -> Option<Vec<Ident>> {
+    let grades = &program.graded.as_ref()?.grades;
+    let mut level = grades.iter().find(|grade| grade.name == *name)?.level.clone();
+    if level.len() == 1 { return None; }
+    let definition = program.sequence.definitions.iter().find(|d| d.name == *name)?;
+    if let Term::Store { inner, .. } = &definition.term
+        && let Term::Ref(source) = inner.as_ref()
+        && grades.iter().any(|grade| grade.name == *source && grade.level.len() == 1)
+    {
+        // The original boundary already uploads a completed host publication.
+        return None;
+    }
+    let node = level.iter().skip(1).try_fold(&machine.root, |node, name|
+        node.children.iter().find(|child| child.name == *name))?;
+    if matches!(definition.term, Term::Store { .. }) && !node.collaborative
+        && let [child] = node.children.as_slice()
+    {
+        level.push(child.name.clone());
+    }
+    Some(level)
 }
 
 fn partial_views(program: &Program, name: &Ident) -> Vec<Ident> {

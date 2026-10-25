@@ -202,7 +202,8 @@ enum Atom {
     /// `part` is the largest actual part, not an average bucket cardinality.
     /// Ordinary depth is ceil(part/lanes). For nonempty inputs scan depth is
     /// ceil(part/lanes) + ceil(log2(min(part,lanes))); empty inputs have depth
-    /// zero. Thus one lane is serial and a whole-width scan is logarithmic.
+    /// zero. One effective lane instead normalizes to all input positions,
+    /// since it must process every part; a whole-width scan is logarithmic.
     Depth {
         size: Size,
         partition: Option<Partition>,
@@ -427,12 +428,15 @@ impl Fact {
     }
 
     fn advance_with_lanes(&mut self, size: &Size, lanes: usize, scan: bool) -> syn::Result<()> {
-        let depth = if lanes == 1 && self.partition.is_none() {
+        // A one-part covering view contains the entire input, not a smaller
+        // maximum bucket. Normalize the identity before symbolic comparison.
+        let partition = self.partition.as_ref().filter(|partition| partition.rows != 1);
+        let depth = if lanes == 1 {
             Sum::positions(size)?
         } else if matches!(size, Size::Constant(0)) {
             Sum::default()
         } else if let Size::Constant(n) = size
-            && self.partition.is_none()
+            && partition.is_none()
         {
             let lanes = lanes as u128;
             let waves = n / lanes + u128::from(n % lanes != 0);
@@ -449,7 +453,7 @@ impl Fact {
             Sum::atom(
                 Atom::Depth {
                     size: size.clone(),
-                    partition: self.partition.clone(),
+                    partition: partition.cloned(),
                     lanes,
                     scan,
                 },
@@ -575,6 +579,10 @@ impl Evaluator<'_> {
             }
             Term::PartitionK { parts, inner, .. } => {
                 let mut fact = self.term(inner, owner, level, tile)?;
+                // Routing schedules the complete flat publication anew. An
+                // ancestor's contiguous tiles cannot reduce the total volume
+                // processed by this pool's effective lanes a second time.
+                fact.partition = None;
                 if *parts == 1 {
                     // The singleton cover is an identity view: native provider
                     // Build has no hashing, routing pass, or bucket publication.
@@ -1033,6 +1041,30 @@ mod tests {
                 .lookup_after_expand,
             0
         );
+    }
+
+    #[test]
+    fn one_lane_span_is_exactly_all_part_work_not_a_maxpart_bound() {
+        for size in [Size::Input("r".into()), Size::Scan("expanded".into())] {
+            for parts in [1, 3, 16] {
+                for scan in [false, true] {
+                    let mut fact = Fact {
+                        size: size.clone(),
+                        result: "r".into(),
+                        layers: Vec::new(),
+                        partition: Some(Partition { driver: Size::Input("r".into()), rows: parts }),
+                        work: Sum::default(),
+                        span: Sum::default(),
+                        local_span: Sum::default(),
+                        expands: 0,
+                        lookup_after_expand: 0,
+                    };
+                    fact.advance_with_lanes(&size, 1, scan).unwrap();
+                    assert_eq!(fact.span, Sum::positions(&size).unwrap());
+                    assert_eq!(fact.local_span, fact.span);
+                }
+            }
+        }
     }
 
     #[test]
