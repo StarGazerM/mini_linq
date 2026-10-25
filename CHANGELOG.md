@@ -7,6 +7,16 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- DOOP on the GPU, exact on cassandra (all 26 outputs equal `mini`). Strings
+  never reach the device: the DOOP loader interns `method_descriptor` at load
+  (`IStr::code`/`from_code`), `device_storage(symbols(T => Codec))` stores
+  symbol columns as `SymbolCodec` u32 codes, closed constants are evaluated on
+  the host (`GPU-Capture`, the closed case of `BE-Partial`/`IF-Parameter`), and
+  the checked `capture_constants` rewrite turns literal atom arguments into
+  guards (`PH-ConstantGuard`). Packed words span multiple 64-bit lanes. Fixes: a
+  dynamic u128 lane mask miscompiled by the CUDA backend (constant lane shifts
+  instead), stratum-scoped arenas, pool trimming, and an RCCL pool growth reset
+  (`8a7e87b`). 11.8 s vs 4.27 s `mini`; kernels 7.7 s, PTX JIT 5.6 s.
 - GPU Datalog: whole Datalog programs run on the GPU through the ordinary
   pipeline. `gpu-datalog-runtime` packs fixed-width tuples most-significant
   first (`DL-DevicePacking`) into sorted, unique, disjoint device runs with

@@ -428,8 +428,13 @@ approval.
   TC 0.36–0.49 s vs 1.58–1.79 s mini / 1.83–2.18 s mini-par; same generation
   0.41 s vs 3.58 s / 3.07 s. Remaining realization cost: per-hole metadata
   readback and stream synchronize, per-admission and per-layout-sort count
-  readbacks, waves issued in order on the pool's single stream. DOOP needs
-  symbol codes for `IStr` columns.
+  readbacks, waves issued in order on the pool's single stream.
+  DOOP cassandra runs on the GPU and all 26 outputs equal `mini` exactly:
+  strings stay in the dataset (`method_descriptor` interned at load, symbol
+  columns as `SymbolCodec` u32 codes, closed constants captured on the host),
+  wide inputs use multi-lane words. 11.8 s vs 4.27 s `mini` / 1.26 s `mini-par`.
+  nsys: kernels 7.7 s (one hole 4.07 s: 306 × 13.3 ms), PTX module JIT 5.6 s
+  (158 × 35 ms); readback transfers 21 ms, the rest of D2H time is waiting.
 - Open: reach chain at 15 threads below sequential; nested CQ code in one
   codegen unit; rule-local aggregates; FlowLog comparison; partial-Rust
   multi-round refinement; surface sugar (disjunction, facts, rule macros).
