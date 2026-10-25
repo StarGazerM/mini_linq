@@ -1,5 +1,5 @@
 [workspace]
-members = ["tiles", "compress", "compress-host", "h05-reference", "printer-runtime", "h05-compiled", "device-columns", "device-columns-oracle", "sequence", "sequence-runtime", "tpch"]
+members = ["tiles", "compress", "compress-host", "h05-reference", "printer-runtime", "h05-compiled", "device-columns", "device-columns-oracle", "sequence", "sequence-runtime", "datalog-runtime", "tpch"]
 resolver = "2"
 
 [workspace.package]

@@ -39,6 +39,35 @@ Release build dependencies also use optimization level 3: the build-time
 compression catalog shares CUDA-containing crates with the runtime, and their
 device address-space lowering requires optimized codegen.
 
+### Packed Datalog runtime
+
+`gpu-datalog-runtime` provides `Packing`/`Column` encodings and `DeviceRuns<u64>`
+or `DeviceRuns<u128>` on the resident-column `Pool`. Integer columns use their
+full declared width; signed columns flip the sign bit, and the first tuple
+column occupies the most significant packed bits. `prefix_range` returns
+inclusive bounds, including the maximum word without overflow.
+
+`DeviceRuns::admit` sorts, deduplicates, subtracts all accepted runs on-device,
+and returns a cheap immutable `Run` delta while accepting it internally.
+It reads back only the unique count and fresh count (empty batches and an empty
+accepted state omit unnecessary readbacks). Ratio-four merges retain sorted,
+unique, pairwise-disjoint runs. For another layout, permute the delta with
+`Packing::permute_device`, canonicalize with `DeviceRuns::sort_unique`, and
+use unsafe `append_sorted` after proving disjointness. `RunView` and device
+`runs::range` support inclusive prefix searches without materialization.
+All work and frees use the pool's legacy default stream.
+
+```sh
+cargo oxide test --arch sm_89 -- --release -p gpu-datalog-runtime
+cargo oxide test --arch sm_89 -- --release -p gpu-datalog-runtime --test runs -- --ignored --nocapture
+```
+
+The ignored probe admits 10M random u64 candidates against 50M accepted rows.
+Timing is opt-in: `enable_timing(true)` records CUDA events, and the explicit
+`last_timings()` accessor synchronizes and reports sort/unique, anti-join, and
+merge milliseconds. `to_host()` is an explicit diagnostic sorted download,
+not part of the admission path.
+
 ### Planner-driven 11-query TPC-H suite
 
 `tpch` is one crate with one binary, `cq-gpu-tpch`. It imports the CPU

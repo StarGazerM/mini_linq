@@ -810,6 +810,18 @@ name = "gpu-compress-host"
 version = "0.1.0"
 
 [[package]]
+name = "gpu-datalog-runtime"
+version = "0.1.0"
+dependencies = [
+ "cuda-core",
+ "cuda-device",
+ "cuda-host",
+ "gpu-device-columns",
+ "rccl-cub",
+ "rccl-memory",
+]
+
+[[package]]
 name = "gpu-device-columns"
 version = "0.1.0"
 dependencies = [

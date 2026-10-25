@@ -1111,6 +1111,26 @@ as a run (merging as above) and return it in sorted order.
  A'=A\uplus N}
  {\mathrm{set}(N)=C\setminus A\quad\mathrm{set}(A')=A\cup C}
 \end{mathpar}
+Device runs realize the same two rules over packed words. For fixed-width
+column types $\tau_1\ldots\tau_n$ with $\sum_i w_i\le 128$, packing places column
+$i$ of a layout's permutation in the next $w_i$ bits from the most significant
+end, after an order-preserving encoding $e_i$ (signed integers flip the sign
+bit; symbol codes are unsigned). Packing is injective and maps the
+lexicographic order to the integer order, so sort, uniqueness, merge and
+binary search on words coincide with those on tuples, and a key prefix $k$ of
+length $j$ selects the contiguous word range $[p(k)\cdot2^{s_j},(p(k)+1)\cdot2^{s_j})$
+with $s_j=\sum_{i>j}w_i$.
+\begin{mathpar}
+\Rule{DL-DevicePacking}{\forall i.\ e_i\text{ injective and monotone}\quad
+ \sum_i w_i\le 128}
+ {\mathrm{pack}(r)<\mathrm{pack}(r')\iff r<_{\mathrm{lex}}r'\quad
+ \mathrm{lookup}_L(k)=\mathrm{unpack}(\{x\in L\mid p(k)2^{s_j}\le x<(p(k)+1)2^{s_j}\})}
+\Rule{DL-DeviceRuns}{\textsc{DL-DevicePacking}\quad
+ \text{device admission and merge follow \textsc{DL-RunAdmission} and \textsc{DL-RunLayout} on words}}
+ {\mathrm{unpack}(\text{device state})=\text{the CPU run state after the same candidate batches}}
+\end{mathpar}
+Live counts may be read back to size sorts and to test termination; such
+readbacks are recorded realization cost, not semantic steps.
 Let $S$ be a power of two at least the worker count and let
 $h_S(x)=h(x)\mathbin{\&}(S-1)$. Canonical admission uses the full tuple:
 $C_i=\{r\in C\mid h_S(r)=i\}$, so equal tuples always share a shard.
