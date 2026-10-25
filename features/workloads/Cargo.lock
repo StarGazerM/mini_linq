@@ -692,7 +692,10 @@ name = "cq-sequence-tasks"
 version = "0.1.0"
 dependencies = [
  "cq-lang-sequence",
+ "cq-print",
+ "cq-sequence-plan",
  "cq-sequence-pull",
+ "cq-sequence-rewrite-passes",
  "cq-storage",
  "proc-macro2",
  "quote",
@@ -706,7 +709,6 @@ version = "0.1.0"
 dependencies = [
  "cq-lang-sequence",
  "cq-sequence-plan",
- "cq-sequence-rewrite-passes",
  "cq-sequence-tasks",
  "cq-stage",
  "syn 2.0.119",
