@@ -148,7 +148,7 @@ fn unstored_input(program: &Program, term: &Term) -> Option<syn::Ident> {
         | Term::Group(_, inner)
         | Term::Canon(inner)
         | Term::Store { inner, .. } => unstored_input(program, inner),
-        Term::Tile { .. } | Term::Union(_) | Term::Choose(_) | Term::Rows(_) => None,
+        Term::Tile { .. } | Term::PartitionK { .. } | Term::Union(_) | Term::Choose(_) | Term::Rows(_) => None,
     }
 }
 
@@ -163,7 +163,7 @@ fn producer<'a>(program: &'a Program, name: &syn::Ident) -> Option<&'a Term> {
 
 fn has_tile(program: &Program, term: &Term) -> bool {
     match term {
-        Term::Tile { .. } => true,
+        Term::Tile { .. } | Term::PartitionK { .. } => true,
         Term::Ref(name) => producer(program, name)
             .is_some_and(|term| !matches!(term, Term::Store { .. }) && has_tile(program, term)),
         Term::Map(_, inner)
@@ -193,6 +193,7 @@ fn expands(program: &Program, term: &Term) -> bool {
         | Term::Group(_, inner)
         | Term::Canon(inner)
         | Term::Tile { inner, .. }
+        | Term::PartitionK { inner, .. }
         | Term::Store { inner, .. } => expands(program, inner),
         Term::Union(arms) => arms.iter().any(|term| expands(program, term)),
         Term::Choose(arms) => arms.iter().any(|(_, term)| expands(program, term)),

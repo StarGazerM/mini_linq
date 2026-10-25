@@ -6,7 +6,7 @@
 //! Pool chunks own their buffers and publish in chunk order at the join. Rayon
 //! propagates a task panic to that join rather than publishing partial output.
 //! Key-disjoint partitions support local canon and keyed folds; global monoids
-//! combine task-local partials at the host.
+//! combine task-local partials at the host, never as a pool collective.
 
 use cq_lang_sequence::{Analysis, LevelNode, Machine, Program, Term, Tiling};
 use quote::{format_ident, quote};
@@ -18,18 +18,22 @@ pub struct Config {
     pub threads: Option<usize>,
     /// Contiguous driver rows owned by one task.
     pub grain: usize,
+    /// Logical partition count fixed before execution, independent of workers.
+    pub partitions: usize,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { threads: None, grain: 1024 }
+        Self { threads: None, grain: 1024, partitions: 64 }
     }
 }
 
 pub mod combine;
 mod keyed;
 
-/// The host owns a separated dynamic pool of sequential tasks.
+/// The host owns a separated dynamic pool with 64 logical partitions.
+///
+/// This fixed planning width is independent of the Rayon worker count.
 pub fn machine() -> Machine {
     machine_with(Config::default())
 }
@@ -37,6 +41,12 @@ pub fn machine() -> Machine {
 pub fn machine_with(config: Config) -> Machine {
     assert!(config.grain > 0, "task grain must be positive");
     assert!(config.threads != Some(0), "task thread count must be positive");
+    machine_with_width(config.partitions)
+}
+
+/// Build a task machine with a fixed positive logical partition count.
+pub fn machine_with_width(parts: usize) -> Machine {
+    assert!(parts > 0, "task machine partition count must be positive");
     Machine {
         layout: None,
         name: syn::parse_quote!(tasks),
@@ -52,7 +62,7 @@ pub fn machine_with(config: Config) -> Machine {
                 name: syn::parse_quote!(pool),
                 collaborative: false,
                 dynamic: true,
-                width: Some(config.grain),
+                width: Some(parts),
                 children: vec![LevelNode {
                     shared_bytes: None,
                     name: syn::parse_quote!(task),

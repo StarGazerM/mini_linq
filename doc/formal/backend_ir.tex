@@ -70,17 +70,19 @@ t ::= rows r                     // the positions of a retained result or host
     | flatten t                  // join; offsets are the scan of lengths
     | compact p t                // total filter, order-preserving
     | tile n t                   // view: regroup into runs of n
+    | partition_k[K](P) t        // key-disjoint redistribution into P parts
     | lookup b [K] t             // per-position bucket of provider b
     | fold (o,e) t               // monoid fold
     | canon t                    // support
-    | store t                    // materialize (the only non-view)
+    | store t                    // materialize
     | choose [ g => t ]*         // size-guarded equal alternatives
 \end{lstlisting}
 \code{tile}, \code{flatten} over known offsets, \code{lookup} over a range
 cursor and the gathers inside $f$ are \emph{views}: bijections on positions
 that change addressing and materialize nothing (Lift's layout patterns,
-Descend's views~\cite{paper-lift,paper-descend}). Only \code{store}
-materializes; a segmented stored \code{flatten} retains offsets (BE-Offsets).
+Descend's views~\cite{paper-lift,paper-descend}). \code{store} materializes,
+and \code{partition\_k} redistributes an ancestor store into owned parts;
+a segmented stored \code{flatten} retains offsets (BE-Offsets).
 Under BE-Alpha, constructors are lifted through outer tile levels:
 \code{map}, \code{compact}, \code{lookup}, \code{fold}, \code{canon} and
 \code{store} operate on innermost rows and preserve those outer partitions;
@@ -139,6 +141,77 @@ incremental flattening~\cite{paper-futhark-flatten}: the right
 decomposition depends on lengths known at run time, so several equal
 decompositions may be recorded under thresholds that are tuning
 parameters, not meaning.
+
+\paragraph{Key-disjoint partitions.}
+Let $B=\alpha t$ be a bag of complete valuations $V$, $K$ a tuple of
+available columns, and $r_P$ a fixed total routing function on key tuples
+with range $[0,P)$. Write $B_p=B|_{r_P(K(x))=p}$, retaining every input
+occurrence exactly once. Collisions between unequal keys are permitted;
+equal keys must always route together. Empty parts are retained.
+\begin{mathpar}
+\Rule{BE-KeyPart}{P>0\quad K\subseteq V\quad
+ t\text{ reads a store at a strict ancestor of the separated pool}\quad
+ P=\mathsf{width}(\mathsf{pool})}
+ {\mathsf{partition}_{K,P}(t)=[B_0,\ldots,B_{P-1}]
+ \quad\biguplus_{p<P}B_p=B
+ \quad K(\mathrm{supp}\,B_p)\cap K(\mathrm{supp}\,B_q)=\varnothing\ (p\ne q)}
+
+\Rule{BE-KeyPartCanon}{[B_p]_{p<P}=\mathsf{partition}_{K,P}(t)
+ \quad V\to K}
+ {\alpha(\mathsf{canon}\,t)
+ =\textstyle\biguplus_{p<P}\alpha(\mathsf{canon}\,B_p)}
+
+\Rule{BE-KeyPartGroup}{[B_p]_{p<P}=\mathsf{partition}_{K,P}(t)
+ \quad G\ne\varnothing\quad G\to K}
+ {\mathsf{group}_{G;(e_i,M_i)_i}(\mathsf{canon}\,B)
+ =\textstyle\biguplus_{p<P}
+ \mathsf{group}_{G;(e_i,M_i)_i}(\mathsf{canon}\,B_p)}
+
+\Rule{BE-GroupPartial}{D=\iota(\mathrm{supp}\,\alpha t)
+ \quad\biguplus_{p<P}D_p=D
+ \quad(M_i,\oplus_i,e_i^0)_i\text{ commutative monoids}}
+ {\mathsf{group}_{\varnothing;(e_i,M_i)_i}(D)
+ =[((),(\textstyle\bigoplus_{p<P}^{M_i}
+       \mathsf{fold}_{M_i}(\mathsf{map}_{e_i}D_p))_i)]}
+
+\Rule{BE-KeyPartProvider}{[B_p]_{p<P}=\mathsf{partition}_{K,P}(t)
+ \quad L\to K\quad K=h\circ L\quad I_p=\mathsf{build}_L(B_p)}
+ {\mathsf{lookup}_{\mathsf{build}_L(B)}(l)
+ =\mathsf{lookup}_{I_{r_P(h(l))}}(l)}
+\end{mathpar}
+Here equalities forget enumeration order but preserve bag multiplicities;
+canon compares complete valuations, never just routing or aggregate columns.
+The group law uses the same complete-valuation canonicalization and declared
+monoids as BE-Group. Since $G\to K$, no group crosses a part boundary.
+An unkeyed aggregate uses BE-GroupPartial rather than BE-KeyPartGroup:
+per-part monoid folds are combined by one host fold, yielding a flat
+singleton result, including the monoid identity on empty input.
+The checked premise is global uniqueness of complete valuations across
+all parts, not merely uniqueness within each part. It is established either
+by BE-KeyPartCanon (routing determined by the complete valuation followed
+by per-part canon), or by BE-GroupKey's proof that the original valuations
+are globally distinct. The latter permits ordinary contiguous tiles without
+canon. Raw tiles without such a uniqueness proof are rejected: per-tile
+canon alone cannot eliminate duplicates crossing tile boundaries.
+Both \code{Tile} and \code{PartitionK} at the pool may therefore feed an
+unkeyed group with this partial-fold interpretation. The host merge folds
+partial aggregate states with the same monoid operations, not by evaluating
+the original row expressions again or by counting partial rows. Empty parts
+contribute identities; zero parts still yield exactly one identity answer.
+The provider law concerns exact point buckets (and hence membership), with
+the same routing function and partition count at build and lookup. It does
+not license a range lookup spanning several routing keys to read one part,
+nor remove provider capability or codec obligations.
+The routed provider retains the routing projection $h$ and applies it in
+the written routing-column order to every lookup key. This includes
+proper subsets and reordered routing tuples; the planner's default
+candidate uses the whole canonical lookup key.
+The surface constructor is \code{partition\_k[K](P) t}; it adds one nested
+level of exactly $P$ parts graded at the pool. Canon and keyed group operate
+inside each part, and an explicit flatten joins them. Redistribution obeys
+BE-Separate through its ancestor store; it is not a pool collective.
+The machine fixes $P$ at plan time. Runtime worker count only schedules
+these parts and never changes routing or the equations above.
 
 \paragraph{Providers and codecs are capabilities.} A provider is read
 through \code{lookup} and the term records only what the read requires:
@@ -369,6 +442,11 @@ for a row carrying a \code{String}; a compatible host token or a rejection
 is required.
 Each substitution uses the existing source/target Structures retype checks;
 an absent token or inadmissible retention rejects with the obligation.
+Sequence rewrite equality also accepts these type-only substitutions for
+built providers, retained rows and canon implementations, checked by the
+Structures rewrite contract. Physical syntax, host adapters, key layouts
+and canonical boundaries must remain identical; this is not permission
+to replace an opaque reader or predicate.
 Placement propagates opaque evaluation and its unstored feeds to host before
 assigning descendant work. String-literal predicates and operations reading
 or producing String-bearing rows likewise stay host through the projection
@@ -629,12 +707,20 @@ dynamic part claiming & none & work stealing & atomic cursor (free, BE-Partition
   \mathsf{tile}_n\text{ at pool}\mapsto\code{par\_chunks}(n);\
   \mathsf{store}\text{ at pool}\mapsto\text{task-local vectors joined in chunk order};\
   \mathsf{flatten}\text{ at task}\mapsto\text{sequential flat map};\
-  \mathsf{canon}\mapsto\text{per-part then global (BE-Canon)}}
+  \mathsf{partition}_{K,P}\mapsto\text{route into }P\text{ owned parts};\
+  \mathsf{canon}\mapsto\text{per-part then global (BE-Canon), or per-key-part (BE-KeyPartCanon)}}
 \end{mathpar}
 A collective graded at the separated pool is rejected by BE-Collective; a
 reduction at the join does not make the pool collaborative. Panics
 propagate through the join to the host, and no partially joined result is
 published.
+The Tasks machine API \code{machine()} uses a fixed default of 64 logical
+pool partitions; \code{machine\_with\_width(parts)} requires a positive count
+and records it as the pool's distributing width. This logical width is not
+the contiguous tile grain and is not the Rayon worker count. Changing the
+runtime thread count changes scheduling only. Keyed group and routed point
+providers realize BE-KeyPartGroup and BE-KeyPartProvider only where the
+checked Sequence records them; the translator introduces no partition plan.
 
 The parallel Datalog extension (Section~\ref{sec:datalog-languages}) is the
 task interpretation at the granularity of rule holes: its partitioned
@@ -736,7 +822,8 @@ A segmented-fold term therefore records the keyed store and its per-owner
 fold; its input canonicalization is over $V$, never over aggregate values.
 The host hash-grouped implementation fuses store construction and segment
 fold without changing this equation. The Tasks interpretation performs this
-operation at the host join, not as a collective at the separated pool.
+operation at the host join or independently inside key-disjoint parts under
+BE-KeyPartGroup, never as a collective at the separated pool.
 
 \paragraph{Key-aware grouped fold.}
 \begin{mathpar}

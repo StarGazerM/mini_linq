@@ -395,6 +395,30 @@ impl<'a> Emitter<'a> {
         input.stored = false;
         input
     }
+    /// Serial interpretation of the same fixed key routing used by task targets.
+    pub fn partition_k(&mut self, keys: &[Ident], parts: usize, mut input: Value) -> syn::Result<Value> {
+        let result = input.result.as_ref().ok_or_else(|| syn::Error::new(
+            proc_macro2::Span::call_site(), "partition_k requires row provenance"))?;
+        self.register(result);
+        let columns: Vec<_> = keys.iter().map(symbol_name).collect();
+        let pattern = self.context().bind_columns(result, &columns, false);
+        let key: Vec<_> = columns.iter().map(|column| self.context().access(result, column)).collect();
+        let rows = input.rows;
+        input.rows = quote!({
+            let mut __cq_parts: ::std::vec::Vec<::std::vec::Vec<_>> =
+                (0..#parts).map(|_| ::std::vec::Vec::new()).collect();
+            for __cq_row in #rows {
+                let #pattern = &__cq_row;
+                let __cq_part = ::cq_storage::sharded::route_index(&(#(#key,)*), #parts);
+                __cq_parts[__cq_part].push(__cq_row);
+            }
+            __cq_parts.into_iter()
+        });
+        input.depth += 1;
+        input.stored = false;
+        Ok(input)
+    }
+
 
     // Row-layout conversion is shared by union injection and checked
     // equivalent-result aliases. It changes carriers, never query decisions.
@@ -640,7 +664,7 @@ impl<'a> Emitter<'a> {
         })
     }
 
-    fn group(&mut self, name: &Ident, input: Value) -> syn::Result<Value> {
+    pub fn group(&mut self, name: &Ident, input: Value) -> syn::Result<Value> {
         let result = symbol_name(name);
         self.register(&result);
         let Operator::Group(group) = &self.context().physical[&result].operator else {
@@ -947,6 +971,7 @@ fn translate_with_profile(
             | Term::Group(_, inner)
             | Term::Canon(inner)
             | Term::Store { inner, .. }
+            | Term::PartitionK { inner, .. }
             | Term::Lookup { inner, .. } => Some(term(emitter, inner, owner, tiles, false, hook)?),
             Term::Tile { inner, .. } => Some(term(emitter, inner, owner, tiles + 1, false, hook)?),
             _ => None,
@@ -973,12 +998,22 @@ fn translate_with_profile(
                     Ok(emitter.tile(*n, rows))
                 })?
             }
+            Term::PartitionK { keys, parts, .. } => emitter.partition_k(keys, *parts, input())?,
             Term::Lookup { provider, keys, .. } => {
                 emitter.lift(input(), input().depth, &mut |emitter, rows| {
                     emitter.lookup(provider, keys, rows, membership)
                 })?
             }
-            Term::Group(name, _) => emitter.group(name, input())?,
+            Term::Group(name, _) => {
+                let global = matches!(&emitter.context().physical[&symbol_name(name)].operator,
+                    Operator::Group(group) if group.keys.is_empty());
+                if global && input().depth != 0 {
+                    let flat = emitter.flatten(input());
+                    emitter.group(name, flat)?
+                } else {
+                    emitter.lift(input(), input().depth, &mut |emitter, rows| emitter.group(name, rows))?
+                }
+            }
             Term::Fold(monoid, _) => {
                 emitter.lift(input(), input().depth, &mut |emitter, rows| {
                     emitter.fold(monoid, rows)

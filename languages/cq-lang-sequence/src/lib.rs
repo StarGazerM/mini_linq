@@ -5,7 +5,9 @@
 //! Optional `evidence { ... }` records estimates and author-asserted key premises;
 //! see [`Evidence`] and [`EvidenceFact`] for their distinct correctness contracts.
 //! Terms are prefix forms: `rows`, `map`, `flatten`, `compact`, `tile`, `lookup`,
-//! `fold`, `group`, `canon`, `store`, `union` and `choose`, or references to earlier definitions.
+//! `partition_k[keys](parts)`, `fold`, `group`, `canon`, `store`, `union` and
+//! `choose`, or references to earlier definitions. A key partition reads a named
+//! ancestor store into fixed key-disjoint parts; runtime worker count is unrelated.
 //! Constructor names are also valid references when followed by a term boundary.
 //! A store may declare `store capacity N term`; the optional final sequence
 //! statement `output count;`, `output reserve;` or `output bounded;` selects the
@@ -18,7 +20,7 @@ use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
-use syn::{Ident, LitInt, Token, braced, bracketed};
+use syn::{Ident, LitInt, Token, braced, bracketed, parenthesized};
 
 pub mod contract;
 mod evidence;
@@ -39,6 +41,7 @@ mod kw {
     syn::custom_keyword!(flatten);
     syn::custom_keyword!(compact);
     syn::custom_keyword!(tile);
+    syn::custom_keyword!(partition_k);
     syn::custom_keyword!(items);
     syn::custom_keyword!(lookup);
     syn::custom_keyword!(fold);
@@ -86,6 +89,12 @@ pub enum Term {
     Tile {
         n: usize,
         items: Option<usize>,
+        inner: Box<Term>,
+    },
+    /// Hash-route a stored valuation stream into a fixed key-disjoint cover.
+    PartitionK {
+        keys: Vec<Ident>,
+        parts: usize,
         inner: Box<Term>,
     },
     Lookup {
@@ -455,6 +464,20 @@ impl Parse for Term {
         } else if input.peek(kw::compact) {
             input.parse::<kw::compact>()?;
             Ok(Self::Compact(input.parse()?, input.parse()?))
+        } else if input.peek(kw::partition_k) {
+            input.parse::<kw::partition_k>()?;
+            let keys;
+            bracketed!(keys in input);
+            let keys = Punctuated::<Ident, Token![,]>::parse_terminated(&keys)?
+                .into_iter()
+                .collect();
+            let parts;
+            parenthesized!(parts in input);
+            let count = parse_usize(&parts)?;
+            if !parts.is_empty() {
+                return Err(parts.error("partition_k expects one partition count"));
+            }
+            Ok(Self::PartitionK { keys, parts: count, inner: input.parse()? })
         } else if input.peek(kw::tile) {
             input.parse::<kw::tile>()?;
             let n = parse_usize(input)?;
@@ -532,6 +555,10 @@ impl ToTokens for Term {
             Self::Map(name, inner) => quote! { map #name #inner },
             Self::Flatten(inner) => quote! { flatten #inner },
             Self::Compact(name, inner) => quote! { compact #name #inner },
+            Self::PartitionK { keys, parts, inner } => {
+                let parts = integer(*parts);
+                quote! { partition_k [#(#keys),*](#parts) #inner }
+            }
             Self::Tile { n, items, inner } => {
                 let n = integer(*n);
                 let items = items.map(|n| {

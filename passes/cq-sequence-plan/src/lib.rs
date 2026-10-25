@@ -13,6 +13,8 @@ mod advice;
 mod decomposition;
 mod placement;
 mod planner;
+mod key_partition;
+pub use key_partition::{KeyPartitionPolicy, decompose_with_key_partitions};
 pub use planner::{Planner, RuleBased};
 
 pub use cq_sequence_rewrite_passes::select_from_catalog;
@@ -23,6 +25,7 @@ pub enum Advice {
     Evidence(cq_lang_sequence::Evidence),
     LookupFirst(Box<cq_sequence_rewrite_passes::LookupFirst>),
     Adaptive(cq_sequence_rewrite_passes::AdaptiveCandidate),
+    KeyPartition(cq_sequence_rewrite_passes::KeyPartition),
     GroupWithoutCanon(Ident),
     Store(Ident),
     StoreLevel(Ident),
@@ -71,6 +74,7 @@ impl Advice {
                 rewrites::lookup_first_in(checker, source, quote!(#arguments))
             }
             Self::Adaptive(arguments) => rewrites::apply_adaptive_in(checker, source, arguments),
+            Self::KeyPartition(arguments) => rewrites::key_partition_in(checker, source, arguments),
             Self::GroupWithoutCanon(name) => {
                 rewrites::group_without_canon_in(checker, source, quote!(#name))
             }
@@ -140,6 +144,17 @@ pub struct Planned {
 
 /// Fill unauthored scheduling decisions, returning the checked result and its proof trace.
 pub fn plan(program: &Program, machine: &Machine, catalog: &Catalog) -> syn::Result<Planned> {
+    plan_with_key_partitions(program, machine, catalog, &[])
+}
+
+/// Plan with explicit force/forbid decisions for key partitioning; unmentioned
+/// definitions are selected by the same checked PL-Cost candidate comparison.
+pub fn plan_with_key_partitions(
+    program: &Program,
+    machine: &Machine,
+    catalog: &Catalog,
+    policies: &[KeyPartitionPolicy],
+) -> syn::Result<Planned> {
     let started = std::env::var_os("CQ_SEQUENCE_PLAN_TIMING").map(|_| std::time::Instant::now());
     let checker = &mut cq_lang_sequence::contract::Checker::new(program)?;
     let mut prepared = Planned {
@@ -162,7 +177,7 @@ pub fn plan(program: &Program, machine: &Machine, catalog: &Catalog) -> syn::Res
         push(checker, &mut prepared, Advice::Adaptive(advice))?;
     }
     let adaptive_elapsed = started.map(|started| started.elapsed());
-    let mut planned = decompose_in(checker, &prepared.program, machine, catalog)?;
+    let mut planned = decompose_in(checker, &prepared.program, machine, catalog, policies)?;
     prepared.trace.append(&mut planned.trace);
     planned.trace = prepared.trace;
     if let Some(started) = started {
@@ -185,7 +200,7 @@ pub fn plan(program: &Program, machine: &Machine, catalog: &Catalog) -> syn::Res
 /// Callers with an order-advice phase use this entry rather than selecting another
 /// relational order. Its result has the same checked replay and grading contract.
 pub fn decompose(program: &Program, machine: &Machine, catalog: &Catalog) -> syn::Result<Planned> {
-    decompose_in(&mut Default::default(), program, machine, catalog)
+    decompose_in(&mut Default::default(), program, machine, catalog, &[])
 }
 
 fn decompose_in(
@@ -193,8 +208,10 @@ fn decompose_in(
     program: &Program,
     machine: &Machine,
     catalog: &Catalog,
+    policies: &[KeyPartitionPolicy],
 ) -> syn::Result<Planned> {
     checker.check_shared(program)?;
+    key_partition::validate(program, policies)?;
     let mut prepared = Planned {
         program: program.clone(),
         trace: Vec::new(),
@@ -315,14 +332,18 @@ fn decompose_in(
         let segmentable = prepared.program.sequence.definitions.iter().any(|definition| {
             matches!(&definition.term, Term::Flatten(inner) if matches!(inner.as_ref(), Term::Lookup { .. }))
         });
+        let facts = checker.check_shared(&prepared.program)?;
+        let partition_choices = key_partition::choices(&prepared.program, &facts, policies);
         for &(width, items) in &schedules {
             let mut best: Option<(Cost, Planned)> = None;
             for segmented in [true, false] {
                 if segmented && (!parallel || width.is_none() || !segmentable) {
                     continue;
                 }
+                for (keyed, candidate_policies) in std::iter::once((false, policies))
+                    .chain(partition_choices.iter().map(|choice| (true, choice.as_slice()))) {
                 match candidate(
-                    checker, &prepared, machine, catalog, width, items, segmented,
+                    checker, &prepared, machine, catalog, width, items, segmented, program, candidate_policies, keyed,
                 ) {
                     Ok((analysis, planned)) => {
                         let cost = Cost::from_analysis(&planned.program, machine, &analysis)?;
@@ -343,6 +364,7 @@ fn decompose_in(
                             failure,
                         );
                     }
+                }
                 }
             }
             if let Some((cost, planned)) = best {
@@ -452,8 +474,12 @@ fn candidate(
     width: Option<usize>,
     items: usize,
     segmented: bool,
+    authored: &Program,
+    policies: &[KeyPartitionPolicy],
+    keyed: bool,
 ) -> syn::Result<(Analysis, Planned)> {
     let mut planned = source.clone();
+    key_partition::apply(checker, &mut planned, authored, machine, catalog, policies, keyed)?;
     if !machine.root.children.is_empty() {
         let mut decomposed =
             decomposition::advise(checker, &planned.program, machine, width, items, segmented)?;
@@ -582,6 +608,7 @@ fn variable_output(term: &Term, program: &Program) -> bool {
         | Term::Flatten(t)
         | Term::Fold(_, t)
         | Term::Group(_, t)
+        | Term::PartitionK { inner: t, .. }
         | Term::Tile { inner: t, .. }
         | Term::Store { inner: t, .. }
         | Term::Lookup { inner: t, .. } => variable_output(t, program),

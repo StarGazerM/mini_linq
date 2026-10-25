@@ -96,7 +96,7 @@ fn boundary(
     root: bool,
 ) -> syn::Result<Option<(usize, usize)>> {
     match term {
-        Term::Tile { .. } => Ok(None),
+        Term::Tile { .. } | Term::PartitionK { .. } => Ok(None),
         Term::Ref(name) => {
             let producer = definition(program, name)?;
             let producer_term = &program.sequence.definitions[producer].term;
@@ -130,6 +130,7 @@ fn child_mut(term: &mut Term) -> Option<&mut Term> {
         | Term::Group(_, inner)
         | Term::Canon(inner)
         | Term::Tile { inner, .. }
+        | Term::PartitionK { inner, .. }
         | Term::Store { inner, .. } => Some(inner),
         _ => None,
     }

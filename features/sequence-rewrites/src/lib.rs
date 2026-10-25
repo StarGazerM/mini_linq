@@ -8,6 +8,7 @@
 //! | `store_level` | `d`, named list, `all`, or empty | Store selected flatten definitions (BE-Offsets). |
 //! | `tile` | `d, n` or `d, n, items m` | Wrap in positive contiguous tiles (BE-Partition). Unknown-length stores need capacity. |
 //! | `partition` | `d, n` or `d, n, items m` | Pair tile/flatten at the producer chain's storage input, preserving row shape and authored tiles. |
+//! | `key_partition` | `d, publication, [keys], parts` | Publish at an ancestor, then route before Canon, Group, or provider Store. Global Group merges per-part monoids into one row; `[]` selects contiguous tiles only for globally unique input. Machine grading remains mandatory. |
 //! | `segment` | `d, n` or `d, n, items m` | Materialize a named flatten's offsets and pair tile/flatten around that store. |
 //! | `choose` | `d, len x < k => a, else => b` | Select earlier equal-Structures-result definitions (BE-Choose). |
 //! | `output` | `count`, `reserve`, or `bounded` | Set the final store protocol; bounded requires declared capacity. |
@@ -73,6 +74,7 @@ sequence_rewrite!(store_level, a);
 sequence_rewrite!(tile, a, 0);
 sequence_rewrite!(partition, missing, 0);
 sequence_rewrite!(segment, missing, 0);
+sequence_rewrite!(key_partition, missing, publication, [], 0);
 sequence_rewrite!(choose, b, len r < 4 => a, else => missing);
 sequence_rewrite!(output, bounded);
 sequence_rewrite!(grade, custom, missing at host);

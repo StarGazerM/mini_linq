@@ -30,6 +30,10 @@ struct Fact {
     /// A key proved for these positions, not merely for their relational support.
     unique: Option<Vec<String>>,
     reads: BTreeSet<(String, Vec<String>)>,
+    /// Routing columns whose equal values inhabit exactly one outer part.
+    partition: Option<Vec<String>>,
+    /// Outer positions are a checked Tile or key-disjoint cover.
+    partitioned: bool,
 }
 
 struct Checked<'a> {
@@ -566,6 +570,8 @@ impl Checked<'_> {
                     max_depth: 0,
                     materializes: false,
                     reads: BTreeSet::new(),
+                    partition: None,
+                    partitioned: false,
                 })
             }
             Term::Ref(name) => self
@@ -755,6 +761,31 @@ impl Checked<'_> {
                 }
                 Ok(fact)
             }
+            Term::PartitionK { keys, parts, inner } => {
+                if *parts == 0 {
+                    return fail(term, "BE-KeyPart", "partition count must be positive");
+                }
+                let Term::Ref(source) = inner.as_ref() else {
+                    return fail(term, "BE-KeyPart", "partition input must name an ancestor store");
+                };
+                if !self.analysis.stores.contains_key(&symbol_name(source)) {
+                    return fail(term, "BE-KeyPart", "partition input must name an ancestor store");
+                }
+                let mut fact = self.term(inner, owner)?;
+                let heading = self.heading(&fact.meaning);
+                let columns: Vec<_> = keys.iter().map(symbol_name).collect();
+                if fact.max_depth != 0 || columns.iter().any(|key| !heading.contains(key))
+                    || columns.iter().collect::<BTreeSet<_>>().len() != columns.len()
+                {
+                    return fail(term, "BE-KeyPart", "routing key must be distinct columns determined by the flat valuation");
+                }
+                fact.depth = 1;
+                fact.max_depth = 1;
+                fact.shape = vec![Len::Lit(*parts), fact.len.clone()];
+                fact.partition = Some(columns);
+                fact.partitioned = true;
+                Ok(fact)
+            }
             Term::Tile { n, items, inner } => {
                 // Formal rule BE-Partition: Positive contiguous tiles are a disjoint covering view.
                 if *n == 0 || *items == Some(0) {
@@ -767,6 +798,7 @@ impl Checked<'_> {
                 let mut fact = self.term(inner, owner)?;
                 fact.depth += 1;
                 fact.max_depth += 1;
+                fact.partitioned = true;
                 let rows = fact.shape.last_mut().expect("row level");
                 *rows = Len::CeilDiv(Box::new(rows.clone()), *n);
                 fact.shape.push(Len::Unknown(Some(*n)));
@@ -893,6 +925,10 @@ impl Checked<'_> {
                 fact.len = Len::Scan(owner.into());
                 fact.shape.pop();
                 *fact.shape.last_mut().expect("flatten leaves a row level") = fact.len.clone();
+                if fact.depth == 0 {
+                    fact.partition = None;
+                    fact.partitioned = false;
+                }
                 if let Meaning::Lookup(provider, keys, inner) = &fact.meaning {
                     if let Meaning::Result(_) = inner.as_ref() {
                         if let Some((index, _)) = self
@@ -927,7 +963,19 @@ impl Checked<'_> {
                         "group must consume its complete Physical valuation heading",
                     );
                 }
-                if fact.max_depth != 0 {
+                // Formal rule BE-KeyPartGroup: Equal group keys route to one part.
+                if let Some(keys) = &fact.partition && !group.keys.is_empty() {
+                    let group_keys: Vec<_> = group.keys.iter().map(symbol_name).collect();
+                    if keys.iter().any(|key| !group_keys.contains(key)) {
+                        return fail(term, "BE-KeyPartGroup", "group key must determine the routing key");
+                    }
+                }
+                // Formal rule BE-GroupPartial: Globally distinct parts fold locally and merge once at host.
+                let partial = group.keys.is_empty() && fact.partitioned && fact.max_depth == 1;
+                if partial && fact.unique.is_none() {
+                    return fail(term, "BE-GroupPartial", "partial global folds require valuations distinct across parts: a global key or per-key-part canon");
+                }
+                if !partial && fact.max_depth != usize::from(fact.partition.is_some()) {
                     return fail(
                         term,
                         "BE-Group",
@@ -946,7 +994,17 @@ impl Checked<'_> {
                 } else {
                     Len::Scan(owner.into())
                 };
-                fact.shape = vec![fact.len.clone()];
+                if partial {
+                    fact.depth = 0;
+                    fact.max_depth = 0;
+                    fact.partition = None;
+                    fact.partitioned = false;
+                }
+                if fact.partition.is_some() {
+                    *fact.shape.last_mut().expect("partition row level") = fact.len.clone();
+                } else {
+                    fact.shape = vec![fact.len.clone()];
+                }
                 fact.unique = Some(group.keys.iter().map(symbol_name).collect());
                 fact.meaning = Meaning::Result(symbol_name(name));
                 fact.materializes = true;
@@ -989,7 +1047,14 @@ impl Checked<'_> {
                     ordered: false,
                 });
                 fact.len = Len::Scan(owner.into());
-                fact.unique = (fact.depth == 0).then(|| self.heading(&fact.meaning));
+                // Formal rule BE-KeyPartCanon: Equal complete valuations route to one part.
+                let heading = self.heading(&fact.meaning);
+                if fact.partition.as_ref().is_some_and(|keys| keys.iter().any(|key| !heading.contains(key))) {
+                    return fail(term, "BE-KeyPartCanon", "complete valuation must determine the routing key");
+                }
+                fact.unique = (fact.depth == 0
+                    || (fact.depth == 1 && fact.max_depth == 1 && fact.partition.is_some()))
+                    .then_some(heading);
                 *fact.shape.last_mut().expect("row level") = fact.len.clone();
                 Ok(fact)
             }
@@ -1041,6 +1106,11 @@ impl Checked<'_> {
                             previous.unique = None;
                         }
                         previous.reads.extend(next.reads);
+                        previous.partitioned &= next.partitioned;
+                        if previous.partition != next.partition {
+                            previous.partition = None;
+                            previous.unique = None;
+                        }
                     } else {
                         result = Some(next);
                     }
@@ -1058,6 +1128,13 @@ impl Checked<'_> {
         required: Capability,
     ) -> syn::Result<()> {
         self.require_store(provider)?;
+        // Formal rule BE-KeyPartProvider: A lookup key determines the provider's routing key.
+        for fact in self.facts.values().filter(|fact| fact.materializes
+            && fact.meaning == Meaning::Result(symbol_name(provider))) {
+            if fact.partition.as_ref().is_some_and(|routing| routing.iter().any(|key| !keys.contains(key))) {
+                return fail(provider, "BE-KeyPartProvider", "lookup key must determine the stored provider routing key");
+            }
+        }
         self.provider_capability(provider, keys, required)
     }
 
@@ -1260,7 +1337,27 @@ fn check_rewrite_in(source: &Program, target: &Program, context: &Checker) -> sy
             }
             target.structures.structures.entries.contains(entry)
         });
-    if !unchanged
+    // A target may replace storage implementations without changing any
+    // host adapter, key layout, canonical boundary, or Physical computation.
+    let storage_retyped = !unchanged && source.structures.physical == target.structures.physical
+        && source.structures.structures.entries.len() == target.structures.structures.entries.len()
+        && source.structures.structures.entries.iter()
+            .zip(&target.structures.structures.entries).all(|(left, right)| {
+                use cq_lang_structures::Structure;
+                let mut normalized = left.clone();
+                match (&mut normalized.structure, &right.structure) {
+                    (Structure::Built { keyed: left, .. }, Structure::Built { keyed: right, .. }) =>
+                        left.ty = right.ty.clone(),
+                    (Structure::Dedup { ty: left, .. }, Structure::Dedup { ty: right, .. })
+                    | (Structure::HeadDedup { ty: left, .. }, Structure::HeadDedup { ty: right, .. })
+                    | (Structure::Rows { ty: left, .. }, Structure::Rows { ty: right, .. }) =>
+                        *left = right.clone(),
+                    _ => {}
+                }
+                normalized == *right
+            })
+        && cq_lang_structures::check_rewrite(&source.structures, &target.structures).is_ok();
+    if !unchanged && !storage_retyped
         && (source.structures.physical == target.structures.physical
             || !preserves_adapters
             || !lookup_semantics::reexpression(

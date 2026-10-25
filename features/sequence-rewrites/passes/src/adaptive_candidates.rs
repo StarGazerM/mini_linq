@@ -267,6 +267,7 @@ fn sequence_ancestors(source: &Program, result: &Ident) -> BTreeSet<String> {
             | Term::Group(_, inner)
             | Term::Canon(inner)
             | Term::Tile { inner, .. }
+            | Term::PartitionK { inner, .. }
             | Term::Store { inner, .. } => references(inner, names),
             Term::Union(arms) => {
                 for arm in arms {
@@ -647,6 +648,7 @@ fn rewrite_term(
         | Term::Canon(inner)
         | Term::Fold(_, inner)
         | Term::Tile { inner, .. }
+        | Term::PartitionK { inner, .. }
         | Term::Store { inner, .. } => rewrite_term(inner, references, results),
         Term::Union(arms) => {
             let mut changed = false;

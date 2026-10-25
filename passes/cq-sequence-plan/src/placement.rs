@@ -489,6 +489,7 @@ fn has_row_work(
         | Term::Group(_, t)
         | Term::Canon(t)
         | Term::Tile { inner: t, .. }
+        | Term::PartitionK { inner: t, .. }
         | Term::Store { inner: t, .. } => {
             has_row_work(t, definitions, indices, row_predicates, seen)
         }
@@ -503,7 +504,7 @@ fn has_row_work(
 
 fn requires_host(term: &Term, opaque: &BTreeSet<String>) -> bool {
     match term {
-        Term::Group(_, _) => true,
+        Term::Group(_, inner) => !crate::key_partition::contains_partition(inner),
         Term::Map(name, inner) | Term::Compact(name, inner) => {
             opaque.contains(&symbol_name(name)) || requires_host(inner, opaque)
         }
@@ -514,6 +515,7 @@ fn requires_host(term: &Term, opaque: &BTreeSet<String>) -> bool {
         | Term::Fold(_, inner)
         | Term::Canon(inner)
         | Term::Store { inner, .. }
+        | Term::PartitionK { inner, .. }
         | Term::Tile { inner, .. } => requires_host(inner, opaque),
         Term::Union(arms) => arms.iter().any(|term| requires_host(term, opaque)),
         Term::Choose(arms) => arms.iter().any(|(_, term)| requires_host(term, opaque)),
@@ -597,6 +599,7 @@ fn reads_at(
         | Term::Fold(_, inner)
         | Term::Group(_, inner)
         | Term::Store { inner, .. }
+        | Term::PartitionK { inner, .. }
         | Term::Tile { inner, .. } => reads_at(inner, result, facts, catalog, level, canon_level),
         Term::Union(arms) => arms
             .iter()
@@ -624,6 +627,7 @@ fn references<'a>(
         | Term::Group(_, t)
         | Term::Canon(t)
         | Term::Tile { inner: t, .. }
+        | Term::PartitionK { inner: t, .. }
         | Term::Store { inner: t, .. }
         | Term::Lookup { inner: t, .. } => references(t, definitions, indices, result),
         Term::Union(terms) => {
@@ -690,6 +694,7 @@ fn driver_domains(
         | Term::Group(_, inner)
         | Term::Canon(inner)
         | Term::Tile { inner, .. }
+        | Term::PartitionK { inner, .. }
         | Term::Store { inner, .. }
         | Term::Lookup { inner, .. } => driver_domains(inner, definitions, indices, domains),
         Term::Union(arms) => {

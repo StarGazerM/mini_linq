@@ -124,6 +124,8 @@ fn every_grammar_form_round_trips() {
         quote!(lookup r [] rows l),
         quote!(choose [else => rows r]),
         quote!(tile 2 rows r),
+        quote!(partition_k[a,b](4) rows r),
+        quote!(partition_k[](4) rows r),
     ] {
         let term: Term = syn::parse2(term).unwrap();
         assert_eq!(syn::parse2::<Term>(term.to_token_stream()).unwrap(), term);
@@ -134,7 +136,7 @@ fn every_grammar_form_round_trips() {
 fn constructor_names_remain_definition_names_and_references() {
     for spelling in [
         "rows", "map", "flatten", "compact", "tile", "lookup", "fold", "group", "canon", "store",
-        "union", "choose", "capacity", "output",
+        "union", "choose", "capacity", "output", "partition_k",
     ] {
         let name: syn::Ident = syn::parse_str(spelling).unwrap();
         let sequence: Sequence = syn::parse2(quote! {
@@ -1187,4 +1189,207 @@ fn shared_choices_reuse_provider_obligations_without_repeating_reads() {
         matches!(obligation, Obligation::Provider { provider, .. } if provider == "r")
     ).count(), 1);
     assert!(facts.obligations.len() <= 5, "{:?}", facts.obligations);
+}
+
+fn key_pool() -> Machine {
+    let mut pool = node("pool", false, true, vec![node("task", false, false, vec![])]);
+    pool.width = Some(4);
+    Machine { root: node("host", false, false, vec![pool]), ..sequential() }
+}
+
+#[test]
+fn key_partition_roundtrip_canon_and_group_laws() {
+    let source = grouped_program(quote!(k), quote!(
+        input = store rows r;
+        out = store group grouped canon input;
+    ));
+    let mut target = grouped_program(quote!(k), quote!(
+        input = store rows r;
+        out = store flatten group grouped canon partition_k[k](4) input;
+    ));
+    let printed = target.to_token_stream();
+    assert_eq!(target, syn::parse2::<Program>(printed).unwrap());
+    contract::check_rewrite(&source, &target).unwrap();
+    grade(&mut target, quote!(input at host; out at pool;));
+    let facts = check_grading(&target, &key_pool()).unwrap();
+    assert_eq!(facts.shapes["out"].len(), 1);
+
+    let source = program(quote!(input = store rows r; out = store canon input;));
+    let mut target = program(quote!(
+        input = store rows r;
+        out = store flatten canon partition_k[a](4) input;
+    ));
+    contract::check_rewrite(&source, &target).unwrap();
+    grade(&mut target, quote!(input at host; out at pool;));
+    check_grading(&target, &key_pool()).unwrap();
+}
+
+#[test]
+fn key_partition_rejects_missing_ancestor_store_and_invalid_width() {
+    reject(&program(quote!(out = partition_k[a](4) rows r;)), "BE-KeyPart");
+    reject(&program(quote!(input = rows r; out = partition_k[a](4) input;)), "BE-KeyPart");
+    reject(&program(quote!(input = store rows r; out = partition_k[a](0) input;)), "BE-KeyPart");
+    let mut p = program(quote!(input = store rows r; out = partition_k[a](4) input;));
+    grade(&mut p, quote!(input at pool; out at pool;));
+    reject_grade(&p, &key_pool(), "BE-KeyPart");
+    grade(&mut p, quote!(input at host; out at host;));
+    reject_grade(&p, &key_pool(), "BE-KeyPart");
+    grade(&mut p, quote!(input at host; out at pool;));
+    let mut machine = key_pool();
+    machine.root.children[0].width = Some(8);
+    reject_grade(&p, &machine, "BE-KeyPart");
+}
+
+#[test]
+fn key_partition_rejects_undetermined_valuation_group_and_lookup_keys() {
+    reject(&program(quote!(
+        input = store rows r;
+        out = canon partition_k[missing](4) input;
+    )), "BE-KeyPart");
+    reject(&grouped_program(quote!(k), quote!(
+        input = store rows r;
+        out = flatten group grouped canon partition_k[value](4) input;
+    )), "BE-KeyPartGroup");
+    reject(&lookup_program(quote!(
+        input = store rows r;
+        provider = store partition_k[b](4) input;
+        out = flatten lookup r[a] rows l;
+    )), "BE-KeyPartProvider");
+    contract::check(&lookup_program(quote!(
+        input = store rows r;
+        provider = store partition_k[](4) input;
+        out = flatten lookup r[a] rows l;
+    ))).unwrap();
+    contract::check(&lookup_program(quote!(
+        input = store rows r;
+        provider = store partition_k[a](4) input;
+        out = flatten lookup r[a] rows l;
+    ))).unwrap();
+}
+
+#[test]
+fn key_partition_does_not_authorize_a_collective_at_separated_pool() {
+    let mut p = program(quote!(
+        input = store rows r;
+        out = fold count partition_k[a](4) input;
+    ));
+    grade(&mut p, quote!(input at host; out at pool;));
+    reject_grade(&p, &key_pool(), "BE-Collective");
+}
+
+#[test]
+fn key_partition_canon_rejects_projection_losing_the_routing_key() {
+    let p: Program = syn::parse_quote! {
+        physical {
+            relation R(a:i32, b:i32);
+            r = pipe rename R@0 {a -> a, b -> b};
+            projected = pipe canon project r keep {a};
+            return projected as answer(a);
+        }
+        structures { r host scan = Reader []; projected canon = Canon; }
+        sequence {
+            input = store rows r;
+            out = flatten canon map projected partition_k[b](4) input;
+        }
+    };
+    reject(&p, "BE-KeyPartCanon");
+}
+
+#[test]
+fn key_partition_does_not_promote_subtile_canon_to_complete_valuations() {
+    reject(&grouped_program(quote!(k), quote!(
+        input = store rows r;
+        out = flatten group grouped flatten canon tile 2 partition_k[k](4) input;
+    )), "BE-Group");
+}
+
+#[test]
+fn key_partition_provider_accepts_projected_and_reordered_lookup_keys() {
+    for routing in [quote!(b), quote!(b,a)] {
+        let p: Program = syn::parse2(quote! {
+            physical {
+                relation L(a:i32,b:i32); relation R(a:i32,b:i32,c:i32);
+                l = pipe rename L@0 {a -> a,b -> b};
+                r = let rename R@1 {a -> a,b -> b,c -> c};
+                j = pipe canon probe first [a,b] l,r;
+                return j as answer(a,b,c);
+            }
+            structures {
+                l host scan = Reader []; r host scan = Reader [];
+                r = Provider [a,b]; j canon = Canon;
+            }
+            sequence {
+                input = store rows r;
+                provider = store partition_k[#routing](4) input;
+                out = flatten lookup r[a,b] rows l;
+            }
+        }).unwrap();
+        contract::check(&p).unwrap();
+    }
+}
+
+#[test]
+fn global_partial_group_accepts_key_canon_or_globally_unique_tiles() {
+    let mut routed = grouped_program(quote!(), quote!(
+        input = store rows r;
+        out = store group grouped canon partition_k[k,witness,value](4) input;
+    ));
+    grade(&mut routed, quote!(input at host; out at pool;));
+    let facts = check_grading(&routed, &key_pool()).unwrap();
+    assert_eq!(facts.shapes["out"], vec![Len::Lit(1)]);
+    let source = grouped_program(quote!(), quote!(
+        input = store rows r;
+        out = store group grouped canon input;
+    ));
+    contract::check_rewrite(&source, &routed).unwrap();
+
+    let mut tiled = grouped_program(quote!(), quote!(
+        input = store rows r;
+        out = store group grouped tile 4 input;
+    ));
+    tiled.evidence = syn::parse_quote!(evidence { R(witness) key; });
+    grade(&mut tiled, quote!(input at host; out at pool;));
+    let facts = check_grading(&tiled, &key_pool()).unwrap();
+    assert_eq!(facts.shapes["out"], vec![Len::Lit(1)]);
+}
+
+#[test]
+fn global_partial_group_rejects_nonunique_tiles_even_with_local_canon() {
+    for input in [
+        quote!(tile 4 input),
+        quote!(canon tile 4 input),
+        quote!(partition_k[k](4) input),
+    ] {
+        reject(&grouped_program(quote!(), quote!(
+            input = store rows r;
+            out = store group grouped #input;
+        )), "BE-GroupPartial");
+    }
+    // Canonicalizing globally before contiguous tiling is also sound.
+    contract::check(&grouped_program(quote!(), quote!(
+        input = store canon rows r;
+        out = store group grouped tile 4 input;
+    ))).unwrap();
+}
+
+#[test]
+fn storage_type_rewrites_preserve_adapters_and_key_layouts() {
+    let source = lookup_program(quote!(
+        input = store rows r; out = store canon flatten lookup r[a] rows l;
+    ));
+    let mut target = source.clone();
+    for entry in &mut target.structures.structures.entries {
+        match &mut entry.structure {
+            structures::Structure::Built { keyed, .. } => keyed.ty = syn::parse_quote!(NativeProvider),
+            structures::Structure::Dedup { ty, .. } => *ty = syn::parse_quote!(NativeCanon),
+            _ => {}
+        }
+    }
+    contract::check_rewrite(&source, &target).unwrap();
+    for entry in &mut target.structures.structures.entries {
+        if let structures::Structure::Host { keyed, .. } = &mut entry.structure {
+            keyed.ty = syn::parse_quote!(DifferentReader);
+        }
+    }
+    assert!(contract::check_rewrite(&source, &target).is_err());
 }

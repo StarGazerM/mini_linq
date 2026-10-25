@@ -6,7 +6,7 @@
 //! only creates parallel parts when grading records `Distribute`; strip widths
 //! and per-lane item counts never manufacture additional processors.
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use cq_lang_sequence::structures::physical::Operator;
@@ -36,10 +36,15 @@ impl Cost {
         machine: &Machine,
         analysis: &Analysis,
     ) -> syn::Result<Self> {
+        let mut key_inputs = BTreeSet::new();
+        for definition in &program.sequence.definitions {
+            partition_inputs(&definition.term, &mut key_inputs);
+        }
         let mut evaluator = Evaluator {
             program,
             analysis,
             facts: BTreeMap::new(),
+            key_inputs,
         };
         let mut work = Sum::default();
         let mut ends = Vec::new();
@@ -380,6 +385,7 @@ fn atom_leq(left: &Atom, right: &Atom, budget: &mut usize) -> bool {
 enum Layer {
     Tile { parents: Size },
     Bucket { parents: Size },
+    KeyPart { parts: usize },
 }
 
 #[derive(Clone)]
@@ -398,7 +404,10 @@ struct Fact {
 impl Fact {
     fn evaluate(&mut self, size: &Size, level: &LevelNode, scan: bool) -> syn::Result<()> {
         self.work.add(&Sum::positions(size)?)?;
-        let lanes = level.width.unwrap_or(1).max(1);
+        let lanes = self.layers.iter().rev().find_map(|layer| match layer {
+            Layer::KeyPart { parts } => Some(*parts),
+            _ => None,
+        }).unwrap_or_else(|| level.width.unwrap_or(1)).max(1);
         let depth = if lanes == 1 && self.partition.is_none() {
             Sum::positions(size)?
         } else if matches!(size, Size::Constant(0)) {
@@ -437,6 +446,7 @@ struct Evaluator<'a> {
     program: &'a Program,
     analysis: &'a Analysis,
     facts: BTreeMap<String, Fact>,
+    key_inputs: BTreeSet<String>,
 }
 
 impl Evaluator<'_> {
@@ -499,6 +509,17 @@ impl Evaluator<'_> {
                     level
                 };
                 let mut fact = self.term(inner, owner, producer, tile)?;
+                if !self.key_inputs.contains(owner)
+                    && self.program.structures.structures.entries.iter().any(|entry| {
+                        symbol_name(&entry.name) == fact.result
+                            && matches!(entry.structure, cq_lang_sequence::structures::Structure::Built { .. })
+                    })
+                {
+                    // Building an index evaluates one insertion per row.
+                    // A routing publication holds raw rows, not a second index.
+                    let size = fact.size.clone();
+                    fact.evaluate(&size, producer, false)?;
+                }
                 // A collaborative scratch store does not close the enclosing
                 // dispatch's partition; separated publication does.
                 if separated {
@@ -524,6 +545,14 @@ impl Evaluator<'_> {
                 fact.layers.push(Layer::Tile {
                     parents: Size::CeilDiv(Box::new(fact.size.clone()), *n),
                 });
+                Ok(fact)
+            }
+            Term::PartitionK { parts, inner, .. } => {
+                let mut fact = self.term(inner, owner, level, tile)?;
+                // Like Store/Tile, routing changes organization, not the number
+                // of evaluated row expressions. P is the machine's fixed
+                // distributing width, never the runtime worker count.
+                fact.layers.push(Layer::KeyPart { parts: *parts });
                 Ok(fact)
             }
             Term::Lookup {
@@ -634,7 +663,20 @@ impl Evaluator<'_> {
                 let size = fact.size.clone();
                 fact.evaluate(&size, level, true)?;
                 fact.result = symbol_name(name);
-                fact.size = Size::Scan(format!("group({})", fact.result));
+                let global = self.program.structures.physical.program.definitions.iter()
+                    .find(|definition| definition.name == *name)
+                    .is_some_and(|definition| matches!(&definition.operator,
+                        Operator::Group(group) if group.keys.is_empty()));
+                fact.size = if global {
+                    // Partial monoids merge at host into exactly one row,
+                    // including the empty-input identity. No partition layer
+                    // escapes to consumers of a global aggregate.
+                    fact.layers.clear();
+                    fact.partition = None;
+                    Size::Constant(1)
+                } else {
+                    Size::Scan(format!("group({})", fact.result))
+                };
                 Ok(fact)
             }
             Term::Fold(_, inner) | Term::Canon(inner) => {
@@ -647,6 +689,7 @@ impl Evaluator<'_> {
                         Some(Layer::Tile { parents } | Layer::Bucket { parents, .. }) => {
                             parents.clone()
                         }
+                        Some(Layer::KeyPart { parts }) => Size::Constant(*parts as u128),
                     }
                 } else {
                     Size::Scan(format!("canon({})", fact.result))
@@ -707,6 +750,28 @@ impl Evaluator<'_> {
     }
 }
 
+fn partition_inputs(term: &Term, inputs: &mut BTreeSet<String>) {
+    match term {
+        Term::PartitionK { inner, .. } => {
+            if let Term::Ref(name) = inner.as_ref() {
+                inputs.insert(symbol_name(name));
+            }
+            partition_inputs(inner, inputs);
+        }
+        Term::Map(_, t) | Term::Compact(_, t) | Term::Flatten(t)
+        | Term::Fold(_, t) | Term::Group(_, t) | Term::Canon(t)
+        | Term::Tile { inner: t, .. } | Term::Store { inner: t, .. }
+        | Term::Lookup { inner: t, .. } => partition_inputs(t, inputs),
+        Term::Union(arms) => {
+            for term in arms { partition_inputs(term, inputs); }
+        }
+        Term::Choose(arms) => {
+            for (_, term) in arms { partition_inputs(term, inputs); }
+        }
+        Term::Rows(_) | Term::Ref(_) => {}
+    }
+}
+
 fn count_stores(term: &Term) -> syn::Result<usize> {
     match term {
         Term::Store { inner, .. } => count_stores(inner)?.checked_add(1).ok_or_else(overflow),
@@ -717,6 +782,7 @@ fn count_stores(term: &Term) -> syn::Result<usize> {
         | Term::Group(_, inner)
         | Term::Canon(inner)
         | Term::Tile { inner, .. }
+        | Term::PartitionK { inner, .. }
         | Term::Lookup { inner, .. } => count_stores(inner),
         Term::Union(arms) => arms.iter().try_fold(0usize, |sum, arm| {
             sum.checked_add(count_stores(arm)?).ok_or_else(overflow)
@@ -831,6 +897,7 @@ mod tests {
             program: &source,
             analysis: &analysis,
             facts: BTreeMap::new(),
+            key_inputs: BTreeSet::new(),
         };
         let level = sequential().root;
         let delayed: Term = syn::parse_quote!(flatten lookup r [a] flatten lookup r [a] rows r);

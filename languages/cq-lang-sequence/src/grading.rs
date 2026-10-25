@@ -33,6 +33,7 @@ struct Checker<'a> {
     nodes: Vec<Node<'a>>,
     collectives: Vec<(String, Monoid, Vec<String>)>,
     lengths: &'a BTreeMap<String, Len>,
+    shapes: &'a BTreeMap<String, Vec<Len>>,
     results: &'a BTreeMap<String, String>,
     tilings: BTreeMap<String, Vec<crate::Tiling>>,
     parts: BTreeMap<String, Option<usize>>,
@@ -167,6 +168,7 @@ pub(crate) fn check_grading_in(
         nodes: Vec::new(),
         collectives: Vec::new(),
         lengths: &analysis.lengths,
+        shapes: &analysis.shapes,
         results: &analysis.results,
         tilings: BTreeMap::new(),
         parts: BTreeMap::new(),
@@ -466,6 +468,27 @@ impl<'a> Checker<'a> {
                 }
                 inputs.push(self.visit(inner, owner, level, tiled, uniform, false)?);
             }
+            Term::PartitionK { parts, inner, .. } => {
+                // Formal rule BE-KeyPart: Exchange reads an ancestor store into a fixed separated pool.
+                let pool = self.levels.iter().enumerate().filter(|(_, candidate)|
+                    self.levels[level].path.starts_with(&candidate.path)
+                    && candidate.path.len() > 1 && !candidate.model.collaborative
+                    && candidate.model.width == Some(*parts) && !candidate.children.is_empty())
+                    .max_by_key(|(_, candidate)| candidate.path.len())
+                    .map(|(index, _)| index)
+                    .ok_or_else(|| self.error(owner, "BE-KeyPart: partition count must match a separated distributing pool"))?;
+                let Term::Ref(name) = inner.as_ref() else {
+                    return Err(self.error(owner, "BE-KeyPart: input must name an ancestor store"));
+                };
+                let source = self.definitions[&symbol_name(name)];
+                let source_path = &self.levels[self.grades[source]].path;
+                let pool_path = &self.levels[pool].path;
+                if source_path.len() >= pool_path.len() || !pool_path.starts_with(source_path)
+                    || !self.is_stored(self.roots[source]) {
+                    return Err(self.error(owner, "BE-KeyPart: input must be stored at a strict ancestor of the pool"));
+                }
+                inputs.push(self.visit(inner, owner, self.grades[source], tiled, uniform, false)?);
+            }
             Term::Tile { inner, .. } => {
                 let kind = if self
                     .publication_tile
@@ -481,8 +504,12 @@ impl<'a> Checker<'a> {
                 kinds.push(kind);
                 inputs.push(self.visit(inner, owner, level, tiled, uniform, false)?);
             }
-            Term::Group(_, inner) => {
-                if level != 0 {
+            Term::Group(name, inner) => {
+                let partial = matches!(&self.physical[&symbol_name(name)].operator,
+                    cq_lang_structures::physical::Operator::Group(group) if group.keys.is_empty())
+                    && self.nested_parts(inner);
+                if level != 0 && !partial
+                    && (!self.levels[level].children.is_empty() || !self.key_partitioned(inner)) {
                     return Err(self.error(
                         owner,
                         "BE-Group: grouped folds must execute at the host join",
@@ -649,6 +676,7 @@ impl<'a> Checker<'a> {
             | Term::Fold(_, inner)
             | Term::Group(_, inner)
             | Term::Canon(inner)
+            | Term::PartitionK { inner, .. }
             | Term::Tile { inner, .. } => self.require_ranges(inner),
             Term::Union(arms) => {
                 for arm in arms {
@@ -755,6 +783,27 @@ impl<'a> Checker<'a> {
         }
     }
 
+    fn nested_parts(&self, term: &Term) -> bool {
+        match term {
+            Term::Tile { .. } | Term::PartitionK { .. } => true,
+            Term::Canon(inner) | Term::Store { inner, .. }
+            | Term::Map(_, inner) | Term::Compact(_, inner) => self.nested_parts(inner),
+            Term::Ref(name) => self.shapes.get(&symbol_name(name)).is_some_and(|shape| shape.len() > 1),
+            Term::Choose(arms) => arms.iter().all(|(_, arm)| self.nested_parts(arm)),
+            _ => false,
+        }
+    }
+
+    fn key_partitioned(&self, term: &Term) -> bool {
+        match term {
+            Term::PartitionK { .. } => true,
+            Term::Canon(inner) | Term::Store { inner, .. } => self.key_partitioned(inner),
+            Term::Ref(name) => self.definitions.get(&symbol_name(name))
+                .is_some_and(|&index| self.key_partitioned(&self.program.sequence.definitions[index].term)),
+            _ => false,
+        }
+    }
+
     fn physical_result(&self, term: &Term) -> Option<String> {
         match term {
             Term::Rows(name)
@@ -766,6 +815,7 @@ impl<'a> Checker<'a> {
             | Term::Fold(_, inner)
             | Term::Canon(inner)
             | Term::Tile { inner, .. }
+            | Term::PartitionK { inner, .. }
             | Term::Store { inner, .. } => self.physical_result(inner),
             Term::Lookup { .. } | Term::Choose(_) | Term::Union(_) => None,
         }
@@ -1004,6 +1054,7 @@ fn outer_tile<'a>(
 ) -> Option<&'a Term> {
     match term {
         Term::Tile { inner, .. } => outer_tile(inner, program, definitions).or(Some(term)),
+        Term::PartitionK { .. } => None,
         Term::Map(_, inner)
         | Term::Compact(_, inner)
         | Term::Flatten(inner)
