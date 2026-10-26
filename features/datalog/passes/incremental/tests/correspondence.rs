@@ -32,6 +32,70 @@ fn both_passes_preserve_complete_round_trippable_programs() {
     assert_eq!(variants.variants.len(), 4);
     assert_eq!(variants.deltas.len(), 2);
 }
+
+#[test]
+fn delta_first_records_and_checks_source_occurrence_permutations() {
+    let strata = stratify::compile(&source()).unwrap();
+    let planned = seminaive::compile_with_driver(&strata, seminaive::DriverPolicy::DeltaFirst).unwrap();
+    roundtrip(&planned);
+    let moved = planned.variants.iter().find(|variant| variant.rule == 2 && variant.delta == Some(1)).unwrap();
+    assert_eq!(moved.order, [1, 0]);
+    let BodyItem::Positive { atom } = &moved.query.body[0] else { panic!("delta must drive the variant") };
+    assert_eq!(atom.relation, planned.deltas.iter().find(|delta| delta.relation == "Reach").unwrap().name);
+    let mut invalid = planned.clone();
+    invalid.variants.iter_mut().find(|variant| variant.rule == 2 && variant.delta == Some(1)).unwrap().order = vec![0, 1];
+    assert!(seminaive::check(&strata, &invalid).is_err());
+}
+
+#[test]
+fn delta_first_connects_the_remaining_prefix_and_checks_the_full_permutation() {
+    let source: source::Program = syn::parse_quote! {
+        struct Connected;
+        relation E(x:i32,y:i32) = (edges);
+        relation Methods(m:i32) = (methods);
+        relation Link(m:i32,x:i32,y:i32) = (links);
+        relation R(x:i32,y:i32);
+        output R;
+        R(*x,*y) :- E(x,y);
+        R(*x,*z) :- Methods(m), Link(m,x,y), R(y,z);
+    };
+    let strata = stratify::compile(&source).unwrap();
+    let planned = seminaive::compile_with_driver(&strata, seminaive::DriverPolicy::DeltaFirst).unwrap();
+    assert_eq!(planned.variants[1].order, [2, 1, 0]);
+    roundtrip(&planned);
+    for order in [vec![2, 2, 0], vec![2, 1], vec![3, 1, 0]] {
+        let mut invalid = planned.clone();
+        invalid.variants[1].order = order;
+        assert!(seminaive::check(&strata, &invalid).is_err());
+    }
+    // A different valid certificate is accepted; checking does not rerun ranking.
+    let mut alternative = planned.clone();
+    alternative.variants[1].order = vec![2, 0, 1];
+    let body = &mut alternative.variants[1].query.body;
+    let saved = body[1].clone();
+    body[1] = body[2].clone();
+    body[2] = saved;
+    seminaive::check(&strata, &alternative).unwrap();
+}
+
+#[test]
+fn delta_first_does_not_cross_rust_or_negation() {
+    let source: source::Program = syn::parse_quote! {
+        struct Barriers;
+        relation Edge(x:i32,y:i32) = (edges);
+        relation Blocked(x:i32) = (blocked);
+        relation Reach(x:i32,y:i32);
+        output Reach;
+        Reach(*x,*y) :- Edge(x,y);
+        Reach(*x,*z) :- Edge(x,y), if *x != *y, Reach(y,z);
+        Reach(*x,*z) :- Edge(x,y), !Blocked(x), Reach(y,z);
+    };
+    let strata = stratify::compile(&source).unwrap();
+    let written = seminaive::compile(&strata).unwrap();
+    let planned = seminaive::compile_with_driver(&strata, seminaive::DriverPolicy::DeltaFirst).unwrap();
+    assert_eq!(planned, written);
+    roundtrip(&planned);
+}
 #[test]
 fn stages_reject_wrong_input_and_target_shapes() {
     let s = source();

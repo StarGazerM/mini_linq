@@ -785,6 +785,44 @@ do not compare target names or variant order with a regenerated expansion.
 The total finite refinement uses DL-Delta and DL-FrozenNegation; partial Rust
 requires the additional prefix-safety obligation, not merely this check.
 
+\paragraph{Recorded occurrence order.}
+Each variant records a permutation $\pi$ of its source rule's body positions;
+$\pi(k)$ is the source occurrence executed at position $k$.  Omitted textual
+\code{order} denotes the identity permutation.  The delta occurrence $d$ remains
+an index in the source body, not in the permuted body.  Let $[a,b)$ be the first
+maximal contiguous interval of positive relational atoms, or the empty interval
+when no positive atom occurs.  A permitted order fixes every position outside
+$[a,b)$ and permutes only this interval.  In particular, it does not move any
+atom across an opaque Rust clause or a negative occurrence.
+\begin{mathpar}
+\Rule{DL-OccurrenceOrder}{
+ \pi\in\mathrm{Sym}(\{0,\ldots,n-1\})\quad
+ \forall k\notin[a,b).\ \pi(k)=k\quad
+ \forall k\in[a,b).\ \pi(k)\in[a,b)\quad
+ \mathrm{WF}_{\mathrm{CQ}}(V)\quad
+ \pi^{-1}(\mathrm{erase}_{\Delta_d}(V))=Q
+}{\mathrm{ValidVariantOrder}(Q,d,\pi,V)}
+\end{mathpar}
+Here erasure checks the selected delta relation at execution position
+$\pi^{-1}(d)$, restores that occurrence's source relation, and then restores
+source body order before comparing the entire rule, including its head and
+opaque Rust.  Seeds have no delta substitution.  The Incremental contract also
+retains its independent changing-position coverage and fresh-schema checks.
+The checker validates the supplied permutation and never reruns a planner.
+Under the existing relational laws, permuting positive atoms preserves their
+joined valuation set; because the entire prefix precedes the same subsequent
+Rust and negative clauses, the reached valuations at those barriers are
+unchanged.  The existing purity, lawful equality and partial-Rust premises
+continue to apply.
+
+\paragraph{Delta-first planning advice.}
+The target-independent \code{driver(delta\_first)} advice selects the changing
+occurrence first when $d\in[a,b)$, then selects the remaining prefix occurrences
+by connectivity to already bound relational variables, breaking ties by source
+position.  It records the resulting complete permutation.  Seeds and variants
+whose changing occurrence is outside that prefix retain identity order.
+This heuristic is not part of the validity rule and is not chosen by a printer.
+
 \subsection{Storage: Incremental to Storage}
 Record the existing deterministic concrete providers, initializers, layouts,
 bindings and maintenance. Independently check exact base preservation and the
@@ -795,6 +833,13 @@ or whitelisting concrete Rust types.
  \mathrm{incremental}(t)=s}{\mathrm{check}_{\mathrm{storage}}(s,t)}
 \end{mathpar}
 Refinement requires the stated $\alpha$ laws for the selected providers.
+
+\paragraph{Storage correspondence under occurrence order.}
+A read at execution position $k$ refers to source occurrence $\pi(k)$.
+Key availability is derived by visiting the recorded execution order, while
+relation identity and full-versus-delta selection use the source occurrence
+($\pi(k)=d$ exactly for the selected delta read).  Storage and Round preserve
+this correspondence; a leading direct delta becomes the recorded delta scan.
 
 \subsection{Fork: Storage to Round}
 Construct bound CQ holes and explicit operational records, copying provider

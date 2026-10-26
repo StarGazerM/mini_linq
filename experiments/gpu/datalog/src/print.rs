@@ -326,9 +326,15 @@ fn phase(program: &Program, index: usize, phase: &str, holes: &[TokenStream], sc
         let fresh = local("fresh", i);
         let next = &context.relations[i].next;
         let word = crate::storage::word_type(&schemas[i])?;
+        let relation_name = context.relations[i].declaration.name.to_string();
         Ok(quote!(let #fresh = {
             let candidates = ::gpu_datalog_runtime::concatenate_batches::<#word>(__cq_gpu_pool.clone(), &#packed, &#next)?;
-            #state.admit(&candidates, candidates.len())?
+            let fresh = #state.admit(&candidates, candidates.len())?;
+            if ::gpu_datalog_runtime::trace_kernels() {
+                ::std::eprintln!("gpu_datalog_admission\tstratum={}\tphase={}\tround={}\trelation={}\tcandidates={}\tadmitted={}",
+                    #index, #phase, __cq_gpu_round, #relation_name, candidates.len(), fresh.len());
+            }
+            fresh
         }; ::std::mem::drop(#next);))
     }).collect::<syn::Result<Vec<_>>>()?;
     let mut publication = Vec::new();
@@ -399,7 +405,7 @@ fn phase(program: &Program, index: usize, phase: &str, holes: &[TokenStream], sc
                 #index, #phase, __cq_gpu_round,
                 ::gpu_datalog_runtime::readback_count() - __cq_gpu_readbacks_before,
             );
-            __cq_gpu_round += 1;
         }
+        __cq_gpu_round += 1;
     ))
 }

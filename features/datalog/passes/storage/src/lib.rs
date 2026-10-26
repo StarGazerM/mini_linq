@@ -1,4 +1,4 @@
-//! Choose stable storage layouts in the independently checked variant-driver order.
+//! Choose stable storage layouts in the independently checked occurrence order.
 use cq_datalog_support::{ensure, key_columns};
 use cq_lang_datalog_incremental as incremental;
 use cq_lang_datalog_storage::{BodyItem, HostCanonical, Layout, Policy, Program, Providers};
@@ -128,8 +128,8 @@ fn choose_layouts(
     for variant in ordered {
         let mut bound = BTreeSet::new();
         let order =
-            incremental::variant_order(&source.strata.source.rules[variant.rule], variant.driver)
-                .expect("checked driver order");
+            incremental::variant_order(&source.strata.source.rules[variant.rule], &variant.order)
+                .expect("checked occurrence order");
         for (position, item) in variant.query.body.iter().enumerate() {
             let BodyItem::Positive { atom } = item else {
                 continue;

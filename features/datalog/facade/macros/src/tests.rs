@@ -84,6 +84,25 @@ fn default_pass_arguments_are_not_silently_ignored() {
 }
 
 #[test]
+fn incremental_driver_advice_is_explicit_and_composes_with_invariants() {
+    use syn::parse::Parser;
+    use cq_datalog_incremental::DriverPolicy;
+    assert_eq!(incremental_arguments.parse2(quote!()).unwrap(), (false, DriverPolicy::WrittenOrder));
+    assert_eq!(incremental_arguments.parse2(quote!(driver(delta_first); hoist_invariants;)).unwrap(),
+        (true, DriverPolicy::DeltaFirst));
+    assert_eq!(incremental_arguments.parse2(quote!(hoist_invariants; driver(written_order);)).unwrap(),
+        (true, DriverPolicy::WrittenOrder));
+    for invalid in [
+        quote!(driver(unknown);),
+        quote!(driver(delta_first, written_order);),
+        quote!(driver(delta_first); driver(written_order);),
+        quote!(hoist_invariants; hoist_invariants;),
+    ] {
+        assert!(incremental_arguments.parse2(invalid).is_err());
+    }
+}
+
+#[test]
 fn invariant_arguments_reach_the_incremental_pass() {
     use syn::parse::Parser;
     assert!(!invariant_arguments.parse2(quote!()).unwrap());

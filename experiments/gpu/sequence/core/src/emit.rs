@@ -1411,6 +1411,11 @@ pub(crate) fn translate_impl(
         fingerprint.finish(),
         NEXT_MODULE.fetch_add(1, Ordering::Relaxed)
     );
+    if let Some(directory) = std::env::var_os("CQ_GPU_SEQUENCE_DUMP") {
+        let path = std::path::PathBuf::from(directory).join(format!("{module_name}.sequence"));
+        std::fs::write(&path, quote!(#program).to_string())
+            .map_err(|err| error(format!("cannot dump Sequence program to {}: {err}", path.display())))?;
+    }
     for definition in &program.sequence.definitions {
         let publication = symbol_name(&definition.name);
         // Lowering can give the terminal group its own store, followed by a
@@ -2456,6 +2461,12 @@ pub(crate) fn translate_impl(
         };
         let record_readback = (arena.is_some() || compiler.rows.has_runs())
             .then(|| quote!(::gpu_datalog_runtime::record_readback();));
+        let trace_dispatch = (arena.is_some() || compiler.rows.has_runs()).then(|| quote! {
+            if ::gpu_datalog_runtime::trace_kernels() {
+                ::std::eprintln!("gpu_sequence_dispatch\tmodule={}\tkernel={}\tcapacity={}\tcandidates={}",
+                    stringify!(#module_name), stringify!(#kernel_name), __cq_capacity, __cq_required);
+            }
+        });
         launches.push(quote! {
             #packing_setup
             #(#host_domains)*
@@ -2477,6 +2488,7 @@ pub(crate) fn translate_impl(
                 #record_readback
                 if __cq_counts[2]!=0 {return Err("Sequence device count or fold overflow".into());}
                 let __cq_required=__cq_counts[0] as usize;
+                #trace_dispatch
                 if __cq_required>__cq_capacity {
                     __cq_capacity=__cq_required;
                     continue;

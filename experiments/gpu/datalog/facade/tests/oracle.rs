@@ -8,6 +8,7 @@ oracle_shared::oracle_programs!(
     ascent::ascent,
     oracle_shared::oracle_input,
     pipeline {
+        incremental = ::cq_datalog::passes::incremental(driver(delta_first););
         storage_rewrites = [::cq_gpu_datalog::device_storage];
         cq = pipeline {
             physical = [::cq_gpu_sequence::capture_constants];

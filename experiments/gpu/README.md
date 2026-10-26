@@ -176,6 +176,18 @@ and each hole's candidate rows and retry capacities. Layout footprints include
 shared backing allocations and must not be summed as physical pool usage.
 Native CUDA library scratch outside the pool is not included in pool counters.
 
+For kernel attribution, build with `CQ_GPU_SEQUENCE_DUMP=/existing/directory`.
+The Sequence printer writes each checked program under its exact kernel module
+name (`*.sequence`), including its providers, scan, expansions, grades and output
+protocol. Run with `GPU_DATALOG_TRACE_KERNELS=1` to record layout descriptor
+identities and run lengths, input rows/run counts, every dispatch attempt's
+capacity and candidate count, and per-relation admission counts. Combine this
+with `GPU_DATALOG_TRACE_MEMORY=1` to associate invocations with Round hole IDs.
+These diagnostics neither download candidate rows nor change plans; diagnostic
+printing is excluded from performance measurements. Admission is shared by all
+holes for a head, so admitted rows are attributed to that head/round, not
+arbitrarily to an individual hole.
+
 ```sh
 cargo oxide test --arch sm_89 -- --release -p cq-gpu-datalog --test oracle
 GPU_DATALOG_PROBE_NODES=2048 GPU_DATALOG_PROBE_CASES=tc_left,tc_right,same_generation \
@@ -191,6 +203,19 @@ The loader owns the global string dictionary and precomputes method descriptors.
 `DoopSymbols` implements `SymbolCodec<IStr>` using that dictionary's stable u32
 codes; no string operations run on the GPU.
 
+The benchmark selects the target-independent incremental advice
+`incremental = ::cq_datalog::passes::incremental(driver(delta_first););`.
+For each recursive variant whose changing occurrence lies in the first
+uninterrupted positive prefix, the planner leads with that delta and then
+prefers connected positive reads, breaking ties by source position. It records
+the complete source-occurrence permutation before selecting storage layouts.
+The independent Incremental checker checks bijection, prefix barriers, delta
+substitution and exact inverse-permutation erasure; Storage checks keys in
+recorded execution order. Rust and negative clauses are never crossed. Seeds
+and variants with a delta beyond such a barrier retain written order. This is
+explicit program advice, not a GPU-specific Datalog compiler or printer rule;
+the default incremental policy remains written order.
+
 ```sh
 GPU_DATALOG_TRACE_ROUNDS=1 cargo oxide run --arch sm_89 --bin doop-gpu -- /tmp/doop-data/cassandra
 ```
@@ -200,6 +225,43 @@ time; input upload, device layout construction, fixpoint execution, output
 download and symbol decoding are included. Full-set comparison is outside the
 timer. The executable also prints the ratio to the previously measured
 15-thread mini-par reference (1.28 seconds), not a new parallel measurement.
+
+#### Delta-driven rule scheduling
+
+On Cassandra with Rust 1.99.1, CUDA 13.0 and `sm_89` cubins, paired untraced
+runs measured **9.602122 s → 3.672471 s** GPU evaluation (2.61×), matching all
+26 output sets exactly. Nsight Systems measured summed GPU kernel time
+**7.720946 s → 1.895041 s** (4.07×). Profiling is reported separately:
+the corresponding instrumented evaluation times were 10.038853 s and 4.484224 s.
+
+The five formerly hottest step kernels all scanned full `reachable` before
+their selected delta occurrence. Kernel `_124` (hole 123, cast propagation,
+delta `varpointsto`) enumerated compatible types and heaps before its delta
+test. Its representative full scan had 2,686 rows: only eleven useful 256-row
+outer tiles on 142 SMs, although 2,272 blocks were launched. Descendant work
+stayed within those blocks. Nsight Compute measured 15.95 ms, 0.01% DRAM
+throughput and 90.71 million executed warp instructions—not a bandwidth-bound
+scan. The delta-driven plan replaces reverse heap enumeration with a full-key
+heap-allocation check; the representative launch fell to 199.01 µs and
+2.94 million instructions, without relaxing exactness or changing tiling.
+
+| Kernel suffix / Round hole | Selected delta / rule | Before kernel sum | After kernel sum |
+|---|---|---:|---:|
+| `_124` / 123 | `varpointsto` / cast | 4.080474 s | 0.065991 s |
+| `_137` / 136 | `varpointsto` / virtual receiver | 0.554450 s | 0.117876 s |
+| `_144` / 143 | `varpointsto` / virtual reachability | 0.502598 s | 0.102994 s |
+| `_146` / 145 | `varpointsto` / virtual callgraph | 0.463852 s | 0.102617 s |
+| `_133` / 132 | `instancefieldpointsto` / field load | 0.416583 s | 0.347589 s |
+
+All 8,370 hole/round candidate counts and head-admission records agreed before
+and after; the main component still took 179 step rounds. Full CQs, exact
+before/after module names and checked Sequence plans, all per-launch input
+run sizes for these five holes, admission counts and full-set evidence are in
+[`compare/doop_cassandra.delta_driver.results.json`](compare/doop_cassandra.delta_driver.results.json).
+The remaining largest kernel is the instance-field delta variant; this change
+does not claim to eliminate its signature-key expansion skew.
+
+#### Earlier measurements
 
 Cassandra validation matched all 26 outputs exactly. An untraced release run
 measured GPU evaluation **11.809409 s**, sequential mini **4.269240 s**, versus

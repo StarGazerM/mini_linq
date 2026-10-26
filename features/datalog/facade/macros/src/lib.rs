@@ -8,6 +8,7 @@ mod kw {
     syn::custom_keyword!(pipeline);
     syn::custom_keyword!(arguments);
     syn::custom_keyword!(hoist_invariants);
+    syn::custom_keyword!(driver);
 }
 
 struct Entry {
@@ -90,6 +91,34 @@ fn invariant_arguments(input: ParseStream<'_>) -> syn::Result<bool> {
     Ok(enabled)
 }
 
+fn incremental_arguments(input: ParseStream<'_>) -> syn::Result<(bool, cq_datalog_incremental::DriverPolicy)> {
+    let mut hoist = false;
+    let mut driver = None;
+    while !input.is_empty() {
+        if input.peek(kw::hoist_invariants) {
+            input.parse::<kw::hoist_invariants>()?;
+            if hoist { return Err(input.error("duplicate hoist_invariants")); }
+            hoist = true;
+        } else if input.peek(kw::driver) {
+            input.parse::<kw::driver>()?;
+            let argument;
+            syn::parenthesized!(argument in input);
+            let name: syn::Ident = argument.parse()?;
+            let policy = match name.to_string().as_str() {
+                "written_order" => cq_datalog_incremental::DriverPolicy::WrittenOrder,
+                "delta_first" => cq_datalog_incremental::DriverPolicy::DeltaFirst,
+                _ => return Err(syn::Error::new_spanned(name, "expected written_order or delta_first")),
+            };
+            if !argument.is_empty() { return Err(argument.error("expected one driver policy")); }
+            if driver.replace(policy).is_some() { return Err(input.error("duplicate driver policy")); }
+        } else {
+            return Err(input.error("expected hoist_invariants; or driver(delta_first);"));
+        }
+        input.parse::<Token![;]>()?;
+    }
+    Ok((hoist, driver.unwrap_or_default()))
+}
+
 /// Surface tokens → Source tokens, expanding refutable bindings explicitly.
 #[proc_macro]
 pub fn surface_if_let(input: TokenStream) -> TokenStream {
@@ -123,12 +152,13 @@ pub fn incremental(input: TokenStream) -> TokenStream {
         input.into(),
         |source, args| {
             use syn::parse::Parser;
-            let hoist = invariant_arguments.parse2(args)? || cfg!(feature = "hoist-invariants");
+            let (hoist, driver) = incremental_arguments.parse2(args)?;
+            let hoist = hoist || cfg!(feature = "hoist-invariants");
             if hoist && source.source.invariants.is_empty() {
                 let source = cq_datalog_stratify::invariants::compile(source)?;
-                cq_datalog_incremental::compile(&source)
+                cq_datalog_incremental::compile_with_driver(&source, driver)
             } else {
-                cq_datalog_incremental::compile(source)
+                cq_datalog_incremental::compile_with_driver(source, driver)
             }
         },
     )

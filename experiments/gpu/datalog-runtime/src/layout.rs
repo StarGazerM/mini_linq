@@ -147,11 +147,19 @@ impl<K: ScalarTuple, V: ScalarTuple> DeviceLayout<K, V> {
             descriptors.push(PackedRunView { ptr: run.view().ptr.cast(), len, ms_first: W::MS_FIRST as u32 });
         }
         let fields = packing.packed_fields().collect::<Vec<_>>();
-        let descriptors = Buffer::from_host_async(pool.clone(), &descriptors)?;
+        let device_descriptors = Buffer::from_host_async(pool.clone(), &descriptors)?;
+        if crate::trace_kernels() {
+            eprint!("gpu_datalog_layout\tdescriptors={:p}\trows={rows}\trun_lengths=", device_descriptors.ptr());
+            for (index, descriptor) in descriptors.iter().enumerate() {
+                if index != 0 { eprint!(","); }
+                eprint!("{}", descriptor.len);
+            }
+            eprintln!();
+        }
         let fields = Buffer::from_host_async(pool, &fields)?;
         Ok(Self {
             storage: Arc::new(LayoutStorage {
-                runs: descriptors, fields, packing, rows, word_bits: W::BITS, allocated_run_bytes,
+                runs: device_descriptors, fields, packing, rows, word_bits: W::BITS, allocated_run_bytes,
                 _owner: Box::new(runs),
             }),
             marker: PhantomData,

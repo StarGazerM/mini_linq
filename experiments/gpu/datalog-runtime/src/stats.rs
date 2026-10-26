@@ -15,6 +15,13 @@ pub fn record_readback() {
     READBACKS.with(|count| count.set(count.get().wrapping_add(1)));
 }
 
+/// Enable descriptor and dispatch diagnostics without downloading candidate rows.
+pub fn trace_kernels() -> bool {
+    static ENABLED: std::sync::LazyLock<bool> = std::sync::LazyLock::new(||
+        std::env::var_os("GPU_DATALOG_TRACE_KERNELS").is_some());
+    *ENABLED
+}
+
 /// Per-relation ownership footprints; shared layout owners are not additive.
 #[derive(Clone, Copy, Default)]
 pub struct MemoryUse {

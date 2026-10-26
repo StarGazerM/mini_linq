@@ -324,6 +324,10 @@ impl Rows {
                     }
                     #id.validate(&[#(#schema),*])?;
                     let #length = #id.len();
+                    if ::gpu_datalog_runtime::trace_kernels() {
+                        ::std::eprintln!("gpu_sequence_input\tname={}\tdescriptors={:p}\trows={}\truns={}",
+                            #name, #id.view().runs, #length, #id.view().run_count);
+                    }
                     __cq_run_owners.push(#id.owner());
                 });
                 parameters.push((view.clone(), syn::parse_quote!(::gpu_datalog_runtime::RunsView), quote!(#id.view())));
