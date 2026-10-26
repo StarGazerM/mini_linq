@@ -1,1 +1,1 @@
-backend = "/data/cuda-oxide/crates/rustc-codegen-cuda/target/release/librustc_codegen_cuda.so"
+backend = "/data/cuda-oxide/cuda-oxide/crates/rustc-codegen-cuda/target/release/librustc_codegen_cuda.so"
