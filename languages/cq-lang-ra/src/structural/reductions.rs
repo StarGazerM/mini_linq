@@ -137,18 +137,23 @@ fn check_absorption(source: &Program, target: &Program, schedule: &Schedule) -> 
             if proof.negative[index] {
                 return false;
             }
-            let replacement = match (&definition.operator, &other.operator) {
-                (Operator::Semijoin(a), Operator::Semijoin(b)) if a.left == b.left => &b.right,
-                (Operator::NaturalJoin(a), Operator::NaturalJoin(b)) if a.left == b.left => {
-                    &b.right
-                }
+            let (left, right) = match (&definition.operator, &other.operator) {
+                (Operator::Semijoin(_), Operator::Semijoin(b)) => (&b.left, &b.right),
+                (Operator::NaturalJoin(_), Operator::NaturalJoin(b)) => (&b.left, &b.right),
                 _ => return false,
             };
-            let Some(&replacement) = indices.get(&symbol_name(replacement)) else {
+            let (Some(&left), Some(&right)) = (
+                indices.get(&symbol_name(left)),
+                indices.get(&symbol_name(right)),
+            ) else {
                 return false;
             };
             let node = &schedule.nodes[index];
-            if !proof.absorbed(node.operands[1], replacement, node.operands[0]) {
+            // Replay the two local identities in order; the left substitution
+            // must be justified by the target RHS, not a removed restriction.
+            if !proof.absorbed(node.operands[1], right, node.operands[0])
+                || !proof.absorbed(node.operands[0], left, right)
+            {
                 return false;
             }
             substituted = true;

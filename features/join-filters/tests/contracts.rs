@@ -134,3 +134,40 @@ fn explicit_advice_can_cover_a_total_unfiltered_build() {
     assert_eq!(advised.physical, selected.physical);
     assert_eq!(ir::contract::check(&advised).unwrap().join_filters.len(), 1);
 }
+
+#[test]
+fn advice_keeps_all_witnesses_and_is_idempotent_after_coalescing() {
+    let source: physical::Program = syn::parse_quote! { physical {
+        relation L(a:i64,b:i64); relation R(c:i64,d:i64);
+        l = pipe rename L@0 {a -> x,b -> y};
+        r = pipe rename R@1 {c -> x,d -> z};
+        s = pipe range select r if (z > 1);
+        b = let project s keep {x,z};
+        q = pipe semi eager [x] l,b;
+        j = pipe probe first [x] q,b;
+        out = pipe canon project j keep {x,y,z}; return out as answer(x,y,z);
+    }};
+    let selected = cq_structure_selection::compile(&source).unwrap();
+    let advised = join_filter(&selected, quote!(l)).unwrap();
+    assert_eq!(advised.physical, source);
+    assert_eq!(
+        advised
+            .structures
+            .entries
+            .iter()
+            .filter(|entry| { matches!(&entry.structure, Structure::JoinFilter { .. }) })
+            .count(),
+        2
+    );
+    assert_eq!(
+        ir::contract::check(&advised).unwrap().join_filters["l"].len(),
+        1
+    );
+    assert_eq!(join_filter(&advised, quote!(l)).unwrap(), advised);
+    let retyped = retype(&advised, quote!(l join_filter => FilterAlias)).unwrap();
+    assert_eq!(
+        ir::contract::check(&retyped).unwrap().join_filters["l"].len(),
+        1
+    );
+    assert_eq!(join_filter(&retyped, quote!(l)).unwrap(), retyped);
+}

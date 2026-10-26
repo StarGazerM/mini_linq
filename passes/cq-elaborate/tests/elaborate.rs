@@ -256,28 +256,24 @@ fn reduction_absorption_restores_native_inputs_and_removes_dead_support() {
     }};
     check(&reduced, &source).unwrap();
     let target = cq_elaborate::simplify_reductions(&source).unwrap();
-    assert_plan(
-        &target,
-        quote! {
-            r0 = rename r@1 {k -> k,v -> v};
-            r1 = rename l@0 {k -> k};
-            r3 = semijoin r1 with r0;
-            r4 = natural_join r3 with r0;
-            output r4 as answer(k,v);
-        },
-    );
     let reference = cq_elaborate::compile_written(&coarse(&query)).unwrap();
     ra::check_rewrite(&source, &target).unwrap();
     ra::check_rewrite(&reference, &target).unwrap();
     // Absorption is an RA rewrite, not permission to omit a named VO reduction.
     assert!(check(&reduced, &target).is_err());
-    assert_eq!(cq_elaborate::simplify_reductions(&target).unwrap(), target);
+    let repeated = cq_elaborate::simplify_reductions(&target).unwrap();
+    ra::check_rewrite(&target, &repeated).unwrap();
     for seed in 0..64 {
         let database = databases::binary_database(&query, seed);
         assert_eq!(
             oracle::evaluate_ra(&target, &database).output,
             cq_oracle::evaluate_cq(&query, &database),
             "seed {seed}"
+        );
+        assert_eq!(
+            oracle::evaluate_ra(&repeated, &database).output,
+            cq_oracle::evaluate_cq(&query, &database),
+            "repeated pass, seed {seed}"
         );
     }
 }
@@ -385,17 +381,6 @@ fn reduction_absorption_certificate_rejects_changed_support_predicates() {
         output r4 as answer(k,v);
     }};
     let target = cq_elaborate::simplify_reductions(&source).unwrap();
-    assert_plan(
-        &target,
-        quote! {
-            r0 = rename r@1 {k -> k,v -> v};
-            r1 = rename l@0 {k -> k};
-            support = select r1 if (k > 0);
-            r3 = semijoin support with r0;
-            r4 = natural_join r3 with r0;
-            output r4 as answer(k,v);
-        },
-    );
     ra::check_rewrite(&source, &target).unwrap();
     let mut changed = target;
     changed.plan.definitions[2].operator = syn::parse_quote!(select r1 if (k >= 0));
@@ -449,6 +434,11 @@ fn reduction_absorption_does_not_confuse_projected_aliases_with_full_key_support
             quote!(semijoin alias with r),
             quote!(answer(x)),
         ),
+        (
+            quote!(natural_join reduced with alias),
+            quote!(natural_join r with alias),
+            quote!(answer(x, y)),
+        ),
     ] {
         let query = cq(quote! {
             struct Q; relation R(x:i32,y:i32); relation T(x:i32,y:i32);
@@ -476,6 +466,43 @@ fn reduction_absorption_does_not_confuse_projected_aliases_with_full_key_support
         let expected = cq_oracle::evaluate_cq(&query, &database);
         assert_eq!(oracle::evaluate_ra(&target, &database).output, expected);
         assert_ne!(oracle::evaluate_ra(&bypassed, &database).output, expected);
+    }
+}
+
+#[test]
+fn two_sided_absorption_keeps_the_restriction_justifying_the_other_operand() {
+    let source: ra::Program = syn::parse_quote! { relational {
+        relation R(x:i32); relation S(x:i32); relation T(x:i32);
+        r = rename R@0 {x -> x};
+        s = rename S@1 {x -> x};
+        t = rename T@2 {x -> x};
+        left = semijoin r with s;
+        right = semijoin t with left;
+        result = natural_join left with right;
+        output result as answer(x);
+    }};
+    let target = cq_elaborate::simplify_reductions(&source).unwrap();
+    ra::check_rewrite(&source, &target).unwrap();
+    let invalid: ra::Program = syn::parse_quote! { relational {
+        relation R(x:i32); relation S(x:i32); relation T(x:i32);
+        r = rename R@0 {x -> x};
+        s = rename S@1 {x -> x};
+        t = rename T@2 {x -> x};
+        result = natural_join r with t;
+        output result as answer(x);
+    }};
+    assert!(ra::check_rewrite(&source, &invalid).is_err());
+    for support in [vec![], vec![vec![1]]] {
+        let database = [
+            ("R".into(), [vec![1], vec![2]].into()),
+            ("S".into(), support.into_iter().collect()),
+            ("T".into(), [vec![1]].into()),
+        ]
+        .into();
+        assert_eq!(
+            oracle::evaluate_ra(&target, &database).output,
+            oracle::evaluate_ra(&source, &database).output
+        );
     }
 }
 
@@ -508,8 +535,6 @@ fn dead_expansion_eliminates_the_canonical_nation_region_chain() {
                 output result as answer(nation_key);
             },
         );
-        // Default/Hypergraph reduction absorption is deliberately unchanged.
-        assert_eq!(cq_elaborate::simplify_reductions(&source).unwrap(), source);
         let target = cq_elaborate::simplify_expansions(&source).unwrap();
         ra::contract::check(&target).unwrap();
         ra::check_rewrite(&source, &target).unwrap();

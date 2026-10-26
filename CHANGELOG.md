@@ -7,6 +7,29 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Validate transfer across all 29 registered TPC-H-derived/full-query cases,
+  adding real per-stage transfer configurations to the 12 standalone retail
+  runners. Preserve query text, SQL, numeric contracts and cached projections.
+  Fix H09's catastrophic Cartesian prefix by connecting atoms only within
+  written relational runs, without moving predicate/binding/block boundaries.
+  Extend checked absorption to redundant left operands, retaining right-support
+  pruning precedence and all shared-witness/opaque/negative constraints.
+  H21-positive no longer repeats 356,794 membership checks before its exact join.
+  All 29 transfer cases match DuckDB at SF0.1/SF1; H09 SF1 completes in 487.8 ms
+  instead of reaching the 120-second worker cap. Written-order H09 remains an
+  unchanged timeout control. Remove incidental plan-text/operator-count pins;
+  retain authored-plan validity, semantic checks and negative certificates.
+- Repair the predicate-transfer path: apply checked redundant-support absorption
+  after elaboration, preserving the complete VO schedule and final CQ-to-RA check.
+  Piped positional read spines now feed one retained snapshot instead of allocating
+  intermediate masks; selection narrowing enumerates set bits and retains block
+  skipping. Equivalent scan filters share construction and tests only after every
+  covering witness is validated, without removing exact joins.
+  Predicate-form H05, H07-block, D27 and H08 matched cached DuckDB answers under
+  default and transfer at SF0.1 and SF1. Runtime regressions cover snapshot
+  allocation, sparse occurrence enumeration and filter construction/probe counts.
+  Public API: add `Selection::from_positions` for host-issued IDs; filter emitter
+  identities now take a scan-local canonical index rather than a covering operator.
 - Legacy GPU Datalog workspace removed.
 - Retire Datalog-side hooks kept only for the (already broken) legacy GPU
   Datalog bridge: `KeyRepresentation`, `LayoutRealization`, device-owned

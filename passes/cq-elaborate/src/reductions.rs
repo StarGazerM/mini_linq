@@ -55,15 +55,18 @@ pub(super) fn simplify(source: &ra::Program) -> syn::Result<ra::Program> {
         if proof.negative[index] {
             continue;
         }
-        let right = match &mut definition.operator {
-            Operator::Semijoin(join) => &mut join.right,
-            Operator::NaturalJoin(join) => &mut join.right,
+        let (left, right) = match &mut definition.operator {
+            Operator::Semijoin(join) => (&mut join.left, &mut join.right),
+            Operator::NaturalJoin(join) => (&mut join.left, &mut join.right),
             _ => continue,
         };
-        let left = dependencies[index][0];
-        *right = definitions[proof.absorb(indices[&symbol_name(right)], left)]
-            .result
-            .clone();
+        // Prune backward support versions first: their removal can restore
+        // piped scans and filters. Then remove a duplicate left reduction only
+        // when the surviving RHS proves it redundant.
+        let reduced_right = proof.absorb(dependencies[index][1], dependencies[index][0]);
+        let reduced_left = proof.absorb(dependencies[index][0], reduced_right);
+        *right = definitions[reduced_right].result.clone();
+        *left = definitions[reduced_left].result.clone();
     }
     // Partial absorption of a shared restricted result gives its projected
     // consumers different row witnesses. Keep that shared materialization
@@ -82,21 +85,23 @@ pub(super) fn simplify(source: &ra::Program) -> syn::Result<ra::Program> {
         }
         let mut restored = false;
         for (index, definition) in target.plan.definitions.iter_mut().enumerate() {
-            let right = match &mut definition.operator {
-                Operator::Semijoin(join) => &mut join.right,
-                Operator::NaturalJoin(join) => &mut join.right,
+            let (left, right) = match &mut definition.operator {
+                Operator::Semijoin(join) => (&mut join.left, &mut join.right),
+                Operator::NaturalJoin(join) => (&mut join.left, &mut join.right),
                 _ => continue,
             };
-            let original = dependencies[index][1];
-            let replacement = indices[&symbol_name(right)];
-            let mut bypassed = original;
-            while bypassed != replacement {
-                if reachable[bypassed] {
-                    *right = definitions[original].result.clone();
-                    restored = true;
-                    break;
+            for (side, operand) in [left, right].into_iter().enumerate() {
+                let original = dependencies[index][side];
+                let replacement = indices[&symbol_name(operand)];
+                let mut bypassed = original;
+                while bypassed != replacement {
+                    if reachable[bypassed] {
+                        *operand = definitions[original].result.clone();
+                        restored = true;
+                        break;
+                    }
+                    bypassed = dependencies[bypassed][0];
                 }
-                bypassed = dependencies[bypassed][0];
             }
         }
         if !restored {

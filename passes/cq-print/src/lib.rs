@@ -640,10 +640,12 @@ impl<'a> Context<'a> {
             let build = self.profile_build(&build_name, build);
             statements.push(syn::parse_quote! { let #structure = &#build; });
             let join_filters = self.analysis.join_filters.clone();
-            for (scan, filter) in join_filters
-                .iter()
-                .flat_map(|(scan, filters)| filters.iter().map(move |f| (scan, f)))
-            {
+            for (scan, index, filter) in join_filters.iter().flat_map(|(scan, filters)| {
+                filters
+                    .iter()
+                    .enumerate()
+                    .map(move |(index, f)| (scan, index, f))
+            }) {
                 let covering = symbol_name(&filter.covering);
                 let (Operator::Probe(_, k) | Operator::Semi(_, k)) =
                     &self.physical[&covering].operator
@@ -664,11 +666,11 @@ impl<'a> Context<'a> {
                         .position(|c| *c == key)
                         .expect("checked non-constant key"),
                 );
-                let id = self.join_filter_ident(scan, &covering, &key);
+                let id = self.join_filter_ident(scan, index);
                 let pairs = quote!(::core::iter::Iterator::map(
                     #structure.keys(), |__cq_key| (*__cq_key.#component, ())
                 ));
-                let filter_name = format!("{name}.filter.{scan}.{key}");
+                let filter_name = format!("{name}.filter.{scan}.{key}.{index}");
                 self.profile_label(
                     &filter_name,
                     "JOIN_FILTER_BUILD",

@@ -278,7 +278,17 @@ fn keyed_read(structure: &Structure, source: &ir::Program) -> bool {
 pub fn join_filter(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
     let scan: Ident = syn::parse2(arguments)?;
     let facts = ir::contract::check(source)?;
-    let recorded = facts.join_filters.get(&symbol_name(&scan));
+    // Analysis coalesces runtime filters; advice must inspect every recorded
+    // proof witness to remain idempotent after that coalescing.
+    let recorded: Vec<_> = source
+        .structures
+        .entries
+        .iter()
+        .filter_map(|entry| match &entry.structure {
+            Structure::JoinFilter { filter, .. } if entry.name == scan => Some(filter),
+            _ => None,
+        })
+        .collect();
     let candidates: Vec<_> = source
         .physical
         .program
@@ -300,15 +310,13 @@ pub fn join_filter(source: &ir::Program, arguments: TokenStream) -> syn::Result<
     let origin = &facts.lineage[&symbol_name(&scan)];
     let mut target = source.clone();
     for (covering, candidate) in candidates {
-        if recorded.is_some_and(|filters| {
-            filters.iter().any(|f| {
-                symbol_name(&f.covering) == symbol_name(covering)
-                    && f.key
-                        .columns
-                        .iter()
-                        .map(symbol_name)
-                        .eq([candidate.key.clone()])
-            })
+        if recorded.iter().any(|f| {
+            symbol_name(&f.covering) == symbol_name(covering)
+                && f.key
+                    .columns
+                    .iter()
+                    .map(symbol_name)
+                    .eq([candidate.key.clone()])
         }) {
             continue;
         }

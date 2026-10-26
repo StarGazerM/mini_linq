@@ -1,11 +1,24 @@
 TPC-H-shaped retail CPU configurations
 ======================================
 
-Every retail source exposes default, no-reduce, le, le_runs, and advised.
-Standalone/staged runners use standalone_configs! and stage-local query! advice;
-the same CQ is not copied between configurations. Kernel advice and standalone
-stage advice follow experiments/gpu/tpch/src/advice.rs. See tpch-methodology.txt
-for pipeline, timing, and correctness semantics.
+Every retail source exposes default, no-reduce, transfer, le, le_runs, and advised.
+Standalone/staged runners use standalone_configs! and compile the entire authored
+runner for each configuration; the same CQ is not copied between configurations.
+Only advised applies stage-local query! advice. Transfer applies
+cq_planners::order(transfer) independently to each authored CQ stage, retaining
+the same preprocessing, materialization, aggregate heads, and answer contracts.
+Kernel advice and standalone stage advice follow experiments/gpu/tpch/src/advice.rs.
+See tpch-methodology.txt for pipeline, timing, and correctness semantics.
+
+All 29 entries in src/tpch.rs CASES expose default and transfer: 27 retail-derived
+cases plus full tpch_q06 and tpch_q19, which retain their own configuration shells.
+This inventory is not the complete canonical ordered TPC-H Q1-Q22 suite.
+No input projection or cached data schema changes are needed for transfer.
+The historical validation table below does not report transfer validation.
+Current transfer validation covers all 29 cases at SF0.1 and SF1, with exact
+DuckDB witnesses and separate deterministic counters. See
+experiments/gpu/compare/rpt-repair/summary.json from the repository root for the full
+matrix, H09 timeout control, paired timing method and remaining limitations.
 
 SF0.1 configuration validation (2026-10-24)
 ------------------------------------------

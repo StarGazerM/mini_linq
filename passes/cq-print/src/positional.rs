@@ -3,12 +3,11 @@ use super::*;
 use structures::{KeyOwnership, MembershipSummary, ReadPredicate, Summary};
 
 impl Context<'_> {
-    pub fn join_filter_ident(&self, scan: &str, covering: &str, key: &str) -> Ident {
+    pub fn join_filter_ident(&self, scan: &str, index: usize) -> Ident {
         format_ident!(
-            "__cq_{}_join_filter_{}_{}",
+            "__cq_{}_join_filter_{}",
             scan,
-            covering,
-            key,
+            index,
             span = proc_macro2::Span::mixed_site()
         )
     }
@@ -18,10 +17,10 @@ impl Context<'_> {
         let filters = self.analysis.join_filters.get(&origin.occurrence)?;
         let filters = filters
             .iter()
-            .map(|f| {
-                let key = symbol_name(f.key.columns.first().expect("checked key"));
+            .enumerate()
+            .map(|(index, f)| {
                 (
-                    self.join_filter_ident(&origin.occurrence, &symbol_name(&f.covering), &key),
+                    self.join_filter_ident(&origin.occurrence, index),
                     f.marker.clone(),
                 )
             })
@@ -310,32 +309,15 @@ impl Context<'_> {
             Ok(ids)
         }
     }
-    /// Construct the named selection through exactly its checked read spine.
-    /// Formal rule IF-Selection: Construct immutable snapshots through the recorded read spine.
+    /// Formal rule IF-Selection: Retain only the named Physical decision.
+    /// Pipe inputs remain lazy position streams, not intermediate snapshots.
     pub fn selection_source(&mut self, name: &str) -> syn::Result<TokenStream> {
-        let s = self.analysis.selections[name].clone();
-        self.snapshot(name, name, &s.ty, &s.summary)
-    }
-    fn snapshot(
-        &mut self,
-        name: &str,
-        root: &str,
-        ty: &syn::Type,
-        summary: &Summary,
-    ) -> syn::Result<TokenStream> {
-        let summary = match summary {
+        let selection = self.analysis.selections[name].clone();
+        let ty = &selection.ty;
+        let summary = match &selection.summary {
             Summary::None(_) => quote!(::cq_storage::SelectionSummary::None),
             Summary::PerBlock(_) => quote!(::cq_storage::SelectionSummary::PerBlock),
         };
-        self.snapshot_with(name, root, ty, &summary)
-    }
-    fn snapshot_with(
-        &mut self,
-        name: &str,
-        root: &str,
-        ty: &syn::Type,
-        summary: &TokenStream,
-    ) -> syn::Result<TokenStream> {
         let read = &self.analysis.reads[name];
         let host = Self::positional_host(&symbol_name(&read.origin.base));
         let marker = read.marker.clone();
@@ -344,34 +326,44 @@ impl Context<'_> {
             Operator::Semi(_, k) => symbol_name(&k.left),
             _ => return error(&self.physical[name].name, "unsupported selection spine"),
         };
-        let predicate = self.read_predicate(name);
-        let predicate = self.profile_predicate(name, predicate);
-        let mut input = input;
-        while let Operator::Project(p) = &self.physical[&input].operator {
-            let previous = symbol_name(&p.input);
-            self.profile_alias(&input, &previous);
-            self.take_positions(&input);
-            input = previous;
+        // A point adapter covers one conjunct; read_ids also checks any
+        // remaining conjuncts before the snapshot can expose its positions.
+        let complete = !matches!(&self.physical[name].operator,
+            Operator::Point(_, s)
+                if s.condition.equalities.len() + s.condition.constraints.len() != 1);
+        // Projection-only pipes do not introduce a predicate. Keep the
+        // retained predecessor's block-summary narrowing in that case.
+        let mut predecessor = input.clone();
+        while self.physical_analysis.modes[&predecessor] == physical::ModeKind::Pipe {
+            let Operator::Project(project) = &self.physical[&predecessor].operator else {
+                break;
+            };
+            predecessor = symbol_name(&project.input);
         }
-        let previous = match self.reprs.get(&input) {
-            Some(Repr::Selection { selection, .. }) => Some(selection.to_token_stream()),
-            Some(Repr::Host) => None,
-            Some(Repr::Positions(_)) => Some(self.snapshot_with(&input, root, ty, summary)?),
-            _ => {
-                return error(
-                    &self.physical[name].name,
-                    "selection cannot bypass a retained or opaque input",
-                );
-            }
+        let previous = match self.reprs.get(&predecessor) {
+            Some(Repr::Selection { selection, .. }) if complete => Some(selection.clone()),
+            _ => None,
         };
         let result = if let Some(previous) = previous {
-            quote!({ let __cq_previous = #previous; __cq_previous.narrow(<#marker>::default(), &#predicate, #summary) })
+            let mut projection = input;
+            while projection != predecessor {
+                let Operator::Project(project) = &self.physical[&projection].operator else {
+                    unreachable!("checked projection-only spine");
+                };
+                let source = symbol_name(&project.input);
+                self.profile_alias(&projection, &source);
+                self.take_positions(&projection);
+                projection = source;
+            }
+            let predicate = self.read_predicate(name);
+            let predicate = self.profile_predicate(name, predicate);
+            quote!(#previous.narrow(<#marker>::default(), &#predicate, #summary))
         } else {
-            quote!(<#ty>::select(#host, <#marker>::default(), &#predicate, #summary))
+            // The checked stream already carries every earlier predicate,
+            // projection, join filter and occurrence. Consume it exactly once.
+            let ids = self.read_ids(name)?;
+            quote!(<#ty>::from_positions(#host, #ids, #summary))
         };
-        if name != root {
-            self.take_positions(name);
-        }
         let result = if let Some(i) = self.profile_index(name) {
             let profile = self.profile_handle();
             quote!(#profile.build(#i, || {

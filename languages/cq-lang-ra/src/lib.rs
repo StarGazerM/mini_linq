@@ -831,7 +831,8 @@ pub use constants::disjoint_unions;
 /// Check local contracts and fixed structural obligations of an RA rewrite.
 ///
 /// A localized identity certificate also accepts absorption of a reduced
-/// support operand when exact named-result lineage supplies all shared columns.
+/// operand when exact named-result lineage supplies all shared columns.
+/// It checks the RHS substitution first, then the LHS against the surviving RHS.
 /// It preserves the remaining definitions, Rust payloads and negative ancestry;
 /// independent projected witnesses are never merged to establish containment.
 /// For entirely Rust-free, block-free positive programs, a separate certificate

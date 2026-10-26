@@ -595,7 +595,7 @@ expansion fixtures. Interfaces at the Rust boundary:
  {r\longmapsto\code{BlockRead::read}(H,C,P)\text{ then survivor row fetch}}
 
 \Rule{IF-Selection}{r\text{ records an immutable selection and its read spine}}
- {r\longmapsto\code{Selection::select/narrow};\quad
+ {r\longmapsto\code{Selection::from_positions/narrow};\quad
   \mathsf{scan}(r)\longmapsto\code{rows};\quad
   \mathsf{index}(r)\longmapsto\code{build}}
 \end{mathpar}
@@ -604,14 +604,17 @@ The recorded predicates emit \code{Point}, \code{Window} or
 \code{BlockRead::read_owned} form owns a pipe predicate and cursor state, so
 no local predicate reference forces output collection. It shares the same
 bounds and exact read law as borrowed \code{read}; neither form requires cloning
-keys or predicates. A pipe keeps a
-lazy ID iterator, while a let builds one immutable mask. Keysets consume only
+keys or predicates. A pipe keeps a lazy ID iterator; only a recorded retained
+selection builds an immutable mask, consuming the complete checked read spine once.
+Piped predecessors never require intermediate snapshots. Keysets consume only
 recorded keys through Build; their provider performs exact dense/hash adaptation
 within its recorded budget. Each named payload index uses the snapshot's Build
 projection, preserving constants, multiplicity and original host references.
-No tuple buffer is inserted beside a selection. Intermediate narrowing uses the
-named selection's summary policy. Scalar hosts visit their rows; ZoneRows may
-reject blocks using enclosing bounds. Skipping is in memory after decoding.
+No tuple buffer is inserted beside a selection. Narrowing a retained predecessor
+enumerates its set bits in each surviving block, not every base position, and
+uses the named selection's summary policy. Empty blocks and blocks rejected by
+enclosing bounds are skipped; partial and non-word-aligned block boundaries
+preserve occurrence order. Skipping is in memory after decoding.
 Lazy semi keeps the incremental KeySet route and is not drained for summaries;
 opaque, branch and unsupported inputs retain their previous demand behavior.
 No nonlocal probe-filter motion is implemented.
@@ -712,11 +715,11 @@ and $S$ checked redundant-support absorption:
  w=R_{None,r}(v)\quad a=S(E(w))}
  {\code{cq_planners::order(hypergraph)}(q)=a}
 
-\Rule{Plan-Transfer}{n=N(q)\quad v=O_{Written,Coarse}(n)\quad w=R_{None,Masks}(v)\\
+\Rule{Plan-Transfer}{n=N(q)\quad v=C_{atoms}(O_{Written,Coarse}(n))\quad w=R_{None,Masks}(v)\\
  r=\mathsf{outer}(w)\quad T=\mathsf{reductionTree}(q)\ \text{rooted at}\ r\\
  F=\{\mathsf{red}(r,c)\mid c\in\mathsf{children}(r),\ \mathsf{filteredSubtree}(c)\}\\
  B=\{\mathsf{red}(c,p)\mid p=\mathsf{parent}(c),\ \exists\ \text{filter outside}\ \mathsf{subtree}(c)\}\ \text{parents first}}
- {\code{cq_planners::order(transfer)}(q)=E(w;F;B)}
+ {\code{cq_planners::order(transfer)}(q)=S(E(w;F;B))}
 
 \Rule{CK-Transfer}{\mathsf{erase}(t)=v\quad t=\mathsf{transfer}(R_{None,Masks}(v))}
  {\mathsf{check}^{Transfer}(q,t)\Downarrow\ok}
@@ -740,18 +743,23 @@ Masks schedule. A \code{skip(T with S)} still requires an existing Masks
 reduction; under \code{no_reduce} it fails the R-Advice premise rather than
 silently becoming a no-op.
 
-\code{order(transfer)} is robust predicate transfer (Zhao et al., SIGMOD'25) on
-the written left-deep order, a diverging route through the same public
-pipeline. Its transfer graph is the reduction tree rooted at the stream: in
-fact-first written order that is the largest relation, RPT's LargestRoot, and
-the most-shared-first spanning core matches its maximum-spanning-tree weights.
+\code{order(transfer)} is an exact-semijoin adaptation of robust predicate
+transfer (Zhao et al., SIGMOD'25), not the paper's vectorized Bloom pipeline or
+RPT+'s adaptive execution. $C_{atoms}$ preserves every predicate, binding and
+block boundary, but within each maximal top-level run of atoms prefers the
+earliest atom connected to already bound columns. It preserves written ties
+and does not invent a connection for genuinely disconnected components.
+This prevents avoidable Cartesian prefixes even when opaque Rust excludes
+additional transfer reductions. The reduction tree is rooted at the stream;
+when that is the largest relation the root coincides with LargestRoot.
+The most-shared-first spanning core matches the paper's maximum-spanning-tree weights.
 The forward pass is the Masks pass plus the stream's reductions by its filtered
 children; the backward pass then reduces each child atom by its already reduced
 parent. As in RPT, no transfer starts from a side without filters, transfers
 follow only edges whose clauses share a variable (a join predicate), and blocks
 are never transfer supports beyond the Masks atom-to-block cuts. Transfers are
-exact semijoins, not Bloom filters; they materialize reduced relations, as
-RPT's filter creators do, before the unchanged join phase. Scopes containing
+exact semijoins, not Bloom filters. Checked absorption removes redundant support
+versions before Physical chooses which remaining results to retain. Scopes containing
 opaque Rust keep only their Masks reductions: there the structural RA
 correspondence check rejects some sound transfer schedules.
 
@@ -770,12 +778,17 @@ reduction: every scope, acyclic or cyclic, reduces its inner clauses along the
 outer-rooted reduction tree (R-Masks) and by exact atom-to-block cuts; every
 branch is its own scope. Reduction compilation is independently checked before
 elaboration, and elaboration is checked against the reduced VO schedule. The
-external Hypergraph planner additionally applies a checked RA realization
-rewrite. It uses
+external Hypergraph and Transfer planners additionally apply a checked RA
+realization rewrite. It uses
 $L\ltimes(R\ltimes L)=L\ltimes R$ and
 $L'\bowtie(R\ltimes L)=L'\bowtie R$ only when the required shared columns of $L'$
-are proven contained in $L$ by reduction lineage. Dead reduced copies are then
-removed; independent consumers that still need a reduction keep it alive.
+are proven contained in $L$ by reduction lineage. The corresponding left-operand
+law removes $(L\ltimes R)\bowtie R$'s duplicate membership test (and similarly
+for a semijoin consumer). Right-side support pruning takes precedence; the
+left-side law must be proved using the surviving RHS, not a discarded
+restriction. This is local absorption, not a maximal fixed-point guarantee.
+Dead reduced copies are removed; independent consumers that still need a
+reduction keep the same restricted witness alive.
 The rewrite is checked against the original RA and does not alter the reduction
 algorithm.
 
@@ -831,7 +844,12 @@ Every eligible build selects an exact \code{AdaptiveKeySet}.
 Selection does not sample cardinalities or assume keys or foreign keys.
 Approximate structures live in an external feature and require explicit
 \code{cq_rewrites::retype} advice; the printer has no algorithm-specific branch.
-\textsc{IF-JoinFilter} constructs each recorded provider from the existing
+Every recorded covering witness is validated before runtime filters are shared.
+Sharing requires the same scan occurrence, build version, scalar key, source-index
+layout, filter type and column marker; covering-operator identity alone does not
+require another filter. First-witness order supplies scan-local identities, also
+used to distinguish profile labels.
+\textsc{IF-JoinFilter} constructs each distinct checked provider from the existing
 index's distinct keys, projected to the filtered key column, through
 \code{Build} on $(k,())$ pairs, emits \code{require::conservative::<K,T>}, then
 filters positions before fetching payloads: the first filter through the

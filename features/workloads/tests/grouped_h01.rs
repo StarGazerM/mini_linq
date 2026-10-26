@@ -1,6 +1,10 @@
 use cq_load::{Date, Decimal, Load};
 use cq_testkit::conformance::assert_answers_equal;
 
+#[allow(unused_imports, unused_macros, dead_code)]
+#[path = "../src/tpch_runtime.rs"]
+mod tpch_runtime;
+
 #[allow(dead_code)]
 #[path = "../src/queries/retail/tpch/retail_h01.rs"]
 mod h01;
@@ -38,18 +42,6 @@ fn h01_grouped_head_matches_duckdb_distinct_join() {
                 })
                 .collect(),
         };
-        let actual = h01::run(&data, "default")
-            .into_iter()
-            .map(|(flag, status, quantity, price, count)| {
-                vec![
-                    flag.as_bytes()[0] as i32,
-                    status.as_bytes()[0] as i32,
-                    i32::try_from(quantity).unwrap(),
-                    i32::try_from(price).unwrap(),
-                    i32::try_from(count).unwrap(),
-                ]
-            })
-            .collect::<Vec<_>>();
         let sql = format!(
             r#"WITH lineitem AS (
             SELECT c0 AS l_orderkey, c1 AS l_linenumber,
@@ -71,6 +63,20 @@ fn h01_grouped_head_matches_duckdb_distinct_join() {
             &sql,
         )
         .expect("DuckDB H01 oracle");
-        assert_answers_equal("DuckDB H01", expected, "grouped CQ H01", actual, true);
+        for config in ["default", "transfer"] {
+            let actual = h01::run(&data, config)
+                .into_iter()
+                .map(|(flag, status, quantity, price, count)| {
+                    vec![
+                        flag.as_bytes()[0] as i32,
+                        status.as_bytes()[0] as i32,
+                        i32::try_from(quantity).unwrap(),
+                        i32::try_from(price).unwrap(),
+                        i32::try_from(count).unwrap(),
+                    ]
+                })
+                .collect::<Vec<_>>();
+            assert_answers_equal("DuckDB H01", expected.clone(), config, actual, true);
+        }
     }
 }

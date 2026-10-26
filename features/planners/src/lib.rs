@@ -66,7 +66,7 @@
 //! | --- | --- |
 //! | Written | Written clause order; coarse uses full atoms, fine splits each atom in place |
 //! | Hypergraph | Written/coarse plus the full upward/downward Yannakakis reducer when acyclic |
-//! | Transfer | Written/coarse plus robust predicate transfer: forward then backward semijoins along the reduction tree rooted at the stream |
+//! | Transfer | Coarse connected growth within written atom runs, with predicate/binding/block boundaries fixed; forward then backward semijoins rooted at the stream |
 //! | LE | Written outer/Rust chain, early bound-key lookups in GYO ear order, demand-delayed coarse expansions, Masks reductions |
 //! | Prefix connected | Ready connected atoms before disconnected atoms, then written position |
 //! | Prefix greedy | Connected atoms, then smallest resulting heading width, then written position |
@@ -78,6 +78,12 @@
 //! acyclic branches under cyclic roots may receive tree reducers. Rust guards
 //! stay on their base chain. These are deterministic heuristics without
 //! cardinality estimates or complexity claims.
+//! Hypergraph and Transfer apply checked redundant-support absorption after
+//! elaboration. Their VO schedules retain all reduction obligations; the final
+//! RA graph removes only reductions subsumed by remaining exact joins.
+//! Transfer avoids a Cartesian prefix when a later atom in the same run
+//! connects to the bound columns, even if opaque Rust prevents extra reducers.
+//! It does not move predicates or bindings to make that connection.
 //!
 //! For library consumers, `Planner::ALL` lists the eleven choices.
 //! `compile_valuation(&cq, planner)` returns complete VO text and
@@ -99,7 +105,7 @@
 //!
 //! Tests use only the public `cq-testkit` package. They cover all 30 published
 //! scenarios through all eleven planners, authored answers and independent CQ/VO/RA′
-//! oracles, pinned VO/RA′ texts, rejected mutations and admitted free rankings,
+//! oracles, authored VO/RA′ fixtures, rejected mutations and admitted free rankings,
 //! named and explicit macro pipelines, and 200 deterministic partial Rust seeds
 //! (`0, 2, ..., 398`) executed under every planner against exact written-order
 //! Rust. The seed corpus covers division, remainder, overflow and unwrap in guards,
@@ -109,11 +115,11 @@
 //! 24-visit cost probe.
 //!
 //! `triangle`, `chain` (the public `oriented_chain` scenario), and `fine_triangle`
-//! are pinned for every planner in `tests/fixtures/`. The two triangle CQ inputs
-//! are identical; each planner's split determines its VO. LE additionally pins
-//! H05, H09, D72-inner and a recursive fallback block. Fixtures contain complete
-//! canonical token text and are compared byte for byte. An intentional fixture
-//! change can be captured with `cargo run --example pin_plans` and reviewed;
+//! have authored plans for every planner in `tests/fixtures/`. The two triangle
+//! CQ inputs are identical; each planner's split determines its VO. These plans
+//! remain checked inputs, not mandatory optimizer output text. LE additionally
+//! captures H05, H09, D72-inner and a recursive fallback block. An intentional
+//! fixture change can be captured with `cargo run --example pin_plans` and reviewed;
 //! ordinary tests never regenerate fixtures.
 //!
 //! Acceptance from this directory:
