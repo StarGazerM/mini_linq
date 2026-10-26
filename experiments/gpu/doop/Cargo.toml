@@ -12,6 +12,7 @@ mini-linq = { path = "../../../facade/mini-linq" }
 cq-storage = { path = "../../../runtime/cq-storage" }
 cq-gpu-datalog = { path = "../datalog/facade" }
 cq-gpu-sequence = { path = "../sequence" }
+cq-sequence-rewrites = { path = "../../../features/sequence-rewrites" }
 cq-gpu-sequence-runtime = { path = "../sequence-runtime" }
 cq-gpu-runtime = { path = "../printer-runtime" }
 gpu-datalog-runtime = { path = "../datalog-runtime" }

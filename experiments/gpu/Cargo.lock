@@ -1072,6 +1072,7 @@ dependencies = [
  "cq-gpu-runtime",
  "cq-gpu-sequence",
  "cq-gpu-sequence-runtime",
+ "cq-sequence-rewrites",
  "cq-storage",
  "cuda-core",
  "cuda-device",

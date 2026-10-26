@@ -1,0 +1,1249 @@
+{
+  "dataset": "/tmp/doop-data/cassandra",
+  "base_revision": "6d12415c",
+  "toolchain": {
+    "rust": "1.99.1",
+    "cuda": "13.0",
+    "arch": "sm_89",
+    "gpu": "NVIDIA RTX 6000 Ada Generation"
+  },
+  "mechanisms": [
+    "Arena invocation timing is thread-local opt-in; ordinary Sequence timing remains unchanged. Disable four timing events, terminal synchronize, and elapsed-event synchronization per invocation without removing dispatch validation.",
+    "Explicit checked DOOP output(reserve_previous) advice uses the arena last validated row count as an initial capacity only; full metadata, sticky failure checks, bounded writes and overflow replay precede publication. Count/reserve/bounded behavior is unchanged.",
+    "Injective layout permutations use unsafe sort_known_unique: radix sort plus copy/gather, no unique compaction/count readback. Arbitrary inputs and admission retain deduplication."
+  ],
+  "timings": {
+    "untraced_before_seconds": 3.473414,
+    "untraced_after_seconds": 3.143608,
+    "untraced_reduction_seconds": 0.32980600000000004,
+    "untraced_speedup": 1.1049132080081232,
+    "profiled_before_seconds": 3.897107,
+    "profiled_after_seconds": 3.424297,
+    "kernel_before_seconds": 1.893807869,
+    "kernel_after_seconds": 1.752146957,
+    "internal_kernel_gap_before_seconds": 1.829632383,
+    "internal_kernel_gap_after_seconds": 1.517730453,
+    "sampling": "One untraced and one profiled execution per version; timings are observations, not confidence intervals. Historic 3.672471s is not used as the paired baseline."
+  },
+  "exactness": {
+    "comparison": "exact full-tuple sets, all 26 outputs",
+    "before_untraced": true,
+    "before_profiled": true,
+    "after_untraced": true,
+    "after_profiled": true
+  },
+  "formal_rules": [
+    {
+      "name": "GPU-Arena-Timing",
+      "implementation": "experiments/gpu/sequence/core/src/emit.rs",
+      "specification": "doc/formal/backend_ir.tex",
+      "text": "For an arena invocation, disabled timing permits omission only of terminal timing events, their elapsed-time publication, and the redundant terminal stream fence. All dispatch count and failure validation remains before publication; same-stream ordering and retained owners preserve validity. Enabled timing restores synchronizing measurements without changing the candidate bag."
+    },
+    {
+      "name": "GPU-ReservePrevious",
+      "implementation": "experiments/gpu/sequence/core/src/emit.rs",
+      "specification": "doc/formal/backend_ir.tex",
+      "text": "The explicitly recorded reserve_previous protocol is realized only by an arena terminal. The last validated count, initially zero, is an initial capacity hint, not a bound. Every attempt counts all candidates and writes only within capacity; sticky arithmetic/fold failure aborts. If the count exceeds capacity, discard the unpublished attempt and replay the unchanged invocation snapshot at the required capacity. Publish and remember only a fully validated initialized prefix; never admit a truncated batch."
+    },
+    {
+      "name": "DL-SortKnownUnique",
+      "implementation": "experiments/gpu/datalog-runtime/src/runs.rs",
+      "specification": "doc/formal/datalog.tex",
+      "text": "An injective column permutation of an initialized unique run remains unique and preserves its known cardinality. Sorting that prefix produces a sorted unique run of the same length without compaction or a count readback. Other arbitrary inputs still require unique canonicalization."
+    }
+  ],
+  "before": {
+    "schema_version": 1,
+    "disjoint_internal_kernel_gap_partition": {
+      "window_start_ns": 6666399671,
+      "window_end_ns": 10389839923,
+      "total_internal_kernel_gap_ns": 1829632383,
+      "api_resident_gap_ns": 710794151,
+      "no_recorded_cuda_api_gap_ns": 1118838232,
+      "method": "Intersect each traced CUDA API interval with the complement of the kernel interval union, restricted to first kernel start through last kernel end. Assign each intersected interval to exactly one API category; the remainder is no-recorded-CUDA-API time. All observed CUDA API records use one thread and are nonoverlapping: summed API duration equals its union (2,594,547,754 ns).",
+      "partition": [
+        {
+          "category": "no_recorded_cuda_api",
+          "gap_duration_ns": 1118838232,
+          "api_calls_intersecting_gaps": 0
+        },
+        {
+          "category": "dtoh_metadata",
+          "gap_duration_ns": 120732060,
+          "api_calls_intersecting_gaps": 12392
+        },
+        {
+          "category": "module_load",
+          "gap_duration_ns": 89425246,
+          "api_calls_intersecting_gaps": 157
+        },
+        {
+          "category": "launch",
+          "gap_duration_ns": 88161858,
+          "api_calls_intersecting_gaps": 30549
+        },
+        {
+          "category": "event_management",
+          "gap_duration_ns": 86105225,
+          "api_calls_intersecting_gaps": 150710
+        },
+        {
+          "category": "allocation",
+          "gap_duration_ns": 82355429,
+          "api_calls_intersecting_gaps": 11590
+        },
+        {
+          "category": "stream_synchronize",
+          "gap_duration_ns": 64722684,
+          "api_calls_intersecting_gaps": 24390
+        },
+        {
+          "category": "dtoh_compaction_count",
+          "gap_duration_ns": 55750860,
+          "api_calls_intersecting_gaps": 3625
+        },
+        {
+          "category": "memset",
+          "gap_duration_ns": 38069928,
+          "api_calls_intersecting_gaps": 17589
+        },
+        {
+          "category": "upload",
+          "gap_duration_ns": 29106115,
+          "api_calls_intersecting_gaps": 11560
+        },
+        {
+          "category": "event_synchronize",
+          "gap_duration_ns": 28363159,
+          "api_calls_intersecting_gaps": 66976
+        },
+        {
+          "category": "device_to_device_copy",
+          "gap_duration_ns": 24298013,
+          "api_calls_intersecting_gaps": 5992
+        },
+        {
+          "category": "free",
+          "gap_duration_ns": 3691150,
+          "api_calls_intersecting_gaps": 6268
+        },
+        {
+          "category": "dtoh_payload_other",
+          "gap_duration_ns": 12424,
+          "api_calls_intersecting_gaps": 1
+        }
+      ],
+      "interpretation": [
+        "This is a disjoint partition of the 1.829632383 s internal kernel-gap interval set, not of the 3.897107 s evaluation. It excludes all kernel-overlapping API time and time before first/after last kernel.",
+        "DtoH metadata plus compaction-count API residence accounts for 176,482,920 ns of internal gaps, not the 1.914779751 s summed residence of those APIs.",
+        "No-recorded-CUDA-API is a residual, not measured CPU-on-core time: it can include host computation, wrapper/allocation/cache work outside traced CUDA APIs, untraced driver work, scheduling, profiler overhead and GPU memory activity.",
+        "API attribution reports where the host thread resides while no kernel executes, not causality or avoidable overhead; kernels can be absent because memory activity is executing.",
+        "Final dispatch synchronization versus optional timing cannot be identified without call stacks or annotations. Stream and event synchronization are reported separately; event_management includes create/record/query/destroy and is not assumed to be optional timing. Terminal synchronization after the last kernel is outside this partition.",
+        "The reproducible sweep query assumes globally unique correlation IDs and nonoverlapping CUDA API intervals on one thread, both observed in this before report. Recheck these preconditions before applying to a multithreaded after report."
+      ],
+      "reproducible_sql": "WITH kernels AS (\n SELECT k.start,k.end,k.correlationId,s.value name FROM CUPTI_ACTIVITY_KIND_KERNEL k JOIN StringIds s ON s.id=k.shortName\n), submission_events AS (\n SELECT correlationId,'kernel' kind,name,0 bytes FROM kernels\n UNION ALL SELECT correlationId,'dtoh','',bytes FROM CUPTI_ACTIVITY_KIND_MEMCPY WHERE copyKind=2\n), preceding AS (\n SELECT *,LAG(kind) OVER (ORDER BY correlationId) prior_kind,LAG(name) OVER (ORDER BY correlationId) prior_name FROM submission_events\n), dtoh_protocol AS (\n SELECT correlationId,CASE WHEN prior_kind='kernel' AND prior_name LIKE '__cq_sequence_dispatch_%' THEN 'dtoh_metadata'\n WHEN bytes=8 AND prior_kind='kernel' AND prior_name LIKE 'scatter_selected%' THEN 'dtoh_compaction_count'\n ELSE 'dtoh_payload_other' END category FROM preceding WHERE kind='dtoh'\n), api AS (\n SELECT r.start,r.end,r.correlationId,CASE\n WHEN s.value='cuMemcpyDtoHAsync_v2' THEN d.category\n WHEN s.value='cuStreamSynchronize' THEN 'stream_synchronize'\n WHEN s.value='cuEventSynchronize' THEN 'event_synchronize'\n WHEN s.value IN ('cuEventCreate','cuEventRecord','cuEventDestroy_v2','cuEventQuery','cuEventElapsedTime') THEN 'event_management'\n WHEN s.value IN ('cuMemAllocAsync','cuMemAlloc_v2','cuMemAllocHost_v2') THEN 'allocation'\n WHEN s.value IN ('cuMemFreeAsync','cuMemFree_v2','cuMemFreeHost') THEN 'free'\n WHEN s.value LIKE 'cuMemset%' THEN 'memset'\n WHEN s.value='cuLaunchKernel' THEN 'launch'\n WHEN s.value='cuMemcpyHtoDAsync_v2' THEN 'upload'\n WHEN s.value='cuMemcpyDtoDAsync_v2' THEN 'device_to_device_copy'\n WHEN s.value='cuModuleLoadData' THEN 'module_load'\n ELSE 'other_api' END category\n FROM CUPTI_ACTIVITY_KIND_RUNTIME r JOIN StringIds s ON s.id=r.nameId LEFT JOIN dtoh_protocol d ON d.correlationId=r.correlationId\n), boundaries AS (\n SELECT start t,correlationId+1 api_id,0 kernel FROM api UNION ALL SELECT end,-(correlationId+1),0 FROM api\n UNION ALL SELECT start,0,1 FROM kernels UNION ALL SELECT end,0,-1 FROM kernels\n), grouped AS (\n SELECT t,SUM(api_id) api_id,SUM(kernel) kernel FROM boundaries GROUP BY t\n), segments AS (\n SELECT t,LEAD(t) OVER (ORDER BY t) next_t,SUM(api_id) OVER (ORDER BY t) active_api,SUM(kernel) OVER (ORDER BY t) active_kernel FROM grouped\n), bounds AS (\n SELECT MIN(start) first_kernel,MAX(end) last_kernel FROM kernels\n)\nSELECT COALESCE(a.category,'no_recorded_cuda_api') category,SUM(g.next_t-g.t) gap_duration_ns,\n COUNT(DISTINCT CASE WHEN g.active_api<>0 THEN g.active_api END) api_calls_intersecting_gaps\nFROM segments g CROSS JOIN bounds b LEFT JOIN api a ON a.correlationId=g.active_api-1\nWHERE g.active_kernel=0 AND g.t>=b.first_kernel AND g.next_t<=b.last_kernel\nGROUP BY category ORDER BY gap_duration_ns DESC"
+    },
+    "report": "/tmp/doop-host-before.nsys-rep",
+    "sqlite": "/tmp/doop-host-before.sqlite",
+    "nsys_version": "2025.3.1.90-253135822126v0",
+    "export_command": "nsys export --type sqlite --output /tmp/doop-host-before.sqlite /tmp/doop-host-before.nsys-rep",
+    "scope": "Full captured process, not an NVTX-delimited evaluation. Duration fields are integer nanoseconds; timestamps use the exported trace coordinate system.",
+    "reported_stdout": {
+      "dataset": "/tmp/doop-data/cassandra",
+      "comparison": "exact full-tuple sets, all 26 outputs",
+      "gpu_evaluation_seconds": 3.897107,
+      "mini_evaluation_seconds": 4.27923
+    },
+    "capture": {
+      "duration_ns": 11155386732,
+      "nvtx_events_collected": false,
+      "gpu": "NVIDIA RTX 6000 Ada Generation",
+      "kernel_device": 0,
+      "kernel_stream": 7,
+      "cuda_api_threads": 1,
+      "cuda_api_count": 379384,
+      "cuda_api_summed_duration_ns": 2594547754
+    },
+    "host_api_groups": {
+      "dtoh": {
+        "count": 16083,
+        "duration_ns": 1922449521,
+        "apis": [
+          "cuMemcpyDtoHAsync_v2"
+        ]
+      },
+      "stream_sync": {
+        "count": 24457,
+        "duration_ns": 64838697,
+        "apis": [
+          "cuStreamSynchronize"
+        ]
+      },
+      "event_sync": {
+        "count": 66981,
+        "duration_ns": 28373420,
+        "apis": [
+          "cuEventSynchronize"
+        ]
+      },
+      "device_alloc": {
+        "count": 13908,
+        "duration_ns": 84007057,
+        "apis": [
+          "cuMemAllocAsync",
+          "cuMemAlloc_v2"
+        ]
+      },
+      "device_free": {
+        "count": 13908,
+        "duration_ns": 13598871,
+        "apis": [
+          "cuMemFreeAsync",
+          "cuMemFree_v2"
+        ]
+      },
+      "pinned_host_alloc": {
+        "count": 4,
+        "duration_ns": 4241292,
+        "apis": [
+          "cuMemAllocHost_v2"
+        ]
+      },
+      "pinned_host_free": {
+        "count": 4,
+        "duration_ns": 1634082,
+        "apis": [
+          "cuMemFreeHost"
+        ]
+      },
+      "memset": {
+        "count": 23158,
+        "duration_ns": 53099127,
+        "apis": [
+          "cuMemsetD8Async"
+        ]
+      },
+      "kernel_launch": {
+        "count": 47015,
+        "duration_ns": 148612514,
+        "apis": [
+          "cuLaunchKernel"
+        ]
+      },
+      "event_record": {
+        "count": 88069,
+        "duration_ns": 71987877,
+        "apis": [
+          "cuEventRecord"
+        ]
+      }
+    },
+    "host_api_by_name": [
+      {
+        "name": "cuMemcpyDtoHAsync_v2",
+        "count": 16083,
+        "duration_ns": 1922449521
+      },
+      {
+        "name": "cuLaunchKernel",
+        "count": 47015,
+        "duration_ns": 148612514
+      },
+      {
+        "name": "cuModuleLoadData",
+        "count": 158,
+        "duration_ns": 90560563
+      },
+      {
+        "name": "cuMemAllocAsync",
+        "count": 11444,
+        "duration_ns": 77170444
+      },
+      {
+        "name": "cuEventRecord",
+        "count": 88069,
+        "duration_ns": 71987877
+      },
+      {
+        "name": "cuStreamSynchronize",
+        "count": 24457,
+        "duration_ns": 64838697
+      },
+      {
+        "name": "cuMemsetD8Async",
+        "count": 23158,
+        "duration_ns": 53099127
+      },
+      {
+        "name": "cuMemcpyHtoDAsync_v2",
+        "count": 12348,
+        "duration_ns": 41542903
+      },
+      {
+        "name": "cuEventSynchronize",
+        "count": 66981,
+        "duration_ns": 28373420
+      },
+      {
+        "name": "cuModuleUnload",
+        "count": 158,
+        "duration_ns": 27365566
+      },
+      {
+        "name": "cuMemcpyDtoDAsync_v2",
+        "count": 6118,
+        "duration_ns": 26405831
+      },
+      {
+        "name": "cuEventCreate",
+        "count": 33493,
+        "duration_ns": 9847235
+      },
+      {
+        "name": "cuMemFreeAsync",
+        "count": 13898,
+        "duration_ns": 8263581
+      },
+      {
+        "name": "cuMemAlloc_v2",
+        "count": 2464,
+        "duration_ns": 6836613
+      },
+      {
+        "name": "cuEventDestroy_v2",
+        "count": 33493,
+        "duration_ns": 5949713
+      },
+      {
+        "name": "cuMemFree_v2",
+        "count": 10,
+        "duration_ns": 5335290
+      },
+      {
+        "name": "cuMemAllocHost_v2",
+        "count": 4,
+        "duration_ns": 4241292
+      },
+      {
+        "name": "cuMemFreeHost",
+        "count": 4,
+        "duration_ns": 1634082
+      },
+      {
+        "name": "cuEventQuery",
+        "count": 28,
+        "duration_ns": 32714
+      },
+      {
+        "name": "cuCtxSetCurrent",
+        "count": 1,
+        "duration_ns": 771
+      }
+    ],
+    "dtoh": {
+      "count": 16083,
+      "api_duration_ns": 1922449521,
+      "gpu_transfer_duration_ns": 24012306,
+      "bytes": 35741216,
+      "size_classes": [
+        {
+          "bytes_per_copy": 20,
+          "count": 12392,
+          "api_duration_ns": 1735187928,
+          "gpu_transfer_duration_ns": 14034924,
+          "interpretation": "[INFERENCE] Sequence dispatch metadata; every transfer immediately follows a Sequence dispatch in kernel/DtoH submission order. One chain gives (4+1)*sizeof(u32)=20 bytes."
+        },
+        {
+          "bytes_per_copy": 24,
+          "count": 0,
+          "api_duration_ns": 0,
+          "gpu_transfer_duration_ns": 0,
+          "interpretation": "No 24-byte DtoH transfers are present. Do not label the observed metadata transfers as 24 bytes."
+        },
+        {
+          "bytes_per_copy": 8,
+          "count": 3629,
+          "api_duration_ns": 179622743,
+          "gpu_transfer_duration_ns": 4026607,
+          "interpretation": "3,625 compaction-count transfers, plus four small output transfers; byte size alone does not uniquely identify count protocol."
+        },
+        {
+          "bytes_per_copy": "other",
+          "count": 62,
+          "api_duration_ns": 7638850,
+          "gpu_transfer_duration_ns": 5950775
+        }
+      ],
+      "protocol_attribution": {
+        "evidence": "[INFERENCE] Source protocol plus correlated kernel/copy submission sequence; no CPU call stacks or source-line attribution in this report.",
+        "dispatch_metadata": {
+          "count": 12392,
+          "api_duration_ns": 1735187928,
+          "gpu_transfer_duration_ns": 14034924
+        },
+        "compaction_counts": {
+          "count": 3625,
+          "api_duration_ns": 179591823,
+          "gpu_transfer_duration_ns": 4021935,
+          "unique_count": {
+            "count": 2493,
+            "api_duration_ns": 166271239
+          },
+          "fresh_count": {
+            "count": 1132,
+            "api_duration_ns": 13320584
+          }
+        },
+        "remaining_payload_copies": {
+          "count": 66,
+          "api_duration_ns": 7669770,
+          "gpu_transfer_duration_ns": 5955447,
+          "description": "Includes four 8-byte copies. 65 occur after the final compaction count, one 16-byte copy occurs earlier. Treat as payload/other readbacks rather than count solely by size."
+        }
+      },
+      "api_kernel_time_intersection_ns": 1738292971,
+      "interpretation": "The DtoH API intervals overlap 1.738292971 s of executing kernels. Their 1.922449521 s sum is API residence/wait time, not independent CPU overhead or transfer-engine busy time."
+    },
+    "gpu_kernel_timeline": {
+      "event_count": 47015,
+      "first_ns": 6666399671,
+      "last_ns": 10389839923,
+      "span_ns": 3723440252,
+      "summed_duration_ns": 1893807869,
+      "busy_union_ns": 1893807869,
+      "internal_gap_ns": 1829632383,
+      "positive_gap_count": 47014,
+      "largest_gap_ns": 11943154,
+      "gap_median_ns": 4160,
+      "gaps_over_1ms_count": 168,
+      "gaps_over_1ms_total_ns": 998647000,
+      "sequence_dispatch_count": 12392,
+      "sequence_dispatch_duration_ns": 1614780949,
+      "gap_p95_floor_index_ns": 49025,
+      "gap_p99_floor_index_ns": 155874
+    },
+    "gpu_all_recorded_activity_timeline": {
+      "event_count": 104722,
+      "first_ns": 6663933823,
+      "last_ns": 10544882269,
+      "span_ns": 3880948446,
+      "summed_duration_ns": 1962061072,
+      "busy_union_ns": 1962061072,
+      "internal_gap_ns": 1918887374,
+      "positive_gap_count": 104721,
+      "largest_gap_ns": 82873624
+    },
+    "gpu_memory_activity": {
+      "memset": {
+        "count": 23158,
+        "gpu_duration_ns": 23418826,
+        "bytes": 94232160
+      },
+      "copies_by_kind": [
+        {
+          "copyKind": 1,
+          "count": 12348,
+          "gpu_duration_ns": 7650998,
+          "bytes": 28172788
+        },
+        {
+          "copyKind": 2,
+          "count": 16083,
+          "gpu_duration_ns": 24012306,
+          "bytes": 35741216
+        },
+        {
+          "copyKind": 8,
+          "count": 6118,
+          "gpu_duration_ns": 13171073,
+          "bytes": 287759584
+        }
+      ]
+    },
+    "evaluation_window": {
+      "exact_start_ns": null,
+      "exact_end_ns": null,
+      "reason": "No NVTX events, CPU trace disabled, stdout timing is duration-only. Kernel sequence locates execution and final downloads but cannot recover exact Instant timestamps.",
+      "first_evaluation_module_load_start_ns": 6652645762,
+      "first_kernel_start_ns": 6666399671,
+      "last_kernel_end_ns": 10389839923,
+      "last_dtoh_gpu_end_ns": 10544882269,
+      "last_dtoh_api_end_ns": 10544884869,
+      "last_recorded_api_end_ns": 10677335574,
+      "inferred_start_bounds_ns": [
+        6647777369,
+        6652645762
+      ],
+      "inferred_end_bounds_ns": [
+        10544884869,
+        10549753262
+      ],
+      "bounds_status": "[INFERENCE] Conditional on first cuModuleLoadData and last DtoH both lying inside gpu_evaluation_seconds. Source excludes thread_pool/context initialization, includes GPU run and output decoding. Bounds use reported 3.897107 s rounded to six decimals (maximum duration 3,897,107,500 ns). This is a bounded location, not an exact range. No API aggregates were filtered to these bounds.",
+      "bounds_formula": "start >= last_DtoH_API_end - duration_max; start <= first_evaluation_module_load_start; end >= last_DtoH_API_end; end <= first_evaluation_module_load_start + duration_max"
+    },
+    "limitations": [
+      "Capture includes fact loading, CUDA initialization, CPU mini reference, GPU evaluation, comparison/output and process/thread-local teardown. Aggregate API totals include calls outside the reported 3.897107 s evaluation, notably module unload and teardown synchronization.",
+      "Host API durations overlap GPU kernels and memory activity. Never sum API durations plus GPU durations as a disjoint wall-time breakdown; API elapsed time is not CPU-on-core time.",
+      "Kernel gaps mean no recorded kernel executing between first and last kernels. They can contain memory transfers, memsets, CPU work, module setup, driver waits or profiler overhead; they are not all avoidable host overhead.",
+      "All-recorded-activity gaps exclude recorded kernels, copies and memsets, but do not measure SM occupancy, unrelated GPU processes or unrecorded device work.",
+      "Protocol attribution is inferred from current runtime source and observed kernel sequence; profiled executable debug/source identity was not established. Allocation/free and event calls are actual CUDA API calls, not logical buffer-operation counts.",
+      "Nsight warns installed CUDA driver 13.0 is unsupported by this build; CUDA tracing uses libraries for driver 12.9. No NVTX events were collected despite NVTX collection enabled.",
+      "Profile overhead is present. These measurements describe this profiled run, not an unprofiled latency prediction."
+    ],
+    "source_evidence": [
+      {
+        "path": "experiments/gpu/doop/src/main.rs",
+        "lines": "11-34",
+        "evidence": "Prewarms thread_pool, times mini and GPU separately, includes upload/layout/execution/download and output decode."
+      },
+      {
+        "path": "experiments/gpu/sequence/core/src/emit.rs",
+        "symbol": "meta_words / store_meta.to_host",
+        "evidence": "meta_words = 4 + chains.len(); Buffer<u32> downloaded after every dispatch; checks overflow and required capacity, may retry."
+      },
+      {
+        "path": "experiments/gpu/datalog-runtime/src/runs.rs",
+        "symbol": "read_count / sort / subtract",
+        "evidence": "Copies one u64 (8 bytes) to stack, then stream.synchronize; used for unique and fresh compaction counts."
+      },
+      {
+        "path": "experiments/gpu/device-columns/src/memory.rs",
+        "symbol": "Buffer::to_host_prefix",
+        "evidence": "Copies len*sizeof(T) bytes into Vec then synchronizes stream."
+      },
+      {
+        "path": "experiments/gpu/datalog/src/print.rs",
+        "lines": "242-274",
+        "evidence": "Explicit output state.to_host and host unpack/codec decode before returning GPU run result."
+      }
+    ],
+    "reproducible_sql": {
+      "api_by_name": "SELECT s.value name,count(*) count,sum(r.end-r.start) total_ns,min(r.start) first_ns,max(r.end) last_ns FROM CUPTI_ACTIVITY_KIND_RUNTIME r JOIN StringIds s ON s.id=r.nameId GROUP BY r.nameId ORDER BY total_ns DESC",
+      "dtoh_by_size": "SELECT m.bytes,count(*) count,sum(m.end-m.start) gpu_ns,sum(r.end-r.start) api_ns,sum(m.bytes) total_bytes FROM CUPTI_ACTIVITY_KIND_MEMCPY m JOIN CUPTI_ACTIVITY_KIND_RUNTIME r ON r.correlationId=m.correlationId WHERE m.copyKind=2 GROUP BY m.bytes ORDER BY count DESC",
+      "kernel_busy_and_gaps": "WITH intervals AS (SELECT start,end FROM CUPTI_ACTIVITY_KIND_KERNEL WHERE deviceId=0), ordered AS (\nSELECT start,end,MAX(end) OVER (ORDER BY start,end ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) prior_end FROM intervals)\nSELECT COUNT(*) event_count,MIN(start) first_ns,MAX(end) last_ns,MAX(end)-MIN(start) span_ns,\nSUM(end-start) summed_duration_ns,\nSUM(MAX(0,end-MAX(start,COALESCE(prior_end,start)))) busy_union_ns,\nSUM(CASE WHEN start>prior_end THEN start-prior_end ELSE 0 END) internal_gap_ns,\nSUM(CASE WHEN start>prior_end THEN 1 ELSE 0 END) positive_gap_count,\nMAX(CASE WHEN start>prior_end THEN start-prior_end ELSE 0 END) largest_gap_ns FROM ordered",
+      "all_gpu_activity_busy_and_gaps": "WITH intervals AS (SELECT start,end FROM CUPTI_ACTIVITY_KIND_KERNEL WHERE deviceId=0 UNION ALL SELECT start,end FROM CUPTI_ACTIVITY_KIND_MEMCPY WHERE deviceId=0 UNION ALL SELECT start,end FROM CUPTI_ACTIVITY_KIND_MEMSET WHERE deviceId=0), ordered AS (\nSELECT start,end,MAX(end) OVER (ORDER BY start,end ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) prior_end FROM intervals)\nSELECT COUNT(*) event_count,MIN(start) first_ns,MAX(end) last_ns,MAX(end)-MIN(start) span_ns,\nSUM(end-start) summed_duration_ns,\nSUM(MAX(0,end-MAX(start,COALESCE(prior_end,start)))) busy_union_ns,\nSUM(CASE WHEN start>prior_end THEN start-prior_end ELSE 0 END) internal_gap_ns,\nSUM(CASE WHEN start>prior_end THEN 1 ELSE 0 END) positive_gap_count,\nMAX(CASE WHEN start>prior_end THEN start-prior_end ELSE 0 END) largest_gap_ns FROM ordered",
+      "dtoh_preceding_kernel_or_copy": "WITH ordered AS (\nSELECT correlationId, 'kernel' kind, 0 bytes, s.value name, 0 api_ns, k.end-k.start gpu_ns\nFROM CUPTI_ACTIVITY_KIND_KERNEL k JOIN StringIds s ON s.id=k.shortName\nUNION ALL\nSELECT m.correlationId,'dtoh',m.bytes,'',r.end-r.start,m.end-m.start\nFROM CUPTI_ACTIVITY_KIND_MEMCPY m JOIN CUPTI_ACTIVITY_KIND_RUNTIME r ON r.correlationId=m.correlationId WHERE m.copyKind=2),\nmarked AS (SELECT *,LAG(kind) OVER (ORDER BY correlationId) prior_kind,LAG(name) OVER (ORDER BY correlationId) prior_name FROM ordered)\nSELECT bytes,prior_kind,CASE WHEN prior_name LIKE '__cq_sequence_dispatch_%' THEN 'sequence_dispatch' WHEN prior_name LIKE 'scatter_selected%' THEN 'scatter_selected' ELSE prior_name END prior_kernel,\nCOUNT(*) count,SUM(api_ns) api_ns,SUM(gpu_ns) gpu_ns FROM marked WHERE kind='dtoh' GROUP BY bytes,prior_kind,prior_kernel ORDER BY count DESC",
+      "compaction_unique_vs_fresh_counts": "WITH kernels AS (SELECT k.correlationId,s.value name FROM CUPTI_ACTIVITY_KIND_KERNEL k JOIN StringIds s ON s.id=k.shortName),\nevents AS (SELECT correlationId,'kernel' kind,name,0 bytes,0 api_ns FROM kernels UNION ALL SELECT m.correlationId,'dtoh','',m.bytes,r.end-r.start FROM CUPTI_ACTIVITY_KIND_MEMCPY m JOIN CUPTI_ACTIVITY_KIND_RUNTIME r ON r.correlationId=m.correlationId WHERE m.copyKind=2),\nordered AS (SELECT *,LAG(kind) OVER (ORDER BY correlationId) prior_kind,LAG(name) OVER (ORDER BY correlationId) prior_name,MAX(CASE WHEN name LIKE 'mark_adjacent_unique%' OR name LIKE 'mark_flagged%' THEN correlationId END) OVER (ORDER BY correlationId) marker FROM events)\nSELECT CASE WHEN k.name LIKE 'mark_adjacent_unique%' THEN 'unique_count' WHEN k.name LIKE 'mark_flagged%' THEN 'fresh_count' ELSE k.name END protocol,COUNT(*) count,SUM(o.api_ns) api_ns FROM ordered o JOIN kernels k ON k.correlationId=o.marker WHERE o.kind='dtoh' AND o.bytes=8 AND o.prior_kind='kernel' AND o.prior_name LIKE 'scatter_selected%' GROUP BY protocol",
+      "dtoh_api_kernel_overlap": "WITH boundary AS (\nSELECT r.start t,1 dh,0 kernel FROM CUPTI_ACTIVITY_KIND_RUNTIME r JOIN StringIds s ON s.id=r.nameId WHERE s.value='cuMemcpyDtoHAsync_v2'\nUNION ALL SELECT r.end,-1,0 FROM CUPTI_ACTIVITY_KIND_RUNTIME r JOIN StringIds s ON s.id=r.nameId WHERE s.value='cuMemcpyDtoHAsync_v2'\nUNION ALL SELECT start,0,1 FROM CUPTI_ACTIVITY_KIND_KERNEL\nUNION ALL SELECT end,0,-1 FROM CUPTI_ACTIVITY_KIND_KERNEL),\ngrouped AS (SELECT t,SUM(dh) dh,SUM(kernel) kernel FROM boundary GROUP BY t),\nsegments AS (SELECT t,LEAD(t) OVER (ORDER BY t) next_t,SUM(dh) OVER (ORDER BY t) active_dtoh,SUM(kernel) OVER (ORDER BY t) active_kernel FROM grouped)\nSELECT SUM(next_t-t) overlap_ns FROM segments WHERE active_dtoh>0 AND active_kernel>0",
+      "largest_kernel_gaps": "WITH k AS (SELECT start,end,s.value name,LAG(end) OVER (ORDER BY start) prior_end,LAG(s.value) OVER (ORDER BY start) prior_name FROM CUPTI_ACTIVITY_KIND_KERNEL k JOIN StringIds s ON s.id=k.shortName)\nSELECT prior_end,start,start-prior_end gap_ns,prior_name,name FROM k WHERE start>prior_end ORDER BY gap_ns DESC LIMIT 10",
+      "stdout": "SELECT f.value filename,c.value content FROM ProcessStreams p JOIN StringIds f ON f.id=p.filenameId JOIN StringIds c ON c.id=p.contentId",
+      "diagnostics": "SELECT severity,text FROM DIAGNOSTIC_EVENT"
+    }
+  },
+  "after": {
+    "schema_version": 1,
+    "report": "/tmp/doop-host-after.nsys-rep",
+    "sqlite": "/tmp/doop-host-after.sqlite",
+    "nsys_version": "2025.3.1.90-253135822126v0",
+    "export_command": "nsys export --type sqlite --output /tmp/doop-host-after.sqlite /tmp/doop-host-after.nsys-rep",
+    "scope": "Full captured process, not an NVTX-delimited evaluation. Duration fields are integer nanoseconds; timestamps use the exported trace coordinate system.",
+    "reported_stdout": {
+      "dataset": "/tmp/doop-data/cassandra",
+      "comparison": "exact full-tuple sets, all 26 outputs",
+      "gpu_evaluation_seconds": 3.424297,
+      "mini_evaluation_seconds": 4.212904
+    },
+    "capture": {
+      "duration_ns": 10432665392,
+      "nvtx_events_collected": false,
+      "gpu": "NVIDIA RTX 6000 Ada Generation",
+      "kernel_device": 0,
+      "kernel_stream": 7,
+      "cuda_api_threads": 1,
+      "cuda_api_count": 186725,
+      "cuda_api_summed_duration_ns": 2228436768
+    },
+    "host_api_groups": {
+      "dtoh": {
+        "count": 13670,
+        "duration_ns": 1725273610,
+        "apis": [
+          "cuMemcpyDtoHAsync_v2"
+        ]
+      },
+      "stream_sync": {
+        "count": 13672,
+        "duration_ns": 33887648,
+        "apis": [
+          "cuStreamSynchronize"
+        ]
+      },
+      "event_sync": {
+        "count": 5,
+        "duration_ns": 10390,
+        "apis": [
+          "cuEventSynchronize"
+        ]
+      },
+      "device_alloc": {
+        "count": 12651,
+        "duration_ns": 83624019,
+        "apis": [
+          "cuMemAllocAsync",
+          "cuMemAlloc_v2"
+        ]
+      },
+      "device_free": {
+        "count": 12651,
+        "duration_ns": 16426422,
+        "apis": [
+          "cuMemFreeAsync",
+          "cuMemFree_v2"
+        ]
+      },
+      "pinned_host_alloc": {
+        "count": 4,
+        "duration_ns": 4480445,
+        "apis": [
+          "cuMemAllocHost_v2"
+        ]
+      },
+      "pinned_host_free": {
+        "count": 4,
+        "duration_ns": 1732803,
+        "apis": [
+          "cuMemFreeHost"
+        ]
+      },
+      "memset": {
+        "count": 22001,
+        "duration_ns": 46759519,
+        "apis": [
+          "cuMemsetD8Async"
+        ]
+      },
+      "kernel_launch": {
+        "count": 41059,
+        "duration_ns": 123297600,
+        "apis": [
+          "cuLaunchKernel"
+        ]
+      },
+      "event_record": {
+        "count": 51104,
+        "duration_ns": 18802666,
+        "apis": [
+          "cuEventRecord"
+        ]
+      }
+    },
+    "host_api_by_name": [
+      {
+        "name": "cuMemcpyDtoHAsync_v2",
+        "count": 13670,
+        "duration_ns": 1725273610
+      },
+      {
+        "name": "cuLaunchKernel",
+        "count": 41059,
+        "duration_ns": 123297600
+      },
+      {
+        "name": "cuModuleLoadData",
+        "count": 158,
+        "duration_ns": 84488320
+      },
+      {
+        "name": "cuMemAllocAsync",
+        "count": 10188,
+        "duration_ns": 76899162
+      },
+      {
+        "name": "cuMemsetD8Async",
+        "count": 22001,
+        "duration_ns": 46759519
+      },
+      {
+        "name": "cuStreamSynchronize",
+        "count": 13672,
+        "duration_ns": 33887648
+      },
+      {
+        "name": "cuMemcpyHtoDAsync_v2",
+        "count": 12348,
+        "duration_ns": 32255317
+      },
+      {
+        "name": "cuMemcpyDtoDAsync_v2",
+        "count": 7173,
+        "duration_ns": 29632838
+      },
+      {
+        "name": "cuModuleUnload",
+        "count": 158,
+        "duration_ns": 27710365
+      },
+      {
+        "name": "cuEventRecord",
+        "count": 51104,
+        "duration_ns": 18802666
+      },
+      {
+        "name": "cuMemFreeAsync",
+        "count": 12642,
+        "duration_ns": 11215595
+      },
+      {
+        "name": "cuMemAlloc_v2",
+        "count": 2463,
+        "duration_ns": 6724857
+      },
+      {
+        "name": "cuMemFree_v2",
+        "count": 9,
+        "duration_ns": 5210827
+      },
+      {
+        "name": "cuMemAllocHost_v2",
+        "count": 4,
+        "duration_ns": 4480445
+      },
+      {
+        "name": "cuMemFreeHost",
+        "count": 4,
+        "duration_ns": 1732803
+      },
+      {
+        "name": "cuEventQuery",
+        "count": 56,
+        "duration_ns": 46691
+      },
+      {
+        "name": "cuEventSynchronize",
+        "count": 5,
+        "duration_ns": 10390
+      },
+      {
+        "name": "cuEventDestroy_v2",
+        "count": 5,
+        "duration_ns": 4117
+      },
+      {
+        "name": "cuEventCreate",
+        "count": 5,
+        "duration_ns": 3477
+      },
+      {
+        "name": "cuCtxSetCurrent",
+        "count": 1,
+        "duration_ns": 521
+      }
+    ],
+    "dtoh": {
+      "count": 13670,
+      "api_duration_ns": 1725273610,
+      "gpu_transfer_duration_ns": 19626939,
+      "bytes": 35708028,
+      "size_classes": [
+        {
+          "bytes_per_copy": 20,
+          "count": 11235,
+          "api_duration_ns": 1622848350,
+          "gpu_transfer_duration_ns": 12790888
+        },
+        {
+          "bytes_per_copy": 24,
+          "count": 0,
+          "api_duration_ns": 0,
+          "gpu_transfer_duration_ns": 0
+        },
+        {
+          "bytes_per_copy": 8,
+          "count": 2373,
+          "api_duration_ns": 96583593,
+          "gpu_transfer_duration_ns": 2684514
+        },
+        {
+          "bytes_per_copy": "other",
+          "count": 62,
+          "api_duration_ns": 5841667,
+          "gpu_transfer_duration_ns": 4151537
+        }
+      ],
+      "protocol_attribution": {
+        "evidence": "[INFERENCE] Source protocol plus correlated kernel/copy submission sequence; no CPU call stacks or source-line attribution in this report.",
+        "dispatch_metadata": {
+          "count": 11235,
+          "api_duration_ns": 1622848350,
+          "gpu_transfer_duration_ns": 12790888
+        },
+        "compaction_counts": {
+          "count": 2369,
+          "api_duration_ns": 96551871,
+          "gpu_transfer_duration_ns": 2679842,
+          "fresh_count": {
+            "count": 1132,
+            "api_duration_ns": 13976442
+          },
+          "unique_count": {
+            "count": 1237,
+            "api_duration_ns": 82575429
+          }
+        },
+        "remaining_payload_copies": {
+          "count": 66,
+          "api_duration_ns": 5873389,
+          "gpu_transfer_duration_ns": 4156209,
+          "description": "Includes four 8-byte output copies; 8-byte size alone is not a unique identifier of count readbacks."
+        }
+      },
+      "api_kernel_time_intersection_ns": 1565880611,
+      "interpretation": "20-byte metadata persists; no 24-byte copies. DtoH API intervals overlap 1.565880611 s of kernel execution. API duration is residence/wait time, not disjoint CPU overhead."
+    },
+    "gpu_kernel_timeline": {
+      "event_count": 41059,
+      "first_ns": 6424618062,
+      "last_ns": 9694495472,
+      "span_ns": 3269877410,
+      "summed_duration_ns": 1752146957,
+      "busy_union_ns": 1752146957,
+      "internal_gap_ns": 1517730453,
+      "positive_gap_count": 41058,
+      "largest_gap_ns": 10408373,
+      "gap_median_ns": 4224,
+      "gap_p95_floor_index_ns": 30337,
+      "gap_p99_floor_index_ns": 142017,
+      "gaps_over_1ms_count": 171,
+      "gaps_over_1ms_total_ns": 961273896,
+      "sequence_dispatch_count": 11235,
+      "sequence_dispatch_duration_ns": 1486402590
+    },
+    "gpu_all_recorded_activity_timeline": {
+      "event_count": 96251,
+      "first_ns": 6422328212,
+      "last_ns": 9839137358,
+      "span_ns": 3416809146,
+      "summed_duration_ns": 1818688745,
+      "busy_union_ns": 1818688745,
+      "internal_gap_ns": 1598120401,
+      "positive_gap_count": 96250,
+      "largest_gap_ns": 81299733
+    },
+    "gpu_memory_activity": {
+      "memset": {
+        "count": 22001,
+        "gpu_duration_ns": 23300240,
+        "bytes": 94209020
+      },
+      "copies_by_kind": [
+        {
+          "copyKind": 1,
+          "count": 12348,
+          "gpu_duration_ns": 8209310,
+          "bytes": 28172788
+        },
+        {
+          "copyKind": 2,
+          "count": 13670,
+          "gpu_duration_ns": 19626939,
+          "bytes": 35708028
+        },
+        {
+          "copyKind": 8,
+          "count": 7173,
+          "gpu_duration_ns": 15405299,
+          "bytes": 373096096
+        }
+      ]
+    },
+    "disjoint_internal_kernel_gap_partition": {
+      "window_start_ns": 6424618062,
+      "window_end_ns": 9694495472,
+      "total_internal_kernel_gap_ns": 1517730453,
+      "api_resident_gap_ns": 507476468,
+      "no_recorded_cuda_api_gap_ns": 1010253985,
+      "method": "Same sweep query and categories as before. Intersect single-thread, nonoverlapping API intervals with kernel complement within first-to-last kernel span; classify each resulting segment once. API interval sum and union both equal 2,228,436,768 ns. Correlation IDs remain globally unique.",
+      "partition": [
+        {
+          "category": "no_recorded_cuda_api",
+          "gap_duration_ns": 1010253985,
+          "api_calls_intersecting_gaps": 0
+        },
+        {
+          "category": "dtoh_metadata",
+          "gap_duration_ns": 121716226,
+          "api_calls_intersecting_gaps": 11235
+        },
+        {
+          "category": "module_load",
+          "gap_duration_ns": 82499348,
+          "api_calls_intersecting_gaps": 157
+        },
+        {
+          "category": "allocation",
+          "gap_duration_ns": 80275689,
+          "api_calls_intersecting_gaps": 8952
+        },
+        {
+          "category": "launch",
+          "gap_duration_ns": 70086788,
+          "api_calls_intersecting_gaps": 26794
+        },
+        {
+          "category": "stream_synchronize",
+          "gap_duration_ns": 33772360,
+          "api_calls_intersecting_gaps": 13605
+        },
+        {
+          "category": "dtoh_compaction_count",
+          "gap_duration_ns": 31798999,
+          "api_calls_intersecting_gaps": 2369
+        },
+        {
+          "category": "memset",
+          "gap_duration_ns": 31129383,
+          "api_calls_intersecting_gaps": 16359
+        },
+        {
+          "category": "device_to_device_copy",
+          "gap_duration_ns": 22571608,
+          "api_calls_intersecting_gaps": 6267
+        },
+        {
+          "category": "upload",
+          "gap_duration_ns": 14696471,
+          "api_calls_intersecting_gaps": 6890
+        },
+        {
+          "category": "event_management",
+          "gap_duration_ns": 12399173,
+          "api_calls_intersecting_gaps": 32468
+        },
+        {
+          "category": "free",
+          "gap_duration_ns": 6517799,
+          "api_calls_intersecting_gaps": 5351
+        },
+        {
+          "category": "dtoh_payload_other",
+          "gap_duration_ns": 12624,
+          "api_calls_intersecting_gaps": 1
+        }
+      ],
+      "interpretation": [
+        "No-recorded-CUDA-API is a residual, not measured CPU-on-core time: it can include host computation, wrapper/allocation/cache work outside traced CUDA APIs, untraced driver work, scheduling, profiler overhead and GPU memory activity.",
+        "API attribution reports where the host thread resides while no kernel executes, not causality or avoidable overhead; kernels can be absent because memory activity is executing.",
+        "Final dispatch synchronization versus optional timing cannot be identified without call stacks or annotations. Stream and event synchronization are reported separately; event_management includes create/record/query/destroy and is not assumed to be optional timing. Terminal synchronization after the last kernel is outside this partition.",
+        "The reproducible sweep query assumes globally unique correlation IDs and nonoverlapping CUDA API intervals on one thread, both observed in the before and after reports. Recheck these preconditions before applying to another capture."
+      ],
+      "reproducible_sql": "WITH kernels AS (\n SELECT k.start,k.end,k.correlationId,s.value name FROM CUPTI_ACTIVITY_KIND_KERNEL k JOIN StringIds s ON s.id=k.shortName\n), submission_events AS (\n SELECT correlationId,'kernel' kind,name,0 bytes FROM kernels\n UNION ALL SELECT correlationId,'dtoh','',bytes FROM CUPTI_ACTIVITY_KIND_MEMCPY WHERE copyKind=2\n), preceding AS (\n SELECT *,LAG(kind) OVER (ORDER BY correlationId) prior_kind,LAG(name) OVER (ORDER BY correlationId) prior_name FROM submission_events\n), dtoh_protocol AS (\n SELECT correlationId,CASE WHEN prior_kind='kernel' AND prior_name LIKE '__cq_sequence_dispatch_%' THEN 'dtoh_metadata'\n WHEN bytes=8 AND prior_kind='kernel' AND prior_name LIKE 'scatter_selected%' THEN 'dtoh_compaction_count'\n ELSE 'dtoh_payload_other' END category FROM preceding WHERE kind='dtoh'\n), api AS (\n SELECT r.start,r.end,r.correlationId,CASE\n WHEN s.value='cuMemcpyDtoHAsync_v2' THEN d.category\n WHEN s.value='cuStreamSynchronize' THEN 'stream_synchronize'\n WHEN s.value='cuEventSynchronize' THEN 'event_synchronize'\n WHEN s.value IN ('cuEventCreate','cuEventRecord','cuEventDestroy_v2','cuEventQuery','cuEventElapsedTime') THEN 'event_management'\n WHEN s.value IN ('cuMemAllocAsync','cuMemAlloc_v2','cuMemAllocHost_v2') THEN 'allocation'\n WHEN s.value IN ('cuMemFreeAsync','cuMemFree_v2','cuMemFreeHost') THEN 'free'\n WHEN s.value LIKE 'cuMemset%' THEN 'memset'\n WHEN s.value='cuLaunchKernel' THEN 'launch'\n WHEN s.value='cuMemcpyHtoDAsync_v2' THEN 'upload'\n WHEN s.value='cuMemcpyDtoDAsync_v2' THEN 'device_to_device_copy'\n WHEN s.value='cuModuleLoadData' THEN 'module_load'\n ELSE 'other_api' END category\n FROM CUPTI_ACTIVITY_KIND_RUNTIME r JOIN StringIds s ON s.id=r.nameId LEFT JOIN dtoh_protocol d ON d.correlationId=r.correlationId\n), boundaries AS (\n SELECT start t,correlationId+1 api_id,0 kernel FROM api UNION ALL SELECT end,-(correlationId+1),0 FROM api\n UNION ALL SELECT start,0,1 FROM kernels UNION ALL SELECT end,0,-1 FROM kernels\n), grouped AS (\n SELECT t,SUM(api_id) api_id,SUM(kernel) kernel FROM boundaries GROUP BY t\n), segments AS (\n SELECT t,LEAD(t) OVER (ORDER BY t) next_t,SUM(api_id) OVER (ORDER BY t) active_api,SUM(kernel) OVER (ORDER BY t) active_kernel FROM grouped\n), bounds AS (\n SELECT MIN(start) first_kernel,MAX(end) last_kernel FROM kernels\n)\nSELECT COALESCE(a.category,'no_recorded_cuda_api') category,SUM(g.next_t-g.t) gap_duration_ns,\n COUNT(DISTINCT CASE WHEN g.active_api<>0 THEN g.active_api END) api_calls_intersecting_gaps\nFROM segments g CROSS JOIN bounds b LEFT JOIN api a ON a.correlationId=g.active_api-1\nWHERE g.active_kernel=0 AND g.t>=b.first_kernel AND g.next_t<=b.last_kernel\nGROUP BY category ORDER BY gap_duration_ns DESC"
+    },
+    "stream_sync_immediately_following_dtoh_protocol": {
+      "classification": "Attribute a stream synchronization only when the immediately preceding CUDA API record is a DtoH transfer classified by kernel/copy submission order; otherwise leave unattributed. Duration intersections use the same internal kernel-gap window.",
+      "by_protocol": {
+        "compaction_count": {
+          "calls": 2369,
+          "api_duration_ns": 3972157,
+          "internal_gap_duration_ns": 3971315,
+          "calls_intersecting_internal_gaps": 2368
+        },
+        "metadata": {
+          "calls": 11235,
+          "api_duration_ns": 29706864,
+          "internal_gap_duration_ns": 29706864,
+          "calls_intersecting_internal_gaps": 11235
+        },
+        "not_immediately_after_dtoh": {
+          "calls": 2,
+          "api_duration_ns": 96745,
+          "internal_gap_duration_ns": 93249,
+          "calls_intersecting_internal_gaps": 1
+        },
+        "payload_other": {
+          "calls": 66,
+          "api_duration_ns": 111882,
+          "internal_gap_duration_ns": 932,
+          "calls_intersecting_internal_gaps": 1
+        }
+      },
+      "reproducible_sql": "WITH kernels AS (SELECT k.correlationId,s.value name FROM CUPTI_ACTIVITY_KIND_KERNEL k JOIN StringIds s ON s.id=k.shortName),\nevents AS (SELECT correlationId,'kernel' kind,name,0 bytes FROM kernels UNION ALL SELECT correlationId,'dtoh','',bytes FROM CUPTI_ACTIVITY_KIND_MEMCPY WHERE copyKind=2),\npreceding AS (SELECT *,LAG(kind) OVER (ORDER BY correlationId) prior_kind,LAG(name) OVER (ORDER BY correlationId) prior_name FROM events),\nprotocol AS (SELECT correlationId,CASE WHEN prior_kind='kernel' AND prior_name LIKE '__cq_sequence_dispatch_%' THEN 'metadata' WHEN bytes=8 AND prior_kind='kernel' AND prior_name LIKE 'scatter_selected%' THEN 'compaction_count' ELSE 'payload_other' END kind FROM preceding WHERE kind='dtoh'),\nordered_api AS (SELECT r.start,r.end,r.correlationId,s.value name,LAG(r.correlationId) OVER (ORDER BY r.start) prior_correlation FROM CUPTI_ACTIVITY_KIND_RUNTIME r JOIN StringIds s ON s.id=r.nameId)\nSELECT a.start,a.end,a.correlationId,COALESCE(p.kind,'not_immediately_after_dtoh') protocol FROM ordered_api a LEFT JOIN protocol p ON p.correlationId=a.prior_correlation WHERE a.name='cuStreamSynchronize' ORDER BY a.start"
+    },
+    "evaluation_window": {
+      "exact_start_ns": null,
+      "exact_end_ns": null,
+      "reason": "No NVTX events, CPU trace disabled, stdout timing is duration-only. Kernel sequence locates execution and final downloads but cannot recover exact Instant timestamps.",
+      "first_evaluation_module_load_start_ns": 6419579382,
+      "first_kernel_start_ns": 6424618062,
+      "last_kernel_end_ns": 9694495472,
+      "last_dtoh_gpu_end_ns": 9839137358,
+      "last_dtoh_api_end_ns": 9839139677,
+      "last_recorded_api_end_ns": 9969703906,
+      "inferred_start_bounds_ns": [
+        6414842177,
+        6419579382
+      ],
+      "inferred_end_bounds_ns": [
+        9839139677,
+        9843876882
+      ],
+      "bounds_status": "[INFERENCE] Conditional on first module load and final DtoH both lying within GPU evaluation. Use reported 3.424297 s plus 500 ns rounding allowance. These are bounds, not exact timer timestamps; API aggregates are full-profile.",
+      "bounds_formula": "start >= last_DtoH_API_end - duration_max; start <= first_evaluation_module_load_start; end >= last_DtoH_API_end; end <= first_evaluation_module_load_start + duration_max"
+    },
+    "before_after_comparison": {
+      "timing": {
+        "profiled_before_seconds": 3.897107,
+        "profiled_after_seconds": 3.424297,
+        "profiled_reduction_seconds": 0.47281,
+        "profiled_reduction_fraction": 0.12132333035762169,
+        "untraced_before_seconds": 3.473414,
+        "untraced_after_seconds": 3.143608,
+        "untraced_reduction_seconds": 0.329806,
+        "untraced_reduction_fraction": 0.09495153759384858,
+        "untraced_evidence": "Timings supplied by HostOverhead; this analysis did not run or independently inspect an untraced benchmark."
+      },
+      "delta_after_minus_before": {
+        "cuda_api_calls": -192659,
+        "cuda_api_summed_duration_ns": -366110986,
+        "kernel_count": -5956,
+        "kernel_busy_ns": -141660912,
+        "kernel_span_ns": -453562842,
+        "internal_kernel_gap_ns": -311901930,
+        "dispatch_metadata_count": -1157,
+        "compaction_count_readbacks": -1256
+      },
+      "gap_delta_after_minus_before_ns": {
+        "allocation": -2079740,
+        "device_to_device_copy": -1726405,
+        "dtoh_compaction_count": -23951861,
+        "dtoh_metadata": 984166,
+        "dtoh_payload_other": 200,
+        "event_management": -73706052,
+        "event_synchronize": -28363159,
+        "free": 2826649,
+        "launch": -18075070,
+        "memset": -6940545,
+        "module_load": -6925898,
+        "no_recorded_cuda_api": -108584247,
+        "stream_synchronize": -30950324,
+        "upload": -14409644
+      },
+      "interpretation": "Kernel busy time falls by 141.660912 ms and internal kernel gaps by 311.901930 ms. Metadata dispatch/readback count falls by 1,157, but gap-resident metadata DtoH time rises by 0.984166 ms; fewer dispatch attempts did not produce measured metadata-gap reduction in this pair. Unique-count readbacks fall by 1,256 while fresh-count readbacks remain 1,132. Effects are combined changes plus profiling/run variability, not an isolated per-change causal experiment."
+    },
+    "round_batch_optimistic_bounds": {
+      "status": "[INFERENCE] Counterfactual upper bounds on selected observed gap budgets, not measured savings or evidence that batching can remove them. All bounds use this profiled run, not the untraced timing.",
+      "metadata_only_protocol": {
+        "metadata_dtoh_gap_ns": 121716226,
+        "immediately_following_stream_sync_gap_ns": 29706864,
+        "optimistic_removable_gap_ceiling_ns": 151423090,
+        "fraction_of_profiled_eval": 0.04422019760552312,
+        "counterfactual_eval_floor_seconds": 3.27287391,
+        "assumptions": "Erase every per-dispatch metadata readback and immediately following stream synchronization, replace with zero-cost checks, preserve all kernels and every other interval. Real batching retains checks and may add buffer/scan work. This bounds the direct metadata API-gap contribution only, not all possible effects of a full-round redesign."
+      },
+      "full_round_control_protocol": {
+        "optimistic_removable_gap_ceiling_ns": 187287585,
+        "fraction_of_profiled_eval": 0.05469373275740977,
+        "counterfactual_eval_floor_seconds": 3.237009415,
+        "included_disjoint_categories": [
+          "dtoh_metadata",
+          "dtoh_compaction_count",
+          "stream_synchronize"
+        ],
+        "assumptions": "Even more optimistically erase all metadata and compaction-count readback gap residence plus every in-window stream synchronization, including unrelated ones. Keep kernel work and all remaining gaps unchanged. A round batch would retain at least a round-end observation; host counts also drive dependent allocation, admission and subsequent work, so this is an upper budget rather than an implementation prediction."
+      },
+      "all_internal_gap_envelope": {
+        "optimistic_removable_gap_ceiling_ns": 1517730453,
+        "counterfactual_eval_floor_seconds": 1.906566547,
+        "optimistic_speedup_ceiling": 1.7960542764102112,
+        "assumptions": "Delete every internal kernel gap while retaining all kernels and the measured time outside the first-to-last kernel span. This deliberately includes module loads, allocations, memory operations, unrelated host work and untraced intervals. It is a loose global envelope, not batching-attributable headroom; evidence cannot assign the 1.010253985 s no-API residual to round batching."
+      }
+    },
+    "limitations": [
+      "Capture includes fact loading, CUDA initialization, CPU mini reference, GPU evaluation, comparison/output and process/thread-local teardown. Aggregate API totals include calls outside the reported 3.424297 s evaluation, notably module unload and teardown synchronization.",
+      "Host API durations overlap GPU kernels and memory activity. Never sum API durations plus GPU durations as a disjoint wall-time breakdown; API elapsed time is not CPU-on-core time.",
+      "Kernel gaps mean no recorded kernel executing between first and last kernels. They can contain memory transfers, memsets, CPU work, module setup, driver waits or profiler overhead; they are not all avoidable host overhead.",
+      "All-recorded-activity gaps exclude recorded kernels, copies and memsets, but do not measure SM occupancy, unrelated GPU processes or unrecorded device work.",
+      "Protocol attribution is inferred from current runtime source and observed kernel sequence; profiled executable debug/source identity was not established. Allocation/free and event calls are actual CUDA API calls, not logical buffer-operation counts.",
+      "Nsight warns installed CUDA driver 13.0 is unsupported by this build; CUDA tracing uses libraries for driver 12.9. No NVTX events were collected despite NVTX collection enabled.",
+      "Profile overhead is present. These measurements describe this profiled run, not an unprofiled latency prediction."
+    ],
+    "source_evidence": [
+      {
+        "path": "experiments/gpu/doop/src/main.rs",
+        "lines": "11-34",
+        "evidence": "Prewarms thread_pool, times mini and GPU separately, includes upload/layout/execution/download and output decode."
+      },
+      {
+        "path": "experiments/gpu/sequence/core/src/emit.rs",
+        "symbol": "meta_words / store_meta.to_host",
+        "evidence": "meta_words = 4 + chains.len(); Buffer<u32> downloaded after every dispatch; checks overflow and required capacity, may retry."
+      },
+      {
+        "path": "experiments/gpu/datalog-runtime/src/runs.rs",
+        "symbol": "read_count / sort / subtract",
+        "evidence": "Copies one u64 (8 bytes) to stack, then stream.synchronize; used for unique and fresh compaction counts."
+      },
+      {
+        "path": "experiments/gpu/device-columns/src/memory.rs",
+        "symbol": "Buffer::to_host_prefix",
+        "evidence": "Copies len*sizeof(T) bytes into Vec then synchronizes stream."
+      },
+      {
+        "path": "experiments/gpu/datalog/src/print.rs",
+        "lines": "242-274",
+        "evidence": "Explicit output state.to_host and host unpack/codec decode before returning GPU run result."
+      }
+    ],
+    "reproducible_sql": {
+      "api_by_name": "SELECT s.value name,count(*) count,sum(r.end-r.start) total_ns,min(r.start) first_ns,max(r.end) last_ns FROM CUPTI_ACTIVITY_KIND_RUNTIME r JOIN StringIds s ON s.id=r.nameId GROUP BY r.nameId ORDER BY total_ns DESC",
+      "dtoh_by_size": "SELECT m.bytes,count(*) count,sum(m.end-m.start) gpu_ns,sum(r.end-r.start) api_ns,sum(m.bytes) total_bytes FROM CUPTI_ACTIVITY_KIND_MEMCPY m JOIN CUPTI_ACTIVITY_KIND_RUNTIME r ON r.correlationId=m.correlationId WHERE m.copyKind=2 GROUP BY m.bytes ORDER BY count DESC",
+      "kernel_busy_and_gaps": "WITH intervals AS (SELECT start,end FROM CUPTI_ACTIVITY_KIND_KERNEL WHERE deviceId=0), ordered AS (\nSELECT start,end,MAX(end) OVER (ORDER BY start,end ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) prior_end FROM intervals)\nSELECT COUNT(*) event_count,MIN(start) first_ns,MAX(end) last_ns,MAX(end)-MIN(start) span_ns,\nSUM(end-start) summed_duration_ns,\nSUM(MAX(0,end-MAX(start,COALESCE(prior_end,start)))) busy_union_ns,\nSUM(CASE WHEN start>prior_end THEN start-prior_end ELSE 0 END) internal_gap_ns,\nSUM(CASE WHEN start>prior_end THEN 1 ELSE 0 END) positive_gap_count,\nMAX(CASE WHEN start>prior_end THEN start-prior_end ELSE 0 END) largest_gap_ns FROM ordered",
+      "all_gpu_activity_busy_and_gaps": "WITH intervals AS (SELECT start,end FROM CUPTI_ACTIVITY_KIND_KERNEL WHERE deviceId=0 UNION ALL SELECT start,end FROM CUPTI_ACTIVITY_KIND_MEMCPY WHERE deviceId=0 UNION ALL SELECT start,end FROM CUPTI_ACTIVITY_KIND_MEMSET WHERE deviceId=0), ordered AS (\nSELECT start,end,MAX(end) OVER (ORDER BY start,end ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) prior_end FROM intervals)\nSELECT COUNT(*) event_count,MIN(start) first_ns,MAX(end) last_ns,MAX(end)-MIN(start) span_ns,\nSUM(end-start) summed_duration_ns,\nSUM(MAX(0,end-MAX(start,COALESCE(prior_end,start)))) busy_union_ns,\nSUM(CASE WHEN start>prior_end THEN start-prior_end ELSE 0 END) internal_gap_ns,\nSUM(CASE WHEN start>prior_end THEN 1 ELSE 0 END) positive_gap_count,\nMAX(CASE WHEN start>prior_end THEN start-prior_end ELSE 0 END) largest_gap_ns FROM ordered",
+      "dtoh_preceding_kernel_or_copy": "WITH ordered AS (\nSELECT correlationId, 'kernel' kind, 0 bytes, s.value name, 0 api_ns, k.end-k.start gpu_ns\nFROM CUPTI_ACTIVITY_KIND_KERNEL k JOIN StringIds s ON s.id=k.shortName\nUNION ALL\nSELECT m.correlationId,'dtoh',m.bytes,'',r.end-r.start,m.end-m.start\nFROM CUPTI_ACTIVITY_KIND_MEMCPY m JOIN CUPTI_ACTIVITY_KIND_RUNTIME r ON r.correlationId=m.correlationId WHERE m.copyKind=2),\nmarked AS (SELECT *,LAG(kind) OVER (ORDER BY correlationId) prior_kind,LAG(name) OVER (ORDER BY correlationId) prior_name FROM ordered)\nSELECT bytes,prior_kind,CASE WHEN prior_name LIKE '__cq_sequence_dispatch_%' THEN 'sequence_dispatch' WHEN prior_name LIKE 'scatter_selected%' THEN 'scatter_selected' ELSE prior_name END prior_kernel,\nCOUNT(*) count,SUM(api_ns) api_ns,SUM(gpu_ns) gpu_ns FROM marked WHERE kind='dtoh' GROUP BY bytes,prior_kind,prior_kernel ORDER BY count DESC",
+      "compaction_unique_vs_fresh_counts": "WITH kernels AS (SELECT k.correlationId,s.value name FROM CUPTI_ACTIVITY_KIND_KERNEL k JOIN StringIds s ON s.id=k.shortName),\nevents AS (SELECT correlationId,'kernel' kind,name,0 bytes,0 api_ns FROM kernels UNION ALL SELECT m.correlationId,'dtoh','',m.bytes,r.end-r.start FROM CUPTI_ACTIVITY_KIND_MEMCPY m JOIN CUPTI_ACTIVITY_KIND_RUNTIME r ON r.correlationId=m.correlationId WHERE m.copyKind=2),\nordered AS (SELECT *,LAG(kind) OVER (ORDER BY correlationId) prior_kind,LAG(name) OVER (ORDER BY correlationId) prior_name,MAX(CASE WHEN name LIKE 'mark_adjacent_unique%' OR name LIKE 'mark_flagged%' THEN correlationId END) OVER (ORDER BY correlationId) marker FROM events)\nSELECT CASE WHEN k.name LIKE 'mark_adjacent_unique%' THEN 'unique_count' WHEN k.name LIKE 'mark_flagged%' THEN 'fresh_count' ELSE k.name END protocol,COUNT(*) count,SUM(o.api_ns) api_ns FROM ordered o JOIN kernels k ON k.correlationId=o.marker WHERE o.kind='dtoh' AND o.bytes=8 AND o.prior_kind='kernel' AND o.prior_name LIKE 'scatter_selected%' GROUP BY protocol",
+      "dtoh_api_kernel_overlap": "WITH boundary AS (\nSELECT r.start t,1 dh,0 kernel FROM CUPTI_ACTIVITY_KIND_RUNTIME r JOIN StringIds s ON s.id=r.nameId WHERE s.value='cuMemcpyDtoHAsync_v2'\nUNION ALL SELECT r.end,-1,0 FROM CUPTI_ACTIVITY_KIND_RUNTIME r JOIN StringIds s ON s.id=r.nameId WHERE s.value='cuMemcpyDtoHAsync_v2'\nUNION ALL SELECT start,0,1 FROM CUPTI_ACTIVITY_KIND_KERNEL\nUNION ALL SELECT end,0,-1 FROM CUPTI_ACTIVITY_KIND_KERNEL),\ngrouped AS (SELECT t,SUM(dh) dh,SUM(kernel) kernel FROM boundary GROUP BY t),\nsegments AS (SELECT t,LEAD(t) OVER (ORDER BY t) next_t,SUM(dh) OVER (ORDER BY t) active_dtoh,SUM(kernel) OVER (ORDER BY t) active_kernel FROM grouped)\nSELECT SUM(next_t-t) overlap_ns FROM segments WHERE active_dtoh>0 AND active_kernel>0",
+      "largest_kernel_gaps": "WITH k AS (SELECT start,end,s.value name,LAG(end) OVER (ORDER BY start) prior_end,LAG(s.value) OVER (ORDER BY start) prior_name FROM CUPTI_ACTIVITY_KIND_KERNEL k JOIN StringIds s ON s.id=k.shortName)\nSELECT prior_end,start,start-prior_end gap_ns,prior_name,name FROM k WHERE start>prior_end ORDER BY gap_ns DESC LIMIT 10",
+      "stdout": "SELECT f.value filename,c.value content FROM ProcessStreams p JOIN StringIds f ON f.id=p.filenameId JOIN StringIds c ON c.id=p.contentId",
+      "diagnostics": "SELECT severity,text FROM DIAGNOSTIC_EVENT"
+    }
+  },
+  "scope_decisions": {
+    "full_round_pending_batch_validation": "Explicitly excluded by integrator; see after.round_batch_optimistic_bounds. These are optimistic direct protocol residence bounds, not measured batching savings.",
+    "admission": "Unique and fresh readbacks retained; no uninitialized capacity tail or sentinel scheme introduced.",
+    "pool": "Existing stream-ordered arena reuse retained; no new allocator introduced."
+  },
+  "verification": [
+    {
+      "command": "CUDA_HOME=/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0 BINDGEN_EXTRA_CLANG_ARGS=-I/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/math_libs/13.0/targets/x86_64-linux/include cargo oxide build --arch sm_89 -- --release --bin doop-gpu --bin printer-smoke",
+      "cwd": "experiments/gpu",
+      "result": "passed"
+    },
+    {
+      "command": "cargo oxide test --arch sm_89 -- --release -p gpu-datalog-runtime -p cq-gpu-datalog-core -p cq-gpu-datalog -p cq-gpu-sequence",
+      "cwd": "experiments/gpu",
+      "environment": "same CUDA_HOME and BINDGEN_EXTRA_CLANG_ARGS as build",
+      "result": "passed",
+      "passed": 102,
+      "ignored": 2,
+      "highlights": [
+        "GPU Datalog full oracle fixtures",
+        "symbols and wide rows",
+        "run_holes: 15 passed, including previous-count growing/shrinking/empty/retry and retained batches",
+        "known-unique sort u64/u128/3\u20135 lanes without readbacks",
+        "H01 SF1/SF10 and H05 SF1 conformance"
+      ]
+    },
+    {
+      "command": "./target/release/printer-smoke",
+      "cwd": "experiments/gpu",
+      "result": "passed",
+      "stdout": "smoke exact=true input_rows=5 answer_rows=4\nsmoke exact=true input_rows=0 answer_rows=0\n"
+    },
+    {
+      "command": "./target/release/doop-gpu /tmp/doop-data/cassandra",
+      "cwd": "experiments/gpu",
+      "result": "passed",
+      "comparison": "exact full-tuple sets, all 26 outputs",
+      "gpu_evaluation_seconds": 3.143608
+    },
+    {
+      "command": "cargo test --release -p cq-lang-sequence -p cq-sequence-pull",
+      "cwd": ".",
+      "result": "passed",
+      "passed": 97,
+      "suites": 8
+    },
+    {
+      "command": "cargo test --release --manifest-path features/sequence-rewrites/Cargo.toml -p cq-sequence-rewrites -p cq-sequence-rewrite-passes",
+      "cwd": ".",
+      "result": "passed",
+      "passed": 99,
+      "suites": 8
+    }
+  ],
+  "api_comparison": {
+    "dtoh": {
+      "before_count": 16083,
+      "after_count": 13670,
+      "removed_count": 2413,
+      "before_duration_ns": 1922449521,
+      "after_duration_ns": 1725273610
+    },
+    "stream_sync": {
+      "before_count": 24457,
+      "after_count": 13672,
+      "removed_count": 10785,
+      "before_duration_ns": 64838697,
+      "after_duration_ns": 33887648
+    },
+    "event_sync": {
+      "before_count": 66981,
+      "after_count": 5,
+      "removed_count": 66976,
+      "before_duration_ns": 28373420,
+      "after_duration_ns": 10390
+    },
+    "device_alloc": {
+      "before_count": 13908,
+      "after_count": 12651,
+      "removed_count": 1257,
+      "before_duration_ns": 84007057,
+      "after_duration_ns": 83624019
+    },
+    "device_free": {
+      "before_count": 13908,
+      "after_count": 12651,
+      "removed_count": 1257,
+      "before_duration_ns": 13598871,
+      "after_duration_ns": 16426422
+    },
+    "pinned_host_alloc": {
+      "before_count": 4,
+      "after_count": 4,
+      "removed_count": 0,
+      "before_duration_ns": 4241292,
+      "after_duration_ns": 4480445
+    },
+    "pinned_host_free": {
+      "before_count": 4,
+      "after_count": 4,
+      "removed_count": 0,
+      "before_duration_ns": 1634082,
+      "after_duration_ns": 1732803
+    },
+    "memset": {
+      "before_count": 23158,
+      "after_count": 22001,
+      "removed_count": 1157,
+      "before_duration_ns": 53099127,
+      "after_duration_ns": 46759519
+    },
+    "kernel_launch": {
+      "before_count": 47015,
+      "after_count": 41059,
+      "removed_count": 5956,
+      "before_duration_ns": 148612514,
+      "after_duration_ns": 123297600
+    },
+    "event_record": {
+      "before_count": 88069,
+      "after_count": 51104,
+      "removed_count": 36965,
+      "before_duration_ns": 71987877,
+      "after_duration_ns": 18802666
+    }
+  },
+  "attribution": {
+    "invocations": {
+      "count": 8372,
+      "evidence": "[INFERENCE] 66,976 removed cuEventSynchronize calls / eight calls per four elapsed-time queries; also stream-sync reduction 10,785 minus DtoH reduction 2,413 = 8,372."
+    },
+    "sequence_dispatch_attempts": {
+      "before": 12392,
+      "after": 11235,
+      "removed": 1157,
+      "baseline_extra_count_probe_attempts": 4020,
+      "after_extra_retry_attempts": 2863,
+      "note": "[INFERENCE] one metadata readback per attempt and one successful attempt per invocation; retries are not admitted."
+    },
+    "layout_unique_counts_removed": 1256,
+    "fresh_count_readbacks_unchanged": 1132,
+    "residual": "After internal kernel gaps total 1.517730453s; 1.010253985s has no recorded CUDA API and is not attributed to CPU execution or batching. Direct metadata DtoH gap residence is 0.121716226s, not 1.622848350s summed API time which overlaps kernel execution.",
+    "baseline_non_kernel_explanation": "The measured baseline first-to-last kernel span has 1.829632383s gaps (a trace-based counterpart to the earlier approximate 1.77s). The disjoint partition lives in before.disjoint_internal_kernel_gap_partition; do not combine untraced evaluation time and profiled kernel time to claim an exact partition."
+  },
+  "commands": {
+    "profile_before": "nsys profile --trace=cuda,nvtx --sample=none --cpuctxsw=none --force-overwrite=true -o /tmp/doop-host-before ./target/release/doop-gpu /tmp/doop-data/cassandra",
+    "profile_after": "nsys profile --trace=cuda,nvtx --sample=none --cpuctxsw=none --force-overwrite=true -o /tmp/doop-host-after ./target/release/doop-gpu /tmp/doop-data/cassandra",
+    "profile_cwd": "experiments/gpu",
+    "notes": "No diagnostic tracing during timings. SQL queries and profiler limitation/unsupported-driver warning are retained in the nested summaries."
+  }
+}

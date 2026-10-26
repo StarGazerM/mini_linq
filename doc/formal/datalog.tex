@@ -1181,6 +1181,15 @@ with $s_j=64L-\sum_{i\le j}w_i$.
  \text{device admission and merge follow \textsc{DL-RunAdmission} and \textsc{DL-RunLayout} on words}}
  {\mathrm{unpack}(\text{device state})=\text{the CPU run state after the same candidate batches}}
 \end{mathpar}
+A layout run built from an admitted delta permutes columns of a run whose
+words are pairwise distinct; the permutation is injective, so its image is
+also pairwise distinct and sorting alone yields a sorted unique run of the same
+known length, with no compaction and no count readback. Uploads and admission
+still deduplicate.
+\begin{mathpar}
+\Rule{DL-SortKnownUnique}{x_0\ldots x_{n-1}\text{ initialized and pairwise distinct}}
+ {\mathrm{sort}(x)\text{ is sorted, unique, of length }n}
+\end{mathpar}
 Live counts may be read back to size sorts and to test termination; such
 readbacks are recorded realization cost, not semantic steps.
 

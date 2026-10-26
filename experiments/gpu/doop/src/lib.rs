@@ -21,7 +21,11 @@ doop_shared::doop_engine!(run, pipeline {
         physical = [::cq_gpu_sequence::capture_constants];
         structures = [::cq_gpu_datalog::bind_inputs, ::cq_gpu_sequence::bind_runs];
         sequence = ::mini_linq::passes::sequence;
-        decompose = [::cq_gpu_sequence::plan];
+        // Each arena hole reuses only its last validated count as a capacity hint.
+        decompose = [
+            ::cq_gpu_sequence::plan,
+            ::cq_sequence_rewrites::output(reserve_previous),
+        ];
         grade = ::cq_gpu_sequence::machine_grade;
         print = ::cq_gpu_sequence::translate_arena;
     };

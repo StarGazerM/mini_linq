@@ -1273,6 +1273,11 @@ pub(crate) fn translate_impl(
             "GPU Sequence translation requires checked gpu grading",
         ));
     }
+    if arena.is_none()
+        && program.sequence.output == Some(OutputProtocol::ReservePrevious)
+    {
+        return Err(error("reserve_previous requires the GPU arena terminal"));
+    }
     for (_, _, level) in &analysis.collectives {
         if level.last().is_some_and(|level| level == "device") {
             return Err(error(
@@ -2419,6 +2424,13 @@ pub(crate) fn translate_impl(
         };
         let initial = match (dispatch.concatenation.clone(), capacity) {
             (OutputProtocol::Count, _) => quote!(0usize),
+            // Formal rule GPU-ReservePrevious: a recorded previous-count hint is
+            // not a bound; validate full count and failure flags, then replay any
+            // undersized attempt against unchanged inputs before publication.
+            (OutputProtocol::ReservePrevious, _) if arena.is_some() && final_output =>
+                quote!(__cq_arena.previous_count()),
+            (OutputProtocol::ReservePrevious, _) =>
+                return Err(error("reserve_previous requires a final GPU arena dispatch")),
             (OutputProtocol::Bounded, Some(capacity)) => quote!(#capacity),
             (OutputProtocol::Bounded, None) => {
                 return Err(error("bounded dispatch requires its recorded capacity"));
@@ -2467,6 +2479,8 @@ pub(crate) fn translate_impl(
                     stringify!(#module_name), stringify!(#kernel_name), __cq_capacity, __cq_required);
             }
         });
+        let remember_count = (dispatch.concatenation == OutputProtocol::ReservePrevious)
+            .then(|| quote!(__cq_arena.record_count(#store_length);));
         launches.push(quote! {
             #packing_setup
             #(#host_domains)*
@@ -2495,6 +2509,7 @@ pub(crate) fn translate_impl(
                 }
                 break (#store_rows,#store_begin,#store_offsets,#output_keys,#store_meta,__cq_counts[#logical] as usize);
             };
+            #remember_count
         });
         if final_output {
             output = Some(if arena.is_some() {
@@ -2692,6 +2707,13 @@ pub(crate) fn translate_impl(
     let setup = &compiler.rows.setup;
     let build = &compiler.rows.build;
     let arena_setup = arena.zip(arena_packing.as_ref()).map(|(expression, packing)| packing.setup(expression));
+    // Formal rule GPU-Arena-Timing: optional measurements alone add a terminal fence;
+    // checked dispatch metadata and retained stream-ordered owners suffice otherwise.
+    let timing_enabled = if arena.is_some() {
+        quote!(::cq_gpu_runtime::arena_timing_enabled())
+    } else {
+        quote!(true)
+    };
     syn::parse2(quote!({
         #[::cuda_device::cuda_module]
         mod #module_name {
@@ -2721,25 +2743,34 @@ pub(crate) fn translate_impl(
                 *cache=Some((__cq_pool.context().clone(),module.clone()));
                 Ok(module)
             })?;
-            let __cq_timing_wall = ::std::time::Instant::now();
-            let __cq_timing_start = __cq_pool.stream().record_event(
-                Some(::cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
+            let __cq_timing_enabled = #timing_enabled;
+            let __cq_timing_wall = __cq_timing_enabled.then(::std::time::Instant::now);
+            let __cq_timing_start = if __cq_timing_enabled {
+                Some(__cq_pool.stream().record_event(
+                    Some(::cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?)
+            } else { None };
             #build
             #(#launches)*
-            let __cq_timing_expanded=__cq_pool.stream().record_event(
-                Some(::cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
+            let __cq_timing_expanded = if __cq_timing_enabled {
+                Some(__cq_pool.stream().record_event(
+                    Some(::cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?)
+            } else { None };
             #output
-            let __cq_timing_finished=__cq_pool.stream().record_event(
-                Some(::cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
-            __cq_pool.stream().synchronize()?;
-            ::cq_gpu_runtime::publish_timings(::cq_gpu_runtime::Timings {
-                build_ms:__cq_timing_start.elapsed_ms(&__cq_timing_built)? as f64,
-                kernel_ms:__cq_timing_built.elapsed_ms(&__cq_timing_expanded)? as f64,
-                dedup_ms:__cq_timing_expanded.elapsed_ms(&__cq_timing_finished)? as f64,
-                total_ms:__cq_timing_start.elapsed_ms(&__cq_timing_finished)? as f64,
-                wall_ms:__cq_timing_wall.elapsed().as_secs_f64()*1000.0,
-                ..::cq_gpu_runtime::Timings::default()
-            });
+            if let (Some(wall), Some(start), Some(built), Some(expanded)) =
+                (__cq_timing_wall, __cq_timing_start, __cq_timing_built, __cq_timing_expanded)
+            {
+                let finished = __cq_pool.stream().record_event(
+                    Some(::cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
+                __cq_pool.stream().synchronize()?;
+                ::cq_gpu_runtime::publish_timings(::cq_gpu_runtime::Timings {
+                    build_ms: start.elapsed_ms(&built)? as f64,
+                    kernel_ms: built.elapsed_ms(&expanded)? as f64,
+                    dedup_ms: expanded.elapsed_ms(&finished)? as f64,
+                    total_ms: start.elapsed_ms(&finished)? as f64,
+                    wall_ms: wall.elapsed().as_secs_f64()*1000.0,
+                    ..::cq_gpu_runtime::Timings::default()
+                });
+            }
             Ok(__cq_result)
         })().expect("GPU Sequence execution failed")
     }))

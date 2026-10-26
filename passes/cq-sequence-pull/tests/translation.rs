@@ -31,6 +31,28 @@ fn assert_answers(
 }
 
 #[test]
+fn reserve_previous_rejects_non_arena_pull_terminals() {
+    let structures = pipeline(quote! {
+        struct Query;
+        relation R(a:i32);
+        answer(a) :- R(a);
+    });
+    let mut program = cq_sequence_lowering::compile(&structures).unwrap();
+    program.sequence.output = Some(cq_lang_sequence::OutputProtocol::ReservePrevious);
+    let analysis = contract::check(&program).unwrap();
+    for result in [
+        cq_sequence_pull::translate(&program, &analysis),
+        cq_sequence_pull::translate_profile(&program, &analysis),
+    ] {
+        let error = result.unwrap_err().to_string();
+        assert!(
+            error.contains("output reserve_previous requires an arena terminal"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
 fn cq_pipeline_answers_equal_independent_expected_sets() {
     let data = quote! {
         let L = vec![(1i32, 2i32), (1, 2), (2, 3), (3, 4)];

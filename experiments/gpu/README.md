@@ -82,8 +82,10 @@ and returns a cheap immutable `Run` delta while accepting it internally.
 It reads back only the unique count and fresh count (empty batches and an empty
 accepted state omit unnecessary readbacks). Ratio-four merges retain sorted,
 unique, pairwise-disjoint runs. For another layout, permute the delta with
-`Packing::permute_device`, canonicalize with `DeviceRuns::sort_unique`, and
-use unsafe `append_sorted` after proving disjointness. `RunView` and device
+`Packing::permute_device`, sort with unsafe `DeviceRuns::sort_known_unique`
+(the column permutation preserves uniqueness and cardinality), and use unsafe
+`append_sorted` after proving disjointness. This path needs no unique-count
+readback or compaction; arbitrary inputs still use `sort_unique`. `RunView` and device
 `runs::range` support inclusive prefix searches without materialization.
 All work and frees use the pool's legacy default stream.
 
@@ -112,8 +114,19 @@ a `CandidateBatch` (u64 lanes, native low-first for u128 and most-significant
 first for larger words; length; packing; retained owners). The hole must be
 consumer-canonical: the batch is a candidate bag for `DeviceRuns::admit`.
 Sizing keeps the dispatch's output protocol, so each attempt reads its
-metadata back and the invocation ends with one stream synchronize; candidate
-rows are never downloaded.
+metadata back; candidate rows are never downloaded. Arena invocations omit
+the redundant final stream synchronize and phase timing events by default.
+`cq_gpu_runtime::enable_arena_timing(true)` opts the current thread into those
+events, the final fence, and `take_last_timings()` publication. Required metadata
+validation and device overflow/failure checks are unchanged; retained owners
+and the pool stream order protect asynchronous work.
+The explicitly recorded `output reserve_previous` protocol is supported only by
+the arena terminal. Its initial capacity is the arena's last validated row count
+(zero on first use or after `clear`), not a proven bound. Each attempt counts all
+rows and checks sticky failure flags; an undersized attempt is discarded and
+replayed against the unchanged inputs at the required capacity before publication.
+Thus shrinking, growing, and empty rounds remain exact, and retained batches
+cannot be overwritten by subsequent leases. Other output protocols are unchanged.
 Declared run layouts also realize native keyed Host fallbacks: scan and keyed
 reader records remain distinct, and lookups reuse the supplied runs without
 building another index.
@@ -215,6 +228,11 @@ recorded execution order. Rust and negative clauses are never crossed. Seeds
 and variants with a delta beyond such a barrier retain written order. This is
 explicit program advice, not a GPU-specific Datalog compiler or printer rule;
 the default incremental policy remains written order.
+
+DOOP also explicitly selects the checked Sequence
+`::cq_sequence_rewrites::output(reserve_previous)` advice after GPU decomposition.
+This changes only the recorded terminal capacity protocol; it does not alter
+the rule order, dispatch geometry, candidate bag, or admitted tuple sets.
 
 ```sh
 GPU_DATALOG_TRACE_ROUNDS=1 cargo oxide run --arch sm_89 --bin doop-gpu -- /tmp/doop-data/cassandra

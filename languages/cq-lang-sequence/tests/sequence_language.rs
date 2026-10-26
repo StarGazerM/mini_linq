@@ -887,12 +887,44 @@ fn output_requires_final_store_and_bounded_capacity() {
         &program(quote!(a = store rows r; output bounded;)),
         "BE-Length",
     );
-    for protocol in [quote!(count), quote!(reserve), quote!(bounded)] {
+    for protocol in [
+        quote!(count),
+        quote!(reserve),
+        quote!(reserve_previous),
+        quote!(bounded),
+    ] {
         contract::check(&program(
             quote!(a = store capacity 8 rows r; output #protocol;),
         ))
         .unwrap();
     }
+}
+
+#[test]
+fn reserve_previous_round_trips_without_claiming_capacity() {
+    let p = program(quote!(a = store rows r; output reserve_previous;));
+    assert_eq!(p.sequence.output, Some(OutputProtocol::ReservePrevious));
+    assert_eq!(
+        OutputProtocol::ReservePrevious.to_token_stream().to_string(),
+        "reserve_previous"
+    );
+    assert_eq!(syn::parse2::<Program>(p.to_token_stream()).unwrap(), p);
+    let analysis = contract::check(&p).unwrap();
+    assert_eq!(
+        analysis.output,
+        Some(("a".into(), OutputProtocol::ReservePrevious))
+    );
+    reject(
+        &program(quote!(a = rows r; output reserve_previous;)),
+        "BE-Length",
+    );
+    let default = program(quote!(a = store rows r;));
+    assert_eq!(default.sequence.output, None);
+    assert_eq!(analysis.stores, contract::check(&default).unwrap().stores);
+    assert_eq!(
+        contract::check(&default).unwrap().output,
+        Some(("a".into(), OutputProtocol::Count))
+    );
 }
 
 #[test]
@@ -1724,6 +1756,13 @@ fn shared_checker_retains_source_analysis_across_candidate_exploration() {
     assert_eq!(
         reserved.output,
         Some(("out".into(), OutputProtocol::Reserve))
+    );
+    output.sequence.output = Some(OutputProtocol::ReservePrevious);
+    let previous = checker.check_shared(&output).unwrap();
+    assert!(!std::rc::Rc::ptr_eq(&reserved, &previous));
+    assert_eq!(
+        previous.output,
+        Some(("out".into(), OutputProtocol::ReservePrevious))
     );
     output.sequence.output = Some(OutputProtocol::Bounded);
     assert!(checker.check_shared(&output).is_err());

@@ -649,10 +649,11 @@ cq_lang_sequence::Obligation::Provider::capability	{"struct_field":{"resolved_pa
 cq_lang_sequence::Obligation::Provider::keys	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"resolved_path":{"args":null,"id":"alloc::string::String","path":"String"}}}],"constraints":[]}},"id":"alloc::vec::Vec","path":"Vec"}}}
 cq_lang_sequence::Obligation::Provider::provider	{"struct_field":{"resolved_path":{"args":null,"id":"alloc::string::String","path":"String"}}}
 cq_lang_sequence::Obligation::Provider::ty	{"struct_field":{"resolved_path":{"args":null,"id":"syn::ty::Type","path":"syn::Type"}}}
-cq_lang_sequence::OutputProtocol	{"enum":{"generics":{"params":[],"where_predicates":[]},"has_stripped_variants":false,"variants":["cq_lang_sequence::OutputProtocol::Count","cq_lang_sequence::OutputProtocol::Reserve","cq_lang_sequence::OutputProtocol::Bounded"]}}
+cq_lang_sequence::OutputProtocol	{"enum":{"generics":{"params":[],"where_predicates":[]},"has_stripped_variants":false,"variants":["cq_lang_sequence::OutputProtocol::Count","cq_lang_sequence::OutputProtocol::Reserve","cq_lang_sequence::OutputProtocol::ReservePrevious","cq_lang_sequence::OutputProtocol::Bounded"]}}
 cq_lang_sequence::OutputProtocol::Bounded	{"variant":{"discriminant":null,"kind":"plain"}}
 cq_lang_sequence::OutputProtocol::Count	{"variant":{"discriminant":null,"kind":"plain"}}
 cq_lang_sequence::OutputProtocol::Reserve	{"variant":{"discriminant":null,"kind":"plain"}}
+cq_lang_sequence::OutputProtocol::ReservePrevious	{"variant":{"discriminant":null,"kind":"plain"}}
 cq_lang_sequence::Program	{"struct":{"generics":{"params":[],"where_predicates":[]},"kind":{"plain":{"fields":["cq_lang_sequence::Program::structures","cq_lang_sequence::Program::sequence","cq_lang_sequence::Program::graded","cq_lang_sequence::Program::evidence"],"has_stripped_fields":false}}}}
 cq_lang_sequence::Program::evidence	{"struct_field":{"resolved_path":{"args":null,"id":"cq_lang_sequence::Evidence","path":"Evidence"}}}
 cq_lang_sequence::Program::graded	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"resolved_path":{"args":null,"id":"cq_lang_sequence::Graded","path":"Graded"}}}],"constraints":[]}},"id":"core::option::Option","path":"Option"}}}

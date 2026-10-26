@@ -83,6 +83,11 @@ fn every_registered_macro_applies_and_round_trips() {
             quote!(bounded),
         ),
         (
+            apply_macro!(cq_sequence_rewrites::output, reserve_previous),
+            output,
+            quote!(reserve_previous),
+        ),
+        (
             apply_macro!(cq_sequence_rewrites::grade, custom, a at host, b at device.block),
             grade,
             quote!(custom, a at host, b at device.block),

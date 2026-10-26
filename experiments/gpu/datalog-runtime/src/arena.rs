@@ -12,10 +12,16 @@ use std::{any::Any, sync::Arc};
 pub struct CandidateArena {
     pool: Arc<Pool>,
     slots: Vec<Arc<Buffer<u64>>>,
+    previous_count: usize,
 }
 impl CandidateArena {
-    pub fn new(pool: Arc<Pool>) -> Self { Self { pool, slots: Vec::new() } }
+    pub fn new(pool: Arc<Pool>) -> Self { Self { pool, slots: Vec::new(), previous_count: 0 } }
     pub fn pool(&self) -> &Arc<Pool> { &self.pool }
+    /// Initial capacity hint for the explicitly recorded reserve_previous protocol.
+    /// This is not a bound or a live length; every attempt must validate its count.
+    pub fn previous_count(&self) -> usize { self.previous_count }
+    /// Remember a fully validated invocation's count, including an empty result.
+    pub fn record_count(&mut self, rows: usize) { self.previous_count = rows; }
 
     /// Device bytes retained by all slots, including spare capacity and slots
     /// still owned by published batches. Does not include their input owners.
@@ -42,7 +48,7 @@ impl CandidateArena {
     }
     /// Forget every slot. Outstanding leases and batches remain valid and keep
     /// their own storage alive; subsequent reservations allocate fresh slots.
-    pub fn clear(&mut self) { self.slots.clear(); }
+    pub fn clear(&mut self) { self.slots.clear(); self.previous_count = 0; }
 
     /// Reserve the minimum complete u64 lanes for each row. Native u128 words
     /// use low-lane-first storage; words wider than 128 bits use MS-first arrays.

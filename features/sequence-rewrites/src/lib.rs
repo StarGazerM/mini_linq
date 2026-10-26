@@ -11,7 +11,7 @@
 //! | `key_partition` | `d, publication, [keys], parts` | Publish at an ancestor, then route before Canon, Group, or provider Store. Global Group merges per-part monoids into one row; `[]` selects contiguous tiles only for globally unique input. Machine grading remains mandatory. |
 //! | `segment` | `d, n` or `d, n, items m` | Materialize a named flatten's offsets and pair tile/flatten around that store. |
 //! | `choose` | `d, len x < k => a, else => b` | Select earlier equal-Structures-result definitions (BE-Choose). |
-//! | `output` | `count`, `reserve`, or `bounded` | Set the final store protocol; bounded requires declared capacity. |
+//! | `output` | `count`, `reserve`, `reserve_previous`, or `bounded` | Set the final store protocol; bounded requires declared capacity. |
 //! | `grade` | `machine, d at host.device, ...` | Add/update placements; preserve other grades on the same machine. |
 //! | `evidence` | `evidence { ... }` | Record estimates and author-asserted key premises. False keys can change grouped answers. |
 //! | `group_without_canon` | group definition | Remove valuation canon only with checked positional uniqueness. |
@@ -23,6 +23,10 @@
 //! placements. The facade's grade phase checks those against the target model.
 //! Named `store_level` selections must all be flatten terms; `all` and empty
 //! advice skip other definitions. The other passes require their stated advice.
+//! `reserve_previous` is explicit advice, never a default planner selection.
+//! It requires an arena terminal: the arena/hole's last validated count seeds
+//! initial capacity (zero on first invocation), not an output bound. Full counter
+//! and BE-Abort checks and overflow replay must succeed before publication.
 //!
 //! Lookup-first preserves live smallest-intersection candidate and membership
 //! adapters, removing them only when their intersection is reexpressed. Movable

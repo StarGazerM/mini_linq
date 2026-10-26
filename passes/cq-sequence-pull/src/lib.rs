@@ -1145,6 +1145,12 @@ pub fn translate_profile(program: &Program, analysis: &Analysis) -> syn::Result<
 }
 
 fn translate_host(program: &Program, analysis: &Analysis, profile: bool) -> syn::Result<syn::Expr> {
+    if program.sequence.output == Some(cq_lang_sequence::OutputProtocol::ReservePrevious) {
+        return Err(syn::Error::new_spanned(
+            program,
+            "output reserve_previous requires an arena terminal; sequential pull is not supported",
+        ));
+    }
     if analysis
         .levels
         .values()

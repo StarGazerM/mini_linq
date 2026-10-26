@@ -115,6 +115,42 @@ fn random_batches<W: Word>() -> Result {
     Ok(())
 }
 
+fn known_unique_sort<W: Word>() -> Result {
+    let pool = pool()?;
+    let state = DeviceRuns::<W>::new(pool.clone())?;
+    for rows in [0, 1, 17, 257, 4097] {
+        let mut values: Vec<_> = (0..rows).rev().map(|row| word::<W>(row as u64)).collect();
+        if rows > 1 {
+            let mut maximum = W::zero();
+            for lane in 0..W::BITS / 64 { maximum.set_lane(lane, u64::MAX); }
+            values[0] = maximum;
+        }
+        // The repeated suffix must not be included in the live prefix.
+        let mut upload = values.clone();
+        upload.extend([W::zero(), W::zero()]);
+        let input = Buffer::from_host(pool.clone(), &upload)?;
+        let before = gpu_datalog_runtime::readback_count();
+        // SAFETY: distinct leading lanes make every prefix word unique.
+        let sorted = unsafe { state.sort_known_unique(&input, rows)? };
+        assert_eq!(gpu_datalog_runtime::readback_count(), before);
+        assert_eq!(sorted.len(), rows);
+        values.sort_unstable();
+        assert_eq!(sorted.buffer().to_host_prefix(rows)?, values);
+        assert_eq!(input.to_host()?, upload);
+        assert!(state.is_empty());
+    }
+    Ok(())
+}
+
+#[test]
+fn known_unique_sort_preserves_rows_without_readback() -> Result {
+    known_unique_sort::<u64>()?;
+    known_unique_sort::<u128>()?;
+    known_unique_sort::<[u64; 3]>()?;
+    known_unique_sort::<[u64; 4]>()?;
+    known_unique_sort::<[u64; 5]>()
+}
+
 #[test]
 fn random_duplicate_batches_u64() -> Result {
     random_batches::<u64>()
@@ -471,8 +507,10 @@ fn permuted_layout_prefix_lookup<W: Word>(widths: &[u32]) -> Result {
         }).collect::<Result<Vec<_>>>()?;
         assert_eq!(shuffled.to_host()?, expected);
         // Sort each disjoint permuted delta before appending to the other layout.
-        let mut sorter = DeviceRuns::<W>::new(pool.clone())?;
-        let sorted = sorter.admit(&shuffled, fresh.len())?;
+        let before = gpu_datalog_runtime::readback_count();
+        // SAFETY: the permutation is bijective and fresh is already unique.
+        let sorted = unsafe { permuted.sort_known_unique(&shuffled, fresh.len())? };
+        assert_eq!(gpu_datalog_runtime::readback_count(), before);
         // SAFETY: admission removed old canonical keys; the permutation is
         // bijective, so its sorted delta is disjoint from this layout's state.
         unsafe { permuted.append_sorted(sorted)? };

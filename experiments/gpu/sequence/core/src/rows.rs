@@ -822,8 +822,10 @@ impl Rows {
             }
         }
         build.extend(quote! {
-            let __cq_timing_built = __cq_pool.stream().record_event(
-                Some(::cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
+            let __cq_timing_built = if __cq_timing_enabled {
+                Some(__cq_pool.stream().record_event(
+                    Some(::cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?)
+            } else { None };
         });
         let codec_columns: BTreeSet<_> = analysis
             .obligations

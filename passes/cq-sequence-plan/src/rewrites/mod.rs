@@ -274,8 +274,10 @@ pub fn choose_in(
     checked_in(checker, source, target)
 }
 
-/// Set `count`, `reserve` or `bounded` on the final store. Bounded output
-/// requires the store's declared capacity; this pass never invents one.
+/// Set `count`, `reserve`, `reserve_previous` or `bounded` on the final store.
+/// Bounded output requires the store's declared capacity; this pass never
+/// invents one. `reserve_previous` requires an arena terminal and uses the last
+/// validated count only as a capacity hint, with checked overflow replay.
 // Formal rule EXT-SeqOutput: Output protocols change storage interpretation, not support.
 pub fn output(source: &Program, arguments: TokenStream) -> syn::Result<Program> {
     output_in(&mut Default::default(), source, arguments)

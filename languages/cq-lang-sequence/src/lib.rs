@@ -10,9 +10,12 @@
 //! ancestor store into fixed key-disjoint parts; scheduling guards may select a cover.
 //! Constructor names are also valid references when followed by a term boundary.
 //! A store may declare `store capacity N term`; the optional final sequence
-//! statement `output count;`, `output reserve;` or `output bounded;` selects the
-//! final store's output protocol. Bounded output takes its capacity from that
-//! store. Codec and provider premises are analysis obligations, not syntax.
+//! statement `output count;`, `output reserve;`, `output reserve_previous;` or
+//! `output bounded;` selects the final store's output protocol. Bounded output
+//! takes its capacity from that store. `reserve_previous` is arena-terminal only:
+//! the last validated count is an initial capacity hint (zero on first use),
+//! never a bound; full counter and BE-Abort checks and overflow replay precede
+//! publication. Codec and provider premises are analysis obligations, not syntax.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -57,6 +60,7 @@ mod kw {
     syn::custom_keyword!(workers);
     syn::custom_keyword!(output);
     syn::custom_keyword!(reserve);
+    syn::custom_keyword!(reserve_previous);
     syn::custom_keyword!(bounded);
 }
 
@@ -276,6 +280,8 @@ pub struct CanonToken {
 pub enum OutputProtocol {
     Count,
     Reserve,
+    /// Arena-local previous validated count as a capacity hint, with checked replay.
+    ReservePrevious,
     Bounded,
 }
 
@@ -820,6 +826,9 @@ impl Parse for OutputProtocol {
         } else if lookahead.peek(kw::reserve) {
             input.parse::<kw::reserve>()?;
             Ok(Self::Reserve)
+        } else if lookahead.peek(kw::reserve_previous) {
+            input.parse::<kw::reserve_previous>()?;
+            Ok(Self::ReservePrevious)
         } else if lookahead.peek(kw::bounded) {
             input.parse::<kw::bounded>()?;
             Ok(Self::Bounded)
@@ -834,6 +843,7 @@ impl ToTokens for OutputProtocol {
         tokens.extend(match self {
             Self::Count => quote! { count },
             Self::Reserve => quote! { reserve },
+            Self::ReservePrevious => quote! { reserve_previous },
             Self::Bounded => quote! { bounded },
         });
     }

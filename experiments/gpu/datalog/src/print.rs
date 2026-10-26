@@ -163,7 +163,8 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
             let mut #state = ::gpu_datalog_runtime::DeviceRuns::<#word>::new(__cq_gpu_pool.clone())?;
             for run in #relation_state.owned_runs() {
                 let permuted = #packed.permute_device(run.buffer(), run.len(), &[#(#order),*])?;
-                let sorted = #state.sort_unique(&permuted, run.len())?;
+                // SAFETY: a column permutation preserves uniqueness of the run.
+                let sorted = unsafe { #state.sort_known_unique(&permuted, run.len())? };
                 // A permutation is injective; canonical accepted runs are disjoint.
                 unsafe { #state.append_sorted(sorted)?; }
             }
@@ -354,7 +355,8 @@ fn phase(program: &Program, index: usize, phase: &str, holes: &[TokenStream], sc
                     let ty = &layout.provider;
                     publication.push(quote!({
                         let permuted = #packed.permute_device(#fresh.buffer(), #fresh.len(), &[#(#order),*])?;
-                        let run = #layout_state.sort_unique(&permuted, #fresh.len())?;
+                        // SAFETY: a column permutation preserves uniqueness of the admitted delta.
+                        let run = unsafe { #layout_state.sort_known_unique(&permuted, #fresh.len())? };
                         unsafe { #layout_state.append_sorted(run)?; }
                         #host = <#ty>::from_runs(__cq_gpu_pool.clone(), #schema.clone(), #layout_state.owned_runs())?;
                     }));
@@ -377,7 +379,8 @@ fn phase(program: &Program, index: usize, phase: &str, holes: &[TokenStream], sc
                     let ty = &layout.provider;
                     publication.push(quote!({
                         let permuted = #packed.permute_device(#fresh.buffer(), #fresh.len(), &[#(#order),*])?;
-                        let run = #state.sort_unique(&permuted, #fresh.len())?;
+                        // SAFETY: a column permutation preserves uniqueness of the admitted delta.
+                        let run = unsafe { #state.sort_known_unique(&permuted, #fresh.len())? };
                         #host = <#ty>::from_runs(__cq_gpu_pool.clone(), #schema.clone(), vec![run])?;
                     }));
                 },

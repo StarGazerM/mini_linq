@@ -108,7 +108,10 @@ pub fn h05_sequential_physical_reference(input: TokenStream) -> TokenStream {
 #[path = "../../run_holes.rs"]
 mod run_holes;
 
-fn arena_hole(name: &syn::Ident) -> syn::Result<syn::Expr> {
+fn arena_hole(
+    name: &syn::Ident,
+    output: cq_lang_sequence::OutputProtocol,
+) -> syn::Result<syn::Expr> {
     let mut structures = run_holes::fixture(&name.to_string());
     let normalized = cq_gpu_sequence_core::constants::compile(&structures.physical)?;
     if normalized != structures.physical {
@@ -135,13 +138,16 @@ fn arena_hole(name: &syn::Ident) -> syn::Result<syn::Expr> {
     let source = cq_sequence_lowering::compile(&structures)?;
     let machine = cq_gpu_sequence::machine();
     let mut planned = cq_sequence_plan::plan(&source, &machine, &cq_gpu_sequence::catalog())?;
-    // Deliberately under-size the terminal so fanout exercises metadata retry.
     let terminal = planned.program.sequence.definitions.last_mut().unwrap();
     let cq_lang_sequence::Term::Store { capacity, .. } = &mut terminal.term else {
         return Err(syn::Error::new_spanned(name, "expected a planned terminal store"));
     };
-    *capacity = Some(1);
-    planned.program.sequence.output = Some(cq_lang_sequence::OutputProtocol::Reserve);
+    if matches!(output, cq_lang_sequence::OutputProtocol::Reserve) {
+        // Keep the fixed-reservation fixture deliberately under-sized so fanout
+        // exercises metadata retry independently of previous-count reservation.
+        *capacity = Some(1);
+    }
+    planned.program.sequence.output = Some(output);
     let analysis = cq_lang_sequence::check_grading(&planned.program, &machine)?;
     cq_gpu_sequence_core::translate_arena(
         &planned.program,
@@ -150,11 +156,11 @@ fn arena_hole(name: &syn::Ident) -> syn::Result<syn::Expr> {
     )
 }
 
-/// Exercise the complete Structures-to-arena production pipeline.
+/// Exercise the production arena pipeline with a fixed capacity-one reservation.
 #[proc_macro]
 pub fn planned_arena_hole(input: TokenStream) -> TokenStream {
     let name = syn::parse_macro_input!(input as syn::Ident);
-    match arena_hole(&name) {
+    match arena_hole(&name, cq_lang_sequence::OutputProtocol::Reserve) {
         Ok(expression) => expression.into_token_stream().into(),
         Err(error) => error.into_compile_error().into(),
     }
@@ -164,7 +170,30 @@ pub fn planned_arena_hole(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn arena_hole_source(input: TokenStream) -> TokenStream {
     let name = syn::parse_macro_input!(input as syn::Ident);
-    match arena_hole(&name) {
+    match arena_hole(&name, cq_lang_sequence::OutputProtocol::Reserve) {
+        Ok(expression) => syn::LitStr::new(
+            &expression.into_token_stream().to_string(),
+            name.span(),
+        ).into_token_stream().into(),
+        Err(error) => error.into_compile_error().into(),
+    }
+}
+
+/// Exercise arena holes using their last validated count as the initial capacity.
+#[proc_macro]
+pub fn planned_arena_hole_previous(input: TokenStream) -> TokenStream {
+    let name = syn::parse_macro_input!(input as syn::Ident);
+    match arena_hole(&name, cq_lang_sequence::OutputProtocol::ReservePrevious) {
+        Ok(expression) => expression.into_token_stream().into(),
+        Err(error) => error.into_compile_error().into(),
+    }
+}
+
+/// Expose the previous-count reservation expansion for source-level assertions.
+#[proc_macro]
+pub fn arena_hole_previous_source(input: TokenStream) -> TokenStream {
+    let name = syn::parse_macro_input!(input as syn::Ident);
+    match arena_hole(&name, cq_lang_sequence::OutputProtocol::ReservePrevious) {
         Ok(expression) => syn::LitStr::new(
             &expression.into_token_stream().to_string(),
             name.span(),

@@ -160,11 +160,17 @@ fn output_sets_each_protocol_and_enforces_capacity() {
     for (advice, protocol) in [
         (quote!(count), OutputProtocol::Count),
         (quote!(reserve), OutputProtocol::Reserve),
+        (quote!(reserve_previous), OutputProtocol::ReservePrevious),
         (quote!(bounded), OutputProtocol::Bounded),
     ] {
         let target = apply(output, &source, advice);
         assert_eq!(target.sequence.output, Some(protocol));
     }
+    let unbounded = program(quote!(a = store rows r;));
+    let target = apply(output, &unbounded, quote!(reserve_previous));
+    assert_eq!(target.sequence.output, Some(OutputProtocol::ReservePrevious));
+    assert_eq!(target.sequence.definitions, unbounded.sequence.definitions);
+    assert!(output(&program(quote!(a = rows r;)), quote!(reserve_previous)).is_err());
     assert!(output(&program(quote!(a = store rows r;)), quote!(bounded)).is_err());
     assert!(output(&program(quote!(a = rows r;)), quote!(count)).is_err());
     assert!(output(&source, quote!(unknown)).is_err());

@@ -181,6 +181,19 @@ impl<W: Word, S> DeviceRuns<W, S> {
     /// Canonicalize a buffer without changing accepted state, for layout deltas.
     /// Only the unique count is downloaded. The input remains unchanged.
     pub fn sort_unique(&self, input: &Buffer<W>, rows: usize) -> Result<Run<W>> {
+        self.sort(input, rows, false)
+    }
+    /// Sort an already unique initialized prefix without count downloads.
+    ///
+    /// Formal rule DL-SortKnownUnique: an injective permutation of a unique run
+    /// remains unique; sorting preserves its cardinality without compaction.
+    /// # Safety
+    /// The initialized input prefix must contain pairwise distinct words.
+    /// The input remains unchanged and accepted state is not modified.
+    pub unsafe fn sort_known_unique(&self, input: &Buffer<W>, rows: usize) -> Result<Run<W>> {
+        self.sort(input, rows, true)
+    }
+    fn sort(&self, input: &Buffer<W>, rows: usize, known_unique: bool) -> Result<Run<W>> {
         if !Arc::ptr_eq(&self.pool, input.pool()) || rows > input.len() || rows > u32::MAX as usize {
             return Err("invalid sort input pool or live length".into());
         }
@@ -189,8 +202,12 @@ impl<W: Word, S> DeviceRuns<W, S> {
         if rows == 0 { return unsafe { Run::from_sorted(output, 0) }; }
         let cub = rccl_cub::cuda::Program::load(self.pool.context())?;
         let launch = cub.on(self.pool.stream())?;
-        let mut count = Native::<u64>::new(&self.pool, 1)?;
-        let mut compact = rccl_cub::thrust_integration::compaction_workspace_in(self.pool.resource(), &launch, rows)?;
+        let mut compaction = if known_unique { None } else {
+            Some((
+                Native::<u64>::new(&self.pool, 1)?,
+                rccl_cub::thrust_integration::compaction_workspace_in(self.pool.resource(), &launch, rows)?,
+            ))
+        };
         if W::BITS == 64 {
             let mut first = Native::<u64>::new(&self.pool, rows)?;
             let mut alternate = Native::<u64>::new(&self.pool, rows)?;
@@ -202,11 +219,16 @@ impl<W: Word, S> DeviceRuns<W, S> {
             };
             let mut buffers = rccl_cub::DoubleBuffer::new(first.get_mut(), alternate.get_mut()).ok_or("unequal sort buffers")?;
             rccl_cub::device_radix_sort_keys_buffer(&launch, &mut buffers, 0..64, &mut controls.workspace)?;
-            rccl_cub::thrust_integration::device_unique_copy_by(
-                &launch, DeviceSliceRead::new(buffers.current().cu_deviceptr() as *const u64),
-                DeviceSliceWrite::new(output.ptr().cast::<u64>()), count.get_mut(),
-                |a: u64, b: u64| a == b, rows, &mut compact,
-            )?;
+            if let Some((count, compact)) = &mut compaction {
+                rccl_cub::thrust_integration::device_unique_copy_by(
+                    &launch, DeviceSliceRead::new(buffers.current().cu_deviceptr() as *const u64),
+                    DeviceSliceWrite::new(output.ptr().cast::<u64>()), count.get_mut(),
+                    |a: u64, b: u64| a == b, rows, compact,
+                )?;
+            } else {
+                // SAFETY: radix sort initialized all rows; output is disjoint.
+                unsafe { cuda_core::simt::memory::memcpy_dtod_async(output.cu_deviceptr(), buffers.current().cu_deviceptr(), rows * 8, self.pool.stream().cu_stream())?; }
+            }
         } else {
             let mut first = Native::<u64>::new(&self.pool, rows)?;
             let mut alternate = Native::<u64>::new(&self.pool, rows)?;
@@ -234,18 +256,27 @@ impl<W: Word, S> DeviceRuns<W, S> {
                     &launch, &mut buffers, 0..64, &mut controls.workspace,
                 )?;
             }
-            let source = input.ptr();
-            let words = rccl_cub::DeviceMap::new(
-                DeviceSliceRead::new(buffers.current().1.cu_deviceptr() as *const u32),
-                move |row: u32| unsafe { *source.add(row as usize) },
-            );
-            rccl_cub::thrust_integration::device_unique_copy_by(
-                &launch, words, DeviceSliceWrite::new(output.ptr()),
-                count.get_mut(), |a: W, b: W| a.compare(&b).is_eq(), rows, &mut compact,
-            )?;
+            if let Some((count, compact)) = &mut compaction {
+                let source = input.ptr();
+                let words = rccl_cub::DeviceMap::new(
+                    DeviceSliceRead::new(buffers.current().1.cu_deviceptr() as *const u32),
+                    move |row: u32| unsafe { *source.add(row as usize) },
+                );
+                rccl_cub::thrust_integration::device_unique_copy_by(
+                    &launch, words, DeviceSliceWrite::new(output.ptr()),
+                    count.get_mut(), |a: W, b: W| a.compare(&b).is_eq(), rows, compact,
+                )?;
+            } else {
+                self.module.gather_sorted::<W>(
+                    self.pool.stream(), &self.module.prepare_gather_sorted::<W>(config)?,
+                    input.ptr(), rows as u32,
+                    buffers.current().1.cu_deviceptr() as *const u32, output.ptr(),
+                )?;
+            }
         }
-        let rows = read_count(&self.pool, count.get())?;
-        // SAFETY: device unique wrote exactly this sorted unique prefix.
+        let rows = if let Some((count, _)) = &compaction { read_count(&self.pool, count.get())? } else { rows };
+        // SAFETY: compaction established uniqueness, or the caller guaranteed it.
+        // Both paths initialize the complete sorted prefix before publication.
         unsafe { Run::from_sorted(output, rows) }
     }
     fn subtract(&self, unique: &Run<W>) -> Result<Run<W>> {
@@ -426,6 +457,18 @@ mod run_kernels {
                 row += 1;
             }
             tile += stride;
+        }
+    }
+
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub fn gather_sorted<W: Word>(input: *const W, rows: u32, order: *const u32, output: *mut W) {
+        let mut row = thread::index_1d().get() as usize;
+        let stride = thread::gridDim_x() as usize * 256;
+        while row < rows as usize {
+            unsafe { *output.add(row) = *input.add(*order.add(row) as usize); }
+            row += stride;
         }
     }
 

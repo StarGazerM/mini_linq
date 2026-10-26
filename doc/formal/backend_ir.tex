@@ -1027,6 +1027,30 @@ protocol, so a batch is never truncated.
  \text{output protocol discharges BE-Length}}
  {\mathrm{unpack}(\mathrm{arena})\equiv_{\mathrm{bag}}\sem{t}}
 \end{mathpar}
+Publishing an arena batch needs no terminal stream fence. Every recorded
+dispatch metadata check and BE-Abort flag is still read before publication;
+the batch retains its owners, and all later use, reuse and destruction are
+ordered on the same pool stream, so a consumer can never observe an incomplete
+batch. Timing events and the fence that reads them are opt-in and do not
+change the result.
+\begin{mathpar}
+\Rule{GPU-Arena-Timing}{\text{metadata and BE-Abort checked before publication}\quad
+ \text{all uses ordered on the producing stream}}
+ {\text{omitting the terminal fence preserves }\textsc{GPU-Arena}}
+\end{mathpar}
+The recorded output protocol \code{reserve\_previous}, accepted only by the arena
+terminal, starts each invocation of a hole with the last validated count of
+that hole as its capacity (zero at first use). The remembered count is an
+initial capacity, not a bound: the kernel counts every candidate and writes
+only in bounds; an arithmetic failure aborts (BE-Abort); a capacity shortfall
+discards the attempt and reruns it with the full required capacity against the
+same immutable snapshot. Only a fully validated, initialized prefix is
+published, so the batch equals the Count protocol's.
+\begin{mathpar}
+\Rule{GPU-ReservePrevious}{\text{inputs immutable during the invocation}\quad
+ \text{count}\le\text{capacity checked before publication}}
+ {\text{published batch}=\text{the }\mathsf{count}\text{ protocol's batch}}
+\end{mathpar}
 
 \paragraph{Closed host captures.}
 A Rust subexpression of a guard, binding or selection whose free variables

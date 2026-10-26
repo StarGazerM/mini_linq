@@ -44,15 +44,56 @@ fn delta_edge_runs_empty_delta_and_retry() -> Result {
         vec![vec![-7, 0], vec![9, u32::MAX as i128]], vec![]];
     let edge = DeviceLayout::<(i32,), (u32,)>::from_runs(pool.clone(), ep.clone(), runs(&pool, &ep, &edge_rows)?)?;
     let mut arena = gpu_datalog_runtime::CandidateArena::new(pool.clone());
+    cq_gpu_runtime::enable_arena_timing(false);
     for delta_rows in [vec![vec![vec![-13, -7], vec![i32::MIN as i128, 9]]], vec![vec![]]] {
         let delta = DeviceLayout::<(i32,), (i32,)>::from_runs(pool.clone(), dp.clone(), runs(&pool, &dp, &delta_rows)?)?;
         let result = cq_gpu_sequence_test_macros::planned_arena_hole!(linear);
         assert_eq!(bag(result.buffer(), result.len(), result.packing())?, join(&delta_rows, &edge_rows));
+        assert!(cq_gpu_runtime::take_last_timings().is_none());
     }
+    cq_gpu_runtime::enable_arena_timing(true);
+    let delta_rows = vec![vec![vec![-13, -7]]];
+    let delta = DeviceLayout::<(i32,), (i32,)>::from_runs(
+        pool.clone(), dp.clone(), runs(&pool, &dp, &delta_rows)?)?;
+    let result = cq_gpu_sequence_test_macros::planned_arena_hole!(linear);
+    let timing = cq_gpu_runtime::take_last_timings();
+    cq_gpu_runtime::enable_arena_timing(false);
+    assert!(timing.is_some());
+    assert_eq!(bag(result.buffer(), result.len(), result.packing())?, join(&delta_rows, &edge_rows));
     // Opt-in artifact location avoids writing into the source tree during tests.
     if let Some(path) = std::env::var_os("CQ_RUN_HOLE_SOURCE") {
         std::fs::write(path, cq_gpu_sequence_test_macros::arena_hole_source!(linear))?;
     }
+    Ok(())
+}
+
+#[test]
+fn previous_count_is_only_a_hint_and_retained_batches_stay_immutable() -> Result {
+    let pool = Pool::new(0, 0, 0)?;
+    let dp = Packing::with_columns(&[Column::I32, Column::I32])?;
+    let ep = Packing::with_columns(&[Column::I32, Column::U32])?;
+    let edge_rows = vec![vec![vec![7, 11], vec![7, 12]]];
+    let edge = DeviceLayout::<(i32,), (u32,)>::from_runs(
+        pool.clone(), ep.clone(), runs(&pool, &ep, &edge_rows)?)?;
+    let mut arena = gpu_datalog_runtime::CandidateArena::new(pool.clone());
+    let mut retained = Vec::new();
+    for (rows, attempts) in [(1, 2), (2, 2), (1, 1), (0, 1), (1, 2)] {
+        let delta_rows = vec![(0..rows).map(|x| vec![x, 7]).collect::<Vec<_>>()];
+        let delta = DeviceLayout::<(i32,), (i32,)>::from_runs(
+            pool.clone(), dp.clone(), runs(&pool, &dp, &delta_rows)?)?;
+        let before = gpu_datalog_runtime::readback_count();
+        let result = cq_gpu_sequence_test_macros::planned_arena_hole_previous!(linear);
+        assert_eq!(gpu_datalog_runtime::readback_count() - before, attempts);
+        assert_eq!(arena.previous_count(), result.len());
+        let expected = join(&delta_rows, &edge_rows);
+        assert_eq!(bag(result.buffer(), result.len(), result.packing())?, expected);
+        retained.push((result, expected));
+    }
+    for (result, expected) in retained {
+        assert_eq!(bag(result.buffer(), result.len(), result.packing())?, expected);
+    }
+    arena.clear();
+    assert_eq!(arena.previous_count(), 0);
     Ok(())
 }
 
