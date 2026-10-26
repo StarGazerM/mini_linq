@@ -25,10 +25,12 @@ either endpoint.
 
 ## Build and run
 
-From this directory, with the pinned cuda-oxide backend:
+From this directory, with the cuda-oxide monorepo checkout at `/data/cuda-oxide`
+(CUDA 13.0+; cuRAND headers come from the HPC SDK math libraries):
 
 ```sh
-export CUDA_HOME=/opt/nvidia/hpc_sdk/Linux_x86_64/25.5/cuda/12.9
+export CUDA_HOME=/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0
+export BINDGEN_EXTRA_CLANG_ARGS=-I/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/math_libs/13.0/targets/x86_64-linux/include
 cargo oxide build --arch sm_89 -- --release --workspace
 cargo oxide test --arch sm_89 -- --release --workspace
 ```
@@ -134,7 +136,8 @@ schedule and is not replanned. Manifest row counts are recorded as evidence,
 never fabricated selectivities. Replay coverage checks exact program equality.
 
 ```sh
-export CUDA_HOME=/opt/nvidia/hpc_sdk/Linux_x86_64/25.5/cuda/12.9
+export CUDA_HOME=/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0
+export BINDGEN_EXTRA_CLANG_ARGS=-I/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/math_libs/13.0/targets/x86_64-linux/include
 cargo oxide build --arch sm_89 -- --release -p cq-gpu-tpch
 cargo oxide test --arch sm_89 -- --release -p cq-gpu-tpch -- --nocapture
 ./target/release/cq-gpu-tpch
