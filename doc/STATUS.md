@@ -438,6 +438,8 @@ approval.
   Now: AOT sm_89 cubins (module loading 0.12 s) and delta-first occurrence
   order (`driver(delta_first)`, `DL-OccurrenceOrder`): GPU DOOP 3.67 s warm,
   kernels 1.90 s; largest remaining kernel is the field-load delta variant.
+  Host overhead cut (no arena fences, `reserve_previous`, known-unique sorts):
+  3.14 s; ~1.0 s of inter-kernel host time is CPU work outside CUDA calls.
   Before AOT: cold first run after a rebuild ~25 s (driver PTX JIT cache empty). The GPU
   workspace pins pushed forks (cuda-oxide and RCCL `mini-linq/main`), Rust
   1.99.1, CUDA 13.0.

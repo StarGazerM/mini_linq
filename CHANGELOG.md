@@ -7,6 +7,15 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- GPU host overhead: arena publication without terminal fences (timing opt-in,
+  `GPU-Arena-Timing`), recorded `output reserve_previous` arena protocol that
+  starts from the last validated count and reruns on shortfall
+  (`GPU-ReservePrevious`), and layout sorts of injective permutations without
+  dedup or count readback (`DL-SortKnownUnique`). DOOP GPU 3.47 s -> 3.14 s,
+  exact; event synchronizations 66,981 -> 5, stream synchronizations
+  24,457 -> 13,672. About 1.0 s of host time between kernels remains outside any
+  CUDA call; metadata readbacks plus their syncs bound further batching gains at
+  151 ms.
 - Delta-first occurrence order (`DL-OccurrenceOrder`): variants record a
   checked permutation of their first positive-atom prefix; the opt-in
   `incremental(driver(delta_first))` advice leads with the delta, then connected
