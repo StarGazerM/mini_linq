@@ -1,1 +1,6 @@
 backend = "/data/cuda-oxide/cuda-oxide/crates/rustc-codegen-cuda/target/release/librustc_codegen_cuda.so"
+default-arch = "sm_89"
+
+[env]
+# cargo-oxide performs provenance-checked libNVVM/nvJitLink finalization at build time.
+CUDA_OXIDE_MATERIALIZE_CUBIN = "1"

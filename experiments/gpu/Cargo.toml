@@ -7,12 +7,12 @@ edition = "2021"
 
 [workspace.dependencies]
 # Pinned heads of the maintained cuda-oxide and RCCL mini-linq/main fork branches.
-cuda-core = { git = "https://github.com/StarGazerM/cuda-oxide.git", rev = "496c01bfc5df0dad510bc4ca76e2260d6f586b8f" }
-cuda-device = { git = "https://github.com/StarGazerM/cuda-oxide.git", rev = "496c01bfc5df0dad510bc4ca76e2260d6f586b8f" }
-cuda-host = { git = "https://github.com/StarGazerM/cuda-oxide.git", rev = "496c01bfc5df0dad510bc4ca76e2260d6f586b8f" }
-rccl-memory = { git = "https://github.com/StarGazerM/rccl.git", rev = "8e329e2528a4ffac0518118d047af7f2096c6917" }
-rccl-cub = { git = "https://github.com/StarGazerM/rccl.git", rev = "8e329e2528a4ffac0518118d047af7f2096c6917" }
-rccl-thrust = { git = "https://github.com/StarGazerM/rccl.git", rev = "8e329e2528a4ffac0518118d047af7f2096c6917" }
+cuda-core = { git = "https://github.com/StarGazerM/cuda-oxide.git", rev = "bb850d8326ff08deb1508b7572f537387da30403" }
+cuda-device = { git = "https://github.com/StarGazerM/cuda-oxide.git", rev = "bb850d8326ff08deb1508b7572f537387da30403" }
+cuda-host = { git = "https://github.com/StarGazerM/cuda-oxide.git", rev = "bb850d8326ff08deb1508b7572f537387da30403" }
+rccl-memory = { git = "https://github.com/StarGazerM/rccl.git", rev = "292bf9b047bc37db5d2d6e1a01d0ef8f8da3bc12" }
+rccl-cub = { git = "https://github.com/StarGazerM/rccl.git", rev = "292bf9b047bc37db5d2d6e1a01d0ef8f8da3bc12" }
+rccl-thrust = { git = "https://github.com/StarGazerM/rccl.git", rev = "292bf9b047bc37db5d2d6e1a01d0ef8f8da3bc12" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

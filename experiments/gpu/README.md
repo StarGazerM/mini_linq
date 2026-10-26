@@ -47,6 +47,23 @@ Release build dependencies also use optimization level 3: the build-time
 compression catalog shares CUDA-containing crates with the runtime, and their
 device address-space lowering requires optimized codegen.
 
+The workspace's `.cargo/cuda-oxide.toml` selects `sm_89` and enables
+`CUDA_OXIDE_MATERIALIZE_CUBIN` for the **cargo-oxide wrapper**. This is equivalent
+to passing `--materialize-cubin --arch sm_89`: the backend emits NVVM IR, then
+libNVVM and nvJitLink finalize each embedded artifact to a native cubin during
+the build. At the final host link, retained local/dependency device IR is linked
+again into `__cuda_oxide_linked` for cross-crate generic kernels (including RCCL).
+Compile-only IR lives in unanchored, linker-excluded archive members; it is not
+embedded in the final runtime image or parsed by module loading.
+`cuda-host::load_bundle` selects each ordinary module's cubin; the generic loader
+selects the linked cubin instead of merging PTX at runtime. Keep invoking
+`cargo oxide`, not raw `cargo`; the wrapper fingerprints the compiler/toolkit
+inputs and supplies the required
+materializer handshake. Do not set the internal materialization variable around
+raw Cargo. Cubins target the configured GPU architecture rather than providing
+the runtime PTX bridge to other architectures; rebuild with the appropriate
+`--arch` when changing GPUs.
+
 ### Packed Datalog runtime
 
 `gpu-datalog-runtime` provides `Packing`/`Column` encodings and `DeviceRuns<W>`
@@ -206,6 +223,58 @@ permuted keys and inflated the `returnvar` join to 929,428,430 candidates.
 Constant lane shifts fix the permutation; the corrected hole emits 33,667
 candidates using 269,336 bytes. Runtime differential tests cover that regression
 and the explicit wide-row merge path required beyond RCCL's 16-byte key limit.
+
+#### Ahead-of-time cubin loading
+
+The `sm_89` AOT run preserves exact full-tuple results for all 26 Cassandra
+outputs. The 13-program Datalog oracle and all fixtures passed, as did the three
+Datalog packages (54 tests, two opt-in probes ignored), all 14 `run_holes` tests,
+and both nonempty/empty `printer-smoke` cases.
+
+| Measurement | PTX before | AOT cubin after |
+| --- | ---: | ---: |
+| Cold GPU evaluation | approximately 27 s (prior observation) | 10.463490 s |
+| Warm GPU evaluation, unprofiled | 11.857853 s | 10.422113 s |
+| Nsight `cuModuleLoadData`, 158 calls | 5.588267898 s | 0.163992571 s |
+| Median module load | 35.210215 ms | 0.765312 ms |
+| Nsight kernel time, 52,489 launches | 7.731254122 s | 8.793091834 s |
+| Executable size | 22,623,200 bytes | 21,204,400 bytes |
+
+The cold cubin run immediately followed `rm -rf ~/.nv/ComputeCache`; warm was
+the next execution. The cache remained an empty 4-KiB directory after the
+plain, instrumented and profiled runs. Warm end-to-end evaluation fell **12.1%**,
+and profiled module-loading time fell **97.1%**. Kernel time increased, so this
+is a loading improvement, not a claim of faster kernels. Nsight and preload
+instrumentation are separate runs with observer overhead.
+
+Driver interception recorded every image and its loader stack:
+
+| Load IDs | Calls | PTX bytes/image before | Cubin bytes/image after | Loader |
+| --- | ---: | ---: | ---: | --- |
+| 1 | 1 | 11,210,914 | 4,816,608 | Generic runtime kernel set: merged PTX before, build-time linked cubin after |
+| 2–3 | 2 | 2,632,192 | 1,353,888 | Anchored Sequence runtime crate, `load_bundle` |
+| 4–158 | 155 | 8,421,855 | 3,360,992 | Per-hole loaders, anchored DOOP crate, `load_bundle` |
+
+The 155 hole loads are byte-identical **crate-wide** images, not separate
+per-hole PTX and not the full merged image. Load count was intentionally left
+unchanged. Every after-image was an ELF cubin passed to `cuModuleLoadData`;
+there were **zero PTX loads**, no other `cuModuleLoad*` variants, and no modules
+requiring runtime compilation. Ordinary loads take `load_bundle`'s Cubin branch;
+the generic loader selects `__cuda_oxide_linked`. PTX sizes exclude the trailing
+NUL; cubin sizes are the file-backed ELF extent.
+
+The maintained cuda-oxide pin adds build-time cross-crate nvJitLink support,
+weak-ODR device definitions, fail-closed cubin/IR pairing and regression tests.
+Compile-only IR is excluded from final host images rather than copied during
+runtime bundle discovery. The CLI remains `--materialize-cubin --arch sm_89`;
+the workspace enables that mode by default. No per-crate source attributes or
+local dependency patches are required.
+
+Full per-load sizes, hashes, timings, loader paths, fork revisions and
+verification results are in
+[`compare/doop_cassandra.aot_cubin.results.json`](compare/doop_cassandra.aot_cubin.results.json).
+Raw profiles and intercepted images from this measurement are under
+`/tmp/aot-cubin-measure/` (`ptx-nsys` and `final-nsys`).
 
 ### Planner-driven 11-query TPC-H suite
 
