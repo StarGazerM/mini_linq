@@ -1,0 +1,1120 @@
+{
+  "dataset": "/tmp/doop-data/cassandra",
+  "comparison": "exact full-tuple sets, all 26 outputs",
+  "architecture": "sm_89",
+  "gpu": "NVIDIA RTX 6000 Ada",
+  "driver": "580.178.04",
+  "cuda": "13.0 (HPC SDK 25.9)",
+  "llvm": "23.1.1-rust-1.99.1-stable",
+  "root_cause": "Materialization forced CUDA_OXIDE_EMIT_NVVM_IR=1, replacing LLVM internalize/default<O2> + llc PTX generation with legacy LLVM-7-dialect libNVVM + nvJitLink LTO; the resulting larger integer/control-flow code caused the regression, not added register pressure, spills, debug flags, or reduced theoretical occupancy.",
+  "baseline": {
+    "ptx_binary_sha256": "e047023e2b4acc3730fc1135dc41d824c7a2fc9dd8c6e06bd24e2146317ac06b",
+    "ptx_sha256": "58b779054f8207b3e48912c7ce2ec8a42e66e38ae153444db084dcfcc38d661d",
+    "aot_cubin_sha256": "48a06ec22ff31c881104b15be089745794d26963868c84f90cd3d22a337aeb35",
+    "driver_loaded_cubin_sha256": "2fcd555a2465d8c2657bd10fc60de7027da1b24ed84f3d8887789e6595c783e7",
+    "ptxas_cubin_sha256": "cd205af7ed9e70833429df5c6c69d63d5ea99ab4041d9e56fbf9819d567f0c0c",
+    "ptx_kernel_ns": 7731254122,
+    "nvvm_aot_kernel_ns": 8793091834,
+    "warm_gpu_evaluation_seconds": {
+      "original_ptx": 11.857853,
+      "nvvm_aot": 10.422113
+    }
+  },
+  "artifact_method": "Extract OXIDEART payloads from the retained original PTX executable and current AOT executable. Assemble exact original PTX with CUDA 13 ptxas -arch=sm_89 -O3 -v. Also load original PTX with cuModuleLoadData, extract its cached ELF from ComputeCache, and compare every instruction of each of the five hot kernels: identical to standalone ptxas. cuLinkCreate/Complete produces different relocatable-code register choices and is NOT used as the runtime-JIT baseline. Recompiled retained AOT NVVM IR with original libNVVM/nvJitLink options plus resource diagnostics; all five kernels have instruction-identical SASS to embedded AOT.",
+  "flags": {
+    "ordinary_ptx": [
+      "LLVM internalize,default<O2>",
+      "-switch-to-lookup=false",
+      "llc -fp-contract=fast",
+      "ptxas -arch=sm_89 -O3"
+    ],
+    "regressed_nvvm": [
+      "libNVVM -arch=compute_89 -gen-lto -fma=1",
+      "nvJitLink -arch=sm_89 -lto -fma=1",
+      "diagnostic -verbose -Xptxas=-v -no-cache"
+    ],
+    "debug": "Both contain .debug_frame only, no .debug_info or .debug_line; neither -g/-G nor -lineinfo is requested.",
+    "math": "No differing FTZ/prec-div/prec-sqrt options; FMA enabled on both. These kernels are integer/control-flow workloads.",
+    "register_cap": "No -maxrregcount supplied; required block dimensions are 256,1,1 in both."
+  },
+  "instruction_count_definition": "cuobjdump -sass decoded instructions including terminal padding NOPs; non-NOP counts also recorded. CALL.REL.NOINC counts describe intra-kernel control flow, not outlined device functions.",
+  "kernels": [
+    {
+      "suffix": 124,
+      "symbol": "__cq_sequence_dispatch_0___cq_sequence_kernels_2abbaf0ece1eee48_124",
+      "block_dimensions": [
+        256,
+        1,
+        1
+      ],
+      "dynamic_shared_bytes": 34896,
+      "ptx_driver_jit": {
+        "resources": "REG:64 STACK:16 SHARED:0 LOCAL:0 CONSTANT[2]:40 CONSTANT[0]:544 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": 1920,
+        "non_nop_instructions": 1911,
+        "call_rel_noinc": 9,
+        "resident_blocks_per_sm": 2,
+        "theoretical_occupancy_percent": 33.33333333333333,
+        "sass_sha256": "ce660991dd9f16af9eb5603b1a0655f94a467adbd396271a599e7343b38f07b1",
+        "ptxas_stack_spill_store_spill_load_bytes": [
+          16,
+          16,
+          16
+        ],
+        "opcode_counts": {
+          "ATOMG": 2,
+          "BRA": 97,
+          "BSSY": 39,
+          "BSYNC": 39,
+          "CALL": 9,
+          "CS2R": 6,
+          "EXIT": 6,
+          "FLO": 2,
+          "IADD3": 148,
+          "IMAD": 347,
+          "ISETP": 218,
+          "LD": 116,
+          "LDC": 1,
+          "LDG": 4,
+          "LDL": 4,
+          "LDS": 52,
+          "LEA": 74,
+          "LOP3": 131,
+          "P2R": 16,
+          "PLOP3": 37,
+          "POPC": 4,
+          "R2UR": 8,
+          "S2R": 5,
+          "SEL": 106,
+          "SHF": 150,
+          "SHFL": 42,
+          "ST": 6,
+          "STG": 1,
+          "STL": 4,
+          "STS": 41,
+          "UIADD3": 37,
+          "UIMAD": 3,
+          "UISETP": 31,
+          "ULDC": 19,
+          "UMOV": 49,
+          "USEL": 10,
+          "USHF": 6,
+          "VOTE": 1,
+          "VOTEU": 1
+        }
+      },
+      "nvvm_aot": {
+        "resources": "REG:64 STACK:0 SHARED:0 LOCAL:0 CONSTANT[2]:72 CONSTANT[0]:544 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": 2592,
+        "non_nop_instructions": 2582,
+        "call_rel_noinc": 12,
+        "resident_blocks_per_sm": 2,
+        "theoretical_occupancy_percent": 33.33333333333333,
+        "sass_sha256": "9fd4057d5c89ad04e4e2e693ca555145b37e02493590cf70816b0281b1063a02",
+        "ptxas_stack_spill_store_spill_load_bytes": [
+          0,
+          0,
+          0
+        ],
+        "opcode_counts": {
+          "ATOMG": 2,
+          "BRA": 151,
+          "BREAK": 4,
+          "BSSY": 35,
+          "BSYNC": 35,
+          "CALL": 12,
+          "CS2R": 7,
+          "EXIT": 6,
+          "FLO": 2,
+          "IADD3": 232,
+          "IMAD": 499,
+          "ISETP": 328,
+          "LD": 54,
+          "LDC": 1,
+          "LDG": 94,
+          "LDS": 52,
+          "LEA": 144,
+          "LOP3": 219,
+          "P2R": 5,
+          "PLOP3": 17,
+          "POPC": 4,
+          "R2UR": 4,
+          "S2R": 5,
+          "SEL": 168,
+          "SHF": 202,
+          "SHFL": 42,
+          "ST": 6,
+          "STG": 1,
+          "STS": 41,
+          "UIADD3": 35,
+          "UIMAD": 3,
+          "UISETP": 39,
+          "ULDC": 20,
+          "ULEA": 1,
+          "UMOV": 55,
+          "USEL": 10,
+          "USHF": 5,
+          "VOTE": 1,
+          "VOTEU": 1,
+          "WARPSYNC": 1
+        }
+      },
+      "fixed_ptx_aot": {
+        "resources": "REG:64 STACK:16 SHARED:0 LOCAL:0 CONSTANT[2]:40 CONSTANT[0]:544 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": 1920,
+        "non_nop_instructions": 1911,
+        "sass_sha256": "ce660991dd9f16af9eb5603b1a0655f94a467adbd396271a599e7343b38f07b1",
+        "identical_to_original_jit_sass": true
+      }
+    },
+    {
+      "suffix": 137,
+      "symbol": "__cq_sequence_dispatch_0___cq_sequence_kernels_6fe7d65bfa43c029_137",
+      "block_dimensions": [
+        256,
+        1,
+        1
+      ],
+      "dynamic_shared_bytes": 67696,
+      "ptx_driver_jit": {
+        "resources": "REG:128 STACK:24 SHARED:0 LOCAL:0 CONSTANT[2]:72 CONSTANT[0]:672 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": 3384,
+        "non_nop_instructions": 3373,
+        "call_rel_noinc": 17,
+        "resident_blocks_per_sm": 1,
+        "theoretical_occupancy_percent": 16.666666666666664,
+        "sass_sha256": "856902741eeab86f299e6ef02d4b824e69f9273f81e3e2e15d06d386cf1806f1",
+        "ptxas_stack_spill_store_spill_load_bytes": [
+          24,
+          16,
+          16
+        ],
+        "opcode_counts": {
+          "ATOMG": 2,
+          "BRA": 177,
+          "BSSY": 70,
+          "BSYNC": 70,
+          "CALL": 17,
+          "CS2R": 12,
+          "EXIT": 10,
+          "FLO": 2,
+          "IADD3": 293,
+          "IMAD": 613,
+          "ISETP": 444,
+          "LD": 219,
+          "LDC": 1,
+          "LDG": 8,
+          "LDL": 5,
+          "LDS": 100,
+          "LEA": 142,
+          "LOP3": 245,
+          "P2R": 18,
+          "PLOP3": 34,
+          "POPC": 4,
+          "R2UR": 3,
+          "S2R": 5,
+          "SEL": 212,
+          "SHF": 285,
+          "SHFL": 74,
+          "ST": 10,
+          "STG": 1,
+          "STL": 5,
+          "STS": 77,
+          "UIADD3": 41,
+          "UIMAD": 1,
+          "UISETP": 20,
+          "ULDC": 18,
+          "UMOV": 53,
+          "USEL": 6,
+          "USHF": 9,
+          "VOTE": 1,
+          "VOTEU": 1
+        }
+      },
+      "nvvm_aot": {
+        "resources": "REG:123 STACK:0 SHARED:0 LOCAL:0 CONSTANT[2]:136 CONSTANT[0]:672 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": 4800,
+        "non_nop_instructions": 4792,
+        "call_rel_noinc": 26,
+        "resident_blocks_per_sm": 1,
+        "theoretical_occupancy_percent": 16.666666666666664,
+        "sass_sha256": "805896c0761c397eb016f9dbc62eeb32dcd1aee330a060073d851e69a1f64b69",
+        "ptxas_stack_spill_store_spill_load_bytes": [
+          0,
+          0,
+          0
+        ],
+        "opcode_counts": {
+          "ATOMG": 2,
+          "BRA": 289,
+          "BREAK": 4,
+          "BSSY": 63,
+          "BSYNC": 63,
+          "CALL": 26,
+          "CS2R": 17,
+          "EXIT": 10,
+          "FLO": 2,
+          "IADD3": 470,
+          "IMAD": 946,
+          "ISETP": 660,
+          "LD": 104,
+          "LDC": 1,
+          "LDG": 177,
+          "LDS": 100,
+          "LEA": 272,
+          "LOP3": 411,
+          "P2R": 5,
+          "PLOP3": 14,
+          "POPC": 4,
+          "R2UR": 3,
+          "S2R": 5,
+          "SEL": 337,
+          "SHF": 388,
+          "SHFL": 74,
+          "ST": 10,
+          "STG": 1,
+          "STS": 77,
+          "UIADD3": 41,
+          "UIMAD": 2,
+          "UISETP": 31,
+          "ULDC": 23,
+          "UMOV": 74,
+          "USEL": 8,
+          "USHF": 8,
+          "VOTE": 1,
+          "VOTEU": 1,
+          "WARPSYNC": 1
+        }
+      },
+      "fixed_ptx_aot": {
+        "resources": "REG:128 STACK:24 SHARED:0 LOCAL:0 CONSTANT[2]:72 CONSTANT[0]:672 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": 3384,
+        "non_nop_instructions": 3373,
+        "sass_sha256": "856902741eeab86f299e6ef02d4b824e69f9273f81e3e2e15d06d386cf1806f1",
+        "identical_to_original_jit_sass": true
+      }
+    },
+    {
+      "suffix": 144,
+      "symbol": "__cq_sequence_dispatch_0___cq_sequence_kernels_649e1f27aa41eca5_144",
+      "block_dimensions": [
+        256,
+        1,
+        1
+      ],
+      "dynamic_shared_bytes": 39024,
+      "ptx_driver_jit": {
+        "resources": "REG:128 STACK:8 SHARED:0 LOCAL:0 CONSTANT[2]:64 CONSTANT[0]:640 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": 2992,
+        "non_nop_instructions": 2977,
+        "call_rel_noinc": 15,
+        "resident_blocks_per_sm": 2,
+        "theoretical_occupancy_percent": 33.33333333333333,
+        "sass_sha256": "e9cc142b472f0bb2b1e606e248eb0028bbf1f3c11e0bf95770744b4e5a98ce70",
+        "ptxas_stack_spill_store_spill_load_bytes": [
+          8,
+          0,
+          0
+        ],
+        "opcode_counts": {
+          "ATOMG": 2,
+          "BRA": 157,
+          "BSSY": 62,
+          "BSYNC": 62,
+          "CALL": 15,
+          "CS2R": 8,
+          "EXIT": 9,
+          "FLO": 2,
+          "IADD3": 253,
+          "IMAD": 531,
+          "ISETP": 388,
+          "LD": 192,
+          "LDC": 1,
+          "LDG": 7,
+          "LDL": 1,
+          "LDS": 79,
+          "LEA": 125,
+          "LOP3": 215,
+          "P2R": 22,
+          "PLOP3": 36,
+          "POPC": 4,
+          "R2UR": 3,
+          "S2R": 5,
+          "SEL": 186,
+          "SHF": 249,
+          "SHFL": 66,
+          "ST": 9,
+          "STG": 1,
+          "STL": 1,
+          "STS": 58,
+          "UIADD3": 42,
+          "UIMAD": 1,
+          "UISETP": 24,
+          "ULDC": 21,
+          "UMOV": 62,
+          "USEL": 6,
+          "USHF": 8,
+          "VOTE": 1,
+          "VOTEU": 1
+        }
+      },
+      "nvvm_aot": {
+        "resources": "REG:120 STACK:0 SHARED:0 LOCAL:0 CONSTANT[2]:120 CONSTANT[0]:640 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": 4264,
+        "non_nop_instructions": 4251,
+        "call_rel_noinc": 23,
+        "resident_blocks_per_sm": 2,
+        "theoretical_occupancy_percent": 33.33333333333333,
+        "sass_sha256": "441e060dd349aeebe9485d472977ab4a019e3c84f852e85982bd033141ea39c3",
+        "ptxas_stack_spill_store_spill_load_bytes": [
+          0,
+          0,
+          0
+        ],
+        "opcode_counts": {
+          "ATOMG": 2,
+          "BRA": 256,
+          "BREAK": 4,
+          "BSSY": 56,
+          "BSYNC": 56,
+          "CALL": 23,
+          "CS2R": 9,
+          "EXIT": 9,
+          "FLO": 2,
+          "IADD3": 410,
+          "IMAD": 862,
+          "ISETP": 581,
+          "LD": 92,
+          "LDC": 1,
+          "LDG": 157,
+          "LDS": 79,
+          "LEA": 241,
+          "LOP3": 363,
+          "P2R": 5,
+          "PLOP3": 15,
+          "POPC": 4,
+          "R2UR": 3,
+          "S2R": 5,
+          "SEL": 296,
+          "SHF": 344,
+          "SHFL": 66,
+          "ST": 9,
+          "STG": 1,
+          "STS": 58,
+          "UIADD3": 39,
+          "UIMAD": 2,
+          "UISETP": 32,
+          "ULDC": 22,
+          "UMOV": 68,
+          "USEL": 8,
+          "USHF": 7,
+          "VOTE": 1,
+          "VOTEU": 1,
+          "WARPSYNC": 1
+        }
+      },
+      "fixed_ptx_aot": {
+        "resources": "REG:128 STACK:8 SHARED:0 LOCAL:0 CONSTANT[2]:64 CONSTANT[0]:640 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": 2992,
+        "non_nop_instructions": 2977,
+        "sass_sha256": "e9cc142b472f0bb2b1e606e248eb0028bbf1f3c11e0bf95770744b4e5a98ce70",
+        "identical_to_original_jit_sass": true
+      }
+    },
+    {
+      "suffix": 146,
+      "symbol": "__cq_sequence_dispatch_0___cq_sequence_kernels_2f077071d1b1ec17_146",
+      "block_dimensions": [
+        256,
+        1,
+        1
+      ],
+      "dynamic_shared_bytes": 55408,
+      "ptx_driver_jit": {
+        "resources": "REG:128 STACK:8 SHARED:0 LOCAL:0 CONSTANT[2]:64 CONSTANT[0]:640 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": 3040,
+        "non_nop_instructions": 3028,
+        "call_rel_noinc": 15,
+        "resident_blocks_per_sm": 1,
+        "theoretical_occupancy_percent": 16.666666666666664,
+        "sass_sha256": "793a892f5ec41633fd7cb729dcbc6ed1edd7f6e0370789eac7b4f362af698e6f",
+        "ptxas_stack_spill_store_spill_load_bytes": [
+          8,
+          0,
+          0
+        ],
+        "opcode_counts": {
+          "ATOMG": 2,
+          "BRA": 159,
+          "BSSY": 63,
+          "BSYNC": 63,
+          "CALL": 15,
+          "CS2R": 10,
+          "EXIT": 9,
+          "FLO": 2,
+          "IADD3": 258,
+          "IMAD": 532,
+          "ISETP": 390,
+          "LD": 197,
+          "LDC": 1,
+          "LDG": 7,
+          "LDL": 1,
+          "LDS": 86,
+          "LEA": 125,
+          "LOP3": 222,
+          "P2R": 22,
+          "PLOP3": 36,
+          "POPC": 4,
+          "R2UR": 3,
+          "S2R": 5,
+          "SEL": 189,
+          "SHF": 258,
+          "SHFL": 66,
+          "ST": 9,
+          "STG": 1,
+          "STL": 1,
+          "STS": 66,
+          "UIADD3": 42,
+          "UIMAD": 1,
+          "UISETP": 24,
+          "ULDC": 21,
+          "UMOV": 60,
+          "USEL": 6,
+          "USHF": 8,
+          "VOTE": 1,
+          "VOTEU": 1
+        }
+      },
+      "nvvm_aot": {
+        "resources": "REG:120 STACK:0 SHARED:0 LOCAL:0 CONSTANT[2]:120 CONSTANT[0]:640 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": 4328,
+        "non_nop_instructions": 4317,
+        "call_rel_noinc": 23,
+        "resident_blocks_per_sm": 1,
+        "theoretical_occupancy_percent": 16.666666666666664,
+        "sass_sha256": "f21d0291eb18745a340700000234ee09cdf681a610855e07071adb319b5512a4",
+        "ptxas_stack_spill_store_spill_load_bytes": [
+          0,
+          0,
+          0
+        ],
+        "opcode_counts": {
+          "ATOMG": 2,
+          "BRA": 258,
+          "BREAK": 4,
+          "BSSY": 56,
+          "BSYNC": 56,
+          "CALL": 23,
+          "CS2R": 12,
+          "EXIT": 9,
+          "FLO": 2,
+          "IADD3": 418,
+          "IMAD": 865,
+          "ISETP": 583,
+          "LD": 94,
+          "LDC": 1,
+          "LDG": 160,
+          "LDS": 86,
+          "LEA": 245,
+          "LOP3": 372,
+          "P2R": 5,
+          "PLOP3": 15,
+          "POPC": 4,
+          "R2UR": 3,
+          "S2R": 5,
+          "SEL": 298,
+          "SHF": 353,
+          "SHFL": 66,
+          "ST": 9,
+          "STG": 1,
+          "STS": 66,
+          "UIADD3": 41,
+          "UIMAD": 2,
+          "UISETP": 32,
+          "ULDC": 23,
+          "UMOV": 69,
+          "USEL": 8,
+          "USHF": 7,
+          "VOTE": 1,
+          "VOTEU": 1,
+          "WARPSYNC": 1
+        }
+      },
+      "fixed_ptx_aot": {
+        "resources": "REG:128 STACK:8 SHARED:0 LOCAL:0 CONSTANT[2]:64 CONSTANT[0]:640 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": 3040,
+        "non_nop_instructions": 3028,
+        "sass_sha256": "793a892f5ec41633fd7cb729dcbc6ed1edd7f6e0370789eac7b4f362af698e6f",
+        "identical_to_original_jit_sass": true
+      }
+    },
+    {
+      "suffix": 133,
+      "symbol": "__cq_sequence_dispatch_0___cq_sequence_kernels_512d613ce969d33d_133",
+      "block_dimensions": [
+        256,
+        1,
+        1
+      ],
+      "dynamic_shared_bytes": 24656,
+      "ptx_driver_jit": {
+        "resources": "REG:62 STACK:0 SHARED:0 LOCAL:0 CONSTANT[2]:32 CONSTANT[0]:512 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": 1544,
+        "non_nop_instructions": 1536,
+        "call_rel_noinc": 7,
+        "resident_blocks_per_sm": 3,
+        "theoretical_occupancy_percent": 50.0,
+        "sass_sha256": "b28308bad610d3628ec735c944b985bbc3eef9fafd939ae7b788519673f5b92f",
+        "ptxas_stack_spill_store_spill_load_bytes": [
+          0,
+          0,
+          0
+        ],
+        "opcode_counts": {
+          "ATOMG": 2,
+          "BRA": 79,
+          "BSSY": 32,
+          "BSYNC": 32,
+          "CALL": 7,
+          "CS2R": 6,
+          "EXIT": 5,
+          "FLO": 2,
+          "IADD3": 119,
+          "IMAD": 284,
+          "ISETP": 177,
+          "LD": 94,
+          "LDC": 1,
+          "LDG": 3,
+          "LDS": 39,
+          "LEA": 57,
+          "LOP3": 108,
+          "P2R": 15,
+          "PLOP3": 23,
+          "POPC": 4,
+          "R2UR": 4,
+          "S2R": 5,
+          "SEL": 85,
+          "SHF": 123,
+          "SHFL": 34,
+          "ST": 5,
+          "STG": 1,
+          "STS": 31,
+          "UIADD3": 31,
+          "UIMAD": 3,
+          "UISETP": 25,
+          "ULDC": 17,
+          "UMOV": 38,
+          "USEL": 8,
+          "USHF": 4,
+          "VOTE": 1,
+          "VOTEU": 1
+        }
+      },
+      "nvvm_aot": {
+        "resources": "REG:48 STACK:8 SHARED:0 LOCAL:0 CONSTANT[2]:56 CONSTANT[0]:512 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": 2152,
+        "non_nop_instructions": 2143,
+        "call_rel_noinc": 10,
+        "resident_blocks_per_sm": 3,
+        "theoretical_occupancy_percent": 50.0,
+        "sass_sha256": "4e09a178e211e0f4f696d63e2360034eb5e99a257e04b0d804bbbd238eefc69f",
+        "ptxas_stack_spill_store_spill_load_bytes": [
+          8,
+          8,
+          16
+        ],
+        "opcode_counts": {
+          "ATOMG": 2,
+          "BRA": 120,
+          "BREAK": 4,
+          "BSSY": 28,
+          "BSYNC": 28,
+          "CALL": 10,
+          "CS2R": 7,
+          "EXIT": 5,
+          "FLO": 2,
+          "IADD3": 185,
+          "IMAD": 436,
+          "ISETP": 253,
+          "LD": 44,
+          "LDC": 1,
+          "LDG": 77,
+          "LDL": 4,
+          "LDS": 39,
+          "LEA": 117,
+          "LOP3": 182,
+          "PLOP3": 16,
+          "POPC": 4,
+          "R2UR": 4,
+          "S2R": 5,
+          "SEL": 129,
+          "SHF": 171,
+          "SHFL": 34,
+          "ST": 5,
+          "STG": 1,
+          "STL": 2,
+          "STS": 31,
+          "UIADD3": 33,
+          "UIMAD": 5,
+          "UISETP": 38,
+          "ULDC": 20,
+          "ULEA": 1,
+          "UMOV": 52,
+          "USEL": 10,
+          "USHF": 4,
+          "VOTE": 1,
+          "VOTEU": 1,
+          "WARPSYNC": 1
+        }
+      },
+      "fixed_ptx_aot": {
+        "resources": "REG:62 STACK:0 SHARED:0 LOCAL:0 CONSTANT[2]:32 CONSTANT[0]:512 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": 1544,
+        "non_nop_instructions": 1536,
+        "sass_sha256": "b28308bad610d3628ec735c944b985bbc3eef9fafd939ae7b788519673f5b92f",
+        "identical_to_original_jit_sass": true
+      }
+    }
+  ],
+  "isolation_experiment": {
+    "change": "Replace only the DOOP-crate embedded cubin in an isolated copy of the AOT executable with ptxas assembly of the exact original PTX; generic/runtime cubins unchanged.",
+    "exact": true,
+    "kernel_ns": 7819311828,
+    "kernel_launches": 52489,
+    "gpu_evaluation_seconds_profiled": 10.121957,
+    "hot_124_ns": 4090343751
+  },
+  "ncu": {
+    "selection": "_124, launch-skip 100, launch-count 1, 13 passes, same 2272x256 launch; ncu clock control fixes SM at 915 MHz",
+    "regressed": {
+      "DRAM Frequency": {
+        "value": "9.49",
+        "unit": "Ghz"
+      },
+      "SM Frequency": {
+        "value": "915.00",
+        "unit": "Mhz"
+      },
+      "Elapsed Cycles": {
+        "value": "17,406,651",
+        "unit": "cycle"
+      },
+      "Memory Throughput": {
+        "value": "0.65",
+        "unit": "%"
+      },
+      "DRAM Throughput": {
+        "value": "0.01",
+        "unit": "%"
+      },
+      "Duration": {
+        "value": "19.02",
+        "unit": "ms"
+      },
+      "L1/TEX Cache Throughput": {
+        "value": "19.50",
+        "unit": "%"
+      },
+      "L2 Cache Throughput": {
+        "value": "0.09",
+        "unit": "%"
+      },
+      "SM Active Cycles": {
+        "value": "550,689.35",
+        "unit": "cycle"
+      },
+      "Compute (SM) Throughput": {
+        "value": "1.50",
+        "unit": "%"
+      },
+      "Warp Cycles Per Issued Instruction": {
+        "value": "7.39",
+        "unit": "cycle"
+      },
+      "Warp Cycles Per Executed Instruction": {
+        "value": "7.40",
+        "unit": "cycle"
+      },
+      "Avg. Active Threads Per Warp": {
+        "value": "30.88",
+        "unit": ""
+      },
+      "Avg. Not Predicated Off Threads Per Warp": {
+        "value": "25.66",
+        "unit": ""
+      },
+      "Block Size": {
+        "value": "256",
+        "unit": ""
+      },
+      "Function Cache Configuration": {
+        "value": "CachePreferNone",
+        "unit": ""
+      },
+      "Grid Size": {
+        "value": "2,272",
+        "unit": ""
+      },
+      "Registers Per Thread": {
+        "value": "64",
+        "unit": "register/thread"
+      },
+      "Shared Memory Configuration Size": {
+        "value": "102.40",
+        "unit": "Kbyte"
+      },
+      "Driver Shared Memory Per Block": {
+        "value": "1.02",
+        "unit": "Kbyte/block"
+      },
+      "Dynamic Shared Memory Per Block": {
+        "value": "34.90",
+        "unit": "Kbyte/block"
+      },
+      "Static Shared Memory Per Block": {
+        "value": "0",
+        "unit": "byte/block"
+      },
+      "# SMs": {
+        "value": "142",
+        "unit": "SM"
+      },
+      "Stack Size": {
+        "value": "1,024",
+        "unit": ""
+      },
+      "Threads": {
+        "value": "581,632",
+        "unit": "thread"
+      },
+      "# TPCs": {
+        "value": "71",
+        "unit": ""
+      },
+      "Enabled TPC IDs": {
+        "value": "all",
+        "unit": ""
+      },
+      "Uses Green Context": {
+        "value": "0",
+        "unit": ""
+      },
+      "Waves Per SM": {
+        "value": "8",
+        "unit": ""
+      },
+      "Block Limit SM": {
+        "value": "24",
+        "unit": "block"
+      },
+      "Block Limit Registers": {
+        "value": "4",
+        "unit": "block"
+      },
+      "Block Limit Shared Mem": {
+        "value": "2",
+        "unit": "block"
+      },
+      "Block Limit Warps": {
+        "value": "6",
+        "unit": "block"
+      },
+      "Theoretical Active Warps per SM": {
+        "value": "16",
+        "unit": "warp"
+      },
+      "Theoretical Occupancy": {
+        "value": "33.33",
+        "unit": "%"
+      },
+      "Achieved Occupancy": {
+        "value": "23.34",
+        "unit": "%"
+      },
+      "Achieved Active Warps Per SM": {
+        "value": "11.20",
+        "unit": "warp"
+      }
+    },
+    "preserved_ptx": {
+      "DRAM Frequency": {
+        "value": "9.49",
+        "unit": "Ghz"
+      },
+      "SM Frequency": {
+        "value": "915.00",
+        "unit": "Mhz"
+      },
+      "Elapsed Cycles": {
+        "value": "14,581,452",
+        "unit": "cycle"
+      },
+      "Memory Throughput": {
+        "value": "0.66",
+        "unit": "%"
+      },
+      "DRAM Throughput": {
+        "value": "0.01",
+        "unit": "%"
+      },
+      "Duration": {
+        "value": "15.94",
+        "unit": "ms"
+      },
+      "L1/TEX Cache Throughput": {
+        "value": "16.16",
+        "unit": "%"
+      },
+      "L2 Cache Throughput": {
+        "value": "0.11",
+        "unit": "%"
+      },
+      "SM Active Cycles": {
+        "value": "542,072.81",
+        "unit": "cycle"
+      },
+      "Compute (SM) Throughput": {
+        "value": "1.62",
+        "unit": "%"
+      },
+      "Warp Cycles Per Issued Instruction": {
+        "value": "7.74",
+        "unit": "cycle"
+      },
+      "Warp Cycles Per Executed Instruction": {
+        "value": "7.74",
+        "unit": "cycle"
+      },
+      "Avg. Active Threads Per Warp": {
+        "value": "30.10",
+        "unit": ""
+      },
+      "Avg. Not Predicated Off Threads Per Warp": {
+        "value": "25.70",
+        "unit": ""
+      },
+      "Block Size": {
+        "value": "256",
+        "unit": ""
+      },
+      "Function Cache Configuration": {
+        "value": "CachePreferNone",
+        "unit": ""
+      },
+      "Grid Size": {
+        "value": "2,272",
+        "unit": ""
+      },
+      "Registers Per Thread": {
+        "value": "64",
+        "unit": "register/thread"
+      },
+      "Shared Memory Configuration Size": {
+        "value": "102.40",
+        "unit": "Kbyte"
+      },
+      "Driver Shared Memory Per Block": {
+        "value": "1.02",
+        "unit": "Kbyte/block"
+      },
+      "Dynamic Shared Memory Per Block": {
+        "value": "34.90",
+        "unit": "Kbyte/block"
+      },
+      "Static Shared Memory Per Block": {
+        "value": "0",
+        "unit": "byte/block"
+      },
+      "# SMs": {
+        "value": "142",
+        "unit": "SM"
+      },
+      "Stack Size": {
+        "value": "1,024",
+        "unit": ""
+      },
+      "Threads": {
+        "value": "581,632",
+        "unit": "thread"
+      },
+      "# TPCs": {
+        "value": "71",
+        "unit": ""
+      },
+      "Enabled TPC IDs": {
+        "value": "all",
+        "unit": ""
+      },
+      "Uses Green Context": {
+        "value": "0",
+        "unit": ""
+      },
+      "Waves Per SM": {
+        "value": "8",
+        "unit": ""
+      },
+      "Block Limit SM": {
+        "value": "24",
+        "unit": "block"
+      },
+      "Block Limit Registers": {
+        "value": "4",
+        "unit": "block"
+      },
+      "Block Limit Shared Mem": {
+        "value": "2",
+        "unit": "block"
+      },
+      "Block Limit Warps": {
+        "value": "6",
+        "unit": "block"
+      },
+      "Theoretical Active Warps per SM": {
+        "value": "16",
+        "unit": "warp"
+      },
+      "Theoretical Occupancy": {
+        "value": "33.33",
+        "unit": "%"
+      },
+      "Achieved Occupancy": {
+        "value": "18.63",
+        "unit": "%"
+      },
+      "Achieved Active Warps Per SM": {
+        "value": "8.94",
+        "unit": "warp"
+      }
+    },
+    "interpretation": "Shared memory limits both to two resident blocks/SM, 33.33% theoretical occupancy. AOT has higher achieved occupancy (23.34% vs 18.63%) yet is slower (19.02 vs 15.94 ms), ruling out occupancy loss. Fixed-latency dependency stalls: 2.5 vs 2.4 cycles/instruction, 33.5% vs 30.6%; expanded integer/control-flow code is the distinguishing evidence."
+  },
+  "fix": {
+    "cuda_oxide_revision": "d89093b8149b93c63324c5a0e687a097061f117c",
+    "description": "Preserve ordinary LLVM/PTX code generation, assemble with PtxAssembler, fingerprint exact ptxas in wrapper/backend handshake, share one driver-independent PTX merger between runtime and build-time generic linking, retain NVVM/LTOIR where required.",
+    "rccl_revision": "67f06e4ad723d6fefb7222bbead01ea94a20f29b"
+  },
+  "verification": {
+    "cuda_artifact_finalizer_and_cuda_host_lib_tests": {
+      "passed": 127,
+      "ignored": 8
+    },
+    "cargo_oxide_bin_tests": {
+      "passed": 285,
+      "test_threads": 1
+    },
+    "backend_unit_tests": {
+      "passed": 49,
+      "ignored": 1
+    },
+    "live_ptx_materialization_test": "passed including FMA off and debug policies",
+    "live_cross_crate_aot_fixture": "passed all six cross-crate shared/global/pool value and alignment checks; runtime payloads asserted ELF-only",
+    "notes": [
+      "Corrected pre-existing incremental test expectation: architecture cfg changes global Rust flags and rebuilds host dependencies; output-mode changes remain device-owner scoped.",
+      "A parallel wrapper test run had a transient external clang-fixture probe failure; complete serial suite passed.",
+      "Corrected new live PTX fixture from .version 7.0 to 7.1 for sm_86."
+    ],
+    "required_datalog_packages": {
+      "passed": 54,
+      "ignored": 2,
+      "command": "cargo oxide test --arch sm_89 -- --release -p gpu-datalog-runtime -p cq-gpu-datalog-core -p cq-gpu-datalog",
+      "oracle": "all programs matched CPU on every fixture"
+    },
+    "run_holes": {
+      "passed": 14,
+      "ignored": 0,
+      "command": "cargo oxide test --arch sm_89 -- --release -p cq-gpu-sequence --test run_holes"
+    }
+  },
+  "fixed_artifacts": [
+    {
+      "bundle": "__cuda_oxide_linked",
+      "kind": 512,
+      "bytes": 3733472,
+      "sha256": "3f9844ece6c0f0b2b4dfdde35fb150aee7cf1c2a9c81d870b83437f7da9bb187"
+    },
+    {
+      "bundle": "doop-gpu",
+      "kind": 512,
+      "bytes": 2629984,
+      "sha256": "18a82f135d16397275932b736a2874fc9918effc399e8cb61f9aabf79b3cc018"
+    },
+    {
+      "bundle": "cq-gpu-sequence-runtime",
+      "kind": 512,
+      "bytes": 1040672,
+      "sha256": "72ed3d79ded55b2906f2949d0dece85e8fd8ba96b6c18e8e0e4632a27f1e7b49"
+    },
+    {
+      "bundle": "rccl-cub",
+      "kind": 512,
+      "bytes": 18720,
+      "sha256": "538ee0682666610182aa053a8fb51b2a1e09d47355ab813ef3c6b41e3faa3085"
+    },
+    {
+      "bundle": "gpu-device-columns",
+      "kind": 512,
+      "bytes": 49440,
+      "sha256": "e7b1a39ae538133d14786735dce9b8b0e184a6cee8d856738ad2b17114274ef2"
+    }
+  ],
+  "fixed_binary_sha256": "65d2c45533f54239433d27e9373f961b0034184adcc35d12db32bcac1a238535",
+  "fixed_nsys": {
+    "kernel_ns": 7722568032,
+    "kernel_launches": 52489,
+    "gpu_evaluation_seconds_profiled": 10.334188,
+    "exact": true,
+    "module_loads": [
+      {
+        "api": "cuModuleLoadData",
+        "calls": 158,
+        "total_ns": 119942920
+      }
+    ],
+    "top_five": [
+      {
+        "symbol": "__cq_sequence_dispatch_0___cq_sequence_kernels_2abbaf0ece1eee48_124",
+        "calls": 306,
+        "total_ns": 4079973207
+      },
+      {
+        "symbol": "__cq_sequence_dispatch_0___cq_sequence_kernels_6fe7d65bfa43c029_137",
+        "calls": 355,
+        "total_ns": 555819730
+      },
+      {
+        "symbol": "__cq_sequence_dispatch_0___cq_sequence_kernels_649e1f27aa41eca5_144",
+        "calls": 355,
+        "total_ns": 502518087
+      },
+      {
+        "symbol": "__cq_sequence_dispatch_0___cq_sequence_kernels_2f077071d1b1ec17_146",
+        "calls": 355,
+        "total_ns": 464021058
+      },
+      {
+        "symbol": "__cq_sequence_dispatch_0___cq_sequence_kernels_512d613ce969d33d_133",
+        "calls": 331,
+        "total_ns": 416294849
+      }
+    ]
+  },
+  "commands": {
+    "build": "cargo oxide build --arch sm_89 -- --release -p doop-gpu",
+    "nsys": "nsys profile --trace=cuda --sample=none --cpuctxsw=none -o fixed ./target/release/doop-gpu /tmp/doop-data/cassandra",
+    "assembly": "ptxas -arch=sm_89 -O3 -v doop_gpu.ptx -o ptx-o3.cubin",
+    "disassembly": [
+      "cuobjdump -sass IMAGE",
+      "cuobjdump -res-usage IMAGE",
+      "cuobjdump -elf IMAGE",
+      "nvdisasm -g IMAGE"
+    ],
+    "ncu": "ncu --kernel-name regex:__cq_sequence_dispatch_0___cq_sequence_kernels_2abbaf0ece1eee48_124 --launch-skip 100 --launch-count 1 --section LaunchStats --section Occupancy --section SpeedOfLight --section WarpStateStats PROGRAM /tmp/doop-data/cassandra"
+  },
+  "cleanup": "Temporary extracted artifacts, disassemblies and raw profiles removed after recording this evidence; short summary retained at /tmp/sass-compare-summary.txt.",
+  "fixed_warm": {
+    "gpu_evaluation_seconds": 9.314324,
+    "mini_evaluation_seconds": 4.390642,
+    "exact": true,
+    "command": "./target/release/doop-gpu /tmp/doop-data/cassandra"
+  }
+}

@@ -2,5 +2,5 @@ backend = "/data/cuda-oxide/cuda-oxide/crates/rustc-codegen-cuda/target/release/
 default-arch = "sm_89"
 
 [env]
-# cargo-oxide performs provenance-checked libNVVM/nvJitLink finalization at build time.
+# cargo-oxide preserves device codegen and provenance-checks build-time cubin assembly.
 CUDA_OXIDE_MATERIALIZE_CUBIN = "1"

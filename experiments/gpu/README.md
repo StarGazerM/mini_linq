@@ -49,12 +49,15 @@ device address-space lowering requires optimized codegen.
 
 The workspace's `.cargo/cuda-oxide.toml` selects `sm_89` and enables
 `CUDA_OXIDE_MATERIALIZE_CUBIN` for the **cargo-oxide wrapper**. This is equivalent
-to passing `--materialize-cubin --arch sm_89`: the backend emits NVVM IR, then
-libNVVM and nvJitLink finalize each embedded artifact to a native cubin during
-the build. At the final host link, retained local/dependency device IR is linked
-again into `__cuda_oxide_linked` for cross-crate generic kernels (including RCCL).
-Compile-only IR lives in unanchored, linker-excluded archive members; it is not
-embedded in the final runtime image or parsed by module loading.
+to passing `--materialize-cubin --arch sm_89`: ordinary device code keeps the
+LLVM optimization/PTX pipeline, and provenance-checked `ptxas` assembles its
+native cubin during the build. Materialization does not force the different
+libNVVM optimizer. Artifacts that require NVVM IR retain their libNVVM/nvJitLink
+route. At the final host link, retained local/dependency inputs produce
+`__cuda_oxide_linked` for cross-crate generic kernels (including RCCL), using
+the same PTX merge semantics as the nonmaterialized loader. Compile-only inputs
+live in unanchored, linker-excluded archive members; they are not embedded in
+the final runtime image or parsed by module loading.
 `cuda-host::load_bundle` selects each ordinary module's cubin; the generic loader
 selects the linked cubin instead of merging PTX at runtime. Keep invoking
 `cargo oxide`, not raw `cargo`; the wrapper fingerprints the compiler/toolkit
@@ -273,8 +276,73 @@ local dependency patches are required.
 Full per-load sizes, hashes, timings, loader paths, fork revisions and
 verification results are in
 [`compare/doop_cassandra.aot_cubin.results.json`](compare/doop_cassandra.aot_cubin.results.json).
-Raw profiles and intercepted images from this measurement are under
-`/tmp/aot-cubin-measure/` (`ptx-nsys` and `final-nsys`).
+The temporary profiles and intercepted images from that historical measurement
+have been removed; the JSON retains their measurements and image identities.
+
+#### Preserving code generation during AOT assembly
+
+The initial AOT mode changed more than module loading: it forced
+`CUDA_OXIDE_EMIT_NVVM_IR=1`, replacing LLVM 23's `internalize,default<O2>`/`llc`
+PTX pipeline with the legacy libNVVM optimizer and nvJitLink LTO. The resulting
+integer/control-flow code was larger. It was not an optimization-level,
+debug-information, math-mode, or register-cap flag mismatch.
+
+The exact former PTX was recovered from the retained executable (SHA-256
+`e047023e2b4acc3730fc1135dc41d824c7a2fc9dd8c6e06bd24e2146317ac06b`).
+CUDA 13 `ptxas -arch=sm_89 -O3` produces instruction-identical SASS to the
+driver's cached `cuModuleLoadData` cubin for all five hot kernels:
+
+| Kernel suffix | Registers, PTX / initial AOT | Stack bytes, PTX / initial AOT | SASS instructions, PTX / initial AOT | Dynamic shared bytes | Resident blocks/SM, both |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `_124` | 64 / 64 | 16 / 0 | 1,920 / 2,592 | 34,896 | 2 |
+| `_137` | 128 / 123 | 24 / 0 | 3,384 / 4,800 | 67,696 | 1 |
+| `_144` | 128 / 120 | 8 / 0 | 2,992 / 4,264 | 39,024 | 2 |
+| `_146` | 128 / 120 | 8 / 0 | 3,040 / 4,328 | 55,408 | 1 |
+| `_133` | 62 / 48 | 0 / 8 | 1,544 / 2,152 | 24,656 | 3 |
+
+Counts include terminal padding NOPs. Static shared memory is zero and block
+size is 256 throughout. PTX `_124` and `_137` have 16-byte spill stores/loads;
+the initial AOT versions eliminate those spills but are nevertheless slower.
+The initial AOT `_133` has 8-byte spill stores and 16-byte spill loads.
+The disassembly's `CALL.REL.NOINC` instructions are intra-kernel control flow,
+not evidence of newly outlined device helpers. Neither image requests `-G`,
+line information, or a register cap.
+
+Nsight Compute on the same `_124` launch (2,272 blocks, fixed 915-MHz SM clock)
+measured **19.02 ms** with the initial AOT code versus **15.94 ms** with the
+PTX-assembled code. Both use 64 registers and have 33.33% theoretical occupancy,
+limited by shared memory. The slower code actually has higher achieved
+occupancy, 23.34% versus 18.63%; occupancy loss is not the cause.
+
+Materialization now preserves ordinary PTX code generation and assembles it
+ahead of time with provenance-checked `ptxas`. Generic cross-crate PTX uses the
+same shared merger as the nonmaterialized loader, but runs during the build.
+NVVM/LTOIR inputs retain their required compiler route. Runtime images still
+contain only cubins, while compile-only inputs remain linker-excluded.
+The rebuilt fixed cubins have instruction-identical SASS and identical resource
+usage to the original driver-JIT kernels for every row in the table above.
+
+The rebuilt Cassandra profile again matched all 26 complete output tuple sets:
+
+| Measurement | Original PTX JIT | Initial NVVM AOT | Fixed PTX AOT |
+| --- | ---: | ---: | ---: |
+| Kernel time, 52,489 launches | 7.731254122 s | 8.793091834 s | **7.722568032 s** |
+| Module loading, 158 calls | 5.588267898 s | 0.163992571 s | **0.119942920 s** |
+| Warm GPU evaluation, unprofiled | 11.857853 s | 10.422113 s | **9.314324 s** |
+
+The fixed kernel time meets the original 7.73-second target and is 12.17% below
+the regressed AOT measurement. `_124` accounts for 4.079973207 s over 306
+launches. Profiled end-to-end GPU evaluation is 10.334188 s; the separate
+unprofiled warm run is 9.314324 s and also matches all outputs exactly.
+The three required Datalog packages pass **54 tests** (two opt-in probes
+ignored), and `cq-gpu-sequence --test run_holes` passes **14 tests**.
+
+The published fork revisions are cuda-oxide
+`d89093b8149b93c63324c5a0e687a097061f117c` and RCCL
+`67f06e4ad723d6fefb7222bbead01ea94a20f29b`. Artifact identities, per-kernel
+resource/SASS comparisons, compiler flags, Nsight Compute counters, and
+verification results are recorded in
+[`compare/doop_cassandra.aot_codegen.results.json`](compare/doop_cassandra.aot_codegen.results.json).
 
 ### Planner-driven 11-query TPC-H suite
 
