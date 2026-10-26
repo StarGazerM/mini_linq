@@ -7,6 +7,16 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Delta-first occurrence order (`DL-OccurrenceOrder`): variants record a
+  checked permutation of their first positive-atom prefix; the opt-in
+  `incremental(driver(delta_first))` advice leads with the delta, then connected
+  reads. CPU default stays written order. GPU DOOP selects it: the hot hole
+  kernels (cast, virtual dispatch, field load) scanned full `reachable` before
+  testing their delta; now they scan the delta. Cassandra exact; GPU evaluation
+  9.60 s -> 3.67 s, kernel time 7.72 s -> 1.90 s (cast kernel 4.08 s -> 0.066 s).
+- AOT cubins keep LLVM PTX codegen: cubin materialization had forced the libNVVM
+  path (35-43% more SASS); now PTX is assembled with `ptxas` at build time.
+  Module loading 5.59 s -> 0.12 s; kernel SASS identical to driver JIT.
 - GPU workspace builds from pushed forks only: cuda-oxide `mini-linq/main`
   (`496c01bf`, upstream NVlabs main `9df9e7ce` plus 7 patches: RCCL compiler
   support, PTX debug/merge fixes, merged-PTX module cache, static shared
