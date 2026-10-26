@@ -389,9 +389,13 @@ approval.
 - Not context facts (see context.tex): declared keys (need a provenance
   model), first-witness consumption, guard totality, terminal canonical
   return.
-- Upstream items (GPU side): `sequence_conformance` corpus test does not finish
-  within 20 min (skip by exact name in workload runs);
-  `translate_pull` codegen triggers `clippy::unused_unit` in workloads.
+- Upstream items (GPU side): `translate_pull` codegen triggers
+  `clippy::unused_unit` in workloads.
+- Sequence conformance: 31 crates (one per classic/retail case, pairwise
+  triangle matrix per planner, 310 kernel rows instead of 2,848). Tasks code
+  reaches Rayon only through non-generic `cq_storage::parallel` helpers. A full
+  rebuild after a compiler change takes 143 s wall (1,355 s CPU, 3.7 GB peak
+  RSS); running all 31 takes seconds.
 - Core dependency ownership: checked rewrite libraries now live in
   `passes/cq-rewrite-passes` and `passes/cq-sequence-rewrite-passes`; feature
   macro crates wrap them. Cross-feature lowering/pull tests live with workloads
