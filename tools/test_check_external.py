@@ -87,6 +87,7 @@ class FeatureClosureTests(unittest.TestCase):
                     self.assertEqual(synced, [
                         "features/datalog/Cargo.toml",
                         "features/datalog-parallel/Cargo.toml",
+                        "features/workloads/Cargo.toml",
                     ])
                     Path(command[-1]).mkdir()
                 elif command[1] == "package":
