@@ -435,6 +435,9 @@ approval.
   wide inputs use multi-lane words. 11.8 s vs 4.27 s `mini` / 1.26 s `mini-par`.
   nsys: kernels 7.7 s (one hole 4.07 s: 306 × 13.3 ms), PTX module JIT 5.6 s
   (158 × 35 ms); readback transfers 21 ms, the rest of D2H time is waiting.
+  Cold first run after a rebuild ~25 s (driver PTX JIT cache empty). The GPU
+  workspace pins pushed forks (cuda-oxide and RCCL `mini-linq/main`), Rust
+  1.99.1, CUDA 13.0.
 - Open: reach chain at 15 threads below sequential; nested CQ code in one
   codegen unit; rule-local aggregates; FlowLog comparison; partial-Rust
   multi-round refinement; surface sugar (disjunction, facts, rule macros).

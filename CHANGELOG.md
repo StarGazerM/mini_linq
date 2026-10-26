@@ -7,6 +7,13 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- GPU workspace builds from pushed forks only: cuda-oxide `mini-linq/main`
+  (`496c01bf`, upstream NVlabs main `9df9e7ce` plus 7 patches: RCCL compiler
+  support, PTX debug/merge fixes, merged-PTX module cache, static shared
+  namespacing, i128 shift legalization) and RCCL `mini-linq/main` (`8e329e25`);
+  no local `[patch]` paths. Toolchain Rust 1.99.1 (`RUSTC_BOOTSTRAP=1`) and
+  CUDA 13.0, which upstream bindings require. DOOP GPU exact, 11.8–12.0 s warm;
+  the first run after a rebuild takes ~25 s while the driver JIT-compiles PTX.
 - DOOP on the GPU, exact on cassandra (all 26 outputs equal `mini`). Strings
   never reach the device: the DOOP loader interns `method_descriptor` at load
   (`IStr::code`/`from_code`), `device_storage(symbols(T => Codec))` stores
