@@ -641,6 +641,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-sequence-conformance"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-sequence",
+ "cq-sequence-plan",
+ "cq-sequence-pull",
+ "cq-sequence-tasks",
+ "cq-storage",
+ "cq-syntax",
+ "cq-testkit",
+ "proc-macro2",
+ "quote",
+ "rayon",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "cq-sequence-lowering"
 version = "0.1.0"
 dependencies = [
@@ -772,17 +789,11 @@ dependencies = [
  "cq-lang-ix",
  "cq-lang-physical",
  "cq-lang-ra",
- "cq-lang-sequence",
  "cq-lang-structures",
  "cq-lang-vo",
- "cq-sequence-plan",
- "cq-sequence-pull",
- "cq-sequence-tasks",
  "cq-syntax",
  "duckdb",
  "hashbrown 0.15.5",
- "proc-macro2",
- "quote",
  "rayon",
  "syn 2.0.119",
 ]
@@ -805,6 +816,7 @@ dependencies = [
  "cq-load",
  "cq-planners",
  "cq-rewrites",
+ "cq-sequence-tasks",
  "cq-storage",
  "cq-testkit",
  "cq-workload-passes",
@@ -837,9 +849,9 @@ version = "0.1.0"
 dependencies = [
  "cq-lang-sequence",
  "cq-lang-structures",
+ "cq-sequence-conformance",
  "cq-sequence-lowering",
  "cq-stage",
- "cq-testkit",
  "cq-workload-authored",
  "proc-macro2",
  "quote",
@@ -857,6 +869,7 @@ dependencies = [
  "cq-join-filters",
  "cq-lang-cq",
  "cq-lang-physical",
+ "cq-lang-sequence",
  "cq-lang-structures",
  "cq-load",
  "cq-physical-lowering",
@@ -864,6 +877,8 @@ dependencies = [
  "cq-planners-plan",
  "cq-rewrite-passes",
  "cq-rewrites",
+ "cq-sequence-lowering",
+ "cq-sequence-pull",
  "cq-sequence-tasks",
  "cq-sequence-tasks-macros",
  "cq-storage",

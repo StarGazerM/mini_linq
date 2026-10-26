@@ -1,13 +1,11 @@
 [workspace]
-members = ["passes"]
-default-members = [".", "passes"]
 resolver = "3"
 
 [workspace.dependencies]
 cq-stage = { version = "0.1.0", path = "../../facade/cq-stage" }
 cq-lang-sequence = { version = "0.1.0", path = "../../languages/cq-lang-sequence" }
 cq-syntax = { version = "0.1.0", path = "../../languages/cq-syntax" }
-cq-sequence-rewrite-passes = { version = "0.1.0", path = "passes" }
+cq-sequence-rewrite-passes = { version = "0.1.0", path = "../../passes/cq-sequence-rewrite-passes" }
 proc-macro2 = "1"
 quote = "1"
 syn = { version = "2", features = ["full", "extra-traits"] }
@@ -33,6 +31,11 @@ cq-lang-sequence.workspace = true
 cq-sequence-rewrite-passes.workspace = true
 
 [dev-dependencies]
+cq-syntax.workspace = true
+cq-rewrite-passes = { version = "0.1.0", path = "../../passes/cq-rewrite-passes" }
+cq-sequence-lowering = { version = "0.1.0", path = "../../passes/cq-sequence-lowering" }
+cq-structure-selection = { version = "0.1.0", path = "../../passes/cq-structure-selection" }
+cq-workloads = { version = "0.1.0", path = "../workloads" }
 proc-macro2.workspace = true
 quote.workspace = true
 syn.workspace = true

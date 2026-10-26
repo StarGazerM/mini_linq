@@ -1,7 +1,88 @@
 //! Realizations of checked key partitions. Geometry is supplied by the plan,
 //! never by the executing pool. Canon requires full-valuation routing; keyed
 //! grouping requires group-key routing and canonical complete valuations.
-use rayon::prelude::*;
+use cq_storage::parallel::map_index;
+use std::sync::Mutex;
+
+/// Indexed coarse work. Each index is consumed exactly once by a dispatch;
+/// owned tiles may reject a second access to the same index.
+pub trait Tiles: Sync {
+    type Tile: Send;
+    fn len(&self) -> usize;
+    fn tile(&self, index: usize) -> Self::Tile;
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+/// A tile count and its accessor, without a parallel iterator type.
+pub struct IndexedTiles<F> {
+    count: usize,
+    access: F,
+}
+
+impl<F> IndexedTiles<F> {
+    pub fn new<T>(count: usize, access: F) -> Self
+    where
+        F: Fn(usize) -> T,
+    {
+        Self { count, access }
+    }
+}
+
+impl<T: Send, F: Fn(usize) -> T + Sync> Tiles for IndexedTiles<F> {
+    type Tile = T;
+    fn len(&self) -> usize {
+        self.count
+    }
+    fn tile(&self, index: usize) -> T {
+        (self.access)(index)
+    }
+}
+
+/// Transfer each owned part to its task without requiring its rows to be Sync.
+pub fn owned_tiles<T: Send>(parts: Vec<T>) -> impl Tiles<Tile = T> {
+    let slots: Vec<_> = parts
+        .into_iter()
+        .map(|part| Mutex::new(Some(part)))
+        .collect();
+    IndexedTiles::new(slots.len(), move |index: usize| {
+        slots[index]
+            .lock()
+            .expect("tile slot poisoned")
+            .take()
+            .expect("tile consumed once")
+    })
+}
+
+/// Enumerate an opaque source into owned contiguous tiles.
+pub fn owned_row_tiles<R: Send>(
+    rows: impl IntoIterator<Item = R>,
+    grain: usize,
+) -> impl Tiles<Tile = std::vec::IntoIter<R>> {
+    assert!(grain > 0, "tile grain must be positive");
+    let mut rows = rows.into_iter();
+    let mut parts = Vec::new();
+    loop {
+        let part: Vec<_> = rows.by_ref().take(grain).collect();
+        if part.is_empty() {
+            break;
+        }
+        parts.push(part.into_iter());
+    }
+    owned_tiles(parts)
+}
+
+fn group_count(tiles: usize) -> usize {
+    tiles.min(rayon::current_num_threads().saturating_mul(4))
+}
+
+fn group_range(tiles: usize, groups: usize, group: usize) -> std::ops::Range<usize> {
+    let width = tiles / groups;
+    let extra = tiles % groups;
+    let start = group * width + group.min(extra);
+    start..start + width + usize::from(group < extra)
+}
 
 /// Dispatch contiguous hosts to borrowed tiles; non-contiguous row interfaces
 /// retain their ordinary enumeration before partitioning.
@@ -9,10 +90,7 @@ pub struct TileSource<H>(pub H);
 
 pub trait TileRows {
     type Row: Send;
-    fn tile_rows(
-        self,
-        grain: usize,
-    ) -> impl IndexedParallelIterator<Item = impl Iterator<Item = Self::Row> + Send>;
+    fn tile_rows(self, grain: usize) -> impl Tiles<Tile: Iterator<Item = Self::Row>>;
 }
 
 impl<'a, T: Sync> TileRows for &&TileSource<&'a [T]>
@@ -21,11 +99,11 @@ where
     <&'a T as cq_storage::rows::Columns>::Row: Send,
 {
     type Row = <&'a T as cq_storage::rows::Columns>::Row;
-    fn tile_rows(
-        self,
-        grain: usize,
-    ) -> impl IndexedParallelIterator<Item = impl Iterator<Item = Self::Row> + Send> {
-        self.0.par_chunks(grain).map(cq_storage::rows::Rows::rows)
+    fn tile_rows(self, grain: usize) -> impl Tiles<Tile: Iterator<Item = Self::Row>> {
+        let rows = self.0;
+        IndexedTiles::new(rows.len().div_ceil(grain), move |index| {
+            cq_storage::rows::Rows::rows(&rows[index * grain..rows.len().min((index + 1) * grain)])
+        })
     }
 }
 
@@ -35,11 +113,11 @@ where
     <&'a T as cq_storage::rows::Columns>::Row: Send,
 {
     type Row = <&'a T as cq_storage::rows::Columns>::Row;
-    fn tile_rows(
-        self,
-        grain: usize,
-    ) -> impl IndexedParallelIterator<Item = impl Iterator<Item = Self::Row> + Send> {
-        self.0.par_chunks(grain).map(cq_storage::rows::Rows::rows)
+    fn tile_rows(self, grain: usize) -> impl Tiles<Tile: Iterator<Item = Self::Row>> {
+        let rows = self.0;
+        IndexedTiles::new(rows.len().div_ceil(grain), move |index| {
+            cq_storage::rows::Rows::rows(&rows[index * grain..rows.len().min((index + 1) * grain)])
+        })
     }
 }
 
@@ -49,11 +127,11 @@ where
     <&'a T as cq_storage::rows::Columns>::Row: Send,
 {
     type Row = <&'a T as cq_storage::rows::Columns>::Row;
-    fn tile_rows(
-        self,
-        grain: usize,
-    ) -> impl IndexedParallelIterator<Item = impl Iterator<Item = Self::Row> + Send> {
-        self.0.par_chunks(grain).map(cq_storage::rows::Rows::rows)
+    fn tile_rows(self, grain: usize) -> impl Tiles<Tile: Iterator<Item = Self::Row>> {
+        let rows = self.0;
+        IndexedTiles::new(rows.len().div_ceil(grain), move |index| {
+            cq_storage::rows::Rows::rows(&rows[index * grain..rows.len().min((index + 1) * grain)])
+        })
     }
 }
 
@@ -63,11 +141,11 @@ where
     <&'a T as cq_storage::rows::Columns>::Row: Send,
 {
     type Row = <&'a T as cq_storage::rows::Columns>::Row;
-    fn tile_rows(
-        self,
-        grain: usize,
-    ) -> impl IndexedParallelIterator<Item = impl Iterator<Item = Self::Row> + Send> {
-        self.0.par_chunks(grain).map(cq_storage::rows::Rows::rows)
+    fn tile_rows(self, grain: usize) -> impl Tiles<Tile: Iterator<Item = Self::Row>> {
+        let rows = *self.0;
+        IndexedTiles::new(rows.len().div_ceil(grain), move |index| {
+            cq_storage::rows::Rows::rows(&rows[index * grain..rows.len().min((index + 1) * grain)])
+        })
     }
 }
 
@@ -76,29 +154,50 @@ where
     H::Row: Send,
 {
     type Row = H::Row;
-    fn tile_rows(
-        self,
-        grain: usize,
-    ) -> impl IndexedParallelIterator<Item = impl Iterator<Item = Self::Row> + Send> {
-        self.0
-            .rows()
-            .collect::<Vec<_>>()
-            .into_par_iter()
-            .chunks(grain)
-            .map(Vec::into_iter)
+    fn tile_rows(self, grain: usize) -> impl Tiles<Tile: Iterator<Item = Self::Row>> {
+        owned_row_tiles(self.0.rows(), grain)
     }
 }
 
+/// Fold contiguous groups of checked tiles into ordered buffers.
+///
+/// The number of buffers is bounded by four times the executing worker count.
+/// Only the coarse index body enters the shared Rayon dispatch; the tile body
+/// is called once per tile, never once per row.
+pub fn fold_tiles<P: Tiles, T: Send>(
+    parts: P,
+    body: &(dyn Fn(&mut Vec<T>, P::Tile) + Sync),
+) -> Vec<Vec<T>> {
+    let groups = group_count(parts.len());
+    map_index(groups, &|group| {
+        let mut buffer = Vec::new();
+        for index in group_range(parts.len(), groups, group) {
+            body(&mut buffer, parts.tile(index));
+        }
+        buffer
+    })
+}
+
+/// Evaluate each checked tile into its own buffer, preserving tile order.
+pub fn map_tiles<P: Tiles, T: Send>(
+    parts: P,
+    body: &(dyn Fn(P::Tile) -> Vec<T> + Sync),
+) -> Vec<Vec<T>> {
+    map_index(parts.len(), &|index| body(parts.tile(index)))
+}
+
 /// Execute an existing serial row adapter independently in each checked part.
+/// The adapter is type-erased; it runs once per part, outside the row loop.
 pub fn map_parts<R: Send, O: Send>(
     parts: Vec<Vec<R>>,
-    map: impl Fn(Vec<R>) -> Vec<O> + Sync + Send,
+    map: &(dyn Fn(Vec<R>) -> Vec<O> + Sync),
 ) -> Vec<Vec<O>> {
+    let parts = owned_tiles(parts);
     cq_storage::profile_select! {
-        plain { parts.into_par_iter().map(map).collect() }
+        plain { map_index(parts.len(), &|index| map(parts.tile(index))) }
         counters {{
             let context = cq_storage::counters::TaskContext::capture();
-            parts.into_par_iter().map(|part| context.run(|| map(part))).collect()
+            map_index(parts.len(), &|index| context.run(|| map(parts.tile(index))))
         }}
     }
 }
@@ -106,18 +205,17 @@ pub fn map_parts<R: Send, O: Send>(
 /// Route with a borrowing key projection, avoiding owned key copies solely
 /// for hashing. The router must return an index below the plan's positive count.
 ///
-/// Each Rayon fold accumulates a contiguous range of chunks into shared owner
-/// buffers instead of allocating a set of buffers for every chunk. Ordered
-/// collection of the folds preserves per-owner chunk and row encounter order,
-/// regardless of how the pool splits the work. Unordered sources gain no order
-/// guarantee. Pool scheduling never changes the supplied partition geometry.
+/// Each contiguous group accumulates chunks into shared owner buffers rather
+/// than allocating a set of buffers per chunk. Ordered collection preserves
+/// per-owner chunk and row encounter order. Scheduling never changes the
+/// supplied partition geometry.
 pub fn route_by<R: Send, Chunks, Chunk>(
     chunks: Chunks,
     count: usize,
     router: impl Fn(&R, usize) -> usize + Sync,
 ) -> Vec<Vec<R>>
 where
-    Chunks: IntoParallelIterator<Item = Chunk>,
+    Chunks: Tiles<Tile = Chunk>,
     Chunk: IntoIterator<Item = R> + Send,
 {
     assert!(count > 0, "key partition count must be positive");
@@ -125,24 +223,22 @@ where
         plain { () }
         counters { cq_storage::counters::TaskContext::capture() }
     };
-    let buckets: Vec<Vec<Vec<R>>> = chunks
-        .into_par_iter()
-        .fold(
-            || (0..count).map(|_| Vec::new()).collect::<Vec<Vec<R>>>(),
-            |mut buckets, chunk| {
-                let route = || {
-                    for row in chunk {
-                        buckets[router(&row, count)].push(row);
-                    }
-                    buckets
-                };
-                cq_storage::profile_select! {
-                    plain { route() }
-                    counters { _context.run(route) }
+    let groups = group_count(chunks.len());
+    let buckets: Vec<Vec<Vec<R>>> = map_index(groups, &|group| {
+        let route = || {
+            let mut buckets: Vec<Vec<R>> = (0..count).map(|_| Vec::new()).collect();
+            for index in group_range(chunks.len(), groups, group) {
+                for row in chunks.tile(index) {
+                    buckets[router(&row, count)].push(row);
                 }
-            },
-        )
-        .collect();
+            }
+            buckets
+        };
+        cq_storage::profile_select! {
+            plain { route() }
+            counters { _context.run(route) }
+        }
+    });
     let mut owners: Vec<Vec<Vec<R>>> = (0..count)
         .map(|_| Vec::with_capacity(buckets.len()))
         .collect();
@@ -153,19 +249,17 @@ where
             }
         }
     }
-    owners
-        .into_par_iter()
-        .map(|chunks| {
-            // Reuse the first nonempty buffer; a single fold needs no row copy.
-            let mut chunks = chunks.into_iter();
-            let mut rows = chunks.next().unwrap_or_default();
-            rows.reserve_exact(chunks.as_slice().iter().map(Vec::len).sum());
-            for mut chunk in chunks {
-                rows.append(&mut chunk);
-            }
-            rows
-        })
-        .collect()
+    let owners = owned_tiles(owners);
+    map_index(owners.len(), &|index| {
+        // Reuse the first nonempty buffer; a single group needs no row copy.
+        let mut chunks = owners.tile(index).into_iter();
+        let mut rows = chunks.next().unwrap_or_default();
+        rows.reserve_exact(chunks.as_slice().iter().map(Vec::len).sum());
+        for mut chunk in chunks {
+            rows.append(&mut chunk);
+        }
+        rows
+    })
 }
 
 #[cfg(test)]
@@ -173,10 +267,62 @@ mod tests {
     use super::*;
     use std::collections::{HashMap, HashSet};
     #[test]
+    fn folds_bound_buffers_and_preserve_tile_order() {
+        for workers in [1, 2, 7] {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    for count in [0, 1, 3, 29, 1001] {
+                        let parts = IndexedTiles::new(count, |index| index);
+                        let buffers = fold_tiles(parts, &|buffer, index| {
+                            buffer.extend([index * 2, index * 2 + 1]);
+                        });
+                        assert_eq!(buffers.len(), count.min(workers * 4));
+                        assert_eq!(
+                            buffers.into_iter().flatten().collect::<Vec<_>>(),
+                            (0..count * 2).collect::<Vec<_>>(),
+                        );
+                    }
+                });
+        }
+    }
+
+    #[test]
+    fn owned_tiles_transfer_non_sync_rows_in_order() {
+        let parts = owned_row_tiles((0..17).map(std::cell::Cell::new), 3);
+        let rows = map_tiles(parts, &|rows| rows.map(|row| row.get()).collect());
+        assert_eq!(
+            rows.iter().map(Vec::len).collect::<Vec<_>>(),
+            [3, 3, 3, 3, 3, 2]
+        );
+        assert_eq!(
+            rows.into_iter().flatten().collect::<Vec<_>>(),
+            (0..17).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn opaque_hosts_keep_enumeration_order() {
+        #[derive(Clone, Copy)]
+        struct Opaque<'a>(&'a [u32]);
+        impl cq_storage::rows::Rows for Opaque<'_> {
+            type Row = u32;
+            fn rows(self) -> impl Iterator<Item = u32> {
+                self.0.iter().copied()
+            }
+        }
+        let source = TileSource(Opaque(&[3, 1, 4, 1, 5]));
+        let parts = map_tiles((&&source).tile_rows(2), &Iterator::collect);
+        assert_eq!(parts, [vec![3, 1], vec![4, 1], vec![5]]);
+    }
+
+    #[test]
     fn contiguous_tiles_borrow_the_original_columns() {
         let input = [(1u32, 2u32), (3, 4), (5, 6)];
         let source = TileSource(input.as_slice());
-        let parts: Vec<Vec<_>> = (&&source).tile_rows(2).map(Iterator::collect).collect();
+        let parts = map_tiles((&&source).tile_rows(2), &Iterator::collect);
         assert_eq!(parts.iter().map(Vec::len).collect::<Vec<_>>(), [2, 1]);
         assert!(std::ptr::eq(parts[0][0].0, &input[0].0));
         assert!(std::ptr::eq(parts[1][0].1, &input[2].1));
@@ -203,7 +349,7 @@ mod tests {
             let owner = cq_storage::sharded::route_index(&(&row.key,), 7);
             expected[owner].push(row.key.as_ptr());
         }
-        let parts = route_by(chunks, 7, |row, n| {
+        let parts = route_by(owned_tiles(chunks), 7, |row, n| {
             cq_storage::sharded::route_index(&(&row.key,), n)
         });
         assert_eq!(parts.iter().map(Vec::len).sum::<usize>(), 3);
@@ -257,18 +403,21 @@ mod tests {
                                 let owner = cq_storage::sharded::route_index(&(row.0,), count);
                                 expected[owner].push(row);
                             }
-                            let routed = route_by(chunks.clone(), count, |row, n| {
+                            let routed = route_by(owned_tiles(chunks.clone()), count, |row, n| {
                                 cq_storage::sharded::route_index(&(row.0,), n)
                             });
                             assert_eq!(routed, expected);
 
-                            // Filtering removes indexedness, not source encounter
-                            // order; both forms must retain every occurrence.
+                            // Filtering before indexing retains source encounter
+                            // order and every surviving occurrence.
                             let routed = route_by(
-                                chunks
-                                    .clone()
-                                    .into_par_iter()
-                                    .filter(|chunk| !chunk.is_empty()),
+                                owned_tiles(
+                                    chunks
+                                        .clone()
+                                        .into_iter()
+                                        .filter(|chunk| !chunk.is_empty())
+                                        .collect(),
+                                ),
                                 count,
                                 |row, n| cq_storage::sharded::route_index(&(row.0,), n),
                             );
@@ -294,11 +443,12 @@ mod tests {
                         let mut chunks: Vec<_> = rows.chunks(113).map(<[_]>::to_vec).collect();
                         chunks.push(vec![]);
                         for count in [1, 7, 32] {
-                            let routed = route_by(chunks.clone(), count, |row, count| {
-                                cq_storage::sharded::route_index(row, count)
-                            });
+                            let routed =
+                                route_by(owned_tiles(chunks.clone()), count, |row, count| {
+                                    cq_storage::sharded::route_index(row, count)
+                                });
                             assert_eq!(routed.len(), count);
-                            let actual: Vec<_> = map_parts(routed, |part| {
+                            let actual: Vec<_> = map_parts(routed, &|part| {
                                 part.into_iter()
                                     .collect::<HashSet<_>>()
                                     .into_iter()
@@ -315,10 +465,11 @@ mod tests {
                                 for &r in &rows {
                                     *expected.entry(r % groups).or_insert(0) += r;
                                 }
-                                let routed = route_by(chunks.clone(), count, |row, count| {
-                                    cq_storage::sharded::route_index(&(row % groups), count)
-                                });
-                                let actual: Vec<_> = map_parts(routed, |part| {
+                                let routed =
+                                    route_by(owned_tiles(chunks.clone()), count, |row, count| {
+                                        cq_storage::sharded::route_index(&(row % groups), count)
+                                    });
+                                let actual: Vec<_> = map_parts(routed, &|part| {
                                     let mut totals = HashMap::new();
                                     for row in part {
                                         *totals.entry(row % groups).or_insert(0) += row;

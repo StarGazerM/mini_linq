@@ -1,4 +1,4 @@
-//! External, checked transformations for Physical and Structures programs.
+//! Checked core transformations for Physical and Structures programs.
 //!
 //! These functions accept the same opaque argument tokens as their proc macros.
 //! They preserve declarations, graph, Rust expressions, keys, and unrelated

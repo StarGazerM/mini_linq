@@ -25,14 +25,26 @@ use syn::{Ident, Token, Type};
 /// differences (levels, each sorted). Every demand is the union of a level
 /// prefix of exactly one chain. A demand for which `extendable` is false
 /// ends its chain (e.g. a payload probe, which must read all built levels).
-pub fn chain_cover<T: Ord + Clone>(demands: &BTreeSet<Vec<T>>, extendable: impl Fn(&Vec<T>) -> bool) -> Vec<Vec<Vec<T>>> {
+pub fn chain_cover<T: Ord + Clone>(
+    demands: &BTreeSet<Vec<T>>,
+    extendable: impl Fn(&Vec<T>) -> bool,
+) -> Vec<Vec<Vec<T>>> {
     let sets: Vec<&Vec<T>> = demands.iter().collect();
     let open: Vec<bool> = sets.iter().map(|set| extendable(set)).collect();
-    fn augment<T: Ord>(left: usize, sets: &[&Vec<T>], open: &[bool], seen: &mut [bool], matched: &mut [Option<usize>]) -> bool {
+    fn augment<T: Ord>(
+        left: usize,
+        sets: &[&Vec<T>],
+        seen: &mut [bool],
+        matched: &mut [Option<usize>],
+    ) -> bool {
         for right in 0..sets.len() {
-            if !seen[right] && sets[left].len() < sets[right].len() && sets[left].iter().all(|key| sets[right].contains(key)) {
+            if !seen[right]
+                && sets[left].len() < sets[right].len()
+                && sets[left].iter().all(|key| sets[right].contains(key))
+            {
                 seen[right] = true;
-                if matched[right].is_none() || augment(matched[right].unwrap(), sets, open, seen, matched) {
+                if matched[right].is_none() || augment(matched[right].unwrap(), sets, seen, matched)
+                {
                     matched[right] = Some(left);
                     return true;
                 }
@@ -41,10 +53,8 @@ pub fn chain_cover<T: Ord + Clone>(demands: &BTreeSet<Vec<T>>, extendable: impl 
         false
     }
     let mut matched = vec![None; sets.len()];
-    for left in 0..sets.len() {
-        if open[left] {
-            augment(left, &sets, &open, &mut vec![false; sets.len()], &mut matched);
-        }
+    for (left, _) in open.iter().enumerate().filter(|(_, open)| **open) {
+        augment(left, &sets, &mut vec![false; sets.len()], &mut matched);
     }
     let mut successor = vec![None; sets.len()];
     for (right, left) in matched.iter().enumerate() {
@@ -60,7 +70,13 @@ pub fn chain_cover<T: Ord + Clone>(demands: &BTreeSet<Vec<T>>, extendable: impl 
         let mut levels = vec![sets[start].clone()];
         let mut current = start;
         while let Some(next) = successor[current] {
-            levels.push(sets[next].iter().filter(|key| !sets[current].contains(key)).cloned().collect());
+            levels.push(
+                sets[next]
+                    .iter()
+                    .filter(|key| !sets[current].contains(key))
+                    .cloned()
+                    .collect(),
+            );
             current = next;
         }
         chains.push(levels);
@@ -70,7 +86,10 @@ pub fn chain_cover<T: Ord + Clone>(demands: &BTreeSet<Vec<T>>, extendable: impl 
 
 /// Independent check of a cover: levels nonempty, sorted and disjoint within
 /// a chain, and the level prefixes of all chains are exactly `demands`.
-pub fn check_chain_cover<T: Ord + Clone>(demands: &BTreeSet<Vec<T>>, chains: &[Vec<Vec<T>>]) -> Result<(), &'static str> {
+pub fn check_chain_cover<T: Ord + Clone>(
+    demands: &BTreeSet<Vec<T>>,
+    chains: &[Vec<Vec<T>>],
+) -> Result<(), &'static str> {
     let mut prefixes = BTreeSet::new();
     for chain in chains {
         let mut prefix = BTreeSet::new();
@@ -80,7 +99,9 @@ pub fn check_chain_cover<T: Ord + Clone>(demands: &BTreeSet<Vec<T>>, chains: &[V
                 || level.iter().any(|key| !prefix.insert(key.clone()))
                 || !prefixes.insert(prefix.iter().cloned().collect::<Vec<_>>())
             {
-                return Err("chain levels must be nonempty, sorted, disjoint and cover each demand exactly once");
+                return Err(
+                    "chain levels must be nonempty, sorted, disjoint and cover each demand exactly once",
+                );
             }
         }
     }
@@ -123,12 +144,24 @@ fn default_type(ty: &Type) -> bool {
 
 /// Index of the definition at which `column` of `result` is first bound,
 /// following each operator's stream input (its first operand).
-fn birth(program: &ir::physical::Program, headings: &BTreeMap<String, Vec<String>>, result: &str, column: &str) -> usize {
+fn birth(
+    program: &ir::physical::Program,
+    headings: &BTreeMap<String, Vec<String>>,
+    result: &str,
+    column: &str,
+) -> usize {
     let definitions = &program.program.definitions;
-    let index = definitions.iter().position(|d| symbol_name(&d.name) == result).expect("checked result");
+    let index = definitions
+        .iter()
+        .position(|d| symbol_name(&d.name) == result)
+        .expect("checked result");
     let operands = definitions[index].operator.operands();
     match operands.first() {
-        Some(input) if headings.get(&symbol_name(input)).is_some_and(|h| h.iter().any(|c| c == column)) => {
+        Some(input)
+            if headings
+                .get(&symbol_name(input))
+                .is_some_and(|h| h.iter().any(|c| c == column)) =>
+        {
             birth(program, headings, &symbol_name(input), column)
         }
         _ => index,
@@ -139,12 +172,19 @@ pub fn sorted_indexes(source: &ir::Program, arguments: TokenStream) -> syn::Resu
     let choices: Vec<Choice> = if arguments.is_empty() {
         Vec::new()
     } else {
-        syn::parse::Parser::parse2(ir::CommaList::<Choice>::parse_terminated, arguments)?.into_iter().collect()
+        syn::parse::Parser::parse2(ir::CommaList::<Choice>::parse_terminated, arguments)?
+            .into_iter()
+            .collect()
     };
     let facts = ir::contract::check(source)?;
     let physical = &facts.physical;
-    let operators: BTreeMap<String, &Operator> =
-        source.physical.program.definitions.iter().map(|d| (symbol_name(&d.name), &d.operator)).collect();
+    let operators: BTreeMap<String, &Operator> = source
+        .physical
+        .program
+        .definitions
+        .iter()
+        .map(|d| (symbol_name(&d.name), &d.operator))
+        .collect();
     let candidates = ir::physical::candidate_prefixes(&source.physical, physical);
     let mut used = vec![false; choices.len()];
     let mut target = source.clone();
@@ -157,44 +197,80 @@ pub fn sorted_indexes(source: &ir::Program, arguments: TokenStream) -> syn::Resu
         .collect();
     for name in names {
         let built: Vec<usize> = (0..target.structures.entries.len())
-            .filter(|&i| symbol_name(&target.structures.entries[i].name) == name
-                && matches!(&target.structures.entries[i].structure, Structure::Built { .. }))
+            .filter(|&i| {
+                symbol_name(&target.structures.entries[i].name) == name
+                    && matches!(
+                        &target.structures.entries[i].structure,
+                        Structure::Built { .. }
+                    )
+            })
             .collect();
-        let eligible = built.iter().all(|&i| match &target.structures.entries[i].structure {
-            Structure::Built { keyed, .. } => keyed.membership.is_none() && default_type(&keyed.ty),
-            _ => false,
-        });
-        let reads: Vec<_> = physical.keyed_reads.get(&name).into_iter().flatten().collect();
+        let eligible = built
+            .iter()
+            .all(|&i| match &target.structures.entries[i].structure {
+                Structure::Built { keyed, .. } => {
+                    keyed.membership.is_none() && default_type(&keyed.ty)
+                }
+                _ => false,
+            });
+        let reads: Vec<_> = physical
+            .keyed_reads
+            .get(&name)
+            .into_iter()
+            .flatten()
+            .collect();
         let keyed_only = reads.iter().all(|(reader, _, supply)| {
             let operator = operators[reader.as_str()];
             *supply == ir::physical::syntax::SupplyKind::Stream
                 && (matches!(operator, Operator::Probe(_, k) if matches!(k.choice, Some(ir::physical::Choice::First(_))))
                     || matches!(operator, Operator::Semi(..) | Operator::Anti(..)))
         });
-        let candidate = candidates.iter().any(|c| c.sides.iter().any(|(side, _)| *side == name));
-        let integral_keys = reads.iter().all(|(_, columns, _)| columns.iter().all(|c| sorted_key(&physical.rows[&name].types[c])));
+        let candidate = candidates
+            .iter()
+            .any(|c| c.sides.iter().any(|(side, _)| *side == name));
+        let integral_keys = reads.iter().all(|(_, columns, _)| {
+            columns
+                .iter()
+                .all(|c| sorted_key(&physical.rows[&name].types[c]))
+        });
         let chosen = choices.iter().position(|choice| {
             let build = symbol_name(&choice.build);
-            build == name || facts.lineage.get(&name).is_some_and(|origin| origin.base == build)
+            build == name
+                || facts
+                    .lineage
+                    .get(&name)
+                    .is_some_and(|origin| origin.base == build)
         });
         if !eligible || reads.is_empty() || !keyed_only || candidate || !integral_keys {
             if let Some(choice) = chosen {
-                return Err(syn::Error::new_spanned(&choices[choice].build, "sorted_indexes choice names no eligible built result"));
+                return Err(syn::Error::new_spanned(
+                    &choices[choice].build,
+                    "sorted_indexes choice names no eligible built result",
+                ));
             }
             continue;
         }
-        let demands: BTreeSet<Vec<String>> = reads.iter().map(|(_, columns, _)| {
-            let mut columns = columns.clone();
-            columns.sort();
-            columns
-        }).collect();
+        let demands: BTreeSet<Vec<String>> = reads
+            .iter()
+            .map(|(_, columns, _)| {
+                let mut columns = columns.clone();
+                columns.sort();
+                columns
+            })
+            .collect();
         let layouts: Vec<Vec<String>> = if let Some(choice) = chosen {
             used[choice] = true;
-            let layout: Vec<String> = choices[choice].levels.iter().flat_map(|l| l.columns.iter().map(symbol_name)).collect();
+            let layout: Vec<String> = choices[choice]
+                .levels
+                .iter()
+                .flat_map(|l| l.columns.iter().map(symbol_name))
+                .collect();
             let singletons: Vec<Vec<String>> = layout.iter().map(|c| vec![c.clone()]).collect();
             if choices[choice].levels.iter().any(|l| l.columns.len() != 1)
                 || layout.iter().any(|c| !physical.headings[&name].contains(c))
-                || demands.iter().any(|d| ir::prefix_depth(&singletons, d).is_none())
+                || demands
+                    .iter()
+                    .any(|d| ir::prefix_depth(&singletons, d).is_none())
             {
                 return Err(syn::Error::new_spanned(
                     &choices[choice].build,
@@ -214,16 +290,25 @@ pub fn sorted_indexes(source: &ir::Program, arguments: TokenStream) -> syn::Resu
                 })
                 .collect();
             let chains = chain_cover(&demands, |key| !probed.contains(key));
-            check_chain_cover(&demands, &chains).map_err(|detail| syn::Error::new(proc_macro2::Span::call_site(), detail))?;
+            check_chain_cover(&demands, &chains)
+                .map_err(|detail| syn::Error::new(proc_macro2::Span::call_site(), detail))?;
             // Within a level, order columns by when the reading stream binds
             // them; the level is the difference between two read keys.
             let heading = &physical.headings[&name];
             let left_of = |key: &Vec<String>| -> Option<String> {
-                reads.iter().find(|(_, columns, _)| {
-                    let mut columns = columns.clone();
-                    columns.sort();
-                    &columns == key
-                }).and_then(|(reader, _, _)| operators[reader.as_str()].operands().first().map(|l| symbol_name(l)))
+                reads
+                    .iter()
+                    .find(|(_, columns, _)| {
+                        let mut columns = columns.clone();
+                        columns.sort();
+                        &columns == key
+                    })
+                    .and_then(|(reader, _, _)| {
+                        operators[reader.as_str()]
+                            .operands()
+                            .first()
+                            .map(|l| symbol_name(l))
+                    })
             };
             chains
                 .iter()
@@ -236,7 +321,9 @@ pub fn sorted_indexes(source: &ir::Program, arguments: TokenStream) -> syn::Resu
                         let left = left_of(&prefix);
                         let mut level = level.clone();
                         level.sort_by_key(|column| {
-                            let bound = left.as_deref().map_or(usize::MAX, |l| birth(&source.physical, &physical.headings, l, column));
+                            let bound = left.as_deref().map_or(usize::MAX, |l| {
+                                birth(&source.physical, &physical.headings, l, column)
+                            });
                             (bound, heading.iter().position(|c| c == column))
                         });
                         layout.extend(level);
@@ -263,13 +350,22 @@ pub fn sorted_indexes(source: &ir::Program, arguments: TokenStream) -> syn::Resu
                 columns == full && matches!(operators[reader.as_str()], Operator::Probe(..))
             });
             let mut entry = template.clone();
-            let Structure::Built { keyed, .. } = &mut entry.structure else { unreachable!() };
+            let Structure::Built { keyed, .. } = &mut entry.structure else {
+                unreachable!()
+            };
             let row = &physical.rows[&name];
-            keyed.levels = layout.iter().map(|c| {
-                let column = &row.bindings[c];
-                syn::parse_quote!([#column])
-            }).collect();
-            let mut ty: Type = if payload { syn::parse_quote!(::cq_storage::HashIndex<'_, _, _>) } else { syn::parse_quote!(::cq_storage::HashSet<_>) };
+            keyed.levels = layout
+                .iter()
+                .map(|c| {
+                    let column = &row.bindings[c];
+                    syn::parse_quote!([#column])
+                })
+                .collect();
+            let mut ty: Type = if payload {
+                syn::parse_quote!(::cq_storage::HashIndex<'_, _, _>)
+            } else {
+                syn::parse_quote!(::cq_storage::HashSet<_>)
+            };
             for _ in 1..layout.len() {
                 ty = syn::parse_quote!(::cq_storage::Trie<'_, _, #ty>);
             }
@@ -285,7 +381,10 @@ pub fn sorted_indexes(source: &ir::Program, arguments: TokenStream) -> syn::Resu
         }
     }
     if let Some(unused) = used.iter().position(|used| !used) {
-        return Err(syn::Error::new_spanned(&choices[unused].build, "sorted_indexes choice matched no built result"));
+        return Err(syn::Error::new_spanned(
+            &choices[unused].build,
+            "sorted_indexes choice matched no built result",
+        ));
     }
     ir::check_rewrite(source, &target)?;
     Ok(target)

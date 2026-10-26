@@ -43,32 +43,55 @@ pub struct Runtime {
     dependencies: Vec<(String, PathBuf)>,
 }
 impl Runtime {
+    /// Compile storage once per source path and counters setting in this process.
+    /// Cached artifacts live outside each runtime's independent query directory.
     pub fn new(source: &Path, counters: bool) -> Self {
-        let mut runtime = Self::with_dependencies(Vec::new());
-        let mut compiler = crate::runtime_rustc();
-        compiler.args([
-            "--edition=2024",
-            "--crate-name",
-            "cq_storage",
-            "--crate-type",
-            "rlib",
-        ]);
-        if counters {
-            compiler.args(["--cfg", "feature=\"counters\""]);
-        }
-        success(
-            &compiler
-                .arg(source)
-                .arg("--out-dir")
-                .arg(&runtime.directory)
-                .output()
-                .unwrap(),
+        type Key = (PathBuf, bool);
+        static STORAGE: std::sync::LazyLock<
+            std::sync::Mutex<std::collections::HashMap<Key, PathBuf>>,
+        > = std::sync::LazyLock::new(Default::default);
+
+        let key = (
+            source.canonicalize().expect("storage source path"),
+            counters,
         );
-        runtime.dependencies.push((
-            "cq_storage".into(),
-            runtime.directory.join("libcq_storage.rlib"),
-        ));
-        runtime
+        let mut artifacts = STORAGE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let artifact = artifacts
+            .entry(key)
+            .or_insert_with_key(|(source, counters)| {
+                let directory =
+                    std::env::temp_dir().join(format!("cq-storage-{}", std::process::id()));
+                std::fs::create_dir_all(&directory).unwrap();
+                static NEXT: std::sync::atomic::AtomicUsize =
+                    std::sync::atomic::AtomicUsize::new(0);
+                let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let artifact = directory.join(format!("libcq_storage_{id}.rlib"));
+                let mut compiler = crate::runtime_rustc();
+                compiler.args([
+                    "--edition=2024",
+                    "--crate-name",
+                    "cq_storage",
+                    "--crate-type",
+                    "rlib",
+                ]);
+                if *counters {
+                    compiler.args(["--cfg", "feature=\"counters\""]);
+                }
+                success(
+                    &compiler
+                        .arg(source)
+                        .arg("-o")
+                        .arg(&artifact)
+                        .output()
+                        .unwrap(),
+                );
+                artifact
+            })
+            .clone();
+        drop(artifacts);
+        Self::with_dependencies(vec![("cq_storage".into(), artifact)])
     }
 
     /// Use already-linked Cargo artifacts when fixture-specific providers
@@ -139,4 +162,36 @@ fn success(output: &Output) {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Runtime;
+
+    #[test]
+    fn storage_is_cached_by_source_and_counters_without_sharing_query_directories() {
+        let fixture = Runtime::with_dependencies(Vec::new());
+        let source = fixture.directory.join("storage.rs");
+        std::fs::write(
+            &source,
+            "pub fn value() -> bool { cfg!(feature = \"counters\") }",
+        )
+        .unwrap();
+        let first = Runtime::new(&source, false);
+        let second = Runtime::new(&source, false);
+        let counters = Runtime::new(&source, true);
+        let other_source = fixture.directory.join("other.rs");
+        std::fs::copy(&source, &other_source).unwrap();
+        let other = Runtime::new(&other_source, false);
+        assert_eq!(first.dependencies, second.dependencies);
+        assert_ne!(first.dependencies, counters.dependencies);
+        assert_ne!(first.dependencies, other.dependencies);
+        assert_ne!(first.directory, second.directory);
+        let first_directory = first.directory.clone();
+        drop(first);
+        assert!(!first_directory.exists());
+        assert!(second.dependencies[0].1.exists());
+        second.run("fn main() { assert!(!cq_storage::value()); }");
+        counters.run("fn main() { assert!(cq_storage::value()); }");
+    }
 }

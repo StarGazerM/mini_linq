@@ -178,6 +178,7 @@ fn pool_tile_and_store_emit_indexed_parallel_buffers() {
     let expression = translate(&program, &analysis).unwrap();
     let rendered = expression.to_token_stream().to_string();
     assert!(rendered.contains("tile_rows (64usize)"), "{rendered}");
+    assert!(!rendered.contains("rayon :: prelude"), "{rendered}");
     assert!(!worker_bodies(&expression).is_empty());
     assert!(
         rendered.contains("collect :: < :: std :: vec :: Vec < _ > >"),
@@ -185,28 +186,25 @@ fn pool_tile_and_store_emit_indexed_parallel_buffers() {
     );
 }
 
-// Inspect the closure passed to the indexed parallel iterator, not merely the
-// presence of Rayon: parallel copying of an already-evaluated segment is wrong.
+// Inspect the closure run for each indexed tile, not merely the presence of
+// parallel dispatch: copying an already-evaluated segment is wrong. Tile
+// sources feed the shared `fold_tiles`/`map_tiles` dispatch boundary.
 fn worker_bodies(expression: &syn::Expr) -> Vec<syn::Expr> {
     #[derive(Default)]
     struct Workers(Vec<syn::Expr>);
-    fn unparen(mut expression: &syn::Expr) -> &syn::Expr {
-        while let syn::Expr::Paren(paren) = expression {
-            expression = &paren.expr;
-        }
-        expression
-    }
 
     impl VisitMut for Workers {
-        fn visit_expr_method_call_mut(&mut self, call: &mut syn::ExprMethodCall) {
-            if (call.method == "map" || call.method == "fold")
-                && let syn::Expr::MethodCall(source) = unparen(call.receiver.as_ref())
-                && (source.method == "par_chunks" || source.method == "tile_rows")
-                && let Some(syn::Expr::Closure(worker)) = call.args.last()
+        fn visit_expr_call_mut(&mut self, call: &mut syn::ExprCall) {
+            if let syn::Expr::Path(function) = call.func.as_ref()
+                && function.path.segments.last().is_some_and(|segment| {
+                    segment.ident == "fold_tiles" || segment.ident == "map_tiles"
+                })
+                && let Some(syn::Expr::Reference(worker)) = call.args.last()
+                && let syn::Expr::Closure(worker) = worker.expr.as_ref()
             {
                 self.0.push(*worker.body.clone());
             }
-            visit_mut::visit_expr_method_call_mut(self, call);
+            visit_mut::visit_expr_call_mut(self, call);
         }
     }
 
@@ -421,9 +419,7 @@ fn host_grouped_tasks_and_pull_execute_the_same_valuation_fold() {
             }
         }
     };
-    let runtime = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../runtime/cq-storage/src/lib.rs");
-    cq_testkit::rustc::Runtime::new(&runtime, false).run(&source.to_string());
+    run_partition_fixture(source);
 }
 
 #[test]
@@ -505,6 +501,7 @@ fn joined_tiles_canonicalize_complete_valuations_before_grouping() {
 
 fn run_partition_fixture(source: proc_macro2::TokenStream) {
     let runtime = cq_testkit::rustc::Runtime::with_dependencies(vec![
+        cq_testkit::rustc::linked_dependency::<rayon::ThreadPool>("rayon", "rayon::ThreadPool"),
         cq_testkit::rustc::linked_dependency::<cq_sequence_tasks::Config>(
             "cq_sequence_tasks",
             "cq_sequence_tasks::Config",
@@ -553,8 +550,13 @@ fn key_partitioned_groups_preserve_exact_valuations_and_empty_global_identity() 
         let rendered = expression.to_token_stream().to_string();
         assert!(rendered.contains("combine :: route_by"), "{rendered}");
         assert!(rendered.contains("combine :: map_parts"), "{rendered}");
+        assert!(!rendered.contains("into_par_iter"), "{rendered}");
+        assert!(!rendered.contains("par_chunks"), "{rendered}");
+        assert!(!rendered.contains("rayon :: prelude"), "{rendered}");
         if global {
             assert!(rendered.contains("let __cq_partials"), "{rendered}");
+            assert!(rendered.contains("parallel :: map_index"), "{rendered}");
+            assert!(rendered.contains("combine :: owned_tiles"), "{rendered}");
         }
         expression
     };
@@ -630,6 +632,9 @@ fn globally_unique_tiles_fold_partial_aggregates_with_one_empty_identity() {
     let expression = translate(&program, &facts).unwrap();
     let rendered = expression.to_token_stream().to_string();
     assert!(rendered.contains("let __cq_partials"), "{rendered}");
+    assert!(rendered.contains("parallel :: map_index"), "{rendered}");
+    assert!(rendered.contains("__cq_tiles . tile"), "{rendered}");
+    assert!(!rendered.contains("rayon :: prelude"), "{rendered}");
     assert!(!rendered.contains("combine :: route_by"), "{rendered}");
     run_partition_fixture(quote::quote! {
         fn main() {
@@ -1550,6 +1555,22 @@ fn keyed_partial_maps_merge_at_host_and_preserve_empty_input() {
         assert_eq!(facts.partial_groups["partials"], vec![true]);
         assert_eq!(facts.shapes["partials"].len(), 1);
         let tasks = translate(&program, &facts).unwrap();
+        let rendered = tasks.to_token_stream().to_string();
+        assert!(rendered.contains("parallel :: map_index"), "{rendered}");
+        assert!(
+            rendered.contains("div_ceil (__cq_tiles_per_task)"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("for __cq_index in __cq_start .. __cq_end"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("fold_chunks"), "{rendered}");
+        assert!(!rendered.contains("into_par_iter"), "{rendered}");
+        assert!(!rendered.contains("rayon :: prelude"), "{rendered}");
+        if stored_parts {
+            assert!(rendered.contains("combine :: owned_tiles"), "{rendered}");
+        }
         cq_sequence_tasks::translate_profile(&program, &facts).unwrap();
         let mut sequential = program.clone();
         sequential.graded = Some(syn::parse_quote! {
@@ -1998,6 +2019,11 @@ fn filtered_host_tiles_apply_predicates_without_collecting_the_host() {
     let expression = translate(&program, &facts).unwrap();
     let rendered = expression.to_token_stream().to_string();
     assert!(rendered.contains("position_range"), "{rendered}");
+    assert!(
+        rendered.contains("combine :: IndexedTiles :: new"),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("into_par_iter"), "{rendered}");
     assert!(rendered.contains("ReadPredicate :: test"), "{rendered}");
     assert!(!rendered.contains("let __cq_driver = ("), "{rendered}");
     run_partition_fixture(quote::quote! {

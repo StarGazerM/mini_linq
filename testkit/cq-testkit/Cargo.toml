@@ -13,12 +13,12 @@ categories = ["development-tools::testing"]
 default = []
 golden = []
 duckdb = ["dep:duckdb", "golden"]
-sequence-conformance = ["dep:cq-lang-sequence", "dep:cq-sequence-plan", "dep:cq-sequence-pull", "dep:cq-sequence-tasks", "dep:proc-macro2", "dep:quote", "dep:rayon"]
 
 [dependencies]
-# Links raw-rustc generated-program fixtures against the runtime hash backends.
+# Links raw-rustc generated-program fixtures against the storage runtime dependencies.
 ahash = "=0.8.12"
 hashbrown = { version = "=0.15.5", default-features = false, features = ["inline-more"] }
+rayon = "1"
 cq-lang-cq = { path = "../../languages/cq-lang-cq", version = "0.1.0" }
 cq-lang-vo = { path = "../../languages/cq-lang-vo", version = "0.1.0" }
 cq-lang-ra = { path = "../../languages/cq-lang-ra", version = "0.1.0" }
@@ -26,12 +26,5 @@ cq-lang-ix = { path = "../../languages/cq-lang-ix", version = "0.1.0" }
 cq-lang-physical = { path = "../../languages/cq-lang-physical", version = "0.1.0" }
 cq-lang-structures = { path = "../../languages/cq-lang-structures", version = "0.1.0" }
 cq-syntax = { path = "../../languages/cq-syntax", version = "0.1.0" }
-cq-lang-sequence = { path = "../../languages/cq-lang-sequence", optional = true }
-cq-sequence-plan = { path = "../../passes/cq-sequence-plan", optional = true }
-cq-sequence-pull = { path = "../../passes/cq-sequence-pull", optional = true }
-cq-sequence-tasks = { path = "../../features/sequence-tasks", optional = true }
-proc-macro2 = { workspace = true, optional = true }
-quote = { workspace = true, optional = true }
-rayon = { version = "1", optional = true }
 syn.workspace = true
 duckdb = { version = "=1.10505.0", features = ["bundled"], optional = true }

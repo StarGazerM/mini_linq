@@ -47,7 +47,7 @@ cq-planners-plan = { path = "../planners/plan" }
 cq-rewrites = { path = "../rewrites" }
 cq-join-filters = { path = "../join-filters" }
 cq-workload-passes = { path = "pipeline-passes" }
-cq-rewrite-passes = { path = "../rewrites/passes" }
+cq-rewrite-passes = { path = "../../passes/cq-rewrite-passes" }
 own-push = { path = "../own-dialect/printer" }
 cq-ext-support = { path = "../extensions/cq-ext-support" }
 cq-ext-aggregate = { path = "../extensions/cq-ext-aggregate" }
@@ -110,6 +110,9 @@ cq-lang-structures.workspace = true
 
 
 [dev-dependencies]
+cq-lang-sequence.workspace = true
+cq-sequence-lowering.workspace = true
+cq-sequence-pull.workspace = true
 cq-testkit = { workspace = true, features = ["duckdb"] }
 cq-load = { workspace = true, features = ["parquet"] }
 # Generated `par` configurations link the Tasks runtime and Rayon.

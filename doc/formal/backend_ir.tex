@@ -898,7 +898,7 @@ dynamic part claiming & none & work stealing & atomic cursor (free, BE-Partition
 \begin{mathpar}
 \Rule{T-Tasks}{t\text{ checked against }\mathsf{host}>\mathsf{pool}(\text{separated, dynamic})>\mathsf{task}}
  {\mathsf{run}_{\rm tasks}(t)=\text{T-Pull at }\mathsf{host};\
-  \mathsf{tile}_n\text{ at pool}\mapsto\code{par\_chunks}(n);\
+  \mathsf{tile}_n\text{ at pool}\mapsto\text{indexed contiguous tiles via shared task dispatch};\
   \mathsf{store}\text{ at pool}\mapsto\text{task-local vectors joined in chunk order};\
   \mathsf{flatten}\text{ at task}\mapsto\text{sequential flat map};\
   \mathsf{partition}_{K,P}\mapsto\text{route into }P\text{ owned parts};\
@@ -908,6 +908,10 @@ A collective graded at the separated pool is rejected by BE-Collective; a
 reduction at the join does not make the pool collaborative. Panics
 propagate through the join to the host, and no partially joined result is
 published.
+The shared dispatch erases the coarse index body before entering Rayon.
+Publication groups contiguous tiles into a bounded multiple of the worker
+count and joins per-group buffers in encounter order; per-index result slots
+preserve order without specializing the scheduler for each pipeline.
 The Tasks machine API \code{machine()} uses a fixed default of 64 logical
 pool partitions; \code{machine\_with\_width(parts)} requires a positive count
 and records it as the pool's distributing width. This logical width is not

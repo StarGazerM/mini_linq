@@ -503,6 +503,7 @@ fn prepare(
     Ok(planned)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn candidate(
     checker: &mut cq_lang_sequence::contract::Checker,
     source: &Planned,

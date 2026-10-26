@@ -19,8 +19,10 @@
 //! translation by default. Explicit push configurations retain the Structures
 //! terminal. The independent fuzz reference and SQL oracle remain unchanged;
 //! counted pull executions use the matching Sequence profile translation.
-//! The corpus's `sequence_conformance` test replays the pairwise configuration
-//! tables and full triangle matrix over every existing fixture scenario. It
+//! The corpus's `sequence_conformance` tests replay the pairwise configuration
+//! tables and, for the triangle kernel, planner x join x intersection with host
+//! and rewrite axes covered pairwise (26 or 32 rows per planner, not the
+//! 2,848-row executable product), over every existing fixture scenario. It
 //! preserves planner, rewrite, representation and host choices, and explicitly
 //! stores the final producer with a checked Sequence rewrite before comparing
 //! Sequential and Tasks on identical terms. Only Tasks grading rejections are
@@ -50,7 +52,7 @@
 //! cargo test
 //! cargo test -p cq-workloads --features counters --test growth -- --nocapture
 //! cargo test -p cq-workload-e2e --features parquet
-//! cargo test -p cq-workload-corpus --test sequence_conformance -- --nocapture
+//! cargo test -p cq-workload-corpus --test 'sequence_conformance_*' -- --nocapture
 //! cargo run -p cq-xtask --features oracle -- golden
 //! cargo run -p cq-xtask --features oracle -- fuzz --cases 200 --seed 0
 //! cargo run -p cq-xtask --features oracle -- fuzz --cases 2000 --seed 0

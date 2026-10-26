@@ -1,6 +1,4 @@
-#![cfg(feature = "sequence-conformance")]
-
-use cq_testkit::conformance::{Target, assert_conformant, assert_conformant_with_inputs, plan};
+use cq_sequence_conformance::{Target, assert_conformant, assert_conformant_with_inputs, plan};
 
 fn program() -> cq_lang_sequence::Program {
     syn::parse_quote! {

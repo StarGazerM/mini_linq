@@ -22,7 +22,8 @@ not estimated facts or hash-only equality.
 ```
 cq-lang-sequence  (language, checks, machine model, grading check)      [1]
    ├── cq-sequence-lowering   Structures -> Sequence (default)            [2]
-   ├── cq-sequence-rewrites   Sequence -> Sequence, advice-driven         [3]  (features/sequence-rewrites)
+   ├── cq-sequence-rewrite-passes  Sequence -> Sequence, advice-driven     [3]  (passes/)
+   ├── cq-sequence-plan       checked rewrite composition and planning        (passes/)
    ├── cq-sequence-pull       translation: sequential CPU                 [4]  (passes/)
    ├── cq-sequence-tasks      translation: Rayon                          [5]  (features/)
    └── cq-gpu-sequence        translation: CUDA (experiments/gpu)         [6]
@@ -31,10 +32,11 @@ facade: pipeline phases `sequence`, `decompose`, `grade`, print defaults   [8]
 conformance: one program, every target, equal supp∘α; H05 fixture         [9]
 ```
 
-[1] blocks everything; [2]–[7] are independent of each other given [1]'s
-API; [8] after [2]+[4]; [9] after any two targets. Shared crates ([1]–[3],
-[8]) must not depend on target crates ([4]–[6]) or runtimes — enforced by
-`tools/check_dependencies.py`.
+[1] supplies the language API; [3] reuses [2] and the core
+`passes/cq-rewrite-passes` Physical/Structures rewrites. `cq-sequence-plan`
+composes [3]; the optional `features/sequence-rewrites` macros wrap [3].
+[8] follows [2]+[4], and [9] exercises multiple targets. Core libraries never
+depend on optional feature consumers — enforced by `tools/check_dependencies.py`.
 
 ## [1] `languages/cq-lang-sequence`
 
@@ -236,7 +238,7 @@ aggregates → `group result input` (BE-Group), final result → `store` with
 whole workload corpus lowers; `check` passes; [4] over this output
 reproduces today's answers (goldens + fuzz).
 
-## [3] `features/sequence-rewrites` (proc macros + library, like `features/rewrites`)
+## [3] `passes/cq-sequence-rewrite-passes` (library) and `features/sequence-rewrites` (proc macros)
 
 Each is `Sequence -> Sequence`, takes advice tokens, has one law, and is
 checked by `check_rewrite`:
@@ -274,9 +276,14 @@ walks the whole program except the fold.
 ## [5] `features/sequence-tasks` (Rayon translation)
 
 Same signature. Machine `tasks { host > pool(separated, dynamic) > task }`.
-`tile n` at `pool` → `par_chunks(n)`; `store` at `pool` → per-task `Vec`
-merged at join; a directly pool-graded `fold` is rejected, while publication
-evaluates its producer at task; `canon` → BE-Canon prefilter + global.
+`tile n` at `pool` → indexed contiguous tiles dispatched through the shared,
+non-generic `cq-storage` Rayon loop; `store` at `pool` → one `Vec` per
+contiguous group of tiles, joined in group order. Groups are bounded by a small
+multiple of the executing worker count; this changes scheduling, not the
+checked partition geometry. Ordered indexed result slots keep generic row and
+pipeline types out of Rayon plumbing. A directly pool-graded `fold` is rejected,
+while publication evaluates its producer at task;
+`canon` → BE-Canon prefilter + global.
 `group` reuses the host interpretation after publication; grading rejects it at
 both pool and task levels rather than reducing each chunk independently.
 Acceptance: conformance with [4] on the corpus; the parallel
@@ -329,14 +336,17 @@ terminal paths require explicit sequence and grade.
 
 ## [9] conformance
 
-Implemented: `cq-testkit`'s `sequence-conformance` feature exposes
-`assert_conformant(program, targets)` for `Sequential` and `Tasks`. Each
+Implemented: `cq-sequence-conformance` in `features/sequence-tasks/conformance`
+exposes `assert_conformant(program, targets)` for `Sequential` and `Tasks`. Each
 target checks its machine grading, translates, and compiles/runs against the
 same inputs through the existing rustc driver. Answer rows compare as multisets,
 or sets at an explicit canonical output boundary; ordering is not observable.
 The first divergence names both targets and the differing row multiplicities.
 The default driver uses deterministic binary-domain databases; authored corpus
 inputs and raw duplicate-preserving `Case::inputs` use the same execution path.
+Core `cq-testkit` retains answer comparison and the rustc runtime driver without
+depending on compiler passes or optional targets. Cross-feature lowering and
+pull tests live in `features/workloads/tests` and `features/sequence-tasks/tests`.
 
 The workload corpus expands each configured Sequence program into Sequential
 and Tasks functions in the test binary through `conformance_targets!` and its
@@ -356,25 +366,23 @@ spot tests. Capability inference is shared across machines: host row stores need
 exact buckets, while segmented flattening and distributed execution require
 ranges in their actual read context.
 
-The `sequence_conformance_*` integration tests mirror the executable corpus's
-13 partitions: classic, retail, and eleven full-kernel planner families. They
-reuse the existing configuration lists and share registration, comparison, and
-reporting through `tests/support/sequence_conformance.rs`, with one summary
-test per file. Separate crates let Cargo compile the partitions in parallel
-instead of serializing all 3,436 configurations in one rustc invocation; the
-10,272 scenario comparisons and answer comparator are unchanged. Run them from
-`features/workloads` with
-`cargo test -p cq-workload-corpus --test 'sequence_conformance*' -- --nocapture`
-to see each partition's configuration and agreement counts.
-After `cargo clean -p cq-workload-corpus` (dependencies retained), the split
-build took 4m58s versus the supplied 28-minute monolithic baseline; the timed
-test command took 316.69s including all thirteen passing tests. Classic reported
-274 configurations / 786 agreements, retail 314 / 942, each of the seven
-coarse/hypergraph/LE kernel files 224 / 672, and each of the four fine kernel
-files 320 / 960: 3,436 / 10,272 total with no failures.
-`cargo clippy -p cq-workload-corpus --tests --no-deps` then completed in 221.94s;
-it reported existing unused-macro warnings in `support/le_configurations.rs`
-and needless-range-loop warnings in `matrix.rs`, with none in the new files.
+The `sequence_conformance_*` integration tests compare Sequential and Tasks
+translations of the same corpus programs: one crate per classic case (10), one
+per retail case (10), and eleven triangle-kernel planner families. Classic and
+retail reuse the executable corpus's pairwise configuration lists. The kernel
+crates do not replay the executable 2,848-row product: they keep the full
+product only over choices that change the compared program (planner x join x
+intersection) and cover host representation and the four rewrite axes pairwise
+(`tests/support/sequence_matrix.rs`, 26 or 32 rows per planner; printer rows
+are omitted because conformance replaces the printer). Registration,
+comparison and reporting stay in `tests/support/sequence_conformance.rs`. Run
+them from `features/workloads` with
+`cargo test -p cq-workload-corpus --test 'sequence_conformance*' -- --nocapture`.
+Compile cost, not execution, dominated: one 224/320-row kernel crate took over
+20 minutes in rustc (24 GB RSS for the former single retail crate, of which
+codegen 45%, monomorphization 24%, borrow checking 20%, macro expansion 15%).
+Tasks programs cost about four times a Sequential program in monomorphization
+and codegen, mostly Rayon plumbing instantiated per generated closure.
 
 Box [9] acceptance before the planner cutover exercised 3,436 configurations and 10,272 applicable scenarios:
 10,272 agreed, zero grading skips, zero execution failures. The workload
@@ -563,10 +571,10 @@ rule: filtering Lookups first in the GYO/LargestRoot transfer order, Expands
 as late as their consumers permit, and segmentation-first resource recovery.
 Explicit ordering, selection, Physical/Structures, realization, staging and decomposition advice retain precedence;
 `plan(preserve_order)` also requests order-preserving decomposition explicitly.
-The 13 `sequence_conformance_*` crates exercise the automatic rule. GPU suite
+The 31 `sequence_conformance_*` crates exercise the automatic rule. GPU suite
 generation enables automatic entries by default (`CQ_GPU_TPCH_AUTOMATIC=0`
 opts out). Handoff gates are exact SF1/SF10 execution of all 14 supported entries,
-13-crate agreement, and scoped API/lint/formal checks. Timings are reported,
+all-crate conformance agreement, and scoped API/lint/formal checks. Timings are reported,
 not compared against an automatic-versus-advised performance gate.
 
 Sources: Birler, Kemper, Neumann, "Robust Join Processing with Diamond

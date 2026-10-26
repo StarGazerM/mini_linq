@@ -17,7 +17,7 @@ mod selection;
 use selection::Results;
 
 mod catalog;
-pub use catalog::select_from_catalog;
+pub use catalog::{select_from_catalog, select_from_catalog_preserving};
 
 mod evidence;
 pub use evidence::{evidence, record_evidence, record_evidence_in};

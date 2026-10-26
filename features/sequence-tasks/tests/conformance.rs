@@ -1,5 +1,5 @@
 use cq_lang_sequence::Program;
-use cq_testkit::conformance::{Target, assert_conformant, assert_conformant_with_inputs};
+use cq_sequence_conformance::{Target, assert_conformant, assert_conformant_with_inputs};
 
 const TARGETS: &[Target] = &[Target::Sequential, Target::Tasks];
 
@@ -37,7 +37,7 @@ fn host_hash_lookup_store_keeps_exact_capability_on_tasks_machine() {
             result = store joined;
         }
     });
-    let (_, analysis) = cq_testkit::conformance::plan(&program, Target::Tasks).unwrap();
+    let (_, analysis) = cq_sequence_conformance::plan(&program, Target::Tasks).unwrap();
     assert_eq!(
         analysis.capabilities[&("r".into(), vec!["a".into()])],
         cq_lang_sequence::Capability::Exact,

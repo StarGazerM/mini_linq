@@ -123,11 +123,12 @@ oracle agreement supply distinct evidence.
 
 Folder boundaries constrain language dependencies to shared syntax, the pass
 protocol, and their base language. Passes depend on their endpoints, with explicit
-adapter dependencies for `cq-physical-realization` and `cq-sequence-pull`.
-Runtime crates have no compiler dependencies. Language, pass, and facade crates
-have no Cargo features. The dependency gate still reports the core-to-feature
-edges from `cq-sequence-lowering` and `cq-sequence-pull` test dependencies and
-`cq-sequence-plan` to `features/sequence-rewrites/passes`; these are not permitted exceptions.
+adapter dependencies for `cq-physical-realization`, `cq-sequence-pull`, and
+the planner's checked rewrite composition. `cq-sequence-plan` composes the core
+`cq-sequence-rewrite-passes`, which reuses `cq-rewrite-passes` and
+`cq-sequence-lowering`. Runtime crates have no compiler dependencies. Language,
+pass, and facade crates have no Cargo features. Cross-feature execution tests
+live in feature workspaces; core testkit depends only on languages and runtime.
 The isolation gate tests declared dependency closures.
 
 ## Extending

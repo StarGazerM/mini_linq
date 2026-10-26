@@ -115,6 +115,7 @@ pub(crate) fn choices(
     choices
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn apply(
     checker: &mut cq_lang_sequence::contract::Checker,
     planned: &mut Planned,
@@ -225,6 +226,12 @@ pub(crate) fn apply(
                     else {
                         return true;
                     };
+                    // Sharded supplies complete-key lookup, not Candidates or
+                    // nested candidate traversal. Keep multi-level providers
+                    // native even when their explicit lookup is exact.
+                    if keyed.levels.len() != 1 {
+                        return false;
+                    }
                     let ty = &keyed.ty;
                     let routed: syn::Type = syn::parse_quote!(::cq_storage::sharded::Sharded<#ty>);
                     facts.obligations.iter().all(|obligation| match obligation {

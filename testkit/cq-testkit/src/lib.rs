@@ -1,7 +1,6 @@
 //! Public conformance tools for MiniLinq passes and external dialects. This crate
-//! keeps language-only dependencies by default. The opt-in `sequence-conformance`
-//! feature adds CPU translations and executable answer comparison. All fixtures
-//! are included in the crate; consumers need no paths into a repository checkout.
+//! keeps only language and runtime dependencies. All fixtures are included in
+//! the crate; consumers need no paths into a repository checkout.
 //! Add `cq-testkit` as a dev-dependency in a core language, pass, runtime, or
 //! facade crate. External feature crates can use the same API.
 //!
@@ -146,8 +145,6 @@ pub use cq_lang_structures as structures;
 pub use cq_lang_vo as vo;
 
 pub use cases::{CASES, Case};
-#[cfg(feature = "sequence-conformance")]
-pub use conformance::{Target, assert_conformant};
 pub use corpus::{SCENARIOS, Scenario};
 pub use harness::PassCase;
 pub use values::{Binding, Database, Relation, Rows};
@@ -162,6 +159,7 @@ pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + S
 /// dependency. Other builds in a shared target directory are not substitutes.
 pub fn runtime_rustc() -> std::process::Command {
     static ARTIFACTS: std::sync::LazyLock<(
+        std::path::PathBuf,
         std::path::PathBuf,
         std::path::PathBuf,
         std::path::PathBuf,
@@ -185,9 +183,16 @@ pub fn runtime_rustc() -> std::process::Command {
             &format!("{:?}", std::any::TypeId::of::<hashbrown::HashTable<()>>()),
         )
         .unwrap_or_else(|error| panic!("{error}"));
-        (dependencies, ahash, hashbrown)
+        let rayon = linked_runtime_backend(
+            &dependencies,
+            "rayon",
+            "rayon::ThreadPool",
+            &format!("{:?}", std::any::TypeId::of::<rayon::ThreadPool>()),
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+        (dependencies, ahash, hashbrown, rayon)
     });
-    let (dependencies, ahash, hashbrown) = &*ARTIFACTS;
+    let (dependencies, ahash, hashbrown, rayon) = &*ARTIFACTS;
     let mut command =
         std::process::Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()));
     command
@@ -196,23 +201,9 @@ pub fn runtime_rustc() -> std::process::Command {
         .arg("--extern")
         .arg(format!("ahash={}", ahash.display()))
         .arg("--extern")
-        .arg(format!("hashbrown={}", hashbrown.display()));
-    #[cfg(feature = "sequence-conformance")]
-    {
-        static RAYON: std::sync::LazyLock<std::path::PathBuf> = std::sync::LazyLock::new(|| {
-            let dependencies = std::env::current_exe().unwrap();
-            linked_runtime_backend(
-                dependencies.parent().unwrap(),
-                "rayon",
-                "rayon::ThreadPool",
-                &format!("{:?}", std::any::TypeId::of::<rayon::ThreadPool>()),
-            )
-            .unwrap_or_else(|error| panic!("{error}"))
-        });
-        command
-            .arg("--extern")
-            .arg(format!("rayon={}", RAYON.display()));
-    }
+        .arg(format!("hashbrown={}", hashbrown.display()))
+        .arg("--extern")
+        .arg(format!("rayon={}", rayon.display()));
     command
 }
 

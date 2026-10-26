@@ -13,13 +13,8 @@ target = "cq-lang-sequence"
 [dependencies]
 cq-lang-sequence.workspace = true
 cq-syntax.workspace = true
-cq-rewrite-passes = { path = "../../rewrites/passes" }
-cq-sequence-lowering = { path = "../../../passes/cq-sequence-lowering" }
+cq-rewrite-passes.workspace = true
+cq-sequence-lowering.workspace = true
 quote.workspace = true
 proc-macro2.workspace = true
 syn.workspace = true
-
-[dev-dependencies]
-cq-structure-selection = { path = "../../../passes/cq-structure-selection" }
-cq-workloads = { path = "../../workloads" }
-

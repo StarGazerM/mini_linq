@@ -21,7 +21,10 @@ impl Parse for Advice {
             let depth: syn::LitInt = input.parse()?;
             let value = depth.base10_parse()?;
             if value == 0 {
-                return Err(syn::Error::new_spanned(depth, "expand depth must be positive"));
+                return Err(syn::Error::new_spanned(
+                    depth,
+                    "expand depth must be positive",
+                ));
             }
             value
         };
@@ -48,8 +51,13 @@ pub fn expand_lookups(source: &ir::Program, arguments: TokenStream) -> syn::Resu
     }
     let facts = ir::contract::check(source)?;
     let mut target = source.clone();
-    let definitions: std::collections::BTreeMap<_, _> = source.physical.program.definitions
-        .iter().map(|definition| (symbol_name(&definition.name), definition)).collect();
+    let definitions: std::collections::BTreeMap<_, _> = source
+        .physical
+        .program
+        .definitions
+        .iter()
+        .map(|definition| (symbol_name(&definition.name), definition))
+        .collect();
     let mut expands = facts.expands.clone();
     for definition in &source.physical.program.definitions {
         let Operator::Probe(_, probe) = &definition.operator else {

@@ -12,8 +12,9 @@
 
 use crate::instrument::HashMap;
 use std::hash::Hash;
+use std::sync::Mutex;
 
-use rayon::prelude::*;
+use crate::parallel::{for_each_index, map_index};
 
 use crate::{Build, ExactMembership, IndexRead};
 
@@ -149,20 +150,22 @@ impl<I, F> Sharded<I, F> {
         }
         #[cfg(any(feature = "counters", feature = "operator-timing"))]
         let context = crate::counters::TaskContext::capture();
+        let parts: Vec<_> = parts
+            .into_iter()
+            .map(|part| Mutex::new(Some(part)))
+            .collect();
         Self::from_parts_with_router(
-            parts
-                .into_par_iter()
-                .map(|part| {
-                    #[cfg(any(feature = "counters", feature = "operator-timing"))]
-                    {
-                        context.run(|| I::build(part.into_iter()))
-                    }
-                    #[cfg(not(any(feature = "counters", feature = "operator-timing")))]
-                    {
-                        I::build(part.into_iter())
-                    }
-                })
-                .collect(),
+            map_index(parts.len(), &|index| {
+                let part = parts[index].lock().unwrap().take().expect("owned part");
+                #[cfg(any(feature = "counters", feature = "operator-timing"))]
+                {
+                    context.run(|| I::build(part.into_iter()))
+                }
+                #[cfg(not(any(feature = "counters", feature = "operator-timing")))]
+                {
+                    I::build(part.into_iter())
+                }
+            }),
             router,
         )
         .with_parallel_release()
@@ -184,19 +187,17 @@ impl<I, F> Sharded<I, F> {
         #[cfg(any(feature = "counters", feature = "operator-timing"))]
         let context = crate::counters::TaskContext::capture();
         Self::from_parts_with_router(
-            parts
-                .par_iter()
-                .map(|part| {
-                    #[cfg(any(feature = "counters", feature = "operator-timing"))]
-                    {
-                        context.run(|| build(part))
-                    }
-                    #[cfg(not(any(feature = "counters", feature = "operator-timing")))]
-                    {
-                        build(part)
-                    }
-                })
-                .collect(),
+            map_index(parts.len(), &|index| {
+                let part = &parts[index];
+                #[cfg(any(feature = "counters", feature = "operator-timing"))]
+                {
+                    context.run(|| build(part))
+                }
+                #[cfg(not(any(feature = "counters", feature = "operator-timing")))]
+                {
+                    build(part)
+                }
+            }),
             router,
         )
         .with_parallel_release()
@@ -242,7 +243,12 @@ fn release_parallel<I: Send>(shards: &mut Vec<I>) {
     }
     #[cfg(any(feature = "counters", feature = "operator-timing"))]
     let context = crate::counters::TaskContext::capture();
-    std::mem::take(shards).into_par_iter().for_each(|shard| {
+    let slots: Vec<_> = std::mem::take(shards)
+        .into_iter()
+        .map(|shard| Mutex::new(Some(shard)))
+        .collect();
+    for_each_index(slots.len(), &|index| {
+        let shard = slots[index].lock().unwrap().take().expect("owned shard");
         #[cfg(any(feature = "counters", feature = "operator-timing"))]
         {
             context.run(|| drop(shard));
@@ -431,6 +437,57 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn owned_build_preserves_non_clone_non_sync_rows_and_releases_once() {
+        use std::cell::Cell;
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        struct Payload {
+            value: Cell<usize>,
+            dropped: Arc<AtomicUsize>,
+        }
+        impl Drop for Payload {
+            fn drop(&mut self) {
+                self.dropped.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let parts = (0..8)
+            .map(|part| {
+                (0..3)
+                    .map(|offset| {
+                        (
+                            part,
+                            Payload {
+                                value: Cell::new(part * 3 + offset),
+                                dropped: dropped.clone(),
+                            },
+                        )
+                    })
+                    .collect()
+            })
+            .collect();
+        let provider = Sharded::<Index<usize, Payload>>::build_parts(parts);
+        for (part, shard) in provider.shards.iter().enumerate() {
+            let bucket = &shard.buckets[&part];
+            assert_eq!(bucket.first.value.get(), part * 3);
+            assert_eq!(
+                bucket
+                    .tail
+                    .iter()
+                    .map(|row| row.value.get())
+                    .collect::<Vec<_>>(),
+                [part * 3 + 1, part * 3 + 2],
+            );
+        }
+        assert_eq!(dropped.load(Ordering::Relaxed), 0);
+        drop(provider);
+        assert_eq!(dropped.load(Ordering::Relaxed), 24);
+    }
+
     #[test]
     fn identity_cover_builds_on_host_and_never_routes_reads() {
         let host = std::thread::current().id();

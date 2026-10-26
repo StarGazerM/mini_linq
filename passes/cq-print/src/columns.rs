@@ -217,10 +217,13 @@ impl Context<'_> {
                 "publication demand contains a column outside its checked heading",
             ));
         }
-        let mut used: BTreeMap<_, BTreeSet<_>> = self.carried_columns.iter()
+        let mut used: BTreeMap<_, BTreeSet<_>> = self
+            .carried_columns
+            .iter()
             .map(|(name, columns)| (name.clone(), columns.iter().cloned().collect()))
             .collect();
-        used.get_mut(result).expect("checked publication demand")
+        used.get_mut(result)
+            .expect("checked publication demand")
             .extend(columns.iter().cloned());
         self.carried_columns = propagate_columns(module, self.analysis, used);
         Ok(())

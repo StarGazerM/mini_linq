@@ -4,8 +4,8 @@
 //! [`combine`] runtime) in the consumer. The
 //! caller supplies facts checked against [`machine`]; translation never repeats
 //! analysis. Host and task-local constructors reuse the sequential interpreter.
-//! Pool chunks own their buffers and publish in chunk order at the join. Rayon
-//! propagates a task panic to that join rather than publishing partial output.
+//! Shared indexed dispatch keeps Rayon plumbing out of generated pipelines.
+//! Pool chunks publish owned buffers in order; task panics propagate to the join.
 //! Key-disjoint partitions support local canon and keyed folds; global monoids
 //! combine task-local partials at the host, never as a pool collective.
 //!
@@ -125,14 +125,16 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
         vec!["host".into(), "pool".into(), "task".into()],
     ];
     for token in &mut catalog.providers {
-        token.levels = levels.clone();
+        // Lazy Rc/RefCell providers remain legal at host, but cannot be
+        // captured by shared task readers. Selection upgrades them when its
+        // checked retention/retyping rewrite is applicable.
+        if !matches!(&token.ty, syn::Type::Path(path)
+            if path.path.segments.last().is_some_and(|segment|
+                segment.ident == "HashIndex" || segment.ident == "Trie" || segment.ident == "KeySet"))
+        {
+            token.levels = levels.clone();
+        }
     }
-    // Shared reads must not capture the serial lazy Rc/RefCell providers.
-    catalog.providers.retain(|token| {
-        !matches!(&token.ty, syn::Type::Path(path)
-        if path.path.segments.last().is_some_and(|segment|
-            segment.ident == "HashIndex" || segment.ident == "Trie" || segment.ident == "KeySet"))
-    });
     catalog.providers.insert(
         0,
         cq_lang_sequence::ProviderToken {
@@ -223,44 +225,72 @@ pub fn select_providers(
     source: &Program,
     catalog: &cq_lang_sequence::Catalog,
 ) -> syn::Result<Program> {
+    let analysis = cq_lang_sequence::contract::check(source)?;
+    let mut admitted: std::collections::BTreeSet<_> = source
+        .structures
+        .structures
+        .entries
+        .iter()
+        .map(|entry| cq_lang_sequence::structures::symbol_name(&entry.name))
+        .collect();
+    for obligation in &analysis.obligations {
+        let cq_lang_sequence::Obligation::Provider {
+            provider,
+            capability,
+            ty,
+            ..
+        } = obligation
+        else {
+            continue;
+        };
+        if !catalog.providers.iter().any(|token| {
+            cq_sequence_plan::matches_type(&token.ty, ty)
+                && token.capabilities.contains(capability)
+                && !token.levels.is_empty()
+                && token.elements.as_ref().is_none_or(|accepted| {
+                    analysis.structures.layouts[provider].iter().all(|column| {
+                        accepted.iter().any(|pattern| {
+                            cq_sequence_plan::matches_type(
+                                pattern,
+                                &analysis.structures.physical.rows[provider].types[column],
+                            )
+                        })
+                    })
+                })
+        }) {
+            admitted.remove(provider);
+        }
+    }
     // Instantiate supported authored families before checked selection. A
     // transient retype can invalidate obligations such as exact join filters.
     let mut native = catalog.clone();
+    native
+        .providers
+        .retain(|token| token.levels.iter().any(|level| level.len() > 1));
     for entry in &source.structures.structures.entries {
         let ty = match &entry.structure {
-            cq_lang_sequence::structures::Structure::Built { keyed, .. } => &keyed.ty,
-            cq_lang_sequence::structures::Structure::KeySet { ty, .. } => ty,
+            cq_lang_sequence::structures::Structure::Built { keyed, .. }
+            | cq_lang_sequence::structures::Structure::Host { keyed, .. } => &keyed.ty,
+            cq_lang_sequence::structures::Structure::KeySet { ty, .. }
+            | cq_lang_sequence::structures::Structure::Selection { ty, .. } => ty,
             cq_lang_sequence::structures::Structure::JoinFilter { filter, .. } => &filter.ty,
             _ => continue,
         };
-        if let Some(token) = catalog
-            .providers
-            .iter()
-            .find(|token| cq_sequence_plan::matches_type(&token.ty, ty))
-        {
+        if let Some(token) = catalog.providers.iter().find(|token| {
+            token.levels.iter().any(|level| level.len() > 1)
+                && cq_sequence_plan::matches_type(&token.ty, ty)
+        }) {
             let mut token = token.clone();
             token.ty = ty.clone();
             native.providers.push(token);
         }
     }
     let mut target = source.clone();
-    target.structures =
-        cq_sequence_rewrite_passes::select_from_catalog(&source.structures, &native)?;
-    for original in &source.structures.structures.entries {
-        // Replayable row buffers are not keyed range providers. Keep their
-        // native row-collection ABI rather than selecting an index family.
-        if let cq_lang_sequence::structures::Structure::Rows { ty, .. } = &original.structure {
-            for selected in &mut target.structures.structures.entries {
-                if selected.name == original.name
-                    && let cq_lang_sequence::structures::Structure::Rows {
-                        ty: replacement, ..
-                    } = &mut selected.structure
-                {
-                    *replacement = ty.clone();
-                }
-            }
-        }
-    }
+    target.structures = cq_sequence_rewrite_passes::select_from_catalog_preserving(
+        &source.structures,
+        &native,
+        &admitted,
+    )?;
     for (old, retained) in source
         .structures
         .physical
@@ -311,8 +341,8 @@ pub fn select_providers(
 }
 
 /// Translate checked partitions into joined, owned output.
-// Formal rule T-Tasks: defer the entire partition-local iterator pipeline into
-// the worker closure, then join before any global canonicalization/publication.
+// Formal rule T-Tasks: shared indexed task dispatch publishes ordered task-local
+// buffers before monoidal reductions and local then global canonicalization.
 pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Expr> {
     translate_with(program, analysis, Config::default())
 }
@@ -437,7 +467,8 @@ fn translate_mode(
                     partitions.push(TaskTile {
                         binding,
                         prepare: quote!(),
-                        parts: quote!((0..::cq_storage::PositionalRows::len(#host).div_ceil(#n)).into_par_iter()),
+                        parts: quote!(::cq_sequence_tasks::combine::IndexedTiles::new(
+                            ::cq_storage::PositionalRows::len(#host).div_ceil(#n), |i| i)),
                     });
                     output.rows = quote!(::core::iter::once(#rows));
                 } else if let Some(result) = host_result {
@@ -461,7 +492,9 @@ fn translate_mode(
                     partitions.push(TaskTile {
                         binding: binding.clone(),
                         prepare: quote!(let __cq_driver = (#source).collect::<::std::vec::Vec<_>>();),
-                        parts: quote!(__cq_driver.par_chunks(#n)),
+                        parts: quote!(::cq_sequence_tasks::combine::IndexedTiles::new(
+                            __cq_driver.len().div_ceil(#n),
+                            |i| &__cq_driver[i * #n..((i + 1) * #n).min(__cq_driver.len())])),
                     });
                     output.rows = quote!(::core::iter::once(#binding.iter().cloned()));
                 }
@@ -940,20 +973,19 @@ fn join_tile(
         prepare,
         parts,
     } = tile;
+    // Shared indexed dispatch keeps Rayon plumbing independent of generated
+    // tile sources and row pipelines; row iteration remains statically typed.
     let workers = if nested {
         let local = task_scope(emitter, quote!((#rows).collect::<::std::vec::Vec<_>>()));
-        quote!((#parts).map(|#binding| #local))
+        quote!(::cq_sequence_tasks::combine::map_tiles(#parts, &|#binding| #local))
     } else {
-        let local = task_scope(
-            emitter,
-            quote!({
-                __cq_buffer.extend(#rows);
-                __cq_buffer
-            }),
-        );
+        let local = task_scope(emitter, quote!(__cq_buffer.extend(#rows)));
         // A scheduler task may consume several logical tiles. Preserve their
         // order while growing one buffer, rather than allocating per tile.
-        quote!((#parts).fold(::std::vec::Vec::new, |mut __cq_buffer, #binding| #local))
+        quote!(::cq_sequence_tasks::combine::fold_tiles(
+            #parts,
+            &|__cq_buffer: &mut ::std::vec::Vec<_>, #binding| #local,
+        ))
     };
     let joined = if nested {
         quote!(__cq_parts.into_iter().map(::std::vec::Vec::into_iter))
@@ -961,13 +993,12 @@ fn join_tile(
         quote!(__cq_parts.into_iter().flatten())
     };
     quote!({
-        use ::rayon::prelude::*;
         #prepare
         let __cq_task_context = ::cq_storage::profile_select! {
             plain { () }
             counters { ::cq_storage::counters::TaskContext::capture() }
         };
-        let __cq_parts = (#workers).collect::<::std::vec::Vec<_>>();
+        let __cq_parts = #workers;
         #joined
     })
 }

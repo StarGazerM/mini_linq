@@ -390,11 +390,14 @@ approval.
   model), first-witness consumption, guard totality, terminal canonical
   return.
 - Upstream items (GPU side): `sequence_conformance` corpus test does not finish
-  within 20 min (skip by exact name in workload runs); core→feature edges
-  (`cq-sequence-lowering` and `cq-sequence-pull` dev-deps, `cq-sequence-plan`
-  → `features/sequence-rewrites/passes`); packaged external gate fails on
-  `cq-testkit`'s optional path dependency on `features/sequence-tasks`;
+  within 20 min (skip by exact name in workload runs);
   `translate_pull` codegen triggers `clippy::unused_unit` in workloads.
+- Core dependency ownership: checked rewrite libraries now live in
+  `passes/cq-rewrite-passes` and `passes/cq-sequence-rewrite-passes`; feature
+  macro crates wrap them. Cross-feature lowering/pull tests live with workloads
+  and Tasks; executable CPU conformance lives in
+  `features/sequence-tasks/conformance`, leaving core `cq-testkit` independent
+  of compiler passes and optional targets.
 - Archived: abandoned v1-design branches are tags `archive/<name>`; the parked
   pre-redesign refactor is `../mini_linq-archive/datalog-par-factor.patch`.
 

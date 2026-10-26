@@ -123,14 +123,131 @@ pub fn compile(source: &cq_lang_structures::Program) -> syn::Result<Program> {
     Ok(program)
 }
 
-/// Re-derive the default lowering and compare syntax trees, never printed text.
+/// Check the L-Sequence obligations directly on the target: the unchanged
+/// Structures prefix, one definition per Physical result in order with its
+/// operator's lowering shape under its mode and canon flag, and the fresh
+/// count-output store of the returned result.
 pub fn check(source: &cq_lang_structures::Program, target: &Program) -> syn::Result<()> {
-    let expected = compile(source)?;
-    if expected != *target {
-        return Err(syn::Error::new_spanned(
+    let fail = |message: &str| {
+        Err(syn::Error::new_spanned(
             target,
-            "L-Sequence: target differs from the default lowering",
-        ));
+            format!("L-Sequence: {message}"),
+        ))
+    };
+    if target.structures != *source {
+        return fail("the Structures prefix changed");
+    }
+    if target.graded.is_some() || target.evidence != Default::default() {
+        return fail("lowering records no grades or evidence");
+    }
+    let analysis = cq_lang_structures::contract::check(source)?;
+    cq_lang_sequence::contract::check(target)?;
+    let physical = &source.physical.program;
+    let definitions = &target.sequence.definitions;
+    if definitions.len() != physical.definitions.len() + 1 {
+        return fail("expected one definition per Physical result plus the output store");
+    }
+    let is_ref = |term: &Term, input: &syn::Ident| matches!(term, Term::Ref(name) if name == input);
+    for (definition, lowered) in physical.definitions.iter().zip(definitions) {
+        let name = &definition.name;
+        let shape = |message: &str| {
+            Err(syn::Error::new_spanned(
+                &lowered.name,
+                format!("L-Sequence: `{name}` {message}"),
+            ))
+        };
+        if lowered.name != *name {
+            return shape("is out of Physical order");
+        }
+        let mut term = &lowered.term;
+        if ModeKind::from(&definition.mode) != ModeKind::Pipe {
+            let Term::Store {
+                capacity: None,
+                inner,
+            } = term
+            else {
+                return shape("is retained by its Physical mode and must be stored");
+            };
+            term = inner.as_ref();
+        }
+        if definition.canon.is_some() {
+            let Term::Canon(inner) = term else {
+                return shape("is canonical and must be canonicalized");
+            };
+            term = inner.as_ref();
+        }
+        let lowered_shape = if analysis.physical.hosts.contains_key(&symbol_name(name)) {
+            matches!(term, Term::Rows(rows) if rows == name)
+        } else {
+            match &definition.operator {
+                Operator::Unit(_) => matches!(term, Term::Rows(rows) if rows == name),
+                Operator::Union(union) => matches!(term, Term::Union(terms)
+                    if terms.len() == union.operands.len()
+                        && terms.iter().zip(&union.operands).all(|(term, operand)| is_ref(term, operand))),
+                Operator::Probe(_, keyed)
+                | Operator::Merge(_, keyed)
+                | Operator::Semi(_, keyed)
+                | Operator::Anti(_, keyed) => {
+                    let mut keys: Vec<_> = keyed.columns.iter().map(symbol_name).collect();
+                    keys.sort();
+                    let membership = matches!(
+                        definition.operator,
+                        Operator::Semi(_, _) | Operator::Anti(_, _)
+                    ) || analysis
+                        .membership
+                        .contains(&(symbol_name(&keyed.right), keys));
+                    let lookup = |inner: &Term| {
+                        matches!(inner, Term::Lookup { provider, keys, inner }
+                            if *provider == keyed.right
+                                && keys.iter().eq(keyed.columns.iter())
+                                && is_ref(inner, &keyed.left))
+                    };
+                    match term {
+                        Term::Compact(result, inner) if membership => {
+                            result == name && lookup(inner)
+                        }
+                        Term::Flatten(inner) if !membership => lookup(inner),
+                        _ => false,
+                    }
+                }
+                Operator::Group(group) => matches!(term, Term::Group(result, inner)
+                    if result == name && is_ref(inner, &group.input)),
+                Operator::Select(select) => matches!(term, Term::Compact(result, inner)
+                    if result == name && is_ref(inner, &select.input)),
+                operator => operator.input().is_some_and(|input| {
+                    matches!(term, Term::Map(result, inner)
+                        if result == name && is_ref(inner, input))
+                }),
+            }
+        };
+        if !lowered_shape {
+            return shape("does not have its operator's lowering shape");
+        }
+    }
+    let output = definitions.last().expect("checked definition count");
+    let mut fresh = "__sequence_output".to_owned();
+    while analysis.physical.headings.contains_key(&fresh) {
+        fresh.push('_');
+    }
+    if symbol_name(&output.name) != fresh {
+        return fail("the output store must use the first fresh `__sequence_output` name");
+    }
+    let Term::Store {
+        capacity: None,
+        inner,
+    } = &output.term
+    else {
+        return fail("the output must be one store");
+    };
+    let returned = match (physical.return_canon.is_some(), inner.as_ref()) {
+        (true, Term::Canon(returned)) => returned.as_ref(),
+        (false, returned) => returned,
+        (true, _) => return fail("a canonical return must canonicalize its output"),
+    };
+    if !is_ref(returned, &physical.returned)
+        || target.sequence.output != Some(OutputProtocol::Count)
+    {
+        return fail("the output store must count the returned result");
     }
     Ok(())
 }

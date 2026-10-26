@@ -538,12 +538,16 @@ pub fn lookup_first_advice_in(
     // string leaf must not force its index representation onto integer forwards.
     // Levels constrain reads, not construction. The shared builder checks the
     // rewrite; decomposition checks read placement, and replay uses frozen tokens.
-    lookup_first_with(checker, source, &advice, |name, keys, target, analysis| {
-        let result = symbol_name(name);
-        let levels = [keys.to_vec()];
-        let needed = needed
-            .get_or_init(|| structures::required_columns(&target.physical, &analysis.physical));
-        let provider = catalog.providers.iter().filter(capable).find(|provider| {
+    let applicable = lookup_first_with(
+        checker,
+        source,
+        &advice,
+        |name, keys, target, analysis| {
+            let result = symbol_name(name);
+            let levels = [keys.to_vec()];
+            let needed = needed
+                .get_or_init(|| structures::required_columns(&target.physical, &analysis.physical));
+            let provider = catalog.providers.iter().filter(capable).find(|provider| {
             provider.elements.as_ref().is_none_or(|accepted| {
                 analysis.layouts[&result].iter().all(|column| {
                     let actual = &analysis.physical.rows[&result].types[column];
@@ -554,13 +558,17 @@ pub fn lookup_first_advice_in(
             name,
             "lookup_first generated layout requires a catalog provider with Exact and Membership for its row types at a legal read level",
         ))?;
-        providers.push((
-            name.clone(),
-            columns(keys, name.span()),
-            provider.ty.clone(),
-        ));
-        Ok(provider.ty.clone())
-    })?;
+            providers.push((
+                name.clone(),
+                columns(keys, name.span()),
+                provider.ty.clone(),
+            ));
+            Ok(provider.ty.clone())
+        },
+    )?;
+    if applicable.is_none() {
+        return Ok(None);
+    }
     advice.providers = providers;
     Ok(Some(advice))
 }
@@ -786,7 +794,10 @@ pub fn lookup_first_in(
             .remove(&(symbol_name(name), keys.to_vec()))
             .unwrap_or(&advice.ty)
             .clone())
-    })?;
+    })?.ok_or_else(|| syn::Error::new_spanned(
+        source,
+        "lookup_first would require row scans or additional retention of an authored filtered index",
+    ))?;
     if !providers.is_empty() {
         return Err(syn::Error::new_spanned(
             source,
@@ -806,7 +817,7 @@ fn lookup_first_with(
         &structures::Program,
         &structures::Analysis,
     ) -> syn::Result<syn::Type>,
-) -> syn::Result<Program> {
+) -> syn::Result<Option<Program>> {
     let Some(graph) = graph(checker, source)? else {
         return Err(syn::Error::new_spanned(
             source,
@@ -1107,7 +1118,7 @@ fn lookup_first_with(
     // representation: preserve the complete checked source, including any
     // authored provider entries, rather than performing Structures-only cleanup.
     if target.physical == source.structures.physical {
-        return Ok(source.clone());
+        return Ok(Some(source.clone()));
     }
     // Entries tied to deleted joins no longer describe an executable result.
     // Existing leaf read adapters remain; generated exact indexes supersede
@@ -1214,6 +1225,55 @@ fn lookup_first_with(
                 .push(syn::parse_quote!(#name rows = ::std::vec::Vec<_>;));
         }
     }
+    // A recovered projected root may still be used as an index by the new
+    // chain. Such a layout cannot also supply full row scans or extra retained
+    // stores. This is ordering inapplicability, not a relaxed Structures law:
+    // automatic advice declines it and an explicit rewrite reports rejection.
+    for name in &graph.filtered {
+        let entries = target
+            .structures
+            .entries
+            .iter()
+            .filter(|entry| symbol_name(&entry.name) == *name);
+        if !entries.clone().any(|entry| {
+            matches!(&entry.structure,
+            structures::Structure::Built { keyed, .. } if keyed.filtered.is_some())
+        }) {
+            continue;
+        }
+        let definition = target
+            .physical
+            .program
+            .definitions
+            .iter()
+            .find(|definition| symbol_name(&definition.name) == *name)
+            .expect("filtered provider definition");
+        let multiple = matches!(&definition.operator, Operator::Union(union)
+            if union.origin.as_ref().is_none_or(|origin| origin.over.is_none()));
+        let (builds, nested) = entries.clone().fold((0, false), |(count, nested), entry| {
+            match &entry.structure {
+                structures::Structure::Built { keyed, .. } => {
+                    (count + 1, nested || keyed.levels.len() != 1)
+                }
+                _ => (count, nested),
+            }
+        });
+        if physical.modes[name] != physical::ModeKind::Let
+            || !multiple
+                && (physical.scanned.contains(name)
+                    || entries.clone().any(|entry| {
+                        matches!(
+                            entry.structure,
+                            structures::Structure::Rows { .. }
+                                | structures::Structure::Selection { .. }
+                        )
+                    })
+                    || builds != 1
+                    || nested)
+        {
+            return Ok(None);
+        }
+    }
     // Liveness and projected layouts belong to Structures, not to Physical's
     // full relation headings. Freeze types only after every retained store and
     // its consumers are present, before provider aliases rename those entries.
@@ -1239,5 +1299,5 @@ fn lookup_first_with(
     result.evidence = source.evidence.clone();
     result.sequence.output = source.sequence.output.clone();
     checker.check_rewrite_in(source, &result)?;
-    Ok(result)
+    Ok(Some(result))
 }

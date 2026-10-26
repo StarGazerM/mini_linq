@@ -7,6 +7,35 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Share one non-generic Rayon index dispatcher across Tasks pipelines and
+  sharded index construction/release. Borrowed tile access and ordered
+  per-index result slots keep generated row and closure types out of Rayon
+  plumbing; contiguous tile groups retain ordered publication and bounded
+  task-local buffers without changing planner decisions.
+- Dependency gate green again: feature lockfiles pin root third-party versions,
+  and `cq-sequence-lowering::check` verifies L-Sequence obligations on the
+  target instead of re-running lowering. Feature workspaces share
+  `features/target` (workloads keeps its own); CI runs facade consumer targets
+  once (`cargo test --workspace`) and `tools/regression-targets.tsv` keeps only
+  rows that workspace testing does not cover. Root sources are rustfmt-clean.
+- Move `cq-rewrite-passes` and `cq-sequence-rewrite-passes` into `passes/`,
+  preserving their public APIs and the optional feature macro wrappers.
+  Declare the planner's checked pass composition explicitly. Move workload
+  rewrite/lowering tests to feature consumers and standalone rewrite coverage
+  into core. Move executable CPU conformance from `cq-testkit` to
+  `features/sequence-tasks/conformance`; core testkit retains answer comparison
+  and the rustc driver without depending on passes or optional targets.
+  The rustc runtime caches storage rlibs once per canonical source path and
+  counters setting per process, while keeping query working directories separate.
+- Keep admitted native Sequence providers when a checked retention or retyping
+  rewrite is inapplicable, without discarding applicable choices for other results.
+  Tasks admits serial lazy providers only at host and upgrades them to shareable
+  representations when legal. Workload conformance records the same host-only
+  restriction for its `Rc`-backed sorted indexes.
+  Candidate directories keep their native representation instead of being
+  routed through unsupported sharded protocols. Automatic lookup-first advice
+  declines reorderings that would require scanning or retaining an authored
+  filtered index; explicit requests still report a checked rejection.
 - Sequence records checked, uniform `workers < N` scheduling guards without
   changing support or count semantics. Adaptive native provider plans route iff
   `rows >= low && (workers > 1 || rows >= cache)`; forced plans stay unconditional.

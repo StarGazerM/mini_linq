@@ -18,6 +18,27 @@ pub fn select_from_catalog(
     source: &structures::Program,
     catalog: &Catalog,
 ) -> syn::Result<structures::Program> {
+    select(source, catalog, None)
+}
+
+/// Select providers while retaining admitted native results when a checked
+/// representation rewrite is inapplicable. `admitted` names results whose
+/// existing provider obligations the caller's target catalog already supports;
+/// the target must still check scheduled read levels after planning.
+/// Native row collections retain their collection ABI in this mode.
+pub fn select_from_catalog_preserving(
+    source: &structures::Program,
+    catalog: &Catalog,
+    admitted: &std::collections::BTreeSet<String>,
+) -> syn::Result<structures::Program> {
+    select(source, catalog, Some(admitted))
+}
+
+fn select(
+    source: &structures::Program,
+    catalog: &Catalog,
+    admitted: Option<&std::collections::BTreeSet<String>>,
+) -> syn::Result<structures::Program> {
     let analysis = structures::contract::check(source)?;
     let needed = structures::required_columns(&source.physical, &analysis.physical);
     let candidates = structures::physical::candidate_prefixes(&source.physical, &analysis.physical);
@@ -27,6 +48,19 @@ pub fn select_from_catalog(
         let mut required = Vec::new();
         let kind = match &entry.structure {
             Structure::Built { keyed, .. } => {
+                if let Some(admitted) = admitted
+                    && keyed.levels.len() > 1
+                {
+                    // Range over flat rows is not the Candidates protocol of a
+                    // nested directory. Keep its admitted native representation.
+                    if admitted.contains(&name) {
+                        continue;
+                    }
+                    return Err(syn::Error::new_spanned(
+                        &entry.name,
+                        "PL-Select: native candidate directory is not admitted by the target catalog",
+                    ));
+                }
                 let levels = keyed.level_names();
                 for (reader, columns, _) in analysis
                     .physical
@@ -93,6 +127,7 @@ pub fn select_from_catalog(
                 }
                 "index"
             }
+            Structure::Rows { .. } if admitted.is_some() => continue,
             Structure::Rows { .. } => {
                 required.push(Capability::Range);
                 "rows"
@@ -117,52 +152,86 @@ pub fn select_from_catalog(
             let bits = columns.iter().try_fold(0u32, |sum, column| {
                 let ty = &analysis.physical.rows[&name].types[column];
                 let width = match ty {
-                    syn::Type::Path(path) => match path.path.get_ident().map(ToString::to_string).as_deref() {
-                        Some("bool") => 1,
-                        Some("u8" | "i8") => 8,
-                        Some("u16" | "i16") => 16,
-                        Some("u32" | "i32") => 32,
-                        Some("u64" | "i64" | "usize" | "isize") => 64,
-                        _ => return None,
-                    },
+                    syn::Type::Path(path) => {
+                        match path.path.get_ident().map(ToString::to_string).as_deref() {
+                            Some("bool") => 1,
+                            Some("u8" | "i8") => 8,
+                            Some("u16" | "i16") => 16,
+                            Some("u32" | "i32") => 32,
+                            Some("u64" | "i64" | "usize" | "isize") => 64,
+                            _ => return None,
+                        }
+                    }
                     _ => return None,
                 };
                 sum.checked_add(width)
             });
-            catalog.canons.iter().find(|token| {
-                !token.levels.is_empty() && token.max_packed_bits.is_none_or(|maximum| bits.is_some_and(|bits| bits <= maximum))
-            }).map(|token| &token.ty)
+            catalog
+                .canons
+                .iter()
+                .find(|token| {
+                    !token.levels.is_empty()
+                        && token
+                            .max_packed_bits
+                            .is_none_or(|maximum| bits.is_some_and(|bits| bits <= maximum))
+                })
+                .map(|token| &token.ty)
         } else {
-            catalog.providers.iter().filter(|token| {
-                !token.levels.is_empty()
-                    && accepts_elements(token, &analysis, &name)
-                    && match &entry.structure {
-                        Structure::Built { keyed, .. } => accepts_read_levels(
-                            token, source, &analysis, &name, &keyed.level_names(), &needed,
-                        ),
-                        _ => true,
+            catalog
+                .providers
+                .iter()
+                .filter(|token| {
+                    !token.levels.is_empty()
+                        && accepts_elements(token, &analysis, &name)
+                        && match &entry.structure {
+                            Structure::Built { keyed, .. } => accepts_read_levels(
+                                token,
+                                source,
+                                &analysis,
+                                &name,
+                                &keyed.level_names(),
+                                &needed,
+                            ),
+                            _ => true,
+                        }
+                        && required
+                            .iter()
+                            .all(|capability| token.capabilities.contains(capability))
+                })
+                .min_by_key(|token| match &entry.structure {
+                    Structure::Built { keyed, .. } => token.ty != keyed.ty,
+                    Structure::Selection { ty, .. } | Structure::KeySet { ty, .. } => {
+                        token.ty != *ty
                     }
-                    && required.iter().all(|capability| token.capabilities.contains(capability))
-            }).min_by_key(|token| match &entry.structure {
-                Structure::Built { keyed, .. } => token.ty != keyed.ty,
-                Structure::KeySet { ty, .. } => token.ty != *ty,
-                Structure::JoinFilter { filter, .. } => token.ty != filter.ty,
-                _ => true,
-            }).map(|token| &token.ty)
-        }.ok_or_else(|| syn::Error::new(
-            entry.name.span(),
-            format!("PL-Select: structure `{name}` entry {index} ({kind}) has unmet catalog read obligation {required:?}"),
-        ))?;
+                    Structure::JoinFilter { filter, .. } => token.ty != filter.ty,
+                    _ => true,
+                })
+                .map(|token| &token.ty)
+        };
+        let Some(ty) = ty else {
+            if admitted.is_some_and(|names| names.contains(&name)) {
+                continue;
+            }
+            return Err(syn::Error::new(
+                entry.name.span(),
+                format!(
+                    "PL-Select: structure `{name}` entry {index} ({kind}) has unmet catalog read obligation {required:?}"
+                ),
+            ));
+        };
         let index = syn::LitInt::new(&index.to_string(), entry.name.span());
-        target =
-            cq_rewrite_passes::retype(&target, quote!(entry(#index) => #ty)).map_err(|error| {
-                syn::Error::new(
+        match cq_rewrite_passes::retype(&target, quote!(entry(#index) => #ty)) {
+            Ok(selected) => target = selected,
+            Err(_) if admitted.is_some_and(|names| names.contains(&name)) => {}
+            Err(error) => {
+                return Err(syn::Error::new(
                     error.span(),
                     format!("PL-Select: structure `{name}` ({kind}): {error}"),
-                )
-            })?;
+                ));
+            }
+        }
     }
-    let target = retain_host_indexes(&target, catalog)?;
+    let target = retain_host_indexes(&target, catalog, admitted)?;
     structures::check_retention_rewrite(source, &target)?;
     Ok(target)
 }
@@ -170,6 +239,35 @@ pub fn select_from_catalog(
 fn retain_host_indexes(
     source: &structures::Program,
     catalog: &Catalog,
+    admitted: Option<&std::collections::BTreeSet<String>>,
+) -> syn::Result<structures::Program> {
+    if admitted.is_none() {
+        return retain_host_index(source, catalog, None);
+    }
+    let mut target = source.clone();
+    let names: std::collections::BTreeSet<_> = source
+        .structures
+        .entries
+        .iter()
+        .filter(
+            |entry| matches!(&entry.structure, Structure::Host { reader, .. } if reader != "scan"),
+        )
+        .map(|entry| symbol_name(&entry.name))
+        .collect();
+    for name in names {
+        match retain_host_index(&target, catalog, Some(&name)) {
+            Ok(selected) => target = selected,
+            Err(_) if admitted.is_some_and(|names| names.contains(&name)) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(target)
+}
+
+fn retain_host_index(
+    source: &structures::Program,
+    catalog: &Catalog,
+    selected: Option<&str>,
 ) -> syn::Result<structures::Program> {
     let analysis = structures::contract::check(source)?;
     let needed = structures::required_columns(&source.physical, &analysis.physical);
@@ -181,6 +279,9 @@ fn retain_host_indexes(
             continue;
         };
         let name = symbol_name(&entry.name);
+        if selected.is_some_and(|selected| name != selected) {
+            continue;
+        }
         let reader_name = symbol_name(reader);
         let mut keys = keyed.level_names().concat();
         keys.sort();

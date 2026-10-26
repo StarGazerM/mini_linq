@@ -185,6 +185,9 @@ def check(data, announce=True):
             adapters = {
                 "cq-physical-realization": {"cq-print"},
                 "cq-sequence-pull": {"cq-lang-structures", "cq-print", "cq-physical-realization"},
+                # Planning composes checked rewrites, which reuse Physical rewrites and lowering.
+                "cq-sequence-plan": {"cq-sequence-rewrite-passes"},
+                "cq-sequence-rewrite-passes": {"cq-rewrite-passes", "cq-sequence-lowering"},
             }.get(name, set())
             allowed = required | {"cq-syntax"} | adapters
             if internal & (set(LANGUAGES) - {"cq-syntax"}) != required | (adapters & set(LANGUAGES)):

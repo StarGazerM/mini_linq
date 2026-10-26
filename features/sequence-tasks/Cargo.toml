@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "macros"]
+members = [".", "macros", "conformance"]
 resolver = "3"
 
 [workspace.dependencies]
@@ -22,7 +22,7 @@ description = "Checked Sequence translation for ordered Rayon tasks"
 cq-lang-sequence.workspace = true
 cq-sequence-pull.workspace = true
 cq-print = { path = "../../passes/cq-print" }
-cq-sequence-rewrite-passes = { path = "../sequence-rewrites/passes" }
+cq-sequence-rewrite-passes = { path = "../../passes/cq-sequence-rewrite-passes" }
 cq-sequence-plan = { path = "../../passes/cq-sequence-plan" }
 proc-macro2.workspace = true
 quote.workspace = true
@@ -31,7 +31,8 @@ cq-storage = { path = "../../runtime/cq-storage" }
 rayon = "1"
 
 [dev-dependencies]
-cq-testkit = { path = "../../testkit/cq-testkit", features = ["sequence-conformance"] }
+cq-testkit = { path = "../../testkit/cq-testkit" }
+cq-sequence-conformance = { path = "conformance" }
 cq-structure-selection = { path = "../../passes/cq-structure-selection" }
 cq-load = { path = "../../runtime/cq-load", default-features = false }
 cq-storage = { path = "../../runtime/cq-storage", features = ["counters"] }

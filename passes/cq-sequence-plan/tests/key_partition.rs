@@ -970,6 +970,89 @@ fn scheduled_range_obligation_keeps_native_provider() {
 }
 
 #[test]
+fn smallest_candidate_directories_keep_their_native_two_level_providers() {
+    let structures: cq_lang_sequence::structures::Program = syn::parse_quote! {
+        physical {
+            relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);
+            l = pipe rename L@0 {a -> a,b -> b};
+            r = let rename R@1 {b -> b,c -> c};
+            s = let rename S@2 {a -> a,c -> c};
+            candidate = pipe probe smallest [b] l,r;
+            checked = pipe canon semi eager [a,c] candidate,s;
+            return checked as answer(a,b,c);
+        }
+        structures {
+            l host scan = Reader []; r host scan = Reader []; s host scan = Reader [];
+            r = Index [b][c]; s = Index [a][c];
+            checked canon = Canonical;
+        }
+    };
+    let source = cq_sequence_lowering::compile(&structures).unwrap();
+    let mut available = catalog();
+    for token in &mut available.providers {
+        token.capabilities.push(Capability::Membership);
+    }
+    let selected = cq_sequence_rewrite_passes::select_from_catalog_preserving(
+        &structures,
+        &available,
+        &["r".to_owned(), "s".to_owned()].into_iter().collect(),
+    )
+    .unwrap();
+    assert_eq!(selected, structures);
+    let machine = machine(Some(4));
+    let planned = decompose(&source, &machine, &available).unwrap();
+    assert!(
+        !planned
+            .program
+            .to_token_stream()
+            .to_string()
+            .contains("Sharded")
+    );
+    replay(&source, &planned);
+    for name in ["r", "s"] {
+        assert!(
+            decompose_with_key_partitions(&source, &machine, &available, &[policy(name, true)],)
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn filtered_provider_retains_valid_single_level_routing() {
+    let source: Program = syn::parse_quote! {
+        physical {
+            relation L(a:i32); relation R(a:i32,b:i32,unused:i32);
+            l = pipe rename L@0 {a -> a};
+            r = let rename R@1 {a -> a,b -> b,unused -> unused};
+            joined = pipe probe first [a] l,r;
+            answer = pipe canon project joined keep {a,b};
+            return answer as answer(a,b);
+        }
+        structures {
+            l host scan = Reader []; r host scan = Reader [];
+            r = Index [a] payload [a,b] constants {};
+            answer canon = Canonical;
+        }
+        sequence {
+            provider = store rows r;
+            input = store rows l;
+            joined = flatten lookup r[a] input;
+            result = store canon map answer joined;
+        }
+    };
+    let machine = machine(Some(4));
+    let planned = decompose(&source, &machine, &catalog()).unwrap();
+    assert!(planned.trace.iter().any(
+        |advice| matches!(advice, Advice::KeyPartition(partition) if partition.name == "provider")
+    ));
+    replay(&source, &planned);
+    assert!(
+        decompose_with_key_partitions(&source, &machine, &catalog(), &[policy("provider", true)],)
+            .is_ok()
+    );
+}
+
+#[test]
 fn provider_routing_requires_flat_carried_valuations() {
     let mut source = provider_program();
     source.sequence.definitions[0].term = syn::parse_quote!(store tile 2 rows r);
@@ -1815,4 +1898,63 @@ fn support_equal_duplicate_rows_never_supply_a_host_cardinality_bound() {
         assert_eq!(arms[0].0, Guard::Lt(Len::Input("published".into()), 31));
         assert_eq!(arms[1].0, Guard::Else);
     }
+}
+
+#[test]
+fn automatic_probe_chain_preserves_filtered_shared_index_contracts() {
+    let structures: cq_lang_sequence::structures::Program = syn::parse_quote! {
+        physical {
+            relation P(a:i32); relation PS(a:i32,b:i32); relation S(b:i32,c:i32);
+            relation N(c:i32,d:i32); relation L(o:i32,a:i32,b:i32,u:i32); relation O(o:i32,v:i32);
+            r0 = pipe rename P@0 {a -> a};
+            r1 = let rename PS@1 {a -> a,b -> b};
+            r2 = pipe probe first [a] r0,r1;
+            r3 = let rename S@2 {b -> b,c -> c};
+            r4 = pipe probe first [b] r2,r3;
+            r5 = let rename N@3 {c -> c,d -> d};
+            r6 = pipe probe first [c] r4,r5;
+            r7 = let rename L@4 {o -> o,a -> a,b -> b,u -> u};
+            r8 = pipe probe first [a,b] r6,r7;
+            r9 = let rename O@5 {o -> o,v -> v};
+            r10 = pipe probe first [o] r8,r9;
+            r11 = pipe canon project r10 keep {o,a,b};
+            return r11 as answer(o,a,b);
+        }
+        structures {
+            r0 host scan = Reader []; r1 host scan = Reader []; r3 host scan = Reader [];
+            r5 host scan = Reader []; r7 host scan = Reader []; r9 host scan = Reader [];
+            r1 = Index [a]; r3 = Index [b];
+            r5 = Index [c] payload [c] constants {};
+            r7 = Index [a,b] payload [o,a,b] constants {};
+            r9 = Index [o] payload [o] constants {};
+            r11 canon = Canonical;
+        }
+    };
+    let source = cq_sequence_lowering::compile(&structures).unwrap();
+    let mut available = catalog();
+    available.providers[0]
+        .capabilities
+        .extend([Capability::Range, Capability::Membership]);
+    available.providers[1]
+        .capabilities
+        .push(Capability::Membership);
+    let mut prepared = source.clone();
+    assert!(
+        cq_sequence_rewrite_passes::lookup_first_advice(&source, &available)
+            .unwrap()
+            .is_none()
+    );
+    let error = cq_sequence_rewrite_passes::lookup_first(&source, quote!(using Index)).unwrap_err();
+    assert!(
+        error.to_string().contains("authored filtered index"),
+        "{error}"
+    );
+    for advice in cq_sequence_rewrite_passes::adaptive_candidates(&prepared).unwrap() {
+        prepared = Advice::Adaptive(advice)
+            .apply(&prepared)
+            .unwrap_or_else(|error| panic!("adaptive advice: {error}"));
+    }
+    decompose(&prepared, &machine(Some(4)), &available).unwrap();
+    let planned = cq_sequence_plan::plan(&source, &machine(Some(4)), &available).unwrap();
+    replay(&source, &planned);
 }

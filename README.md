@@ -88,9 +88,9 @@ the repository against Cargo-packaged core crates.
 - `join-filters`: checked join-filter planning and runtime providers.
 - `own-dialect`: a push printer that preserves recorded Structures decisions.
 - `planners`: nine checked CQ-to-RA′ planning choices.
-- `rewrites`: checked Physical rewrites and Structures type replacement.
-- `sequence-rewrites`: checked Sequence rewrites and planning passes.
-- `sequence-tasks`: a parallel task-based Sequence terminal.
+- `rewrites`: macro wrappers for core Physical rewrites and Structures type replacement.
+- `sequence-rewrites`: macro wrappers for core checked Sequence rewrite passes.
+- `sequence-tasks`: a parallel task-based Sequence terminal and executable CPU conformance.
 - `stacked-ir`: an external Trace language inserted and erased through checked passes.
 - `workloads`: pipeline matrix, deterministic datasets, SQL goldens, fuzzing, and benchmarks.
 

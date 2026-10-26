@@ -210,6 +210,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-sequence-conformance"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-sequence",
+ "cq-sequence-plan",
+ "cq-sequence-pull",
+ "cq-sequence-tasks",
+ "cq-storage",
+ "cq-syntax",
+ "cq-testkit",
+ "proc-macro2",
+ "quote",
+ "rayon",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "cq-sequence-lowering"
 version = "0.1.0"
 dependencies = [
@@ -272,6 +289,7 @@ dependencies = [
  "cq-lang-sequence",
  "cq-load",
  "cq-print",
+ "cq-sequence-conformance",
  "cq-sequence-plan",
  "cq-sequence-pull",
  "cq-sequence-rewrite-passes",
@@ -357,16 +375,10 @@ dependencies = [
  "cq-lang-ix",
  "cq-lang-physical",
  "cq-lang-ra",
- "cq-lang-sequence",
  "cq-lang-structures",
  "cq-lang-vo",
- "cq-sequence-plan",
- "cq-sequence-pull",
- "cq-sequence-tasks",
  "cq-syntax",
  "hashbrown",
- "proc-macro2",
- "quote",
  "rayon",
  "syn 2.0.119",
 ]

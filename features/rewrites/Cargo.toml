@@ -1,6 +1,6 @@
 [workspace]
-members = ["passes", "test-driver"]
-default-members = [".", "passes", "test-driver"]
+members = ["test-driver"]
+default-members = [".", "test-driver"]
 resolver = "3"
 
 [package]
@@ -18,7 +18,7 @@ proc-macro = true
 cq-stage = { version = "0.1.0", path = "../../facade/cq-stage" }
 cq-lang-physical = { version = "0.1.0", path = "../../languages/cq-lang-physical" }
 cq-lang-structures = { version = "0.1.0", path = "../../languages/cq-lang-structures" }
-cq-rewrite-passes = { version = "0.1.0", path = "passes" }
+cq-rewrite-passes = { version = "0.1.0", path = "../../passes/cq-rewrite-passes" }
 
 [dev-dependencies]
 cq-planners = { version = "0.1.0", path = "../planners" }

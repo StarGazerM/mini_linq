@@ -1,2 +1,6 @@
 [alias]
 xtask = "run -p cq-xtask --features oracle --"
+
+# Keep benchmark workers and caches out of the shared features/target.
+[build]
+target-dir = "target"

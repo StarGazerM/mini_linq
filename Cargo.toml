@@ -26,6 +26,8 @@ members = [
     "passes/cq-structure-selection",
     "passes/cq-sequence-lowering",
     "passes/cq-sequence-plan",
+    "passes/cq-rewrite-passes",
+    "passes/cq-sequence-rewrite-passes",
     "passes/cq-represent",
     "passes/cq-staging",
     "passes/cq-print",
@@ -75,6 +77,8 @@ cq-index-policy = { path = "passes/cq-index-policy", version = "0.1.0", default-
 cq-structure-selection = { path = "passes/cq-structure-selection", version = "0.1.0", default-features = false }
 cq-sequence-lowering = { path = "passes/cq-sequence-lowering", version = "0.1.0", default-features = false }
 cq-sequence-plan = { path = "passes/cq-sequence-plan", version = "0.1.0" }
+cq-rewrite-passes = { path = "passes/cq-rewrite-passes", version = "0.1.0" }
+cq-sequence-rewrite-passes = { path = "passes/cq-sequence-rewrite-passes", version = "0.1.0" }
 cq-represent = { path = "passes/cq-represent", version = "0.1.0", default-features = false }
 cq-staging = { path = "passes/cq-staging", version = "0.1.0", default-features = false }
 cq-physical-lowering = { path = "passes/cq-physical-lowering", version = "0.1.0", default-features = false }

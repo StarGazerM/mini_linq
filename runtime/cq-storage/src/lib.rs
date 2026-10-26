@@ -96,10 +96,11 @@ mod host;
 mod instrument;
 mod membership;
 mod ordered;
+pub mod parallel;
 pub mod rows;
-mod sorted_run;
 pub mod sequence;
 pub mod sharded;
+mod sorted_run;
 pub use sharded::Sharded;
 mod trie;
 

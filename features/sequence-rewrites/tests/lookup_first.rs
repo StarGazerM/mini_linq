@@ -471,38 +471,6 @@ fn unchanged_unary_intersection_preserves_authored_provider_entries() {
 }
 
 #[test]
-fn unary_intersection_corpus_orderings_preserve_checked_representations() {
-    let query = cq_workloads::case("intersection")
-        .unwrap()
-        .module()
-        .unwrap();
-    for plan in 0..cq_workloads::pipelines::Planner::ALL.len() {
-        let physical = cq_workloads::pipelines::Pipeline {
-            plan,
-            ..Default::default()
-        }
-        .physical(&query)
-        .unwrap();
-        for positional in [false, true] {
-            let selection = if positional {
-                quote!(positional(Left, Right))
-            } else {
-                Default::default()
-            };
-            let structures = cq_structure_selection::compile_with(&physical, selection).unwrap();
-            let source = cq_sequence_lowering::compile(&structures).unwrap();
-            let advice = lookup_first_advice(&source, &catalog()).unwrap_or_else(|error| {
-                panic!("intersection {plan} positional={positional}: {error}")
-            });
-            if let Some(advice) = advice {
-                let target = lookup_first(&source, advice.to_token_stream()).unwrap();
-                check_rewrite(&source, &target).unwrap();
-            }
-        }
-    }
-}
-
-#[test]
 fn retained_union_prefix_keeps_constant_and_range_reads_as_row_scans() {
     let structures = syn::parse_quote! {
         physical {
@@ -547,35 +515,6 @@ fn retained_union_prefix_keeps_constant_and_range_reads_as_row_scans() {
         lookup_first(&source, advice.to_token_stream()).unwrap()
     );
     check_rewrite(&source, &target).unwrap();
-}
-
-#[test]
-fn constraint_only_cq_union_arms_keep_the_prefix_domain() {
-    let query = syn::parse_quote! {
-        struct Q;
-        relation P(x:i32);
-        answer(x) :- P(x), { if *x == 1 } | { if *x == 2 };
-    };
-    let physical = cq_workloads::pipelines::Pipeline::default()
-        .physical(&query)
-        .unwrap();
-    let structures = cq_structure_selection::compile(&physical).unwrap();
-    let source = cq_sequence_lowering::compile(&structures).unwrap();
-    if let Some(advice) = lookup_first_advice(&source, &catalog()).unwrap() {
-        let target = lookup_first(&source, advice.to_token_stream()).unwrap();
-        let facts = cq_lang_sequence::contract::check(&target).unwrap();
-        for (name, layouts) in &facts.structures.built {
-            for (levels, _) in layouts {
-                assert!(facts.structures.physical.keyed_reads[name].iter().any(
-                    |(_, keys, supply)| {
-                        *supply == cq_syntax::SupplyKind::Stream
-                            && structures::prefix_depth(levels, keys).is_some()
-                    }
-                ));
-            }
-        }
-        check_rewrite(&source, &target).unwrap();
-    }
 }
 
 #[test]
@@ -1206,7 +1145,7 @@ fn removed_smallest_region_drops_only_its_obsolete_fallbacks() {
 #[test]
 fn d72_automatic_cyclic_plan_records_one_layout_per_provider() {
     let query = syn::parse_str(include_str!(
-        "../../../planners/tests/fixtures/le_retail_d72_inner.cq"
+        "../../planners/tests/fixtures/le_retail_d72_inner.cq"
     ))
     .unwrap();
     let physical = cq_workloads::pipelines::Pipeline::default()
@@ -1380,7 +1319,68 @@ mod intersection_configuration_matrix {
             }
         };
     }
-    include!("../../../workloads/e2e/corpus/tests/support/le_configurations.rs");
-    include!("../../../workloads/e2e/corpus/tests/support/configurations.rs");
+    include!("../../workloads/e2e/corpus/tests/support/le_configurations.rs");
+    include!("../../workloads/e2e/corpus/tests/support/configurations.rs");
     case_configurations!(intersection, run_intersection);
+}
+
+#[test]
+fn unary_intersection_corpus_orderings_preserve_checked_representations() {
+    let query = cq_workloads::case("intersection")
+        .unwrap()
+        .module()
+        .unwrap();
+    for plan in 0..cq_workloads::pipelines::Planner::ALL.len() {
+        let physical = cq_workloads::pipelines::Pipeline {
+            plan,
+            ..Default::default()
+        }
+        .physical(&query)
+        .unwrap();
+        for positional in [false, true] {
+            let selection = if positional {
+                quote!(positional(Left, Right))
+            } else {
+                Default::default()
+            };
+            let structures = cq_structure_selection::compile_with(&physical, selection).unwrap();
+            let source = cq_sequence_lowering::compile(&structures).unwrap();
+            let advice = lookup_first_advice(&source, &catalog()).unwrap_or_else(|error| {
+                panic!("intersection {plan} positional={positional}: {error}")
+            });
+            if let Some(advice) = advice {
+                let target = lookup_first(&source, advice.to_token_stream()).unwrap();
+                check_rewrite(&source, &target).unwrap();
+            }
+        }
+    }
+}
+
+#[test]
+fn constraint_only_cq_union_arms_keep_the_prefix_domain() {
+    let query = syn::parse_quote! {
+        struct Q;
+        relation P(x:i32);
+        answer(x) :- P(x), { if *x == 1 } | { if *x == 2 };
+    };
+    let physical = cq_workloads::pipelines::Pipeline::default()
+        .physical(&query)
+        .unwrap();
+    let structures = cq_structure_selection::compile(&physical).unwrap();
+    let source = cq_sequence_lowering::compile(&structures).unwrap();
+    if let Some(advice) = lookup_first_advice(&source, &catalog()).unwrap() {
+        let target = lookup_first(&source, advice.to_token_stream()).unwrap();
+        let facts = cq_lang_sequence::contract::check(&target).unwrap();
+        for (name, layouts) in &facts.structures.built {
+            for (levels, _) in layouts {
+                assert!(facts.structures.physical.keyed_reads[name].iter().any(
+                    |(_, keys, supply)| {
+                        *supply == cq_syntax::SupplyKind::Stream
+                            && structures::prefix_depth(levels, keys).is_some()
+                    }
+                ));
+            }
+        }
+        check_rewrite(&source, &target).unwrap();
+    }
 }

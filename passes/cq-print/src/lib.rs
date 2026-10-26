@@ -83,6 +83,15 @@ pub enum Repr {
     },
 }
 
+/// Key-disjoint parts, routing columns, routed provider ordinals with their
+/// inner types, and whether the parts already own provider-ready rows.
+type PartitionedSource<'p> = (
+    TokenStream,
+    &'p [String],
+    &'p BTreeMap<usize, syn::Type>,
+    bool,
+);
+
 pub struct Context<'a> {
     pub profile: Option<profile::Profile>,
     pub analysis: &'a structures::Analysis,
@@ -542,7 +551,7 @@ impl<'a> Context<'a> {
         &mut self,
         name: &str,
         source: TokenStream,
-        parts: Option<(TokenStream, &[String], &BTreeMap<usize, syn::Type>, bool)>,
+        parts: Option<PartitionedSource<'_>>,
     ) -> Repr {
         let structures: Vec<(Vec<Vec<String>>, syn::Type)> =
             self.analysis.built.get(name).cloned().unwrap_or_default();
@@ -1047,5 +1056,31 @@ pub fn group(fields: &[TokenStream]) -> TokenStream {
         quote!((#(#fields,)*))
     } else {
         group(&fields.chunks(12).map(group).collect::<Vec<_>>())
+    }
+}
+
+/// Construct a canonicalization set of the recorded type. Catalog-selected
+/// native hash sets do not count insertion attempts themselves, so counters
+/// builds wrap them in `DistinctSet` (moved, not rehashed). Opaque authored
+/// providers keep their own protocol and never receive a second wrapper.
+/// Every printer uses this, so pull and push report the same primitive counts.
+pub fn canonical_set(ty: &syn::Type) -> TokenStream {
+    let native_hash_set = matches!(ty, syn::Type::Path(path)
+    if path.qself.is_none() && (
+        path.path.segments.len() == 2
+            && path.path.segments[0].ident == "cq_storage"
+            && path.path.segments[1].ident == "HashSet"
+        || path.path.segments.len() == 3
+            && path.path.segments[0].ident == "std"
+            && path.path.segments[1].ident == "collections"
+            && path.path.segments[2].ident == "HashSet"
+    ));
+    if native_hash_set {
+        quote!(::cq_storage::profile_select! {
+            plain { <#ty>::new() }
+            counters { ::cq_storage::counters::DistinctSet::from_set(<#ty>::new()) }
+        })
+    } else {
+        quote!(<#ty>::new())
     }
 }

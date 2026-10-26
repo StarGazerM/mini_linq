@@ -84,7 +84,11 @@ pub(crate) fn partition(
     });
     let mut prepare = quote!();
     let chunks = if let Some(stored) = stored {
-        quote!((#stored).par_chunks(#grain).map(|__cq_chunk| __cq_chunk.iter().cloned()))
+        prepare = quote!(let __cq_route_rows = &(#stored););
+        quote!(::cq_sequence_tasks::combine::IndexedTiles::new(
+            __cq_route_rows.len().div_ceil(#grain),
+            |i| __cq_route_rows[i * #grain..((i + 1) * #grain).min(__cq_route_rows.len())]
+                .iter().cloned()))
     } else if let Some(result) = borrowed_host {
         if context.carries_positions(result) || context.join_filter_ids(result).is_some() {
             let host = cq_print::Context::positional_host(&context.physical_analysis.hosts[result]);
@@ -94,8 +98,9 @@ pub(crate) fn partition(
                 .join_filter_ids_from(result, ids.clone())
                 .unwrap_or(ids);
             let rows = context.profile_stream(result, context.positional_rows(result, ids));
-            quote!((0..::cq_storage::PositionalRows::len(#host).div_ceil(#grain))
-                .into_par_iter().map(|__cq_chunk| #rows))
+            quote!(::cq_sequence_tasks::combine::IndexedTiles::new(
+                ::cq_storage::PositionalRows::len(#host).div_ceil(#grain),
+                |__cq_chunk| #rows))
         } else {
             let host = &context.hosts[&context.physical_analysis.hosts[result]].value;
             let rows = context.profile_stream(
@@ -106,15 +111,20 @@ pub(crate) fn partition(
                 use ::cq_sequence_tasks::combine::TileRows as _;
                 let __cq_route_source = ::cq_sequence_tasks::combine::TileSource(#host);
                 let __cq_route_source_ref = &&__cq_route_source;
+                let __cq_route_tiles = __cq_route_source_ref.tile_rows(#grain);
             };
-            quote!(__cq_route_source_ref.tile_rows(#grain).map(|__cq_chunk| #rows))
+            quote!(::cq_sequence_tasks::combine::IndexedTiles::new(
+            __cq_route_tiles.len(), |i| {
+                let __cq_chunk = __cq_route_tiles.tile(i);
+                #rows
+            }))
         }
     } else {
         let rows = &input.rows;
-        quote!((#rows).collect::<::std::vec::Vec<_>>().into_par_iter().chunks(#grain))
+        quote!(::cq_sequence_tasks::combine::owned_row_tiles(#rows, #grain))
     };
     Ok(quote!({
-        use ::rayon::prelude::*;
+        use ::cq_sequence_tasks::combine::Tiles as _;
         #prepare
         ::cq_sequence_tasks::combine::route_by(#chunks, #parts, |#pattern, __cq_count| {
             ::cq_storage::sharded::route_index(&#key, __cq_count)
@@ -135,7 +145,7 @@ pub(crate) fn canon(
     Ok(quote!({
         let __cq_parts = (#rows).map(|__cq_part| __cq_part.collect::<::std::vec::Vec<_>>())
             .collect::<::std::vec::Vec<_>>();
-        ::cq_sequence_tasks::combine::map_parts(__cq_parts, |__cq_part| {
+        ::cq_sequence_tasks::combine::map_parts(__cq_parts, &|__cq_part| {
             #canonical
         }).into_iter().map(::std::vec::Vec::into_iter)
     }))
@@ -155,7 +165,7 @@ pub(crate) fn group(
     Ok(quote!({
         let __cq_parts = (#rows).map(|__cq_part| __cq_part.collect::<::std::vec::Vec<_>>())
             .collect::<::std::vec::Vec<_>>();
-        ::cq_sequence_tasks::combine::map_parts(__cq_parts, |__cq_part| {
+        ::cq_sequence_tasks::combine::map_parts(__cq_parts, &|__cq_part| {
             #grouped
         }).into_iter().map(::std::vec::Vec::into_iter)
     }))
@@ -255,7 +265,7 @@ pub(crate) fn partial(
             binding,
             quote!(let __cq_group_input = (#rows)
                 .map(|part| part.collect::<::std::vec::Vec<_>>()).collect::<::std::vec::Vec<_>>();),
-            quote!(__cq_group_input.into_par_iter()),
+            quote!(::cq_sequence_tasks::combine::owned_tiles(__cq_group_input)),
         )
     };
     let table = quote::format_ident!("__cq_task_groups", span = proc_macro2::Span::mixed_site());
@@ -268,7 +278,7 @@ pub(crate) fn partial(
         }),
     );
     let merged = quote!({
-        use ::rayon::prelude::*;
+        use ::cq_sequence_tasks::combine::Tiles as _;
         #prepare
         let __cq_task_context = ::cq_storage::profile_select! {
             plain { () }
@@ -276,11 +286,19 @@ pub(crate) fn partial(
         };
         let __cq_tiles = #parts;
         let __cq_tiles_per_task = __cq_tiles.len().div_ceil(#workers).max(1);
-        let __cq_partials = __cq_tiles.fold_chunks(
-            __cq_tiles_per_task,
-            ::std::collections::HashMap::<_, (#(#types,)*)>::new,
-            |mut #table, #binding| #updates,
-        ).collect::<::std::vec::Vec<_>>();
+        let __cq_partials = ::cq_storage::parallel::map_index(
+            __cq_tiles.len().div_ceil(__cq_tiles_per_task),
+            &|__cq_task| {
+                let mut #table = ::std::collections::HashMap::<_, (#(#types,)*)>::new();
+                let __cq_start = __cq_task * __cq_tiles_per_task;
+                let __cq_end = (__cq_start + __cq_tiles_per_task).min(__cq_tiles.len());
+                for __cq_index in __cq_start..__cq_end {
+                    let #binding = __cq_tiles.tile(__cq_index);
+                    #table = #updates;
+                }
+                #table
+            },
+        );
         let mut #table = ::std::collections::HashMap::<_, (#(#types,)*)>::new();
         for __cq_map in __cq_partials {
             for (__cq_keys, __cq_partial) in __cq_map {
@@ -375,8 +393,9 @@ pub(crate) fn global(
     } else {
         local.rows = quote!(__cq_part.into_iter());
         (
-            quote!((#rows).map(|__cq_part| __cq_part.collect::<::std::vec::Vec<_>>())
-            .collect::<::std::vec::Vec<_>>().into_par_iter()),
+            quote!(::cq_sequence_tasks::combine::owned_tiles(
+                (#rows).map(|__cq_part| __cq_part.collect::<::std::vec::Vec<_>>())
+                    .collect::<::std::vec::Vec<_>>())),
             quote!(),
             quote!(),
         )
@@ -388,13 +407,17 @@ pub(crate) fn global(
     });
     let grouped = super::task_scope(emitter, grouped);
     let merge = quote!({
-        use ::rayon::prelude::*;
+        use ::cq_sequence_tasks::combine::Tiles as _;
         #prepare
         let __cq_task_context = ::cq_storage::profile_select! {
             plain { () }
             counters { ::cq_storage::counters::TaskContext::capture() }
         };
-        let __cq_partials = (#parts).map(|__cq_part| #grouped).collect::<::std::vec::Vec<_>>();
+        let __cq_tiles = #parts;
+        let __cq_partials = ::cq_storage::parallel::map_index(__cq_tiles.len(), &|__cq_index| {
+            let __cq_part = __cq_tiles.tile(__cq_index);
+            #grouped
+        });
         let mut __cq_state = #initial;
         for __cq_partial in __cq_partials {
             #(#merges)*
