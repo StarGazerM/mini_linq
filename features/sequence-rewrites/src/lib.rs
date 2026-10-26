@@ -1,6 +1,6 @@
 //! Checked, advice-driven Sequence scheduling passes, usable at the public
-//! `cq_stage` pipeline boundary. The companion `cq-sequence-rewrite-passes`
-//! library exposes the same transformations to tools without proc macros.
+//! `cq_stage` pipeline boundary. The core `cq_sequence_plan::rewrites`
+//! module exposes the same transformations to tools without proc macros.
 //!
 //! | Macro | Advice | Effect |
 //! |---|---|---|
@@ -61,7 +61,7 @@ macro_rules! sequence_rewrite {
         pub fn $name(input: TokenStream) -> TokenStream {
             cq_stage::rewrite::<cq_lang_sequence::Program>(
                 input.into(),
-                cq_sequence_rewrite_passes::$name,
+                cq_sequence_plan::rewrites::$name,
             )
             .into()
         }

@@ -1,7 +1,7 @@
 use cq_lang_sequence::{
     Evidence, Guard, Len, OutputProtocol, Program, Term, check_rewrite, contract,
 };
-use cq_sequence_rewrite_passes::{
+use cq_sequence_plan::rewrites::{
     AdaptiveCandidate, adaptive, adaptive_candidates, adaptive_choose, adaptive_filter,
     apply_adaptive, select_filter,
 };
@@ -469,7 +469,7 @@ fn automatic_policy_uses_evidence_but_replay_does_not() {
 fn authored_decomposition_is_not_rebuilt_by_adaptive_preparation() {
     let source = automatic_source();
     let candidate: AdaptiveCandidate = syn::parse_quote!(__lookup_lookup, selected, 100000);
-    let authored = cq_sequence_rewrite_passes::store(&source, quote!(__lookup_lookup)).unwrap();
+    let authored = cq_sequence_plan::rewrites::store(&source, quote!(__lookup_lookup)).unwrap();
     assert!(adaptive_candidates(&authored).unwrap().is_empty());
     assert!(apply_adaptive(&authored, &candidate).is_err());
 }

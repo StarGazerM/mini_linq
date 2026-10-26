@@ -7,6 +7,20 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Restore closed-core release boundaries: shared Sequence transformations now
+  live in `cq_sequence_plan::rewrites`, with retyping and host-retention helpers
+  in `cq_structure_selection`. Remove the old feature implementation crate and
+  migrate direct callers; feature macro names remain unchanged.
+  Move CPU target conformance and workload-dependent tests to the external
+  `cq-sequence-conformance` workspace, keeping `cq-testkit` language/runtime-only.
+  Replace Sequence lowering's self-recompiling checker with direct coverage,
+  operator, retention and output checks, accepting arbitrary fresh output names.
+  Align feature locks to reviewed root versions; vendor every feature closure
+  and canonicalize relocation paths so macOS temporary-directory aliases are
+  not mistaken for source escapes.
+  Runtime fixtures link their exact Cargo storage/Rayon artifacts instead of
+  checkout source paths. Refresh inadmissible handwritten corpus registrations
+  without removing queries, configuration definitions or custom negative cases.
 - Validate transfer across all 29 registered TPC-H-derived/full-query cases,
   adding real per-stage transfer configurations to the 12 standalone retail
   runners. Preserve query text, SQL, numeric contracts and cached projections.

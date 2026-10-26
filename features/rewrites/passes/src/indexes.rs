@@ -17,6 +17,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use cq_lang_structures::{self as ir, Structure, physical::Operator, symbol_name};
+use cq_structure_selection::arguments::sorted_key;
 use proc_macro2::TokenStream;
 use syn::{Ident, Token, Type};
 
@@ -106,12 +107,6 @@ impl syn::parse::Parse for Choice {
         }
         Ok(Self { build, levels })
     }
-}
-
-/// Single-column keys the sorted providers order losslessly through their
-/// i64 key codecs (`I64Codec`, `BorrowedI64TupleCodec`): `i32`, `i64`, `u32`.
-pub(crate) fn sorted_key(ty: &Type) -> bool {
-    matches!(ir::ungroup_type(ty), Type::Path(p) if ["i32", "i64", "u32"].iter().any(|name| p.path.is_ident(name)))
 }
 
 fn default_type(ty: &Type) -> bool {

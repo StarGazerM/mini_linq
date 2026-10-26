@@ -1,5 +1,5 @@
 use cq_lang_sequence::{Graded, OutputProtocol, Program, Term, check_rewrite, contract};
-use cq_sequence_rewrite_passes::{choose, grade, output, store, store_level, tile};
+use cq_sequence_plan::rewrites::{choose, grade, output, store, store_level, tile};
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 
@@ -203,7 +203,7 @@ fn every_pass_checks_the_source_contract() {
 fn evidence_advice_is_checked_replayable_metadata() {
     let source = program(quote!(out = store rows r;));
     let target = apply(
-        cq_sequence_rewrite_passes::evidence,
+        cq_sequence_plan::rewrites::evidence,
         &source,
         quote!(evidence {
             count R = 0;
@@ -220,11 +220,11 @@ fn evidence_advice_is_checked_replayable_metadata() {
     assert_eq!(target.evidence.count("R"), Some(0));
     assert_eq!(contract::check(&target).unwrap().evidence, target.evidence);
     assert_eq!(
-        cq_sequence_rewrite_passes::record_evidence(&target, &target.evidence).unwrap(),
+        cq_sequence_plan::rewrites::record_evidence(&target, &target.evidence).unwrap(),
         target
     );
     let extended = apply(
-        cq_sequence_rewrite_passes::evidence,
+        cq_sequence_plan::rewrites::evidence,
         &target,
         quote!(evidence { count R = 123; }),
     );
@@ -234,11 +234,11 @@ fn evidence_advice_is_checked_replayable_metadata() {
     );
     assert_eq!(extended.evidence.count("R"), Some(123));
     assert!(
-        cq_sequence_rewrite_passes::evidence(&source, quote!(evidence { count absent = 1; }))
+        cq_sequence_plan::rewrites::evidence(&source, quote!(evidence { count absent = 1; }))
             .is_err()
     );
     assert!(
-        cq_sequence_rewrite_passes::evidence(&source, quote!(evidence { sorted R [absent]; }))
+        cq_sequence_plan::rewrites::evidence(&source, quote!(evidence { sorted R [absent]; }))
             .is_err()
     );
 }
@@ -255,10 +255,10 @@ fn grouped_key_premises_remove_only_proven_valuation_canon() {
         structures { r host scan = Reader []; r canon = Canon; grouped rows = Rows; }
         sequence { values = store canon rows r; answer = store group grouped values; }
     };
-    assert!(cq_sequence_rewrite_passes::group_without_canon(&source, quote!(answer)).is_err());
+    assert!(cq_sequence_plan::rewrites::group_without_canon(&source, quote!(answer)).is_err());
     let mut keyed = source.clone();
     keyed.evidence = syn::parse_quote!(evidence { R(id) key; });
-    let target = cq_sequence_rewrite_passes::group_without_canon(&keyed, quote!(answer)).unwrap();
+    let target = cq_sequence_plan::rewrites::group_without_canon(&keyed, quote!(answer)).unwrap();
     assert!(matches!(target.sequence.definitions[0].term, Term::Rows(_)));
     contract::check_rewrite(&keyed, &target).unwrap();
     assert!(
@@ -283,7 +283,7 @@ fn grouped_key_premises_remove_only_proven_valuation_canon() {
             .cloned()
             .collect();
     }
-    assert!(cq_sequence_rewrite_passes::group_without_canon(&projected, quote!(answer)).is_err());
+    assert!(cq_sequence_plan::rewrites::group_without_canon(&projected, quote!(answer)).is_err());
 }
 
 #[test]
@@ -308,9 +308,9 @@ fn grouped_join_requires_keys_for_every_enumerated_atom() {
         }
         evidence { L(id) key; }
     };
-    assert!(cq_sequence_rewrite_passes::group_without_canon(&source, quote!(result)).is_err());
+    assert!(cq_sequence_plan::rewrites::group_without_canon(&source, quote!(result)).is_err());
     source.evidence = syn::parse_quote!(evidence { L(id) key; R(a,b) key; });
-    let target = cq_sequence_rewrite_passes::group_without_canon(&source, quote!(result)).unwrap();
+    let target = cq_sequence_plan::rewrites::group_without_canon(&source, quote!(result)).unwrap();
     let Term::Store { inner, .. } = &target.sequence.definitions[2].term else {
         panic!("expanding input keeps its flat publication");
     };

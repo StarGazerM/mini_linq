@@ -410,12 +410,13 @@ approval.
 - Not context facts (see context.tex): declared keys (need a provenance
   model), first-witness consumption, guard totality, terminal canonical
   return.
-- Upstream items (GPU side): `sequence_conformance` corpus test does not finish
-  within 20 min (skip by exact name in workload runs); core→feature edges
-  (`cq-sequence-lowering` and `cq-sequence-pull` dev-deps, `cq-sequence-plan`
-  → `features/sequence-rewrites/passes`); packaged external gate fails on
-  `cq-testkit`'s optional path dependency on `features/sequence-tasks`;
-  `translate_pull` codegen triggers `clippy::unused_unit` in workloads.
+- Core boundary blockers are repaired: Sequence rewrites and shared selection
+  helpers are core-owned; target-dependent conformance and workload tests live
+  in `features/sequence-conformance`. `cq-testkit` has no optional compiler or
+  feature backedge. Dependency isolation checks the actual closed core.
+- Historical GPU-side notes also flag a slow `sequence_conformance` corpus and
+  workload `clippy::unused_unit` diagnostics. They are separate from these
+  ownership repairs and do not justify skipping core release gates.
 - Archived: abandoned v1-design branches are tags `archive/<name>`; the parked
   pre-redesign refactor is `../mini_linq-archive/datalog-par-factor.patch`.
 

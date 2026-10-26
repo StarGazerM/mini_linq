@@ -146,13 +146,14 @@ pub fn select_from_catalog(
             format!("PL-Select: structure `{name}` entry {index} ({kind}) has unmet catalog read obligation {required:?}"),
         ))?;
         let index = syn::LitInt::new(&index.to_string(), entry.name.span());
-        target =
-            cq_rewrite_passes::retype(&target, quote!(entry(#index) => #ty)).map_err(|error| {
+        target = cq_structure_selection::retype(&target, quote!(entry(#index) => #ty)).map_err(
+            |error| {
                 syn::Error::new(
                     error.span(),
                     format!("PL-Select: structure `{name}` ({kind}): {error}"),
                 )
-            })?;
+            },
+        )?;
     }
     retain_host_indexes(&target, catalog)
 }
@@ -256,8 +257,11 @@ fn retain_host_indexes(
         ))?;
         let build = &entry.name;
         if retained.insert(name.clone()) {
-            target.physical = cq_rewrite_passes::build_host_reads(&target.physical, quote!(#build))
-                .map_err(|error| syn::Error::new(error.span(), format!("PL-Select: {error}")))?;
+            target.physical =
+                cq_structure_selection::build_host_reads(&target.physical, quote!(#build))
+                    .map_err(|error| {
+                        syn::Error::new(error.span(), format!("PL-Select: {error}"))
+                    })?;
         }
         if indexes.insert((name.clone(), keys.clone())) {
             let ty = &token.ty;

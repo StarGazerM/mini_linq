@@ -1,5 +1,5 @@
 use cq_lang_sequence::{Program, check_rewrite, contract};
-use cq_sequence_rewrite_passes::{choose, grade, output, partition, segment, store_level, tile};
+use cq_sequence_plan::rewrites::{choose, grade, output, partition, segment, store_level, tile};
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 

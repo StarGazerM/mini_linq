@@ -286,7 +286,7 @@ terminal paths require explicit sequence and grade.
 
 ## [9] conformance
 
-Implemented: `cq-testkit`'s `sequence-conformance` feature exposes
+Implemented: the external `cq-sequence-conformance` crate exposes
 `assert_conformant(program, targets)` for `Sequential` and `Tasks`. Each
 target checks its machine grading, translates, and compiles/runs against the
 same inputs through the existing rustc driver. Answer rows compare as multisets,
@@ -294,6 +294,12 @@ or sets at an explicit canonical output boundary; ordering is not observable.
 The first divergence names both targets and the differing row multiplicities.
 The default driver uses deterministic binary-domain databases; authored corpus
 inputs and raw duplicate-preserving `Case::inputs` use the same execution path.
+The core `cq-testkit` retains independent fixtures and
+`conformance::assert_answers_equal`, with no compiler or target dependencies.
+The external driver links its Cargo-built storage and Rayon artifacts through
+`cq_testkit::rustc::{Runtime::with_dependencies, linked_dependency}`. Callers
+providing a custom runtime link their exact storage/provider artifacts and
+`rayon::ThreadPool` when using Tasks; no checkout source paths are required.
 
 The workload corpus expands each configured Sequence program into Sequential
 and Tasks functions in the test binary through `conformance_targets!` and its

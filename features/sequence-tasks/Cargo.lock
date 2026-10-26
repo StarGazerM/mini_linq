@@ -192,12 +192,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-rewrite-passes"
+name = "cq-sequence-conformance"
 version = "0.1.0"
 dependencies = [
- "cq-lang-physical",
- "cq-lang-structures",
+ "cq-lang-sequence",
+ "cq-sequence-plan",
+ "cq-sequence-pull",
+ "cq-sequence-tasks",
+ "cq-storage",
+ "cq-syntax",
+ "cq-testkit",
  "proc-macro2",
+ "quote",
+ "rayon",
  "syn 2.0.119",
 ]
 
@@ -215,7 +222,8 @@ name = "cq-sequence-plan"
 version = "0.1.0"
 dependencies = [
  "cq-lang-sequence",
- "cq-sequence-rewrite-passes",
+ "cq-sequence-lowering",
+ "cq-structure-selection",
  "cq-syntax",
  "proc-macro2",
  "quote",
@@ -236,24 +244,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-sequence-rewrite-passes"
-version = "0.1.0"
-dependencies = [
- "cq-lang-sequence",
- "cq-rewrite-passes",
- "cq-sequence-lowering",
- "cq-syntax",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "cq-sequence-rewrites"
 version = "0.1.0"
 dependencies = [
  "cq-lang-sequence",
- "cq-sequence-rewrite-passes",
+ "cq-sequence-plan",
  "cq-stage",
 ]
 
@@ -262,11 +257,14 @@ name = "cq-sequence-tasks"
 version = "0.1.0"
 dependencies = [
  "cq-lang-sequence",
+ "cq-sequence-conformance",
  "cq-sequence-pull",
+ "cq-storage",
  "cq-structure-selection",
  "cq-testkit",
  "proc-macro2",
  "quote",
+ "rayon",
  "syn 2.0.119",
 ]
 
@@ -305,6 +303,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-storage"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "hashbrown",
+]
+
+[[package]]
 name = "cq-structure-selection"
 version = "0.1.0"
 dependencies = [
@@ -334,17 +340,10 @@ dependencies = [
  "cq-lang-ix",
  "cq-lang-physical",
  "cq-lang-ra",
- "cq-lang-sequence",
  "cq-lang-structures",
  "cq-lang-vo",
- "cq-sequence-plan",
- "cq-sequence-pull",
- "cq-sequence-tasks",
  "cq-syntax",
  "hashbrown",
- "proc-macro2",
- "quote",
- "rayon",
  "syn 2.0.119",
 ]
 

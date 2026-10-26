@@ -195,3 +195,84 @@ fn configuration_names_rows_and_pipeline_tokens_agree() {
         "both LE planners must have independent configuration witnesses",
     );
 }
+
+// Expand only the registration constants, never a query or compiler macro.
+// This checks the same inventory consumed by runtime and Sequence conformance.
+mod eligibility {
+    use cq_workloads::{catalog, pipelines::Pipeline};
+
+    macro_rules! pipeline_configuration {
+        ($($tokens:tt)*) => {};
+    }
+    #[macro_use]
+    mod le_configurations {
+        include!("support/le_configurations.rs");
+    }
+    #[macro_use]
+    mod configurations {
+        include!("support/configurations.rs");
+    }
+
+    macro_rules! cases {
+        ($(($case:ident, $runner:ident)),+ $(,)?) => {
+            $(mod $case { case_configurations!($case, $runner); })+
+
+            #[test]
+            fn registered_configurations_are_eligible() {
+                let cases = [$( (stringify!($case), $case::CONFIGURATIONS) ),+];
+                assert_eq!(cases.len(), catalog::all().count());
+                let mut rejected = Vec::new();
+                for case in catalog::all() {
+                    let stem = case.name.replace('-', "_");
+                    let rows = cases.iter().find(|(name, _)| *name == stem)
+                        .expect("every catalog query has registered configurations").1;
+                    let source = case.module().unwrap();
+                    for row in rows {
+                        let pipeline = Pipeline {
+                            // LE and LE-with-sorted-runs share the physical plan.
+                            plan: [0, 1, 2, 5, 6, 7, 8, 9, 10, 4, 4][row[0]],
+                            merge: row[1] != 0,
+                            canon: row[2] != 0,
+                            smallest: row[3] != 0,
+                            ordered_dedup: row[5] != 0,
+                            sorted_payload: row[6] != 0,
+                            lazy: row[7] != 0,
+                            push: row[8] != 0,
+                            positional: row[9] != 0,
+                        };
+                        if let Some(reason) = pipeline.rejection(&source, row[4]).unwrap() {
+                            let name = row.iter().enumerate()
+                                .map(|(axis, &value)| super::AXES[axis][value])
+                                .collect::<Vec<_>>().join("_");
+                            rejected.push(format!("{}/{name}: {reason}", case.name));
+                        }
+                    }
+                }
+                assert!(rejected.is_empty(), "ineligible registrations:\n{}", rejected.join("\n"));
+            }
+        };
+    }
+
+    cases! {
+        (intersection, run_intersection),
+        (cartesian_product, run_cartesian_product),
+        (oriented_chain, run_oriented_chain),
+        (claw, run_claw),
+        (fact_star, run_fact_star),
+        (triangle, run_triangle),
+        (cycle_4, run_cycle_4),
+        (spade, run_spade),
+        (barbell, run_barbell),
+        (loomis_whitney_4, run_loomis_whitney_4),
+        (retail_h03, run_retail_h03),
+        (retail_h05, run_retail_h05),
+        (retail_h07, run_retail_h07),
+        (retail_h08, run_retail_h08),
+        (retail_h09, run_retail_h09),
+        (retail_h21_positive, run_retail_h21_positive),
+        (retail_d19, run_retail_d19),
+        (retail_d27, run_retail_d27),
+        (retail_d72_inner, run_retail_d72_inner),
+        (retail_d85, run_retail_d85),
+    }
+}

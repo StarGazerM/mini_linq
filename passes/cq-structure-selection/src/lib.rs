@@ -5,6 +5,9 @@
 //! The denotation is `bottom + Set`: Rust chain positions are preserved. A
 //! const supply is one fixed key, answered directly or by scan and filter;
 //! only stream supplies can justify building reusable keyed storage.
+//! Explicit checked decisions are available through [`retype`] and
+//! [`build_host_reads`], independently of optional rewrite macro frontends.
+//! These preserve the existing Structures and Physical rewrite contracts.
 
 //! Selection preserves Physical union/anti choices and chooses dedup types, anti indices and direct chained-scan union index builds.
 //!
@@ -17,6 +20,13 @@
 //! its existing recognition. Only differing literals on one interface column
 //! prove union arms disjoint; no data keys or constraints are assumed.
 //!
+pub mod arguments;
+mod host_reads;
+mod retype;
+
+pub use host_reads::build_host_reads;
+pub use retype::retype;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use cq_lang_physical as physical;

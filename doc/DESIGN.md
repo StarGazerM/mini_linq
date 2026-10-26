@@ -123,12 +123,15 @@ oracle agreement supply distinct evidence.
 
 Folder boundaries constrain language dependencies to shared syntax, the pass
 protocol, and their base language. Passes depend on their endpoints, with explicit
-adapter dependencies for `cq-physical-realization` and `cq-sequence-pull`.
+adapter dependencies for `cq-physical-realization`, `cq-sequence-pull`, and
+`cq-sequence-plan`'s checked selection/lowering adapters. Shared Sequence rewrites
+live in `cq_sequence_plan::rewrites`; provider retyping and host retention live
+in `cq_structure_selection`. Feature macros call these core-owned implementations.
 Runtime crates have no compiler dependencies. Language, pass, and facade crates
-have no Cargo features. The dependency gate still reports the core-to-feature
-edges from `cq-sequence-lowering` and `cq-sequence-pull` test dependencies and
-`cq-sequence-plan` to `features/sequence-rewrites/passes`; these are not permitted exceptions.
-The isolation gate tests declared dependency closures.
+have no Cargo features. `cq-testkit` depends only on languages and runtime;
+CPU target planning/translation conformance and workload-dependent tests live
+in `features/sequence-conformance`, not in an optional core backedge.
+The isolation gate tests declared dependency closures, including dev dependencies.
 
 ## Extending
 
@@ -173,8 +176,11 @@ Features are external consumers, with versioned public core dependencies and
 local development paths. `python3 tools/check_external.py` packages every core
 crate, relocates every feature and its sibling consumer dependencies outside
 the checkout, substitutes packaged core sources, and builds all targets and
-runs workspace tests. Escaping to in-tree source is a gate failure. Positive,
-sibling-closure, and in-tree-only negative fixtures always run.
+runs workspace tests. Vendoring includes every repository feature's locked
+third-party closure rather than relying on accidental core dependencies.
+Escapes are checked using canonical filesystem paths, including symlinked
+temporary directories. Positive, sibling-closure, and in-tree-only negative
+fixtures always run.
 
 The public API gate compares reviewed rustdoc-derived signatures.
 

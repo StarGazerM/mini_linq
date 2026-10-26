@@ -112,6 +112,7 @@ def copy_feature_closure(feature, directory, names):
     checks the resolved graph after relocation, including absolute paths.
     """
     feature = feature.resolve()
+    directory = directory.resolve()
     feature_root = (ROOT / "features").resolve()
     base = feature_root if feature.is_relative_to(feature_root) else feature.parent
     tree = directory / "features"
@@ -170,8 +171,13 @@ def package_core(directory, log):
     # Pin the derive fork too. cargo package normalizes git dependencies to a
     # version; our directory source preserves the actual locked implementation.
     vendor = directory/"vendor"
-    # Feature-only oracle dependencies are part of the packaged-consumer inventory.
-    run(["cargo","vendor","--locked","--offline","--sync","features/datalog/Cargo.toml","--sync","features/datalog-parallel/Cargo.toml",str(vendor)], ROOT, log)
+    # Vendor every standalone consumer's locked third-party closure. Core must
+    # not acquire feature dependencies merely to make them available here.
+    command = ["cargo", "vendor", "--locked", "--offline"]
+    for feature in feature_workspaces():
+        command.extend(["--sync", str(feature / "Cargo.toml")])
+    command.append(str(vendor))
+    run(command, ROOT, log)
     original = tomllib.loads((ROOT/"Cargo.toml").read_text())["workspace"]
     root = {"workspace":{"members":[],"resolver":"3","package":original["package"],"dependencies":original["dependencies"]}, "patch":{"crates-io":{}}}
     for p in packages:

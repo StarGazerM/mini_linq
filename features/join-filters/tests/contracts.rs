@@ -1,5 +1,6 @@
 use cq_lang_structures::{self as ir, Structure, physical};
-use cq_rewrite_passes::{join_filter, retype};
+use cq_rewrite_passes::join_filter;
+use cq_structure_selection::retype;
 use quote::{ToTokens, quote};
 
 fn source() -> ir::Program {

@@ -1,6 +1,5 @@
 //! Advice-driven Sequence rewrites. Every entry point checks source, target and
 //! construction-based support equality; machine validation belongs to grading.
-#![forbid(unsafe_code)]
 
 use std::collections::BTreeSet;
 

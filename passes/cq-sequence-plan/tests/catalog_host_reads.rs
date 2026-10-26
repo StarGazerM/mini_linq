@@ -2,8 +2,8 @@ use cq_lang_sequence::{
     CanonToken, Capability, Catalog, CodecToken, LevelNode, Machine, Program, ProviderToken,
     check_grading, check_rewrite, structures,
 };
+use cq_sequence_plan::rewrites::{lookup_first, lookup_first_advice};
 use cq_sequence_plan::{Advice, decompose, plan, select_from_catalog};
-use cq_sequence_rewrite_passes::{lookup_first, lookup_first_advice};
 use quote::ToTokens;
 
 fn machine() -> Machine {

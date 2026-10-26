@@ -1,4 +1,4 @@
-use cq_rewrite_passes::build_host_reads;
+use cq_structure_selection::build_host_reads;
 use cq_testkit::physical as ir;
 use proc_macro2::TokenStream;
 use quote::quote;

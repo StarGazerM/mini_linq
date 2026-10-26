@@ -1016,8 +1016,7 @@ mod tests {
     #[test]
     fn unsupported_authored_provider_read_grade_is_not_replaced() {
         let source =
-            cq_sequence_rewrite_passes::grade(&membership(), quote::quote!(gpu, answer at host))
-                .unwrap();
+            crate::rewrites::grade(&membership(), quote::quote!(gpu, answer at host)).unwrap();
         let facts = cq_lang_sequence::contract::check(&source).unwrap();
         let available = catalog(vec![
             vec!["host".into(), "device".into()],

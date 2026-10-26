@@ -184,7 +184,18 @@ fn host_grouped_tasks_and_pull_execute_the_same_valuation_fold() {
             }
         }
     };
-    let runtime = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../runtime/cq-storage/src/lib.rs");
-    cq_testkit::rustc::Runtime::new(&runtime, false).run(&source.to_string());
+    static DEPENDENCIES: std::sync::LazyLock<Vec<(String, std::path::PathBuf)>> =
+        std::sync::LazyLock::new(|| {
+            vec![
+                cq_testkit::rustc::linked_dependency::<cq_storage::SortedRun<i32, i32>>(
+                    "cq_storage",
+                    "cq_storage::SortedRun<i32, i32>",
+                ),
+                cq_testkit::rustc::linked_dependency::<rayon::ThreadPool>(
+                    "rayon",
+                    "rayon::ThreadPool",
+                ),
+            ]
+        });
+    cq_testkit::rustc::Runtime::with_dependencies(DEPENDENCIES.clone()).run(&source.to_string());
 }

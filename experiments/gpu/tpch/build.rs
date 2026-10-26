@@ -283,7 +283,7 @@ fn compile_stage(
             structures = checked(
                 "loader host adapter",
                 &structures,
-                cq_rewrite_passes::retype(
+                cq_structure_selection::retype(
                     &structures,
                     if kernel
                         .published

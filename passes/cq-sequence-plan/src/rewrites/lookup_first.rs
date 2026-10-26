@@ -549,7 +549,7 @@ pub fn lookup_first_advice_in(
                     let actual = &analysis.physical.rows[&result].types[column];
                     accepted.iter().any(|ty| matches!(ty, syn::Type::Infer(_)) || ty == actual)
                 })
-            }) && crate::catalog::accepts_read_levels(provider, target, analysis, &result, &levels, needed)
+            }) && crate::rewrites::catalog::accepts_read_levels(provider, target, analysis, &result, &levels, needed)
         }).ok_or_else(|| syn::Error::new_spanned(
             name,
             "lookup_first generated layout requires a catalog provider with Exact and Membership for its row types at a legal read level",

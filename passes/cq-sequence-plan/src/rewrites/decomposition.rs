@@ -1,7 +1,7 @@
 use cq_lang_sequence::{Program, Term};
 use proc_macro2::TokenStream;
 
-use crate::{Tile, checked_in, definition};
+use crate::rewrites::{Tile, checked_in, definition};
 
 /// Partition a producer chain at its input storage boundary. The paired
 /// flatten keeps its row shape unchanged, including across named pipe terms.

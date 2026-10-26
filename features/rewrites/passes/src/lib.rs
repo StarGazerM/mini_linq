@@ -2,7 +2,8 @@
 //!
 //! These functions accept the same opaque argument tokens as their proc macros.
 //! They preserve declarations, graph, Rust expressions, keys, and unrelated
-//! decisions. `build_host_reads` and `retain_streams` record explicit retention.
+//! decisions. `retain_streams` records explicit retention. Shared `retype` and
+//! `build_host_reads` helpers are owned by `cq_structure_selection`.
 //! Correspondence belongs to the public language checks. `hoist` and
 //! `smallest_intersections` move independent relational definitions earlier;
 //! opaque Rust payloads and their dependency/Before contracts are preserved.
@@ -23,14 +24,13 @@
 
 mod indexes;
 mod physical;
-mod selection;
 mod structures;
 
 pub use indexes::{chain_cover, check_chain_cover, sorted_indexes};
 pub use physical::{
-    build_host_reads, canon_prefixes, hoist, host_sets, lazy_semijoins, merge_joins,
-    retain_streams, smallest_intersections,
+    canon_prefixes, hoist, host_sets, lazy_semijoins, merge_joins, retain_streams,
+    smallest_intersections,
 };
 pub use structures::{
-    expand_lookups, hashed_runs, join_filter, membership, retain_lookups, retype, sorted_runs,
+    expand_lookups, hashed_runs, join_filter, membership, retain_lookups, sorted_runs,
 };

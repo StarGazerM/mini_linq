@@ -1,6 +1,4 @@
-#![cfg(feature = "sequence-conformance")]
-
-use cq_testkit::conformance::{Target, assert_conformant, assert_conformant_with_inputs, plan};
+use cq_sequence_conformance::{Target, assert_conformant, assert_conformant_with_inputs, plan};
 
 fn program() -> cq_lang_sequence::Program {
     syn::parse_quote! {
@@ -51,4 +49,30 @@ fn planning_uses_target_catalogs_and_preserves_authored_decisions() {
                 .program,
         );
     }
+}
+
+#[test]
+fn caller_runtime_links_exact_storage_and_rayon_artifacts() {
+    use cq_testkit::rustc::{Runtime, linked_dependency};
+
+    let runtime = Runtime::with_dependencies(vec![
+        linked_dependency::<cq_storage::SortedRun<i32, i32>>(
+            "cq_storage",
+            "cq_storage::SortedRun<i32, i32>",
+        ),
+        linked_dependency::<rayon::ThreadPool>("rayon", "rayon::ThreadPool"),
+    ]);
+    let setup = quote::quote! {
+        use rayon::prelude::*;
+        let R: Vec<(i32, i32)> = vec![(1, 20), (1, 20), (2, 10)]
+            .into_par_iter()
+            .collect();
+    };
+    cq_sequence_conformance::assert_conformant_with_runtime(
+        &program(),
+        &[Target::Sequential, Target::Tasks],
+        &setup,
+        &runtime,
+        &cq_lang_sequence::Catalog::default(),
+    );
 }

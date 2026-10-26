@@ -17,14 +17,21 @@ impl StringDictionary {
         let mut values: Vec<&str> = values.into_iter().collect();
         values.sort_unstable();
         values.dedup();
-        assert!(values.len() <= u32::MAX as usize, "string dictionary exceeds u32 codes");
-        Self { values: values.into_iter().map(str::to_owned).collect() }
+        assert!(
+            values.len() <= u32::MAX as usize,
+            "string dictionary exceeds u32 codes"
+        );
+        Self {
+            values: values.into_iter().map(str::to_owned).collect(),
+        }
     }
 
     /// Returns the source value's code, or `None` when the value is absent.
     pub fn lookup(&self, value: &str) -> Option<u32> {
-        self.values.binary_search_by(|candidate| candidate.as_str().cmp(value))
-            .ok().map(|index| index as u32)
+        self.values
+            .binary_search_by(|candidate| candidate.as_str().cmp(value))
+            .ok()
+            .map(|index| index as u32)
     }
 }
 

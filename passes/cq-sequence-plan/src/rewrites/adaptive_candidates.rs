@@ -10,7 +10,7 @@ use syn::parse::{Parse, ParseStream};
 use syn::{Ident, LitBool, LitInt, Token};
 
 use super::{adaptive_choose_in, fresh, has_filter, replace_producer, select_filter};
-use crate::{checked_in, definition};
+use crate::rewrites::{checked_in, definition};
 
 mod kw {
     syn::custom_keyword!(select);

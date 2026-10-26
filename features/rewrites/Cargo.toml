@@ -19,13 +19,13 @@ cq-stage = { version = "0.1.0", path = "../../facade/cq-stage" }
 cq-lang-physical = { version = "0.1.0", path = "../../languages/cq-lang-physical" }
 cq-lang-structures = { version = "0.1.0", path = "../../languages/cq-lang-structures" }
 cq-rewrite-passes = { version = "0.1.0", path = "passes" }
+cq-structure-selection = { version = "0.1.0", path = "../../passes/cq-structure-selection" }
 
 [dev-dependencies]
 cq-planners = { version = "0.1.0", path = "../planners" }
 cq-physical-lowering = { version = "0.1.0", path = "../../passes/cq-physical-lowering" }
 cq-testkit = { version = "0.1.0", path = "../../testkit/cq-testkit" }
 cq-rewrite-test-driver = { version = "0.1.0", path = "test-driver" }
-cq-structure-selection = { version = "0.1.0", path = "../../passes/cq-structure-selection" }
 cq-storage = { version = "0.1.0", path = "../../runtime/cq-storage", features = ["counters"] }
 mini-linq = { version = "0.1.0", path = "../../facade/mini-linq" }
 proc-macro2 = "1"

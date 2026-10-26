@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use cq_lang_sequence::{
     Capability, Catalog, Program, ProviderToken, Term, check_rewrite, structures,
 };
-use cq_sequence_rewrite_passes::{LookupFirst, lookup_first, lookup_first_advice, lookup_plan};
+use cq_sequence_plan::rewrites::{LookupFirst, lookup_first, lookup_first_advice, lookup_plan};
 use quote::{ToTokens, quote};
 use structures::physical::Operator;
 
@@ -1206,7 +1206,7 @@ fn removed_smallest_region_drops_only_its_obsolete_fallbacks() {
 #[test]
 fn d72_automatic_cyclic_plan_records_one_layout_per_provider() {
     let query = syn::parse_str(include_str!(
-        "../../../planners/tests/fixtures/le_retail_d72_inner.cq"
+        "../../planners/tests/fixtures/le_retail_d72_inner.cq"
     ))
     .unwrap();
     let physical = cq_workloads::pipelines::Pipeline::default()
@@ -1380,7 +1380,7 @@ mod intersection_configuration_matrix {
             }
         };
     }
-    include!("../../../workloads/e2e/corpus/tests/support/le_configurations.rs");
-    include!("../../../workloads/e2e/corpus/tests/support/configurations.rs");
+    include!("../../workloads/e2e/corpus/tests/support/le_configurations.rs");
+    include!("../../workloads/e2e/corpus/tests/support/configurations.rs");
     case_configurations!(intersection, run_intersection);
 }

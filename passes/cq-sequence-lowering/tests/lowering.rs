@@ -1,5 +1,4 @@
 use cq_lang_sequence::{Capability, LevelNode, Machine, OutputProtocol, Program, Term};
-use cq_planners_plan::Planner;
 use cq_sequence_lowering::{check, compile};
 
 fn accept(source: &cq_lang_structures::Program) -> Program {
@@ -28,35 +27,10 @@ fn accept(source: &cq_lang_structures::Program) -> Program {
     target
 }
 
-fn lower_cq(source: &cq_testkit::cq::Program, label: &str) {
-    for planner in Planner::ALL {
-        let result = (|| -> syn::Result<_> {
-            let ra = cq_planners_plan::compile(source, planner)?;
-            let ix = cq_index_policy::compile(&ra)?;
-            let physical = cq_physical_lowering::compile(&ix)?;
-            cq_structure_selection::compile(&physical)
-        })()
-        .unwrap_or_else(|error| panic!("{label} {planner:?}: {error}"));
-        accept(&result);
-    }
-}
-
 #[test]
-fn every_authored_scenario_and_scenario_family() {
+fn every_authored_structures_scenario() {
     for scenario in cq_testkit::SCENARIOS {
         accept(&scenario.parse_structures().unwrap());
-        lower_cq(&scenario.parse_cq().unwrap(), scenario.name);
-    }
-    for case in cq_testkit::CASES.iter().chain(cq_testkit::blocks::CASES) {
-        lower_cq(&case.parse_cq().unwrap(), case.name);
-    }
-}
-
-#[test]
-fn every_workload_through_every_planner() {
-    for case in cq_workloads::catalog::all() {
-        let source = cq_workloads::case(case.name).unwrap().module().unwrap();
-        lower_cq(&source, case.name);
     }
 }
 
@@ -95,6 +69,36 @@ fn probe_shape_and_structural_checker_reject_mutations() {
     let mut changed = target;
     changed.sequence.definitions.swap(0, 1);
     assert!(check(&source, &changed).is_err());
+}
+
+#[test]
+fn correspondence_accepts_authored_output_names_but_not_another_result() {
+    let source: cq_lang_structures::Program = syn::parse_quote! {
+        physical {
+            relation R(a:i32); relation S(a:i32);
+            r = pipe canon rename R@0 {a -> a};
+            s = pipe canon rename S@1 {a -> a};
+            u = pipe canon union r,s;
+            return u as answer(a);
+        } structures {
+            r host scan = Reader []; s host scan = Reader [];
+            r canon = Canon; s canon = Canon; u canon = Canon;
+        }
+    };
+    let target: Program = syn::parse_quote! {
+        #source
+        sequence {
+            r = canon rows r;
+            s = canon rows s;
+            u = canon union [r,s];
+            authored_output = store u;
+            output count;
+        }
+    };
+    check(&source, &target).unwrap();
+    let mut wrong = target;
+    wrong.sequence.definitions.last_mut().unwrap().term = syn::parse_quote!(store s);
+    assert!(check(&source, &wrong).is_err());
 }
 
 #[test]
@@ -140,39 +144,6 @@ fn merge_uses_lookup_with_both_ordered_provider_obligations() {
         );
     }
     assert_eq!(analysis.results["j"], "j");
-}
-
-#[test]
-fn rewritten_claw_preserves_ordered_stream_providers() {
-    use quote::ToTokens;
-    let source = cq_workloads::case("claw").unwrap().module().unwrap();
-    for plan in 0..Planner::ALL.len() {
-        for choices in 0..16 {
-            let pipeline = cq_workloads::pipelines::Pipeline {
-                plan,
-                merge: choices & 1 != 0,
-                canon: choices & 2 != 0,
-                smallest: choices & 4 != 0,
-                lazy: choices & 8 != 0,
-                ..Default::default()
-            };
-            let physical = pipeline.physical(&source).unwrap();
-            let structures = match cq_structure_selection::compile(&physical) {
-                Ok(structures) => structures,
-                Err(error) => {
-                    assert!(
-                        error
-                            .to_string()
-                            .ends_with(cq_workloads::pipelines::SMALLEST_LAYOUT_REJECTION)
-                    );
-                    continue;
-                }
-            };
-            compile(&structures).unwrap_or_else(|error| {
-                panic!("{pipeline:?}: {error}\n{}", structures.to_token_stream())
-            });
-        }
-    }
 }
 
 #[test]

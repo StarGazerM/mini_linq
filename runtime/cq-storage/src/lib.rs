@@ -97,8 +97,8 @@ mod instrument;
 mod membership;
 mod ordered;
 pub mod rows;
-mod sorted_run;
 pub mod sequence;
+mod sorted_run;
 mod trie;
 
 pub use answers::{Answers, GroupedAnswers, SingleGroup};

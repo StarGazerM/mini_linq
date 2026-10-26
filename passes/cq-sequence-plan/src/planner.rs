@@ -34,7 +34,7 @@ impl Planner for RuleBased {
         if evidence == &program.evidence {
             return crate::plan(program, machine, catalog);
         }
-        let recorded = cq_sequence_rewrite_passes::record_evidence(program, evidence)?;
+        let recorded = crate::rewrites::record_evidence(program, evidence)?;
         let changed = recorded != *program;
         let mut planned = crate::plan(&recorded, machine, catalog)?;
         if changed {

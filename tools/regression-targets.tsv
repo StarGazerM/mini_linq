@@ -20,6 +20,9 @@ cq-index-policy	test	index_demands	passes/cq-index-policy/tests/index_demands.rs
 cq-structure-selection	test	selection	passes/cq-structure-selection/tests/selection.rs
 cq-physical-lowering	test	lowering	passes/cq-physical-lowering/tests/lowering.rs
 cq-sequence-pull	test	realization	passes/cq-sequence-pull/tests/realization.rs
+cq-sequence-conformance	manifest-target-test	lowering	features/sequence-conformance/Cargo.toml
+cq-sequence-conformance	manifest-target-test	pull_translation	features/sequence-conformance/Cargo.toml
+cq-sequence-conformance	manifest-target-test	sequence_conformance	features/sequence-conformance/Cargo.toml
 mini-linq	test	physical_query	facade/mini-linq/tests/physical_query.rs
 mini-linq-macros	lib	macro_inputs	facade/mini-linq-macros/src/lib.rs
 cq-reduce	test	ya_schedule	passes/cq-reduce/tests/ya_schedule.rs

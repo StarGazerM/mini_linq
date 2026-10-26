@@ -15,7 +15,7 @@ quote.workspace = true
 syn.workspace = true
 
 [dev-dependencies]
-cq-testkit = { workspace = true, features = ["sequence-conformance"] }
+cq-testkit.workspace = true
 cq-storage.workspace = true
 cq-structure-selection.workspace = true
 cq-sequence-lowering = { path = "../cq-sequence-lowering" }
@@ -24,7 +24,6 @@ cq-order.workspace = true
 cq-elaborate.workspace = true
 cq-index-policy.workspace = true
 cq-physical-lowering.workspace = true
-cq-workloads = { path = "../../features/workloads" }
 
 [package.metadata.cq]
 source = "cq-lang-sequence"

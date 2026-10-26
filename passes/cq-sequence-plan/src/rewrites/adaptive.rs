@@ -12,7 +12,7 @@ use cq_syntax::symbol_name;
 use quote::format_ident;
 use syn::Ident;
 
-use crate::{checked_in, definition};
+use crate::rewrites::{checked_in, definition};
 
 #[path = "adaptive_candidates.rs"]
 mod candidates;

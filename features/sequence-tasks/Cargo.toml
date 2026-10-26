@@ -26,8 +26,11 @@ quote.workspace = true
 syn.workspace = true
 
 [dev-dependencies]
-cq-testkit = { path = "../../testkit/cq-testkit", features = ["sequence-conformance"] }
+cq-sequence-conformance = { path = "../sequence-conformance" }
+cq-testkit = { path = "../../testkit/cq-testkit" }
 cq-structure-selection = { path = "../../passes/cq-structure-selection" }
+cq-storage = { path = "../../runtime/cq-storage" }
+rayon = "1"
 
 [package.metadata.cq]
 source = "cq-lang-sequence"
