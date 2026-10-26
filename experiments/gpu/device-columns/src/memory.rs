@@ -156,7 +156,7 @@ impl UploadChunk {
         self.used += bytes;
         self.tracked = false;
         unsafe {
-            cuda_core::memory::memcpy_htod_async(destination, source, bytes, stream.cu_stream())?;
+            cuda_core::simt::memory::memcpy_htod_async(destination, source, bytes, stream.cu_stream())?;
         }
         self.ready.record(stream)?;
         self.tracked = true;
@@ -182,7 +182,7 @@ impl<T: DeviceCopy> Buffer<T> {
         let buffer = unsafe { Self::uninitialized(pool, len)? };
         if buffer.bytes() != 0 {
             unsafe {
-                cuda_core::memory::memset_d8_async(
+                cuda_core::simt::memory::memset_d8_async(
                     buffer.cu_deviceptr(),
                     0,
                     buffer.bytes(),
@@ -224,7 +224,7 @@ impl<T: DeviceCopy> Buffer<T> {
         let buffer = unsafe { Self::uninitialized(pool, values.len())? };
         if !values.is_empty() {
             unsafe {
-                cuda_core::memory::memcpy_htod_async(
+                cuda_core::simt::memory::memcpy_htod_async(
                     buffer.cu_deviceptr(),
                     values.as_ptr(),
                     buffer.bytes(),
@@ -333,7 +333,7 @@ impl<T: DeviceCopy> Buffer<T> {
         let mut values = Vec::<T>::with_capacity(len);
         if len != 0 {
             unsafe {
-                cuda_core::memory::memcpy_dtoh_async(
+                cuda_core::simt::memory::memcpy_dtoh_async(
                     values.as_mut_ptr(),
                     self.cu_deviceptr(),
                     len * std::mem::size_of::<T>(),

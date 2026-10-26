@@ -525,7 +525,7 @@ fn main() -> Result<()> {
         };
         let meta = w.meta.ptr();
         unsafe {
-            cuda_core::memory::memset_d8_async(w.meta.cu_deviceptr(), 0, w.meta.bytes(), stream.cu_stream())?;
+            cuda_core::simt::memory::memset_d8_async(w.meta.cu_deviceptr(), 0, w.meta.bytes(), stream.cu_stream())?;
         }
         module.segments(stream, &segments_launch, ix, segments, meta)?;
         module.expand(stream, &expand_launch, ix, segments, out, meta)?;
@@ -547,7 +547,7 @@ fn main() -> Result<()> {
         let mut alternate = temporary::<u64>(stream, rows)?;
         if rows > 0 {
             unsafe {
-                cuda_core::memory::memcpy_dtod_async(keys.cu_deviceptr(), w.answers.cu_deviceptr(), rows * 8, stream.cu_stream())?;
+                cuda_core::simt::memory::memcpy_dtod_async(keys.cu_deviceptr(), w.answers.cu_deviceptr(), rows * 8, stream.cu_stream())?;
             }
         }
         let mut unique = temporary::<u64>(stream, rows)?;

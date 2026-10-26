@@ -557,7 +557,7 @@ impl EncodedColumn {
         } else {
             let mut len = 0u64;
             unsafe {
-                cuda_core::memory::memcpy_dtoh_async(
+                cuda_core::simt::memory::memcpy_dtoh_async(
                     &mut len,
                     self.count as u64,
                     8,

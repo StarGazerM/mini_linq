@@ -1605,7 +1605,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                         } else {
                             copies.push(quote! {
                                 if #length != 0 {
-                                    unsafe { ::cuda_core::memory::memcpy_dtod_async(
+                                    unsafe { ::cuda_core::simt::memory::memcpy_dtod_async(
                                         #store_rows.cu_deviceptr() + (__cq_union_offset * #width * ::std::mem::size_of::<i64>()) as u64,
                                         #source_rows.cu_deviceptr(),
                                         #length * #width * ::std::mem::size_of::<i64>(),

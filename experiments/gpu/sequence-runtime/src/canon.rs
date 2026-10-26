@@ -256,7 +256,7 @@ impl<'pool> PackedCanon<'pool> {
             let wide = scratch.wide.as_mut().expect("wide canon scratch");
             let selected = scratch.selected.as_mut().expect("packed canon count scratch");
             unsafe {
-                cuda_core::memory::memcpy_dtod_async(wide.cu_deviceptr(), input.cu_deviceptr(),
+                cuda_core::simt::memory::memcpy_dtod_async(wide.cu_deviceptr(), input.cu_deviceptr(),
                     rows * std::mem::size_of::<u128>(), self.pool.stream().cu_stream())?;
             }
             let execution = self.thrust.par_in(self.pool.stream(), self.pool.resource())?;
@@ -273,7 +273,7 @@ impl<'pool> PackedCanon<'pool> {
                 |a: u128, b: u128| a == b,
             )?;
             unsafe {
-                cuda_core::memory::memcpy_dtod_async(metadata.cu_deviceptr(), selected.cu_deviceptr(),
+                cuda_core::simt::memory::memcpy_dtod_async(metadata.cu_deviceptr(), selected.cu_deviceptr(),
                     std::mem::size_of::<u64>(), self.pool.stream().cu_stream())?;
             }
         } else if rows != 0 {
@@ -290,7 +290,7 @@ impl<'pool> PackedCanon<'pool> {
                 .as_mut()
                 .expect("packed canon alternate scratch");
             unsafe {
-                cuda_core::memory::memcpy_dtod_async(
+                cuda_core::simt::memory::memcpy_dtod_async(
                     first.cu_deviceptr(),
                     input.cu_deviceptr(),
                     rows * std::mem::size_of::<u64>(),
@@ -322,7 +322,7 @@ impl<'pool> PackedCanon<'pool> {
             unsafe {
                 // OutputCount starts with the logical u64 row count. The
                 // zeroed error/padding words remain untouched.
-                cuda_core::memory::memcpy_dtod_async(
+                cuda_core::simt::memory::memcpy_dtod_async(
                     metadata.cu_deviceptr(),
                     selected.cu_deviceptr(),
                     std::mem::size_of::<u64>(),
@@ -479,7 +479,7 @@ impl<'pool> WideCanon<'pool> {
                 },
             )?;
             unsafe {
-                cuda_core::memory::memcpy_dtod_async(
+                cuda_core::simt::memory::memcpy_dtod_async(
                     metadata.cu_deviceptr(),
                     selected.cu_deviceptr(),
                     std::mem::size_of::<u64>(),
