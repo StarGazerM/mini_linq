@@ -241,8 +241,10 @@ GPU_DATALOG_TRACE_ROUNDS=1 cargo oxide run --arch sm_89 --bin doop-gpu -- /tmp/d
 Fact loading and CUDA context creation are outside the reported evaluation
 time; input upload, device layout construction, fixpoint execution, output
 download and symbol decoding are included. Full-set comparison is outside the
-timer. The executable also prints the ratio to the previously measured
-15-thread mini-par reference (1.28 seconds), not a new parallel measurement.
+timer. Pass `--gpu-only` to skip the CPU reference and exact comparison when
+measuring GPU execution alone. Set `GPU_DATALOG_PHASES=1` to report synchronized
+setup, fixpoint, and output phase times on stderr; disabled phase marks add no
+stream synchronization.
 
 #### Delta-driven rule scheduling
 

@@ -262,6 +262,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
     syn::parse2(quote!({
         (|| -> ::gpu_datalog_runtime::Result<_> {
             let __cq_gpu_pool = ::gpu_datalog_runtime::thread_pool()?;
+            ::gpu_datalog_runtime::phases::start();
             let __cq_gpu_trace_rounds = ::std::env::var_os("GPU_DATALOG_TRACE_ROUNDS").is_some();
             let __cq_gpu_trace_memory = ::std::env::var_os("GPU_DATALOG_TRACE_MEMORY").is_some();
             let mut __cq_gpu_memory_usage = if __cq_gpu_trace_memory {
@@ -269,8 +270,12 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
             } else { ::std::vec::Vec::new() };
             #(#initialize)*
             #initialized
+            ::gpu_datalog_runtime::phases::mark(&__cq_gpu_pool, "setup")?;
             #(#strata)*
-            Ok(#result)
+            ::gpu_datalog_runtime::phases::mark(&__cq_gpu_pool, "fixpoint")?;
+            let __cq_gpu_result = #result;
+            ::gpu_datalog_runtime::phases::mark(&__cq_gpu_pool, "output")?;
+            Ok(__cq_gpu_result)
         })().expect("GPU Datalog execution failed")
     }))
 }

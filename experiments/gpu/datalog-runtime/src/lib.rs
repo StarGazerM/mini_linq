@@ -8,6 +8,7 @@ pub mod arena;
 pub mod layout;
 pub mod pack;
 pub mod runs;
+pub mod phases;
 mod stats;
 pub use stats::{readback_count, record_readback, trace_kernels, trace_memory, MemoryUse};
 pub use gpu_device_columns::{Buffer, Pool};
