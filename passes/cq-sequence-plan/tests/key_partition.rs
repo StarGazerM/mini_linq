@@ -1,10 +1,10 @@
 use cq_lang_sequence::{
     CanonToken, Capability, Catalog, CodecToken, LevelNode, Machine, Program, ProviderToken, Term,
 };
+use cq_sequence_plan::rewrites::key_partition;
 use cq_sequence_plan::{
     Advice, KeyPartitionPolicy, cost, decompose, decompose_with_key_partitions,
 };
-use cq_sequence_rewrite_passes::key_partition;
 use quote::{ToTokens, quote};
 
 fn machine(parts: Option<usize>) -> Machine {
@@ -992,7 +992,7 @@ fn smallest_candidate_directories_keep_their_native_two_level_providers() {
     for token in &mut available.providers {
         token.capabilities.push(Capability::Membership);
     }
-    let selected = cq_sequence_rewrite_passes::select_from_catalog_preserving(
+    let selected = cq_sequence_plan::rewrites::select_from_catalog_preserving(
         &structures,
         &available,
         &["r".to_owned(), "s".to_owned()].into_iter().collect(),
@@ -1940,16 +1940,16 @@ fn automatic_probe_chain_preserves_filtered_shared_index_contracts() {
         .push(Capability::Membership);
     let mut prepared = source.clone();
     assert!(
-        cq_sequence_rewrite_passes::lookup_first_advice(&source, &available)
+        cq_sequence_plan::rewrites::lookup_first_advice(&source, &available)
             .unwrap()
             .is_none()
     );
-    let error = cq_sequence_rewrite_passes::lookup_first(&source, quote!(using Index)).unwrap_err();
+    let error = cq_sequence_plan::rewrites::lookup_first(&source, quote!(using Index)).unwrap_err();
     assert!(
         error.to_string().contains("authored filtered index"),
         "{error}"
     );
-    for advice in cq_sequence_rewrite_passes::adaptive_candidates(&prepared).unwrap() {
+    for advice in cq_sequence_plan::rewrites::adaptive_candidates(&prepared).unwrap() {
         prepared = Advice::Adaptive(advice)
             .apply(&prepared)
             .unwrap_or_else(|error| panic!("adaptive advice: {error}"));

@@ -335,8 +335,8 @@ pub struct Analysis {
     pub keysets: BTreeMap<(String, Vec<String>), KeySet>,
     /// Positional access decisions attached to existing Physical readers.
     pub reads: BTreeMap<String, Read>,
-    /// Conservative scan filters per scan, in decision order, each with a
-    /// verified exact covering probe or semijoin.
+    /// Distinct runtime filters per scan occurrence, in first-witness order.
+    /// Every raw decision's exact covering witness is checked before coalescing.
     pub join_filters: BTreeMap<String, Vec<JoinFilter>>,
     pub physical: physical::Analysis,
     /// Declared column order of every host relation.
@@ -912,6 +912,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
             "missing computed-head dedup type",
         );
     }
+    coalesce_join_filters(program, &mut analysis);
     Ok(analysis)
 }
 

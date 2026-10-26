@@ -74,6 +74,36 @@ fn probe_shape_and_structural_checker_reject_mutations() {
 }
 
 #[test]
+fn correspondence_accepts_authored_output_names_but_not_another_result() {
+    let source: cq_lang_structures::Program = syn::parse_quote! {
+        physical {
+            relation R(a:i32); relation S(a:i32);
+            r = pipe canon rename R@0 {a -> a};
+            s = pipe canon rename S@1 {a -> a};
+            u = pipe canon union r,s;
+            return u as answer(a);
+        } structures {
+            r host scan = Reader []; s host scan = Reader [];
+            r canon = Canon; s canon = Canon; u canon = Canon;
+        }
+    };
+    let target: Program = syn::parse_quote! {
+        #source
+        sequence {
+            r = canon rows r;
+            s = canon rows s;
+            u = canon union [r,s];
+            authored_output = store u;
+            output count;
+        }
+    };
+    check(&source, &target).unwrap();
+    let mut wrong = target;
+    wrong.sequence.definitions.last_mut().unwrap().term = syn::parse_quote!(store s);
+    assert!(check(&source, &wrong).is_err());
+}
+
+#[test]
 fn output_name_is_fresh_and_return_canon_is_preserved() {
     let source: cq_lang_structures::Program = syn::parse_quote! {
         physical {

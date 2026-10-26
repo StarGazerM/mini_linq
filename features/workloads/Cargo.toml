@@ -47,7 +47,7 @@ cq-planners-plan = { path = "../planners/plan" }
 cq-rewrites = { path = "../rewrites" }
 cq-join-filters = { path = "../join-filters" }
 cq-workload-passes = { path = "pipeline-passes" }
-cq-rewrite-passes = { path = "../../passes/cq-rewrite-passes" }
+cq-rewrite-passes = { path = "../rewrites/passes" }
 own-push = { path = "../own-dialect/printer" }
 cq-ext-support = { path = "../extensions/cq-ext-support" }
 cq-ext-aggregate = { path = "../extensions/cq-ext-aggregate" }

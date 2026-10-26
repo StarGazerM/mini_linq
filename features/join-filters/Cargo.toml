@@ -17,7 +17,7 @@ own-push = { path = "../own-dialect/printer" }
 mini-linq = { version = "0.1.0", path = "../../facade/mini-linq" }
 cq-load = { version = "0.1.0", path = "../../runtime/cq-load" }
 cq-rewrites = { version = "0.1.0", path = "../rewrites" }
-cq-rewrite-passes = { version = "0.1.0", path = "../../passes/cq-rewrite-passes" }
+cq-rewrite-passes = { version = "0.1.0", path = "../rewrites/passes" }
 cq-structure-selection = { version = "0.1.0", path = "../../passes/cq-structure-selection" }
 cq-lang-structures = { version = "0.1.0", path = "../../languages/cq-lang-structures" }
 cq-testkit = { version = "0.1.0", path = "../../testkit/cq-testkit" }

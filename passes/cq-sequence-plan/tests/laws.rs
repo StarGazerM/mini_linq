@@ -2,8 +2,8 @@ use cq_lang_sequence::{
     Analysis, CanonToken, Capability, Catalog, CodecToken, Guard, Len, LevelNode, Machine,
     OutputProtocol, Program, ProviderToken, Term, check_grading, check_rewrite,
 };
+use cq_sequence_plan::rewrites::{adaptive_candidates, lookup_first_advice};
 use cq_sequence_plan::{Advice, Planned, decompose, plan};
-use cq_sequence_rewrite_passes::{adaptive_candidates, lookup_first_advice};
 use proc_macro2::TokenStream;
 use quote::quote;
 
@@ -640,7 +640,7 @@ fn catalog_provider_scope_is_the_read_level_not_the_host_store() {
     // An unauthored read can move to host; an explicitly authored descendant
     // read remains a catalog error rather than silently changing its grade.
     let authored =
-        cq_sequence_rewrite_passes::grade(&source, quote!(gpu, result at device)).unwrap();
+        cq_sequence_plan::rewrites::grade(&source, quote!(gpu, result at device)).unwrap();
     let error = plan(&authored, &machine, &available)
         .unwrap_err()
         .to_string();

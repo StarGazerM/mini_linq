@@ -123,131 +123,140 @@ pub fn compile(source: &cq_lang_structures::Program) -> syn::Result<Program> {
     Ok(program)
 }
 
-/// Check the L-Sequence obligations directly on the target: the unchanged
-/// Structures prefix, one definition per Physical result in order with its
-/// operator's lowering shape under its mode and canon flag, and the fresh
-/// count-output store of the returned result.
+/// Check the supplied lowering's coverage, operators, retention and output
+/// obligations directly. The compiler is not invoked; fresh output names are free.
 pub fn check(source: &cq_lang_structures::Program, target: &Program) -> syn::Result<()> {
-    let fail = |message: &str| {
-        Err(syn::Error::new_spanned(
-            target,
-            format!("L-Sequence: {message}"),
-        ))
-    };
-    if target.structures != *source {
-        return fail("the Structures prefix changed");
-    }
-    if target.graded.is_some() || target.evidence != Default::default() {
-        return fail("lowering records no grades or evidence");
-    }
     let analysis = cq_lang_structures::contract::check(source)?;
     cq_lang_sequence::contract::check(target)?;
+    let invalid = || {
+        syn::Error::new_spanned(
+            target,
+            "L-Sequence: target violates default lowering obligations",
+        )
+    };
     let physical = &source.physical.program;
-    let definitions = &target.sequence.definitions;
-    if definitions.len() != physical.definitions.len() + 1 {
-        return fail("expected one definition per Physical result plus the output store");
+    if target.structures != *source
+        || target.graded.is_some()
+        || target.evidence != Default::default()
+        || target.sequence.output != Some(OutputProtocol::Count)
+        || target.sequence.definitions.len() != physical.definitions.len() + 1
+    {
+        return Err(invalid());
     }
-    let is_ref = |term: &Term, input: &syn::Ident| matches!(term, Term::Ref(name) if name == input);
-    for (definition, lowered) in physical.definitions.iter().zip(definitions) {
+    let is_ref =
+        |term: &Term, name: &syn::Ident| matches!(term, Term::Ref(reference) if reference == name);
+    for (definition, lowered) in physical
+        .definitions
+        .iter()
+        .zip(&target.sequence.definitions)
+    {
+        if definition.name != lowered.name {
+            return Err(invalid());
+        }
+        let term = lowering_body(
+            &lowered.term,
+            ModeKind::from(&definition.mode) != ModeKind::Pipe,
+            definition.canon.is_some(),
+        )
+        .ok_or_else(invalid)?;
         let name = &definition.name;
-        let shape = |message: &str| {
-            Err(syn::Error::new_spanned(
-                &lowered.name,
-                format!("L-Sequence: `{name}` {message}"),
-            ))
-        };
-        if lowered.name != *name {
-            return shape("is out of Physical order");
-        }
-        let mut term = &lowered.term;
-        if ModeKind::from(&definition.mode) != ModeKind::Pipe {
-            let Term::Store {
-                capacity: None,
-                inner,
-            } = term
-            else {
-                return shape("is retained by its Physical mode and must be stored");
-            };
-            term = inner.as_ref();
-        }
-        if definition.canon.is_some() {
-            let Term::Canon(inner) = term else {
-                return shape("is canonical and must be canonicalized");
-            };
-            term = inner.as_ref();
-        }
-        let lowered_shape = if analysis.physical.hosts.contains_key(&symbol_name(name)) {
-            matches!(term, Term::Rows(rows) if rows == name)
+        let valid = if analysis.physical.hosts.contains_key(&symbol_name(name))
+            || matches!(definition.operator, Operator::Unit(_))
+        {
+            matches!(term, Term::Rows(result) if result == name)
         } else {
-            match &definition.operator {
-                Operator::Unit(_) => matches!(term, Term::Rows(rows) if rows == name),
-                Operator::Union(union) => matches!(term, Term::Union(terms)
-                    if terms.len() == union.operands.len()
-                        && terms.iter().zip(&union.operands).all(|(term, operand)| is_ref(term, operand))),
-                Operator::Probe(_, keyed)
-                | Operator::Merge(_, keyed)
-                | Operator::Semi(_, keyed)
-                | Operator::Anti(_, keyed) => {
-                    let mut keys: Vec<_> = keyed.columns.iter().map(symbol_name).collect();
-                    keys.sort();
-                    let membership = matches!(
-                        definition.operator,
-                        Operator::Semi(_, _) | Operator::Anti(_, _)
-                    ) || analysis
-                        .membership
-                        .contains(&(symbol_name(&keyed.right), keys));
-                    let lookup = |inner: &Term| {
-                        matches!(inner, Term::Lookup { provider, keys, inner }
-                            if *provider == keyed.right
-                                && keys.iter().eq(keyed.columns.iter())
-                                && is_ref(inner, &keyed.left))
-                    };
-                    match term {
-                        Term::Compact(result, inner) if membership => {
-                            result == name && lookup(inner)
-                        }
-                        Term::Flatten(inner) if !membership => lookup(inner),
-                        _ => false,
-                    }
+            match (&definition.operator, term) {
+                (Operator::Union(union), Term::Union(inputs)) => {
+                    inputs.len() == union.operands.len()
+                        && inputs
+                            .iter()
+                            .zip(&union.operands)
+                            .all(|(input, source)| is_ref(input, source))
                 }
-                Operator::Group(group) => matches!(term, Term::Group(result, inner)
-                    if result == name && is_ref(inner, &group.input)),
-                Operator::Select(select) => matches!(term, Term::Compact(result, inner)
-                    if result == name && is_ref(inner, &select.input)),
-                operator => operator.input().is_some_and(|input| {
-                    matches!(term, Term::Map(result, inner)
-                        if result == name && is_ref(inner, input))
-                }),
+                (Operator::Group(group), Term::Group(result, input)) => {
+                    result == name && is_ref(input, &group.input)
+                }
+                (Operator::Select(select), Term::Compact(result, input)) => {
+                    result == name && is_ref(input, &select.input)
+                }
+                (
+                    Operator::Probe(_, keyed)
+                    | Operator::Merge(_, keyed)
+                    | Operator::Semi(_, keyed)
+                    | Operator::Anti(_, keyed),
+                    Term::Flatten(lookup) | Term::Compact(_, lookup),
+                ) => {
+                    let Term::Lookup {
+                        provider,
+                        keys,
+                        inner,
+                    } = lookup.as_ref()
+                    else {
+                        return Err(invalid());
+                    };
+                    let mut columns: Vec<_> = keyed.columns.iter().map(symbol_name).collect();
+                    columns.sort();
+                    let membership =
+                        matches!(definition.operator, Operator::Semi(..) | Operator::Anti(..))
+                            || analysis
+                                .membership
+                                .contains(&(symbol_name(&keyed.right), columns));
+                    let expansion = match term {
+                        Term::Compact(result, _) => membership && result == name,
+                        Term::Flatten(_) => !membership,
+                        _ => unreachable!("matched lookup consumer"),
+                    };
+                    expansion
+                        && provider == &keyed.right
+                        && keys.iter().eq(keyed.columns.iter())
+                        && is_ref(inner, &keyed.left)
+                }
+                (operator, Term::Map(result, input))
+                    if !matches!(
+                        operator,
+                        Operator::Union(_)
+                            | Operator::Group(_)
+                            | Operator::Select(_)
+                            | Operator::Probe(..)
+                            | Operator::Merge(..)
+                            | Operator::Semi(..)
+                            | Operator::Anti(..)
+                    ) =>
+                {
+                    result == name && operator.input().is_some_and(|source| is_ref(input, source))
+                }
+                _ => false,
             }
         };
-        if !lowered_shape {
-            return shape("does not have its operator's lowering shape");
+        if !valid {
+            return Err(invalid());
         }
     }
-    let output = definitions.last().expect("checked definition count");
-    let mut fresh = "__sequence_output".to_owned();
-    while analysis.physical.headings.contains_key(&fresh) {
-        fresh.push('_');
-    }
-    if symbol_name(&output.name) != fresh {
-        return fail("the output store must use the first fresh `__sequence_output` name");
-    }
-    let Term::Store {
-        capacity: None,
-        inner,
-    } = &output.term
-    else {
-        return fail("the output must be one store");
-    };
-    let returned = match (physical.return_canon.is_some(), inner.as_ref()) {
-        (true, Term::Canon(returned)) => returned.as_ref(),
-        (false, returned) => returned,
-        (true, _) => return fail("a canonical return must canonicalize its output"),
-    };
-    if !is_ref(returned, &physical.returned)
-        || target.sequence.output != Some(OutputProtocol::Count)
+    let output = target.sequence.definitions.last().ok_or_else(invalid)?;
+    if !lowering_body(&output.term, true, physical.return_canon.is_some())
+        .is_some_and(|term| is_ref(term, &physical.returned))
     {
-        return fail("the output store must count the returned result");
+        return Err(invalid());
     }
     Ok(())
+}
+
+fn lowering_body(mut term: &Term, retained: bool, canonical: bool) -> Option<&Term> {
+    if retained {
+        let Term::Store {
+            capacity: None,
+            inner,
+        } = term
+        else {
+            return None;
+        };
+        term = inner;
+    }
+    if canonical {
+        let Term::Canon(inner) = term else {
+            return None;
+        };
+        term = inner;
+    }
+    Some(term)
 }

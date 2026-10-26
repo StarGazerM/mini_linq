@@ -52,17 +52,23 @@ Configurations
 Every retail query compiles the same authored clauses in these configurations:
 - default: the written coarse binary CQ planner and default recorded Physical decisions;
 - no-reduce: the written planner with implicit semijoin reduction disabled;
+- transfer: cq_planners::order(transfer), with predicate transfer before the join phase;
 - le: the Lookup & Expand planner;
 - le_runs: Lookup & Expand with sorted_runs and retain_lookups Structures rewrites;
 - advised: the checked order/reduction advice from experiments/gpu/tpch/src/advice.rs,
   expressed through the public CPU plan pass. Device-only storage choices are
   not imported. H10/H14 use the grouped GPU route's unreduced written order.
 Standalone queries use standalone_configs!, authoring their runner and each CQ
-body once. Each query! stage supplies its own advice, so staged queries retain
-the GPU's per-stage order rather than applying one stage's order to every rule.
+body once. Each query! stage supplies its own advice, applied only by advised,
+so that configuration retains the GPU's per-stage order rather than applying
+one stage's order to every rule. Transfer instead selects its planner for every
+CQ stage in the same runner, preserving preprocessing and materialization.
 The GPU importer unwraps this shared shell without applying the CPU pipeline.
-Kernel queries also retain their existing transfer, hypergraph/generic_smallest
-and optional zone configurations. Full Q6/Q19 retain their separate candidates.
+Kernel queries also retain their existing hypergraph/generic_smallest and
+optional zone configurations. Full Q6/Q19 retain their separate candidates,
+including default and transfer. Thus all 29 registered CASES (27 retail-derived
+and two full queries) offer default and transfer; this is not canonical Q1-Q22
+coverage. Transfer does not change input projections or cached data schemas.
 All hosts are typed Vecs loaded from the same projections. This is a small
 candidate set, not an exhaustive planner search. The metadata records the
 best measured configuration for each query/scale from this set; candidates

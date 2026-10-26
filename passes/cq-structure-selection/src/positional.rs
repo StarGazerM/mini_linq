@@ -367,6 +367,8 @@ fn choose_join_filters(
             .name
     };
     let mut entries = Vec::new();
+    // Record every admissible covering witness. The contract checks all of
+    // them before coalescing equivalent scan/build/key/layout runtime filters.
     for d in &target.physical.program.definitions {
         for candidate in structures::join_filter_candidates(target, &facts, &symbol_name(&d.name)) {
             let origin = &facts.lineage[&candidate.scan];

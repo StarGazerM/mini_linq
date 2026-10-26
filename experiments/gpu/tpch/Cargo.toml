@@ -35,7 +35,7 @@ cq-sequence-lowering = { path = "../../../passes/cq-sequence-lowering" }
 cq-sequence-plan = { path = "../../../passes/cq-sequence-plan" }
 cq-sequence-pull = { path = "../../../passes/cq-sequence-pull" }
 cq-gpu-sequence = { path = "../sequence" }
-cq-rewrite-passes = { path = "../../../passes/cq-rewrite-passes" }
+cq-rewrite-passes = { path = "../../../features/rewrites/passes" }
 cq-load = { path = "../../../runtime/cq-load", default-features = false }
 proc-macro2 = "1"
 prettyplease = "0.2"

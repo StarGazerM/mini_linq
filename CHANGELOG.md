@@ -7,26 +7,24 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Integrate the parallel Tasks work with the closed-core layout: key-partition
+  advice and the Tasks provider-preserving catalog selection live in
+  `cq_sequence_plan::rewrites`; eager-membership host retention moved into
+  `cq_structure_selection::build_host_reads`; Tasks conformance links the exact
+  `cq_sequence_tasks` and Rayon artifacts from `features/sequence-conformance`.
+  Join-filter identity bindings use the scan-local filter index. Catalog
+  selection and host retention require ordered payload (Exact and Ordered)
+  for Merge reads, so an ordered key set is never chosen for a merge build
+  (the refreshed claw/oriented-chain BTreeMap merge registrations under Tasks).
 - Share one non-generic Rayon index dispatcher across Tasks pipelines and
   sharded index construction/release. Borrowed tile access and ordered
   per-index result slots keep generated row and closure types out of Rayon
   plumbing; contiguous tile groups retain ordered publication and bounded
   task-local buffers without changing planner decisions.
-- Dependency gate green again: feature lockfiles pin root third-party versions,
-  and `cq-sequence-lowering::check` verifies L-Sequence obligations on the
-  target instead of re-running lowering. Feature workspaces share
+- Feature lockfiles pin root third-party versions. Feature workspaces share
   `features/target` (workloads keeps its own); CI runs facade consumer targets
   once (`cargo test --workspace`) and `tools/regression-targets.tsv` keeps only
   rows that workspace testing does not cover. Root sources are rustfmt-clean.
-- Move `cq-rewrite-passes` and `cq-sequence-rewrite-passes` into `passes/`,
-  preserving their public APIs and the optional feature macro wrappers.
-  Declare the planner's checked pass composition explicitly. Move workload
-  rewrite/lowering tests to feature consumers and standalone rewrite coverage
-  into core. Move executable CPU conformance from `cq-testkit` to
-  `features/sequence-tasks/conformance`; core testkit retains answer comparison
-  and the rustc driver without depending on passes or optional targets.
-  The rustc runtime caches storage rlibs once per canonical source path and
-  counters setting per process, while keeping query working directories separate.
 - Keep admitted native Sequence providers when a checked retention or retyping
   rewrite is inapplicable, without discarding applicable choices for other results.
   Tasks admits serial lazy providers only at host and upgrades them to shareable
@@ -111,6 +109,43 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   global collectives no longer inherit fictitious parallel span from flattened
   contiguous tiles. Primitive work counters remain repeatable; concurrent
   retained-memory peaks are reported as scheduler-dependent observations.
+- Restore closed-core release boundaries: shared Sequence transformations now
+  live in `cq_sequence_plan::rewrites`, with retyping and host-retention helpers
+  in `cq_structure_selection`. Remove the old feature implementation crate and
+  migrate direct callers; feature macro names remain unchanged.
+  Move CPU target conformance and workload-dependent tests to the external
+  `cq-sequence-conformance` workspace, keeping `cq-testkit` language/runtime-only.
+  Replace Sequence lowering's self-recompiling checker with direct coverage,
+  operator, retention and output checks, accepting arbitrary fresh output names.
+  Align feature locks to reviewed root versions; vendor every feature closure
+  and canonicalize relocation paths so macOS temporary-directory aliases are
+  not mistaken for source escapes.
+  Runtime fixtures link their exact Cargo storage/Rayon artifacts instead of
+  checkout source paths. Refresh inadmissible handwritten corpus registrations
+  without removing queries, configuration definitions or custom negative cases.
+- Validate transfer across all 29 registered TPC-H-derived/full-query cases,
+  adding real per-stage transfer configurations to the 12 standalone retail
+  runners. Preserve query text, SQL, numeric contracts and cached projections.
+  Fix H09's catastrophic Cartesian prefix by connecting atoms only within
+  written relational runs, without moving predicate/binding/block boundaries.
+  Extend checked absorption to redundant left operands, retaining right-support
+  pruning precedence and all shared-witness/opaque/negative constraints.
+  H21-positive no longer repeats 356,794 membership checks before its exact join.
+  All 29 transfer cases match DuckDB at SF0.1/SF1; H09 SF1 completes in 487.8 ms
+  instead of reaching the 120-second worker cap. Written-order H09 remains an
+  unchanged timeout control. Remove incidental plan-text/operator-count pins;
+  retain authored-plan validity, semantic checks and negative certificates.
+- Repair the predicate-transfer path: apply checked redundant-support absorption
+  after elaboration, preserving the complete VO schedule and final CQ-to-RA check.
+  Piped positional read spines now feed one retained snapshot instead of allocating
+  intermediate masks; selection narrowing enumerates set bits and retains block
+  skipping. Equivalent scan filters share construction and tests only after every
+  covering witness is validated, without removing exact joins.
+  Predicate-form H05, H07-block, D27 and H08 matched cached DuckDB answers under
+  default and transfer at SF0.1 and SF1. Runtime regressions cover snapshot
+  allocation, sparse occurrence enumeration and filter construction/probe counts.
+  Public API: add `Selection::from_positions` for host-issued IDs; filter emitter
+  identities now take a scan-local canonical index rather than a covering operator.
 - Legacy GPU Datalog workspace removed.
 - Retire Datalog-side hooks kept only for the (already broken) legacy GPU
   Datalog bridge: `KeyRepresentation`, `LayoutRealization`, device-owned

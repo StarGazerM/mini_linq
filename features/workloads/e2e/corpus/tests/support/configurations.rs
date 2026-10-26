@@ -1,5 +1,8 @@
 // Named choices; each identifier spells out the values in axis order.
 // The integer witness is emitted beside the corresponding executable test.
+// Registrations follow Pipeline::rejection on the current checked physical plan:
+// native leading merges need ordered hosts; push cannot consume retained merges.
+// configuration_consistency checks eligibility separately from pairwise coverage.
 macro_rules! configuration {
     (written_coarse_probe_keep_first_slice_hash_dedup_default_eager_pull_unadvised, $case:ident) => {
         pub const CONFIG: [usize; 10] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
@@ -1032,7 +1035,7 @@ macro_rules! case_configurations {
         prefix_greedy_fine_merge_keep_first_hashmap_ordered_dedup_default_eager_pull_unadvised,
         elimination_coarse_probe_keep_first_btreemap_ordered_dedup_default_lazy_push_unadvised,
         elimination_fine_probe_canon_smallest_hashmap_hash_dedup_sorted_eager_pull_unadvised,
-        hypergraph_merge_canon_first_slice_hash_dedup_default_eager_pull_positional,
+        hypergraph_merge_keep_first_btreemap_hash_dedup_default_eager_pull_unadvised,
         written_fine_probe_keep_first_hashmap_hash_dedup_default_eager_pull_unadvised,
         prefix_connected_coarse_probe_keep_first_slice_ordered_dedup_sorted_lazy_push_positional,
         prefix_connected_fine_merge_canon_first_hashmap_ordered_dedup_sorted_lazy_pull_unadvised,
@@ -1196,7 +1199,7 @@ macro_rules! case_configurations {
         prefix_greedy_fine_merge_keep_first_hashmap_ordered_dedup_default_eager_pull_unadvised,
         elimination_coarse_probe_keep_first_btreemap_ordered_dedup_default_lazy_push_unadvised,
         elimination_fine_probe_canon_smallest_hashmap_hash_dedup_sorted_eager_pull_unadvised,
-        hypergraph_merge_canon_first_slice_hash_dedup_default_eager_pull_positional,
+        hypergraph_merge_keep_first_btreemap_hash_dedup_default_eager_pull_unadvised,
         written_fine_probe_keep_first_hashmap_hash_dedup_default_eager_pull_unadvised,
         prefix_connected_coarse_probe_keep_first_slice_ordered_dedup_sorted_lazy_push_positional,
         prefix_connected_fine_merge_canon_first_hashmap_ordered_dedup_sorted_lazy_pull_unadvised,
@@ -1244,7 +1247,7 @@ macro_rules! case_configurations {
     (retail_h07, $case:ident) => { configurations!($case;
         written_coarse_probe_keep_smallest_slice_hash_dedup_default_eager_pull_unadvised,
         written_fine_merge_canon_smallest_slice_ordered_dedup_sorted_lazy_push_positional,
-        hypergraph_merge_keep_first_hashmap_ordered_dedup_default_lazy_push_unadvised,
+        hypergraph_probe_keep_first_hashmap_ordered_dedup_sorted_lazy_push_unadvised,
         elimination_fine_probe_canon_first_slice_ordered_dedup_sorted_eager_pull_unadvised,
         prefix_connected_fine_probe_canon_smallest_btreemap_hash_dedup_default_eager_push_unadvised,
         elimination_coarse_merge_keep_smallest_btreemap_hash_dedup_sorted_lazy_push_unadvised,
@@ -1267,7 +1270,7 @@ macro_rules! case_configurations {
         elimination_coarse_probe_keep_first_hashmap_hash_dedup_default_eager_push_unadvised,
         elimination_fine_probe_keep_smallest_btreemap_ordered_dedup_default_eager_push_unadvised,
         written_fine_merge_keep_smallest_btreemap_hash_dedup_default_lazy_pull_unadvised,
-        hypergraph_merge_canon_smallest_slice_ordered_dedup_sorted_lazy_push_positional,
+        hypergraph_merge_keep_first_btreemap_hash_dedup_default_eager_pull_unadvised,
         prefix_connected_fine_merge_canon_smallest_slice_ordered_dedup_sorted_lazy_push_positional,
         prefix_greedy_fine_merge_canon_smallest_slice_ordered_dedup_sorted_lazy_push_positional,
         elimination_fine_merge_canon_smallest_slice_ordered_dedup_sorted_lazy_push_positional,
@@ -1335,7 +1338,7 @@ macro_rules! case_configurations {
     (retail_h21_positive, $case:ident) => { configurations!($case;
         written_coarse_probe_keep_smallest_slice_hash_dedup_default_eager_pull_unadvised,
         written_fine_merge_canon_smallest_slice_ordered_dedup_sorted_lazy_push_positional,
-        hypergraph_merge_keep_first_hashmap_ordered_dedup_default_lazy_push_unadvised,
+        hypergraph_probe_keep_first_hashmap_ordered_dedup_sorted_lazy_push_unadvised,
         elimination_fine_probe_canon_first_slice_ordered_dedup_sorted_eager_pull_unadvised,
         prefix_connected_fine_probe_canon_smallest_btreemap_hash_dedup_default_eager_push_unadvised,
         elimination_coarse_merge_keep_smallest_btreemap_hash_dedup_sorted_lazy_push_unadvised,
@@ -1358,7 +1361,7 @@ macro_rules! case_configurations {
         elimination_coarse_probe_keep_first_hashmap_hash_dedup_default_eager_push_unadvised,
         elimination_fine_probe_keep_smallest_btreemap_ordered_dedup_default_eager_push_unadvised,
         written_fine_merge_keep_smallest_btreemap_hash_dedup_default_lazy_pull_unadvised,
-        hypergraph_merge_canon_smallest_slice_ordered_dedup_sorted_lazy_push_positional,
+        hypergraph_merge_keep_first_btreemap_hash_dedup_default_eager_pull_unadvised,
         prefix_connected_fine_merge_canon_smallest_slice_ordered_dedup_sorted_lazy_push_positional,
         prefix_greedy_fine_merge_canon_smallest_slice_ordered_dedup_sorted_lazy_push_positional,
         elimination_fine_merge_canon_smallest_slice_ordered_dedup_sorted_lazy_push_positional,
@@ -1449,7 +1452,7 @@ macro_rules! case_configurations {
     (retail_d85, $case:ident) => { configurations!($case;
         written_coarse_probe_keep_smallest_slice_hash_dedup_default_eager_pull_unadvised,
         written_fine_merge_canon_smallest_slice_ordered_dedup_sorted_lazy_push_positional,
-        hypergraph_merge_keep_first_hashmap_ordered_dedup_default_lazy_push_unadvised,
+        hypergraph_probe_keep_first_hashmap_ordered_dedup_sorted_lazy_push_unadvised,
         elimination_fine_probe_canon_first_slice_ordered_dedup_sorted_eager_pull_unadvised,
         prefix_connected_fine_probe_canon_smallest_btreemap_hash_dedup_default_eager_push_unadvised,
         elimination_coarse_probe_keep_first_slice_hash_dedup_default_eager_pull_positional,
@@ -1471,7 +1474,7 @@ macro_rules! case_configurations {
         prefix_greedy_fine_merge_keep_first_hashmap_ordered_dedup_default_lazy_push_unadvised,
         elimination_fine_probe_keep_smallest_btreemap_ordered_dedup_default_eager_push_unadvised,
         written_fine_merge_keep_smallest_btreemap_hash_dedup_default_lazy_pull_unadvised,
-        hypergraph_merge_canon_smallest_slice_ordered_dedup_sorted_lazy_push_positional,
+        hypergraph_merge_keep_first_btreemap_hash_dedup_default_eager_pull_unadvised,
         prefix_connected_fine_merge_canon_smallest_slice_ordered_dedup_sorted_lazy_push_positional,
         prefix_greedy_fine_probe_canon_smallest_slice_hash_dedup_sorted_eager_push_unadvised,
         elimination_fine_merge_canon_smallest_slice_ordered_dedup_sorted_lazy_push_positional,

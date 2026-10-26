@@ -1697,15 +1697,8 @@ fn retained_scans_never_use_join_filters_before_the_covering_build() {
             .iter()
             .flat_map(|(scan, filters)| {
                 let context = &context;
-                filters.iter().map(move |filter| {
-                    context
-                        .join_filter_ident(
-                            scan,
-                            &filter.covering.to_string(),
-                            &filter.key.columns.first().unwrap().to_string(),
-                        )
-                        .to_string()
-                })
+                (0..filters.len())
+                    .map(move |index| context.join_filter_ident(scan, index).to_string())
             })
             .collect();
         let mut expression = translate(&program, &facts).unwrap();

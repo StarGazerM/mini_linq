@@ -411,7 +411,7 @@ pub fn physical(
             "smallest_intersections" => {
                 cq_rewrite_passes::smallest_intersections(&current, arguments)?
             }
-            "build_host_reads" => cq_rewrite_passes::build_host_reads(&current, arguments)?,
+            "build_host_reads" => cq_structure_selection::build_host_reads(&current, arguments)?,
             _ => return Err(syn::Error::new_spanned(name, "unsupported Physical advice")),
         };
     }
@@ -427,7 +427,7 @@ pub fn structures(
         let Invocation { name, arguments } = syn::parse_str(invocation)?;
         current = match name.to_string().as_str() {
             "sorted_indexes" => cq_rewrite_passes::sorted_indexes(&current, arguments)?,
-            "retype" => cq_rewrite_passes::retype(&current, arguments)?,
+            "retype" => cq_structure_selection::retype(&current, arguments)?,
             "membership" => cq_rewrite_passes::membership(&current, arguments)?,
             _ => {
                 return Err(syn::Error::new_spanned(

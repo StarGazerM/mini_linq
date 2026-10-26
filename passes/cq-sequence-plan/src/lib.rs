@@ -16,17 +16,18 @@ mod key_partition;
 mod placement;
 mod planner;
 pub use key_partition::{KeyPartitionPolicy, decompose_with_key_partitions};
+pub mod rewrites;
 pub use planner::{Planner, RuleBased};
 
-pub use cq_sequence_rewrite_passes::select_from_catalog;
+pub use crate::rewrites::select_from_catalog;
 
 /// One invocation of the same checked library function exposed by a rewrite macro.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Advice {
     Evidence(cq_lang_sequence::Evidence),
-    LookupFirst(Box<cq_sequence_rewrite_passes::LookupFirst>),
-    Adaptive(cq_sequence_rewrite_passes::AdaptiveCandidate),
-    KeyPartition(cq_sequence_rewrite_passes::KeyPartition),
+    LookupFirst(Box<crate::rewrites::LookupFirst>),
+    Adaptive(crate::rewrites::AdaptiveCandidate),
+    KeyPartition(crate::rewrites::KeyPartition),
     GroupWithoutCanon(Ident),
     Store(Ident),
     StoreLevel(Ident),
@@ -68,7 +69,7 @@ impl Advice {
         checker: &mut cq_lang_sequence::contract::Checker,
         source: &Program,
     ) -> syn::Result<Program> {
-        use cq_sequence_rewrite_passes as rewrites;
+        use crate::rewrites;
         let result = match self {
             Self::Evidence(evidence) => rewrites::record_evidence_in(checker, source, evidence),
             Self::LookupFirst(arguments) => {
@@ -162,9 +163,7 @@ pub fn plan_with_key_partitions(
         program: program.clone(),
         trace: Vec::new(),
     };
-    if let Some(advice) =
-        cq_sequence_rewrite_passes::lookup_first_advice_in(checker, program, catalog)?
-    {
+    if let Some(advice) = crate::rewrites::lookup_first_advice_in(checker, program, catalog)? {
         push(
             checker,
             &mut prepared,
@@ -173,7 +172,7 @@ pub fn plan_with_key_partitions(
     }
     let ordering_elapsed = started.map(|started| started.elapsed());
     // Freeze every decision before the first choice changes the candidate graph.
-    let adaptive = cq_sequence_rewrite_passes::adaptive_candidates_in(checker, &prepared.program)?;
+    let adaptive = crate::rewrites::adaptive_candidates_in(checker, &prepared.program)?;
     for advice in adaptive {
         push(checker, &mut prepared, Advice::Adaptive(advice))?;
     }
@@ -613,12 +612,7 @@ fn push_all(
         }
         // Grades are nonsemantic; the typed checked rewrite validates the
         // complete batch once while the replay trace retains individual steps.
-        cq_sequence_rewrite_passes::grade_definitions_in(
-            checker,
-            &mut planned.program,
-            machine,
-            &grades,
-        )?;
+        crate::rewrites::grade_definitions_in(checker, &mut planned.program, machine, &grades)?;
         planned.trace.extend(trace);
     }
     Ok(())
@@ -635,7 +629,7 @@ fn push(
         machine,
     } = &advice
     {
-        cq_sequence_rewrite_passes::grade_definitions_in(
+        crate::rewrites::grade_definitions_in(
             checker,
             &mut planned.program,
             machine,

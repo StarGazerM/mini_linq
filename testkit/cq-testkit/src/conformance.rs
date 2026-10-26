@@ -1,6 +1,7 @@
 //! Executable answer conformance: ignore enumeration order, not multiplicity.
 //!
 //! `assert_answers_equal` is dependency-light and also serves external targets.
+//! CPU planning and execution live in the external `cq-sequence-conformance` crate.
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;

@@ -48,17 +48,27 @@ impl<H: PositionalRows> Selection<H> {
             blocks[b / 64] |= 1 << (b % 64);
         }
     }
+    /// Retain a checked positional stream as one immutable snapshot.
+    /// Every ID must have been issued by `host`, as for `Column::key`.
+    /// The stream is consumed once, in order; duplicate IDs name one occurrence.
+    pub fn from_positions(
+        host: H,
+        positions: impl IntoIterator<Item = RowId>,
+        summary: SelectionSummary,
+    ) -> Self {
+        let mut result = Self::empty(host, summary);
+        for id in positions {
+            result.insert(id);
+        }
+        result
+    }
     pub fn select<C, P>(host: H, column: C, predicate: &P, summary: SelectionSummary) -> Self
     where
         C: Column<H>,
         H: BlockRead<C>,
         P: ReadPredicate<C::Key>,
     {
-        let mut result = Self::empty(host, summary);
-        for id in host.read(column, predicate) {
-            result.insert(id);
-        }
-        result
+        Self::from_positions(host, host.read(column, predicate), summary)
     }
     /// Cardinality from bitmap words, used only by measurement builds.
     #[cfg(any(feature = "counters", feature = "operator-timing"))]
@@ -69,12 +79,19 @@ impl<H: PositionalRows> Selection<H> {
             .sum()
     }
     pub fn positions(&self) -> impl Iterator<Item = RowId> + '_ {
-        self.host.positions().filter(|&id| self.contains(id))
+        self.positions_in(0, self.host.len())
     }
     pub fn rows(&self) -> SelectionRows<'_, H> {
         SelectionRows {
             selection: self,
-            cursor: 0,
+            positions: self.positions_in(0, self.host.len()),
+        }
+    }
+    fn positions_in(&self, start: usize, end: usize) -> BitmapPositions<'_> {
+        BitmapPositions {
+            bits: &self.bits,
+            cursor: start,
+            end,
         }
     }
     pub fn contains(&self, id: RowId) -> bool {
@@ -88,10 +105,14 @@ impl<H: PositionalRows> Selection<H> {
         P: ReadPredicate<C::Key>,
     {
         let mut result = Self::empty(self.host, summary);
+        let size = self.host.block_size().get();
         for block in self.host.blocks() {
             crate::count!(blocks_considered);
+            let start = block.offset().saturating_mul(size).min(self.host.len());
+            let end = start.saturating_add(size).min(self.host.len());
+            let mut positions = self.positions_in(start, end).peekable();
             let empty = self.blocks.as_ref().map_or_else(
-                || !self.host.block_positions(block).any(|id| self.contains(id)),
+                || positions.peek().is_none(),
                 |bits| bits[block.offset() / 64] & (1 << (block.offset() % 64)) == 0,
             );
             if empty {
@@ -109,11 +130,7 @@ impl<H: PositionalRows> Selection<H> {
                 continue;
             }
             crate::count!(blocks_visited);
-            for id in self
-                .host
-                .block_positions(block)
-                .filter(|&id| self.contains(id))
-            {
+            for id in positions {
                 crate::count!(rows_tested);
                 if predicate.test(&column.key(self.host, id)) {
                     result.insert(id);
@@ -135,27 +152,46 @@ impl<H: PositionalRows> Selection<H> {
 }
 pub struct SelectionRows<'a, H: PositionalRows> {
     selection: &'a Selection<H>,
-    cursor: usize,
+    positions: BitmapPositions<'a>,
 }
 impl<H: PositionalRows> Iterator for SelectionRows<'_, H> {
     type Item = H::Row;
     fn next(&mut self) -> Option<Self::Item> {
-        while self.cursor < self.selection.host.len() {
+        let id = self.positions.next()?;
+        let row = self.selection.host.row_at(id);
+        if row.is_some() {
+            crate::count!(rows_enumerated);
+        }
+        row
+    }
+}
+impl<H: PositionalRows> std::iter::FusedIterator for SelectionRows<'_, H> {}
+
+/// Enumerate set bits in a half-open range, including non-word-aligned blocks.
+struct BitmapPositions<'a> {
+    bits: &'a [u64],
+    cursor: usize,
+    end: usize,
+}
+impl Iterator for BitmapPositions<'_> {
+    type Item = RowId;
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.cursor < self.end {
             let word_index = self.cursor / 64;
-            let word = self.selection.bits[word_index] & (u64::MAX << (self.cursor % 64));
+            let word = self.bits[word_index] & (u64::MAX << (self.cursor % 64));
             if word == 0 {
                 self.cursor = (word_index + 1).saturating_mul(64);
                 continue;
             }
             let offset = word_index * 64 + word.trailing_zeros() as usize;
-            self.cursor = offset + 1;
-            let row = self.selection.host.row_at(RowId(offset));
-            if row.is_some() {
-                crate::count!(rows_enumerated);
+            if offset >= self.end {
+                self.cursor = self.end;
+                return None;
             }
-            return row;
+            self.cursor = offset + 1;
+            return Some(RowId(offset));
         }
         None
     }
 }
-impl<H: PositionalRows> std::iter::FusedIterator for SelectionRows<'_, H> {}
+impl std::iter::FusedIterator for BitmapPositions<'_> {}

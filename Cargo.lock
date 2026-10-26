@@ -573,18 +573,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-rewrite-passes"
-version = "0.1.0"
-dependencies = [
- "cq-lang-physical",
- "cq-lang-structures",
- "cq-structure-selection",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "cq-sequence-lowering"
 version = "0.1.0"
 dependencies = [
@@ -601,7 +589,6 @@ version = "0.1.0"
 dependencies = [
  "cq-lang-sequence",
  "cq-sequence-lowering",
- "cq-sequence-rewrite-passes",
  "cq-structure-selection",
  "cq-syntax",
  "proc-macro2",
@@ -626,19 +613,6 @@ dependencies = [
  "cq-storage",
  "cq-structure-selection",
  "cq-testkit",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "cq-sequence-rewrite-passes"
-version = "0.1.0"
-dependencies = [
- "cq-lang-sequence",
- "cq-rewrite-passes",
- "cq-sequence-lowering",
- "cq-syntax",
  "proc-macro2",
  "quote",
  "syn 2.0.119",

@@ -54,8 +54,10 @@ fn h06_exact_revenue_preserves_lines_and_empty_identity() {
                 CAST(c4 * 0.01 AS DECIMAL(18,2)) AS l_quantity,
                 DATE '1994-01-01' + c5 AS l_shipdate FROM "mini-linq/raw/0") {}"#, h06::SQL);
         let expected = evaluate_sql(&[raw(rows, 6)], &sql).unwrap();
-        let actual = h06::run(&data, "default").into_iter().map(|(v,)| vec![integer(v)]).collect::<Vec<_>>();
-        assert_answers_equal("DuckDB H06", expected, "grouped H06", actual, true);
+        for config in ["default", "transfer"] {
+            let actual = h06::run(&data, config).into_iter().map(|(v,)| vec![integer(v)]).collect::<Vec<_>>();
+            assert_answers_equal("DuckDB H06", expected.clone(), config, actual, true);
+        }
     }
 }
 
@@ -89,12 +91,14 @@ fn h10_customer_revenue_matches_duckdb_without_limit() {
             SELECT c_custkey, unicode(c_name), revenue, account_balance, unicode(n_name),
                 unicode(c_address), unicode(c_phone), unicode(c_comment) FROM ({})"#, h10::SQL);
         let expected = evaluate_sql(&[raw(rows, 6)], &sql).unwrap();
-        let actual = h10::run(&data, "default").into_iter().map(|(key, name, revenue, balance, nation, address, phone, comment)| {
-            vec![integer(key), name.as_bytes()[0] as i32, integer(revenue), integer(balance),
-                nation.as_bytes()[0] as i32, address.as_bytes()[0] as i32,
-                phone.as_bytes()[0] as i32, comment.as_bytes()[0] as i32]
-        }).collect::<Vec<_>>();
-        assert_answers_equal("DuckDB H10", expected, "grouped H10", actual, true);
+        for config in ["default", "transfer"] {
+            let actual = h10::run(&data, config).into_iter().map(|(key, name, revenue, balance, nation, address, phone, comment)| {
+                vec![integer(key), name.as_bytes()[0] as i32, integer(revenue), integer(balance),
+                    nation.as_bytes()[0] as i32, address.as_bytes()[0] as i32,
+                    phone.as_bytes()[0] as i32, comment.as_bytes()[0] as i32]
+            }).collect::<Vec<_>>();
+            assert_answers_equal("DuckDB H10", expected.clone(), config, actual, true);
+        }
     }
 }
 
@@ -125,10 +129,12 @@ fn h12_priority_counts_match_duckdb_and_date_guards() {
             DATE '1994-01-01' + c5 AS l_shipdate FROM "mini-linq/raw/0")
             SELECT unicode(l_shipmode), high_line_count, low_line_count FROM ({})"#, h12::SQL);
         let expected = evaluate_sql(&[raw(rows, 7)], &sql).unwrap();
-        let actual = h12::run(&data, "default").into_iter().map(|(mode, high, low)| {
-            vec![mode.as_bytes()[0] as i32, integer(high), integer(low)]
-        }).collect::<Vec<_>>();
-        assert_answers_equal("DuckDB H12", expected, "grouped H12", actual, true);
+        for config in ["default", "transfer"] {
+            let actual = h12::run(&data, config).into_iter().map(|(mode, high, low)| {
+                vec![mode.as_bytes()[0] as i32, integer(high), integer(low)]
+            }).collect::<Vec<_>>();
+            assert_answers_equal("DuckDB H12", expected.clone(), config, actual, true);
+        }
     }
 }
 

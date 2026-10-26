@@ -75,7 +75,7 @@ fn h01_grouped_head_matches_duckdb_distinct_join() {
                     ]
                 })
                 .collect::<Vec<_>>();
-            assert_answers_equal("DuckDB H01", &expected, "grouped CQ H01", &actual, true);
+            assert_answers_equal("DuckDB H01", &expected, config, &actual, true);
         }
     }
 }

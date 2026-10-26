@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use cq_lang_sequence::{
     Capability, Catalog, Program, ProviderToken, Term, check_rewrite, structures,
 };
-use cq_sequence_rewrite_passes::{LookupFirst, lookup_first, lookup_first_advice, lookup_plan};
+use cq_sequence_plan::rewrites::{LookupFirst, lookup_first, lookup_first_advice, lookup_plan};
 use quote::{ToTokens, quote};
 use structures::physical::Operator;
 

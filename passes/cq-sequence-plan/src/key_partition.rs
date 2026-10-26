@@ -1,10 +1,10 @@
 //! Machine-selected collective and provider decomposition. Keyed groups route
 //! their keys; global groups route complete valuations before per-part Canon,
 //! or use contiguous tiles when BE-GroupKey already proves global uniqueness.
+use crate::rewrites::KeyPartition;
 use crate::{Advice, Planned};
 use cq_lang_sequence::structures::physical::Operator;
 use cq_lang_sequence::{Analysis, Catalog, Machine, Program, Term};
-use cq_sequence_rewrite_passes::KeyPartition;
 use cq_syntax::symbol_name;
 use std::collections::{BTreeMap, BTreeSet};
 use syn::Ident;

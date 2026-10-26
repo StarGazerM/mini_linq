@@ -57,8 +57,6 @@ fn h14_components_preserve_identity_dates_and_empty_global_group() {
                 }.into())
             }).collect(),
         };
-        let actual = h14::run(&data, "default").into_iter()
-            .map(|(promo, total)| vec![integer(promo), integer(total)]).collect::<Vec<_>>();
         let sql = format!(r#"WITH lineitem AS (
             SELECT c0 AS l_orderkey, c1 AS l_linenumber, c2 AS l_partkey,
                 CAST(c3 / 100.0 AS DECIMAL(18,2)) AS l_extendedprice,
@@ -69,7 +67,11 @@ fn h14_components_preserve_identity_dates_and_empty_global_group() {
                 FROM "mini-linq/raw/1") {}"#, h14::SQL);
         let expected = evaluate_sql(&[raw("Lineitem", 6, rows), raw("Part", 2, parts.clone())], &sql)
             .expect("DuckDB H14 oracle");
-        assert_answers_equal("DuckDB H14", expected, "grouped CQ H14", actual, true);
+        for config in ["default", "transfer"] {
+            let actual = h14::run(&data, config).into_iter()
+                .map(|(promo, total)| vec![integer(promo), integer(total)]).collect::<Vec<_>>();
+            assert_answers_equal("DuckDB H14", expected.clone(), config, actual, true);
+        }
     }
 }
 
@@ -96,12 +98,6 @@ fn h18_threshold_is_strict_and_joins_follow_identity_preserving_sum() {
             customer: customers.iter().map(|r| (r[0].into(),
                 char::from_u32(r[1] as u32).unwrap().to_string())).collect(),
         };
-        let actual = h18::run(&data, "default").into_iter()
-            .map(|(name, customer, order, date, price, quantity)| vec![
-                i32::from(name.as_bytes()[0]), integer(customer), integer(order),
-                date.days_since_epoch(),
-                integer(price), integer(quantity),
-            ]).collect::<Vec<_>>();
         let sql = format!(r#"WITH lineitem AS (
             SELECT c0 AS l_orderkey, c1 AS l_linenumber,
                 CAST(c2 / 100.0 AS DECIMAL(18,2)) AS l_quantity FROM "mini-linq/raw/0"),
@@ -115,7 +111,15 @@ fn h18_threshold_is_strict_and_joins_follow_identity_preserving_sum() {
             raw("Lineitem", 3, rows), raw("Orders", 4, orders.clone()),
             raw("Customer", 2, customers.clone()),
         ], &sql).expect("DuckDB H18 oracle");
-        assert_answers_equal("DuckDB H18", expected, "grouped CQ H18", actual, true);
+        for config in ["default", "transfer"] {
+            let actual = h18::run(&data, config).into_iter()
+                .map(|(name, customer, order, date, price, quantity)| vec![
+                    i32::from(name.as_bytes()[0]), integer(customer), integer(order),
+                    date.days_since_epoch(),
+                    integer(price), integer(quantity),
+                ]).collect::<Vec<_>>();
+            assert_answers_equal("DuckDB H18", expected.clone(), config, actual, true);
+        }
     }
 }
 
@@ -157,8 +161,6 @@ fn h19_three_branches_boundaries_shipping_and_duplicate_identity() {
                 ["Brand#12", "Brand#23", "Brand#34", "Brand#99"][r[1] as usize].into(),
                 containers[r[2] as usize].into(), r[3])).collect(),
         );
-        let actual = h19::run(&data, "default").into_iter()
-            .map(|(revenue,)| vec![integer(revenue)]).collect::<Vec<_>>();
         let sql = format!(r#"WITH lineitem AS (
             SELECT c0 AS l_orderkey, c1 AS l_linenumber, c2 AS l_partkey,
                 CAST(c3 / 100.0 AS DECIMAL(18,2)) AS l_quantity,
@@ -177,6 +179,10 @@ fn h19_three_branches_boundaries_shipping_and_duplicate_identity() {
                 c3 AS p_size FROM "mini-linq/raw/1") {}"#, h19::SQL);
         let expected = evaluate_sql(&[raw("Lineitem", 8, rows), raw("Part", 4, parts.clone())], &sql)
             .expect("DuckDB H19 oracle");
-        assert_answers_equal("DuckDB H19", expected, "grouped CQ H19", actual, true);
+        for config in ["default", "transfer"] {
+            let actual = h19::run(&data, config).into_iter()
+                .map(|(revenue,)| vec![integer(revenue)]).collect::<Vec<_>>();
+            assert_answers_equal("DuckDB H19", expected.clone(), config, actual, true);
+        }
     }
 }

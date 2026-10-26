@@ -286,7 +286,7 @@ pub fn select_providers(
         }
     }
     let mut target = source.clone();
-    target.structures = cq_sequence_rewrite_passes::select_from_catalog_preserving(
+    target.structures = cq_sequence_plan::rewrites::select_from_catalog_preserving(
         &source.structures,
         &native,
         &admitted,

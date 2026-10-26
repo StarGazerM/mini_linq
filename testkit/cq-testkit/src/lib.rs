@@ -1,6 +1,7 @@
 //! Public conformance tools for MiniLinq passes and external dialects. This crate
-//! keeps only language and runtime dependencies. All fixtures are included in
-//! the crate; consumers need no paths into a repository checkout.
+//! keeps language/runtime-only dependencies. CPU Sequence planning and execution
+//! live in the external `cq-sequence-conformance` crate. All fixtures are included
+//! here; consumers need no paths into a repository checkout.
 //! Add `cq-testkit` as a dev-dependency in a core language, pass, runtime, or
 //! facade crate. External feature crates can use the same API.
 //!

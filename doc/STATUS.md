@@ -77,11 +77,33 @@ non-selective `ps_availqty > 0`) costs 32 ms of composite probes into the
 
 ## Predicate transfer route (`cq_planners::order(transfer)`)
 
-Robust predicate transfer (RPT, SIGMOD'25) as a diverging planner through the
-same public pipeline: written order, the Masks forward pass plus the stream's
-reductions, then the backward pass from filtered sides, all before the join
-phase. `cargo xtask profile --tpch --sf 1 --config default|transfer`,
-uninstrumented medians (ms), same session:
+Exact-semijoin adaptation of RPT (SIGMOD'25), through the same public pipeline:
+connected growth within written atom runs, Masks forward pass plus the stream's
+reductions, then the backward pass from filtered sides, before the join phase.
+Predicate, binding and block boundaries stay fixed. This is not the paper's
+vectorized Bloom pipeline or RPT+'s adaptive execution.
+
+The implementation now applies checked reduction absorption after elaboration,
+retains positional snapshots only at recorded retained boundaries, enumerates
+surviving bitmap positions during narrowing, and shares equivalent scan filters
+after validating every covering witness. Default and transfer matched cached
+DuckDB witnesses for predicate-form H05, H07-block, D27 and H08 at SF0.1 and SF1.
+
+The full 29-case catalog now exposes transfer, including every stage of the
+12 standalone retail runners. All 29 transfer cases matched DuckDB at SF0.1 and
+SF1. The full-suite check exposed H09's disconnected Part × Orders prefix:
+at SF0.1 it created 161,250,000 pairs before a Lineitem probe reduced them to
+32,160. Connected atom scheduling removes that prefix; SF1 transfer completed
+in 487.8 ms (pooled median of ten), versus the prior 120-second worker timeout.
+The explicit written-order H09 baseline is unchanged and its SF1 timeout was
+not rerun. Left-side absorption also removes H21-positive's 356,794 duplicate
+membership checks, with support pruning performed first to preserve H03/D85
+scan filters. [Full evidence](../experiments/gpu/compare/rpt-repair/summary.json)
+and [29-query matrix](../experiments/gpu/compare/rpt-repair/matrix.tsv).
+
+Historical measurements below predate these repairs; they do not characterize
+the repaired path. `cargo xtask profile --tpch --sf 1 --config default|transfer`,
+uninstrumented medians (ms), same historical session:
 
 | Query | default | transfer |
 |---|---:|---:|
@@ -97,12 +119,11 @@ uninstrumented medians (ms), same session:
 | retail_h21_positive | 90.2 | 127.0 |
 | retail_h09 | 174.8 | 336.1 |
 
-The backward pass pays off where a build is large and only filtered from the
-stream side: D72's PartSupp index shrinks from 800k to 124,846 rows (57 → 35
-ms). Elsewhere reducing and retaining the stream costs more than it saves:
-the default already filters the stream at its scan with the builds' key sets,
-and its probes then only hit, which is the SQL Server argument for omitting
-the top-down pass.
+The historical D72 PartSupp build shrank from 800k to 124,846 rows (57 → 35 ms).
+The other historical regressions included avoidable retained supports, bitmap
+snapshots/full-base enumeration and duplicate filter construction. They are not
+evidence that these costs are inherent to predicate transfer. Four repaired
+derived kernels do not establish global non-regression or full Yannakakis coverage.
 
 ## Lookup-expand route (`cq_planners::order(le)`)
 
@@ -389,19 +410,17 @@ approval.
 - Not context facts (see context.tex): declared keys (need a provenance
   model), first-witness consumption, guard totality, terminal canonical
   return.
-- Upstream items (GPU side): `translate_pull` codegen triggers
-  `clippy::unused_unit` in workloads.
+- Core boundary blockers are repaired: Sequence rewrites and shared selection
+  helpers are core-owned; target-dependent conformance and workload tests live
+  in `features/sequence-conformance`. `cq-testkit` has no optional compiler or
+  feature backedge. Dependency isolation checks the actual closed core.
+- `translate_pull` codegen still triggers `clippy::unused_unit` in workloads
+  (GPU-side note).
 - Sequence conformance: 31 crates (one per classic/retail case, pairwise
   triangle matrix per planner, 310 kernel rows instead of 2,848). Tasks code
   reaches Rayon only through non-generic `cq_storage::parallel` helpers. A full
   rebuild after a compiler change takes 143 s wall (1,355 s CPU, 3.7 GB peak
   RSS); running all 31 takes seconds.
-- Core dependency ownership: checked rewrite libraries now live in
-  `passes/cq-rewrite-passes` and `passes/cq-sequence-rewrite-passes`; feature
-  macro crates wrap them. Cross-feature lowering/pull tests live with workloads
-  and Tasks; executable CPU conformance lives in
-  `features/sequence-tasks/conformance`, leaving core `cq-testkit` independent
-  of compiler passes and optional targets.
 - Archived: abandoned v1-design branches are tags `archive/<name>`; the parked
   pre-redesign refactor is `../mini_linq-archive/datalog-par-factor.patch`.
 

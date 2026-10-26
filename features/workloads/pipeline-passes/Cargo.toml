@@ -17,4 +17,4 @@ cq-sequence-lowering.workspace = true
 cq-workload-authored = { path = "../authored" }
 quote.workspace = true
 proc-macro2.workspace = true
-cq-sequence-conformance = { path = "../../sequence-tasks/conformance" }
+cq-sequence-conformance = { path = "../../sequence-conformance" }

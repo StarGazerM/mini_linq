@@ -22,8 +22,7 @@ not estimated facts or hash-only equality.
 ```
 cq-lang-sequence  (language, checks, machine model, grading check)      [1]
    ├── cq-sequence-lowering   Structures -> Sequence (default)            [2]
-   ├── cq-sequence-rewrite-passes  Sequence -> Sequence, advice-driven     [3]  (passes/)
-   ├── cq-sequence-plan       checked rewrite composition and planning        (passes/)
+   ├── cq-sequence-plan       checked rewrites (`rewrites`) and planning  [3]  (passes/)
    ├── cq-sequence-pull       translation: sequential CPU                 [4]  (passes/)
    ├── cq-sequence-tasks      translation: Rayon                          [5]  (features/)
    └── cq-gpu-sequence        translation: CUDA (experiments/gpu)         [6]
@@ -32,9 +31,9 @@ facade: pipeline phases `sequence`, `decompose`, `grade`, print defaults   [8]
 conformance: one program, every target, equal supp∘α; H05 fixture         [9]
 ```
 
-[1] supplies the language API; [3] reuses [2] and the core
-`passes/cq-rewrite-passes` Physical/Structures rewrites. `cq-sequence-plan`
-composes [3]; the optional `features/sequence-rewrites` macros wrap [3].
+[1] supplies the language API; [3] reuses [2] and the core selection helpers
+in `cq_structure_selection` (retyping, host retention). The optional
+`features/sequence-rewrites` macros wrap `cq_sequence_plan::rewrites`.
 [8] follows [2]+[4], and [9] exercises multiple targets. Core libraries never
 depend on optional feature consumers — enforced by `tools/check_dependencies.py`.
 
@@ -238,7 +237,7 @@ aggregates → `group result input` (BE-Group), final result → `store` with
 whole workload corpus lowers; `check` passes; [4] over this output
 reproduces today's answers (goldens + fuzz).
 
-## [3] `passes/cq-sequence-rewrite-passes` (library) and `features/sequence-rewrites` (proc macros)
+## [3] `cq_sequence_plan::rewrites` (library) and `features/sequence-rewrites` (proc macros)
 
 Each is `Sequence -> Sequence`, takes advice tokens, has one law, and is
 checked by `check_rewrite`:
@@ -336,17 +335,20 @@ terminal paths require explicit sequence and grade.
 
 ## [9] conformance
 
-Implemented: `cq-sequence-conformance` in `features/sequence-tasks/conformance`
-exposes `assert_conformant(program, targets)` for `Sequential` and `Tasks`. Each
+Implemented: the external `cq-sequence-conformance` crate exposes
+`assert_conformant(program, targets)` for `Sequential` and `Tasks`. Each
 target checks its machine grading, translates, and compiles/runs against the
 same inputs through the existing rustc driver. Answer rows compare as multisets,
 or sets at an explicit canonical output boundary; ordering is not observable.
 The first divergence names both targets and the differing row multiplicities.
 The default driver uses deterministic binary-domain databases; authored corpus
 inputs and raw duplicate-preserving `Case::inputs` use the same execution path.
-Core `cq-testkit` retains answer comparison and the rustc runtime driver without
-depending on compiler passes or optional targets. Cross-feature lowering and
-pull tests live in `features/workloads/tests` and `features/sequence-tasks/tests`.
+The core `cq-testkit` retains independent fixtures and
+`conformance::assert_answers_equal`, with no compiler or target dependencies.
+The external driver links its Cargo-built storage and Rayon artifacts through
+`cq_testkit::rustc::{Runtime::with_dependencies, linked_dependency}`. Callers
+providing a custom runtime link their exact storage/provider artifacts and
+`rayon::ThreadPool` when using Tasks; no checkout source paths are required.
 
 The workload corpus expands each configured Sequence program into Sequential
 and Tasks functions in the test binary through `conformance_targets!` and its

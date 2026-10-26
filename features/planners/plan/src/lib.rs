@@ -38,9 +38,9 @@ pub enum Planner {
     WrittenCoarse,
     WrittenFine,
     Hypergraph,
-    /// Robust predicate transfer (Zhao et al., SIGMOD'25) on the written
-    /// left-deep order: forward then backward semijoin transfer along the
-    /// reduction tree rooted at the outer stream, before the join phase.
+    /// Predicate transfer with connected growth within each written atom run.
+    /// Predicate, binding and block boundaries stay fixed. Forward then
+    /// backward semijoins precede the join phase.
     Transfer,
     /// Lookup early, expand full correlated rows at first demand, with Masks.
     Le,
@@ -86,11 +86,15 @@ impl Planner {
     fn ordering(self) -> Options {
         // Formal rule Plan-Generic: Written/Fine records variable-at-a-time valuation steps.
         let (heuristic, split) = match self {
-            Self::WrittenCoarse | Self::Hypergraph | Self::Transfer | Self::Le => {
+            Self::WrittenCoarse | Self::Hypergraph | Self::Le => {
                 (Heuristic::Written, Split::Coarse)
             }
             Self::WrittenFine => (Heuristic::Written, Split::Fine),
-            Self::PrefixConnectedCoarse => (Heuristic::Prefix(Ranking::Connected), Split::Coarse),
+            // Transfer must not expand disconnected prefixes when a ready
+            // connecting atom exists, even where opaque Rust forbids reducers.
+            Self::Transfer | Self::PrefixConnectedCoarse => {
+                (Heuristic::Prefix(Ranking::Connected), Split::Coarse)
+            }
             Self::PrefixConnectedFine => (Heuristic::Prefix(Ranking::Connected), Split::Fine),
             Self::PrefixGreedyCoarse => (Heuristic::Prefix(Ranking::GreedyWidth), Split::Coarse),
             Self::PrefixGreedyFine => (Heuristic::Prefix(Ranking::GreedyWidth), Split::Fine),
@@ -203,7 +207,11 @@ pub fn compile_valuation(source: &cq::Program, planner: Planner) -> syn::Result<
     cq::contract::check(source)?;
     let normal = cq::normal::normalize(source)?;
     let ordering = planner.ordering();
-    let ordered = cq_order::compile(&normal, &ordering)?;
+    let ordered = if planner == Planner::Transfer {
+        connect_transfer_atoms(cq_order::compile(&normal, &Options::default())?)
+    } else {
+        cq_order::compile(&normal, &ordering)?
+    };
     cq_order::check(&normal, &ordered, &ordering)?;
     let ordered = if planner == Planner::Le {
         le::compile(&ordered)?
@@ -220,9 +228,66 @@ pub fn compile_valuation(source: &cq::Program, planner: Planner) -> syn::Result<
     }
 }
 
-/// Robust predicate transfer on a Masks-reduced written plan. In the stream
-/// scope, along the reduction tree rooted at the stream (the largest relation
-/// in fact-first written order, RPT's LargestRoot): after the Masks forward
+/// Avoid disconnected prefixes within each top-level run of atoms. Keep every
+/// predicate, binding and block boundary in its written position: hoisting a
+/// total binding can otherwise change a later aggregate's recorded domain.
+fn connect_transfer_atoms(mut ordered: vo::Program) -> vo::Program {
+    let graph = cq::hypergraph::Analysis::of(&ordered.cq);
+    let canonical = |name: &syn::Ident| {
+        let name = name.to_string();
+        graph.canonical_names.get(&name).cloned().unwrap_or(name)
+    };
+    let mut bound = std::collections::BTreeSet::new();
+    let steps = &mut ordered.valuation.steps;
+    let mut position = 0;
+    while position < steps.len() {
+        if matches!(steps[position], vo::Step::Atom(..)) {
+            let end = position
+                + steps[position..]
+                    .iter()
+                    .take_while(|step| matches!(step, vo::Step::Atom(..)))
+                    .count();
+            while position < end {
+                let connected = |step: &vo::Step| {
+                    let vo::Step::Atom(atom, _) = step else {
+                        unreachable!("atom run");
+                    };
+                    atom.variables()
+                        .any(|(_, name)| bound.contains(&canonical(name)))
+                };
+                if !bound.is_empty() && !connected(&steps[position]) {
+                    if let Some(next) = steps[position + 1..end].iter().position(connected) {
+                        steps[position..=position + 1 + next].rotate_right(1);
+                    }
+                }
+                let vo::Step::Atom(atom, _) = &steps[position] else {
+                    unreachable!("atom run");
+                };
+                bound.extend(atom.variables().map(|(_, name)| canonical(name)));
+                position += 1;
+            }
+        } else {
+            match &steps[position] {
+                vo::Step::Let(binding, _) => {
+                    bound.extend(cq::rust::bindings(&binding.pattern).iter().map(canonical));
+                }
+                vo::Step::For(generator, _) => {
+                    bound.extend(cq::rust::bindings(&generator.pattern).iter().map(canonical));
+                }
+                vo::Step::Block(block, _) => {
+                    bound.extend(block.source.variables().map(|(_, name)| canonical(name)));
+                }
+                _ => {}
+            }
+            position += 1;
+        }
+    }
+    ordered
+}
+
+/// Predicate transfer on a Masks-reduced plan with connected atom runs.
+/// The reduction tree is rooted at the stream; when that is the largest
+/// relation the root coincides with RPT's LargestRoot. After the Masks forward
 /// pass into every other clause, the stream is reduced by each child whose
 /// subtree carries a filter or block cut, then the backward pass reduces every
 /// child atom, parents first, by its parent when a filter lies outside the
@@ -312,13 +377,13 @@ fn transfer(reduced: &vo::Program) -> syn::Result<vo::Program> {
 
 /// CQ→RA′ through the public order, reduce and elaborate APIs. Relational
 /// pushdown is performed by elaboration; opaque Rust always stays in its chain.
-/// Hypergraph plans share the facade's checked redundant-support absorption.
+/// Hypergraph and Transfer share the facade's checked redundant-support absorption.
 pub fn compile(source: &cq::Program, planner: Planner) -> syn::Result<ra::Program> {
     let valuation = compile_valuation(source, planner)?;
     let target = cq_elaborate::compile(&valuation)?;
     cq_elaborate::check(&valuation, &target)?;
     let target = match planner {
-        Planner::Hypergraph => cq_elaborate::simplify_reductions(&target)?,
+        Planner::Hypergraph | Planner::Transfer => cq_elaborate::simplify_reductions(&target)?,
         Planner::Le => cq_elaborate::simplify_expansions(&target)?,
         _ => target,
     };

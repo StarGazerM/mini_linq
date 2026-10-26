@@ -124,12 +124,14 @@ oracle agreement supply distinct evidence.
 Folder boundaries constrain language dependencies to shared syntax, the pass
 protocol, and their base language. Passes depend on their endpoints, with explicit
 adapter dependencies for `cq-physical-realization`, `cq-sequence-pull`, and
-the planner's checked rewrite composition. `cq-sequence-plan` composes the core
-`cq-sequence-rewrite-passes`, which reuses `cq-rewrite-passes` and
-`cq-sequence-lowering`. Runtime crates have no compiler dependencies. Language,
-pass, and facade crates have no Cargo features. Cross-feature execution tests
-live in feature workspaces; core testkit depends only on languages and runtime.
-The isolation gate tests declared dependency closures.
+`cq-sequence-plan`'s checked selection/lowering adapters. Shared Sequence rewrites
+live in `cq_sequence_plan::rewrites`; provider retyping and host retention live
+in `cq_structure_selection`. Feature macros call these core-owned implementations.
+Runtime crates have no compiler dependencies. Language, pass, and facade crates
+have no Cargo features. `cq-testkit` depends only on languages and runtime;
+CPU target planning/translation conformance and workload-dependent tests live
+in `features/sequence-conformance`, not in an optional core backedge.
+The isolation gate tests declared dependency closures, including dev dependencies.
 
 ## Extending
 
@@ -174,8 +176,11 @@ Features are external consumers, with versioned public core dependencies and
 local development paths. `python3 tools/check_external.py` packages every core
 crate, relocates every feature and its sibling consumer dependencies outside
 the checkout, substitutes packaged core sources, and builds all targets and
-runs workspace tests. Escaping to in-tree source is a gate failure. Positive,
-sibling-closure, and in-tree-only negative fixtures always run.
+runs workspace tests. Vendoring includes every repository feature's locked
+third-party closure rather than relying on accidental core dependencies.
+Escapes are checked using canonical filesystem paths, including symlinked
+temporary directories. Positive, sibling-closure, and in-tree-only negative
+fixtures always run.
 
 The public API gate compares reviewed rustdoc-derived signatures.
 

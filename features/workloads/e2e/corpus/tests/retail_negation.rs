@@ -42,6 +42,43 @@ macro_rules! intersection_configurations {
     ); };
 }
 
+// These anti-only bodies share H03's historical witnesses, not its checked
+// positive join plan. Keep their admissible rows independent of catalog H03.
+macro_rules! anti_configurations {
+    ($case:ident) => { configurations!($case;
+        written_coarse_probe_keep_first_slice_hash_dedup_default_eager_pull_unadvised,
+        written_fine_merge_canon_smallest_slice_ordered_dedup_sorted_lazy_push_positional,
+        hypergraph_probe_keep_first_hashmap_ordered_dedup_sorted_lazy_push_unadvised,
+        prefix_connected_coarse_merge_canon_smallest_btreemap_hash_dedup_default_eager_pull_unadvised,
+        prefix_connected_fine_probe_keep_smallest_slice_hash_dedup_default_eager_push_positional,
+        prefix_greedy_coarse_probe_canon_first_btreemap_hash_dedup_sorted_lazy_pull_unadvised,
+        prefix_greedy_fine_merge_keep_first_hashmap_ordered_dedup_default_eager_pull_unadvised,
+        elimination_coarse_probe_keep_first_btreemap_ordered_dedup_default_lazy_push_unadvised,
+        elimination_fine_probe_canon_smallest_hashmap_hash_dedup_sorted_eager_pull_unadvised,
+        hypergraph_merge_canon_first_slice_hash_dedup_default_eager_pull_positional,
+        written_fine_probe_keep_first_hashmap_hash_dedup_default_eager_pull_unadvised,
+        prefix_connected_coarse_probe_keep_first_slice_ordered_dedup_sorted_lazy_push_positional,
+        prefix_connected_fine_merge_canon_first_hashmap_ordered_dedup_sorted_lazy_pull_unadvised,
+        prefix_greedy_fine_probe_canon_smallest_slice_hash_dedup_sorted_lazy_push_positional,
+        elimination_fine_merge_keep_first_slice_ordered_dedup_default_lazy_push_positional,
+        prefix_greedy_coarse_probe_keep_smallest_slice_ordered_dedup_default_eager_push_positional,
+        elimination_coarse_probe_canon_smallest_slice_hash_dedup_sorted_eager_pull_positional,
+        written_coarse_probe_canon_smallest_slice_ordered_dedup_sorted_lazy_push_positional,
+        written_coarse_merge_keep_first_btreemap_hash_dedup_default_eager_pull_unadvised,
+        hypergraph_probe_keep_smallest_btreemap_hash_dedup_default_eager_pull_unadvised,
+        written_coarse_probe_keep_first_hashmap_hash_dedup_default_eager_pull_unadvised,
+        written_fine_probe_keep_first_btreemap_hash_dedup_default_eager_pull_unadvised,
+        prefix_connected_coarse_probe_keep_first_hashmap_hash_dedup_default_eager_pull_unadvised,
+        prefix_connected_fine_probe_keep_first_btreemap_hash_dedup_default_eager_pull_unadvised,
+        prefix_greedy_coarse_probe_keep_first_hashmap_hash_dedup_default_eager_pull_unadvised,
+        prefix_greedy_coarse_merge_keep_first_btreemap_hash_dedup_default_eager_pull_unadvised,
+        prefix_greedy_fine_probe_keep_first_btreemap_hash_dedup_default_eager_pull_unadvised,
+        elimination_coarse_probe_keep_first_hashmap_hash_dedup_default_eager_pull_unadvised,
+        elimination_coarse_merge_keep_first_btreemap_hash_dedup_default_eager_pull_unadvised,
+        elimination_fine_probe_keep_first_btreemap_hash_dedup_default_eager_pull_unadvised,
+    ); };
+}
+
 mod retail_h04 {
     macro_rules! run_retail_h03 {
         (configuration: $configuration:ident;
@@ -101,8 +138,7 @@ mod retail_h04_not_exists {
             }
         };
     }
-    // Reuse the complete H03 pairwise list, including LE and sorted runs.
-    case_configurations!(retail_h03, run_retail_h03);
+    anti_configurations!(run_retail_h03);
 }
 
 mod retail_h16 {
@@ -166,8 +202,7 @@ mod retail_h22 {
             }
         };
     }
-    // Reuse the complete H03 pairwise list, including LE and sorted runs.
-    case_configurations!(retail_h03, run_retail_h03);
+    anti_configurations!(run_retail_h03);
 }
 
 #[test]

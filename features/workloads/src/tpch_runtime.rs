@@ -66,7 +66,7 @@ pub(crate) use configuration;
 /// Each `query!` carries stage-local advice; only the advised variant applies it.
 macro_rules! standalone_configs {
     ($d:tt; $($body:tt)*) => {
-        pub const CONFIGS: &[&str] = &["default", "par", "no-reduce", "le", "le_runs", "advised"];
+        pub const CONFIGS: &[&str] = &["default", "par", "no-reduce", "transfer", "le", "le_runs", "advised"];
         crate::tpch_runtime::standalone_configuration!(default, $d, {}, [], { $($body)* });
         crate::tpch_runtime::standalone_configuration!(par, $d, {
             decompose = [::cq_sequence_tasks_macros::plan];
@@ -75,6 +75,9 @@ macro_rules! standalone_configs {
         }, [], { $($body)* });
         crate::tpch_runtime::standalone_configuration!(no_reduce, $d, {
             plan = ::mini_linq::passes::plan(no_reduce);
+        }, [], { $($body)* });
+        crate::tpch_runtime::standalone_configuration!(transfer, $d, {
+            plan = ::cq_planners::order(transfer);
         }, [], { $($body)* });
         crate::tpch_runtime::standalone_configuration!(le, $d, {
             plan = ::cq_planners::order(le);
@@ -88,6 +91,7 @@ macro_rules! standalone_configs {
                 "default" => default::run(data, config),
                 "par" => par::run(data, config),
                 "no-reduce" => no_reduce::run(data, config),
+                "transfer" => transfer::run(data, config),
                 "le" => le::run(data, config),
                 "le_runs" => le_runs::run(data, config),
                 "advised" => advised::run(data, config),
@@ -210,8 +214,8 @@ macro_rules! retail_kernel {
                 }.map(|($($out,)+)| ($(::core::clone::Clone::clone($out),)+)).collect()
             }
         });
-        // Robust predicate transfer: the same written order and Structures,
-        // with forward and backward semijoin transfer before the join phase.
+        // Predicate transfer uses the same authored query and Structures,
+        // connecting atom runs before forward/backward semijoin transfer.
         crate::tpch_runtime::configuration!(transfer, $d, {
             plan = ::cq_planners::order(transfer);
             select = ::mini_linq::passes::select(positional($($relation),*));

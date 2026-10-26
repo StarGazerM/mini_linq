@@ -363,3 +363,153 @@ fn chunked_read_and_staging_counters_count_actual_tests_and_blocks() {
     assert_eq!(counts.rows_tested, 6);
     assert_eq!(counts.blocks_skipped, 0);
 }
+
+#[test]
+fn sparse_narrowing_visits_bitmap_survivors_not_base_positions() {
+    use std::cell::RefCell;
+
+    #[derive(Clone, Copy)]
+    struct SparseHost<'a> {
+        rows: &'a [(i64,)],
+        size: NonZeroUsize,
+        enumerated: &'a Cell<usize>,
+        events: &'a RefCell<Vec<(char, usize)>>,
+    }
+    impl<'a> Rows for SparseHost<'a> {
+        type Row = (&'a i64,);
+        fn rows(self) -> impl Iterator<Item = Self::Row> {
+            self.rows.iter().map(|row| (&row.0,))
+        }
+    }
+    impl PositionalRows for SparseHost<'_> {
+        fn len(self) -> usize {
+            self.rows.len()
+        }
+        fn row_at(self, id: RowId) -> Option<Self::Row> {
+            self.rows.get(id.offset()).map(|row| (&row.0,))
+        }
+        fn block_size(self) -> NonZeroUsize {
+            self.size
+        }
+        fn positions(self) -> impl Iterator<Item = RowId> {
+            self.rows.positions().inspect(move |_| {
+                self.enumerated.set(self.enumerated.get() + 1);
+            })
+        }
+        fn block_positions(self, block: BlockId) -> impl Iterator<Item = RowId> {
+            self.rows
+                .positions()
+                .skip(block.offset() * self.size.get())
+                .take(self.size.get())
+                .inspect(move |_| self.enumerated.set(self.enumerated.get() + 1))
+        }
+    }
+    #[derive(Clone, Copy)]
+    struct SparseCol;
+    impl Column<SparseHost<'_>> for SparseCol {
+        type Key = i64;
+        fn key(self, host: SparseHost<'_>, id: RowId) -> i64 {
+            host.events.borrow_mut().push(('k', id.offset()));
+            host.rows[id.offset()].0
+        }
+    }
+    impl BlockRead<SparseCol> for SparseHost<'_> {
+        fn bounds(self, _: SparseCol, block: BlockId) -> Option<(i64, i64)> {
+            self.events.borrow_mut().push(('b', block.offset()));
+            let start = block.offset() * self.size.get();
+            let end = (start + self.size.get()).min(self.rows.len());
+            let rows = &self.rows[start..end];
+            Some((
+                rows.iter().map(|row| row.0).min()?,
+                rows.iter().map(|row| row.0).max()?,
+            ))
+        }
+    }
+    struct AtLeastThree<'a>(&'a RefCell<Vec<(char, usize)>>);
+    impl ReadPredicate<i64> for AtLeastThree<'_> {
+        fn test(&self, key: &i64) -> bool {
+            self.0.borrow_mut().push(('t', *key as usize));
+            *key >= 3
+        }
+        fn any_in(&self, _: &i64, hi: &i64) -> bool {
+            self.0.borrow_mut().push(('a', *hi as usize));
+            *hi >= 3
+        }
+    }
+
+    for len in [0usize, 1, 65, 257, 4097] {
+        // Equal keys remain distinct occurrences, including bitmap boundaries.
+        let data: Vec<_> = (0..len).map(|i| ((i % 7) as i64,)).collect();
+        for size in [1, 3, 63, 64, 65, 130, 4097] {
+            for summary in [SelectionSummary::None, SelectionSummary::PerBlock] {
+                for output_summary in [SelectionSummary::None, SelectionSummary::PerBlock] {
+                    let enumerated = Cell::new(0);
+                    let events = RefCell::new(Vec::new());
+                    let host = SparseHost {
+                        rows: &data,
+                        size: NonZeroUsize::new(size).unwrap(),
+                        enumerated: &enumerated,
+                        events: &events,
+                    };
+                    for empty in [false, true] {
+                        let candidates: Vec<_> = host
+                            .positions()
+                            .filter(|id| {
+                                !empty
+                                    && [0, 63, 64, 65, 129, 130, len.saturating_sub(1)]
+                                        .contains(&id.offset())
+                            })
+                            .collect();
+                        let selected =
+                            Selection::from_positions(host, candidates.iter().copied(), summary);
+                        enumerated.set(0);
+                        events.borrow_mut().clear();
+                        let narrowed =
+                            selected.narrow(SparseCol, &AtLeastThree(&events), output_summary);
+                        let mut expected_events = Vec::new();
+                        for block in host.blocks() {
+                            let start = block.offset() * size;
+                            let end = (start + size).min(len);
+                            let live: Vec<_> = candidates
+                                .iter()
+                                .filter(|id| (start..end).contains(&id.offset()))
+                                .collect();
+                            if live.is_empty() {
+                                continue;
+                            }
+                            let hi = data[start..end].iter().map(|row| row.0).max().unwrap();
+                            expected_events.push(('b', block.offset()));
+                            expected_events.push(('a', hi as usize));
+                            if hi >= 3 {
+                                for id in live {
+                                    expected_events.push(('k', id.offset()));
+                                    expected_events.push(('t', data[id.offset()].0 as usize));
+                                }
+                            }
+                        }
+                        assert_eq!(*events.borrow(), expected_events);
+                        let expected: Vec<_> = candidates
+                            .iter()
+                            .copied()
+                            .filter(|id| data[id.offset()].0 >= 3)
+                            .collect();
+                        assert_eq!(narrowed.positions().collect::<Vec<_>>(), expected);
+                        assert_eq!(selected.positions().collect::<Vec<_>>(), candidates);
+                        assert_eq!(
+                            narrowed.rows().map(|(key,)| *key).collect::<Vec<_>>(),
+                            expected
+                                .iter()
+                                .map(|id| data[id.offset()].0)
+                                .collect::<Vec<_>>()
+                        );
+                        assert_eq!(
+                            enumerated.get(),
+                            0,
+                            "narrow and snapshot reads must not enumerate base positions"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}

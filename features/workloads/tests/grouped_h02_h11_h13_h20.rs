@@ -65,12 +65,14 @@ fn h02_minimum_preserves_ties_and_restricts_the_minimum_to_europe() {
                 unicode(address),unicode(phone),unicode(comment)
             FROM ({}) AS result(balance,supplier,nation,part,manufacturer,address,phone,comment)"#, h02::SQL);
         let expected = evaluate_sql(&[raw(rows, 3)], &sql).unwrap();
-        let actual = h02::run(&data, "default").into_iter()
-            .map(|(balance, supplier, nation, part, manufacturer, address, phone, comment)| {
-                vec![integer(balance), code(&supplier), code(&nation), integer(part),
-                    code(&manufacturer), code(&address), code(&phone), code(&comment)]
-            }).collect::<Vec<_>>();
-        assert_answers_equal("DuckDB H02", expected, "staged H02", actual, true);
+        for config in ["default", "transfer"] {
+            let actual = h02::run(&data, config).into_iter()
+                .map(|(balance, supplier, nation, part, manufacturer, address, phone, comment)| {
+                    vec![integer(balance), code(&supplier), code(&nation), integer(part),
+                        code(&manufacturer), code(&address), code(&phone), code(&comment)]
+                }).collect::<Vec<_>>();
+            assert_answers_equal("DuckDB H02", expected.clone(), config, actual, true);
+        }
     }
 }
 
@@ -93,9 +95,11 @@ fn h11_threshold_is_strict_and_both_sums_preserve_supplier_identity() {
             nation(n_nationkey,n_name) AS (VALUES (1,'GERMANY'),(2,'FRANCE'))
             SELECT * FROM ({})"#, h11::SQL);
         let expected = evaluate_sql(&[raw(rows, 4)], &sql).unwrap();
-        let actual = h11::run(&data, "default").into_iter()
-            .map(|(part, value)| vec![integer(part), integer(value)]).collect::<Vec<_>>();
-        assert_answers_equal("DuckDB H11", expected, "staged H11", actual, true);
+        for config in ["default", "transfer"] {
+            let actual = h11::run(&data, config).into_iter()
+                .map(|(part, value)| vec![integer(part), integer(value)]).collect::<Vec<_>>();
+            assert_answers_equal("DuckDB H11", expected.clone(), config, actual, true);
+        }
     }
 }
 
@@ -122,17 +126,13 @@ fn h13_counts_zero_and_obeys_ordered_comment_pattern() {
                 .into_iter()
                 .map(|(customer, count)| vec![integer(customer), i32::try_from(count).unwrap()])
                 .collect::<Vec<_>>();
-            assert_answers_equal(
-                "DuckDB H13",
-                &expected,
-                "count plus anti-join H13",
-                &actual,
-                true,
-            );
+            assert_answers_equal("DuckDB H13", &expected, config, &actual, true);
         }
     }
     let empty = h13::Data { customer: vec![], orders: vec![] };
-    assert!(h13::run(&empty, "default").is_empty());
+    for config in ["default", "transfer"] {
+        assert!(h13::run(&empty, config).is_empty(), "{config}");
+    }
 }
 
 #[test]
@@ -167,9 +167,11 @@ fn h20_preserves_line_identity_date_bounds_and_absent_group_null_semantics() {
                 FROM "mini-linq/raw/0")
             SELECT unicode(s_name),unicode(s_address) FROM ({})"#, h20::SQL);
         let expected = evaluate_sql(&[raw(rows, 6)], &sql).unwrap();
-        let actual = h20::run(&data, "default").into_iter()
-            .map(|(name, address)| vec![code(&name), code(&address)]).collect::<Vec<_>>();
-        assert_answers_equal("DuckDB H20", expected, "staged H20", actual, true);
+        for config in ["default", "transfer"] {
+            let actual = h20::run(&data, config).into_iter()
+                .map(|(name, address)| vec![code(&name), code(&address)]).collect::<Vec<_>>();
+            assert_answers_equal("DuckDB H20", expected.clone(), config, actual, true);
+        }
     }
 }
 
@@ -208,10 +210,12 @@ fn h15_grouped_max_preserves_all_maximum_ties_and_quarter_boundaries() {
             SELECT s_suppkey,unicode(s_name),unicode(s_address),unicode(s_phone),total_revenue
             FROM ({})"#, h15::SQL);
         let expected = evaluate_sql(&[raw(rows, 6)], &sql).unwrap();
-        let actual = h15::run(&data, "default").into_iter()
-            .map(|(supplier, name, address, phone, revenue)| {
-                vec![integer(supplier), code(&name), code(&address), code(&phone), integer(revenue)]
-            }).collect::<Vec<_>>();
-        assert_answers_equal("DuckDB H15 MAX oracle", expected, "grouped MAX H15", actual, true);
+        for config in ["default", "transfer"] {
+            let actual = h15::run(&data, config).into_iter()
+                .map(|(supplier, name, address, phone, revenue)| {
+                    vec![integer(supplier), code(&name), code(&address), code(&phone), integer(revenue)]
+                }).collect::<Vec<_>>();
+            assert_answers_equal("DuckDB H15 MAX oracle", expected.clone(), config, actual, true);
+        }
     }
 }
