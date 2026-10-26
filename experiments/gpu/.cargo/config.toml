@@ -1,6 +1,8 @@
 # CUDA toolkit discovery uses CUDA_HOME/PATH; machine-specific overrides belong
 # in the caller's environment, not workspace defaults.
 [env]
+# The pinned stable SIMT backend uses rustc_private and nightly compiler flags.
+RUSTC_BOOTSTRAP = "1"
 # Keep cuda-oxide IR, PTX, and embedding objects out of the source tree.
 # Override per build when compiling concurrently with different configurations.
 CUDA_OXIDE_PTX_DIR = { value = "target/oxide-ir", relative = true, force = false }

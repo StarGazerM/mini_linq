@@ -195,7 +195,7 @@ impl<W: Word, S> DeviceRuns<W, S> {
             let mut first = Native::<u64>::new(&self.pool, rows)?;
             let mut alternate = Native::<u64>::new(&self.pool, rows)?;
             // SAFETY: input is initialized; the destination is disjoint and same-width.
-            unsafe { cuda_core::memory::memcpy_dtod_async(first.get().cu_deviceptr(), input.cu_deviceptr(), rows * 8, self.pool.stream().cu_stream())?; }
+            unsafe { cuda_core::simt::memory::memcpy_dtod_async(first.get().cu_deviceptr(), input.cu_deviceptr(), rows * 8, self.pool.stream().cu_stream())?; }
             let mut controls = RadixScratch {
                 workspace: rccl_cub::device_radix_sort_keys_buffer_workspace::<u64>(&launch, rows)?,
                 pool: self.pool.clone(),
@@ -366,7 +366,7 @@ impl Drop for RadixScratch {
 fn read_count(pool: &Pool, buffer: &DeviceBuffer<u64>) -> Result<usize> {
     let mut count = 0_u64;
     // SAFETY: preceding compaction initialized one u64; stack storage survives synchronization.
-    unsafe { cuda_core::memory::memcpy_dtoh_async(&mut count as *mut u64, buffer.cu_deviceptr(), 8, pool.stream().cu_stream())?; }
+    unsafe { cuda_core::simt::memory::memcpy_dtoh_async(&mut count as *mut u64, buffer.cu_deviceptr(), 8, pool.stream().cu_stream())?; }
     crate::record_readback();
     pool.stream().synchronize()?;
     Ok(usize::try_from(count)?)

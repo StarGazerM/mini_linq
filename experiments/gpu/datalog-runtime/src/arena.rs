@@ -206,7 +206,7 @@ pub fn concatenate_batches<W: Word>(
             // slices are initialized and disjoint, and pool frees/reuse follow
             // the copy in stream order even when callers drop the input batch.
             unsafe {
-                cuda_core::memory::memcpy_dtod_async(
+                cuda_core::simt::memory::memcpy_dtod_async(
                     output.cu_deviceptr() + offset as u64,
                     batch.buffer().cu_deviceptr(),
                     bytes,

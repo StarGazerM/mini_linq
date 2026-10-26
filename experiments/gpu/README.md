@@ -25,8 +25,16 @@ either endpoint.
 
 ## Build and run
 
-From this directory, with the cuda-oxide monorepo checkout at `/data/cuda-oxide`
-(CUDA 13.0+; cuRAND headers come from the HPC SDK math libraries):
+The workspace pins the pushed `mini-linq/main` branches of the StarGazerM
+cuda-oxide and RCCL forks by commit, without local dependency patches.
+It uses cuda-oxide's Rust **1.99.1** SIMT toolchain, with `RUSTC_BOOTSTRAP=1`
+configured for the compiler backend. Build the backend and install `cargo-oxide`
+from that pinned fork's nested `cuda-oxide/` workspace; the backend path is
+configured in `.cargo/cuda-oxide.toml`.
+
+The shared host bindings require CUDA 13.0 or newer. With the HPC SDK layout,
+bindgen also needs the separate cuRAND headers under `math_libs`.
+From this directory, with that backend:
 
 ```sh
 export CUDA_HOME=/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0
@@ -177,6 +185,13 @@ Cassandra validation matched all 26 outputs exactly. An untraced release run
 measured GPU evaluation **11.809409 s**, sequential mini **4.269240 s**, versus
 the prior 15-thread mini-par reference **1.28 s** (GPU/reference **9.226×**).
 These are end-to-end evaluation times, not kernel-only timings.
+
+With the maintained upstream-based fork pins, Rust 1.99.1, and CUDA 13.0,
+the Cassandra release validation again matched all 26 full-tuple outputs.
+That run measured GPU evaluation **25.274430 s** and sequential mini
+**4.176412 s** (GPU/prior mini-par reference **19.745648×**).
+This is slower than the preceding local-patch measurement; no speedup is
+claimed for the toolchain migration.
 
 The instrumented run recorded a **232,744,960-byte pool allocation peak** and
 **528,482,304-byte maximum pool reservation**, excluding native CUDA library
