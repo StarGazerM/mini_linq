@@ -433,6 +433,75 @@ resource/SASS comparisons, compiler flags, Nsight Compute counters, and
 verification results are recorded in
 [`compare/doop_cassandra.aot_codegen.results.json`](compare/doop_cassandra.aot_codegen.results.json).
 
+### SRDatalog field-flow DOOP on prepared integer inputs
+
+`srd-doop-gpu` is separate from the 26-output `doop-gpu` benchmark above.
+It instantiates `srd_doop_shared::srd_doop_engine!` from
+`features/datalog/doop/srd`: the field-flow query has 37 inputs, 85 source
+rules, and 43 output relations. Prepared integer IDs and `meta.json` constants
+are passed unchanged; there is no symbol codec or alternate GPU query body.
+The pipeline uses `device_storage`, `delta_first`, `capture_constants`,
+`reserve_previous`, `translate_arena`, and `print_rounds`, like `doop-gpu`.
+
+The translation comes directly from `build_doopdb_program(meta, field_flow=True)`
+in SRDatalog `fab849f672d43af2a6a1e8a1727ec065201e3720`; multihead splitting
+is the only rule transformation. `generated.schema.json` records the source
+SHA-256, relation schemas, and 91 expanded rules. Regenerate from the repository
+root with `python3 features/datalog/doop/srd/translate.py --srd-repo PATH --field-flow`.
+The CPU engines use that same generated macro and loader:
+
+```sh
+cargo test --release --manifest-path ../../features/datalog/doop/srd-engines/Cargo.toml --workspace --features phase-timing
+cargo build --release --manifest-path ../../features/datalog/doop/srd-engines/Cargo.toml --workspace --features phase-timing
+../../features/target/release/srd-doop-mini PREPARED --export OUTPUT
+../../features/target/release/srd-doop-mini-par PREPARED --threads 15
+```
+
+The CPU fixture checks all 43 IDBs, including recursive field flow, split
+multihead rules, negative method modifiers, duplicate inputs, and unreachable
+stores. The optional CPU phase instrumentation reports per-round evaluation,
+admission, and publication times; their sum is not the whole evaluation wall time.
+
+From this workspace, with the build environment above:
+
+```sh
+cargo oxide build --arch sm_89 -- --release -p srd-doop-gpu
+./target/release/srd-doop-gpu \
+  /data/doop-bench/doop-vs-srdatalog-20261026/fresh-corpus/prepared/xalan \
+  --gpu-only --export /tmp/srd-doop-gpu-xalan
+cargo oxide test --arch sm_89 -- --release -p srd-doop-gpu --test exactness -- --test-threads=1
+```
+
+Use `prepared/batik` in place of `prepared/xalan` for Batik. The shared harness
+accepts `--gpu-only` explicitly; this standalone executable never runs a CPU
+reference, even when that flag is omitted. `--export DIRECTORY` writes complete
+output relations for external exact tuple comparison; counts alone are not an
+exactness check. Evaluation includes upload, GPU execution, and output
+materialization, excluding input loading, CUDA context initialization, and
+export. `GPU_DATALOG_PHASES=1` enables the GPU setup/fixpoint/output split.
+The small shared field-flow fixture test asserts every one of the 43 output
+relations against explicit expected tuples and requires CUDA. Run GPU jobs
+serially. These commands describe how to build and verify, not recorded results.
+
+`compare/srd_query_benchmark.py` retains provenance, per-process logs, uptime,
+and in-run `nvidia-smi` SM-clock samples in the results JSON. From this directory:
+
+```sh
+python3 compare/srd_query_benchmark.py build --datasets xalan batik
+python3 compare/srd_query_benchmark.py export --datasets xalan batik
+python3 compare/srd_query_benchmark.py run
+```
+
+Compilation is separate from execution. Timing uses one warmup and three
+fresh-process measurements with a hard 10-second limit, baseline SRD plans,
+`SRDATALOG_RMM_RESOURCE=cuda_async`, and 15 CPU threads. Correctness exports
+have a separate 300-second deadline and never enter timing medians. Export
+comparison checks all IDB tuples, rejects duplicates, and validates counts
+against each engine's JSON. `--engines` and `--datasets` select subsets, which
+accumulate in `compare/srd_query_xalan_batik.results.json`; never run concurrent
+writers or GPU engines. The original-query `doop-gpu` timing is explicitly
+separate and is not an equality comparison against the SRD query.
+
 ### Planner-driven 11-query TPC-H suite
 
 `tpch` is one crate with one binary, `cq-gpu-tpch`. It imports the CPU
