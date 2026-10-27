@@ -453,8 +453,8 @@ The CPU engines use that same generated macro and loader:
 ```sh
 cargo test --release --manifest-path ../../features/datalog/doop/srd-engines/Cargo.toml --workspace --features phase-timing
 cargo build --release --manifest-path ../../features/datalog/doop/srd-engines/Cargo.toml --workspace --features phase-timing
-../../features/datalog/doop/srd-engines/target/release/srd-doop-mini PREPARED --export OUTPUT
-../../features/datalog/doop/srd-engines/target/release/srd-doop-mini-par PREPARED --threads 15
+../../features/target/release/srd-doop-mini PREPARED --export OUTPUT
+../../features/target/release/srd-doop-mini-par PREPARED --threads 15
 ```
 
 The CPU fixture checks all 43 IDBs, including recursive field flow, split
@@ -482,6 +482,25 @@ export. `GPU_DATALOG_PHASES=1` enables the GPU setup/fixpoint/output split.
 The small shared field-flow fixture test asserts every one of the 43 output
 relations against explicit expected tuples and requires CUDA. Run GPU jobs
 serially. These commands describe how to build and verify, not recorded results.
+
+`compare/srd_query_benchmark.py` retains provenance, per-process logs, uptime,
+and in-run `nvidia-smi` SM-clock samples in the results JSON. From this directory:
+
+```sh
+python3 compare/srd_query_benchmark.py build --datasets xalan batik
+python3 compare/srd_query_benchmark.py export --datasets xalan batik
+python3 compare/srd_query_benchmark.py run
+```
+
+Compilation is separate from execution. Timing uses one warmup and three
+fresh-process measurements with a hard 10-second limit, baseline SRD plans,
+`SRDATALOG_RMM_RESOURCE=cuda_async`, and 15 CPU threads. Correctness exports
+have a separate 300-second deadline and never enter timing medians. Export
+comparison checks all IDB tuples, rejects duplicates, and validates counts
+against each engine's JSON. `--engines` and `--datasets` select subsets, which
+accumulate in `compare/srd_query_xalan_batik.results.json`; never run concurrent
+writers or GPU engines. The original-query `doop-gpu` timing is explicitly
+separate and is not an equality comparison against the SRD query.
 
 ### Planner-driven 11-query TPC-H suite
 
