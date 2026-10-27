@@ -100,6 +100,55 @@ fn substitute(
     }).collect()
 }
 
+/// Whether a hole's query names anything bound outside the query, such as a
+/// local of the function containing `datalog!`. Host declaration values are
+/// substituted separately. Callees (`sym("…")`) are items visible to nested
+/// functions; macros are opaque and conservatively count as environment reads.
+fn reads_environment(cq: &round::cq::Program) -> bool {
+    use round::cq::BodyItem;
+    use syn::visit::Visit;
+    struct Callees(std::collections::BTreeSet<String>);
+    impl<'ast> Visit<'ast> for Callees {
+        fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+            if let syn::Expr::Path(path) = &*call.func {
+                if let Some(name) = path.path.get_ident() {
+                    self.0.insert(cq_syntax::symbol_name(name));
+                }
+            }
+            syn::visit::visit_expr_call(self, call);
+        }
+    }
+    let mut bound = std::collections::BTreeSet::new();
+    let mut expressions: Vec<&syn::Expr> = cq.query.head.args.iter().collect();
+    for item in &cq.query.body {
+        match item {
+            BodyItem::Positive { atom } => for argument in &atom.args {
+                match cq_syntax::rust::variable(argument) {
+                    Some(variable) => { bound.insert(cq_syntax::symbol_name(variable)); }
+                    None => expressions.push(argument),
+                }
+            },
+            BodyItem::Negation(negation) => expressions.extend(&negation.atom.args),
+            BodyItem::Filter(filter) => expressions.push(&filter.condition),
+            BodyItem::Let(binding) => {
+                bound.extend(cq_syntax::rust::bindings(&binding.pattern).iter().map(cq_syntax::symbol_name));
+                expressions.push(&binding.expression);
+            }
+            BodyItem::For(binding) => {
+                bound.extend(cq_syntax::rust::bindings(&binding.pattern).iter().map(cq_syntax::symbol_name));
+                expressions.push(&binding.expression);
+            }
+            _ => return true,
+        }
+    }
+    expressions.into_iter().any(|expression| {
+        let free = cq_syntax::rust::free_variables(expression);
+        let mut callees = Callees(std::collections::BTreeSet::new());
+        callees.visit_expr(expression);
+        free.opaque || free.names.iter().any(|name| !bound.contains(name) && !callees.0.contains(name))
+    })
+}
+
 /// Formal rule P-DL-Gpu: Interpret the recorded waves, admission owners and
 /// publication operations using immutable packed runs on one device stream.
 pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
@@ -140,15 +189,22 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
     }
     // Each hole is a separate function item: rustc type-checks a closure with
     // its enclosing body, so closures would keep the whole program one query.
+    // A hole whose query reads a local of the code around `datalog!` keeps the
+    // closure form, because a function item cannot capture locals.
     let mut hole_items = Vec::new();
+    let mut hole_index = 0usize;
     let holes = cq_datalog_print::splice_with(program, |hole| {
-        let index = hole_items.len();
+        let index = hole_index;
+        hole_index += 1;
+        let standalone = !reads_environment(&hole.cq);
         let mut cq = hole.cq.clone();
         let mut parameters = Vec::new();
-        for declaration in &mut cq.declarations {
-            if let Some(value) = &mut declaration.value {
-                let expression = value.expression.to_token_stream();
-                value.expression = syn::parse2(substitute(expression, &hosts, &mut parameters))?;
+        if standalone {
+            for declaration in &mut cq.declarations {
+                if let Some(value) = &mut declaration.value {
+                    let expression = value.expression.to_token_stream();
+                    value.expression = syn::parse2(substitute(expression, &hosts, &mut parameters))?;
+                }
             }
         }
         let inputs = cq.declarations.iter().map(|declaration| declaration.name.to_string())
@@ -171,6 +227,9 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
         ensure(terminal.arguments.is_empty(), hole, "GPU Datalog owns the batch arena argument")?;
         terminal.arguments = quote!(&mut *__cq_gpu_arena);
         let invocation = pipeline.start(cq.to_token_stream())?;
+        if !standalone {
+            return Ok(invocation);
+        }
         let function = format_ident!("__cq_gpu_hole_{}", index);
         let (scan_parameter, scan_argument) = match scans.get(&index) {
             Some(binding) => {

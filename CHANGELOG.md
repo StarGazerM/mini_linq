@@ -7,6 +7,12 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- GPU Datalog holes whose query reads a local of the code around `datalog!`
+  (SRD DOOP's `constants`) keep the closure form; a standalone hole function
+  cannot capture locals. Free names are checked with `cq_syntax::rust`, callees
+  (`sym("…")`) count as items and macros as environment reads. DOOP keeps 154 of
+  155 holes standalone; `srd-doop-gpu` (merged from `codex/wt-schedule`) builds
+  in 16 codegen units and passes its exact 43-relation test.
 - cuda-oxide `1c1c42105` / RCCL `8649af3e`: standalone PTX assembly uses
   `ptxas --split-compile=0` (identical SASS). DOOP cubin assembly 5.53 s ->
   1.40 s; DOOP GPU release build 52 s -> 42 s, cassandra exact.

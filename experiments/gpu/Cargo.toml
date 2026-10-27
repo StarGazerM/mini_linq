@@ -33,4 +33,7 @@ opt-level = 3
 [profile.release.package.doop-gpu]
 codegen-units = 16
 
+[profile.release.package.srd-doop-gpu]
+codegen-units = 16
+
 
