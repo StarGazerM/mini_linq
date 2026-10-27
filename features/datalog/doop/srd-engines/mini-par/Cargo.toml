@@ -1,0 +1,22 @@
+[package]
+name = "srd-doop-mini-par"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[features]
+phase-timing = ["cq-datalog/phase-timing"]
+hole-timing = ["cq-datalog-parallel/hole-timing"]
+
+[dependencies]
+srd-doop-shared = { path = "../../srd" }
+srd-doop-harness = { path = "../harness" }
+cq-datalog = { path = "../../../facade/cq-datalog" }
+mini-linq = { path = "../../../../../facade/mini-linq" }
+cq-storage = { path = "../../../../../runtime/cq-storage" }
+cq-datalog-parallel = { path = "../../../../datalog-parallel" }
+cq-datalog-parallel-runtime = { path = "../../../../datalog-parallel/runtime" }
+rayon = "1"
+
+[dev-dependencies]
+srd-doop-shared = { path = "../../srd", features = ["test-fixture"] }
