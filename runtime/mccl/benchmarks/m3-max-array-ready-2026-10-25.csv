@@ -1,0 +1,9 @@
+case,total_keys,a_keys,b_keys,operation,reps,warmup,timing,logical_bytes,median_us,p10_us,p90_us,effective_gb_s,copy_over_merge_ratio
+interleaved,1024,512,512,merge,9,3,cpu_wall_array_ready_call,8192,200.584,166.184,220.908,0.041,0.745533
+interleaved,1024,512,512,copy,9,3,cpu_wall_array_ready_call,8192,149.542,140.649,245.366,0.055,0.745533
+interleaved,65536,32768,32768,merge,9,3,cpu_wall_array_ready_call,524288,196.708,185.242,220.125,2.665,0.899175
+interleaved,65536,32768,32768,copy,9,3,cpu_wall_array_ready_call,524288,176.875,162.833,203.909,2.964,0.899175
+interleaved,1048576,524288,524288,merge,9,3,cpu_wall_array_ready_call,8388608,288.125,269.600,325.442,29.114,0.680118
+interleaved,1048576,524288,524288,copy,9,3,cpu_wall_array_ready_call,8388608,195.959,183.500,237.000,42.808,0.680118
+interleaved,16777216,8388608,8388608,merge,9,3,cpu_wall_array_ready_call,134217728,1822.375,1766.025,2232.433,73.650,0.360267
+interleaved,16777216,8388608,8388608,copy,9,3,cpu_wall_array_ready_call,134217728,656.541,630.734,1230.366,204.432,0.360267

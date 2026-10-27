@@ -1,0 +1,1357 @@
+{
+  "allocation": "fresh per build; not a guarantee of cold physical pages or caches",
+  "bandwidth": "modeled logical sort-buffer bytes / GPU timestamp duration; duration includes directory; excludes directory search/threadgroup traffic; NOT measured DRAM bandwidth",
+  "cpu": "comparison sort vs single-thread stable byte radix skipping constant bytes; identical shared-buffer read layout",
+  "gpu": "same four-pass GPU encoding in fresh, pretouched and unprofiled modes; pretouch charged explicitly",
+  "modes": [
+    "cpu_comparison",
+    "cpu_radix"
+  ],
+  "order": "rotating constructor order",
+  "phases": "submit_wait includes GPU execution; do not add GPU time to host phase sum. cleanup_other includes scratch destruction/autorelease and other unclassified host work",
+  "results": [
+    {
+      "distribution": "uniform",
+      "mode": "cpu_comparison",
+      "rows": 65536,
+      "samples": [
+        {
+          "order": 0,
+          "round": 0,
+          "wall_ms": 1.032708
+        },
+        {
+          "order": 1,
+          "round": 1,
+          "wall_ms": 0.960459
+        },
+        {
+          "order": 0,
+          "round": 2,
+          "wall_ms": 0.91625
+        },
+        {
+          "order": 1,
+          "round": 3,
+          "wall_ms": 0.867375
+        },
+        {
+          "order": 0,
+          "round": 4,
+          "wall_ms": 0.848584
+        },
+        {
+          "order": 1,
+          "round": 5,
+          "wall_ms": 0.842125
+        },
+        {
+          "order": 0,
+          "round": 6,
+          "wall_ms": 0.831708
+        },
+        {
+          "order": 1,
+          "round": 7,
+          "wall_ms": 0.798542
+        },
+        {
+          "order": 0,
+          "round": 8,
+          "wall_ms": 0.7965
+        }
+      ],
+      "summary": {
+        "allocation_ms": null,
+        "cleanup_other_ms": null,
+        "encode_ms": null,
+        "gpu_logical_sort_gbps": null,
+        "gpu_ms": null,
+        "pretouch_ms": null,
+        "submit_wait_ms": null,
+        "upload_ms": null,
+        "wall_ms": {
+          "max": 1.032708,
+          "median": 0.848584,
+          "min": 0.7965
+        }
+      }
+    },
+    {
+      "distribution": "uniform",
+      "mode": "cpu_radix",
+      "rows": 65536,
+      "samples": [
+        {
+          "order": 1,
+          "round": 0,
+          "wall_ms": 0.593125
+        },
+        {
+          "order": 0,
+          "round": 1,
+          "wall_ms": 0.5918749999999999
+        },
+        {
+          "order": 1,
+          "round": 2,
+          "wall_ms": 0.5576249999999999
+        },
+        {
+          "order": 0,
+          "round": 3,
+          "wall_ms": 0.569708
+        },
+        {
+          "order": 1,
+          "round": 4,
+          "wall_ms": 0.5495
+        },
+        {
+          "order": 0,
+          "round": 5,
+          "wall_ms": 0.520959
+        },
+        {
+          "order": 1,
+          "round": 6,
+          "wall_ms": 0.5167919999999999
+        },
+        {
+          "order": 0,
+          "round": 7,
+          "wall_ms": 0.503542
+        },
+        {
+          "order": 1,
+          "round": 8,
+          "wall_ms": 0.514458
+        }
+      ],
+      "summary": {
+        "allocation_ms": null,
+        "cleanup_other_ms": null,
+        "encode_ms": null,
+        "gpu_logical_sort_gbps": null,
+        "gpu_ms": null,
+        "pretouch_ms": null,
+        "submit_wait_ms": null,
+        "upload_ms": null,
+        "wall_ms": {
+          "max": 0.593125,
+          "median": 0.5495,
+          "min": 0.503542
+        }
+      }
+    },
+    {
+      "distribution": "uniform",
+      "mode": "cpu_comparison",
+      "rows": 1048576,
+      "samples": [
+        {
+          "order": 0,
+          "round": 0,
+          "wall_ms": 15.183874999999999
+        },
+        {
+          "order": 1,
+          "round": 1,
+          "wall_ms": 15.355916
+        },
+        {
+          "order": 0,
+          "round": 2,
+          "wall_ms": 15.142125
+        },
+        {
+          "order": 1,
+          "round": 3,
+          "wall_ms": 15.3735
+        },
+        {
+          "order": 0,
+          "round": 4,
+          "wall_ms": 15.205625000000001
+        },
+        {
+          "order": 1,
+          "round": 5,
+          "wall_ms": 15.331792
+        },
+        {
+          "order": 0,
+          "round": 6,
+          "wall_ms": 15.172667
+        },
+        {
+          "order": 1,
+          "round": 7,
+          "wall_ms": 15.348459
+        },
+        {
+          "order": 0,
+          "round": 8,
+          "wall_ms": 15.235458
+        }
+      ],
+      "summary": {
+        "allocation_ms": null,
+        "cleanup_other_ms": null,
+        "encode_ms": null,
+        "gpu_logical_sort_gbps": null,
+        "gpu_ms": null,
+        "pretouch_ms": null,
+        "submit_wait_ms": null,
+        "upload_ms": null,
+        "wall_ms": {
+          "max": 15.3735,
+          "median": 15.235458,
+          "min": 15.142125
+        }
+      }
+    },
+    {
+      "distribution": "uniform",
+      "mode": "cpu_radix",
+      "rows": 1048576,
+      "samples": [
+        {
+          "order": 1,
+          "round": 0,
+          "wall_ms": 6.8245
+        },
+        {
+          "order": 0,
+          "round": 1,
+          "wall_ms": 6.8807920000000005
+        },
+        {
+          "order": 1,
+          "round": 2,
+          "wall_ms": 6.8187500000000005
+        },
+        {
+          "order": 0,
+          "round": 3,
+          "wall_ms": 6.889583
+        },
+        {
+          "order": 1,
+          "round": 4,
+          "wall_ms": 6.837125
+        },
+        {
+          "order": 0,
+          "round": 5,
+          "wall_ms": 6.826958
+        },
+        {
+          "order": 1,
+          "round": 6,
+          "wall_ms": 6.776958
+        },
+        {
+          "order": 0,
+          "round": 7,
+          "wall_ms": 6.843291
+        },
+        {
+          "order": 1,
+          "round": 8,
+          "wall_ms": 6.8604579999999995
+        }
+      ],
+      "summary": {
+        "allocation_ms": null,
+        "cleanup_other_ms": null,
+        "encode_ms": null,
+        "gpu_logical_sort_gbps": null,
+        "gpu_ms": null,
+        "pretouch_ms": null,
+        "submit_wait_ms": null,
+        "upload_ms": null,
+        "wall_ms": {
+          "max": 6.889583,
+          "median": 6.837125,
+          "min": 6.776958
+        }
+      }
+    },
+    {
+      "distribution": "uniform",
+      "mode": "cpu_comparison",
+      "rows": 4194304,
+      "samples": [
+        {
+          "order": 0,
+          "round": 0,
+          "wall_ms": 65.391542
+        },
+        {
+          "order": 1,
+          "round": 1,
+          "wall_ms": 65.414791
+        },
+        {
+          "order": 0,
+          "round": 2,
+          "wall_ms": 65.625958
+        },
+        {
+          "order": 1,
+          "round": 3,
+          "wall_ms": 65.890042
+        },
+        {
+          "order": 0,
+          "round": 4,
+          "wall_ms": 65.393042
+        },
+        {
+          "order": 1,
+          "round": 5,
+          "wall_ms": 65.93191700000001
+        },
+        {
+          "order": 0,
+          "round": 6,
+          "wall_ms": 67.33966600000001
+        },
+        {
+          "order": 1,
+          "round": 7,
+          "wall_ms": 65.706208
+        },
+        {
+          "order": 0,
+          "round": 8,
+          "wall_ms": 65.322459
+        }
+      ],
+      "summary": {
+        "allocation_ms": null,
+        "cleanup_other_ms": null,
+        "encode_ms": null,
+        "gpu_logical_sort_gbps": null,
+        "gpu_ms": null,
+        "pretouch_ms": null,
+        "submit_wait_ms": null,
+        "upload_ms": null,
+        "wall_ms": {
+          "max": 67.33966600000001,
+          "median": 65.625958,
+          "min": 65.322459
+        }
+      }
+    },
+    {
+      "distribution": "uniform",
+      "mode": "cpu_radix",
+      "rows": 4194304,
+      "samples": [
+        {
+          "order": 1,
+          "round": 0,
+          "wall_ms": 27.558417000000002
+        },
+        {
+          "order": 0,
+          "round": 1,
+          "wall_ms": 27.984875
+        },
+        {
+          "order": 1,
+          "round": 2,
+          "wall_ms": 27.894624999999998
+        },
+        {
+          "order": 0,
+          "round": 3,
+          "wall_ms": 27.903792
+        },
+        {
+          "order": 1,
+          "round": 4,
+          "wall_ms": 27.689124999999997
+        },
+        {
+          "order": 0,
+          "round": 5,
+          "wall_ms": 28.083333
+        },
+        {
+          "order": 1,
+          "round": 6,
+          "wall_ms": 28.030875
+        },
+        {
+          "order": 0,
+          "round": 7,
+          "wall_ms": 27.670083
+        },
+        {
+          "order": 1,
+          "round": 8,
+          "wall_ms": 27.541625
+        }
+      ],
+      "summary": {
+        "allocation_ms": null,
+        "cleanup_other_ms": null,
+        "encode_ms": null,
+        "gpu_logical_sort_gbps": null,
+        "gpu_ms": null,
+        "pretouch_ms": null,
+        "submit_wait_ms": null,
+        "upload_ms": null,
+        "wall_ms": {
+          "max": 28.083333,
+          "median": 27.894624999999998,
+          "min": 27.541625
+        }
+      }
+    },
+    {
+      "distribution": "uniform",
+      "mode": "cpu_comparison",
+      "rows": 16777216,
+      "samples": [
+        {
+          "order": 0,
+          "round": 0,
+          "wall_ms": 277.91583399999996
+        },
+        {
+          "order": 1,
+          "round": 1,
+          "wall_ms": 280.448125
+        },
+        {
+          "order": 0,
+          "round": 2,
+          "wall_ms": 277.73616699999997
+        },
+        {
+          "order": 1,
+          "round": 3,
+          "wall_ms": 279.890959
+        },
+        {
+          "order": 0,
+          "round": 4,
+          "wall_ms": 280.689291
+        },
+        {
+          "order": 1,
+          "round": 5,
+          "wall_ms": 279.91587499999997
+        },
+        {
+          "order": 0,
+          "round": 6,
+          "wall_ms": 281.402083
+        },
+        {
+          "order": 1,
+          "round": 7,
+          "wall_ms": 280.41450000000003
+        },
+        {
+          "order": 0,
+          "round": 8,
+          "wall_ms": 280.103875
+        }
+      ],
+      "summary": {
+        "allocation_ms": null,
+        "cleanup_other_ms": null,
+        "encode_ms": null,
+        "gpu_logical_sort_gbps": null,
+        "gpu_ms": null,
+        "pretouch_ms": null,
+        "submit_wait_ms": null,
+        "upload_ms": null,
+        "wall_ms": {
+          "max": 281.402083,
+          "median": 280.103875,
+          "min": 277.73616699999997
+        }
+      }
+    },
+    {
+      "distribution": "uniform",
+      "mode": "cpu_radix",
+      "rows": 16777216,
+      "samples": [
+        {
+          "order": 1,
+          "round": 0,
+          "wall_ms": 111.805166
+        },
+        {
+          "order": 0,
+          "round": 1,
+          "wall_ms": 111.784625
+        },
+        {
+          "order": 1,
+          "round": 2,
+          "wall_ms": 111.4825
+        },
+        {
+          "order": 0,
+          "round": 3,
+          "wall_ms": 112.00475
+        },
+        {
+          "order": 1,
+          "round": 4,
+          "wall_ms": 112.354084
+        },
+        {
+          "order": 0,
+          "round": 5,
+          "wall_ms": 111.89162499999999
+        },
+        {
+          "order": 1,
+          "round": 6,
+          "wall_ms": 111.703875
+        },
+        {
+          "order": 0,
+          "round": 7,
+          "wall_ms": 111.564666
+        },
+        {
+          "order": 1,
+          "round": 8,
+          "wall_ms": 112.197208
+        }
+      ],
+      "summary": {
+        "allocation_ms": null,
+        "cleanup_other_ms": null,
+        "encode_ms": null,
+        "gpu_logical_sort_gbps": null,
+        "gpu_ms": null,
+        "pretouch_ms": null,
+        "submit_wait_ms": null,
+        "upload_ms": null,
+        "wall_ms": {
+          "max": 112.354084,
+          "median": 111.805166,
+          "min": 111.4825
+        }
+      }
+    },
+    {
+      "distribution": "uniform",
+      "mode": "cpu_comparison",
+      "rows": 67108864,
+      "samples": [
+        {
+          "order": 0,
+          "round": 0,
+          "wall_ms": 1185.1995829999998
+        },
+        {
+          "order": 1,
+          "round": 1,
+          "wall_ms": 1186.0534579999999
+        },
+        {
+          "order": 0,
+          "round": 2,
+          "wall_ms": 1187.0755829999998
+        },
+        {
+          "order": 1,
+          "round": 3,
+          "wall_ms": 1186.106667
+        },
+        {
+          "order": 0,
+          "round": 4,
+          "wall_ms": 1185.3470829999999
+        },
+        {
+          "order": 1,
+          "round": 5,
+          "wall_ms": 1183.412542
+        },
+        {
+          "order": 0,
+          "round": 6,
+          "wall_ms": 1185.617667
+        },
+        {
+          "order": 1,
+          "round": 7,
+          "wall_ms": 1185.2220419999999
+        },
+        {
+          "order": 0,
+          "round": 8,
+          "wall_ms": 1190.189458
+        }
+      ],
+      "summary": {
+        "allocation_ms": null,
+        "cleanup_other_ms": null,
+        "encode_ms": null,
+        "gpu_logical_sort_gbps": null,
+        "gpu_ms": null,
+        "pretouch_ms": null,
+        "submit_wait_ms": null,
+        "upload_ms": null,
+        "wall_ms": {
+          "max": 1190.189458,
+          "median": 1185.617667,
+          "min": 1183.412542
+        }
+      }
+    },
+    {
+      "distribution": "uniform",
+      "mode": "cpu_radix",
+      "rows": 67108864,
+      "samples": [
+        {
+          "order": 1,
+          "round": 0,
+          "wall_ms": 449.383917
+        },
+        {
+          "order": 0,
+          "round": 1,
+          "wall_ms": 446.956125
+        },
+        {
+          "order": 1,
+          "round": 2,
+          "wall_ms": 447.613916
+        },
+        {
+          "order": 0,
+          "round": 3,
+          "wall_ms": 448.998708
+        },
+        {
+          "order": 1,
+          "round": 4,
+          "wall_ms": 450.4345
+        },
+        {
+          "order": 0,
+          "round": 5,
+          "wall_ms": 449.076291
+        },
+        {
+          "order": 1,
+          "round": 6,
+          "wall_ms": 448.311625
+        },
+        {
+          "order": 0,
+          "round": 7,
+          "wall_ms": 449.115167
+        },
+        {
+          "order": 1,
+          "round": 8,
+          "wall_ms": 449.108458
+        }
+      ],
+      "summary": {
+        "allocation_ms": null,
+        "cleanup_other_ms": null,
+        "encode_ms": null,
+        "gpu_logical_sort_gbps": null,
+        "gpu_ms": null,
+        "pretouch_ms": null,
+        "submit_wait_ms": null,
+        "upload_ms": null,
+        "wall_ms": {
+          "max": 450.4345,
+          "median": 449.076291,
+          "min": 446.956125
+        }
+      }
+    },
+    {
+      "distribution": "dense",
+      "mode": "cpu_comparison",
+      "rows": 65536,
+      "samples": [
+        {
+          "order": 0,
+          "round": 0,
+          "wall_ms": 0.521625
+        },
+        {
+          "order": 1,
+          "round": 1,
+          "wall_ms": 0.527292
+        },
+        {
+          "order": 0,
+          "round": 2,
+          "wall_ms": 0.519042
+        },
+        {
+          "order": 1,
+          "round": 3,
+          "wall_ms": 0.520875
+        },
+        {
+          "order": 0,
+          "round": 4,
+          "wall_ms": 0.519917
+        },
+        {
+          "order": 1,
+          "round": 5,
+          "wall_ms": 0.525041
+        },
+        {
+          "order": 0,
+          "round": 6,
+          "wall_ms": 0.518625
+        },
+        {
+          "order": 1,
+          "round": 7,
+          "wall_ms": 0.521792
+        },
+        {
+          "order": 0,
+          "round": 8,
+          "wall_ms": 0.523833
+        }
+      ],
+      "summary": {
+        "allocation_ms": null,
+        "cleanup_other_ms": null,
+        "encode_ms": null,
+        "gpu_logical_sort_gbps": null,
+        "gpu_ms": null,
+        "pretouch_ms": null,
+        "submit_wait_ms": null,
+        "upload_ms": null,
+        "wall_ms": {
+          "max": 0.527292,
+          "median": 0.521625,
+          "min": 0.518625
+        }
+      }
+    },
+    {
+      "distribution": "dense",
+      "mode": "cpu_radix",
+      "rows": 65536,
+      "samples": [
+        {
+          "order": 1,
+          "round": 0,
+          "wall_ms": 0.340584
+        },
+        {
+          "order": 0,
+          "round": 1,
+          "wall_ms": 0.362458
+        },
+        {
+          "order": 1,
+          "round": 2,
+          "wall_ms": 0.36133299999999996
+        },
+        {
+          "order": 0,
+          "round": 3,
+          "wall_ms": 0.349167
+        },
+        {
+          "order": 1,
+          "round": 4,
+          "wall_ms": 0.356167
+        },
+        {
+          "order": 0,
+          "round": 5,
+          "wall_ms": 0.358458
+        },
+        {
+          "order": 1,
+          "round": 6,
+          "wall_ms": 0.3565
+        },
+        {
+          "order": 0,
+          "round": 7,
+          "wall_ms": 0.356917
+        },
+        {
+          "order": 1,
+          "round": 8,
+          "wall_ms": 0.37225
+        }
+      ],
+      "summary": {
+        "allocation_ms": null,
+        "cleanup_other_ms": null,
+        "encode_ms": null,
+        "gpu_logical_sort_gbps": null,
+        "gpu_ms": null,
+        "pretouch_ms": null,
+        "submit_wait_ms": null,
+        "upload_ms": null,
+        "wall_ms": {
+          "max": 0.37225,
+          "median": 0.356917,
+          "min": 0.340584
+        }
+      }
+    },
+    {
+      "distribution": "dense",
+      "mode": "cpu_comparison",
+      "rows": 1048576,
+      "samples": [
+        {
+          "order": 0,
+          "round": 0,
+          "wall_ms": 22.063958000000003
+        },
+        {
+          "order": 1,
+          "round": 1,
+          "wall_ms": 22.080916
+        },
+        {
+          "order": 0,
+          "round": 2,
+          "wall_ms": 22.103583
+        },
+        {
+          "order": 1,
+          "round": 3,
+          "wall_ms": 22.028624999999998
+        },
+        {
+          "order": 0,
+          "round": 4,
+          "wall_ms": 21.957167
+        },
+        {
+          "order": 1,
+          "round": 5,
+          "wall_ms": 22.110167
+        },
+        {
+          "order": 0,
+          "round": 6,
+          "wall_ms": 22.224791
+        },
+        {
+          "order": 1,
+          "round": 7,
+          "wall_ms": 22.141166000000002
+        },
+        {
+          "order": 0,
+          "round": 8,
+          "wall_ms": 22.01175
+        }
+      ],
+      "summary": {
+        "allocation_ms": null,
+        "cleanup_other_ms": null,
+        "encode_ms": null,
+        "gpu_logical_sort_gbps": null,
+        "gpu_ms": null,
+        "pretouch_ms": null,
+        "submit_wait_ms": null,
+        "upload_ms": null,
+        "wall_ms": {
+          "max": 22.224791,
+          "median": 22.080916,
+          "min": 21.957167
+        }
+      }
+    },
+    {
+      "distribution": "dense",
+      "mode": "cpu_radix",
+      "rows": 1048576,
+      "samples": [
+        {
+          "order": 1,
+          "round": 0,
+          "wall_ms": 6.290958
+        },
+        {
+          "order": 0,
+          "round": 1,
+          "wall_ms": 6.33
+        },
+        {
+          "order": 1,
+          "round": 2,
+          "wall_ms": 6.29675
+        },
+        {
+          "order": 0,
+          "round": 3,
+          "wall_ms": 6.312542
+        },
+        {
+          "order": 1,
+          "round": 4,
+          "wall_ms": 6.235666
+        },
+        {
+          "order": 0,
+          "round": 5,
+          "wall_ms": 6.340625
+        },
+        {
+          "order": 1,
+          "round": 6,
+          "wall_ms": 6.374416
+        },
+        {
+          "order": 0,
+          "round": 7,
+          "wall_ms": 6.384208
+        },
+        {
+          "order": 1,
+          "round": 8,
+          "wall_ms": 6.226917
+        }
+      ],
+      "summary": {
+        "allocation_ms": null,
+        "cleanup_other_ms": null,
+        "encode_ms": null,
+        "gpu_logical_sort_gbps": null,
+        "gpu_ms": null,
+        "pretouch_ms": null,
+        "submit_wait_ms": null,
+        "upload_ms": null,
+        "wall_ms": {
+          "max": 6.384208,
+          "median": 6.312542,
+          "min": 6.226917
+        }
+      }
+    },
+    {
+      "distribution": "dense",
+      "mode": "cpu_comparison",
+      "rows": 4194304,
+      "samples": [
+        {
+          "order": 0,
+          "round": 0,
+          "wall_ms": 89.02283299999999
+        },
+        {
+          "order": 1,
+          "round": 1,
+          "wall_ms": 89.337417
+        },
+        {
+          "order": 0,
+          "round": 2,
+          "wall_ms": 89.135958
+        },
+        {
+          "order": 1,
+          "round": 3,
+          "wall_ms": 91.463667
+        },
+        {
+          "order": 0,
+          "round": 4,
+          "wall_ms": 90.014125
+        },
+        {
+          "order": 1,
+          "round": 5,
+          "wall_ms": 89.179333
+        },
+        {
+          "order": 0,
+          "round": 6,
+          "wall_ms": 89.172083
+        },
+        {
+          "order": 1,
+          "round": 7,
+          "wall_ms": 89.240167
+        },
+        {
+          "order": 0,
+          "round": 8,
+          "wall_ms": 89.317917
+        }
+      ],
+      "summary": {
+        "allocation_ms": null,
+        "cleanup_other_ms": null,
+        "encode_ms": null,
+        "gpu_logical_sort_gbps": null,
+        "gpu_ms": null,
+        "pretouch_ms": null,
+        "submit_wait_ms": null,
+        "upload_ms": null,
+        "wall_ms": {
+          "max": 91.463667,
+          "median": 89.240167,
+          "min": 89.02283299999999
+        }
+      }
+    },
+    {
+      "distribution": "dense",
+      "mode": "cpu_radix",
+      "rows": 4194304,
+      "samples": [
+        {
+          "order": 1,
+          "round": 0,
+          "wall_ms": 33.005208
+        },
+        {
+          "order": 0,
+          "round": 1,
+          "wall_ms": 32.648666999999996
+        },
+        {
+          "order": 1,
+          "round": 2,
+          "wall_ms": 33.153042
+        },
+        {
+          "order": 0,
+          "round": 3,
+          "wall_ms": 32.976292
+        },
+        {
+          "order": 1,
+          "round": 4,
+          "wall_ms": 32.675667
+        },
+        {
+          "order": 0,
+          "round": 5,
+          "wall_ms": 32.734874999999995
+        },
+        {
+          "order": 1,
+          "round": 6,
+          "wall_ms": 32.864
+        },
+        {
+          "order": 0,
+          "round": 7,
+          "wall_ms": 32.970583
+        },
+        {
+          "order": 1,
+          "round": 8,
+          "wall_ms": 32.604082999999996
+        }
+      ],
+      "summary": {
+        "allocation_ms": null,
+        "cleanup_other_ms": null,
+        "encode_ms": null,
+        "gpu_logical_sort_gbps": null,
+        "gpu_ms": null,
+        "pretouch_ms": null,
+        "submit_wait_ms": null,
+        "upload_ms": null,
+        "wall_ms": {
+          "max": 33.153042,
+          "median": 32.864,
+          "min": 32.604082999999996
+        }
+      }
+    },
+    {
+      "distribution": "dense",
+      "mode": "cpu_comparison",
+      "rows": 16777216,
+      "samples": [
+        {
+          "order": 0,
+          "round": 0,
+          "wall_ms": 353.72708400000005
+        },
+        {
+          "order": 1,
+          "round": 1,
+          "wall_ms": 352.823583
+        },
+        {
+          "order": 0,
+          "round": 2,
+          "wall_ms": 353.890917
+        },
+        {
+          "order": 1,
+          "round": 3,
+          "wall_ms": 354.03420800000004
+        },
+        {
+          "order": 0,
+          "round": 4,
+          "wall_ms": 354.341375
+        },
+        {
+          "order": 1,
+          "round": 5,
+          "wall_ms": 352.64166600000004
+        },
+        {
+          "order": 0,
+          "round": 6,
+          "wall_ms": 352.994584
+        },
+        {
+          "order": 1,
+          "round": 7,
+          "wall_ms": 354.424625
+        },
+        {
+          "order": 0,
+          "round": 8,
+          "wall_ms": 354.38966700000003
+        }
+      ],
+      "summary": {
+        "allocation_ms": null,
+        "cleanup_other_ms": null,
+        "encode_ms": null,
+        "gpu_logical_sort_gbps": null,
+        "gpu_ms": null,
+        "pretouch_ms": null,
+        "submit_wait_ms": null,
+        "upload_ms": null,
+        "wall_ms": {
+          "max": 354.424625,
+          "median": 353.890917,
+          "min": 352.64166600000004
+        }
+      }
+    },
+    {
+      "distribution": "dense",
+      "mode": "cpu_radix",
+      "rows": 16777216,
+      "samples": [
+        {
+          "order": 1,
+          "round": 0,
+          "wall_ms": 133.1745
+        },
+        {
+          "order": 0,
+          "round": 1,
+          "wall_ms": 133.282667
+        },
+        {
+          "order": 1,
+          "round": 2,
+          "wall_ms": 133.960083
+        },
+        {
+          "order": 0,
+          "round": 3,
+          "wall_ms": 132.989542
+        },
+        {
+          "order": 1,
+          "round": 4,
+          "wall_ms": 133.355584
+        },
+        {
+          "order": 0,
+          "round": 5,
+          "wall_ms": 133.787541
+        },
+        {
+          "order": 1,
+          "round": 6,
+          "wall_ms": 132.557708
+        },
+        {
+          "order": 0,
+          "round": 7,
+          "wall_ms": 132.54095900000002
+        },
+        {
+          "order": 1,
+          "round": 8,
+          "wall_ms": 132.23358299999998
+        }
+      ],
+      "summary": {
+        "allocation_ms": null,
+        "cleanup_other_ms": null,
+        "encode_ms": null,
+        "gpu_logical_sort_gbps": null,
+        "gpu_ms": null,
+        "pretouch_ms": null,
+        "submit_wait_ms": null,
+        "upload_ms": null,
+        "wall_ms": {
+          "max": 133.960083,
+          "median": 133.1745,
+          "min": 132.23358299999998
+        }
+      }
+    },
+    {
+      "distribution": "dense",
+      "mode": "cpu_comparison",
+      "rows": 67108864,
+      "samples": [
+        {
+          "order": 0,
+          "round": 0,
+          "wall_ms": 1435.8252499999999
+        },
+        {
+          "order": 1,
+          "round": 1,
+          "wall_ms": 1441.5787500000001
+        },
+        {
+          "order": 0,
+          "round": 2,
+          "wall_ms": 1439.548583
+        },
+        {
+          "order": 1,
+          "round": 3,
+          "wall_ms": 1451.822708
+        },
+        {
+          "order": 0,
+          "round": 4,
+          "wall_ms": 1436.390708
+        },
+        {
+          "order": 1,
+          "round": 5,
+          "wall_ms": 1439.722167
+        },
+        {
+          "order": 0,
+          "round": 6,
+          "wall_ms": 1437.234292
+        },
+        {
+          "order": 1,
+          "round": 7,
+          "wall_ms": 1447.827291
+        },
+        {
+          "order": 0,
+          "round": 8,
+          "wall_ms": 1438.0327909999999
+        }
+      ],
+      "summary": {
+        "allocation_ms": null,
+        "cleanup_other_ms": null,
+        "encode_ms": null,
+        "gpu_logical_sort_gbps": null,
+        "gpu_ms": null,
+        "pretouch_ms": null,
+        "submit_wait_ms": null,
+        "upload_ms": null,
+        "wall_ms": {
+          "max": 1451.822708,
+          "median": 1439.548583,
+          "min": 1435.8252499999999
+        }
+      }
+    },
+    {
+      "distribution": "dense",
+      "mode": "cpu_radix",
+      "rows": 67108864,
+      "samples": [
+        {
+          "order": 1,
+          "round": 0,
+          "wall_ms": 568.399791
+        },
+        {
+          "order": 0,
+          "round": 1,
+          "wall_ms": 564.3765830000001
+        },
+        {
+          "order": 1,
+          "round": 2,
+          "wall_ms": 559.812917
+        },
+        {
+          "order": 0,
+          "round": 3,
+          "wall_ms": 562.977292
+        },
+        {
+          "order": 1,
+          "round": 4,
+          "wall_ms": 563.985541
+        },
+        {
+          "order": 0,
+          "round": 5,
+          "wall_ms": 567.84225
+        },
+        {
+          "order": 1,
+          "round": 6,
+          "wall_ms": 567.679167
+        },
+        {
+          "order": 0,
+          "round": 7,
+          "wall_ms": 566.3745409999999
+        },
+        {
+          "order": 1,
+          "round": 8,
+          "wall_ms": 567.790667
+        }
+      ],
+      "summary": {
+        "allocation_ms": null,
+        "cleanup_other_ms": null,
+        "encode_ms": null,
+        "gpu_logical_sort_gbps": null,
+        "gpu_ms": null,
+        "pretouch_ms": null,
+        "submit_wait_ms": null,
+        "upload_ms": null,
+        "wall_ms": {
+          "max": 568.399791,
+          "median": 566.3745409999999,
+          "min": 559.812917
+        }
+      }
+    }
+  ],
+  "runs": 9,
+  "validation": "complete stable sorted key/payload equality outside timing, every build",
+  "warmups": 2
+}

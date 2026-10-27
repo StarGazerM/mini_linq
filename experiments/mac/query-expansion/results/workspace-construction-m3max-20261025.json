@@ -1,0 +1,351 @@
+{
+  "architecture": "aarch64",
+  "cold_definition": "first call on an empty workspace per size; fresh allocates every call; not a reset of device, process, OS caches or physical pages; cold pair order alternates by size",
+  "constructors": "fresh MacContext::build versus opt-in MacWorkspace::build; identical shared/default-cache Metal pipeline and CPU reads",
+  "context_setup_ms_excluded": 13.349416,
+  "data": "deterministic full-width u32 keys and source row IDs",
+  "limits": "single-process paired sweep; validation touches buffers between samples, OS contention and randomized CPU hash indexes remain; no portable crossover or fastest-CPU claim",
+  "mode": "constructor",
+  "order": "separately reported first calls per size, then alternating fresh-first/workspace-first pairs",
+  "results": [
+    {
+      "cold_first_calls": [
+        {
+          "constructor_ms": 5.993459,
+          "first": true,
+          "mode": "fresh"
+        },
+        {
+          "constructor_ms": 2.692625,
+          "first": false,
+          "mode": "workspace"
+        }
+      ],
+      "fresh_constructor_median_ms": 2.702375,
+      "fresh_samples": [
+        {
+          "constructor_ms": 2.704584,
+          "first": true,
+          "pair": 0
+        },
+        {
+          "constructor_ms": 2.702375,
+          "first": false,
+          "pair": 1
+        },
+        {
+          "constructor_ms": 3.791333,
+          "first": true,
+          "pair": 2
+        },
+        {
+          "constructor_ms": 2.783541,
+          "first": false,
+          "pair": 3
+        },
+        {
+          "constructor_ms": 2.669542,
+          "first": true,
+          "pair": 4
+        },
+        {
+          "constructor_ms": 2.665,
+          "first": false,
+          "pair": 5
+        },
+        {
+          "constructor_ms": 2.731792,
+          "first": true,
+          "pair": 6
+        },
+        {
+          "constructor_ms": 2.61625,
+          "first": false,
+          "pair": 7
+        },
+        {
+          "constructor_ms": 2.665791,
+          "first": true,
+          "pair": 8
+        }
+      ],
+      "source_pairs": 1048576,
+      "workspace_constructor_median_ms": 1.949,
+      "workspace_samples": [
+        {
+          "constructor_ms": 2.072292,
+          "first": false,
+          "pair": 0
+        },
+        {
+          "constructor_ms": 1.9567500000000002,
+          "first": true,
+          "pair": 1
+        },
+        {
+          "constructor_ms": 1.949,
+          "first": false,
+          "pair": 2
+        },
+        {
+          "constructor_ms": 1.94475,
+          "first": true,
+          "pair": 3
+        },
+        {
+          "constructor_ms": 1.955708,
+          "first": false,
+          "pair": 4
+        },
+        {
+          "constructor_ms": 2.850625,
+          "first": true,
+          "pair": 5
+        },
+        {
+          "constructor_ms": 1.935041,
+          "first": false,
+          "pair": 6
+        },
+        {
+          "constructor_ms": 1.940209,
+          "first": true,
+          "pair": 7
+        },
+        {
+          "constructor_ms": 1.9417080000000002,
+          "first": false,
+          "pair": 8
+        }
+      ]
+    },
+    {
+      "cold_first_calls": [
+        {
+          "constructor_ms": 28.590875,
+          "first": true,
+          "mode": "workspace"
+        },
+        {
+          "constructor_ms": 19.093084,
+          "first": false,
+          "mode": "fresh"
+        }
+      ],
+      "fresh_constructor_median_ms": 25.862750000000002,
+      "fresh_samples": [
+        {
+          "constructor_ms": 21.226833,
+          "first": true,
+          "pair": 0
+        },
+        {
+          "constructor_ms": 27.370625,
+          "first": false,
+          "pair": 1
+        },
+        {
+          "constructor_ms": 30.547625,
+          "first": true,
+          "pair": 2
+        },
+        {
+          "constructor_ms": 25.358792,
+          "first": false,
+          "pair": 3
+        },
+        {
+          "constructor_ms": 25.862750000000002,
+          "first": true,
+          "pair": 4
+        },
+        {
+          "constructor_ms": 31.554792,
+          "first": false,
+          "pair": 5
+        },
+        {
+          "constructor_ms": 28.098917,
+          "first": true,
+          "pair": 6
+        },
+        {
+          "constructor_ms": 22.273999999999997,
+          "first": false,
+          "pair": 7
+        },
+        {
+          "constructor_ms": 24.761625,
+          "first": true,
+          "pair": 8
+        }
+      ],
+      "source_pairs": 16777216,
+      "workspace_constructor_median_ms": 11.604667000000001,
+      "workspace_samples": [
+        {
+          "constructor_ms": 11.604667000000001,
+          "first": false,
+          "pair": 0
+        },
+        {
+          "constructor_ms": 16.108958,
+          "first": true,
+          "pair": 1
+        },
+        {
+          "constructor_ms": 10.78,
+          "first": false,
+          "pair": 2
+        },
+        {
+          "constructor_ms": 10.911042,
+          "first": true,
+          "pair": 3
+        },
+        {
+          "constructor_ms": 20.335209,
+          "first": false,
+          "pair": 4
+        },
+        {
+          "constructor_ms": 19.580333,
+          "first": true,
+          "pair": 5
+        },
+        {
+          "constructor_ms": 11.424167,
+          "first": false,
+          "pair": 6
+        },
+        {
+          "constructor_ms": 10.713166999999999,
+          "first": true,
+          "pair": 7
+        },
+        {
+          "constructor_ms": 12.675458,
+          "first": false,
+          "pair": 8
+        }
+      ]
+    },
+    {
+      "cold_first_calls": [
+        {
+          "constructor_ms": 74.49541599999999,
+          "first": true,
+          "mode": "fresh"
+        },
+        {
+          "constructor_ms": 72.55945799999999,
+          "first": false,
+          "mode": "workspace"
+        }
+      ],
+      "fresh_constructor_median_ms": 83.72995900000001,
+      "fresh_samples": [
+        {
+          "constructor_ms": 74.363,
+          "first": true,
+          "pair": 0
+        },
+        {
+          "constructor_ms": 85.032292,
+          "first": false,
+          "pair": 1
+        },
+        {
+          "constructor_ms": 93.607334,
+          "first": true,
+          "pair": 2
+        },
+        {
+          "constructor_ms": 83.72995900000001,
+          "first": false,
+          "pair": 3
+        },
+        {
+          "constructor_ms": 86.107375,
+          "first": true,
+          "pair": 4
+        },
+        {
+          "constructor_ms": 80.78295800000001,
+          "first": false,
+          "pair": 5
+        },
+        {
+          "constructor_ms": 88.821209,
+          "first": true,
+          "pair": 6
+        },
+        {
+          "constructor_ms": 77.55125,
+          "first": false,
+          "pair": 7
+        },
+        {
+          "constructor_ms": 78.831,
+          "first": true,
+          "pair": 8
+        }
+      ],
+      "source_pairs": 67108864,
+      "workspace_constructor_median_ms": 40.347541,
+      "workspace_samples": [
+        {
+          "constructor_ms": 38.556,
+          "first": false,
+          "pair": 0
+        },
+        {
+          "constructor_ms": 38.617959,
+          "first": true,
+          "pair": 1
+        },
+        {
+          "constructor_ms": 49.245833000000005,
+          "first": false,
+          "pair": 2
+        },
+        {
+          "constructor_ms": 45.84975,
+          "first": true,
+          "pair": 3
+        },
+        {
+          "constructor_ms": 40.347541,
+          "first": false,
+          "pair": 4
+        },
+        {
+          "constructor_ms": 38.604625,
+          "first": true,
+          "pair": 5
+        },
+        {
+          "constructor_ms": 45.331458,
+          "first": false,
+          "pair": 6
+        },
+        {
+          "constructor_ms": 41.626166,
+          "first": true,
+          "pair": 7
+        },
+        {
+          "constructor_ms": 37.371541,
+          "first": false,
+          "pair": 8
+        }
+      ]
+    }
+  ],
+  "retention_tradeoff": "workspace retains scratch/scan capacity plus at most one dropped output/directory pair, trading memory footprint for avoiding repeated allocation/first-use costs; live immutable runs/clones/snapshots may prevent recycling and require additional output allocations",
+  "reuse": "no prebuilt query index or answer is reused; H09 Lineitem run drops at query return; previous constructor-only run drops before next build",
+  "samples_per_mode": 9,
+  "timing": "constructor only, includes allocation/upload/encode/GPU/wait/publication; excludes input generation, stable CPU oracle sort, context/setup, full row and lookup validation, and run destruction; each run drops before the next sample",
+  "validation": "every sample compared outside timing; H09 complete compiled oracle plus exact enumeration/witness/gather/index parity, or constructor full stable row and per-key lookup parity; untimed boundaries/empty/no-green and pinned clone survival checks also passed",
+  "workspace_setup": "empty workspace creation excluded; all lazy buffer allocations and first writes are inside the separately reported cold construction"
+}

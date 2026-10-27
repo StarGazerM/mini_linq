@@ -113,7 +113,8 @@ pub use ordered::{
     GroupedCursor, KeyCursor, Merge, OrderedCursor, OrderedRead, Sorted, merge, sorted_by,
 };
 pub use sorted_run::{RunCursor, SortedRun};
-pub use radix_run::{RadixKey, RadixRun};
+pub use radix_run::{RadixKey, RadixRun, RadixRunReadState, RadixRunView};
+pub use radix_spline::{RadixSplineMetadata, RadixSplinePoint};
 pub use trie::Trie;
 
 mod point;

@@ -30,17 +30,31 @@ impl Sort {
 
     /// Compare four 8-bit passes against eight 4-bit passes.
     pub fn with_digit_bits(gpu: &Gpu, capacity: usize, items: usize, bits: usize) -> Self {
+        Self::with_storage(gpu, capacity, items, bits, true)
+    }
+
+    /// Shared-source construction diagnostic: only GPU kernels initialize scratch.
+    pub fn with_uninitialized_scratch(
+        gpu: &Gpu,
+        capacity: usize,
+        items: usize,
+        bits: usize,
+    ) -> Self {
+        Self::with_storage(gpu, capacity, items, bits, false)
+    }
+
+    fn with_storage(gpu: &Gpu, capacity: usize, items: usize, bits: usize, pretouch: bool) -> Self {
         assert!(bits == 4 || bits == 8);
         assert!(capacity <= u32::MAX as usize, "sort capacity must fit u32");
         assert!(matches!(items, 4 | 8), "sort items must be 4 or 8");
         let tile = THREADS * items;
-        let scratch = gpu.buffer(capacity.max(1) * std::mem::size_of::<Row>());
+        let scratch = gpu.allocate_buffer(capacity.max(1) * std::mem::size_of::<Row>(), pretouch);
         let bins = 1 << bits;
         let mut length = bins * capacity.div_ceil(tile);
-        let mut levels = vec![gpu.buffer(length.max(2) * 4)];
+        let mut levels = vec![gpu.allocate_buffer(length.max(2) * 4, pretouch)];
         loop {
             length = length.div_ceil(SCAN_BLOCK).max(1);
-            levels.push(gpu.buffer(length.max(2) * 4));
+            levels.push(gpu.allocate_buffer(length.max(2) * 4, pretouch));
             if length == 1 {
                 break;
             }
@@ -83,6 +97,41 @@ impl Sort {
         }
     }
 
+    /// Enumerate every allocation used by the radix implementation.
+    pub fn scratch_buffers(&self) -> impl Iterator<Item = &BufferRef> {
+        std::iter::once(self.scratch.as_ref()).chain(self.levels.iter().map(|b| b.as_ref()))
+    }
+
+    /// Replace only scratch storage, retaining all compiled pipelines.
+    /// The caller must first wait for every command using the old storage.
+    pub fn reallocate_scratch(&mut self, gpu: &Gpu, pretouch: bool) {
+        self.resize_scratch(gpu, self.capacity, pretouch);
+    }
+
+    /// Change capacity between diagnostic sizes without recompiling pipelines.
+    /// Existing encodes must have completed before calling this method.
+    pub fn resize_scratch(&mut self, gpu: &Gpu, capacity: usize, pretouch: bool) {
+        assert!(capacity <= u32::MAX as usize, "sort capacity must fit u32");
+        self.capacity = capacity;
+        self.scratch = gpu.allocate_buffer(capacity.max(1) * std::mem::size_of::<Row>(), pretouch);
+        let mut length = self.bins * capacity.div_ceil(self.tile);
+        let mut depth = 0;
+        loop {
+            let buffer = gpu.allocate_buffer(length.max(2) * 4, pretouch);
+            if let Some(slot) = self.levels.get_mut(depth) {
+                *slot = buffer;
+            } else {
+                self.levels.push(buffer);
+            }
+            depth += 1;
+            if depth > 1 && length == 1 {
+                break;
+            }
+            length = length.div_ceil(SCAN_BLOCK).max(1);
+        }
+        self.levels.truncate(depth);
+    }
+
     /// Input and output must be distinct buffers with room for n rows. Input is
     /// never modified. Encodes every dependency on-GPU, without submitting or
     /// waiting, and always leaves the final result in output, including n == 1.
@@ -93,6 +142,26 @@ impl Sort {
         input: &BufferRef,
         output: &BufferRef,
         n: usize,
+    ) {
+        self.encode_with_dispatch(
+            input,
+            output,
+            n,
+            |pipeline, buffers, constants, groups, threads| {
+                gpu.dispatch(cb, pipeline, buffers, constants, groups, threads);
+            },
+        );
+    }
+
+    /// Experiment-only encoder-topology control, using exactly the normal stage
+    /// sequence. The callback must preserve dependencies between dispatches.
+    /// Input and output must be distinct; the shared source is immutable.
+    pub fn encode_with_dispatch(
+        &self,
+        input: &BufferRef,
+        output: &BufferRef,
+        n: usize,
+        mut dispatch: impl FnMut(&metal::ComputePipelineStateRef, &[&BufferRef], &[u32], usize, usize),
     ) {
         assert!(n <= self.capacity, "sort exceeds allocated capacity");
         if n == 0 {
@@ -118,8 +187,7 @@ impl Sort {
             };
             let destination: &BufferRef = if pass % 2 == 0 { &self.scratch } else { output };
             let args = [n as u32, tiles as u32, (pass * self.bits) as u32];
-            gpu.dispatch(
-                cb,
+            dispatch(
                 &self.histogram,
                 &[source, &self.levels[0]],
                 &args,
@@ -127,8 +195,7 @@ impl Sort {
                 THREADS,
             );
             for level in 0..depth {
-                gpu.dispatch(
-                    cb,
+                dispatch(
                     &self.scan,
                     &[&self.levels[level], &self.levels[level + 1]],
                     &[lengths[level] as u32],
@@ -137,8 +204,7 @@ impl Sort {
                 );
             }
             for level in (0..depth - 1).rev() {
-                gpu.dispatch(
-                    cb,
+                dispatch(
                     &self.add,
                     &[&self.levels[level], &self.levels[level + 1]],
                     &[lengths[level] as u32],
@@ -146,8 +212,7 @@ impl Sort {
                     THREADS,
                 );
             }
-            gpu.dispatch(
-                cb,
+            dispatch(
                 &self.scatter,
                 &[source, destination, &self.levels[0]],
                 &args,

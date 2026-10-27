@@ -3,12 +3,15 @@ name = "gpu-index"
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
+default-run = "gpu-index"
 
 [workspace]
 
 [dependencies]
 metal = "0.32"
 serde_json = "1"
+libc = "0.2"
+mccl = { path = "../../../../mccl" }
 
 cq-storage = { path = "../../../runtime/cq-storage" }
 [profile.release]

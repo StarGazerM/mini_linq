@@ -9,8 +9,14 @@ They are not new measurements of the current native provider.
 This standalone Rust/Metal executable implements stable u32-key/u32-payload
 sorting, stable old-run-before-delta merging, exact radix-prefix directories,
 GPU group-boundary extraction, and flat/binary-carry maintenance experiments.
-It does **not** implement a production Mac backend or GPU RadixSpline builder.
-See [the implementation plan](../../../doc/MAC-IMPLEMENTATION.md).
+This benchmark is not a Metal query backend or GPU RadixSpline builder.
+The GPU fork now also has an explicit u32/u32 shared-memory runtime with online
+flat/binary-carry snapshots in [`runtime/cq-mac`](../../../runtime/cq-mac/src/lib.rs).
+Both consume the canonical kernels in the sibling `../mccl/native/index`
+checkout. The runtime uses MCCL/MLX ownership; this offline benchmark retains its
+explicit raw Metal measurement harness. Historical measurements below are not
+new MCCL runtime measurements.
+See [the implementation plan and runtime commands](../../../doc/MAC-IMPLEMENTATION.md).
 
 ## Run
 
@@ -32,12 +38,76 @@ RadixSpline builder. That construction reference deliberately uses the original
 4-bit sort. Updates use the selected 8-bit sort. `--sort-only` compares both.
 No original evidence file is overwritten by the commands above.
 
+### Matched MCCL construction controls
+
+The `index_compare` binary now ingests an immutable packed relation once per
+backend and reuses its handle. It compares three-buffer raw construction,
+single serial/concurrent encoders, MCCL public/native shared-source construction,
+buffer-level sort/directory and a GPU copy reference. Destructive two-buffer and
+per-build CPU repopulation cases are removed. Build the sibling native bundle first:
+
+```sh
+cmake -S ../mccl -B ../mccl/build/native -DCMAKE_BUILD_TYPE=Release
+cmake --build ../mccl/build/native --parallel 8
+cargo run --release --locked --manifest-path experiments/mac/gpu-index/Cargo.toml \
+  --bin index_compare -- --sizes 65536,1048576,16777216,67108864 \
+  --runs 5 --warmups 2 --distributions uniform,workspace,dense,all_equal \
+  --out /tmp/index-compare.json
+```
+
+One-time raw source population and MCCL ingestion are reported separately from
+construction. Raw scratch/output storage is not CPU-zeroed. Raw buffer/pipeline
+setup is excluded; MCCL still pays cached per-call output allocation/graph costs.
+The `workspace` distribution matches the historical repeated full-width-key
+fixture, not a new relation generator. Output includes raw GPU timestamps,
+CPU phases/faults, first reads, complete validation and atomic completed-case
+checkpoints. MCCL evaluation wall time is never mislabeled GPU time; actual
+MCCL timestamps come from the separate native `mccl_index_timing` observer.
+Run timing experiments sequentially and without Shader Validation.
+
+[Current shared-source contract and measurements](../../../doc/MAC-IMPLEMENTATION.md#shared-relation-input-cutover).
+[Shared-source comparison](shared-source-compare-m3max-20261026.json).
+The [historical host-populated comparison](index-compare-m3max-20261026.json)
+remains unchanged and has different timing boundaries.
+
+
 Correctness checks execute real Metal kernels and compare complete rows against
 stable CPU sorting/merging: arbitrary nonmonotonic payloads, empty inputs,
 duplicates, full-width u32 extrema, irregular tiles, both merge orientations,
 all radix-directory boundaries, exact hit/miss ranges, and group starts.
 Large timed outputs and intermediate history merges are validated outside the
 timing window. Equal-key occurrences are preserved, not deduplicated.
+
+### First-touch and lifecycle controls
+
+Additional binaries isolate VM first touch and resource lifetime without changing
+the sort kernels. The original commands retain `gpu-index` as their default binary.
+
+```sh
+cargo run --release --locked --manifest-path experiments/mac/gpu-index/Cargo.toml \
+  --bin first_touch -- --bytes 8388608,134217728,536870912 --runs 9 \
+  --out experiments/mac/gpu-index/first-touch-rerun.json
+cargo run --release --locked --manifest-path experiments/mac/gpu-index/Cargo.toml \
+  --bin lifetime -- --sizes 1048576,16777216,67108864 --runs 9 \
+  --out experiments/mac/gpu-index/lifetime-rerun.json
+```
+
+`first_touch` compares anonymous VM and Metal shared CPU writes, recording actual
+page size and CPU process fault deltas. `lifetime` separately changes fresh/reused
+input, output and scratch, CPU rewriting/readback, residency requests and command
+autorelease lifetime. It reports setup and first submission separately, keeps
+pipelines and unsorted input constant, and checks complete stable rows/directory
+offsets. Use `--cases` to select cases; residency cases require macOS 15+ support.
+CPU fault counters are not GPU fault counters. Readback cases copy output into a
+preallocated validation array; this is an explicit experimental factor, not the
+production CPU query access path.
+
+Evidence: [first touch](m3max-first-touch-20261025.json),
+[lifecycle matrix](m3max-lifetime-20261025.json),
+[workload ordering](m3max-small-after-large-20261025.json), and
+[trace summary](m3max-first-touch-trace-summary-20261025.json).
+See the [root-cause analysis and verified reusable runtime](../../../doc/MAC-IMPLEMENTATION.md#first-touch-and-resource-lifetime-root-cause-isolation).
+
 
 ## Evidence and measured choices
 
@@ -68,6 +138,14 @@ wrong algorithm. Directory-inclusive host time was 22.587 ms. The same build
 with 97 distinct keys took 20.983 ms GPU time; all-equal keys took 20.789 ms.
 SIMD-private histograms aggregate uniform digits before atomics. Stable ranks
 never depend on atomic return order.
+
+The [2026-10-25 matched M3 Max rerun](m3max-bandwidth-recheck-20261025.json)
+reproduced the large-input throughput: 355.18 logical GB/s copy and 277.13
+logical GB/s for the four-pass sort at 67,108,864 rows. These retain the same
+preallocated/pre-touched measurement boundary. Fresh runtime construction
+also pays input population and residency/submission costs; see the
+[phase profiles, CPU tuning and Metal trace evidence](../../../doc/MAC-IMPLEMENTATION.md#cpu-tuning-and-gpu-bandwidth-reconciliation).
+
 
 Final updates into a 67,108,864-row base, seven-sample medians:
 

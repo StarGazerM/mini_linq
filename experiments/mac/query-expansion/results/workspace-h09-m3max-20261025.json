@@ -1,0 +1,537 @@
+{
+  "architecture": "aarch64",
+  "cold_definition": "first call on an empty workspace per size; fresh allocates every call; not a reset of device, process, OS caches or physical pages; cold pair order alternates by size",
+  "constructors": "fresh MacContext::build versus opt-in MacWorkspace::build; identical shared/default-cache Metal pipeline and CPU reads",
+  "context_setup_ms_excluded": 16.379125000000002,
+  "data": "identical deterministic synthetic H09 fixtures, not dbgen",
+  "limits": "single-process paired sweep; validation touches buffers between samples, OS contention and randomized CPU hash indexes remain; no portable crossover or fastest-CPU claim",
+  "mode": "h09",
+  "order": "separately reported first calls per size, then alternating fresh-first/workspace-first pairs",
+  "results": [
+    {
+      "cold_first_calls": [
+        {
+          "mode": "fresh",
+          "sample": {
+            "constructor_ms": 4.0137089999999995,
+            "first": true,
+            "full_query_ms": 7.529208,
+            "packing_ms": 0.078667,
+            "pair": 0
+          }
+        },
+        {
+          "mode": "workspace",
+          "sample": {
+            "constructor_ms": 1.040375,
+            "first": false,
+            "full_query_ms": 4.531000000000001,
+            "packing_ms": 0.078584,
+            "pair": 0
+          }
+        }
+      ],
+      "counts": {
+        "answers": 16372,
+        "index_builds": 1,
+        "index_probes": 683,
+        "indexed_rows": 65539,
+        "payload_gathers": 21857,
+        "witnesses": 16372
+      },
+      "fresh_medians_ms": {
+        "constructor_ms": 1.056417,
+        "full_query_ms": 4.4045000000000005,
+        "packing_ms": 0.0785
+      },
+      "fresh_samples": [
+        {
+          "constructor_ms": 1.036541,
+          "first": true,
+          "full_query_ms": 4.473292,
+          "packing_ms": 0.078459,
+          "pair": 0
+        },
+        {
+          "constructor_ms": 1.1308749999999999,
+          "first": false,
+          "full_query_ms": 4.732125,
+          "packing_ms": 0.074792,
+          "pair": 1
+        },
+        {
+          "constructor_ms": 1.0790000000000002,
+          "first": true,
+          "full_query_ms": 4.478707999999999,
+          "packing_ms": 0.0785,
+          "pair": 2
+        },
+        {
+          "constructor_ms": 1.056417,
+          "first": false,
+          "full_query_ms": 4.4045000000000005,
+          "packing_ms": 0.07875,
+          "pair": 3
+        },
+        {
+          "constructor_ms": 1.004208,
+          "first": true,
+          "full_query_ms": 4.32775,
+          "packing_ms": 0.080875,
+          "pair": 4
+        },
+        {
+          "constructor_ms": 1.068333,
+          "first": false,
+          "full_query_ms": 4.372083,
+          "packing_ms": 0.0785,
+          "pair": 5
+        },
+        {
+          "constructor_ms": 1.126667,
+          "first": true,
+          "full_query_ms": 4.411,
+          "packing_ms": 0.078375,
+          "pair": 6
+        },
+        {
+          "constructor_ms": 1.0209590000000002,
+          "first": false,
+          "full_query_ms": 4.30875,
+          "packing_ms": 0.078791,
+          "pair": 7
+        },
+        {
+          "constructor_ms": 1.0135,
+          "first": true,
+          "full_query_ms": 4.304042,
+          "packing_ms": 0.08158299999999999,
+          "pair": 8
+        }
+      ],
+      "lineitem_rows": 65539,
+      "workspace_medians_ms": {
+        "constructor_ms": 0.896875,
+        "full_query_ms": 4.214542,
+        "packing_ms": 0.078708
+      },
+      "workspace_samples": [
+        {
+          "constructor_ms": 0.857542,
+          "first": false,
+          "full_query_ms": 4.214416,
+          "packing_ms": 0.078875,
+          "pair": 0
+        },
+        {
+          "constructor_ms": 0.829708,
+          "first": true,
+          "full_query_ms": 4.085916999999999,
+          "packing_ms": 0.0785,
+          "pair": 1
+        },
+        {
+          "constructor_ms": 0.890208,
+          "first": false,
+          "full_query_ms": 4.192791000000001,
+          "packing_ms": 0.080459,
+          "pair": 2
+        },
+        {
+          "constructor_ms": 0.9578749999999999,
+          "first": true,
+          "full_query_ms": 4.345667,
+          "packing_ms": 0.078917,
+          "pair": 3
+        },
+        {
+          "constructor_ms": 0.866083,
+          "first": false,
+          "full_query_ms": 4.236375,
+          "packing_ms": 0.078792,
+          "pair": 4
+        },
+        {
+          "constructor_ms": 0.944542,
+          "first": true,
+          "full_query_ms": 4.283959,
+          "packing_ms": 0.078666,
+          "pair": 5
+        },
+        {
+          "constructor_ms": 0.920208,
+          "first": false,
+          "full_query_ms": 4.256666999999999,
+          "packing_ms": 0.078459,
+          "pair": 6
+        },
+        {
+          "constructor_ms": 0.896875,
+          "first": true,
+          "full_query_ms": 4.214542,
+          "packing_ms": 0.078666,
+          "pair": 7
+        },
+        {
+          "constructor_ms": 0.9502090000000001,
+          "first": false,
+          "full_query_ms": 4.014084,
+          "packing_ms": 0.078708,
+          "pair": 8
+        }
+      ]
+    },
+    {
+      "cold_first_calls": [
+        {
+          "mode": "workspace",
+          "sample": {
+            "constructor_ms": 3.8803330000000003,
+            "first": true,
+            "full_query_ms": 100.61525,
+            "packing_ms": 1.2793329999999998,
+            "pair": 0
+          }
+        },
+        {
+          "mode": "fresh",
+          "sample": {
+            "constructor_ms": 2.890291,
+            "first": false,
+            "full_query_ms": 99.533167,
+            "packing_ms": 1.263417,
+            "pair": 0
+          }
+        }
+      ],
+      "counts": {
+        "answers": 261754,
+        "index_builds": 1,
+        "index_probes": 10923,
+        "indexed_rows": 1048579,
+        "payload_gathers": 349537,
+        "witnesses": 261754
+      },
+      "fresh_medians_ms": {
+        "constructor_ms": 2.792083,
+        "full_query_ms": 92.060166,
+        "packing_ms": 1.247708
+      },
+      "fresh_samples": [
+        {
+          "constructor_ms": 2.800917,
+          "first": true,
+          "full_query_ms": 99.068916,
+          "packing_ms": 1.2706250000000001,
+          "pair": 0
+        },
+        {
+          "constructor_ms": 4.020583,
+          "first": false,
+          "full_query_ms": 98.67604200000001,
+          "packing_ms": 1.265333,
+          "pair": 1
+        },
+        {
+          "constructor_ms": 2.855958,
+          "first": true,
+          "full_query_ms": 94.46354099999999,
+          "packing_ms": 1.249708,
+          "pair": 2
+        },
+        {
+          "constructor_ms": 2.812916,
+          "first": false,
+          "full_query_ms": 92.060166,
+          "packing_ms": 1.2362499999999998,
+          "pair": 3
+        },
+        {
+          "constructor_ms": 2.792083,
+          "first": true,
+          "full_query_ms": 89.876125,
+          "packing_ms": 1.247708,
+          "pair": 4
+        },
+        {
+          "constructor_ms": 2.785291,
+          "first": false,
+          "full_query_ms": 89.974208,
+          "packing_ms": 1.215875,
+          "pair": 5
+        },
+        {
+          "constructor_ms": 2.785125,
+          "first": true,
+          "full_query_ms": 91.558833,
+          "packing_ms": 1.277792,
+          "pair": 6
+        },
+        {
+          "constructor_ms": 2.762583,
+          "first": false,
+          "full_query_ms": 91.781334,
+          "packing_ms": 1.223541,
+          "pair": 7
+        },
+        {
+          "constructor_ms": 2.790041,
+          "first": true,
+          "full_query_ms": 92.165291,
+          "packing_ms": 1.2229999999999999,
+          "pair": 8
+        }
+      ],
+      "lineitem_rows": 1048579,
+      "workspace_medians_ms": {
+        "constructor_ms": 2.118417,
+        "full_query_ms": 90.736792,
+        "packing_ms": 1.2218330000000002
+      },
+      "workspace_samples": [
+        {
+          "constructor_ms": 2.1866250000000003,
+          "first": false,
+          "full_query_ms": 100.86225,
+          "packing_ms": 1.2644170000000001,
+          "pair": 0
+        },
+        {
+          "constructor_ms": 2.157834,
+          "first": true,
+          "full_query_ms": 99.638542,
+          "packing_ms": 1.43475,
+          "pair": 1
+        },
+        {
+          "constructor_ms": 2.036584,
+          "first": false,
+          "full_query_ms": 90.502375,
+          "packing_ms": 1.2218330000000002,
+          "pair": 2
+        },
+        {
+          "constructor_ms": 2.013917,
+          "first": true,
+          "full_query_ms": 94.127292,
+          "packing_ms": 1.232,
+          "pair": 3
+        },
+        {
+          "constructor_ms": 2.475167,
+          "first": false,
+          "full_query_ms": 90.268792,
+          "packing_ms": 1.2156669999999998,
+          "pair": 4
+        },
+        {
+          "constructor_ms": 2.12275,
+          "first": true,
+          "full_query_ms": 89.322208,
+          "packing_ms": 1.219125,
+          "pair": 5
+        },
+        {
+          "constructor_ms": 2.1016670000000004,
+          "first": false,
+          "full_query_ms": 90.736792,
+          "packing_ms": 1.218458,
+          "pair": 6
+        },
+        {
+          "constructor_ms": 2.118417,
+          "first": true,
+          "full_query_ms": 90.50333400000001,
+          "packing_ms": 1.22025,
+          "pair": 7
+        },
+        {
+          "constructor_ms": 2.046542,
+          "first": false,
+          "full_query_ms": 91.024625,
+          "packing_ms": 1.222625,
+          "pair": 8
+        }
+      ]
+    },
+    {
+      "cold_first_calls": [
+        {
+          "mode": "fresh",
+          "sample": {
+            "constructor_ms": 9.954208000000001,
+            "first": true,
+            "full_query_ms": 468.873667,
+            "packing_ms": 4.893542,
+            "pair": 0
+          }
+        },
+        {
+          "mode": "workspace",
+          "sample": {
+            "constructor_ms": 8.469917,
+            "first": false,
+            "full_query_ms": 498.259459,
+            "packing_ms": 5.037083,
+            "pair": 0
+          }
+        }
+      ],
+      "counts": {
+        "answers": 1046995,
+        "index_builds": 1,
+        "index_probes": 43691,
+        "indexed_rows": 4194307,
+        "payload_gathers": 1398113,
+        "witnesses": 1046995
+      },
+      "fresh_medians_ms": {
+        "constructor_ms": 8.204875000000001,
+        "full_query_ms": 480.345875,
+        "packing_ms": 4.952417
+      },
+      "fresh_samples": [
+        {
+          "constructor_ms": 8.357,
+          "first": true,
+          "full_query_ms": 481.985584,
+          "packing_ms": 5.060375,
+          "pair": 0
+        },
+        {
+          "constructor_ms": 8.126583,
+          "first": false,
+          "full_query_ms": 451.774958,
+          "packing_ms": 5.146416,
+          "pair": 1
+        },
+        {
+          "constructor_ms": 8.44875,
+          "first": true,
+          "full_query_ms": 486.963875,
+          "packing_ms": 5.077375,
+          "pair": 2
+        },
+        {
+          "constructor_ms": 8.231541,
+          "first": false,
+          "full_query_ms": 438.186917,
+          "packing_ms": 4.952417,
+          "pair": 3
+        },
+        {
+          "constructor_ms": 8.204875000000001,
+          "first": true,
+          "full_query_ms": 448.31462500000004,
+          "packing_ms": 4.886208000000001,
+          "pair": 4
+        },
+        {
+          "constructor_ms": 6.625,
+          "first": false,
+          "full_query_ms": 468.92212500000005,
+          "packing_ms": 5.069292000000001,
+          "pair": 5
+        },
+        {
+          "constructor_ms": 8.089542,
+          "first": true,
+          "full_query_ms": 493.468916,
+          "packing_ms": 4.894666,
+          "pair": 6
+        },
+        {
+          "constructor_ms": 6.043291999999999,
+          "first": false,
+          "full_query_ms": 480.345875,
+          "packing_ms": 4.881708000000001,
+          "pair": 7
+        },
+        {
+          "constructor_ms": 8.264624999999999,
+          "first": true,
+          "full_query_ms": 504.208334,
+          "packing_ms": 4.897334,
+          "pair": 8
+        }
+      ],
+      "lineitem_rows": 4194307,
+      "workspace_medians_ms": {
+        "constructor_ms": 5.7132499999999995,
+        "full_query_ms": 460.496292,
+        "packing_ms": 5.017375
+      },
+      "workspace_samples": [
+        {
+          "constructor_ms": 5.7132499999999995,
+          "first": false,
+          "full_query_ms": 446.18920899999995,
+          "packing_ms": 5.017375,
+          "pair": 0
+        },
+        {
+          "constructor_ms": 4.468166,
+          "first": true,
+          "full_query_ms": 450.919917,
+          "packing_ms": 4.874334,
+          "pair": 1
+        },
+        {
+          "constructor_ms": 6.254333,
+          "first": false,
+          "full_query_ms": 497.481333,
+          "packing_ms": 4.996874999999999,
+          "pair": 2
+        },
+        {
+          "constructor_ms": 6.737459,
+          "first": true,
+          "full_query_ms": 460.496292,
+          "packing_ms": 5.039792,
+          "pair": 3
+        },
+        {
+          "constructor_ms": 4.552167,
+          "first": false,
+          "full_query_ms": 448.744625,
+          "packing_ms": 4.872917,
+          "pair": 4
+        },
+        {
+          "constructor_ms": 5.646459,
+          "first": true,
+          "full_query_ms": 491.52416700000003,
+          "packing_ms": 4.994916,
+          "pair": 5
+        },
+        {
+          "constructor_ms": 6.30075,
+          "first": false,
+          "full_query_ms": 499.046042,
+          "packing_ms": 5.061375,
+          "pair": 6
+        },
+        {
+          "constructor_ms": 5.575208,
+          "first": true,
+          "full_query_ms": 459.046583,
+          "packing_ms": 5.217875,
+          "pair": 7
+        },
+        {
+          "constructor_ms": 6.3355,
+          "first": false,
+          "full_query_ms": 461.744792,
+          "packing_ms": 5.530166,
+          "pair": 8
+        }
+      ]
+    }
+  ],
+  "retention_tradeoff": "workspace retains scratch/scan capacity plus at most one dropped output/directory pair, trading memory footprint for avoiding repeated allocation/first-use costs; live immutable runs/clones/snapshots may prevent recycling and require additional output allocations",
+  "reuse": "no prebuilt query index or answer is reused; H09 Lineitem run drops at query return; previous constructor-only run drops before next build",
+  "samples_per_mode": 9,
+  "timing": "full H09 includes repacking source row IDs, construction/allocation/upload/GPU/wait, CPU residual indexes/joins/dedup and temporary/index destruction; excludes context/setup, fixture generation, compiled and CPU reference execution, validation, reporting and answer destruction",
+  "validation": "every sample compared outside timing; H09 complete compiled oracle plus exact enumeration/witness/gather/index parity, or constructor full stable row and per-key lookup parity; untimed boundaries/empty/no-green and pinned clone survival checks also passed",
+  "workspace_setup": "empty workspace creation excluded; all lazy buffer allocations and first writes are inside the separately reported cold construction"
+}

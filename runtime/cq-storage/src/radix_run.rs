@@ -3,7 +3,9 @@
 //! search algorithms. Payload lookup checks exact equality in the spline window;
 //! dense-domain membership can use a bounded, lazily initialized presence bitmap.
 
-use crate::radix_spline::RadixSpline;
+use crate::radix_spline::{
+    RadixSpline, RadixSplineMetadata, RadixSplinePoint, RadixSplineView,
+};
 use crate::rows::Rows;
 use crate::sorted_run::RunRows;
 use crate::{Build, ExactMembership, IndexRead, RunCursor};
@@ -105,6 +107,128 @@ impl<T: RadixKey> RadixKey for (T,) {
     }
 }
 
+/// Reusable CPU read state for one immutable, strictly increasing key array.
+///
+/// Construction examines only the endpoints and key count. Dense membership
+/// uses the same bounded policy as [`RadixRun`], and allocates its bitmap only
+/// on the first in-domain membership probe. Payload probes never initialize it.
+pub struct RadixRunReadState {
+    membership: Option<DenseMembership>,
+}
+
+impl RadixRunReadState {
+    pub fn new<K: RadixKey>(keys: &[K]) -> Self {
+        Self {
+            membership: DenseMembership::candidate(keys),
+        }
+    }
+}
+
+/// Allocation-free native reads over borrowed grouped payloads and spline data.
+///
+/// This view does not own or build its arrays. In particular, completed GPU
+/// arrays can use the exact same reader as a CPU-built [`RadixRun`]. Copies of
+/// the view and its cursors retain the arrays' lifetime, not the view's lifetime.
+pub struct RadixRunView<'a, K, V> {
+    keys: &'a [K],
+    offsets: &'a [usize],
+    items: &'a [V],
+    directory: RadixSplineView<'a>,
+    state: &'a RadixRunReadState,
+}
+
+impl<K, V> Copy for RadixRunView<'_, K, V> {}
+
+impl<K, V> Clone for RadixRunView<'_, K, V> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<'a, K: RadixKey, V: Copy> RadixRunView<'a, K, V> {
+    /// Borrow an already completed grouped run without validating or copying it.
+    ///
+    /// # Safety
+    ///
+    /// All arrays must be fully initialized and remain immutable for `'a`,
+    /// including with respect to device writes. Keys must be strictly increasing
+    /// under both `Ord` and their radix encoding. Offsets must have
+    /// `keys.len() + 1` entries, start at zero, increase for each key's nonempty
+    /// payload group, and end at `items.len()`. Payload order within each group
+    /// must preserve the represented occurrence order.
+    ///
+    /// Metadata must describe these keys (`len` is the distinct-key count),
+    /// with `shift < 64` and `search_error + 2` representable as `usize`.
+    /// For nonempty keys, points must include the first and last key/rank,
+    /// be strictly increasing in key and rank, and bound interpolation error
+    /// (including floating-point rounding) by `search_error`. The radix directory
+    /// must contain the first point at or after each min-relative shifted prefix,
+    /// plus its terminal entry; all entries must be valid point boundaries.
+    /// Empty runs need no points or directory entries.
+    ///
+    /// `state` must have been created from the same keys and must never have
+    /// been used with a different key array. No structural checks are performed
+    /// here or on a probe.
+    pub unsafe fn from_parts(
+        keys: &'a [K],
+        offsets: &'a [usize],
+        items: &'a [V],
+        points: &'a [RadixSplinePoint],
+        radix: &'a [usize],
+        metadata: RadixSplineMetadata,
+        state: &'a RadixRunReadState,
+    ) -> Self {
+        Self {
+            keys,
+            offsets,
+            items,
+            directory: RadixSplineView { points, radix, metadata },
+            state,
+        }
+    }
+
+    pub fn keys(&self) -> &'a [K] {
+        self.keys
+    }
+
+    pub fn items(&self) -> &'a [V] {
+        self.items
+    }
+
+    /// Exact half-open payload range; missing keys return the empty terminal range.
+    #[inline]
+    pub fn range(&self, key: &K) -> (usize, usize) {
+        self.slot(key).map_or((self.items.len(), self.items.len()), |slot| {
+            (self.offsets[slot], self.offsets[slot + 1])
+        })
+    }
+
+    #[inline]
+    pub fn lookup(&self, key: &K) -> RunCursor<'a, V> {
+        crate::count!(lookups);
+        let (begin, end) = self.range(key);
+        RunCursor::from_slice(&self.items[begin..end])
+    }
+
+    #[inline]
+    pub fn contains(&self, key: &K) -> bool {
+        crate::count!(lookups);
+        match &self.state.membership {
+            Some(membership) => membership.contains(key.radix_key(), self.keys),
+            None => self.slot(key).is_some(),
+        }
+    }
+
+    #[inline]
+    fn slot(&self, key: &K) -> Option<usize> {
+        let bound = self.directory.search_bound(key.radix_key());
+        self.keys[bound.clone()]
+            .binary_search(key)
+            .ok()
+            .map(|i| bound.start + i)
+    }
+}
+
 /// Stable clustered payload groups with a RadixSpline lookup directory.
 ///
 /// Uses 12 radix bits and a 32-position spline error bound. The spline routes to
@@ -117,7 +241,7 @@ impl<T: RadixKey> RadixKey for (T,) {
 pub struct RadixRun<K, V> {
     rows: RunRows<K, V>,
     directory: RadixSpline,
-    membership: Option<DenseMembership>,
+    state: RadixRunReadState,
 }
 
 impl<K, V> crate::Keys for RadixRun<K, V> {
@@ -141,11 +265,11 @@ impl<K: RadixKey, V: Copy> RadixRun<K, V> {
     pub fn from_pairs(source: impl IntoIterator<Item = (K, V)>) -> Self {
         let rows = RunRows::from_pairs_cached_key(source, RadixKey::radix_key);
         let directory = RadixSpline::build(rows.keys.len(), |i| rows.keys[i].radix_key());
-        let membership = DenseMembership::candidate(&rows.keys);
+        let state = RadixRunReadState::new(&rows.keys);
         Self {
             rows,
             directory,
-            membership,
+            state,
         }
     }
 
@@ -170,16 +294,18 @@ impl<K: RadixKey, V: Copy> RadixRun<K, V> {
     /// Exact half-open payload range; an absent key returns `(items.len(), items.len())`.
     #[inline]
     pub fn range(&self, key: &K) -> (usize, usize) {
-        self.rows.range(self.slot(key))
+        self.as_view().range(key)
     }
 
     #[inline]
-    fn slot(&self, key: &K) -> Option<usize> {
-        let bound = self.directory.search_bound(key.radix_key());
-        self.rows.keys[bound.clone()]
-            .binary_search(key)
-            .ok()
-            .map(|i| bound.start + i)
+    fn as_view(&self) -> RadixRunView<'_, K, V> {
+        RadixRunView {
+            keys: &self.rows.keys,
+            offsets: &self.rows.offsets,
+            items: &self.rows.items,
+            directory: self.directory.as_view(),
+            state: &self.state,
+        }
     }
 }
 
@@ -196,19 +322,14 @@ impl<'a, K: RadixKey, V: Copy> IndexRead for &'a RadixRun<K, V> {
 
     #[inline]
     fn lookup(&self, key: &K) -> Self::Cursor {
-        crate::count!(lookups);
-        self.rows.cursor(self.slot(key))
+        self.as_view().lookup(key)
     }
 }
 
 impl<K: RadixKey, V: Copy> ExactMembership<K> for RadixRun<K, V> {
     #[inline]
     fn contains(&self, key: &K) -> bool {
-        crate::count!(lookups);
-        match &self.membership {
-            Some(membership) => membership.contains(key.radix_key(), &self.rows.keys),
-            None => self.slot(key).is_some(),
-        }
+        self.as_view().contains(key)
     }
 }
 
@@ -222,6 +343,110 @@ impl<K: Copy, V: Copy> Rows for &RadixRun<K, V> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn borrowed_grouped_view_preserves_payloads_and_lazy_membership() {
+        let keys: Vec<u32> = (0..96).map(|rank| 64 + 2 * rank).collect();
+        let offsets: Vec<usize> = (0..=96).map(|rank| 2 * rank).collect();
+        let items: Vec<u32> = (0..96).flat_map(|rank| [rank, 1000 + rank]).collect();
+        // Exact collinear endpoints with a consecutive-rank chunk bridge.
+        // This need not be the segmentation the native greedy builder chooses.
+        let points = [
+            RadixSplinePoint { key: 64, rank: 0 },
+            RadixSplinePoint { key: 128, rank: 32 },
+            RadixSplinePoint { key: 130, rank: 33 },
+            RadixSplinePoint { key: 254, rank: 95 },
+        ];
+        let radix: Vec<usize> = (0..192)
+            .map(|prefix| points.partition_point(|point| point.key < 64 + prefix))
+            .collect();
+        let metadata = RadixSplineMetadata {
+            min_key: 64,
+            max_key: 254,
+            len: keys.len(),
+            shift: 0,
+            search_error: 33,
+        };
+        let state = RadixRunReadState::new(&keys);
+        let membership = state.membership.as_ref().expect("bounded dense domain");
+        let saved = {
+            // SAFETY: the arrays above are immutable, exactly grouped, and the
+            // collinear spline/directory describe these keys with zero error.
+            let view = unsafe {
+                RadixRunView::from_parts(
+                    &keys, &offsets, &items, &points, &radix, metadata, &state,
+                )
+            };
+            assert_eq!(view.keys(), keys);
+            assert_eq!(view.items(), items);
+            for key in 0..300 {
+                let expected: Vec<_> = keys
+                    .binary_search(&key)
+                    .ok()
+                    .map(|rank| items[2 * rank..2 * rank + 2].to_vec())
+                    .unwrap_or_default();
+                let cursor = view.lookup(&key);
+                assert_eq!(cursor.collect::<Vec<_>>(), expected);
+                let (begin, end) = view.range(&key);
+                assert_eq!(&items[begin..end], expected);
+                let mut advanced = cursor;
+                assert_eq!(advanced.nth(1), expected.get(1).copied());
+                assert_eq!(cursor.collect::<Vec<_>>(), expected);
+            }
+            assert!(!view.contains(&63));
+            assert!(!view.contains(&255));
+            assert!(membership.bits.get().is_none());
+            let saved = view.lookup(&128);
+            let copy = view;
+            for key in 0..300 {
+                assert_eq!(copy.contains(&key), keys.binary_search(&key).is_ok());
+            }
+            assert!(membership.bits.get().is_some());
+            saved
+        };
+        assert_eq!(saved.collect::<Vec<_>>(), [32, 1032]);
+    }
+
+    #[test]
+    fn borrowed_views_cover_empty_singleton_and_sparse_full_domain() {
+        for keys in [
+            Vec::new(),
+            vec![u64::MAX],
+            vec![0, 1 << 63, u64::MAX],
+        ] {
+            let offsets: Vec<_> = (0..=keys.len()).collect();
+            let items: Vec<_> = (0..keys.len()).collect();
+            let spline = RadixSpline::build(keys.len(), |rank| keys[rank]);
+            let directory = spline.as_view();
+            let state = RadixRunReadState::new(&keys);
+            assert!(state.membership.is_none());
+            // SAFETY: one payload per ordered key; the native builder supplies
+            // the matching valid spline and the state uses this same key array.
+            let view = unsafe {
+                RadixRunView::from_parts(
+                    &keys,
+                    &offsets,
+                    &items,
+                    directory.points,
+                    directory.radix,
+                    directory.metadata,
+                    &state,
+                )
+            };
+            for key in [0, 1, (1 << 63) - 1, 1 << 63, u64::MAX - 1, u64::MAX] {
+                let slot = keys.binary_search(&key).ok();
+                assert_eq!(
+                    view.lookup(&key).collect::<Vec<_>>(),
+                    slot.into_iter().collect::<Vec<_>>(),
+                );
+                assert_eq!(view.contains(&key), slot.is_some());
+                assert_eq!(
+                    view.range(&key),
+                    slot.map_or((items.len(), items.len()), |rank| (rank, rank + 1)),
+                );
+            }
+        }
+    }
 
     #[test]
     fn cached_numeric_sort_preserves_borrowed_duplicate_order() {
@@ -253,7 +478,7 @@ mod tests {
     #[test]
     fn dense_membership_is_lazy_exact_and_safe_for_concurrent_readers() {
         let run = RadixRun::from_pairs((0_u64..96).map(|i| (64 + 2 * i, i)));
-        let membership = run.membership.as_ref().expect("bounded dense domain");
+        let membership = run.state.membership.as_ref().expect("bounded dense domain");
         let saved = (&run).lookup(&64);
         assert_eq!(saved.collect::<Vec<_>>(), [0]);
         assert!(!run.contains(&63));
@@ -302,7 +527,7 @@ mod tests {
             let keys: Vec<_> = (0..64).map(|i| i * step).collect();
             let run = RadixRun::from_pairs(keys.iter().copied().map(|key| (key, key)));
             assert!(
-                run.membership.is_none(),
+                run.state.membership.is_none(),
                 "sparse domains must not reserve a large presence bitmap"
             );
             for key in keys.iter().flat_map(|key| [*key, key + 1]) {

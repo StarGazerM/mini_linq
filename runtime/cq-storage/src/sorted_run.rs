@@ -235,6 +235,13 @@ pub struct RunCursor<'a, V> {
     position: usize,
 }
 
+impl<'a, V> RunCursor<'a, V> {
+    #[inline]
+    pub(crate) fn from_slice(items: &'a [V]) -> Self {
+        Self { items, position: 0 }
+    }
+}
+
 impl<V: Copy> Iterator for RunCursor<'_, V> {
     type Item = V;
     fn next(&mut self) -> Option<V> {

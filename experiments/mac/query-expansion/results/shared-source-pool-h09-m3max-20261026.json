@@ -1,0 +1,463 @@
+{
+  "cache_limit_bytes": 33620080,
+  "context_setup_ms_excluded": 28.126958000000002,
+  "first_execution_total": "measured ingestion plus first cleared GPU execution duration, a sum excluding oracle validation and cache-boundary work, not a contiguous cold-start interval",
+  "limits": "bounded process-wide MLX cache, not a per-context workspace; no guarantee of cold physical pages; other allocator users may interfere; single-process synthetic fixtures",
+  "mode": "h09",
+  "order": "first cleared/pooled observations separate, then alternating paired order",
+  "policy": "same MCCL constructor; clear inactive MLX cache before cleared samples, retain it before pooled samples; cache boundary excluded",
+  "previous_cache_limit_bytes": 130567005798,
+  "restored": true,
+  "results": [
+    {
+      "cleared_medians_ms": {
+        "constructor_ms": 1.148625,
+        "full_query_ms": 4.2325
+      },
+      "cleared_samples": [
+        {
+          "after_validation_and_release": {
+            "active_bytes": 1589248,
+            "cached_bytes": 1703984,
+            "peak_bytes": 3293232
+          },
+          "before": {
+            "active_bytes": 1589248,
+            "cached_bytes": 0,
+            "peak_bytes": 3293232
+          },
+          "cache_boundary_ms_excluded": 0.025875,
+          "constructor_ms": 1.202459,
+          "counts": {
+            "answers": 16372,
+            "index_builds": 1,
+            "index_probes": 683,
+            "indexed_rows": 65539,
+            "payload_gathers": 21857,
+            "witnesses": 16372
+          },
+          "full_query_ms": 4.236958,
+          "order": 0,
+          "pair": 0
+        },
+        {
+          "after_validation_and_release": {
+            "active_bytes": 1589248,
+            "cached_bytes": 1703984,
+            "peak_bytes": 3293232
+          },
+          "before": {
+            "active_bytes": 1589248,
+            "cached_bytes": 0,
+            "peak_bytes": 3293232
+          },
+          "cache_boundary_ms_excluded": 0.015083,
+          "constructor_ms": 1.148625,
+          "counts": {
+            "answers": 16372,
+            "index_builds": 1,
+            "index_probes": 683,
+            "indexed_rows": 65539,
+            "payload_gathers": 21857,
+            "witnesses": 16372
+          },
+          "full_query_ms": 4.2325,
+          "order": 1,
+          "pair": 1
+        },
+        {
+          "after_validation_and_release": {
+            "active_bytes": 1589248,
+            "cached_bytes": 1703984,
+            "peak_bytes": 3293232
+          },
+          "before": {
+            "active_bytes": 1589248,
+            "cached_bytes": 0,
+            "peak_bytes": 3293232
+          },
+          "cache_boundary_ms_excluded": 0.0125,
+          "constructor_ms": 1.0684589999999998,
+          "counts": {
+            "answers": 16372,
+            "index_builds": 1,
+            "index_probes": 683,
+            "indexed_rows": 65539,
+            "payload_gathers": 21857,
+            "witnesses": 16372
+          },
+          "full_query_ms": 4.171958,
+          "order": 0,
+          "pair": 2
+        }
+      ],
+      "first_observations": {
+        "cleared": {
+          "after_validation_and_release": {
+            "active_bytes": 1589248,
+            "cached_bytes": 1703984,
+            "peak_bytes": 3293232
+          },
+          "before": {
+            "active_bytes": 1589248,
+            "cached_bytes": 0,
+            "peak_bytes": 2162688
+          },
+          "cache_boundary_ms_excluded": 0.067125,
+          "constructor_ms": 5.895167,
+          "counts": {
+            "answers": 16372,
+            "index_builds": 1,
+            "index_probes": 683,
+            "indexed_rows": 65539,
+            "payload_gathers": 21857,
+            "witnesses": 16372
+          },
+          "full_query_ms": 8.929124999999999
+        },
+        "pooled": {
+          "after_validation_and_release": {
+            "active_bytes": 1589248,
+            "cached_bytes": 1703984,
+            "peak_bytes": 3293232
+          },
+          "before": {
+            "active_bytes": 1589248,
+            "cached_bytes": 1703984,
+            "peak_bytes": 3293232
+          },
+          "cache_boundary_ms_excluded": 0.0,
+          "constructor_ms": 1.06675,
+          "counts": {
+            "answers": 16372,
+            "index_builds": 1,
+            "index_probes": 683,
+            "indexed_rows": 65539,
+            "payload_gathers": 21857,
+            "witnesses": 16372
+          },
+          "full_query_ms": 4.298625
+        }
+      },
+      "ingestion_plus_first_gpu_ms": 9.087874999999999,
+      "pooled_medians_ms": {
+        "constructor_ms": 1.074167,
+        "full_query_ms": 4.144416
+      },
+      "pooled_samples": [
+        {
+          "after_validation_and_release": {
+            "active_bytes": 1589248,
+            "cached_bytes": 1703984,
+            "peak_bytes": 3293232
+          },
+          "before": {
+            "active_bytes": 1589248,
+            "cached_bytes": 1703984,
+            "peak_bytes": 3293232
+          },
+          "cache_boundary_ms_excluded": 0.000042,
+          "constructor_ms": 1.074167,
+          "counts": {
+            "answers": 16372,
+            "index_builds": 1,
+            "index_probes": 683,
+            "indexed_rows": 65539,
+            "payload_gathers": 21857,
+            "witnesses": 16372
+          },
+          "full_query_ms": 4.144416,
+          "order": 1,
+          "pair": 0
+        },
+        {
+          "after_validation_and_release": {
+            "active_bytes": 1589248,
+            "cached_bytes": 1703984,
+            "peak_bytes": 3293232
+          },
+          "before": {
+            "active_bytes": 1589248,
+            "cached_bytes": 1703984,
+            "peak_bytes": 3293232
+          },
+          "cache_boundary_ms_excluded": 0.000041,
+          "constructor_ms": 1.609833,
+          "counts": {
+            "answers": 16372,
+            "index_builds": 1,
+            "index_probes": 683,
+            "indexed_rows": 65539,
+            "payload_gathers": 21857,
+            "witnesses": 16372
+          },
+          "full_query_ms": 4.671209,
+          "order": 0,
+          "pair": 1
+        },
+        {
+          "after_validation_and_release": {
+            "active_bytes": 1589248,
+            "cached_bytes": 1703984,
+            "peak_bytes": 3293232
+          },
+          "before": {
+            "active_bytes": 1589248,
+            "cached_bytes": 1703984,
+            "peak_bytes": 3293232
+          },
+          "cache_boundary_ms_excluded": 0.000041,
+          "constructor_ms": 1.048875,
+          "counts": {
+            "answers": 16372,
+            "index_builds": 1,
+            "index_probes": 683,
+            "indexed_rows": 65539,
+            "payload_gathers": 21857,
+            "witnesses": 16372
+          },
+          "full_query_ms": 4.14175,
+          "order": 1,
+          "pair": 2
+        }
+      ],
+      "rows": 65539,
+      "staging": {
+        "first_cpu_reference_query_ms": 4.18875,
+        "ingestion_ms": 0.15875,
+        "ingestion_plus_first_cpu_reference_query_ms": 4.3475,
+        "source_bytes": 1572936,
+        "source_columns": 3,
+        "source_dtype": "i64"
+      }
+    },
+    {
+      "cleared_medians_ms": {
+        "constructor_ms": 1.7992920000000001,
+        "full_query_ms": 87.246375
+      },
+      "cleared_samples": [
+        {
+          "after_validation_and_release": {
+            "active_bytes": 25182208,
+            "cached_bytes": 25788944,
+            "peak_bytes": 50971152
+          },
+          "before": {
+            "active_bytes": 25182208,
+            "cached_bytes": 0,
+            "peak_bytes": 50971152
+          },
+          "cache_boundary_ms_excluded": 0.049292,
+          "constructor_ms": 2.7083329999999997,
+          "counts": {
+            "answers": 261754,
+            "index_builds": 1,
+            "index_probes": 10923,
+            "indexed_rows": 1048579,
+            "payload_gathers": 349537,
+            "witnesses": 261754
+          },
+          "full_query_ms": 89.01675,
+          "order": 0,
+          "pair": 0
+        },
+        {
+          "after_validation_and_release": {
+            "active_bytes": 25182208,
+            "cached_bytes": 25788944,
+            "peak_bytes": 50971152
+          },
+          "before": {
+            "active_bytes": 25182208,
+            "cached_bytes": 0,
+            "peak_bytes": 50971152
+          },
+          "cache_boundary_ms_excluded": 0.04425,
+          "constructor_ms": 1.7992920000000001,
+          "counts": {
+            "answers": 261754,
+            "index_builds": 1,
+            "index_probes": 10923,
+            "indexed_rows": 1048579,
+            "payload_gathers": 349537,
+            "witnesses": 261754
+          },
+          "full_query_ms": 86.68129099999999,
+          "order": 1,
+          "pair": 1
+        },
+        {
+          "after_validation_and_release": {
+            "active_bytes": 25182208,
+            "cached_bytes": 25788944,
+            "peak_bytes": 50971152
+          },
+          "before": {
+            "active_bytes": 25182208,
+            "cached_bytes": 0,
+            "peak_bytes": 50971152
+          },
+          "cache_boundary_ms_excluded": 0.040958999999999995,
+          "constructor_ms": 1.7884579999999999,
+          "counts": {
+            "answers": 261754,
+            "index_builds": 1,
+            "index_probes": 10923,
+            "indexed_rows": 1048579,
+            "payload_gathers": 349537,
+            "witnesses": 261754
+          },
+          "full_query_ms": 87.246375,
+          "order": 0,
+          "pair": 2
+        }
+      ],
+      "first_observations": {
+        "cleared": {
+          "after_validation_and_release": {
+            "active_bytes": 25182208,
+            "cached_bytes": 25788944,
+            "peak_bytes": 50971152
+          },
+          "before": {
+            "active_bytes": 25182208,
+            "cached_bytes": 0,
+            "peak_bytes": 33619968
+          },
+          "cache_boundary_ms_excluded": 0.12075,
+          "constructor_ms": 2.830917,
+          "counts": {
+            "answers": 261754,
+            "index_builds": 1,
+            "index_probes": 10923,
+            "indexed_rows": 1048579,
+            "payload_gathers": 349537,
+            "witnesses": 261754
+          },
+          "full_query_ms": 90.09320799999999
+        },
+        "pooled": {
+          "after_validation_and_release": {
+            "active_bytes": 25182208,
+            "cached_bytes": 25788944,
+            "peak_bytes": 50971152
+          },
+          "before": {
+            "active_bytes": 25182208,
+            "cached_bytes": 25788944,
+            "peak_bytes": 50971152
+          },
+          "cache_boundary_ms_excluded": 0.000084,
+          "constructor_ms": 2.0765,
+          "counts": {
+            "answers": 261754,
+            "index_builds": 1,
+            "index_probes": 10923,
+            "indexed_rows": 1048579,
+            "payload_gathers": 349537,
+            "witnesses": 261754
+          },
+          "full_query_ms": 85.97679099999999
+        }
+      },
+      "ingestion_plus_first_gpu_ms": 91.73104099999999,
+      "pooled_medians_ms": {
+        "constructor_ms": 2.085042,
+        "full_query_ms": 86.593125
+      },
+      "pooled_samples": [
+        {
+          "after_validation_and_release": {
+            "active_bytes": 25182208,
+            "cached_bytes": 25788944,
+            "peak_bytes": 50971152
+          },
+          "before": {
+            "active_bytes": 25182208,
+            "cached_bytes": 25788944,
+            "peak_bytes": 50971152
+          },
+          "cache_boundary_ms_excluded": 0.0,
+          "constructor_ms": 2.085042,
+          "counts": {
+            "answers": 261754,
+            "index_builds": 1,
+            "index_probes": 10923,
+            "indexed_rows": 1048579,
+            "payload_gathers": 349537,
+            "witnesses": 261754
+          },
+          "full_query_ms": 85.69475,
+          "order": 1,
+          "pair": 0
+        },
+        {
+          "after_validation_and_release": {
+            "active_bytes": 25182208,
+            "cached_bytes": 25788944,
+            "peak_bytes": 50971152
+          },
+          "before": {
+            "active_bytes": 25182208,
+            "cached_bytes": 25788944,
+            "peak_bytes": 50971152
+          },
+          "cache_boundary_ms_excluded": 0.0,
+          "constructor_ms": 2.0005420000000003,
+          "counts": {
+            "answers": 261754,
+            "index_builds": 1,
+            "index_probes": 10923,
+            "indexed_rows": 1048579,
+            "payload_gathers": 349537,
+            "witnesses": 261754
+          },
+          "full_query_ms": 87.086125,
+          "order": 0,
+          "pair": 1
+        },
+        {
+          "after_validation_and_release": {
+            "active_bytes": 25182208,
+            "cached_bytes": 25788944,
+            "peak_bytes": 50971152
+          },
+          "before": {
+            "active_bytes": 25182208,
+            "cached_bytes": 25788944,
+            "peak_bytes": 50971152
+          },
+          "cache_boundary_ms_excluded": 0.000041,
+          "constructor_ms": 2.1879579999999996,
+          "counts": {
+            "answers": 261754,
+            "index_builds": 1,
+            "index_probes": 10923,
+            "indexed_rows": 1048579,
+            "payload_gathers": 349537,
+            "witnesses": 261754
+          },
+          "full_query_ms": 86.593125,
+          "order": 1,
+          "pair": 2
+        }
+      ],
+      "rows": 1048579,
+      "staging": {
+        "first_cpu_reference_query_ms": 112.2545,
+        "ingestion_ms": 1.637833,
+        "ingestion_plus_first_cpu_reference_query_ms": 113.892333,
+        "source_bytes": 25165896,
+        "source_columns": 3,
+        "source_dtype": "i64"
+      }
+    }
+  ],
+  "samples_per_mode": 3,
+  "schema": "mccl.query-pool.v2",
+  "source_bytes": "retained numeric relation logical bytes, not physical residency or measured traffic",
+  "timing": "CPU wall time through completed publication from one retained shared numeric source; H09 additionally includes CPU joins/dedup and temporary destruction; ingestion reported separately and reused across cache clears; no GPU timestamps or DRAM counters",
+  "validation": "complete stable rows and per-key lookup, or authored H09 answers plus exact enumeration and work counters; outside timing; outputs released before next sample",
+  "wired_policy": "unchanged; no implicit residency request"
+}

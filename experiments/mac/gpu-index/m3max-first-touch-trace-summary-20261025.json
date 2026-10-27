@@ -1,0 +1,24 @@
+{
+  "cpu_trace": {
+    "artifact": "target/first-touch-system-20261025.trace",
+    "target": "first_touch --bytes 134217728 --runs 3",
+    "page_bytes": 16384,
+    "fault_events": {
+      "Zero Fill": {"count": 106698, "instrumented_total_ms": 53.381028},
+      "Page Cache Hit": {"count": 611, "instrumented_total_ms": 0.518009},
+      "Copy On Write": {"count": 73, "instrumented_total_ms": 0.178753}
+    },
+    "scope": "Target process, including source allocation and startup, across anonymous-mmap and Metal-shared controls. Instrumented durations are not substituted for uninstrumented benchmark medians. CPU faults are not GPU fault counters."
+  },
+  "gpu_trace": {
+    "artifact": "target/lifetime-ordering-metal-20261025.trace",
+    "target": "lifetime --sizes 1048576,16777216,1048576 --cases reuse --runs 31",
+    "timings": "m3max-ordering-instrumented-20261025.json",
+    "command_groups": [
+      {"rows": 1048576, "submission_indices": [0,31], "gpu_intervals": 32, "gpu_interval_min_ms": 0.498875, "gpu_interval_max_ms": 1.268625, "overlapping_device_states_ms": {"1": 6.852668, "2": 12.412542}},
+      {"rows": 16777216, "submission_indices": [32,63], "gpu_intervals": 34, "overlapping_device_states_ms": {"1": 22.824959, "2": 7.897707, "3": 158.122087}},
+      {"rows": 1048576, "submission_indices": [64,95], "gpu_intervals": 32, "gpu_interval_min_ms": 0.341, "gpu_interval_max_ms": 0.555875, "overlapping_device_states_ms": {"3": 11.702541}}
+    ],
+    "scope": "Command groups matched by command-buffer IDs to target GPU intervals. Performance-state intervals are device-wide and overlaps may not cover the entire execution interval. State codes are not converted to MHz. No forced clock or DRAM bandwidth counter was used. The two 1M groups have identical data, kernels, and reuse policy."
+  }
+}

@@ -29,10 +29,34 @@ use std::ops::Range;
 const RADIX_BITS: u32 = 12;
 const MAX_ERROR: usize = 32;
 
+/// One interpolation endpoint, with its rank in the distinct-key array.
+///
+/// The C layout permits borrowing initialized GPU-produced endpoint arrays.
+#[repr(C)]
 #[derive(Clone, Copy, Debug)]
-struct Point {
-    key: u64,
-    rank: usize,
+pub struct RadixSplinePoint {
+    pub key: u64,
+    pub rank: usize,
+}
+
+/// Scalar parameters for the native radix-spline reader.
+///
+/// `len` counts distinct keys, not payload occurrences. `search_error` includes
+/// the interpolation rounding guard as well as the builder's corridor error.
+#[derive(Clone, Copy, Debug)]
+pub struct RadixSplineMetadata {
+    pub min_key: u64,
+    pub max_key: u64,
+    pub len: usize,
+    pub shift: u32,
+    pub search_error: usize,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct RadixSplineView<'a> {
+    pub(crate) points: &'a [RadixSplinePoint],
+    pub(crate) radix: &'a [usize],
+    pub(crate) metadata: RadixSplineMetadata,
 }
 
 // Keeping differences integral until conversion is essential near u64::MAX and
@@ -44,7 +68,7 @@ struct Vector {
 }
 
 impl Vector {
-    fn between(origin: Point, point: Point, error: i128) -> Self {
+    fn between(origin: RadixSplinePoint, point: RadixSplinePoint, error: i128) -> Self {
         Self {
             x: point.key - origin.key,
             y: point.rank as i128 - origin.rank as i128 + error,
@@ -103,7 +127,7 @@ pub(crate) struct RadixSpline {
     shift: u32,
     search_error: usize,
     radix: Vec<usize>,
-    points: Vec<Point>,
+    points: Vec<RadixSplinePoint>,
 }
 
 impl RadixSpline {
@@ -123,12 +147,12 @@ impl RadixSpline {
         let max_key = if n == 1 { min_key } else { key_at(n - 1) };
         // leading_zeros is defined for zero, unlike the upstream clz builtin.
         let shift = (u64::BITS - (max_key - min_key).leading_zeros()).saturating_sub(RADIX_BITS);
-        let mut points = vec![Point {
+        let mut points = vec![RadixSplinePoint {
             key: min_key,
             rank: 0,
         }];
         if n > 1 {
-            let mut previous = Point {
+            let mut previous = RadixSplinePoint {
                 key: key_at(1),
                 rank: 1,
             };
@@ -136,7 +160,7 @@ impl RadixSpline {
             let mut upper = previous;
             let mut lower = previous;
             for rank in 2..n {
-                let current = Point {
+                let current = RadixSplinePoint {
                     key: key_at(rank),
                     rank,
                 };
@@ -199,21 +223,44 @@ impl RadixSpline {
         }
     }
 
+    #[inline]
+    pub(crate) fn as_view(&self) -> RadixSplineView<'_> {
+        RadixSplineView {
+            points: &self.points,
+            radix: &self.radix,
+            metadata: RadixSplineMetadata {
+                min_key: self.min_key,
+                max_key: self.max_key,
+                len: self.len,
+                shift: self.shift,
+                search_error: self.search_error,
+            },
+        }
+    }
+
+    #[cfg(test)]
+    fn search_bound(&self, key: u64) -> Range<usize> {
+        self.as_view().search_bound(key)
+    }
+}
+
+impl RadixSplineView<'_> {
     /// The exact lower bound is in `start..=end`; an existing key is in
     /// `start..end`. Searching this slice therefore also handles absent keys.
     #[inline]
     pub(crate) fn search_bound(&self, key: u64) -> Range<usize> {
-        if self.len == 0 {
+        let RadixSplineMetadata { min_key, max_key, len, search_error, .. } = self.metadata;
+        if len == 0 {
             return 0..0;
         }
-        if key <= self.min_key {
+        if key <= min_key {
             return 0..1;
         }
-        if key >= self.max_key {
-            return if key == self.max_key {
-                self.len - 1..self.len
+        if key >= max_key {
+            return if key == max_key {
+                len - 1..len
             } else {
-                self.len..self.len
+                len..len
             };
         }
         let index = self.segment(key);
@@ -225,13 +272,13 @@ impl RadixSpline {
         // Add the integral anchor after interpolation, retaining exact ranks
         // even when an absolute rank would no longer fit in the significand.
         let estimate = down.rank + offset.min(rank_span);
-        estimate.saturating_sub(self.search_error)
-            ..estimate.saturating_add(self.search_error + 2).min(self.len)
+        estimate.saturating_sub(search_error)
+            ..estimate.saturating_add(search_error + 2).min(len)
     }
 
     #[inline]
     fn segment(&self, key: u64) -> usize {
-        let prefix = ((key - self.min_key) >> self.shift) as usize;
+        let prefix = ((key - self.metadata.min_key) >> self.metadata.shift) as usize;
         let begin = self.radix[prefix];
         let end = self.radix[prefix + 1];
         if end - begin < 32 {

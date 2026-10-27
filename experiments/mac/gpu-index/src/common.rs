@@ -19,9 +19,9 @@ impl Gpu {
     pub fn new() -> Self {
         let device = Device::system_default().expect("Metal device required");
         let source = [
-            include_str!("common.metal"),
-            include_str!("sort.metal"),
-            include_str!("maintain.metal"),
+            include_str!("../../../../../mccl/native/index/common.metal"),
+            include_str!("../../../../../mccl/native/index/sort.metal"),
+            include_str!("../../../../../mccl/native/index/maintain.metal"),
         ]
         .join("\n");
         let library = device
@@ -35,14 +35,20 @@ impl Gpu {
         }
     }
     pub fn buffer(&self, bytes: usize) -> Buffer {
+        self.allocate_buffer(bytes, true)
+    }
+    /// Allocate shared/default-cache storage; optional CPU zeroing is explicit.
+    /// Call only while no GPU work can access an allocation being replaced.
+    pub fn allocate_buffer(&self, bytes: usize, pretouch: bool) -> Buffer {
         let bytes = bytes.max(8);
         assert!(bytes as u64 <= self.device.max_buffer_length());
         let b = self
             .device
             .new_buffer(bytes as u64, MTLResourceOptions::StorageModeShared);
-        // Pre-touch allocations outside measurements. CPU writes precede submission.
-        unsafe {
-            std::ptr::write_bytes(b.contents(), 0, bytes);
+        if pretouch {
+            unsafe {
+                std::ptr::write_bytes(b.contents(), 0, bytes);
+            }
         }
         b
     }
