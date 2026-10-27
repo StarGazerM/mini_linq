@@ -64,6 +64,32 @@ pub fn register_query_cleanup(release: fn()) {
     });
 }
 
+/// Codegen partitioning for generated query bodies.
+///
+/// Rustc ignores modules nested in functions when assigning codegen units, and
+/// LLVM inlines once-called closures into their caller. Each module-level
+/// runner keeps its closure out of the generated caller and gives it a distinct
+/// codegen-unit home. Callers mark the closure `#[inline]`: a non-inline closure
+/// body is homed with its defining function, not with this runner.
+#[doc(hidden)]
+pub mod __codegen {
+    macro_rules! partitions {
+        ($($name:ident),* $(,)?) => {$(
+            pub mod $name {
+                #[inline(never)]
+                pub fn run<R>(evaluate: impl FnOnce() -> R) -> R {
+                    evaluate()
+                }
+            }
+        )*};
+    }
+    partitions!(
+        partition_0, partition_1, partition_2, partition_3, partition_4, partition_5,
+        partition_6, partition_7, partition_8, partition_9, partition_10, partition_11,
+        partition_12, partition_13, partition_14, partition_15,
+    );
+}
+
 impl Drop for QueryScope {
     fn drop(&mut self) {
         let cleanup = QUERY_CLEANUP.with(|cleanup| cleanup.borrow_mut().take());

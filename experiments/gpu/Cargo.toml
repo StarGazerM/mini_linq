@@ -20,4 +20,17 @@ serde_json = "1"
 lto = false
 codegen-units = 1
 
+# Proc macros and their pass crates run the whole Datalog/CQ compiler during
+# expansion; Cargo's build-override default (opt-level 0) leaves them unoptimized.
+[profile.release.build-override]
+opt-level = 3
+
+[profile.dev.build-override]
+opt-level = 3
+
+# Generated DOOP host code places holes, strata and phases in partitioned
+# non-inlined runners; parallel LLVM codegen units compile them concurrently.
+[profile.release.package.doop-gpu]
+codegen-units = 16
+
 

@@ -1411,11 +1411,13 @@ pub(crate) fn translate_impl(
     static NEXT_MODULE: AtomicUsize = AtomicUsize::new(0);
     let mut fingerprint = std::collections::hash_map::DefaultHasher::new();
     quote!(#program).to_string().hash(&mut fingerprint);
-    let module_name = format_ident!(
-        "__cq_sequence_kernels_{:016x}_{}",
-        fingerprint.finish(),
-        NEXT_MODULE.fetch_add(1, Ordering::Relaxed)
-    );
+    let expansion = NEXT_MODULE.fetch_add(1, Ordering::Relaxed);
+    let module_name = format_ident!("__cq_sequence_kernels_{:016x}_{}", fingerprint.finish(), expansion);
+    // Host LLVM inlines a once-called closure into its caller; one program of
+    // many holes then becomes one function whose register allocation dominates
+    // the build. A non-inlined runner keeps each hole a separate function, and
+    // its module selects a separate codegen unit.
+    let partition = format_ident!("partition_{}", expansion % 16);
     if let Some(directory) = std::env::var_os("CQ_GPU_SEQUENCE_DUMP") {
         let path = std::path::PathBuf::from(directory).join(format!("{module_name}.sequence"));
         std::fs::write(&path, quote!(#program).to_string())
@@ -2456,7 +2458,13 @@ pub(crate) fn translate_impl(
         } else {
             quote!(#output_keys.ptr())
         };
-        let packing_setup = if let Some(packing) = arena_packing.as_ref().filter(|_| final_output) {
+        // The final arena dispatch publishes only its reserved keys: no later
+        // stage reads its row, range-begin or offset stores, and its packing is
+        // the arena's. Allocate only stores a consumer can observe.
+        let arena_final = arena.is_some() && final_output;
+        let packing_setup = if arena_final {
+            quote!()
+        } else if let Some(packing) = arena_packing.as_ref().filter(|_| final_output) {
             let bits = packing.bits;
             let lanes = bits.div_ceil(64).max(1) as usize;
             quote! {
@@ -2481,22 +2489,37 @@ pub(crate) fn translate_impl(
         });
         let remember_count = (dispatch.concatenation == OutputProtocol::ReservePrevious)
             .then(|| quote!(__cq_arena.record_count(#store_length);));
+        let (stores, allocations, pointers) = if arena_final && row_width == 0 && range_width == 0 {
+            (
+                quote!(),
+                quote!(),
+                quote!(::core::ptr::null_mut::<i64>(),::core::ptr::null_mut::<u32>(),::core::ptr::null_mut::<u32>(),),
+            )
+        } else {
+            (
+                quote!(#store_rows,#store_begin,#store_offsets,),
+                quote! {
+                    let #store_rows=unsafe {::cq_gpu_runtime::Buffer::<i64>::uninitialized(__cq_pool.clone(),
+                        __cq_capacity.checked_mul(#row_width).ok_or("Sequence row allocation overflow")?)?};
+                    let #store_begin=unsafe {::cq_gpu_runtime::Buffer::<u32>::uninitialized(__cq_pool.clone(),__cq_capacity*#range_width)?};
+                    let #store_offsets=unsafe {::cq_gpu_runtime::Buffer::<u32>::uninitialized(__cq_pool.clone(),
+                        __cq_capacity.checked_add(1).ok_or("Sequence offset allocation overflow")?*#range_width)?};
+                },
+                quote!(#store_rows.ptr(),#store_begin.ptr(),#store_offsets.ptr(),),
+            )
+        };
         launches.push(quote! {
             #packing_setup
             #(#host_domains)*
             let __cq_prepared=__cq_module.#prepare_name(::cuda_core::LaunchConfig1D::new(#grid,256,#shared_u32))?;
             let mut __cq_capacity=#initial;
-            let (#store_rows,#store_begin,#store_offsets,#output_keys,#store_meta,#store_length)=loop {
+            let (#stores #output_keys,#store_meta,#store_length)=loop {
                 if __cq_capacity>u32::MAX as usize {return Err("Sequence output exceeds u32 positions".into());}
-                let #store_rows=unsafe {::cq_gpu_runtime::Buffer::<i64>::uninitialized(__cq_pool.clone(),
-                    __cq_capacity.checked_mul(#row_width).ok_or("Sequence row allocation overflow")?)?};
-                let #store_begin=unsafe {::cq_gpu_runtime::Buffer::<u32>::uninitialized(__cq_pool.clone(),__cq_capacity*#range_width)?};
-                let #store_offsets=unsafe {::cq_gpu_runtime::Buffer::<u32>::uninitialized(__cq_pool.clone(),
-                    __cq_capacity.checked_add(1).ok_or("Sequence offset allocation overflow")?*#range_width)?};
+                #allocations
                 #key_allocation
                 let #store_meta=::cq_gpu_runtime::Buffer::<u32>::zeroed(__cq_pool.clone(),#meta_words)?;
                 __cq_module.#kernel_name(__cq_pool.stream(),&__cq_prepared,#(#arguments,)*
-                    #store_rows.ptr(),#store_begin.ptr(),#store_offsets.ptr(),#key_pointer,
+                    #pointers #key_pointer,
                     __cq_capacity as u32,#store_meta.ptr())?;
                 let __cq_counts=#store_meta.to_host()?;
                 #record_readback
@@ -2507,7 +2530,7 @@ pub(crate) fn translate_impl(
                     __cq_capacity=__cq_required;
                     continue;
                 }
-                break (#store_rows,#store_begin,#store_offsets,#output_keys,#store_meta,__cq_counts[#logical] as usize);
+                break (#stores #output_keys,#store_meta,__cq_counts[#logical] as usize);
             };
             #remember_count
         });
@@ -2707,6 +2730,11 @@ pub(crate) fn translate_impl(
     let setup = &compiler.rows.setup;
     let build = &compiler.rows.build;
     let arena_setup = arena.zip(arena_packing.as_ref()).map(|(expression, packing)| packing.setup(expression));
+    let mut used = BTreeSet::new();
+    identifiers(quote!(#setup #arena_setup #build #(#launches)* #output), &mut used);
+    let support = compiler.rows.support.iter().filter(|(name, ..)| used.contains(&name.to_string()));
+    let (support_before, support_after): (Vec<_>, Vec<_>) =
+        support.map(|(_, before, after)| (before, after)).unzip();
     // Formal rule GPU-Arena-Timing: optional measurements alone add a terminal fence;
     // checked dispatch metadata and retained stream-ordered owners suffice otherwise.
     let timing_enabled = if arena.is_some() {
@@ -2720,8 +2748,10 @@ pub(crate) fn translate_impl(
             use ::cuda_device::{kernel,launch_bounds,launch_contract};
             #(#kernels)*
         }
-        (|| -> ::cq_gpu_sequence_runtime::Result<_> {
+        ::cq_gpu_sequence_runtime::__codegen::#partition::run(#[inline] || -> ::cq_gpu_sequence_runtime::Result<_> {
+            #(#support_before)*
             #setup
+            #(#support_after)*
             #arena_setup
             ::std::thread_local! {
                 static __CQ_SEQUENCE_MODULE: ::std::cell::RefCell<Option<(
@@ -2772,8 +2802,20 @@ pub(crate) fn translate_impl(
                 });
             }
             Ok(__cq_result)
-        })().expect("GPU Sequence execution failed")
+        }).expect("GPU Sequence execution failed")
     }))
+}
+
+fn identifiers(tokens: TokenStream, names: &mut BTreeSet<String>) {
+    for token in tokens {
+        match token {
+            proc_macro2::TokenTree::Ident(name) => {
+                names.insert(name.to_string());
+            }
+            proc_macro2::TokenTree::Group(group) => identifiers(group.stream(), names),
+            _ => {}
+        }
+    }
 }
 
 #[cfg(test)]

@@ -139,6 +139,10 @@ pub struct Rows {
     pub columns: BTreeMap<String, usize>,
     pub setup: TokenStream,
     pub build: TokenStream,
+    /// Optional support objects as `(identifier, before setup, after setup)`.
+    /// Each is emitted only when generated code outside its own declaration
+    /// references the identifier; unused adapters would load device modules.
+    pub support: Vec<(Ident, TokenStream, TokenStream)>,
     pub parameters: Vec<(Ident, Type, TokenStream)>,
     pub output_columns: Vec<String>,
     pub dense: BTreeSet<usize>,
@@ -307,10 +311,6 @@ impl Rows {
             if first {
                 setup.extend(quote! {
                     let __cq_pool = #id.pool().clone();
-                    let mut __cq_dictionary = ::cq_gpu_runtime::Dictionary::default();
-                    let mut __cq_statuses = ::std::vec::Vec::<
-                        ::std::sync::Arc<::cq_gpu_runtime::Buffer<::cq_gpu_sequence_runtime::OutputCount>>
-                    >::new();
                 });
                 first = false;
             }
@@ -365,32 +365,49 @@ impl Rows {
                 "T-Gpu: a resident input supplies the execution pool",
             ));
         }
-        setup.extend(quote! {
-            let __cq_dictionary = ::std::sync::Arc::new(__cq_dictionary);
-            ::std::thread_local! {
-                static __CQ_OUTPUT_ADAPTER: ::std::cell::RefCell<Option<
-                    ::std::rc::Rc<::std::cell::RefCell<::cq_gpu_sequence_runtime::canon::PackedColumnsAdapter>>
-                >> = const { ::std::cell::RefCell::new(None) };
-            }
-            let __cq_range_builder = ::cq_gpu_sequence_runtime::RangeBuilder::new(&__cq_pool)?;
-        });
-        setup.extend(quote! {
-            ::cq_gpu_sequence_runtime::register_query_cleanup(|| {
-                __CQ_OUTPUT_ADAPTER.with(|cache| cache.borrow_mut().take());
-            });
-        });
         let output_width = output_columns.len();
-        setup.extend(quote! {
-            let __cq_output_adapter = __CQ_OUTPUT_ADAPTER.with(|cache| -> ::cq_gpu_sequence_runtime::Result<_> {
-                let mut cache = cache.borrow_mut();
-                if cache.as_ref().is_none_or(|adapter|
-                    !::std::sync::Arc::ptr_eq(adapter.borrow().pool(), &__cq_pool)) {
-                    *cache = Some(::std::rc::Rc::new(::std::cell::RefCell::new(
-                        ::cq_gpu_sequence_runtime::canon::PackedColumnsAdapter::new(__cq_pool.clone(), #output_width)?)));
-                }
-                Ok(cache.as_ref().unwrap().clone())
-            })?;
-        });
+        let support = vec![
+            (
+                format_ident!("__cq_dictionary"),
+                quote!(let mut __cq_dictionary = ::cq_gpu_runtime::Dictionary::default();),
+                quote!(let __cq_dictionary = ::std::sync::Arc::new(__cq_dictionary);),
+            ),
+            (
+                format_ident!("__cq_statuses"),
+                quote!(let mut __cq_statuses = ::std::vec::Vec::<
+                    ::std::sync::Arc<::cq_gpu_runtime::Buffer<::cq_gpu_sequence_runtime::OutputCount>>
+                >::new();),
+                TokenStream::new(),
+            ),
+            (
+                format_ident!("__cq_range_builder"),
+                TokenStream::new(),
+                quote!(let __cq_range_builder = ::cq_gpu_sequence_runtime::RangeBuilder::new(&__cq_pool)?;),
+            ),
+            (
+                format_ident!("__cq_output_adapter"),
+                TokenStream::new(),
+                quote! {
+                    ::std::thread_local! {
+                        static __CQ_OUTPUT_ADAPTER: ::std::cell::RefCell<Option<
+                            ::std::rc::Rc<::std::cell::RefCell<::cq_gpu_sequence_runtime::canon::PackedColumnsAdapter>>
+                        >> = const { ::std::cell::RefCell::new(None) };
+                    }
+                    ::cq_gpu_sequence_runtime::register_query_cleanup(|| {
+                        __CQ_OUTPUT_ADAPTER.with(|cache| cache.borrow_mut().take());
+                    });
+                    let __cq_output_adapter = __CQ_OUTPUT_ADAPTER.with(|cache| -> ::cq_gpu_sequence_runtime::Result<_> {
+                        let mut cache = cache.borrow_mut();
+                        if cache.as_ref().is_none_or(|adapter|
+                            !::std::sync::Arc::ptr_eq(adapter.borrow().pool(), &__cq_pool)) {
+                            *cache = Some(::std::rc::Rc::new(::std::cell::RefCell::new(
+                                ::cq_gpu_sequence_runtime::canon::PackedColumnsAdapter::new(__cq_pool.clone(), #output_width)?)));
+                        }
+                        Ok(cache.as_ref().unwrap().clone())
+                    })?;
+                },
+            ),
+        ];
         let mut sources = BTreeMap::new();
         let mut providers = BTreeMap::new();
         let mut run_sources = BTreeMap::new();
@@ -860,6 +877,7 @@ impl Rows {
             columns,
             setup,
             build,
+            support,
             parameters,
             output_columns,
             dense,

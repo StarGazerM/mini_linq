@@ -7,6 +7,23 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- GPU Datalog host compile time. Generated holes, strata, phases, relation and
+  layout initialization, the initial memory snapshot and output decoders run as
+  `#[inline]` closures through partitioned `#[inline(never)]` runners
+  (`cq_gpu_sequence_runtime::__codegen`), so each is a separate function in its
+  own codegen unit instead of one program function (336,826 unoptimized IR
+  instructions; register allocation dominated). Each hole is a separate `fn`
+  item taking only the hosts it reads (closures are type-checked with their
+  parent: `doop_gpu::run` typeck 21.2 s), and `bind_inputs` receives only that
+  hole's bindings instead of all 457. Arena holes no longer construct unused
+  output adapters, range builders, dictionaries, status vectors or zero-width
+  row/range buffers (each adapter/builder loaded device modules). `doop-gpu`
+  uses 16 codegen units; the GPU workspace builds proc macros and their pass
+  crates at `opt-level = 3` (`build-override`; they were unoptimized). DOOP GPU
+  release build 23 min 06 s -> 52 s (`doop_gpu` crate: expansion 24.9 -> 5.3 s,
+  typeck 29.3 -> 4.0 s, host LLVM 1,266 -> 9.1 s; the serial cuda-oxide device
+  pipeline, 19.3 s, now dominates). Cassandra exact; GPU evaluation 2.19 s ->
+  2.11-2.13 s.
 - Rebase the Datalog scheduling/GPU work onto the combined main history.
   Preserve query-scope cache release alongside per-pool stratum scratch
   release, and pin cuda-oxide `e7d4a63ba` / RCCL `d4c95133` without local

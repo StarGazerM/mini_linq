@@ -73,6 +73,33 @@ fn memory_snapshot(context: &RoundContext, indices: &[usize], arenas: &[usize], 
     })
 }
 
+/// Replace each host identifier read by a hole with a dereferenced reference
+/// parameter, recording `(parameter, host, type)` once per distinct host.
+fn substitute(
+    tokens: TokenStream,
+    hosts: &std::collections::BTreeMap<String, Type>,
+    parameters: &mut Vec<(Ident, Ident, Type)>,
+) -> TokenStream {
+    use proc_macro2::{Group, TokenTree};
+    tokens.into_iter().map(|token| match token {
+        TokenTree::Ident(name) if hosts.contains_key(&name.to_string()) => {
+            let position = parameters.iter().position(|(_, host, _)| *host == name).unwrap_or_else(|| {
+                let parameter = format_ident!("__cq_gpu_input_{}", parameters.len());
+                parameters.push((parameter, name.clone(), hosts[&name.to_string()].clone()));
+                parameters.len() - 1
+            });
+            let parameter = &parameters[position].0;
+            quote!((*#parameter))
+        }
+        TokenTree::Group(group) => {
+            let mut replacement = Group::new(group.delimiter(), substitute(group.stream(), hosts, parameters));
+            replacement.set_span(group.span());
+            TokenStream::from(TokenTree::Group(replacement))
+        }
+        token => TokenStream::from(token),
+    }).collect()
+}
+
 /// Formal rule P-DL-Gpu: Interpret the recorded waves, admission owners and
 /// publication operations using immutable packed runs on one device stream.
 pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
@@ -92,11 +119,44 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
     // Check eligibility independently, including schemas not read by a hole.
     for schema in &schemas { crate::storage::word_type(schema)?; }
     let input_types = input_types(program, &schemas)?;
-    let bindings = input_types.iter().map(|(name, ty)| {
-        let name = Ident::new(name, proc_macro2::Span::call_site());
-        quote!(#name => #ty;)
-    }).collect::<TokenStream>();
+    // Hosts a hole may read through its CQ declarations, with their local types.
+    let mut hosts = std::collections::BTreeMap::<String, Type>::new();
+    for (index, relation) in context.relations.iter().enumerate() {
+        let ty = canonical_type(&schemas, index);
+        hosts.insert(relation.all.to_string(), ty.clone());
+        if let Some(delta) = &relation.delta_host { hosts.insert(delta.to_string(), ty); }
+    }
+    for layout in context.layouts.iter().chain(&context.delta_layouts) {
+        hosts.insert(layout.host.to_string(), layout.provider.clone());
+    }
+    let mut scans = std::collections::BTreeMap::new();
+    for stratum in &context.strata {
+        for key in &stratum.keys {
+            hosts.insert(key.name.to_string(), input_types[&key.name.to_string()].clone());
+        }
+        for rule in stratum.seeds.iter().chain(&stratum.steps) {
+            if let Some(scan) = &rule.scan { scans.insert(rule.hole, scan.binding.clone()); }
+        }
+    }
+    // Each hole is a separate function item: rustc type-checks a closure with
+    // its enclosing body, so closures would keep the whole program one query.
+    let mut hole_items = Vec::new();
     let holes = cq_datalog_print::splice_with(program, |hole| {
+        let index = hole_items.len();
+        let mut cq = hole.cq.clone();
+        let mut parameters = Vec::new();
+        for declaration in &mut cq.declarations {
+            if let Some(value) = &mut declaration.value {
+                let expression = value.expression.to_token_stream();
+                value.expression = syn::parse2(substitute(expression, &hosts, &mut parameters))?;
+            }
+        }
+        let inputs = cq.declarations.iter().map(|declaration| declaration.name.to_string())
+            .collect::<std::collections::BTreeSet<_>>();
+        let bindings = input_types.iter().filter(|(name, _)| inputs.contains(*name)).map(|(name, ty)| {
+            let name = Ident::new(name, proc_macro2::Span::call_site());
+            quote!(#name => #ty;)
+        }).collect::<TokenStream>();
         let mut pipeline = hole.pipeline.clone();
         let mut bound = false;
         for pass in &mut pipeline.passes {
@@ -110,8 +170,34 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
         let terminal = pipeline.passes.last_mut().expect("checked terminal");
         ensure(terminal.arguments.is_empty(), hole, "GPU Datalog owns the batch arena argument")?;
         terminal.arguments = quote!(&mut *__cq_gpu_arena);
-        pipeline.start(hole.cq.to_token_stream())
+        let invocation = pipeline.start(cq.to_token_stream())?;
+        let function = format_ident!("__cq_gpu_hole_{}", index);
+        let (scan_parameter, scan_argument) = match scans.get(&index) {
+            Some(binding) => {
+                let ty = &input_types[&binding.to_string()];
+                (quote!(#binding: &#ty,), quote!(#binding,))
+            }
+            None => (quote!(), quote!()),
+        };
+        let declared = parameters.iter().map(|(parameter, _, ty)| quote!(#parameter: &#ty));
+        let arguments = parameters.iter().map(|(_, host, _)| quote!(&#host));
+        hole_items.push(quote!(
+            fn #function(
+                __cq_gpu_arena: &mut ::gpu_datalog_runtime::CandidateArena,
+                #scan_parameter #(#declared,)*
+            ) -> ::gpu_datalog_runtime::CandidateBatch {
+                #invocation
+            }
+        ));
+        Ok(quote!(#function(&mut *__cq_gpu_arena, #scan_argument #(#arguments,)*)))
     })?;
+    // Setup and output run through the same partitioned runners as strata, so
+    // the program body keeps only the owning locals rather than every
+    // relation's construction, upload, permutation and error path.
+    let program_runner = |slot: usize| {
+        let partition = format_ident!("partition_{}", slot % 16);
+        quote!(::cq_gpu_sequence_runtime::__codegen::#partition::run)
+    };
     let mut initialize = Vec::new();
     for (index, relation) in context.relations.iter().enumerate() {
         let state = local("state", index);
@@ -120,11 +206,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
         let schema = packing(&schemas[index].iter().collect::<Vec<_>>())?;
         let all = &relation.all;
         let ty = canonical_type(&schemas, index);
-        initialize.push(quote!(
-            let #packed = #schema;
-            let mut #state = ::gpu_datalog_runtime::DeviceRuns::<#word>::new(__cq_gpu_pool.clone())?;
-        ));
-        if let Some(value) = &relation.declaration.value {
+        let upload = relation.declaration.value.as_ref().map(|value| {
             let expression = &value.expression;
             let fields = types(context, index).into_iter().enumerate().map(|(index, ty)| {
                 let field = syn::Index::from(index);
@@ -133,21 +215,36 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
                     None => quote!(*row.#field as i128),
                 }
             });
-            initialize.push(quote!({
+            quote!({
                 let host = &(#expression);
                 let words = ::cq_storage::rows::Rows::rows(host)
                     .map(|row| #packed.pack::<#word>(&[#(#fields),*]))
                     .collect::<::gpu_datalog_runtime::Result<::std::vec::Vec<_>>>()?;
                 let upload = ::gpu_datalog_runtime::Buffer::from_host_async(__cq_gpu_pool.clone(), &words)?;
                 #state.admit(&upload, words.len())?;
-            }));
-        }
-        initialize.push(quote!(let mut #all: #ty = <#ty>::from_runs(
-            __cq_gpu_pool.clone(), #packed.clone(), #state.owned_runs())?;));
-        if let Some(delta) = &relation.delta_host {
-            initialize.push(quote!(let mut #delta: #ty = <#ty>::from_runs::<#word>(
-                __cq_gpu_pool.clone(), #packed.clone(), ::std::vec::Vec::new())?;));
-        }
+            })
+        });
+        let (delta_binding, delta_value, delta_result) = match &relation.delta_host {
+            Some(delta) => (
+                quote!(mut #delta,),
+                quote!(let #delta: #ty = <#ty>::from_runs::<#word>(
+                    __cq_gpu_pool.clone(), #packed.clone(), ::std::vec::Vec::new())?;),
+                quote!(#delta,),
+            ),
+            None => (quote!(), quote!(), quote!()),
+        };
+        let runner = program_runner(index);
+        initialize.push(quote!(
+            let (#packed, mut #state, mut #all, #delta_binding) =
+                #runner(#[inline] || -> ::gpu_datalog_runtime::Result<_> {
+                    let #packed = #schema;
+                    let mut #state = ::gpu_datalog_runtime::DeviceRuns::<#word>::new(__cq_gpu_pool.clone())?;
+                    #upload
+                    let #all: #ty = <#ty>::from_runs(__cq_gpu_pool.clone(), #packed.clone(), #state.owned_runs())?;
+                    #delta_value
+                    Ok((#packed, #state, #all, #delta_result))
+                })?;
+        ));
     }
     for (index, layout) in context.layouts.iter().enumerate() {
         let state = local("layout", index);
@@ -158,17 +255,21 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
         let order = &layout.columns;
         let ty = &layout.provider;
         let host = &layout.host;
+        let runner = program_runner(context.relations.len() + index);
         initialize.push(quote!(
-            let #schema = #packed.permute(&[#(#order),*])?;
-            let mut #state = ::gpu_datalog_runtime::DeviceRuns::<#word>::new(__cq_gpu_pool.clone())?;
-            for run in #relation_state.owned_runs() {
-                let permuted = #packed.permute_device(run.buffer(), run.len(), &[#(#order),*])?;
-                // SAFETY: a column permutation preserves uniqueness of the run.
-                let sorted = unsafe { #state.sort_known_unique(&permuted, run.len())? };
-                // A permutation is injective; canonical accepted runs are disjoint.
-                unsafe { #state.append_sorted(sorted)?; }
-            }
-            let mut #host: #ty = <#ty>::from_runs(__cq_gpu_pool.clone(), #schema.clone(), #state.owned_runs())?;
+            let (#schema, mut #state, mut #host) = #runner(#[inline] || -> ::gpu_datalog_runtime::Result<_> {
+                let #schema = #packed.permute(&[#(#order),*])?;
+                let mut #state = ::gpu_datalog_runtime::DeviceRuns::<#word>::new(__cq_gpu_pool.clone())?;
+                for run in #relation_state.owned_runs() {
+                    let permuted = #packed.permute_device(run.buffer(), run.len(), &[#(#order),*])?;
+                    // SAFETY: a column permutation preserves uniqueness of the run.
+                    let sorted = unsafe { #state.sort_known_unique(&permuted, run.len())? };
+                    // A permutation is injective; canonical accepted runs are disjoint.
+                    unsafe { #state.append_sorted(sorted)?; }
+                }
+                let #host: #ty = <#ty>::from_runs(__cq_gpu_pool.clone(), #schema.clone(), #state.owned_runs())?;
+                Ok((#schema, #state, #host))
+            })?;
         ));
     }
     for (index, layout) in context.delta_layouts.iter().enumerate() {
@@ -205,8 +306,18 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
                 <#ty>::from_runs(__cq_gpu_pool.clone(), packing, vec![run])?
             };));
         }
+        // Each stratum and phase runs as its own non-inlined function. Relation
+        // states stay in the program body and are captured by reference, so
+        // neither LLVM nor their error paths see one program-sized function.
+        let runner = |offset: usize| {
+            let partition = format_ident!("partition_{}", (3 * index + offset) % 16);
+            quote!(::cq_gpu_sequence_runtime::__codegen::#partition::run)
+        };
+        let (stratum_runner, seed_runner, step_runner) = (runner(0), runner(1), runner(2));
         let seed = phase(program, index, round::schedule::SEED, &holes, &schemas)?;
+        let seed = quote!(#seed_runner(#[inline] || -> ::gpu_datalog_runtime::Result<()> { #seed Ok(()) })?;);
         let step = phase(program, index, round::schedule::STEP, &holes, &schemas)?;
+        let step = quote!(#step_runner(#[inline] || -> ::gpu_datalog_runtime::Result<()> { #step Ok(()) })?;);
         let lengths = stratum.termination.iter().map(|&i| {
             let delta = context.relations[i].delta_host.as_ref().expect("checked delta");
             quote!(#delta.len())
@@ -227,13 +338,14 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
         });
         let released = memory_snapshot(context, &stratum.members, &[], &format!("stratum={index}/released"));
         strata.push(quote!({
-            {
+            #stratum_runner(#[inline] || -> ::gpu_datalog_runtime::Result<()> {
                 #(#arenas)*
                 #(#keys)*
                 let mut __cq_gpu_round = 0usize;
                 #seed
                 #rounds
-            }
+                Ok(())
+            })?;
             ::cq_gpu_sequence_runtime::release_cached_scratch(&__cq_gpu_pool);
             __cq_gpu_pool.release_unused()?;
             #released
@@ -250,16 +362,22 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
             }
         });
         // Restore logical host symbols only at the explicit output boundary.
-        quote!(#state.to_host()?.into_iter().map(|word| {
-            let row = #packed.unpack(word)?;
-            Ok((#(#fields,)*))
-        }).collect::<::gpu_datalog_runtime::Result<::std::vec::Vec<_>>>()?.into_iter())
+        let runner = program_runner(index);
+        quote!(#runner(#[inline] || -> ::gpu_datalog_runtime::Result<_> {
+            Ok(#state.to_host()?.into_iter().map(|word| {
+                let row = #packed.unpack(word)?;
+                Ok((#(#fields,)*))
+            }).collect::<::gpu_datalog_runtime::Result<::std::vec::Vec<_>>>()?.into_iter())
+        })?)
     }).collect::<Vec<_>>();
     let result = if outputs.len() == 1 { outputs[0].clone() } else { quote!((#(#outputs,)*)) };
     let relation_count = context.relations.len();
     let indices = (0..relation_count).collect::<Vec<_>>();
     let initialized = memory_snapshot(context, &indices, &[], "initialized");
+    let initialized_runner = program_runner(relation_count);
+    let initialized = quote!(#initialized_runner(#[inline] || { #initialized }););
     syn::parse2(quote!({
+        #(#hole_items)*
         (|| -> ::gpu_datalog_runtime::Result<_> {
             let __cq_gpu_pool = ::gpu_datalog_runtime::thread_pool()?;
             ::gpu_datalog_runtime::phases::start();
