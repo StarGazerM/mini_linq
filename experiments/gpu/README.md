@@ -27,7 +27,7 @@ either endpoint.
 
 The workspace pins the pushed `mini-linq/main` branches of the StarGazerM
 cuda-oxide and RCCL forks by commit, without local dependency patches.
-The declared source of truth is cuda-oxide `e7d4a63ba` and RCCL `d4c95133`;
+The declared source of truth is cuda-oxide `1c1c42105` and RCCL `8649af3e`;
 the local `/data/cuda-oxide` and `/data/rccl` checkouts match those pushed
 revisions. Do not add path patches: update the git pins and lockfile together.
 It uses cuda-oxide's Rust **1.99.1** SIMT toolchain, with `RUSTC_BOOTSTRAP=1`

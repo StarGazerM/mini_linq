@@ -7,6 +7,9 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- cuda-oxide `1c1c42105` / RCCL `8649af3e`: standalone PTX assembly uses
+  `ptxas --split-compile=0` (identical SASS). DOOP cubin assembly 5.53 s ->
+  1.40 s; DOOP GPU release build 52 s -> 42 s, cassandra exact.
 - GPU Datalog host compile time. Generated holes, strata, phases, relation and
   layout initialization, the initial memory snapshot and output decoders run as
   `#[inline]` closures through partitioned `#[inline(never)]` runners

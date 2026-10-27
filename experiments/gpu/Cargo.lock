@@ -964,7 +964,7 @@ dependencies = [
 [[package]]
 name = "cuda-artifact-finalizer"
 version = "0.2.1"
-source = "git+https://github.com/StarGazerM/cuda-oxide.git?rev=e7d4a63baac987e2094cc874aac31998d2cbf32a#e7d4a63baac987e2094cc874aac31998d2cbf32a"
+source = "git+https://github.com/StarGazerM/cuda-oxide.git?rev=1c1c4210522089bc25cc32f4808b2a06e91ff9e4#1c1c4210522089bc25cc32f4808b2a06e91ff9e4"
 dependencies = [
  "libnvvm-sys",
  "nvjitlink-sys",
@@ -978,7 +978,7 @@ dependencies = [
 [[package]]
 name = "cuda-bindings"
 version = "0.5.0"
-source = "git+https://github.com/StarGazerM/cuda-oxide.git?rev=e7d4a63baac987e2094cc874aac31998d2cbf32a#e7d4a63baac987e2094cc874aac31998d2cbf32a"
+source = "git+https://github.com/StarGazerM/cuda-oxide.git?rev=1c1c4210522089bc25cc32f4808b2a06e91ff9e4#1c1c4210522089bc25cc32f4808b2a06e91ff9e4"
 dependencies = [
  "bindgen",
  "libloading",
@@ -991,7 +991,7 @@ dependencies = [
 [[package]]
 name = "cuda-core"
 version = "0.5.0"
-source = "git+https://github.com/StarGazerM/cuda-oxide.git?rev=e7d4a63baac987e2094cc874aac31998d2cbf32a#e7d4a63baac987e2094cc874aac31998d2cbf32a"
+source = "git+https://github.com/StarGazerM/cuda-oxide.git?rev=1c1c4210522089bc25cc32f4808b2a06e91ff9e4#1c1c4210522089bc25cc32f4808b2a06e91ff9e4"
 dependencies = [
  "anyhow",
  "cuda-bindings",
@@ -1003,7 +1003,7 @@ dependencies = [
 [[package]]
 name = "cuda-core-derive"
 version = "0.5.0"
-source = "git+https://github.com/StarGazerM/cuda-oxide.git?rev=e7d4a63baac987e2094cc874aac31998d2cbf32a#e7d4a63baac987e2094cc874aac31998d2cbf32a"
+source = "git+https://github.com/StarGazerM/cuda-oxide.git?rev=1c1c4210522089bc25cc32f4808b2a06e91ff9e4#1c1c4210522089bc25cc32f4808b2a06e91ff9e4"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1013,7 +1013,7 @@ dependencies = [
 [[package]]
 name = "cuda-device"
 version = "0.2.1"
-source = "git+https://github.com/StarGazerM/cuda-oxide.git?rev=e7d4a63baac987e2094cc874aac31998d2cbf32a#e7d4a63baac987e2094cc874aac31998d2cbf32a"
+source = "git+https://github.com/StarGazerM/cuda-oxide.git?rev=1c1c4210522089bc25cc32f4808b2a06e91ff9e4#1c1c4210522089bc25cc32f4808b2a06e91ff9e4"
 dependencies = [
  "cuda-macros",
 ]
@@ -1021,7 +1021,7 @@ dependencies = [
 [[package]]
 name = "cuda-host"
 version = "0.2.1"
-source = "git+https://github.com/StarGazerM/cuda-oxide.git?rev=e7d4a63baac987e2094cc874aac31998d2cbf32a#e7d4a63baac987e2094cc874aac31998d2cbf32a"
+source = "git+https://github.com/StarGazerM/cuda-oxide.git?rev=1c1c4210522089bc25cc32f4808b2a06e91ff9e4#1c1c4210522089bc25cc32f4808b2a06e91ff9e4"
 dependencies = [
  "cuda-artifact-finalizer",
  "cuda-core",
@@ -1039,7 +1039,7 @@ dependencies = [
 [[package]]
 name = "cuda-macros"
 version = "0.2.1"
-source = "git+https://github.com/StarGazerM/cuda-oxide.git?rev=e7d4a63baac987e2094cc874aac31998d2cbf32a#e7d4a63baac987e2094cc874aac31998d2cbf32a"
+source = "git+https://github.com/StarGazerM/cuda-oxide.git?rev=1c1c4210522089bc25cc32f4808b2a06e91ff9e4#1c1c4210522089bc25cc32f4808b2a06e91ff9e4"
 dependencies = [
  "oxide-tile-export",
  "proc-macro2",
@@ -1051,7 +1051,7 @@ dependencies = [
 [[package]]
 name = "cuda-target-spec"
 version = "0.1.0"
-source = "git+https://github.com/StarGazerM/cuda-oxide.git?rev=e7d4a63baac987e2094cc874aac31998d2cbf32a#e7d4a63baac987e2094cc874aac31998d2cbf32a"
+source = "git+https://github.com/StarGazerM/cuda-oxide.git?rev=1c1c4210522089bc25cc32f4808b2a06e91ff9e4#1c1c4210522089bc25cc32f4808b2a06e91ff9e4"
 
 [[package]]
 name = "digest"
@@ -1339,7 +1339,7 @@ dependencies = [
 [[package]]
 name = "libnvvm-sys"
 version = "0.2.1"
-source = "git+https://github.com/StarGazerM/cuda-oxide.git?rev=e7d4a63baac987e2094cc874aac31998d2cbf32a#e7d4a63baac987e2094cc874aac31998d2cbf32a"
+source = "git+https://github.com/StarGazerM/cuda-oxide.git?rev=1c1c4210522089bc25cc32f4808b2a06e91ff9e4#1c1c4210522089bc25cc32f4808b2a06e91ff9e4"
 dependencies = [
  "cuda-target-spec",
  "libloading",
@@ -1418,7 +1418,7 @@ dependencies = [
 [[package]]
 name = "nvjitlink-sys"
 version = "0.2.1"
-source = "git+https://github.com/StarGazerM/cuda-oxide.git?rev=e7d4a63baac987e2094cc874aac31998d2cbf32a#e7d4a63baac987e2094cc874aac31998d2cbf32a"
+source = "git+https://github.com/StarGazerM/cuda-oxide.git?rev=1c1c4210522089bc25cc32f4808b2a06e91ff9e4#1c1c4210522089bc25cc32f4808b2a06e91ff9e4"
 dependencies = [
  "libloading",
  "thiserror",
@@ -1498,7 +1498,7 @@ dependencies = [
 [[package]]
 name = "oxide-tile-export"
 version = "0.2.1"
-source = "git+https://github.com/StarGazerM/cuda-oxide.git?rev=e7d4a63baac987e2094cc874aac31998d2cbf32a#e7d4a63baac987e2094cc874aac31998d2cbf32a"
+source = "git+https://github.com/StarGazerM/cuda-oxide.git?rev=1c1c4210522089bc25cc32f4808b2a06e91ff9e4#1c1c4210522089bc25cc32f4808b2a06e91ff9e4"
 dependencies = [
  "serde",
  "serde_json",
@@ -1527,7 +1527,7 @@ dependencies = [
 [[package]]
 name = "ptx-parse"
 version = "0.1.0"
-source = "git+https://github.com/StarGazerM/cuda-oxide.git?rev=e7d4a63baac987e2094cc874aac31998d2cbf32a#e7d4a63baac987e2094cc874aac31998d2cbf32a"
+source = "git+https://github.com/StarGazerM/cuda-oxide.git?rev=1c1c4210522089bc25cc32f4808b2a06e91ff9e4#1c1c4210522089bc25cc32f4808b2a06e91ff9e4"
 
 [[package]]
 name = "quote"
@@ -1567,7 +1567,7 @@ dependencies = [
 [[package]]
 name = "rccl-cub"
 version = "0.1.0"
-source = "git+https://github.com/StarGazerM/rccl.git?rev=d4c95133fd8891a242802ecad88f119377590b69#d4c95133fd8891a242802ecad88f119377590b69"
+source = "git+https://github.com/StarGazerM/rccl.git?rev=8649af3eaa6b0e896a75e96d3faa8d18357b1372#8649af3eaa6b0e896a75e96d3faa8d18357b1372"
 dependencies = [
  "cuda-core",
  "cuda-device",
@@ -1578,7 +1578,7 @@ dependencies = [
 [[package]]
 name = "rccl-memory"
 version = "0.1.0"
-source = "git+https://github.com/StarGazerM/rccl.git?rev=d4c95133fd8891a242802ecad88f119377590b69#d4c95133fd8891a242802ecad88f119377590b69"
+source = "git+https://github.com/StarGazerM/rccl.git?rev=8649af3eaa6b0e896a75e96d3faa8d18357b1372#8649af3eaa6b0e896a75e96d3faa8d18357b1372"
 dependencies = [
  "cuda-core",
  "cuda-device",
@@ -1588,7 +1588,7 @@ dependencies = [
 [[package]]
 name = "rccl-thrust"
 version = "0.1.0"
-source = "git+https://github.com/StarGazerM/rccl.git?rev=d4c95133fd8891a242802ecad88f119377590b69#d4c95133fd8891a242802ecad88f119377590b69"
+source = "git+https://github.com/StarGazerM/rccl.git?rev=8649af3eaa6b0e896a75e96d3faa8d18357b1372#8649af3eaa6b0e896a75e96d3faa8d18357b1372"
 dependencies = [
  "cuda-core",
  "cuda-device",
@@ -1629,7 +1629,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 [[package]]
 name = "reserved-oxide-symbols"
 version = "0.2.1"
-source = "git+https://github.com/StarGazerM/cuda-oxide.git?rev=e7d4a63baac987e2094cc874aac31998d2cbf32a#e7d4a63baac987e2094cc874aac31998d2cbf32a"
+source = "git+https://github.com/StarGazerM/cuda-oxide.git?rev=1c1c4210522089bc25cc32f4808b2a06e91ff9e4#1c1c4210522089bc25cc32f4808b2a06e91ff9e4"
 
 [[package]]
 name = "rustc-hash"
