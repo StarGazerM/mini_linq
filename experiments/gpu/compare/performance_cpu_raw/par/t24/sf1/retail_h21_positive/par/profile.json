@@ -1,0 +1,1480 @@
+{
+  "answer_rows": 302284,
+  "bag_insertions": 12818127,
+  "build_rows_verified": false,
+  "candidate_insertions": 0,
+  "distinct_insertions": 0,
+  "index_builds": 0,
+  "median_ms": 732.451732,
+  "operator_rows": [
+    {
+      "inputs": [
+        "__cq___lookup_expand___unfiltered_0",
+        "__cq___cq___lookup_expand___unfiltered_0_unfiltered_0"
+      ],
+      "key": "_other_commit,_other_receipt,commit_date,nation_key,order_key,other_supplier,receipt_date,waiting_supplier",
+      "kind": "UNION",
+      "result": "__cq___cq___lookup_expand___unfiltered_0_alternatives_0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "inputs": [
+        "__cq___cq___lookup_expand__unfiltered_0_unfiltered_0",
+        "r1"
+      ],
+      "key": "nation_key",
+      "kind": "PROBE",
+      "result": "__cq___cq___lookup_expand___unfiltered_0_unfiltered_0",
+      "rows_in": 378274,
+      "rows_inserted": 0,
+      "rows_out": 378274
+    },
+    {
+      "inputs": [
+        "__cq___cq___lookup_lookup__unfiltered_0_unfiltered_0",
+        "r2"
+      ],
+      "key": "waiting_supplier",
+      "kind": "PROBE",
+      "result": "__cq___cq___lookup_expand__unfiltered_0_unfiltered_0",
+      "rows_in": 378274,
+      "rows_inserted": 0,
+      "rows_out": 378274
+    },
+    {
+      "inputs": [
+        "__cq___cq___lookup_forward_unfiltered_0_unfiltered_0",
+        "r7"
+      ],
+      "key": "order_key",
+      "kind": "PROBE",
+      "result": "__cq___cq___lookup_expand_unfiltered_0_unfiltered_0",
+      "rows_in": 356794,
+      "rows_inserted": 0,
+      "rows_out": 378274
+    },
+    {
+      "inputs": [
+        "r8",
+        "r7"
+      ],
+      "key": "order_key",
+      "kind": "SEMI",
+      "result": "__cq___cq___lookup_forward_unfiltered_0_unfiltered_0",
+      "rows_in": 6001215,
+      "rows_inserted": 0,
+      "rows_out": 356794
+    },
+    {
+      "inputs": [
+        "__cq___cq___lookup_expand_unfiltered_0_unfiltered_0",
+        "r2"
+      ],
+      "key": "waiting_supplier",
+      "kind": "SEMI",
+      "result": "__cq___cq___lookup_lookup__unfiltered_0_unfiltered_0",
+      "rows_in": 378274,
+      "rows_inserted": 0,
+      "rows_out": 378274
+    },
+    {
+      "inputs": [
+        "__lookup_expand__",
+        "__cq___lookup_expand___unfiltered_1"
+      ],
+      "key": "_other_commit,_other_receipt,commit_date,nation_key,order_key,other_supplier,receipt_date,waiting_supplier",
+      "kind": "UNION",
+      "result": "__cq___lookup_expand___alternatives_0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "inputs": [
+        "__cq___lookup_lookup___unfiltered_0",
+        "r1"
+      ],
+      "key": "nation_key",
+      "kind": "PROBE",
+      "result": "__cq___lookup_expand___unfiltered_0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "inputs": [
+        "__cq___lookup_expand__unfiltered_1",
+        "r1"
+      ],
+      "key": "nation_key",
+      "kind": "PROBE",
+      "result": "__cq___lookup_expand___unfiltered_1",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "inputs": [
+        "__cq___lookup_lookup__unfiltered_0",
+        "r2"
+      ],
+      "key": "waiting_supplier",
+      "kind": "PROBE",
+      "result": "__cq___lookup_expand__unfiltered_0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "inputs": [
+        "__cq___lookup_lookup__unfiltered_1",
+        "r2"
+      ],
+      "key": "waiting_supplier",
+      "kind": "PROBE",
+      "result": "__cq___lookup_expand__unfiltered_1",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "inputs": [
+        "__cq___lookup_forward_unfiltered_0",
+        "r7"
+      ],
+      "key": "order_key",
+      "kind": "PROBE",
+      "result": "__cq___lookup_expand_unfiltered_0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "inputs": [
+        "__cq___lookup_lookup_unfiltered_0",
+        "r7"
+      ],
+      "key": "order_key",
+      "kind": "PROBE",
+      "result": "__cq___lookup_expand_unfiltered_1",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "inputs": [
+        "r8",
+        "r7"
+      ],
+      "key": "order_key",
+      "kind": "SEMI",
+      "result": "__cq___lookup_forward_unfiltered_0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "inputs": [
+        "r8",
+        "r7"
+      ],
+      "key": "order_key",
+      "kind": "SEMI",
+      "result": "__cq___lookup_forward_unfiltered_1",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "inputs": [
+        "__cq___lookup_expand__unfiltered_0",
+        "r1"
+      ],
+      "key": "nation_key",
+      "kind": "SEMI",
+      "result": "__cq___lookup_lookup___unfiltered_0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "inputs": [
+        "__cq___lookup_expand_unfiltered_0",
+        "r2"
+      ],
+      "key": "waiting_supplier",
+      "kind": "SEMI",
+      "result": "__cq___lookup_lookup__unfiltered_0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "inputs": [
+        "__cq___lookup_expand_unfiltered_1",
+        "r2"
+      ],
+      "key": "waiting_supplier",
+      "kind": "SEMI",
+      "result": "__cq___lookup_lookup__unfiltered_1",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "inputs": [
+        "__cq___lookup_forward_unfiltered_1",
+        "r6"
+      ],
+      "key": "order_key",
+      "kind": "SEMI",
+      "result": "__cq___lookup_lookup_unfiltered_0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "inputs": [
+        "r12",
+        "__cq_r12_unfiltered_0"
+      ],
+      "key": "_other_commit,_other_receipt,commit_date,nation_key,order_key,other_supplier,receipt_date,waiting_supplier",
+      "kind": "UNION",
+      "result": "__cq_r12_alternatives_0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "inputs": [
+        "__cq___cq___lookup_expand___unfiltered_0_alternatives_0",
+        "r6"
+      ],
+      "key": "order_key",
+      "kind": "PROBE",
+      "result": "__cq_r12_unfiltered_0",
+      "rows_in": 378274,
+      "rows_inserted": 0,
+      "rows_out": 378274
+    },
+    {
+      "inputs": [
+        "__lookup_lookup",
+        "r7"
+      ],
+      "key": "order_key",
+      "kind": "PROBE",
+      "result": "__lookup_expand",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "inputs": [
+        "__lookup_lookup_",
+        "r2"
+      ],
+      "key": "waiting_supplier",
+      "kind": "PROBE",
+      "result": "__lookup_expand_",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "inputs": [
+        "__lookup_lookup__",
+        "r1"
+      ],
+      "key": "nation_key",
+      "kind": "PROBE",
+      "result": "__lookup_expand__",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "inputs": [
+        "r8",
+        "r7"
+      ],
+      "key": "order_key",
+      "kind": "SEMI",
+      "result": "__lookup_forward",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "inputs": [
+        "__lookup_forward",
+        "r6"
+      ],
+      "key": "order_key",
+      "kind": "SEMI",
+      "result": "__lookup_lookup",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "inputs": [
+        "__lookup_expand",
+        "r2"
+      ],
+      "key": "waiting_supplier",
+      "kind": "SEMI",
+      "result": "__lookup_lookup_",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "inputs": [
+        "__lookup_expand_",
+        "r1"
+      ],
+      "key": "nation_key",
+      "kind": "SEMI",
+      "result": "__lookup_lookup__",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "inputs": [],
+      "key": "Supplier",
+      "kind": "RENAME",
+      "result": "r0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 10000
+    },
+    {
+      "inputs": [],
+      "key": "Nation",
+      "kind": "RENAME",
+      "result": "r1",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 1
+    },
+    {
+      "inputs": [
+        "__cq___lookup_expand___alternatives_0",
+        "r6"
+      ],
+      "key": "order_key",
+      "kind": "PROBE",
+      "result": "r12",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "inputs": [
+        "__cq_r12_alternatives_0"
+      ],
+      "key": "_other_commit,_other_receipt,commit_date,nation_key,order_key,other_supplier,receipt_date,waiting_supplier",
+      "kind": "SELECT",
+      "result": "r13",
+      "rows_in": 378274,
+      "rows_inserted": 0,
+      "rows_out": 302383
+    },
+    {
+      "inputs": [
+        "r13"
+      ],
+      "key": "order_key,other_supplier,waiting_supplier",
+      "kind": "PROJECT",
+      "result": "r14",
+      "rows_in": 302383,
+      "rows_inserted": 0,
+      "rows_out": 302383
+    },
+    {
+      "inputs": [
+        "r0",
+        "r1"
+      ],
+      "key": "nation_key",
+      "kind": "SEMI",
+      "result": "r2",
+      "rows_in": 10000,
+      "rows_inserted": 0,
+      "rows_out": 411
+    },
+    {
+      "inputs": [],
+      "key": "Lineitem",
+      "kind": "RENAME",
+      "result": "r3",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 6001215
+    },
+    {
+      "inputs": [
+        "r3"
+      ],
+      "key": "commit_date,order_key,receipt_date,waiting_supplier",
+      "kind": "SELECT",
+      "result": "r4",
+      "rows_in": 6001215,
+      "rows_inserted": 0,
+      "rows_out": 3793296
+    },
+    {
+      "inputs": [
+        "r4",
+        "r2"
+      ],
+      "key": "waiting_supplier",
+      "kind": "SEMI",
+      "result": "r5",
+      "rows_in": 3793296,
+      "rows_inserted": 0,
+      "rows_out": 156739
+    },
+    {
+      "inputs": [],
+      "key": "Orders",
+      "kind": "RENAME",
+      "result": "r6",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 729413
+    },
+    {
+      "inputs": [
+        "r5",
+        "r6"
+      ],
+      "key": "order_key",
+      "kind": "SEMI",
+      "result": "r7",
+      "rows_in": 156739,
+      "rows_inserted": 0,
+      "rows_out": 75871
+    },
+    {
+      "inputs": [],
+      "key": "Lineitem",
+      "kind": "RENAME",
+      "result": "r8",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 6001215
+    },
+    {
+      "inputs": [
+        "r0"
+      ],
+      "key": "",
+      "kind": "ROWS_BUILD",
+      "result": "r0.rows",
+      "rows_in": 10000,
+      "rows_inserted": 10000,
+      "rows_out": 10000
+    },
+    {
+      "inputs": [
+        "r1"
+      ],
+      "key": "",
+      "kind": "ROWS_BUILD",
+      "result": "__cq_key_input_r1.rows",
+      "rows_in": 1,
+      "rows_inserted": 1,
+      "rows_out": 1
+    },
+    {
+      "inputs": [
+        "r1"
+      ],
+      "key": "",
+      "kind": "PARTITION_BUILD",
+      "result": "r1.parts",
+      "rows_in": 1,
+      "rows_inserted": 1,
+      "rows_out": 1
+    },
+    {
+      "inputs": [
+        "r1"
+      ],
+      "key": "nation_key",
+      "kind": "INDEX_BUILD",
+      "result": "r1.index.nation_key",
+      "rows_in": 1,
+      "rows_inserted": 1,
+      "rows_out": 1
+    },
+    {
+      "inputs": [
+        "r2"
+      ],
+      "key": "waiting_supplier",
+      "kind": "INDEX_BUILD",
+      "result": "r2.index.waiting_supplier",
+      "rows_in": 411,
+      "rows_inserted": 411,
+      "rows_out": 411
+    },
+    {
+      "inputs": [
+        "r3"
+      ],
+      "key": "",
+      "kind": "ROWS_BUILD",
+      "result": "r3.rows",
+      "rows_in": 6001215,
+      "rows_inserted": 6001215,
+      "rows_out": 6001215
+    },
+    {
+      "inputs": [
+        "r6"
+      ],
+      "key": "order_key",
+      "kind": "INDEX_BUILD",
+      "result": "r6.index.order_key",
+      "rows_in": 729413,
+      "rows_inserted": 729413,
+      "rows_out": 729413
+    },
+    {
+      "inputs": [
+        "r7"
+      ],
+      "key": "order_key",
+      "kind": "INDEX_BUILD",
+      "result": "r7.index.order_key",
+      "rows_in": 75871,
+      "rows_inserted": 75871,
+      "rows_out": 72110
+    },
+    {
+      "inputs": [
+        "r8"
+      ],
+      "key": "",
+      "kind": "ROWS_BUILD",
+      "result": "r8.rows",
+      "rows_in": 6001215,
+      "rows_inserted": 6001215,
+      "rows_out": 6001215
+    },
+    {
+      "inputs": [
+        "r14"
+      ],
+      "key": "",
+      "kind": "DEDUP",
+      "result": "r14.dedup",
+      "rows_in": 302383,
+      "rows_inserted": 302383,
+      "rows_out": 302284
+    },
+    {
+      "inputs": [
+        "r14"
+      ],
+      "key": "",
+      "kind": "ANSWER",
+      "result": "r14.answer",
+      "rows_in": 302284,
+      "rows_inserted": 0,
+      "rows_out": 302284
+    },
+    {
+      "inputs": [],
+      "key": "",
+      "kind": "TASKS_BUILD_WALL",
+      "result": "__cq_tasks_build",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "inputs": [
+        "r14.answer"
+      ],
+      "key": "",
+      "kind": "TASKS_QUERY_WALL",
+      "result": "__cq_tasks_query",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "inputs": [],
+      "key": "",
+      "kind": "TASKS_BUILD_WALL_TOTAL",
+      "result": "__cq_tasks_build_wall_total",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    }
+  ],
+  "operators": [
+    {
+      "calls": 1,
+      "elapsed_ms": 732.451041,
+      "id": 0,
+      "inputs": [],
+      "key": "retail_h21_positive",
+      "kind": "QUERY",
+      "program": 0,
+      "result": "query",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 302284
+    },
+    {
+      "calls": 0,
+      "elapsed_ms": 0.0,
+      "id": 1,
+      "inputs": [
+        "__cq___lookup_expand___unfiltered_0",
+        "__cq___cq___lookup_expand___unfiltered_0_unfiltered_0"
+      ],
+      "key": "_other_commit,_other_receipt,commit_date,nation_key,order_key,other_supplier,receipt_date,waiting_supplier",
+      "kind": "UNION",
+      "program": 1,
+      "result": "__cq___cq___lookup_expand___unfiltered_0_alternatives_0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "calls": 378274,
+      "elapsed_ms": 53.159837,
+      "id": 2,
+      "inputs": [
+        "__cq___cq___lookup_expand__unfiltered_0_unfiltered_0",
+        "r1"
+      ],
+      "key": "nation_key",
+      "kind": "PROBE",
+      "program": 1,
+      "result": "__cq___cq___lookup_expand___unfiltered_0_unfiltered_0",
+      "rows_in": 378274,
+      "rows_inserted": 0,
+      "rows_out": 378274
+    },
+    {
+      "calls": 378274,
+      "elapsed_ms": 79.716174,
+      "id": 3,
+      "inputs": [
+        "__cq___cq___lookup_lookup__unfiltered_0_unfiltered_0",
+        "r2"
+      ],
+      "key": "waiting_supplier",
+      "kind": "PROBE",
+      "program": 1,
+      "result": "__cq___cq___lookup_expand__unfiltered_0_unfiltered_0",
+      "rows_in": 378274,
+      "rows_inserted": 0,
+      "rows_out": 378274
+    },
+    {
+      "calls": 356794,
+      "elapsed_ms": 104.166501,
+      "id": 4,
+      "inputs": [
+        "__cq___cq___lookup_forward_unfiltered_0_unfiltered_0",
+        "r7"
+      ],
+      "key": "order_key",
+      "kind": "PROBE",
+      "program": 1,
+      "result": "__cq___cq___lookup_expand_unfiltered_0_unfiltered_0",
+      "rows_in": 356794,
+      "rows_inserted": 0,
+      "rows_out": 378274
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 156.162366,
+      "id": 5,
+      "inputs": [
+        "r8",
+        "r7"
+      ],
+      "key": "order_key",
+      "kind": "SEMI",
+      "program": 1,
+      "result": "__cq___cq___lookup_forward_unfiltered_0_unfiltered_0",
+      "rows_in": 6001215,
+      "rows_inserted": 0,
+      "rows_out": 356794
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 156.163108,
+      "id": 6,
+      "inputs": [
+        "__cq___cq___lookup_expand_unfiltered_0_unfiltered_0",
+        "r2"
+      ],
+      "key": "waiting_supplier",
+      "kind": "SEMI",
+      "program": 1,
+      "result": "__cq___cq___lookup_lookup__unfiltered_0_unfiltered_0",
+      "rows_in": 378274,
+      "rows_inserted": 0,
+      "rows_out": 378274
+    },
+    {
+      "calls": 0,
+      "elapsed_ms": 0.0,
+      "id": 7,
+      "inputs": [
+        "__lookup_expand__",
+        "__cq___lookup_expand___unfiltered_1"
+      ],
+      "key": "_other_commit,_other_receipt,commit_date,nation_key,order_key,other_supplier,receipt_date,waiting_supplier",
+      "kind": "UNION",
+      "program": 1,
+      "result": "__cq___lookup_expand___alternatives_0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "calls": 0,
+      "elapsed_ms": 0.0,
+      "id": 8,
+      "inputs": [
+        "__cq___lookup_lookup___unfiltered_0",
+        "r1"
+      ],
+      "key": "nation_key",
+      "kind": "PROBE",
+      "program": 1,
+      "result": "__cq___lookup_expand___unfiltered_0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "calls": 0,
+      "elapsed_ms": 0.0,
+      "id": 9,
+      "inputs": [
+        "__cq___lookup_expand__unfiltered_1",
+        "r1"
+      ],
+      "key": "nation_key",
+      "kind": "PROBE",
+      "program": 1,
+      "result": "__cq___lookup_expand___unfiltered_1",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "calls": 0,
+      "elapsed_ms": 0.0,
+      "id": 10,
+      "inputs": [
+        "__cq___lookup_lookup__unfiltered_0",
+        "r2"
+      ],
+      "key": "waiting_supplier",
+      "kind": "PROBE",
+      "program": 1,
+      "result": "__cq___lookup_expand__unfiltered_0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "calls": 0,
+      "elapsed_ms": 0.0,
+      "id": 11,
+      "inputs": [
+        "__cq___lookup_lookup__unfiltered_1",
+        "r2"
+      ],
+      "key": "waiting_supplier",
+      "kind": "PROBE",
+      "program": 1,
+      "result": "__cq___lookup_expand__unfiltered_1",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "calls": 0,
+      "elapsed_ms": 0.0,
+      "id": 12,
+      "inputs": [
+        "__cq___lookup_forward_unfiltered_0",
+        "r7"
+      ],
+      "key": "order_key",
+      "kind": "PROBE",
+      "program": 1,
+      "result": "__cq___lookup_expand_unfiltered_0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "calls": 0,
+      "elapsed_ms": 0.0,
+      "id": 13,
+      "inputs": [
+        "__cq___lookup_lookup_unfiltered_0",
+        "r7"
+      ],
+      "key": "order_key",
+      "kind": "PROBE",
+      "program": 1,
+      "result": "__cq___lookup_expand_unfiltered_1",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "calls": 0,
+      "elapsed_ms": 0.0,
+      "id": 14,
+      "inputs": [
+        "r8",
+        "r7"
+      ],
+      "key": "order_key",
+      "kind": "SEMI",
+      "program": 1,
+      "result": "__cq___lookup_forward_unfiltered_0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "calls": 0,
+      "elapsed_ms": 0.0,
+      "id": 15,
+      "inputs": [
+        "r8",
+        "r7"
+      ],
+      "key": "order_key",
+      "kind": "SEMI",
+      "program": 1,
+      "result": "__cq___lookup_forward_unfiltered_1",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "calls": 0,
+      "elapsed_ms": 0.0,
+      "id": 16,
+      "inputs": [
+        "__cq___lookup_expand__unfiltered_0",
+        "r1"
+      ],
+      "key": "nation_key",
+      "kind": "SEMI",
+      "program": 1,
+      "result": "__cq___lookup_lookup___unfiltered_0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "calls": 0,
+      "elapsed_ms": 0.0,
+      "id": 17,
+      "inputs": [
+        "__cq___lookup_expand_unfiltered_0",
+        "r2"
+      ],
+      "key": "waiting_supplier",
+      "kind": "SEMI",
+      "program": 1,
+      "result": "__cq___lookup_lookup__unfiltered_0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "calls": 0,
+      "elapsed_ms": 0.0,
+      "id": 18,
+      "inputs": [
+        "__cq___lookup_expand_unfiltered_1",
+        "r2"
+      ],
+      "key": "waiting_supplier",
+      "kind": "SEMI",
+      "program": 1,
+      "result": "__cq___lookup_lookup__unfiltered_1",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "calls": 0,
+      "elapsed_ms": 0.0,
+      "id": 19,
+      "inputs": [
+        "__cq___lookup_forward_unfiltered_1",
+        "r6"
+      ],
+      "key": "order_key",
+      "kind": "SEMI",
+      "program": 1,
+      "result": "__cq___lookup_lookup_unfiltered_0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "calls": 0,
+      "elapsed_ms": 0.0,
+      "id": 20,
+      "inputs": [
+        "r12",
+        "__cq_r12_unfiltered_0"
+      ],
+      "key": "_other_commit,_other_receipt,commit_date,nation_key,order_key,other_supplier,receipt_date,waiting_supplier",
+      "kind": "UNION",
+      "program": 1,
+      "result": "__cq_r12_alternatives_0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "calls": 378274,
+      "elapsed_ms": 12.669901000000001,
+      "id": 21,
+      "inputs": [
+        "__cq___cq___lookup_expand___unfiltered_0_alternatives_0",
+        "r6"
+      ],
+      "key": "order_key",
+      "kind": "PROBE",
+      "program": 1,
+      "result": "__cq_r12_unfiltered_0",
+      "rows_in": 378274,
+      "rows_inserted": 0,
+      "rows_out": 378274
+    },
+    {
+      "calls": 0,
+      "elapsed_ms": 0.0,
+      "id": 22,
+      "inputs": [
+        "__lookup_lookup",
+        "r7"
+      ],
+      "key": "order_key",
+      "kind": "PROBE",
+      "program": 1,
+      "result": "__lookup_expand",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "calls": 0,
+      "elapsed_ms": 0.0,
+      "id": 23,
+      "inputs": [
+        "__lookup_lookup_",
+        "r2"
+      ],
+      "key": "waiting_supplier",
+      "kind": "PROBE",
+      "program": 1,
+      "result": "__lookup_expand_",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "calls": 0,
+      "elapsed_ms": 0.0,
+      "id": 24,
+      "inputs": [
+        "__lookup_lookup__",
+        "r1"
+      ],
+      "key": "nation_key",
+      "kind": "PROBE",
+      "program": 1,
+      "result": "__lookup_expand__",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "calls": 0,
+      "elapsed_ms": 0.0,
+      "id": 25,
+      "inputs": [
+        "r8",
+        "r7"
+      ],
+      "key": "order_key",
+      "kind": "SEMI",
+      "program": 1,
+      "result": "__lookup_forward",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "calls": 0,
+      "elapsed_ms": 0.0,
+      "id": 26,
+      "inputs": [
+        "__lookup_forward",
+        "r6"
+      ],
+      "key": "order_key",
+      "kind": "SEMI",
+      "program": 1,
+      "result": "__lookup_lookup",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "calls": 0,
+      "elapsed_ms": 0.0,
+      "id": 27,
+      "inputs": [
+        "__lookup_expand",
+        "r2"
+      ],
+      "key": "waiting_supplier",
+      "kind": "SEMI",
+      "program": 1,
+      "result": "__lookup_lookup_",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "calls": 0,
+      "elapsed_ms": 0.0,
+      "id": 28,
+      "inputs": [
+        "__lookup_expand_",
+        "r1"
+      ],
+      "key": "nation_key",
+      "kind": "SEMI",
+      "program": 1,
+      "result": "__lookup_lookup__",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 0.009839,
+      "id": 29,
+      "inputs": [],
+      "key": "Supplier",
+      "kind": "RENAME",
+      "program": 1,
+      "result": "r0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 10000
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 0.0027760000000000003,
+      "id": 30,
+      "inputs": [],
+      "key": "Nation",
+      "kind": "RENAME",
+      "program": 1,
+      "result": "r1",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 1
+    },
+    {
+      "calls": 0,
+      "elapsed_ms": 0.0,
+      "id": 31,
+      "inputs": [
+        "__cq___lookup_expand___alternatives_0",
+        "r6"
+      ],
+      "key": "order_key",
+      "kind": "PROBE",
+      "program": 1,
+      "result": "r12",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 156.163839,
+      "id": 32,
+      "inputs": [
+        "__cq_r12_alternatives_0"
+      ],
+      "key": "_other_commit,_other_receipt,commit_date,nation_key,order_key,other_supplier,receipt_date,waiting_supplier",
+      "kind": "SELECT",
+      "program": 1,
+      "result": "r13",
+      "rows_in": 378274,
+      "rows_inserted": 0,
+      "rows_out": 302383
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 156.164099,
+      "id": 33,
+      "inputs": [
+        "r13"
+      ],
+      "key": "order_key,other_supplier,waiting_supplier",
+      "kind": "PROJECT",
+      "program": 1,
+      "result": "r14",
+      "rows_in": 302383,
+      "rows_inserted": 0,
+      "rows_out": 302383
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 0.063943,
+      "id": 34,
+      "inputs": [
+        "r0",
+        "r1"
+      ],
+      "key": "nation_key",
+      "kind": "SEMI",
+      "program": 1,
+      "result": "r2",
+      "rows_in": 10000,
+      "rows_inserted": 0,
+      "rows_out": 411
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 70.509298,
+      "id": 35,
+      "inputs": [],
+      "key": "Lineitem",
+      "kind": "RENAME",
+      "program": 1,
+      "result": "r3",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 6001215
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 67.306929,
+      "id": 36,
+      "inputs": [
+        "r3"
+      ],
+      "key": "commit_date,order_key,receipt_date,waiting_supplier",
+      "kind": "SELECT",
+      "program": 1,
+      "result": "r4",
+      "rows_in": 6001215,
+      "rows_inserted": 0,
+      "rows_out": 3793296
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 67.30722899999999,
+      "id": 37,
+      "inputs": [
+        "r4",
+        "r2"
+      ],
+      "key": "waiting_supplier",
+      "kind": "SEMI",
+      "program": 1,
+      "result": "r5",
+      "rows_in": 3793296,
+      "rows_inserted": 0,
+      "rows_out": 156739
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 28.877579,
+      "id": 38,
+      "inputs": [],
+      "key": "Orders",
+      "kind": "RENAME",
+      "program": 1,
+      "result": "r6",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 729413
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 67.30779000000001,
+      "id": 39,
+      "inputs": [
+        "r5",
+        "r6"
+      ],
+      "key": "order_key",
+      "kind": "SEMI",
+      "program": 1,
+      "result": "r7",
+      "rows_in": 156739,
+      "rows_inserted": 0,
+      "rows_out": 75871
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 39.276955,
+      "id": 40,
+      "inputs": [],
+      "key": "Lineitem",
+      "kind": "RENAME",
+      "program": 1,
+      "result": "r8",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 6001215
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 0.039425,
+      "id": 41,
+      "inputs": [
+        "r0"
+      ],
+      "key": "",
+      "kind": "ROWS_BUILD",
+      "program": 1,
+      "result": "r0.rows",
+      "rows_in": 10000,
+      "rows_inserted": 10000,
+      "rows_out": 10000
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 0.003336,
+      "id": 42,
+      "inputs": [
+        "r1"
+      ],
+      "key": "",
+      "kind": "ROWS_BUILD",
+      "program": 1,
+      "result": "__cq_key_input_r1.rows",
+      "rows_in": 1,
+      "rows_inserted": 1,
+      "rows_out": 1
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 0.28187,
+      "id": 43,
+      "inputs": [
+        "r1"
+      ],
+      "key": "",
+      "kind": "PARTITION_BUILD",
+      "program": 1,
+      "result": "r1.parts",
+      "rows_in": 1,
+      "rows_inserted": 1,
+      "rows_out": 1
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 0.053593,
+      "id": 44,
+      "inputs": [
+        "r1"
+      ],
+      "key": "nation_key",
+      "kind": "INDEX_BUILD",
+      "program": 1,
+      "result": "r1.index.nation_key",
+      "rows_in": 1,
+      "rows_inserted": 1,
+      "rows_out": 1
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 0.129839,
+      "id": 45,
+      "inputs": [
+        "r2"
+      ],
+      "key": "waiting_supplier",
+      "kind": "INDEX_BUILD",
+      "program": 1,
+      "result": "r2.index.waiting_supplier",
+      "rows_in": 411,
+      "rows_inserted": 411,
+      "rows_out": 411
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 172.433358,
+      "id": 46,
+      "inputs": [
+        "r3"
+      ],
+      "key": "",
+      "kind": "ROWS_BUILD",
+      "program": 1,
+      "result": "r3.rows",
+      "rows_in": 6001215,
+      "rows_inserted": 6001215,
+      "rows_out": 6001215
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 81.808198,
+      "id": 47,
+      "inputs": [
+        "r6"
+      ],
+      "key": "order_key",
+      "kind": "INDEX_BUILD",
+      "program": 1,
+      "result": "r6.index.order_key",
+      "rows_in": 729413,
+      "rows_inserted": 729413,
+      "rows_out": 729413
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 172.292097,
+      "id": 48,
+      "inputs": [
+        "r7"
+      ],
+      "key": "order_key",
+      "kind": "INDEX_BUILD",
+      "program": 1,
+      "result": "r7.index.order_key",
+      "rows_in": 75871,
+      "rows_inserted": 75871,
+      "rows_out": 72110
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 99.38376,
+      "id": 49,
+      "inputs": [
+        "r8"
+      ],
+      "key": "",
+      "kind": "ROWS_BUILD",
+      "program": 1,
+      "result": "r8.rows",
+      "rows_in": 6001215,
+      "rows_inserted": 6001215,
+      "rows_out": 6001215
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 182.355939,
+      "id": 50,
+      "inputs": [
+        "r14"
+      ],
+      "key": "",
+      "kind": "DEDUP",
+      "program": 1,
+      "result": "r14.dedup",
+      "rows_in": 302383,
+      "rows_inserted": 302383,
+      "rows_out": 302284
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 0.537651,
+      "id": 51,
+      "inputs": [
+        "r14"
+      ],
+      "key": "",
+      "kind": "ANSWER",
+      "program": 1,
+      "result": "r14.answer",
+      "rows_in": 302284,
+      "rows_inserted": 0,
+      "rows_out": 302284
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 526.433111,
+      "id": 52,
+      "inputs": [],
+      "key": "",
+      "kind": "TASKS_BUILD_WALL",
+      "program": 1,
+      "result": "__cq_tasks_build",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 182.897598,
+      "id": 53,
+      "inputs": [
+        "r14.answer"
+      ],
+      "key": "",
+      "kind": "TASKS_QUERY_WALL",
+      "program": 1,
+      "result": "__cq_tasks_query",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 526.433081,
+      "id": 54,
+      "inputs": [],
+      "key": "",
+      "kind": "TASKS_BUILD_WALL_TOTAL",
+      "program": 0,
+      "result": "__cq_tasks_build_wall_total",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    }
+  ],
+  "rows_copied": 0,
+  "rows_enumerated": 0,
+  "samples_ms": [
+    720.655508,
+    726.757848,
+    732.451732,
+    737.655899,
+    788.872702
+  ],
+  "set_insertions": 302383,
+  "top_level_clock_verified": true,
+  "top_level_ms": 732.451041,
+  "tree": "QUERY            query [retail_h21_positive] inputs= rows=302284 in=0 inserted=0 t=732.451ms\n  TASKS_BUILD_WALL_TOTAL __cq_tasks_build_wall_total [] inputs= rows=0 in=0 inserted=0 t=526.433ms\n  TASKS_QUERY_WALL __cq_tasks_query [] inputs=r14.answer rows=0 in=0 inserted=0 t=182.898ms\n    ANSWER           r14.answer [] inputs=r14 rows=302284 in=302284 inserted=0 t=0.538ms\n      PROJECT          r14 [order_key,other_supplier,waiting_supplier] inputs=r13 rows=302383 in=302383 inserted=0 t=156.164ms\n        SELECT           r13 [_other_commit,_other_receipt,commit_date,nation_key,order_key,other_supplier,receipt_date,waiting_supplier] inputs=__cq_r12_alternatives_0 rows=302383 in=378274 inserted=0 t=156.164ms\n          UNION            __cq_r12_alternatives_0 [_other_commit,_other_receipt,commit_date,nation_key,order_key,other_supplier,receipt_date,waiting_supplier] inputs=r12,__cq_r12_unfiltered_0 rows=0 in=0 inserted=0 t=0.000ms\n            PROBE            r12 [order_key] inputs=__cq___lookup_expand___alternatives_0,r6 rows=0 in=0 inserted=0 t=0.000ms\n              UNION            __cq___lookup_expand___alternatives_0 [_other_commit,_other_receipt,commit_date,nation_key,order_key,other_supplier,receipt_date,waiting_supplier] inputs=__lookup_expand__,__cq___lookup_expand___unfiltered_1 rows=0 in=0 inserted=0 t=0.000ms\n                PROBE            __lookup_expand__ [nation_key] inputs=__lookup_lookup__,r1 rows=0 in=0 inserted=0 t=0.000ms\n                  SEMI             __lookup_lookup__ [nation_key] inputs=__lookup_expand_,r1 rows=0 in=0 inserted=0 t=0.000ms\n                    PROBE            __lookup_expand_ [waiting_supplier] inputs=__lookup_lookup_,r2 rows=0 in=0 inserted=0 t=0.000ms\n                      SEMI             __lookup_lookup_ [waiting_supplier] inputs=__lookup_expand,r2 rows=0 in=0 inserted=0 t=0.000ms\n                        PROBE            __lookup_expand [order_key] inputs=__lookup_lookup,r7 rows=0 in=0 inserted=0 t=0.000ms\n                          SEMI             __lookup_lookup [order_key] inputs=__lookup_forward,r6 rows=0 in=0 inserted=0 t=0.000ms\n                            SEMI             __lookup_forward [order_key] inputs=r8,r7 rows=0 in=0 inserted=0 t=0.000ms\n                              RENAME           r8 [Lineitem] inputs= rows=6001215 in=0 inserted=0 t=39.277ms\n                              SEMI             r7 [order_key] inputs=r5,r6 rows=75871 in=156739 inserted=0 t=67.308ms\n                                SEMI             r5 [waiting_supplier] inputs=r4,r2 rows=156739 in=3793296 inserted=0 t=67.307ms\n                                  SELECT           r4 [commit_date,order_key,receipt_date,waiting_supplier] inputs=r3 rows=3793296 in=6001215 inserted=0 t=67.307ms\n                                    RENAME           r3 [Lineitem] inputs= rows=6001215 in=0 inserted=0 t=70.509ms\n                                  SEMI             r2 [nation_key] inputs=r0,r1 rows=411 in=10000 inserted=0 t=0.064ms\n                                    RENAME           r0 [Supplier] inputs= rows=10000 in=0 inserted=0 t=0.010ms\n                                    RENAME           r1 [Nation] inputs= rows=1 in=0 inserted=0 t=0.003ms\n                                RENAME           r6 [Orders] inputs= rows=729413 in=0 inserted=0 t=28.878ms\n                            RENAME           r6 [Orders] inputs= rows=729413 in=0 inserted=0 t=28.878ms (shared)\n                          SEMI             r7 [order_key] inputs=r5,r6 rows=75871 in=156739 inserted=0 t=67.308ms (shared)\n                        SEMI             r2 [nation_key] inputs=r0,r1 rows=411 in=10000 inserted=0 t=0.064ms (shared)\n                      SEMI             r2 [nation_key] inputs=r0,r1 rows=411 in=10000 inserted=0 t=0.064ms (shared)\n                    RENAME           r1 [Nation] inputs= rows=1 in=0 inserted=0 t=0.003ms (shared)\n                  RENAME           r1 [Nation] inputs= rows=1 in=0 inserted=0 t=0.003ms (shared)\n                PROBE            __cq___lookup_expand___unfiltered_1 [nation_key] inputs=__cq___lookup_expand__unfiltered_1,r1 rows=0 in=0 inserted=0 t=0.000ms\n                  PROBE            __cq___lookup_expand__unfiltered_1 [waiting_supplier] inputs=__cq___lookup_lookup__unfiltered_1,r2 rows=0 in=0 inserted=0 t=0.000ms\n                    SEMI             __cq___lookup_lookup__unfiltered_1 [waiting_supplier] inputs=__cq___lookup_expand_unfiltered_1,r2 rows=0 in=0 inserted=0 t=0.000ms\n                      PROBE            __cq___lookup_expand_unfiltered_1 [order_key] inputs=__cq___lookup_lookup_unfiltered_0,r7 rows=0 in=0 inserted=0 t=0.000ms\n                        SEMI             __cq___lookup_lookup_unfiltered_0 [order_key] inputs=__cq___lookup_forward_unfiltered_1,r6 rows=0 in=0 inserted=0 t=0.000ms\n                          SEMI             __cq___lookup_forward_unfiltered_1 [order_key] inputs=r8,r7 rows=0 in=0 inserted=0 t=0.000ms\n                            RENAME           r8 [Lineitem] inputs= rows=6001215 in=0 inserted=0 t=39.277ms (shared)\n                            SEMI             r7 [order_key] inputs=r5,r6 rows=75871 in=156739 inserted=0 t=67.308ms (shared)\n                          RENAME           r6 [Orders] inputs= rows=729413 in=0 inserted=0 t=28.878ms (shared)\n                        SEMI             r7 [order_key] inputs=r5,r6 rows=75871 in=156739 inserted=0 t=67.308ms (shared)\n                      SEMI             r2 [nation_key] inputs=r0,r1 rows=411 in=10000 inserted=0 t=0.064ms (shared)\n                    SEMI             r2 [nation_key] inputs=r0,r1 rows=411 in=10000 inserted=0 t=0.064ms (shared)\n                  RENAME           r1 [Nation] inputs= rows=1 in=0 inserted=0 t=0.003ms (shared)\n              RENAME           r6 [Orders] inputs= rows=729413 in=0 inserted=0 t=28.878ms (shared)\n            PROBE            __cq_r12_unfiltered_0 [order_key] inputs=__cq___cq___lookup_expand___unfiltered_0_alternatives_0,r6 rows=378274 in=378274 inserted=0 t=12.670ms\n              UNION            __cq___cq___lookup_expand___unfiltered_0_alternatives_0 [_other_commit,_other_receipt,commit_date,nation_key,order_key,other_supplier,receipt_date,waiting_supplier] inputs=__cq___lookup_expand___unfiltered_0,__cq___cq___lookup_expand___unfiltered_0_unfiltered_0 rows=0 in=0 inserted=0 t=0.000ms\n                PROBE            __cq___lookup_expand___unfiltered_0 [nation_key] inputs=__cq___lookup_lookup___unfiltered_0,r1 rows=0 in=0 inserted=0 t=0.000ms\n                  SEMI             __cq___lookup_lookup___unfiltered_0 [nation_key] inputs=__cq___lookup_expand__unfiltered_0,r1 rows=0 in=0 inserted=0 t=0.000ms\n                    PROBE            __cq___lookup_expand__unfiltered_0 [waiting_supplier] inputs=__cq___lookup_lookup__unfiltered_0,r2 rows=0 in=0 inserted=0 t=0.000ms\n                      SEMI             __cq___lookup_lookup__unfiltered_0 [waiting_supplier] inputs=__cq___lookup_expand_unfiltered_0,r2 rows=0 in=0 inserted=0 t=0.000ms\n                        PROBE            __cq___lookup_expand_unfiltered_0 [order_key] inputs=__cq___lookup_forward_unfiltered_0,r7 rows=0 in=0 inserted=0 t=0.000ms\n                          SEMI             __cq___lookup_forward_unfiltered_0 [order_key] inputs=r8,r7 rows=0 in=0 inserted=0 t=0.000ms\n                            RENAME           r8 [Lineitem] inputs= rows=6001215 in=0 inserted=0 t=39.277ms (shared)\n                            SEMI             r7 [order_key] inputs=r5,r6 rows=75871 in=156739 inserted=0 t=67.308ms (shared)\n                          SEMI             r7 [order_key] inputs=r5,r6 rows=75871 in=156739 inserted=0 t=67.308ms (shared)\n                        SEMI             r2 [nation_key] inputs=r0,r1 rows=411 in=10000 inserted=0 t=0.064ms (shared)\n                      SEMI             r2 [nation_key] inputs=r0,r1 rows=411 in=10000 inserted=0 t=0.064ms (shared)\n                    RENAME           r1 [Nation] inputs= rows=1 in=0 inserted=0 t=0.003ms (shared)\n                  RENAME           r1 [Nation] inputs= rows=1 in=0 inserted=0 t=0.003ms (shared)\n                PROBE            __cq___cq___lookup_expand___unfiltered_0_unfiltered_0 [nation_key] inputs=__cq___cq___lookup_expand__unfiltered_0_unfiltered_0,r1 rows=378274 in=378274 inserted=0 t=53.160ms\n                  PROBE            __cq___cq___lookup_expand__unfiltered_0_unfiltered_0 [waiting_supplier] inputs=__cq___cq___lookup_lookup__unfiltered_0_unfiltered_0,r2 rows=378274 in=378274 inserted=0 t=79.716ms\n                    SEMI             __cq___cq___lookup_lookup__unfiltered_0_unfiltered_0 [waiting_supplier] inputs=__cq___cq___lookup_expand_unfiltered_0_unfiltered_0,r2 rows=378274 in=378274 inserted=0 t=156.163ms\n                      PROBE            __cq___cq___lookup_expand_unfiltered_0_unfiltered_0 [order_key] inputs=__cq___cq___lookup_forward_unfiltered_0_unfiltered_0,r7 rows=378274 in=356794 inserted=0 t=104.167ms\n                        SEMI             __cq___cq___lookup_forward_unfiltered_0_unfiltered_0 [order_key] inputs=r8,r7 rows=356794 in=6001215 inserted=0 t=156.162ms\n                          RENAME           r8 [Lineitem] inputs= rows=6001215 in=0 inserted=0 t=39.277ms (shared)\n                          SEMI             r7 [order_key] inputs=r5,r6 rows=75871 in=156739 inserted=0 t=67.308ms (shared)\n                        SEMI             r7 [order_key] inputs=r5,r6 rows=75871 in=156739 inserted=0 t=67.308ms (shared)\n                      SEMI             r2 [nation_key] inputs=r0,r1 rows=411 in=10000 inserted=0 t=0.064ms (shared)\n                    SEMI             r2 [nation_key] inputs=r0,r1 rows=411 in=10000 inserted=0 t=0.064ms (shared)\n                  RENAME           r1 [Nation] inputs= rows=1 in=0 inserted=0 t=0.003ms (shared)\n              RENAME           r6 [Orders] inputs= rows=729413 in=0 inserted=0 t=28.878ms (shared)\n  TASKS_BUILD_WALL __cq_tasks_build [] inputs= rows=0 in=0 inserted=0 t=526.433ms\n  DEDUP            r14.dedup [] inputs=r14 rows=302284 in=302383 inserted=302383 t=182.356ms\n    PROJECT          r14 [order_key,other_supplier,waiting_supplier] inputs=r13 rows=302383 in=302383 inserted=0 t=156.164ms (shared)\n  ROWS_BUILD       r8.rows [] inputs=r8 rows=6001215 in=6001215 inserted=6001215 t=99.384ms excl=99.384ms\n    RENAME           r8 [Lineitem] inputs= rows=6001215 in=0 inserted=0 t=39.277ms (shared)\n  INDEX_BUILD      r7.index.order_key [order_key] inputs=r7 rows=72110 in=75871 inserted=75871 t=172.292ms excl=104.982ms\n    SEMI             r7 [order_key] inputs=r5,r6 rows=75871 in=156739 inserted=0 t=67.308ms (shared)\n  INDEX_BUILD      r6.index.order_key [order_key] inputs=r6 rows=729413 in=729413 inserted=729413 t=81.808ms excl=52.930ms\n    RENAME           r6 [Orders] inputs= rows=729413 in=0 inserted=0 t=28.878ms (shared)\n  ROWS_BUILD       r3.rows [] inputs=r3 rows=6001215 in=6001215 inserted=6001215 t=172.433ms excl=172.433ms\n    RENAME           r3 [Lineitem] inputs= rows=6001215 in=0 inserted=0 t=70.509ms (shared)\n  INDEX_BUILD      r2.index.waiting_supplier [waiting_supplier] inputs=r2 rows=411 in=411 inserted=411 t=0.130ms excl=0.065ms\n    SEMI             r2 [nation_key] inputs=r0,r1 rows=411 in=10000 inserted=0 t=0.064ms (shared)\n  INDEX_BUILD      r1.index.nation_key [nation_key] inputs=r1 rows=1 in=1 inserted=1 t=0.054ms excl=0.052ms\n    RENAME           r1 [Nation] inputs= rows=1 in=0 inserted=0 t=0.003ms (shared)\n  PARTITION_BUILD  r1.parts [] inputs=r1 rows=1 in=1 inserted=1 t=0.282ms excl=0.280ms\n    RENAME           r1 [Nation] inputs= rows=1 in=0 inserted=0 t=0.003ms (shared)\n  ROWS_BUILD       __cq_key_input_r1.rows [] inputs=r1 rows=1 in=1 inserted=1 t=0.003ms excl=0.001ms\n    RENAME           r1 [Nation] inputs= rows=1 in=0 inserted=0 t=0.003ms (shared)\n  ROWS_BUILD       r0.rows [] inputs=r0 rows=10000 in=10000 inserted=10000 t=0.039ms excl=0.039ms\n    RENAME           r0 [Supplier] inputs= rows=10000 in=0 inserted=0 t=0.010ms (shared)\nBUILD_EXCLUSIVE_TOTAL t=430.168ms\nTASKS_BUILD_WALL_TOTAL t=526.433081000ms\n",
+  "verified": true
+}

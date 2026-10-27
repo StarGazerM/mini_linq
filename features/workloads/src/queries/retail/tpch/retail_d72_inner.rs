@@ -20,10 +20,8 @@ JOIN nation n ON c.c_nationkey = n.n_nationkey
 WHERE l.l_shipdate >= DATE '1995-01-01' AND l.l_shipdate < DATE '1995-04-01'
 AND l.l_quantity > 20.00 AND ps.ps_availqty > 0"#;
     candidate generic_smallest;
-    // ps_availqty > 0 keeps every PartSupp row, while the Lineitem window keeps
-    // 124,846 of 800,000 (part, supplier) keys: reduce PartSupp by Lineitem
-    // instead of Lineitem by PartSupp.
-    advise plan(skip(Lineitem with PartSupp), reduce(PartSupp with Lineitem));
+    // Statistics-derived GPU order, expressed through the shared CPU planner.
+    advise plan(no_reduce, order(Nation, Supplier, Lineitem, Orders, Customer, PartSupp, Part));
     setup {
         let start = date("1995-01-01"); let end = date("1995-04-01");
         let minimum = Decimal::from_scaled(2000).expect("20.00");

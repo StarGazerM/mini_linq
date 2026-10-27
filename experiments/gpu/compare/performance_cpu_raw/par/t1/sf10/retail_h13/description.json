@@ -1,0 +1,22 @@
+{
+  "configs": [
+    "default",
+    "par",
+    "no-reduce",
+    "le",
+    "le_runs",
+    "advised"
+  ],
+  "exports": [
+    [
+      "customer",
+      "c_custkey"
+    ],
+    [
+      "orders",
+      "o_orderkey,o_custkey,o_comment"
+    ]
+  ],
+  "name": "retail_h13",
+  "sql": "SELECT c.c_custkey, COUNT(o.o_orderkey)\nFROM (SELECT DISTINCT c_custkey FROM customer) c\nLEFT JOIN (SELECT DISTINCT o_orderkey, o_custkey FROM orders\n    WHERE o_comment NOT LIKE '%special%requests%') o ON o.o_custkey = c.c_custkey\nGROUP BY c.c_custkey"
+}

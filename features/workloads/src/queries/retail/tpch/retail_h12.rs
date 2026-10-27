@@ -3,10 +3,13 @@
 use cq_load::{Date, Load};
 
 pub const NAME: &str = "retail_h12";
-pub const CONFIGS: &[&str] = &["default", "radix", "radix_retained"];
+
 pub const EXPORTS: &[(&str, &str)] = &[
     ("orders", "o_orderkey,o_orderpriority"),
-    ("lineitem", "l_orderkey,l_linenumber,l_shipmode,l_commitdate,l_receiptdate,l_shipdate"),
+    (
+        "lineitem",
+        "l_orderkey,l_linenumber,l_shipmode,l_commitdate,l_receiptdate,l_shipdate",
+    ),
 ];
 pub const SQL: &str = r#"SELECT l_shipmode,
     CAST(SUM(CASE WHEN o_orderpriority IN ('1-URGENT', '2-HIGH') THEN 1 ELSE 0 END) AS BIGINT) AS high_line_count,
@@ -37,44 +40,46 @@ pub fn load(root: &std::path::Path, config: &str) -> Result<Data, Box<dyn std::e
     assert!(CONFIGS.contains(&config), "unknown H12 configuration");
     Ok(Data {
         orders: <relation_loader!(Orders)>::parquet(
-            root.join("orders.parquet"), cq_load::ParquetOptions::default(),
+            root.join("orders.parquet"),
+            cq_load::ParquetOptions::default(),
         )?,
         lineitem: <relation_loader!(Lineitem)>::parquet(
-            root.join("lineitem.parquet"), cq_load::ParquetOptions::default(),
+            root.join("lineitem.parquet"),
+            cq_load::ParquetOptions::default(),
         )?,
     })
 }
 
-crate::tpch_runtime::same_plan_kernel! { $;
-#[allow(non_snake_case)]
-pub(super) fn execute(data: &Data) -> Vec<Answer> {
-    let Orders = data.orders.as_slice();
-    let Lineitem = data.lineitem.as_slice();
-    let start = Date::load("1994-01-01").expect("authored ISO date");
-    let end = Date::load("1995-01-01").expect("authored ISO date");
-    query! {
-        pipeline {}
-        struct Query;
-        relation Orders(o_orderkey: i64, o_orderpriority: String);
-        relation Lineitem(l_orderkey: i64, l_linenumber: i64, l_shipmode: String,
-            l_commitdate: Date, l_receiptdate: Date, l_shipdate: Date);
-        relation answer(shipmode: String, high_line_count: i64, low_line_count: i64);
-        answer(shipmode, sum(high), sum(low)) :-
-            Lineitem(order_key, line_number, shipmode, commitdate, receiptdate, shipdate),
-            if shipmode == "MAIL" || shipmode == "SHIP",
-            if *shipdate < *commitdate && *commitdate < *receiptdate,
-            if *receiptdate >= start && *receiptdate < end,
-            Orders(order_key, priority),
-            let high: i64 = if priority == "1-URGENT" || priority == "2-HIGH" { 1 } else { 0 },
-            let low: i64 = if priority == "1-URGENT" || priority == "2-HIGH" { 0 } else { 1 };
+crate::tpch_runtime::standalone_configs! { $;
+    pub(super) fn run(data: &Data, config: &str) -> Vec<Answer> {
+        assert!(CONFIGS.contains(&config), "unknown H12 configuration");
+        let Orders = data.orders.as_slice();
+        let Lineitem = data.lineitem.as_slice();
+        let start = Date::load("1994-01-01").expect("authored ISO date");
+        let end = Date::load("1995-01-01").expect("authored ISO date");
+        query! {
+            plan(no_reduce, order(Lineitem, Orders));
+            struct Query;
+            relation Orders(o_orderkey: i64, o_orderpriority: String);
+            relation Lineitem(l_orderkey: i64, l_linenumber: i64, l_shipmode: String,
+                l_commitdate: Date, l_receiptdate: Date, l_shipdate: Date);
+            relation answer(shipmode: String, high_line_count: i64, low_line_count: i64);
+            answer(shipmode, sum(high), sum(low)) :-
+                Lineitem(order_key, line_number, shipmode, commitdate, receiptdate, shipdate),
+                if shipmode == "MAIL" || shipmode == "SHIP",
+                if *shipdate < *commitdate && *commitdate < *receiptdate,
+                if *receiptdate >= start && *receiptdate < end,
+                Orders(order_key, priority),
+                let high: i64 = if priority == "1-URGENT" || priority == "2-HIGH" { 1 } else { 0 },
+                let low: i64 = if priority == "1-URGENT" || priority == "2-HIGH" { 0 } else { 1 };
+        }
+        .map(|(mode, high, low)| (mode.clone(), high, low))
+        .collect()
     }
-    .map(|(mode, high, low)| (mode.clone(), high, low))
-    .collect()
-}
 }
 
 pub fn canonical(rows: &[Answer]) -> Vec<Vec<String>> {
-    rows.iter().map(|(mode, high, low)| {
-        vec![mode.clone(), high.to_string(), low.to_string()]
-    }).collect()
+    rows.iter()
+        .map(|(mode, high, low)| vec![mode.clone(), high.to_string(), low.to_string()])
+        .collect()
 }

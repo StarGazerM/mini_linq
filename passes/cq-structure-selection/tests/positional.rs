@@ -230,3 +230,142 @@ fn join_filters_cross_probes_only_on_scan_key_columns() {
     assert!(plan(quote!(x)).contains(&"j".to_owned()));
     assert!(!plan(quote!(w)).contains(&"j".to_owned()));
 }
+
+fn repeated_filter_plan(distinct_build: bool, distinct_layout: bool) -> ir::Program {
+    let version = distinct_build.then(|| quote!(c = let project b keep {x,z};));
+    let build = if distinct_build { quote!(c) } else { quote!(b) };
+    let key = if distinct_layout {
+        quote!(x, z)
+    } else {
+        quote!(x)
+    };
+    let first = if distinct_layout || distinct_build {
+        quote!(probe first)
+    } else {
+        quote!(semi eager)
+    };
+    let projection = distinct_build.then(|| quote!(p = pipe project q keep {x,y};));
+    let input = if distinct_build { quote!(p) } else { quote!(q) };
+    let source: physical::Program = syn::parse2(quote! { physical {
+        relation L(a:i64,b:i64); relation R(c:i64,d:i64);
+        l = pipe rename L@0 {a -> x,b -> y};
+        r = pipe rename R@1 {c -> x,d -> z};
+        s = pipe range select r if (z > 1);
+        b = let project s keep {x,z};
+        #version
+        q = pipe #first [x] l,b;
+        #projection
+        j = pipe probe first [#key] #input,#build;
+        out = pipe canon project j keep {x,z}; return out as answer(x,z);
+    }})
+    .unwrap();
+    let selected = cq_structure_selection::compile_with(&source, quote!(positional(L, R))).unwrap();
+    assert_eq!(selected.physical, source, "exact operators must remain");
+    selected
+}
+
+#[test]
+fn equivalent_filter_witnesses_share_checked_runtime_work() {
+    let selected = repeated_filter_plan(false, false);
+    let witnesses: Vec<_> = selected
+        .structures
+        .entries
+        .iter()
+        .filter_map(|entry| match &entry.structure {
+            Structure::JoinFilter { filter, .. } if entry.name == "l" => Some(filter),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(witnesses.len(), 2, "retain both validation witnesses");
+    assert_eq!(
+        ir::contract::check(&selected).unwrap().join_filters["l"].len(),
+        1
+    );
+    assert_eq!(
+        syn::parse2::<ir::Program>(selected.to_token_stream()).unwrap(),
+        selected
+    );
+
+    // A witness that would otherwise be coalesced is still checked.
+    // Column marker identity is a Rust ColumnSlot obligation, exercised by
+    // provider-contract compile-fail tests rather than provider-name inspection.
+    let mut invalid = selected.clone();
+    for entry in &mut invalid.structures.entries {
+        if let Structure::JoinFilter { filter, .. } = &mut entry.structure {
+            if filter.covering == "j" {
+                filter.covering = syn::parse_quote!(out);
+            }
+        }
+    }
+    assert!(ir::contract::check(&invalid).is_err());
+
+    let mut different_type = selected;
+    for entry in &mut different_type.structures.entries {
+        if let Structure::JoinFilter { filter, .. } = &mut entry.structure {
+            if filter.covering == "j" {
+                filter.ty = syn::parse_quote!(OtherConservativeFilter);
+            }
+        }
+    }
+    assert_eq!(
+        ir::contract::check(&different_type).unwrap().join_filters["l"].len(),
+        2
+    );
+}
+
+#[test]
+fn filter_build_versions_and_key_layouts_remain_distinct() {
+    let versions = repeated_filter_plan(true, false);
+    assert_eq!(
+        ir::contract::check(&versions).unwrap().join_filters["l"].len(),
+        2
+    );
+    let layouts = repeated_filter_plan(false, true);
+    let facts = ir::contract::check(&layouts).unwrap();
+    assert_eq!(facts.join_filters["l"].len(), 2);
+    assert_eq!(
+        facts.join_filters["l"]
+            .iter()
+            .filter(|f| f.key == syn::parse_quote!([x]))
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn filters_do_not_share_across_occurrences_of_one_host() {
+    let source: physical::Program = syn::parse_quote! { physical {
+        relation L(a:i64,b:i64); relation R(c:i64,d:i64);
+        l = pipe rename L@0 {a -> x,b -> y};
+        m = pipe rename L@2 {a -> x,b -> y};
+        r = pipe rename R@1 {c -> x,d -> z};
+        b = let range select r if (z > 1);
+        p = pipe probe first [x] l,b;
+        q = pipe probe first [x] m,b;
+        out = pipe canon union p,q; return out as answer(x,y,z);
+    }};
+    let selected = cq_structure_selection::compile_with(&source, quote!(positional(L, R))).unwrap();
+    let facts = ir::contract::check(&selected).unwrap();
+    assert_eq!(facts.join_filters["l"].len(), 1);
+    assert_eq!(facts.join_filters["m"].len(), 1);
+    assert_eq!(selected.physical, source);
+}
+
+#[test]
+fn filters_preserve_distinct_scalar_key_mappings_and_markers() {
+    let source: physical::Program = syn::parse_quote! { physical {
+        relation L(a:i64,b:i64); relation R(c:i64,d:i64);
+        l = pipe rename L@0 {a -> x,b -> y};
+        r = pipe rename R@1 {c -> x,d -> y};
+        b = let range select r if (y > 1);
+        q = pipe semi eager [x,y] l,b;
+        j = pipe probe first [x,y] q,b;
+        out = pipe canon project j keep {x,y}; return out as answer(x,y);
+    }};
+    let selected = cq_structure_selection::compile_with(&source, quote!(positional(L, R))).unwrap();
+    let facts = ir::contract::check(&selected).unwrap();
+    let filters = &facts.join_filters["l"];
+    assert_eq!(filters.len(), 2);
+    assert_ne!(filters[0].key, filters[1].key);
+    assert_ne!(filters[0].marker, filters[1].marker);
+}

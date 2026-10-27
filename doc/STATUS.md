@@ -87,11 +87,33 @@ non-selective `ps_availqty > 0`) costs 32 ms of composite probes into the
 
 ## Predicate transfer route (`cq_planners::order(transfer)`)
 
-Robust predicate transfer (RPT, SIGMOD'25) as a diverging planner through the
-same public pipeline: written order, the Masks forward pass plus the stream's
-reductions, then the backward pass from filtered sides, all before the join
-phase. `cargo xtask profile --tpch --sf 1 --config default|transfer`,
-uninstrumented medians (ms), same session:
+Exact-semijoin adaptation of RPT (SIGMOD'25), through the same public pipeline:
+connected growth within written atom runs, Masks forward pass plus the stream's
+reductions, then the backward pass from filtered sides, before the join phase.
+Predicate, binding and block boundaries stay fixed. This is not the paper's
+vectorized Bloom pipeline or RPT+'s adaptive execution.
+
+The implementation now applies checked reduction absorption after elaboration,
+retains positional snapshots only at recorded retained boundaries, enumerates
+surviving bitmap positions during narrowing, and shares equivalent scan filters
+after validating every covering witness. Default and transfer matched cached
+DuckDB witnesses for predicate-form H05, H07-block, D27 and H08 at SF0.1 and SF1.
+
+The full 29-case catalog now exposes transfer, including every stage of the
+12 standalone retail runners. All 29 transfer cases matched DuckDB at SF0.1 and
+SF1. The full-suite check exposed H09's disconnected Part × Orders prefix:
+at SF0.1 it created 161,250,000 pairs before a Lineitem probe reduced them to
+32,160. Connected atom scheduling removes that prefix; SF1 transfer completed
+in 487.8 ms (pooled median of ten), versus the prior 120-second worker timeout.
+The explicit written-order H09 baseline is unchanged and its SF1 timeout was
+not rerun. Left-side absorption also removes H21-positive's 356,794 duplicate
+membership checks, with support pruning performed first to preserve H03/D85
+scan filters. [Full evidence](../experiments/gpu/compare/rpt-repair/summary.json)
+and [29-query matrix](../experiments/gpu/compare/rpt-repair/matrix.tsv).
+
+Historical measurements below predate these repairs; they do not characterize
+the repaired path. `cargo xtask profile --tpch --sf 1 --config default|transfer`,
+uninstrumented medians (ms), same historical session:
 
 | Query | default | transfer |
 |---|---:|---:|
@@ -107,12 +129,11 @@ uninstrumented medians (ms), same session:
 | retail_h21_positive | 90.2 | 127.0 |
 | retail_h09 | 174.8 | 336.1 |
 
-The backward pass pays off where a build is large and only filtered from the
-stream side: D72's PartSupp index shrinks from 800k to 124,846 rows (57 → 35
-ms). Elsewhere reducing and retaining the stream costs more than it saves:
-the default already filters the stream at its scan with the builds' key sets,
-and its probes then only hit, which is the SQL Server argument for omitting
-the top-down pass.
+The historical D72 PartSupp build shrank from 800k to 124,846 rows (57 → 35 ms).
+The other historical regressions included avoidable retained supports, bitmap
+snapshots/full-base enumeration and duplicate filter construction. They are not
+evidence that these costs are inherent to predicate transfer. Four repaired
+derived kernels do not establish global non-regression or full Yannakakis coverage.
 
 ## Lookup-expand route (`cq_planners::order(le)`)
 
@@ -407,20 +428,65 @@ approval.
   Sequence back end has no supplied-consumer entry, `cq-sequence-pull`
   `lib.rs:654-711`). DOOP at 15 threads ≈ 0.8 s (cassandra), 2.3 s (xalan);
   all six apps exact vs Ascent sequentially and at 15 threads.
+- Schedule: Round records per-hole read sets, wave partitions, per-hole
+  policy, derived publication placement and a progress mode
+  (`WF-DL-Schedule`, `WF-DL-Progress`, `DL-WaveCommute`,
+  `DL-PublishAfterReaders`, `DL-AsyncCovering`, `CK-DL-Schedule`,
+  `P-DL-Waves`, `P-DL-Relational`, `DL-RelationalScheduler`;
+  `doc/formal/datalog.tex` "Schedule records", "Relational progress"). Waves
+  are rayon scopes on CPU and will be stream/graph branches on GPU; admission
+  is the only per-head join. `relational` progress drops the step-round
+  barrier: per-member batches, tiled delta windows, scheduler-gated
+  isolation (no lock ever waits). DOOP cassandra at 15 threads is exact under
+  every mode; relational is ~8% slower (1.84–1.88 s vs 1.67–1.76 s) because
+  its dense points-to SCC has holes reading most members, so commits drain
+  readers. Sharded native layouts (`shard_storage(layouts(sharded))`,
+  `DL-ShardedLayout`) cut publication from 42% to 20% of step time: DOOP
+  cassandra 15 threads 1.28 s compute, exact; evaluation (65%) now dominates.
+  Sorted-run providers (`layouts(runs)`, `seen(runs)`; `DL-RunLayout`,
+  `DL-RunAdmission`) are the exact CPU reference for GPU Datalog storage
+  (3.11 s on cassandra; not a CPU default).
+- GPU Datalog (`experiments/gpu/datalog`, `cq-gpu-datalog`): `device_storage`
+  (`CK-DL-DeviceStorage`) + `batch` hole terminal `translate_arena` over
+  packed-run inputs (`GPU-Runs`, `GPU-Arena`) + `print_rounds` (`P-DL-Gpu`) on
+  device runs (`DL-DevicePacking`, `DL-DeviceRuns`). The 13-program oracle is
+  exact on the GPU (416 comparisons). Random graph, 2048 nodes, ~4.1M answers:
+  TC 0.36–0.49 s vs 1.58–1.79 s mini / 1.83–2.18 s mini-par; same generation
+  0.41 s vs 3.58 s / 3.07 s. Remaining realization cost: per-hole metadata
+  readback and stream synchronize, per-admission and per-layout-sort count
+  readbacks, waves issued in order on the pool's single stream.
+  DOOP cassandra runs on the GPU and all 26 outputs equal `mini` exactly:
+  strings stay in the dataset (`method_descriptor` interned at load, symbol
+  columns as `SymbolCodec` u32 codes, closed constants captured on the host),
+  wide inputs use multi-lane words. 11.8 s vs 4.27 s `mini` / 1.26 s `mini-par`.
+  nsys: kernels 7.7 s (one hole 4.07 s: 306 × 13.3 ms), PTX module JIT 5.6 s
+  (158 × 35 ms); readback transfers 21 ms, the rest of D2H time is waiting.
+  Now: AOT sm_89 cubins (module loading 0.12 s) and delta-first occurrence
+  order (`driver(delta_first)`, `DL-OccurrenceOrder`): GPU DOOP 3.67 s warm,
+  kernels 1.90 s; largest remaining kernel is the field-load delta variant.
+  Host overhead cut (no arena fences, `reserve_previous`, known-unique sorts):
+  3.14 s; ~1.0 s of inter-kernel host time is CPU work outside CUDA calls.
+  Before AOT: cold first run after a rebuild ~25 s (driver PTX JIT cache empty). The GPU
+  workspace pins pushed forks (cuda-oxide and RCCL `mini-linq/main`), Rust
+  1.99.1, CUDA 13.0.
 - Open: reach chain at 15 threads below sequential; nested CQ code in one
   codegen unit; rule-local aggregates; FlowLog comparison; partial-Rust
   multi-round refinement; surface sugar (disjunction, facts, rule macros).
-- On hold (GPU-side storage design first): lattices and custom providers;
-  DOOP probe efficiency; geometric run merging.
+- On hold: lattices and custom providers; DOOP probe efficiency.
 - Not context facts (see context.tex): declared keys (need a provenance
   model), first-witness consumption, guard totality, terminal canonical
   return.
-- Upstream items (GPU side): `sequence_conformance` corpus test does not finish
-  within 20 min (skip by exact name in workload runs); core→feature edges
-  (`cq-sequence-lowering` and `cq-sequence-pull` dev-deps, `cq-sequence-plan`
-  → `features/sequence-rewrites/passes`); packaged external gate fails on
-  `cq-testkit`'s optional path dependency on `features/sequence-tasks`;
-  `translate_pull` codegen triggers `clippy::unused_unit` in workloads.
+- Core boundary blockers are repaired: Sequence rewrites and shared selection
+  helpers are core-owned; target-dependent conformance and workload tests live
+  in `features/sequence-conformance`. `cq-testkit` has no optional compiler or
+  feature backedge. Dependency isolation checks the actual closed core.
+- `translate_pull` codegen still triggers `clippy::unused_unit` in workloads
+  (GPU-side note).
+- Sequence conformance: 31 crates (one per classic/retail case, pairwise
+  triangle matrix per planner, 310 kernel rows instead of 2,848). Tasks code
+  reaches Rayon only through non-generic `cq_storage::parallel` helpers. A full
+  rebuild after a compiler change takes 143 s wall (1,355 s CPU, 3.7 GB peak
+  RSS); running all 31 takes seconds.
 - Archived: abandoned v1-design branches are tags `archive/<name>`; the parked
   pre-redesign refactor is `../mini_linq-archive/datalog-par-factor.patch`.
 

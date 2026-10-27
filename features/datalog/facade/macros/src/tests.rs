@@ -84,6 +84,25 @@ fn default_pass_arguments_are_not_silently_ignored() {
 }
 
 #[test]
+fn incremental_driver_advice_is_explicit_and_composes_with_invariants() {
+    use syn::parse::Parser;
+    use cq_datalog_incremental::DriverPolicy;
+    assert_eq!(incremental_arguments.parse2(quote!()).unwrap(), (false, DriverPolicy::WrittenOrder));
+    assert_eq!(incremental_arguments.parse2(quote!(driver(delta_first); hoist_invariants;)).unwrap(),
+        (true, DriverPolicy::DeltaFirst));
+    assert_eq!(incremental_arguments.parse2(quote!(hoist_invariants; driver(written_order);)).unwrap(),
+        (true, DriverPolicy::WrittenOrder));
+    for invalid in [
+        quote!(driver(unknown);),
+        quote!(driver(delta_first, written_order);),
+        quote!(driver(delta_first); driver(written_order);),
+        quote!(hoist_invariants; hoist_invariants;),
+    ] {
+        assert!(incremental_arguments.parse2(invalid).is_err());
+    }
+}
+
+#[test]
 fn invariant_arguments_reach_the_incremental_pass() {
     use syn::parse::Parser;
     assert!(!invariant_arguments.parse2(quote!()).unwrap());
@@ -163,4 +182,26 @@ fn configuration_records_the_alias_declaration_for_independent_round_checks() {
         .find(|pass| pass.path.segments.last().unwrap().ident == "fork")
         .unwrap();
     assert!(cq_datalog_fork::compile_with(&storage, fork.arguments.clone()).is_err());
+}
+
+#[test]
+fn configuration_records_batch_terminal_through_fork() {
+    let source: cq_lang_datalog_source::Program = syn::parse2(source()).unwrap();
+    let strata = cq_datalog_stratify::compile(&source).unwrap();
+    let incremental = cq_datalog_incremental::compile(&strata).unwrap();
+    let storage = cq_datalog_storage::compile(&incremental).unwrap();
+    let config: DatalogConfiguration = syn::parse_quote! { pipeline {
+        terminals = [::cq_gpu_sequence::translate_arena => batch];
+        cq = pipeline { print = ::cq_gpu_sequence::translate_arena; };
+    } };
+    let queue = config.resolve(DatalogConfiguration::defaults()).unwrap();
+    let fork = queue.passes.iter()
+        .find(|pass| pass.path.segments.last().unwrap().ident == "fork")
+        .unwrap();
+    let target = cq_datalog_fork::compile_with(&storage, fork.arguments.clone()).unwrap();
+    assert!(!target.holes.is_empty());
+    assert!(target.holes.iter().all(|hole|
+        hole.interface == cq_lang_datalog_round::HoleInterface::Batch));
+    let replay: cq_lang_datalog_round::Program = syn::parse2(quote!(#target)).unwrap();
+    assert_eq!(target, replay);
 }

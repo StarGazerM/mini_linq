@@ -24,7 +24,16 @@ fn duckdb(database: &Path, sql: &str) -> Result<std::process::Child> {
 }
 
 #[test]
-fn h01_gpu_matches_duckdb_sf1_and_sf10() -> Result<()> {
+fn h01_gpu_matches_duckdb_sf1() -> Result<()> {
+    h01_gpu_matches_duckdb(1)
+}
+
+#[test]
+fn h01_gpu_matches_duckdb_sf10() -> Result<()> {
+    h01_gpu_matches_duckdb(10)
+}
+
+fn h01_gpu_matches_duckdb(scale: u32) -> Result<()> {
     let source =
         include_str!("../../../../features/workloads/src/queries/retail/tpch/retail_h01.rs");
     let sql = source
@@ -34,7 +43,7 @@ fn h01_gpu_matches_duckdb_sf1_and_sf10() -> Result<()> {
         .split("\"#;")
         .next()
         .unwrap();
-    for scale in [1, 10] {
+    {
         let directory = std::path::PathBuf::from(format!("/data/tpch-gpu/sf{scale}"));
         let database = directory.join("dbgen.duckdb");
         if !database.is_file() {

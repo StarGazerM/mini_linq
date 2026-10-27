@@ -82,28 +82,12 @@ pub fn sequence(input: TokenStream) -> TokenStream {
     .into()
 }
 
-fn sequential_machine() -> cq_lang_sequence::Machine {
-    cq_lang_sequence::Machine {
-        layout: None,
-        name: syn::parse_quote!(sequential),
-        items: 1,
-        root: cq_lang_sequence::LevelNode {
-            shared_bytes: None,
-            name: syn::parse_quote!(host),
-            collaborative: false,
-            dynamic: false,
-            width: None,
-            children: vec![],
-        },
-    }
-}
-
 /// Check host-only grading without changing authored Sequence decisions.
 #[proc_macro]
 pub fn sequential(input: TokenStream) -> TokenStream {
     cq_stage::rewrite::<cq_lang_sequence::Program>(input.into(), |source, arguments| {
         no_arguments(arguments)?;
-        cq_lang_sequence::check_grading(source, &sequential_machine())?;
+        cq_lang_sequence::check_grading(source, &cq_sequence_pull::machine())?;
         Ok(source.clone())
     })
     .into()
@@ -114,7 +98,7 @@ pub fn sequential(input: TokenStream) -> TokenStream {
 pub fn translate_pull(input: TokenStream) -> TokenStream {
     cq_stage::pass::<cq_lang_sequence::Program, syn::Expr>(input.into(), |source, arguments| {
         no_arguments(arguments)?;
-        let analysis = cq_lang_sequence::check_grading(source, &sequential_machine())?;
+        let analysis = cq_lang_sequence::check_grading(source, &cq_sequence_pull::machine())?;
         cq_sequence_pull::translate(source, &analysis)
     })
     .into()
@@ -171,7 +155,8 @@ mod tests {
         cq_structure_selection::check(&target, &selected).unwrap();
         let sequence = cq_sequence_lowering::compile(&selected).unwrap();
         cq_sequence_lowering::check(&selected, &sequence).unwrap();
-        let analysis = cq_lang_sequence::check_grading(&sequence, &sequential_machine()).unwrap();
+        let analysis =
+            cq_lang_sequence::check_grading(&sequence, &cq_sequence_pull::machine()).unwrap();
         cq_sequence_pull::translate(&sequence, &analysis).unwrap();
     }
 

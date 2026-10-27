@@ -17,6 +17,119 @@ fn assert_same<T: Ord + Clone + std::fmt::Debug>(parallel: &[T], sequential: &[T
 }
 
 #[test]
+fn recorded_waves_match_round_oracle_for_mutual_heads() {
+    for threads in [1, 4] {
+        rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(|| {
+            let rows: Vec<_> = (0..32).map(|x| (x,)).collect();
+            macro_rules! run {
+                ($($mode:tt)*) => {{
+                    let (a, b) = cq_datalog::datalog! {
+                        pipeline { $($mode)* }
+                        struct MutualWaves;
+                        relation E(x:i32) = (&rows);
+                        relation A(x:i32);
+                        relation B(x:i32);
+                        output A, B;
+                        A(*x) :- E(x);
+                        A(*x) :- B(x);
+                        A(*x + 1) :- B(x), if *x < 40;
+                        B(*x) :- E(x);
+                        B(*x) :- A(x);
+                        B(*x + 1) :- A(x), if *x < 40;
+                    };
+                    (a.into_iter().collect::<Vec<_>>(), b.into_iter().collect::<Vec<_>>())
+                }};
+            }
+            let expected = run!(print = cq_datalog_test_passes::eval_round;);
+            macro_rules! check {
+                ($schedule:ident) => {{
+                    let actual = run!(
+                        storage_rewrites = [cq_datalog_parallel::shard_storage];
+                        round = [cq_datalog_schedule::schedule($schedule), cq_datalog_parallel::partition(threshold = 0, grain = 2)];
+                        print = cq_datalog_parallel::print_rounds;
+                    );
+                    assert_same(&actual.0, &expected.0);
+                    assert_same(&actual.1, &expected.1);
+                }};
+            }
+            check!(whole);
+            check!(per_hole);
+            check!(by_head);
+        });
+    }
+}
+
+#[test]
+fn early_publication_of_three_head_cycle_matches_round() {
+    for threads in [1, 4] {
+        rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(|| {
+            let rows: Vec<_> = (0..8).map(|x| (x,)).collect();
+            macro_rules! run {
+                ($($mode:tt)*) => {{
+                    let (a, b, c) = cq_datalog::datalog! {
+                        pipeline { $($mode)* }
+                        struct EarlyCycle;
+                        relation E(x:i32) = (&rows);
+                        relation A(x:i32);
+                        relation B(x:i32);
+                        relation C(x:i32);
+                        output A, B, C;
+                        A(*x) :- E(x);
+                        A(*x) :- C(x);
+                        B(*x) :- A(x);
+                        C(*x + 1) :- B(x), if *x < 12;
+                    };
+                    (a.into_iter().collect::<Vec<_>>(), b.into_iter().collect::<Vec<_>>(), c.into_iter().collect::<Vec<_>>())
+                }};
+            }
+            let expected = run!(print = cq_datalog_test_passes::eval_round;);
+            let actual = run!(
+                storage_rewrites = [cq_datalog_parallel::shard_storage];
+                round = [cq_datalog_schedule::schedule(per_hole), cq_datalog_parallel::partition(threshold = 0, grain = 2)];
+                print = cq_datalog_parallel::print_rounds;
+            );
+            assert_same(&actual.0, &expected.0);
+            assert_same(&actual.1, &expected.1);
+            assert_same(&actual.2, &expected.2);
+        });
+    }
+}
+
+#[test]
+fn per_hole_chunk_policy_preserves_two_rule_sets() {
+    for threads in [1, 4] {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+            .install(|| {
+                let rows: Vec<_> = (0..32).map(|x| (x,)).collect();
+                macro_rules! run {
+                ($($policy:tt)*) => {
+                    cq_datalog::datalog! {
+                        pipeline {
+                            storage_rewrites = [cq_datalog_parallel::shard_storage];
+                            round = [$($policy)*];
+                            print = cq_datalog_parallel::print_rounds;
+                        }
+                        struct Policy;
+                        relation E(x:i32) = (&rows);
+                        relation A(x:i32);
+                        output A;
+                        A(*x) :- E(x);
+                        A(*x + 1) :- E(x);
+                    }.into_iter().collect::<Vec<_>>()
+                };
+            }
+                assert_same(
+                    &run!(cq_datalog_parallel_test_passes::hole_policy),
+                    &run!(cq_datalog_parallel::partition),
+                );
+            });
+    }
+}
+
+#[test]
 fn self_join_matches_sequential_sets_and_ascent_in_local_pools() {
     for threads in [2, 4] {
         rayon::ThreadPoolBuilder::new()
@@ -338,10 +451,16 @@ fn small_work_threshold_evaluates_inline_and_preserves_sets() {
         .build()
         .unwrap()
         .install(|| {
-            let caller = std::thread::current().id();
+            let threads = [
+                std::sync::Mutex::new(Vec::new()),
+                std::sync::Mutex::new(Vec::new()),
+            ];
             let inputs: Vec<_> = (0..31_i32).map(|x| (x,)).collect();
-            let checked = |x: i32| {
-                assert_eq!(std::thread::current().id(), caller);
+            let checked = |x: i32, hole: usize| {
+                threads[hole]
+                    .lock()
+                    .unwrap()
+                    .push(std::thread::current().id());
                 x
             };
             let actual = cq_datalog::datalog! {
@@ -354,11 +473,18 @@ fn small_work_threshold_evaluates_inline_and_preserves_sets() {
                 relation Input(x:i32) = (&inputs);
                 relation Reach(x:i32);
                 output Reach;
-                Reach(checked(*x)) :- Input(x);
-                Reach(checked(*x + 1)) :- Reach(x), if *x < 31;
+                Reach(checked(*x, 0)) :- Input(x);
+                Reach(checked(*x + 1, 1)) :- Reach(x), if *x < 31;
             }
             .collect::<BTreeSet<_>>();
             assert_eq!(actual, (0..=31).map(|x| (x,)).collect());
+            // Small drivers inline their chunks, not concurrency between holes.
+            // Each hole here emits 31 callbacks in its sole nonempty evaluation.
+            for recorded in threads {
+                let recorded = recorded.into_inner().unwrap();
+                assert_eq!(recorded.len(), 31);
+                assert!(recorded.iter().all(|thread| thread == &recorded[0]));
+            }
         });
 }
 

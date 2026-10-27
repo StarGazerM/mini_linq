@@ -21,4 +21,5 @@ cq-storage = { version = "0.1.0", path = "../../../../../runtime/cq-storage" }
 rayon = "1"
 
 [dev-dependencies]
+cq-datalog-schedule = { path = "../../../../datalog/passes/schedule" }
 oracle-ascent = { path = "../../../../datalog/oracle/engines/ascent" }

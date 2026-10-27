@@ -337,7 +337,7 @@ fn bench_size(gpu: &Gpu, n: usize, runs: usize, results: &mut Vec<Value>) {
             let cpu_ms = cpu_start.elapsed().as_secs_f64() * 1000.0;
             let total_ms = start.elapsed().as_secs_f64() * 1000.0;
             for &key in keys.iter().step_by((keys.len() / 4096).max(1)) {
-                let range = spline.search_bound(u64::from(key));
+                let range = spline.as_view().search_bound(u64::from(key));
                 assert!(keys[range].binary_search(&key).is_ok());
             }
             std::hint::black_box(&spline);

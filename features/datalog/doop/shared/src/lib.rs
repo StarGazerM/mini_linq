@@ -8,10 +8,10 @@ pub mod interner;
 mod loader;
 pub mod mini_engine;
 
-use interner::IStr;
+pub use interner::IStr;
 use std::{io, path::Path};
 
-/// The 32 raw input relations, loaded once per engine using the same parser.
+/// The 32 raw input relations and dataset-precomputed method descriptors.
 #[derive(Default)]
 pub struct Facts {
     pub directsuperclass: Vec<(IStr, IStr)>,
@@ -39,6 +39,7 @@ pub struct Facts {
     pub _specialmethodinvocation: Vec<(IStr, i32, IStr, IStr, IStr)>,
     pub _virtualmethodinvocation: Vec<(IStr, i32, IStr, IStr, IStr)>,
     pub _method: Vec<(IStr, IStr, IStr, IStr, IStr, IStr, i32)>,
+    pub method_descriptor: Vec<(IStr, IStr)>,
     pub _storeinstancefield: Vec<(IStr, i32, IStr, IStr, IStr, IStr)>,
     pub _loadinstancefield: Vec<(IStr, i32, IStr, IStr, IStr, IStr)>,
     pub _storestaticfield: Vec<(IStr, i32, IStr, IStr, IStr)>,
@@ -50,6 +51,8 @@ pub struct Facts {
 
 impl Facts {
     pub fn load(directory: &Path) -> io::Result<Self> {
+        let methods = loader::load(&directory.join("Method.facts"))?;
+        let method_descriptor = loader::method_descriptors(&methods);
         Ok(Self {
             directsuperclass: loader::load(&directory.join("DirectSuperclass.facts"))?,
             directsuperinterface: loader::load(&directory.join("DirectSuperinterface.facts"))?,
@@ -79,7 +82,8 @@ impl Facts {
             _virtualmethodinvocation: loader::load(
                 &directory.join("VirtualMethodInvocation.facts"),
             )?,
-            _method: loader::load(&directory.join("Method.facts"))?,
+            _method: methods,
+            method_descriptor,
             _storeinstancefield: loader::load(&directory.join("StoreInstanceField.facts"))?,
             _loadinstancefield: loader::load(&directory.join("LoadInstanceField.facts"))?,
             _storestaticfield: loader::load(&directory.join("StoreStaticField.facts"))?,

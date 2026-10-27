@@ -627,7 +627,7 @@ fn main() -> Result<()> {
         "distributions":distributions,"runs":runs,"warmups":warmups,"variants":VARIANTS,
         "setup":{"raw_context":raw_context_setup,"mccl_context":mccl_context_setup,"c_stream":c_stream_setup},
         "configuration":{"radix_bits":8,"passes":4,"items_per_thread":8,"threads_per_group":256,"directory":"exact radix12, 4097 entries",
-            "kernel_source":"sibling mccl/native/index; raw runtime compile, MCCL offline metallib",
+            "kernel_source":"experiments/mac/mccl/native/index; raw runtime compile, MCCL offline metallib",
             "mccl_items":"native preferred items8; capability fallback items4 can occur under GPU instrumentation; use uninstrumented launch",
             "environment":std::env::vars().filter(|(k,_)| k.starts_with("MTL_") || k.starts_with("METAL_") || k.starts_with("MLX_") || k.starts_with("MCCL_")).collect::<BTreeMap<_,_>>()},
         "method":{

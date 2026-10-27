@@ -11,7 +11,7 @@ use cuda_core::{CudaContext, DeviceCopy, LaunchConfig1D};
 pub use device::*;
 pub use encoding::{decode_value, encode_value, DecodeValue, Dictionary, EncodeValue};
 pub use host::*;
-pub use memory::{Buffer, MemoryResource, Pool};
+pub use memory::{Buffer, MemoryResource, Pool, PoolMemoryStats};
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 pub type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
@@ -557,7 +557,7 @@ impl EncodedColumn {
         } else {
             let mut len = 0u64;
             unsafe {
-                cuda_core::memory::memcpy_dtoh_async(
+                cuda_core::simt::memory::memcpy_dtoh_async(
                     &mut len,
                     self.count as u64,
                     8,

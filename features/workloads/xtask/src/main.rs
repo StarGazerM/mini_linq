@@ -551,8 +551,8 @@ MiniLinq workload tasks
   cargo xtask differential [--cases N] [--seed S]
   cargo xtask explain CASE [--through STAGE]
   cargo xtask bench [--scale N] [--seed N]
-  cargo xtask bench --tpch --sf 0.1|1 [--runs N] [--query NAME] [--config NAME | --reduction-comparison | --index-comparison]
-  cargo xtask profile --tpch --sf 0.1|1 [--query NAME] [--config NAME] [--output DIR]
+  cargo xtask bench --tpch --sf 0.1|1|10 [--runs N] [--cap-seconds N] [--query NAME] [--config NAME[,NAME...] | --reduction-comparison | --index-comparison]
+  cargo xtask profile --tpch --sf 0.1|1|10 [--query NAME] [--config NAME] [--output DIR]
 
 SCENARIO is coverage, empty-input, no-match, or all.
 It defaults to all for golden, coverage for generate.
@@ -562,6 +562,11 @@ Bench always builds and runs in the release profile; time is never asserted.
 The synthetic bench reports scales N, 2N and 4N (default N=128).
 The TPC-H-derived bench enables the DuckDB oracle, caches data under target/,
 and reports warm medians for the selected scale factor.
+Runs must be positive and odd (1 is useful for smoke checks; default 5).
+--cap-seconds bounds configuration workers, including load and counting, not compilation or DuckDB;
+expired configurations report timeout with no query timing. The default is no cap.
+SF10 has about 60 million lineitems: allow ample RAM (125 GiB recommended) and
+roughly 26 GB disk for cached dbgen data and parquet projections under target/bench/data/tpch-10.
 The extended and typed corpora have tiny fixtures only. Typed CSV fixtures are
 authored; `golden typed --write` regenerates their Parquet copies and answers.
 

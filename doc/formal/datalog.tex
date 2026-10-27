@@ -347,6 +347,11 @@ obligation; it is not Rust alias resolution or a proof of printer equivalence.
 The argument-free \code{own\_push::push!} is not a push-interface terminal:
 although it uses push loops internally, its public result is an iterator.
 Datalog's push adapter uses the public consumer form of that feature printer.
+A third interface, \code{batch}, asserts that the terminal returns an opaque
+candidate batch to a batch-capable round printer: it neither enumerates rows on
+the host nor invokes a host consumer. Its key-set holes therefore declare
+owned key columns and dereference their arguments, since a batch holds values,
+not borrows of host rows. Host round printers reject batch holes.
 This check examines terminal invocations, not Rust tokens that do not yet exist.
 With $\Gamma$ the recorded registry and $\mathrm{last}(Q)$ the terminal:
 \begin{mathpar}
@@ -487,6 +492,133 @@ operating across these dependency boundaries is rejected.
 The publication member list may be any permutation of the component:
 publication is a barrier with no interleaved query evaluation, not a requirement
 to repeat the default member order.
+
+\paragraph{Schedule records.}
+A Round program records one \code{schedule}: a \code{progress} mode and, per
+component, each rule hole's positive \emph{read set} and an ordered list of
+\emph{waves}. A read is a pair (relation, \code{full}$\mid$\code{delta}); a
+hole's read set is derived from the Storage \code{Read} records of its
+variant: a \code{direct} read names the relation's delta, a \code{delta}
+layout read names its layout's relation at delta, a \code{full} layout read
+names its layout's relation at full. Negative keys are frozen for the
+component and are not reads. A wave names a phase (\code{seed} or
+\code{step}) and the positions of rule holes in that phase's list. The seed
+waves precede the step waves; each phase's waves partition its holes, every
+hole appearing exactly once; a wave is nonempty. The only admitted progress
+mode is \code{synchronous}: every hole of a round reads the snapshot
+committed by the preceding publication. The schedule records which holes the
+printer may evaluate concurrently and after which wave each head's admission
+may begin; it records no join order, provider, or CQ decision, and Fork's
+default schedule is one wave per phase containing every hole.
+Two further per-component records are realization advice and a derived
+placement. A \code{policy} entry names one hole at most once and may give a
+positive chunk \code{grain} and an \code{inline\_below} driver length under
+which that hole's own chunking is inlined; it never affects wave concurrency
+or any value. A \code{publication} entry names, per phase with waves and per
+member, the wave after which that member's publication may begin.
+\begin{mathpar}
+\Rule{WF-DL-Schedule}{\mathrm{WF}_{\mathrm{Round}}(P)\quad
+ \forall h.\ \mathrm{reads}(h)=\mathrm{derive}(\mathrm{Storage},h)\quad
+ \text{waves partition each phase's holes, nonempty, seeds before steps}\quad
+ \text{policy names existing holes once, positive grain}\quad
+ \mathrm{publication}=\mathrm{derive}(\mathrm{reads},\mathrm{waves})\quad
+ \text{WF-DL-Progress}}
+ {\mathrm{WF}_{\mathrm{Schedule}}(P)}
+\end{mathpar}
+Publication of a member $H$ mutates the hosts and layouts that holes reading
+$H$ (at either version) scan or probe in the same round, and consumes the
+admitted rows of every hole whose head is $H$. Its placement is therefore
+derived, not chosen: the last wave of the phase containing a writer or reader
+of $H$, or the phase's last wave when none touches $H$. A printer that starts
+$H$'s admission and publication after that wave, inside the following wave's
+scope, interleaves them only with holes that neither write nor read $H$.
+\begin{mathpar}
+\Rule{DL-PublishAfterReaders}{w_H=\max\{w\mid \text{wave }w\text{ holds }h,\ \mathrm{head}(h)=H\lor H\in\mathrm{reads}(h)\}\quad
+ \text{publish}(H)\text{ starts after wave }w_H\text{ joins}}
+ {\text{no hole of the round observes }H\text{ after its publication}}
+\end{mathpar}
+\paragraph{Meaning.} Evaluations in one round read only the committed
+immutable snapshot $(A_r,\Delta_r)$ and never a candidate of the same round.
+Hence the candidate bag of a round is $\biguplus_h h(A_r,\Delta_r)$ for any
+evaluation order, concurrency, or wave partition, and a head's admission,
+which is owned by exactly one canonical owner, yields the same
+$\Delta_{r+1}$ whether it runs after the whole phase or as soon as every hole
+of that head has completed. Waves therefore change no value; they bound which
+evaluations may overlap and when an admission may start.
+\begin{mathpar}
+\Rule{DL-WaveCommute}{\text{holes read only }(A_r,\Delta_r)\quad
+ \text{admission of head }H\text{ runs after every hole with head }H}
+ {\mathrm{supp}\bigl(\textstyle\biguplus_h C_h\bigr)\text{ and }\Delta_{r+1}
+ \text{ are independent of wave partition and overlap}}
+\end{mathpar}
+The schedule is a Round rewrite target: a \code{schedule} pass changes only
+the schedule record, and the correspondence checker requires both contracts
+and exact equality of the erased programs modulo that record.
+\begin{mathpar}
+\Rule{CK-DL-Schedule}{\mathrm{WF}_{\mathrm{Schedule}}(s)\quad
+ \mathrm{WF}_{\mathrm{Schedule}}(t)\quad
+ \mathrm{erase}(s)[\mathrm{schedule}:=\mathrm{erase}(t).\mathrm{schedule}]=\mathrm{erase}(t)}
+ {\mathrm{check}_{\mathrm{schedule}}(s,t)}
+\end{mathpar}
+Admitted wave advice: \code{whole} (one wave per phase), \code{per\_hole}
+(one hole per wave, in list order), \code{by\_head} (holes grouped by head
+relation in head order), or an explicit per-component listing. Advice
+selects among schedules that WF-DL-Schedule already admits; it is not a
+semantic choice.
+
+\paragraph{Relational progress.}
+\code{progress \{relational\}} removes the step-phase round barrier. Seeds and
+their publication remain synchronous. Afterwards each component member $R$
+has its own sequence of committed batches $B_R^1,B_R^2,\ldots$; committing a
+batch admits it against $R$'s canonical owner and performs $R$'s complete
+recorded publication atomically with respect to every reader of $R$. A step
+hole $h$ whose variant selects a changing occurrence on $R$ executes on one
+batch of $R$ at a time and reads all its relations under a \emph{consistent
+cut}: a state of every member it reads that contains exactly the batches
+committed before some instant $T_h$, held unchanged while $h$ runs. The
+realization obligations are:
+\begin{enumerate}
+\item \emph{tiled windows}: for every step hole $h$ with delta relation $R$ and
+  every nonempty batch $B_R^k$, $h$ executes exactly once with $B_R^k$ as its
+  delta, and $R$ commits $B_R^{k+1}$ only after every such hole has done so;
+\item \emph{consistent cuts}: the cut of $h$ includes $B_R^k$ and every batch
+  of every member committed before $B_R^k$;
+\item \emph{exclusive admission}: one owner admits each member, candidates of
+  every hole with that head enter some later admission, and admitted rows are
+  committed only through that member's batches;
+\item \emph{quiescence}: the component ends when no hole runs, no candidate
+  is pending, and every committed batch has been consumed by all its delta
+  readers.
+\end{enumerate}
+Relational progress requires the component to declare no observer (rounds
+are no longer global) and timing policy \code{none}.
+\begin{mathpar}
+\Rule{DL-AsyncCovering}{\text{seeds committed synchronously}\quad
+ \text{tiled windows}\quad\text{consistent cuts}\quad
+ \text{exclusive admission}\quad\text{quiescence}\quad
+ \text{rules total on reached prefixes}}
+ {\text{the final accumulated members equal the synchronous seminaive fixpoint}}
+\end{mathpar}
+\emph{Argument.} Soundness: every hole evaluates its monotone rule on subsets
+of the fixpoint. Completeness by induction on derivation height: given body
+tuples $t_1,\ldots,t_n$ of a rule instance whose changing occurrences are all
+committed, let $t_j$ be the one whose batch $B_R^k$ committed last (any, on
+ties within one batch). \code{seminaive\_covering} provides a step variant
+selecting occurrence $j$; by (1) its hole executes on $B_R^k$; by (2) its cut
+contains every other $t_i$, at full version, including members of the same
+batch; frozen and lower-component occurrences are constant. So the head is a
+candidate, and by (3) it is committed unless already present; (4) ensures no
+pending work is lost. Synchronous rounds are one admissible relational
+schedule (each round's cut is the committed snapshot, and every delta reader
+runs on each batch), so a printer realizing only synchronous rounds also
+realizes \code{relational}. Partial Rust remains subject to the prefix-safety
+premise of the preceding paragraph.
+\begin{mathpar}
+\Rule{WF-DL-Progress}{\mathrm{progress}\in\{\code{synchronous},\code{relational}\}\quad
+ \mathrm{progress}=\code{relational}\Rightarrow
+ \text{no observer}\land\mathrm{timing}=\code{none}}
+ {\text{the progress mode is admissible}}
+\end{mathpar}
 
 \paragraph{Control and output records.} A component's \code{termination}
 list contains each component member exactly once, in any order, with no foreign
@@ -653,6 +785,44 @@ do not compare target names or variant order with a regenerated expansion.
 The total finite refinement uses DL-Delta and DL-FrozenNegation; partial Rust
 requires the additional prefix-safety obligation, not merely this check.
 
+\paragraph{Recorded occurrence order.}
+Each variant records a permutation $\pi$ of its source rule's body positions;
+$\pi(k)$ is the source occurrence executed at position $k$.  Omitted textual
+\code{order} denotes the identity permutation.  The delta occurrence $d$ remains
+an index in the source body, not in the permuted body.  Let $[a,b)$ be the first
+maximal contiguous interval of positive relational atoms, or the empty interval
+when no positive atom occurs.  A permitted order fixes every position outside
+$[a,b)$ and permutes only this interval.  In particular, it does not move any
+atom across an opaque Rust clause or a negative occurrence.
+\begin{mathpar}
+\Rule{DL-OccurrenceOrder}{
+ \pi\in\mathrm{Sym}(\{0,\ldots,n-1\})\quad
+ \forall k\notin[a,b).\ \pi(k)=k\quad
+ \forall k\in[a,b).\ \pi(k)\in[a,b)\quad
+ \mathrm{WF}_{\mathrm{CQ}}(V)\quad
+ \pi^{-1}(\mathrm{erase}_{\Delta_d}(V))=Q
+}{\mathrm{ValidVariantOrder}(Q,d,\pi,V)}
+\end{mathpar}
+Here erasure checks the selected delta relation at execution position
+$\pi^{-1}(d)$, restores that occurrence's source relation, and then restores
+source body order before comparing the entire rule, including its head and
+opaque Rust.  Seeds have no delta substitution.  The Incremental contract also
+retains its independent changing-position coverage and fresh-schema checks.
+The checker validates the supplied permutation and never reruns a planner.
+Under the existing relational laws, permuting positive atoms preserves their
+joined valuation set; because the entire prefix precedes the same subsequent
+Rust and negative clauses, the reached valuations at those barriers are
+unchanged.  The existing purity, lawful equality and partial-Rust premises
+continue to apply.
+
+\paragraph{Delta-first planning advice.}
+The target-independent \code{driver(delta\_first)} advice selects the changing
+occurrence first when $d\in[a,b)$, then selects the remaining prefix occurrences
+by connectivity to already bound relational variables, breaking ties by source
+position.  It records the resulting complete permutation.  Seeds and variants
+whose changing occurrence is outside that prefix retain identity order.
+This heuristic is not part of the validity rule and is not chosen by a printer.
+
 \subsection{Storage: Incremental to Storage}
 Record the existing deterministic concrete providers, initializers, layouts,
 bindings and maintenance. Independently check exact base preservation and the
@@ -663,6 +833,13 @@ or whitelisting concrete Rust types.
  \mathrm{incremental}(t)=s}{\mathrm{check}_{\mathrm{storage}}(s,t)}
 \end{mathpar}
 Refinement requires the stated $\alpha$ laws for the selected providers.
+
+\paragraph{Storage correspondence under occurrence order.}
+A read at execution position $k$ refers to source occurrence $\pi(k)$.
+Key availability is derived by visiting the recorded execution order, while
+relation identity and full-versus-delta selection use the source occurrence
+($\pi(k)=d$ exactly for the selected delta read).  Storage and Round preserve
+this correspondence; a leading direct delta becomes the recorded delta scan.
 
 \subsection{Fork: Storage to Round}
 Construct bound CQ holes and explicit operational records, copying provider
@@ -858,17 +1035,200 @@ an expensive full-input hole. This avoids narrow-delta task overhead without cha
 the selected occurrence or CQ rule. A different occurrence would require a
 new checked rule; it is not an unchecked performance choice.
 
+The extension printer realizes the recorded schedule. The partition pass
+preserves the schedule record exactly. Each wave is one joining Rayon scope
+whose tasks are that wave's holes. Inside a hole, chunking of the leading
+scan uses the hole's recorded \code{grain} and is inlined when the driver is
+shorter than its recorded \code{inline\_below}; the certificate's threshold
+and grain are the defaults. The wave itself is spawned whenever the pool has
+more than one worker: a small delta inlines a hole's chunks, never the
+concurrency between holes. A head's sharded admission is spawned into the
+first scope after the last wave containing one of its holes. When the
+recorded publication wave of a member precedes the phase's last wave, that
+member's admission and complete publication (full layouts, accumulated
+extension, delta replacement, delta rebuilds, in the recorded order) run as
+one task in the following wave's scope and are omitted from the phase
+barrier; otherwise they follow the final wave as before. The sequential base
+printer evaluates holes in wave order with its inline admission and ignores
+policy and placement; it realizes \code{relational} progress by synchronous
+rounds, which DL-AsyncCovering admits.
+\begin{mathpar}
+\Rule{P-DL-Waves}{\mathrm{WF}_{\mathrm{Schedule}}(t)\quad
+ \text{scope}_w\text{ joins before scope}_{w+1}\quad
+ \mathrm{admit}(H)\text{ is spawned after the last wave of }H\text{'s holes}\quad
+ \mathrm{publish}(H)\text{ is spawned after }w_H\text{ (DL-PublishAfterReaders)}}
+ {\text{the realization refines DL-WaveCommute}}
+\end{mathpar}
+Under \code{relational} progress the extension printer keeps the seed phase
+above and replaces the step loop by an event-driven executor. Isolation is a
+scheduling property, not lock waiting: a hole task may itself run nested
+parallel chunks, and a work-stealing pool may then run another released task
+on the same thread's stack, so no released task may ever wait on state held
+by another. Each member's hosts (accumulated rows, delta host, full and delta
+layouts) sit behind one reader/writer lock acquired only by non-blocking
+attempts; its admission set sits behind a mutex touched only by its own
+commit; its pending candidates sit behind a mutex held only to append or take,
+never across nested work. Per-head hashers are cloned before the step phase.
+A step-hole task takes read access to every member it reads, in member-index
+order, and keeps it for its whole evaluation; on completion it appends its
+candidates to each head's pending buffer and the scheduler records that it
+consumed its delta member's current batch. A commit takes the pending
+candidates, admits them, and if any are fresh performs the member's recorded
+publication under write access, advancing its batch number. Because the
+scheduler never releases a commit of a member while a reader of it runs, nor
+a reader of a committing member, every access attempt succeeds; a failed
+attempt is a violated premise and panics rather than blocks. The state a hole
+holds is therefore frozen for every member it reads, a consistent cut. The
+dispatching thread ends the joining scope at quiescence. With one worker the
+step loop falls back to synchronous rounds.
+\begin{mathpar}
+\Rule{P-DL-Relational}{\text{access granted only as released by DL-RelationalScheduler, never waited for}\quad
+ \text{read access held for each hole's evaluation}\quad
+ \text{pending and admission mutexes never held across nested work}\quad
+ \text{scope joins at quiescence}}
+ {\text{the executor discharges the obligations of DL-AsyncCovering}}
+\end{mathpar}
+The scheduler is pure bookkeeping over local member and step-hole indices.
+Each member records its committed nonempty batch count $v_R$ (1 after a
+nonempty seed batch, else 0); each step hole $h$ its delta member
+$\delta(h)$, its read members $\rho(h)\ni\delta(h)$, and the batch $c_h$ it last
+consumed. A member is \emph{ready} when it has pending candidates, is not
+committing, and every delta reader has consumed its current batch; a ready
+member becomes \emph{draining} and stops the release of its readers until it
+commits, so commits cannot starve.
+\begin{mathpar}
+\Rule{DL-RelationalScheduler}{\text{release }h\iff\neg\mathrm{running}(h)\land c_h<v_{\delta(h)}\land
+   \forall R\in\rho(h).\ \neg\mathrm{committing}(R)\land\neg\mathrm{draining}(R)\\
+ \text{release commit }R\iff\mathrm{draining}(R)\land\forall h.\ R\in\rho(h)\Rightarrow\neg\mathrm{running}(h)}
+ {\text{tiled windows and frozen cuts hold, no release waits, and dispatch stops exactly at quiescence}}
+\end{mathpar}
+
 \subsection{Sharded admission and exclusive-layout publication (extension)}
-The extension's Storage rewrite replaces only canonical IDB membership;
-full/delta layout maps, all other Storage records and CQ queues are unchanged.
+By default the extension's Storage rewrite replaces only canonical IDB
+membership. With the argument \code{layouts(sharded)} it additionally replaces
+every IDB full or delta layout whose key is nonempty, from
+\code{HashMap<K, Vec<V>, S>} to \code{ShardedLayout<K, V, S>}, preserving the
+key, payload and hasher types and the layout's relation, columns, key length
+and maintenance. With \code{layouts(runs)} it instead replaces them with
+\code{RunLayout<K, V>}, and with \code{seen(runs)} canonical membership becomes
+\code{RunSeen<T, S>}, keeping $S$ for task-local deduplication only.
+Unit-key scan layouts, EDB layouts, other Storage records and
+CQ queues are unchanged.
 A Round-to-extension pass records the small-work threshold, partition grain,
 admission shard-count policy and ownership/publication certificate. None of
 these parallel choices belongs to the base language or default expansion.
 \begin{mathpar}
 \Rule{CK-DL-ShardStorage}{\mathrm{WF}_{\mathrm{Storage}}(s)\quad
  \mathrm{WF}_{\mathrm{Storage}}(t)\quad
- t\text{ changes only canonical IDB membership providers}}
+ t\text{ changes only canonical IDB membership providers and, optionally,}\\
+ \text{nonempty-key IDB layout maps to sharded or run layouts with equal }K,V(,S)}
  {\mathrm{check}_{\mathrm{shardStorage}}(s,t)}
+\end{mathpar}
+A sharded layout holds $S$ disjoint grouped maps; key $k$ lives only in shard
+$g_S(k)$, selected by bits of $h(k)$ disjoint from the table's own bucket and
+tag bits, so one hash serves routing and probing. Bulk insertion of rows $N$
+partitions them by $g_S$ and fills each shard by one task with exclusive
+access, appending in row order within each bucket.
+\begin{mathpar}
+\Rule{DL-ShardedLayout}{L=\biguplus_{i<S}L_i\quad
+ \mathrm{dom}(L_i)=\{k\mid g_S(k)=i\}\quad
+ L'_i=L_i\cdot\mathrm{layout}(\{r\in N\mid g_S(\mathrm{key}(r))=i\})}
+ {\mathrm{lookup}_{L'}(k)=\mathrm{lookup}_{M'}(k)\text{ for the grouped map }M'\text{ built by inserting the same rows in order}}
+\end{mathpar}
+So every read trait (keyed lookup, candidates, membership, scan) answers as
+the replaced \code{HashMap} would, and DL-LayoutPublication still holds with
+one owner task per layout; only that task's insertion is internally parallel.
+A run layout realizes \textsc{STR-RunRead} and \textsc{STR-RunCompact} on the
+host, as the CPU reference for device runs. It is a sequence of immutable runs
+$\rho_1\cdots\rho_m$, each sorted by $(\mathrm{key},\mathrm{payload})$, so its
+column types must be totally ordered; lookup of $k$ concatenates the
+contiguous $k$-range of every run. Publication sorts the new rows into one run
+and appends it, then merges the last two runs while the earlier is at most
+$r$ times the later, for the leveled capacity ratio $r$ (default four), so
+$m=O(\log_r|L|)$. The ratio changes only cost.
+\begin{mathpar}
+\Rule{DL-RunLayout}{L=\rho_1\cdots\rho_m\quad
+ \rho_{m+1}=\mathrm{sort}(\mathrm{layout}(N))\quad
+ L'=\mathrm{merge}^{*}(\rho_1\cdots\rho_{m+1})}
+ {\mathrm{lookup}_{L'}(k)\equiv_{\mathrm{bag}}\mathrm{lookup}_{L}(k)\uplus\mathrm{lookup}_{\mathrm{layout}(N)}(k)}
+\end{mathpar}
+Run admission is the device algorithm: sort and deduplicate the candidates,
+remove those found by binary search in an accepted run, append the remainder
+as a run (merging as above) and return it in sorted order.
+\begin{mathpar}
+\Rule{DL-RunAdmission}{U=\mathrm{unique}(\mathrm{sort}(C))\quad
+ N=[r\in U\mid\forall i.\ r\notin\rho_i]\quad
+ A'=A\uplus N}
+ {\mathrm{set}(N)=C\setminus A\quad\mathrm{set}(A')=A\cup C}
+\end{mathpar}
+Device runs realize the same two rules over packed words. For fixed-width
+column types $\tau_1\ldots\tau_n$ with $b=\sum_i w_i$, a word is $L=\lceil b/64\rceil$
+64-bit lanes ($u64$, $u128$, or $[u64;L]$ for $L>2$) read as one
+$64L$-bit integer, most significant lane first. Packing places column $i$ of a
+layout's permutation in the next $w_i$ bits from the most significant end,
+after an order-preserving encoding $e_i$ (signed integers flip the sign bit;
+symbol codes are unsigned). Packing is injective and maps the lexicographic
+order to the integer order, so sort, uniqueness, merge and binary search on
+words coincide with those on tuples, and a key prefix $k$ of length $j$
+selects the contiguous word range $[p(k)\cdot2^{s_j},(p(k)+1)\cdot2^{s_j})$
+with $s_j=64L-\sum_{i\le j}w_i$.
+\begin{mathpar}
+\Rule{DL-DevicePacking}{\forall i.\ e_i\text{ injective and monotone}\quad
+ L=\lceil\textstyle\sum_i w_i/64\rceil}
+ {\mathrm{pack}(r)<\mathrm{pack}(r')\iff r<_{\mathrm{lex}}r'\quad
+ \mathrm{lookup}_L(k)=\mathrm{unpack}(\{x\in L\mid p(k)2^{s_j}\le x<(p(k)+1)2^{s_j}\})}
+\Rule{DL-DeviceRuns}{\textsc{DL-DevicePacking}\quad
+ \text{device admission and merge follow \textsc{DL-RunAdmission} and \textsc{DL-RunLayout} on words}}
+ {\mathrm{unpack}(\text{device state})=\text{the CPU run state after the same candidate batches}}
+\end{mathpar}
+A layout run built from an admitted delta permutes columns of a run whose
+words are pairwise distinct; the permutation is injective, so its image is
+also pairwise distinct and sorting alone yields a sorted unique run of the same
+known length, with no compaction and no count readback. Uploads and admission
+still deduplicate.
+\begin{mathpar}
+\Rule{DL-SortKnownUnique}{x_0\ldots x_{n-1}\text{ initialized and pairwise distinct}}
+ {\mathrm{sort}(x)\text{ is sorted, unique, of length }n}
+\end{mathpar}
+Live counts may be read back to size sorts and to test termination; such
+readbacks are recorded realization cost, not semantic steps.
+
+\paragraph{Device realization (extension).}
+The device Storage rewrite replaces every layout provider (EDB and IDB, full
+and delta, any key length) by \code{DeviceLayout<K, V>} and every IDB
+membership provider by \code{DeviceRuns<W>}, where $W$ is the narrowest word
+holding the relation's packed columns. It requires every column type to be a
+supported fixed-width integer or a declared symbol type, and each source
+layout to be the default \code{HashMap} with the default hasher, so erasure is
+exact. A symbol type is named with its codec by the rewrite's
+\code{symbols(T => C, ...)} argument, where \code{C: SymbolCodec<T>} is an
+injective map to \code{u32} codes with its inverse, fixed for the process, so
+equal symbols have equal codes in every relation and round. The device sees only codes; strings never leave the host.
+Relations, columns, keys and maintenance are unchanged.
+\begin{mathpar}
+\Rule{CK-DL-DeviceStorage}{\mathrm{WF}_{\mathrm{Storage}}(s)\quad
+ \mathrm{WF}_{\mathrm{Storage}}(t)\quad
+ \text{substituting back the default providers in }t\text{ gives }s\quad
+ \textsc{DL-DevicePacking}\text{ premises hold for every relation}}
+ {\mathrm{check}_{\mathrm{deviceStorage}}(s,t)}
+\end{mathpar}
+The device round printer consumes the same Round and Schedule records as the
+host printers. Inputs are uploaded once into their layouts. Each round issues
+the holes of every wave in wave order, each writing its head's candidate
+batches; after the last wave every head admits its batches into its accepted
+runs (\textsc{DL-DeviceRuns}), yielding the delta. Publication then follows the
+recorded operations: \code{full\_layouts} permutes the delta into each layout's
+packing, sorts it and appends it as a run (disjoint because it was admitted);
+\code{all\_extend} is the admission itself; \code{delta\_swap} retains the delta
+run; \code{delta\_rebuild} builds each delta layout from it. Termination tests
+the sum of the fresh counts. Outputs unpack the accepted runs. Issuing waves in
+order on one stream is exact by \textsc{DL-WaveCommute}; concurrent streams per
+wave would change only cost.
+\begin{mathpar}
+\Rule{P-DL-Gpu}{\mathrm{WF}_{\mathrm{Round}}(r)\quad
+ \text{every hole has the batch interface}\quad
+ \textsc{CK-DL-DeviceStorage}\quad\textsc{GPU-Arena}}
+ {\mathrm{unpack}(\mathrm{print}_{\mathrm{gpu}}(r))=\mathrm{print}_{\mathrm{rounds}}(r)\text{ as relations}}
 \end{mathpar}
 Let $S$ be a power of two at least the worker count and let
 $h_S(x)=h(x)\mathbin{\&}(S-1)$. Canonical admission uses the full tuple:

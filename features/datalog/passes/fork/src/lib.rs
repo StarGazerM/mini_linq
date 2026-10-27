@@ -450,7 +450,11 @@ fn construct(
                                 .iter()
                                 .map(|&i| {
                                     let variable = &variables[i];
-                                    quote!(#variable)
+                                    if interface == HoleInterface::Batch {
+                                        quote!(*#variable)
+                                    } else {
+                                        quote!(#variable)
+                                    }
                                 })
                                 .collect(),
                             key.columns
@@ -461,7 +465,13 @@ fn construct(
                                         [relation]
                                         .columns[i]
                                         .ty;
-                                    quote!(#variable: &#ty)
+                                    // Batch arenas own their scalar key columns;
+                                    // host key sets retain borrowed projections.
+                                    if interface == HoleInterface::Batch {
+                                        quote!(#variable: #ty)
+                                    } else {
+                                        quote!(#variable: &#ty)
+                                    }
                                 })
                                 .collect(),
                         )
@@ -592,6 +602,7 @@ fn construct(
             }
         })
         .collect();
+    let schedule = cq_lang_datalog_round::Schedule::whole(source, &analysis, &context)?;
     let target = Program {
         storage: source.clone(),
         context,
@@ -599,6 +610,7 @@ fn construct(
         terminals,
         execution: Vec::new(),
         policy: RoundPolicy { timing },
+        schedule,
     };
     check(source, &target)?;
     Ok(target)

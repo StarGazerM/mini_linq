@@ -1,0 +1,642 @@
+[
+  {
+    "config": "default",
+    "ms": 13.266417,
+    "round": 0
+  },
+  {
+    "config": "transfer",
+    "ms": 13.591583,
+    "round": 0
+  },
+  {
+    "config": "transfer",
+    "ms": 12.837167,
+    "round": 1
+  },
+  {
+    "config": "default",
+    "ms": 12.534666999999999,
+    "round": 1
+  },
+  {
+    "config": "default",
+    "ms": 12.539875,
+    "round": 2
+  },
+  {
+    "config": "transfer",
+    "ms": 12.494084,
+    "round": 2
+  },
+  {
+    "config": "transfer",
+    "ms": 13.150125000000001,
+    "round": 3
+  },
+  {
+    "config": "default",
+    "ms": 14.165917,
+    "round": 3
+  },
+  {
+    "config": "default",
+    "ms": 12.994375000000002,
+    "round": 4
+  },
+  {
+    "config": "transfer",
+    "ms": 14.146458,
+    "round": 4
+  },
+  {
+    "config": "transfer",
+    "ms": 12.556708,
+    "round": 5
+  },
+  {
+    "config": "default",
+    "ms": 13.244334,
+    "round": 5
+  },
+  {
+    "config": "default",
+    "ms": 11.424708,
+    "round": 6
+  },
+  {
+    "config": "transfer",
+    "ms": 13.686792,
+    "round": 6
+  },
+  {
+    "config": "transfer",
+    "ms": 13.971499999999999,
+    "round": 7
+  },
+  {
+    "config": "default",
+    "ms": 11.749374999999999,
+    "round": 7
+  },
+  {
+    "config": "default",
+    "ms": 11.931792,
+    "round": 8
+  },
+  {
+    "config": "transfer",
+    "ms": 13.045333,
+    "round": 8
+  },
+  {
+    "config": "transfer",
+    "ms": 13.323375,
+    "round": 9
+  },
+  {
+    "config": "default",
+    "ms": 12.412374999999999,
+    "round": 9
+  },
+  {
+    "config": "default",
+    "ms": 12.147916,
+    "round": 10
+  },
+  {
+    "config": "transfer",
+    "ms": 13.122166,
+    "round": 10
+  },
+  {
+    "config": "transfer",
+    "ms": 12.679041,
+    "round": 11
+  },
+  {
+    "config": "default",
+    "ms": 14.25225,
+    "round": 11
+  },
+  {
+    "config": "default",
+    "ms": 13.721959,
+    "round": 12
+  },
+  {
+    "config": "transfer",
+    "ms": 12.552667,
+    "round": 12
+  },
+  {
+    "config": "transfer",
+    "ms": 13.141209,
+    "round": 13
+  },
+  {
+    "config": "default",
+    "ms": 13.042791999999999,
+    "round": 13
+  },
+  {
+    "config": "default",
+    "ms": 13.237834000000001,
+    "round": 14
+  },
+  {
+    "config": "transfer",
+    "ms": 14.080208,
+    "round": 14
+  },
+  {
+    "config": "transfer",
+    "ms": 12.938540999999999,
+    "round": 15
+  },
+  {
+    "config": "default",
+    "ms": 13.762708,
+    "round": 15
+  },
+  {
+    "config": "default",
+    "ms": 11.720625,
+    "round": 16
+  },
+  {
+    "config": "transfer",
+    "ms": 14.215041,
+    "round": 16
+  },
+  {
+    "config": "transfer",
+    "ms": 13.722584,
+    "round": 17
+  },
+  {
+    "config": "default",
+    "ms": 12.9565,
+    "round": 17
+  },
+  {
+    "config": "default",
+    "ms": 13.022916,
+    "round": 18
+  },
+  {
+    "config": "transfer",
+    "ms": 11.358500000000001,
+    "round": 18
+  },
+  {
+    "config": "transfer",
+    "ms": 13.561166,
+    "round": 19
+  },
+  {
+    "config": "default",
+    "ms": 12.272458,
+    "round": 19
+  },
+  {
+    "config": "default",
+    "ms": 14.274833000000001,
+    "round": 20
+  },
+  {
+    "config": "transfer",
+    "ms": 13.244416,
+    "round": 20
+  },
+  {
+    "config": "transfer",
+    "ms": 13.477833,
+    "round": 21
+  },
+  {
+    "config": "default",
+    "ms": 12.702541,
+    "round": 21
+  },
+  {
+    "config": "default",
+    "ms": 12.045083,
+    "round": 22
+  },
+  {
+    "config": "transfer",
+    "ms": 13.681000000000001,
+    "round": 22
+  },
+  {
+    "config": "transfer",
+    "ms": 12.593708,
+    "round": 23
+  },
+  {
+    "config": "default",
+    "ms": 11.370209,
+    "round": 23
+  },
+  {
+    "config": "default",
+    "ms": 12.790208000000002,
+    "round": 24
+  },
+  {
+    "config": "transfer",
+    "ms": 12.167417,
+    "round": 24
+  },
+  {
+    "config": "transfer",
+    "ms": 14.245625,
+    "round": 25
+  },
+  {
+    "config": "default",
+    "ms": 11.180541,
+    "round": 25
+  },
+  {
+    "config": "default",
+    "ms": 13.248959,
+    "round": 26
+  },
+  {
+    "config": "transfer",
+    "ms": 11.960999999999999,
+    "round": 26
+  },
+  {
+    "config": "transfer",
+    "ms": 12.761415999999999,
+    "round": 27
+  },
+  {
+    "config": "default",
+    "ms": 12.175542,
+    "round": 27
+  },
+  {
+    "config": "default",
+    "ms": 13.861417,
+    "round": 28
+  },
+  {
+    "config": "transfer",
+    "ms": 12.752042,
+    "round": 28
+  },
+  {
+    "config": "transfer",
+    "ms": 11.19,
+    "round": 29
+  },
+  {
+    "config": "default",
+    "ms": 13.606333,
+    "round": 29
+  },
+  {
+    "config": "default",
+    "ms": 11.82575,
+    "round": 30
+  },
+  {
+    "config": "transfer",
+    "ms": 12.0095,
+    "round": 30
+  },
+  {
+    "config": "transfer",
+    "ms": 13.0125,
+    "round": 31
+  },
+  {
+    "config": "default",
+    "ms": 13.9825,
+    "round": 31
+  },
+  {
+    "config": "default",
+    "ms": 13.299125,
+    "round": 32
+  },
+  {
+    "config": "transfer",
+    "ms": 13.793292000000001,
+    "round": 32
+  },
+  {
+    "config": "transfer",
+    "ms": 12.833208,
+    "round": 33
+  },
+  {
+    "config": "default",
+    "ms": 11.453458999999999,
+    "round": 33
+  },
+  {
+    "config": "default",
+    "ms": 13.558416,
+    "round": 34
+  },
+  {
+    "config": "transfer",
+    "ms": 13.078790999999999,
+    "round": 34
+  },
+  {
+    "config": "transfer",
+    "ms": 12.98225,
+    "round": 35
+  },
+  {
+    "config": "default",
+    "ms": 13.964542,
+    "round": 35
+  },
+  {
+    "config": "default",
+    "ms": 11.947459,
+    "round": 36
+  },
+  {
+    "config": "transfer",
+    "ms": 11.564582999999999,
+    "round": 36
+  },
+  {
+    "config": "transfer",
+    "ms": 13.345667,
+    "round": 37
+  },
+  {
+    "config": "default",
+    "ms": 13.263292,
+    "round": 37
+  },
+  {
+    "config": "default",
+    "ms": 13.697834,
+    "round": 38
+  },
+  {
+    "config": "transfer",
+    "ms": 13.401083,
+    "round": 38
+  },
+  {
+    "config": "transfer",
+    "ms": 12.446458,
+    "round": 39
+  },
+  {
+    "config": "default",
+    "ms": 13.35775,
+    "round": 39
+  },
+  {
+    "config": "default",
+    "ms": 11.786125,
+    "round": 40
+  },
+  {
+    "config": "transfer",
+    "ms": 12.402625,
+    "round": 40
+  },
+  {
+    "config": "transfer",
+    "ms": 12.646125,
+    "round": 41
+  },
+  {
+    "config": "default",
+    "ms": 12.69225,
+    "round": 41
+  },
+  {
+    "config": "default",
+    "ms": 12.341833,
+    "round": 42
+  },
+  {
+    "config": "transfer",
+    "ms": 13.730457999999999,
+    "round": 42
+  },
+  {
+    "config": "transfer",
+    "ms": 14.115791000000002,
+    "round": 43
+  },
+  {
+    "config": "default",
+    "ms": 14.050167,
+    "round": 43
+  },
+  {
+    "config": "default",
+    "ms": 12.887708,
+    "round": 44
+  },
+  {
+    "config": "transfer",
+    "ms": 12.810333,
+    "round": 44
+  },
+  {
+    "config": "transfer",
+    "ms": 12.735042,
+    "round": 45
+  },
+  {
+    "config": "default",
+    "ms": 13.828,
+    "round": 45
+  },
+  {
+    "config": "default",
+    "ms": 14.071958,
+    "round": 46
+  },
+  {
+    "config": "transfer",
+    "ms": 12.621458,
+    "round": 46
+  },
+  {
+    "config": "transfer",
+    "ms": 13.29425,
+    "round": 47
+  },
+  {
+    "config": "default",
+    "ms": 12.670542,
+    "round": 47
+  },
+  {
+    "config": "default",
+    "ms": 13.440917,
+    "round": 48
+  },
+  {
+    "config": "transfer",
+    "ms": 12.741000000000001,
+    "round": 48
+  },
+  {
+    "config": "transfer",
+    "ms": 14.610833,
+    "round": 49
+  },
+  {
+    "config": "default",
+    "ms": 14.070334,
+    "round": 49
+  },
+  {
+    "config": "default",
+    "ms": 13.264209000000001,
+    "round": 50
+  },
+  {
+    "config": "transfer",
+    "ms": 12.832082999999999,
+    "round": 50
+  },
+  {
+    "config": "transfer",
+    "ms": 14.19725,
+    "round": 51
+  },
+  {
+    "config": "default",
+    "ms": 12.899707999999999,
+    "round": 51
+  },
+  {
+    "config": "default",
+    "ms": 12.352125000000001,
+    "round": 52
+  },
+  {
+    "config": "transfer",
+    "ms": 13.888333,
+    "round": 52
+  },
+  {
+    "config": "transfer",
+    "ms": 13.02175,
+    "round": 53
+  },
+  {
+    "config": "default",
+    "ms": 13.129042,
+    "round": 53
+  },
+  {
+    "config": "default",
+    "ms": 13.302833,
+    "round": 54
+  },
+  {
+    "config": "transfer",
+    "ms": 12.987584,
+    "round": 54
+  },
+  {
+    "config": "transfer",
+    "ms": 13.999417,
+    "round": 55
+  },
+  {
+    "config": "default",
+    "ms": 14.816125,
+    "round": 55
+  },
+  {
+    "config": "default",
+    "ms": 13.412916000000001,
+    "round": 56
+  },
+  {
+    "config": "transfer",
+    "ms": 13.500167000000001,
+    "round": 56
+  },
+  {
+    "config": "transfer",
+    "ms": 14.252625,
+    "round": 57
+  },
+  {
+    "config": "default",
+    "ms": 13.008916000000001,
+    "round": 57
+  },
+  {
+    "config": "default",
+    "ms": 13.273750000000001,
+    "round": 58
+  },
+  {
+    "config": "transfer",
+    "ms": 14.178833000000001,
+    "round": 58
+  },
+  {
+    "config": "transfer",
+    "ms": 12.416708,
+    "round": 59
+  },
+  {
+    "config": "default",
+    "ms": 13.53225,
+    "round": 59
+  },
+  {
+    "config": "default",
+    "ms": 11.949417,
+    "round": 60
+  },
+  {
+    "config": "transfer",
+    "ms": 13.367708,
+    "round": 60
+  },
+  {
+    "config": "transfer",
+    "ms": 13.576542,
+    "round": 61
+  },
+  {
+    "config": "default",
+    "ms": 14.514542,
+    "round": 61
+  },
+  {
+    "config": "default",
+    "ms": 12.644874999999999,
+    "round": 62
+  },
+  {
+    "config": "transfer",
+    "ms": 13.340042,
+    "round": 62
+  },
+  {
+    "config": "transfer",
+    "ms": 14.602959,
+    "round": 63
+  },
+  {
+    "config": "default",
+    "ms": 14.722166999999999,
+    "round": 63
+  }
+]

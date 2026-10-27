@@ -7,6 +7,7 @@ crate::tpch_runtime::retail_kernel! { $;
 WHERE substring(c.c_phone FROM 1 FOR 2) IN ('13', '31', '23', '29', '30', '18', '17')
 AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.o_custkey = c.c_custkey)"#;
     candidate hypergraph;
+    advise plan(no_reduce, order(Customer));
     setup {}
     relations {
         relation Customer => customer(c_custkey: i64, c_phone: String);

@@ -138,7 +138,7 @@ pub fn conformance_targets(input: proc_macro::TokenStream) -> proc_macro::TokenS
 /// Plan and emit both target functions after the configured Structures pipeline.
 #[proc_macro]
 pub fn sequence_targets(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    use cq_testkit::conformance::{Target, translate_with_catalog};
+    use cq_sequence_conformance::{Target, translate_with_catalog};
     use quote::quote;
     cq_stage::pass::<cq_lang_structures::Program, syn::Expr>(input.into(), |source, arguments| {
         let loader: syn::Ident = syn::parse2(arguments)?;
@@ -154,11 +154,8 @@ pub fn sequence_targets(input: proc_macro::TokenStream) -> proc_macro::TokenStre
                     cq_lang_sequence::Capability::Exact,
                     cq_lang_sequence::Capability::Membership,
                 ],
-                levels: vec![
-                    vec!["host".into()],
-                    vec!["host".into(), "pool".into()],
-                    vec!["host".into(), "pool".into(), "task".into()],
-                ],
+                // SortedIndex uses Rc-backed buckets and is a host-only provider.
+                levels: vec![vec!["host".into()]],
             }],
             ..Default::default()
         };

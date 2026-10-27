@@ -12,7 +12,7 @@
 //! overhead and allocations owned by K. Staging bytes are reported separately.
 use crate::instrument::HashSet;
 use crate::{Build, ExactIntervalMembership, ExactMembership};
-use std::{hash::Hash, rc::Rc};
+use std::{hash::Hash, sync::Arc};
 
 /// Some ordinals must be injective and order-preserving for all supported keys.
 /// Returning None disables dense representation for the entire set.
@@ -91,8 +91,8 @@ enum Form<K> {
         words: Vec<u64>,
     },
     Hash {
-        keys: HashSet<Rc<K>>,
-        sorted: Vec<Rc<K>>,
+        keys: HashSet<Arc<K>>,
+        sorted: Vec<Arc<K>>,
     },
 }
 pub struct AdaptiveKeySet<K, C, const MAX_BITS: usize> {
@@ -179,11 +179,11 @@ impl<K: Eq + Hash + Ord, C: KeyCodec<K>, const B: usize> AdaptiveKeySet<K, C, B>
                 Some(x) => range = Some(range.map_or((x, x), |(lo, hi)| (lo.min(x), hi.max(x)))),
                 None => ordinal = false,
             }
-            staging.insert(Rc::new(key));
+            staging.insert(Arc::new(key));
         }
         #[cfg(feature = "counters")]
         crate::counters::build_cardinality(staging.len());
-        let stage_bytes = staging.capacity() * (std::mem::size_of::<Rc<K>>() + 1)
+        let stage_bytes = staging.capacity() * (std::mem::size_of::<Arc<K>>() + 1)
             + staging.len() * (std::mem::size_of::<K>() + 2 * std::mem::size_of::<usize>());
         let mut allocation = crate::counters_memory::Allocation::new(stage_bytes);
         let span = range.and_then(|(lo, hi)| hi.checked_sub(lo)?.checked_add(1));
@@ -206,7 +206,7 @@ impl<K: Eq + Hash + Ord, C: KeyCodec<K>, const B: usize> AdaptiveKeySet<K, C, B>
         let bytes = match &form {
             Form::Dense { words, .. } => words.capacity() * 8,
             Form::Hash { sorted, .. } => {
-                stage_bytes + sorted.capacity() * std::mem::size_of::<Rc<K>>()
+                stage_bytes + sorted.capacity() * std::mem::size_of::<Arc<K>>()
             }
         };
         // Staging and final bitmap coexist; hash array shares the staging keys.
@@ -240,7 +240,7 @@ impl<K: Eq + Hash + Ord, C: KeyCodec<K>, const B: usize> ExactMembership<K>
     fn contains(&self, key: &K) -> bool {
         crate::count!(lookups);
         #[inline(never)]
-        fn hashed<K: Eq + Hash>(keys: &HashSet<Rc<K>>, key: &K) -> bool {
+        fn hashed<K: Eq + Hash>(keys: &HashSet<Arc<K>>, key: &K) -> bool {
             keys.contains(key)
         }
         match &self.form {

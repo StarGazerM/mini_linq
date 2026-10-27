@@ -52,6 +52,7 @@
 //!
 pub use cq_lang_physical as physical;
 
+use quote::ToTokens;
 use std::collections::{BTreeMap, BTreeSet};
 
 use syn::{Ident, Token, token};
@@ -427,8 +428,8 @@ pub struct Analysis {
     pub keysets: BTreeMap<(String, Vec<String>), KeySet>,
     /// Positional access decisions attached to existing Physical readers.
     pub reads: BTreeMap<String, Read>,
-    /// Conservative scan filters per scan, in decision order, each with a
-    /// verified exact covering probe or semijoin.
+    /// Distinct runtime filters per scan occurrence, in first-witness order.
+    /// Every raw decision's exact covering witness is checked before coalescing.
     pub join_filters: BTreeMap<String, Vec<JoinFilter>>,
     pub physical: physical::Analysis,
     /// Declared column order of every host relation.
@@ -1032,6 +1033,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
             "missing computed-head dedup type",
         );
     }
+    coalesce_join_filters(program, &mut analysis);
     Ok(analysis)
 }
 
@@ -1089,6 +1091,129 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
             &target.physical,
             "Structures rewrite must preserve Physical AST and tokens exactly",
         );
+    }
+    Ok(())
+}
+
+/// Compare semantic layout while allowing the storage type and its declared support to change.
+/// Independent checking still proves live support obligations. Host readers and
+/// all non-storage syntax remain exact, including opaque tokens.
+pub fn storage_layout_eq(left: &Entry, right: &Entry) -> bool {
+    if left.name != right.name
+        || std::mem::discriminant(&left.structure) != std::mem::discriminant(&right.structure)
+    {
+        return false;
+    }
+    let mut normalized = left.clone();
+    match (&mut normalized.structure, &right.structure) {
+        (Structure::Built { keyed: left, .. }, Structure::Built { keyed: right, .. }) => {
+            left.ty = right.ty.clone();
+            left.supports = right.supports.clone();
+        }
+        (Structure::Dedup { ty: left, .. }, Structure::Dedup { ty: right, .. })
+        | (Structure::HeadDedup { ty: left, .. }, Structure::HeadDedup { ty: right, .. })
+        | (Structure::Rows { ty: left, .. }, Structure::Rows { ty: right, .. })
+        | (Structure::Selection { ty: left, .. }, Structure::Selection { ty: right, .. })
+        | (Structure::KeySet { ty: left, .. }, Structure::KeySet { ty: right, .. }) => {
+            *left = right.clone()
+        }
+        (
+            Structure::JoinFilter { filter: left, .. },
+            Structure::JoinFilter { filter: right, .. },
+        ) => left.ty = right.ty.clone(),
+        _ => {}
+    }
+    normalized == *right
+        && normalized.to_token_stream().to_string() == right.to_token_stream().to_string()
+}
+
+/// Check catalog retention across the Physical/Structures boundary.
+///
+/// Unlike an ordinary Structures rewrite, this permits checked host renames
+/// to move from `pipe` to `let`, replacing keyed fallbacks with built indexes.
+/// Operators, their order, opaque syntax, scan adapters and existing layouts
+/// remain unchanged. Storage implementations may be retyped.
+pub fn check_retention_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
+    contract::check(source)?;
+    let facts = contract::check(target)?;
+    let mut normalized = target.physical.clone();
+    if source.physical.program.definitions.len() != normalized.program.definitions.len() {
+        return error(
+            target,
+            "catalog retention cannot add or remove Physical definitions",
+        );
+    }
+    for (old, new) in source
+        .physical
+        .program
+        .definitions
+        .iter()
+        .zip(&mut normalized.program.definitions)
+    {
+        if old.mode != new.mode {
+            if !matches!(
+                (&old.mode, &new.mode, &old.operator),
+                (
+                    physical::Mode::Pipe(_),
+                    physical::Mode::Let(_),
+                    physical::Operator::Rename(_)
+                )
+            ) {
+                return error(
+                    new,
+                    "catalog retention only permits a host rename from pipe to let",
+                );
+            }
+            new.mode = old.mode.clone();
+        }
+    }
+    if normalized != source.physical
+        || normalized.to_token_stream().to_string() != source.physical.to_token_stream().to_string()
+    {
+        return error(
+            target,
+            "catalog retention must preserve all non-mode Physical syntax exactly",
+        );
+    }
+    physical::check_rewrite(&source.physical, &target.physical)?;
+    let same_entry = storage_layout_eq;
+    for entry in &source.structures.entries {
+        if target
+            .structures
+            .entries
+            .iter()
+            .any(|other| same_entry(entry, other))
+        {
+            continue;
+        }
+        if let Structure::Host { reader, keyed, .. } = &entry.structure
+            && reader != "scan"
+            && facts.physical.modes.get(&symbol_name(&entry.name)) == Some(&physical::ModeKind::Let)
+        {
+            let mut keys = keyed.level_names().concat();
+            keys.sort();
+            if facts.built_on(&symbol_name(&entry.name), &keys).is_some() {
+                continue;
+            }
+        }
+        return error(
+            entry,
+            "catalog retention must preserve scans, opaque adapters and existing storage layouts",
+        );
+    }
+    for entry in &target.structures.entries {
+        if !matches!(entry.structure, Structure::Built { .. })
+            && !source
+                .structures
+                .entries
+                .iter()
+                .any(|other| same_entry(other, entry))
+        {
+            return error(
+                entry,
+                "catalog retention may add built indexes, not new opaque adapters",
+            );
+        }
     }
     Ok(())
 }

@@ -10,6 +10,8 @@ use crate::{Analysis, Capability, Guard, Len, Monoid, Obligation, OutputProtocol
 
 #[path = "lookup_semantics.rs"]
 mod lookup_semantics;
+#[path = "publication.rs"]
+mod publication;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Meaning {
@@ -30,6 +32,10 @@ struct Fact {
     /// A key proved for these positions, not merely for their relational support.
     unique: Option<Vec<String>>,
     reads: BTreeSet<(String, Vec<String>)>,
+    /// Routing columns whose equal values inhabit exactly one outer part.
+    partition: Option<Vec<String>>,
+    /// Outer positions are a checked Tile or key-disjoint cover.
+    partitioned: bool,
 }
 
 struct Checked<'a> {
@@ -207,8 +213,13 @@ fn analyze_in(
             lengths: BTreeMap::new(),
             shapes: BTreeMap::new(),
             tilings: BTreeMap::new(),
+            partial_groups: BTreeMap::new(),
             views: BTreeSet::new(),
             stores: BTreeMap::new(),
+            publications: BTreeMap::new(),
+            host_sources: BTreeMap::new(),
+            host_tiles: BTreeMap::new(),
+            routed_providers: BTreeMap::new(),
             capabilities: BTreeMap::new(),
             provider_reads: BTreeMap::new(),
             levels: BTreeMap::new(),
@@ -225,6 +236,7 @@ fn analyze_in(
         prefix: &prefix,
         support: &context.support,
     };
+    let mut publication_facts = BTreeMap::new();
     for definition in &program.sequence.definitions {
         let name = symbol_name(&definition.name);
         if checker.facts.contains_key(&name) {
@@ -235,6 +247,9 @@ fn analyze_in(
             );
         }
         let mut fact = checker.term(&definition.term, &name)?;
+        if matches!(definition.term, Term::Store { .. }) {
+            publication_facts.insert(name.clone(), publication::Input::from(&fact));
+        }
         if checker
             .analysis
             .structures
@@ -315,6 +330,7 @@ fn analyze_in(
             "output protocol requires a final store",
         );
     }
+    publication::derive(program, &mut checker.analysis, &publication_facts)?;
     program.evidence.check(program, &checker.analysis)?;
     Ok(context.remember(CheckedProof {
         prefix: prefix.clone(),
@@ -355,16 +371,6 @@ impl Checked<'_> {
         Ok(())
     }
 
-    fn range_reads(&mut self, fact: &Fact) -> syn::Result<()> {
-        for (provider, keys) in &fact.reads {
-            self.provider(
-                &Ident::new(provider, proc_macro2::Span::call_site()),
-                keys,
-                Capability::Range,
-            )?;
-        }
-        Ok(())
-    }
     fn physical(&self, name: &Ident) -> syn::Result<&physical::Definition> {
         self.prefix
             .physical
@@ -566,6 +572,8 @@ impl Checked<'_> {
                     max_depth: 0,
                     materializes: false,
                     reads: BTreeSet::new(),
+                    partition: None,
+                    partitioned: false,
                 })
             }
             Term::Ref(name) => self
@@ -755,6 +763,44 @@ impl Checked<'_> {
                 }
                 Ok(fact)
             }
+            Term::PartitionK { keys, parts, inner } => {
+                if *parts == 0 {
+                    return fail(term, "BE-KeyPart", "partition count must be positive");
+                }
+                let Term::Ref(source) = inner.as_ref() else {
+                    return fail(
+                        term,
+                        "BE-KeyPart",
+                        "partition input must name an ancestor store",
+                    );
+                };
+                if !self.analysis.stores.contains_key(&symbol_name(source)) {
+                    return fail(
+                        term,
+                        "BE-KeyPart",
+                        "partition input must name an ancestor store",
+                    );
+                }
+                let mut fact = self.term(inner, owner)?;
+                let heading = self.heading(&fact.meaning);
+                let columns: Vec<_> = keys.iter().map(symbol_name).collect();
+                if fact.max_depth != 0
+                    || columns.iter().any(|key| !heading.contains(key))
+                    || columns.iter().collect::<BTreeSet<_>>().len() != columns.len()
+                {
+                    return fail(
+                        term,
+                        "BE-KeyPart",
+                        "routing key must be distinct columns determined by the flat valuation",
+                    );
+                }
+                fact.depth = 1;
+                fact.max_depth = 1;
+                fact.shape = vec![Len::Lit(*parts), fact.len.clone()];
+                fact.partition = Some(columns);
+                fact.partitioned = true;
+                Ok(fact)
+            }
             Term::Tile { n, items, inner } => {
                 // Formal rule BE-Partition: Positive contiguous tiles are a disjoint covering view.
                 if *n == 0 || *items == Some(0) {
@@ -767,6 +813,7 @@ impl Checked<'_> {
                 let mut fact = self.term(inner, owner)?;
                 fact.depth += 1;
                 fact.max_depth += 1;
+                fact.partitioned = true;
                 let rows = fact.shape.last_mut().expect("row level");
                 *rows = Len::CeilDiv(Box::new(rows.clone()), *n);
                 fact.shape.push(Len::Unknown(Some(*n)));
@@ -878,21 +925,23 @@ impl Checked<'_> {
                 if fact.depth == 0 {
                     return fail(term, "BE-Offsets", "flatten requires nested positions");
                 }
-                // Only segmented flattening needs indexed bucket offsets.
-                // A single row stream enumerates exact buckets sequentially.
-                if fact.depth > 1 {
-                    self.range_reads(&fact)?;
-                } else {
-                    for (provider, keys) in &fact.reads {
-                        let name = Ident::new(provider, proc_macro2::Span::call_site());
-                        self.provider(&name, keys, Capability::Exact)?;
-                    }
+                // Nesting alone does not require random bucket offsets:
+                // a leaf task enumerates each bucket sequentially. Grading
+                // adds Range only for collective scans or distributing a
+                // flattened bucket stream across executors.
+                for (provider, keys) in &fact.reads {
+                    let name = Ident::new(provider, proc_macro2::Span::call_site());
+                    self.provider(&name, keys, Capability::Exact)?;
                 }
                 fact.depth -= 1;
                 fact.max_depth -= 1;
                 fact.len = Len::Scan(owner.into());
                 fact.shape.pop();
                 *fact.shape.last_mut().expect("flatten leaves a row level") = fact.len.clone();
+                if fact.depth == 0 {
+                    fact.partition = None;
+                    fact.partitioned = false;
+                }
                 if let Meaning::Lookup(provider, keys, inner) = &fact.meaning {
                     if let Meaning::Result(_) = inner.as_ref() {
                         if let Some((index, _)) = self
@@ -916,6 +965,16 @@ impl Checked<'_> {
             }
             Term::Group(name, inner) => {
                 // Formal rule BE-Group: Fold each key's complete distinct valuation set at host.
+                let group_slot = {
+                    let modes = self
+                        .analysis
+                        .partial_groups
+                        .entry(owner.into())
+                        .or_default();
+                    let slot = modes.len();
+                    modes.push(false);
+                    slot
+                };
                 let mut fact = self.term(inner, owner)?;
                 let Operator::Group(group) = &self.physical(name)?.operator else {
                     return fail(name, "BE-Group", "group must name a Physical group");
@@ -927,7 +986,31 @@ impl Checked<'_> {
                         "group must consume its complete Physical valuation heading",
                     );
                 }
-                if fact.max_depth != 0 {
+                // Formal rule BE-KeyPartGroup: Equal group keys route to one part.
+                if let Some(keys) = &fact.partition
+                    && !group.keys.is_empty()
+                {
+                    let group_keys: Vec<_> = group.keys.iter().map(symbol_name).collect();
+                    if keys.iter().any(|key| !group_keys.contains(key)) {
+                        return fail(
+                            term,
+                            "BE-KeyPartGroup",
+                            "group key must determine the routing key",
+                        );
+                    }
+                }
+                // Formal rule BE-GroupPartial: Globally distinct parts fold locally and merge once at host.
+                let partial = fact.partitioned
+                    && fact.max_depth == 1
+                    && (group.keys.is_empty() || fact.partition.is_none());
+                if partial && fact.unique.is_none() {
+                    return fail(
+                        term,
+                        "BE-GroupPartial",
+                        "partial folds require valuations distinct across parts: a global key or key-routed canon",
+                    );
+                }
+                if !partial && fact.max_depth != usize::from(fact.partition.is_some()) {
                     return fail(
                         term,
                         "BE-Group",
@@ -946,10 +1029,24 @@ impl Checked<'_> {
                 } else {
                     Len::Scan(owner.into())
                 };
-                fact.shape = vec![fact.len.clone()];
+                if partial {
+                    fact.depth = 0;
+                    fact.max_depth = 0;
+                    fact.partition = None;
+                    fact.partitioned = false;
+                }
+                if fact.partition.is_some() {
+                    *fact.shape.last_mut().expect("partition row level") = fact.len.clone();
+                } else {
+                    fact.shape = vec![fact.len.clone()];
+                }
                 fact.unique = Some(group.keys.iter().map(symbol_name).collect());
                 fact.meaning = Meaning::Result(symbol_name(name));
                 fact.materializes = true;
+                self.analysis
+                    .partial_groups
+                    .get_mut(owner)
+                    .expect("reserved Group constructor slot")[group_slot] = partial;
                 Ok(fact)
             }
             Term::Fold(monoid, inner) => {
@@ -989,7 +1086,22 @@ impl Checked<'_> {
                     ordered: false,
                 });
                 fact.len = Len::Scan(owner.into());
-                fact.unique = (fact.depth == 0).then(|| self.heading(&fact.meaning));
+                // Formal rule BE-KeyPartCanon: Equal complete valuations route to one part.
+                let heading = self.heading(&fact.meaning);
+                if fact
+                    .partition
+                    .as_ref()
+                    .is_some_and(|keys| keys.iter().any(|key| !heading.contains(key)))
+                {
+                    return fail(
+                        term,
+                        "BE-KeyPartCanon",
+                        "complete valuation must determine the routing key",
+                    );
+                }
+                fact.unique = (fact.depth == 0
+                    || (fact.depth == 1 && fact.max_depth == 1 && fact.partition.is_some()))
+                .then_some(heading);
                 *fact.shape.last_mut().expect("row level") = fact.len.clone();
                 Ok(fact)
             }
@@ -1010,9 +1122,9 @@ impl Checked<'_> {
                 Ok(fact)
             }
             Term::Choose(alternatives) => {
-                // Formal rule BE-Choose: Length guards cover all sizes and alternatives have equal support.
+                // Formal rule BE-Choose: Scheduling guards are exhaustive and alternatives have equal support.
                 if alternatives.is_empty() || !self.exhaustive(alternatives)? {
-                    return fail(term, "BE-Choose", "length guards are not exhaustive");
+                    return fail(term, "BE-Choose", "scheduling guards are not exhaustive");
                 }
                 let mut result: Option<Fact> = None;
                 for (_, alternative) in alternatives {
@@ -1041,6 +1153,11 @@ impl Checked<'_> {
                             previous.unique = None;
                         }
                         previous.reads.extend(next.reads);
+                        previous.partitioned &= next.partitioned;
+                        if previous.partition != next.partition {
+                            previous.partition = None;
+                            previous.unique = None;
+                        }
                     } else {
                         result = Some(next);
                     }
@@ -1058,6 +1175,22 @@ impl Checked<'_> {
         required: Capability,
     ) -> syn::Result<()> {
         self.require_store(provider)?;
+        // Formal rule BE-KeyPartProvider: A lookup key determines the provider's routing key.
+        for fact in self.facts.values().filter(|fact| {
+            fact.materializes && fact.meaning == Meaning::Result(symbol_name(provider))
+        }) {
+            if fact
+                .partition
+                .as_ref()
+                .is_some_and(|routing| routing.iter().any(|key| !keys.contains(key)))
+            {
+                return fail(
+                    provider,
+                    "BE-KeyPartProvider",
+                    "lookup key must determine the stored provider routing key",
+                );
+            }
+        }
         self.provider_capability(provider, keys, required)
     }
 
@@ -1172,6 +1305,11 @@ impl Checked<'_> {
                     }
                     covered = true;
                 }
+                Guard::WorkersLt(bound) => {
+                    if *bound == 0 {
+                        return fail(guard, "BE-Choose", "worker guard bound must be positive");
+                    }
+                }
                 Guard::Lt(len, bound) | Guard::Ge(len, bound) => {
                     self.guard_len(len)?;
                     if let Some(value) = constant_len(len) {
@@ -1258,9 +1396,23 @@ fn check_rewrite_in(source: &Program, target: &Program, context: &Checker) -> sy
             {
                 return true;
             }
-            target.structures.structures.entries.contains(entry)
+            // Catalog retyping and relational reexpression may occur in the
+            // same composed pass. Compare the surviving layout, not the
+            // selected storage implementation, while keeping readers exact.
+            target
+                .structures
+                .structures
+                .entries
+                .iter()
+                .any(|target| cq_lang_structures::storage_layout_eq(entry, target))
         });
+    // Catalog selection may retain host renames and replace their keyed
+    // fallbacks, while preserving opaque syntax and the original scans.
+    let storage_retyped = !unchanged
+        && cq_lang_structures::check_retention_rewrite(&source.structures, &target.structures)
+            .is_ok();
     if !unchanged
+        && !storage_retyped
         && (source.structures.physical == target.structures.physical
             || !preserves_adapters
             || !lookup_semantics::reexpression(

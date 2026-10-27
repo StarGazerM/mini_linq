@@ -12,6 +12,7 @@ pub mod tpch_runtime {
             name $name:literal;
             sql $sql:literal;
             candidate $candidate:ident;
+            $(advise plan($($advice:tt)*);)?
             setup { $($setup:tt)* }
             relations {
                 $(relation $relation:ident => $table:ident (

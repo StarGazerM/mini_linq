@@ -186,7 +186,7 @@ pub unsafe fn fold(
         let selected_order = temporary::<u32>(stream, selected)?;
         if selected != 0 {
             unsafe {
-                cuda_core::memory::memcpy_dtod_async(
+                cuda_core::simt::memory::memcpy_dtod_async(
                     selected_order.cu_deviceptr(),
                     order.cu_deviceptr(),
                     selected * std::mem::size_of::<u32>(),

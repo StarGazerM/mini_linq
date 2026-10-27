@@ -16,6 +16,63 @@ use syn::{
     punctuated::Punctuated,
 };
 
+/// Unwrap the shared CPU configuration shell without expanding its variants.
+/// GPU planning still consumes the single authored CQ, not a CPU plan.
+pub(crate) fn authored_file(source: &str) -> Result<syn::File> {
+    use syn::visit_mut::VisitMut;
+    struct Runner(syn::ItemFn);
+    impl Parse for Runner {
+        fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+            input.parse::<Token![$]>()?;
+            input.parse::<Token![;]>()?;
+            Ok(Self(input.parse()?))
+        }
+    }
+    struct Query(TokenStream);
+    impl Parse for Query {
+        fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+            let keyword: Ident = input.parse()?;
+            if keyword != "plan" {
+                return Err(syn::Error::new_spanned(keyword, "expected stage-local plan"));
+            }
+            let advice;
+            syn::parenthesized!(advice in input);
+            let _: TokenStream = advice.parse()?;
+            input.parse::<Token![;]>()?;
+            Ok(Self(input.parse()?))
+        }
+    }
+    struct Queries(Option<syn::Error>);
+    impl VisitMut for Queries {
+        fn visit_macro_mut(&mut self, mac: &mut syn::Macro) {
+            if mac.path.is_ident("query") {
+                match syn::parse2::<Query>(mac.tokens.clone()) {
+                    Ok(Query(body)) => {
+                        mac.path = syn::parse_quote!(mini_linq::compile);
+                        mac.tokens = quote!(pipeline {} #body);
+                    }
+                    Err(error) => self.0 = Some(error),
+                }
+            }
+        }
+    }
+    let mut file = syn::parse_file(source)?;
+    for item in &mut file.items {
+        if let syn::Item::Macro(shell) = item
+            && shell.mac.path.segments.last().is_some_and(|s| s.ident == "standalone_configs")
+        {
+            let Runner(mut runner) = syn::parse2(shell.mac.tokens.clone())?;
+            let mut queries = Queries(None);
+            queries.visit_block_mut(&mut runner.block);
+            if let Some(error) = queries.0 {
+                return Err(error.into());
+            }
+            *item = syn::Item::Fn(runner);
+        }
+    }
+    Ok(file)
+}
+
 macro_rules! sources {
     ($($name:literal),* $(,)?) => { pub const SOURCES: &[(&str, &str)] = &[$(
         ($name, include_str!(concat!("../../../../features/workloads/src/queries/retail/tpch/retail_", $name, ".rs"))),
@@ -59,6 +116,7 @@ pub struct Relation {
 
 pub struct Kernel {
     pub plan_advice: TokenStream,
+    pub evidence: cq_lang_sequence::Evidence,
     pub setup: syn::Block,
     pub relations: Vec<Relation>,
     pub answer: Vec<(Ident, syn::Type)>,
@@ -68,6 +126,32 @@ pub struct Kernel {
     pub body: TokenStream,
     /// Standalone programs retain their declared output and aggregate head.
     program: Option<cq_lang_cq::Program>,
+}
+
+/// The shared source prefix carries author premises, not CPU planning choices.
+pub(crate) struct AuthoredQuery {
+    pub program: cq_lang_cq::Program,
+    pub evidence: cq_lang_sequence::Evidence,
+}
+
+impl Parse for AuthoredQuery {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let keyword: Ident = input.parse()?;
+        if keyword != "pipeline" {
+            return Err(input.error("expected pipeline"));
+        }
+        let pipeline;
+        syn::braced!(pipeline in input);
+        if !pipeline.is_empty() {
+            return Err(pipeline.error("expected authored default pipeline"));
+        }
+        let evidence = if input.peek(Ident) {
+            input.parse()?
+        } else {
+            Default::default()
+        };
+        Ok(Self { program: input.parse()?, evidence })
+    }
 }
 
 fn columns(input: ParseStream<'_>) -> syn::Result<Vec<(Ident, syn::Type)>> {
@@ -161,6 +245,7 @@ impl Parse for Kernel {
         input.parse::<Token![-]>()?;
         Ok(Self {
             plan_advice,
+            evidence: Default::default(),
             setup,
             relations,
             derived,
@@ -210,7 +295,7 @@ impl Kernel {
     }
 
     pub fn import(source: &str) -> Result<Self> {
-        let mut file = syn::parse_file(source)?;
+        let mut file = authored_file(source)?;
         for item in &file.items {
             if let syn::Item::Macro(item) = item
                 && item
@@ -257,24 +342,10 @@ impl Kernel {
                 compiles.0.len()
             ).into());
         }
-        struct Compile(cq_lang_cq::Program);
-        impl Parse for Compile {
-            fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-                let keyword: Ident = input.parse()?;
-                if keyword != "pipeline" {
-                    return Err(syn::Error::new_spanned(keyword, "expected pipeline"));
-                }
-                let pipeline;
-                syn::braced!(pipeline in input);
-                if !pipeline.is_empty() {
-                    return Err(pipeline
-                        .error("standalone importer requires the authored default pipeline"));
-                }
-                Ok(Self(input.parse()?))
-            }
-        }
-        let program = syn::parse2::<Compile>(compiles.0.remove(0))?.0;
-        Self::standalone_program(file, program, &BTreeMap::new())
+        let source = syn::parse2::<AuthoredQuery>(compiles.0.remove(0))?;
+        let mut kernel = Self::standalone_program(file, source.program, &BTreeMap::new())?;
+        kernel.evidence = source.evidence;
+        Ok(kernel)
     }
 
     pub fn standalone_program(
@@ -397,6 +468,7 @@ impl Kernel {
             .collect();
         Ok(Self {
             plan_advice: TokenStream::new(),
+            evidence: Default::default(),
             setup,
             relations,
             answer,
@@ -1101,6 +1173,26 @@ fn encode_tokens(
 mod tests {
     use super::*;
     #[test]
+    fn shared_key_evidence_survives_single_and_staged_imports() {
+        let source = |name| SOURCES.iter().find(|(query, _)| *query == name).unwrap().1;
+        let h01 = Kernel::import(source("h01")).unwrap();
+        assert!(h01.evidence.has_key(
+            "Lineitem",
+            &["l_orderkey".into(), "l_linenumber".into()],
+        ));
+        let h13 = crate::stages::Program::import(source("h13")).unwrap().unwrap();
+        let publications = h13.preprocessing.iter()
+            .map(|preprocess| (preprocess.name.to_string(), preprocess.columns.clone()))
+            .collect();
+        for index in 0..h13.stages.len() {
+            let kernel = h13.kernel(index, &publications).unwrap();
+            assert_eq!(kernel.evidence, h13.stages[index].evidence);
+            assert!(kernel.evidence.has_key("Customer", &["c_custkey".into()]));
+            assert!(kernel.evidence.has_key("QualifiedOrders", &["order_key".into()]));
+        }
+    }
+
+    #[test]
     fn imported_plan_hints_are_not_discarded() {
         let source = SOURCES
             .iter()
@@ -1110,7 +1202,7 @@ mod tests {
         let kernel = Kernel::import(source).unwrap();
         assert_eq!(
             kernel.plan_advice.to_string(),
-            quote!(skip(Lineitem with PartSupp), reduce(PartSupp with Lineitem)).to_string()
+            quote!(no_reduce, order(Nation, Supplier, Lineitem, Orders, Customer, PartSupp, Part)).to_string()
         );
     }
     #[test]

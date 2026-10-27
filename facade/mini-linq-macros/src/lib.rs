@@ -127,7 +127,6 @@ fn sequence_pipeline(config: cq_stage::Configuration) -> syn::Result<cq_stage::P
             "complete Sequence input accepts only plan, decompose, grade and print phases",
         ));
     }
-    let authored_advice = !config.decompose.is_empty();
     let mut passes = config.decompose;
     passes.push(config.plan.unwrap_or_else(|| {
         syn::parse_quote!(::mini_linq::passes::plan_sequential(preserve_order))
@@ -191,13 +190,12 @@ struct PlanOptions {
     skip: Vec<(cq_order::OrderAtom, cq_order::OrderAtom)>,
 }
 impl Parse for PlanOptions {
-    /// Optional `order(Relation, Relation@clause, ...)` plus `no_reduce`, or any number of
+    /// Optional `order(Relation, Relation@clause, ...)`, `no_reduce`, and any number of
     /// `reduce(Target with Support)` and `skip(Target with Support)`, comma separated.
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let mut options = Self::default();
         while !input.is_empty() {
             let option: syn::Ident = input.parse()?;
-            let advised = !options.reduce.is_empty() || !options.skip.is_empty();
             if option == "order" && options.order.is_none() {
                 let content;
                 syn::parenthesized!(content in input);
@@ -207,9 +205,9 @@ impl Parse for PlanOptions {
                         .into_iter()
                         .collect(),
                 );
-            } else if option == "no_reduce" && !options.no_reduce && !advised {
+            } else if option == "no_reduce" && !options.no_reduce {
                 options.no_reduce = true;
-            } else if (option == "reduce" || option == "skip") && !options.no_reduce {
+            } else if option == "reduce" || option == "skip" {
                 let content;
                 syn::parenthesized!(content in input);
                 let target: cq_order::OrderAtom = content.parse()?;
@@ -229,7 +227,7 @@ impl Parse for PlanOptions {
             } else {
                 return Err(syn::Error::new_spanned(
                     option,
-                    "expected order(Relation, ...), and no_reduce or reduce/skip(Target with Support)",
+                    "expected order(Relation, ...), no_reduce, or reduce/skip(Target with Support)",
                 ));
             }
             if !input.is_empty() {
@@ -250,11 +248,11 @@ impl Parse for PlanOptions {
 /// CQ → RA′: a left-deep plan in written order with checked reductions.
 /// The first clause of each scope is the outer stream; every other clause is
 /// reduced by its filtered subtrees of the outer-rooted reduction tree before
-/// the stream starts. `plan(no_reduce)` disables reductions, not the order.
+/// the stream starts. `plan(no_reduce)` disables implicit reductions, not the order.
 /// `plan(reduce(T with S))` additionally reduces the top-level atom reading `T`
-/// by the one reading `S` after the Masks reductions, before the stream;
-/// `plan(skip(T with S))` drops that Masks reduction. Both record the author's
-/// cardinality knowledge as VO reduce steps; dropping a reduction is sound.
+/// by the one reading `S` after any Masks reductions, before the stream;
+/// `plan(skip(T with S))` drops an existing Masks reduction and is rejected
+/// under `no_reduce`, where no Masks reduction exists. Advice remains checked.
 /// Formal rule Plan-Prefix: Normalize, order Written/Coarse, then optionally reduce by outer-rooted masks and advised reductions before IX.
 #[proc_macro]
 pub fn plan(input: TokenStream) -> TokenStream {
@@ -289,7 +287,7 @@ pub fn plan(input: TokenStream) -> TokenStream {
         let mut reduced = cq_reduce::compile(&plan, &options)?;
         cq_reduce::check(&plan, &reduced, &options)?;
         if !args.reduce.is_empty() || !args.skip.is_empty() {
-            // Formal rule R-Advice: Advised semijoins of two top-level atoms sharing a variable run after the Masks reductions, before the stream; skipped ones are removed.
+            // Formal rule R-Advice: Advised semijoins of two top-level atoms sharing a variable run after any Masks reductions, before the stream; skip must name an existing Masks reduction.
             let analysis = cq_lang_vo::contract::check(&reduced)?;
             let graph = cq_lang_cq::hypergraph::Analysis::of(&reduced.cq);
             let pair = |target: &cq_order::OrderAtom,
@@ -406,10 +404,14 @@ pub fn sequence(input: TokenStream) -> TokenStream {
     cq_stage::pass::<cq_lang_structures::Program, cq_lang_sequence::Program>(
         input.into(),
         |source, args| {
-            no_arguments(args)?;
             let target = cq_sequence_lowering::compile(source)?;
             cq_sequence_lowering::check(source, &target)?;
-            Ok(target)
+            if args.is_empty() {
+                Ok(target)
+            } else {
+                let evidence: cq_lang_sequence::Evidence = syn::parse2(args)?;
+                cq_sequence_plan::Advice::Evidence(evidence).apply(&target)
+            }
         },
     )
     .into()
@@ -584,6 +586,21 @@ mod tests {
         assert_eq!(qualified.order.unwrap()[0].occurrence, Some(2));
         assert!(syn::parse2::<PlanOptions>(quote!(order(R@))).is_err());
         assert!(syn::parse2::<PlanOptions>(quote!(order(R @ -1))).is_err());
+    }
+
+    #[test]
+    fn explicit_reductions_compose_with_disabled_implicit_reductions() {
+        for arguments in [
+            quote!(no_reduce, order(S, R), reduce(R with S)),
+            quote!(reduce(R with S), no_reduce, order(S, R)),
+        ] {
+            let options: PlanOptions = syn::parse2(arguments).unwrap();
+            assert!(options.no_reduce);
+            assert_eq!(options.reduce.len(), 1);
+            assert_eq!(options.reduce[0].0, syn::parse_quote!(R));
+            assert_eq!(options.reduce[0].1, syn::parse_quote!(S));
+            assert!(options.skip.is_empty());
+        }
     }
 
     #[test]

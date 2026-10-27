@@ -2,8 +2,8 @@ use cq_lang_sequence::{
     CanonToken, Capability, Catalog, CodecToken, LevelNode, Machine, Program, ProviderToken,
     check_grading, check_rewrite, structures,
 };
+use cq_sequence_plan::rewrites::{lookup_first, lookup_first_advice};
 use cq_sequence_plan::{Advice, decompose, plan, select_from_catalog};
-use cq_sequence_rewrite_passes::{lookup_first, lookup_first_advice};
 use quote::ToTokens;
 
 fn machine() -> Machine {
@@ -20,6 +20,8 @@ fn machine() -> Machine {
     Machine {
         name: syn::parse_quote!(gpu),
         items: 1,
+        key_partition_threshold: 65536,
+        key_partition_cache_threshold: 6 * 1024 * 1024,
         layout: None,
         root: node("host", vec![node("device", vec![node("block", vec![])])]),
     }
@@ -278,4 +280,66 @@ fn automatic_h07_keeps_numeric_forwards_legal_before_string_readers() {
             .any(|advice| matches!(advice, Advice::LookupFirst(_)))
     );
     assert_replay(&source, &planned);
+}
+
+#[test]
+fn catalog_retention_and_canon_retyping_cross_the_sequence_boundary() {
+    let source = string_reader(false);
+    let mut selected = select_from_catalog(&source, &catalog()).unwrap();
+    for entry in &mut selected.structures.entries {
+        if let structures::Structure::Dedup { ty, .. } = &mut entry.structure {
+            *ty = syn::parse_quote!(NativeCanon);
+        }
+    }
+    // The ordinary Structures-only contract remains exact.
+    assert!(structures::check_rewrite(&source, &selected).is_err());
+    structures::check_retention_rewrite(&source, &selected).unwrap();
+    let sequence = cq_sequence_lowering::compile(&source).unwrap();
+    let mut target = sequence.clone();
+    target.structures = selected.clone();
+    check_rewrite(&sequence, &target).unwrap();
+
+    let mut changed_reader = selected.clone();
+    if let structures::Structure::Host { keyed, .. } =
+        &mut changed_reader.structures.entries[0].structure
+    {
+        keyed.ty = syn::parse_quote!(DifferentReader);
+    }
+    assert!(structures::check_retention_rewrite(&source, &changed_reader).is_err());
+    let mut changed_order = selected.clone();
+    changed_order.physical.program.definitions.swap(0, 1);
+    assert!(structures::check_retention_rewrite(&source, &changed_order).is_err());
+    let mut changed_mode = selected;
+    changed_mode.physical.program.definitions[2].mode =
+        structures::physical::Mode::Let(Default::default());
+    assert!(structures::check_retention_rewrite(&source, &changed_mode).is_err());
+}
+
+#[test]
+fn catalog_retyping_composes_with_checked_join_reexpression() {
+    let mut original = string_reader(false);
+    for entry in &mut original.structures.entries {
+        if let structures::Structure::Dedup { ty, .. } = &mut entry.structure {
+            *ty = syn::parse_quote!(AuthoredCanon);
+        }
+    }
+    let source = cq_sequence_lowering::compile(&original).unwrap();
+    let selected = select_from_catalog(&original, &catalog()).unwrap();
+    let intermediate = cq_sequence_lowering::compile(&selected).unwrap();
+    check_rewrite(&source, &intermediate).unwrap();
+    let target = lookup_first(&intermediate, quote::quote!(using HostIndex, order [r,l])).unwrap();
+    check_rewrite(&intermediate, &target).unwrap();
+    assert_ne!(source.structures.physical, target.structures.physical);
+    // This is a composition, not merely the retention-only special case.
+    assert!(structures::check_retention_rewrite(&source.structures, &target.structures).is_err());
+    check_rewrite(&source, &target).unwrap();
+
+    let mut changed_reader = target;
+    let scan = changed_reader.structures.structures.entries.iter_mut().find(|entry|
+        matches!(&entry.structure, structures::Structure::Host { reader, .. } if reader == "scan")
+    ).unwrap();
+    if let structures::Structure::Host { keyed, .. } = &mut scan.structure {
+        keyed.ty = syn::parse_quote!(DifferentReader);
+    }
+    assert!(check_rewrite(&source, &changed_reader).is_err());
 }

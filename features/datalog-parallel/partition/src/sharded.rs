@@ -139,10 +139,67 @@ impl syn::parse::Parse for Arguments {
     }
 }
 
-/// Rewrite only IDB membership. All full/delta layout types and other Storage
-/// records, including the EDB canonicalizer and opaque initializers, are
-/// preserved exactly.
+/// Rewrite IDB membership, independently selecting keyed IDB layout providers.
+/// Defaults retain sharded admission and native layouts. `seen(runs)` selects
+/// sorted-run admission; `layouts(sharded)` and `layouts(runs)` are exclusive.
+/// EDB providers, layout metadata, and opaque initializers remain unchanged.
 pub fn compile_storage(source: &storage::Program) -> syn::Result<storage::Program> {
+    compile_storage_with(source, TokenStream::new())
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LayoutChoice {
+    Native,
+    Sharded,
+    Runs,
+}
+
+struct StorageArguments {
+    layouts: LayoutChoice,
+    run_seen: bool,
+}
+
+impl syn::parse::Parse for StorageArguments {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let mut layouts = None;
+        let mut run_seen = false;
+        while !input.is_empty() {
+            let name: Ident = input.parse()?;
+            let content;
+            syn::parenthesized!(content in input);
+            let provider: Ident = content.parse()?;
+            ensure(content.is_empty(), &provider, "unexpected provider arguments")?;
+            if name == "layouts" {
+                ensure(layouts.is_none(), &name, "layout selections are mutually exclusive")?;
+                layouts = Some(if provider == "sharded" {
+                    LayoutChoice::Sharded
+                } else if provider == "runs" {
+                    LayoutChoice::Runs
+                } else {
+                    return Err(syn::Error::new_spanned(provider, "expected sharded or runs"));
+                });
+            } else if name == "seen" {
+                ensure(!run_seen && provider == "runs", &provider, "expected one seen(runs)")?;
+                run_seen = true;
+            } else {
+                return Err(syn::Error::new_spanned(name, "expected layouts or seen"));
+            }
+            if !input.is_empty() {
+                input.parse::<syn::Token![,]>()?;
+            }
+        }
+        Ok(Self {
+            layouts: layouts.unwrap_or(LayoutChoice::Native),
+            run_seen,
+        })
+    }
+}
+
+pub fn compile_storage_with(
+    source: &storage::Program,
+    arguments: TokenStream,
+) -> syn::Result<storage::Program> {
+    let arguments: StorageArguments = syn::parse2(arguments)?;
     storage::contract::check(source)?;
     let mut target = source.clone();
     for (provider, declaration) in target
@@ -151,28 +208,40 @@ pub fn compile_storage(source: &storage::Program) -> syn::Result<storage::Progra
         .zip(&source.incremental.strata.source.declarations)
     {
         if declaration.value.is_none() {
-            provider.seen = sharded_seen(&provider.seen)?;
+            provider.seen = selected_seen(&provider.seen, arguments.run_seen)?;
+        }
+    }
+    if arguments.layouts != LayoutChoice::Native {
+        for layout in target.layouts.iter_mut().chain(&mut target.delta_layouts) {
+            if layout.key > 0
+                && source
+                    .incremental
+                    .strata
+                    .source
+                    .declarations
+                    .iter()
+                    .any(|declaration| {
+                        declaration.name == layout.relation && declaration.value.is_none()
+                    })
+            {
+                let replacement = if arguments.layouts == LayoutChoice::Runs {
+                    run_layout(&layout.provider)?
+                } else {
+                    sharded_layout(&layout.provider)
+                };
+                if let Some(provider) = replacement {
+                    layout.provider = provider;
+                }
+            }
         }
     }
     check_storage(source, &target)?;
     Ok(target)
 }
 
-pub fn compile_storage_with(
-    source: &storage::Program,
-    arguments: TokenStream,
-) -> syn::Result<storage::Program> {
-    ensure(
-        arguments.is_empty(),
-        &arguments,
-        "sharded storage takes no arguments",
-    )?;
-    compile_storage(source)
-}
-
-/// Formal rule CK-DL-ShardStorage: preserve every record except IDB seen substitutions.
-/// Independently reverse only those membership substitutions, then demand exact
-/// equality, including every native full/delta layout and opaque CQ queue.
+/// Formal rule CK-DL-ShardStorage: reverse IDB seen and eligible layout substitutions.
+/// Demand exact equality after erasure, including all layout metadata and opaque
+/// CQ queues; unit-key and EDB layouts cannot be substituted.
 pub fn check_storage(source: &storage::Program, target: &storage::Program) -> syn::Result<()> {
     storage::contract::check(source)?;
     storage::contract::check(target)?;
@@ -196,11 +265,40 @@ pub fn check_storage(source: &storage::Program, target: &storage::Program) -> sy
             let original = &source.providers[index].seen;
             let expected = sharded_seen(original)?;
             ensure(
-                target.providers[index].seen == expected,
+                target.providers[index].seen == expected
+                    || target.providers[index].seen == selected_seen(original, true)?,
                 target,
-                "incorrect sharded seen provider",
+                "incorrect admission provider",
             )?;
             erased.providers[index].seen = original.clone();
+        }
+    }
+    for (original, rewritten) in source
+        .layouts
+        .iter()
+        .chain(&source.delta_layouts)
+        .zip(erased.layouts.iter_mut().chain(&mut erased.delta_layouts))
+    {
+        if rewritten.provider != original.provider
+            && original.key > 0
+            && source
+                .incremental
+                .strata
+                .source
+                .declarations
+                .iter()
+                .any(|declaration| {
+                    declaration.name == original.relation && declaration.value.is_none()
+                })
+        {
+            ensure(
+                sharded_layout(&original.provider).as_ref() == Some(&rewritten.provider)
+                    || run_layout(&original.provider).ok().flatten().as_ref()
+                        == Some(&rewritten.provider),
+                target,
+                "incorrect layout provider",
+            )?;
+            rewritten.provider = original.provider.clone();
         }
     }
     ensure(
@@ -547,7 +645,10 @@ fn check_providers(program: &Program) -> syn::Result<()> {
             let seen_arguments = type_arguments(
                 &relation.providers.seen,
                 &["cq_datalog_parallel_runtime", "ShardedSeen"],
-            );
+            ).or_else(|| type_arguments(
+                &relation.providers.seen,
+                &["cq_datalog_parallel_runtime", "RunSeen"],
+            ));
             let rows: Type = syn::parse_quote!(::std::vec::Vec<#tuple>);
             ensure(
                 seen_arguments.is_some_and(|arguments| {
@@ -558,7 +659,7 @@ fn check_providers(program: &Program) -> syn::Result<()> {
                             .all(|argument| argument_type(argument).is_some())
                 }),
                 program,
-                "sharded Round requires ShardedSeen<Tuple, Hasher> for each IDB",
+                "sharded Round requires ShardedSeen or RunSeen for each IDB",
             )?;
             ensure(
                 relation.providers.delta == rows && relation.providers.next == rows,
@@ -580,18 +681,44 @@ fn check_providers(program: &Program) -> syn::Result<()> {
             .map(|&i| &declaration.columns[i].ty)
             .collect();
         let (keys, values) = types.split_at(layout.key);
-        let arguments = type_arguments(&layout.provider, &["std", "collections", "HashMap"]);
+        let sharded = declaration.value.is_none()
+            && layout.key > 0
+            && type_arguments(
+                &layout.provider,
+                &["cq_datalog_parallel_runtime", "ShardedLayout"],
+            )
+            .is_some();
+        let runs = declaration.value.is_none()
+            && layout.key > 0
+            && type_arguments(
+                &layout.provider,
+                &["cq_datalog_parallel_runtime", "RunLayout"],
+            ).is_some();
+        let arguments = if sharded {
+            type_arguments(
+                &layout.provider,
+                &["cq_datalog_parallel_runtime", "ShardedLayout"],
+            )
+        } else if runs {
+            type_arguments(&layout.provider, &["cq_datalog_parallel_runtime", "RunLayout"])
+        } else {
+            type_arguments(&layout.provider, &["std", "collections", "HashMap"])
+        };
         let key: Type = syn::parse_quote!((#(#keys,)*));
-        let value: Type = syn::parse_quote!(::std::vec::Vec<(#(#values,)*)>);
+        let value: Type = if sharded || runs {
+            syn::parse_quote!((#(#values,)*))
+        } else {
+            syn::parse_quote!(::std::vec::Vec<(#(#values,)*)>)
+        };
         ensure(
             arguments.is_some_and(|arguments| {
-                arguments.len() == 3
+                arguments.len() == (if runs { 2 } else { 3 })
                     && argument_type(&arguments[0]) == Some(&key)
                     && argument_type(&arguments[1]) == Some(&value)
-                    && argument_type(&arguments[2]).is_some()
+                    && (runs || argument_type(&arguments[2]).is_some())
             }),
             program,
-            "sharded Round requires native HashMap<K, Vec<V>, Hasher> for every layout",
+            "sharded Round requires a native HashMap or an eligible ShardedLayout or RunLayout",
         )?;
     }
     Ok(())
@@ -628,6 +755,54 @@ fn argument_type(argument: &syn::GenericArgument) -> Option<&Type> {
         syn::GenericArgument::Type(ty) => Some(ty),
         _ => None,
     }
+}
+
+/// Recognize exactly the grouped native map, preserving all three type arguments.
+fn sharded_layout(ty: &Type) -> Option<Type> {
+    let arguments = type_arguments(ty, &["std", "collections", "HashMap"])?;
+    if arguments.len() != 3 {
+        return None;
+    }
+    let key = argument_type(&arguments[0])?;
+    let values = argument_type(&arguments[1])?;
+    let hasher = argument_type(&arguments[2])?;
+    let payload = type_arguments(values, &["std", "vec", "Vec"])?;
+    if payload.len() != 1 {
+        return None;
+    }
+    let value = argument_type(&payload[0])?;
+    Some(syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedLayout<#key, #value, #hasher>))
+}
+
+/// Run layouts erase only to the exact default native storage representation.
+fn run_layout(ty: &Type) -> syn::Result<Option<Type>> {
+    let Some(sharded) = sharded_layout(ty) else {
+        return Ok(None);
+    };
+    let arguments = type_arguments(
+        &sharded, &["cq_datalog_parallel_runtime", "ShardedLayout"],
+    ).expect("constructed sharded layout");
+    let default: Type = syn::parse_quote!(
+        ::std::hash::BuildHasherDefault<::cq_datalog::rustc_hash::FxHasher>
+    );
+    ensure(
+        argument_type(&arguments[2]) == Some(&default),
+        ty,
+        "layouts(runs) requires the default storage hasher BuildHasherDefault<FxHasher>",
+    )?;
+    let key = &arguments[0];
+    let value = &arguments[1];
+    Ok(Some(syn::parse_quote!(::cq_datalog_parallel_runtime::RunLayout<#key, #value>)))
+}
+
+fn selected_seen(ty: &Type, runs: bool) -> syn::Result<Type> {
+    let mut selected = sharded_seen(ty)?;
+    if runs {
+        let Type::Path(path) = &mut selected else { unreachable!() };
+        path.path.segments.last_mut().expect("seen path").ident =
+            Ident::new("RunSeen", proc_macro2::Span::call_site());
+    }
+    Ok(selected)
 }
 
 fn sharded_seen(ty: &Type) -> syn::Result<Type> {

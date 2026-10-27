@@ -25,10 +25,27 @@ either endpoint.
 
 ## Build and run
 
-From this directory, with the pinned cuda-oxide backend:
+The workspace pins the pushed `mini-linq/main` branches of the StarGazerM
+cuda-oxide and RCCL forks by commit, without local dependency patches.
+The declared source of truth is cuda-oxide `299eda41b` and RCCL `1d33079a`;
+the local `/data/cuda-oxide` and `/data/rccl` checkouts match those pushed
+revisions. Do not add path patches: update the git pins and lockfile together.
+It uses cuda-oxide's Rust **1.99.1** SIMT toolchain, with `RUSTC_BOOTSTRAP=1`
+configured for the compiler backend. Build the backend and install `cargo-oxide`
+from that pinned fork's nested `cuda-oxide/` workspace; the backend path is
+configured in `.cargo/cuda-oxide.toml`.
+The monorepo keeps host crates at its root and device/codegen crates under
+`cuda-oxide/crates`. Rebuild the configured release backend from the pinned
+checkout with `RUSTC_BOOTSTRAP=1 cargo build --release --lib --target-dir target`
+in `cuda-oxide/crates/rustc-codegen-cuda`.
+
+The shared host bindings require CUDA 13.0 or newer. With the HPC SDK layout,
+bindgen also needs the separate cuRAND headers under `math_libs`.
+From this directory, with that backend:
 
 ```sh
-export CUDA_HOME=/opt/nvidia/hpc_sdk/Linux_x86_64/25.5/cuda/12.9
+export CUDA_HOME=/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0
+export BINDGEN_EXTRA_CLANG_ARGS=-I/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/math_libs/13.0/targets/x86_64-linux/include
 cargo oxide build --arch sm_89 -- --release --workspace
 cargo oxide test --arch sm_89 -- --release --workspace
 ```
@@ -36,6 +53,454 @@ cargo oxide test --arch sm_89 -- --release --workspace
 Release build dependencies also use optimization level 3: the build-time
 compression catalog shares CUDA-containing crates with the runtime, and their
 device address-space lowering requires optimized codegen.
+
+The workspace's `.cargo/cuda-oxide.toml` selects `sm_89` and enables
+`CUDA_OXIDE_MATERIALIZE_CUBIN` for the **cargo-oxide wrapper**. This is equivalent
+to passing `--materialize-cubin --arch sm_89`: ordinary device code keeps the
+LLVM optimization/PTX pipeline, and provenance-checked `ptxas` assembles its
+native cubin during the build. Materialization does not force the different
+libNVVM optimizer. Artifacts that require NVVM IR retain their libNVVM/nvJitLink
+route. At the final host link, retained local/dependency inputs produce
+`__cuda_oxide_linked` for cross-crate generic kernels (including RCCL), using
+the same PTX merge semantics as the nonmaterialized loader. Compile-only inputs
+live in unanchored, linker-excluded archive members; they are not embedded in
+the final runtime image or parsed by module loading.
+`cuda-host::load_bundle` selects each ordinary module's cubin; the generic loader
+selects the linked cubin instead of merging PTX at runtime. Keep invoking
+`cargo oxide`, not raw `cargo`; the wrapper fingerprints the compiler/toolkit
+inputs and supplies the required
+materializer handshake. Do not set the internal materialization variable around
+raw Cargo. Cubins target the configured GPU architecture rather than providing
+the runtime PTX bridge to other architectures; rebuild with the appropriate
+`--arch` when changing GPUs.
+
+### Packed Datalog runtime
+
+`gpu-datalog-runtime` provides `Packing`/`Column` encodings and `DeviceRuns<W>`
+on the resident-column `Pool`. The narrowest word is u64, u128, or `[u64; L]`
+for larger schemas. Array lanes are most-significant first; native u128 keeps
+its native in-memory lane order. Integer columns use their full declared width;
+signed columns flip the sign bit, and the first tuple column occupies the most
+significant packed bits. `prefix_range` returns inclusive bounds, including the
+maximum word without overflow.
+
+`DeviceRuns::admit` sorts, deduplicates, subtracts all accepted runs on-device,
+and returns a cheap immutable `Run` delta while accepting it internally.
+It reads back only the unique count and fresh count (empty batches and an empty
+accepted state omit unnecessary readbacks). Ratio-four merges retain sorted,
+unique, pairwise-disjoint runs. For another layout, permute the delta with
+`Packing::permute_device`, sort with unsafe `DeviceRuns::sort_known_unique`
+(the column permutation preserves uniqueness and cardinality), and use unsafe
+`append_sorted` after proving disjointness. This path needs no unique-count
+readback or compaction; arbitrary inputs still use `sort_unique`. `RunView` and device
+`runs::range` support inclusive prefix searches without materialization.
+All work and frees use the pool's legacy default stream.
+
+```sh
+cargo oxide test --arch sm_89 -- --release -p gpu-datalog-runtime
+cargo oxide test --arch sm_89 -- --release -p gpu-datalog-runtime --test runs -- --ignored --nocapture
+```
+
+The ignored probe admits 10M random u64 candidates against 50M accepted rows.
+Timing is opt-in: `enable_timing(true)` records CUDA events, and the explicit
+`last_timings()` accessor synchronizes and reports sort/unique, anti-join, and
+merge milliseconds. `to_host()` is an explicit diagnostic sorted download,
+not part of the admission path.
+
+### Run-bound hole inputs and candidate arenas
+
+A CQ input whose declared host type is `::gpu_datalog_runtime::DeviceLayout<K, V>`
+(`DeviceLayout::from_runs(pool, packing, runs)`) is bound as packed device runs
+(`GPU-Runs`): scans visit every run, key-prefix lookups binary-search one range
+per run with block-uniform expansion, and membership ORs over runs. Supported
+column types are i8/i16/i32/i64/u8/u16/u32 and codec-declared symbols (u32 on
+device), with no 128-bit tuple cap; keys occupy the leading columns.
+`cq_gpu_sequence::translate_arena(&mut arena)` (`GPU-Arena`) publishes head rows
+packed most-significant-first in head order into a `CandidateArena` and returns
+a `CandidateBatch` (u64 lanes, native low-first for u128 and most-significant
+first for larger words; length; packing; retained owners). The hole must be
+consumer-canonical: the batch is a candidate bag for `DeviceRuns::admit`.
+Sizing keeps the dispatch's output protocol, so each attempt reads its
+metadata back; candidate rows are never downloaded. Arena invocations omit
+the redundant final stream synchronize and phase timing events by default.
+`cq_gpu_runtime::enable_arena_timing(true)` opts the current thread into those
+events, the final fence, and `take_last_timings()` publication. Required metadata
+validation and device overflow/failure checks are unchanged; retained owners
+and the pool stream order protect asynchronous work.
+The explicitly recorded `output reserve_previous` protocol is supported only by
+the arena terminal. Its initial capacity is the arena's last validated row count
+(zero on first use or after `clear`), not a proven bound. Each attempt counts all
+rows and checks sticky failure flags; an undersized attempt is discarded and
+replayed against the unchanged inputs at the required capacity before publication.
+Thus shrinking, growing, and empty rounds remain exact, and retained batches
+cannot be overwritten by subsequent leases. Other output protocols are unchanged.
+Declared run layouts also realize native keyed Host fallbacks: scan and keyed
+reader records remain distinct, and lookups reuse the supplied runs without
+building another index.
+
+```sh
+cargo oxide test --arch sm_89 -- --release -p cq-gpu-sequence --test run_holes
+```
+
+### Whole-program GPU Datalog
+
+`cq-gpu-datalog` runs a Datalog program on the device through the ordinary
+Datalog pipeline (`CK-DL-DeviceStorage`, `P-DL-Gpu`):
+
+```rust
+pipeline {
+    storage_rewrites = [::cq_gpu_datalog::device_storage];
+    cq = pipeline {
+        physical = [::cq_gpu_sequence::capture_constants];
+        structures = [::cq_gpu_datalog::bind_inputs, ::cq_gpu_sequence::bind_runs];
+        sequence = ::mini_linq::passes::sequence;
+        decompose = [::cq_gpu_sequence::plan];
+        grade = ::cq_gpu_sequence::machine_grade;
+        print = ::cq_gpu_sequence::translate_arena;
+    };
+    terminals = [::cq_gpu_sequence::translate_arena => batch];
+    print = ::cq_gpu_datalog::print_rounds;
+}
+```
+
+Inputs upload once; each round issues the recorded waves in order, admits each
+head's candidate batches into its accepted runs, and publishes the delta into
+the recorded layouts; outputs download once. All programs on one thread share
+`gpu_datalog_runtime::thread_pool()` (device 0), so the runtime's thread-local
+caches never pin a finished program's pool.
+Candidate batches are released after admission, arenas are scoped to the
+producing stratum, and completed strata release cached Sequence scratch and
+wholly unused pool chunks. Accepted runs and layouts retain their published
+owners; trimming never invalidates live device views.
+
+Symbol columns are declared with
+`device_storage(symbols(IStr => MyCodec))`, where
+`MyCodec: gpu_datalog_runtime::SymbolCodec<IStr>` supplies a process-fixed,
+injective `code(&IStr) -> u32` mapping and its `decode(u32) -> IStr` inverse.
+Use the same type spelling as the relation declaration; the compiler does not
+resolve Rust aliases. Upload/download performs the conversion on the host.
+Closed guard, binding and selection expressions are host captures, evaluated
+once per invocation on demand for a nonempty dispatch input. Invocation-local
+`OnceCell` values retain captures across retries and dispatches; symbols use
+the column's codec, and kernels receive only integer parameters.
+`capture_constants` is a checked Physical rewrite before provider selection:
+literal atom arguments become fresh columns, equality guards, then a projection
+that removes those columns. `bind_runs` never changes the Physical program.
+
+Set `GPU_DATALOG_TRACE_ROUNDS=1` to print metadata/count readbacks for each
+stratum seed and fixpoint round. This includes candidate dispatch attempts,
+admission counts and layout canonicalization counts, not final row downloads.
+`GPU_DATALOG_TRACE_MEMORY=1` additionally records pool current/peak allocation,
+reserved/cached bytes, per-relation accepted/layout/arena ownership footprints,
+and each hole's candidate rows and retry capacities. Layout footprints include
+shared backing allocations and must not be summed as physical pool usage.
+Native CUDA library scratch outside the pool is not included in pool counters.
+
+For kernel attribution, build with `CQ_GPU_SEQUENCE_DUMP=/existing/directory`.
+The Sequence printer writes each checked program under its exact kernel module
+name (`*.sequence`), including its providers, scan, expansions, grades and output
+protocol. Run with `GPU_DATALOG_TRACE_KERNELS=1` to record layout descriptor
+identities and run lengths, input rows/run counts, every dispatch attempt's
+capacity and candidate count, and per-relation admission counts. Combine this
+with `GPU_DATALOG_TRACE_MEMORY=1` to associate invocations with Round hole IDs.
+These diagnostics neither download candidate rows nor change plans; diagnostic
+printing is excluded from performance measurements. Admission is shared by all
+holes for a head, so admitted rows are attributed to that head/round, not
+arbitrarily to an individual hole.
+
+```sh
+cargo oxide test --arch sm_89 -- --release -p cq-gpu-datalog --test oracle
+GPU_DATALOG_PROBE_NODES=2048 GPU_DATALOG_PROBE_CASES=tc_left,tc_right,same_generation \
+  cargo oxide test --arch sm_89 -- --release -p cq-gpu-datalog --test oracle timing -- --ignored --nocapture
+```
+
+### DOOP points-to benchmark
+
+`doop-gpu` instantiates `doop_shared::doop_engine!` with the GPU pipeline above.
+It uses the shared fact loader and compares all 26 complete output tuple sets
+against `doop-mini`; it does not substitute a separate points-to program.
+The loader owns the global string dictionary and precomputes method descriptors.
+`DoopSymbols` implements `SymbolCodec<IStr>` using that dictionary's stable u32
+codes; no string operations run on the GPU.
+
+The benchmark selects the target-independent incremental advice
+`incremental = ::cq_datalog::passes::incremental(driver(delta_first););`.
+For each recursive variant whose changing occurrence lies in the first
+uninterrupted positive prefix, the planner leads with that delta and then
+prefers connected positive reads, breaking ties by source position. It records
+the complete source-occurrence permutation before selecting storage layouts.
+The independent Incremental checker checks bijection, prefix barriers, delta
+substitution and exact inverse-permutation erasure; Storage checks keys in
+recorded execution order. Rust and negative clauses are never crossed. Seeds
+and variants with a delta beyond such a barrier retain written order. This is
+explicit program advice, not a GPU-specific Datalog compiler or printer rule;
+the default incremental policy remains written order.
+
+DOOP also explicitly selects the checked Sequence
+`::cq_sequence_rewrites::output(reserve_previous)` advice after GPU decomposition.
+This changes only the recorded terminal capacity protocol; it does not alter
+the rule order, dispatch geometry, candidate bag, or admitted tuple sets.
+
+```sh
+GPU_DATALOG_TRACE_ROUNDS=1 cargo oxide run --arch sm_89 --bin doop-gpu -- /tmp/doop-data/cassandra
+```
+
+Fact loading and CUDA context creation are outside the reported evaluation
+time; input upload, device layout construction, fixpoint execution, output
+download and symbol decoding are included. Full-set comparison is outside the
+timer. Pass `--gpu-only` to skip the CPU reference and exact comparison when
+measuring GPU execution alone. Set `GPU_DATALOG_PHASES=1` to report synchronized
+setup, fixpoint, and output phase times on stderr; disabled phase marks add no
+stream synchronization.
+
+#### Delta-driven rule scheduling
+
+On Cassandra with Rust 1.99.1, CUDA 13.0 and `sm_89` cubins, paired untraced
+runs measured **9.602122 s → 3.672471 s** GPU evaluation (2.61×), matching all
+26 output sets exactly. Nsight Systems measured summed GPU kernel time
+**7.720946 s → 1.895041 s** (4.07×). Profiling is reported separately:
+the corresponding instrumented evaluation times were 10.038853 s and 4.484224 s.
+
+The five formerly hottest step kernels all scanned full `reachable` before
+their selected delta occurrence. Kernel `_124` (hole 123, cast propagation,
+delta `varpointsto`) enumerated compatible types and heaps before its delta
+test. Its representative full scan had 2,686 rows: only eleven useful 256-row
+outer tiles on 142 SMs, although 2,272 blocks were launched. Descendant work
+stayed within those blocks. Nsight Compute measured 15.95 ms, 0.01% DRAM
+throughput and 90.71 million executed warp instructions—not a bandwidth-bound
+scan. The delta-driven plan replaces reverse heap enumeration with a full-key
+heap-allocation check; the representative launch fell to 199.01 µs and
+2.94 million instructions, without relaxing exactness or changing tiling.
+
+| Kernel suffix / Round hole | Selected delta / rule | Before kernel sum | After kernel sum |
+|---|---|---:|---:|
+| `_124` / 123 | `varpointsto` / cast | 4.080474 s | 0.065991 s |
+| `_137` / 136 | `varpointsto` / virtual receiver | 0.554450 s | 0.117876 s |
+| `_144` / 143 | `varpointsto` / virtual reachability | 0.502598 s | 0.102994 s |
+| `_146` / 145 | `varpointsto` / virtual callgraph | 0.463852 s | 0.102617 s |
+| `_133` / 132 | `instancefieldpointsto` / field load | 0.416583 s | 0.347589 s |
+
+All 8,370 hole/round candidate counts and head-admission records agreed before
+and after; the main component still took 179 step rounds. Full CQs, exact
+before/after module names and checked Sequence plans, all per-launch input
+run sizes for these five holes, admission counts and full-set evidence are in
+[`compare/doop_cassandra.delta_driver.results.json`](compare/doop_cassandra.delta_driver.results.json).
+The remaining largest kernel is the instance-field delta variant; this change
+does not claim to eliminate its signature-key expansion skew.
+
+#### Earlier measurements
+
+Cassandra validation matched all 26 outputs exactly. An untraced release run
+measured GPU evaluation **11.809409 s**, sequential mini **4.269240 s**, versus
+the prior 15-thread mini-par reference **1.28 s** (GPU/reference **9.226×**).
+These are end-to-end evaluation times, not kernel-only timings.
+
+With the maintained upstream-based fork pins, Rust 1.99.1, and CUDA 13.0,
+the Cassandra release validation again matched all 26 full-tuple outputs.
+That run measured GPU evaluation **25.274430 s** and sequential mini
+**4.176412 s** (GPU/prior mini-par reference **19.745648×**).
+This is slower than the preceding local-patch measurement; no speedup is
+claimed for the toolchain migration.
+
+The instrumented run recorded a **232,744,960-byte pool allocation peak** and
+**528,482,304-byte maximum pool reservation**, excluding native CUDA library
+scratch. The main recursive stratum used 179 step rounds, with 53–109 metadata
+readbacks per step; all strata totaled 16,553 metadata readbacks. Exact per-round
+counts, full output cardinalities and memory snapshots are recorded in
+[`compare/doop_cassandra.results.json`](compare/doop_cassandra.results.json).
+
+The initial 7.44-GB allocation failure was a correctness bug, not retained
+multi-gigabyte relation state: a dynamic-u128-mask device miscompilation corrupted
+permuted keys and inflated the `returnvar` join to 929,428,430 candidates.
+Constant lane shifts fix the permutation; the corrected hole emits 33,667
+candidates using 269,336 bytes. Runtime differential tests cover that regression
+and the explicit wide-row merge path required beyond RCCL's 16-byte key limit.
+
+#### Ahead-of-time cubin loading
+
+The `sm_89` AOT run preserves exact full-tuple results for all 26 Cassandra
+outputs. The 13-program Datalog oracle and all fixtures passed, as did the three
+Datalog packages (54 tests, two opt-in probes ignored), all 14 `run_holes` tests,
+and both nonempty/empty `printer-smoke` cases.
+
+| Measurement | PTX before | AOT cubin after |
+| --- | ---: | ---: |
+| Cold GPU evaluation | approximately 27 s (prior observation) | 10.463490 s |
+| Warm GPU evaluation, unprofiled | 11.857853 s | 10.422113 s |
+| Nsight `cuModuleLoadData`, 158 calls | 5.588267898 s | 0.163992571 s |
+| Median module load | 35.210215 ms | 0.765312 ms |
+| Nsight kernel time, 52,489 launches | 7.731254122 s | 8.793091834 s |
+| Executable size | 22,623,200 bytes | 21,204,400 bytes |
+
+The cold cubin run immediately followed `rm -rf ~/.nv/ComputeCache`; warm was
+the next execution. The cache remained an empty 4-KiB directory after the
+plain, instrumented and profiled runs. Warm end-to-end evaluation fell **12.1%**,
+and profiled module-loading time fell **97.1%**. Kernel time increased, so this
+is a loading improvement, not a claim of faster kernels. Nsight and preload
+instrumentation are separate runs with observer overhead.
+
+Driver interception recorded every image and its loader stack:
+
+| Load IDs | Calls | PTX bytes/image before | Cubin bytes/image after | Loader |
+| --- | ---: | ---: | ---: | --- |
+| 1 | 1 | 11,210,914 | 4,816,608 | Generic runtime kernel set: merged PTX before, build-time linked cubin after |
+| 2–3 | 2 | 2,632,192 | 1,353,888 | Anchored Sequence runtime crate, `load_bundle` |
+| 4–158 | 155 | 8,421,855 | 3,360,992 | Per-hole loaders, anchored DOOP crate, `load_bundle` |
+
+The 155 hole loads are byte-identical **crate-wide** images, not separate
+per-hole PTX and not the full merged image. Load count was intentionally left
+unchanged. Every after-image was an ELF cubin passed to `cuModuleLoadData`;
+there were **zero PTX loads**, no other `cuModuleLoad*` variants, and no modules
+requiring runtime compilation. Ordinary loads take `load_bundle`'s Cubin branch;
+the generic loader selects `__cuda_oxide_linked`. PTX sizes exclude the trailing
+NUL; cubin sizes are the file-backed ELF extent.
+
+The maintained cuda-oxide pin adds build-time cross-crate nvJitLink support,
+weak-ODR device definitions, fail-closed cubin/IR pairing and regression tests.
+Compile-only IR is excluded from final host images rather than copied during
+runtime bundle discovery. The CLI remains `--materialize-cubin --arch sm_89`;
+the workspace enables that mode by default. No per-crate source attributes or
+local dependency patches are required.
+
+Full per-load sizes, hashes, timings, loader paths, fork revisions and
+verification results are in
+[`compare/doop_cassandra.aot_cubin.results.json`](compare/doop_cassandra.aot_cubin.results.json).
+The temporary profiles and intercepted images from that historical measurement
+have been removed; the JSON retains their measurements and image identities.
+
+#### Preserving code generation during AOT assembly
+
+The initial AOT mode changed more than module loading: it forced
+`CUDA_OXIDE_EMIT_NVVM_IR=1`, replacing LLVM 23's `internalize,default<O2>`/`llc`
+PTX pipeline with the legacy libNVVM optimizer and nvJitLink LTO. The resulting
+integer/control-flow code was larger. It was not an optimization-level,
+debug-information, math-mode, or register-cap flag mismatch.
+
+The exact former PTX was recovered from the retained executable (SHA-256
+`e047023e2b4acc3730fc1135dc41d824c7a2fc9dd8c6e06bd24e2146317ac06b`).
+CUDA 13 `ptxas -arch=sm_89 -O3` produces instruction-identical SASS to the
+driver's cached `cuModuleLoadData` cubin for all five hot kernels:
+
+| Kernel suffix | Registers, PTX / initial AOT | Stack bytes, PTX / initial AOT | SASS instructions, PTX / initial AOT | Dynamic shared bytes | Resident blocks/SM, both |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `_124` | 64 / 64 | 16 / 0 | 1,920 / 2,592 | 34,896 | 2 |
+| `_137` | 128 / 123 | 24 / 0 | 3,384 / 4,800 | 67,696 | 1 |
+| `_144` | 128 / 120 | 8 / 0 | 2,992 / 4,264 | 39,024 | 2 |
+| `_146` | 128 / 120 | 8 / 0 | 3,040 / 4,328 | 55,408 | 1 |
+| `_133` | 62 / 48 | 0 / 8 | 1,544 / 2,152 | 24,656 | 3 |
+
+Counts include terminal padding NOPs. Static shared memory is zero and block
+size is 256 throughout. PTX `_124` and `_137` have 16-byte spill stores/loads;
+the initial AOT versions eliminate those spills but are nevertheless slower.
+The initial AOT `_133` has 8-byte spill stores and 16-byte spill loads.
+The disassembly's `CALL.REL.NOINC` instructions are intra-kernel control flow,
+not evidence of newly outlined device helpers. Neither image requests `-G`,
+line information, or a register cap.
+
+Nsight Compute on the same `_124` launch (2,272 blocks, fixed 915-MHz SM clock)
+measured **19.02 ms** with the initial AOT code versus **15.94 ms** with the
+PTX-assembled code. Both use 64 registers and have 33.33% theoretical occupancy,
+limited by shared memory. The slower code actually has higher achieved
+occupancy, 23.34% versus 18.63%; occupancy loss is not the cause.
+
+Materialization now preserves ordinary PTX code generation and assembles it
+ahead of time with provenance-checked `ptxas`. Generic cross-crate PTX uses the
+same shared merger as the nonmaterialized loader, but runs during the build.
+NVVM/LTOIR inputs retain their required compiler route. Runtime images still
+contain only cubins, while compile-only inputs remain linker-excluded.
+The rebuilt fixed cubins have instruction-identical SASS and identical resource
+usage to the original driver-JIT kernels for every row in the table above.
+
+The rebuilt Cassandra profile again matched all 26 complete output tuple sets:
+
+| Measurement | Original PTX JIT | Initial NVVM AOT | Fixed PTX AOT |
+| --- | ---: | ---: | ---: |
+| Kernel time, 52,489 launches | 7.731254122 s | 8.793091834 s | **7.722568032 s** |
+| Module loading, 158 calls | 5.588267898 s | 0.163992571 s | **0.119942920 s** |
+| Warm GPU evaluation, unprofiled | 11.857853 s | 10.422113 s | **9.314324 s** |
+
+The fixed kernel time meets the original 7.73-second target and is 12.17% below
+the regressed AOT measurement. `_124` accounts for 4.079973207 s over 306
+launches. Profiled end-to-end GPU evaluation is 10.334188 s; the separate
+unprofiled warm run is 9.314324 s and also matches all outputs exactly.
+The three required Datalog packages pass **54 tests** (two opt-in probes
+ignored), and `cq-gpu-sequence --test run_holes` passes **14 tests**.
+
+The published fork revisions are cuda-oxide
+`d89093b8149b93c63324c5a0e687a097061f117c` and RCCL
+`67f06e4ad723d6fefb7222bbead01ea94a20f29b`. Artifact identities, per-kernel
+resource/SASS comparisons, compiler flags, Nsight Compute counters, and
+verification results are recorded in
+[`compare/doop_cassandra.aot_codegen.results.json`](compare/doop_cassandra.aot_codegen.results.json).
+
+### SRDatalog field-flow DOOP on prepared integer inputs
+
+`srd-doop-gpu` is separate from the 26-output `doop-gpu` benchmark above.
+It instantiates `srd_doop_shared::srd_doop_engine!` from
+`features/datalog/doop/srd`: the field-flow query has 37 inputs, 85 source
+rules, and 43 output relations. Prepared integer IDs and `meta.json` constants
+are passed unchanged; there is no symbol codec or alternate GPU query body.
+The pipeline uses `device_storage`, `delta_first`, `capture_constants`,
+`reserve_previous`, `translate_arena`, and `print_rounds`, like `doop-gpu`.
+
+The translation comes directly from `build_doopdb_program(meta, field_flow=True)`
+in SRDatalog `fab849f672d43af2a6a1e8a1727ec065201e3720`; multihead splitting
+is the only rule transformation. `generated.schema.json` records the source
+SHA-256, relation schemas, and 91 expanded rules. Regenerate from the repository
+root with `python3 features/datalog/doop/srd/translate.py --srd-repo PATH --field-flow`.
+The CPU engines use that same generated macro and loader:
+
+```sh
+cargo test --release --manifest-path ../../features/datalog/doop/srd-engines/Cargo.toml --workspace --features phase-timing
+cargo build --release --manifest-path ../../features/datalog/doop/srd-engines/Cargo.toml --workspace --features phase-timing
+../../features/target/release/srd-doop-mini PREPARED --export OUTPUT
+../../features/target/release/srd-doop-mini-par PREPARED --threads 15
+```
+
+The CPU fixture checks all 43 IDBs, including recursive field flow, split
+multihead rules, negative method modifiers, duplicate inputs, and unreachable
+stores. The optional CPU phase instrumentation reports per-round evaluation,
+admission, and publication times; their sum is not the whole evaluation wall time.
+
+From this workspace, with the build environment above:
+
+```sh
+cargo oxide build --arch sm_89 -- --release -p srd-doop-gpu
+./target/release/srd-doop-gpu \
+  /data/doop-bench/doop-vs-srdatalog-20261026/fresh-corpus/prepared/xalan \
+  --gpu-only --export /tmp/srd-doop-gpu-xalan
+cargo oxide test --arch sm_89 -- --release -p srd-doop-gpu --test exactness -- --test-threads=1
+```
+
+Use `prepared/batik` in place of `prepared/xalan` for Batik. The shared harness
+accepts `--gpu-only` explicitly; this standalone executable never runs a CPU
+reference, even when that flag is omitted. `--export DIRECTORY` writes complete
+output relations for external exact tuple comparison; counts alone are not an
+exactness check. Evaluation includes upload, GPU execution, and output
+materialization, excluding input loading, CUDA context initialization, and
+export. `GPU_DATALOG_PHASES=1` enables the GPU setup/fixpoint/output split.
+The small shared field-flow fixture test asserts every one of the 43 output
+relations against explicit expected tuples and requires CUDA. Run GPU jobs
+serially. These commands describe how to build and verify, not recorded results.
+
+`compare/srd_query_benchmark.py` retains provenance, per-process logs, uptime,
+and in-run `nvidia-smi` SM-clock samples in the results JSON. From this directory:
+
+```sh
+python3 compare/srd_query_benchmark.py build --datasets xalan batik
+python3 compare/srd_query_benchmark.py export --datasets xalan batik
+python3 compare/srd_query_benchmark.py run
+```
+
+Compilation is separate from execution. Timing uses one warmup and three
+fresh-process measurements with a hard 10-second limit, baseline SRD plans,
+`SRDATALOG_RMM_RESOURCE=cuda_async`, and 15 CPU threads. Correctness exports
+have a separate 300-second deadline and never enter timing medians. Export
+comparison checks all IDB tuples, rejects duplicates, and validates counts
+against each engine's JSON. `--engines` and `--datasets` select subsets, which
+accumulate in `compare/srd_query_xalan_batik.results.json`; never run concurrent
+writers or GPU engines. The original-query `doop-gpu` timing is explicitly
+separate and is not an equality comparison against the SRD query.
 
 ### Planner-driven 11-query TPC-H suite
 
@@ -134,7 +599,8 @@ schedule and is not replanned. Manifest row counts are recorded as evidence,
 never fabricated selectivities. Replay coverage checks exact program equality.
 
 ```sh
-export CUDA_HOME=/opt/nvidia/hpc_sdk/Linux_x86_64/25.5/cuda/12.9
+export CUDA_HOME=/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0
+export BINDGEN_EXTRA_CLANG_ARGS=-I/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/math_libs/13.0/targets/x86_64-linux/include
 cargo oxide build --arch sm_89 -- --release -p cq-gpu-tpch
 cargo oxide test --arch sm_89 -- --release -p cq-gpu-tpch -- --nocapture
 ./target/release/cq-gpu-tpch

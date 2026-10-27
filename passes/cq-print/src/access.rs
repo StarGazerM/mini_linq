@@ -95,6 +95,11 @@ impl<'a> Context<'a> {
 
     /// Enumerate borrowed columns in declaration order, then apply the rename.
     pub fn host_scan(&self, result: &str) -> TokenStream {
+        self.host_scan_from(result, None)
+    }
+
+    /// Apply the recorded host rename to an optionally borrowed tile iterator.
+    pub fn host_scan_from(&self, result: &str, source: Option<TokenStream>) -> TokenStream {
         if let Operator::Rename(rename) = &self.physical[result].operator {
             // Literal predicates belong only to this row source. Retained rows
             // and indices consume its projected tuples through ordinary builds.
@@ -156,7 +161,7 @@ impl<'a> Context<'a> {
                     .iter()
                     .take_while(|column| literals.contains_key(*column))
                     .count();
-                let native_key = prefix > 0 && (0..prefix).all(|i| {
+                let native_key = source.is_none() && prefix > 0 && (0..prefix).all(|i| {
                     !matches!(literals[&host.layout[i]], Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(_), .. }))
                         || matches!(&host.types[i], syn::Type::Reference(reference)
                             if matches!(&*reference.elem, syn::Type::Path(path) if path.path.is_ident("str")))
@@ -178,7 +183,9 @@ impl<'a> Context<'a> {
                         )).point(&(#(#values,)*))
                     })
                 } else {
-                    quote!(::cq_storage::rows::Rows::rows(#value))
+                    source
+                        .clone()
+                        .unwrap_or_else(|| quote!(::cq_storage::rows::Rows::rows(#value)))
                 };
                 return quote! {{
                     let __cq_scan: #ty = ::core::iter::Iterator::map(
@@ -211,7 +218,8 @@ impl<'a> Context<'a> {
             }
         });
         let ty = self.fallback_type(result, "scan", &[]);
-        quote! { { let __cq_scan: #ty = ::core::iter::Iterator::map(::cq_storage::rows::Rows::rows(#value), move |(#(#payload,)*)| #row); __cq_scan } }
+        let rows = source.unwrap_or_else(|| quote!(::cq_storage::rows::Rows::rows(#value)));
+        quote! { { let __cq_scan: #ty = ::core::iter::Iterator::map(#rows, move |(#(#payload,)*)| #row); __cq_scan } }
     }
 
     /// Allocate one lazy fallback for each host read key, outside all probe closures.

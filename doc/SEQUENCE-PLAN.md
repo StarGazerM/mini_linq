@@ -22,7 +22,7 @@ not estimated facts or hash-only equality.
 ```
 cq-lang-sequence  (language, checks, machine model, grading check)      [1]
    ├── cq-sequence-lowering   Structures -> Sequence (default)            [2]
-   ├── cq-sequence-rewrites   Sequence -> Sequence, advice-driven         [3]  (features/sequence-rewrites)
+   ├── cq-sequence-plan       checked rewrites (`rewrites`) and planning  [3]  (passes/)
    ├── cq-sequence-pull       translation: sequential CPU                 [4]  (passes/)
    ├── cq-sequence-tasks      translation: Rayon                          [5]  (features/)
    └── cq-gpu-sequence        translation: CUDA (experiments/gpu)         [6]
@@ -31,10 +31,11 @@ facade: pipeline phases `sequence`, `decompose`, `grade`, print defaults   [8]
 conformance: one program, every target, equal supp∘α; H05 fixture         [9]
 ```
 
-[1] blocks everything; [2]–[7] are independent of each other given [1]'s
-API; [8] after [2]+[4]; [9] after any two targets. Shared crates ([1]–[3],
-[8]) must not depend on target crates ([4]–[6]) or runtimes — enforced by
-`tools/check_dependencies.py`.
+[1] supplies the language API; [3] reuses [2] and the core selection helpers
+in `cq_structure_selection` (retyping, host retention). The optional
+`features/sequence-rewrites` macros wrap `cq_sequence_plan::rewrites`.
+[8] follows [2]+[4], and [9] exercises multiple targets. Core libraries never
+depend on optional feature consumers — enforced by `tools/check_dependencies.py`.
 
 ## [1] `languages/cq-lang-sequence`
 
@@ -57,7 +58,7 @@ Term     ::= "rows" Ident                          // retained Physical result o
            | "choose" "[" (Guard "=>" Term),+ "]"
            | Ident                                  // a Def name
 Monoid   ::= "count" | "or" | "sum" Ident
-Guard    ::= LenExpr ("<" | ">=") LitInt | "else"
+Guard    ::= LenExpr ("<" | ">=") LitInt | "workers" "<" LitInt | "else"
 LenExpr  ::= "len" Ident | LenExpr "+" LenExpr | LitInt
 Grade    ::= Ident "at" Level ";"                  // Def name -> level of the machine
 Level    ::= Ident ("." Ident)*                    // path in the machine tree, e.g. device.block.lane
@@ -74,7 +75,7 @@ pub enum Term { Rows(Ident), Map(Ident, Box<Term>), Flatten(Box<Term>), Compact(
                 Choose(Vec<(Guard, Term)>), Ref(Ident) }
 
 /// Machine model: a tree of levels with labels. Data, not code; each target exports one.
-pub struct Machine { pub name: Ident, pub items: usize, pub root: LevelNode }
+pub struct Machine { pub name: Ident, pub items: usize, pub key_partition_threshold: usize, pub key_partition_cache_threshold: usize, pub root: LevelNode }
 pub struct LevelNode { pub name: Ident, pub collaborative: bool, pub dynamic: bool, pub width: Option<usize>, pub children: Vec<LevelNode> }
 
 /// Target catalogs are ordered syntax/capability data, with no target dependency here.
@@ -92,6 +93,10 @@ pub struct Analysis {
     pub shapes: BTreeMap<String, Vec<Len>>,             // outer partitions through innermost row lengths
     pub views: BTreeSet<String>,                        // Defs that materialize nothing
     pub stores: BTreeMap<String, Len>,                  // stored Defs and their length/capacity
+    pub publications: BTreeMap<String, Publication>,    // checked BorrowHost | Alias | OwnRows { staged } | DeferredRows { consumer } | Parts
+    pub host_sources: BTreeMap<String, String>,         // pure base provenance before reheading
+    pub host_tiles: BTreeMap<String, Vec<Option<String>>>, // Tile input provenance in preorder
+    pub routed_providers: BTreeMap<String, BTreeMap<usize, syn::Type>>, // checked native ABI inner types
     pub capabilities: BTreeMap<(String, Vec<String>), Capability>, // provider reads: Exact | Range | Membership | Ordered
     pub levels: BTreeMap<String, Vec<String>>,          // grade of every Def (empty when ungraded)
     pub dispatches: Vec<Dispatch>,                      // derived (BE-Boundary): outer store, members, inner stores
@@ -105,6 +110,41 @@ pub fn check_grading(p: &Program, m: &Machine) -> syn::Result<Analysis>;   // BE
 pub fn check_rewrite(s: &Program, t: &Program) -> syn::Result<()>;         // checked equal support; join motion preserves pinned Rust domains
 impl cq_stage::Language for Program { … }
 ```
+`BE-Publication` derives named Store ownership once for both PL-Cost and Tasks.
+Borrowed host stores and aliases do not allocate rows. Owned flat staging and
+key-part publication do; their lengths contribute a retained-row traffic
+tie-breaker after compute span, without equating a copy with row-expression
+evaluation. Provider insertion still pays work and span. Alias reheading
+does not license raw-buffer reuse unless the carrier is unchanged. Native
+`cq_storage::sharded::Sharded` representation arguments and routing coverage of
+the stored outer key (after constant elision) are checked before emission;
+the printer consumes the checked inner types, never a last-path-name heuristic.
+`DeferredRows { consumer }` is a checked Store-consumer fusion, not general lazy
+Store semantics. Only an owned flat staging input can receive it: every row or
+written length demand must belong to one `Parts` publication whose leading
+`workers < 2` arm contains a singleton leaf, directly or through checked nested
+length choices. Every leaf covers that same named input with the same keys.
+The consumer has exactly one native routed provider,
+no retained-row requirement, no direct part-row replay or alias, and is not the
+final output publication. Original input and consumer carriers must agree;
+support-equal reheading alone is insufficient. Pure named producer views and
+previously published `BorrowHost` sources are followed; prior owned or nested
+Stores remain pinned. The checker traverses Physical dependencies using
+`Analysis::opaque`, rejects scan dependencies with shadowable
+join-filter bindings, and rejects intervening publications of source dependencies.
+Everything failing these premises retains its original ownership record.
+
+On a recorded worker-singleton leaf reached without counting the staged input,
+Tasks may consume that pure producer once without a raw `Vec`. In particular,
+a proven nonexpanding host-length bound can select it before demanding the
+filtered input count. A written staged-input count or routed leaf initializes
+one owned row buffer (and its retention token); subsequent demands reuse it. If counting
+already forced the buffer, a later singleton arm reads that buffer rather than
+reevaluating the producer. Skipped staging reports neither row-build nor retained
+row activity; actual routed copies remain charged. PL-Cost still charges deferred
+input at the worst-case owned-row traffic and unchanged work/span: this checked
+fusion grants neither a new scheduling decision nor a planner cost discount.
+
 
 `Machine.items` is the preferred per-lane count (the planner also considers one);
 `LevelNode.width` records a fixed distributing width, or `None` for dynamic
@@ -125,7 +165,7 @@ Checks (each a named `// Formal rule BE-…:` marker):
 - BE-Group: `group result input` names a Physical Group and consumes exactly its complete, flat, distinct valuation heading. Grouping executes at host, never per tile or at a separated pool/task. Global grouping has length one, including empty input; keyed grouping has data-dependent length and no empty groups.
 - `union [d, ...]` is a view with α = ⊎ and summed Len; opaque Guard/Bind are `map` Defs that must be graded at host (BE-Partial).
 - BE-Code: codec premises are deferred to traits (recorded as obligations in Analysis, like Leibniz).
-- BE-Choose: guards exhaustive; all alternatives have equal `supp∘α` by construction (the same result or independently checked equivalent join/semijoin support).
+- BE-Choose: guards exhaustive; all alternatives have equal `supp∘α` by construction (the same result or independently checked equivalent join/semijoin support). `workers < N` requires a positive bound and observes the target-wide available worker count, a uniform scheduling parameter that neither changes support nor supplies size evidence; a final `else` covers its remaining cases.
 - Grading: BE-Scope (reads inside extent, inner level), BE-Collective (fold/scan at collaborative level, whole level), BE-Separate (siblings exchange only via a store at an ancestor), BE-Boundary (derive `dispatches`), BE-Partial (no opaque Rust below host), BE-Abort (every dispatch has a failure channel).
 
 Acceptance: round-trip of every form; one rejection test per rule; `rules.tsv` rows switch to `implementation`; `tools/public-api/cq-lang-sequence.txt`.
@@ -197,7 +237,7 @@ aggregates → `group result input` (BE-Group), final result → `store` with
 whole workload corpus lowers; `check` passes; [4] over this output
 reproduces today's answers (goldens + fuzz).
 
-## [3] `features/sequence-rewrites` (proc macros + library, like `features/rewrites`)
+## [3] `cq_sequence_plan::rewrites` (library) and `features/sequence-rewrites` (proc macros)
 
 Each is `Sequence -> Sequence`, takes advice tokens, has one law, and is
 checked by `check_rewrite`:
@@ -206,7 +246,7 @@ checked by `check_rewrite`:
 |---|---|---|---|
 | `store_level(d)` | a `flatten` Def | wrap it in `store` (kept as offsets) | BE-Offsets |
 | `tile(d, n [, items m])` | a Def | `tile n [items m]` around it | BE-Partition (views are bijections) |
-| `choose(d, len x < k => a, else => b)` | guards + two Defs | `choose` | BE-Choose |
+| `choose(d, len x < k => a, else => b)` or `choose(d, workers < k => a, else => b)` | guards + two Defs | `choose` | BE-Choose |
 | `output(protocol)` | `count` / `reserve` / `bounded(n)` | set the final store's protocol | output paragraph |
 | `codec(R.c => Type)` | host column, codec type token | record codec obligation | BE-Code |
 | `canon(d => Type)` | canon provider type token | record | BE-Canon |
@@ -220,7 +260,11 @@ rejection case (e.g. `tile` over a `store` at an unknown length).
 pub fn translate(p: &cq_lang_sequence::Program, a: &Analysis) -> syn::Result<syn::Expr>;
 ```
 One function per Term constructor; `tile` groups contiguous rows and `choose`
-uses the checked fallback arm; lifted constructors preserve outer groups.
+evaluates recorded first-match guards; lifted constructors preserve outer groups.
+Pull realizes `workers` as `1usize`. The target-hook `translate_with` and
+`translate_profile_with` APIs take an explicit `syn::Expr` worker count before
+the hook; Tasks supplies `rayon::current_num_threads()`. This expression must
+be uniform across all scopes in the target.
 `store` → `Vec`; output flatten → push. Reads only `Analysis`.
 `group` uses the shared Physical host hash-fold adapter, preserving declared
 accumulator types and consuming every canonical valuation once for every aggregate.
@@ -231,9 +275,14 @@ walks the whole program except the fold.
 ## [5] `features/sequence-tasks` (Rayon translation)
 
 Same signature. Machine `tasks { host > pool(separated, dynamic) > task }`.
-`tile n` at `pool` → `par_chunks(n)`; `store` at `pool` → per-task `Vec`
-merged at join; a directly pool-graded `fold` is rejected, while publication
-evaluates its producer at task; `canon` → BE-Canon prefilter + global.
+`tile n` at `pool` → indexed contiguous tiles dispatched through the shared,
+non-generic `cq-storage` Rayon loop; `store` at `pool` → one `Vec` per
+contiguous group of tiles, joined in group order. Groups are bounded by a small
+multiple of the executing worker count; this changes scheduling, not the
+checked partition geometry. Ordered indexed result slots keep generic row and
+pipeline types out of Rayon plumbing. A directly pool-graded `fold` is rejected,
+while publication evaluates its producer at task;
+`canon` → BE-Canon prefilter + global.
 `group` reuses the host interpretation after publication; grading rejects it at
 both pool and task levels rather than reducing each chunk independently.
 Acceptance: conformance with [4] on the corpus; the parallel
@@ -286,7 +335,7 @@ terminal paths require explicit sequence and grade.
 
 ## [9] conformance
 
-Implemented: `cq-testkit`'s `sequence-conformance` feature exposes
+Implemented: the external `cq-sequence-conformance` crate exposes
 `assert_conformant(program, targets)` for `Sequential` and `Tasks`. Each
 target checks its machine grading, translates, and compiles/runs against the
 same inputs through the existing rustc driver. Answer rows compare as multisets,
@@ -294,6 +343,12 @@ or sets at an explicit canonical output boundary; ordering is not observable.
 The first divergence names both targets and the differing row multiplicities.
 The default driver uses deterministic binary-domain databases; authored corpus
 inputs and raw duplicate-preserving `Case::inputs` use the same execution path.
+The core `cq-testkit` retains independent fixtures and
+`conformance::assert_answers_equal`, with no compiler or target dependencies.
+The external driver links its Cargo-built storage and Rayon artifacts through
+`cq_testkit::rustc::{Runtime::with_dependencies, linked_dependency}`. Callers
+providing a custom runtime link their exact storage/provider artifacts and
+`rayon::ThreadPool` when using Tasks; no checkout source paths are required.
 
 The workload corpus expands each configured Sequence program into Sequential
 and Tasks functions in the test binary through `conformance_targets!` and its
@@ -313,25 +368,23 @@ spot tests. Capability inference is shared across machines: host row stores need
 exact buckets, while segmented flattening and distributed execution require
 ranges in their actual read context.
 
-The `sequence_conformance_*` integration tests mirror the executable corpus's
-13 partitions: classic, retail, and eleven full-kernel planner families. They
-reuse the existing configuration lists and share registration, comparison, and
-reporting through `tests/support/sequence_conformance.rs`, with one summary
-test per file. Separate crates let Cargo compile the partitions in parallel
-instead of serializing all 3,436 configurations in one rustc invocation; the
-10,272 scenario comparisons and answer comparator are unchanged. Run them from
-`features/workloads` with
-`cargo test -p cq-workload-corpus --test 'sequence_conformance*' -- --nocapture`
-to see each partition's configuration and agreement counts.
-After `cargo clean -p cq-workload-corpus` (dependencies retained), the split
-build took 4m58s versus the supplied 28-minute monolithic baseline; the timed
-test command took 316.69s including all thirteen passing tests. Classic reported
-274 configurations / 786 agreements, retail 314 / 942, each of the seven
-coarse/hypergraph/LE kernel files 224 / 672, and each of the four fine kernel
-files 320 / 960: 3,436 / 10,272 total with no failures.
-`cargo clippy -p cq-workload-corpus --tests --no-deps` then completed in 221.94s;
-it reported existing unused-macro warnings in `support/le_configurations.rs`
-and needless-range-loop warnings in `matrix.rs`, with none in the new files.
+The `sequence_conformance_*` integration tests compare Sequential and Tasks
+translations of the same corpus programs: one crate per classic case (10), one
+per retail case (10), and eleven triangle-kernel planner families. Classic and
+retail reuse the executable corpus's pairwise configuration lists. The kernel
+crates do not replay the executable 2,848-row product: they keep the full
+product only over choices that change the compared program (planner x join x
+intersection) and cover host representation and the four rewrite axes pairwise
+(`tests/support/sequence_matrix.rs`, 26 or 32 rows per planner; printer rows
+are omitted because conformance replaces the printer). Registration,
+comparison and reporting stay in `tests/support/sequence_conformance.rs`. Run
+them from `features/workloads` with
+`cargo test -p cq-workload-corpus --test 'sequence_conformance*' -- --nocapture`.
+Compile cost, not execution, dominated: one 224/320-row kernel crate took over
+20 minutes in rustc (24 GB RSS for the former single retail crate, of which
+codegen 45%, monomorphization 24%, borrow checking 20%, macro expansion 15%).
+Tasks programs cost about four times a Sequential program in monomorphization
+and codegen, mostly Rayon plumbing instantiated per generated closure.
 
 Box [9] acceptance before the planner cutover exercised 3,436 configurations and 10,272 applicable scenarios:
 10,272 agreed, zero grading skips, zero execution failures. The workload
@@ -379,8 +432,62 @@ Laws:
 - PL-Det: a pure function of `(t, M, K)`; candidates are enumerated in a
   fixed order and ties broken by that order.
 - PL-Cost: the work/span model compares legal segmented and plain schedules
-  at the first feasible machine geometry. Proven lower span wins, then fewer
-  stores and dispatches; equality or incomparability keeps the earlier candidate.
+  at the first feasible machine geometry. Proven lower compute span wins,
+  then less retained-row traffic, fewer stores and dispatches; equality or
+  incomparability keeps the earlier candidate.
+  Eligible exact-key native provider Stores retain a checked runtime `choose`
+  in every candidate. With published row count `n`, available workers `w`,
+  positive machine cutoffs `low = key_partition_threshold` and
+  `cache = key_partition_cache_threshold`, route iff
+  `n >= low && (w > 1 || n >= cache)`. The single-worker cutoff is
+  `effective_cache = max(low, cache)`; a cache cutoff below `low` is valid.
+  Tasks defaults are `low = 65,536` and `cache = 6 * 1024 * 1024 = 6,291,456`
+  rows. The latter is a measured target default, not a universal optimum or
+  a cache-byte guarantee: it exceeds H04 SF1's 6,001,215 host rows while falling
+  below the measured H04 and H21 SF10 provider inputs.
+  The recorded first-match tree is:
+  ```text
+  workers < 2 => choose [
+      len Host < effective_cache => partition_k[K](1) input, // only if proven
+      len input < effective_cache => partition_k[K](1) input,
+      else => partition_k[K](P) input
+  ],
+  len input < low => partition_k[K](1) input,
+  else => partition_k[K](P) input
+  ```
+  The optional host-layout `Len::Input` bound follows only nonexpanding Physical
+  Rename/Select/Point/Range/Guard/Bind/Project and Semi/Anti driver chains,
+  never Probe/Merge/Union/Group. This is also an occurrence proof over the actual
+  Sequence producer, not just its set support: it follows host Rows, pure Refs,
+  Store/Tile/Flatten/Canon and compatible Choices; each Map/Compact must extend
+  its child's provenance through that nonexpanding Physical path. Membership
+  Compact may consume a Lookup's existence; expanding Lookups, Union, Fold and
+  Group cannot supply this bound. A Rows read of a previously published
+  non-`BorrowHost` result is excluded, even when its support equals a host.
+  A host name shadowed by an existing or newly introduced Sequence definition
+  is not used. The shortcut proves singleton selection without forcing filtered
+  staging; the exact-input fallback preserves the policy when the host is larger.
+  These guards are not estimates.
+  All branches use `Sharded<I>`; identity branches build native `I` without
+  hash routing. Replay advice is
+  `key_partition(provider, published, [keys], P, threshold 65536, cache 6291456)`.
+  Explicit threshold-only recipes retain the legacy worker/count policy.
+  Policy `select true` forces fixed routing without either cutoff; `select false`
+  keeps native storage. Authored grades remain authoritative.
+  Tasks author syntax remains `cq_sequence_tasks_macros::plan(threshold 65536,
+  key_partition(provider, select true))`. The cache cutoff is an in-band
+  `Machine`/Tasks `Config` field, not a new `plan(..)` option. The translator
+  evaluates recorded guards, never a target-local threshold or query predicate.
+  For globally unique grouped valuations, keyed partial folds may instead use
+  contiguous tiles: each scheduler task accumulates a finite map and the host
+  merges maps pointwise with the declared monoids. Total single-use producer
+  spines stream directly from their driver; opaque producers retain explicit
+  host publications. Key-routed grouping remains a competing candidate, and
+  its cost is compared with the nonzero host-map merge cost. Missing global
+  uniqueness cannot justify per-tile canonicalization alone.
+  Provider eligibility uses the completed schedule's grading obligations:
+  distributed/segmented range reads keep native providers rather than granting
+  range capability to a hash-routed family.
   Cost is an argument, never a meaning.
 
 The checked `cq_sequence_plan::cost(&Program, &Machine)` API exposes the same
@@ -466,10 +573,10 @@ rule: filtering Lookups first in the GYO/LargestRoot transfer order, Expands
 as late as their consumers permit, and segmentation-first resource recovery.
 Explicit ordering, selection, Physical/Structures, realization, staging and decomposition advice retain precedence;
 `plan(preserve_order)` also requests order-preserving decomposition explicitly.
-The 13 `sequence_conformance_*` crates exercise the automatic rule. GPU suite
+The 31 `sequence_conformance_*` crates exercise the automatic rule. GPU suite
 generation enables automatic entries by default (`CQ_GPU_TPCH_AUTOMATIC=0`
 opts out). Handoff gates are exact SF1/SF10 execution of all 14 supported entries,
-13-crate agreement, and scoped API/lint/formal checks. Timings are reported,
+all-crate conformance agreement, and scoped API/lint/formal checks. Timings are reported,
 not compared against an automatic-versus-advised performance gate.
 
 Sources: Birler, Kemper, Neumann, "Robust Join Processing with Diamond

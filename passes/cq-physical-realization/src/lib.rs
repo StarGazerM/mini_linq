@@ -123,6 +123,7 @@ pub fn sources_with<'a>(
         active_prefixes: BTreeMap::new(),
         consumer: None,
         input: None,
+        partitioned: false,
     };
     printer.certify_host_sets(module);
     let definitions = &module.physical.program.definitions;
@@ -183,6 +184,7 @@ impl<'a> RowEmitter<'a> {
                 consumer: None,
                 active_prefixes: BTreeMap::new(),
                 input: None,
+                partitioned: false,
             },
         }
     }
@@ -205,6 +207,48 @@ impl<'a> RowEmitter<'a> {
         let previous = self.printer.consumer.replace(name.to_owned());
         let previous_input = std::mem::replace(&mut self.printer.input, input);
         let result = self.printer.produce(name, definition);
+        self.printer.consumer = previous;
+        self.printer.input = previous_input;
+        result
+    }
+
+    /// Respect a target-owned input partition rather than reopening its host.
+    pub fn operator_in_partition(
+        &mut self,
+        name: &str,
+        input: Option<(String, TokenStream)>,
+    ) -> syn::Result<TokenStream> {
+        let previous = std::mem::replace(&mut self.printer.partitioned, true);
+        let result = self.operator(name, input);
+        self.printer.partitioned = previous;
+        result
+    }
+
+    /// Fold a checked keyed Group into a caller-owned task accumulator.
+    pub fn accumulate_group(
+        &mut self,
+        name: &str,
+        input: (String, TokenStream),
+        table: TokenStream,
+    ) -> syn::Result<TokenStream> {
+        let definition = self.printer.physical[name];
+        let Operator::Group(group) = &definition.operator else {
+            return error(
+                &definition.name,
+                "group accumulator requires Group provenance",
+            );
+        };
+        if group.keys.is_empty() {
+            return error(
+                &definition.name,
+                "keyed group accumulator requires nonempty keys",
+            );
+        }
+        let previous = self.printer.consumer.replace(name.to_owned());
+        let previous_input = self.printer.input.replace(input);
+        let result = self
+            .printer
+            .group_with_accumulator(name, group, Some(&table));
         self.printer.consumer = previous;
         self.printer.input = previous_input;
         result
@@ -287,10 +331,11 @@ impl<'a> RowEmitter<'a> {
             let nested = cq_print::group(&fields);
             quote!(&#nested)
         };
+        let constructor = cq_print::canonical_set(ty);
         quote! {{
             #[allow(unused_imports)]
             use ::cq_storage::HashSetConstructor as _;
-            let mut __cq_seen = <#ty>::new();
+            let mut __cq_seen = #constructor;
             ::core::iter::Iterator::filter(#rows, move |__cq_row| {
                 ::cq_storage::require::leibniz(#key);
                 __cq_seen.insert(::core::clone::Clone::clone(#key))
@@ -304,6 +349,7 @@ struct Printer<'a> {
     consumer: Option<String>,
     active_prefixes: BTreeMap<String, TokenStream>,
     input: Option<(String, TokenStream)>,
+    partitioned: bool,
 }
 impl<'a> std::ops::Deref for Printer<'a> {
     type Target = Context<'a>;

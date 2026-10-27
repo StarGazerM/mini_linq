@@ -9,7 +9,7 @@ default-run = "mac-query-expansion"
 [workspace]
 
 [dependencies]
-cq-mac = { path = "../../../runtime/cq-mac" }
+cq-mac = { path = "../cq-mac" }
 cq-storage = { path = "../../../runtime/cq-storage" }
 cq-load = { path = "../../../runtime/cq-load" }
 mini-linq = { path = "../../../facade/mini-linq" }

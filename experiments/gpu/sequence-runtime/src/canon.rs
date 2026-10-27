@@ -21,6 +21,19 @@ pub(crate) fn release_query_cache() {
     CACHED_KERNELS.with(|cache| cache.borrow_mut().take());
 }
 
+pub(crate) fn release_cached_scratch(pool: &Arc<Pool>) {
+    let scratch = CACHED_SCRATCH.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.as_ref().is_some_and(|scratch| Arc::ptr_eq(&scratch.pool, pool)) {
+            cache.take()
+        } else {
+            None
+        }
+    });
+    // CanonScratch frees all native buffers on the pool's owning stream.
+    drop(scratch);
+}
+
 fn module(pool: &Pool) -> Result<Rc<canon_kernels::LoadedModule>> {
     CACHED_KERNELS.with(|cache| {
         if let Some((context, module)) = cache.borrow().as_ref() {
@@ -135,8 +148,9 @@ impl PackedField {
 /// Reusable RCCL programs, sort controls and count scratch on one runtime pool.
 /// The fixed capacity is supplied by generated host code, not chosen here.
 /// Sort/count and exact-live-size key scratch are cached per thread across
-/// providers sharing the same pool. Sort controls reuse a larger allocation
-/// when it fits; results own their allocations and survive provider reuse.
+/// providers sharing the same pool, until [`crate::release_cached_scratch`].
+/// Sort controls reuse a larger allocation when it fits; results own their
+/// allocations and survive provider reuse or cache release.
 pub struct PackedCanon<'pool> {
     pool: &'pool Arc<Pool>,
     cub: rccl_cub::cuda::Program<'pool>,
@@ -256,7 +270,7 @@ impl<'pool> PackedCanon<'pool> {
             let wide = scratch.wide.as_mut().expect("wide canon scratch");
             let selected = scratch.selected.as_mut().expect("packed canon count scratch");
             unsafe {
-                cuda_core::memory::memcpy_dtod_async(wide.cu_deviceptr(), input.cu_deviceptr(),
+                cuda_core::simt::memory::memcpy_dtod_async(wide.cu_deviceptr(), input.cu_deviceptr(),
                     rows * std::mem::size_of::<u128>(), self.pool.stream().cu_stream())?;
             }
             let execution = self.thrust.par_in(self.pool.stream(), self.pool.resource())?;
@@ -273,7 +287,7 @@ impl<'pool> PackedCanon<'pool> {
                 |a: u128, b: u128| a == b,
             )?;
             unsafe {
-                cuda_core::memory::memcpy_dtod_async(metadata.cu_deviceptr(), selected.cu_deviceptr(),
+                cuda_core::simt::memory::memcpy_dtod_async(metadata.cu_deviceptr(), selected.cu_deviceptr(),
                     std::mem::size_of::<u64>(), self.pool.stream().cu_stream())?;
             }
         } else if rows != 0 {
@@ -290,7 +304,7 @@ impl<'pool> PackedCanon<'pool> {
                 .as_mut()
                 .expect("packed canon alternate scratch");
             unsafe {
-                cuda_core::memory::memcpy_dtod_async(
+                cuda_core::simt::memory::memcpy_dtod_async(
                     first.cu_deviceptr(),
                     input.cu_deviceptr(),
                     rows * std::mem::size_of::<u64>(),
@@ -322,7 +336,7 @@ impl<'pool> PackedCanon<'pool> {
             unsafe {
                 // OutputCount starts with the logical u64 row count. The
                 // zeroed error/padding words remain untouched.
-                cuda_core::memory::memcpy_dtod_async(
+                cuda_core::simt::memory::memcpy_dtod_async(
                     metadata.cu_deviceptr(),
                     selected.cu_deviceptr(),
                     std::mem::size_of::<u64>(),
@@ -479,7 +493,7 @@ impl<'pool> WideCanon<'pool> {
                 },
             )?;
             unsafe {
-                cuda_core::memory::memcpy_dtod_async(
+                cuda_core::simt::memory::memcpy_dtod_async(
                     metadata.cu_deviceptr(),
                     selected.cu_deviceptr(),
                     std::mem::size_of::<u64>(),

@@ -5,6 +5,9 @@
 //! admission, ordered publication operations, phase/loop control, termination,
 //! observer/key-set scope and output conversions. This terminal realizes those
 //! checked records rather than selecting a second execution plan.
+//! Evaluators receive each phase's holes in flattened schedule-wave order.
+//! Sequential admission remains inline (or in the timed admission phase);
+//! publication still occurs only after the complete phase has evaluated.
 //!
 //! A hole's CQ input is fact-free, so its first invocation has the empty context.
 //! Round records discharged facts in the checked lower-owner argument packet;
@@ -22,7 +25,20 @@ use std::collections::BTreeSet;
 use syn::Ident;
 mod codegen;
 
+/// Host realization supports iterator and consumer holes, not device batches.
+pub fn check_host_interfaces(program: &Program) -> syn::Result<()> {
+    for hole in &program.holes {
+        ensure(
+            hole.interface != HoleInterface::Batch,
+            hole,
+            "host Datalog printers do not support batch holes; use a batch-capable printer",
+        )?;
+    }
+    Ok(())
+}
+
 pub fn splice(program: &Program) -> syn::Result<Vec<TokenStream>> {
+    check_host_interfaces(program)?;
     splice_with(program, |hole| {
         let mut pipeline = hole.pipeline.clone();
         if hole.interface == HoleInterface::Push {
@@ -61,6 +77,9 @@ pub fn consume_hole(
             let #name = #consumer;
             #invocation;
         }),
+        HoleInterface::Batch => quote!(compile_error!(
+            "host Datalog printers do not support batch holes"
+        )),
     }
 }
 
@@ -88,6 +107,9 @@ pub fn collect_hole(
                 #rows
             })
         }
+        HoleInterface::Batch => quote!(compile_error!(
+            "host Datalog printers do not support batch holes"
+        )),
     }
 }
 /// Splice one caller-owned expansion per checked hole, in recorded order.
@@ -127,7 +149,9 @@ pub fn compile_with(
     ) -> syn::Result<(TokenStream, TokenStream)>,
 ) -> syn::Result<syn::Expr> {
     let holes = splice(program)?;
-    render_admitted(program, &holes, evaluator, publication)
+    render_admitted(program, &holes, evaluator, publication, |_, _, body| {
+        Ok(body)
+    })
 }
 /// Realize already-spliced holes. The length and complete Round contract are checked.
 pub fn render_with(
@@ -143,6 +167,8 @@ pub fn render_with(
     render_with_publication(program, holes, evaluator, publication)
 }
 /// Realize checked holes with alternative publication realizations.
+/// The evaluator's rules follow the recorded waves, preserving each wave's
+/// hole order. Context and splice indices retain their original identities.
 pub fn render_with_publication(
     program: &Program,
     holes: &[TokenStream],
@@ -154,8 +180,23 @@ pub fn render_with_publication(
     ) -> syn::Result<(TokenStream, TokenStream)>,
     publish: impl FnMut(&RoundContext, &Stratum) -> Vec<TokenStream>,
 ) -> syn::Result<syn::Expr> {
+    render_with_step_loop(program, holes, evaluator, publish, |_, _, body| Ok(body))
+}
+/// Replace only the step loop, retaining synchronous seed publication and outputs.
+pub fn render_with_step_loop(
+    program: &Program,
+    holes: &[TokenStream],
+    evaluator: impl FnMut(
+        &[RuleHole],
+        &RoundContext,
+        &[TokenStream],
+        &[Execution],
+    ) -> syn::Result<(TokenStream, TokenStream)>,
+    publish: impl FnMut(&RoundContext, &Stratum) -> Vec<TokenStream>,
+    step_loop: impl FnMut(usize, &Stratum, TokenStream) -> syn::Result<TokenStream>,
+) -> syn::Result<syn::Expr> {
     round::contract::check(program)?;
-    render_admitted(program, holes, evaluator, publish)
+    render_admitted(program, holes, evaluator, publish, step_loop)
 }
 // Internal callers retain the Round admission performed before splicing.
 fn render_admitted(
@@ -168,7 +209,9 @@ fn render_admitted(
         &[Execution],
     ) -> syn::Result<(TokenStream, TokenStream)>,
     mut publish: impl FnMut(&RoundContext, &Stratum) -> Vec<TokenStream>,
+    mut step_loop: impl FnMut(usize, &Stratum, TokenStream) -> syn::Result<TokenStream>,
 ) -> syn::Result<syn::Expr> {
+    check_host_interfaces(program)?;
     ensure(
         holes.len() == program.holes.len(),
         program,
@@ -195,8 +238,26 @@ fn render_admitted(
             );
             quote!(let #name = &#collection;)
         });
-        let seeds = evaluator(&stratum.seeds, context, holes, &program.execution)?;
-        let steps = evaluator(&stratum.steps, context, holes, &program.execution)?;
+        let scheduled_rules = |phase: &str, rules: &[RuleHole]| {
+            program.schedule.strata[stratum_index]
+                .waves
+                .iter()
+                .filter(|wave| wave.phase == phase)
+                .flat_map(|wave| wave.holes.iter().map(|&index| rules[index].clone()))
+                .collect::<Vec<_>>()
+        };
+        let seeds = evaluator(
+            &scheduled_rules(round::schedule::SEED, &stratum.seeds),
+            context,
+            holes,
+            &program.execution,
+        )?;
+        let steps = evaluator(
+            &scheduled_rules(round::schedule::STEP, &stratum.steps),
+            context,
+            holes,
+            &program.execution,
+        )?;
         let allocate: Vec<_> = stratum
             .members
             .iter()
@@ -270,6 +331,7 @@ fn render_admitted(
             ),
             _ => unreachable!("checked loop form"),
         };
+        let loop_body = step_loop(stratum_index, stratum, loop_body)?;
         match stratum.key_scope.to_string().as_str() {
             "component" => {
                 let body = quote!({
@@ -411,12 +473,23 @@ pub fn publication(context: &RoundContext, stratum: &Stratum) -> Vec<TokenStream
         })
         .collect()
 }
-/// Insert admitted rows into the supplied full layouts in one shared row loop.
+/// Insert admitted rows with one shared HashMap loop and one bulk call per bulk layout.
 pub fn full_insert<'a>(layouts: impl IntoIterator<Item = &'a Layout>, next: &Ident) -> TokenStream {
-    let updates = layouts
-        .into_iter()
-        .map(|layout| insert_layout(layout, false));
-    quote!({ for row in &#next { #(#updates)* } })
+    let mut updates = Vec::new();
+    let mut bulk = Vec::new();
+    for layout in layouts {
+        if bulk_layout(layout) {
+            bulk.push(extend_layout(layout, next));
+        } else {
+            updates.push(insert_layout(layout, false));
+        }
+    }
+    let rows = if updates.is_empty() && !bulk.is_empty() {
+        TokenStream::new()
+    } else {
+        quote!(for row in &#next { #(#updates)* })
+    };
+    quote!({ #rows #(#bulk)* })
 }
 /// Extend a relation's accumulated rows with its admitted rows.
 pub fn all_extend(relation: &round::Relation) -> TokenStream {
@@ -433,9 +506,16 @@ pub fn delta_swap(relation: &round::Relation) -> TokenStream {
     let next = &relation.next;
     quote!(#delta = #next;)
 }
-/// Replace a delta layout with its default host, then populate the new delta.
+/// Replace a delta's rows, retaining bulk layout host capacity across rounds.
 pub fn delta_rebuild(layout: &Layout, delta: &Ident) -> TokenStream {
     let host = &layout.host;
+    if bulk_layout(layout) {
+        let extend = extend_layout(layout, delta);
+        return quote!({
+            #host.clear();
+            #extend
+        });
+    }
     let insert = insert_layout(layout, false);
     quote!({
         #host = ::core::default::Default::default();
@@ -583,11 +663,14 @@ pub fn round_body(
     });
     quote!(#(#allocate)* #(#bodies)*)
 }
-// Every full layout is immutable while the round's holes run. Only admitted
-// rows reach publication, so no repeated whole-IDB scans or rebuilds occur.
-pub fn insert_layout(layout: &Layout, borrowed_columns: bool) -> TokenStream {
-    let host = &layout.host;
-    let columns: Vec<_> = layout
+fn bulk_layout(layout: &Layout) -> bool {
+    matches!(&layout.provider, syn::Type::Path(provider)
+        if provider.path.segments.last().is_some_and(|segment|
+            segment.ident == "ShardedLayout" || segment.ident == "RunLayout"))
+}
+
+fn layout_columns(layout: &Layout, borrowed_columns: bool) -> Vec<TokenStream> {
+    layout
         .columns
         .iter()
         .map(|&i| {
@@ -598,9 +681,28 @@ pub fn insert_layout(layout: &Layout, borrowed_columns: bool) -> TokenStream {
                 quote!(::core::clone::Clone::clone(&row.#index))
             }
         })
-        .collect();
+        .collect()
+}
+
+fn extend_layout(layout: &Layout, rows: &Ident) -> TokenStream {
+    let host = &layout.host;
+    let columns = layout_columns(layout, false);
     let (keys, values) = columns.split_at(layout.key);
-    quote!(#host.entry((#(#keys,)*)).or_default().push((#(#values,)*));)
+    quote!(#host.extend_from(&#rows, |row| (#(#keys,)*), |row| (#(#values,)*));)
+}
+
+// Every full layout is immutable while the round's holes run. Only admitted
+// rows reach publication, so no repeated whole-IDB scans or rebuilds occur.
+// EDB bindings remain HashMaps; sharded and sorted-run IDBs use bulk publication above.
+pub fn insert_layout(layout: &Layout, borrowed_columns: bool) -> TokenStream {
+    let host = &layout.host;
+    let columns = layout_columns(layout, borrowed_columns);
+    let (keys, values) = columns.split_at(layout.key);
+    if bulk_layout(layout) {
+        quote!(#host.push((#(#keys,)*), (#(#values,)*));)
+    } else {
+        quote!(#host.entry((#(#keys,)*)).or_default().push((#(#values,)*));)
+    }
 }
 
 /// Formal rule DL-InsertNew: Canonical all-column membership admits each row with one insertion lookup.

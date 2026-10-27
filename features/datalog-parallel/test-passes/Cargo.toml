@@ -10,5 +10,6 @@ proc-macro = true
 [dependencies]
 cq-stage = { path = "../../../facade/cq-stage" }
 cq-datalog-partition = { path = "../partition" }
+cq-lang-datalog-round = { path = "../../datalog/languages/dl-round" }
 syn = { version = "2", features = ["full"] }
 quote = "1"

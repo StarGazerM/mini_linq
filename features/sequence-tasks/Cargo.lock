@@ -130,6 +130,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-load"
+version = "0.1.0"
+dependencies = [
+ "cq-storage",
+ "csv",
+]
+
+[[package]]
 name = "cq-order"
 version = "0.1.0"
 dependencies = [
@@ -192,12 +200,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-rewrite-passes"
+name = "cq-sequence-conformance"
 version = "0.1.0"
 dependencies = [
- "cq-lang-physical",
- "cq-lang-structures",
+ "cq-lang-sequence",
+ "cq-sequence-plan",
+ "cq-sequence-pull",
+ "cq-sequence-tasks",
+ "cq-storage",
+ "cq-syntax",
+ "cq-testkit",
  "proc-macro2",
+ "quote",
+ "rayon",
  "syn 2.0.119",
 ]
 
@@ -215,7 +230,8 @@ name = "cq-sequence-plan"
 version = "0.1.0"
 dependencies = [
  "cq-lang-sequence",
- "cq-sequence-rewrite-passes",
+ "cq-sequence-lowering",
+ "cq-structure-selection",
  "cq-syntax",
  "proc-macro2",
  "quote",
@@ -236,24 +252,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-sequence-rewrite-passes"
-version = "0.1.0"
-dependencies = [
- "cq-lang-sequence",
- "cq-rewrite-passes",
- "cq-sequence-lowering",
- "cq-syntax",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "cq-sequence-rewrites"
 version = "0.1.0"
 dependencies = [
  "cq-lang-sequence",
- "cq-sequence-rewrite-passes",
+ "cq-sequence-plan",
  "cq-stage",
 ]
 
@@ -262,11 +265,17 @@ name = "cq-sequence-tasks"
 version = "0.1.0"
 dependencies = [
  "cq-lang-sequence",
+ "cq-load",
+ "cq-print",
+ "cq-sequence-conformance",
+ "cq-sequence-plan",
  "cq-sequence-pull",
+ "cq-storage",
  "cq-structure-selection",
  "cq-testkit",
  "proc-macro2",
  "quote",
+ "rayon",
  "syn 2.0.119",
 ]
 
@@ -305,6 +314,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-storage"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "hashbrown",
+ "rayon",
+]
+
+[[package]]
 name = "cq-structure-selection"
 version = "0.1.0"
 dependencies = [
@@ -334,16 +352,10 @@ dependencies = [
  "cq-lang-ix",
  "cq-lang-physical",
  "cq-lang-ra",
- "cq-lang-sequence",
  "cq-lang-structures",
  "cq-lang-vo",
- "cq-sequence-plan",
- "cq-sequence-pull",
- "cq-sequence-tasks",
  "cq-syntax",
  "hashbrown",
- "proc-macro2",
- "quote",
  "rayon",
  "syn 2.0.119",
 ]
@@ -374,6 +386,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6"
 
 [[package]]
+name = "csv"
+version = "1.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "52cd9d68cf7efc6ddfaaee42e7288d3a99d613d4b50f76ce9827ae0c6e14f938"
+dependencies = [
+ "csv-core",
+ "itoa",
+ "ryu",
+ "serde_core",
+]
+
+[[package]]
+name = "csv-core"
+version = "0.1.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "704a3c26996a80471189265814dbc2c257598b96b8a7feae2d31ace646bb9782"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "either"
 version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -398,10 +431,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9229cfe53dfd69f0609a49f65461bd93001ea1ef889cd5529dd176593f5338a1"
 
 [[package]]
+name = "itoa"
+version = "1.0.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
+
+[[package]]
 name = "libc"
 version = "0.2.189"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
+
+[[package]]
+name = "memchr"
+version = "2.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "mini-linq"
@@ -486,6 +531,32 @@ checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
 dependencies = [
  "crossbeam-deque",
  "crossbeam-utils",
+]
+
+[[package]]
+name = "ryu"
+version = "1.0.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
+
+[[package]]
+name = "serde_core"
+version = "1.0.229"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "67dca2c9c51e58a4791a4b1ed58308b39c64224d349a935ab5039aa360942a48"
+dependencies = [
+ "serde_derive",
+]
+
+[[package]]
+name = "serde_derive"
+version = "1.0.229"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
 ]
 
 [[package]]

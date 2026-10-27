@@ -1,6 +1,6 @@
 //! Checked, advice-driven Sequence scheduling passes, usable at the public
-//! `cq_stage` pipeline boundary. The companion `cq-sequence-rewrite-passes`
-//! library exposes the same transformations to tools without proc macros.
+//! `cq_stage` pipeline boundary. The core `cq_sequence_plan::rewrites`
+//! module exposes the same transformations to tools without proc macros.
 //!
 //! | Macro | Advice | Effect |
 //! |---|---|---|
@@ -8,9 +8,10 @@
 //! | `store_level` | `d`, named list, `all`, or empty | Store selected flatten definitions (BE-Offsets). |
 //! | `tile` | `d, n` or `d, n, items m` | Wrap in positive contiguous tiles (BE-Partition). Unknown-length stores need capacity. |
 //! | `partition` | `d, n` or `d, n, items m` | Pair tile/flatten at the producer chain's storage input, preserving row shape and authored tiles. |
+//! | `key_partition` | `d, publication, [keys], parts` | Publish at an ancestor, then route before Canon, Group, or provider Store. Global Group merges per-part monoids into one row; `[]` selects contiguous tiles only for globally unique input. Machine grading remains mandatory. |
 //! | `segment` | `d, n` or `d, n, items m` | Materialize a named flatten's offsets and pair tile/flatten around that store. |
 //! | `choose` | `d, len x < k => a, else => b` | Select earlier equal-Structures-result definitions (BE-Choose). |
-//! | `output` | `count`, `reserve`, or `bounded` | Set the final store protocol; bounded requires declared capacity. |
+//! | `output` | `count`, `reserve`, `reserve_previous`, or `bounded` | Set the final store protocol; bounded requires declared capacity. |
 //! | `grade` | `machine, d at host.device, ...` | Add/update placements; preserve other grades on the same machine. |
 //! | `evidence` | `evidence { ... }` | Record estimates and author-asserted key premises. False keys can change grouped answers. |
 //! | `group_without_canon` | group definition | Remove valuation canon only with checked positional uniqueness. |
@@ -22,6 +23,10 @@
 //! placements. The facade's grade phase checks those against the target model.
 //! Named `store_level` selections must all be flatten terms; `all` and empty
 //! advice skip other definitions. The other passes require their stated advice.
+//! `reserve_previous` is explicit advice, never a default planner selection.
+//! It requires an arena terminal: the arena/hole's last validated count seeds
+//! initial capacity (zero on first invocation), not an output bound. Full counter
+//! and BE-Abort checks and overflow replay must succeed before publication.
 //!
 //! Lookup-first preserves live smallest-intersection candidate and membership
 //! adapters, removing them only when their intersection is reexpressed. Movable
@@ -61,7 +66,7 @@ macro_rules! sequence_rewrite {
         pub fn $name(input: TokenStream) -> TokenStream {
             cq_stage::rewrite::<cq_lang_sequence::Program>(
                 input.into(),
-                cq_sequence_rewrite_passes::$name,
+                cq_sequence_plan::rewrites::$name,
             )
             .into()
         }
@@ -73,6 +78,7 @@ sequence_rewrite!(store_level, a);
 sequence_rewrite!(tile, a, 0);
 sequence_rewrite!(partition, missing, 0);
 sequence_rewrite!(segment, missing, 0);
+sequence_rewrite!(key_partition, missing, publication, [], 0);
 sequence_rewrite!(choose, b, len r < 4 => a, else => missing);
 sequence_rewrite!(output, bounded);
 sequence_rewrite!(grade, custom, missing at host);

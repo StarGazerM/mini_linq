@@ -22,6 +22,12 @@ macro_rules! configuration {
             $($stages)*
             physical = [::cq_rewrites::build_host_reads];
         }, [::cq_rewrites::radix_runs], { $($body)* });
+        crate::tpch_runtime::configuration!(@named par, $d, {
+            $($stages)*
+            decompose = [::cq_sequence_tasks_macros::plan];
+            grade = ::cq_sequence_tasks_macros::tasks;
+            print = ::cq_sequence_tasks_macros::translate_tasks;
+        }, { $($body)* });
         crate::tpch_runtime::configuration!(@named no_reduce, $d, {
             plan = ::mini_linq::passes::plan(no_reduce);
             $($stages)*
@@ -42,15 +48,6 @@ macro_rules! configuration {
             use super::*;
             #[allow(unused_macros)]
             macro_rules! query {
-                (@structures; $d($d tokens:tt)*) => { ::mini_linq::compile! {
-                    pipeline {
-                        $($stages)*
-                        structures = [$($extra,)* ::cq_rewrites::retype(dedup => crate::tpch_runtime::Dedup<_>)];
-                        surface = [::cq_ext_aggregate::aggregate, ::cq_ext_correlated::correlated];
-                        print = crate::tpch_runtime::capture_structures;
-                    }
-                    $d($d tokens)*
-                } };
                 (positional($d($d host:ident),*); $d($d tokens:tt)*) => { ::mini_linq::compile! {
                     pipeline {
                         $($stages)*
@@ -75,35 +72,69 @@ macro_rules! configuration {
 }
 pub(crate) use configuration;
 
-/// Expand handwritten, possibly multistage kernels without changing their
-/// default pipeline. Every query stage receives only the selected Structures
-/// advice; host-side materialization remains inside the measured execution.
-macro_rules! same_plan_kernel {
+/// Standalone (including staged aggregate) queries share one authored runner.
+/// Each `query!` carries stage-local advice; only the advised variant applies it.
+macro_rules! standalone_configs {
     ($d:tt; $($body:tt)*) => {
-        crate::tpch_runtime::same_plan_kernel!(@named default, $d, {}, { $($body)* });
-        crate::tpch_runtime::same_plan_kernel!(@named radix, $d, {
-            structures = [::cq_rewrites::radix_runs];
-        }, { $($body)* });
-        crate::tpch_runtime::same_plan_kernel!(@named radix_retained, $d, {
-            structures = [::cq_rewrites::radix_runs, ::cq_rewrites::retain_lookups];
-        }, { $($body)* });
+        pub const CONFIGS: &[&str] = &["default", "par", "radix", "radix_retained", "no-reduce", "transfer", "le", "le_runs", "advised"];
+        crate::tpch_runtime::standalone_configuration!(default, $d, {}, [], { $($body)* });
+        crate::tpch_runtime::standalone_configuration!(radix, $d, {}, [::cq_rewrites::radix_runs], { $($body)* });
+        crate::tpch_runtime::standalone_configuration!(radix_retained, $d, {}, [::cq_rewrites::radix_runs, ::cq_rewrites::retain_lookups], { $($body)* });
+        crate::tpch_runtime::standalone_configuration!(par, $d, {
+            decompose = [::cq_sequence_tasks_macros::plan];
+            grade = ::cq_sequence_tasks_macros::tasks;
+            print = ::cq_sequence_tasks_macros::translate_tasks;
+        }, [], { $($body)* });
+        crate::tpch_runtime::standalone_configuration!(no_reduce, $d, {
+            plan = ::mini_linq::passes::plan(no_reduce);
+        }, [], { $($body)* });
+        crate::tpch_runtime::standalone_configuration!(transfer, $d, {
+            plan = ::cq_planners::order(transfer);
+        }, [], { $($body)* });
+        crate::tpch_runtime::standalone_configuration!(le, $d, {
+            plan = ::cq_planners::order(le);
+        }, [], { $($body)* });
+        crate::tpch_runtime::standalone_configuration!(le_runs, $d, {
+            plan = ::cq_planners::order(le);
+        }, [::cq_rewrites::sorted_runs, ::cq_rewrites::retain_lookups], { $($body)* });
+        crate::tpch_runtime::standalone_configuration!(advised, $d, {}, [], { $($body)* });
         pub fn run(data: &Data, config: &str) -> Vec<Answer> {
             match config {
-                "default" => default::execute(data),
-                "radix" => radix::execute(data),
-                "radix_retained" => radix_retained::execute(data),
-                _ => panic!("unknown configuration {config}"),
+                "default" => default::run(data, config),
+                "par" => par::run(data, config),
+                "radix" => radix::run(data, config),
+                "radix_retained" => radix_retained::run(data, config),
+                "no-reduce" => no_reduce::run(data, config),
+                "transfer" => transfer::run(data, config),
+                "le" => le::run(data, config),
+                "le_runs" => le_runs::run(data, config),
+                "advised" => advised::run(data, config),
+                _ => panic!("unknown configuration {}", config),
             }
         }
     };
-    (@named $module:ident, $d:tt, { $($advice:tt)* }, { $($body:tt)* }) => {
+}
+pub(crate) use standalone_configs;
+
+macro_rules! standalone_configuration {
+    ($module:ident, $d:tt, { $($stages:tt)* }, [$($extra:path),*], { $($body:tt)* }) => {
+        #[allow(non_snake_case)]
         mod $module {
             use super::*;
             macro_rules! query {
-                (pipeline { $d($d stages:tt)* } $d($d tokens:tt)*) => {
-                    ::mini_linq::compile! {
-                        pipeline { $d($d stages)* $($advice)* }
-                        $d($d tokens)*
+                (plan($d($d advice:tt)*); evidence { $d($d facts:tt)* } $d($d tokens:tt)*) => {
+                    crate::tpch_runtime::standalone_query! {
+                        $module; [$d($d advice)*]; {
+                            $($stages)*
+                            sequence = ::mini_linq::passes::sequence(evidence { $d($d facts)* });
+                        };
+                        [$($extra),*]; $d($d tokens)*
+                    }
+                };
+                (plan($d($d advice:tt)*); $d($d tokens:tt)*) => {
+                    crate::tpch_runtime::standalone_query! {
+                        $module; [$d($d advice)*]; { $($stages)* };
+                        [$($extra),*]; $d($d tokens)*
                     }
                 };
             }
@@ -111,33 +142,28 @@ macro_rules! same_plan_kernel {
         }
     };
 }
-pub(crate) use same_plan_kernel;
 
-#[cfg(test)]
-macro_rules! capture_structures {
-    (pipeline {}; $($tokens:tt)*) => {
-        stringify!($($tokens)*)
+pub(crate) use standalone_configuration;
+
+macro_rules! standalone_query {
+    (advised; [$($advice:tt)*]; {$($stages:tt)*}; []; $($tokens:tt)*) => {
+        crate::tpch_runtime::standalone_query! {
+            default; []; { $($stages)* plan = ::mini_linq::passes::plan($($advice)*); }; [];
+            $($tokens)*
+        }
+    };
+    ($module:ident; [$($advice:tt)*]; {$($stages:tt)*}; [$($extra:path),*]; $($tokens:tt)*) => {
+        ::mini_linq::compile! {
+            pipeline {
+                $($stages)*
+                structures = [$($extra,)* ::cq_rewrites::retype(dedup => crate::tpch_runtime::Dedup<_>)];
+                surface = [::cq_ext_aggregate::aggregate, ::cq_ext_correlated::correlated];
+            }
+            $($tokens)*
+        }
     };
 }
-#[cfg(test)]
-pub(crate) use capture_structures;
-
-/// Check complete canonical rows, not just row counts or configuration names.
-#[cfg(test)]
-pub(crate) fn same_plan_answers<T>(
-    run: impl Fn(&str) -> Vec<T>,
-    canonical: impl Fn(&[T]) -> Vec<Vec<String>>,
-) -> Vec<T> {
-    let baseline = run("default");
-    let mut expected = canonical(&baseline);
-    expected.sort();
-    for config in ["radix", "radix_retained"] {
-        let mut actual = canonical(&run(config));
-        actual.sort();
-        assert_eq!(actual, expected, "{config} differs from the default query");
-    }
-    baseline
-}
+pub(crate) use standalone_query;
 
 macro_rules! candidate {
     (hypergraph; $d:tt; positional($($host:ident),*); $($body:tt)*) => {
@@ -174,7 +200,7 @@ macro_rules! retail_kernel {
     ) => {
         pub const NAME: &str = $name;
         pub const SQL: &str = $sql;
-        pub const CONFIGS: &[&str] = &["default", "radix", "radix_retained", "built_hash", "built_radix", "no-reduce", "transfer", "le", "le_runs", stringify!($candidate) $(, crate::tpch_runtime::advised_name!($($advice)*))? $(, stringify!($extra), concat!(stringify!($extra), "_zone"))?];
+        pub const CONFIGS: &[&str] = &["default", "par", "radix", "radix_retained", "built_hash", "built_radix", "no-reduce", "transfer", "le", "le_runs", stringify!($candidate) $(, crate::tpch_runtime::advised_name!($($advice)*))? $(, stringify!($extra), concat!(stringify!($extra), "_zone"))?];
         pub const EXPORTS: &[(&str, &str)] = &[$(
             (stringify!($table), concat!(stringify!($first) $(, ",", stringify!($column))*)),
         )*];
@@ -202,18 +228,9 @@ macro_rules! retail_kernel {
                     answer($($out),+) :- $($body)*
                 }.map(|($($out,)+)| ($(::core::clone::Clone::clone($out),)+)).collect()
             }
-            #[cfg(test)]
-            pub(super) fn structures() -> &'static str {
-                query! { @structures;
-                    struct Query;
-                    $(relation $relation($first: $first_ty $(, $column: $ty)*);)*
-                    $($($derived)*)?
-                    answer($($out),+) :- $($body)*
-                }
-            }
         });
-        // Robust predicate transfer: the same written order and Structures,
-        // with forward and backward semijoin transfer before the join phase.
+        // Predicate transfer uses the same authored query and Structures,
+        // connecting atom runs before forward/backward semijoin transfer.
         crate::tpch_runtime::configuration!(transfer, $d, {
             plan = ::cq_planners::order(transfer);
             select = ::mini_linq::passes::select(positional($($relation),*));
@@ -305,6 +322,7 @@ macro_rules! retail_kernel {
                 "radix_retained" => radix_retained::run(data),
                 "built_hash" => built_hash::run(data),
                 "built_radix" => built_radix::run(data),
+                "par" => par::run(data),
                 "no-reduce" => no_reduce::run(data),
                 "transfer" => transfer::run(data),
                 "le" => le::run(data),
@@ -312,17 +330,6 @@ macro_rules! retail_kernel {
                 stringify!($candidate) => tuned::run(data),
                 $(crate::tpch_runtime::advised_name!($($advice)*) => advised::run(data),)?
                 _ => crate::tpch_runtime::extra_run!([$($extra)?]; data, config),
-            }
-        }
-        #[cfg(test)]
-        pub fn structures(config: &str) -> &'static str {
-            match config {
-                "default" => default::structures(),
-                "radix" => radix::structures(),
-                "radix_retained" => radix_retained::structures(),
-                "built_hash" => built_hash::structures(),
-                "built_radix" => built_radix::structures(),
-                _ => panic!("unknown structure capture configuration {config}"),
             }
         }
         pub fn canonical(rows: &[Answer]) -> Vec<Vec<String>> {
@@ -445,3 +452,20 @@ macro_rules! extra_prepare {
     }};
 }
 pub(crate) use extra_prepare;
+
+/// Check complete canonical rows under the same plan and alternate indexes.
+#[cfg(test)]
+pub(crate) fn same_plan_answers<T>(
+    run: impl Fn(&str) -> Vec<T>,
+    canonical: impl Fn(&[T]) -> Vec<Vec<String>>,
+) -> Vec<T> {
+    let baseline = run("default");
+    let mut expected = canonical(&baseline);
+    expected.sort();
+    for config in ["radix", "radix_retained"] {
+        let mut actual = canonical(&run(config));
+        actual.sort();
+        assert_eq!(actual, expected, "{config} differs from the default query");
+    }
+    baseline
+}

@@ -283,7 +283,7 @@ fn compile_stage(
             structures = checked(
                 "loader host adapter",
                 &structures,
-                cq_rewrite_passes::retype(
+                cq_structure_selection::retype(
                     &structures,
                     if kernel
                         .published
@@ -357,6 +357,14 @@ fn compile_stage(
         pipeline.sequence.insert(
             0,
             cq_sequence_plan::Advice::Evidence(evidence)
+                .to_token_stream()
+                .to_string(),
+        );
+    }
+    if !kernel.evidence.facts.is_empty() {
+        pipeline.sequence.insert(
+            0,
+            cq_sequence_plan::Advice::Evidence(kernel.evidence.clone())
                 .to_token_stream()
                 .to_string(),
         );

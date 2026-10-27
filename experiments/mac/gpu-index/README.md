@@ -1,8 +1,8 @@
 # Mac GPU sorted-index experiments
 
-Imported from the independent `mini_linq-gpu-index-20261024` snapshot into the
-working tree containing the CPU join improvements. Only this experiment was
-copied; the snapshot's older compiler/runtime files were not imported.
+Originally imported from the independent `mini_linq-gpu-index-20261024` snapshot
+alongside the CPU join improvements. The GPU runtime and MCCL are now consolidated
+under `experiments/mac/`; sibling snapshots are historical backups only.
 The measurements below predate integration and retain their original provenance.
 They are not new measurements of the current native provider.
 
@@ -10,10 +10,10 @@ This standalone Rust/Metal executable implements stable u32-key/u32-payload
 sorting, stable old-run-before-delta merging, exact radix-prefix directories,
 GPU group-boundary extraction, and flat/binary-carry maintenance experiments.
 This benchmark is not a Metal query backend or GPU RadixSpline builder.
-The GPU fork now also has an explicit u32/u32 shared-memory runtime with online
-flat/binary-carry snapshots in [`runtime/cq-mac`](../../../runtime/cq-mac/src/lib.rs).
-Both consume the canonical kernels in the sibling `../mccl/native/index`
-checkout. The runtime uses MCCL/MLX ownership; this offline benchmark retains its
+This tree also has an explicit u32/u32 shared-memory runtime with online
+flat/binary-carry snapshots in [`experiments/mac/cq-mac`](../cq-mac/src/lib.rs).
+Both consume the canonical kernels in [`experiments/mac/mccl/native/index`](../mccl/native/index).
+The runtime uses MCCL/MLX ownership; this offline benchmark retains its
 explicit raw Metal measurement harness. Historical measurements below are not
 new MCCL runtime measurements.
 See [the implementation plan and runtime commands](../../../doc/MAC-IMPLEMENTATION.md).
@@ -23,6 +23,8 @@ See [the implementation plan and runtime commands](../../../doc/MAC-IMPLEMENTATI
 From the repository root, on an Apple-silicon Mac with Metal available:
 
 ```sh
+cmake -S experiments/mac/mccl -B experiments/mac/mccl/build/native -DCMAKE_BUILD_TYPE=Release
+cmake --build experiments/mac/mccl/build/native --parallel 8
 cargo run --release --locked --manifest-path experiments/mac/gpu-index/Cargo.toml -- --check-only
 cargo run --release --locked --manifest-path experiments/mac/gpu-index/Cargo.toml -- \
   --sort-only --sizes 1048576,16777216,67108864 --runs 5 \
@@ -44,11 +46,11 @@ The `index_compare` binary now ingests an immutable packed relation once per
 backend and reuses its handle. It compares three-buffer raw construction,
 single serial/concurrent encoders, MCCL public/native shared-source construction,
 buffer-level sort/directory and a GPU copy reference. Destructive two-buffer and
-per-build CPU repopulation cases are removed. Build the sibling native bundle first:
+per-build CPU repopulation cases are removed. Build the local native bundle first:
 
 ```sh
-cmake -S ../mccl -B ../mccl/build/native -DCMAKE_BUILD_TYPE=Release
-cmake --build ../mccl/build/native --parallel 8
+cmake -S experiments/mac/mccl -B experiments/mac/mccl/build/native -DCMAKE_BUILD_TYPE=Release
+cmake --build experiments/mac/mccl/build/native --parallel 8
 cargo run --release --locked --manifest-path experiments/mac/gpu-index/Cargo.toml \
   --bin index_compare -- --sizes 65536,1048576,16777216,67108864 \
   --runs 5 --warmups 2 --distributions uniform,workspace,dense,all_equal \

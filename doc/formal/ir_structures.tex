@@ -273,7 +273,7 @@ occurrence, the filtered key column, host key column and exact covering
 operator. A scan may carry several entries, one per covering operator and key
 column. The core neither classifies approximate algorithms nor recognizes their names.
 \textsc{STR-JoinFilter} independently checks that \code{j} is an eager probe or
-semijoin of \code{b} on a key $K\ni k$ served by one single-level hash index,
+semijoin of \code{b} on a key $K\ni k$ served by a single-level exact key index,
 that the build is total, and that the scan reaches \code{j} through an
 exclusive pipe spine whose every result carries $k$: renames, projections,
 declarative selections and left operands of eager probes and semijoins.
@@ -330,6 +330,13 @@ lineage maps $k$ to a host column.
 The selected provider enumerates its exact distinct keys through \code{Keys}
 for filter construction. Any lawful implementation can satisfy this premise;
 retyping must preserve the declaration and its Rust trait obligation.
+A checked \code{Sharded} family preserves exact key enumeration as well: each
+complete key routes to exactly one native index, and enumerating all its native
+keys gives the same global key support, including the one-index identity
+representation. Its selected provider must still declare and satisfy the
+\code{Keys} contract; a provider name alone does not establish support.
+The filter's build, covering operator, scan lineage and marker obligations
+remain unchanged.
 A retained-cursor probe remains an exact covering read: its earlier eager
 semi performed the same-key lookup. The original covering operator and its
 exclusive-spine proof are retained, not redirected across an opaque Rust or

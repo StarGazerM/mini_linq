@@ -22,6 +22,7 @@ cq-sequence-lowering = { path = "../../../passes/cq-sequence-lowering" }
 cq-gpu-sequence-test-macros = { path = "tests/support/macros" }
 cq-gpu-runtime = { path = "../printer-runtime" }
 cq-gpu-sequence-runtime = { path = "../sequence-runtime" }
+gpu-datalog-runtime = { path = "../datalog-runtime" }
 cq-storage = { path = "../../../runtime/cq-storage" }
 cq-testkit = { path = "../../../testkit/cq-testkit", default-features = false }
 cuda-device.workspace = true

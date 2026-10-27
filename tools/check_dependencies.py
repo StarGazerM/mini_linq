@@ -185,6 +185,9 @@ def check(data, announce=True):
             adapters = {
                 "cq-physical-realization": {"cq-print"},
                 "cq-sequence-pull": {"cq-lang-structures", "cq-print", "cq-physical-realization"},
+                # Catalog realization uses checked core selection/lowering,
+                # never the optional feature frontends for those operations.
+                "cq-sequence-plan": {"cq-structure-selection", "cq-sequence-lowering"},
             }.get(name, set())
             allowed = required | {"cq-syntax"} | adapters
             if internal & (set(LANGUAGES) - {"cq-syntax"}) != required | (adapters & set(LANGUAGES)):

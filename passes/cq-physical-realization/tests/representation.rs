@@ -1,5 +1,31 @@
 use quote::{ToTokens, quote};
 
+#[test]
+fn native_canon_counts_actual_inserts_without_wrapping_custom_providers() {
+    for ty in [
+        syn::parse_quote!(::cq_storage::HashSet<_>),
+        syn::parse_quote!(::std::collections::HashSet<_, CustomHashState>),
+    ] {
+        let rows = cq_physical_realization::RowEmitter::canon(&ty, quote!(rows), 1);
+        syn::parse2::<syn::Expr>(rows.clone()).unwrap();
+        let printed = rows.to_string();
+        assert!(printed.contains("profile_select"), "{printed}");
+        assert!(printed.contains("DistinctSet :: from_set"), "{printed}");
+        let constructor = quote!(<#ty>::new()).to_string();
+        assert_eq!(printed.matches(&constructor).count(), 2, "{printed}");
+    }
+    for ty in [
+        syn::parse_quote!(::cq_storage::counters::DistinctSet<_>),
+        syn::parse_quote!(crate::tpch_runtime::Dedup<_>),
+        syn::parse_quote!(::std::collections::BTreeSet<_>),
+    ] {
+        let rows = cq_physical_realization::RowEmitter::canon(&ty, quote!(rows), 1);
+        let printed = rows.to_string();
+        assert!(!printed.contains("from_set"), "{printed}");
+        assert!(!printed.contains("profile_select"), "{printed}");
+    }
+}
+
 fn source_tokens(module: &cq_lang_structures::Program) -> syn::Result<proc_macro2::TokenStream> {
     let analysis = cq_lang_structures::contract::check(module)?;
     let context = cq_physical_realization::sources_with(module, &analysis, |_, _| {})?;

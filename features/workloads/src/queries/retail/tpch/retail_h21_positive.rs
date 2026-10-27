@@ -13,6 +13,7 @@ JOIN lineitem l2 ON l1.l_orderkey = l2.l_orderkey
 WHERE n.n_name = 'SAUDI ARABIA' AND o.o_orderstatus = 'F'
 AND l1.l_receiptdate > l1.l_commitdate AND l2.l_suppkey <> l1.l_suppkey"#;
     candidate generic_smallest;
+    advise plan(no_reduce, order(Nation, Supplier, Lineitem@1, Orders, Lineitem@0), reduce(Supplier with Nation), reduce(Lineitem@1 with Supplier));
     setup {}
     relations {
         relation Supplier => supplier(s_suppkey: i64, s_nationkey: i32);

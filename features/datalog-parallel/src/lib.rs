@@ -2,6 +2,18 @@
 //! `round = [cq_datalog_parallel::partition(threshold = 1024, grain = 64)];`
 //! and `print = cq_datalog_parallel::print_rounds;` in the Datalog pipeline.
 //! Checked Storage/Round refinements precede all CQ hole expansion.
+//! Opt into internally parallel keyed IDB layouts with
+//! `storage_rewrites = [cq_datalog_parallel::shard_storage(layouts(sharded))];`.
+//! The default shards only admission; unit-key and EDB layouts stay native.
+//! Select sorted-run keyed IDB layouts with `shard_storage(layouts(runs))`,
+//! sorted-run admission with `shard_storage(seen(runs))`, or both with
+//! `shard_storage(layouts(runs), seen(runs))`. These options are independent;
+//! `layouts(sharded)` and `layouts(runs)` are mutually exclusive. Run layouts
+//! require ordered keys and payloads; run admission requires ordered rows.
+//! Run layouts accept only the default source layout hasher
+//! `BuildHasherDefault<cq_datalog::rustc_hash::FxHasher>`; custom/keyed layout
+//! hashers are rejected rather than silently erased. Unit-key and EDB layouts
+//! remain native, and omitting `seen(runs)` retains sharded admission.
 //! Eligible rule holes replace the entire standard `sequence -> sequential ->
 //! translate_pull` tail with the registered Structures `print_push` terminal,
 //! feeding the task collector directly. The checker preserves the preceding
@@ -47,12 +59,12 @@
 //! pulling in otherwise disabled implementations. Build timing binaries
 //! without instrumentation and run each engine in a separate process.
 //!
-//! Sharding preserves the Datalog default Fx hasher for admission and layouts.
+//! Sharding and run admission preserve the Datalog default Fx hasher.
 //! CQ holes discharge result canonicalization to admission and negation key
 //! sets rather than allocating separate answer-dedup sets. Fx is unkeyed: for
 //! adversarial inputs select `cq_datalog_hasher::hasher(keyed)` before
-//! `shard_storage` and `cq_datalog_hasher::hasher_round(keyed)` before `partition`.
-//! Hash iteration order is not an output guarantee.
+//! `shard_storage` and `cq_datalog_hasher::hasher_round(keyed)` before `partition`
+//! when not selecting `layouts(runs)`. Hash iteration order is not an output guarantee.
 use proc_macro::TokenStream;
 
 #[proc_macro]

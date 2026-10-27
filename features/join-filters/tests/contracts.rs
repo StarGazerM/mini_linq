@@ -1,5 +1,6 @@
 use cq_lang_structures::{self as ir, Structure, physical};
-use cq_rewrite_passes::{join_filter, retype};
+use cq_rewrite_passes::join_filter;
+use cq_structure_selection::retype;
 use quote::{ToTokens, quote};
 
 fn source() -> ir::Program {
@@ -133,4 +134,77 @@ fn explicit_advice_can_cover_a_total_unfiltered_build() {
     let advised = join_filter(&selected, quote!(l)).unwrap();
     assert_eq!(advised.physical, selected.physical);
     assert_eq!(ir::contract::check(&advised).unwrap().join_filters.len(), 1);
+}
+
+#[test]
+fn routed_exact_provider_retyping_preserves_join_filter_obligations() {
+    let before = join_filter(&source(), quote!(l)).unwrap();
+    let expected = ir::contract::check(&before).unwrap().join_filters;
+    for ty in [
+        quote!(::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>>),
+        quote!(::cq_storage::sharded::Sharded<::cq_storage::SortedRun<_, _>>),
+        quote!(::cq_storage::sharded::Sharded<::cq_storage::SortedRun<_, _>, _>),
+        quote!(::cq_storage::sharded::Sharded<::cq_storage::RadixRun<_, _>>),
+    ] {
+        let changed = retype(&before, quote!(b => #ty supports [keys])).unwrap();
+        assert_eq!(changed.physical, before.physical);
+        let facts = ir::contract::check(&changed).unwrap();
+        assert_eq!(facts.join_filters, expected);
+        assert_eq!(ir::join_filter_candidates(&changed, &facts, "j").len(), 1);
+        assert_eq!(changed, syn::parse2(changed.to_token_stream()).unwrap());
+    }
+}
+
+#[test]
+fn routed_filter_requires_declared_key_enumeration() {
+    let before = join_filter(&source(), quote!(l)).unwrap();
+    for ty in [
+        quote!(::cq_storage::sharded::Sharded<MembershipOnly>),
+        quote!(::cq_storage::sharded::Sharded<::cq_storage::HashIndex<'_, _, _>>),
+        quote!(::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>, UnknownRouter>),
+        quote!(
+            ::cq_storage::sharded::Sharded<
+                ::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>>,
+            >
+        ),
+    ] {
+        assert!(retype(&before, quote!(b => #ty)).is_err(), "{ty}");
+    }
+}
+
+#[test]
+fn advice_keeps_all_witnesses_and_is_idempotent_after_coalescing() {
+    let source: physical::Program = syn::parse_quote! { physical {
+        relation L(a:i64,b:i64); relation R(c:i64,d:i64);
+        l = pipe rename L@0 {a -> x,b -> y};
+        r = pipe rename R@1 {c -> x,d -> z};
+        s = pipe range select r if (z > 1);
+        b = let project s keep {x,z};
+        q = pipe semi eager [x] l,b;
+        j = pipe probe first [x] q,b;
+        out = pipe canon project j keep {x,y,z}; return out as answer(x,y,z);
+    }};
+    let selected = cq_structure_selection::compile(&source).unwrap();
+    let advised = join_filter(&selected, quote!(l)).unwrap();
+    assert_eq!(advised.physical, source);
+    assert_eq!(
+        advised
+            .structures
+            .entries
+            .iter()
+            .filter(|entry| { matches!(&entry.structure, Structure::JoinFilter { .. }) })
+            .count(),
+        2
+    );
+    assert_eq!(
+        ir::contract::check(&advised).unwrap().join_filters["l"].len(),
+        1
+    );
+    assert_eq!(join_filter(&advised, quote!(l)).unwrap(), advised);
+    let retyped = retype(&advised, quote!(l join_filter => FilterAlias)).unwrap();
+    assert_eq!(
+        ir::contract::check(&retyped).unwrap().join_filters["l"].len(),
+        1
+    );
+    assert_eq!(join_filter(&retyped, quote!(l)).unwrap(), retyped);
 }

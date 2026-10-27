@@ -16,6 +16,571 @@ fn program(body: proc_macro2::TokenStream) -> Program {
     .unwrap()
 }
 
+#[test]
+fn publication_distinguishes_borrow_alias_and_real_retained_rows() {
+    let p = program(quote! {
+        borrowed = store rows r;
+        view = borrowed;
+        borrowed_again = store view;
+        retained = store canon borrowed;
+        retained_parts = partition_k[a](4) retained;
+        alias = store retained;
+        alias_parts = partition_k[a](4) alias;
+    });
+    let analysis = contract::check(&p).unwrap();
+    let borrow = Publication::BorrowHost {
+        result: "r".into(),
+        host: "R".into(),
+    };
+    assert_eq!(analysis.publications["borrowed"], borrow);
+    assert_eq!(analysis.publications["borrowed_again"], borrow);
+    assert!(!analysis.publications.contains_key("view"));
+    assert_eq!(analysis.host_sources["view"], "r");
+    assert_eq!(
+        analysis.publications["retained"],
+        Publication::OwnRows { staged: true }
+    );
+    assert_eq!(
+        analysis.publications["alias"],
+        Publication::Alias {
+            source: "retained".into()
+        }
+    );
+    assert!(!analysis.host_sources.contains_key("retained"));
+}
+
+#[test]
+fn publication_alias_preserves_original_carrier_across_reheading() {
+    let p: Program = syn::parse_quote! {
+        physical {
+            relation R(a:i32);
+            r = pipe canon rename R@0 {a -> a};
+            s = pipe canon project r keep {a};
+            return s as answer(a);
+        }
+        structures { r host scan = Reader []; r canon = Canon; s canon = Canon; }
+        sequence {
+            input = store canon rows r;
+            input_parts = partition_k[a](4) input;
+            s = store input;
+            out = flatten partition_k[a](4) s;
+        }
+    };
+    let analysis = contract::check(&p).unwrap();
+    assert_eq!(analysis.results["input"], "r");
+    assert_eq!(analysis.results["s"], "s");
+    assert_eq!(
+        analysis.publications["s"],
+        Publication::Alias {
+            source: "input".into()
+        }
+    );
+    assert!(!analysis.host_sources.contains_key("s"));
+}
+
+#[test]
+fn routed_publication_checks_native_representation_and_stored_key_coverage() {
+    let mut p = lookup_program(quote! {
+        input = store rows r;
+        r = store partition_k[a](4) input;
+        out = rows l;
+    });
+    let entry = p
+        .structures
+        .structures
+        .entries
+        .iter_mut()
+        .find(|entry| matches!(entry.structure, structures::Structure::Built { .. }))
+        .unwrap();
+    let structures::Structure::Built { keyed, .. } = &mut entry.structure else {
+        unreachable!()
+    };
+    keyed.ty = syn::parse_quote!(::cq_storage::sharded::Sharded<Provider, _>);
+    let analysis = contract::check(&p).unwrap();
+    assert_eq!(
+        analysis.publications["r"],
+        Publication::Parts {
+            keys: vec!["a".into()]
+        }
+    );
+    assert_eq!(
+        analysis.routed_providers["r"][&0],
+        syn::parse_quote!(Provider)
+    );
+
+    p.sequence.definitions[1].term = syn::parse_quote!(store partition_k[b](4) input);
+    reject(&p, "BE-Publication");
+    p.sequence.definitions[1].term = syn::parse_quote!(store partition_k[a](4) input);
+    let entry = p
+        .structures
+        .structures
+        .entries
+        .iter_mut()
+        .find(|entry| matches!(entry.structure, structures::Structure::Built { .. }))
+        .unwrap();
+    let structures::Structure::Built { keyed, .. } = &mut entry.structure else {
+        unreachable!()
+    };
+    keyed.ty = syn::parse_quote!(::cq_storage::sharded::Sharded);
+    reject(&p, "BE-Publication");
+}
+
+#[test]
+fn unrelated_sharded_type_is_not_a_native_routed_provider() {
+    let mut p = lookup_program(quote! { input = store rows r; out = rows l; });
+    let entry = p
+        .structures
+        .structures
+        .entries
+        .iter_mut()
+        .find(|entry| matches!(entry.structure, structures::Structure::Built { .. }))
+        .unwrap();
+    let structures::Structure::Built { keyed, .. } = &mut entry.structure else {
+        unreachable!()
+    };
+    keyed.ty = syn::parse_quote!(::custom::Sharded<Provider>);
+    let analysis = contract::check(&p).unwrap();
+    assert!(analysis.routed_providers.is_empty());
+    assert_eq!(
+        analysis.publications["input"],
+        Publication::OwnRows { staged: false }
+    );
+}
+
+fn deferred_publication_program(body: proc_macro2::TokenStream) -> Program {
+    syn::parse2(quote! {
+        physical {
+            relation R(a:i32,b:i32); relation P(a:i32);
+            r = pipe canon rename R@0 {a -> a,b -> b};
+            selected = let select r if (b > 0);
+            probe = pipe rename P@1 {a -> a};
+            out = pipe canon probe first [a] probe,selected;
+            return out as answer(a,b);
+        }
+        structures {
+            r host scan = Reader [];
+            r canon = Canon;
+            selected = ::cq_storage::sharded::Sharded<Provider> [a];
+            probe host scan = Reader [];
+            out canon = Canon;
+        }
+        sequence { #body }
+    })
+    .unwrap()
+}
+
+fn deferred_cover() -> proc_macro2::TokenStream {
+    quote! {
+        selected = store choose [
+            workers < 2 => choose [
+                len R < 16 => partition_k[a](1) input,
+                len input < 16 => partition_k[a](1) input,
+                else => partition_k[a](4) input
+            ],
+            len input < 8 => partition_k[a](1) input,
+            else => partition_k[a](4) input
+        ];
+    }
+}
+
+#[test]
+fn deferred_rows_accept_total_selection_and_pure_named_producer() {
+    let cover = deferred_cover();
+    for producer in [
+        quote!(input = store compact selected rows r;),
+        quote! {
+            producer = compact selected rows r;
+            input = store producer;
+        },
+        quote! {
+            scan = rows r;
+            producer = compact selected scan;
+            input = store producer;
+        },
+        quote! {
+            scan = store rows r;
+            producer = compact selected scan;
+            input = store producer;
+        },
+    ] {
+        let p = deferred_publication_program(quote! {
+            #producer
+            #cover
+            out = flatten lookup selected [a] rows probe;
+        });
+        let facts = contract::check(&p).unwrap();
+        assert_eq!(
+            facts.publications["input"],
+            Publication::DeferredRows {
+                consumer: "selected".into()
+            }
+        );
+        assert_eq!(
+            facts.publications["selected"],
+            Publication::Parts {
+                keys: vec!["a".into()]
+            }
+        );
+    }
+}
+
+#[test]
+fn deferred_rows_accept_direct_and_recursively_nested_worker_covers() {
+    for worker in [
+        quote!(partition_k[a](1) input),
+        quote!(choose [
+            len input < 16 => partition_k[a](1) input,
+            else => partition_k[a](4) input
+        ]),
+        quote!(choose [
+            len R < 16 => partition_k[a](1) input,
+            else => choose [
+                len input < 16 => partition_k[a](1) input,
+                else => partition_k[a](4) input
+            ]
+        ]),
+    ] {
+        let p = deferred_publication_program(quote! {
+            input = store compact selected rows r;
+            selected = store choose [
+                workers < 2 => #worker,
+                else => choose [
+                    len input < 8 => partition_k[a](1) input,
+                    else => partition_k[a](4) input
+                ]
+            ];
+            out = flatten lookup selected [a] rows probe;
+        });
+        assert_eq!(
+            contract::check(&p).unwrap().publications["input"],
+            Publication::DeferredRows {
+                consumer: "selected".into()
+            }
+        );
+    }
+}
+
+#[test]
+fn deferred_rows_require_the_recorded_leading_worker_singleton() {
+    for cover in [
+        quote!(selected = store partition_k[a](4) input;),
+        quote!(selected = store choose [
+            len input < 8 => partition_k[a](1) input,
+            else => partition_k[a](4) input
+        ];),
+        quote!(selected = store choose [
+            workers < 3 => partition_k[a](1) input,
+            else => partition_k[a](4) input
+        ];),
+        quote!(selected = store choose [
+            workers < 2 => partition_k[a](4) input,
+            else => partition_k[a](1) input
+        ];),
+        quote!(selected = store choose [
+            len input < 8 => partition_k[a](1) input,
+            workers < 2 => partition_k[a](1) input,
+            else => partition_k[a](4) input
+        ];),
+        quote!(selected = store choose [
+            workers < 2 => choose [
+                len R < 16 => partition_k[a](4) input,
+                else => partition_k[a](4) input
+            ],
+            else => partition_k[a](1) input
+        ];),
+    ] {
+        let p = deferred_publication_program(quote! {
+            input = store compact selected rows r;
+            #cover
+            out = flatten lookup selected [a] rows probe;
+        });
+        assert_eq!(
+            contract::check(&p).unwrap().publications["input"],
+            Publication::OwnRows { staged: true }
+        );
+    }
+}
+
+#[test]
+fn deferred_rows_reject_shared_raw_rows_lengths_and_consumer_replay() {
+    let cover = deferred_cover();
+    for extra in [
+        quote!(shared = input;),
+        quote!(shared = store input;),
+        quote!(shared = fold count input;),
+        quote!(shared = choose [len input < 8 => rows r, else => rows r];),
+        quote!(shared = flatten selected;),
+        quote!(shared = selected;),
+        quote!(shared = choose [len selected < 8 => rows r, else => rows r];),
+        quote!(shared = rows selected;),
+        quote!(shared = store partition_k[a](4) input;),
+    ] {
+        let p = deferred_publication_program(quote! {
+            input = store compact selected rows r;
+            #cover
+            #extra
+            out = flatten lookup selected [a] rows probe;
+        });
+        assert_eq!(
+            contract::check(&p).unwrap().publications["input"],
+            Publication::OwnRows { staged: true },
+            "{extra}"
+        );
+    }
+    let p = deferred_publication_program(quote! {
+        input = store compact selected rows r;
+        #cover
+    });
+    assert_eq!(
+        contract::check(&p).unwrap().publications["input"],
+        Publication::OwnRows { staged: true },
+        "a final Parts output replays the publication"
+    );
+}
+
+#[test]
+fn deferred_rows_do_not_hide_prior_materialization_or_source_aliases() {
+    let cover = deferred_cover();
+    let p = deferred_publication_program(quote! {
+        materialized = store compact selected rows r;
+        producer = materialized;
+        input = store producer;
+        #cover
+        out = flatten lookup selected [a] rows probe;
+    });
+    assert_eq!(
+        contract::check(&p).unwrap().publications["input"],
+        Publication::OwnRows { staged: true }
+    );
+    let p = deferred_publication_program(quote! {
+        input = store compact selected rows r;
+        alias = store input;
+        selected = store choose [
+            workers < 2 => choose [
+                len R < 16 => partition_k[a](1) input,
+                len input < 16 => partition_k[a](1) input,
+                else => partition_k[a](4) alias
+            ],
+            else => partition_k[a](4) alias
+        ];
+        out = flatten lookup selected [a] rows probe;
+    });
+    assert_eq!(
+        contract::check(&p).unwrap().publications["input"],
+        Publication::OwnRows { staged: true }
+    );
+}
+
+#[test]
+fn deferred_rows_do_not_cross_source_publication_rebindings() {
+    let cover = deferred_cover();
+    for (between, expected) in [
+        (
+            quote!(view = rows r;),
+            Publication::DeferredRows {
+                consumer: "selected".into(),
+            },
+        ),
+        (
+            quote!(rebound = store rows r;),
+            Publication::OwnRows { staged: true },
+        ),
+    ] {
+        let p = deferred_publication_program(quote! {
+            input = store compact selected rows r;
+            #between
+            #cover
+            out = flatten lookup selected [a] rows probe;
+        });
+        assert_eq!(contract::check(&p).unwrap().publications["input"], expected);
+    }
+}
+
+#[test]
+fn deferred_rows_reject_opaque_dependencies_not_just_the_outer_operator() {
+    let cover = deferred_cover();
+    for opaque in [
+        quote!(g = pipe guard r if (opaque_predicate(a));),
+        quote!(g = pipe bind r with c:i32 = (opaque_value(a));),
+    ] {
+        let mut p = deferred_publication_program(quote! {
+            producer = compact selected rows r;
+            input = store producer;
+            #cover
+            out = flatten lookup selected [a] rows probe;
+        });
+        p.structures
+            .physical
+            .program
+            .definitions
+            .insert(1, syn::parse2(opaque).unwrap());
+        p.structures
+            .physical
+            .program
+            .definitions
+            .insert(2, syn::parse_quote!(clean = pipe project g keep {a,b};));
+        p.structures.physical.program.definitions[3] =
+            syn::parse_quote!(selected = let select clean if (b > 0););
+        assert_eq!(
+            contract::check(&p).unwrap().publications["input"],
+            Publication::OwnRows { staged: true }
+        );
+    }
+}
+
+#[test]
+fn deferred_rows_reject_retained_rows_and_multiple_native_builds() {
+    let cover = deferred_cover();
+    for (multiple, extra) in [
+        (false, quote!(selected rows = Rows;)),
+        (
+            true,
+            quote! {
+                selected rows = Rows;
+                selected = ::cq_storage::sharded::Sharded<OtherProvider> [a,b];
+            },
+        ),
+    ] {
+        let mut p = deferred_publication_program(quote! {
+            input = store compact selected rows r;
+            #cover
+            out = flatten lookup selected [a] rows probe;
+        });
+        let additional: structures::Structures =
+            syn::parse2(quote!(structures { #extra })).unwrap();
+        p.structures.structures.entries.extend(additional.entries);
+        if multiple {
+            *p.structures
+                .physical
+                .program
+                .definitions
+                .last_mut()
+                .unwrap() = syn::parse_quote!(first = pipe probe first [a] probe,selected;);
+            p.structures
+                .physical
+                .program
+                .definitions
+                .push(syn::parse_quote!(out = pipe canon probe first [a,b] first,selected;));
+            p.sequence.definitions.last_mut().unwrap().term = syn::parse_quote!(flatten lookup selected [a,b]
+                    flatten lookup selected [a] rows probe);
+        }
+        assert_eq!(
+            contract::check(&p).unwrap().publications["input"],
+            Publication::OwnRows { staged: true }
+        );
+    }
+}
+
+#[test]
+fn deferred_rows_reject_support_equal_source_and_consumer_reheading() {
+    for source_alias in [false, true] {
+        let input = if source_alias {
+            quote!(alias)
+        } else {
+            quote!(input)
+        };
+        let consumer = if source_alias {
+            quote!(selected)
+        } else {
+            quote!(alias)
+        };
+        let p: Program = syn::parse2(quote! {
+            physical {
+                relation R(a:i32,b:i32); relation P(a:i32);
+                r = pipe canon rename R@0 {a -> a,b -> b};
+                selected = let select r if (b > 0);
+                alias = let project selected keep {a,b};
+                probe = pipe rename P@1 {a -> a};
+                first = pipe probe first [a] probe,selected;
+                out = pipe canon probe first [a,b] first,alias;
+                return out as answer(a,b);
+            }
+            structures {
+                r host scan = Reader [];
+                r canon = Canon;
+                probe host scan = Reader [];
+                selected = ::cq_storage::sharded::Sharded<Provider> [a];
+                selected rows = Rows;
+                alias = ::cq_storage::sharded::Sharded<AliasProvider> [a,b];
+                out canon = Canon;
+            }
+            sequence {
+                #input = store compact selected rows r;
+                #consumer = store choose [
+                    workers < 2 => choose [
+                        len R < 16 => partition_k[a](1) #input,
+                        len #input < 16 => partition_k[a](1) #input,
+                        else => partition_k[a](4) #input
+                    ],
+                    else => partition_k[a](4) #input
+                ];
+                out = flatten lookup selected [a] rows probe;
+            }
+        })
+        .unwrap();
+        let facts = contract::check(&p).unwrap();
+        assert_eq!(facts.results["alias"], "alias");
+        assert_eq!(
+            facts.publications[&input.to_string()],
+            Publication::OwnRows { staged: true }
+        );
+    }
+}
+
+#[test]
+fn deferred_rows_pin_sources_with_shadowed_join_filter_bindings() {
+    let mut p: Program = syn::parse_quote! {
+        physical {
+            relation L(a:i64); relation R(a:i64); relation O(a:i64);
+            l = pipe rename L@0 {a -> a};
+            r = pipe rename R@1 {a -> a};
+            b = let select r if (a > 0);
+            selected = let probe first [a] l,b;
+            probe = pipe rename O@2 {a -> a};
+            out = pipe canon probe first [a] probe,selected;
+            return out as answer(a);
+        }
+        structures {
+            l host scan = Reader [];
+            r host scan = Reader [];
+            b = ::cq_storage::HashIndex<'_, _, _> [a] supports [keys];
+            l join_filter = Filter build b [a] covering selected marker ::cq_load::ColumnAt<0>;
+            selected = ::cq_storage::sharded::Sharded<Provider> [a];
+            probe host scan = Reader [];
+            out canon = Canon;
+        }
+        sequence {
+            source = rows l;
+            b = store compact b rows r;
+            input = store flatten map selected source;
+            selected = store choose [
+                workers < 2 => choose [
+                    len L < 16 => partition_k[a](1) input,
+                    len input < 16 => partition_k[a](1) input,
+                    else => partition_k[a](4) input
+                ],
+                else => partition_k[a](4) input
+            ];
+            answer = flatten lookup selected [a] rows probe;
+        }
+    };
+    assert_eq!(
+        contract::check(&p).unwrap().publications["input"],
+        Publication::OwnRows { staged: true }
+    );
+    p.structures
+        .structures
+        .entries
+        .retain(|entry| !matches!(entry.structure, structures::Structure::JoinFilter { .. }));
+    assert_eq!(
+        contract::check(&p).unwrap().publications["input"],
+        Publication::DeferredRows {
+            consumer: "selected".into()
+        },
+        "the same total join is eligible without a shadowed scan-filter binding"
+    );
+}
+
 fn lookup_program(body: proc_macro2::TokenStream) -> Program {
     syn::parse2(quote! {
         physical {
@@ -56,6 +621,8 @@ fn sequential() -> Machine {
         layout: None,
         name: syn::parse_quote!(target),
         items: 1,
+        key_partition_threshold: 65536,
+        key_partition_cache_threshold: 6 * 1024 * 1024,
         root: node("host", false, false, vec![]),
     }
 }
@@ -65,6 +632,8 @@ fn gpu() -> Machine {
         layout: None,
         name: syn::parse_quote!(target),
         items: 4,
+        key_partition_threshold: 65536,
+        key_partition_cache_threshold: 6 * 1024 * 1024,
         root: node(
             "host",
             false,
@@ -124,6 +693,8 @@ fn every_grammar_form_round_trips() {
         quote!(lookup r [] rows l),
         quote!(choose [else => rows r]),
         quote!(tile 2 rows r),
+        quote!(partition_k[a,b](4) rows r),
+        quote!(partition_k[](4) rows r),
     ] {
         let term: Term = syn::parse2(term).unwrap();
         assert_eq!(syn::parse2::<Term>(term.to_token_stream()).unwrap(), term);
@@ -133,8 +704,21 @@ fn every_grammar_form_round_trips() {
 #[test]
 fn constructor_names_remain_definition_names_and_references() {
     for spelling in [
-        "rows", "map", "flatten", "compact", "tile", "lookup", "fold", "group", "canon", "store",
-        "union", "choose", "capacity", "output",
+        "rows",
+        "map",
+        "flatten",
+        "compact",
+        "tile",
+        "lookup",
+        "fold",
+        "group",
+        "canon",
+        "store",
+        "union",
+        "choose",
+        "capacity",
+        "output",
+        "partition_k",
     ] {
         let name: syn::Ident = syn::parse_str(spelling).unwrap();
         let sequence: Sequence = syn::parse2(quote! {
@@ -253,8 +837,9 @@ fn bind_rejects_provider_without_requested_key_capability() {
 
 #[test]
 fn bind_records_range_obligations_without_inspecting_type_names() {
-    let p = lookup_program(quote!(a = flatten lookup r [a] tile 8 rows l;));
-    let a = contract::check(&p).unwrap();
+    let mut p = lookup_program(quote!(a = flatten lookup r [a] tile 8 rows l;));
+    grade(&mut p, quote!(a at device.block;));
+    let a = check_grading(&p, &gpu()).unwrap();
     assert_eq!(
         a.capabilities[&("r".into(), vec!["a".into()])],
         Capability::Range
@@ -302,12 +887,44 @@ fn output_requires_final_store_and_bounded_capacity() {
         &program(quote!(a = store rows r; output bounded;)),
         "BE-Length",
     );
-    for protocol in [quote!(count), quote!(reserve), quote!(bounded)] {
+    for protocol in [
+        quote!(count),
+        quote!(reserve),
+        quote!(reserve_previous),
+        quote!(bounded),
+    ] {
         contract::check(&program(
             quote!(a = store capacity 8 rows r; output #protocol;),
         ))
         .unwrap();
     }
+}
+
+#[test]
+fn reserve_previous_round_trips_without_claiming_capacity() {
+    let p = program(quote!(a = store rows r; output reserve_previous;));
+    assert_eq!(p.sequence.output, Some(OutputProtocol::ReservePrevious));
+    assert_eq!(
+        OutputProtocol::ReservePrevious.to_token_stream().to_string(),
+        "reserve_previous"
+    );
+    assert_eq!(syn::parse2::<Program>(p.to_token_stream()).unwrap(), p);
+    let analysis = contract::check(&p).unwrap();
+    assert_eq!(
+        analysis.output,
+        Some(("a".into(), OutputProtocol::ReservePrevious))
+    );
+    reject(
+        &program(quote!(a = rows r; output reserve_previous;)),
+        "BE-Length",
+    );
+    let default = program(quote!(a = store rows r;));
+    assert_eq!(default.sequence.output, None);
+    assert_eq!(analysis.stores, contract::check(&default).unwrap().stores);
+    assert_eq!(
+        contract::check(&default).unwrap().output,
+        Some(("a".into(), OutputProtocol::Count))
+    );
 }
 
 #[test]
@@ -328,6 +945,31 @@ fn choose_rejects_nonexhaustive_and_unequal_alternatives() {
         quote!(a = choose [len r < 3 => tile 2 rows r, len r >= 3 => tile 4 rows r];),
     ))
     .unwrap();
+}
+
+#[test]
+fn worker_guards_roundtrip_and_preserve_support_without_claiming_size() {
+    let source = program(quote!(a = rows r;));
+    let target = program(quote!(a = choose [
+        workers < 2 => tile 1 rows r,
+        len r < 3 => tile 2 rows r,
+        else => tile 4 rows r
+    ];));
+    assert_eq!(target, syn::parse2(target.to_token_stream()).unwrap());
+    check_rewrite(&source, &target).unwrap();
+    let facts = contract::check(&target).unwrap();
+    assert_eq!(
+        facts.lengths["a"],
+        contract::check(&source).unwrap().lengths["a"]
+    );
+    for body in [
+        quote!(a = choose [workers < 0 => rows r, else => rows r];),
+        quote!(a = choose [workers < 2 => rows r];),
+        quote!(a = choose [workers < 2 => rows r, else => fold count rows r];),
+        quote!(a = choose [else => rows r, workers < 2 => rows r];),
+    ] {
+        reject(&program(body), "BE-Choose");
+    }
 }
 
 #[test]
@@ -408,6 +1050,20 @@ fn collectives_obey_machine_labels_not_machine_names() {
     let mut collaborative = gpu();
     collaborative.root.children[0].collaborative = true;
     check_grading(&p, &collaborative).unwrap();
+}
+
+#[test]
+fn worker_guards_are_uniform_for_collective_participation() {
+    let mut p = program(quote!(
+        a = store rows r;
+        b = choose [workers < 2 => fold count a, else => fold count a];
+    ));
+    grade(&mut p, quote!(a at host; b at device;));
+    let mut collaborative = gpu();
+    collaborative.root.children[0].collaborative = true;
+    let facts = check_grading(&p, &collaborative).unwrap();
+    assert_eq!(facts.lengths["b"], Len::Lit(1));
+    assert_eq!(facts.collectives.len(), 2);
 }
 
 #[test]
@@ -573,6 +1229,8 @@ fn leaf_flatten_is_sequential_but_parent_fold_needs_collaboration() {
         layout: None,
         name: syn::parse_quote!(target),
         items: 1,
+        key_partition_threshold: 65536,
+        key_partition_cache_threshold: 6 * 1024 * 1024,
         root: node(
             "host",
             false,
@@ -645,7 +1303,7 @@ fn host_retained_probe_stores_rows_without_requiring_range_offsets() {
 }
 
 #[test]
-fn row_stores_need_exact_and_segmented_or_distributed_reads_need_range() {
+fn row_stores_need_exact_and_collective_or_distributed_reads_need_range() {
     let streaming = lookup_program(quote!(a = flatten lookup r [a] rows l;));
     let key = ("r".into(), vec!["a".into()]);
     assert_eq!(
@@ -665,7 +1323,7 @@ fn row_stores_need_exact_and_segmented_or_distributed_reads_need_range() {
     let segmented = lookup_program(quote!(a = flatten lookup r [a] tile 8 rows l;));
     assert_eq!(
         contract::check(&segmented).unwrap().capabilities[&key],
-        Capability::Range
+        Capability::Exact
     );
     let mut distributed = lookup_program(quote!(a = store tile 8 flatten lookup r [a] rows l;));
     grade(&mut distributed, quote!(a at device;));
@@ -1002,17 +1660,29 @@ fn grouped_fold_records_result_cardinality_and_store_owner() {
 }
 
 #[test]
-fn grouped_fold_requires_complete_distinct_flat_valuations() {
+fn grouped_fold_requires_complete_globally_distinct_valuations() {
     for body in [
         quote!(r = rows r; groups = group grouped r;),
         quote!(r = canon rows r; groups = map grouped r;),
         quote!(r = canon rows r; groups = group r r;),
-        quote!(r = canon rows r; groups = group grouped tile 2 r;),
+        quote!(r = rows r; groups = group grouped tile 2 r;),
+        quote!(r = rows r; groups = group grouped canon tile 2 r;),
         quote!(r = canon rows r; groups = group grouped fold count r;),
         quote!(r = flatten canon tile 2 rows r; groups = group grouped r;),
     ] {
         reject(&grouped_program(quote!(k), body), "BE-Group");
     }
+    // Global canonicalization establishes uniqueness across the contiguous
+    // parts; this is now a legal keyed partial fold with a flat merged result.
+    let accepted = grouped_program(
+        quote!(k),
+        quote!(
+            r = canon rows r; groups = group grouped tile 2 r;
+        ),
+    );
+    let facts = contract::check(&accepted).unwrap();
+    assert_eq!(facts.partial_groups["groups"], [true]);
+    assert_eq!(facts.shapes["groups"].len(), 1);
 }
 
 #[test]
@@ -1086,6 +1756,13 @@ fn shared_checker_retains_source_analysis_across_candidate_exploration() {
     assert_eq!(
         reserved.output,
         Some(("out".into(), OutputProtocol::Reserve))
+    );
+    output.sequence.output = Some(OutputProtocol::ReservePrevious);
+    let previous = checker.check_shared(&output).unwrap();
+    assert!(!std::rc::Rc::ptr_eq(&reserved, &previous));
+    assert_eq!(
+        previous.output,
+        Some(("out".into(), OutputProtocol::ReservePrevious))
     );
     output.sequence.output = Some(OutputProtocol::Bounded);
     assert!(checker.check_shared(&output).is_err());
@@ -1187,4 +1864,424 @@ fn shared_choices_reuse_provider_obligations_without_repeating_reads() {
         matches!(obligation, Obligation::Provider { provider, .. } if provider == "r")
     ).count(), 1);
     assert!(facts.obligations.len() <= 5, "{:?}", facts.obligations);
+}
+
+fn key_pool() -> Machine {
+    let mut pool = node(
+        "pool",
+        false,
+        true,
+        vec![node("task", false, false, vec![])],
+    );
+    pool.width = Some(4);
+    Machine {
+        key_partition_threshold: 65536,
+        root: node("host", false, false, vec![pool]),
+        ..sequential()
+    }
+}
+
+#[test]
+fn key_partition_roundtrip_canon_and_group_laws() {
+    let source = grouped_program(
+        quote!(k),
+        quote!(
+            input = store rows r;
+            out = store group grouped canon input;
+        ),
+    );
+    let mut target = grouped_program(
+        quote!(k),
+        quote!(
+            input = store rows r;
+            out = store flatten group grouped canon partition_k[k](4) input;
+        ),
+    );
+    let printed = target.to_token_stream();
+    assert_eq!(target, syn::parse2::<Program>(printed).unwrap());
+    contract::check_rewrite(&source, &target).unwrap();
+    grade(&mut target, quote!(input at host; out at pool;));
+    let facts = check_grading(&target, &key_pool()).unwrap();
+    assert_eq!(facts.shapes["out"].len(), 1);
+
+    let source = program(quote!(input = store rows r; out = store canon input;));
+    let mut target = program(quote!(
+        input = store rows r;
+        out = store flatten canon partition_k[a](4) input;
+    ));
+    contract::check_rewrite(&source, &target).unwrap();
+    grade(&mut target, quote!(input at host; out at pool;));
+    check_grading(&target, &key_pool()).unwrap();
+}
+
+#[test]
+fn key_partition_rejects_missing_ancestor_store_and_invalid_width() {
+    reject(
+        &program(quote!(out = partition_k[a](4) rows r;)),
+        "BE-KeyPart",
+    );
+    reject(
+        &program(quote!(input = rows r; out = partition_k[a](4) input;)),
+        "BE-KeyPart",
+    );
+    reject(
+        &program(quote!(input = store rows r; out = partition_k[a](0) input;)),
+        "BE-KeyPart",
+    );
+    let mut p = program(quote!(input = store rows r; out = partition_k[a](4) input;));
+    grade(&mut p, quote!(input at pool; out at pool;));
+    reject_grade(&p, &key_pool(), "BE-KeyPart");
+    grade(&mut p, quote!(input at host; out at host;));
+    reject_grade(&p, &key_pool(), "BE-KeyPart");
+    grade(&mut p, quote!(input at host; out at pool;));
+    let mut machine = key_pool();
+    machine.root.children[0].width = Some(8);
+    reject_grade(&p, &machine, "BE-KeyPart");
+}
+
+#[test]
+fn runtime_provider_cover_keeps_routing_and_grades_both_branches() {
+    let mut p = lookup_program(quote!(
+        input = store rows r;
+        provider = store choose [
+            len input < 65536 => partition_k[a](1) input,
+            else => partition_k[a](4) input
+        ];
+        out = flatten lookup r[a] rows l;
+    ));
+    grade(
+        &mut p,
+        quote!(input at host; provider at pool; out at host;),
+    );
+    let facts = check_grading(&p, &key_pool()).unwrap();
+    assert_eq!(facts.shapes["provider"][0], Len::Unknown(None));
+    assert_eq!(p, syn::parse2(p.to_token_stream()).unwrap());
+
+    let mut wrong_width = key_pool();
+    wrong_width.root.children[0].width = Some(8);
+    reject_grade(&p, &wrong_width, "BE-KeyPart");
+    grade(
+        &mut p,
+        quote!(input at pool; provider at pool; out at host;),
+    );
+    reject_grade(&p, &key_pool(), "BE-KeyPart");
+}
+
+#[test]
+fn key_partition_rejects_undetermined_valuation_group_and_lookup_keys() {
+    reject(
+        &program(quote!(
+            input = store rows r;
+            out = canon partition_k[missing](4) input;
+        )),
+        "BE-KeyPart",
+    );
+    reject(
+        &grouped_program(
+            quote!(k),
+            quote!(
+                input = store rows r;
+                out = flatten group grouped canon partition_k[value](4) input;
+            ),
+        ),
+        "BE-KeyPartGroup",
+    );
+    reject(
+        &lookup_program(quote!(
+            input = store rows r;
+            provider = store partition_k[b](4) input;
+            out = flatten lookup r[a] rows l;
+        )),
+        "BE-KeyPartProvider",
+    );
+    contract::check(&lookup_program(quote!(
+        input = store rows r;
+        provider = store partition_k[](4) input;
+        out = flatten lookup r[a] rows l;
+    )))
+    .unwrap();
+    contract::check(&lookup_program(quote!(
+        input = store rows r;
+        provider = store partition_k[a](4) input;
+        out = flatten lookup r[a] rows l;
+    )))
+    .unwrap();
+}
+
+#[test]
+fn key_partition_does_not_authorize_a_collective_at_separated_pool() {
+    let mut p = program(quote!(
+        input = store rows r;
+        out = fold count partition_k[a](4) input;
+    ));
+    grade(&mut p, quote!(input at host; out at pool;));
+    reject_grade(&p, &key_pool(), "BE-Collective");
+}
+
+#[test]
+fn key_partition_canon_rejects_projection_losing_the_routing_key() {
+    let p: Program = syn::parse_quote! {
+        physical {
+            relation R(a:i32, b:i32);
+            r = pipe rename R@0 {a -> a, b -> b};
+            projected = pipe canon project r keep {a};
+            return projected as answer(a);
+        }
+        structures { r host scan = Reader []; projected canon = Canon; }
+        sequence {
+            input = store rows r;
+            out = flatten canon map projected partition_k[b](4) input;
+        }
+    };
+    reject(&p, "BE-KeyPartCanon");
+}
+
+#[test]
+fn key_partition_does_not_promote_subtile_canon_to_complete_valuations() {
+    reject(
+        &grouped_program(
+            quote!(k),
+            quote!(
+                input = store rows r;
+                out = flatten group grouped flatten canon tile 2 partition_k[k](4) input;
+            ),
+        ),
+        "BE-Group",
+    );
+}
+
+#[test]
+fn key_partition_provider_accepts_projected_and_reordered_lookup_keys() {
+    for routing in [quote!(b), quote!(b, a)] {
+        let p: Program = syn::parse2(quote! {
+            physical {
+                relation L(a:i32,b:i32); relation R(a:i32,b:i32,c:i32);
+                l = pipe rename L@0 {a -> a,b -> b};
+                r = let rename R@1 {a -> a,b -> b,c -> c};
+                j = pipe canon probe first [a,b] l,r;
+                return j as answer(a,b,c);
+            }
+            structures {
+                l host scan = Reader []; r host scan = Reader [];
+                r = Provider [a,b]; j canon = Canon;
+            }
+            sequence {
+                input = store rows r;
+                provider = store partition_k[#routing](4) input;
+                out = flatten lookup r[a,b] rows l;
+            }
+        })
+        .unwrap();
+        contract::check(&p).unwrap();
+    }
+}
+
+#[test]
+fn global_partial_group_accepts_key_canon_or_globally_unique_tiles() {
+    let mut routed = grouped_program(
+        quote!(),
+        quote!(
+            input = store rows r;
+            out = store group grouped canon partition_k[k,witness,value](4) input;
+        ),
+    );
+    grade(&mut routed, quote!(input at host; out at pool;));
+    let facts = check_grading(&routed, &key_pool()).unwrap();
+    assert_eq!(facts.shapes["out"], vec![Len::Lit(1)]);
+    let source = grouped_program(
+        quote!(),
+        quote!(
+            input = store rows r;
+            out = store group grouped canon input;
+        ),
+    );
+    contract::check_rewrite(&source, &routed).unwrap();
+
+    let mut tiled = grouped_program(
+        quote!(),
+        quote!(
+            input = store rows r;
+            out = store group grouped tile 4 input;
+        ),
+    );
+    tiled.evidence = syn::parse_quote!(evidence { R(witness) key; });
+    grade(&mut tiled, quote!(input at host; out at pool;));
+    let facts = check_grading(&tiled, &key_pool()).unwrap();
+    assert_eq!(facts.shapes["out"], vec![Len::Lit(1)]);
+}
+
+#[test]
+fn keyed_partial_groups_merge_globally_unique_contiguous_parts() {
+    let mut tiled = grouped_program(
+        quote!(k),
+        quote!(
+            input = store rows r;
+            out = store group grouped tile 4 input;
+        ),
+    );
+    tiled.evidence = syn::parse_quote!(evidence { R(witness) key; });
+    grade(&mut tiled, quote!(input at host; out at pool;));
+    let facts = check_grading(&tiled, &key_pool()).unwrap();
+    assert_eq!(facts.shapes["out"], vec![Len::Scan("out".into())]);
+    assert_eq!(facts.partial_groups["out"], [true]);
+    let mut source = grouped_program(
+        quote!(k),
+        quote!(
+            input = store rows r;
+            out = store group grouped input;
+        ),
+    );
+    source.evidence = tiled.evidence.clone();
+    contract::check_rewrite(&source, &tiled).unwrap();
+
+    // Empty keyed input yields no groups, unlike the unkeyed identity row.
+    tiled.evidence = syn::parse_quote!(evidence { R(witness) key; count R = 0; });
+    assert_ne!(
+        check_grading(&tiled, &key_pool()).unwrap().lengths["out"],
+        Len::Lit(1)
+    );
+    for input in [quote!(tile 4 input), quote!(canon tile 4 input)] {
+        reject(
+            &grouped_program(
+                quote!(k),
+                quote!(
+                    input = store rows r;
+                    out = store group grouped #input;
+                ),
+            ),
+            "BE-GroupPartial",
+        );
+    }
+    // Key routing still represents independent groups, not host map merging.
+    let routed = grouped_program(
+        quote!(k),
+        quote!(
+            input = store rows r;
+            out = store group grouped canon partition_k[k](4) input;
+        ),
+    );
+    assert_eq!(contract::check(&routed).unwrap().shapes["out"].len(), 2);
+    assert_eq!(
+        contract::check(&routed).unwrap().partial_groups["out"],
+        [false]
+    );
+}
+
+#[test]
+fn partial_group_metadata_uses_constructor_preorder_and_definition_ownership() {
+    let mut p: Program = syn::parse_quote! {
+        physical {
+            relation R(k:i32, witness:i64, value:i64);
+            r = pipe canon rename R@0 {k -> k, witness -> witness, value -> value};
+            by_key = pipe canon group r by [k] { subtotal:i64 = sum(value); };
+            all_rows = pipe group by_key by [] { grand_total:i64 = sum(subtotal); };
+            return all_rows as answer(grand_total);
+        }
+        structures { r host scan = Reader []; r canon = Canon; by_key canon = Canon; }
+        sequence {
+            input = store rows r;
+            output_rows = store group all_rows group by_key tile 4 input;
+        }
+        evidence { key R [witness]; }
+    };
+    assert_eq!(
+        contract::check(&p).unwrap().partial_groups["output_rows"],
+        [false, true]
+    );
+    p.sequence.definitions[1].term = syn::parse_quote!(store group all_rows choose [
+        len input < 1 => group by_key tile 4 input,
+        else => group by_key input
+    ]);
+    p.sequence
+        .definitions
+        .push(syn::parse_quote!(alias = output_rows;));
+    let facts = contract::check(&p).unwrap();
+    assert_eq!(facts.partial_groups["output_rows"], [false, true, false]);
+    assert!(!facts.partial_groups.contains_key("input"));
+    assert!(!facts.partial_groups.contains_key("alias"));
+    grade(
+        &mut p,
+        quote!(input at host; output_rows at host; alias at host;),
+    );
+    let graded = check_grading(&p, &sequential()).unwrap();
+    assert_eq!(graded.partial_groups, facts.partial_groups);
+}
+
+#[test]
+fn global_partial_group_rejects_nonunique_tiles_even_with_local_canon() {
+    for input in [
+        quote!(tile 4 input),
+        quote!(canon tile 4 input),
+        quote!(partition_k[k](4) input),
+    ] {
+        reject(
+            &grouped_program(
+                quote!(),
+                quote!(
+                    input = store rows r;
+                    out = store group grouped #input;
+                ),
+            ),
+            "BE-GroupPartial",
+        );
+    }
+    // Canonicalizing globally before contiguous tiling is also sound.
+    contract::check(&grouped_program(
+        quote!(),
+        quote!(
+            input = store canon rows r;
+            out = store group grouped tile 4 input;
+        ),
+    ))
+    .unwrap();
+}
+
+#[test]
+fn storage_type_rewrites_preserve_adapters_and_key_layouts() {
+    let source = lookup_program(quote!(
+        input = store rows r; out = store canon flatten lookup r[a] rows l;
+    ));
+    let mut target = source.clone();
+    for entry in &mut target.structures.structures.entries {
+        match &mut entry.structure {
+            structures::Structure::Built { keyed, .. } => {
+                keyed.ty = syn::parse_quote!(NativeProvider)
+            }
+            structures::Structure::Dedup { ty, .. } => *ty = syn::parse_quote!(NativeCanon),
+            _ => {}
+        }
+    }
+    contract::check_rewrite(&source, &target).unwrap();
+    for entry in &mut target.structures.structures.entries {
+        if let structures::Structure::Host { keyed, .. } = &mut entry.structure {
+            keyed.ty = syn::parse_quote!(DifferentReader);
+        }
+    }
+    assert!(contract::check_rewrite(&source, &target).is_err());
+}
+
+#[test]
+fn task_local_nested_lookup_flatten_requires_only_exact_provider_access() {
+    let mut p = lookup_program(quote!(
+        source = store rows r;
+        provider = store partition_k[a](4) source;
+        input = store rows l;
+        out = store flatten flatten lookup r[a] tile 4 input;
+    ));
+    grade(
+        &mut p,
+        quote!(
+            source at host; provider at pool; input at host; out at pool;
+        ),
+    );
+    let key = ("r".into(), vec!["a".into()]);
+    let facts = check_grading(&p, &key_pool()).unwrap();
+    assert_eq!(facts.capabilities[&key], Capability::Exact);
+    assert!(facts.obligations.iter().all(|obligation| !matches!(
+        obligation,
+        Obligation::Provider {
+            capability: Capability::Range,
+            ..
+        }
+    )));
 }

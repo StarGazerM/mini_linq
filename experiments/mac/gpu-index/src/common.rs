@@ -19,9 +19,9 @@ impl Gpu {
     pub fn new() -> Self {
         let device = Device::system_default().expect("Metal device required");
         let source = [
-            include_str!("../../../../../mccl/native/index/common.metal"),
-            include_str!("../../../../../mccl/native/index/sort.metal"),
-            include_str!("../../../../../mccl/native/index/maintain.metal"),
+            include_str!("../../mccl/native/index/common.metal"),
+            include_str!("../../mccl/native/index/sort.metal"),
+            include_str!("../../mccl/native/index/maintain.metal"),
         ]
         .join("\n");
         let library = device

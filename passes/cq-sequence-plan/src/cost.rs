@@ -1,16 +1,24 @@
 //! Symbolic evaluated-position work and dependency-chain span.
 //!
-//! Tiles, references and publication are not extra row evaluations. Stores and
-//! dispatches are separate tie breakers. Span follows data dependencies (a join
-//! of independent branches takes their maximum), not definition order. A tile
+//! Tiles and references are not extra row evaluations. Owned row publication
+//! pays span; provider insertion also pays work. Borrows and aliases are free.
+//! Store/dispatch counts remain tie breakers. Span follows data dependencies:
+//! independent branches join at their maximum, not definition order. A tile
 //! only creates parallel parts when grading records `Distribute`; strip widths
 //! and per-lane item counts never manufacture additional processors.
+//! Retained provider routing pays a routing pass and P bucket publications;
+//! unknown lengths cannot prove that this setup is amortized. Streamed
+//! collectives instead use amortized routing bandwidth when counts are unknown:
+//! routing plus consumption halves their effective lanes. Known counts retain
+//! the explicit setup cost, including for empty and singleton collectives.
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt;
 
 use cq_lang_sequence::structures::physical::Operator;
-use cq_lang_sequence::{Analysis, Len, LevelNode, Machine, OutputProtocol, Program, Term, Tiling};
+use cq_lang_sequence::{
+    Analysis, Len, LevelNode, Machine, OutputProtocol, Program, Publication, Term, Tiling,
+};
 use cq_syntax::symbol_name;
 
 /// A conservative symbolic cost. Incomparable costs retain candidate order.
@@ -18,13 +26,16 @@ use cq_syntax::symbol_name;
 pub struct Cost {
     work: Sum,
     span: Sum,
+    /// Retained row traffic, separate from row-expression dependency span.
+    copies: Sum,
     /// Shrinking lookups evaluated after an upstream Expand in the same pipeline.
     pub lookup_after_expand: usize,
     pub stores: usize,
     pub dispatches: usize,
 }
 
-/// Check the grading and derive its cost, without supplying input cardinalities.
+/// Check grading and derive cost from authored count estimates where available;
+/// absent input counts remain symbolic. Estimates guide schedules, not semantics.
 pub fn cost(program: &Program, machine: &Machine) -> syn::Result<Cost> {
     let analysis = cq_lang_sequence::check_grading(program, machine)?;
     Cost::from_analysis(program, machine, &analysis)
@@ -40,8 +51,17 @@ impl Cost {
             program,
             analysis,
             facts: BTreeMap::new(),
+            scheduler_parts: machine
+                .root
+                .children
+                .iter()
+                .find(|level| !level.collaborative && !level.children.is_empty())
+                .and_then(|level| level.width)
+                .unwrap_or(1)
+                .max(1),
         };
         let mut work = Sum::default();
+        let mut copies = Sum::default();
         let mut ends = Vec::new();
         let mut stores = 0usize;
         let mut lookup_after_expand = 0usize;
@@ -59,6 +79,28 @@ impl Cost {
             }
             let mut tile = 0;
             let mut fact = evaluator.term(&definition.term, &name, level, &mut tile)?;
+            let copies_rows = match analysis.publications.get(&name) {
+                Some(
+                    Publication::OwnRows { staged: true }
+                    | Publication::DeferredRows { .. }
+                    | Publication::Parts { .. },
+                ) => true,
+                Some(Publication::OwnRows { staged: false }) => {
+                    analysis.structures.retained.contains_key(&fact.result)
+                        || analysis
+                            .structures
+                            .physical
+                            .modes
+                            .get(&fact.result)
+                            .is_none_or(|mode| {
+                                *mode == cq_lang_sequence::structures::physical::ModeKind::Pipe
+                            })
+                }
+                _ => false,
+            };
+            if copies_rows {
+                copies.add(&Sum::positions(&fact.size)?)?;
+            }
             if let Some(result) = analysis.results.get(&name) {
                 fact.result.clone_from(result);
             }
@@ -99,6 +141,7 @@ impl Cost {
         Ok(Self {
             work,
             span: Sum::maximum(ends),
+            copies,
             lookup_after_expand,
             stores,
             dispatches: analysis.dispatches.len(),
@@ -120,14 +163,17 @@ impl Cost {
 }
 
 impl PartialOrd for Cost {
-    // Formal rule PL-Cost: Compare work, Lookup-before-Expand, dependency span, stores, then dispatches; unresolved work comparisons retain enumeration order.
+    // Formal rule PL-Cost: Compare work, Lookup-before-Expand, dependency span, retained-row traffic, stores, then dispatches; unresolved comparisons retain enumeration order.
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.work.compare(&other.work)? {
             Ordering::Equal => match self.lookup_after_expand.cmp(&other.lookup_after_expand) {
                 Ordering::Equal => match self.span.compare(&other.span)? {
-                    Ordering::Equal => {
-                        Some((self.stores, self.dispatches).cmp(&(other.stores, other.dispatches)))
-                    }
+                    Ordering::Equal => match self.copies.compare(&other.copies)? {
+                        Ordering::Equal => Some(
+                            (self.stores, self.dispatches).cmp(&(other.stores, other.dispatches)),
+                        ),
+                        ordering => Some(ordering),
+                    },
                     ordering => Some(ordering),
                 },
                 ordering => Some(ordering),
@@ -141,8 +187,13 @@ impl fmt::Display for Cost {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "(work={}, lookup_after_expand={}, span={}, stores={}, dispatches={})",
-            self.work, self.lookup_after_expand, self.span, self.stores, self.dispatches
+            "(work={}, lookup_after_expand={}, span={}, copies={}, stores={}, dispatches={})",
+            self.work,
+            self.lookup_after_expand,
+            self.span,
+            self.copies,
+            self.stores,
+            self.dispatches
         )
     }
 }
@@ -188,7 +239,8 @@ enum Atom {
     /// `part` is the largest actual part, not an average bucket cardinality.
     /// Ordinary depth is ceil(part/lanes). For nonempty inputs scan depth is
     /// ceil(part/lanes) + ceil(log2(min(part,lanes))); empty inputs have depth
-    /// zero. Thus one lane is serial and a whole-width scan is logarithmic.
+    /// zero. One effective lane instead normalizes to all input positions,
+    /// since it must process every part; a whole-width scan is logarithmic.
     Depth {
         size: Size,
         partition: Option<Partition>,
@@ -380,6 +432,7 @@ fn atom_leq(left: &Atom, right: &Atom, budget: &mut usize) -> bool {
 enum Layer {
     Tile { parents: Size },
     Bucket { parents: Size },
+    KeyPart { parts: usize, lanes: usize },
 }
 
 #[derive(Clone)]
@@ -398,13 +451,38 @@ struct Fact {
 impl Fact {
     fn evaluate(&mut self, size: &Size, level: &LevelNode, scan: bool) -> syn::Result<()> {
         self.work.add(&Sum::positions(size)?)?;
-        let lanes = level.width.unwrap_or(1).max(1);
-        let depth = if lanes == 1 && self.partition.is_none() {
+        self.advance(size, level, scan)
+    }
+
+    /// Advance the dependency chain without inventing row-expression work for
+    /// organizational operations such as routing and publication.
+    fn advance(&mut self, size: &Size, level: &LevelNode, scan: bool) -> syn::Result<()> {
+        let lanes = self
+            .layers
+            .iter()
+            .rev()
+            .find_map(|layer| match layer {
+                Layer::KeyPart { lanes, .. } => Some(*lanes),
+                _ => None,
+            })
+            .unwrap_or_else(|| level.width.unwrap_or(1))
+            .max(1);
+        self.advance_with_lanes(size, lanes, scan)
+    }
+
+    fn advance_with_lanes(&mut self, size: &Size, lanes: usize, scan: bool) -> syn::Result<()> {
+        // A one-part covering view contains the entire input, not a smaller
+        // maximum bucket. Normalize the identity before symbolic comparison.
+        let partition = self
+            .partition
+            .as_ref()
+            .filter(|partition| partition.rows != 1);
+        let depth = if lanes == 1 {
             Sum::positions(size)?
         } else if matches!(size, Size::Constant(0)) {
             Sum::default()
         } else if let Size::Constant(n) = size
-            && self.partition.is_none()
+            && partition.is_none()
         {
             let lanes = lanes as u128;
             let waves = n / lanes + u128::from(n % lanes != 0);
@@ -421,7 +499,7 @@ impl Fact {
             Sum::atom(
                 Atom::Depth {
                     size: size.clone(),
-                    partition: self.partition.clone(),
+                    partition: partition.cloned(),
                     lanes,
                     scan,
                 },
@@ -437,9 +515,37 @@ struct Evaluator<'a> {
     program: &'a Program,
     analysis: &'a Analysis,
     facts: BTreeMap<String, Fact>,
+    scheduler_parts: usize,
 }
 
 impl Evaluator<'_> {
+    fn input_size(&self, name: &str) -> Size {
+        if let Some(rows) = self.program.evidence.count(name) {
+            return Size::Constant(rows as u128);
+        }
+        if let Some(definition) = self
+            .program
+            .structures
+            .physical
+            .program
+            .definitions
+            .iter()
+            .find(|definition| symbol_name(&definition.name) == name)
+        {
+            match &definition.operator {
+                Operator::Unit(_) => return Size::Constant(1),
+                Operator::Rename(rename) => {
+                    if let Some(rows) = self.program.evidence.count(&symbol_name(&rename.relation))
+                    {
+                        return Size::Constant(rows as u128);
+                    }
+                }
+                _ => {}
+            }
+        }
+        Size::Input(name.into())
+    }
+
     fn term(
         &self,
         term: &Term,
@@ -450,21 +556,7 @@ impl Evaluator<'_> {
         match term {
             Term::Rows(name) => {
                 let result = symbol_name(name);
-                let size = if self
-                    .program
-                    .structures
-                    .physical
-                    .program
-                    .definitions
-                    .iter()
-                    .any(|definition| {
-                        symbol_name(&definition.name) == result
-                            && matches!(definition.operator, Operator::Unit(_))
-                    }) {
-                    Size::Constant(1)
-                } else {
-                    Size::Input(result.clone())
-                };
+                let size = self.input_size(&result);
                 let mut fact = Fact {
                     size: size.clone(),
                     result,
@@ -499,6 +591,32 @@ impl Evaluator<'_> {
                     level
                 };
                 let mut fact = self.term(inner, owner, producer, tile)?;
+                let publication = self.analysis.publications.get(owner).filter(|_| {
+                    self.program.sequence.definitions.iter().any(|definition| {
+                        symbol_name(&definition.name) == owner
+                            && std::ptr::eq(&definition.term, term)
+                    })
+                });
+                if !matches!(
+                    publication,
+                    Some(
+                        Publication::BorrowHost { .. }
+                            | Publication::Alias { .. }
+                            | Publication::OwnRows { staged: true }
+                            | Publication::DeferredRows { .. }
+                    )
+                ) && self
+                    .analysis
+                    .structures
+                    .built
+                    .get(&fact.result)
+                    .is_some_and(|providers| !providers.is_empty())
+                {
+                    // Provider insertion evaluates rows; copying their carrier
+                    // is separately accounted as retained publication traffic.
+                    let size = fact.size.clone();
+                    fact.evaluate(&size, producer, false)?;
+                }
                 // A collaborative scratch store does not close the enclosing
                 // dispatch's partition; separated publication does.
                 if separated {
@@ -524,6 +642,50 @@ impl Evaluator<'_> {
                 fact.layers.push(Layer::Tile {
                     parents: Size::CeilDiv(Box::new(fact.size.clone()), *n),
                 });
+                Ok(fact)
+            }
+            Term::PartitionK { parts, inner, .. } => {
+                let mut fact = self.term(inner, owner, level, tile)?;
+                // Routing schedules the complete flat publication anew. An
+                // ancestor's contiguous tiles cannot reduce the total volume
+                // processed by this pool's effective lanes a second time.
+                fact.partition = None;
+                if *parts == 1 {
+                    // The singleton cover is an identity view: native provider
+                    // Build has no hashing, routing pass, or bucket publication.
+                    fact.layers.push(Layer::KeyPart { parts: 1, lanes: 1 });
+                    return Ok(fact);
+                }
+                let size = fact.size.clone();
+                let collective = self
+                    .program
+                    .sequence
+                    .definitions
+                    .iter()
+                    .find(|definition| symbol_name(&definition.name) == owner)
+                    .is_some_and(|definition| streamed_collective(&definition.term));
+                if collective && !matches!(size, Size::Constant(_)) {
+                    // A streamed collective consumes every routed row. Charge
+                    // its routing pass in amortized bandwidth, rather than
+                    // requiring a literal row count to exploit any parallelism.
+                    // Retained providers cannot use this estimate: their build
+                    // may be tiny compared with the stream probing them.
+                    fact.layers.push(Layer::KeyPart {
+                        parts: *parts,
+                        lanes: (*parts / 2).max(1),
+                    });
+                } else {
+                    // Known inputs and retained providers pay the complete
+                    // routing pass plus every bucket publication, even empty.
+                    fact.layers.push(Layer::KeyPart {
+                        parts: *parts,
+                        lanes: *parts,
+                    });
+                    fact.advance(&size, level, false)?;
+                    let setup = Sum::atom(Atom::One, *parts as u128);
+                    fact.span.add(&setup)?;
+                    fact.local_span.add(&setup)?;
+                }
                 Ok(fact)
             }
             Term::Lookup {
@@ -631,14 +793,105 @@ impl Evaluator<'_> {
             }
             Term::Group(name, inner) => {
                 let mut fact = self.term(inner, owner, level, tile)?;
+                // A scalar collective consumes the joined stream, not each
+                // previously flattened tile independently. Only an explicit
+                // nesting layer gives it partition-local inputs.
+                if fact.layers.is_empty() {
+                    fact.partition = None;
+                }
+                let global = self
+                    .program
+                    .structures
+                    .physical
+                    .program
+                    .definitions
+                    .iter()
+                    .find(|definition| definition.name == *name)
+                    .is_some_and(|definition| {
+                        matches!(&definition.operator,
+                        Operator::Group(group) if group.keys.is_empty())
+                    });
+                let contiguous = !fact.layers.is_empty()
+                    && fact
+                        .layers
+                        .iter()
+                        .all(|layer| !matches!(layer, Layer::KeyPart { .. }));
+                let partial = !fact.layers.is_empty() && (global || contiguous);
                 let size = fact.size.clone();
-                fact.evaluate(&size, level, true)?;
+                let amortized_merge = partial && global && !matches!(size, Size::Constant(_));
+                if contiguous || amortized_merge {
+                    // One accumulator per scheduler task owns all its logical
+                    // tiles; tile grain does not create additional processors.
+                    // With unknown input size, a scalar host merge follows
+                    // routing's amortized-bandwidth convention: charge it by
+                    // halving fold throughput, rather than dropping its cost.
+                    let lanes = fact
+                        .layers
+                        .iter()
+                        .rev()
+                        .find_map(|layer| match layer {
+                            Layer::KeyPart { lanes, .. } => Some(*lanes),
+                            _ => None,
+                        })
+                        .unwrap_or(self.scheduler_parts);
+                    let lanes = if amortized_merge {
+                        (lanes / 2).max(1)
+                    } else {
+                        lanes
+                    };
+                    fact.partition = None;
+                    fact.work.add(&Sum::positions(&size)?)?;
+                    fact.advance_with_lanes(&size, lanes, true)?;
+                } else {
+                    fact.evaluate(&size, level, true)?;
+                }
                 fact.result = symbol_name(name);
-                fact.size = Size::Scan(format!("group({})", fact.result));
+                let groups = if global {
+                    Size::Constant(1)
+                } else {
+                    self.program
+                        .evidence
+                        .count(&fact.result)
+                        .or_else(|| self.program.evidence.count(owner))
+                        .map(|count| Size::Constant(count as u128))
+                        .unwrap_or_else(|| Size::Scan(format!("group({})", fact.result)))
+                };
+                if partial && !amortized_merge {
+                    // Host merge combines aggregate states, not original row
+                    // expressions. Charge its serial dependency span just as
+                    // routing charges organizational work. Unknown groups stay
+                    // symbolic; no cardinality sample makes this merge free.
+                    let merge = if let Size::Constant(groups) = &groups {
+                        let mut states = groups
+                            .checked_mul(self.scheduler_parts as u128)
+                            .ok_or_else(overflow)?;
+                        if !global && let Size::Constant(rows) = &size {
+                            states = states.min(*rows);
+                        }
+                        Sum::atom(Atom::One, states)
+                    } else {
+                        Sum::atom(
+                            Atom::Positions(groups.clone()),
+                            self.scheduler_parts as u128,
+                        )
+                    };
+                    fact.span.add(&merge)?;
+                    fact.local_span.add(&merge)?;
+                }
+                if global || partial {
+                    fact.layers.clear();
+                    fact.partition = None;
+                }
+                fact.size = groups;
                 Ok(fact)
             }
             Term::Fold(_, inner) | Term::Canon(inner) => {
                 let mut fact = self.term(inner, owner, level, tile)?;
+                if matches!(term, Term::Canon(_)) && fact.layers.is_empty() {
+                    // Contiguous tiles do not establish key disjointness:
+                    // canonicalizing their flattened stream is a global pass.
+                    fact.partition = None;
+                }
                 let size = fact.size.clone();
                 fact.evaluate(&size, level, true)?;
                 fact.size = if matches!(term, Term::Fold(_, _)) {
@@ -647,6 +900,7 @@ impl Evaluator<'_> {
                         Some(Layer::Tile { parents } | Layer::Bucket { parents, .. }) => {
                             parents.clone()
                         }
+                        Some(Layer::KeyPart { parts, .. }) => Size::Constant(*parts as u128),
                     }
                 } else {
                     Size::Scan(format!("canon({})", fact.result))
@@ -706,6 +960,13 @@ impl Evaluator<'_> {
         }
     }
 }
+fn streamed_collective(term: &Term) -> bool {
+    match term {
+        Term::Canon(_) | Term::Group(_, _) => true,
+        Term::Store { inner, .. } | Term::Flatten(inner) => streamed_collective(inner),
+        _ => false,
+    }
+}
 
 fn count_stores(term: &Term) -> syn::Result<usize> {
     match term {
@@ -717,6 +978,7 @@ fn count_stores(term: &Term) -> syn::Result<usize> {
         | Term::Group(_, inner)
         | Term::Canon(inner)
         | Term::Tile { inner, .. }
+        | Term::PartitionK { inner, .. }
         | Term::Lookup { inner, .. } => count_stores(inner),
         Term::Union(arms) => arms.iter().try_fold(0usize, |sum, arm| {
             sum.checked_add(count_stores(arm)?).ok_or_else(overflow)
@@ -799,6 +1061,8 @@ mod tests {
             layout: None,
             name: syn::parse_quote!(target),
             items: 1,
+            key_partition_threshold: 65536,
+            key_partition_cache_threshold: 6 * 1024 * 1024,
             root: LevelNode {
                 shared_bytes: None,
                 name: syn::parse_quote!(host),
@@ -831,6 +1095,7 @@ mod tests {
             program: &source,
             analysis: &analysis,
             facts: BTreeMap::new(),
+            scheduler_parts: 1,
         };
         let level = sequential().root;
         let delayed: Term = syn::parse_quote!(flatten lookup r [a] flatten lookup r [a] rows r);
@@ -860,13 +1125,132 @@ mod tests {
     }
 
     #[test]
+    fn one_lane_span_is_exactly_all_part_work_not_a_maxpart_bound() {
+        for size in [Size::Input("r".into()), Size::Scan("expanded".into())] {
+            for parts in [1, 3, 16] {
+                for scan in [false, true] {
+                    let mut fact = Fact {
+                        size: size.clone(),
+                        result: "r".into(),
+                        layers: Vec::new(),
+                        partition: Some(Partition {
+                            driver: Size::Input("r".into()),
+                            rows: parts,
+                        }),
+                        work: Sum::default(),
+                        span: Sum::default(),
+                        local_span: Sum::default(),
+                        expands: 0,
+                        lookup_after_expand: 0,
+                    };
+                    fact.advance_with_lanes(&size, 1, scan).unwrap();
+                    assert_eq!(fact.span, Sum::positions(&size).unwrap());
+                    assert_eq!(fact.local_span, fact.span);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn real_key_input_copies_pay_retained_traffic_but_aliases_do_not() {
+        let mut alias = program(quote! {
+            source = store canon rows r;
+            source_parts = partition_k[a](4) source;
+            out = store source;
+            result = flatten partition_k[a](4) out;
+        });
+        alias.graded = Some(syn::parse_quote! {
+            graded target {
+                source at host; source_parts at device.block;
+                out at host; result at device.block;
+            }
+        });
+        let mut machine = gpu();
+        machine.root.children[0].width = Some(4);
+        let mut copied = alias.clone();
+        copied.sequence.definitions[2].term = syn::parse_quote!(store flatten tile 8 source);
+        let alias_analysis = cq_lang_sequence::contract::check(&alias).unwrap();
+        let copied_analysis = cq_lang_sequence::contract::check(&copied).unwrap();
+        assert_eq!(
+            alias_analysis.publications["out"],
+            Publication::Alias {
+                source: "source".into()
+            },
+        );
+        assert_eq!(
+            copied_analysis.publications["out"],
+            Publication::OwnRows { staged: true },
+        );
+        let alias = cost(&alias, &machine).unwrap();
+        let copied = cost(&copied, &machine).unwrap();
+        assert_eq!(alias.work, copied.work, "copying is not a row expression");
+        assert_eq!(alias.span, copied.span);
+        assert_eq!(alias.copies.compare(&copied.copies), Some(Ordering::Less));
+        assert!(alias.better_than(&copied));
+    }
+
+    #[test]
+    fn deferred_raw_rows_keep_worst_case_owned_publication_cost() {
+        let program: Program = syn::parse_quote! {
+            physical {
+                relation R(a:i32); relation P(a:i32);
+                r = pipe canon rename R@0 {a -> a};
+                selected = let select r if (a > 0);
+                probe = pipe rename P@1 {a -> a};
+                out = pipe canon probe first [a] probe,selected;
+                return out as answer(a);
+            }
+            structures {
+                r host scan = Reader [];
+                r canon = Canon;
+                selected = ::cq_storage::sharded::Sharded<Provider> [a];
+                probe host scan = Reader [];
+                out canon = Canon;
+            }
+            sequence {
+                input = store compact selected rows r;
+                selected = store choose [
+                    workers < 2 => partition_k[a](1) input,
+                    len input < 8 => partition_k[a](1) input,
+                    else => partition_k[a](4) input
+                ];
+                out = flatten lookup selected [a] rows probe;
+            }
+            graded target {
+                input at host;
+                selected at device;
+                out at device.block;
+            }
+        };
+        let mut machine = gpu();
+        machine.root.children[0].width = Some(4);
+        let mut analysis = cq_lang_sequence::check_grading(&program, &machine).unwrap();
+        assert_eq!(
+            analysis.publications["input"],
+            Publication::DeferredRows {
+                consumer: "selected".into()
+            }
+        );
+        let deferred = Cost::from_analysis(&program, &machine, &analysis).unwrap();
+        analysis
+            .publications
+            .insert("input".into(), Publication::OwnRows { staged: true });
+        let owned = Cost::from_analysis(&program, &machine, &analysis).unwrap();
+        assert_eq!(deferred, owned, "fusion is not a planner cost discount");
+        assert_ne!(deferred.copies, Sum::default());
+    }
+
+    #[test]
     fn aliases_and_partition_views_do_not_add_evaluated_positions() {
         let plain = program(quote!(a = store rows r; output reserve;));
         let aliased = program(quote!(source = rows r; a = store source; output reserve;));
         let tiled = program(quote!(a = store flatten tile 8 rows r; output reserve;));
         let expected = cost(&plain, &sequential()).unwrap();
         assert_eq!(cost(&aliased, &sequential()).unwrap(), expected);
-        assert_eq!(cost(&tiled, &sequential()).unwrap(), expected);
+        let tiled = cost(&tiled, &sequential()).unwrap();
+        assert_eq!(tiled.work, expected.work);
+        assert_eq!(expected.span, tiled.span);
+        assert_eq!(expected.copies.compare(&tiled.copies), Some(Ordering::Less));
     }
 
     #[test]
@@ -876,6 +1260,10 @@ mod tests {
         let mut expected = Sum::positions(&Size::Input("r".into())).unwrap();
         expected.add(&expected.clone()).unwrap();
         assert_eq!(evaluated.work, expected);
+        assert_eq!(
+            evaluated.copies,
+            Sum::positions(&Size::Constant(1)).unwrap()
+        );
         assert_eq!(evaluated.span, expected);
     }
 
@@ -1029,7 +1417,7 @@ mod tests {
     }
 
     #[test]
-    fn extra_strip_store_without_span_improvement_loses_the_tie() {
+    fn unnamed_strip_store_uses_the_store_tiebreaker() {
         let plain = join(quote!(store canon flatten flatten lookup r [a] tile 8 left));
         let segmented = join(quote!(
             store canon flatten flatten tile 32 items 4
@@ -1038,7 +1426,7 @@ mod tests {
         let plain = cost(&plain, &gpu()).unwrap();
         let segmented = cost(&segmented, &gpu()).unwrap();
         assert_eq!(plain.work, segmented.work);
-        assert_eq!(plain.span, segmented.span);
+        assert_eq!(plain.span.compare(&segmented.span), Some(Ordering::Equal));
         assert!(plain.better_than(&segmented));
     }
 
@@ -1072,6 +1460,7 @@ mod tests {
         let a = Cost {
             work: a,
             span: Sum::default(),
+            copies: Sum::default(),
             lookup_after_expand: 0,
             stores: 0,
             dispatches: 0,
@@ -1079,6 +1468,7 @@ mod tests {
         let b = Cost {
             work: b,
             span: Sum::default(),
+            copies: Sum::default(),
             lookup_after_expand: 0,
             stores: 0,
             dispatches: 0,
@@ -1124,6 +1514,7 @@ mod tests {
         let base = Cost {
             work: Sum::default(),
             span: Sum::default(),
+            copies: Sum::default(),
             lookup_after_expand: 0,
             stores: 1,
             dispatches: 1,
@@ -1134,6 +1525,10 @@ mod tests {
         later = base.clone();
         later.stores += 1;
         later.dispatches = 0;
+        assert!(base.better_than(&later));
+        later = base.clone();
+        later.copies = Sum::atom(Atom::One, 1);
+        later.stores = 0;
         assert!(base.better_than(&later));
         later = base.clone();
         later.span = Sum::atom(Atom::One, 1);

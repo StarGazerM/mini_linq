@@ -15,6 +15,10 @@ quote.workspace = true
 syn.workspace = true
 
 [dev-dependencies]
+cq-datalog.workspace = true
+cq-storage.workspace = true
+cq-datalog-testkit = { path = "../testkit" }
+cq-datalog-test-passes = { path = "../test-passes" }
 cq-datalog-fork.workspace = true
 cq-datalog-storage.workspace = true
 cq-datalog-stratify.workspace = true

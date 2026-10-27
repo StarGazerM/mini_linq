@@ -33,6 +33,8 @@ struct Checker<'a> {
     nodes: Vec<Node<'a>>,
     collectives: Vec<(String, Monoid, Vec<String>)>,
     lengths: &'a BTreeMap<String, Len>,
+    partial_groups: &'a BTreeMap<String, Vec<bool>>,
+    group_cursors: Vec<usize>,
     results: &'a BTreeMap<String, String>,
     tilings: BTreeMap<String, Vec<crate::Tiling>>,
     parts: BTreeMap<String, Option<usize>>,
@@ -167,6 +169,8 @@ pub(crate) fn check_grading_in(
         nodes: Vec::new(),
         collectives: Vec::new(),
         lengths: &analysis.lengths,
+        partial_groups: &analysis.partial_groups,
+        group_cursors: vec![0; program.sequence.definitions.len()],
         results: &analysis.results,
         tilings: BTreeMap::new(),
         parts: BTreeMap::new(),
@@ -466,6 +470,52 @@ impl<'a> Checker<'a> {
                 }
                 inputs.push(self.visit(inner, owner, level, tiled, uniform, false)?);
             }
+            Term::PartitionK { parts, inner, .. } => {
+                // Formal rule BE-KeyPart: Exchange reads an ancestor store into a fixed separated pool.
+                let pool = self
+                    .levels
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, candidate)| {
+                        self.levels[level].path.starts_with(&candidate.path)
+                            && candidate.path.len() > 1
+                            && !candidate.model.collaborative
+                            && (*parts == 1 || candidate.model.width == Some(*parts))
+                            && candidate.model.width.is_some_and(|width| width > 0)
+                            && !candidate.children.is_empty()
+                    })
+                    .max_by_key(|(_, candidate)| candidate.path.len())
+                    .map(|(index, _)| index)
+                    .ok_or_else(|| {
+                        self.error(
+                            owner,
+                            "BE-KeyPart: partition count must match a separated distributing pool",
+                        )
+                    })?;
+                let Term::Ref(name) = inner.as_ref() else {
+                    return Err(self.error(owner, "BE-KeyPart: input must name an ancestor store"));
+                };
+                let source = self.definitions[&symbol_name(name)];
+                let source_path = &self.levels[self.grades[source]].path;
+                let pool_path = &self.levels[pool].path;
+                if source_path.len() >= pool_path.len()
+                    || !pool_path.starts_with(source_path)
+                    || !self.is_stored(self.roots[source])
+                {
+                    return Err(self.error(
+                        owner,
+                        "BE-KeyPart: input must be stored at a strict ancestor of the pool",
+                    ));
+                }
+                inputs.push(self.visit(
+                    inner,
+                    owner,
+                    self.grades[source],
+                    tiled,
+                    uniform,
+                    false,
+                )?);
+            }
             Term::Tile { inner, .. } => {
                 let kind = if self
                     .publication_tile
@@ -482,7 +532,13 @@ impl<'a> Checker<'a> {
                 inputs.push(self.visit(inner, owner, level, tiled, uniform, false)?);
             }
             Term::Group(_, inner) => {
-                if level != 0 {
+                let slot = self.group_cursors[owner];
+                self.group_cursors[owner] += 1;
+                let partial = self.partial_groups[&self.name(owner)][slot];
+                if level != 0
+                    && !partial
+                    && (!self.levels[level].children.is_empty() || !self.key_partitioned(inner))
+                {
                     return Err(self.error(
                         owner,
                         "BE-Group: grouped folds must execute at the host join",
@@ -557,7 +613,7 @@ impl<'a> Checker<'a> {
                         Guard::Lt(length, _) | Guard::Ge(length, _) => {
                             self.uniform_length(length, owner, level)?
                         }
-                        Guard::Else => true,
+                        Guard::WorkersLt(_) | Guard::Else => true,
                     };
                     branch_uniform &= guard_uniform;
                     inputs.push(self.visit(
@@ -649,6 +705,7 @@ impl<'a> Checker<'a> {
             | Term::Fold(_, inner)
             | Term::Group(_, inner)
             | Term::Canon(inner)
+            | Term::PartitionK { inner, .. }
             | Term::Tile { inner, .. } => self.require_ranges(inner),
             Term::Union(arms) => {
                 for arm in arms {
@@ -664,6 +721,15 @@ impl<'a> Checker<'a> {
         }
     }
     fn unknown_length(&self, term: &Term) -> bool {
+        fn fixed_key_cover(term: &Term) -> bool {
+            match term {
+                Term::PartitionK { .. } => true,
+                Term::Choose(arms) => {
+                    !arms.is_empty() && arms.iter().all(|(_, arm)| fixed_key_cover(arm))
+                }
+                _ => false,
+            }
+        }
         match term {
             Term::Ref(name) => matches!(
                 self.lengths.get(&symbol_name(name)),
@@ -677,6 +743,11 @@ impl<'a> Checker<'a> {
             } => self.unknown_length(inner),
             Term::Union(arms) => arms.iter().any(|arm| self.unknown_length(arm)),
             Term::Choose(arms) => {
+                // Nested choices still select one fixed cover of previously
+                // published rows, so no arm needs an unknown-sized allocation.
+                if fixed_key_cover(term) {
+                    return false;
+                }
                 // The contract records joins of unequal branch lengths.
                 arms.iter().any(|(_, arm)| self.unknown_length(arm))
                     || arms.windows(2).any(|pair| pair[0].1 != pair[1].1)
@@ -755,6 +826,32 @@ impl<'a> Checker<'a> {
         }
     }
 
+    fn key_partitioned(&self, term: &Term) -> bool {
+        match term {
+            Term::PartitionK { .. } => true,
+            Term::Canon(inner)
+            | Term::Store { inner, .. }
+            | Term::Map(_, inner)
+            | Term::Compact(_, inner) => self.key_partitioned(inner),
+            Term::Flatten(inner) if matches!(inner.as_ref(), Term::Lookup { .. }) => {
+                let Term::Lookup { inner, .. } = inner.as_ref() else {
+                    unreachable!()
+                };
+                self.key_partitioned(inner)
+            }
+            Term::Ref(name) => self
+                .definitions
+                .get(&symbol_name(name))
+                .is_some_and(|&index| {
+                    self.key_partitioned(&self.program.sequence.definitions[index].term)
+                }),
+            Term::Choose(arms) => {
+                !arms.is_empty() && arms.iter().all(|(_, arm)| self.key_partitioned(arm))
+            }
+            _ => false,
+        }
+    }
+
     fn physical_result(&self, term: &Term) -> Option<String> {
         match term {
             Term::Rows(name)
@@ -766,16 +863,17 @@ impl<'a> Checker<'a> {
             | Term::Fold(_, inner)
             | Term::Canon(inner)
             | Term::Tile { inner, .. }
+            | Term::PartitionK { inner, .. }
             | Term::Store { inner, .. } => self.physical_result(inner),
             Term::Lookup { .. } | Term::Choose(_) | Term::Union(_) => None,
         }
     }
 
     fn total_physical(&self, result: &Ident, stop: Option<&str>) -> syn::Result<()> {
-        // Formal rule BE-Partial: opaque Bind/Guard code cannot be evaluated
-        // below host, including through an indirect Physical dependency. Stop
-        // at explicit map inputs and previously checked Sequence stores: their
-        // opaque results are already evaluated, including lookup providers.
+        // Formal rule BE-Partial: opaque Bind/Guard code is host-only.
+        // IF-Parameter discharges closed fragments once before dispatch.
+        // Stop at explicit map inputs and checked Sequence stores, whose
+        // opaque results have already been evaluated.
         let mut pending = vec![symbol_name(result)];
         let mut visited = BTreeSet::new();
         while let Some(name) = pending.pop() {
@@ -792,7 +890,9 @@ impl<'a> Checker<'a> {
             let Some(definition) = self.physical.get(&name) else {
                 continue;
             };
-            if self.physical_facts.opaque(&definition.operator) {
+            if self.physical_facts.opaque(&definition.operator)
+                && !self.physical_facts.capturable(&definition.operator)
+            {
                 return Err(syn::Error::new(
                     result.span(),
                     "BE-Partial: opaque Physical Rust must be evaluated at host before dispatch",
@@ -1004,6 +1104,7 @@ fn outer_tile<'a>(
 ) -> Option<&'a Term> {
     match term {
         Term::Tile { inner, .. } => outer_tile(inner, program, definitions).or(Some(term)),
+        Term::PartitionK { .. } => None,
         Term::Map(_, inner)
         | Term::Compact(_, inner)
         | Term::Flatten(inner)

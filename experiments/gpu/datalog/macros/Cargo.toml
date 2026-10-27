@@ -1,0 +1,16 @@
+[package]
+name = "cq-gpu-datalog-macros"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+cq-gpu-datalog-core = { path = ".." }
+cq-lang-datalog-storage = { path = "../../../../features/datalog/languages/dl-storage" }
+cq-lang-datalog-round = { path = "../../../../features/datalog/languages/dl-round" }
+cq-lang-structures = { path = "../../../../languages/cq-lang-structures" }
+cq-stage = { path = "../../../../facade/cq-stage" }
+proc-macro2 = "1"
+syn = { version = "2", features = ["full"] }

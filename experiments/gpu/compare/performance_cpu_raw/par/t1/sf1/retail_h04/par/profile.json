@@ -1,0 +1,418 @@
+{
+  "answer_rows": 52523,
+  "bag_insertions": 7501215,
+  "build_rows_verified": false,
+  "candidate_insertions": 0,
+  "distinct_insertions": 0,
+  "index_builds": 0,
+  "median_ms": 340.270614,
+  "operator_rows": [
+    {
+      "inputs": [
+        "r1",
+        "r3"
+      ],
+      "key": "order_key",
+      "kind": "SEMI",
+      "result": "__lookup_forward",
+      "rows_in": 57218,
+      "rows_inserted": 0,
+      "rows_out": 52523
+    },
+    {
+      "inputs": [],
+      "key": "Orders",
+      "kind": "RENAME",
+      "result": "r0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 3000000
+    },
+    {
+      "inputs": [
+        "r0"
+      ],
+      "key": "order_date",
+      "kind": "RANGE",
+      "result": "r1",
+      "rows_in": 1500000,
+      "rows_inserted": 0,
+      "rows_out": 57218
+    },
+    {
+      "inputs": [],
+      "key": "Lineitem",
+      "kind": "RENAME",
+      "result": "r2",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 6001215
+    },
+    {
+      "inputs": [
+        "r2"
+      ],
+      "key": "order_key",
+      "kind": "SELECT",
+      "result": "r3",
+      "rows_in": 6001215,
+      "rows_inserted": 0,
+      "rows_out": 3793296
+    },
+    {
+      "inputs": [
+        "__lookup_forward",
+        "r3"
+      ],
+      "key": "order_key",
+      "kind": "PROBE",
+      "result": "r4",
+      "rows_in": 52523,
+      "rows_inserted": 0,
+      "rows_out": 52523
+    },
+    {
+      "inputs": [
+        "r4"
+      ],
+      "key": "order_key",
+      "kind": "PROJECT",
+      "result": "r5",
+      "rows_in": 52523,
+      "rows_inserted": 0,
+      "rows_out": 52523
+    },
+    {
+      "inputs": [
+        "r0"
+      ],
+      "key": "",
+      "kind": "ROWS_BUILD",
+      "result": "r0.rows",
+      "rows_in": 1500000,
+      "rows_inserted": 1500000,
+      "rows_out": 1500000
+    },
+    {
+      "inputs": [
+        "r2"
+      ],
+      "key": "",
+      "kind": "ROWS_BUILD",
+      "result": "r2.rows",
+      "rows_in": 6001215,
+      "rows_inserted": 6001215,
+      "rows_out": 6001215
+    },
+    {
+      "inputs": [
+        "r3"
+      ],
+      "key": "order_key",
+      "kind": "KEYSET_BUILD",
+      "result": "r3.index.order_key",
+      "rows_in": 3793296,
+      "rows_inserted": 3793296,
+      "rows_out": 1375365
+    },
+    {
+      "inputs": [
+        "r5"
+      ],
+      "key": "",
+      "kind": "DEDUP",
+      "result": "r5.dedup",
+      "rows_in": 52523,
+      "rows_inserted": 52523,
+      "rows_out": 52523
+    },
+    {
+      "inputs": [
+        "r5"
+      ],
+      "key": "",
+      "kind": "ANSWER",
+      "result": "r5.answer",
+      "rows_in": 52523,
+      "rows_inserted": 0,
+      "rows_out": 52523
+    },
+    {
+      "inputs": [],
+      "key": "",
+      "kind": "TASKS_BUILD_WALL",
+      "result": "__cq_tasks_build",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "inputs": [
+        "r5.answer"
+      ],
+      "key": "",
+      "kind": "TASKS_QUERY_WALL",
+      "result": "__cq_tasks_query",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "inputs": [],
+      "key": "",
+      "kind": "TASKS_BUILD_WALL_TOTAL",
+      "result": "__cq_tasks_build_wall_total",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    }
+  ],
+  "operators": [
+    {
+      "calls": 1,
+      "elapsed_ms": 340.270334,
+      "id": 0,
+      "inputs": [],
+      "key": "retail_h04",
+      "kind": "QUERY",
+      "program": 0,
+      "result": "query",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 52523
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 3.619488,
+      "id": 1,
+      "inputs": [
+        "r1",
+        "r3"
+      ],
+      "key": "order_key",
+      "kind": "SEMI",
+      "program": 1,
+      "result": "__lookup_forward",
+      "rows_in": 57218,
+      "rows_inserted": 0,
+      "rows_out": 52523
+    },
+    {
+      "calls": 2,
+      "elapsed_ms": 8.662815,
+      "id": 2,
+      "inputs": [],
+      "key": "Orders",
+      "kind": "RENAME",
+      "program": 1,
+      "result": "r0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 3000000
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 3.6193280000000003,
+      "id": 3,
+      "inputs": [
+        "r0"
+      ],
+      "key": "order_date",
+      "kind": "RANGE",
+      "program": 1,
+      "result": "r1",
+      "rows_in": 1500000,
+      "rows_inserted": 0,
+      "rows_out": 57218
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 52.317771,
+      "id": 4,
+      "inputs": [],
+      "key": "Lineitem",
+      "kind": "RENAME",
+      "program": 1,
+      "result": "r2",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 6001215
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 42.386763,
+      "id": 5,
+      "inputs": [
+        "r2"
+      ],
+      "key": "order_key",
+      "kind": "SELECT",
+      "program": 1,
+      "result": "r3",
+      "rows_in": 6001215,
+      "rows_inserted": 0,
+      "rows_out": 3793296
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 3.620009,
+      "id": 6,
+      "inputs": [
+        "__lookup_forward",
+        "r3"
+      ],
+      "key": "order_key",
+      "kind": "PROBE",
+      "program": 1,
+      "result": "r4",
+      "rows_in": 52523,
+      "rows_inserted": 0,
+      "rows_out": 52523
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 3.62045,
+      "id": 7,
+      "inputs": [
+        "r4"
+      ],
+      "key": "order_key",
+      "kind": "PROJECT",
+      "program": 1,
+      "result": "r5",
+      "rows_in": 52523,
+      "rows_inserted": 0,
+      "rows_out": 52523
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 27.086613999999997,
+      "id": 8,
+      "inputs": [
+        "r0"
+      ],
+      "key": "",
+      "kind": "ROWS_BUILD",
+      "program": 1,
+      "result": "r0.rows",
+      "rows_in": 1500000,
+      "rows_inserted": 1500000,
+      "rows_out": 1500000
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 136.839826,
+      "id": 9,
+      "inputs": [
+        "r2"
+      ],
+      "key": "",
+      "kind": "ROWS_BUILD",
+      "program": 1,
+      "result": "r2.rows",
+      "rows_in": 6001215,
+      "rows_inserted": 6001215,
+      "rows_out": 6001215
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 159.635795,
+      "id": 10,
+      "inputs": [
+        "r3"
+      ],
+      "key": "order_key",
+      "kind": "KEYSET_BUILD",
+      "program": 1,
+      "result": "r3.index.order_key",
+      "rows_in": 3793296,
+      "rows_inserted": 3793296,
+      "rows_out": 1375365
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 7.275035,
+      "id": 11,
+      "inputs": [
+        "r5"
+      ],
+      "key": "",
+      "kind": "DEDUP",
+      "program": 1,
+      "result": "r5.dedup",
+      "rows_in": 52523,
+      "rows_inserted": 52523,
+      "rows_out": 52523
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 0.044966000000000006,
+      "id": 12,
+      "inputs": [
+        "r5"
+      ],
+      "key": "",
+      "kind": "ANSWER",
+      "program": 1,
+      "result": "r5.answer",
+      "rows_in": 52523,
+      "rows_inserted": 0,
+      "rows_out": 52523
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 323.565852,
+      "id": 13,
+      "inputs": [],
+      "key": "",
+      "kind": "TASKS_BUILD_WALL",
+      "program": 1,
+      "result": "__cq_tasks_build",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 7.322807,
+      "id": 14,
+      "inputs": [
+        "r5.answer"
+      ],
+      "key": "",
+      "kind": "TASKS_QUERY_WALL",
+      "program": 1,
+      "result": "__cq_tasks_query",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 323.565812,
+      "id": 15,
+      "inputs": [],
+      "key": "",
+      "kind": "TASKS_BUILD_WALL_TOTAL",
+      "program": 0,
+      "result": "__cq_tasks_build_wall_total",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    }
+  ],
+  "rows_copied": 0,
+  "rows_enumerated": 0,
+  "samples_ms": [
+    338.159157,
+    339.671375,
+    340.270614,
+    342.990077,
+    409.736918
+  ],
+  "set_insertions": 3845819,
+  "top_level_clock_verified": true,
+  "top_level_ms": 340.270334,
+  "tree": "QUERY            query [retail_h04] inputs= rows=52523 in=0 inserted=0 t=340.270ms\n  TASKS_BUILD_WALL_TOTAL __cq_tasks_build_wall_total [] inputs= rows=0 in=0 inserted=0 t=323.566ms\n  TASKS_QUERY_WALL __cq_tasks_query [] inputs=r5.answer rows=0 in=0 inserted=0 t=7.323ms\n    ANSWER           r5.answer [] inputs=r5 rows=52523 in=52523 inserted=0 t=0.045ms\n      PROJECT          r5 [order_key] inputs=r4 rows=52523 in=52523 inserted=0 t=3.620ms\n        PROBE            r4 [order_key] inputs=__lookup_forward,r3 rows=52523 in=52523 inserted=0 t=3.620ms\n          SEMI             __lookup_forward [order_key] inputs=r1,r3 rows=52523 in=57218 inserted=0 t=3.619ms\n            RANGE            r1 [order_date] inputs=r0 rows=57218 in=1500000 inserted=0 t=3.619ms\n              RENAME           r0 [Orders] inputs= rows=3000000 in=0 inserted=0 t=8.663ms\n            SELECT           r3 [order_key] inputs=r2 rows=3793296 in=6001215 inserted=0 t=42.387ms\n              RENAME           r2 [Lineitem] inputs= rows=6001215 in=0 inserted=0 t=52.318ms\n          SELECT           r3 [order_key] inputs=r2 rows=3793296 in=6001215 inserted=0 t=42.387ms (shared)\n  TASKS_BUILD_WALL __cq_tasks_build [] inputs= rows=0 in=0 inserted=0 t=323.566ms\n  DEDUP            r5.dedup [] inputs=r5 rows=52523 in=52523 inserted=52523 t=7.275ms\n    PROJECT          r5 [order_key] inputs=r4 rows=52523 in=52523 inserted=0 t=3.620ms (shared)\n  KEYSET_BUILD     r3.index.order_key [order_key] inputs=r3 rows=1375365 in=3793296 inserted=3793296 t=159.636ms excl=117.248ms\n    SELECT           r3 [order_key] inputs=r2 rows=3793296 in=6001215 inserted=0 t=42.387ms (shared)\n  ROWS_BUILD       r2.rows [] inputs=r2 rows=6001215 in=6001215 inserted=6001215 t=136.840ms excl=136.840ms\n    RENAME           r2 [Lineitem] inputs= rows=6001215 in=0 inserted=0 t=52.318ms (shared)\n  ROWS_BUILD       r0.rows [] inputs=r0 rows=1500000 in=1500000 inserted=1500000 t=27.087ms excl=27.087ms\n    RENAME           r0 [Orders] inputs= rows=3000000 in=0 inserted=0 t=8.663ms (shared)\nBUILD_EXCLUSIVE_TOTAL t=281.175ms\nTASKS_BUILD_WALL_TOTAL t=323.565812000ms\n",
+  "verified": true
+}

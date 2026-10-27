@@ -473,6 +473,41 @@ fn push_program() -> Program {
     program
 }
 
+/// The same program forked for a batch terminal: Fork, not a post-hoc interface
+/// flip, records batch holes and their owned key-set schema.
+fn batch_program() -> Program {
+    let source: source::Program = syn::parse_quote! {
+        struct Push;
+        relation E(x:i32) = (input);
+        relation B(x:i32) = (blocked);
+        relation R(x:i32);
+        output R;
+        R(*x) :- E(x), !B(x);
+    };
+    let strata = cq_datalog_stratify::compile(&source).unwrap();
+    let incremental = cq_datalog_incremental::compile(&strata).unwrap();
+    let storage = cq_datalog_storage::compile(&incremental).unwrap();
+    cq_datalog_fork::compile_with(&storage, quote! {
+        terminals = [custom::batch => batch];
+        cq = pipeline { custom::lower, custom::batch };
+    })
+    .unwrap()
+}
+
+#[test]
+fn host_printer_rejects_batch_but_custom_splicing_accepts_it() {
+    let program = batch_program();
+    assert!(program.holes.iter().all(|hole| hole.interface == HoleInterface::Batch));
+    round::contract::check(&program).unwrap();
+    assert!(compile(&program).unwrap_err().to_string().contains("do not support batch holes"));
+    assert!(splice(&program).unwrap_err().to_string().contains("do not support batch holes"));
+    assert_eq!(splice_with(&program, |_| Ok(quote!(batch()))).unwrap().len(), program.holes.len());
+    assert!(consume_hole(HoleInterface::Batch, &quote!(batch()), quote!(consumer))
+        .to_string().contains("compile_error"));
+    assert!(collect_hole(HoleInterface::Batch, &quote!(batch()), quote!(Vec<Row>))
+        .to_string().contains("compile_error"));
+}
+
 #[test]
 fn push_rule_and_key_holes_receive_consumers_without_iterator_adapters() {
     let program = push_program();

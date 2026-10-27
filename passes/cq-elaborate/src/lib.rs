@@ -190,9 +190,12 @@ mod structural;
 
 /// Simplify already elaborated reductions using exact named-result lineage.
 ///
-/// In a semijoin or natural-join support (right) operand, `R semijoin T`
+/// In either operand of a semijoin or natural join, `R semijoin T`
 /// may be replaced by `R` when the other operand is contained in `T` on
-/// every column shared by `R` and `T`. Containment follows only the same
+/// every column shared by `R` and `T`. Right-side support pruning takes
+/// precedence; a left-side bypass must be justified by the surviving RHS.
+/// This is a local pass, not a maximal fixed-point guarantee.
+/// Containment follows only the same
 /// named result through projections, selections, semijoin left inputs and
 /// natural-join inputs; it never identifies independent projected witnesses
 /// or infers facts from types, data, predicates or source occurrence numbers.

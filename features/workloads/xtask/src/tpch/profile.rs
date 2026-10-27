@@ -26,9 +26,9 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
             _ => return Err(format!("unknown or duplicate profile argument {arg}").into()),
         }
     }
-    let sf = sf.ok_or("profile requires --tpch --sf 0.1|1")?;
-    if !tpch || !matches!(sf.as_str(), "0.1" | "1") {
-        return Err("profile requires --tpch --sf 0.1|1".into());
+    let sf = sf.ok_or("profile requires --tpch --sf 0.1|1|10")?;
+    if !tpch || !matches!(sf.as_str(), "0.1" | "1" | "10") {
+        return Err("profile requires --tpch --sf 0.1|1|10".into());
     }
     if query
         .as_ref()
@@ -54,7 +54,7 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
                         .strip_prefix("workloads/")
                         .unwrap_or(c.rust_path),
                 ),
-                Some(&evidence.join("workers")),
+                &evidence.join("workers"),
             )
         })
         .collect::<Result<Vec<_>>>()?;
@@ -80,7 +80,10 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
         )?;
         let raw = execute_worker_binary(
             &q,
-            &q.built.count_binary,
+            q.built
+                .count_binary
+                .as_ref()
+                .ok_or("missing counting worker")?,
             &directory,
             &config,
             0,
@@ -135,11 +138,15 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
         let candidate = raw["candidate_insertions"]
             .as_u64()
             .ok_or("missing candidate count")?;
-        if Some(bag) != raw["rows_copied"].as_u64()
-            || Some(sets + candidate) != raw["distinct_insertions"].as_u64()
-        {
+        let copied = raw["rows_copied"]
+            .as_u64()
+            .ok_or("missing copied row count")?;
+        let distinct = raw["distinct_insertions"]
+            .as_u64()
+            .ok_or("missing distinct insertion count")?;
+        if bag != copied || sets + candidate != distinct {
             return Err(format!(
-                "{} / {config}: independent primitive build counts disagree",
+                "{} / {config}: independent primitive build counts disagree: bag {bag}/{copied} copied; set {sets} + candidates {candidate}/{distinct} distinct attempts",
                 q.name
             )
             .into());

@@ -34,6 +34,7 @@ fn parameter_layout(ty: &syn::Type) -> syn::Result<(usize, usize)> {
             "usize" | "isize" | "u64" | "i64" | "f64" => return Ok((8, 8)),
             "ColumnView" => return Ok((40, 8)),
             "RangeView" => return Ok((64, 8)),
+            "RunsView" => return Ok((32, 8)),
             _ => {}
         }
     }
@@ -407,6 +408,9 @@ impl<'a> Compiler<'a> {
                 }
                 Ok(chains)
             }
+            Term::PartitionK { .. } => {
+                Err(error("T-Gpu: key partition requires a routed-pool target"))
+            }
             Term::Flatten(inner)
             | Term::Canon(inner)
             | Term::Store { inner, .. }
@@ -498,6 +502,11 @@ impl<'a> Compiler<'a> {
     fn guard(&self, guard: &Guard) -> syn::Result<TokenStream> {
         Ok(match guard {
             Guard::Else => quote!(true),
+            Guard::WorkersLt(_) => {
+                return Err(error(
+                    "GPU Sequence does not support target-wide worker guards",
+                ));
+            }
             Guard::Lt(len, n) => {
                 let len = self.length(len)?;
                 quote!((#len) < #n)
@@ -524,6 +533,37 @@ impl<'a> Compiler<'a> {
         membership: bool,
     ) -> syn::Result<TokenStream> {
         let (view, payload, order) = self.rows.provider(provider)?;
+        if self.rows.run_provider(provider) {
+            if order.len() < keys.len() || order[..keys.len()].iter().any(|key| !keys.contains(key)) {
+                return Err(error("GPU-Runs: lookup keys are not a checked leading prefix"));
+            }
+            let run = format_ident!("__cq_run_{provider}");
+            let parts = order.iter().take(keys.len()).map(|key| {
+                let slot = self.slot(key)?;
+                Ok(quote!(__row[#slot]))
+            }).collect::<syn::Result<Vec<_>>>()?;
+            let count = keys.len() as u32;
+            let prefix = quote!(let __prefix: [i64; #count as usize] = [#(#parts),*];);
+            return Ok(if membership {
+                quote! {
+                    #prefix
+                    let mut __member_found = false;
+                    if __live {
+                        for #run in 0..#view.run_count {
+                            let (__begin, __end) = ::gpu_datalog_runtime::device::prefix_range(#view, #run, __prefix.as_ptr(), #count);
+                            __member_found |= __begin < __end;
+                        }
+                    }
+                }
+            } else {
+                quote! {
+                    #prefix
+                    let (__begin, __end) = if __live {
+                        ::gpu_datalog_runtime::device::prefix_range(#view, #run, __prefix.as_ptr(), #count)
+                    } else { (0u32, 0u32) };
+                }
+            });
+        }
         if order.is_empty() && keys.is_empty() {
             return Ok(quote! {
                 let (mut __begin, mut __end) = (0u32, #view.len);
@@ -590,6 +630,17 @@ impl<'a> Compiler<'a> {
 
     fn payload(&self, provider: &str, position: TokenStream) -> syn::Result<TokenStream> {
         let (view, payload, _) = self.rows.provider(provider)?;
+        if self.rows.run_provider(provider) {
+            let run = format_ident!("__cq_run_{provider}");
+            let assignments = payload.iter().enumerate().map(|(index,column)| {
+                let slot = self.slot(column)?;
+                Ok(quote! {
+                    __row[#slot] = ::gpu_datalog_runtime::device::decode(
+                        #view, #run, (#position) as u32, #index as u32);
+                })
+            }).collect::<syn::Result<Vec<_>>>()?;
+            return Ok(quote!(#(#assignments)*));
+        }
         let assignments = payload.iter().enumerate().map(|(index,column)| {
             let slot=self.slot(column)?;
             let decode = if self.rows.dense.contains(&slot) { format_ident!("decode_u32") } else { format_ident!("decode") };
@@ -604,6 +655,7 @@ struct Kernel<'c, 'p> {
     shared: crate::layout::SharedLayout,
     virtual_range: Option<String>,
     packed_columns: Option<Vec<String>>,
+    arena_packing: Option<&'c crate::arena::Packing>,
     publication_columns: BTreeSet<usize>,
     sink: Option<TokenStream>,
     scalar_output: bool,
@@ -894,7 +946,7 @@ impl Kernel<'_, '_> {
                             #payload
                         },
                     })?;
-                Ok(quote! {
+                let expansion = quote! {
                     #lookup
                     #shared
                     let #begins = __shared.add(#begin_offset).cast::<u32>();
@@ -916,7 +968,16 @@ impl Kernel<'_, '_> {
                         __child_base += #tile as u64;
                     }
                     ::cuda_device::thread::sync_threads();
-                })
+                };
+                if self.compiler.rows.run_provider(provider) {
+                    let view = self.compiler.rows.provider(provider)?.0;
+                    let run = format_ident!("__cq_run_{provider}");
+                    // Run bounds are uniform descriptor metadata: every lane
+                    // executes every run's existing segmented collective.
+                    Ok(quote! { for #run in 0..#view.run_count { #expansion } })
+                } else {
+                    Ok(expansion)
+                }
             }
             Operation::Fold(_) => Err(error("scalar row template cannot cross a reduction scope")),
             _ => self.scalar_operations(rest, row),
@@ -1050,6 +1111,12 @@ impl Kernel<'_, '_> {
     }
 
     fn output_write(&self) -> syn::Result<TokenStream> {
+        if let Some(packing) = self.arena_packing {
+            let slots = self.compiler.rows.output_columns.iter()
+                .map(|column| self.compiler.slot(column))
+                .collect::<syn::Result<Vec<_>>>()?;
+            return Ok(packing.write(&slots));
+        }
         let width = self.compiler.rows.width;
         let write = if let Some(columns) = &self.packed_columns {
             let parts = columns
@@ -1189,6 +1256,14 @@ fn canon_type<'a>(analysis: &'a Analysis, publication: &str) -> syn::Result<&'a 
 /// Translate only checked scheduling facts; no planner is consulted here.
 // Formal rule T-Gpu: Interpret checked Sequence constructors at their recorded GPU grades.
 pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Expr> {
+    translate_impl(program, analysis, None)
+}
+
+pub(crate) fn translate_impl(
+    program: &Program,
+    analysis: &Analysis,
+    arena: Option<&syn::Expr>,
+) -> syn::Result<syn::Expr> {
     if program
         .graded
         .as_ref()
@@ -1210,6 +1285,11 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
             "T-Gpu: Structures witnesses, staging and join filters are not realized by this target; use supported Sequence scheduling or a native terminal",
         ));
     }
+    if arena.is_none()
+        && program.sequence.output == Some(OutputProtocol::ReservePrevious)
+    {
+        return Err(error("reserve_previous requires the GPU arena terminal"));
+    }
     for (_, _, level) in &analysis.collectives {
         if level.last().is_some_and(|level| level == "device") {
             return Err(error(
@@ -1218,6 +1298,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
         }
     }
     let rows = Rows::new(program, analysis)?;
+    let arena_packing = arena.map(|_| rows.output_types().and_then(crate::arena::Packing::new)).transpose()?;
     let mut compiler = Compiler {
         program,
         analysis,
@@ -1299,13 +1380,16 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
         .definitions
         .get(final_name)
         .and_then(|term| grouped_boundary(term, &compiler.definitions));
+    if arena.is_some() && (final_group.is_some() || final_fold.is_some()) {
+        return Err(error("GPU arena terminal requires raw candidate rows, not a group or fold"));
+    }
     let mut packing = Vec::new();
     for (i, column) in compiler
         .rows
         .output_columns
         .iter()
         .enumerate()
-        .filter(|_| final_group.is_none())
+        .filter(|_| final_group.is_none() && arena.is_none())
     {
         let bounds = match final_fold {
             Some(Monoid::Count) => quote!(::cq_gpu_runtime::Bounds::Inclusive {
@@ -1339,11 +1423,18 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
     static NEXT_MODULE: AtomicUsize = AtomicUsize::new(0);
     let mut fingerprint = std::collections::hash_map::DefaultHasher::new();
     quote!(#program).to_string().hash(&mut fingerprint);
-    let module_name = format_ident!(
-        "__cq_sequence_kernels_{:016x}_{}",
-        fingerprint.finish(),
-        NEXT_MODULE.fetch_add(1, Ordering::Relaxed)
-    );
+    let expansion = NEXT_MODULE.fetch_add(1, Ordering::Relaxed);
+    let module_name = format_ident!("__cq_sequence_kernels_{:016x}_{}", fingerprint.finish(), expansion);
+    // Host LLVM inlines a once-called closure into its caller; one program of
+    // many holes then becomes one function whose register allocation dominates
+    // the build. A non-inlined runner keeps each hole a separate function, and
+    // its module selects a separate codegen unit.
+    let partition = format_ident!("partition_{}", expansion % 16);
+    if let Some(directory) = std::env::var_os("CQ_GPU_SEQUENCE_DUMP") {
+        let path = std::path::PathBuf::from(directory).join(format!("{module_name}.sequence"));
+        std::fs::write(&path, quote!(#program).to_string())
+            .map_err(|err| error(format!("cannot dump Sequence program to {}: {err}", path.display())))?;
+    }
     for definition in &program.sequence.definitions {
         let publication = symbol_name(&definition.name);
         // Lowering can give the terminal group its own store, followed by a
@@ -1512,6 +1603,9 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
         });
         let index = compiler.stored.len();
         let Some(dispatch) = dispatch else {
+            if arena.is_some() && publication == final_name {
+                return Err(error("GPU arena terminal requires a recorded device row dispatch"));
+            }
             if analysis
                 .levels
                 .get(&publication)
@@ -1609,7 +1703,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                         } else {
                             copies.push(quote! {
                                 if #length != 0 {
-                                    unsafe { ::cuda_core::memory::memcpy_dtod_async(
+                                    unsafe { ::cuda_core::simt::memory::memcpy_dtod_async(
                                         #store_rows.cu_deviceptr() + (__cq_union_offset * #width * ::std::mem::size_of::<i64>()) as u64,
                                         #source_rows.cu_deviceptr(),
                                         #length * #width * ::std::mem::size_of::<i64>(),
@@ -1883,6 +1977,9 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                 .iter()
                 .any(|op| matches!(op, Operation::Canon))
         });
+        if arena.is_some() && final_output && canonical {
+            return Err(error("GPU arena terminal publishes raw candidates; terminal canon requires a separate publication"));
+        }
         let provider = canonical
             .then(|| canon_type(analysis, &publication))
             .transpose()?;
@@ -1995,7 +2092,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                         .any(|op| matches!(op, Operation::Flatten))
                 {
                     if let Operation::Lookup { provider, .. } = &ops[at] {
-                        Some(provider.clone())
+                        (!compiler.rows.run_provider(provider)).then(|| provider.clone())
                     } else {
                         None
                     }
@@ -2126,6 +2223,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
             shared: crate::layout::SharedLayout::new(),
             virtual_range: virtual_range.clone(),
             packed_columns: packed_columns.clone(),
+            arena_packing: if final_output { arena_packing.as_ref() } else { None },
             publication_columns: chains
                 .iter()
                 .flat_map(|chain| {
@@ -2340,6 +2438,13 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
         };
         let initial = match (dispatch.concatenation.clone(), capacity) {
             (OutputProtocol::Count, _) => quote!(0usize),
+            // Formal rule GPU-ReservePrevious: a recorded previous-count hint is
+            // not a bound; validate full count and failure flags, then replay any
+            // undersized attempt against unchanged inputs before publication.
+            (OutputProtocol::ReservePrevious, _) if arena.is_some() && final_output =>
+                quote!(__cq_arena.previous_count()),
+            (OutputProtocol::ReservePrevious, _) =>
+                return Err(error("reserve_previous requires a final GPU arena dispatch")),
             (OutputProtocol::Bounded, Some(capacity)) => quote!(#capacity),
             (OutputProtocol::Bounded, None) => {
                 return Err(error("bounded dispatch requires its recorded capacity"));
@@ -2355,38 +2460,98 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
         } else {
             0usize
         };
+        let key_allocation = if arena.is_some() && final_output {
+            quote!(let #output_keys = __cq_arena.reserve(__cq_arena_packing.clone(), __cq_capacity)?;)
+        } else {
+            quote!(let #output_keys=unsafe {::cq_gpu_runtime::Buffer::<u64>::uninitialized(__cq_pool.clone(),__cq_capacity*#key_width*__cq_key_lanes)?};)
+        };
+        let key_pointer = if arena.is_some() && final_output {
+            quote!(#output_keys.buffer().ptr())
+        } else {
+            quote!(#output_keys.ptr())
+        };
+        // The final arena dispatch publishes only its reserved keys: no later
+        // stage reads its row, range-begin or offset stores, and its packing is
+        // the arena's. Allocate only stores a consumer can observe.
+        let arena_final = arena.is_some() && final_output;
+        let packing_setup = if arena_final {
+            quote!()
+        } else if let Some(packing) = arena_packing.as_ref().filter(|_| final_output) {
+            let bits = packing.bits;
+            let lanes = bits.div_ceil(64).max(1) as usize;
+            quote! {
+                let __cq_key_bits = #bits;
+                let __cq_key_lanes = #lanes;
+            }
+        } else {
+            quote! {
+                let mut __cq_key_bits=0u32;
+                let mut __cq_fields=::std::vec::Vec::<::cq_gpu_sequence_runtime::canon::PackedField>::new();
+                #(#local_packing)*
+                let __cq_key_lanes=::cq_gpu_sequence_runtime::canon::WideCanon::key_lanes(__cq_key_bits)?;
+            }
+        };
+        let record_readback = (arena.is_some() || compiler.rows.has_runs())
+            .then(|| quote!(::gpu_datalog_runtime::record_readback();));
+        let trace_dispatch = (arena.is_some() || compiler.rows.has_runs()).then(|| quote! {
+            if ::gpu_datalog_runtime::trace_kernels() {
+                ::std::eprintln!("gpu_sequence_dispatch\tmodule={}\tkernel={}\tcapacity={}\tcandidates={}",
+                    stringify!(#module_name), stringify!(#kernel_name), __cq_capacity, __cq_required);
+            }
+        });
+        let remember_count = (dispatch.concatenation == OutputProtocol::ReservePrevious)
+            .then(|| quote!(__cq_arena.record_count(#store_length);));
+        let (stores, allocations, pointers) = if arena_final && row_width == 0 && range_width == 0 {
+            (
+                quote!(),
+                quote!(),
+                quote!(::core::ptr::null_mut::<i64>(),::core::ptr::null_mut::<u32>(),::core::ptr::null_mut::<u32>(),),
+            )
+        } else {
+            (
+                quote!(#store_rows,#store_begin,#store_offsets,),
+                quote! {
+                    let #store_rows=unsafe {::cq_gpu_runtime::Buffer::<i64>::uninitialized(__cq_pool.clone(),
+                        __cq_capacity.checked_mul(#row_width).ok_or("Sequence row allocation overflow")?)?};
+                    let #store_begin=unsafe {::cq_gpu_runtime::Buffer::<u32>::uninitialized(__cq_pool.clone(),__cq_capacity*#range_width)?};
+                    let #store_offsets=unsafe {::cq_gpu_runtime::Buffer::<u32>::uninitialized(__cq_pool.clone(),
+                        __cq_capacity.checked_add(1).ok_or("Sequence offset allocation overflow")?*#range_width)?};
+                },
+                quote!(#store_rows.ptr(),#store_begin.ptr(),#store_offsets.ptr(),),
+            )
+        };
         launches.push(quote! {
-            let mut __cq_key_bits=0u32;
-            let mut __cq_fields=::std::vec::Vec::<::cq_gpu_sequence_runtime::canon::PackedField>::new();
-            #(#local_packing)*
-            let __cq_key_lanes=::cq_gpu_sequence_runtime::canon::WideCanon::key_lanes(__cq_key_bits)?;
+            #packing_setup
             #(#host_domains)*
             let __cq_prepared=__cq_module.#prepare_name(::cuda_core::LaunchConfig1D::new(#grid,256,#shared_u32))?;
             let mut __cq_capacity=#initial;
-            let (#store_rows,#store_begin,#store_offsets,#output_keys,#store_meta,#store_length)=loop {
+            let (#stores #output_keys,#store_meta,#store_length)=loop {
                 if __cq_capacity>u32::MAX as usize {return Err("Sequence output exceeds u32 positions".into());}
-                let #store_rows=unsafe {::cq_gpu_runtime::Buffer::<i64>::uninitialized(__cq_pool.clone(),
-                    __cq_capacity.checked_mul(#row_width).ok_or("Sequence row allocation overflow")?)?};
-                let #store_begin=unsafe {::cq_gpu_runtime::Buffer::<u32>::uninitialized(__cq_pool.clone(),__cq_capacity*#range_width)?};
-                let #store_offsets=unsafe {::cq_gpu_runtime::Buffer::<u32>::uninitialized(__cq_pool.clone(),
-                    __cq_capacity.checked_add(1).ok_or("Sequence offset allocation overflow")?*#range_width)?};
-                let #output_keys=unsafe {::cq_gpu_runtime::Buffer::<u64>::uninitialized(__cq_pool.clone(),__cq_capacity*#key_width*__cq_key_lanes)?};
+                #allocations
+                #key_allocation
                 let #store_meta=::cq_gpu_runtime::Buffer::<u32>::zeroed(__cq_pool.clone(),#meta_words)?;
                 __cq_module.#kernel_name(__cq_pool.stream(),&__cq_prepared,#(#arguments,)*
-                    #store_rows.ptr(),#store_begin.ptr(),#store_offsets.ptr(),#output_keys.ptr(),
+                    #pointers #key_pointer,
                     __cq_capacity as u32,#store_meta.ptr())?;
                 let __cq_counts=#store_meta.to_host()?;
+                #record_readback
                 if __cq_counts[2]!=0 {return Err("Sequence device count or fold overflow".into());}
                 let __cq_required=__cq_counts[0] as usize;
+                #trace_dispatch
                 if __cq_required>__cq_capacity {
                     __cq_capacity=__cq_required;
                     continue;
                 }
-                break (#store_rows,#store_begin,#store_offsets,#output_keys,#store_meta,__cq_counts[#logical] as usize);
+                break (#stores #output_keys,#store_meta,__cq_counts[#logical] as usize);
             };
+            #remember_count
         });
         if final_output {
-            output = Some(if canonical {
+            output = Some(if arena.is_some() {
+                quote! {
+                    let __cq_result = unsafe { #output_keys.finish(#store_length, __cq_run_owners)? };
+                }
+            } else if canonical {
                 quote! {
                     let mut __cq_canon=<#provider>::new(&__cq_pool,#store_length)?;
                     let __cq_keys=unsafe {__cq_canon.canonicalize(&#output_keys,#store_length,__cq_key_bits)?};
@@ -2507,6 +2672,7 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                 shared: crate::layout::SharedLayout::new(),
                 virtual_range: None,
                 packed_columns: Some(compiler.rows.output_columns.clone()),
+                arena_packing: None,
                 publication_columns: BTreeSet::new(),
                 sink: None,
                 scalar_output: false,
@@ -2570,18 +2736,35 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
     launches.push(
         output.ok_or_else(|| error("checked GPU output has no recorded publication adapter"))?,
     );
+    crate::capture::launches(&kernels, &mut launches)?;
     prune_kernel_parameters(&mut kernels, &mut launches)?;
     let output = launches.pop().expect("output launch");
     let setup = &compiler.rows.setup;
     let build = &compiler.rows.build;
+    let arena_setup = arena.zip(arena_packing.as_ref()).map(|(expression, packing)| packing.setup(expression));
+    let mut used = BTreeSet::new();
+    identifiers(quote!(#setup #arena_setup #build #(#launches)* #output), &mut used);
+    let support = compiler.rows.support.iter().filter(|(name, ..)| used.contains(&name.to_string()));
+    let (support_before, support_after): (Vec<_>, Vec<_>) =
+        support.map(|(_, before, after)| (before, after)).unzip();
+    // Formal rule GPU-Arena-Timing: optional measurements alone add a terminal fence;
+    // checked dispatch metadata and retained stream-ordered owners suffice otherwise.
+    let timing_enabled = if arena.is_some() {
+        quote!(::cq_gpu_runtime::arena_timing_enabled())
+    } else {
+        quote!(true)
+    };
     syn::parse2(quote!({
         #[::cuda_device::cuda_module]
         mod #module_name {
             use ::cuda_device::{kernel,launch_bounds,launch_contract};
             #(#kernels)*
         }
-        (|| -> ::cq_gpu_sequence_runtime::Result<_> {
+        ::cq_gpu_sequence_runtime::__codegen::#partition::run(#[inline] || -> ::cq_gpu_sequence_runtime::Result<_> {
+            #(#support_before)*
             #setup
+            #(#support_after)*
+            #arena_setup
             ::std::thread_local! {
                 static __CQ_SEQUENCE_MODULE: ::std::cell::RefCell<Option<(
                     ::std::sync::Arc<::cuda_core::CudaContext>,
@@ -2602,34 +2785,130 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
                 *cache=Some((__cq_pool.context().clone(),module.clone()));
                 Ok(module)
             })?;
-            let __cq_timing_wall = ::std::time::Instant::now();
-            let __cq_timing_start = __cq_pool.stream().record_event(
-                Some(::cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
+            let __cq_timing_enabled = #timing_enabled;
+            let __cq_timing_wall = __cq_timing_enabled.then(::std::time::Instant::now);
+            let __cq_timing_start = if __cq_timing_enabled {
+                Some(__cq_pool.stream().record_event(
+                    Some(::cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?)
+            } else { None };
             #build
             #(#launches)*
-            let __cq_timing_expanded=__cq_pool.stream().record_event(
-                Some(::cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
+            let __cq_timing_expanded = if __cq_timing_enabled {
+                Some(__cq_pool.stream().record_event(
+                    Some(::cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?)
+            } else { None };
             #output
-            let __cq_timing_finished=__cq_pool.stream().record_event(
-                Some(::cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
-            __cq_pool.stream().synchronize()?;
-            ::cq_gpu_runtime::publish_timings(::cq_gpu_runtime::Timings {
-                build_ms:__cq_timing_start.elapsed_ms(&__cq_timing_built)? as f64,
-                kernel_ms:__cq_timing_built.elapsed_ms(&__cq_timing_expanded)? as f64,
-                dedup_ms:__cq_timing_expanded.elapsed_ms(&__cq_timing_finished)? as f64,
-                total_ms:__cq_timing_start.elapsed_ms(&__cq_timing_finished)? as f64,
-                wall_ms:__cq_timing_wall.elapsed().as_secs_f64()*1000.0,
-                ..::cq_gpu_runtime::Timings::default()
-            });
+            if let (Some(wall), Some(start), Some(built), Some(expanded)) =
+                (__cq_timing_wall, __cq_timing_start, __cq_timing_built, __cq_timing_expanded)
+            {
+                let finished = __cq_pool.stream().record_event(
+                    Some(::cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
+                __cq_pool.stream().synchronize()?;
+                ::cq_gpu_runtime::publish_timings(::cq_gpu_runtime::Timings {
+                    build_ms: start.elapsed_ms(&built)? as f64,
+                    kernel_ms: built.elapsed_ms(&expanded)? as f64,
+                    dedup_ms: expanded.elapsed_ms(&finished)? as f64,
+                    total_ms: start.elapsed_ms(&finished)? as f64,
+                    wall_ms: wall.elapsed().as_secs_f64()*1000.0,
+                    ..::cq_gpu_runtime::Timings::default()
+                });
+            }
             Ok(__cq_result)
-        })().expect("GPU Sequence execution failed")
+        }).expect("GPU Sequence execution failed")
     }))
+}
+
+fn identifiers(tokens: TokenStream, names: &mut BTreeSet<String>) {
+    for token in tokens {
+        match token {
+            proc_macro2::TokenTree::Ident(name) => {
+                names.insert(name.to_string());
+            }
+            proc_macro2::TokenTree::Group(group) => identifiers(group.stream(), names),
+            _ => {}
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use quote::ToTokens;
+
+    #[test]
+    fn datalog_key_projections_preserve_fresh_column_binding_spans() {
+        use syn::visit::Visit;
+
+        // Fork's Batch key holes use mixed-site variables, the same names in
+        // their declared output columns, and owned dereference projections.
+        // Distinct source locations make rebuilding a call-site binder fail
+        // deterministically even outside a running procedural macro.
+        let mut keys = [
+            syn::parse_str::<syn::Ident>("__cq_datalog_column_0").unwrap(),
+            syn::parse_str::<syn::Ident>("__cq_datalog_column_1").unwrap(),
+        ];
+        for key in &mut keys {
+            key.set_span(Span::mixed_site().located_at(key.span()));
+        }
+        let [key0, key1] = &keys;
+        for (predicate, selected) in [
+            (quote!(select r if (#key0 > 0)), quote!(compact filtered flatten tile 256 input)),
+            (quote!(guard r if (*#key0 > 0 && *#key1 > 0)), quote!(map filtered flatten tile 256 input)),
+        ] {
+            // Physical output bindings have distinct temporary attributes;
+            // the declared head names still coincide with the input variables.
+            let program: Program = syn::parse2(quote! {
+                physical {
+                    relation R(a:i32,b:i32) = (&data.r);
+                    relation answer(#key0:i32,#key1:i32);
+                    r = pipe rename R@0 {a -> #key0,b -> #key1};
+                    filtered = pipe #predicate;
+                    first = pipe bind filtered with out0:i32 = (*#key0);
+                    second = pipe bind first with out1:i32 = (*#key1);
+                    result = pipe canon project second keep {out0,out1};
+                    return result as answer(out0,out1);
+                }
+                structures {
+                    r host scan = ::cq_gpu_runtime::DeviceColumns<'static,(i32,i32)> [];
+                    result canon = ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                }
+                sequence {
+                    input = store rows r;
+                    selected = #selected;
+                    output_rows = store canon map result selected;
+                    output count;
+                }
+                graded gpu {
+                    input at host;
+                    selected at host.device.block;
+                    output_rows at host.device;
+                }
+            }).unwrap();
+            let analysis =
+                cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
+            let generated = translate(&program, &analysis).unwrap();
+
+            struct Bindings<'a> {
+                keys: &'a [syn::Ident; 2],
+                counts: [usize; 2],
+            }
+            impl<'ast> Visit<'ast> for Bindings<'_> {
+                fn visit_pat_ident(&mut self, pattern: &'ast syn::PatIdent) {
+                    for (index, key) in self.keys.iter().enumerate() {
+                        if pattern.ident == *key {
+                            assert_eq!(pattern.ident.span().start(), key.span().start());
+                            assert_eq!(pattern.ident.span().end(), key.span().end());
+                            self.counts[index] += 1;
+                        }
+                    }
+                    syn::visit::visit_pat_ident(self, pattern);
+                }
+            }
+            let mut bindings = Bindings { keys: &keys, counts: [0; 2] };
+            bindings.visit_expr(&generated);
+            assert!(bindings.counts.iter().all(|count| *count > 0));
+        }
+    }
 
     #[test]
     fn rejects_a_legitimately_oversized_live_signature() {
@@ -3044,6 +3323,7 @@ mod tests {
                         shared: crate::layout::SharedLayout::new(),
                         virtual_range: None,
                         packed_columns: Some(vec!["a".into()]),
+                        arena_packing: None,
                         publication_columns: BTreeSet::new(),
                         sink: None,
                         scalar_output: false,

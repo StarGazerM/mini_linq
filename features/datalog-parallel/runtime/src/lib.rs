@@ -9,10 +9,15 @@
 //!
 //! Admission routes by the entire tuple. Each parallel task owns an exclusive
 //! mutable seen shard; native layout maps are published by the extension printer.
+pub mod layout;
+pub mod relational;
+pub mod runs;
 use cq_storage::HashState;
 use hashbrown::HashTable;
 use hashbrown::hash_table::Entry;
+pub use layout::ShardedLayout;
 use rayon::prelude::*;
+pub use runs::{RunLayout, RunSeen};
 use std::hash::{BuildHasher, Hash};
 
 type SeenShard<T> = HashTable<T>;

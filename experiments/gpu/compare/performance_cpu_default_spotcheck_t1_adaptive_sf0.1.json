@@ -1,0 +1,5 @@
+{
+  "generated_worker_sha256": "752a14f8ff356b37d9344aedf075a6fdeb5c6d7d81a82b660efae75a5cd0f7df",
+  "policy": "100-second combined wall budget per configuration; SF0.1 is untimed exactness only. Otherwise one exact warmup per mode and five timed runs, reduced to the first three when any warm/timed query exceeds 10s. Profile winners only: False. Completed measurements are retained.",
+  "changes": "Generated warm clock, adaptive sample count, loop stopping and effective median index. If a fourth/fifth sample triggers reduction, retain the first three rather than an even sample count. Isolated workers retain actual Tasks primitive counters but mark sequential bag/set agreement inapplicable; exact answers, counted operator graph and root wall checks remain mandatory. Authored worker, query sources and plans unchanged."
+}

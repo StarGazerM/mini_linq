@@ -1,3 +1,5 @@
 [toolchain]
-channel = "nightly-2026-08-28"
+# Same toolchain as the cuda-oxide monorepo backend and RCCL; cargo-oxide
+# supplies RUSTC_BOOTSTRAP for the device crates' unstable features.
+channel = "1.99.1"
 components = ["rust-src", "rustc-dev", "rust-analyzer", "clippy", "llvm-tools"]

@@ -1,0 +1,13 @@
+[package]
+name = "srd-doop-shared"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85.1"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[features]
+test-fixture = []
+
+[dependencies]
+serde_json = "1"

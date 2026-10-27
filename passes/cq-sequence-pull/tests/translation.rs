@@ -31,6 +31,28 @@ fn assert_answers(
 }
 
 #[test]
+fn reserve_previous_rejects_non_arena_pull_terminals() {
+    let structures = pipeline(quote! {
+        struct Query;
+        relation R(a:i32);
+        answer(a) :- R(a);
+    });
+    let mut program = cq_sequence_lowering::compile(&structures).unwrap();
+    program.sequence.output = Some(cq_lang_sequence::OutputProtocol::ReservePrevious);
+    let analysis = contract::check(&program).unwrap();
+    for result in [
+        cq_sequence_pull::translate(&program, &analysis),
+        cq_sequence_pull::translate_profile(&program, &analysis),
+    ] {
+        let error = result.unwrap_err().to_string();
+        assert!(
+            error.contains("output reserve_previous requires an arena terminal"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
 fn cq_pipeline_answers_equal_independent_expected_sets() {
     let data = quote! {
         let L = vec![(1i32, 2i32), (1, 2), (2, 3), (3, 4)];
@@ -150,13 +172,21 @@ fn simple(body: TokenStream) -> Program {
 }
 
 #[test]
-fn sequential_and_tasks_share_the_sequence_answer_contract() {
-    use cq_testkit::conformance::{Target, assert_conformant};
+fn sequence_owned_store_keeps_independent_row_accounting_live() {
     let program = simple(quote! {
         input = store rows r;
-        out = store tile 2 canon input;
+        out = store canon input;
     });
-    assert_conformant(&program, &[Target::Sequential, Target::Tasks]);
+    let analysis = contract::check(&program).unwrap();
+    for output in [
+        cq_sequence_pull::translate(&program, &analysis).unwrap(),
+        cq_sequence_pull::translate_profile(&program, &analysis).unwrap(),
+    ] {
+        let printed = output.to_token_stream().to_string();
+        assert!(printed.contains(
+            "let __cq_sequence_store_input_allocation = :: cq_storage :: retain_rows (& __cq_sequence_store_input)"
+        ), "{printed}");
+    }
 }
 
 #[test]
@@ -351,74 +381,6 @@ fn lifted_maps_folds_and_canon_preserve_tile_boundaries() {
         })
         .collect::<Vec<_>>();
     run(quote!(fn main() { #(#checks)* }));
-}
-
-#[test]
-fn retained_union_fallback_readers_keep_their_recorded_providers() {
-    let source = syn::parse_quote! {
-        struct Fuzz;
-        relation r0(c0:i32);
-        relation r1(c0:i32,c1:i32,c2:i32);
-        relation r2(c0:i32,c1:i32,c2:i32);
-        answer(v0,v1) :- r0(v0),
-            { { r1(v0,v1,v3) } | { r1(v0,v1,v3) } } else { r2(v0,v1,v4) };
-    };
-    let pipeline = cq_workloads::pipelines::Pipeline {
-        plan: cq_workloads::pipelines::Planner::ALL
-            .iter()
-            .position(|p| p.name() == "elimination_fine")
-            .unwrap(),
-        merge: true,
-        smallest: true,
-        ..Default::default()
-    };
-    let physical = pipeline.physical(&source).unwrap();
-    let structures = cq_structure_selection::compile(&physical).unwrap();
-    let program = cq_sequence_lowering::compile(&structures).unwrap();
-    let analysis = contract::check(&program).unwrap();
-    let output = cq_sequence_pull::translate(&program, &analysis)
-        .unwrap_or_else(|error| panic!("{error}\n{}", program.to_token_stream()));
-    run(quote!(
-        fn main() {
-            let r0 = vec![(1i32,), (2,), (3,)];
-            let r1 = vec![(1i32, 4i32, 5i32), (1, 4, 6)];
-            let r2 = vec![(1i32, 9i32, 0i32), (2, 7, 8)];
-            let actual: ::std::collections::BTreeSet<_> = (#output).into_iter().collect();
-            let expected: ::std::collections::BTreeSet<_> =
-                [(&1i32, &4i32), (&2, &7)].into_iter().collect();
-            assert_eq!(actual, expected);
-        }
-    ));
-}
-
-#[test]
-fn computed_branch_merges_use_the_retained_ordered_index() {
-    let source = syn::parse_quote! {
-        struct Fuzz;
-        relation r0(c0:i32);
-        answer(v0) :- r0(v0), let v1:i32 = std::convert::identity(v0.to_owned()),
-            { if *v1 == 1 } | { if *v1 == 2 };
-    };
-    let pipeline = cq_workloads::pipelines::Pipeline {
-        plan: cq_workloads::pipelines::Planner::ALL
-            .iter()
-            .position(|p| p.name() == "transfer")
-            .unwrap(),
-        merge: true,
-        canon: true,
-        smallest: true,
-        ..Default::default()
-    };
-    let physical = pipeline.physical(&source).unwrap();
-    let structures = cq_structure_selection::compile(&physical).unwrap();
-    let check = assert_answers(
-        structures,
-        quote! {
-            let r0 = vec![(1i32,), (2,), (1,), (3,)];
-        },
-        quote!([(&1i32,), (&2,)]),
-    );
-    run(quote!(fn main() { #check }));
 }
 
 #[test]

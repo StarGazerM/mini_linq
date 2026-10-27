@@ -1,0 +1,24 @@
+{
+  "configs": [
+    "default",
+    "par",
+    "no-reduce",
+    "transfer",
+    "le",
+    "le_runs",
+    "hypergraph",
+    "advised"
+  ],
+  "exports": [
+    [
+      "orders",
+      "o_orderkey,o_orderdate"
+    ],
+    [
+      "lineitem",
+      "l_orderkey,l_commitdate,l_receiptdate"
+    ]
+  ],
+  "name": "retail_h04_not_exists",
+  "sql": "SELECT DISTINCT o.o_orderkey FROM orders o\nWHERE o.o_orderdate >= DATE '1993-07-01' AND o.o_orderdate < DATE '1993-10-01'\nAND NOT EXISTS (SELECT 1 FROM lineitem l WHERE l.l_orderkey = o.o_orderkey\nAND l.l_commitdate < l.l_receiptdate)"
+}

@@ -11,7 +11,7 @@ default-run = "gpu-index"
 metal = "0.32"
 serde_json = "1"
 libc = "0.2"
-mccl = { path = "../../../../mccl" }
+mccl = { path = "../mccl" }
 
 cq-storage = { path = "../../../runtime/cq-storage" }
 [profile.release]

@@ -8,7 +8,7 @@ cq-sequence-pull = { path = "../../passes/cq-sequence-pull" }
 cq-sequence-tasks = { path = "." }
 proc-macro2 = "1"
 quote = "1"
-syn = { version = "2", features = ["full", "extra-traits"] }
+syn = { version = "2", features = ["full", "extra-traits", "visit-mut"] }
 
 [package]
 name = "cq-sequence-tasks"
@@ -21,13 +21,20 @@ description = "Checked Sequence translation for ordered Rayon tasks"
 [dependencies]
 cq-lang-sequence.workspace = true
 cq-sequence-pull.workspace = true
+cq-print = { path = "../../passes/cq-print" }
+cq-sequence-plan = { path = "../../passes/cq-sequence-plan" }
 proc-macro2.workspace = true
 quote.workspace = true
 syn.workspace = true
+cq-storage = { path = "../../runtime/cq-storage" }
+rayon = "1"
 
 [dev-dependencies]
-cq-testkit = { path = "../../testkit/cq-testkit", features = ["sequence-conformance"] }
+cq-sequence-conformance = { path = "../sequence-conformance" }
+cq-testkit = { path = "../../testkit/cq-testkit" }
 cq-structure-selection = { path = "../../passes/cq-structure-selection" }
+cq-load = { path = "../../runtime/cq-load", default-features = false }
+cq-storage = { path = "../../runtime/cq-storage", features = ["counters"] }
 
 [package.metadata.cq]
 source = "cq-lang-sequence"

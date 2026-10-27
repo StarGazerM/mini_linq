@@ -1,0 +1,5 @@
+# Feature workspaces share one build directory so core crates and third-party
+# dependencies (locked to the root versions) compile once, not once per feature.
+# features/workloads keeps its own directory (benchmark workers and caches).
+[build]
+target-dir = "target"

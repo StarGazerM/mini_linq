@@ -1,5 +1,5 @@
 use cq_lang_sequence::{Program, check_rewrite, contract};
-use cq_sequence_rewrite_passes::{choose, grade, output, partition, segment, store_level, tile};
+use cq_sequence_plan::rewrites::{choose, grade, output, partition, segment, store_level, tile};
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 
@@ -81,6 +81,11 @@ fn every_registered_macro_applies_and_round_trips() {
             apply_macro!(cq_sequence_rewrites::output, bounded),
             output,
             quote!(bounded),
+        ),
+        (
+            apply_macro!(cq_sequence_rewrites::output, reserve_previous),
+            output,
+            quote!(reserve_previous),
         ),
         (
             apply_macro!(cq_sequence_rewrites::grade, custom, a at host, b at device.block),

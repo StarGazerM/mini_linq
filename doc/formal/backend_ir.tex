@@ -70,17 +70,25 @@ t ::= rows r                     // the positions of a retained result or host
     | flatten t                  // join; offsets are the scan of lengths
     | compact p t                // total filter, order-preserving
     | tile n t                   // view: regroup into runs of n
+    | partition_k[K](P) t        // key-disjoint redistribution into P parts
     | lookup b [K] t             // per-position bucket of provider b
     | fold (o,e) t               // monoid fold
     | canon t                    // support
-    | store t                    // materialize (the only non-view)
+    | store t                    // materialize
     | choose [ g => t ]*         // size-guarded equal alternatives
 \end{lstlisting}
 \code{tile}, \code{flatten} over known offsets, \code{lookup} over a range
 cursor and the gathers inside $f$ are \emph{views}: bijections on positions
 that change addressing and materialize nothing (Lift's layout patterns,
-Descend's views~\cite{paper-lift,paper-descend}). Only \code{store}
-materializes; a segmented stored \code{flatten} retains offsets (BE-Offsets).
+Descend's views~\cite{paper-lift,paper-descend}). \code{store} materializes,
+and \code{partition\_k} redistributes an ancestor store into owned parts;
+a segmented stored \code{flatten} retains offsets (BE-Offsets).
+Nested shape alone does not demand a Range provider: a sequential leaf
+task can enumerate each exact bucket within its owned input tile.
+Machine grading adds Range obligations when a non-leaf collective needs
+indexed bucket offsets, or a distributing tile cuts the flattened bucket
+stream across executors. This distinction preserves exact routed-provider
+reads inside a whole task-local segment without weakening collective scans.
 Under BE-Alpha, constructors are lifted through outer tile levels:
 \code{map}, \code{compact}, \code{lookup}, \code{fold}, \code{canon} and
 \code{store} operate on innermost rows and preserve those outer partitions;
@@ -114,7 +122,7 @@ one part; a separated store publishes the concatenation of its outer parts.
  {\text{equality, hashing and canon on }K\text{, and order reads on }c\text{, act on codes}}
 
 \Rule{BE-Choose}{t_1,\ldots,t_n\text{ have checked equal support}\quad
- \text{guards }g_i\text{ over lengths, exhaustive}}
+ \text{guards }g_i\text{ over lengths or target-wide workers, exhaustive}}
  {\mathsf{choose}\,[g_i\Rightarrow t_i]\text{ denotes any }t_i\text{; which runs is free}}
 \end{mathpar}
 BE-Bind is the Kleisli bind of Section~\ref{sec:denotation} restated: a
@@ -136,9 +144,111 @@ stop and is stated on bags: a lost or duplicated position changes
 $\alpha$. BE-Canon makes per-part canon a sound prefilter that replaces
 the global boundary only when equal rows meet in one part. BE-Choose is
 incremental flattening~\cite{paper-futhark-flatten}: the right
-decomposition depends on lengths known at run time, so several equal
-decompositions may be recorded under thresholds that are tuning
-parameters, not meaning.
+decomposition depends on lengths and available workers known at run time,
+so several equal decompositions may be recorded under thresholds that are
+tuning parameters, not meaning. The guard \code{workers < N} has a positive
+bound and reads one target-wide available-worker count. It is uniform for
+collective participation, supplies no size evidence, and does not change
+support; a final \code{else} covers the remaining worker counts. Pull supplies
+one worker; target-hook translations receive an explicit worker expression,
+with Tasks supplying \code{rayon::current\_num\_threads()}.
+
+\paragraph{Key-disjoint partitions.}
+Let $B=\alpha t$ be a bag of complete valuations $V$, $K$ a tuple of
+available columns, and $r_P$ a fixed total routing function on key tuples
+with range $[0,P)$. Write $B_p=B|_{r_P(K(x))=p}$, retaining every input
+occurrence exactly once. Collisions between unequal keys are permitted;
+equal keys must always route together. Empty parts are retained.
+\begin{mathpar}
+\Rule{BE-KeyPart}{P>0\quad K\subseteq V\quad
+ t\text{ reads a store at a strict ancestor of the separated pool}\quad
+ P\in\{1,\mathsf{width}(\mathsf{pool})\}}
+ {\mathsf{partition}_{K,P}(t)=[B_0,\ldots,B_{P-1}]
+ \quad\biguplus_{p<P}B_p=B
+ \quad K(\mathrm{supp}\,B_p)\cap K(\mathrm{supp}\,B_q)=\varnothing\ (p\ne q)}
+
+\Rule{BE-KeyPartCanon}{[B_p]_{p<P}=\mathsf{partition}_{K,P}(t)
+ \quad V\to K}
+ {\alpha(\mathsf{canon}\,t)
+ =\textstyle\biguplus_{p<P}\alpha(\mathsf{canon}\,B_p)}
+
+\Rule{BE-KeyPartGroup}{[B_p]_{p<P}=\mathsf{partition}_{K,P}(t)
+ \quad G\ne\varnothing\quad G\to K}
+ {\mathsf{group}_{G;(e_i,M_i)_i}(\mathsf{canon}\,B)
+ =\textstyle\biguplus_{p<P}
+ \mathsf{group}_{G;(e_i,M_i)_i}(\mathsf{canon}\,B_p)}
+
+\Rule{BE-GroupPartial}{D=\iota(\mathrm{supp}\,\alpha t)
+ \quad\biguplus_{p<P}D_p=D
+ \quad(M_i,\oplus_i,e_i^0)_i\text{ commutative monoids}}
+ {\mathsf{group}_{G;(e_i,M_i)_i}(D)
+ =\mathsf{merge}_G\bigl([\mathsf{group}_{G;(e_i,M_i)_i}(D_p)]_{p<P}\bigr)}
+
+\Rule{BE-KeyPartProvider}{[B_p]_{p<P}=\mathsf{partition}_{K,P}(t)
+ \quad L\to K\quad K=h\circ L\quad I_p=\mathsf{build}_L(B_p)}
+ {\mathsf{lookup}_{\mathsf{build}_L(B)}(l)
+ =\mathsf{lookup}_{I_{r_P(h(l))}}(l)}
+\end{mathpar}
+The case $P=1$ is the identity cover $B_0=B$, with no hash routing.
+Here equalities forget enumeration order but preserve bag multiplicities;
+canon compares complete valuations, never just routing or aggregate columns.
+Provider routing projects the physically stored lookup tuple: constant-bound
+columns omitted by filtered layouts are not routing coordinates. Structures
+rejects covering join filters over provider families lacking exact key
+enumeration, including unsupported routed families.
+The group law uses the same complete-valuation canonicalization and declared
+monoids as BE-Group. Since $G\to K$, no group crosses a part boundary.
+An unkeyed aggregate uses BE-GroupPartial rather than BE-KeyPartGroup.
+A keyed aggregate over globally unique contiguous parts also uses
+BE-GroupPartial: the product aggregate monoid is lifted to finite maps from
+group keys, with pointwise combination and the empty map as identity.
+The host merges these maps and emits one flat row per present key. Absent
+keys emit no rows, including on empty keyed input. The unkeyed case instead
+combines scalar partial states and always emits its single identity row.
+The checked premise is global uniqueness of complete valuations across
+all parts, not merely uniqueness within each part. It is established either
+by BE-KeyPartCanon (routing determined by the complete valuation followed
+by per-part canon), or by BE-GroupKey's proof that the original valuations
+are globally distinct. The latter permits ordinary contiguous tiles without
+canon. Raw tiles without such a uniqueness proof are rejected: per-tile
+canon alone cannot eliminate duplicates crossing tile boundaries.
+Both \code{Tile} and \code{PartitionK} may feed an unkeyed partial fold.
+A keyed \code{Tile} partial fold merges finite maps; a keyed
+\code{PartitionK} retains BE-KeyPartGroup's independent-group cover.
+The host merge combines aggregate states with the same monoid operations,
+not by evaluating original row expressions again or counting partial rows.
+The checker records each Group's proven partial mode in
+\code{Analysis.partial\_groups}, by owning Sequence definition and constructor
+preorder (reserving the slot before checking the Group input).
+Grading and target interpretations consume these checked modes, rather than
+rediscovering routing provenance through nested Lookup, Flatten or Choose terms.
+For globally unique inputs with total pipelines, checked empty-key partition advice lifts
+\code{Tile} through a single-use map/compact/lookup pipe spine to its raw
+driver or existing named Store boundary. It introduces no new full-valuation
+publication, changes no shared pipe, and retains the ordinary totality and
+grade checks on every streamed operation.
+Unauthored single-use views on that spine are graded at the pool's producer
+along with the streamed work; moving only the Group would leave illegal
+unstored host references. Authored grades and stored boundaries are preserved.
+An opaque pipeline instead publishes \code{parts = store tile N t} at host,
+then a pool-graded partial Group consumes that ancestor-stored nested cover.
+Every opaque operation remains host-owned, with unchanged expression and
+domain order; no totality assertion is introduced. This is an ordinary explicit
+parts publication, not a claim of bounded-memory or incremental execution.
+The provider law concerns exact point buckets (and hence membership), with
+the same routing function and partition count at build and lookup. It does
+not license a range lookup spanning several routing keys to read one part,
+nor remove provider capability or codec obligations.
+The routed provider retains the routing projection $h$ and applies it in
+the written routing-column order to every lookup key. This includes
+proper subsets and reordered routing tuples; the planner's default
+candidate uses the whole canonical lookup key.
+The surface constructor is \code{partition\_k[K](P) t}; it adds one nested
+level of exactly $P$ parts graded at the pool. Canon and keyed group operate
+inside each part, and an explicit flatten joins them. Redistribution obeys
+BE-Separate through its ancestor store; it is not a pool collective.
+The machine fixes $P$ at plan time. Runtime worker count only schedules
+these parts and never changes routing or the equations above.
 
 \paragraph{Providers and codecs are capabilities.} A provider is read
 through \code{lookup} and the term records only what the read requires:
@@ -187,6 +297,9 @@ GPU instance of the grade.
 
 \Rule{BE-Length}{\mathsf{store}\,t\text{ at a separated level (host stores need no bound)}}
  {|t|\text{ is in its type before the write (a scan), or a capacity with an overflow flag}}
+
+\Rule{BE-Publication}{d=\mathsf{store}\,t\quad t\text{ has checked provenance and consumers}}
+ {\mathsf{publication}(d)\in\{\mathsf{BorrowHost},\mathsf{Alias},\mathsf{OwnRows},\mathsf{DeferredRows},\mathsf{Parts}\}}
 
 \Rule{BE-Boundary}{\text{a maximal segment of total terms between stores at a separated level}}
  {\text{is one unit of dispatch (a kernel, a task); its domain is the outer stored space; derived, not written}}
@@ -279,6 +392,47 @@ longest dependency chain. Plan R's two schedules have equal work; a
 one-part schedule has span proportional to work, a grid-wide one span
 logarithmic. Cost is not meaning; it is what a decomposition pass argues
 with, and lengths in types are what make it computable.
+BE-Publication derives ownership once, before support-equal result reheading.
+A resident host Rows/Ref/Store chain can publish a borrow; a flat routing
+input can alias an already published flat buffer and its length. Otherwise
+retained rows are owned, either flat or as checked key-disjoint parts. Aliases
+may rehead logical columns without claiming the source's raw carrier is
+unchanged. Real row copies, including raw key-input staging, contribute
+retained-row traffic $B$, not another row-expression evaluation or a unit of
+compute span. Provider insertions continue to contribute work and span.
+Borrow and alias publication add no traffic. Thus being consumed by a key
+partition is not a free-store rule.
+The native routed-provider representation records the inner provider of the
+canonical \code{cq\_storage::sharded::Sharded} ABI. Before emission, checking
+validates its type arguments and proves every routing column belongs to the
+stored outer key, after constant elision. An unrelated type with the same
+last identifier has no routed interpretation.
+
+The \(\mathsf{DeferredRows}(c)\) refinement is checked Store-consumer fusion,
+not a global lazy interpretation of \code{store}. It applies only to a staged
+owned input \(d=\mathsf{store}\,t\) whose row and written-length consumers are
+confined to one \(\mathsf{Parts}\) publication \(c\). That publication starts
+with the recorded uniform guard \code{workers < 2}, whose arm contains a
+singleton leaf \(\mathsf{partition}_K(1)\,d\), directly or beneath checked
+nested length choices. Every leaf covers the same named \(d\) with the same keys.
+Exactly one native routed provider is built, with no retained rows, direct
+part replay, consumer alias, or final-output use. The pre-reheading input and
+consumer result carriers agree. Checking follows pure named producer views
+and previously published resident-host borrows, but not prior owned or nested
+Stores. It uses Physical opacity analysis over every dependency, excludes
+shadowable join-filter source bindings, and excludes
+intervening publications of source dependencies.
+
+Under these premises a worker-singleton leaf reached without counting \(d\)
+may consume \(t\) directly. A proven nonexpanding host-length guard can select
+this leaf before demanding a filtered staged input. Any count of \(d\) or routed
+demand instead forces one owned row vector and retention token, reused by all
+subsequent demands, including a later singleton leaf.
+Thus \(t\) is evaluated at most once on each selected branch. A skipped vector
+incurs no row-build or retention activity; actual routed copies remain owned.
+PL-Cost nevertheless retains the worst-case owned-input traffic \(B\), with
+unchanged work and span. Failure of any premise preserves the original
+publication record, and the interpreter may not infer a new scheduling guard.
 
 \subsection{Decomposition}
 A planner is an advice generator, not another interpretation of Sequence.
@@ -310,7 +464,7 @@ Let $t_0=t$, $t_i=r_i(t_{i-1})$, and let $A(t)$ record authored choices.
  e.\mathsf{type}\gets k.\mathsf{type}\quad\text{by checked retention, index construction and retype}}
 
 \Rule{PL-Cost}{C=(c_1,\ldots,c_k)\text{ admissible, preserving }A(t)\quad
-  \kappa(c)=(W(c),I(c),S(c),\#\mathsf{stores}(c),\#\mathsf{dispatches}(c))}
+  \kappa(c)=(W(c),I(c),S(c),B(c),\#\mathsf{stores}(c),\#\mathsf{dispatches}(c))}
  {c^*=\mathsf{foldl}\bigl(
    (a,b)\mapsto\text{if }\kappa(b)\prec\kappa(a)\text{ then }b\text{ else }a,
    c_1,(c_2,\ldots,c_k)\bigr)}
@@ -328,12 +482,109 @@ PL-Det includes rejection when no catalog token satisfies a recorded
 obligation. PL-Cost uses the work and span of the preceding Cost paragraph,
 not a semantic preference. Here $\prec$ is provable strict lexicographic
 symbolic cost dominance: work first, then Lookup/Expand inversions $I$,
-span, stores and dispatches. An inversion is a Lookup evaluated after an
-upstream Expand in the same pipeline; retained references begin new pipelines.
+span, retained-row traffic $B$, stores and dispatches. $B$ sums the checked
+owned publication lengths. It is a bandwidth tie-breaker, not an assumption
+that copying one carrier costs as much as a hash/group row evaluation.
+An inversion is a Lookup evaluated after an upstream Expand in the same
+pipeline; retained references begin new pipelines.
 Bounds and coefficient dominance establish comparisons; unresolved
 comparisons, like equal costs, retain the earlier candidate.
+For a BE-GroupKey-proven keyed group, both contiguous partial-map folding
+and group-key routing remain candidates. The former is enumerated first,
+then the native schedule and routed alternatives; cardinality uncertainty
+uses the same stable incomparability rule, not a query-specific estimate.
+Partial folding owns one accumulator map per machine scheduler partition,
+not per logical tile. Its fold span uses that scheduler width. Host merge
+adds serial dependency span for up to $P\,|G|$ partial aggregate states,
+capped by the input count when both estimates are available for keyed groups.
+Authored group/output count evidence supplies $|G|$ when present; otherwise
+the charge remains the symbolic $P\,\mathsf{scan}(\mathsf{group})$, never zero.
+For an unkeyed scalar partial fold with unknown input size, the fixed host-merge
+setup instead follows the existing amortized-routing convention: halving
+effective fold throughput charges its bandwidth without making a false
+all-cardinalities dominance claim about a constant setup term. Known input
+counts retain the explicit scalar merge charge. Keyed groups reserve their
+variable-length output, avoiding a second count-pass evaluation of the fold.
+Like routing, merging states is organizational span rather than repeated
+evaluation of original row expressions. Many-group estimates can therefore
+select key routing over partial-map merging without changing either meaning.
+For an eligible native exact-key provider Store, the automatic schedule retains
+an explicit runtime BE-Choose before this cost comparison. For published
+input length \(n\), workers \(w\), and positive machine row cutoffs
+\(\theta=\code{key\_partition\_threshold}\) and
+\(\kappa=\code{key\_partition\_cache\_threshold}\), the policy is
+\[
+  \mathsf{route}(n,w)\iff n\geq\theta\ \land\ (w>1\ \lor\ n\geq\kappa).
+\]
+Let \(c=\max(\theta,\kappa)\). The first root arm \(w<2\) is itself a choice:
+an optional proved \(\mathsf{len}(H)<c\) selects
+\(\mathsf{partition}_{K,1}(t)\), then \(n<c\) selects that same singleton,
+otherwise use \(\mathsf{partition}_{K,P}(t)\). The remaining root arms
+select singleton for \(n<\theta\), and \(P\) parts otherwise.
+Nested choices of fixed key covers retain the published-input allocation
+witness of every leaf (BE-Length); varying the selected part count does not
+introduce an unbounded separated store.
+The host-layout name \(H\) is accepted by \texttt{Len::Input} and supplies an
+upper bound only through nonexpanding Physical Rename, Select, Point, Range,
+Guard, Bind, Project, and Semi/Anti driver chains. Probe, Merge, Union and Group
+stop this derivation. The actual Sequence occurrence count must also be bounded:
+host Rows and pure Ref chains, Store, Tile/Flatten and Canon preserve the bound;
+Map/Compact additionally require the nonexpanding Physical path from their
+child's provenance. Membership Compact may consume a Lookup's existence,
+but expanding Lookup, Union, Fold and Group do not qualify. Choices require
+compatible host and result provenance in every arm. A Rows read following a
+non-BorrowHost publication of that result is excluded: support equality alone
+does not prevent duplicate occurrences. A Sequence definition (including the
+new publication) that shadows \(H\) also prevents the shortcut. Thus host length
+can establish singleton selection without demanding filtered staging; the
+exact-input fallback retains the equation when host length does not decide it.
+Tasks defaults \(\theta=65{,}536\) and \(\kappa=6{,}291{,}456\) rows are
+measured target parameters, not universal optima or cache-byte guarantees.
+The cache cutoff exceeds H04 SF1's \(6{,}001{,}215\) host rows but is below the
+measured H04/H21 SF10 provider inputs. A positive \(\kappa<\theta\) is valid.
+Replay records both \code{threshold N} and \code{cache N}; explicit
+threshold-only advice retains its legacy worker/count policy. This is a Machine
+and Tasks Config parameter, not a new macro option or interpreter branch.
+Written exact count guards use the Sequence \texttt{Len::Input} name of the
+prior publication, not a cardinality estimate. All arms retain the same routing
+keys and provider token; BE-Choose joins unequal outer lengths. The one-part
+identity cover builds the native provider without hashing; routed leaves build
+\(P\) providers. Fixed-cover allocations are available in each branch, so
+differing part counts alone do not require Store capacity.
+The rewrite redirects every ordinary row reference and written length guard
+on the original provider definition to the new raw publication, preserving
+its flat carrier and ancestor extent. Lookup provider identities retain the
+retyped token. Consequently a derived provider sharing the original rows
+does not inherit a spurious extra cover level from an earlier provider build.
+When the original Store executes below host, checked publication advice names
+its raw producer at the original execution grade and publishes
+\code{store producer} at host before the runtime choice. This preserves task-owned
+pipe references instead of moving their evaluation into the ancestor Store;
+the ordinary publication and scope rules establish the transfer.
+Force advice selects the fixed $P$-part schedule without a guard; forbid and
+authored grades retain the native schedule. PL-Cost compares the remaining
+collective and decomposition choices, never discards the automatic provider
+choice for lack of a provable cardinality, and never overrides these policies.
+Provider selection is unique per physical provider, not per Sequence alias:
+an explicitly forced eligible publication wins, otherwise the last eligible
+publication preceding every keyed reader is selected without reordering definitions.
+This dominance premise is checked from recorded provider reads; forced or replayed
+advice that moves the sole provider build after a reader is rejected. A forbid on
+any alias retains the common native type; conflicting forced aliases are rejected.
+Checked replay rejects retyping an already routed provider, rather than
+constructing a nested routed family.
+Provider eligibility is evaluated after decomposition against the scheduled
+grading obligations. If segmentation or distributed lookup requires a range
+cursor, the exact-only routed family is ineligible and the native provider is
+retained; no runtime choice weakens a range or ordered-access requirement.
+The publication must carry a flat valuation containing every routing key;
+native layouts that reconstruct an omitted constant key do not satisfy this
+premise. The routed token must cover every scheduled read level, capability,
+and carried element type, not only match the provider family's type name.
 Resource recovery first preserves the machine's preferred item count and
 distributing width, trying nested segmentation before reducing either.
+Local offsets segmentation is considered only at collaborative grades:
+its inline Store cannot satisfy BE-Boundary at a separated task or pool.
 At each geometry PL-Cost compares admissible segmented and plain candidates;
 strict improvement replaces the earlier candidate, preserving stable ties.
 Dispatch splitting is a last resort, never a substitute for an admissible
@@ -369,6 +620,27 @@ for a row carrying a \code{String}; a compatible host token or a rejection
 is required.
 Each substitution uses the existing source/target Structures retype checks;
 an absent token or inadmissible retention rejects with the obligation.
+Sequence rewrite equality also accepts checked catalog retention:
+host renames alone may change from \code{pipe} to \code{let}, with
+their keyed fallbacks replaced by built indexes. The dedicated
+\code{check\_retention\_rewrite} checks both endpoints and the Physical
+rewrite contract, requiring identical non-mode Physical syntax and order,
+original host scans, existing key layouts and canonical boundaries.
+Provider, retained-row, membership-state and canon implementation types
+may change. Ordinary Structures rewrites still require exact Physical
+syntax; neither boundary permits replacing an opaque reader or predicate.
+When catalog selection follows Sequence lowering, each newly retained
+rename also receives an explicit Sequence store, so its provider is built
+before lookup emission. Native provider preservation matches result and
+key layout, not entry position: retention removes fallback entries and
+appends indexes, changing their positions.
+The native Tasks target preserves retained row-buffer types separately:
+replayable rows use the row collection ABI, not a keyed range-provider family.
+Catalog retyping also composes with a subsequent checked join reexpression.
+The endpoint proof compares surviving storage layouts modulo implementation
+types, while separately proving relational support, opaque evaluation order
+and exact host-reader syntax. It does not require the composite Physical
+change to fit the narrower mode-only retention certificate.
 Placement propagates opaque evaluation and its unstored feeds to host before
 assigning descendant work. String-literal predicates and operations reading
 or producing String-bearing rows likewise stay host through the projection
@@ -626,15 +898,52 @@ dynamic part claiming & none & work stealing & atomic cursor (free, BE-Partition
 \begin{mathpar}
 \Rule{T-Tasks}{t\text{ checked against }\mathsf{host}>\mathsf{pool}(\text{separated, dynamic})>\mathsf{task}}
  {\mathsf{run}_{\rm tasks}(t)=\text{T-Pull at }\mathsf{host};\
-  \mathsf{tile}_n\text{ at pool}\mapsto\code{par\_chunks}(n);\
+  \mathsf{tile}_n\text{ at pool}\mapsto\text{indexed contiguous tiles via shared task dispatch};\
   \mathsf{store}\text{ at pool}\mapsto\text{task-local vectors joined in chunk order};\
   \mathsf{flatten}\text{ at task}\mapsto\text{sequential flat map};\
-  \mathsf{canon}\mapsto\text{per-part then global (BE-Canon)}}
+  \mathsf{partition}_{K,P}\mapsto\text{route into }P\text{ owned parts};\
+  \mathsf{canon}\mapsto\text{per-part then global (BE-Canon), or per-key-part (BE-KeyPartCanon)}}
 \end{mathpar}
 A collective graded at the separated pool is rejected by BE-Collective; a
 reduction at the join does not make the pool collaborative. Panics
 propagate through the join to the host, and no partially joined result is
 published.
+The shared dispatch erases the coarse index body before entering Rayon.
+Publication groups contiguous tiles into a bounded multiple of the worker
+count and joins per-group buffers in encounter order; per-index result slots
+preserve order without specializing the scheduler for each pipeline.
+The Tasks machine API \code{machine()} uses a fixed default of 64 logical
+pool partitions; \code{machine\_with\_width(parts)} requires a positive count
+and records it as the pool's distributing width. This logical width is not
+the contiguous tile grain and is not the Rayon worker count. Changing the
+runtime thread count changes scheduling and may select an equivalent recorded
+worker-guarded cover, never results. Keyed group and routed point
+providers realize BE-KeyPartGroup and BE-KeyPartProvider only where the
+checked Sequence records them; the translator introduces no partition plan.
+Joining task buffers preserves every surviving sequence dimension. Fold,
+Canon, and Group remain lifted over those dimensions, rather than consuming
+tile iterators as rows. Flattening a completed key cover restores ordinary
+host reads; flattening a symbolic worker-local tile does not, until its join.
+An early retained host publication uses an identity join predicate until its
+covering provider is built (IF-JoinFilter). The build shadows that initial
+binding, so subsequently evaluated lazy pipelines use the constructed filter.
+The exact covering operator still rejects the same nonmatching rows.
+Tasks consumes BE-Publication's ownership and representation records rather
+than rediscovering base-row ancestry, partition consumers, or provider type
+names. A BorrowHost routing input reads borrowed host tiles (or base-relative
+positional ranges), without an intermediate whole-host vector. Host tiles
+apply every recorded join-filter predicate inside each base-relative range,
+not in a serial collection before dispatch. Routing groups consecutive chunks
+into scheduler-fold-local buckets, reuses the first nonempty owner buffer,
+and preserves occurrence order within each published part. These are
+realizations of the existing checked covers, not additional IR choices.
+For a recorded singleton provider cover over an immutable published source,
+Tasks retains the source iterator rather than copying it into a row-part
+vector. The native inner provider consumes that iterator directly. Routed
+covers retain their owned part buffers and matching lookup-key router.
+The singleton therefore records no partition-buffer insertions, while native
+provider insertions are still counted. Any preceding owned input publication
+remains an independently accounted Store.
 
 The parallel Datalog extension (Section~\ref{sec:datalog-languages}) is the
 task interpretation at the granularity of rule holes: its partitioned
@@ -695,6 +1004,83 @@ same membership probe; neither expands witnesses. Empty provider ranges,
 absent directory keys, and existential wildcard columns follow the same
 equation. The translator reads this polarity, rather than choosing it.
 
+\paragraph{Packed-run inputs and candidate arenas.}
+A checked binding records that a host input is a collection of device runs
+of packed words (\textsc{DL-DevicePacking}) in a stated column permutation;
+it is never inferred from a built index. Scanning visits every run; a lookup
+of a key prefix takes one contiguous word range per run, and expansion loops
+over runs uniformly across the block, flattening each run's ranges as in the
+segmented-flatten lemma. Membership is the disjunction over runs.
+\begin{mathpar}
+\Rule{GPU-Runs}{\text{input bound to runs }\rho_1\ldots\rho_m\text{ with packing }p\quad
+ \textsc{STR-RunRead}}
+ {\mathsf{lookup}(k)=\biguplus_j\mathrm{unpack}_p(\rho_j[\mathrm{range}_p(k)])\quad
+  \mathsf{member}(k)=\bigvee_j\rho_j[\mathrm{range}_p(k)]\neq\emptyset}
+\end{mathpar}
+An arena terminal publishes the hole's head rows packed in the head's
+canonical column order into a caller-owned device buffer and returns it with
+its length. It is a candidate bag: canonicalization belongs to admission
+(\textsc{DL-DeviceRuns}). Sizing follows the dispatch's recorded output
+protocol, so a batch is never truncated.
+\begin{mathpar}
+\Rule{GPU-Arena}{\mathsf{run}_{\rm gpu}(t)\text{ as T-Gpu}\quad
+ \text{output protocol discharges BE-Length}}
+ {\mathrm{unpack}(\mathrm{arena})\equiv_{\mathrm{bag}}\sem{t}}
+\end{mathpar}
+Publishing an arena batch needs no terminal stream fence. Every recorded
+dispatch metadata check and BE-Abort flag is still read before publication;
+the batch retains its owners, and all later use, reuse and destruction are
+ordered on the same pool stream, so a consumer can never observe an incomplete
+batch. Timing events and the fence that reads them are opt-in and do not
+change the result.
+\begin{mathpar}
+\Rule{GPU-Arena-Timing}{\text{metadata and BE-Abort checked before publication}\quad
+ \text{all uses ordered on the producing stream}}
+ {\text{omitting the terminal fence preserves }\textsc{GPU-Arena}}
+\end{mathpar}
+The recorded output protocol \code{reserve\_previous}, accepted only by the arena
+terminal, starts each invocation of a hole with the last validated count of
+that hole as its capacity (zero at first use). The remembered count is an
+initial capacity, not a bound: the kernel counts every candidate and writes
+only in bounds; an arithmetic failure aborts (BE-Abort); a capacity shortfall
+discards the attempt and reruns it with the full required capacity against the
+same immutable snapshot. Only a fully validated, initialized prefix is
+published, so the batch equals the Count protocol's.
+\begin{mathpar}
+\Rule{GPU-ReservePrevious}{\text{inputs immutable during the invocation}\quad
+ \text{count}\le\text{capacity checked before publication}}
+ {\text{published batch}=\text{the }\mathsf{count}\text{ protocol's batch}}
+\end{mathpar}
+
+\paragraph{Closed host captures.}
+A Rust subexpression of a guard, binding or selection whose free variables
+include no row column (for example \code{sym("abstract")}) is a closed capture.
+The translator evaluates each closed capture once on the host per invocation,
+before the first dispatch that needs it and only if that dispatch's input is
+nonempty, converts the value to its device encoding (the declared
+\code{SymbolCodec} for symbol types), and passes it as a kernel parameter; the kernel compares
+encodings. Strings therefore never reach the device. This is the closed case of
+\textsc{BE-Partial} realized by \textsc{IF-Parameter}, for any machine; staging
+totality (\textsc{ST-Total}) is unchanged, so host plans are unaffected. The
+host premise is the one already made for Rust predicates: a closed capture is
+deterministic and total, so one evaluation equals the per-row evaluations it
+replaces.
+\begin{mathpar}
+\Rule{GPU-Capture}{e\text{ closed}\quad e\text{ deterministic and total}\quad
+ \mathrm{enc}\text{ injective}}
+ {\sem{\phi[\mathrm{enc}(e)/e]}_{\mathrm{device}}=\sem{\phi}_{\mathrm{host}}\text{ on every row}}
+\end{mathpar}
+A literal atom argument such as \code{method\_modifier(sym("abstract"), m)}
+reaches the translator as a constant inside a rename. The checked Physical
+rewrite \code{capture\_constants} turns each such argument into a fresh column,
+an equality guard against the literal (a closed capture), and a projection
+that drops the fresh column; its checker re-derives that triple from the
+source and requires exact equality.
+\begin{mathpar}
+\Rule{PH-ConstantGuard}{a=\mathsf{rename}(R,(\ldots,c,\ldots))\quad c\text{ closed}\quad x\text{ fresh}}
+ {\sem a=\sem{\mathsf{project}_{\neg x}(\mathsf{guard}_{x=c}(\mathsf{rename}(R,(\ldots,x,\ldots))))}}
+\end{mathpar}
+
 
 \subsection{Grouped folds}
 \label{sec:grouped-fold}
@@ -736,7 +1122,8 @@ A segmented-fold term therefore records the keyed store and its per-owner
 fold; its input canonicalization is over $V$, never over aggregate values.
 The host hash-grouped implementation fuses store construction and segment
 fold without changing this equation. The Tasks interpretation performs this
-operation at the host join, not as a collective at the separated pool.
+operation at the host join or independently inside key-disjoint parts under
+BE-KeyPartGroup, never as a collective at the separated pool.
 
 \paragraph{Key-aware grouped fold.}
 \begin{mathpar}

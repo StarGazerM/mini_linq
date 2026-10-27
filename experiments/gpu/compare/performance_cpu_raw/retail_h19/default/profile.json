@@ -5,7 +5,7 @@
   "candidate_insertions": 0,
   "distinct_insertions": 0,
   "index_builds": 0,
-  "median_ms": 140.747988,
+  "median_ms": 65.60044900000001,
   "operator_rows": [
     {
       "inputs": [],
@@ -20,12 +20,12 @@
       "inputs": [
         "r0"
       ],
-      "key": "ship_instruction",
-      "kind": "POINT",
+      "key": "discount,line_number,order_key,part_key,price,quantity,ship_instruction,ship_mode",
+      "kind": "SELECT",
       "result": "r1",
       "rows_in": 6001215,
       "rows_inserted": 0,
-      "rows_out": 1500048
+      "rows_out": 858104
     },
     {
       "inputs": [
@@ -34,7 +34,7 @@
       "key": "",
       "kind": "POINT",
       "result": "r2",
-      "rows_in": 1500048,
+      "rows_in": 858104,
       "rows_inserted": 0,
       "rows_out": 214377
     },
@@ -140,7 +140,7 @@
   "operators": [
     {
       "calls": 1,
-      "elapsed_ms": 140.747647,
+      "elapsed_ms": 65.600189,
       "id": 0,
       "inputs": [],
       "key": "retail_h19",
@@ -153,7 +153,7 @@
     },
     {
       "calls": 1,
-      "elapsed_ms": 138.944397,
+      "elapsed_ms": 65.352905,
       "id": 1,
       "inputs": [],
       "key": "Lineitem",
@@ -166,22 +166,22 @@
     },
     {
       "calls": 1,
-      "elapsed_ms": 138.944618,
+      "elapsed_ms": 65.353115,
       "id": 2,
       "inputs": [
         "r0"
       ],
-      "key": "ship_instruction",
-      "kind": "POINT",
+      "key": "discount,line_number,order_key,part_key,price,quantity,ship_instruction,ship_mode",
+      "kind": "SELECT",
       "program": 1,
       "result": "r1",
       "rows_in": 6001215,
       "rows_inserted": 0,
-      "rows_out": 1500048
+      "rows_out": 858104
     },
     {
       "calls": 1,
-      "elapsed_ms": 138.944848,
+      "elapsed_ms": 65.353336,
       "id": 3,
       "inputs": [
         "r1"
@@ -190,13 +190,13 @@
       "kind": "POINT",
       "program": 1,
       "result": "r2",
-      "rows_in": 1500048,
+      "rows_in": 858104,
       "rows_inserted": 0,
       "rows_out": 214377
     },
     {
       "calls": 1,
-      "elapsed_ms": 2.267421,
+      "elapsed_ms": 0.330032,
       "id": 4,
       "inputs": [],
       "key": "Part",
@@ -209,7 +209,7 @@
     },
     {
       "calls": 214377,
-      "elapsed_ms": 23.379084000000002,
+      "elapsed_ms": 5.374659,
       "id": 5,
       "inputs": [
         "r2",
@@ -225,7 +225,7 @@
     },
     {
       "calls": 1,
-      "elapsed_ms": 138.945649,
+      "elapsed_ms": 65.354147,
       "id": 6,
       "inputs": [
         "r4"
@@ -240,7 +240,7 @@
     },
     {
       "calls": 1,
-      "elapsed_ms": 138.94579000000002,
+      "elapsed_ms": 65.354368,
       "id": 7,
       "inputs": [
         "r5"
@@ -255,7 +255,7 @@
     },
     {
       "calls": 1,
-      "elapsed_ms": 138.94592,
+      "elapsed_ms": 65.354618,
       "id": 8,
       "inputs": [
         "r6"
@@ -270,7 +270,7 @@
     },
     {
       "calls": 1,
-      "elapsed_ms": 0.000191,
+      "elapsed_ms": 0.000161,
       "id": 9,
       "inputs": [
         "r7"
@@ -285,7 +285,7 @@
     },
     {
       "calls": 1,
-      "elapsed_ms": 20.025356000000002,
+      "elapsed_ms": 10.017417,
       "id": 10,
       "inputs": [
         "r3"
@@ -300,7 +300,7 @@
     },
     {
       "calls": 1,
-      "elapsed_ms": 139.009061,
+      "elapsed_ms": 65.389906,
       "id": 11,
       "inputs": [
         "r7"
@@ -315,7 +315,7 @@
     },
     {
       "calls": 1,
-      "elapsed_ms": 0.000391,
+      "elapsed_ms": 0.00029099999999999997,
       "id": 12,
       "inputs": [
         "r8"
@@ -332,15 +332,15 @@
   "rows_copied": 0,
   "rows_enumerated": 0,
   "samples_ms": [
-    140.168846,
-    140.584845,
-    140.747988,
-    146.606119,
-    154.052517
+    64.87137299999999,
+    65.447436,
+    65.60044900000001,
+    66.85509400000001,
+    70.706214
   ],
   "set_insertions": 121,
   "top_level_clock_verified": true,
-  "top_level_ms": 140.747647,
-  "tree": "QUERY            query [retail_h19] inputs= rows=1 in=0 inserted=0 t=140.748ms\n  ANSWER           r8.answer [] inputs=r8 rows=1 in=1 inserted=0 t=0.000ms\n    GROUP            r8 [__cq_6_0] inputs=r7 rows=1 in=121 inserted=0 t=0.000ms\n      PROJECT          r7 [brand,container,discount,line_number,order_key,part_key,price,quantity,revenue_units,ship_instruction,ship_mode,size] inputs=r6 rows=121 in=121 inserted=0 t=138.946ms\n        BIND             r6 [brand,container,discount,line_number,order_key,part_key,price,quantity,revenue_units,ship_instruction,ship_mode,size] inputs=r5 rows=121 in=121 inserted=0 t=138.946ms\n          GUARD            r5 [brand,container,discount,line_number,order_key,part_key,price,quantity,ship_instruction,ship_mode,size] inputs=r4 rows=121 in=214377 inserted=0 t=138.946ms\n            PROBE            r4 [part_key] inputs=r2,r3 rows=214377 in=214377 inserted=0 t=23.379ms\n              POINT            r2 [] inputs=r1 rows=214377 in=1500048 inserted=0 t=138.945ms\n                POINT            r1 [ship_instruction] inputs=r0 rows=1500048 in=6001215 inserted=0 t=138.945ms\n                  RENAME           r0 [Lineitem] inputs= rows=6001215 in=0 inserted=0 t=138.944ms\n              RENAME           r3 [Part] inputs= rows=200000 in=0 inserted=0 t=2.267ms\n  DEDUP            r7.dedup [] inputs=r7 rows=121 in=121 inserted=121 t=139.009ms\n    PROJECT          r7 [brand,container,discount,line_number,order_key,part_key,price,quantity,revenue_units,ship_instruction,ship_mode,size] inputs=r6 rows=121 in=121 inserted=0 t=138.946ms (shared)\n  INDEX_BUILD      r3.fallback.part_key [part_key] inputs=r3 rows=200000 in=200000 inserted=200000 t=20.025ms excl=17.758ms\n    RENAME           r3 [Part] inputs= rows=200000 in=0 inserted=0 t=2.267ms (shared)\nBUILD_EXCLUSIVE_TOTAL t=17.758ms\n",
+  "top_level_ms": 65.600189,
+  "tree": "QUERY            query [retail_h19] inputs= rows=1 in=0 inserted=0 t=65.600ms\n  ANSWER           r8.answer [] inputs=r8 rows=1 in=1 inserted=0 t=0.000ms\n    GROUP            r8 [__cq_6_0] inputs=r7 rows=1 in=121 inserted=0 t=0.000ms\n      PROJECT          r7 [brand,container,discount,line_number,order_key,part_key,price,quantity,revenue_units,ship_instruction,ship_mode,size] inputs=r6 rows=121 in=121 inserted=0 t=65.355ms\n        BIND             r6 [brand,container,discount,line_number,order_key,part_key,price,quantity,revenue_units,ship_instruction,ship_mode,size] inputs=r5 rows=121 in=121 inserted=0 t=65.354ms\n          GUARD            r5 [brand,container,discount,line_number,order_key,part_key,price,quantity,ship_instruction,ship_mode,size] inputs=r4 rows=121 in=214377 inserted=0 t=65.354ms\n            PROBE            r4 [part_key] inputs=r2,r3 rows=214377 in=214377 inserted=0 t=5.375ms\n              POINT            r2 [] inputs=r1 rows=214377 in=858104 inserted=0 t=65.353ms\n                SELECT           r1 [discount,line_number,order_key,part_key,price,quantity,ship_instruction,ship_mode] inputs=r0 rows=858104 in=6001215 inserted=0 t=65.353ms\n                  RENAME           r0 [Lineitem] inputs= rows=6001215 in=0 inserted=0 t=65.353ms\n              RENAME           r3 [Part] inputs= rows=200000 in=0 inserted=0 t=0.330ms\n  DEDUP            r7.dedup [] inputs=r7 rows=121 in=121 inserted=121 t=65.390ms\n    PROJECT          r7 [brand,container,discount,line_number,order_key,part_key,price,quantity,revenue_units,ship_instruction,ship_mode,size] inputs=r6 rows=121 in=121 inserted=0 t=65.355ms (shared)\n  INDEX_BUILD      r3.fallback.part_key [part_key] inputs=r3 rows=200000 in=200000 inserted=200000 t=10.017ms excl=9.687ms\n    RENAME           r3 [Part] inputs= rows=200000 in=0 inserted=0 t=0.330ms (shared)\nBUILD_EXCLUSIVE_TOTAL t=9.687ms\n",
   "verified": true
 }

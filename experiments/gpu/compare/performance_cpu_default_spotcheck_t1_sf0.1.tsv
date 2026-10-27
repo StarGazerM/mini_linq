@@ -1,0 +1,6 @@
+sf	query	configuration	threads	status	correctness	verification_only	runs	profile_runs	answer_rows	uninstrumented_total_median_ms	profile_total_median_ms	profile_build_at_median_total_ms	profile_query_residual_at_median_total_ms	profile_overhead_percent	profile_operator_graph_verified	profile_top_level_clock_verified	primitive_build_counts_verified	build_scope_kinds	load_ms	zone_build_ms	peak_rss_kib	raw_directory
+0.1	retail_h01	default	1	complete	ok	True	0	0	4									[]				experiments/gpu/compare/performance_cpu_raw/default_spotcheck/t1/sf0.1/retail_h01/default
+0.1	retail_h02	default	1	complete	ok	True	0	0	44									[]				experiments/gpu/compare/performance_cpu_raw/default_spotcheck/t1/sf0.1/retail_h02/default
+0.1	retail_h06	default	1	complete	ok	True	0	0	1									[]				experiments/gpu/compare/performance_cpu_raw/default_spotcheck/t1/sf0.1/retail_h06/default
+0.1	retail_h13	default	1	complete	ok	True	0	0	15000									[]				experiments/gpu/compare/performance_cpu_raw/default_spotcheck/t1/sf0.1/retail_h13/default
+0.1	retail_h19	default	1	complete	ok	True	0	0	1									[]				experiments/gpu/compare/performance_cpu_raw/default_spotcheck/t1/sf0.1/retail_h19/default

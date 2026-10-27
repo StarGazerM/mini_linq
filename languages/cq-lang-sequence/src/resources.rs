@@ -397,6 +397,7 @@ impl<'p> Builder<'p> {
             }
             Term::Flatten(inner)
             | Term::Tile { inner, .. }
+            | Term::PartitionK { inner, .. }
             | Term::Store { inner, .. }
             | Term::Fold(_, inner)
             | Term::Canon(inner) => {
@@ -407,6 +408,7 @@ impl<'p> Builder<'p> {
                         items: items.unwrap_or_else(|| n.div_ceil(self.width.unwrap_or(*n).max(1))),
                     },
                     Term::Store { .. } => Operation::Store,
+                    Term::PartitionK { .. } => Operation::Store,
                     Term::Fold(monoid, _) => Operation::Fold(monoid.clone()),
                     Term::Canon(_) => Operation::Canon,
                     _ => unreachable!(),
@@ -489,6 +491,7 @@ impl<'p> Builder<'p> {
             Term::Ref(name) => self.reference_result(&symbol_name(name)),
             Term::Flatten(inner)
             | Term::Tile { inner, .. }
+            | Term::PartitionK { inner, .. }
             | Term::Store { inner, .. }
             | Term::Fold(_, inner)
             | Term::Canon(inner) => self.row_result(inner),

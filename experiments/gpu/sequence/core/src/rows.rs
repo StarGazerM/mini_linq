@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use cq_lang_sequence::{Analysis, Obligation, Program};
-use cq_lang_structures::physical::{Definition, Operator, symbol_name};
+use cq_lang_structures::physical::{Definition, Operator, Row, symbol_name};
 use cq_lang_structures::syntax as cq_syntax;
 use cq_lang_structures::syntax::{
     EqualityValue,
@@ -14,21 +14,26 @@ use syn::visit_mut::VisitMut;
 use syn::{Ident, Type};
 
 #[derive(Clone)]
-struct Interval {
+pub(crate) struct Interval {
     column: String,
     start: TokenStream,
     end: TokenStream,
 }
 #[derive(Clone)]
-struct Origin {
-    host: String,
-    columns: BTreeMap<String, String>,
-    selection: Option<Interval>,
+pub(crate) struct Origin {
+    pub(crate) host: String,
+    pub(crate) columns: BTreeMap<String, String>,
+    pub(crate) selection: Option<Interval>,
 }
 struct Source {
     reads: Vec<(usize, TokenStream)>,
     length: TokenStream,
     positions: Option<Ident>,
+}
+struct RunSource {
+    view: Ident,
+    reads: Vec<(usize, usize)>,
+    length: TokenStream,
 }
 struct Provider {
     view: Ident,
@@ -127,11 +132,17 @@ fn row_slot(expression: &syn::Expr) -> Option<usize> {
 
 /// Physical adapters only: layouts and predicates are already recorded by the
 /// Structures prefix. This module never schedules a Sequence constructor.
+/// Scalar locals reuse checked column identifiers, including their macro hygiene;
+/// rebuilding them from column-name strings disconnects generated CQ variables.
 pub struct Rows {
     pub width: usize,
     pub columns: BTreeMap<String, usize>,
     pub setup: TokenStream,
     pub build: TokenStream,
+    /// Optional support objects as `(identifier, before setup, after setup)`.
+    /// Each is emitted only when generated code outside its own declaration
+    /// references the identifier; unused adapters would load device modules.
+    pub support: Vec<(Ident, TokenStream, TokenStream)>,
     pub parameters: Vec<(Ident, Type, TokenStream)>,
     pub output_columns: Vec<String>,
     pub dense: BTreeSet<usize>,
@@ -139,8 +150,11 @@ pub struct Rows {
     providers: BTreeMap<String, Provider>,
     bounds: BTreeMap<String, TokenStream>,
     definitions: BTreeMap<String, Definition>,
-    types: BTreeMap<String, BTreeMap<String, Type>>,
+    physical_rows: BTreeMap<String, Row>,
     resident_hosts: BTreeSet<String>,
+    run_sources: BTreeMap<String, RunSource>,
+    run_providers: BTreeSet<String>,
+    expressions: BTreeMap<String, syn::Expr>,
 }
 
 impl Rows {
@@ -197,21 +211,86 @@ impl Rows {
                     })
             })
             .collect::<syn::Result<Vec<_>>>()?;
-        let mut setup = TokenStream::new();
+        let mut codecs = BTreeMap::new();
+        for entry in &program.structures.structures.entries {
+            let cq_lang_structures::Structure::Host { keyed, .. } = &entry.structure else { continue };
+            if let Some((types, _)) = crate::runs::layout_types(&keyed.ty)? {
+                for ty in types {
+                    if let Some((logical, codec)) = crate::runs::symbol(&ty) {
+                        codecs.insert(quote!(#logical).to_string(), codec.clone());
+                    }
+                }
+            }
+        }
+        let mut captures = crate::capture::Captures::default();
+        let mut expressions = BTreeMap::new();
+        for (name, definition) in &definitions {
+            let selected;
+            let (expression, input, expected) = match &definition.operator {
+                Operator::Guard(guard) => (&guard.condition, symbol_name(&guard.input), Some(syn::parse_quote!(bool))),
+                Operator::Bind(bind) => (&bind.expression, symbol_name(&bind.input), bind.annotation.as_ref().map(|a| a.ty.clone())),
+                Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) => {
+                    let mut expression: syn::Expr = syn::parse2(cq_print::expressions::relational_condition_with(&select.condition, &BTreeMap::new()))?;
+                    DeviceComparisons.visit_expr_mut(&mut expression);
+                    crate::capture::simplify_references(&mut expression);
+                    selected = expression;
+                    (&selected, symbol_name(&select.input), Some(syn::parse_quote!(bool)))
+                }
+                _ => continue,
+            };
+            let types = &analysis.structures.physical.rows[&input].types;
+            let expression = captures.expression(expression, types, expected.as_ref(), &codecs)?;
+            let device_types = captures.types(types, &codecs);
+            let lowered = match &definition.operator {
+                Operator::Guard(_) | Operator::Select(_) | Operator::Point(_, _) | Operator::Range(_, _) => crate::capture::predicate(&expression, &device_types),
+                Operator::Bind(_) => {
+                    let expected = expected.map(|ty| if codecs.contains_key(&quote!(#ty).to_string()) { syn::parse_quote!(u32) } else { ty });
+                    cq_syntax::arithmetic::expression(&expression, &device_types, expected.as_ref())
+                }
+                _ => unreachable!(),
+            };
+            if let Some(mut expression) = lowered {
+                DeviceComparisons.visit_expr_mut(&mut expression);
+                crate::capture::simplify_references(&mut expression);
+                crate::capture::unborrow(&mut expression);
+                expressions.insert(name.clone(), expression);
+            }
+        }
+        let mut physical_rows = analysis.structures.physical.rows.clone();
+        for row in physical_rows.values_mut() {
+            for ty in row.types.values_mut() {
+                if codecs.contains_key(&quote!(#ty).to_string()) { *ty = syn::parse_quote!(u32); }
+            }
+        }
+        let mut setup = captures.setup;
         let mut build = TokenStream::new();
-        let mut parameters = Vec::new();
+        let mut parameters = captures.parameters;
         let mut hosts = BTreeMap::new();
         let mut raw = BTreeMap::new();
         let mut first = true;
+        let mut run_hosts = BTreeMap::new();
+        setup.extend(quote! {
+            let mut __cq_run_owners: ::std::vec::Vec<::std::sync::Arc<dyn ::std::any::Any>> = ::std::vec::Vec::new();
+        });
         for input in physical.inputs() {
             let name = symbol_name(&input.name);
-            let resident = program.structures.structures.entries.iter().any(|entry| {
-                analysis.structures.physical.hosts.get(&symbol_name(&entry.name)) == Some(&name)
-                    && matches!(&entry.structure,
-                        cq_lang_structures::Structure::Host { reader, keyed, .. }
-                        if reader == "scan" && matches!(&keyed.ty, Type::Path(path)
-                            if path.path.segments.last().is_some_and(|segment| segment.ident == "DeviceColumns")))
-            });
+            let mut run_binding = None;
+            let mut resident = false;
+            for entry in &program.structures.structures.entries {
+                if analysis.structures.physical.hosts.get(&symbol_name(&entry.name)) != Some(&name) {
+                    continue;
+                }
+                if let cq_lang_structures::Structure::Host { reader, keyed, .. } = &entry.structure {
+                    if reader != "scan" { continue; }
+                    if let Some((types, keys)) = crate::runs::layout_types(&keyed.ty)? {
+                        run_binding = Some((types, keys));
+                        resident = true;
+                    } else if matches!(&keyed.ty, Type::Path(path)
+                        if path.path.segments.last().is_some_and(|segment| segment.ident == "DeviceColumns")) {
+                        resident = true;
+                    }
+                }
+            }
             if !resident {
                 continue;
             }
@@ -232,10 +311,29 @@ impl Rows {
             if first {
                 setup.extend(quote! {
                     let __cq_pool = #id.pool().clone();
-                    let mut __cq_dictionary = ::cq_gpu_runtime::Dictionary::default();
-                    let mut __cq_statuses = ::std::vec::Vec::new();
                 });
                 first = false;
+            }
+            if let Some((types, keys)) = run_binding {
+                let schema = types.iter().map(|ty| crate::runs::scalar(ty).map(|s| s.2))
+                    .collect::<syn::Result<Vec<_>>>()?;
+                let view = format_ident!("__cq_sequence_runs_{name}");
+                setup.extend(quote! {
+                    if !::std::sync::Arc::ptr_eq(&__cq_pool, #id.pool()) {
+                        return Err("T-Gpu: resident inputs must share a pool and stream".into());
+                    }
+                    #id.validate(&[#(#schema),*])?;
+                    let #length = #id.len();
+                    if ::gpu_datalog_runtime::trace_kernels() {
+                        ::std::eprintln!("gpu_sequence_input\tname={}\tdescriptors={:p}\trows={}\truns={}",
+                            #name, #id.view().runs, #length, #id.view().run_count);
+                    }
+                    __cq_run_owners.push(#id.owner());
+                });
+                parameters.push((view.clone(), syn::parse_quote!(::gpu_datalog_runtime::RunsView), quote!(#id.view())));
+                run_hosts.insert(name.clone(), (view, types, keys));
+                hosts.insert(name, (id, length));
+                continue;
             }
             setup.extend(quote! {
                 if !::std::sync::Arc::ptr_eq(&__cq_pool, #id.pool()) {
@@ -267,34 +365,53 @@ impl Rows {
                 "T-Gpu: a resident input supplies the execution pool",
             ));
         }
-        setup.extend(quote! {
-            let __cq_dictionary = ::std::sync::Arc::new(__cq_dictionary);
-            ::std::thread_local! {
-                static __CQ_OUTPUT_ADAPTER: ::std::cell::RefCell<Option<
-                    ::std::rc::Rc<::std::cell::RefCell<::cq_gpu_sequence_runtime::canon::PackedColumnsAdapter>>
-                >> = const { ::std::cell::RefCell::new(None) };
-            }
-            let __cq_range_builder = ::cq_gpu_sequence_runtime::RangeBuilder::new(&__cq_pool)?;
-        });
-        setup.extend(quote! {
-            ::cq_gpu_sequence_runtime::register_query_cleanup(|| {
-                __CQ_OUTPUT_ADAPTER.with(|cache| cache.borrow_mut().take());
-            });
-        });
         let output_width = output_columns.len();
-        setup.extend(quote! {
-            let __cq_output_adapter = __CQ_OUTPUT_ADAPTER.with(|cache| -> ::cq_gpu_sequence_runtime::Result<_> {
-                let mut cache = cache.borrow_mut();
-                if cache.as_ref().is_none_or(|adapter|
-                    !::std::sync::Arc::ptr_eq(adapter.borrow().pool(), &__cq_pool)) {
-                    *cache = Some(::std::rc::Rc::new(::std::cell::RefCell::new(
-                        ::cq_gpu_sequence_runtime::canon::PackedColumnsAdapter::new(__cq_pool.clone(), #output_width)?)));
-                }
-                Ok(cache.as_ref().unwrap().clone())
-            })?;
-        });
+        let support = vec![
+            (
+                format_ident!("__cq_dictionary"),
+                quote!(let mut __cq_dictionary = ::cq_gpu_runtime::Dictionary::default();),
+                quote!(let __cq_dictionary = ::std::sync::Arc::new(__cq_dictionary);),
+            ),
+            (
+                format_ident!("__cq_statuses"),
+                quote!(let mut __cq_statuses = ::std::vec::Vec::<
+                    ::std::sync::Arc<::cq_gpu_runtime::Buffer<::cq_gpu_sequence_runtime::OutputCount>>
+                >::new();),
+                TokenStream::new(),
+            ),
+            (
+                format_ident!("__cq_range_builder"),
+                TokenStream::new(),
+                quote!(let __cq_range_builder = ::cq_gpu_sequence_runtime::RangeBuilder::new(&__cq_pool)?;),
+            ),
+            (
+                format_ident!("__cq_output_adapter"),
+                TokenStream::new(),
+                quote! {
+                    ::std::thread_local! {
+                        static __CQ_OUTPUT_ADAPTER: ::std::cell::RefCell<Option<
+                            ::std::rc::Rc<::std::cell::RefCell<::cq_gpu_sequence_runtime::canon::PackedColumnsAdapter>>
+                        >> = const { ::std::cell::RefCell::new(None) };
+                    }
+                    ::cq_gpu_sequence_runtime::register_query_cleanup(|| {
+                        __CQ_OUTPUT_ADAPTER.with(|cache| cache.borrow_mut().take());
+                    });
+                    let __cq_output_adapter = __CQ_OUTPUT_ADAPTER.with(|cache| -> ::cq_gpu_sequence_runtime::Result<_> {
+                        let mut cache = cache.borrow_mut();
+                        if cache.as_ref().is_none_or(|adapter|
+                            !::std::sync::Arc::ptr_eq(adapter.borrow().pool(), &__cq_pool)) {
+                            *cache = Some(::std::rc::Rc::new(::std::cell::RefCell::new(
+                                ::cq_gpu_sequence_runtime::canon::PackedColumnsAdapter::new(__cq_pool.clone(), #output_width)?)));
+                        }
+                        Ok(cache.as_ref().unwrap().clone())
+                    })?;
+                },
+            ),
+        ];
         let mut sources = BTreeMap::new();
         let mut providers = BTreeMap::new();
+        let mut run_sources = BTreeMap::new();
+        let mut run_providers = BTreeSet::new();
         let mut bound_sources: BTreeMap<String, BTreeSet<(String, usize)>> = BTreeMap::new();
         // Only host stores and dispatch inputs need resident source adapters.
         // Intermediate map/compact results execute their predicates per lane;
@@ -410,6 +527,62 @@ impl Rows {
                 origin
             };
             let (host, host_length) = &hosts[&origin.host];
+            if let Some((view, types, key_count)) = run_hosts.get(&origin.host) {
+                if origin.selection.is_some() {
+                    return Err(error("GPU-Runs: source selection must execute as a Sequence predicate"));
+                }
+                let layout = &analysis.structures.host_layouts[&origin.host];
+                let payload = layout.iter().map(|source| {
+                    origin.columns.iter().find(|(_, original)| *original == source)
+                        .map(|(column, _)| column.clone())
+                        .ok_or_else(|| error("GPU-Runs: supplied layout lost a packed column"))
+                }).collect::<syn::Result<Vec<_>>>()?;
+                let reads = payload.iter().enumerate().map(|(index,column)| {
+                    let slot = columns[column];
+                    (slot,index)
+                }).collect();
+                run_sources.insert(name.clone(), RunSource {
+                    view: view.clone(), reads, length: quote!(#host_length),
+                });
+                if let Some(layouts) = analysis.structures.built.get(name) {
+                    if layouts.len() != 1 {
+                        return Err(error("GPU-Runs: name each supplied provider layout separately"));
+                    }
+                    let (levels, ty) = &layouts[0];
+                    if crate::runs::layout_types(ty)?.is_none() {
+                        return Err(syn::Error::new_spanned(ty, format!("GPU-Runs: provider `{name}` requires the checked run binding, found {}", quote!(#ty))));
+                    }
+                    let keys: Vec<_> = levels.iter().flatten().cloned().collect();
+                    if keys.len() > *key_count || keys.iter().zip(&payload).any(|(key,column)| key != column) {
+                        return Err(error("GPU-Runs: provider key is not a packed leading prefix"));
+                    }
+                    providers.insert(name.clone(), Provider { view: view.clone(), payload, keys });
+                    run_providers.insert(name.clone());
+                } else {
+                    // A supplied device layout also realizes native host-read
+                    // fallbacks. These do not need a computed Built index.
+                    let mut width = None;
+                    for ((result, reader, keys), ty) in &analysis.structures.fallbacks {
+                        if result != name || reader == "scan" { continue; }
+                        if crate::runs::layout_types(ty)?.is_none() {
+                            return Err(error("GPU-Runs: native lookup requires a declared run layout"));
+                        }
+                        if keys.len() > *key_count
+                            || payload[..keys.len()].iter().any(|key| !keys.contains(key)) {
+                            return Err(error("GPU-Runs: native lookup key is not a packed leading prefix"));
+                        }
+                        width = Some(width.unwrap_or(0).max(keys.len()));
+                    }
+                    if let Some(width) = width {
+                        providers.insert(name.clone(), Provider {
+                            view: view.clone(), keys: payload[..width].to_vec(), payload,
+                        });
+                        run_providers.insert(name.clone());
+                    }
+                }
+                let _ = types;
+                continue;
+            }
             let fields = &raw[&origin.host];
             for (column, source) in &origin.columns {
                 bound_sources
@@ -591,6 +764,15 @@ impl Rows {
             }
         }
         let mut bounds = BTreeMap::new();
+        for (name, source) in &run_sources {
+            for &(slot, _) in &source.reads {
+                let column = columns.iter().find(|(_, index)| **index == slot).unwrap().0;
+                let ty = &physical_rows[name].types[column];
+                bounds.insert(column.clone(), quote!(::cq_gpu_runtime::Bounds::Inclusive {
+                    min: <#ty>::MIN as i64, max: <#ty>::MAX as i64,
+                }));
+            }
+        }
         for (column, origins) in bound_sources {
             let values = origins.iter().map(|(host, index)| {
                 let host = &hosts[host].0;
@@ -606,7 +788,7 @@ impl Rows {
         }
         // Computed CQ-Arith values have their declared primitive range, not
         // the source codec's range: wrapping can cross either signed endpoint.
-        for row in analysis.structures.physical.rows.values() {
+        for row in physical_rows.values() {
             for column in &row.computed {
                 let ty = &row.types[column];
                 if matches!(
@@ -657,16 +839,11 @@ impl Rows {
             }
         }
         build.extend(quote! {
-            let __cq_timing_built = __cq_pool.stream().record_event(
-                Some(::cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
+            let __cq_timing_built = if __cq_timing_enabled {
+                Some(__cq_pool.stream().record_event(
+                    Some(::cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?)
+            } else { None };
         });
-        let types = analysis
-            .structures
-            .physical
-            .rows
-            .iter()
-            .map(|(name, row)| (name.clone(), row.types.clone()))
-            .collect();
         let codec_columns: BTreeSet<_> = analysis
             .obligations
             .iter()
@@ -700,6 +877,7 @@ impl Rows {
             columns,
             setup,
             build,
+            support,
             parameters,
             output_columns,
             dense,
@@ -707,13 +885,20 @@ impl Rows {
             providers,
             bounds,
             definitions,
-            types,
+            physical_rows,
             resident_hosts,
+            run_sources,
+            run_providers,
+            expressions,
         })
     }
 
     pub fn has_source(&self, name: &str) -> bool {
-        self.sources.contains_key(name)
+        self.sources.contains_key(name) || self.run_sources.contains_key(name)
+    }
+
+    pub fn has_runs(&self) -> bool {
+        !self.run_sources.is_empty()
     }
 
     pub fn host_dependencies(&self, name: &str) -> BTreeSet<String> {
@@ -809,6 +994,19 @@ impl Rows {
         position: TokenStream,
         row: TokenStream,
     ) -> syn::Result<TokenStream> {
+        if let Some(source) = self.run_sources.get(name) {
+            let view = &source.view;
+            let reads = source.reads.iter().map(|(slot,column)| quote! {
+                #row[#slot] = unsafe { ::gpu_datalog_runtime::device::decode(
+                    #view, __run_index, __run_position, #column as u32) };
+            });
+            return Ok(quote! {
+                let (__run_index, __run_position) = unsafe {
+                    ::gpu_datalog_runtime::device::locate(#view, (#position) as u32)
+                };
+                #(#reads)*
+            });
+        }
         let source = self.sources.get(name).ok_or_else(|| {
             error(format!(
                 "T-Gpu: {name} has no resident source; materialize its Sequence producer"
@@ -827,6 +1025,7 @@ impl Rows {
         Ok(quote!(#(#reads)*))
     }
     pub fn source_len(&self, name: &str) -> syn::Result<TokenStream> {
+        if let Some(source) = self.run_sources.get(name) { return Ok(source.length.clone()); }
         self.sources
             .get(name)
             .map(|s| s.length.clone())
@@ -853,6 +1052,13 @@ impl Rows {
                     "T-Gpu: {name} has no recorded resident range layout"
                 ))
             })
+    }
+    pub fn run_provider(&self, name: &str) -> bool { self.run_providers.contains(name) }
+    pub fn output_types(&self) -> syn::Result<Vec<Type>> {
+        self.output_columns.iter().map(|column| {
+            self.physical_rows.values().find_map(|row| row.types.get(column)).cloned()
+                .ok_or_else(|| error(format!("GPU-Arena: output column {column} has no declared type")))
+        }).collect()
     }
     /// Realize the recorded provider only after its device store has published
     /// its live count. Descriptors borrow the stored layout without transposing
@@ -1030,20 +1236,17 @@ impl Rows {
                     }
                     let mut uses = Uses(BTreeSet::new());
                     uses.visit_expr_mut(&mut syn::parse2(tokens)?);
-                    let bindings = self.types[&input]
+                    let input_row = &self.physical_rows[&input];
+                    let bindings = input_row.types
                         .iter()
                         .filter(|(column, _)| uses.0.contains(*column))
                         .map(|(column, ty)| {
-                            let id = Ident::new(column, proc_macro2::Span::call_site());
+                            let id = &input_row.bindings[column];
                             let slot = self.columns[column];
                             quote!(let #id = &(#row[#slot] as #ty);)
                         });
-                    let tokens = cq_print::expressions::relational_condition_with(
-                        &select.condition,
-                        &BTreeMap::new(),
-                    );
-                    let mut expression: syn::Expr = syn::parse2(tokens)?;
-                    DeviceComparisons.visit_expr_mut(&mut expression);
+                    let expression = self.expressions.get(&symbol_name(&definition.name))
+                        .ok_or_else(|| error("GPU-Capture: selection is not an integer device predicate"))?;
                     output.extend(quote! { if #live { #(#bindings)* #live = #expression; } });
                 }
                 Operator::Semi(_, _)
@@ -1054,16 +1257,14 @@ impl Rows {
                 }
                 Operator::Bind(bind) => {
                     let input = symbol_name(&bind.input);
-                    let mut expression = cq_syntax::arithmetic::binding(bind, &self.types[&input])
-                        .ok_or_else(|| {
-                            error("T-Gpu: opaque Rust binding requires host evaluation")
-                        })?;
-                    DeviceComparisons.visit_expr_mut(&mut expression);
+                    let input_row = &self.physical_rows[&input];
+                    let expression = self.expressions.get(&symbol_name(&definition.name))
+                        .ok_or_else(|| error("T-Gpu: opaque Rust binding requires host evaluation"))?;
                     let dependencies = cq_syntax::rust::free_variables(&bind.expression)
-                        .dependencies(&self.types[&input].keys().cloned().collect());
+                        .dependencies(&input_row.types.keys().cloned().collect());
                     let bindings = dependencies.iter().map(|column| {
-                        let id = Ident::new(column, proc_macro2::Span::call_site());
-                        let ty = &self.types[&input][column];
+                        let id = &input_row.bindings[column];
+                        let ty = &input_row.types[column];
                         let slot = self.columns[column];
                         quote!(let #id = &(#row[#slot] as #ty);)
                     });
@@ -1075,17 +1276,14 @@ impl Rows {
                 }
                 Operator::Guard(guard) => {
                     let input = symbol_name(&guard.input);
-                    let mut expression =
-                        cq_syntax::arithmetic::predicate(&guard.condition, &self.types[&input])
-                            .ok_or_else(|| {
-                                error("T-Gpu: opaque Rust guard requires host evaluation")
-                            })?;
-                    DeviceComparisons.visit_expr_mut(&mut expression);
+                    let input_row = &self.physical_rows[&input];
+                    let expression = self.expressions.get(&symbol_name(&definition.name))
+                        .ok_or_else(|| error("T-Gpu: opaque Rust guard requires host evaluation"))?;
                     let dependencies = cq_syntax::rust::free_variables(&guard.condition)
-                        .dependencies(&self.types[&input].keys().cloned().collect());
+                        .dependencies(&input_row.types.keys().cloned().collect());
                     let bindings = dependencies.iter().map(|column| {
-                        let id = Ident::new(column, proc_macro2::Span::call_site());
-                        let ty = &self.types[&input][column];
+                        let id = &input_row.bindings[column];
+                        let ty = &input_row.types[column];
                         let slot = self.columns[column];
                         quote!(let #id = &(#row[#slot] as #ty);)
                     });
@@ -1309,7 +1507,7 @@ fn host_dependencies_from(
     result
 }
 
-fn origin(name: &str, definitions: &BTreeMap<String, Definition>) -> syn::Result<Option<Origin>> {
+pub(crate) fn origin(name: &str, definitions: &BTreeMap<String, Definition>) -> syn::Result<Option<Origin>> {
     let definition = &definitions[name];
     match &definition.operator {
         Operator::Rename(rename) => {
@@ -1466,7 +1664,7 @@ fn ungroup(expression: &syn::Expr) -> &syn::Expr {
     }
 }
 
-struct DeviceComparisons;
+pub(crate) struct DeviceComparisons;
 impl VisitMut for DeviceComparisons {
     fn visit_expr_mut(&mut self, expression: &mut syn::Expr) {
         if let syn::Expr::MethodCall(method) = expression {
@@ -1476,7 +1674,7 @@ impl VisitMut for DeviceComparisons {
                         .path
                         .segments
                         .last()
-                        .is_some_and(|s| s.ident == "relational_cmp")
+                        .is_some_and(|s| s.ident == "relational_cmp" || s.ident == "relational_str_cmp")
                         && call.args.len() == 2
                     {
                         let left = &call.args[0];
@@ -1501,7 +1699,7 @@ impl VisitMut for DeviceComparisons {
                     .path
                     .segments
                     .last()
-                    .is_some_and(|s| s.ident == "relational_eq")
+                    .is_some_and(|s| s.ident == "relational_eq" || s.ident == "relational_string_eq")
                     && call.args.len() == 2
                 {
                     let left = &call.args[0];

@@ -1,0 +1,26 @@
+[package]
+name = "cq-gpu-datalog"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+cq-gpu-datalog-core = { path = ".." }
+cq-gpu-datalog-macros = { path = "../macros" }
+
+[dev-dependencies]
+oracle-shared = { path = "../../../../features/datalog/oracle/shared" }
+oracle-mini = { path = "../../../../features/datalog/oracle/engines/mini" }
+oracle-mini-par = { path = "../../../../features/datalog-parallel/oracle/engines/mini-par" }
+rayon = "1"
+cq-datalog = { path = "../../../../features/datalog/facade/cq-datalog" }
+mini-linq = { path = "../../../../facade/mini-linq" }
+cq-storage = { path = "../../../../runtime/cq-storage" }
+cq-gpu-sequence = { path = "../../sequence" }
+cq-gpu-sequence-runtime = { path = "../../sequence-runtime" }
+cq-gpu-runtime = { path = "../../printer-runtime" }
+gpu-datalog-runtime = { path = "../../datalog-runtime" }
+gpu-compress = { path = "../../compress" }
+gpu-compress-host = { path = "../../compress-host" }
+cuda-device.workspace = true
+cuda-core.workspace = true
+cuda-host.workspace = true

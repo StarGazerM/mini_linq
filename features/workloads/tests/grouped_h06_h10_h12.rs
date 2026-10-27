@@ -18,7 +18,6 @@ mod q06;
 #[allow(dead_code)]
 #[path = "../src/queries/tpch/tpch_q19.rs"]
 mod q19;
-
 #[allow(dead_code)]
 #[path = "../src/queries/retail/tpch/retail_h06.rs"]
 mod h06;
@@ -67,8 +66,10 @@ fn h06_exact_revenue_preserves_lines_and_empty_identity() {
                 CAST(c4 * 0.01 AS DECIMAL(18,2)) AS l_quantity,
                 DATE '1994-01-01' + c5 AS l_shipdate FROM "mini-linq/raw/0") {}"#, h06::SQL);
         let expected = evaluate_sql(&[raw(rows, 6)], &sql).unwrap();
-        let actual = tpch_runtime::same_plan_answers(|config| h06::run(&data, config), h06::canonical).into_iter().map(|(v,)| vec![integer(v)]).collect::<Vec<_>>();
-        assert_answers_equal("DuckDB H06", expected, "grouped H06", actual, true);
+        for &config in h06::CONFIGS {
+            let actual = h06::run(&data, config).into_iter().map(|(v,)| vec![integer(v)]).collect::<Vec<_>>();
+            assert_answers_equal("DuckDB H06", expected.clone(), config, actual, true);
+        }
     }
 }
 
@@ -102,12 +103,14 @@ fn h10_customer_revenue_matches_duckdb_without_limit() {
             SELECT c_custkey, unicode(c_name), revenue, account_balance, unicode(n_name),
                 unicode(c_address), unicode(c_phone), unicode(c_comment) FROM ({})"#, h10::SQL);
         let expected = evaluate_sql(&[raw(rows, 6)], &sql).unwrap();
-        let actual = tpch_runtime::same_plan_answers(|config| h10::run(&data, config), h10::canonical).into_iter().map(|(key, name, revenue, balance, nation, address, phone, comment)| {
-            vec![integer(key), name.as_bytes()[0] as i32, integer(revenue), integer(balance),
-                nation.as_bytes()[0] as i32, address.as_bytes()[0] as i32,
-                phone.as_bytes()[0] as i32, comment.as_bytes()[0] as i32]
-        }).collect::<Vec<_>>();
-        assert_answers_equal("DuckDB H10", expected, "grouped H10", actual, true);
+        for &config in h10::CONFIGS {
+            let actual = h10::run(&data, config).into_iter().map(|(key, name, revenue, balance, nation, address, phone, comment)| {
+                vec![integer(key), name.as_bytes()[0] as i32, integer(revenue), integer(balance),
+                    nation.as_bytes()[0] as i32, address.as_bytes()[0] as i32,
+                    phone.as_bytes()[0] as i32, comment.as_bytes()[0] as i32]
+            }).collect::<Vec<_>>();
+            assert_answers_equal("DuckDB H10", expected.clone(), config, actual, true);
+        }
     }
 }
 
@@ -138,10 +141,12 @@ fn h12_priority_counts_match_duckdb_and_date_guards() {
             DATE '1994-01-01' + c5 AS l_shipdate FROM "mini-linq/raw/0")
             SELECT unicode(l_shipmode), high_line_count, low_line_count FROM ({})"#, h12::SQL);
         let expected = evaluate_sql(&[raw(rows, 7)], &sql).unwrap();
-        let actual = tpch_runtime::same_plan_answers(|config| h12::run(&data, config), h12::canonical).into_iter().map(|(mode, high, low)| {
-            vec![mode.as_bytes()[0] as i32, integer(high), integer(low)]
-        }).collect::<Vec<_>>();
-        assert_answers_equal("DuckDB H12", expected, "grouped H12", actual, true);
+        for &config in h12::CONFIGS {
+            let actual = h12::run(&data, config).into_iter().map(|(mode, high, low)| {
+                vec![mode.as_bytes()[0] as i32, integer(high), integer(low)]
+            }).collect::<Vec<_>>();
+            assert_answers_equal("DuckDB H12", expected.clone(), config, actual, true);
+        }
     }
 }
 
@@ -187,22 +192,7 @@ fn h06_integer_coefficient_query_is_exact() {
 }
 
 #[test]
-fn h03_same_plan_selects_radix_payloads_and_preserves_answers() {
-    let baseline: cq_lang_structures::Program =
-        syn::parse_str(h03::structures("default")).unwrap();
-    let default_facts = cq_lang_structures::contract::check(&baseline).unwrap();
-    assert!(default_facts.built.values().flatten()
-        .any(|(_, ty)| *ty == syn::parse_quote!(::cq_storage::HashIndex<'_, _, _>)));
-    for config in ["radix", "radix_retained"] {
-        let rewritten: cq_lang_structures::Program =
-            syn::parse_str(h03::structures(config)).unwrap();
-        cq_lang_structures::check_rewrite(&baseline, &rewritten).unwrap();
-        assert_eq!(rewritten.physical, baseline.physical, "{config} changed the physical plan");
-        let facts = cq_lang_structures::contract::check(&rewritten).unwrap();
-        assert!(facts.built.values().flatten()
-            .any(|(_, ty)| *ty == syn::parse_quote!(::cq_storage::RadixRun<_, _>)),
-            "{config} did not select a RadixRun payload");
-    }
+fn h03_radix_variants_preserve_duplicate_and_empty_answers() {
     let mut data = h03::Data {
         customer: vec![(1, "BUILDING".into()), (2, "AUTOMOBILE".into())],
         orders: vec![(10, 1, date("1995-03-14")), (10, 1, date("1995-03-14")),
@@ -222,26 +212,7 @@ fn h03_same_plan_selects_radix_payloads_and_preserves_answers() {
 }
 
 #[test]
-fn h09_cardinality_order_avoids_cartesian_prefix_and_keeps_exact_answers() {
-    for config in ["default", "radix", "radix_retained"] {
-        let program: cq_lang_structures::Program =
-            syn::parse_str(h09::structures(config)).unwrap();
-        cq_lang_structures::contract::check(&program).unwrap();
-        for definition in &program.physical.program.definitions {
-            if let cq_lang_structures::physical::Operator::Probe(_, read) = &definition.operator {
-                assert!(!read.columns.is_empty(), "{config} introduces an unkeyed Cartesian probe");
-            }
-        }
-    }
-    let built_hash: cq_lang_structures::Program =
-        syn::parse_str(h09::structures("built_hash")).unwrap();
-    let built_radix: cq_lang_structures::Program =
-        syn::parse_str(h09::structures("built_radix")).unwrap();
-    assert_eq!(built_hash.physical, built_radix.physical);
-    cq_lang_structures::check_rewrite(&built_hash, &built_radix).unwrap();
-    let facts = cq_lang_structures::contract::check(&built_radix).unwrap();
-    assert!(facts.built.values().flatten()
-        .any(|(_, ty)| *ty == syn::parse_quote!(::cq_storage::RadixRun<_, _>)));
+fn h09_configurations_preserve_filtered_join_answers() {
     let mut data = h09::Data {
         part: vec![(1, "green part".into()), (2, "blue part".into()), (3, "green part".into())],
         partsupp: vec![(1, 100), (2, 100), (3, 101)],

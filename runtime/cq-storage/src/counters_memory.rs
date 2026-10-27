@@ -1,22 +1,19 @@
 // Ownership accounting excludes allocator overhead and borrowed base storage.
-// An allocation survives counter resets or thread transfer without subtracting
-// from a different measurement epoch.
+// Allocation ownership follows its query epoch across task/thread transfer;
+// resets detach old epochs rather than charging their later drops to new work.
 #[derive(Default)]
 pub(crate) struct Allocation {
     #[cfg(feature = "counters")]
     bytes: usize,
     #[cfg(feature = "counters")]
-    epoch: u64,
-    #[cfg(feature = "counters")]
-    thread: Option<std::thread::ThreadId>,
+    owner: Option<crate::counters::TaskContext>,
 }
 impl Allocation {
     pub(crate) fn new(bytes: usize) -> Self {
         let mut result = Self::default();
         #[cfg(feature = "counters")]
         {
-            result.epoch = crate::counters::epoch();
-            result.thread = Some(std::thread::current().id());
+            result.owner = Some(crate::counters::TaskContext::capture());
         }
         result.grow(bytes);
         result
@@ -25,11 +22,8 @@ impl Allocation {
         #[cfg(feature = "counters")]
         {
             self.bytes += bytes;
-            if self.live() {
-                crate::counters::record(|c| {
-                    c.bytes_retained_current += bytes as u64;
-                    c.bytes_retained_peak = c.bytes_retained_peak.max(c.bytes_retained_current);
-                });
+            if let Some(owner) = &self.owner {
+                owner.grow(bytes);
             }
         }
         let _ = bytes;
@@ -38,15 +32,11 @@ impl Allocation {
         #[cfg(feature = "counters")]
         {
             self.bytes -= bytes;
-            if self.live() {
-                crate::counters::record(|c| c.bytes_retained_current -= bytes as u64);
+            if let Some(owner) = &self.owner {
+                owner.shrink(bytes);
             }
         }
         let _ = bytes;
-    }
-    #[cfg(feature = "counters")]
-    fn live(&self) -> bool {
-        self.thread == Some(std::thread::current().id()) && self.epoch == crate::counters::epoch()
     }
 }
 impl Drop for Allocation {

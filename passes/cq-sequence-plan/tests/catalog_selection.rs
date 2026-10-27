@@ -18,15 +18,18 @@ fn gpu_catalog() -> Catalog {
             capabilities: vec![Capability::Exact, Capability::Range, Capability::Membership],
             levels: levels.clone(),
         }],
-        canons: vec![CanonToken {
-            ty: syn::parse_quote!(::cq_gpu_sequence_runtime::canon::PackedCanon),
-            levels: levels.clone(),
-            max_packed_bits: Some(128),
-        }, CanonToken {
-            ty: syn::parse_quote!(::cq_gpu_sequence_runtime::canon::WideCanon),
-            levels,
-            max_packed_bits: None,
-        }],
+        canons: vec![
+            CanonToken {
+                ty: syn::parse_quote!(::cq_gpu_sequence_runtime::canon::PackedCanon),
+                levels: levels.clone(),
+                max_packed_bits: Some(128),
+            },
+            CanonToken {
+                ty: syn::parse_quote!(::cq_gpu_sequence_runtime::canon::WideCanon),
+                levels,
+                max_packed_bits: None,
+            },
+        ],
         codecs: vec![],
     }
 }

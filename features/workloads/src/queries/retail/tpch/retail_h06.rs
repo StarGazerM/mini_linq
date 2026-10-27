@@ -4,7 +4,7 @@
 use cq_load::{Date, Decimal, Load};
 
 pub const NAME: &str = "retail_h06";
-pub const CONFIGS: &[&str] = &["default", "radix", "radix_retained"];
+
 pub const EXPORTS: &[(&str, &str)] = &[(
     "lineitem",
     "l_orderkey,l_linenumber,l_extendedprice,l_discount,l_quantity,l_shipdate",
@@ -37,30 +37,32 @@ pub fn load(root: &std::path::Path, config: &str) -> Result<Data, Box<dyn std::e
     })
 }
 
-crate::tpch_runtime::same_plan_kernel! { $;
-#[allow(non_snake_case)]
-pub(super) fn execute(data: &Data) -> Vec<Answer> {
-    let Lineitem = data.lineitem.as_slice();
-    let start = Date::load("1994-01-01").expect("authored ISO date");
-    let end = Date::load("1995-01-01").expect("authored ISO date");
-    query! {
-        pipeline {}
-        struct Query;
-        relation Lineitem(l_orderkey: i64, l_linenumber: i64,
-            l_extendedprice: Decimal, l_discount: Decimal, l_quantity: Decimal,
-            l_shipdate: Date);
-        relation answer(revenue: i64);
-        answer(sum(revenue_units)) :-
-            Lineitem(order_key, line_number, price, discount, quantity, shipdate),
-            if *shipdate >= start && *shipdate < end,
-            if discount.scaled() >= 5 && discount.scaled() <= 7,
-            if quantity.scaled() < 2400,
-            let revenue_units: i64 = price.scaled() * discount.scaled();
+crate::tpch_runtime::standalone_configs! { $;
+    pub(super) fn run(data: &Data, config: &str) -> Vec<Answer> {
+        assert!(CONFIGS.contains(&config), "unknown H06 configuration");
+        let Lineitem = data.lineitem.as_slice();
+        let start = Date::load("1994-01-01").expect("authored ISO date");
+        let end = Date::load("1995-01-01").expect("authored ISO date");
+        query! {
+            plan(no_reduce, order(Lineitem));
+            struct Query;
+            relation Lineitem(l_orderkey: i64, l_linenumber: i64,
+                l_extendedprice: Decimal, l_discount: Decimal, l_quantity: Decimal,
+                l_shipdate: Date);
+            relation answer(revenue: i64);
+            answer(sum(revenue_units)) :-
+                Lineitem(order_key, line_number, price, discount, quantity, shipdate),
+                if *shipdate >= start && *shipdate < end,
+                if discount.scaled() >= 5 && discount.scaled() <= 7,
+                if quantity.scaled() < 2400,
+                let revenue_units: i64 = price.scaled() * discount.scaled();
+        }
+        .collect()
     }
-    .collect()
-}
 }
 
 pub fn canonical(rows: &[Answer]) -> Vec<Vec<String>> {
-    rows.iter().map(|(revenue,)| vec![revenue.to_string()]).collect()
+    rows.iter()
+        .map(|(revenue,)| vec![revenue.to_string()])
+        .collect()
 }

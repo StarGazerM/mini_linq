@@ -1,4 +1,4 @@
-//! Seen-only Storage erasure, admission shards, and exclusive layout publication.
+//! Storage provider erasure, admission shards, and exclusive layout publication.
 use cq_datalog_partition::{
     DEFAULT_GRAIN, DEFAULT_THRESHOLD, ShardedProgram, check_sharded, check_storage,
     compile_sharded, compile_sharded_with, compile_storage, compile_storage_with,
@@ -293,6 +293,281 @@ fn storage_rewrites_only_idb_seen_and_preserves_all_native_layouts() {
         target
     );
     assert!(compile_storage_with(&source, quote!(threshold = 3)).is_err());
+}
+
+fn shard_layout_type(provider: &syn::Type) -> syn::Type {
+    let syn::Type::Path(path) = provider else {
+        panic!("map provider")
+    };
+    let syn::PathArguments::AngleBracketed(args) = &path.path.segments.last().unwrap().arguments
+    else {
+        panic!("map arguments")
+    };
+    let key = &args.args[0];
+    let syn::GenericArgument::Type(syn::Type::Path(values)) = &args.args[1] else {
+        panic!("vector payload")
+    };
+    let syn::PathArguments::AngleBracketed(payload) =
+        &values.path.segments.last().unwrap().arguments
+    else {
+        panic!("vector arguments")
+    };
+    let value = &payload.args[0];
+    let hasher = &args.args[2];
+    syn::parse_quote!(::cq_datalog_parallel_runtime::ShardedLayout<#key, #value, #hasher>)
+}
+
+#[test]
+fn sharded_layouts_rewrite_and_erase_exactly() {
+    let source = authored_storage();
+    let target = compile_storage_with(&source, quote!(layouts(sharded))).unwrap();
+    check_storage(&source, &target).unwrap();
+    let mut changed = 0;
+    for (before, after) in source
+        .layouts
+        .iter()
+        .chain(&source.delta_layouts)
+        .zip(target.layouts.iter().chain(&target.delta_layouts))
+    {
+        if before.key > 0
+            && source
+                .incremental
+                .strata
+                .source
+                .declarations
+                .iter()
+                .any(|declaration| {
+                    declaration.name == before.relation && declaration.value.is_none()
+                })
+        {
+            assert_eq!(after.provider, shard_layout_type(&before.provider));
+            changed += 1;
+        } else {
+            assert_eq!(before, after);
+        }
+    }
+    assert!(changed > 0);
+    compile_sharded(&cq_datalog_fork::compile(&target).unwrap()).unwrap();
+    assert_eq!(
+        syn::parse2::<storage::Program>(target.to_token_stream()).unwrap(),
+        target
+    );
+    for args in [
+        quote!(layouts(native)),
+        quote!(layouts()),
+        quote!(layouts(sharded), layouts(sharded)),
+    ] {
+        assert!(compile_storage_with(&source, args).is_err());
+    }
+}
+
+#[test]
+fn sharded_layout_checker_rejects_ineligible_and_changed_types() {
+    let source = authored_storage();
+    let target = compile_storage_with(&source, quote!(layouts(sharded))).unwrap();
+    for delta in [false, true] {
+        let layouts = if delta {
+            &source.delta_layouts
+        } else {
+            &source.layouts
+        };
+        for (index, layout) in layouts.iter().enumerate() {
+            let eligible = layout.key > 0
+                && source
+                    .incremental
+                    .strata
+                    .source
+                    .declarations
+                    .iter()
+                    .any(|declaration| {
+                        declaration.name == layout.relation && declaration.value.is_none()
+                    });
+            if !eligible {
+                let mut changed = target.clone();
+                let layouts = if delta {
+                    &mut changed.delta_layouts
+                } else {
+                    &mut changed.layouts
+                };
+                layouts[index].provider = shard_layout_type(&layout.provider);
+                assert!(check_storage(&source, &changed).is_err());
+                assert!(compile_sharded(&cq_datalog_fork::compile(&changed).unwrap()).is_err());
+            } else {
+                for argument in 0..3 {
+                    let mut changed = target.clone();
+                    let layouts = if delta {
+                        &mut changed.delta_layouts
+                    } else {
+                        &mut changed.layouts
+                    };
+                    let syn::Type::Path(path) = &mut layouts[index].provider else {
+                        unreachable!()
+                    };
+                    let syn::PathArguments::AngleBracketed(args) =
+                        &mut path.path.segments.last_mut().unwrap().arguments
+                    else {
+                        unreachable!()
+                    };
+                    args.args[argument] = syn::parse_quote!(Changed);
+                    assert!(check_storage(&source, &changed).is_err());
+                }
+                let mut changed = target.clone();
+                let layouts = if delta {
+                    &mut changed.delta_layouts
+                } else {
+                    &mut changed.layouts
+                };
+                let syn::Type::Path(path) = &mut layouts[index].provider else {
+                    unreachable!()
+                };
+                path.path.leading_colon = None;
+                assert!(check_storage(&source, &changed).is_err());
+                assert!(compile_sharded(&cq_datalog_fork::compile(&changed).unwrap()).is_err());
+            }
+        }
+    }
+}
+
+fn run_layout_type(provider: &syn::Type) -> syn::Type {
+    let syn::Type::Path(mut path) = shard_layout_type(provider) else { unreachable!() };
+    let segment = path.path.segments.last_mut().unwrap();
+    segment.ident = syn::parse_quote!(RunLayout);
+    let syn::PathArguments::AngleBracketed(args) = &mut segment.arguments else { unreachable!() };
+    args.args.pop();
+    args.args.pop_punct();
+    syn::Type::Path(path)
+}
+
+#[test]
+fn run_selections_are_independent_and_erase_exactly() {
+    let source = authored_storage();
+    for args in [
+        quote!(seen(runs)),
+        quote!(layouts(runs)),
+        quote!(layouts(runs), seen(runs)),
+        quote!(seen(runs), layouts(sharded),),
+    ] {
+        let text = args.to_string();
+        let target = compile_storage_with(&source, args).unwrap();
+        check_storage(&source, &target).unwrap();
+        assert_eq!(target.providers[0], source.providers[0]);
+        assert_eq!(target.providers[1], source.providers[1]);
+        let seen = target.providers[2].seen.to_token_stream().to_string();
+        assert_eq!(seen.contains("RunSeen"), text.contains("seen"));
+        let mut restored = target.clone();
+        for (before, after) in source.providers.iter().zip(&mut restored.providers) {
+            after.seen = before.seen.clone();
+        }
+        let mut changed = 0;
+        for (before, after) in source.layouts.iter().chain(&source.delta_layouts)
+            .zip(restored.layouts.iter_mut().chain(&mut restored.delta_layouts))
+        {
+            if before.provider != after.provider {
+                assert_eq!(after.provider, if text.contains("layouts (runs)") {
+                    run_layout_type(&before.provider)
+                } else {
+                    shard_layout_type(&before.provider)
+                });
+                after.provider = before.provider.clone();
+                changed += 1;
+            }
+        }
+        assert_eq!(changed > 0, text.contains("layouts"));
+        assert_eq!(restored, source);
+        assert_eq!(syn::parse2::<storage::Program>(target.to_token_stream()).unwrap(), target);
+        compile_sharded(&cq_datalog_fork::compile(&target).unwrap()).unwrap();
+    }
+    for args in [
+        quote!(layouts(runs), layouts(sharded)),
+        quote!(layouts(sharded), layouts(runs)),
+        quote!(layouts(runs), layouts(runs)),
+        quote!(seen(runs), seen(runs)),
+        quote!(seen(sharded)),
+        quote!(seen()),
+        quote!(layouts(runs extra)),
+    ] {
+        assert!(compile_storage_with(&source, args).is_err());
+    }
+}
+
+#[test]
+fn run_layout_checker_rejects_ineligible_and_changed_types_and_hashers() {
+    let source = authored_storage();
+    let target = compile_storage_with(&source, quote!(layouts(runs), seen(runs))).unwrap();
+    for delta in [false, true] {
+        let layouts = if delta { &source.delta_layouts } else { &source.layouts };
+        for (index, layout) in layouts.iter().enumerate() {
+            let eligible = layout.key > 0 && source.incremental.strata.source.declarations.iter()
+                .any(|d| d.name == layout.relation && d.value.is_none());
+            for argument in 0..3 {
+                let mut changed = target.clone();
+                let layouts = if delta { &mut changed.delta_layouts } else { &mut changed.layouts };
+                layouts[index].provider = run_layout_type(&layout.provider);
+                if eligible {
+                    let syn::Type::Path(path) = &mut layouts[index].provider else { unreachable!() };
+                    let syn::PathArguments::AngleBracketed(args) =
+                        &mut path.path.segments.last_mut().unwrap().arguments else { unreachable!() };
+                    if argument == 2 {
+                        args.args.push(syn::parse_quote!(ChangedHasher));
+                    } else {
+                        args.args[argument] = syn::parse_quote!(Changed);
+                    }
+                }
+                assert!(check_storage(&source, &changed).is_err());
+                if !eligible {
+                    assert!(compile_sharded(&cq_datalog_fork::compile(&changed).unwrap()).is_err());
+                }
+            }
+            if eligible {
+                for hasher in [
+                    syn::parse_quote!(::cq_storage::HashState),
+                    syn::parse_quote!(::std::collections::hash_map::RandomState),
+                    syn::parse_quote!(CustomHasher),
+                ] {
+                    let mut changed = source.clone();
+                    let layouts = if delta { &mut changed.delta_layouts } else { &mut changed.layouts };
+                    let syn::Type::Path(path) = &mut layouts[index].provider else { unreachable!() };
+                    let syn::PathArguments::AngleBracketed(args) =
+                        &mut path.path.segments.last_mut().unwrap().arguments else { unreachable!() };
+                    args.args[2] = syn::GenericArgument::Type(hasher);
+                    assert!(compile_storage_with(&changed, quote!(layouts(runs))).unwrap_err()
+                        .to_string().contains("default storage hasher"));
+                    assert!(check_storage(&changed, &target).is_err());
+                    compile_storage_with(&changed, quote!(seen(runs))).unwrap();
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn run_seen_preserves_hasher_and_rejects_row_or_hasher_changes() {
+    for original in [
+        syn::parse_quote!(::cq_storage::HashSet<(i32, i32,)>),
+        syn::parse_quote!(::std::collections::HashSet<(i32, i32,)>),
+        syn::parse_quote!(::std::collections::HashSet<(i32, i32,), CustomHasher>),
+    ] {
+        let mut source = authored_storage();
+        source.providers[2].seen = original;
+        let target = compile_storage_with(&source, quote!(seen(runs))).unwrap();
+        check_storage(&source, &target).unwrap();
+        let expected: syn::Type = if target.providers[2].seen.to_token_stream().to_string().contains("CustomHasher") {
+            syn::parse_quote!(::cq_datalog_parallel_runtime::RunSeen<(i32, i32,), CustomHasher>)
+        } else if source.providers[2].seen.to_token_stream().to_string().contains("cq_storage") {
+            syn::parse_quote!(::cq_datalog_parallel_runtime::RunSeen<(i32, i32,)>)
+        } else {
+            syn::parse_quote!(::cq_datalog_parallel_runtime::RunSeen<(i32, i32,), ::std::collections::hash_map::RandomState>)
+        };
+        assert_eq!(target.providers[2].seen, expected);
+        for bad in [
+            syn::parse_quote!(::cq_datalog_parallel_runtime::RunSeen<(i64,), CustomHasher>),
+            syn::parse_quote!(::cq_datalog_parallel_runtime::RunSeen<(i32, i32,), ChangedHasher>),
+        ] {
+            let mut changed = target.clone();
+            changed.providers[2].seen = bad;
+            assert!(check_storage(&source, &changed).is_err());
+        }
+    }
 }
 
 #[test]

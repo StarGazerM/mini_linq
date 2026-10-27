@@ -1,0 +1,1537 @@
+{
+  "schema_version": 2,
+  "sf": 1,
+  "configuration": "par",
+  "threads": 24,
+  "compiler_runtime_sha256": "2faad03b8af38b63e16266cbbbf9d763fa33618961fab8bd8ca49d1abfa14101",
+  "methodology": {
+    "scope": "All 27 catalog queries; fixed par configuration, no plan selection.",
+    "invocations": "One untimed exact execution at SF0.1. SF1/SF10: one warmup and five plain samples; independent untimed counts; one warmup and five profile samples. Any warm/timed execution above ten seconds reduces that mode to its first three samples.",
+    "cap_seconds": 100,
+    "slow_seconds": 10,
+    "rayon_num_threads": 24,
+    "correctness": "Every warm and timed result matches the authored DuckDB SQL as a normalized exact set; DECIMAL trailing-zero normalization only.",
+    "plain_boundary": "query::run including query-local construction; excludes loading, canonicalization, comparison and final answer destruction.",
+    "profile_phase_labels": {
+      "profile_build_at_median_total_ms": "setup+build",
+      "profile_query_residual_at_median_total_ms": "final evaluation"
+    },
+    "profile_boundary": "Setup+build and final evaluation come from the same median-total profile execution, never from plain total. TASKS_BUILD_WALL_TOTAL measures the wall-time union of setup/publication intervals across all Tasks programs in that execution; nested/concurrent intervals count once. Setup+build includes upstream scans, routing and joins needed to publish stores. Final evaluation is profile total minus that union, including boundary/teardown residual. Per-program TASKS_QUERY_WALL spans remain raw diagnostics, not an additive split. Uninstrumented whole-query totals are primary for performance comparisons.",
+    "limitations": "Task-local/lazy construction during final evaluation remains there unless it enters an explicit build interval. Ordinary inclusive operator task spans may overlap and exceed root wall time; they are never summed into this split. Parallel setup+build is not identical to default/LE/advised exclusive build (BUILD_EXCLUSIVE_TOTAL) and is not exclusive index insertion. Sequential primitive bag/set agreement is inapplicable to Tasks buffers/canonicalization and is marked unverified; actual counters, exact answers and independent counted operator graph checks are retained.",
+    "timeout": "Combined configuration wall budget includes loading, warmup, timed runs and exact checks across plain/counts/profile; never a numeric query timing. Completed exact plain metrics survive later counting/profile timeout; missing phases remain null."
+  },
+  "rows": [
+    {
+      "sf": 1,
+      "query": "retail_h01",
+      "configuration": "par",
+      "threads": 24,
+      "status": "complete",
+      "status_details": {
+        "status": "complete"
+      },
+      "correctness": "ok",
+      "verification_only": false,
+      "runs": 5,
+      "profile_runs": 5,
+      "answer_rows": 4,
+      "uninstrumented_total_median_ms": 3025.542994,
+      "uninstrumented_samples_ms": [
+        2979.2355079999998,
+        2994.7540529999997,
+        3025.542994,
+        3062.977021,
+        3081.958415
+      ],
+      "profile_total_median_ms": 3451.31679,
+      "profile_build_at_median_total_ms": 3418.81444,
+      "profile_query_residual_at_median_total_ms": 32.50234999999975,
+      "profile_samples_ms": [
+        3305.281087,
+        3413.14055,
+        3451.31679,
+        3549.4091359999998,
+        3632.362525
+      ],
+      "profile_overhead_percent": 14.072640740665676,
+      "profile_operator_graph_verified": true,
+      "profile_top_level_clock_verified": true,
+      "primitive_build_counts_verified": false,
+      "build_scope_kinds": [
+        "TASKS_BUILD_WALL"
+      ],
+      "load_ms": 1035.462888,
+      "zone_build_ms": 0.0,
+      "peak_rss_kib": 2863980,
+      "measurement_policy": {
+        "wall_seconds": 46.20409543404821,
+        "cap_seconds": 100,
+        "slow_seconds": 10,
+        "profile_winners_only": false,
+        "retained_plain_before_policy_change": false,
+        "configuration": "par",
+        "rayon_num_threads": 24,
+        "plain_only": false,
+        "verification_only": false,
+        "runs": 5
+      },
+      "raw_directory": "experiments/gpu/compare/performance_cpu_raw/par/t24/sf1/retail_h01/par"
+    },
+    {
+      "sf": 1,
+      "query": "retail_h02",
+      "configuration": "par",
+      "threads": 24,
+      "status": "complete",
+      "status_details": {
+        "status": "complete"
+      },
+      "correctness": "ok",
+      "verification_only": false,
+      "runs": 5,
+      "profile_runs": 5,
+      "answer_rows": 460,
+      "uninstrumented_total_median_ms": 96.531749,
+      "uninstrumented_samples_ms": [
+        87.185552,
+        93.49210299999999,
+        96.531749,
+        98.009843,
+        99.099733
+      ],
+      "profile_total_median_ms": 152.05882,
+      "profile_build_at_median_total_ms": 142.854243,
+      "profile_query_residual_at_median_total_ms": 9.204577,
+      "profile_samples_ms": [
+        141.358707,
+        144.524485,
+        152.05882,
+        165.240961,
+        173.83191
+      ],
+      "profile_overhead_percent": 57.52208115487474,
+      "profile_operator_graph_verified": true,
+      "profile_top_level_clock_verified": true,
+      "primitive_build_counts_verified": false,
+      "build_scope_kinds": [
+        "TASKS_BUILD_WALL"
+      ],
+      "load_ms": 69.801245,
+      "zone_build_ms": 0.0,
+      "peak_rss_kib": 150660,
+      "measurement_policy": {
+        "wall_seconds": 2.0969028818653896,
+        "cap_seconds": 100,
+        "slow_seconds": 10,
+        "profile_winners_only": false,
+        "retained_plain_before_policy_change": false,
+        "configuration": "par",
+        "rayon_num_threads": 24,
+        "plain_only": false,
+        "verification_only": false,
+        "runs": 5
+      },
+      "raw_directory": "experiments/gpu/compare/performance_cpu_raw/par/t24/sf1/retail_h02/par"
+    },
+    {
+      "sf": 1,
+      "query": "retail_h06",
+      "configuration": "par",
+      "threads": 24,
+      "status": "complete",
+      "status_details": {
+        "status": "complete"
+      },
+      "correctness": "ok",
+      "verification_only": false,
+      "runs": 5,
+      "profile_runs": 5,
+      "answer_rows": 1,
+      "uninstrumented_total_median_ms": 24.090744,
+      "uninstrumented_samples_ms": [
+        23.014761,
+        23.460656,
+        24.090744,
+        25.156687,
+        29.039511
+      ],
+      "profile_total_median_ms": 35.546185,
+      "profile_build_at_median_total_ms": 35.543049,
+      "profile_query_residual_at_median_total_ms": 0.003135999999997807,
+      "profile_samples_ms": [
+        34.474270000000004,
+        34.651098999999995,
+        35.546185,
+        37.896411,
+        38.353016
+      ],
+      "profile_overhead_percent": 47.55121303019949,
+      "profile_operator_graph_verified": true,
+      "profile_top_level_clock_verified": true,
+      "primitive_build_counts_verified": false,
+      "build_scope_kinds": [
+        "TASKS_BUILD_WALL"
+      ],
+      "load_ms": 541.6675819999999,
+      "zone_build_ms": 0.0,
+      "peak_rss_kib": 306720,
+      "measurement_policy": {
+        "wall_seconds": 2.1963629219681025,
+        "cap_seconds": 100,
+        "slow_seconds": 10,
+        "profile_winners_only": false,
+        "retained_plain_before_policy_change": false,
+        "configuration": "par",
+        "rayon_num_threads": 24,
+        "plain_only": false,
+        "verification_only": false,
+        "runs": 5
+      },
+      "raw_directory": "experiments/gpu/compare/performance_cpu_raw/par/t24/sf1/retail_h06/par"
+    },
+    {
+      "sf": 1,
+      "query": "retail_h11",
+      "configuration": "par",
+      "threads": 24,
+      "status": "complete",
+      "status_details": {
+        "status": "complete"
+      },
+      "correctness": "ok",
+      "verification_only": false,
+      "runs": 5,
+      "profile_runs": 5,
+      "answer_rows": 1048,
+      "uninstrumented_total_median_ms": 42.746728999999995,
+      "uninstrumented_samples_ms": [
+        41.610501,
+        41.751171,
+        42.746728999999995,
+        43.732800000000005,
+        45.799461
+      ],
+      "profile_total_median_ms": 80.32808600000001,
+      "profile_build_at_median_total_ms": 21.554672,
+      "profile_query_residual_at_median_total_ms": 58.77341400000002,
+      "profile_samples_ms": [
+        78.618629,
+        80.071033,
+        80.32808600000001,
+        80.489304,
+        87.041616
+      ],
+      "profile_overhead_percent": 87.91633390241395,
+      "profile_operator_graph_verified": true,
+      "profile_top_level_clock_verified": true,
+      "primitive_build_counts_verified": false,
+      "build_scope_kinds": [
+        "TASKS_BUILD_WALL"
+      ],
+      "load_ms": 51.773624,
+      "zone_build_ms": 0.0,
+      "peak_rss_kib": 111864,
+      "measurement_policy": {
+        "wall_seconds": 1.195006496971473,
+        "cap_seconds": 100,
+        "slow_seconds": 10,
+        "profile_winners_only": false,
+        "retained_plain_before_policy_change": false,
+        "configuration": "par",
+        "rayon_num_threads": 24,
+        "plain_only": false,
+        "verification_only": false,
+        "runs": 5
+      },
+      "raw_directory": "experiments/gpu/compare/performance_cpu_raw/par/t24/sf1/retail_h11/par"
+    },
+    {
+      "sf": 1,
+      "query": "retail_h13",
+      "configuration": "par",
+      "threads": 24,
+      "status": "complete",
+      "status_details": {
+        "status": "complete"
+      },
+      "correctness": "ok",
+      "verification_only": false,
+      "runs": 5,
+      "profile_runs": 5,
+      "answer_rows": 150000,
+      "uninstrumented_total_median_ms": 496.608549,
+      "uninstrumented_samples_ms": [
+        482.314195,
+        489.46774,
+        496.608549,
+        501.31994199999997,
+        507.278494
+      ],
+      "profile_total_median_ms": 559.284883,
+      "profile_build_at_median_total_ms": 427.652114,
+      "profile_query_residual_at_median_total_ms": 131.63276900000005,
+      "profile_samples_ms": [
+        547.450776,
+        551.448119,
+        559.284883,
+        568.149938,
+        578.841585
+      ],
+      "profile_overhead_percent": 12.620872944335893,
+      "profile_operator_graph_verified": true,
+      "profile_top_level_clock_verified": true,
+      "primitive_build_counts_verified": false,
+      "build_scope_kinds": [
+        "TASKS_BUILD_WALL"
+      ],
+      "load_ms": 201.71898199999998,
+      "zone_build_ms": 0.0,
+      "peak_rss_kib": 512112,
+      "measurement_policy": {
+        "wall_seconds": 8.96128425898496,
+        "cap_seconds": 100,
+        "slow_seconds": 10,
+        "profile_winners_only": false,
+        "retained_plain_before_policy_change": false,
+        "configuration": "par",
+        "rayon_num_threads": 24,
+        "plain_only": false,
+        "verification_only": false,
+        "runs": 5
+      },
+      "raw_directory": "experiments/gpu/compare/performance_cpu_raw/par/t24/sf1/retail_h13/par"
+    },
+    {
+      "sf": 1,
+      "query": "retail_h14",
+      "configuration": "par",
+      "threads": 24,
+      "status": "complete",
+      "status_details": {
+        "status": "complete"
+      },
+      "correctness": "ok",
+      "verification_only": false,
+      "runs": 5,
+      "profile_runs": 5,
+      "answer_rows": 1,
+      "uninstrumented_total_median_ms": 75.783834,
+      "uninstrumented_samples_ms": [
+        69.844156,
+        75.675777,
+        75.783834,
+        75.956896,
+        76.288801
+      ],
+      "profile_total_median_ms": 79.651949,
+      "profile_build_at_median_total_ms": 79.648662,
+      "profile_query_residual_at_median_total_ms": 0.003287000000000262,
+      "profile_samples_ms": [
+        78.36195599999999,
+        79.015198,
+        79.651949,
+        92.347768,
+        96.854377
+      ],
+      "profile_overhead_percent": 5.104142659237865,
+      "profile_operator_graph_verified": true,
+      "profile_top_level_clock_verified": true,
+      "primitive_build_counts_verified": false,
+      "build_scope_kinds": [
+        "TASKS_BUILD_WALL"
+      ],
+      "load_ms": 537.147052,
+      "zone_build_ms": 0.0,
+      "peak_rss_kib": 324768,
+      "measurement_policy": {
+        "wall_seconds": 2.8488352550193667,
+        "cap_seconds": 100,
+        "slow_seconds": 10,
+        "profile_winners_only": false,
+        "retained_plain_before_policy_change": false,
+        "configuration": "par",
+        "rayon_num_threads": 24,
+        "plain_only": false,
+        "verification_only": false,
+        "runs": 5
+      },
+      "raw_directory": "experiments/gpu/compare/performance_cpu_raw/par/t24/sf1/retail_h14/par"
+    },
+    {
+      "sf": 1,
+      "query": "retail_h15",
+      "configuration": "par",
+      "threads": 24,
+      "status": "complete",
+      "status_details": {
+        "status": "complete"
+      },
+      "correctness": "ok",
+      "verification_only": false,
+      "runs": 5,
+      "profile_runs": 5,
+      "answer_rows": 1,
+      "uninstrumented_total_median_ms": 65.614859,
+      "uninstrumented_samples_ms": [
+        59.758481,
+        64.225535,
+        65.614859,
+        65.949179,
+        66.99501500000001
+      ],
+      "profile_total_median_ms": 84.689686,
+      "profile_build_at_median_total_ms": 84.359273,
+      "profile_query_residual_at_median_total_ms": 0.33041299999999296,
+      "profile_samples_ms": [
+        79.35528,
+        80.256648,
+        84.689686,
+        87.563857,
+        87.71063799999999
+      ],
+      "profile_overhead_percent": 29.07089535923564,
+      "profile_operator_graph_verified": true,
+      "profile_top_level_clock_verified": true,
+      "primitive_build_counts_verified": false,
+      "build_scope_kinds": [
+        "TASKS_BUILD_WALL"
+      ],
+      "load_ms": 529.7313449999999,
+      "zone_build_ms": 0.0,
+      "peak_rss_kib": 387892,
+      "measurement_policy": {
+        "wall_seconds": 2.7491417940473184,
+        "cap_seconds": 100,
+        "slow_seconds": 10,
+        "profile_winners_only": false,
+        "retained_plain_before_policy_change": false,
+        "configuration": "par",
+        "rayon_num_threads": 24,
+        "plain_only": false,
+        "verification_only": false,
+        "runs": 5
+      },
+      "raw_directory": "experiments/gpu/compare/performance_cpu_raw/par/t24/sf1/retail_h15/par"
+    },
+    {
+      "sf": 1,
+      "query": "retail_h18",
+      "configuration": "par",
+      "threads": 24,
+      "status": "complete",
+      "status_details": {
+        "status": "complete"
+      },
+      "correctness": "ok",
+      "verification_only": false,
+      "runs": 5,
+      "profile_runs": 5,
+      "answer_rows": 57,
+      "uninstrumented_total_median_ms": 1144.1343200000001,
+      "uninstrumented_samples_ms": [
+        1112.860072,
+        1135.4334470000001,
+        1144.1343200000001,
+        1150.188986,
+        1151.226211
+      ],
+      "profile_total_median_ms": 1538.1149480000001,
+      "profile_build_at_median_total_ms": 1488.113222,
+      "profile_query_residual_at_median_total_ms": 50.00172600000019,
+      "profile_samples_ms": [
+        1511.851822,
+        1535.439413,
+        1538.1149480000001,
+        1542.404463,
+        1573.146565
+      ],
+      "profile_overhead_percent": 34.43482300225029,
+      "profile_operator_graph_verified": true,
+      "profile_top_level_clock_verified": true,
+      "primitive_build_counts_verified": false,
+      "build_scope_kinds": [
+        "TASKS_BUILD_WALL"
+      ],
+      "load_ms": 358.97487099999995,
+      "zone_build_ms": 0.0,
+      "peak_rss_kib": 1344144,
+      "measurement_policy": {
+        "wall_seconds": 19.031909646000713,
+        "cap_seconds": 100,
+        "slow_seconds": 10,
+        "profile_winners_only": false,
+        "retained_plain_before_policy_change": false,
+        "configuration": "par",
+        "rayon_num_threads": 24,
+        "plain_only": false,
+        "verification_only": false,
+        "runs": 5
+      },
+      "raw_directory": "experiments/gpu/compare/performance_cpu_raw/par/t24/sf1/retail_h18/par"
+    },
+    {
+      "sf": 1,
+      "query": "retail_h20",
+      "configuration": "par",
+      "threads": 24,
+      "status": "complete",
+      "status_details": {
+        "status": "complete"
+      },
+      "correctness": "ok",
+      "verification_only": false,
+      "runs": 5,
+      "profile_runs": 5,
+      "answer_rows": 186,
+      "uninstrumented_total_median_ms": 288.998399,
+      "uninstrumented_samples_ms": [
+        272.147314,
+        276.812097,
+        288.998399,
+        300.204111,
+        302.348481
+      ],
+      "profile_total_median_ms": 407.09201099999996,
+      "profile_build_at_median_total_ms": 378.685163,
+      "profile_query_residual_at_median_total_ms": 28.406847999999968,
+      "profile_samples_ms": [
+        399.379255,
+        406.346602,
+        407.09201099999996,
+        411.585655,
+        421.21437499999996
+      ],
+      "profile_overhead_percent": 40.863067895403795,
+      "profile_operator_graph_verified": true,
+      "profile_top_level_clock_verified": true,
+      "primitive_build_counts_verified": false,
+      "build_scope_kinds": [
+        "TASKS_BUILD_WALL"
+      ],
+      "load_ms": 569.846403,
+      "zone_build_ms": 0.0,
+      "peak_rss_kib": 606504,
+      "measurement_policy": {
+        "wall_seconds": 6.613741489942186,
+        "cap_seconds": 100,
+        "slow_seconds": 10,
+        "profile_winners_only": false,
+        "retained_plain_before_policy_change": false,
+        "configuration": "par",
+        "rayon_num_threads": 24,
+        "plain_only": false,
+        "verification_only": false,
+        "runs": 5
+      },
+      "raw_directory": "experiments/gpu/compare/performance_cpu_raw/par/t24/sf1/retail_h20/par"
+    },
+    {
+      "sf": 1,
+      "query": "retail_h10",
+      "configuration": "par",
+      "threads": 24,
+      "status": "complete",
+      "status_details": {
+        "status": "complete"
+      },
+      "correctness": "ok",
+      "verification_only": false,
+      "runs": 5,
+      "profile_runs": 5,
+      "answer_rows": 37967,
+      "uninstrumented_total_median_ms": 420.57114099999995,
+      "uninstrumented_samples_ms": [
+        399.45644200000004,
+        415.880067,
+        420.57114099999995,
+        433.889633,
+        463.68692500000003
+      ],
+      "profile_total_median_ms": 510.27078800000004,
+      "profile_build_at_median_total_ms": 400.650921,
+      "profile_query_residual_at_median_total_ms": 109.61986700000006,
+      "profile_samples_ms": [
+        489.537011,
+        494.935549,
+        510.27078800000004,
+        530.917459,
+        549.5704179999999
+      ],
+      "profile_overhead_percent": 21.32805564992395,
+      "profile_operator_graph_verified": true,
+      "profile_top_level_clock_verified": true,
+      "primitive_build_counts_verified": false,
+      "build_scope_kinds": [
+        "TASKS_BUILD_WALL"
+      ],
+      "load_ms": 783.785945,
+      "zone_build_ms": 0.0,
+      "peak_rss_kib": 911088,
+      "measurement_policy": {
+        "wall_seconds": 9.964304538094439,
+        "cap_seconds": 100,
+        "slow_seconds": 10,
+        "profile_winners_only": false,
+        "retained_plain_before_policy_change": false,
+        "configuration": "par",
+        "rayon_num_threads": 24,
+        "plain_only": false,
+        "verification_only": false,
+        "runs": 5
+      },
+      "raw_directory": "experiments/gpu/compare/performance_cpu_raw/par/t24/sf1/retail_h10/par"
+    },
+    {
+      "sf": 1,
+      "query": "retail_h12",
+      "configuration": "par",
+      "threads": 24,
+      "status": "complete",
+      "status_details": {
+        "status": "complete"
+      },
+      "correctness": "ok",
+      "verification_only": false,
+      "runs": 5,
+      "profile_runs": 5,
+      "answer_rows": 2,
+      "uninstrumented_total_median_ms": 113.796464,
+      "uninstrumented_samples_ms": [
+        101.560206,
+        113.22658200000001,
+        113.796464,
+        113.867871,
+        115.059045
+      ],
+      "profile_total_median_ms": 110.41929,
+      "profile_build_at_median_total_ms": 110.413088,
+      "profile_query_residual_at_median_total_ms": 0.006202000000001817,
+      "profile_samples_ms": [
+        109.70724399999999,
+        109.958556,
+        110.41929,
+        110.695158,
+        112.301368
+      ],
+      "profile_overhead_percent": -2.9677319323384244,
+      "profile_operator_graph_verified": true,
+      "profile_top_level_clock_verified": true,
+      "primitive_build_counts_verified": false,
+      "build_scope_kinds": [
+        "TASKS_BUILD_WALL"
+      ],
+      "load_ms": 770.415731,
+      "zone_build_ms": 0.0,
+      "peak_rss_kib": 700768,
+      "measurement_policy": {
+        "wall_seconds": 4.250959554919973,
+        "cap_seconds": 100,
+        "slow_seconds": 10,
+        "profile_winners_only": false,
+        "retained_plain_before_policy_change": false,
+        "configuration": "par",
+        "rayon_num_threads": 24,
+        "plain_only": false,
+        "verification_only": false,
+        "runs": 5
+      },
+      "raw_directory": "experiments/gpu/compare/performance_cpu_raw/par/t24/sf1/retail_h12/par"
+    },
+    {
+      "sf": 1,
+      "query": "retail_h19",
+      "configuration": "par",
+      "threads": 24,
+      "status": "complete",
+      "status_details": {
+        "status": "complete"
+      },
+      "correctness": "ok",
+      "verification_only": false,
+      "runs": 5,
+      "profile_runs": 5,
+      "answer_rows": 1,
+      "uninstrumented_total_median_ms": 73.830147,
+      "uninstrumented_samples_ms": [
+        73.42075200000001,
+        73.673376,
+        73.830147,
+        74.299426,
+        76.536284
+      ],
+      "profile_total_median_ms": 105.22942,
+      "profile_build_at_median_total_ms": 105.215533,
+      "profile_query_residual_at_median_total_ms": 0.013887000000011085,
+      "profile_samples_ms": [
+        103.350027,
+        104.23379100000001,
+        105.22942,
+        105.634807,
+        108.80256
+      ],
+      "profile_overhead_percent": 42.52906742824176,
+      "profile_operator_graph_verified": true,
+      "profile_top_level_clock_verified": true,
+      "primitive_build_counts_verified": false,
+      "build_scope_kinds": [
+        "TASKS_BUILD_WALL"
+      ],
+      "load_ms": 2303.455849,
+      "zone_build_ms": 0.0,
+      "peak_rss_kib": 1063404,
+      "measurement_policy": {
+        "wall_seconds": 8.763188980869018,
+        "cap_seconds": 100,
+        "slow_seconds": 10,
+        "profile_winners_only": false,
+        "retained_plain_before_policy_change": false,
+        "configuration": "par",
+        "rayon_num_threads": 24,
+        "plain_only": false,
+        "verification_only": false,
+        "runs": 5
+      },
+      "raw_directory": "experiments/gpu/compare/performance_cpu_raw/par/t24/sf1/retail_h19/par"
+    },
+    {
+      "sf": 1,
+      "query": "retail_h03",
+      "configuration": "par",
+      "threads": 24,
+      "status": "complete",
+      "status_details": {
+        "status": "complete"
+      },
+      "correctness": "ok",
+      "verification_only": false,
+      "runs": 5,
+      "profile_runs": 5,
+      "answer_rows": 11620,
+      "uninstrumented_total_median_ms": 134.693464,
+      "uninstrumented_samples_ms": [
+        134.289008,
+        134.585106,
+        134.693464,
+        135.44054599999998,
+        139.625959
+      ],
+      "profile_total_median_ms": 246.773928,
+      "profile_build_at_median_total_ms": 182.91103,
+      "profile_query_residual_at_median_total_ms": 63.862898,
+      "profile_samples_ms": [
+        240.76600000000002,
+        246.56093900000002,
+        246.773928,
+        252.045964,
+        252.81554
+      ],
+      "profile_overhead_percent": 83.21150906030601,
+      "profile_operator_graph_verified": true,
+      "profile_top_level_clock_verified": true,
+      "primitive_build_counts_verified": false,
+      "build_scope_kinds": [
+        "TASKS_BUILD_WALL"
+      ],
+      "load_ms": 213.101877,
+      "zone_build_ms": 0.0,
+      "peak_rss_kib": 306968,
+      "measurement_policy": {
+        "wall_seconds": 3.398499049828388,
+        "cap_seconds": 100,
+        "slow_seconds": 10,
+        "profile_winners_only": false,
+        "retained_plain_before_policy_change": false,
+        "configuration": "par",
+        "rayon_num_threads": 24,
+        "plain_only": false,
+        "verification_only": false,
+        "runs": 5
+      },
+      "raw_directory": "experiments/gpu/compare/performance_cpu_raw/par/t24/sf1/retail_h03/par"
+    },
+    {
+      "sf": 1,
+      "query": "retail_h04",
+      "configuration": "par",
+      "threads": 24,
+      "status": "complete",
+      "status_details": {
+        "status": "complete"
+      },
+      "correctness": "ok",
+      "verification_only": false,
+      "runs": 5,
+      "profile_runs": 5,
+      "answer_rows": 52523,
+      "uninstrumented_total_median_ms": 221.383422,
+      "uninstrumented_samples_ms": [
+        219.570147,
+        219.951578,
+        221.383422,
+        225.279702,
+        226.167003
+      ],
+      "profile_total_median_ms": 347.787505,
+      "profile_build_at_median_total_ms": 329.88762,
+      "profile_query_residual_at_median_total_ms": 17.899884999999983,
+      "profile_samples_ms": [
+        344.163066,
+        345.25580099999996,
+        347.787505,
+        354.312283,
+        373.75897299999997
+      ],
+      "profile_overhead_percent": 57.09735709117372,
+      "profile_operator_graph_verified": true,
+      "profile_top_level_clock_verified": true,
+      "primitive_build_counts_verified": false,
+      "build_scope_kinds": [
+        "TASKS_BUILD_WALL"
+      ],
+      "load_ms": 226.39742500000003,
+      "zone_build_ms": 0.0,
+      "peak_rss_kib": 607432,
+      "measurement_policy": {
+        "wall_seconds": 5.005787763162516,
+        "cap_seconds": 100,
+        "slow_seconds": 10,
+        "profile_winners_only": false,
+        "retained_plain_before_policy_change": false,
+        "configuration": "par",
+        "rayon_num_threads": 24,
+        "plain_only": false,
+        "verification_only": false,
+        "runs": 5
+      },
+      "raw_directory": "experiments/gpu/compare/performance_cpu_raw/par/t24/sf1/retail_h04/par"
+    },
+    {
+      "sf": 1,
+      "query": "retail_h04_not_exists",
+      "configuration": "par",
+      "threads": 24,
+      "status": "complete",
+      "status_details": {
+        "status": "complete"
+      },
+      "correctness": "ok",
+      "verification_only": false,
+      "runs": 5,
+      "profile_runs": 5,
+      "answer_rows": 4695,
+      "uninstrumented_total_median_ms": 165.73363899999998,
+      "uninstrumented_samples_ms": [
+        164.67200400000002,
+        164.942342,
+        165.73363899999998,
+        169.095364,
+        174.172938
+      ],
+      "profile_total_median_ms": 156.43980299999998,
+      "profile_build_at_median_total_ms": 29.014812,
+      "profile_query_residual_at_median_total_ms": 127.42499099999998,
+      "profile_samples_ms": [
+        154.14866,
+        154.216159,
+        156.43980299999998,
+        156.635968,
+        159.169405
+      ],
+      "profile_overhead_percent": -5.607694404151708,
+      "profile_operator_graph_verified": true,
+      "profile_top_level_clock_verified": true,
+      "primitive_build_counts_verified": false,
+      "build_scope_kinds": [
+        "TASKS_BUILD_WALL"
+      ],
+      "load_ms": 227.76487600000002,
+      "zone_build_ms": 0.0,
+      "peak_rss_kib": 254916,
+      "measurement_policy": {
+        "wall_seconds": 2.999603004893288,
+        "cap_seconds": 100,
+        "slow_seconds": 10,
+        "profile_winners_only": false,
+        "retained_plain_before_policy_change": false,
+        "configuration": "par",
+        "rayon_num_threads": 24,
+        "plain_only": false,
+        "verification_only": false,
+        "runs": 5
+      },
+      "raw_directory": "experiments/gpu/compare/performance_cpu_raw/par/t24/sf1/retail_h04_not_exists/par"
+    },
+    {
+      "sf": 1,
+      "query": "retail_h05",
+      "configuration": "par",
+      "threads": 24,
+      "status": "complete",
+      "status_details": {
+        "status": "complete"
+      },
+      "correctness": "ok",
+      "verification_only": false,
+      "runs": 5,
+      "profile_runs": 5,
+      "answer_rows": 7242,
+      "uninstrumented_total_median_ms": 132.849018,
+      "uninstrumented_samples_ms": [
+        131.146172,
+        132.205784,
+        132.849018,
+        139.736421,
+        143.17959199999999
+      ],
+      "profile_total_median_ms": 262.20869600000003,
+      "profile_build_at_median_total_ms": 152.324412,
+      "profile_query_residual_at_median_total_ms": 109.88428400000004,
+      "profile_samples_ms": [
+        261.551726,
+        261.81271699999996,
+        262.20869600000003,
+        263.015882,
+        266.81484500000005
+      ],
+      "profile_overhead_percent": 97.37345442779264,
+      "profile_operator_graph_verified": true,
+      "profile_top_level_clock_verified": true,
+      "primitive_build_counts_verified": false,
+      "build_scope_kinds": [
+        "TASKS_BUILD_WALL"
+      ],
+      "load_ms": 233.814112,
+      "zone_build_ms": 0.0,
+      "peak_rss_kib": 286988,
+      "measurement_policy": {
+        "wall_seconds": 3.600631779874675,
+        "cap_seconds": 100,
+        "slow_seconds": 10,
+        "profile_winners_only": false,
+        "retained_plain_before_policy_change": false,
+        "configuration": "par",
+        "rayon_num_threads": 24,
+        "plain_only": false,
+        "verification_only": false,
+        "runs": 5
+      },
+      "raw_directory": "experiments/gpu/compare/performance_cpu_raw/par/t24/sf1/retail_h05/par"
+    },
+    {
+      "sf": 1,
+      "query": "retail_h07",
+      "configuration": "par",
+      "threads": 24,
+      "status": "complete",
+      "status_details": {
+        "status": "complete"
+      },
+      "correctness": "ok",
+      "verification_only": false,
+      "runs": 5,
+      "profile_runs": 5,
+      "answer_rows": 5501,
+      "uninstrumented_total_median_ms": 84.93582500000001,
+      "uninstrumented_samples_ms": [
+        79.238504,
+        84.706356,
+        84.93582500000001,
+        86.16418,
+        94.750271
+      ],
+      "profile_total_median_ms": 137.53504,
+      "profile_build_at_median_total_ms": 126.44963,
+      "profile_query_residual_at_median_total_ms": 11.08541000000001,
+      "profile_samples_ms": [
+        128.595984,
+        133.861819,
+        137.53504,
+        139.313459,
+        147.098965
+      ],
+      "profile_overhead_percent": 61.92818519158434,
+      "profile_operator_graph_verified": true,
+      "profile_top_level_clock_verified": true,
+      "primitive_build_counts_verified": false,
+      "build_scope_kinds": [
+        "TASKS_BUILD_WALL"
+      ],
+      "load_ms": 280.958119,
+      "zone_build_ms": 0.0,
+      "peak_rss_kib": 262372,
+      "measurement_policy": {
+        "wall_seconds": 2.5988113810308278,
+        "cap_seconds": 100,
+        "slow_seconds": 10,
+        "profile_winners_only": false,
+        "retained_plain_before_policy_change": false,
+        "configuration": "par",
+        "rayon_num_threads": 24,
+        "plain_only": false,
+        "verification_only": false,
+        "runs": 5
+      },
+      "raw_directory": "experiments/gpu/compare/performance_cpu_raw/par/t24/sf1/retail_h07/par"
+    },
+    {
+      "sf": 1,
+      "query": "retail_h07_block",
+      "configuration": "par",
+      "threads": 24,
+      "status": "complete",
+      "status_details": {
+        "status": "complete"
+      },
+      "correctness": "ok",
+      "verification_only": false,
+      "runs": 5,
+      "profile_runs": 5,
+      "answer_rows": 5501,
+      "uninstrumented_total_median_ms": 712.3235030000001,
+      "uninstrumented_samples_ms": [
+        693.24595,
+        697.324741,
+        712.3235030000001,
+        718.998248,
+        728.165894
+      ],
+      "profile_total_median_ms": 955.637901,
+      "profile_build_at_median_total_ms": 230.848865,
+      "profile_query_residual_at_median_total_ms": 724.7890360000001,
+      "profile_samples_ms": [
+        949.379626,
+        953.156927,
+        955.637901,
+        962.613855,
+        996.202657
+      ],
+      "profile_overhead_percent": 34.157850607942095,
+      "profile_operator_graph_verified": true,
+      "profile_top_level_clock_verified": true,
+      "primitive_build_counts_verified": false,
+      "build_scope_kinds": [
+        "TASKS_BUILD_WALL"
+      ],
+      "load_ms": 285.25717000000003,
+      "zone_build_ms": 0.0,
+      "peak_rss_kib": 410132,
+      "measurement_policy": {
+        "wall_seconds": 14.469488364062272,
+        "cap_seconds": 100,
+        "slow_seconds": 10,
+        "profile_winners_only": false,
+        "retained_plain_before_policy_change": false,
+        "configuration": "par",
+        "rayon_num_threads": 24,
+        "plain_only": false,
+        "verification_only": false,
+        "runs": 5
+      },
+      "raw_directory": "experiments/gpu/compare/performance_cpu_raw/par/t24/sf1/retail_h07_block/par"
+    },
+    {
+      "sf": 1,
+      "query": "retail_h08",
+      "configuration": "par",
+      "threads": 24,
+      "status": "complete",
+      "status_details": {
+        "status": "complete"
+      },
+      "correctness": "ok",
+      "verification_only": false,
+      "runs": 5,
+      "profile_runs": 5,
+      "answer_rows": 2603,
+      "uninstrumented_total_median_ms": 176.339059,
+      "uninstrumented_samples_ms": [
+        176.070533,
+        176.10698399999998,
+        176.339059,
+        177.023601,
+        180.02641699999998
+      ],
+      "profile_total_median_ms": 288.378311,
+      "profile_build_at_median_total_ms": 198.157975,
+      "profile_query_residual_at_median_total_ms": 90.220336,
+      "profile_samples_ms": [
+        286.318662,
+        287.786116,
+        288.378311,
+        291.39488400000005,
+        313.363959
+      ],
+      "profile_overhead_percent": 63.53626509938448,
+      "profile_operator_graph_verified": true,
+      "profile_top_level_clock_verified": true,
+      "primitive_build_counts_verified": false,
+      "build_scope_kinds": [
+        "TASKS_BUILD_WALL"
+      ],
+      "load_ms": 329.850015,
+      "zone_build_ms": 0.0,
+      "peak_rss_kib": 394276,
+      "measurement_policy": {
+        "wall_seconds": 4.3509049931308255,
+        "cap_seconds": 100,
+        "slow_seconds": 10,
+        "profile_winners_only": false,
+        "retained_plain_before_policy_change": false,
+        "configuration": "par",
+        "rayon_num_threads": 24,
+        "plain_only": false,
+        "verification_only": false,
+        "runs": 5
+      },
+      "raw_directory": "experiments/gpu/compare/performance_cpu_raw/par/t24/sf1/retail_h08/par"
+    },
+    {
+      "sf": 1,
+      "query": "retail_h09",
+      "configuration": "par",
+      "threads": 24,
+      "status": "complete",
+      "status_details": {
+        "status": "complete"
+      },
+      "correctness": "ok",
+      "verification_only": false,
+      "runs": 5,
+      "profile_runs": 5,
+      "answer_rows": 319402,
+      "uninstrumented_total_median_ms": 1351.718668,
+      "uninstrumented_samples_ms": [
+        1320.968938,
+        1331.74263,
+        1351.718668,
+        1353.836053,
+        1369.408107
+      ],
+      "profile_total_median_ms": 1533.0394950000002,
+      "profile_build_at_median_total_ms": 1218.441934,
+      "profile_query_residual_at_median_total_ms": 314.59756100000027,
+      "profile_samples_ms": [
+        1506.081282,
+        1531.4865370000002,
+        1533.0394950000002,
+        1538.5335890000001,
+        1540.290323
+      ],
+      "profile_overhead_percent": 13.414095054874252,
+      "profile_operator_graph_verified": true,
+      "profile_top_level_clock_verified": true,
+      "primitive_build_counts_verified": false,
+      "build_scope_kinds": [
+        "TASKS_BUILD_WALL"
+      ],
+      "load_ms": 314.050745,
+      "zone_build_ms": 0.0,
+      "peak_rss_kib": 1099100,
+      "measurement_policy": {
+        "wall_seconds": 24.69711440312676,
+        "cap_seconds": 100,
+        "slow_seconds": 10,
+        "profile_winners_only": false,
+        "retained_plain_before_policy_change": false,
+        "configuration": "par",
+        "rayon_num_threads": 24,
+        "plain_only": false,
+        "verification_only": false,
+        "runs": 5
+      },
+      "raw_directory": "experiments/gpu/compare/performance_cpu_raw/par/t24/sf1/retail_h09/par"
+    },
+    {
+      "sf": 1,
+      "query": "retail_h16",
+      "configuration": "par",
+      "threads": 24,
+      "status": "complete",
+      "status_details": {
+        "status": "complete"
+      },
+      "correctness": "ok",
+      "verification_only": false,
+      "runs": 5,
+      "profile_runs": 5,
+      "answer_rows": 118274,
+      "uninstrumented_total_median_ms": 35.814006,
+      "uninstrumented_samples_ms": [
+        34.146370000000005,
+        34.769383,
+        35.814006,
+        37.021441,
+        40.178203
+      ],
+      "profile_total_median_ms": 46.792742999999994,
+      "profile_build_at_median_total_ms": 22.090518,
+      "profile_query_residual_at_median_total_ms": 24.702224999999995,
+      "profile_samples_ms": [
+        44.774935,
+        44.877962000000004,
+        46.792742999999994,
+        47.024928,
+        53.659828
+      ],
+      "profile_overhead_percent": 30.654870052794415,
+      "profile_operator_graph_verified": true,
+      "profile_top_level_clock_verified": true,
+      "primitive_build_counts_verified": false,
+      "build_scope_kinds": [
+        "TASKS_BUILD_WALL"
+      ],
+      "load_ms": 50.785477,
+      "zone_build_ms": 0.0,
+      "peak_rss_kib": 208820,
+      "measurement_policy": {
+        "wall_seconds": 1.5459795059869066,
+        "cap_seconds": 100,
+        "slow_seconds": 10,
+        "profile_winners_only": false,
+        "retained_plain_before_policy_change": false,
+        "configuration": "par",
+        "rayon_num_threads": 24,
+        "plain_only": false,
+        "verification_only": false,
+        "runs": 5
+      },
+      "raw_directory": "experiments/gpu/compare/performance_cpu_raw/par/t24/sf1/retail_h16/par"
+    },
+    {
+      "sf": 1,
+      "query": "retail_h22",
+      "configuration": "par",
+      "threads": 24,
+      "status": "complete",
+      "status_details": {
+        "status": "complete"
+      },
+      "correctness": "ok",
+      "verification_only": false,
+      "runs": 5,
+      "profile_runs": 5,
+      "answer_rows": 14086,
+      "uninstrumented_total_median_ms": 24.028684000000002,
+      "uninstrumented_samples_ms": [
+        23.242977,
+        24.005519,
+        24.028684000000002,
+        24.220301,
+        29.474844
+      ],
+      "profile_total_median_ms": 22.740173,
+      "profile_build_at_median_total_ms": 0.983165,
+      "profile_query_residual_at_median_total_ms": 21.757008,
+      "profile_samples_ms": [
+        22.477239,
+        22.624121,
+        22.740173,
+        22.864071,
+        31.401186
+      ],
+      "profile_overhead_percent": -5.362386887271908,
+      "profile_operator_graph_verified": true,
+      "profile_top_level_clock_verified": true,
+      "primitive_build_counts_verified": false,
+      "build_scope_kinds": [
+        "TASKS_BUILD_WALL"
+      ],
+      "load_ms": 57.950503,
+      "zone_build_ms": 0.0,
+      "peak_rss_kib": 66104,
+      "measurement_policy": {
+        "wall_seconds": 0.6939628920517862,
+        "cap_seconds": 100,
+        "slow_seconds": 10,
+        "profile_winners_only": false,
+        "retained_plain_before_policy_change": false,
+        "configuration": "par",
+        "rayon_num_threads": 24,
+        "plain_only": false,
+        "verification_only": false,
+        "runs": 5
+      },
+      "raw_directory": "experiments/gpu/compare/performance_cpu_raw/par/t24/sf1/retail_h22/par"
+    },
+    {
+      "sf": 1,
+      "query": "retail_h21_positive",
+      "configuration": "par",
+      "threads": 24,
+      "status": "complete",
+      "status_details": {
+        "status": "complete"
+      },
+      "correctness": "ok",
+      "verification_only": false,
+      "runs": 5,
+      "profile_runs": 5,
+      "answer_rows": 302284,
+      "uninstrumented_total_median_ms": 484.39221,
+      "uninstrumented_samples_ms": [
+        477.89340200000004,
+        481.880765,
+        484.39221,
+        488.325309,
+        497.229949
+      ],
+      "profile_total_median_ms": 732.451732,
+      "profile_build_at_median_total_ms": 526.433081,
+      "profile_query_residual_at_median_total_ms": 206.01865099999998,
+      "profile_samples_ms": [
+        720.655508,
+        726.757848,
+        732.451732,
+        737.655899,
+        788.872702
+      ],
+      "profile_overhead_percent": 51.21046888842411,
+      "profile_operator_graph_verified": true,
+      "profile_top_level_clock_verified": true,
+      "primitive_build_counts_verified": false,
+      "build_scope_kinds": [
+        "TASKS_BUILD_WALL"
+      ],
+      "load_ms": 374.548086,
+      "zone_build_ms": 0.0,
+      "peak_rss_kib": 1136488,
+      "measurement_policy": {
+        "wall_seconds": 12.37452116899658,
+        "cap_seconds": 100,
+        "slow_seconds": 10,
+        "profile_winners_only": false,
+        "retained_plain_before_policy_change": false,
+        "configuration": "par",
+        "rayon_num_threads": 24,
+        "plain_only": false,
+        "verification_only": false,
+        "runs": 5
+      },
+      "raw_directory": "experiments/gpu/compare/performance_cpu_raw/par/t24/sf1/retail_h21_positive/par"
+    },
+    {
+      "sf": 1,
+      "query": "retail_d19",
+      "configuration": "par",
+      "threads": 24,
+      "status": "complete",
+      "status_details": {
+        "status": "complete"
+      },
+      "correctness": "ok",
+      "verification_only": false,
+      "runs": 5,
+      "profile_runs": 5,
+      "answer_rows": 8962,
+      "uninstrumented_total_median_ms": 115.55687400000001,
+      "uninstrumented_samples_ms": [
+        114.692908,
+        115.32387800000001,
+        115.55687400000001,
+        115.561313,
+        117.00340800000001
+      ],
+      "profile_total_median_ms": 219.330791,
+      "profile_build_at_median_total_ms": 175.989504,
+      "profile_query_residual_at_median_total_ms": 43.341286999999994,
+      "profile_samples_ms": [
+        218.011943,
+        218.63163999999998,
+        219.330791,
+        219.42768600000002,
+        220.79645
+      ],
+      "profile_overhead_percent": 89.80332662858291,
+      "profile_operator_graph_verified": true,
+      "profile_top_level_clock_verified": true,
+      "primitive_build_counts_verified": false,
+      "build_scope_kinds": [
+        "TASKS_BUILD_WALL"
+      ],
+      "load_ms": 319.22493000000003,
+      "zone_build_ms": 0.0,
+      "peak_rss_kib": 381888,
+      "measurement_policy": {
+        "wall_seconds": 3.44932631298434,
+        "cap_seconds": 100,
+        "slow_seconds": 10,
+        "profile_winners_only": false,
+        "retained_plain_before_policy_change": false,
+        "configuration": "par",
+        "rayon_num_threads": 24,
+        "plain_only": false,
+        "verification_only": false,
+        "runs": 5
+      },
+      "raw_directory": "experiments/gpu/compare/performance_cpu_raw/par/t24/sf1/retail_d19/par"
+    },
+    {
+      "sf": 1,
+      "query": "retail_d27",
+      "configuration": "par",
+      "threads": 24,
+      "status": "complete",
+      "status_details": {
+        "status": "complete"
+      },
+      "correctness": "ok",
+      "verification_only": false,
+      "runs": 5,
+      "profile_runs": 5,
+      "answer_rows": 357,
+      "uninstrumented_total_median_ms": 210.742506,
+      "uninstrumented_samples_ms": [
+        202.692074,
+        209.676172,
+        210.742506,
+        211.603567,
+        212.550983
+      ],
+      "profile_total_median_ms": 281.89533700000004,
+      "profile_build_at_median_total_ms": 142.416053,
+      "profile_query_residual_at_median_total_ms": 139.47928400000004,
+      "profile_samples_ms": [
+        275.027772,
+        276.55862599999995,
+        281.89533700000004,
+        282.965028,
+        285.18203800000003
+      ],
+      "profile_overhead_percent": 33.762923460727976,
+      "profile_operator_graph_verified": true,
+      "profile_top_level_clock_verified": true,
+      "primitive_build_counts_verified": false,
+      "build_scope_kinds": [
+        "TASKS_BUILD_WALL"
+      ],
+      "load_ms": 304.860813,
+      "zone_build_ms": 0.0,
+      "peak_rss_kib": 609572,
+      "measurement_policy": {
+        "wall_seconds": 4.555221902905032,
+        "cap_seconds": 100,
+        "slow_seconds": 10,
+        "profile_winners_only": false,
+        "retained_plain_before_policy_change": false,
+        "configuration": "par",
+        "rayon_num_threads": 24,
+        "plain_only": false,
+        "verification_only": false,
+        "runs": 5
+      },
+      "raw_directory": "experiments/gpu/compare/performance_cpu_raw/par/t24/sf1/retail_d27/par"
+    },
+    {
+      "sf": 1,
+      "query": "retail_d72_inner",
+      "configuration": "par",
+      "threads": 24,
+      "status": "complete",
+      "status_details": {
+        "status": "complete"
+      },
+      "correctness": "ok",
+      "verification_only": false,
+      "runs": 5,
+      "profile_runs": 5,
+      "answer_rows": 5344,
+      "uninstrumented_total_median_ms": 334.367867,
+      "uninstrumented_samples_ms": [
+        316.3467,
+        325.082527,
+        334.367867,
+        338.63826400000005,
+        399.761117
+      ],
+      "profile_total_median_ms": 540.430681,
+      "profile_build_at_median_total_ms": 344.905287,
+      "profile_query_residual_at_median_total_ms": 195.52539400000006,
+      "profile_samples_ms": [
+        531.19687,
+        532.258025,
+        540.430681,
+        542.173051,
+        542.9300430000001
+      ],
+      "profile_overhead_percent": 61.62757679104376,
+      "profile_operator_graph_verified": true,
+      "profile_top_level_clock_verified": true,
+      "primitive_build_counts_verified": false,
+      "build_scope_kinds": [
+        "TASKS_BUILD_WALL"
+      ],
+      "load_ms": 510.183128,
+      "zone_build_ms": 0.0,
+      "peak_rss_kib": 725936,
+      "measurement_policy": {
+        "wall_seconds": 7.658045399119146,
+        "cap_seconds": 100,
+        "slow_seconds": 10,
+        "profile_winners_only": false,
+        "retained_plain_before_policy_change": false,
+        "configuration": "par",
+        "rayon_num_threads": 24,
+        "plain_only": false,
+        "verification_only": false,
+        "runs": 5
+      },
+      "raw_directory": "experiments/gpu/compare/performance_cpu_raw/par/t24/sf1/retail_d72_inner/par"
+    },
+    {
+      "sf": 1,
+      "query": "retail_d85",
+      "configuration": "par",
+      "threads": 24,
+      "status": "complete",
+      "status_details": {
+        "status": "complete"
+      },
+      "correctness": "ok",
+      "verification_only": false,
+      "runs": 5,
+      "profile_runs": 5,
+      "answer_rows": 8962,
+      "uninstrumented_total_median_ms": 195.45938800000002,
+      "uninstrumented_samples_ms": [
+        192.81643100000002,
+        194.865048,
+        195.45938800000002,
+        196.53105200000002,
+        200.633316
+      ],
+      "profile_total_median_ms": 327.13253599999996,
+      "profile_build_at_median_total_ms": 299.053659,
+      "profile_query_residual_at_median_total_ms": 28.078876999999977,
+      "profile_samples_ms": [
+        324.74004,
+        326.287747,
+        327.13253599999996,
+        328.838396,
+        367.34338
+      ],
+      "profile_overhead_percent": 67.36598806909184,
+      "profile_operator_graph_verified": true,
+      "profile_top_level_clock_verified": true,
+      "primitive_build_counts_verified": false,
+      "build_scope_kinds": [
+        "TASKS_BUILD_WALL"
+      ],
+      "load_ms": 350.058476,
+      "zone_build_ms": 0.0,
+      "peak_rss_kib": 708844,
+      "measurement_policy": {
+        "wall_seconds": 5.10493271087762,
+        "cap_seconds": 100,
+        "slow_seconds": 10,
+        "profile_winners_only": false,
+        "retained_plain_before_policy_change": false,
+        "configuration": "par",
+        "rayon_num_threads": 24,
+        "plain_only": false,
+        "verification_only": false,
+        "runs": 5
+      },
+      "raw_directory": "experiments/gpu/compare/performance_cpu_raw/par/t24/sf1/retail_d85/par"
+    }
+  ]
+}

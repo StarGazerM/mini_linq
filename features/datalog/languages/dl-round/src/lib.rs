@@ -37,6 +37,8 @@ use storage::{record, text::Text};
 use syn::{Expr, Ident};
 mod correspondence;
 pub use correspondence::{check_storage, scan_source, use_layouts, use_scan};
+pub mod schedule;
+pub use schedule::Schedule;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Relation {
     pub declaration: RelationDecl,
@@ -150,6 +152,8 @@ pub struct Program {
     pub terminals: TerminalRegistry,
     pub execution: Vec<Execution>,
     pub policy: RoundPolicy,
+    /// Recorded evaluation schedule; checked by WF-DL-Schedule, changes no value.
+    pub schedule: Schedule,
 }
 #[derive(Clone, Debug)]
 pub struct Hole {
@@ -188,6 +192,8 @@ impl Hole {
 pub enum HoleInterface {
     Pull,
     Push,
+    /// Write candidates into a caller-owned batch arena.
+    Batch,
 }
 
 impl syn::parse::Parse for HoleInterface {
@@ -196,9 +202,10 @@ impl syn::parse::Parse for HoleInterface {
         match name.to_string().as_str() {
             "pull" => Ok(Self::Pull),
             "push" => Ok(Self::Push),
+            "batch" => Ok(Self::Batch),
             _ => Err(syn::Error::new_spanned(
                 name,
-                "expected pull or push interface",
+                "expected pull, push or batch interface",
             )),
         }
     }
@@ -208,6 +215,7 @@ impl ToTokens for HoleInterface {
         tokens.extend(match self {
             Self::Pull => quote!(pull),
             Self::Push => quote!(push),
+            Self::Batch => quote!(batch),
         });
     }
 }
@@ -329,7 +337,7 @@ pub struct Execution {
 pub struct RoundPolicy {
     pub timing: Ident,
 }
-record!(Program { storage: storage::Program, context: RoundContext, holes: Vec<Hole>, terminals: TerminalRegistry, execution: Vec<Execution>, policy: RoundPolicy });
+record!(Program { storage: storage::Program, context: RoundContext, holes: Vec<Hole>, terminals: TerminalRegistry, execution: Vec<Execution>, policy: RoundPolicy, schedule: Schedule });
 record!(Hole {
     cq: CqProgram,
     pipeline: cq_stage::Pipeline,
@@ -816,6 +824,7 @@ pub mod contract {
         correspondence::check_storage_with_analysis(&program.storage, &erased, &analysis)?;
         check_facts(&erased)?;
         check_execution(program)?;
+        schedule::check(program, &analysis)?;
         Ok(Analysis { storage: analysis })
     }
 }
@@ -859,6 +868,8 @@ fn check_rewrite_admitted(source: &Program, target: &Program) -> syn::Result<()>
     }
     source.context.outputs = erased.context.outputs.clone();
     source.policy.timing = erased.policy.timing.clone();
+    // The schedule records only admissible evaluation order (CK-DL-Schedule).
+    source.schedule = erased.schedule.clone();
     for (before, after) in source.holes.iter_mut().zip(&erased.holes) {
         before.pipeline = after.pipeline.clone();
         before.lower = after.lower;

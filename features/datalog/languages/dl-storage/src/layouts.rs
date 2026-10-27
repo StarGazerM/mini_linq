@@ -69,7 +69,7 @@ pub(crate) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
         let head = analysis.positions[&symbol_name(&query.head.relation)];
         let component = analysis.component[head].expect("checked IDB component");
         let mut bound = BTreeSet::new();
-        let order = crate::incremental::variant_order(query, variant.driver)?;
+        let order = crate::incremental::variant_order(query, &variant.order)?;
         for (position, &source_position) in order.iter().enumerate() {
             let item = &query.body[source_position];
             match item {

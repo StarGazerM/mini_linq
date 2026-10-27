@@ -1,0 +1,6 @@
+[workspace]
+members = ["harness", "mini", "mini-par"]
+resolver = "3"
+
+[profile.release.build-override]
+opt-level = 3

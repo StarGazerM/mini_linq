@@ -1,0 +1,17 @@
+[package]
+name = "cq-mac"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Synchronous MCCL/MLX indexes over reusable shared numeric relations"
+
+[workspace]
+
+[dependencies]
+cq-storage = { path = "../../../runtime/cq-storage" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+mccl = { path = "../mccl" }
+
+[profile.release]
+debug = 1

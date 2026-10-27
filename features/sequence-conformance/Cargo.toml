@@ -1,0 +1,33 @@
+[workspace]
+members = ["."]
+resolver = "3"
+
+[package]
+name = "cq-sequence-conformance"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85.1"
+license = "MIT OR Apache-2.0"
+description = "Executable CPU Sequence conformance using target-owned planning and translation"
+
+[dependencies]
+cq-lang-sequence = { path = "../../languages/cq-lang-sequence", version = "0.1.0" }
+cq-sequence-plan = { path = "../../passes/cq-sequence-plan", version = "0.1.0" }
+cq-sequence-pull = { path = "../../passes/cq-sequence-pull", version = "0.1.0" }
+cq-sequence-tasks = { path = "../sequence-tasks", version = "0.1.0" }
+cq-storage = { path = "../../runtime/cq-storage", version = "0.1.0" }
+cq-syntax = { path = "../../languages/cq-syntax", version = "0.1.0" }
+cq-testkit = { path = "../../testkit/cq-testkit", version = "0.1.0" }
+proc-macro2 = "1"
+quote = "1"
+rayon = "1"
+syn = { version = "2", features = ["full", "extra-traits"] }
+
+[dev-dependencies]
+cq-index-policy = { path = "../../passes/cq-index-policy", version = "0.1.0" }
+cq-lang-structures = { path = "../../languages/cq-lang-structures", version = "0.1.0" }
+cq-physical-lowering = { path = "../../passes/cq-physical-lowering", version = "0.1.0" }
+cq-planners-plan = { path = "../planners/plan" }
+cq-sequence-lowering = { path = "../../passes/cq-sequence-lowering", version = "0.1.0" }
+cq-structure-selection = { path = "../../passes/cq-structure-selection", version = "0.1.0" }
+cq-workloads = { path = "../workloads" }

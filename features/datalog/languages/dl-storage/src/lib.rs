@@ -116,7 +116,7 @@ pub fn read_plan(
         let component = analysis.component[head].expect("checked IDB component");
         let order = incremental::variant_order(
             &program.incremental.strata.source.rules[variant.rule],
-            variant.driver,
+            &variant.order,
         )?;
         for (position, item) in variant.query.body.iter().enumerate() {
             match item {

@@ -85,12 +85,26 @@ class SequenceDependencies(unittest.TestCase):
     def test_pull_adapters_are_permitted(self):
         self.check_package("cq-sequence-pull", production_only=True)
 
+    def test_sequence_core_edges_are_permitted(self):
+        for name in ("cq-sequence-lowering", "cq-sequence-plan", "cq-sequence-pull"):
+            with self.subTest(package=name):
+                self.check_package(name)
+
     def test_core_feature_edges_remain_forbidden(self):
         for name in ("cq-sequence-lowering", "cq-sequence-plan", "cq-sequence-pull"):
-            with self.subTest(package=name), self.assertRaisesRegex(
-                ValueError, "core depends on an optional feature"
-            ):
-                self.check_package(name)
+            for kind in (None, "dev", "build"):
+                data = copy.deepcopy(self.data)
+                package = next(p for p in data["packages"] if p["name"] == name)
+                dependency = copy.deepcopy(package["dependencies"][0])
+                dependency.update(
+                    name="cq-workloads", kind=kind, optional=True,
+                    path=str(check_dependencies.ROOT / "features/workloads"),
+                )
+                package["dependencies"].append(dependency)
+                with self.subTest(package=name, kind=kind), patch.object(
+                    check_dependencies, "PATHS", {name: check_dependencies.PATHS[name]}
+                ), self.assertRaisesRegex(ValueError, "core depends on an optional feature"):
+                    check_dependencies.check(data, announce=False)
 
 
 if __name__ == "__main__":

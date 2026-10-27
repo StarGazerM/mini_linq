@@ -185,10 +185,12 @@ version = "0.1.0"
 dependencies = [
  "ascent",
  "cq-datalog",
+ "cq-datalog-hasher",
  "cq-datalog-parallel-runtime",
  "cq-datalog-parallel-test-passes",
  "cq-datalog-partition",
  "cq-datalog-rayon-print",
+ "cq-datalog-schedule",
  "cq-datalog-test-passes",
  "cq-datalog-testkit",
  "cq-lang-datalog-round",
@@ -214,6 +216,7 @@ name = "cq-datalog-parallel-test-passes"
 version = "0.0.0"
 dependencies = [
  "cq-datalog-partition",
+ "cq-lang-datalog-round",
  "cq-stage",
  "quote",
  "syn 2.0.119",
@@ -278,6 +281,17 @@ dependencies = [
  "cq-structure-selection",
  "proc-macro2",
  "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-schedule"
+version = "0.0.0"
+dependencies = [
+ "cq-lang-datalog-round",
+ "cq-lang-datalog-storage",
+ "cq-stage",
+ "proc-macro2",
  "syn 2.0.119",
 ]
 
@@ -606,16 +620,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-rewrite-passes"
-version = "0.1.0"
-dependencies = [
- "cq-lang-physical",
- "cq-lang-structures",
- "proc-macro2",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "cq-sequence-lowering"
 version = "0.1.0"
 dependencies = [
@@ -629,7 +633,8 @@ name = "cq-sequence-plan"
 version = "0.1.0"
 dependencies = [
  "cq-lang-sequence",
- "cq-sequence-rewrite-passes",
+ "cq-sequence-lowering",
+ "cq-structure-selection",
  "cq-syntax",
  "proc-macro2",
  "quote",
@@ -644,19 +649,6 @@ dependencies = [
  "cq-lang-structures",
  "cq-physical-realization",
  "cq-print",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "cq-sequence-rewrite-passes"
-version = "0.1.0"
-dependencies = [
- "cq-lang-sequence",
- "cq-rewrite-passes",
- "cq-sequence-lowering",
- "cq-syntax",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -687,6 +679,7 @@ version = "0.1.0"
 dependencies = [
  "ahash",
  "hashbrown 0.15.5",
+ "rayon",
 ]
 
 [[package]]
@@ -723,6 +716,7 @@ dependencies = [
  "cq-lang-vo",
  "cq-syntax",
  "hashbrown 0.15.5",
+ "rayon",
  "syn 2.0.119",
 ]
 
@@ -1088,6 +1082,7 @@ dependencies = [
  "cq-datalog",
  "cq-datalog-parallel",
  "cq-datalog-parallel-runtime",
+ "cq-datalog-schedule",
  "cq-storage",
  "mini-linq",
  "oracle-ascent",

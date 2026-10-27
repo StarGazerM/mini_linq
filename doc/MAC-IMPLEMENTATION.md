@@ -1,6 +1,6 @@
 # Mac implementation: provider, maintained runs, then backend
 
-Status: the GPU fork has MCCL/MLX shared-source construction, immutable CPU reads,
+Status: this tree has MCCL/MLX shared-source construction, immutable CPU reads,
 and online flat/binary-carry snapshots for its existing packed u32/u32 provider.
 It also has an explicitly selected **GPU-built grouped RadixRun**, including
 parallel spline construction and stable grouped merge, using the native CPU
@@ -26,12 +26,14 @@ Datalog's generated layout updates, or a Metal-resident execution backend.
 
 ## Integrated state and compiler-change inventory
 
-The GPU experiment is now at [experiments/mac/gpu-index](../experiments/mac/gpu-index/README.md),
-alongside the main tree's optimized native `RadixRun`. Importing it did not
-replace any runtime/compiler files from the older snapshot. The native cached
-numeric-key sort, lazy exact dense-membership bitmap, H09 workload order, and
-profiling changes remain intact. Historical experiment timings retain their
-original source/machine provenance; integration is not a new performance result.
+The GPU experiment is at [experiments/mac/gpu-index](../experiments/mac/gpu-index/README.md),
+alongside the main tree's optimized native `RadixRun`. Its runtime and canonical
+native implementation are consolidated in `experiments/mac/cq-mac` and
+`experiments/mac/mccl`, separate from the portable core workspace. The native
+cached numeric-key sort, lazy exact dense-membership bitmap, H09 workload order,
+and profiling changes remain intact. The earlier sibling snapshots are historical
+backups, not build dependencies or active work directories. Archived timings
+retain their original source/machine provenance; integration is not a new result.
 
 The current tree includes the following compiler/runtime boundary. The subsequent
 provider-contract refactor replaces the earlier RadixRun name-specific checks:
@@ -98,7 +100,7 @@ path; actual dispatch proves the traits of the chosen handle. Unsupported
 target shapes fail explicitly, including retained/expanded Smallest on native
 realization and Structures staging/witness/filter decisions on the CUDA
 Sequence target. This is not a new GPU or LSM implementation. The approved
-provider-contract refactor has been merged back into `mini_linq-gpu-index-20261024`.
+provider-contract refactor and the subsequent GPU runtime are consolidated here.
 
 ## Existing contracts to reuse
 
@@ -318,13 +320,13 @@ The full CUDA workspace still requires missing machine-local
 unit checks through a temporary isolated manifest; CUDA device execution was
 not exercised. No such prerequisite was bypassed by changing runtime behavior.
 
-The provider-contract refactor is present in both the main tree and the GPU
-experiment folder following the approved merge-back. Subsequent runtime work
-below is isolated to `mini_linq-gpu-index-20261024`; it has not been merged back.
+The provider-contract refactor and subsequent GPU runtime work are now integrated
+in this tree. The earlier `mini_linq-gpu-index-20261024` snapshot remains historical;
+the verification counts above describe their original source states, not this merge.
 
-## Implemented hybrid runtime in the GPU fork
+## Implemented hybrid runtime
 
-[`runtime/cq-mac`](../runtime/cq-mac/src/lib.rs) is a standalone Cargo workspace,
+[`experiments/mac/cq-mac`](../experiments/mac/cq-mac/src/lib.rs) is a standalone Cargo workspace,
 not a dependency of the portable workspace. It adds no compiler pass, provider
 name exception, Datalog emission change or implicit `Build` implementation.
 
@@ -376,7 +378,7 @@ Total source rows are capped at `1 << 30`, with device limits also enforced.
 This does not make arbitrary Rust objects GPU-readable, silently narrow wide
 keys, or replace the broader native `RadixRun` domain.
 
-Canonical shaders now live in the sibling `../mccl/native/index` checkout.
+Canonical shaders live in `experiments/mac/mccl/native/index` within this tree.
 The offline experiment consumes those sources but retains its explicit raw-Metal
 measurement harness. Production CQ code contains no Metal allocator, queue,
 shader copy or CPU radix implementation; MCCL owns these construction primitives.
@@ -385,13 +387,13 @@ and evaluated before publication. CPU probes read completed storage directly.
 
 ### Run and verification
 
-From the GPU fork root, after building the sibling MCCL native bundle:
+From the repository root, build the local MCCL native bundle first:
 
 ```sh
-cmake -S ../mccl -B ../mccl/build/native -DCMAKE_BUILD_TYPE=Release
-cmake --build ../mccl/build/native --parallel 8
-cargo test --locked --manifest-path runtime/cq-mac/Cargo.toml
-cargo run --release --locked --manifest-path runtime/cq-mac/Cargo.toml --example hybrid -- 65539
+cmake -S experiments/mac/mccl -B experiments/mac/mccl/build/native -DCMAKE_BUILD_TYPE=Release
+cmake --build experiments/mac/mccl/build/native --parallel 8
+cargo test --locked --manifest-path experiments/mac/cq-mac/Cargo.toml
+cargo run --release --locked --manifest-path experiments/mac/cq-mac/Cargo.toml --example hybrid -- 65539
 cargo run --release --locked --manifest-path experiments/mac/gpu-index/Cargo.toml -- --check-only
 ```
 
@@ -757,7 +759,7 @@ active radix-byte counts, noncontiguous varying bytes, duplicate payload order,
 empty/extreme inputs, both profiling modes and GPU merge of CPU-built runs.
 No compiler code changed and no crossover threshold was installed in advice.
 
-Reproduce the final candidates and phase diagnostics from the GPU fork:
+Reproduce the final candidates and phase diagnostics from the repository root:
 
 ```sh
 cargo run --release --locked --manifest-path experiments/mac/query-expansion/Cargo.toml \
@@ -1029,8 +1031,8 @@ context's platform requirements and synchronous completion protocol.
 
 ## MCCL provider cutover
 
-The fork's `runtime/cq-mac` now depends on sibling `../mccl`. The portable
-workspace and compiler are unchanged. Core `MacContext` construction/merge,
+`experiments/mac/cq-mac` depends on the local `experiments/mac/mccl` workspace.
+Both remain outside the portable core workspace. Core `MacContext` construction/merge,
 `MacRun`, CQ read traits, chronological bags and pinned snapshot contracts remain.
 MCCL provides stable u32/u32 GPU radix sort, partitioned merge, exact radix-12
 directories and explicitly selected CPU comparison/radix construction. Tuple
@@ -1170,7 +1172,7 @@ All **240 configurations / 720 mode configurations** completed: **3,600 measured
 aggregate builds, constructing 24,660 individual indexes**, excluding first
 observations and warmups. Reports indicate successful cache-limit restoration:
 
-- [Balanced sizes/distributions/relations](../experiments/mac/query-expansion/results/index-matrix-balanced-m3max-20261026.json)
+- [Balanced sizes/distributions/relations (lossless gzip archive)](../experiments/mac/query-expansion/results/index-matrix-balanced-m3max-20261026.json.gz)
 - [Individually named relation projections](../experiments/mac/query-expansion/results/index-matrix-relations-m3max-20261026.json)
 - [Skewed relation sizes and cache boundaries](../experiments/mac/query-expansion/results/index-matrix-skewed-m3max-20261026.json)
 
@@ -1248,7 +1250,7 @@ intervals, scheduling and wall phases are not generally additive.
 
 The initial continuously reused 67M probe measured 21.129 ms summed GPU time
 inside 21.889 ms evaluation wall time; native sort encoding was 0.033 ms and
-directory encoding 0.008 ms. [Timestamp samples](../../mccl/benchmarks/index-timing-m3max-20261026.csv).
+directory encoding 0.008 ms. [Timestamp samples](../experiments/mac/mccl/benchmarks/index-timing-m3max-20261026.csv).
 The matched C-ABI comparator separately measured host-source population at
 9.668 ms, cached input allocation at 0.0035 ms, and graph construction in
 microseconds. The native probe generates directly into storage, so its
@@ -1278,9 +1280,9 @@ experiments/mac/query-expansion/target/release/index_lifecycle \
 experiments/mac/gpu-index/target/release/index_compare \
   --sizes 65536,1048576,16777216,67108864 --runs 5 --warmups 2 \
   --distributions uniform,workspace,dense,all_equal --out /tmp/index-compare.json
-cmake -S ../mccl -B ../mccl/build/native -DCMAKE_BUILD_TYPE=Release
-cmake --build ../mccl/build/native --target mccl_index_timing --parallel 8
-../mccl/build/native/mccl_index_timing --sizes 67108864 --runs 5 \
+cmake -S experiments/mac/mccl -B experiments/mac/mccl/build/native -DCMAKE_BUILD_TYPE=Release
+cmake --build experiments/mac/mccl/build/native --target mccl_index_timing --parallel 8
+experiments/mac/mccl/build/native/mccl_index_timing --sizes 67108864 --runs 5 \
   --cache pooled --out /tmp/index-timing.csv
 ```
 
@@ -1340,12 +1342,12 @@ CPU work and allocator/cache usage, so it establishes workload-history
 sensitivity without uniquely attributing it to GPU clocks.
 
 Raw evidence:
-- [Active A](../../mccl/benchmarks/index-steady-active-a-m3max-20261026.csv),
-  [idle](../../mccl/benchmarks/index-steady-idle-m3max-20261026.csv),
-  [active B](../../mccl/benchmarks/index-steady-active-b-m3max-20261026.csv),
-  [cache-cleared](../../mccl/benchmarks/index-steady-cleared-m3max-20261026.csv).
-- [Paired size/scheduling probe](../../mccl/benchmarks/index-scheduling-m3max-20261026.csv)
-  and [paired idle probe](../../mccl/benchmarks/index-scheduling-idle-m3max-20261026.csv);
+- [Active A](../experiments/mac/mccl/benchmarks/index-steady-active-a-m3max-20261026.csv),
+  [idle](../experiments/mac/mccl/benchmarks/index-steady-idle-m3max-20261026.csv),
+  [active B](../experiments/mac/mccl/benchmarks/index-steady-active-b-m3max-20261026.csv),
+  [cache-cleared](../experiments/mac/mccl/benchmarks/index-steady-cleared-m3max-20261026.csv).
+- [Paired size/scheduling probe](../experiments/mac/mccl/benchmarks/index-scheduling-m3max-20261026.csv)
+  and [paired idle probe](../experiments/mac/mccl/benchmarks/index-scheduling-idle-m3max-20261026.csv);
   retained boundaries here are not the continuously warmed control.
 - [GPU-only matrix history](../experiments/mac/query-expansion/results/index-history-gpu-only-m3max-20261026.json)
   and [CPU/GPU-interleaved history](../experiments/mac/query-expansion/results/index-history-interleaved-m3max-20261026.json).
@@ -1459,7 +1461,7 @@ Post-cutover raw evidence (historical files remain unchanged):
   [H09 pool cases](../experiments/mac/query-expansion/results/shared-source-pool-h09-m3max-20261026.json),
   [constructor pool cases](../experiments/mac/query-expansion/results/shared-source-pool-construction-m3max-20261026.json).
 - [Matched shared-source raw/MCCL controls](../experiments/mac/gpu-index/shared-source-compare-m3max-20261026.json).
-- [Native shared-source GPU timing](../../mccl/benchmarks/shared-source-index-timing-m3max-20261026.csv).
+- [Native shared-source GPU timing](../experiments/mac/mccl/benchmarks/shared-source-index-timing-m3max-20261026.csv).
 
 For the two-column uniform case, one 1,048,576-row shared relation occupied
 8,388,608 logical bytes. Ingestion (including deterministic key generation)
@@ -1715,3 +1717,47 @@ These experiments demonstrate a completed fast GPU constructor with native-style
 CPU reads and GPU merge, not automatic query adoption or an end-to-end H09
 speedup. Tiny inputs still pay GPU submission cost; retained allocation
 capacities, model size and broader key-domain support remain explicit tradeoffs.
+
+## Primary-checkout consolidation and mainline sync (2026-10-27)
+
+All active Mac implementation sources are now Git-managed in this checkout:
+
+- `experiments/mac/mccl`: native MLX/Metal implementation and Rust ownership API.
+- `experiments/mac/cq-mac`: CQ adapters, grouped RadixRun and maintained snapshots.
+- `experiments/mac/gpu-index`: canonical-kernel diagnostics.
+- `experiments/mac/query-expansion`: authored-query and matched build/read drivers.
+- `runtime/cq-storage`: portable native storage and the shared RadixRun reader.
+
+The Mac crates remain standalone Cargo workspaces outside the portable core.
+Cargo metadata for all four Mac workspaces has no external path package.
+The rebuilt `libmccl_native.dylib` resolves MCCL/MLX libraries inside
+`experiments/mac/mccl/build/native`, not a sibling project. Historical source
+paths embedded in archived measurement records are provenance and remain intact.
+The oversized balanced matrix is preserved losslessly as
+`index-matrix-balanced-m3max-20261026.json.gz`.
+
+Mainline was fetched through `43d22720` and integrated with the local work.
+The merge preserves the newer Tasks, closed-core and CUDA/Datalog work alongside
+generic provider support and Mac indexing. Routed providers now implement the
+same explicit `Keys` contract; native RadixRun also has the routed read adapter.
+Catalog retention treats storage type and its declared support together while
+independent checks still enforce all live obligations. Column identity remains
+a Rust `ColumnSlot` obligation, not a provider-name blacklist.
+
+Recovery points retain the pre-consolidation work:
+
+- `backup/mac-before-unify-20261027`: original checkout's local work checkpoint.
+- `refs/backups/gpu-fork-before-unify-20261027`: complete GPU snapshot source/evidence.
+- `refs/backups/mccl-before-unify-20261027`: independent MCCL source/evidence.
+
+Original sibling folders are untouched historical backups, not active build
+dependencies. Development and verification continue only in this checkout.
+
+Unified verification exercised the 1,066-test portable workspace, 187 rewrite
+tests, 11 join-filter tests, 54 Tasks tests, 52 workload tests and 25 xtask tests.
+The local MCCL and CQ Mac suites passed 16 and 15 tests. The actual canonical
+Metal kernel executable, grouped GPU construction/merge driver and H03/H09
+boundary/scaled executions passed exact checks. All five compiled native
+RadixRun example routes returned the same 150 answers. These are integration
+smokes, not new performance measurements; CUDA device execution was not exercised
+on this Apple-silicon host.

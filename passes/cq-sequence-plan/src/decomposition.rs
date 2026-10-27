@@ -101,6 +101,20 @@ pub(crate) fn advise(
         if grade.level.len() == 1 && grade.level[0] == machine.root.name {
             continue;
         }
+        // Segment introduces an inline Store. BE-Boundary requires every
+        // separated Store to be named, so only a collaborative grade admits
+        // this local offsets publication; a task/pool keeps the plain schedule.
+        let collaborative = grade
+            .level
+            .iter()
+            .skip(1)
+            .try_fold(&machine.root, |level, name| {
+                level.children.iter().find(|child| child.name == *name)
+            })
+            .is_some_and(|level| level.collaborative);
+        if !collaborative {
+            continue;
+        }
         if has_tile(program, &definition.term) {
             continue;
         }
@@ -148,7 +162,11 @@ fn unstored_input(program: &Program, term: &Term) -> Option<syn::Ident> {
         | Term::Group(_, inner)
         | Term::Canon(inner)
         | Term::Store { inner, .. } => unstored_input(program, inner),
-        Term::Tile { .. } | Term::Union(_) | Term::Choose(_) | Term::Rows(_) => None,
+        Term::Tile { .. }
+        | Term::PartitionK { .. }
+        | Term::Union(_)
+        | Term::Choose(_)
+        | Term::Rows(_) => None,
     }
 }
 
@@ -163,9 +181,15 @@ fn producer<'a>(program: &'a Program, name: &syn::Ident) -> Option<&'a Term> {
 
 fn has_tile(program: &Program, term: &Term) -> bool {
     match term {
-        Term::Tile { .. } => true,
-        Term::Ref(name) => producer(program, name)
-            .is_some_and(|term| !matches!(term, Term::Store { .. }) && has_tile(program, term)),
+        Term::Tile { .. } | Term::PartitionK { .. } => true,
+        Term::Ref(name) => producer(program, name).is_some_and(|term| match term {
+            // A published nested cover already supplies the parts for a
+            // partial fold, unlike an ordinary flat stored producer.
+            Term::Store { inner, .. } => {
+                matches!(inner.as_ref(), Term::Tile { .. } | Term::PartitionK { .. })
+            }
+            term => has_tile(program, term),
+        }),
         Term::Map(_, inner)
         | Term::Flatten(inner)
         | Term::Compact(_, inner)
@@ -193,6 +217,7 @@ fn expands(program: &Program, term: &Term) -> bool {
         | Term::Group(_, inner)
         | Term::Canon(inner)
         | Term::Tile { inner, .. }
+        | Term::PartitionK { inner, .. }
         | Term::Store { inner, .. } => expands(program, inner),
         Term::Union(arms) => arms.iter().any(|term| expands(program, term)),
         Term::Choose(arms) => arms.iter().any(|(_, term)| expands(program, term)),

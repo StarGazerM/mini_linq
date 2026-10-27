@@ -489,6 +489,7 @@ fn has_row_work(
         | Term::Group(_, t)
         | Term::Canon(t)
         | Term::Tile { inner: t, .. }
+        | Term::PartitionK { inner: t, .. }
         | Term::Store { inner: t, .. } => {
             has_row_work(t, definitions, indices, row_predicates, seen)
         }
@@ -503,7 +504,7 @@ fn has_row_work(
 
 fn requires_host(term: &Term, opaque: &BTreeSet<String>) -> bool {
     match term {
-        Term::Group(_, _) => true,
+        Term::Group(_, inner) => !crate::key_partition::contains_partition(inner),
         Term::Map(name, inner) | Term::Compact(name, inner) => {
             opaque.contains(&symbol_name(name)) || requires_host(inner, opaque)
         }
@@ -514,6 +515,7 @@ fn requires_host(term: &Term, opaque: &BTreeSet<String>) -> bool {
         | Term::Fold(_, inner)
         | Term::Canon(inner)
         | Term::Store { inner, .. }
+        | Term::PartitionK { inner, .. }
         | Term::Tile { inner, .. } => requires_host(inner, opaque),
         Term::Union(arms) => arms.iter().any(|term| requires_host(term, opaque)),
         Term::Choose(arms) => arms.iter().any(|(_, term)| requires_host(term, opaque)),
@@ -597,6 +599,7 @@ fn reads_at(
         | Term::Fold(_, inner)
         | Term::Group(_, inner)
         | Term::Store { inner, .. }
+        | Term::PartitionK { inner, .. }
         | Term::Tile { inner, .. } => reads_at(inner, result, facts, catalog, level, canon_level),
         Term::Union(arms) => arms
             .iter()
@@ -624,6 +627,7 @@ fn references<'a>(
         | Term::Group(_, t)
         | Term::Canon(t)
         | Term::Tile { inner: t, .. }
+        | Term::PartitionK { inner: t, .. }
         | Term::Store { inner: t, .. }
         | Term::Lookup { inner: t, .. } => references(t, definitions, indices, result),
         Term::Union(terms) => {
@@ -690,6 +694,7 @@ fn driver_domains(
         | Term::Group(_, inner)
         | Term::Canon(inner)
         | Term::Tile { inner, .. }
+        | Term::PartitionK { inner, .. }
         | Term::Store { inner, .. }
         | Term::Lookup { inner, .. } => driver_domains(inner, definitions, indices, domains),
         Term::Union(arms) => {
@@ -726,6 +731,7 @@ fn row_predicate(operator: &Operator) -> bool {
     }
 
     match operator {
+        Operator::Guard(_) => true,
         Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) => {
             select
                 .condition
@@ -783,7 +789,8 @@ fn host_operations(program: &Program, facts: &cq_lang_sequence::Analysis) -> BTr
         .definitions
         .iter()
         .filter(|definition| {
-            facts.structures.physical.opaque(&definition.operator)
+            (facts.structures.physical.opaque(&definition.operator)
+                && !facts.structures.physical.capturable(&definition.operator))
                 || host_predicate(&definition.operator)
                 || string_row(facts, &symbol_name(&definition.name))
                 || match &definition.operator {
@@ -828,6 +835,8 @@ mod tests {
         Machine {
             name: syn::parse_quote!(gpu),
             items: 1,
+            key_partition_threshold: 65536,
+            key_partition_cache_threshold: 6 * 1024 * 1024,
             layout: None,
             root: node("host", vec![node("device", vec![node("block", vec![])])]),
         }
@@ -890,6 +899,34 @@ mod tests {
                 selected = compact selected input;
                 result = store canon map answer selected;
             }
+        }
+    }
+
+    #[test]
+    fn closed_partial_fragments_are_parameters_but_row_calls_remain_host_only() {
+        for (condition, host_only) in [
+            (quote::quote!(*a == threshold()), false),
+            (quote::quote!(opaque(a)), true),
+        ] {
+            let source: Program = syn::parse_quote! {
+                physical {
+                    relation R(a:i32);
+                    r = pipe rename R@0 {a -> a};
+                    selected = pipe guard r if (#condition);
+                    answer = pipe canon project selected keep {a};
+                    return answer as answer(a);
+                }
+                structures { r host scan = Reader []; answer canon = Canon; }
+                sequence {
+                    input = store rows r;
+                    result = store canon map answer input;
+                }
+            };
+            let facts = cq_lang_sequence::contract::check(&source).unwrap();
+            assert_eq!(
+                host_operations(&source, &facts).contains("selected"),
+                host_only
+            );
         }
     }
 
@@ -1017,8 +1054,7 @@ mod tests {
     #[test]
     fn unsupported_authored_provider_read_grade_is_not_replaced() {
         let source =
-            cq_sequence_rewrite_passes::grade(&membership(), quote::quote!(gpu, answer at host))
-                .unwrap();
+            crate::rewrites::grade(&membership(), quote::quote!(gpu, answer at host)).unwrap();
         let facts = cq_lang_sequence::contract::check(&source).unwrap();
         let available = catalog(vec![
             vec!["host".into(), "device".into()],

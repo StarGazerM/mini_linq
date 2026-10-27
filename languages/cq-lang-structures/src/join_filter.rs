@@ -200,3 +200,41 @@ pub(crate) fn check_join_filters(program: &Program, facts: &Analysis) -> syn::Re
     }
     Ok(())
 }
+
+/// Covering operators are proof witnesses, not runtime filter identities.
+/// Validate every recorded witness before sharing its runtime work. A build
+/// name identifies one Physical version; its complete covering key identifies
+/// the source index layout (and therefore the projected key component).
+pub(crate) fn coalesce_join_filters(program: &Program, facts: &mut Analysis) {
+    if facts.join_filters.is_empty() {
+        return;
+    }
+    let layouts: BTreeMap<_, _> = program
+        .physical
+        .program
+        .definitions
+        .iter()
+        .filter_map(|d| {
+            let (Operator::Probe(_, k) | Operator::Semi(_, k)) = &d.operator else {
+                return None;
+            };
+            Some((symbol_name(&d.name), names(&k.columns)))
+        })
+        .collect();
+    for filters in facts.join_filters.values_mut() {
+        let witnesses = std::mem::take(filters);
+        for filter in witnesses {
+            if filters.iter().any(|previous| {
+                symbol_name(&previous.build) == symbol_name(&filter.build)
+                    && names(&previous.key.columns) == names(&filter.key.columns)
+                    && ungroup_type(&previous.ty) == ungroup_type(&filter.ty)
+                    && ungroup_type(&previous.marker) == ungroup_type(&filter.marker)
+                    && layouts[&symbol_name(&previous.covering)]
+                        == layouts[&symbol_name(&filter.covering)]
+            }) {
+                continue;
+            }
+            filters.push(filter);
+        }
+    }
+}

@@ -55,14 +55,16 @@ jobs:
           : > "$RUNNER_TEMP/syn-derive-closure/src/lib.rs"
           cargo fetch --manifest-path "$RUNNER_TEMP/syn-derive-closure/Cargo.toml"
       - name: Verify component dependency boundaries
-        run: python3 tools/check_dependencies.py --isolate --frontends --consumers
+        # Frontend/consumer facade targets run once, in `cargo test --workspace`.
+        run: python3 tools/check_dependencies.py --isolate
       - name: Drop isolation build artifacts
         run: rm -rf target/component-isolation && df -h /
       - name: Test restored compiler regressions
         run: bash tools/test_regressions.sh
       - name: Drop feature build artifacts
+        # Feature workspaces share features/target; workloads keeps its own.
         run: |
-          find features -mindepth 2 -maxdepth 2 -name target -type d -not -path 'features/workloads/*' -exec rm -rf {} +
+          rm -rf features/target
           df -h /
       - name: Test packaged public API outside the checkout
         run: python3 tools/check_external.py

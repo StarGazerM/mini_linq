@@ -1,0 +1,268 @@
+{
+  "answer_rows": 526040,
+  "bag_insertions": 0,
+  "build_rows_verified": false,
+  "candidate_insertions": 0,
+  "distinct_insertions": 0,
+  "index_builds": 0,
+  "median_ms": 6051.3898,
+  "operator_rows": [
+    {
+      "inputs": [],
+      "key": "Orders",
+      "kind": "RENAME",
+      "result": "r0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 15000000
+    },
+    {
+      "inputs": [
+        "r0"
+      ],
+      "key": "order_date",
+      "kind": "RANGE",
+      "result": "r1",
+      "rows_in": 15000000,
+      "rows_inserted": 0,
+      "rows_out": 573671
+    },
+    {
+      "inputs": [],
+      "key": "Lineitem",
+      "kind": "RENAME",
+      "result": "r2",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 59986052
+    },
+    {
+      "inputs": [
+        "r2"
+      ],
+      "key": "order_key",
+      "kind": "SELECT",
+      "result": "r3",
+      "rows_in": 59986052,
+      "rows_inserted": 0,
+      "rows_out": 37929348
+    },
+    {
+      "inputs": [
+        "r1",
+        "r3"
+      ],
+      "key": "order_key",
+      "kind": "SEMI",
+      "result": "r4",
+      "rows_in": 573671,
+      "rows_inserted": 0,
+      "rows_out": 526040
+    },
+    {
+      "inputs": [
+        "r4"
+      ],
+      "key": "order_key",
+      "kind": "PROJECT",
+      "result": "r6",
+      "rows_in": 526040,
+      "rows_inserted": 0,
+      "rows_out": 526040
+    },
+    {
+      "inputs": [
+        "r3"
+      ],
+      "key": "order_key",
+      "kind": "KEYSET_BUILD",
+      "result": "r3.index.order_key",
+      "rows_in": 37929348,
+      "rows_inserted": 37929348,
+      "rows_out": 13753474
+    },
+    {
+      "inputs": [
+        "r6"
+      ],
+      "key": "",
+      "kind": "DEDUP",
+      "result": "r6.dedup",
+      "rows_in": 526040,
+      "rows_inserted": 526040,
+      "rows_out": 526040
+    },
+    {
+      "inputs": [
+        "r6"
+      ],
+      "key": "",
+      "kind": "ANSWER",
+      "result": "r6.answer",
+      "rows_in": 526040,
+      "rows_inserted": 0,
+      "rows_out": 526040
+    }
+  ],
+  "operators": [
+    {
+      "calls": 1,
+      "elapsed_ms": 6051.3895299999995,
+      "id": 0,
+      "inputs": [],
+      "key": "retail_h04",
+      "kind": "QUERY",
+      "program": 0,
+      "result": "query",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 526040
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 188.55323700000002,
+      "id": 1,
+      "inputs": [],
+      "key": "Orders",
+      "kind": "RENAME",
+      "program": 1,
+      "result": "r0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 15000000
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 188.55323700000002,
+      "id": 2,
+      "inputs": [
+        "r0"
+      ],
+      "key": "order_date",
+      "kind": "RANGE",
+      "program": 1,
+      "result": "r1",
+      "rows_in": 15000000,
+      "rows_inserted": 0,
+      "rows_out": 573671
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 345.49577,
+      "id": 3,
+      "inputs": [],
+      "key": "Lineitem",
+      "kind": "RENAME",
+      "program": 1,
+      "result": "r2",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 59986052
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 345.49600000000004,
+      "id": 4,
+      "inputs": [
+        "r2"
+      ],
+      "key": "order_key",
+      "kind": "SELECT",
+      "program": 1,
+      "result": "r3",
+      "rows_in": 59986052,
+      "rows_inserted": 0,
+      "rows_out": 37929348
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 188.553848,
+      "id": 5,
+      "inputs": [
+        "r1",
+        "r3"
+      ],
+      "key": "order_key",
+      "kind": "SEMI",
+      "program": 1,
+      "result": "r4",
+      "rows_in": 573671,
+      "rows_inserted": 0,
+      "rows_out": 526040
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 188.553978,
+      "id": 6,
+      "inputs": [
+        "r4"
+      ],
+      "key": "order_key",
+      "kind": "PROJECT",
+      "program": 1,
+      "result": "r6",
+      "rows_in": 526040,
+      "rows_inserted": 0,
+      "rows_out": 526040
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 5585.58079,
+      "id": 7,
+      "inputs": [
+        "r3"
+      ],
+      "key": "order_key",
+      "kind": "KEYSET_BUILD",
+      "program": 1,
+      "result": "r3.index.order_key",
+      "rows_in": 37929348,
+      "rows_inserted": 37929348,
+      "rows_out": 13753474
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 255.41768599999997,
+      "id": 8,
+      "inputs": [
+        "r6"
+      ],
+      "key": "",
+      "kind": "DEDUP",
+      "program": 1,
+      "result": "r6.dedup",
+      "rows_in": 526040,
+      "rows_inserted": 526040,
+      "rows_out": 526040
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 255.417907,
+      "id": 9,
+      "inputs": [
+        "r6"
+      ],
+      "key": "",
+      "kind": "ANSWER",
+      "program": 1,
+      "result": "r6.answer",
+      "rows_in": 526040,
+      "rows_inserted": 0,
+      "rows_out": 526040
+    }
+  ],
+  "rows_copied": 0,
+  "rows_enumerated": 0,
+  "samples_ms": [
+    6044.908434,
+    6050.2745620000005,
+    6051.3898,
+    6055.22888,
+    6070.859126
+  ],
+  "set_insertions": 38455388,
+  "top_level_clock_verified": true,
+  "top_level_ms": 6051.3895299999995,
+  "tree": "QUERY            query [retail_h04] inputs= rows=526040 in=0 inserted=0 t=6051.390ms\n  ANSWER           r6.answer [] inputs=r6 rows=526040 in=526040 inserted=0 t=255.418ms\n    PROJECT          r6 [order_key] inputs=r4 rows=526040 in=526040 inserted=0 t=188.554ms\n      SEMI             r4 [order_key] inputs=r1,r3 rows=526040 in=573671 inserted=0 t=188.554ms\n        RANGE            r1 [order_date] inputs=r0 rows=573671 in=15000000 inserted=0 t=188.553ms\n          RENAME           r0 [Orders] inputs= rows=15000000 in=0 inserted=0 t=188.553ms\n        SELECT           r3 [order_key] inputs=r2 rows=37929348 in=59986052 inserted=0 t=345.496ms\n          RENAME           r2 [Lineitem] inputs= rows=59986052 in=0 inserted=0 t=345.496ms\n  DEDUP            r6.dedup [] inputs=r6 rows=526040 in=526040 inserted=526040 t=255.418ms\n    PROJECT          r6 [order_key] inputs=r4 rows=526040 in=526040 inserted=0 t=188.554ms (shared)\n  KEYSET_BUILD     r3.index.order_key [order_key] inputs=r3 rows=13753474 in=37929348 inserted=37929348 t=5585.581ms excl=5240.084ms\n    SELECT           r3 [order_key] inputs=r2 rows=37929348 in=59986052 inserted=0 t=345.496ms (shared)\nBUILD_EXCLUSIVE_TOTAL t=5240.084ms\n",
+  "verified": true
+}

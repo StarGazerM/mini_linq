@@ -3,7 +3,7 @@
 //! Each variant selects one changing positive occurrence; every such occurrence
 //! is covered at least once. Repeated variants are admissible for set relations.
 //! Only `seminaive_covering` is supported; no naive or exact scheme is implied.
-//! A driver certificate may lead with any read in the first contiguous positive
+//! An occurrence-order certificate may permute the first contiguous positive
 //! prefix. Delta positions always refer to source order; erasure restores that
 //! order before comparison and never crosses a Rust or negative clause.
 use cq_datalog_support::{Fresh, ensure};
@@ -25,7 +25,7 @@ pub mod kw {
     syn::custom_keyword!(delta);
     syn::custom_keyword!(variant);
     syn::custom_keyword!(seed);
-    syn::custom_keyword!(driver);
+    syn::custom_keyword!(order);
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Program {
@@ -37,8 +37,8 @@ pub struct Program {
 pub struct Variant {
     pub rule: usize,
     pub delta: Option<usize>,
-    /// Source-body position moved to the first positive read, within its positive prefix.
-    pub driver: Option<usize>,
+    /// Source-body positions in execution order; only the first positive prefix may move.
+    pub order: Vec<usize>,
     pub query: Query,
 }
 /// A fresh delta relation inheriting the named IDB's ordered columns.
@@ -79,20 +79,21 @@ impl Parse for Program {
                 body.parse::<kw::delta>()?;
                 Some(number(&body)?)
             };
-            let driver = if body.peek(kw::driver) {
-                body.parse::<kw::driver>()?;
-                Some(number(&body)?)
+            let order = if body.peek(kw::order) {
+                body.parse::<kw::order>()?;
+                let positions;
+                syn::bracketed!(positions in body);
+                positions.parse_terminated(syn::LitInt::parse, Token![,])?
+                    .iter().map(syn::LitInt::base10_parse).collect::<syn::Result<Vec<_>>>()?
             } else {
-                strata.source.rules.get(rule).and_then(|query| {
-                    query.body.iter().position(|item| matches!(item, BodyItem::Positive { .. }))
-                })
+                (0..strata.source.rules.get(rule).map_or(0, |query| query.body.len())).collect()
             };
             let query;
             syn::braced!(query in body);
             variants.push(Variant {
                 rule,
                 delta,
-                driver,
+                order,
                 query: query.parse()?,
             });
             if !query.is_empty() {
@@ -121,11 +122,9 @@ impl ToTokens for Program {
                     quote!(delta #p)
                 })
                 .unwrap_or(quote!(seed));
-            let driver = v.driver.map(|position| {
-                let position = syn::LitInt::new(&position.to_string(), proc_macro2::Span::call_site());
-                quote!(driver #position)
-            });
-            quote!(variant #rule #kind #driver { #query })
+            let order = v.order.iter().map(|position|
+                syn::LitInt::new(&position.to_string(), proc_macro2::Span::call_site()));
+            quote!(variant #rule #kind order [#(#order),*] { #query })
         });
         let deltas = deltas.iter().map(|d| {
             let Delta { relation, name } = d;
@@ -136,25 +135,18 @@ impl ToTokens for Program {
         );
     }
 }
-/// Check the driver certificate without moving any Rust clause or negative read.
-pub fn variant_order(query: &Query, driver: Option<usize>) -> syn::Result<Vec<usize>> {
-    let first = query.body.iter().position(|item| matches!(item, BodyItem::Positive { .. }));
-    let mut order: Vec<_> = (0..query.body.len()).collect();
-    match (first, driver) {
-        (None, None) => {}
-        (Some(first), Some(driver)) => {
-            ensure(
-                driver >= first && driver < query.body.len()
-                    && query.body.iter().skip(first).take(driver - first + 1)
-                        .all(|item| matches!(item, BodyItem::Positive { .. })),
-                query,
-                "driver must preserve Before constraints within the positive prefix",
-            )?;
-            let position = order.remove(driver);
-            order.insert(first, position);
-        }
-        _ => return Err(syn::Error::new_spanned(query, "driver must name the first positive prefix")),
-    }
+/// Check a supplied permutation, without replaying the order-selection heuristic.
+pub fn variant_order<'a>(query: &Query, order: &'a [usize]) -> syn::Result<&'a [usize]> {
+    let length = query.body.len();
+    ensure(order.len() == length && order.iter().copied().collect::<BTreeSet<_>>()
+        == (0..length).collect(), query, "variant order must cover every source occurrence exactly once")?;
+    let first = query.body.iter().position(|item| matches!(item, BodyItem::Positive { .. })).unwrap_or(length);
+    let end = first + query.body.iter().skip(first)
+        .take_while(|item| matches!(item, BodyItem::Positive { .. })).count();
+    ensure(order.iter().enumerate().all(|(position, &source)| {
+        if (first..end).contains(&position) { (first..end).contains(&source) }
+        else { position == source }
+    }), query, "variant order must preserve Before constraints outside the first positive prefix")?;
     Ok(order)
 }
 /// Formal rule DL-Delta: check variant erasure and coverage of changing positions.
@@ -184,7 +176,7 @@ fn check_variants(program: &Program, analysis: &Analysis) -> syn::Result<()> {
         )?;
         // Check complete declared schemas and CQ scope independently of erasure.
         checker.check(&v.query)?;
-        let order = variant_order(&p.rules[v.rule], v.driver)?;
+        let order = variant_order(&p.rules[v.rule], &v.order)?;
         ensure(v.query.body.len() == order.len(), &v.query, "variant changed body coverage")?;
         let mut erased = v.query.clone();
         if let Some(i) = v.delta {
@@ -203,15 +195,16 @@ fn check_variants(program: &Program, analysis: &Analysis) -> syn::Result<()> {
             )?;
             atom.relation = original.relation.clone();
         }
-        if let Some(driver) = v.driver {
-            let first = order.iter().position(|&position| position == driver).expect("driver in order");
-            if first != driver {
-                let mut body: Vec<_> = erased.body.into_iter().collect();
-                let item = body.remove(first);
-                body.insert(driver, item);
-                erased.body = body.into_iter().collect();
+        let mut body: Vec<_> = erased.body.into_iter().collect();
+        let mut positions = order.to_vec();
+        for target in 0..positions.len() {
+            while positions[target] != target {
+                let source = positions[target];
+                body.swap(target, source);
+                positions.swap(target, source);
             }
         }
+        erased.body = body.into_iter().collect();
         let expected = &p.rules[v.rule];
         ensure(
             &erased == expected,

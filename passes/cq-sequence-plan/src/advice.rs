@@ -21,6 +21,7 @@ impl Parse for Advice {
             "group_without_canon" => Self::GroupWithoutCanon(arguments.parse()?),
             "lookup_first" => Self::LookupFirst(Box::new(arguments.parse()?)),
             "adaptive" => Self::Adaptive(arguments.parse()?),
+            "key_partition" => Self::KeyPartition(arguments.parse()?),
             "store_level" => Self::StoreLevel(arguments.parse()?),
             "publish" => {
                 let name = arguments.parse()?;
@@ -87,6 +88,7 @@ impl ToTokens for Advice {
             Self::GroupWithoutCanon(name) => quote!(group_without_canon(#name)),
             Self::StoreLevel(name) => quote!(store_level(#name)),
             Self::Adaptive(arguments) => quote!(adaptive(#arguments)),
+            Self::KeyPartition(arguments) => quote!(key_partition(#arguments)),
             Self::Publish { name, producer } => quote!(publish(#name, #producer)),
             Self::Tile { name, n, items }
             | Self::Partition { name, n, items }
@@ -135,6 +137,8 @@ mod tests {
             "lookup_first(using Index, order [r,s,t], transfer [s], early [t])",
             "adaptive(filtered, published, 100000)",
             "adaptive(filtered, published, 100000, select false)",
+            "key_partition(grouped, published, [region, year], 8)",
+            "key_partition(provider, published, [key], 8, threshold 65536)",
         ] {
             let advice: Advice = syn::parse_str(invocation).unwrap();
             assert_eq!(advice, syn::parse2(advice.to_token_stream()).unwrap());

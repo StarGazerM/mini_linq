@@ -18,6 +18,8 @@ pub fn machine() -> cq_lang_sequence::Machine {
         layout: None,
         name: syn::parse_quote!(sequential),
         items: 1,
+        key_partition_threshold: 65536,
+        key_partition_cache_threshold: 6 * 1024 * 1024,
         root: cq_lang_sequence::LevelNode {
             shared_bytes: None,
             name: syn::parse_quote!(host),
@@ -176,6 +178,9 @@ pub struct Value {
     pub result: Option<String>,
     pub depth: usize,
     pub stored: bool,
+    /// A target restricts this iterator to one partition; adapters must not
+    /// replace it with a scan of the complete host representation.
+    pub partitioned: bool,
 }
 
 impl Value {
@@ -190,21 +195,40 @@ pub struct Emitter<'a> {
     program: &'a Program,
     adapters: RowEmitter<'a>,
     values: BTreeMap<String, Value>,
+    target_published: std::collections::BTreeSet<String>,
+    lengths: BTreeMap<String, TokenStream>,
+    partial_groups: BTreeMap<*const Term, bool>,
     owner: String,
     pull: bool,
+    workers: syn::Expr,
+    owned_answer: bool,
 }
 
 impl<'a> Emitter<'a> {
     pub fn new(program: &'a Program, analysis: &'a Analysis) -> Self {
         let mut context = Context::new(&program.structures, &analysis.structures);
         context.certify_host_sets(&program.structures);
+        let mut partial_groups = BTreeMap::new();
+        for definition in &program.sequence.definitions {
+            let mut nodes = Vec::new();
+            group_nodes(&definition.term, &mut nodes);
+            let flags = analysis.partial_groups.get(&symbol_name(&definition.name));
+            for (node, flag) in nodes.into_iter().zip(flags.into_iter().flatten()) {
+                partial_groups.insert(node, *flag);
+            }
+        }
         Self {
             analysis,
             program,
             adapters: RowEmitter::new(context),
             values: BTreeMap::new(),
+            target_published: std::collections::BTreeSet::new(),
+            lengths: BTreeMap::new(),
+            partial_groups,
             owner: String::new(),
             pull: false,
+            workers: syn::parse_quote!(1usize),
+            owned_answer: false,
         }
     }
 
@@ -214,6 +238,113 @@ impl<'a> Emitter<'a> {
 
     pub fn context_mut(&mut self) -> &mut Context<'a> {
         self.adapters.context_mut()
+    }
+
+    /// A target hook has already emitted this store's binding and providers.
+    pub fn mark_target_published(&mut self, owner: &str) {
+        self.target_published.insert(owner.to_owned());
+    }
+
+    /// The contract's proof-derived interpretation of this exact Group node.
+    pub fn is_partial_group(&self, term: &Term) -> bool {
+        *self
+            .partial_groups
+            .get(&(term as *const Term))
+            .expect("checked Group interpretation")
+    }
+
+    /// Publish the exact count of an already evaluated Sequence store.
+    pub fn publish_length(&mut self, name: &str, length: TokenStream) {
+        self.lengths.insert(name.to_owned(), length);
+    }
+
+    /// Re-publish an immutable flat row view already owned by an ancestor.
+    pub fn alias_store(&mut self, name: &str, source: &str) -> bool {
+        if !self
+            .values
+            .get(source)
+            .is_some_and(|value| value.stored && value.depth == 0)
+        {
+            return false;
+        }
+        let Some(length) = self.lengths.get(source).cloned() else {
+            return false;
+        };
+        self.lengths.insert(name.to_owned(), length);
+        self.mark_target_published(name);
+        true
+    }
+
+    fn runtime_length(&self, length: &cq_lang_sequence::Len) -> syn::Result<TokenStream> {
+        use cq_lang_sequence::Len;
+        match length {
+            Len::Lit(value) => Ok(quote!(#value)),
+            Len::Add(left, right) => {
+                let left = self.runtime_length(left)?;
+                let right = self.runtime_length(right)?;
+                Ok(quote!((#left).saturating_add(#right)))
+            }
+            Len::Input(name) => {
+                if let Some(length) = self.lengths.get(name) {
+                    return Ok(length.clone());
+                }
+                if let Some(value) = self
+                    .values
+                    .get(name)
+                    .filter(|value| value.stored && value.depth == 0)
+                {
+                    let rows = &value.rows;
+                    return Ok(quote!((#rows).count()));
+                }
+                if let Some(host) = self.context().hosts.get(name) {
+                    let host = &host.value;
+                    return Ok(quote!({
+                        let __cq_input_rows = ::cq_storage::rows::Rows::rows(#host);
+                        let (__cq_lower, __cq_upper) = __cq_input_rows.size_hint();
+                        if __cq_upper == ::core::option::Option::Some(__cq_lower) {
+                            __cq_lower
+                        } else {
+                            __cq_input_rows.count()
+                        }
+                    }));
+                }
+                Err(syn::Error::new(
+                    proc_macro2::Span::call_site(),
+                    format!("runtime choice length `{name}` has no published flat store"),
+                ))
+            }
+            _ => Err(syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "runtime choice requires a recorded input length, literal, or sum",
+            )),
+        }
+    }
+
+    /// Realize a checked guard using published lengths and the uniform target worker expression.
+    pub fn runtime_guard(&self, guard: &Guard) -> syn::Result<TokenStream> {
+        match guard {
+            Guard::Lt(length, threshold) => {
+                let length = self.runtime_length(length)?;
+                Ok(quote!(#length < #threshold))
+            }
+            Guard::Ge(length, threshold) => {
+                let length = self.runtime_length(length)?;
+                Ok(quote!(#length >= #threshold))
+            }
+            Guard::WorkersLt(threshold) => {
+                let workers = &self.workers;
+                Ok(quote!((#workers) < #threshold))
+            }
+            Guard::Else => Ok(quote!(true)),
+        }
+    }
+
+    /// A target's final task buffers already contain the owned answer head.
+    /// Keep their joined iterator instead of copying into another host buffer.
+    pub fn own_task_answer(&mut self, result: &str, rows: TokenStream) -> TokenStream {
+        self.owned_answer = true;
+        self.adapters
+            .head(result, &self.program.structures.physical.program.head, rows)
     }
 
     fn register(&mut self, name: &str) {
@@ -255,6 +386,7 @@ impl<'a> Emitter<'a> {
             result: Some(result),
             depth: 0,
             stored: false,
+            partitioned: false,
         })
     }
 
@@ -292,6 +424,7 @@ impl<'a> Emitter<'a> {
     }
 
     fn map(&mut self, name: &Ident, mut input: Value, expand: bool) -> syn::Result<Value> {
+        let partition = input.partitioned;
         let result = symbol_name(name);
         if input.result.as_ref() == Some(&result) {
             input.stored = false;
@@ -313,6 +446,7 @@ impl<'a> Emitter<'a> {
                 result: Some(result),
                 depth: usize::from(nested),
                 stored: false,
+                partitioned: partition,
             });
         }
         if self.analysis.structures.selections.contains_key(&result) {
@@ -324,14 +458,16 @@ impl<'a> Emitter<'a> {
                 result: Some(result),
                 depth: 0,
                 stored: false,
+                partitioned: partition,
             });
         }
-        if let Some(ids) = self.adapters.positions(&result)? {
+        if !partition && let Some(ids) = self.adapters.positions(&result)? {
             return Ok(Value {
                 rows: self.context().positional_rows(&result, ids),
                 result: Some(result),
                 depth: 0,
                 stored: false,
+                partitioned: false,
             });
         }
         let definition = self.context().physical[&result];
@@ -340,7 +476,8 @@ impl<'a> Emitter<'a> {
             if input.result.as_deref() != Some(&parent_name) {
                 input = self.map(parent, input, expand)?;
             }
-            let positional = self.analysis.structures.reads.contains_key(&result)
+            let positional = !partition
+                && self.analysis.structures.reads.contains_key(&result)
                 && matches!(
                     self.context().reprs.get(&parent_name),
                     Some(Repr::Host | Repr::Positions(_) | Repr::Selection { .. })
@@ -362,7 +499,11 @@ impl<'a> Emitter<'a> {
         };
         // The input stream is separate from its retained keyed representation:
         // an operator may scan and probe the same stored result.
-        let rows = self.adapters.operator(&result, operand)?;
+        let rows = if partition {
+            self.adapters.operator_in_partition(&result, operand)?
+        } else {
+            self.adapters.operator(&result, operand)?
+        };
         let rows = self.context().profile_stream(&result, rows);
         // Physical fan-out adapters already flatten their row iterator. Rewrap
         // only an expanding constructor: Compact consumes membership directly,
@@ -381,6 +522,7 @@ impl<'a> Emitter<'a> {
             result: Some(result),
             depth: usize::from(nested),
             stored: false,
+            partitioned: partition,
         })
     }
 
@@ -393,6 +535,9 @@ impl<'a> Emitter<'a> {
         input.rows =
             quote!(::core::iter::Iterator::flat_map(#rows, ::core::iter::IntoIterator::into_iter));
         input.depth = input.depth.saturating_sub(1);
+        if self.pull && input.depth == 0 {
+            input.partitioned = false;
+        }
         input.stored = false;
         input
     }
@@ -410,7 +555,45 @@ impl<'a> Emitter<'a> {
         });
         input.depth += 1;
         input.stored = false;
+        input.partitioned = true;
         input
+    }
+    /// Serial interpretation of the same fixed key routing used by task targets.
+    pub fn partition_k(
+        &mut self,
+        keys: &[Ident],
+        parts: usize,
+        mut input: Value,
+    ) -> syn::Result<Value> {
+        let result = input.result.as_ref().ok_or_else(|| {
+            syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "partition_k requires row provenance",
+            )
+        })?;
+        self.register(result);
+        let columns: Vec<_> = keys.iter().map(symbol_name).collect();
+        let pattern = self.context().bind_columns(result, &columns, false);
+        let key: Vec<_> = columns
+            .iter()
+            .map(|column| self.context().access(result, column))
+            .collect();
+        let key = cq_print::group(&key);
+        let rows = input.rows;
+        input.rows = quote!({
+            let mut __cq_parts: ::std::vec::Vec<::std::vec::Vec<_>> =
+                (0..#parts).map(|_| ::std::vec::Vec::new()).collect();
+            for __cq_row in #rows {
+                let #pattern = &__cq_row;
+                let __cq_part = ::cq_storage::sharded::route_index(&#key, #parts);
+                __cq_parts[__cq_part].push(__cq_row);
+            }
+            __cq_parts.into_iter()
+        });
+        input.depth += 1;
+        input.stored = false;
+        input.partitioned = true;
+        Ok(input)
     }
 
     // Row-layout conversion is shared by union injection and checked
@@ -470,6 +653,7 @@ impl<'a> Emitter<'a> {
                 result: Some(result),
                 depth: 0,
                 stored: false,
+                partitioned: false,
             });
         }
         let mut chain = None;
@@ -486,6 +670,7 @@ impl<'a> Emitter<'a> {
             result: Some(result),
             depth: 0,
             stored: false,
+            partitioned: false,
         })
     }
     fn choose<'t>(&self, arms: &'t [(Guard, Term)]) -> syn::Result<&'t Term> {
@@ -564,6 +749,7 @@ impl<'a> Emitter<'a> {
                 result: Some(result),
                 depth: 1,
                 stored: false,
+                partitioned: input.partitioned,
             });
         }
         if self
@@ -654,10 +840,26 @@ impl<'a> Emitter<'a> {
             result: Some(result),
             depth: 1,
             stored: false,
+            partitioned: input.partitioned,
         })
     }
 
-    fn group(&mut self, name: &Ident, input: Value) -> syn::Result<Value> {
+    pub fn group(&mut self, name: &Ident, input: Value) -> syn::Result<Value> {
+        self.group_with_output(name, input, false)
+    }
+
+    /// A task-local global aggregate produces partials, not final Group rows.
+    pub fn group_partial(&mut self, name: &Ident, input: Value) -> syn::Result<Value> {
+        self.group_with_output(name, input, true)
+    }
+
+    /// Reuse the native Group row updates in one scheduler-task accumulator.
+    pub fn group_accumulate(
+        &mut self,
+        name: &Ident,
+        input: Value,
+        table: TokenStream,
+    ) -> syn::Result<TokenStream> {
         let result = symbol_name(name);
         self.register(&result);
         let Operator::Group(group) = &self.context().physical[&result].operator else {
@@ -667,19 +869,58 @@ impl<'a> Emitter<'a> {
             ));
         };
         let operand = symbol_name(&group.input);
+        let label = format!("{result}.partial");
+        let index =
+            self.context_mut()
+                .profile_label(&label, "GROUP_PARTIAL", "", vec![operand.clone()]);
+        let body = self
+            .adapters
+            .accumulate_group(&result, (operand, input.rows), table)?;
+        Ok(if self.context().profile.is_some() {
+            let profile = self.context().profile_handle();
+            quote!(#profile.scope(#index, || #body))
+        } else {
+            body
+        })
+    }
+
+    fn group_with_output(
+        &mut self,
+        name: &Ident,
+        input: Value,
+        partial: bool,
+    ) -> syn::Result<Value> {
+        let result = symbol_name(name);
+        self.register(&result);
+        let Operator::Group(group) = &self.context().physical[&result].operator else {
+            return Err(syn::Error::new_spanned(
+                name,
+                "group lacks Physical group provenance",
+            ));
+        };
+        let operand = symbol_name(&group.input);
+        let output = if partial {
+            let label = format!("{result}.partial");
+            self.context_mut()
+                .profile_label(&label, "GROUP_PARTIAL", "", vec![operand.clone()]);
+            label
+        } else {
+            result.clone()
+        };
         let rows = self
             .adapters
             .operator(&result, Some((operand, input.rows)))?;
-        let rows = self.context().profile_stream(&result, rows);
+        let rows = self.context().profile_stream(&output, rows);
         Ok(Value {
             rows,
             result: Some(result),
             depth: 0,
             stored: false,
+            partitioned: input.partitioned,
         })
     }
 
-    fn fold(&self, monoid: &Monoid, input: Value) -> syn::Result<Value> {
+    pub fn fold(&self, monoid: &Monoid, input: Value) -> syn::Result<Value> {
         let rows = input.rows;
         let value = match monoid {
             Monoid::Count => quote!(::core::iter::Iterator::fold(#rows, 0usize, |n, _| n + 1)),
@@ -699,6 +940,7 @@ impl<'a> Emitter<'a> {
             result: None,
             depth: 0,
             stored: false,
+            partitioned: input.partitioned,
         })
     }
 
@@ -742,13 +984,13 @@ impl<'a> Emitter<'a> {
         Ok(input)
     }
 
-    fn store(&self, mut input: Value) -> Value {
+    fn store(&self, mut input: Value, nested: bool) -> Value {
         let physical_store = input.result.as_ref().is_some_and(|result| {
             input.depth == 0
                 && self.analysis.structures.physical.modes[result]
                     != cq_lang_structures::physical::ModeKind::Pipe
         });
-        if !physical_store {
+        if nested && !physical_store {
             let rows = input.rows;
             input.rows = quote!(::core::iter::IntoIterator::into_iter(::core::iter::Iterator::collect::<::std::vec::Vec<_>>(#rows)));
         }
@@ -764,6 +1006,10 @@ impl<'a> Emitter<'a> {
             value = self.lift(value, depth, &mut |emitter, rows| {
                 emitter.rehead(&result, rows)
             })?;
+        }
+        if self.target_published.remove(&symbol_name(name)) {
+            self.values.insert(symbol_name(name), value.clone());
+            return Ok(value);
         }
         if value.stored {
             let physical_store = value
@@ -807,6 +1053,12 @@ impl<'a> Emitter<'a> {
                 self.context_mut()
                     .statements
                     .push(syn::parse_quote!(let #id = #build;));
+                // Sequence-owned stores need the same independent primitive and
+                // capacity accounting as Physical-owned row providers.
+                let allocation = format_ident!("__cq_sequence_store_{}_allocation", name);
+                self.context_mut().statements.push(syn::parse_quote!(
+                    let #allocation = ::cq_storage::retain_rows(&#id);
+                ));
                 value.rows = quote!(::core::iter::Iterator::cloned(#id.iter()));
                 if let Some(result) = &value.result
                     && value.depth == 0
@@ -848,18 +1100,39 @@ impl<'a> Emitter<'a> {
             value.result.iter().cloned().collect(),
         );
         rows = self.context().profile_input(&answer, rows);
-        if let Some(result) = value.result {
-            let head = &self.program.structures.physical.program.head;
-            rows = self.adapters.head(&result, head, rows);
+        if !self.owned_answer {
+            if let Some(result) = value.result {
+                let head = &self.program.structures.physical.program.head;
+                rows = self.adapters.head(&result, head, rows);
+            }
         }
         rows = self.context().profile_stream(&answer, rows);
-        if let Some(registration) = self.context().profile_registration() {
-            self.context_mut().statements.insert(0, registration);
-        }
+        // Target interpreters eagerly join their answer. Measure preparation
+        // and final evaluation at the host, never by adding concurrent spans.
+        let phases = if !self.pull && self.context().profile.is_some() {
+            let build = self.context_mut().profile_label(
+                "__cq_tasks_build",
+                "TASKS_BUILD_WALL",
+                "",
+                Vec::new(),
+            );
+            let query = self.context_mut().profile_label(
+                "__cq_tasks_query",
+                "TASKS_QUERY_WALL",
+                "",
+                vec![answer],
+            );
+            Some((build, query))
+        } else {
+            None
+        };
+        let registration = self.context().profile_registration();
         let context = self.context();
         let statements = &context.statements;
-        let rows = if self.pull {
-            if context.bound {
+        let rows = if self.owned_answer {
+            rows
+        } else if self.pull {
+            if context.bound || value.stored {
                 quote!(::core::iter::IntoIterator::into_iter(
                     ::core::iter::Iterator::collect::<::std::vec::Vec<_>>(#rows)))
             } else {
@@ -868,7 +1141,18 @@ impl<'a> Emitter<'a> {
         } else {
             quote!(::core::iter::Iterator::collect::<::std::vec::Vec<_>>(#rows))
         };
-        let mut output = syn::parse2(quote!({ #(#statements)* #rows }))?;
+        let mut output = if let Some((build, query)) = phases {
+            let profile = context.profile_handle();
+            syn::parse2(quote!({
+                #registration
+                let __cq_build_clock = #profile.start_scope(#build);
+                #(#statements)*
+                ::core::mem::drop(__cq_build_clock);
+                #profile.scope(#query, || #rows)
+            }))?
+        } else {
+            syn::parse2(quote!({ #registration #(#statements)* #rows }))?
+        };
         cq_print::own_captures(&mut output, &context.owned);
         Ok(output)
     }
@@ -885,6 +1169,12 @@ pub fn translate_profile(program: &Program, analysis: &Analysis) -> syn::Result<
 }
 
 fn translate_host(program: &Program, analysis: &Analysis, profile: bool) -> syn::Result<syn::Expr> {
+    if program.sequence.output == Some(cq_lang_sequence::OutputProtocol::ReservePrevious) {
+        return Err(syn::Error::new_spanned(
+            program,
+            "output reserve_previous requires an arena terminal; sequential pull is not supported",
+        ));
+    }
     if analysis
         .levels
         .values()
@@ -895,15 +1185,24 @@ fn translate_host(program: &Program, analysis: &Analysis, profile: bool) -> syn:
             "sequential translation requires host-only grading",
         ));
     }
-    translate_with_profile(program, analysis, profile, true, |_, _, _, _, _, _| Ok(()))
+    translate_with_profile(
+        program,
+        analysis,
+        syn::parse_quote!(1usize),
+        profile,
+        true,
+        |_, _, _, _, _, _| Ok(()),
+    )
 }
 
 /// Structural fold with a target hook after each constructor. `input` is its
 /// original child, `owner` its definition and `tiles` its enclosing tile depth.
 /// The hook may replace emitted iterator tokens without inspecting the program.
+/// `workers` evaluates to the target-wide available worker count in every scope.
 pub fn translate_with(
     program: &Program,
     analysis: &Analysis,
+    workers: syn::Expr,
     hook: impl FnMut(
         &Term,
         &mut Emitter<'_>,
@@ -913,12 +1212,33 @@ pub fn translate_with(
         usize,
     ) -> syn::Result<()>,
 ) -> syn::Result<syn::Expr> {
-    translate_with_profile(program, analysis, false, false, hook)
+    translate_with_profile(program, analysis, workers, false, false, hook)
+}
+
+/// Target-hook interpretation with real operator counters and disjoint host
+/// preparation/final-evaluation wall scopes. Unlike operator spans, these
+/// phases include each concurrent segment only once, including its join.
+/// `workers` has the same uniform target-wide contract as in [`translate_with`].
+pub fn translate_profile_with(
+    program: &Program,
+    analysis: &Analysis,
+    workers: syn::Expr,
+    hook: impl FnMut(
+        &Term,
+        &mut Emitter<'_>,
+        Option<&Value>,
+        &mut Value,
+        &str,
+        usize,
+    ) -> syn::Result<()>,
+) -> syn::Result<syn::Expr> {
+    translate_with_profile(program, analysis, workers, true, false, hook)
 }
 
 fn translate_with_profile(
     program: &Program,
     analysis: &Analysis,
+    workers: syn::Expr,
     profile: bool,
     pull: bool,
     mut hook: impl FnMut(
@@ -960,6 +1280,7 @@ fn translate_with_profile(
             | Term::Group(_, inner)
             | Term::Canon(inner)
             | Term::Store { inner, .. }
+            | Term::PartitionK { inner, .. }
             | Term::Lookup { inner, .. } => Some(term(emitter, inner, owner, tiles, false, hook)?),
             Term::Tile { inner, .. } => Some(term(emitter, inner, owner, tiles + 1, false, hook)?),
             _ => None,
@@ -986,12 +1307,22 @@ fn translate_with_profile(
                     Ok(emitter.tile(*n, rows))
                 })?
             }
+            Term::PartitionK { keys, parts, .. } => emitter.partition_k(keys, *parts, input())?,
             Term::Lookup { provider, keys, .. } => {
                 emitter.lift(input(), input().depth, &mut |emitter, rows| {
                     emitter.lookup(provider, keys, rows, membership)
                 })?
             }
-            Term::Group(name, _) => emitter.group(name, input())?,
+            Term::Group(name, _) => {
+                if emitter.is_partial_group(node) {
+                    let flat = emitter.flatten(input());
+                    emitter.group(name, flat)?
+                } else {
+                    emitter.lift(input(), input().depth, &mut |emitter, rows| {
+                        emitter.group(name, rows)
+                    })?
+                }
+            }
             Term::Fold(monoid, _) => {
                 emitter.lift(input(), input().depth, &mut |emitter, rows| {
                     emitter.fold(monoid, rows)
@@ -1001,7 +1332,7 @@ fn translate_with_profile(
                 emitter.canon(rows)
             })?,
             Term::Store { .. } => emitter.lift(input(), input().depth, &mut |emitter, rows| {
-                Ok(emitter.store(rows))
+                Ok(emitter.store(rows, input().depth > 0))
             })?,
             Term::Union(arms) => {
                 let fused = emitter.analysis.results.get(owner).is_some_and(|result| {
@@ -1021,17 +1352,62 @@ fn translate_with_profile(
                 };
                 emitter.union(values)?
             }
-            Term::Choose(arms) => {
+            Term::Choose(arms)
+                if emitter.pull
+                    && !arms
+                        .iter()
+                        .any(|(guard, _)| matches!(guard, Guard::WorkersLt(_))) =>
+            {
                 let alternative = emitter.choose(arms)?;
                 term(emitter, alternative, owner, tiles, false, hook)?
             }
+            Term::Choose(arms) => {
+                let mut values = Vec::with_capacity(arms.len());
+                for (guard, arm) in arms {
+                    let condition = emitter.runtime_guard(guard)?;
+                    let start = emitter.context().statements.len();
+                    let value = term(emitter, arm, owner, tiles, false, hook)?;
+                    let statements = emitter.context_mut().statements.split_off(start);
+                    values.push((guard, condition, value, statements));
+                }
+                let depth = values
+                    .iter()
+                    .map(|(_, _, value, _)| value.depth)
+                    .min()
+                    .expect("checked nonempty choice");
+                let result = values[0].2.result.clone();
+                let stored = values.iter().any(|(_, _, value, _)| value.stored);
+                let mut selected =
+                    quote!(::core::unreachable!("checked exhaustive Sequence choice"));
+                for (guard, condition, mut value, statements) in values.into_iter().rev() {
+                    while value.depth > depth {
+                        value = emitter.flatten(value);
+                    }
+                    let rows = collect_choice_rows(value.rows, depth);
+                    let branch = quote!({ #(#statements)* #rows });
+                    selected = if *guard == Guard::Else {
+                        branch
+                    } else {
+                        quote!(if #condition { #branch } else { #selected })
+                    };
+                }
+                Value {
+                    rows: choice_rows(selected, depth),
+                    result,
+                    depth,
+                    stored,
+                    partitioned: false,
+                }
+            }
         };
+        value.partitioned |= child.as_ref().is_some_and(|input| input.partitioned);
         hook(node, emitter, child.as_ref(), &mut value, owner, tiles)?;
         Ok(value)
     }
     // Formal rule T-Pull: Interpret Sequence by the host iterator algebra.
     let mut emitter = Emitter::new(program, analysis);
     emitter.pull = pull;
+    emitter.workers = workers;
     if profile {
         emitter.context_mut().enable_profile(&program.structures);
     }
@@ -1082,3 +1458,52 @@ fn translate_with_profile(
     )
 }
 
+fn collect_choice_rows(rows: TokenStream, depth: usize) -> TokenStream {
+    if depth == 0 {
+        quote!((#rows).collect::<::std::vec::Vec<_>>())
+    } else {
+        let part = collect_choice_rows(
+            quote!(::core::iter::IntoIterator::into_iter(__cq_choice_part)),
+            depth - 1,
+        );
+        quote!((#rows).map(|__cq_choice_part| #part).collect::<::std::vec::Vec<_>>())
+    }
+}
+
+fn choice_rows(rows: TokenStream, depth: usize) -> TokenStream {
+    if depth == 0 {
+        quote!((#rows).into_iter())
+    } else {
+        let part = choice_rows(quote!(__cq_choice_part), depth - 1);
+        quote!((#rows).into_iter().map(|__cq_choice_part| #part))
+    }
+}
+
+fn group_nodes(term: &Term, output: &mut Vec<*const Term>) {
+    if matches!(term, Term::Group(..)) {
+        output.push(term as *const Term);
+    }
+    match term {
+        Term::Map(_, inner)
+        | Term::Compact(_, inner)
+        | Term::Flatten(inner)
+        | Term::Fold(_, inner)
+        | Term::Group(_, inner)
+        | Term::Canon(inner)
+        | Term::Store { inner, .. }
+        | Term::Tile { inner, .. }
+        | Term::PartitionK { inner, .. }
+        | Term::Lookup { inner, .. } => group_nodes(inner, output),
+        Term::Choose(arms) => {
+            for (_, arm) in arms {
+                group_nodes(arm, output);
+            }
+        }
+        Term::Union(arms) => {
+            for arm in arms {
+                group_nodes(arm, output);
+            }
+        }
+        Term::Rows(_) | Term::Ref(_) => {}
+    }
+}

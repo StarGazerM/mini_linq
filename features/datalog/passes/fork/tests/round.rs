@@ -61,6 +61,17 @@ fn default_negation_sets_use_fx_without_a_hole_dedup_override() {
         assert!(hole.facts.consumer_canonical);
     }
     check(&storage, &target).unwrap();
+    let batch = compile_with(&storage, quote! {
+        terminals = [custom::batch => batch];
+        cq = pipeline { custom::lower, custom::batch };
+    }).unwrap();
+    for key in batch.context.strata.iter().flat_map(|stratum| &stratum.keys) {
+        let query = batch.holes[key.hole].cq.to_token_stream().to_string();
+        assert!(query.contains(": i32"));
+        assert!(!query.contains(": & i32"));
+        assert!(query.contains("*"));
+    }
+    check(&storage, &batch).unwrap();
 }
 
 #[test]
@@ -391,12 +402,13 @@ fn fork_infers_both_interfaces_and_round_rewrites_preserve_the_registry() {
         let mut mismatched = changed.clone();
         mismatched.holes[0].pipeline.passes.last_mut().unwrap().path = match interface {
             round::HoleInterface::Pull => syn::parse_quote!(::cq_datalog::passes::print_push),
-            round::HoleInterface::Push => syn::parse_quote!(::mini_linq::passes::translate_pull),
+            round::HoleInterface::Push | round::HoleInterface::Batch =>
+                syn::parse_quote!(::mini_linq::passes::translate_pull),
         };
         assert!(round::check_rewrite(&source, &mismatched).is_err());
         mismatched.holes[0].interface = match interface {
             round::HoleInterface::Pull => round::HoleInterface::Push,
-            round::HoleInterface::Push => round::HoleInterface::Pull,
+            round::HoleInterface::Push | round::HoleInterface::Batch => round::HoleInterface::Pull,
         };
         round::contract::check(&mismatched).unwrap();
         round::check_rewrite(&source, &mismatched).unwrap();
@@ -436,6 +448,27 @@ fn fork_infers_both_interfaces_and_round_rewrites_preserve_the_registry() {
     );
     let replay: round::Program = syn::parse2(alias.to_token_stream()).unwrap();
     assert_eq!(alias, replay);
+    round::contract::check(&replay).unwrap();
+}
+
+#[test]
+fn batch_registry_round_trips_and_fork_records_its_interface() {
+    let registry: round::TerminalRegistry = syn::parse_quote!([
+        ::cq_gpu_sequence::translate_arena => batch
+    ]);
+    let replay: round::TerminalRegistry = syn::parse2(registry.to_token_stream()).unwrap();
+    assert_eq!(registry, replay);
+    let program = compile_with(
+        &source(),
+        quote! {
+            terminals = #registry;
+            cq = pipeline { custom::lower, ::cq_gpu_sequence::translate_arena };
+        },
+    ).unwrap();
+    assert!(!program.holes.is_empty());
+    assert!(program.holes.iter().all(|hole| hole.interface == round::HoleInterface::Batch));
+    let replay: round::Program = syn::parse2(program.to_token_stream()).unwrap();
+    assert_eq!(program, replay);
     round::contract::check(&replay).unwrap();
 }
 

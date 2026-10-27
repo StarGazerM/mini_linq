@@ -34,8 +34,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Err("worker expects DATA CONFIG RUNS ANSWERS METRICS ORACLE".into());
     }
     let runs: usize = args[2].parse()?;
-    if (runs != 0 && (runs < 3 || runs % 2 == 0)) || !query::CONFIGS.contains(&args[1].as_str()) {
-        return Err("worker requires a known configuration and odd RUNS >= 3".into());
+    if (runs != 0 && runs % 2 == 0) || !query::CONFIGS.contains(&args[1].as_str()) {
+        return Err("worker requires a known configuration and positive odd RUNS (or zero for verification)".into());
     }
     let witness: serde_json::Value = serde_json::from_slice(&std::fs::read(&args[5])?)?;
     let oracle: std::collections::BTreeSet<Vec<String>> =
@@ -216,7 +216,12 @@ fn operator_profile(
         let counts = counters::snapshot();
         let bag_insertions: u64 = records
             .iter()
-            .filter(|r| matches!(r.label.kind, "INDEX_BUILD" | "ROWS_BUILD"))
+            .filter(|r| {
+                matches!(
+                    r.label.kind,
+                    "INDEX_BUILD" | "ROWS_BUILD" | "PARTITION_BUILD"
+                )
+            })
             .map(|r| r.rows_inserted)
             .sum();
         let set_insertions: u64 = records

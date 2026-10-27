@@ -1,0 +1,20 @@
+[package]
+name = "cq-gpu-datalog-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+cq-lang-datalog-storage = { path = "../../../features/datalog/languages/dl-storage" }
+cq-lang-datalog-round = { path = "../../../features/datalog/languages/dl-round" }
+cq-datalog-print = { path = "../../../features/datalog/print" }
+cq-datalog-support = { path = "../../../features/datalog/support" }
+cq-lang-structures = { path = "../../../languages/cq-lang-structures" }
+cq-stage = { path = "../../../facade/cq-stage" }
+cq-syntax = { path = "../../../languages/cq-syntax" }
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full", "extra-traits", "visit"] }
+
+[dev-dependencies]
+cq-datalog-storage = { path = "../../../features/datalog/passes/storage" }
+cq-datalog-fork = { path = "../../../features/datalog/passes/fork" }

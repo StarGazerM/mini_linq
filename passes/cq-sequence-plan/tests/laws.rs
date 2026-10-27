@@ -2,8 +2,8 @@ use cq_lang_sequence::{
     Analysis, CanonToken, Capability, Catalog, CodecToken, Guard, Len, LevelNode, Machine,
     OutputProtocol, Program, ProviderToken, Term, check_grading, check_rewrite,
 };
+use cq_sequence_plan::rewrites::{adaptive_candidates, lookup_first_advice};
 use cq_sequence_plan::{Advice, Planned, decompose, plan};
-use cq_sequence_rewrite_passes::{adaptive_candidates, lookup_first_advice};
 use proc_macro2::TokenStream;
 use quote::quote;
 
@@ -31,12 +31,16 @@ fn machines() -> Vec<Machine> {
             layout: None,
             name: syn::parse_quote!(sequential),
             items: 1,
+            key_partition_threshold: 65536,
+            key_partition_cache_threshold: 6 * 1024 * 1024,
             root: node("host", false, false, None, vec![]),
         },
         Machine {
             layout: None,
             name: syn::parse_quote!(tasks),
             items: 1,
+            key_partition_threshold: 65536,
+            key_partition_cache_threshold: 6 * 1024 * 1024,
             root: node(
                 "host",
                 false,
@@ -55,6 +59,8 @@ fn machines() -> Vec<Machine> {
             layout: None,
             name: syn::parse_quote!(gpu),
             items: 4,
+            key_partition_threshold: 65536,
+            key_partition_cache_threshold: 6 * 1024 * 1024,
             root: node(
                 "host",
                 false,
@@ -635,7 +641,7 @@ fn catalog_provider_scope_is_the_read_level_not_the_host_store() {
     // An unauthored read can move to host; an explicitly authored descendant
     // read remains a catalog error rather than silently changing its grade.
     let authored =
-        cq_sequence_rewrite_passes::grade(&source, quote!(gpu, result at device)).unwrap();
+        cq_sequence_plan::rewrites::grade(&source, quote!(gpu, result at device)).unwrap();
     let error = plan(&authored, &machine, &available)
         .unwrap_err()
         .to_string();

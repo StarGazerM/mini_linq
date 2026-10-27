@@ -1,0 +1,492 @@
+{
+  "answer_rows": 1186602,
+  "bag_insertions": 16296824,
+  "build_rows_verified": false,
+  "candidate_insertions": 0,
+  "distinct_insertions": 0,
+  "index_builds": 0,
+  "median_ms": 835.4224770000001,
+  "operator_rows": [
+    {
+      "inputs": [],
+      "key": "Part",
+      "kind": "RENAME",
+      "result": "r0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 2000000
+    },
+    {
+      "inputs": [
+        "r0"
+      ],
+      "key": "brand,kind,part_key,size",
+      "kind": "SELECT",
+      "result": "r1",
+      "rows_in": 2000000,
+      "rows_inserted": 0,
+      "rows_out": 1919874
+    },
+    {
+      "inputs": [
+        "r1"
+      ],
+      "key": "part_key",
+      "kind": "GUARD",
+      "result": "r2",
+      "rows_in": 1919874,
+      "rows_inserted": 0,
+      "rows_out": 296824
+    },
+    {
+      "inputs": [],
+      "key": "Partsupp",
+      "kind": "RENAME",
+      "result": "r3",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 8000000
+    },
+    {
+      "inputs": [
+        "r2",
+        "r3"
+      ],
+      "key": "part_key",
+      "kind": "PROBE",
+      "result": "r4",
+      "rows_in": 296824,
+      "rows_inserted": 0,
+      "rows_out": 1187296
+    },
+    {
+      "inputs": [],
+      "key": "BadSupplier",
+      "kind": "RENAME",
+      "result": "r5",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 56
+    },
+    {
+      "inputs": [
+        "r4",
+        "r5"
+      ],
+      "key": "suppkey",
+      "kind": "ANTI",
+      "result": "r6",
+      "rows_in": 1187296,
+      "rows_inserted": 0,
+      "rows_out": 1186602
+    },
+    {
+      "inputs": [
+        "r6"
+      ],
+      "key": "part_key,suppkey",
+      "kind": "PROJECT",
+      "result": "r7",
+      "rows_in": 1186602,
+      "rows_inserted": 0,
+      "rows_out": 1186602
+    },
+    {
+      "inputs": [
+        "r2"
+      ],
+      "key": "",
+      "kind": "ROWS_BUILD",
+      "result": "r2.rows",
+      "rows_in": 296824,
+      "rows_inserted": 296824,
+      "rows_out": 296824
+    },
+    {
+      "inputs": [
+        "r3"
+      ],
+      "key": "",
+      "kind": "ROWS_BUILD",
+      "result": "__cq_key_input_r3.rows",
+      "rows_in": 8000000,
+      "rows_inserted": 8000000,
+      "rows_out": 8000000
+    },
+    {
+      "inputs": [
+        "r3"
+      ],
+      "key": "",
+      "kind": "PARTITION_BUILD",
+      "result": "r3.parts",
+      "rows_in": 8000000,
+      "rows_inserted": 8000000,
+      "rows_out": 8000000
+    },
+    {
+      "inputs": [
+        "r3"
+      ],
+      "key": "part_key",
+      "kind": "INDEX_BUILD",
+      "result": "r3.index.part_key",
+      "rows_in": 8000000,
+      "rows_inserted": 8000000,
+      "rows_out": 2000000
+    },
+    {
+      "inputs": [
+        "r5"
+      ],
+      "key": "suppkey",
+      "kind": "KEYSET_BUILD",
+      "result": "r5.fallback.suppkey",
+      "rows_in": 56,
+      "rows_inserted": 56,
+      "rows_out": 56
+    },
+    {
+      "inputs": [
+        "r7"
+      ],
+      "key": "",
+      "kind": "DEDUP",
+      "result": "r7.dedup",
+      "rows_in": 1186602,
+      "rows_inserted": 1186602,
+      "rows_out": 1186602
+    },
+    {
+      "inputs": [
+        "r7"
+      ],
+      "key": "",
+      "kind": "ANSWER",
+      "result": "r7.answer",
+      "rows_in": 1186602,
+      "rows_inserted": 0,
+      "rows_out": 1186602
+    },
+    {
+      "inputs": [],
+      "key": "",
+      "kind": "TASKS_BUILD_WALL",
+      "result": "__cq_tasks_build",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "inputs": [
+        "r7.answer"
+      ],
+      "key": "",
+      "kind": "TASKS_QUERY_WALL",
+      "result": "__cq_tasks_query",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "inputs": [],
+      "key": "",
+      "kind": "TASKS_BUILD_WALL_TOTAL",
+      "result": "__cq_tasks_build_wall_total",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    }
+  ],
+  "operators": [
+    {
+      "calls": 1,
+      "elapsed_ms": 835.4216759999999,
+      "id": 0,
+      "inputs": [],
+      "key": "retail_h16",
+      "kind": "QUERY",
+      "program": 0,
+      "result": "query",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 1186602
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 10.558175,
+      "id": 1,
+      "inputs": [],
+      "key": "Part",
+      "kind": "RENAME",
+      "program": 1,
+      "result": "r0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 2000000
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 10.558375999999999,
+      "id": 2,
+      "inputs": [
+        "r0"
+      ],
+      "key": "brand,kind,part_key,size",
+      "kind": "SELECT",
+      "program": 1,
+      "result": "r1",
+      "rows_in": 2000000,
+      "rows_inserted": 0,
+      "rows_out": 1919874
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 10.558546,
+      "id": 3,
+      "inputs": [
+        "r1"
+      ],
+      "key": "part_key",
+      "kind": "GUARD",
+      "program": 1,
+      "result": "r2",
+      "rows_in": 1919874,
+      "rows_inserted": 0,
+      "rows_out": 296824
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 50.820718,
+      "id": 4,
+      "inputs": [],
+      "key": "Partsupp",
+      "kind": "RENAME",
+      "program": 1,
+      "result": "r3",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 8000000
+    },
+    {
+      "calls": 296824,
+      "elapsed_ms": 54.619780999999996,
+      "id": 5,
+      "inputs": [
+        "r2",
+        "r3"
+      ],
+      "key": "part_key",
+      "kind": "PROBE",
+      "program": 1,
+      "result": "r4",
+      "rows_in": 296824,
+      "rows_inserted": 0,
+      "rows_out": 1187296
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 0.000932,
+      "id": 6,
+      "inputs": [],
+      "key": "BadSupplier",
+      "kind": "RENAME",
+      "program": 1,
+      "result": "r5",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 56
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 243.440009,
+      "id": 7,
+      "inputs": [
+        "r4",
+        "r5"
+      ],
+      "key": "suppkey",
+      "kind": "ANTI",
+      "program": 1,
+      "result": "r6",
+      "rows_in": 1187296,
+      "rows_inserted": 0,
+      "rows_out": 1186602
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 243.44074099999997,
+      "id": 8,
+      "inputs": [
+        "r6"
+      ],
+      "key": "part_key,suppkey",
+      "kind": "PROJECT",
+      "program": 1,
+      "result": "r7",
+      "rows_in": 1186602,
+      "rows_inserted": 0,
+      "rows_out": 1186602
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 11.271824,
+      "id": 9,
+      "inputs": [
+        "r2"
+      ],
+      "key": "",
+      "kind": "ROWS_BUILD",
+      "program": 1,
+      "result": "r2.rows",
+      "rows_in": 296824,
+      "rows_inserted": 296824,
+      "rows_out": 296824
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 164.803596,
+      "id": 10,
+      "inputs": [
+        "r3"
+      ],
+      "key": "",
+      "kind": "ROWS_BUILD",
+      "program": 1,
+      "result": "__cq_key_input_r3.rows",
+      "rows_in": 8000000,
+      "rows_inserted": 8000000,
+      "rows_out": 8000000
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 135.232995,
+      "id": 11,
+      "inputs": [
+        "r3"
+      ],
+      "key": "",
+      "kind": "PARTITION_BUILD",
+      "program": 1,
+      "result": "r3.parts",
+      "rows_in": 8000000,
+      "rows_inserted": 8000000,
+      "rows_out": 8000000
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 77.323125,
+      "id": 12,
+      "inputs": [
+        "r3"
+      ],
+      "key": "part_key",
+      "kind": "INDEX_BUILD",
+      "program": 1,
+      "result": "r3.index.part_key",
+      "rows_in": 8000000,
+      "rows_inserted": 8000000,
+      "rows_out": 2000000
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 0.007174000000000001,
+      "id": 13,
+      "inputs": [
+        "r5"
+      ],
+      "key": "suppkey",
+      "kind": "KEYSET_BUILD",
+      "program": 1,
+      "result": "r5.fallback.suppkey",
+      "rows_in": 56,
+      "rows_inserted": 56,
+      "rows_out": 56
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 418.83946199999997,
+      "id": 14,
+      "inputs": [
+        "r7"
+      ],
+      "key": "",
+      "kind": "DEDUP",
+      "program": 1,
+      "result": "r7.dedup",
+      "rows_in": 1186602,
+      "rows_inserted": 1186602,
+      "rows_out": 1186602
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 1.5298740000000002,
+      "id": 15,
+      "inputs": [
+        "r7"
+      ],
+      "key": "",
+      "kind": "ANSWER",
+      "program": 1,
+      "result": "r7.answer",
+      "rows_in": 1186602,
+      "rows_inserted": 0,
+      "rows_out": 1186602
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 388.63722,
+      "id": 16,
+      "inputs": [],
+      "key": "",
+      "kind": "TASKS_BUILD_WALL",
+      "program": 1,
+      "result": "__cq_tasks_build",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 424.199459,
+      "id": 17,
+      "inputs": [
+        "r7.answer"
+      ],
+      "key": "",
+      "kind": "TASKS_QUERY_WALL",
+      "program": 1,
+      "result": "__cq_tasks_query",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 388.636959,
+      "id": 18,
+      "inputs": [],
+      "key": "",
+      "kind": "TASKS_BUILD_WALL_TOTAL",
+      "program": 0,
+      "result": "__cq_tasks_build_wall_total",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 0
+    }
+  ],
+  "rows_copied": 0,
+  "rows_enumerated": 0,
+  "samples_ms": [
+    817.7375470000001,
+    820.145221,
+    835.4224770000001,
+    880.118431,
+    914.905883
+  ],
+  "set_insertions": 1186658,
+  "top_level_clock_verified": true,
+  "top_level_ms": 835.4216759999999,
+  "tree": "QUERY            query [retail_h16] inputs= rows=1186602 in=0 inserted=0 t=835.422ms\n  TASKS_BUILD_WALL_TOTAL __cq_tasks_build_wall_total [] inputs= rows=0 in=0 inserted=0 t=388.637ms\n  TASKS_QUERY_WALL __cq_tasks_query [] inputs=r7.answer rows=0 in=0 inserted=0 t=424.199ms\n    ANSWER           r7.answer [] inputs=r7 rows=1186602 in=1186602 inserted=0 t=1.530ms\n      PROJECT          r7 [part_key,suppkey] inputs=r6 rows=1186602 in=1186602 inserted=0 t=243.441ms\n        ANTI             r6 [suppkey] inputs=r4,r5 rows=1186602 in=1187296 inserted=0 t=243.440ms\n          PROBE            r4 [part_key] inputs=r2,r3 rows=1187296 in=296824 inserted=0 t=54.620ms\n            GUARD            r2 [part_key] inputs=r1 rows=296824 in=1919874 inserted=0 t=10.559ms\n              SELECT           r1 [brand,kind,part_key,size] inputs=r0 rows=1919874 in=2000000 inserted=0 t=10.558ms\n                RENAME           r0 [Part] inputs= rows=2000000 in=0 inserted=0 t=10.558ms\n            RENAME           r3 [Partsupp] inputs= rows=8000000 in=0 inserted=0 t=50.821ms\n          RENAME           r5 [BadSupplier] inputs= rows=56 in=0 inserted=0 t=0.001ms\n  TASKS_BUILD_WALL __cq_tasks_build [] inputs= rows=0 in=0 inserted=0 t=388.637ms\n  DEDUP            r7.dedup [] inputs=r7 rows=1186602 in=1186602 inserted=1186602 t=418.839ms\n    PROJECT          r7 [part_key,suppkey] inputs=r6 rows=1186602 in=1186602 inserted=0 t=243.441ms (shared)\n  KEYSET_BUILD     r5.fallback.suppkey [suppkey] inputs=r5 rows=56 in=56 inserted=56 t=0.007ms excl=0.006ms\n    RENAME           r5 [BadSupplier] inputs= rows=56 in=0 inserted=0 t=0.001ms (shared)\n  INDEX_BUILD      r3.index.part_key [part_key] inputs=r3 rows=2000000 in=8000000 inserted=8000000 t=77.323ms excl=71.500ms\n    RENAME           r3 [Partsupp] inputs= rows=8000000 in=0 inserted=0 t=50.821ms (shared)\n  PARTITION_BUILD  r3.parts [] inputs=r3 rows=8000000 in=8000000 inserted=8000000 t=135.233ms excl=135.231ms\n    RENAME           r3 [Partsupp] inputs= rows=8000000 in=0 inserted=0 t=50.821ms (shared)\n  ROWS_BUILD       __cq_key_input_r3.rows [] inputs=r3 rows=8000000 in=8000000 inserted=8000000 t=164.804ms excl=113.983ms\n    RENAME           r3 [Partsupp] inputs= rows=8000000 in=0 inserted=0 t=50.821ms (shared)\n  ROWS_BUILD       r2.rows [] inputs=r2 rows=296824 in=296824 inserted=296824 t=11.272ms excl=11.272ms\n    GUARD            r2 [part_key] inputs=r1 rows=296824 in=1919874 inserted=0 t=10.559ms (shared)\nBUILD_EXCLUSIVE_TOTAL t=331.992ms\nTASKS_BUILD_WALL_TOTAL t=388.636959000ms\n",
+  "verified": true
+}

@@ -1,0 +1,9 @@
+{
+  "status": "timeout",
+  "phase": "counts",
+  "worker_wall_limit_seconds": 100,
+  "configuration_wall_seconds": 100.38563493604306,
+  "warm_correctness": "unavailable",
+  "correctness": "ok",
+  "error": "Command '['/tmp/mini-linq-performance-cpu/sf10/crates/retail_h08/counting-worker', '/tmp/mini-linq-performance-cpu/sf10/data/retail_h08', 'advised', '0', '/data/mini_linq/experiments/gpu/compare/performance_cpu_raw/sf10/retail_h08/advised/counts.answers.json', '/data/mini_linq/experiments/gpu/compare/performance_cpu_raw/sf10/retail_h08/advised/counts.json', '/data/mini_linq/experiments/gpu/compare/performance_cpu_raw/sf10/retail_h08/oracle.json']' timed out after 22.370178897981532 seconds"
+}

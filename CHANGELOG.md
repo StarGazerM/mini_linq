@@ -7,6 +7,33 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Consolidate active Mac work into this Git checkout under `experiments/mac/`,
+  including MCCL and the CQ Mac provider; remove active sibling-checkout paths.
+  Merge current mainline while preserving generic provider support, RadixRun
+  comparisons and native/GPU implementations. Adapt routed providers to the
+  declared `Keys` contract and retain the closed portable-core boundary.
+- Add explicit GPU-built grouped RadixRun and stable grouped merge through MCCL:
+  GPU grouping, exact parallel error32 spline construction, collinear endpoint
+  compaction and adaptive radix directory. Share the native CPU reader and lazy
+  membership policy through borrowed storage views. Preserve u32 occurrence
+  order, selected original row IDs and pinned old cursors. Record completed
+  build/merge and prepared-read comparisons without a CPU spline finishing pass.
+- Add the matched prepared-reader diagnostic over shared-source GPU/CPU MacRun,
+  native RadixRun and runtime HashIndex, validating exact occurrence sequences
+  and recording dense, sparse, skewed and duplicate-heavy samples.
+- Add completed immutable GPU-built CPU-readable indexes and online flat or
+  binary-carry snapshots, with failure-atomic publication and retained readers.
+  Expand H03/H09 into matched manual executions with typed source-row-ID gathers.
+  Compare explicit CPU and GPU constructors through one query body.
+- Tune CPU byte-radix construction with varying-byte histograms and buffered
+  scatter; separate GPU kernel throughput from fresh-constructor wall time.
+  Audit storage/cache roles and isolate first-touch, driver scheduling and
+  workload-history effects. Preserve historical raw-Metal workspace results
+  while moving active ownership, caching and completion to MCCL/MLX.
+- Replace per-index host tuple packing with reusable immutable shared relations,
+  GPU column projection, selected-value validation, original row-ID generation
+  and stable mask compaction. Charge ingestion separately and retain current
+  constructor/read/maintenance measurements under their explicit boundaries.
 - Express H05, H07-block, D27, and H08 string restrictions as explicit equality
   predicates instead of literal-bound relation occurrences. Keep branch-local
   names, SQL answers, date conditions, and H05's checked order advisory intact.
@@ -51,6 +78,273 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   disconnected Part/Orders prefix: measure local SF1 cardinalities, rank connected
   orders, and retain the faster measured single-key-Lineitem order without
   changing its SQL or Part predicate domain.
+- cuda-oxide `299eda41b` / RCCL `1d33079a`: device modules with at least 16
+  kernels split into kernel groups whose `opt` and `llc` run in parallel
+  (`CUDA_OXIDE_PTX_PARTITIONS`, default available parallelism up to 16); the
+  group PTX merges into one module. DOOP: 16 groups, opt+llc 5.7 s -> ~1.2 s,
+  all 211 kernels assemble to identical SASS; release build 47 s -> 39 s.
+- GPU Datalog holes whose query reads a local of the code around `datalog!`
+  (SRD DOOP's `constants`) keep the closure form; a standalone hole function
+  cannot capture locals. Free names are checked with `cq_syntax::rust`, callees
+  (`sym("…")`) count as items and macros as environment reads. DOOP keeps 154 of
+  155 holes standalone; `srd-doop-gpu` (merged from `codex/wt-schedule`) builds
+  in 16 codegen units and passes its exact 43-relation test.
+- cuda-oxide `1c1c42105` / RCCL `8649af3e`: standalone PTX assembly uses
+  `ptxas --split-compile=0` (identical SASS). DOOP cubin assembly 5.53 s ->
+  1.40 s; DOOP GPU release build 52 s -> 42 s, cassandra exact.
+- GPU Datalog host compile time. Generated holes, strata, phases, relation and
+  layout initialization, the initial memory snapshot and output decoders run as
+  `#[inline]` closures through partitioned `#[inline(never)]` runners
+  (`cq_gpu_sequence_runtime::__codegen`), so each is a separate function in its
+  own codegen unit instead of one program function (336,826 unoptimized IR
+  instructions; register allocation dominated). Each hole is a separate `fn`
+  item taking only the hosts it reads (closures are type-checked with their
+  parent: `doop_gpu::run` typeck 21.2 s), and `bind_inputs` receives only that
+  hole's bindings instead of all 457. Arena holes no longer construct unused
+  output adapters, range builders, dictionaries, status vectors or zero-width
+  row/range buffers (each adapter/builder loaded device modules). `doop-gpu`
+  uses 16 codegen units; the GPU workspace builds proc macros and their pass
+  crates at `opt-level = 3` (`build-override`; they were unoptimized). DOOP GPU
+  release build 23 min 06 s -> 52 s (`doop_gpu` crate: expansion 24.9 -> 5.3 s,
+  typeck 29.3 -> 4.0 s, host LLVM 1,266 -> 9.1 s; the serial cuda-oxide device
+  pipeline, 19.3 s, now dominates). Cassandra exact; GPU evaluation 2.19 s ->
+  2.11-2.13 s.
+- Rebase the Datalog scheduling/GPU work onto the combined main history.
+  Preserve query-scope cache release alongside per-pool stratum scratch
+  release, and pin cuda-oxide `e7d4a63ba` / RCCL `d4c95133` without local
+  dependency patches. GPU Datalog phase timing is opt-in; DOOP `--gpu-only`
+  skips the CPU reference while the default mode retains exact comparison.
+- GPU host overhead: arena publication without terminal fences (timing opt-in,
+  `GPU-Arena-Timing`), recorded `output reserve_previous` arena protocol that
+  starts from the last validated count and reruns on shortfall
+  (`GPU-ReservePrevious`), and layout sorts of injective permutations without
+  dedup or count readback (`DL-SortKnownUnique`). DOOP GPU 3.47 s -> 3.14 s,
+  exact; event synchronizations 66,981 -> 5, stream synchronizations
+  24,457 -> 13,672. About 1.0 s of host time between kernels remains outside any
+  CUDA call; metadata readbacks plus their syncs bound further batching gains at
+  151 ms.
+- Delta-first occurrence order (`DL-OccurrenceOrder`): variants record a
+  checked permutation of their first positive-atom prefix; the opt-in
+  `incremental(driver(delta_first))` advice leads with the delta, then connected
+  reads. CPU default stays written order. GPU DOOP selects it: the hot hole
+  kernels (cast, virtual dispatch, field load) scanned full `reachable` before
+  testing their delta; now they scan the delta. Cassandra exact; GPU evaluation
+  9.60 s -> 3.67 s, kernel time 7.72 s -> 1.90 s (cast kernel 4.08 s -> 0.066 s).
+- AOT cubins keep LLVM PTX codegen: cubin materialization had forced the libNVVM
+  path (35-43% more SASS); now PTX is assembled with `ptxas` at build time.
+  Module loading 5.59 s -> 0.12 s; kernel SASS identical to driver JIT.
+- GPU workspace builds from pushed forks only: cuda-oxide `mini-linq/main`
+  (`496c01bf`, upstream NVlabs main `9df9e7ce` plus 7 patches: RCCL compiler
+  support, PTX debug/merge fixes, merged-PTX module cache, static shared
+  namespacing, i128 shift legalization) and RCCL `mini-linq/main` (`8e329e25`);
+  no local `[patch]` paths. Toolchain Rust 1.99.1 (`RUSTC_BOOTSTRAP=1`) and
+  CUDA 13.0, which upstream bindings require. DOOP GPU exact, 11.8–12.0 s warm;
+  the first run after a rebuild takes ~25 s while the driver JIT-compiles PTX.
+- DOOP on the GPU, exact on cassandra (all 26 outputs equal `mini`). Strings
+  never reach the device: the DOOP loader interns `method_descriptor` at load
+  (`IStr::code`/`from_code`), `device_storage(symbols(T => Codec))` stores
+  symbol columns as `SymbolCodec` u32 codes, closed constants are evaluated on
+  the host (`GPU-Capture`, the closed case of `BE-Partial`/`IF-Parameter`), and
+  the checked `capture_constants` rewrite turns literal atom arguments into
+  guards (`PH-ConstantGuard`). Packed words span multiple 64-bit lanes. Fixes: a
+  dynamic u128 lane mask miscompiled by the CUDA backend (constant lane shifts
+  instead), stratum-scoped arenas, pool trimming, and an RCCL pool growth reset
+  (`8a7e87b`). 11.8 s vs 4.27 s `mini`; kernels 7.7 s, PTX JIT 5.6 s.
+- GPU Datalog: whole Datalog programs run on the GPU through the ordinary
+  pipeline. `gpu-datalog-runtime` packs fixed-width tuples most-significant
+  first (`DL-DevicePacking`) into sorted, unique, disjoint device runs with
+  sort/unique/anti-join admission and ratio-4 merging (`DL-DeviceRuns`); GPU
+  Sequence reads `DeviceLayout` inputs as runs (`GPU-Runs`) and publishes
+  candidates through `translate_arena` (`GPU-Arena`); Round holes gain a
+  `batch` interface (host printers reject it); `cq-gpu-datalog` provides
+  `device_storage` (`CK-DL-DeviceStorage`) and `print_rounds` (`P-DL-Gpu`).
+  Programs on one thread share a device pool (`thread_pool`). Oracle: 13
+  programs exact (416 comparisons). 2048-node random graph: TC 0.36–0.49 s vs
+  1.58–1.79 s `mini`; same generation 0.41 s vs 3.58 s. The local cuda-oxide
+  branch namespaces static shared symbols per merged PTX bundle (`c53311d3`).
+- Sorted-run storage, CPU reference for device runs (`DL-RunLayout`,
+  `DL-RunAdmission`, realizing `STR-RunRead`/`STR-RunCompact`):
+  `RunLayout<K, V>` (immutable (key, payload)-sorted runs, ratio-4 leveled
+  merge) and `RunSeen<T, S>` (sort, dedup, anti-join against accepted runs,
+  append). Selected by `shard_storage(layouts(runs), seen(runs))`; exact on the
+  oracle and DOOP cassandra. Not a CPU default: cassandra 15 threads 3.11 s
+  (evaluation 82%, per-run binary-search probes); `seen(runs)` alone 1.73 s vs
+  1.28 s hashed.
+- Sharded native layouts (`DL-ShardedLayout`): `ShardedLayout<K, V, S>` splits a
+  grouped layout map into hash-routed disjoint shards; bulk publication fills
+  each shard by one task. `shard_storage(layouts(sharded))` rewrites keyed IDB
+  full/delta layouts (checked erasure, `CK-DL-ShardStorage`); unit-key scan and
+  EDB layouts are unchanged. `cq_storage::PointRows::new` is public for
+  external grouped providers. The parallel DOOP engines select it: cassandra at
+  15 threads 1.67–1.76 s → 1.28 s compute, exact; publication 0.61 s → 0.22 s
+  (42% → 20% of step time), evaluation now 65%.
+- Datalog Round records an evaluation **schedule**: per component, each rule
+  hole's positive read set derived from Storage reads and an ordered wave
+  partition of its seed and step holes (`WF-DL-Schedule`; `DL-WaveCommute`
+  states why waves change no value). Fork records one wave per phase. The new
+  `cq-datalog-schedule` Round rewrite (`round = [cq_datalog_schedule::schedule(
+  whole | per_hole | by_head | strata(..))]`, `CK-DL-Schedule`) changes only
+  that record. The sequential printer evaluates holes in wave order; the Rayon
+  printer joins each wave in its own scope and spawns a head's sharded
+  admission alongside the next wave once all of that head's holes have run
+  (`P-DL-Waves`). The parallel oracle corpus adds a `by_head` configuration;
+  DOOP cassandra remains exact at 15 threads.
+  The schedule also records per-hole realization `policy` (`grain`,
+  `inline_below`; advice `grain(N)`, `inline_below(N)`, `policy(..)`) and a
+  derived per-member `publication` wave (`DL-PublishAfterReaders`: after the
+  last wave holding a writer or reader). The Rayon printer decides chunking per
+  hole and always runs a wave concurrently on a multi-worker pool; a member
+  whose publication wave precedes the phase's last wave is admitted and fully
+  published in one task alongside the next wave and leaves the phase barrier.
+  `schedule(relational)` selects relational progress (`WF-DL-Progress`,
+  `DL-AsyncCovering`): after synchronous seeds, each member commits its own
+  batches, every delta reader runs once per batch, and holes read under a
+  frozen cut. The Rayon printer realizes it through a new step-loop hook with
+  an event-driven executor (`P-DL-Relational`) over the runtime
+  `RelationalScheduler`/`drive` (`DL-RelationalScheduler`): isolation is
+  scheduler gating with draining, host locks are only ever tried, so nested
+  work stealing cannot deadlock. The sequential printer realizes it as
+  synchronous rounds. Exact on the oracle corpus and DOOP cassandra; ~8%
+  slower than synchronous there.
+- Integrate the parallel Tasks work with the closed-core layout: key-partition
+  advice and the Tasks provider-preserving catalog selection live in
+  `cq_sequence_plan::rewrites`; eager-membership host retention moved into
+  `cq_structure_selection::build_host_reads`; Tasks conformance links the exact
+  `cq_sequence_tasks` and Rayon artifacts from `features/sequence-conformance`.
+  Join-filter identity bindings use the scan-local filter index. Catalog
+  selection and host retention require ordered payload (Exact and Ordered)
+  for Merge reads, so an ordered key set is never chosen for a merge build
+  (the refreshed claw/oriented-chain BTreeMap merge registrations under Tasks).
+- Share one non-generic Rayon index dispatcher across Tasks pipelines and
+  sharded index construction/release. Borrowed tile access and ordered
+  per-index result slots keep generated row and closure types out of Rayon
+  plumbing; contiguous tile groups retain ordered publication and bounded
+  task-local buffers without changing planner decisions.
+- Feature lockfiles pin root third-party versions. Feature workspaces share
+  `features/target` (workloads keeps its own); CI runs facade consumer targets
+  once (`cargo test --workspace`) and `tools/regression-targets.tsv` keeps only
+  rows that workspace testing does not cover. Root sources are rustfmt-clean.
+- Keep admitted native Sequence providers when a checked retention or retyping
+  rewrite is inapplicable, without discarding applicable choices for other results.
+  Tasks admits serial lazy providers only at host and upgrades them to shareable
+  representations when legal. Workload conformance records the same host-only
+  restriction for its `Rc`-backed sorted indexes.
+  Candidate directories keep their native representation instead of being
+  routed through unsupported sharded protocols. Automatic lookup-first advice
+  declines reorderings that would require scanning or retaining an authored
+  filtered index; explicit requests still report a checked rejection.
+- Sequence records checked, uniform `workers < N` scheduling guards without
+  changing support or count semantics. Adaptive native provider plans route iff
+  `rows >= low && (workers > 1 || rows >= cache)`; forced plans stay unconditional.
+  Positive in-band `Machine`/Tasks `Config` cache cutoffs default to the measured
+  6,291,456 rows, not a universal optimum or cache-byte guarantee. Replay records
+  both cutoffs and nested guards; no new macro option or translator policy.
+  A proved nonexpanding, unshadowed host bound can choose singleton before
+  demanding filtered input length. The proof follows actual producer occurrences,
+  not just set support; expanding joins and duplicate unions never supply it.
+  Pull supplies one worker and target hooks receive an explicit worker-count
+  expression; Tasks uses the current Rayon pool's available worker count.
+- Recorded singleton provider covers build directly from immutable published
+  sources, avoiding the redundant row-part buffer; routed covers keep their
+  owned parts and router. Worker count is captured once inside the executing
+  pool, and partition-buffer counters reflect only buffers actually allocated.
+- Check single-consumer raw staging fusion as `DeferredRows { consumer }`:
+  recorded nested worker/cache singleton leaves consume total producers once
+  without a raw row vector when reached before the staged count is demanded;
+  exact-count fallback or routed demands retain one shared owned buffer.
+  Pure named producer views are eligible, but opaque dependencies, shared or
+  replayed rows, carrier reheading, prior stores and shadowable join-filter
+  sources keep their original publication. PL-Cost retains worst-case owned
+  traffic; skipped buffers produce no row-build or retention profiling activity.
+- Derive checked Sequence publication ownership once (`BorrowHost`, `Alias`,
+  owned rows, or key parts) for PL-Cost and Tasks, preserving source provenance
+  across reheading. Real retained key-input copies pay a row-traffic tie-breaker
+  after compute span rather than being equated with hash/group evaluation;
+  borrows and aliases remain free. Native routed-provider representation and
+  stored-key coverage are checked upstream rather than guessed by the printer.
+- Tasks applies recorded join filters inside borrowed positional tiles and
+  routes borrowed host inputs without an intermediate whole-host vector.
+  Key routing groups contiguous chunks into scheduler-fold-local buckets and
+  reuses the first owner buffer while preserving per-part occurrence order.
+- TPC-H bench dev loop: generated worker sources are stable (no forced
+  rebuilds; `compile_unit_ms` is NA for reused workers), per-query crates build
+  their compiler proc macros at opt-level 3, `--runs 0` verifies exactness only
+  (timing worker, no counting/DuckDB timing), `--config a,b` runs exactly those
+  configurations, and SF 0.1 measurement skips the duplicate pre-gate. The CPU
+  report collector no longer pins `CARGO_BUILD_JOBS=1`, keeps build logs in its
+  cache, and fails if its generated-worker patch anchors drift.
+- The facade no longer depends on or re-exports the Tasks feature: generated
+  Tasks code names `cq_sequence_tasks::combine` directly and consumers select
+  `cq_sequence_tasks_macros::{plan, tasks, translate_tasks}`.
+- Join-filter bindings start as identity predicates and are shadowed when their
+  covering provider is built, so publications read before that build stay
+  exact (IF-JoinFilter `builtBefore`). Routed-provider routers use the stored
+  key after constant elision; nested tiles re-apply collectives to joined rows.
+- Test infrastructure: sequential machine fixtures use
+  `cq_sequence_pull::machine()`, grouped TPC-H tests evaluate each DuckDB oracle
+  once per dataset (and all four grouped suites compile again), linked
+  fixture artifacts are memoized per process, and stale feature lockfiles are
+  refreshed.
+- Add checked runtime choices for Tasks provider builds using published input
+  length and a machine-supplied threshold, with authoritative force/forbid
+  advice. Singleton covers build and read native providers without routing;
+  routed covers build directly from row parts and release their providers in
+  the pool. Shared H01/H13 sources now carry dbgen key evidence through both
+  CPU and GPU pipelines, removing unnecessary complete-valuation canonicalization.
+- Extend checked partial grouping to finite-map monoids over globally unique
+  valuations. Tasks stream total producer spines into bounded-count local
+  accumulator maps and merge them at host; PL-Cost retains key-routed grouping
+  as an alternative when merging many groups would dominate.
+- Preserve authored relational order and selection stages in the CPU Tasks
+  configuration. Contiguous host tiles borrow input rows (positional tiles
+  enumerate base-relative ranges); named stream adapters remain inside their
+  task through publication, with one buffer per scheduler task. Terminal task
+  buffers retain their joined answer iterator instead of making another host
+  copy. Task profiling accounts for retained Sequence buffers and native
+  canonical sets. PL-Cost charges key routing and bucket publication before
+  selecting routed providers; eager indexes keep singleton payloads inline,
+  and adaptive membership's immutable fallback keys support shared task reads.
+  Named single-use canonical inputs move inside checked group-key partitions;
+  global collectives no longer inherit fictitious parallel span from flattened
+  contiguous tiles. Primitive work counters remain repeatable; concurrent
+  retained-memory peaks are reported as scheduler-dependent observations.
+- Restore closed-core release boundaries: shared Sequence transformations now
+  live in `cq_sequence_plan::rewrites`, with retyping and host-retention helpers
+  in `cq_structure_selection`. Remove the old feature implementation crate and
+  migrate direct callers; feature macro names remain unchanged.
+  Move CPU target conformance and workload-dependent tests to the external
+  `cq-sequence-conformance` workspace, keeping `cq-testkit` language/runtime-only.
+  Replace Sequence lowering's self-recompiling checker with direct coverage,
+  operator, retention and output checks, accepting arbitrary fresh output names.
+  Align feature locks to reviewed root versions; vendor every feature closure
+  and canonicalize relocation paths so macOS temporary-directory aliases are
+  not mistaken for source escapes.
+  Runtime fixtures link their exact Cargo storage/Rayon artifacts instead of
+  checkout source paths. Refresh inadmissible handwritten corpus registrations
+  without removing queries, configuration definitions or custom negative cases.
+- Validate transfer across all 29 registered TPC-H-derived/full-query cases,
+  adding real per-stage transfer configurations to the 12 standalone retail
+  runners. Preserve query text, SQL, numeric contracts and cached projections.
+  Fix H09's catastrophic Cartesian prefix by connecting atoms only within
+  written relational runs, without moving predicate/binding/block boundaries.
+  Extend checked absorption to redundant left operands, retaining right-support
+  pruning precedence and all shared-witness/opaque/negative constraints.
+  H21-positive no longer repeats 356,794 membership checks before its exact join.
+  All 29 transfer cases match DuckDB at SF0.1/SF1; H09 SF1 completes in 487.8 ms
+  instead of reaching the 120-second worker cap. Written-order H09 remains an
+  unchanged timeout control. Remove incidental plan-text/operator-count pins;
+  retain authored-plan validity, semantic checks and negative certificates.
+- Repair the predicate-transfer path: apply checked redundant-support absorption
+  after elaboration, preserving the complete VO schedule and final CQ-to-RA check.
+  Piped positional read spines now feed one retained snapshot instead of allocating
+  intermediate masks; selection narrowing enumerates set bits and retains block
+  skipping. Equivalent scan filters share construction and tests only after every
+  covering witness is validated, without removing exact joins.
+  Predicate-form H05, H07-block, D27 and H08 matched cached DuckDB answers under
+  default and transfer at SF0.1 and SF1. Runtime regressions cover snapshot
+  allocation, sparse occurrence enumeration and filter construction/probe counts.
+  Public API: add `Selection::from_positions` for host-issued IDs; filter emitter
+  identities now take a scan-local canonical index rather than a covering operator.
 - Legacy GPU Datalog workspace removed.
 - Add native `RadixRun` payload indexes with radix12/error32 spline routing,
   full-width integral key encodings, exact bounded search, and stable duplicate

@@ -83,6 +83,15 @@ pub enum Repr {
     },
 }
 
+/// Key-disjoint parts, routing columns, routed provider ordinals with their
+/// inner types, and whether the parts already own provider-ready rows.
+type PartitionedSource<'p> = (
+    TokenStream,
+    &'p [String],
+    &'p BTreeMap<usize, syn::Type>,
+    bool,
+);
+
 pub struct Context<'a> {
     pub profile: Option<profile::Profile>,
     pub analysis: &'a structures::Analysis,
@@ -325,7 +334,7 @@ impl<'a> Context<'a> {
                 candidate_reads.entry(name).or_default().push(prefix);
             }
         }
-        Context {
+        let mut context = Context {
             profile: None,
             physical_analysis: &analysis.physical,
             analysis,
@@ -353,7 +362,9 @@ impl<'a> Context<'a> {
                 matches!(&d.operator,
                 Operator::Probe(_, k) if matches!(k.choice, Some(physical::Choice::Smallest(_))))
             }),
-        }
+        };
+        context.prepare_join_filters();
+        context
     }
 
     pub fn relational_condition(
@@ -528,6 +539,44 @@ impl<'a> Context<'a> {
 
     /// Build the selected structures over a result and append their statements.
     pub fn materialize(&mut self, name: &str, source: TokenStream) -> Repr {
+        self.materialize_from(name, source, None)
+    }
+
+    /// Publish providers from the key-disjoint parts recorded by Sequence.
+    /// The caller owns the parts binding for the lifetime of every provider.
+    /// `routed` contains provider ordinals and inner types validated by Sequence;
+    /// routing-key coverage is an upstream BE-Publication obligation.
+    pub fn materialize_partitioned(
+        &mut self,
+        name: &str,
+        parts: TokenStream,
+        routing: &[String],
+        routed: &BTreeMap<usize, syn::Type>,
+    ) -> syn::Result<Repr> {
+        let rows = quote!((#parts).iter().flatten().cloned());
+        Ok(self.materialize_from(name, rows, Some((parts, routing, routed, false))))
+    }
+
+    /// Publish a checked cover that borrows its singleton source instead of
+    /// allocating row parts. Routed arms retain the ordinary parallel builders.
+    /// The caller keeps both the source publication and cover alive.
+    pub fn materialize_provider_parts(
+        &mut self,
+        name: &str,
+        parts: TokenStream,
+        routing: &[String],
+        routed: &BTreeMap<usize, syn::Type>,
+    ) -> Repr {
+        let rows = quote!((#parts).rows());
+        self.materialize_from(name, rows, Some((parts, routing, routed, true)))
+    }
+
+    fn materialize_from(
+        &mut self,
+        name: &str,
+        source: TokenStream,
+        parts: Option<PartitionedSource<'_>>,
+    ) -> Repr {
         let structures: Vec<(Vec<Vec<String>>, syn::Type)> =
             self.analysis.built.get(name).cloned().unwrap_or_default();
         let rows = self
@@ -584,7 +633,7 @@ impl<'a> Context<'a> {
         };
         let source = if replay { direct_source } else { source };
         let mut built = Vec::new();
-        for (levels, ty) in &structures {
+        for (ordinal, (levels, ty)) in structures.iter().enumerate() {
             let columns: Vec<String> = levels.concat();
             let payload_columns = self.built_payload(name, levels);
             let stored_columns: Vec<_> = levels
@@ -647,7 +696,61 @@ impl<'a> Context<'a> {
             // written arguments (or holes) select the qualified form.
             let bare = matches!(ty, syn::Type::Path(path)
                 if path.qself.is_none() && path.path.segments.iter().all(|s| s.arguments.is_none()));
-            let build = if let Some(selection) = selection.as_ref().filter(|_| !bare) {
+            let routed = parts
+                .as_ref()
+                .and_then(|(_, _, providers, _)| providers.get(&ordinal));
+            let build = if let Some(inner) = routed {
+                let (parts, routing, _, borrowed_singleton) =
+                    parts.as_ref().expect("checked partition publication");
+                let stored_key = self.stored_key(name, &levels[0]);
+                let fields = routing
+                    .iter()
+                    .map(|column| {
+                        syn::Index::from(
+                            stored_key
+                                .iter()
+                                .position(|key| key == column)
+                                .expect("checked routing key"),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let key_types = stored_key.iter().map(|_| quote!(_)).collect::<Vec<_>>();
+                let part_rows = self.profile_inserting(
+                    &build_name,
+                    quote!(__cq_part.iter().cloned().map(|#pattern| #nested)),
+                );
+                let router = quote!(|__cq_key: &(#(#key_types,)*), __cq_count| {
+                    ::cq_storage::sharded::route_index(&(#(&__cq_key.#fields,)*), __cq_count)
+                });
+                if *borrowed_singleton {
+                    let singleton_rows = self.profile_inserting(
+                        &build_name,
+                        quote!((#parts).source().map(|#pattern| #nested)),
+                    );
+                    quote!({
+                        let __cq_router = #router;
+                        match (#parts).routed() {
+                            ::core::option::Option::None =>
+                                ::cq_storage::sharded::Sharded::<#inner, _>::from_parts_with_router(
+                                    ::std::vec![<#inner as ::cq_storage::Build<_>>::build(#singleton_rows)],
+                                    __cq_router,
+                                ),
+                            ::core::option::Option::Some(__cq_parts) =>
+                                ::cq_storage::sharded::Sharded::<#inner, _>::build_from_parts_with_router(
+                                    __cq_parts,
+                                    |__cq_part| <#inner as ::cq_storage::Build<_>>::build(#part_rows),
+                                    __cq_router,
+                                ),
+                        }
+                    })
+                } else {
+                    quote!(::cq_storage::sharded::Sharded::<#inner, _>::build_from_parts_with_router(
+                        &(#parts),
+                        |__cq_part| <#inner as ::cq_storage::Build<_>>::build(#part_rows),
+                        #router,
+                    ))
+                }
+            } else if let Some(selection) = selection.as_ref().filter(|_| !bare) {
                 let host_pattern = self.positional_pattern(name);
                 let nested = if let Some(i) = self.profile_index(&build_name) {
                     let profile = self.profile_handle();
@@ -665,10 +768,12 @@ impl<'a> Context<'a> {
             statements.push(syn::parse_quote! { let #structure = &#build; });
             statements.extend(self.provider_guards(name, levels, ty, None, quote!(#structure)));
             let join_filters = self.analysis.join_filters.clone();
-            for (scan, filter) in join_filters
-                .iter()
-                .flat_map(|(scan, filters)| filters.iter().map(move |f| (scan, f)))
-            {
+            for (scan, index, filter) in join_filters.iter().flat_map(|(scan, filters)| {
+                filters
+                    .iter()
+                    .enumerate()
+                    .map(move |(index, f)| (scan, index, f))
+            }) {
                 let covering = symbol_name(&filter.covering);
                 let (Operator::Probe(_, k) | Operator::Semi(_, k)) =
                     &self.physical[&covering].operator
@@ -689,11 +794,11 @@ impl<'a> Context<'a> {
                         .position(|c| *c == key)
                         .expect("checked non-constant key"),
                 );
-                let id = self.join_filter_ident(scan, &covering, &key);
+                let id = self.join_filter_ident(scan, index);
                 let pairs = quote!(::core::iter::Iterator::map(
                     ::cq_storage::Keys::distinct_keys(#structure), |__cq_key| (*__cq_key.#component, ())
                 ));
-                let filter_name = format!("{name}.filter.{scan}.{key}");
+                let filter_name = format!("{name}.filter.{scan}.{key}.{index}");
                 self.profile_label(
                     &filter_name,
                     "JOIN_FILTER_BUILD",
@@ -1029,5 +1134,31 @@ pub fn group(fields: &[TokenStream]) -> TokenStream {
         quote!((#(#fields,)*))
     } else {
         group(&fields.chunks(12).map(group).collect::<Vec<_>>())
+    }
+}
+
+/// Construct a canonicalization set of the recorded type. Catalog-selected
+/// native hash sets do not count insertion attempts themselves, so counters
+/// builds wrap them in `DistinctSet` (moved, not rehashed). Opaque authored
+/// providers keep their own protocol and never receive a second wrapper.
+/// Every printer uses this, so pull and push report the same primitive counts.
+pub fn canonical_set(ty: &syn::Type) -> TokenStream {
+    let native_hash_set = matches!(ty, syn::Type::Path(path)
+    if path.qself.is_none() && (
+        path.path.segments.len() == 2
+            && path.path.segments[0].ident == "cq_storage"
+            && path.path.segments[1].ident == "HashSet"
+        || path.path.segments.len() == 3
+            && path.path.segments[0].ident == "std"
+            && path.path.segments[1].ident == "collections"
+            && path.path.segments[2].ident == "HashSet"
+    ));
+    if native_hash_set {
+        quote!(::cq_storage::profile_select! {
+            plain { <#ty>::new() }
+            counters { ::cq_storage::counters::DistinctSet::from_set(<#ty>::new()) }
+        })
+    } else {
+        quote!(<#ty>::new())
     }
 }

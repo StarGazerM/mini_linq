@@ -1,7 +1,7 @@
 # Mac (Apple silicon) calibration and cost model
 
 Branch `mac-cost-model`. The experiments use standalone workspaces; the native
-provider and join improvements live in the main workspace. Four pieces:
+provider and join improvements live in the main workspace. Five experiment pieces:
 
 - `calib/` — `maccal`: measured primitive costs on this machine (CPU, GPU, and
   CPU+GPU concurrently). Rust + Metal; see `calib/README.md` for every primitive.
@@ -12,6 +12,11 @@ provider and join improvements live in the main workspace. Four pieces:
   common exact lookup / grouped join workloads; see the benchmark section below.
 - `gpu-index/` — real Metal build/merge/directory experiments, including
   flat/binary-carry histories; [measured results and commands](gpu-index/README.md).
+- `query-expansion/` — matched CPU/GPU index construction and query experiments.
+
+The consolidated GPU runtime lives in [`cq-mac/`](cq-mac/src/lib.rs), backed by
+[`mccl/`](mccl/README.md) and its canonical Metal kernels. These remain standalone
+workspaces outside the portable core; all active commands run from this repository.
 
 The [Mac implementation plan](../../doc/MAC-IMPLEMENTATION.md) separates
 GPU-assisted host providers, LSM-like snapshot maintenance, Datalog publication,
@@ -716,19 +721,22 @@ be attributed to the benchmark's configuration name.
 
 ## GPU experiment integration and Mac implementation boundary
 
-The standalone GPU experiment has been imported from the separate
-`mini_linq-gpu-index-20261024` snapshot without replacing the join-optimized
-runtime/compiler files. Its archived measurements remain tied to that snapshot.
-The combined tree passed 149 targeted storage/Structures/Sequential tests,
-the five-route RadixRun example (150 exact answers per route), and real Metal
-sort/merge/grouping/directory/lookup correctness checks.
+The standalone GPU experiment, CQ Mac runtime and MCCL native implementation are
+consolidated here without replacing the join-optimized runtime/compiler contracts.
+The separate `mini_linq-gpu-index-20261024` and MCCL snapshots are historical
+backups, not active work directories. Archived measurements retain their original
+provenance. The earlier experiment import passed 149 targeted
+storage/Structures/Sequential tests, the five-route RadixRun example (150 exact
+answers per route), and real Metal sort/merge/grouping/directory/lookup checks;
+these are historical checks, not verification of the current consolidation.
 
-LSM-like binary carries remain an explicit proposed runtime policy alongside
-flat compaction. The benchmark's offline histories are not an online maintained
-provider: snapshot pinning, all-live-run reads, publication and buffer retirement
-still need implementation. The removed legacy `LeveledDeviceIndex` backend is
-not available through its residual type recognizers.
+The offline benchmark histories are not themselves an online maintained provider.
+The separate [`cq-mac/`](cq-mac/src/lib.rs) runtime now implements selectable
+flat compaction and binary carries, pinned immutable snapshots, all-live-run reads,
+publication and ownership-based buffer retirement. It also exposes explicitly
+selected GPU-built grouped RadixRun with the native CPU reader. The removed legacy
+`LeveledDeviceIndex` backend remains unavailable.
 
 See the [implementation plan](../../doc/MAC-IMPLEMENTATION.md) for contracts,
-acceptance gates and the exact inventory of existing versus proposed compiler
-changes. No new core-compiler behavior was introduced by this integration.
+current root-relative commands and the inventory of existing versus proposed
+compiler changes. This consolidation adds no new core-compiler behavior.

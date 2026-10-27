@@ -1,0 +1,12 @@
+[package]
+name = "gpu-datalog-runtime"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+cuda-core.workspace = true
+cuda-device.workspace = true
+cuda-host.workspace = true
+gpu-device-columns = { path = "../device-columns" }
+rccl-cub.workspace = true
+rccl-memory.workspace = true

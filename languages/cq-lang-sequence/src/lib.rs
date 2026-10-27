@@ -5,12 +5,17 @@
 //! Optional `evidence { ... }` records estimates and author-asserted key premises;
 //! see [`Evidence`] and [`EvidenceFact`] for their distinct correctness contracts.
 //! Terms are prefix forms: `rows`, `map`, `flatten`, `compact`, `tile`, `lookup`,
-//! `fold`, `group`, `canon`, `store`, `union` and `choose`, or references to earlier definitions.
+//! `partition_k[keys](parts)`, `fold`, `group`, `canon`, `store`, `union` and
+//! `choose`, or references to earlier definitions. A key partition reads a named
+//! ancestor store into fixed key-disjoint parts; scheduling guards may select a cover.
 //! Constructor names are also valid references when followed by a term boundary.
 //! A store may declare `store capacity N term`; the optional final sequence
-//! statement `output count;`, `output reserve;` or `output bounded;` selects the
-//! final store's output protocol. Bounded output takes its capacity from that
-//! store. Codec and provider premises are analysis obligations, not syntax.
+//! statement `output count;`, `output reserve;`, `output reserve_previous;` or
+//! `output bounded;` selects the final store's output protocol. Bounded output
+//! takes its capacity from that store. `reserve_previous` is arena-terminal only:
+//! the last validated count is an initial capacity hint (zero on first use),
+//! never a bound; full counter and BE-Abort checks and overflow replay precede
+//! publication. Codec and provider premises are analysis obligations, not syntax.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -18,7 +23,7 @@ use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
-use syn::{Ident, LitInt, Token, braced, bracketed};
+use syn::{Ident, LitInt, Token, braced, bracketed, parenthesized};
 
 pub mod contract;
 mod evidence;
@@ -39,6 +44,7 @@ mod kw {
     syn::custom_keyword!(flatten);
     syn::custom_keyword!(compact);
     syn::custom_keyword!(tile);
+    syn::custom_keyword!(partition_k);
     syn::custom_keyword!(items);
     syn::custom_keyword!(lookup);
     syn::custom_keyword!(fold);
@@ -51,8 +57,10 @@ mod kw {
     syn::custom_keyword!(or);
     syn::custom_keyword!(sum);
     syn::custom_keyword!(len);
+    syn::custom_keyword!(workers);
     syn::custom_keyword!(output);
     syn::custom_keyword!(reserve);
+    syn::custom_keyword!(reserve_previous);
     syn::custom_keyword!(bounded);
 }
 
@@ -86,6 +94,12 @@ pub enum Term {
     Tile {
         n: usize,
         items: Option<usize>,
+        inner: Box<Term>,
+    },
+    /// Hash-route a stored valuation stream into a fixed key-disjoint cover.
+    PartitionK {
+        keys: Vec<Ident>,
+        parts: usize,
         inner: Box<Term>,
     },
     Lookup {
@@ -129,6 +143,8 @@ pub enum Len {
 pub enum Guard {
     Lt(Len, usize),
     Ge(Len, usize),
+    /// Target-wide available workers; a uniform scheduling parameter, not a size.
+    WorkersLt(usize),
     Else,
 }
 
@@ -150,6 +166,12 @@ pub struct Machine {
     pub name: Ident,
     /// Preferred per-lane item count; the planner also considers one item.
     pub items: usize,
+    /// Minimum published input rows for automatic routed provider builds.
+    /// A positive target parameter, independent of cardinality estimates or workers.
+    pub key_partition_threshold: usize,
+    /// Minimum rows for automatic routing with fewer than two workers.
+    /// Positive; the effective single-worker cutoff is the maximum of both thresholds.
+    pub key_partition_cache_threshold: usize,
     pub root: LevelNode,
     /// Target-owned storage layout for one checked dispatch's resource demands.
     /// The language derives the shape; the machine alone assigns byte sizes.
@@ -261,6 +283,8 @@ pub struct CanonToken {
 pub enum OutputProtocol {
     Count,
     Reserve,
+    /// Arena-local previous validated count as a capacity hint, with checked replay.
+    ReservePrevious,
     Bounded,
 }
 
@@ -310,6 +334,31 @@ pub enum Obligation {
     },
 }
 
+/// Checked ownership of a named publication. Views have no publication entry.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Publication {
+    BorrowHost {
+        result: String,
+        host: String,
+    },
+    Alias {
+        source: String,
+    },
+    /// `staged` publishes a raw row buffer for subsequent key routing.
+    OwnRows {
+        staged: bool,
+    },
+    /// Pure staged rows used only by this checked singleton/routed provider.
+    /// A count or routed demand owns one buffer; the worker-singleton arm may
+    /// consume the producer once without publishing a raw row buffer.
+    DeferredRows {
+        consumer: String,
+    },
+    Parts {
+        keys: Vec<String>,
+    },
+}
+
 /// Checked facts consumed by rewrites and target translations.
 #[derive(Clone, Debug)]
 pub struct Analysis {
@@ -322,8 +371,20 @@ pub struct Analysis {
     pub shapes: BTreeMap<String, Vec<Len>>,
     /// Tile interpretations in constructor preorder, grouped by definition.
     pub tilings: BTreeMap<String, Vec<Tiling>>,
+    /// Checked host-merged partial-fold modes for Group constructors in preorder,
+    /// grouped by owning definition. Ref uses retain their producer's entries.
+    pub partial_groups: BTreeMap<String, Vec<bool>>,
     pub views: BTreeSet<String>,
     pub stores: BTreeMap<String, Len>,
+    /// Publication ownership, derived once from checked provenance and consumers.
+    pub publications: BTreeMap<String, Publication>,
+    /// Pure Rows/Ref/Store provenance, before any support-equal reheading.
+    pub host_sources: BTreeMap<String, String>,
+    /// Borrowable base provenance of Tile inputs, in constructor preorder.
+    pub host_tiles: BTreeMap<String, Vec<Option<String>>>,
+    /// Native routed-provider representation: result -> provider ordinal -> inner type.
+    /// Only the canonical cq_storage sharded ABI is admitted here.
+    pub routed_providers: BTreeMap<String, BTreeMap<usize, syn::Type>>,
     pub capabilities: BTreeMap<(String, Vec<String>), Capability>,
     /// Providers evaluated directly by each named definition, excluding Ref
     /// dependencies and support-equal Map reheadings.
@@ -458,6 +519,24 @@ impl Parse for Term {
         } else if input.peek(kw::compact) {
             input.parse::<kw::compact>()?;
             Ok(Self::Compact(input.parse()?, input.parse()?))
+        } else if input.peek(kw::partition_k) {
+            input.parse::<kw::partition_k>()?;
+            let keys;
+            bracketed!(keys in input);
+            let keys = Punctuated::<Ident, Token![,]>::parse_terminated(&keys)?
+                .into_iter()
+                .collect();
+            let parts;
+            parenthesized!(parts in input);
+            let count = parse_usize(&parts)?;
+            if !parts.is_empty() {
+                return Err(parts.error("partition_k expects one partition count"));
+            }
+            Ok(Self::PartitionK {
+                keys,
+                parts: count,
+                inner: input.parse()?,
+            })
         } else if input.peek(kw::tile) {
             input.parse::<kw::tile>()?;
             let n = parse_usize(input)?;
@@ -535,6 +614,10 @@ impl ToTokens for Term {
             Self::Map(name, inner) => quote! { map #name #inner },
             Self::Flatten(inner) => quote! { flatten #inner },
             Self::Compact(name, inner) => quote! { compact #name #inner },
+            Self::PartitionK { keys, parts, inner } => {
+                let parts = integer(*parts);
+                quote! { partition_k [#(#keys),*](#parts) #inner }
+            }
             Self::Tile { n, items, inner } => {
                 let n = integer(*n);
                 let items = items.map(|n| {
@@ -656,6 +739,11 @@ impl Parse for Guard {
             input.parse::<Token![else]>()?;
             return Ok(Self::Else);
         }
+        if input.peek(kw::workers) {
+            input.parse::<kw::workers>()?;
+            input.parse::<Token![<]>()?;
+            return Ok(Self::WorkersLt(parse_usize(input)?));
+        }
         let len = input.parse()?;
         let lookahead = input.lookahead1();
         if lookahead.peek(Token![<]) {
@@ -680,6 +768,10 @@ impl ToTokens for Guard {
             Self::Ge(len, threshold) => {
                 let threshold = integer(*threshold);
                 quote! { #len >= #threshold }
+            }
+            Self::WorkersLt(threshold) => {
+                let threshold = integer(*threshold);
+                quote! { workers < #threshold }
             }
             Self::Else => quote! { else },
         });
@@ -737,6 +829,9 @@ impl Parse for OutputProtocol {
         } else if lookahead.peek(kw::reserve) {
             input.parse::<kw::reserve>()?;
             Ok(Self::Reserve)
+        } else if lookahead.peek(kw::reserve_previous) {
+            input.parse::<kw::reserve_previous>()?;
+            Ok(Self::ReservePrevious)
         } else if lookahead.peek(kw::bounded) {
             input.parse::<kw::bounded>()?;
             Ok(Self::Bounded)
@@ -751,6 +846,7 @@ impl ToTokens for OutputProtocol {
         tokens.extend(match self {
             Self::Count => quote! { count },
             Self::Reserve => quote! { reserve },
+            Self::ReservePrevious => quote! { reserve_previous },
             Self::Bounded => quote! { bounded },
         });
     }

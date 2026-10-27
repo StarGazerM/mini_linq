@@ -323,3 +323,83 @@ pub fn predicate(e: &Expr, types: &BTreeMap<String, Type>) -> Option<Expr> {
     ))
     .ok()
 }
+
+/// Host-capture admission certificate, not a CQ totality fact: unknown Rust is
+/// allowed only in closed host parameters. Row-dependent calls remain opaque.
+pub fn capture_binding(bind: &Bind, types: &BTreeMap<String, Type>) -> bool {
+    bind.for_token.is_none()
+        && matches!(bind.pattern, syn::Pat::Ident(_))
+        && bind.annotation.is_some()
+        && capture_value(&bind.expression, &types.keys().cloned().collect())
+}
+
+fn capture_value(e: &Expr, columns: &BTreeSet<String>) -> bool {
+    let free = rust::free_variables(e);
+    if !free.opaque && free.dependencies(columns).is_empty() {
+        return true;
+    }
+    let e = plain(e);
+    if let Some(variable) = variable(e) {
+        return columns.contains(&symbol_name(variable));
+    }
+    match e {
+        Expr::Binary(value)
+            if matches!(value.op, BinOp::Add(_) | BinOp::Sub(_) | BinOp::Mul(_)) =>
+        {
+            capture_value(&value.left, columns) && capture_value(&value.right, columns)
+        }
+        Expr::Binary(value) if matches!(value.op, BinOp::Div(_)) => {
+            literal(&value.right)
+                .is_some_and(|value| value.base10_parse::<u128>().is_ok_and(|value| value != 0))
+                && capture_value(&value.left, columns)
+        }
+        Expr::If(value) => {
+            capture_condition(&value.cond, columns)
+                && branch(&value.then_branch).is_some_and(|value| capture_value(value, columns))
+                && value
+                    .else_branch
+                    .as_ref()
+                    .is_some_and(|(_, value)| match plain(value) {
+                        Expr::Block(block) => {
+                            branch(&block.block).is_some_and(|value| capture_value(value, columns))
+                        }
+                        value => capture_value(value, columns),
+                    })
+        }
+        _ => false,
+    }
+}
+
+/// A row predicate whose only opaque subexpressions can be host-captured.
+pub fn capture_predicate(e: &Expr, types: &BTreeMap<String, Type>) -> bool {
+    capture_condition(e, &types.keys().cloned().collect())
+}
+
+fn capture_condition(e: &Expr, columns: &BTreeSet<String>) -> bool {
+    let free = rust::free_variables(e);
+    if !free.opaque && free.dependencies(columns).is_empty() {
+        return true;
+    }
+    match plain(e) {
+        Expr::Unary(value) if matches!(value.op, UnOp::Not(_)) => {
+            capture_condition(&value.expr, columns)
+        }
+        Expr::Binary(value) if matches!(value.op, BinOp::And(_) | BinOp::Or(_)) => {
+            capture_condition(&value.left, columns) && capture_condition(&value.right, columns)
+        }
+        Expr::Binary(value)
+            if matches!(
+                value.op,
+                BinOp::Eq(_)
+                    | BinOp::Ne(_)
+                    | BinOp::Lt(_)
+                    | BinOp::Le(_)
+                    | BinOp::Gt(_)
+                    | BinOp::Ge(_)
+            ) =>
+        {
+            capture_value(&value.left, columns) && capture_value(&value.right, columns)
+        }
+        _ => false,
+    }
+}

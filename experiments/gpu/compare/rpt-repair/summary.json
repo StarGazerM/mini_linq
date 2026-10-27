@@ -1,0 +1,394 @@
+{
+  "scope": "All 29 registered CASES, authored queries/SQL unchanged: 27 retail-derived plus canonical Q06/Q19, not the complete ordered canonical Q1-Q22 benchmark.",
+  "branch": "Measurement worktree fix/rpt, based on codex/all-answers at 3ee53e65; source fingerprints identify the measured revision.",
+  "history": {
+    "motivation": "Old planning matrix: H07 25.232->33.934 ms with builds8->15; H08 26.082->45.830 ms with builds8->19. Later checked absorption, bitmap enumeration and duplicate-filter evidence motivated the first fixes. Literal/predicate contracts remain distinct."
+  },
+  "verification": {
+    "transfer_queries": 29,
+    "scales": [
+      "0.1",
+      "1"
+    ],
+    "transfer_measured_executions_sf1": 290,
+    "all_measured_answers": "exact vs DuckDB witnesses; every warm/measured/counted execution checked by production worker",
+    "repeated_counters": "identical across repeated SF1 runs per query/configuration",
+    "workspace_tests": 941,
+    "planner_workspace_tests": 31,
+    "grouped_duckdb_tests": 14
+  },
+  "timing_method": "SF1, fresh query construction and typed output collection, load excluded; ABBA configuration order, two batches of five measurements per configuration, one warmup per batch. Table reports pooled median of10. All compilation/tests completed before timings.",
+  "fixes": [
+    {
+      "cause": "H09 disconnected Part x Orders before Lineitem; extra transfer disabled by opaque guard, so written product survived",
+      "fix": "Prefer connected atoms within maximal top-level atom runs; keep every predicate/binding/block boundary fixed",
+      "sf0_1_before_pairs": 161250000,
+      "sf0_1_after_first_join_rows": 32160,
+      "sf0_1_before_lookups": 161347555,
+      "sf0_1_after_lookups": 129715,
+      "sf1_transfer_median_ms": 487.8065,
+      "baseline_limit": "120s whole-worker timeout at SF1, not a measured query duration; unchanged written default not rerun"
+    },
+    {
+      "cause": "H21 root semijoin repeated exact membership immediately before same-support join",
+      "fix": "Checked left-operand absorption, AFTER right-side support pruning; shared-witness/opaque/negative restrictions retained",
+      "removed_membership_checks_sf1": 356794,
+      "final_default_and_transfer_lookups": 11452866
+    },
+    {
+      "cause": "Left-first absorption ablation retained backward support versions and removed H03/D85 scan filters",
+      "fix": "Restore right-support precedence; LHS bypass is checked against surviving RHS",
+      "ablation_results": "left-first-ablation.json"
+    }
+  ],
+  "residual_timing_investigation": {
+    "H01_H11_H19": "Generated default/transfer run bodies byte-identical and aggregate work counters equal. H01 slow/fast batches flip between configurations. No claim of zero runtime variance.",
+    "H11_in_process": {
+      "pairs": 64,
+      "default_median_ms": 13.085916999999998,
+      "transfer_median_ms": 13.1316875,
+      "transfer_slower_pairs": 34,
+      "mean_paired_delta_ms": 0.15493215625000004,
+      "paired_mean_bootstrap_95_ms": [
+        -0.1158817187499998,
+        0.428449125
+      ],
+      "limit": "Same production query/compiler with a separate alternating driver; this does not prove identical native code layout in the standalone benchmark binary."
+    }
+  },
+  "source_sha256": {
+    "features/planners/plan/src/lib.rs": "b173e7bb273e4b67ee2af3aecfdc5c3df9f57baf6c43e4e55a64e38a9078c47b",
+    "features/workloads/src/tpch_runtime.rs": "8a62f1b1c9f6297cbf350087dc8e193cb73f7f963844ec4745122b66cdb445df",
+    "passes/cq-elaborate/src/reductions.rs": "58044ef40d9185efe52cf67f4b9dee81f013b0818ef854b8ff5a596e5f818347",
+    "languages/cq-lang-ra/src/structural/reductions.rs": "c724323dc5ed6694143f79abdcf87a6a45df33d8a226c68d21608238f69cecc1",
+    "passes/cq-print/src/positional.rs": "7526a0d9a074817e5bcf2b8f94345c5589bf68d11b83e8797f5d55df9ff64c8e",
+    "runtime/cq-storage/src/selection.rs": "e12d22fcafd5fc9ca1ba4e4ffc5d8784235cd48ca7c5855b27dcf556e06a068b"
+  },
+  "results": [
+    {
+      "query": "retail_h01",
+      "answer_rows": 4,
+      "default_ms": 1013.486187,
+      "default_lookups": 0,
+      "default_join_filter_tested": 0,
+      "transfer_ms": 1012.255146,
+      "transfer_lookups": 0,
+      "transfer_join_filter_tested": 0,
+      "transfer_over_default": 0.9987853401301462
+    },
+    {
+      "query": "retail_h02",
+      "answer_rows": 460,
+      "default_ms": 37.3920625,
+      "default_lookups": 1940739,
+      "default_join_filter_tested": 0,
+      "transfer_ms": 37.3576245,
+      "transfer_lookups": 1940739,
+      "transfer_join_filter_tested": 0,
+      "transfer_over_default": 0.9990790023952275
+    },
+    {
+      "query": "retail_h11",
+      "answer_rows": 1048,
+      "default_ms": 12.8563545,
+      "default_lookups": 871498,
+      "default_join_filter_tested": 0,
+      "transfer_ms": 14.035938,
+      "transfer_lookups": 871498,
+      "transfer_join_filter_tested": 0,
+      "transfer_over_default": 1.0917510091993807
+    },
+    {
+      "query": "retail_h15",
+      "answer_rows": 1,
+      "default_ms": 20.07275,
+      "default_lookups": 10001,
+      "default_join_filter_tested": 0,
+      "transfer_ms": 20.0111665,
+      "transfer_lookups": 10001,
+      "transfer_join_filter_tested": 0,
+      "transfer_over_default": 0.9969319849049085
+    },
+    {
+      "query": "retail_h20",
+      "answer_rows": 186,
+      "default_ms": 143.0346875,
+      "default_lookups": 1356126,
+      "default_join_filter_tested": 0,
+      "transfer_ms": 142.192271,
+      "transfer_lookups": 1356126,
+      "transfer_join_filter_tested": 0,
+      "transfer_over_default": 0.9941104041633259
+    },
+    {
+      "query": "retail_h06",
+      "answer_rows": 1,
+      "default_ms": 18.735896,
+      "default_lookups": 0,
+      "default_join_filter_tested": 0,
+      "transfer_ms": 18.593167,
+      "transfer_lookups": 0,
+      "transfer_join_filter_tested": 0,
+      "transfer_over_default": 0.992382056347879
+    },
+    {
+      "query": "retail_h10",
+      "answer_rows": 37967,
+      "default_ms": 156.03416650000003,
+      "default_lookups": 286479,
+      "default_join_filter_tested": 0,
+      "transfer_ms": 153.12512500000003,
+      "transfer_lookups": 286479,
+      "transfer_join_filter_tested": 0,
+      "transfer_over_default": 0.9813563813281881
+    },
+    {
+      "query": "retail_h12",
+      "answer_rows": 2,
+      "default_ms": 78.2306875,
+      "default_lookups": 30988,
+      "default_join_filter_tested": 0,
+      "transfer_ms": 78.49781200000001,
+      "transfer_lookups": 30988,
+      "transfer_join_filter_tested": 0,
+      "transfer_over_default": 1.0034145743638008
+    },
+    {
+      "query": "retail_h13",
+      "answer_rows": 150000,
+      "default_ms": 261.580333,
+      "default_lookups": 300000,
+      "default_join_filter_tested": 0,
+      "transfer_ms": 262.505479,
+      "transfer_lookups": 300000,
+      "transfer_join_filter_tested": 0,
+      "transfer_over_default": 1.0035367567178684
+    },
+    {
+      "query": "retail_h14",
+      "answer_rows": 1,
+      "default_ms": 23.500937,
+      "default_lookups": 75983,
+      "default_join_filter_tested": 0,
+      "transfer_ms": 23.1515835,
+      "transfer_lookups": 75983,
+      "transfer_join_filter_tested": 0,
+      "transfer_over_default": 0.9851344863398426
+    },
+    {
+      "query": "retail_h18",
+      "answer_rows": 57,
+      "default_ms": 430.378667,
+      "default_lookups": 114,
+      "default_join_filter_tested": 0,
+      "transfer_ms": 439.01237499999996,
+      "transfer_lookups": 114,
+      "transfer_join_filter_tested": 0,
+      "transfer_over_default": 1.0200607248035367
+    },
+    {
+      "query": "retail_h19",
+      "answer_rows": 1,
+      "default_ms": 22.4095415,
+      "default_lookups": 214377,
+      "default_join_filter_tested": 0,
+      "transfer_ms": 23.4795205,
+      "transfer_lookups": 214377,
+      "transfer_join_filter_tested": 0,
+      "transfer_over_default": 1.0477465815175202
+    },
+    {
+      "query": "retail_h04",
+      "answer_rows": 52523,
+      "default_ms": 29.417604,
+      "default_lookups": 57218,
+      "default_join_filter_tested": 0,
+      "transfer_ms": 29.4093545,
+      "transfer_lookups": 57218,
+      "transfer_join_filter_tested": 0,
+      "transfer_over_default": 0.9997195726749194
+    },
+    {
+      "query": "retail_h04_not_exists",
+      "answer_rows": 4695,
+      "default_ms": 60.731833,
+      "default_lookups": 57218,
+      "default_join_filter_tested": 0,
+      "transfer_ms": 60.4217085,
+      "transfer_lookups": 57218,
+      "transfer_join_filter_tested": 0,
+      "transfer_over_default": 0.9948935428970175
+    },
+    {
+      "query": "retail_h16",
+      "answer_rows": 118274,
+      "default_ms": 18.7593335,
+      "default_lookups": 147905,
+      "default_join_filter_tested": 0,
+      "transfer_ms": 18.835228999999998,
+      "transfer_lookups": 147905,
+      "transfer_join_filter_tested": 0,
+      "transfer_over_default": 1.0040457460815437
+    },
+    {
+      "query": "retail_h22",
+      "answer_rows": 14086,
+      "default_ms": 12.001167,
+      "default_lookups": 42015,
+      "default_join_filter_tested": 0,
+      "transfer_ms": 12.0770835,
+      "transfer_lookups": 42015,
+      "transfer_join_filter_tested": 0,
+      "transfer_over_default": 1.0063257598198576
+    },
+    {
+      "query": "retail_h03",
+      "answer_rows": 11620,
+      "default_ms": 29.001125000000002,
+      "default_lookups": 4030119,
+      "default_join_filter_tested": 3241776,
+      "transfer_ms": 29.010562,
+      "transfer_lookups": 4030119,
+      "transfer_join_filter_tested": 3241776,
+      "transfer_over_default": 1.0003254011697822
+    },
+    {
+      "query": "retail_h05",
+      "answer_rows": 7242,
+      "default_ms": 28.280041500000003,
+      "default_lookups": 7299247,
+      "default_join_filter_tested": 6001215,
+      "transfer_ms": 28.8314795,
+      "transfer_lookups": 7299247,
+      "transfer_join_filter_tested": 6001215,
+      "transfer_over_default": 1.0194991934506177
+    },
+    {
+      "query": "retail_h07",
+      "answer_rows": 5501,
+      "default_ms": 25.247395500000003,
+      "default_lookups": 3814092,
+      "default_join_filter_tested": 3474153,
+      "transfer_ms": 25.1170205,
+      "transfer_lookups": 3837538,
+      "transfer_join_filter_tested": 3474153,
+      "transfer_over_default": 0.994836101014855
+    },
+    {
+      "query": "retail_h07_block",
+      "answer_rows": 5501,
+      "default_ms": 55.2337085,
+      "default_lookups": 3657605,
+      "default_join_filter_tested": 0,
+      "transfer_ms": 52.8366875,
+      "transfer_lookups": 3681051,
+      "transfer_join_filter_tested": 0,
+      "transfer_over_default": 0.9566022078709416
+    },
+    {
+      "query": "retail_h08",
+      "answer_rows": 2603,
+      "default_ms": 26.2710205,
+      "default_lookups": 6989212,
+      "default_join_filter_tested": 6001215,
+      "transfer_ms": 25.69225,
+      "transfer_lookups": 6994418,
+      "transfer_join_filter_tested": 6001215,
+      "transfer_over_default": 0.9779692418115239
+    },
+    {
+      "query": "retail_h09",
+      "answer_rows": 319402,
+      "transfer_ms": 487.8065,
+      "transfer_lookups": 1288280,
+      "transfer_join_filter_tested": 0,
+      "advised_ms": 483.407896,
+      "advised_lookups": 1288280,
+      "advised_join_filter_tested": 0,
+      "default_status": "unchanged written-order worker timed out at 120 seconds before repair; not rerun at SF1"
+    },
+    {
+      "query": "retail_h21_positive",
+      "answer_rows": 302284,
+      "default_ms": 137.18200000000002,
+      "default_lookups": 11452866,
+      "default_join_filter_tested": 6001215,
+      "transfer_ms": 136.0254375,
+      "transfer_lookups": 11452866,
+      "transfer_join_filter_tested": 6001215,
+      "transfer_over_default": 0.9915691380793398
+    },
+    {
+      "query": "retail_d19",
+      "answer_rows": 8962,
+      "default_ms": 16.770833500000002,
+      "default_lookups": 6252536,
+      "default_join_filter_tested": 6001215,
+      "transfer_ms": 16.608542,
+      "transfer_lookups": 6252536,
+      "transfer_join_filter_tested": 6001215,
+      "transfer_over_default": 0.9903229914005167
+    },
+    {
+      "query": "retail_d27",
+      "answer_rows": 357,
+      "default_ms": 12.808,
+      "default_lookups": 6246919,
+      "default_join_filter_tested": 0,
+      "transfer_ms": 12.567750499999999,
+      "transfer_lookups": 6247990,
+      "transfer_join_filter_tested": 0,
+      "transfer_over_default": 0.9812422314178638
+    },
+    {
+      "query": "retail_d72_inner",
+      "answer_rows": 5344,
+      "default_ms": 98.7279795,
+      "default_lookups": 2259442,
+      "default_join_filter_tested": 1500000,
+      "transfer_ms": 98.9945835,
+      "transfer_lookups": 2259442,
+      "transfer_join_filter_tested": 1500000,
+      "transfer_over_default": 1.0027003895081232
+    },
+    {
+      "query": "retail_d85",
+      "answer_rows": 8962,
+      "default_ms": 19.2675205,
+      "default_lookups": 7129784,
+      "default_join_filter_tested": 6836299,
+      "transfer_ms": 19.252875,
+      "transfer_lookups": 7129784,
+      "transfer_join_filter_tested": 6836299,
+      "transfer_over_default": 0.9992398866268236
+    },
+    {
+      "query": "tpch_q06",
+      "answer_rows": 1,
+      "default_ms": 17.065396,
+      "default_lookups": 0,
+      "default_join_filter_tested": 0,
+      "transfer_ms": 17.143833,
+      "transfer_lookups": 0,
+      "transfer_join_filter_tested": 0,
+      "transfer_over_default": 1.0045962601746834
+    },
+    {
+      "query": "tpch_q19",
+      "answer_rows": 1,
+      "default_ms": 14.9808955,
+      "default_lookups": 1502331,
+      "default_join_filter_tested": 1500048,
+      "transfer_ms": 14.8257295,
+      "transfer_lookups": 1502331,
+      "transfer_join_filter_tested": 1500048,
+      "transfer_over_default": 0.9896424082258634
+    }
+  ],
+  "raw": "final-results.json",
+  "limits": [
+    "Written-order H09 baseline still times out; only transfer scheduling changed.",
+    "This fixes demonstrated implementation/work regressions, not full LargestRoot/SafeSubjoin guarantees or all absolute gaps versus DuckDB.",
+    "H11 standalone batches still vary; no additional RPT work is present in its identical generated functions."
+  ]
+}

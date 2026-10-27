@@ -1,0 +1,80 @@
+TPC-H-shaped retail CPU configurations
+======================================
+
+Every retail source exposes default, par, radix, radix_retained, no-reduce,
+transfer, le, le_runs, and advised. Kernel and full-query shells also retain
+the matched built_hash/built_radix materialization comparison.
+Standalone/staged runners use standalone_configs! and compile the entire authored
+runner for each configuration; the same CQ is not copied between configurations.
+Only advised applies stage-local query! advice. Transfer applies
+cq_planners::order(transfer) independently to each authored CQ stage, retaining
+the same preprocessing, materialization, aggregate heads, and answer contracts.
+Most advice follows experiments/gpu/tpch/src/advice.rs; H05 retains its CPU
+cycle-closing order and H09 its connected Part-first written order.
+See tpch-methodology.txt for pipeline, timing, and correctness semantics.
+
+All 29 entries in src/tpch.rs CASES expose default and transfer: 27 retail-derived
+cases plus full tpch_q06 and tpch_q19, which retain their own configuration shells.
+This inventory is not the complete canonical ordered TPC-H Q1-Q22 suite.
+No input projection or cached data schema changes are needed for transfer.
+The historical validation table below does not report transfer validation.
+Current transfer validation covers all 29 cases at SF0.1 and SF1, with exact
+DuckDB witnesses and separate deterministic counters. See
+experiments/gpu/compare/rpt-repair/summary.json from the repository root for the full
+matrix, H09 timeout control, paired timing method and remaining limitations.
+
+SF0.1 configuration validation (2026-10-24)
+------------------------------------------
+Each cell below was exercised with CARGO_BUILD_JOBS=4 and:
+
+  cargo xtask bench --tpch --sf 0.1 --runs 1 --query retail_QUERY --config CONFIG
+
+Run from features/workloads. "exact" means the selected configuration's TSV
+correctness column is "pass": exact complete-answer comparison with DuckDB,
+including warm, measured, and independently instrumented counter executions.
+Raw reports are target/bench/tpch-0.1-retail_QUERY-config-CONFIG.tsv and .json;
+command logs are target/bench/config-validation/QUERY-CONFIG.log.
+These one-run checks validate answers, not stable performance rankings.
+
+The 26-query GPU comparison suite excludes H14. H14 is additionally checked
+here because it remains a standalone CPU catalog query and uses the same macro.
+No LE or le_runs configuration was rejected by the planner.
+
+| Query | default | no-reduce | le | le_runs | advised |
+|---|---|---|---|---|---|
+| retail_d19 | exact | exact | exact | exact | exact |
+| retail_d27 | exact | exact | exact | exact | exact |
+| retail_d72_inner | exact | exact | exact | exact | exact |
+| retail_d85 | exact | exact | exact | exact | exact |
+| retail_h01 | exact | exact | exact | exact | exact |
+| retail_h02 | exact | exact | exact | exact | exact |
+| retail_h03 | exact | exact | exact | exact | exact |
+| retail_h04 | exact | exact | exact | exact | exact |
+| retail_h04_not_exists | exact | exact | exact | exact | exact |
+| retail_h05 | exact | exact | exact | exact | exact |
+| retail_h06 | exact | exact | exact | exact | exact |
+| retail_h07 | exact | exact | exact | exact | exact |
+| retail_h07_block | exact | exact | exact | exact | exact |
+| retail_h08 | exact | exact | exact | exact | exact |
+| retail_h09 | exact | exact | exact | exact | exact |
+| retail_h10 | exact | exact | exact | exact | exact |
+| retail_h11 | exact | exact | exact | exact | exact |
+| retail_h12 | exact | exact | exact | exact | exact |
+| retail_h13 | exact | exact | exact | exact | exact |
+| retail_h14 | exact | exact | exact | exact | exact |
+| retail_h15 | exact | exact | exact | exact | exact |
+| retail_h16 | exact | exact | exact | exact | exact |
+| retail_h18 | exact | exact | exact | exact | exact |
+| retail_h19 | exact | exact | exact | exact | exact |
+| retail_h20 | exact | exact | exact | exact | exact |
+| retail_h21_positive | exact | exact | exact | exact | exact |
+| retail_h22 | exact | exact | exact | exact | exact |
+
+Additional checks:
+- GPU source/encoding tests: 10 passed, using cargo oxide test --arch sm_89 --
+  --release -p cq-gpu-tpch --lib source::. The importer unwraps the CPU shell and
+  retains all stages, aggregate heads, preprocessing, and materialization.
+- mini-linq-macros library tests: 15 passed. The generic plan parser now accepts
+  no_reduce with explicit reduce advice (needed by H21 and D27); skip still must
+  name an existing Masks reduction, so no_reduce + skip is rejected semantically.
+- python3 doc/formal/check.py: 243 rules inventoried; no conformance claim.

@@ -261,7 +261,15 @@ physical_rewrite!(merge_joins);
 physical_rewrite!(canon_prefixes);
 physical_rewrite!(smallest_intersections);
 physical_rewrite!(lazy_semijoins);
-physical_rewrite!(build_host_reads);
+/// Retain admissible integral keyed host reads before provider selection.
+#[proc_macro]
+pub fn build_host_reads(input: TokenStream) -> TokenStream {
+    cq_stage::rewrite::<cq_lang_physical::Program>(
+        input.into(),
+        cq_structure_selection::build_host_reads,
+    )
+    .into()
+}
 physical_rewrite!(host_sets);
 physical_rewrite!(retain_streams);
 physical_rewrite!(hoist);
@@ -277,7 +285,7 @@ pub fn membership(input: TokenStream) -> TokenStream {
 /// Change only the representation types matched by `selector => RustType`.
 #[proc_macro]
 pub fn retype(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), cq_rewrite_passes::retype).into()
+    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), cq_structure_selection::retype).into()
 }
 
 /// Record an exact join filter on a named eligible scan occurrence.

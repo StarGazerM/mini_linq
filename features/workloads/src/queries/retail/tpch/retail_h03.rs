@@ -10,6 +10,7 @@ JOIN lineitem l ON l.l_orderkey = o.o_orderkey
 WHERE c.c_mktsegment = 'BUILDING' AND o.o_orderdate < DATE '1995-03-15'
 AND l.l_shipdate > DATE '1995-03-15'"#;
     candidate hypergraph;
+    advise plan(no_reduce, order(Customer, Orders, Lineitem));
     setup { let cutoff = date("1995-03-15"); }
     relations {
         relation Customer => customer(c_custkey: i64, c_mktsegment: String);

@@ -96,12 +96,15 @@ mod host;
 mod instrument;
 mod membership;
 mod ordered;
+pub mod parallel;
 pub mod rows;
 mod radix_run;
 mod radix_spline;
 mod sorted_run;
 pub mod sequence;
 pub mod provider_contract;
+pub mod sharded;
+pub use sharded::Sharded;
 mod trie;
 
 pub use answers::{Answers, GroupedAnswers, SingleGroup};

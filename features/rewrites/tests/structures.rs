@@ -1,5 +1,5 @@
 use cq_lang_structures::{self as ir, Structure};
-use cq_rewrite_passes::retype;
+use cq_structure_selection::retype;
 use cq_testkit::PassCase;
 use quote::{ToTokens, quote};
 

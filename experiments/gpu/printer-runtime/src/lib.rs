@@ -26,6 +26,7 @@ pub struct Timings {
 
 thread_local! {
     static LAST_TIMINGS: std::cell::Cell<Option<Timings>> = const { std::cell::Cell::new(None) };
+    static ARENA_TIMING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 pub fn last_run_timings() -> Option<Timings> {
@@ -34,6 +35,17 @@ pub fn last_run_timings() -> Option<Timings> {
 
 pub fn take_last_timings() -> Option<Timings> {
     LAST_TIMINGS.with(std::cell::Cell::take)
+}
+
+/// Enable synchronizing phase measurements for arena invocations on this thread.
+/// Ordinary Sequence outputs retain their existing timing behavior.
+pub fn enable_arena_timing(enabled: bool) {
+    ARENA_TIMING.with(|timing| timing.set(enabled));
+    LAST_TIMINGS.with(|last| last.set(None));
+}
+
+pub fn arena_timing_enabled() -> bool {
+    ARENA_TIMING.with(std::cell::Cell::get)
 }
 
 /// Publish phase measurements from a checked external target interpreter.

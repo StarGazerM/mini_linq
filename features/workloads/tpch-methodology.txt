@@ -17,16 +17,30 @@ LIKE patterns, HAVING, AVG composition and COUNT DISTINCT are not falsely
 reported missing merely because their SQL keywords are absent.
 
 Data and correctness
-The xtask oracle uses DuckDB tpch CALL dbgen at SF 0.1 and SF 1. Generated
+The xtask oracle uses DuckDB tpch CALL dbgen at SF 0.1, SF 1 and SF 10. Generated
 DuckDB tables, per-query projected Parquet files, manifests, executable crates,
 Cargo timing reports, answer witnesses and output reports live under target/bench.
 Exports contain only declared columns, in declaration order, without filters,
 preaggregation or casts. Typed relation_loaders! read the Parquet schemas into
 Vec hosts. The file cache is local and engine-version/projection keyed.
+H01 and H13 author physical-row key evidence in their shared query sources,
+independent of configuration. H01 retains Lineitem(l_orderkey,l_linenumber);
+H13 retains Customer(c_custkey) and QualifiedOrders(order_key), the latter
+preserved by filtering Orders and projecting its unique o_orderkey. These are
+dbgen key premises, not estimated cardinalities or assertions about group keys.
+Hand-built fixtures for these workloads must satisfy the same uniqueness
+contract; equal aggregate values on different identities remain valid inputs.
+The standalone evidence prefix uses the Sequence Evidence grammar and is
+forwarded to the checked sequence lowering phase for every CPU configuration.
+The GPU importer preserves the same stage-local evidence and merges it with
+its existing manifest and planning evidence before Sequence planning.
 
-Every fresh executable/configuration is checked against authored DuckDB SQL on
-SF 0.1 before any query measurements, including invocations requesting SF 1.
-The requested scale is also checked before each configuration's measured runs.
+For SF 1 and SF 10, every executable/configuration is checked against authored
+DuckDB SQL on SF 0.1 before any query measurements. At SF 0.1 the timed workers
+check exact answers before sampling. The requested scale is also checked before
+each configuration's measured runs. `--runs 0` only verifies: one untimed
+exact execution per selected configuration at the requested scale, without
+counting workers or DuckDB timing. `--config a,b` runs exactly those names.
 Comparison uses sets of complete output tuples. Only columns typed DECIMAL by
 DuckDB normalize trailing fractional zeroes; VARCHAR values are unchanged.
 No float tolerance is used. Q6/Q19 keep lineitem primary keys through distinct
@@ -35,19 +49,40 @@ Products/sums use i128 coefficients at scale four. Empty scalar SUM yields NULL.
 Every timed run must reproduce its warm answer. Two separate untimed counting executions must agree exactly.
 
 Configurations
-Each query compiles the same authored clauses under named configurations:
+Every retail query compiles the same authored clauses in these configurations:
 - default: the written/coarse CQ planner with Masks reductions and default
   recorded Physical decisions; this is already a reduced baseline;
-- hypergraph candidate: written/coarse planning with tree reductions in
-  eligible acyclic scopes and block-aware reductions where applicable;
-  it is not uniformly "default plus Yannakakis";
-- generic_smallest candidate: fine variable-at-a-time planner, canonical
-  projections and smallest intersection driver on H05, H09, H21, D72, D85;
-- generic-smallest candidate: the same Fine/canonical/smallest pass pipeline for full Q6 and Q19.
+- no-reduce: the written planner with implicit semijoin reduction disabled;
+- par: the same authored query with Sequence Tasks decomposition, grading and
+  translation, retaining stage-local evidence;
+- radix and radix_retained: the same-plan provider comparisons described below;
 - transfer: the CQ planner's exact forward/backward semijoin schedule, rooted
   at the written outer stream, over its Masks reductions. This configuration
   does not select the separate Sequence lookup_first family, a vectorized
-  blocked-Bloom RPT implementation, or RPT+ in-flight adaptive cancellation.
+  blocked-Bloom RPT implementation, or RPT+ in-flight adaptive cancellation;
+- le: the Lookup & Expand planner;
+- le_runs: Lookup & Expand with sorted_runs and retain_lookups Structures rewrites;
+- advised: checked stage-local CPU order/reduction advice. Most advice follows
+  experiments/gpu/tpch/src/advice.rs without device-only storage choices;
+  H05 keeps the CPU cycle-closing order documented below. H10/H14 use the
+  grouped GPU route's unreduced written order.
+Standalone queries use standalone_configs!, authoring their runner and each CQ
+body once. Each query! stage supplies its own advice, applied only by advised,
+so that configuration retains per-stage order rather than applying one stage's
+order to every rule. Transfer instead selects its planner for every CQ stage
+in the same runner, preserving preprocessing and materialization.
+The GPU importer unwraps this shared shell without applying the CPU pipeline.
+Kernel queries also retain their existing candidates:
+- hypergraph: written/coarse planning with tree reductions in eligible acyclic
+  scopes and block-aware reductions where applicable; it is not uniformly
+  "default plus Yannakakis";
+- generic_smallest: fine variable-at-a-time planning, canonical projections and
+  smallest intersection driver on H05, H09, H21, D72, D85;
+- optional zone configurations.
+Full Q6/Q19 retain their separate candidates, including generic-smallest using
+that same Fine/canonical/smallest pipeline. All 29 registered CASES (27 retail-
+derived and two full queries) offer default and transfer; this is not canonical
+Q1-Q22 coverage. Transfer does not change input projections or cached schemas.
 All hosts are typed Vecs loaded from the same projections. This is a small
 candidate set, not an exhaustive planner search. The metadata records the
 best measured configuration for each query/scale from this set; candidates
@@ -154,10 +189,11 @@ aggregate extension expects borrowed measure columns. Both phases and that
 intermediate allocation are timed.
 
 Compilation
-A generated isolated binary crate per query contains its named configurations
-plus the shared worker. Cargo release --timings supplies that binary unit's duration,
-excluding separate dependency units. The source is freshly rewritten before
-each measurement so an up-to-date no-op build cannot report a compile time.
+A generated isolated binary crate per query contains its configurations plus
+the shared worker. Cargo release --timings supplies that binary unit's duration,
+excluding separate dependency units. Proc macros (the compiler) build at
+opt-level 3. Generated sources are stable, so an unchanged worker is reused and
+reports compile_unit_ms NA; edit any input to obtain a fresh compile time.
 This duration includes macro expansion, Rust checking, optimization/codegen and
 linking; it is not an isolated measurement of proc-macro CPU time. Dependency
 versions are seeded from the repository lock and the release build is locked.

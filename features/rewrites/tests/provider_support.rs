@@ -1,5 +1,6 @@
 use cq_lang_structures::{self as ir, ProviderCapability, Structure};
-use cq_rewrite_passes::{expand_lookups, join_filter, retain_lookups, retype, sorted_runs};
+use cq_rewrite_passes::{expand_lookups, join_filter, retain_lookups, sorted_runs};
+use cq_structure_selection::retype;
 use quote::quote;
 use std::{
     cell::RefCell,

@@ -67,6 +67,10 @@ mod tests {
                     0,
                 ),
             ],
+            method_descriptor: vec![
+                (method, sym("void(java.lang.String[])")),
+                (abstract_method, sym("void()")),
+            ],
             _assignheapallocation: vec![(
                 sym("allocation"),
                 0,

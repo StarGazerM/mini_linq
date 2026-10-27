@@ -1,0 +1,374 @@
+{
+  "answer_rows": 1,
+  "bag_insertions": 2000000,
+  "build_rows_verified": false,
+  "candidate_insertions": 0,
+  "distinct_insertions": 0,
+  "index_builds": 0,
+  "median_ms": 1069.6428369999999,
+  "operator_rows": [
+    {
+      "inputs": [],
+      "key": "Lineitem",
+      "kind": "RENAME",
+      "result": "r0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 59986052
+    },
+    {
+      "inputs": [
+        "r0"
+      ],
+      "key": "discount,line_number,order_key,part_key,price,quantity,ship_instruction,ship_mode",
+      "kind": "SELECT",
+      "result": "r1",
+      "rows_in": 59986052,
+      "rows_inserted": 0,
+      "rows_out": 8566164
+    },
+    {
+      "inputs": [
+        "r1"
+      ],
+      "key": "",
+      "kind": "POINT",
+      "result": "r2",
+      "rows_in": 8566164,
+      "rows_inserted": 0,
+      "rows_out": 2141904
+    },
+    {
+      "inputs": [],
+      "key": "Part",
+      "kind": "RENAME",
+      "result": "r3",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 2000000
+    },
+    {
+      "inputs": [
+        "r2",
+        "r3"
+      ],
+      "key": "part_key",
+      "kind": "SEMI",
+      "result": "r4",
+      "rows_in": 2141904,
+      "rows_inserted": 0,
+      "rows_out": 2141904
+    },
+    {
+      "inputs": [
+        "r4",
+        "r3"
+      ],
+      "key": "part_key",
+      "kind": "PROBE",
+      "result": "r5",
+      "rows_in": 2141904,
+      "rows_inserted": 0,
+      "rows_out": 2141904
+    },
+    {
+      "inputs": [
+        "r5"
+      ],
+      "key": "brand,container,discount,line_number,order_key,part_key,price,quantity,ship_instruction,ship_mode,size",
+      "kind": "GUARD",
+      "result": "r6",
+      "rows_in": 2141904,
+      "rows_inserted": 0,
+      "rows_out": 1134
+    },
+    {
+      "inputs": [
+        "r6"
+      ],
+      "key": "brand,container,discount,line_number,order_key,part_key,price,quantity,revenue_units,ship_instruction,ship_mode,size",
+      "kind": "BIND",
+      "result": "r7",
+      "rows_in": 1134,
+      "rows_inserted": 0,
+      "rows_out": 1134
+    },
+    {
+      "inputs": [
+        "r7"
+      ],
+      "key": "brand,container,discount,line_number,order_key,part_key,price,quantity,revenue_units,ship_instruction,ship_mode,size",
+      "kind": "PROJECT",
+      "result": "r8",
+      "rows_in": 1134,
+      "rows_inserted": 0,
+      "rows_out": 1134
+    },
+    {
+      "inputs": [
+        "r8"
+      ],
+      "key": "__cq_6_0",
+      "kind": "GROUP",
+      "result": "r9",
+      "rows_in": 1134,
+      "rows_inserted": 0,
+      "rows_out": 1
+    },
+    {
+      "inputs": [
+        "r3"
+      ],
+      "key": "part_key",
+      "kind": "INDEX_BUILD",
+      "result": "r3.fallback.part_key",
+      "rows_in": 2000000,
+      "rows_inserted": 2000000,
+      "rows_out": 2000000
+    },
+    {
+      "inputs": [
+        "r8"
+      ],
+      "key": "",
+      "kind": "DEDUP",
+      "result": "r8.dedup",
+      "rows_in": 1134,
+      "rows_inserted": 1134,
+      "rows_out": 1134
+    },
+    {
+      "inputs": [
+        "r9"
+      ],
+      "key": "",
+      "kind": "ANSWER",
+      "result": "r9.answer",
+      "rows_in": 1,
+      "rows_inserted": 0,
+      "rows_out": 1
+    }
+  ],
+  "operators": [
+    {
+      "calls": 1,
+      "elapsed_ms": 1069.642627,
+      "id": 0,
+      "inputs": [],
+      "key": "retail_h19",
+      "kind": "QUERY",
+      "program": 0,
+      "result": "query",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 1
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 1066.992216,
+      "id": 1,
+      "inputs": [],
+      "key": "Lineitem",
+      "kind": "RENAME",
+      "program": 1,
+      "result": "r0",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 59986052
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 1066.992436,
+      "id": 2,
+      "inputs": [
+        "r0"
+      ],
+      "key": "discount,line_number,order_key,part_key,price,quantity,ship_instruction,ship_mode",
+      "kind": "SELECT",
+      "program": 1,
+      "result": "r1",
+      "rows_in": 59986052,
+      "rows_inserted": 0,
+      "rows_out": 8566164
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 1066.992596,
+      "id": 3,
+      "inputs": [
+        "r1"
+      ],
+      "key": "",
+      "kind": "POINT",
+      "program": 1,
+      "result": "r2",
+      "rows_in": 8566164,
+      "rows_inserted": 0,
+      "rows_out": 2141904
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 3.332339,
+      "id": 4,
+      "inputs": [],
+      "key": "Part",
+      "kind": "RENAME",
+      "program": 1,
+      "result": "r3",
+      "rows_in": 0,
+      "rows_inserted": 0,
+      "rows_out": 2000000
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 1066.992827,
+      "id": 5,
+      "inputs": [
+        "r2",
+        "r3"
+      ],
+      "key": "part_key",
+      "kind": "SEMI",
+      "program": 1,
+      "result": "r4",
+      "rows_in": 2141904,
+      "rows_inserted": 0,
+      "rows_out": 2141904
+    },
+    {
+      "calls": 2141904,
+      "elapsed_ms": 52.72612,
+      "id": 6,
+      "inputs": [
+        "r4",
+        "r3"
+      ],
+      "key": "part_key",
+      "kind": "PROBE",
+      "program": 1,
+      "result": "r5",
+      "rows_in": 2141904,
+      "rows_inserted": 0,
+      "rows_out": 2141904
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 1066.993748,
+      "id": 7,
+      "inputs": [
+        "r5"
+      ],
+      "key": "brand,container,discount,line_number,order_key,part_key,price,quantity,ship_instruction,ship_mode,size",
+      "kind": "GUARD",
+      "program": 1,
+      "result": "r6",
+      "rows_in": 2141904,
+      "rows_inserted": 0,
+      "rows_out": 1134
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 1066.993979,
+      "id": 8,
+      "inputs": [
+        "r6"
+      ],
+      "key": "brand,container,discount,line_number,order_key,part_key,price,quantity,revenue_units,ship_instruction,ship_mode,size",
+      "kind": "BIND",
+      "program": 1,
+      "result": "r7",
+      "rows_in": 1134,
+      "rows_inserted": 0,
+      "rows_out": 1134
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 1066.994199,
+      "id": 9,
+      "inputs": [
+        "r7"
+      ],
+      "key": "brand,container,discount,line_number,order_key,part_key,price,quantity,revenue_units,ship_instruction,ship_mode,size",
+      "kind": "PROJECT",
+      "program": 1,
+      "result": "r8",
+      "rows_in": 1134,
+      "rows_inserted": 0,
+      "rows_out": 1134
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 0.000171,
+      "id": 10,
+      "inputs": [
+        "r8"
+      ],
+      "key": "__cq_6_0",
+      "kind": "GROUP",
+      "program": 1,
+      "result": "r9",
+      "rows_in": 1134,
+      "rows_inserted": 0,
+      "rows_out": 1
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 182.9269,
+      "id": 11,
+      "inputs": [
+        "r3"
+      ],
+      "key": "part_key",
+      "kind": "INDEX_BUILD",
+      "program": 1,
+      "result": "r3.fallback.part_key",
+      "rows_in": 2000000,
+      "rows_inserted": 2000000,
+      "rows_out": 2000000
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 1067.29724,
+      "id": 12,
+      "inputs": [
+        "r8"
+      ],
+      "key": "",
+      "kind": "DEDUP",
+      "program": 1,
+      "result": "r8.dedup",
+      "rows_in": 1134,
+      "rows_inserted": 1134,
+      "rows_out": 1134
+    },
+    {
+      "calls": 1,
+      "elapsed_ms": 0.000301,
+      "id": 13,
+      "inputs": [
+        "r9"
+      ],
+      "key": "",
+      "kind": "ANSWER",
+      "program": 1,
+      "result": "r9.answer",
+      "rows_in": 1,
+      "rows_inserted": 0,
+      "rows_out": 1
+    }
+  ],
+  "rows_copied": 0,
+  "rows_enumerated": 0,
+  "samples_ms": [
+    1062.2957820000001,
+    1068.84075,
+    1069.6428369999999,
+    1072.780072,
+    1077.12414
+  ],
+  "set_insertions": 1134,
+  "top_level_clock_verified": true,
+  "top_level_ms": 1069.642627,
+  "tree": "QUERY            query [retail_h19] inputs= rows=1 in=0 inserted=0 t=1069.643ms\n  ANSWER           r9.answer [] inputs=r9 rows=1 in=1 inserted=0 t=0.000ms\n    GROUP            r9 [__cq_6_0] inputs=r8 rows=1 in=1134 inserted=0 t=0.000ms\n      PROJECT          r8 [brand,container,discount,line_number,order_key,part_key,price,quantity,revenue_units,ship_instruction,ship_mode,size] inputs=r7 rows=1134 in=1134 inserted=0 t=1066.994ms\n        BIND             r7 [brand,container,discount,line_number,order_key,part_key,price,quantity,revenue_units,ship_instruction,ship_mode,size] inputs=r6 rows=1134 in=1134 inserted=0 t=1066.994ms\n          GUARD            r6 [brand,container,discount,line_number,order_key,part_key,price,quantity,ship_instruction,ship_mode,size] inputs=r5 rows=1134 in=2141904 inserted=0 t=1066.994ms\n            PROBE            r5 [part_key] inputs=r4,r3 rows=2141904 in=2141904 inserted=0 t=52.726ms\n              SEMI             r4 [part_key] inputs=r2,r3 rows=2141904 in=2141904 inserted=0 t=1066.993ms\n                POINT            r2 [] inputs=r1 rows=2141904 in=8566164 inserted=0 t=1066.993ms\n                  SELECT           r1 [discount,line_number,order_key,part_key,price,quantity,ship_instruction,ship_mode] inputs=r0 rows=8566164 in=59986052 inserted=0 t=1066.992ms\n                    RENAME           r0 [Lineitem] inputs= rows=59986052 in=0 inserted=0 t=1066.992ms\n                RENAME           r3 [Part] inputs= rows=2000000 in=0 inserted=0 t=3.332ms\n              RENAME           r3 [Part] inputs= rows=2000000 in=0 inserted=0 t=3.332ms (shared)\n  DEDUP            r8.dedup [] inputs=r8 rows=1134 in=1134 inserted=1134 t=1067.297ms\n    PROJECT          r8 [brand,container,discount,line_number,order_key,part_key,price,quantity,revenue_units,ship_instruction,ship_mode,size] inputs=r7 rows=1134 in=1134 inserted=0 t=1066.994ms (shared)\n  INDEX_BUILD      r3.fallback.part_key [part_key] inputs=r3 rows=2000000 in=2000000 inserted=2000000 t=182.927ms excl=179.594ms\n    RENAME           r3 [Part] inputs= rows=2000000 in=0 inserted=0 t=3.332ms (shared)\nBUILD_EXCLUSIVE_TOTAL t=179.594ms\n",
+  "verified": true
+}

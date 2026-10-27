@@ -1,0 +1,31 @@
+{
+  "configs": [
+    "default",
+    "no-reduce",
+    "transfer",
+    "le",
+    "le_runs",
+    "generic_smallest",
+    "advised"
+  ],
+  "exports": [
+    [
+      "supplier",
+      "s_suppkey,s_nationkey"
+    ],
+    [
+      "lineitem",
+      "l_orderkey,l_suppkey,l_receiptdate,l_commitdate"
+    ],
+    [
+      "orders",
+      "o_orderkey,o_orderstatus"
+    ],
+    [
+      "nation",
+      "n_nationkey,n_name"
+    ]
+  ],
+  "name": "retail_h21_positive",
+  "sql": "SELECT DISTINCT l1.l_orderkey, s.s_suppkey, l2.l_suppkey\nFROM supplier s JOIN lineitem l1 ON s.s_suppkey = l1.l_suppkey\nJOIN orders o ON o.o_orderkey = l1.l_orderkey\nJOIN nation n ON n.n_nationkey = s.s_nationkey\nJOIN lineitem l2 ON l1.l_orderkey = l2.l_orderkey\nWHERE n.n_name = 'SAUDI ARABIA' AND o.o_orderstatus = 'F'\nAND l1.l_receiptdate > l1.l_commitdate AND l2.l_suppkey <> l1.l_suppkey"
+}

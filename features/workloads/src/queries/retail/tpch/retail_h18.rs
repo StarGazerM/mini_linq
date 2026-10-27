@@ -6,7 +6,7 @@
 use cq_load::{Date, Decimal};
 
 pub const NAME: &str = "retail_h18";
-pub const CONFIGS: &[&str] = &["default", "radix", "radix_retained"];
+
 pub const EXPORTS: &[(&str, &str)] = &[
     ("lineitem", "l_orderkey,l_linenumber,l_quantity"),
     ("orders", "o_orderkey,o_custkey,o_orderdate,o_totalprice"),
@@ -43,61 +43,70 @@ pub fn load(root: &std::path::Path, config: &str) -> Result<Data, Box<dyn std::e
     assert!(CONFIGS.contains(&config), "unknown H18 configuration");
     Ok(Data {
         lineitem: <relation_loader!(Lineitem)>::parquet(
-            root.join("lineitem.parquet"), cq_load::ParquetOptions::default(),
+            root.join("lineitem.parquet"),
+            cq_load::ParquetOptions::default(),
         )?,
         orders: <relation_loader!(Orders)>::parquet(
-            root.join("orders.parquet"), cq_load::ParquetOptions::default(),
+            root.join("orders.parquet"),
+            cq_load::ParquetOptions::default(),
         )?,
         customer: <relation_loader!(Customer)>::parquet(
-            root.join("customer.parquet"), cq_load::ParquetOptions::default(),
+            root.join("customer.parquet"),
+            cq_load::ParquetOptions::default(),
         )?,
     })
 }
 
-crate::tpch_runtime::same_plan_kernel! { $;
-#[allow(non_snake_case)]
-pub(super) fn execute(data: &Data) -> Vec<Answer> {
-    let Lineitem = data.lineitem.as_slice();
-    let quantities: Vec<(i64, i64)> = query! {
-        pipeline {}
-        struct Quantities;
-        relation Lineitem(l_orderkey: i64, l_linenumber: i64, l_quantity: Decimal);
-        relation answer(order_key: i64, sum_quantity: i64);
-        answer(order_key, sum(quantity_units)) :-
-            Lineitem(order_key, line_number, quantity),
-            let quantity_units: i64 = quantity.scaled();
+crate::tpch_runtime::standalone_configs! { $;
+    pub(super) fn run(data: &Data, config: &str) -> Vec<Answer> {
+        assert!(CONFIGS.contains(&config), "unknown H18 configuration");
+        let Lineitem = data.lineitem.as_slice();
+        let quantities: Vec<(i64, i64)> = query! {
+            plan(no_reduce, order(Lineitem));
+            struct Quantities;
+            relation Lineitem(l_orderkey: i64, l_linenumber: i64, l_quantity: Decimal);
+            relation answer(order_key: i64, sum_quantity: i64);
+            answer(order_key, sum(quantity_units)) :-
+                Lineitem(order_key, line_number, quantity),
+                let quantity_units: i64 = quantity.scaled();
+        }
+        .map(|(order_key, quantity)| (*order_key, quantity))
+        .collect();
+        let Quantity = quantities.as_slice();
+        let Orders = data.orders.as_slice();
+        let Customer = data.customer.as_slice();
+        query! {
+            plan(no_reduce, order(Quantity, Orders, Customer));
+            struct Query;
+            relation Quantity(order_key: i64, sum_quantity: i64);
+            relation Orders(o_orderkey: i64, o_custkey: i64, o_orderdate: Date, o_totalprice: Decimal);
+            relation Customer(c_custkey: i64, c_name: String);
+            relation answer(customer_name: String, customer_key: i64, order_key: i64,
+                order_date: Date, total_price: i64, sum_quantity: i64);
+            answer(customer_name, customer_key, order_key, order_date, price_units, sum_quantity) :-
+                Quantity(order_key, sum_quantity), if *sum_quantity > 30000,
+                Orders(order_key, customer_key, order_date, total_price),
+                Customer(customer_key, customer_name),
+                let price_units: i64 = total_price.scaled();
+        }
+        .map(|(name, customer, order, date, price, quantity)| {
+            (name.clone(), *customer, *order, *date, price, *quantity)
+        })
+        .collect()
     }
-    .map(|(order_key, quantity)| (*order_key, quantity))
-    .collect();
-    let Quantity = quantities.as_slice();
-    let Orders = data.orders.as_slice();
-    let Customer = data.customer.as_slice();
-    query! {
-        pipeline {}
-        struct Query;
-        relation Quantity(order_key: i64, sum_quantity: i64);
-        relation Orders(o_orderkey: i64, o_custkey: i64, o_orderdate: Date, o_totalprice: Decimal);
-        relation Customer(c_custkey: i64, c_name: String);
-        relation answer(customer_name: String, customer_key: i64, order_key: i64,
-            order_date: Date, total_price: i64, sum_quantity: i64);
-        answer(customer_name, customer_key, order_key, order_date, price_units, sum_quantity) :-
-            Quantity(order_key, sum_quantity), if *sum_quantity > 30000,
-            Orders(order_key, customer_key, order_date, total_price),
-            Customer(customer_key, customer_name),
-            let price_units: i64 = total_price.scaled();
-    }
-    .map(|(name, customer, order, date, price, quantity)| {
-        (name.clone(), *customer, *order, *date, price, *quantity)
-    })
-    .collect()
-}
 }
 
 pub fn canonical(rows: &[Answer]) -> Vec<Vec<String>> {
     rows.iter()
         .map(|(name, customer, order, date, price, quantity)| {
-            vec![name.clone(), customer.to_string(), order.to_string(),
-                date.days_since_epoch().to_string(), price.to_string(), quantity.to_string()]
+            vec![
+                name.clone(),
+                customer.to_string(),
+                order.to_string(),
+                date.days_since_epoch().to_string(),
+                price.to_string(),
+                quantity.to_string(),
+            ]
         })
         .collect()
 }

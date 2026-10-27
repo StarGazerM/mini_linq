@@ -1,0 +1,34 @@
+{
+  "configs": [
+    "default",
+    "par",
+    "no-reduce",
+    "le",
+    "le_runs",
+    "advised"
+  ],
+  "exports": [
+    [
+      "part",
+      "p_partkey,p_mfgr,p_size,p_type"
+    ],
+    [
+      "partsupp",
+      "ps_partkey,ps_suppkey,ps_supplycost"
+    ],
+    [
+      "supplier",
+      "s_suppkey,s_nationkey,s_acctbal,s_name,s_address,s_phone,s_comment"
+    ],
+    [
+      "nation",
+      "n_nationkey,n_regionkey,n_name"
+    ],
+    [
+      "region",
+      "r_regionkey,r_name"
+    ]
+  ],
+  "name": "retail_h02",
+  "sql": "SELECT DISTINCT CAST(s.s_acctbal * 100 AS BIGINT),\n    s.s_name, n.n_name, p.p_partkey, p.p_mfgr, s.s_address, s.s_phone, s.s_comment\nFROM part p JOIN partsupp ps ON ps.ps_partkey = p.p_partkey\nJOIN supplier s ON s.s_suppkey = ps.ps_suppkey\nJOIN nation n ON n.n_nationkey = s.s_nationkey\nJOIN region r ON r.r_regionkey = n.n_regionkey\nWHERE p.p_size = 15 AND p.p_type LIKE '%BRASS' AND r.r_name = 'EUROPE'\nAND ps.ps_supplycost = (\n    SELECT MIN(ps2.ps_supplycost) FROM partsupp ps2\n    JOIN supplier s2 ON s2.s_suppkey = ps2.ps_suppkey\n    JOIN nation n2 ON n2.n_nationkey = s2.s_nationkey\n    JOIN region r2 ON r2.r_regionkey = n2.n_regionkey\n    WHERE ps2.ps_partkey = p.p_partkey AND r2.r_name = 'EUROPE')"
+}

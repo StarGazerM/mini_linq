@@ -7,22 +7,27 @@ use quote::quote;
 use syn::Ident;
 
 mod catalog;
+pub use catalog::matches_type;
 pub mod cost;
 pub use cost::{Cost, cost};
 mod advice;
 mod decomposition;
+mod key_partition;
 mod placement;
 mod planner;
+pub use key_partition::{KeyPartitionPolicy, decompose_with_key_partitions};
+pub mod rewrites;
 pub use planner::{Planner, RuleBased};
 
-pub use cq_sequence_rewrite_passes::select_from_catalog;
+pub use crate::rewrites::select_from_catalog;
 
 /// One invocation of the same checked library function exposed by a rewrite macro.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Advice {
     Evidence(cq_lang_sequence::Evidence),
-    LookupFirst(Box<cq_sequence_rewrite_passes::LookupFirst>),
-    Adaptive(cq_sequence_rewrite_passes::AdaptiveCandidate),
+    LookupFirst(Box<crate::rewrites::LookupFirst>),
+    Adaptive(crate::rewrites::AdaptiveCandidate),
+    KeyPartition(crate::rewrites::KeyPartition),
     GroupWithoutCanon(Ident),
     Store(Ident),
     StoreLevel(Ident),
@@ -64,13 +69,14 @@ impl Advice {
         checker: &mut cq_lang_sequence::contract::Checker,
         source: &Program,
     ) -> syn::Result<Program> {
-        use cq_sequence_rewrite_passes as rewrites;
+        use crate::rewrites;
         let result = match self {
             Self::Evidence(evidence) => rewrites::record_evidence_in(checker, source, evidence),
             Self::LookupFirst(arguments) => {
                 rewrites::lookup_first_in(checker, source, quote!(#arguments))
             }
             Self::Adaptive(arguments) => rewrites::apply_adaptive_in(checker, source, arguments),
+            Self::KeyPartition(arguments) => rewrites::key_partition_in(checker, source, arguments),
             Self::GroupWithoutCanon(name) => {
                 rewrites::group_without_canon_in(checker, source, quote!(#name))
             }
@@ -140,15 +146,24 @@ pub struct Planned {
 
 /// Fill unauthored scheduling decisions, returning the checked result and its proof trace.
 pub fn plan(program: &Program, machine: &Machine, catalog: &Catalog) -> syn::Result<Planned> {
+    plan_with_key_partitions(program, machine, catalog, &[])
+}
+
+/// Plan with explicit force/forbid decisions for key partitioning. Unmentioned
+/// providers use a checked runtime count choice; collectives use PL-Cost.
+pub fn plan_with_key_partitions(
+    program: &Program,
+    machine: &Machine,
+    catalog: &Catalog,
+    policies: &[KeyPartitionPolicy],
+) -> syn::Result<Planned> {
     let started = std::env::var_os("CQ_SEQUENCE_PLAN_TIMING").map(|_| std::time::Instant::now());
     let checker = &mut cq_lang_sequence::contract::Checker::new(program)?;
     let mut prepared = Planned {
         program: program.clone(),
         trace: Vec::new(),
     };
-    if let Some(advice) =
-        cq_sequence_rewrite_passes::lookup_first_advice_in(checker, program, catalog)?
-    {
+    if let Some(advice) = crate::rewrites::lookup_first_advice_in(checker, program, catalog)? {
         push(
             checker,
             &mut prepared,
@@ -157,12 +172,12 @@ pub fn plan(program: &Program, machine: &Machine, catalog: &Catalog) -> syn::Res
     }
     let ordering_elapsed = started.map(|started| started.elapsed());
     // Freeze every decision before the first choice changes the candidate graph.
-    let adaptive = cq_sequence_rewrite_passes::adaptive_candidates_in(checker, &prepared.program)?;
+    let adaptive = crate::rewrites::adaptive_candidates_in(checker, &prepared.program)?;
     for advice in adaptive {
         push(checker, &mut prepared, Advice::Adaptive(advice))?;
     }
     let adaptive_elapsed = started.map(|started| started.elapsed());
-    let mut planned = decompose_in(checker, &prepared.program, machine, catalog)?;
+    let mut planned = decompose_in(checker, &prepared.program, machine, catalog, policies)?;
     prepared.trace.append(&mut planned.trace);
     planned.trace = prepared.trace;
     if let Some(started) = started {
@@ -185,7 +200,7 @@ pub fn plan(program: &Program, machine: &Machine, catalog: &Catalog) -> syn::Res
 /// Callers with an order-advice phase use this entry rather than selecting another
 /// relational order. Its result has the same checked replay and grading contract.
 pub fn decompose(program: &Program, machine: &Machine, catalog: &Catalog) -> syn::Result<Planned> {
-    decompose_in(&mut Default::default(), program, machine, catalog)
+    decompose_in(&mut Default::default(), program, machine, catalog, &[])
 }
 
 fn decompose_in(
@@ -193,8 +208,10 @@ fn decompose_in(
     program: &Program,
     machine: &Machine,
     catalog: &Catalog,
+    policies: &[KeyPartitionPolicy],
 ) -> syn::Result<Planned> {
     checker.check_shared(program)?;
+    key_partition::validate(program, policies)?;
     let mut prepared = Planned {
         program: program.clone(),
         trace: Vec::new(),
@@ -213,11 +230,14 @@ fn decompose_in(
         .filter(|definition| has_group(&definition.term))
         .map(|definition| definition.name.clone())
         .collect();
+    let mut unique_groups = std::collections::BTreeSet::new();
     for name in groups {
-        let advice = Advice::GroupWithoutCanon(name);
-        if let Ok(target) = advice.apply_in(checker, &prepared.program)
-            && target != prepared.program
-        {
+        let advice = Advice::GroupWithoutCanon(name.clone());
+        if let Ok(target) = advice.apply_in(checker, &prepared.program) {
+            unique_groups.insert(symbol_name(&name));
+            if target == prepared.program {
+                continue;
+            }
             prepared.program = target;
             prepared.trace.push(advice);
         }
@@ -228,6 +248,18 @@ fn decompose_in(
         return Err(syn::Error::new(
             machine.name.span(),
             "P-Decompose: machine items must be positive",
+        ));
+    }
+    if machine.key_partition_threshold == 0 {
+        return Err(syn::Error::new(
+            machine.name.span(),
+            "P-Decompose: machine key partition threshold must be positive",
+        ));
+    }
+    if machine.key_partition_cache_threshold == 0 {
+        return Err(syn::Error::new(
+            machine.name.span(),
+            "P-Decompose: machine key partition cache threshold must be positive",
         ));
     }
     if let Some(graded) = &program.graded
@@ -315,33 +347,59 @@ fn decompose_in(
         let segmentable = prepared.program.sequence.definitions.iter().any(|definition| {
             matches!(&definition.term, Term::Flatten(inner) if matches!(inner.as_ref(), Term::Lookup { .. }))
         });
+        let facts = checker.check_shared(&prepared.program)?;
+        let partition_choices = key_partition::choices(&prepared.program, &facts, policies);
+        let keyed_partials = key_partition::has_keyed_partials(&prepared.program, &unique_groups);
         for &(width, items) in &schedules {
             let mut best: Option<(Cost, Planned)> = None;
             for segmented in [true, false] {
                 if segmented && (!parallel || width.is_none() || !segmentable) {
                     continue;
                 }
-                match candidate(
-                    checker, &prepared, machine, catalog, width, items, segmented,
-                ) {
-                    Ok((analysis, planned)) => {
-                        let cost = Cost::from_analysis(&planned.program, machine, &analysis)?;
-                        if best
-                            .as_ref()
-                            .is_none_or(|(current, _)| cost.better_than(current))
-                        {
-                            best = Some((cost, planned));
+                for (keyed, candidate_policies, partial_groups) in partition_choices
+                    .iter()
+                    .filter(|_| keyed_partials)
+                    .map(|choice| (true, choice.as_slice(), true))
+                    .chain(std::iter::once((false, policies, false)))
+                    .chain(
+                        partition_choices
+                            .iter()
+                            .map(|choice| (true, choice.as_slice(), false)),
+                    )
+                {
+                    match candidate(
+                        checker,
+                        &prepared,
+                        machine,
+                        catalog,
+                        width,
+                        items,
+                        segmented,
+                        program,
+                        candidate_policies,
+                        keyed,
+                        partial_groups,
+                        &unique_groups,
+                    ) {
+                        Ok((analysis, planned)) => {
+                            let cost = Cost::from_analysis(&planned.program, machine, &analysis)?;
+                            if best
+                                .as_ref()
+                                .is_none_or(|(current, _)| cost.better_than(current))
+                            {
+                                best = Some((cost, planned));
+                            }
                         }
-                    }
-                    Err(failure) => {
-                        candidate_error(
-                            &mut error,
-                            stage,
-                            width,
-                            Some(items),
-                            Some(segmented),
-                            failure,
-                        );
+                        Err(failure) => {
+                            candidate_error(
+                                &mut error,
+                                stage,
+                                width,
+                                Some(items),
+                                Some(segmented),
+                                failure,
+                            );
+                        }
                     }
                 }
             }
@@ -444,6 +502,7 @@ fn prepare(
     Ok(planned)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn candidate(
     checker: &mut cq_lang_sequence::contract::Checker,
     source: &Planned,
@@ -452,14 +511,43 @@ fn candidate(
     width: Option<usize>,
     items: usize,
     segmented: bool,
+    authored: &Program,
+    policies: &[KeyPartitionPolicy],
+    keyed: bool,
+    partial_groups: bool,
+    unique_groups: &std::collections::BTreeSet<String>,
 ) -> syn::Result<(Analysis, Planned)> {
     let mut planned = source.clone();
+    key_partition::apply(
+        checker,
+        &mut planned,
+        authored,
+        machine,
+        catalog,
+        policies,
+        keyed,
+        false,
+        partial_groups,
+        unique_groups,
+    )?;
     if !machine.root.children.is_empty() {
         let mut decomposed =
             decomposition::advise(checker, &planned.program, machine, width, items, segmented)?;
         planned.trace.append(&mut decomposed.trace);
         planned.program = decomposed.program;
     }
+    key_partition::apply(
+        checker,
+        &mut planned,
+        authored,
+        machine,
+        catalog,
+        policies,
+        keyed,
+        true,
+        partial_groups,
+        unique_groups,
+    )?;
     // Formal rule PL-Precedence: Recorded grades, tiles and output are never replaced by generated advice.
     if source.program.sequence.output.is_none() {
         let last =
@@ -524,12 +612,7 @@ fn push_all(
         }
         // Grades are nonsemantic; the typed checked rewrite validates the
         // complete batch once while the replay trace retains individual steps.
-        cq_sequence_rewrite_passes::grade_definitions_in(
-            checker,
-            &mut planned.program,
-            machine,
-            &grades,
-        )?;
+        crate::rewrites::grade_definitions_in(checker, &mut planned.program, machine, &grades)?;
         planned.trace.extend(trace);
     }
     Ok(())
@@ -546,7 +629,7 @@ fn push(
         machine,
     } = &advice
     {
-        cq_sequence_rewrite_passes::grade_definitions_in(
+        crate::rewrites::grade_definitions_in(
             checker,
             &mut planned.program,
             machine,
@@ -572,6 +655,21 @@ fn variable_output(term: &Term, program: &Program) -> bool {
     match term {
         Term::Canon(_) | Term::Compact(_, _) => true,
         Term::Rows(_) => false,
+        Term::Group(name, inner) => {
+            program
+                .structures
+                .physical
+                .program
+                .definitions
+                .iter()
+                .any(|definition| {
+                    definition.name == *name
+                        && matches!(&definition.operator,
+                cq_lang_sequence::structures::physical::Operator::Group(group)
+                    if !group.keys.is_empty())
+                })
+                || variable_output(inner, program)
+        }
         Term::Ref(name) => program
             .sequence
             .definitions
@@ -581,7 +679,7 @@ fn variable_output(term: &Term, program: &Program) -> bool {
         Term::Map(_, t)
         | Term::Flatten(t)
         | Term::Fold(_, t)
-        | Term::Group(_, t)
+        | Term::PartitionK { inner: t, .. }
         | Term::Tile { inner: t, .. }
         | Term::Store { inner: t, .. }
         | Term::Lookup { inner: t, .. } => variable_output(t, program),

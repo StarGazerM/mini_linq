@@ -2,12 +2,17 @@
 
 use cq_lang_sequence::{LevelNode, Machine};
 
+mod arena;
+mod capture;
+pub mod constants;
+pub mod runs;
 mod emit;
 pub mod layout;
 mod reduce;
 mod rows;
 
 pub use emit::translate;
+pub use arena::translate_arena;
 
 /// Host publication over separated, dynamically scheduled device blocks.
 /// Each block is collaborative; lanes are sequential leaves (no warp level).
@@ -15,6 +20,8 @@ pub fn machine() -> Machine {
     Machine {
         name: syn::parse_quote!(gpu),
         items: 4,
+        key_partition_threshold: 65536,
+        key_partition_cache_threshold: 6 * 1024 * 1024,
         layout: Some(layout::shared_bytes),
         root: LevelNode {
             name: syn::parse_quote!(host),
@@ -86,6 +93,15 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
             },
             ProviderToken {
                 supports: Vec::new(),
+                ty: syn::parse_quote!(::gpu_datalog_runtime::DeviceLayout<_, _>),
+                capabilities: vec![Capability::Exact, Capability::Range, Capability::Membership],
+                // The declared layout checks primitives and Symbol<T, Codec>
+                // columns; logical symbol types do not appear in device rows.
+                elements: None,
+                levels: levels.clone(),
+            },
+            ProviderToken {
+                supports: Vec::new(),
                 ty: syn::parse_quote!(::cq_storage::SortedRun<_, _>),
                 capabilities: vec![Capability::Exact, Capability::Range, Capability::Membership],
                 elements: None,
@@ -105,14 +121,17 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
                 .collect(),
         })
         .collect(),
-        canons: vec![CanonToken {
-            ty: syn::parse_quote!(::cq_gpu_sequence_runtime::canon::PackedCanon),
-            levels: levels.clone(),
-            max_packed_bits: Some(128),
-        }, CanonToken {
-            ty: syn::parse_quote!(::cq_gpu_sequence_runtime::canon::WideCanon),
-            levels,
-            max_packed_bits: None,
-        }],
+        canons: vec![
+            CanonToken {
+                ty: syn::parse_quote!(::cq_gpu_sequence_runtime::canon::PackedCanon),
+                levels: levels.clone(),
+                max_packed_bits: Some(128),
+            },
+            CanonToken {
+                ty: syn::parse_quote!(::cq_gpu_sequence_runtime::canon::WideCanon),
+                levels,
+                max_packed_bits: None,
+            },
+        ],
     }
 }

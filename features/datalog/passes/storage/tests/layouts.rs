@@ -272,15 +272,15 @@ fn delta_driver_is_recorded_and_independently_checked() {
     let target = cq_datalog_storage::compile(&incremental).unwrap();
     let variant = &target.incremental.variants[1];
     assert_eq!(variant.delta, Some(1));
-    assert_eq!(variant.driver, Some(1));
+    assert_eq!(variant.order, [1, 0]);
     assert!(matches!(&variant.query.body[0], BodyItem::Positive { atom }
         if atom.relation == target.incremental.deltas[0].name));
     assert!(target.delta_layouts.is_empty());
-    assert!(target.to_token_stream().to_string().contains("delta 1 driver 1"));
+    assert!(target.to_token_stream().to_string().contains("delta 1 order [1 , 0]"));
     let replay = syn::parse2(target.to_token_stream()).unwrap();
     check(&incremental, &replay).unwrap();
     let mut wrong = target.clone();
-    wrong.incremental.variants[1].driver = Some(0);
+    wrong.incremental.variants[1].order = vec![0, 1];
     assert!(contract::check(&wrong).is_err());
     let mut wrong = target.clone();
     let body = &mut wrong.incremental.variants[1].query.body;
@@ -292,7 +292,7 @@ fn delta_driver_is_recorded_and_independently_checked() {
     wrong.incremental.variants[1].delta = Some(0);
     assert!(contract::check(&wrong).is_err());
     let cpu = cq_datalog_incremental::compile(&strata).unwrap();
-    assert_eq!(cpu.variants[1].driver, Some(0));
+    assert_eq!(cpu.variants[1].order, [0, 1]);
     let mut wrong = target.clone();
     let index = wrong.reads.iter().find(|read| read.variant == 1 && read.position == 1).unwrap().index;
     wrong.layouts[index].columns.swap(0, 1);
@@ -315,9 +315,9 @@ fn delta_driver_never_crosses_before_constraints() {
         let target = cq_datalog_incremental::compile_with_driver(
             &strata, cq_datalog_incremental::DriverPolicy::DeltaFirst,
         ).unwrap();
-        assert_eq!(target.variants[1].driver, Some(0));
+        assert_eq!(target.variants[1].order, [0, 1, 2]);
         let mut wrong = target.clone();
-        wrong.variants[1].driver = Some(2);
+        wrong.variants[1].order = vec![2, 1, 0];
         assert!(incremental::contract::check(&wrong).unwrap_err().to_string().contains("Before"));
     }
 }

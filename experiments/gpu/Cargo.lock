@@ -32,22 +32,25 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "bindgen"
-version = "0.71.1"
+version = "0.69.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f58bf3d7db68cfbac37cfc485a8d711e87e064c3d0fe0435b92f7a407f9d6b3"
+checksum = "271383c67ccabffb7381723dea0672a673f292304fcb45c01cc648c7a8d58088"
 dependencies = [
  "bitflags",
  "cexpr",
  "clang-sys",
  "itertools",
+ "lazy_static",
+ "lazycell",
  "log",
  "prettyplease",
  "proc-macro2",
  "quote",
  "regex",
- "rustc-hash",
+ "rustc-hash 1.1.0",
  "shlex",
  "syn 2.0.119",
+ "which",
 ]
 
 [[package]]
@@ -101,6 +104,196 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-datalog"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-configuration",
+ "cq-datalog-macros",
+ "cq-lang-datalog-incremental",
+ "cq-lang-datalog-round",
+ "cq-lang-datalog-source",
+ "cq-lang-datalog-storage",
+ "cq-lang-datalog-strata",
+ "cq-storage",
+ "own-push",
+ "rustc-hash 2.1.3",
+]
+
+[[package]]
+name = "cq-datalog-configuration"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-fork",
+ "cq-lang-datalog-round",
+ "cq-stage",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-fork"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-support",
+ "cq-lang-datalog-round",
+ "cq-lang-datalog-storage",
+ "cq-stage",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-incremental"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-support",
+ "cq-lang-datalog-incremental",
+ "cq-lang-datalog-strata",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-macros"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-configuration",
+ "cq-datalog-fork",
+ "cq-datalog-incremental",
+ "cq-datalog-print-rounds",
+ "cq-datalog-storage",
+ "cq-datalog-stratify",
+ "cq-datalog-surface-if-let",
+ "cq-lang-datalog-incremental",
+ "cq-lang-datalog-round",
+ "cq-lang-datalog-source",
+ "cq-lang-datalog-storage",
+ "cq-lang-datalog-strata",
+ "cq-stage",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-parallel"
+version = "0.1.0"
+dependencies = [
+ "cq-datalog-partition",
+ "cq-datalog-rayon-print",
+ "cq-lang-datalog-round",
+ "cq-stage",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-parallel-runtime"
+version = "0.1.0"
+dependencies = [
+ "cq-storage",
+ "hashbrown 0.15.5",
+ "rayon",
+]
+
+[[package]]
+name = "cq-datalog-partition"
+version = "0.1.0"
+dependencies = [
+ "cq-datalog-support",
+ "cq-lang-datalog-round",
+ "cq-stage",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-print"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-support",
+ "cq-lang-datalog-round",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-print-rounds"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-print",
+ "cq-lang-datalog-round",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-rayon-print"
+version = "0.1.0"
+dependencies = [
+ "cq-datalog-partition",
+ "cq-datalog-print",
+ "cq-lang-datalog-round",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-storage"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-support",
+ "cq-lang-datalog-incremental",
+ "cq-lang-datalog-storage",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-stratify"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-support",
+ "cq-lang-datalog-source",
+ "cq-lang-datalog-strata",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-support"
+version = "0.0.0"
+dependencies = [
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-surface-if-let"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-support",
+ "cq-lang-datalog-source",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "cq-elaborate"
 version = "0.1.0"
 dependencies = [
@@ -108,6 +301,61 @@ dependencies = [
  "cq-lang-vo",
  "proc-macro2",
  "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-gpu-datalog"
+version = "0.1.0"
+dependencies = [
+ "cq-datalog",
+ "cq-gpu-datalog-core",
+ "cq-gpu-datalog-macros",
+ "cq-gpu-runtime",
+ "cq-gpu-sequence",
+ "cq-gpu-sequence-runtime",
+ "cq-storage",
+ "cuda-core",
+ "cuda-device",
+ "cuda-host",
+ "gpu-compress",
+ "gpu-compress-host",
+ "gpu-datalog-runtime",
+ "mini-linq",
+ "oracle-mini",
+ "oracle-mini-par",
+ "oracle-shared",
+ "rayon",
+]
+
+[[package]]
+name = "cq-gpu-datalog-core"
+version = "0.1.0"
+dependencies = [
+ "cq-datalog-fork",
+ "cq-datalog-print",
+ "cq-datalog-storage",
+ "cq-datalog-support",
+ "cq-lang-datalog-round",
+ "cq-lang-datalog-storage",
+ "cq-lang-structures",
+ "cq-stage",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-gpu-datalog-macros"
+version = "0.1.0"
+dependencies = [
+ "cq-gpu-datalog-core",
+ "cq-lang-datalog-round",
+ "cq-lang-datalog-storage",
+ "cq-lang-structures",
+ "cq-stage",
+ "proc-macro2",
  "syn 2.0.119",
 ]
 
@@ -138,6 +386,7 @@ dependencies = [
  "cuda-host",
  "gpu-compress",
  "gpu-compress-host",
+ "gpu-datalog-runtime",
  "proc-macro2",
  "quote",
  "serde_json",
@@ -163,6 +412,7 @@ version = "0.1.0"
 dependencies = [
  "cq-gpu-sequence-core",
  "cq-lang-sequence",
+ "cq-lang-structures",
  "cq-sequence-plan",
  "cq-stage",
  "proc-macro2",
@@ -191,6 +441,7 @@ name = "cq-gpu-sequence-test-macros"
 version = "0.1.0"
 dependencies = [
  "cq-gpu-sequence",
+ "cq-gpu-sequence-core",
  "cq-lang-sequence",
  "cq-lang-structures",
  "cq-sequence-lowering",
@@ -261,6 +512,73 @@ dependencies = [
  "quote",
  "syn 2.0.119",
  "syn_derive",
+]
+
+[[package]]
+name = "cq-lang-datalog-incremental"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-support",
+ "cq-lang-datalog-strata",
+ "cq-stage",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-lang-datalog-round"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-support",
+ "cq-lang-cq",
+ "cq-lang-datalog-storage",
+ "cq-stage",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-lang-datalog-source"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-support",
+ "cq-lang-cq",
+ "cq-stage",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-lang-datalog-storage"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-support",
+ "cq-lang-cq",
+ "cq-lang-datalog-incremental",
+ "cq-stage",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-lang-datalog-strata"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-support",
+ "cq-lang-datalog-source",
+ "cq-stage",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -446,6 +764,7 @@ version = "0.1.0"
 dependencies = [
  "cq-lang-physical",
  "cq-lang-structures",
+ "cq-structure-selection",
  "proc-macro2",
  "syn 2.0.119",
 ]
@@ -458,6 +777,7 @@ dependencies = [
  "cq-lang-structures",
  "cq-rewrite-passes",
  "cq-stage",
+ "cq-structure-selection",
 ]
 
 [[package]]
@@ -474,7 +794,8 @@ name = "cq-sequence-plan"
 version = "0.1.0"
 dependencies = [
  "cq-lang-sequence",
- "cq-sequence-rewrite-passes",
+ "cq-sequence-lowering",
+ "cq-structure-selection",
  "cq-syntax",
  "proc-macro2",
  "quote",
@@ -495,24 +816,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-sequence-rewrite-passes"
-version = "0.1.0"
-dependencies = [
- "cq-lang-sequence",
- "cq-rewrite-passes",
- "cq-sequence-lowering",
- "cq-syntax",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "cq-sequence-rewrites"
 version = "0.1.0"
 dependencies = [
  "cq-lang-sequence",
- "cq-sequence-rewrite-passes",
+ "cq-sequence-plan",
  "cq-stage",
 ]
 
@@ -541,6 +849,7 @@ version = "0.1.0"
 dependencies = [
  "ahash",
  "hashbrown 0.15.5",
+ "rayon",
 ]
 
 [[package]]
@@ -577,17 +886,43 @@ dependencies = [
  "cq-lang-vo",
  "cq-syntax",
  "hashbrown 0.15.5",
+ "rayon",
  "syn 2.0.119",
 ]
 
 [[package]]
 name = "crc32fast"
-version = "1.5.2"
+version = "1.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "01a7799fd6b852db0e61728dde9a204c423b44d689dbd432522543614b490e78"
+checksum = "0ba106e844045ddc02c20768ac4b0b7cb45f2cc2ecbd833ac9f5dacb183c2055"
 dependencies = [
  "cfg-if",
 ]
+
+[[package]]
+name = "crossbeam-deque"
+version = "0.8.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "622f3fc73690be383c7214310406f28a90e6edeadc3cea882f9d71e495b9711a"
+dependencies = [
+ "crossbeam-epoch",
+ "crossbeam-utils",
+]
+
+[[package]]
+name = "crossbeam-epoch"
+version = "0.9.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc74980687109a3b14c72fd458107bf0baa1da1a1a805e178d15501ba9b86d9d"
+dependencies = [
+ "crossbeam-utils",
+]
+
+[[package]]
+name = "crossbeam-utils"
+version = "0.8.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6"
 
 [[package]]
 name = "crunchy"
@@ -629,9 +964,12 @@ dependencies = [
 [[package]]
 name = "cuda-artifact-finalizer"
 version = "0.2.1"
+source = "git+https://github.com/StarGazerM/cuda-oxide.git?rev=299eda41b287642ef3323144d8fef8f16fe4fbe1#299eda41b287642ef3323144d8fef8f16fe4fbe1"
 dependencies = [
  "libnvvm-sys",
  "nvjitlink-sys",
+ "oxide-artifacts",
+ "ptx-parse",
  "serde",
  "sha2",
  "thiserror",
@@ -639,25 +977,43 @@ dependencies = [
 
 [[package]]
 name = "cuda-bindings"
-version = "0.2.1"
+version = "0.5.0"
+source = "git+https://github.com/StarGazerM/cuda-oxide.git?rev=299eda41b287642ef3323144d8fef8f16fe4fbe1#299eda41b287642ef3323144d8fef8f16fe4fbe1"
 dependencies = [
  "bindgen",
+ "libloading",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
 name = "cuda-core"
-version = "0.2.1"
+version = "0.5.0"
+source = "git+https://github.com/StarGazerM/cuda-oxide.git?rev=299eda41b287642ef3323144d8fef8f16fe4fbe1#299eda41b287642ef3323144d8fef8f16fe4fbe1"
 dependencies = [
  "anyhow",
  "cuda-bindings",
- "cuda-macros",
+ "cuda-core-derive",
  "half",
  "oxide-artifacts",
 ]
 
 [[package]]
+name = "cuda-core-derive"
+version = "0.5.0"
+source = "git+https://github.com/StarGazerM/cuda-oxide.git?rev=299eda41b287642ef3323144d8fef8f16fe4fbe1#299eda41b287642ef3323144d8fef8f16fe4fbe1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "cuda-device"
 version = "0.2.1"
+source = "git+https://github.com/StarGazerM/cuda-oxide.git?rev=299eda41b287642ef3323144d8fef8f16fe4fbe1#299eda41b287642ef3323144d8fef8f16fe4fbe1"
 dependencies = [
  "cuda-macros",
 ]
@@ -665,12 +1021,17 @@ dependencies = [
 [[package]]
 name = "cuda-host"
 version = "0.2.1"
+source = "git+https://github.com/StarGazerM/cuda-oxide.git?rev=299eda41b287642ef3323144d8fef8f16fe4fbe1#299eda41b287642ef3323144d8fef8f16fe4fbe1"
 dependencies = [
  "cuda-artifact-finalizer",
  "cuda-core",
+ "cuda-device",
  "cuda-macros",
  "half",
+ "libc",
+ "oxide-artifacts",
  "ptx-parse",
+ "reserved-oxide-symbols",
  "sha2",
  "thiserror",
 ]
@@ -678,7 +1039,9 @@ dependencies = [
 [[package]]
 name = "cuda-macros"
 version = "0.2.1"
+source = "git+https://github.com/StarGazerM/cuda-oxide.git?rev=299eda41b287642ef3323144d8fef8f16fe4fbe1#299eda41b287642ef3323144d8fef8f16fe4fbe1"
 dependencies = [
+ "oxide-tile-export",
  "proc-macro2",
  "quote",
  "reserved-oxide-symbols",
@@ -688,6 +1051,7 @@ dependencies = [
 [[package]]
 name = "cuda-target-spec"
 version = "0.1.0"
+source = "git+https://github.com/StarGazerM/cuda-oxide.git?rev=299eda41b287642ef3323144d8fef8f16fe4fbe1#299eda41b287642ef3323144d8fef8f16fe4fbe1"
 
 [[package]]
 name = "digest"
@@ -697,6 +1061,46 @@ checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
 dependencies = [
  "block-buffer",
  "crypto-common",
+]
+
+[[package]]
+name = "doop-gpu"
+version = "0.1.0"
+dependencies = [
+ "cq-datalog",
+ "cq-gpu-datalog",
+ "cq-gpu-runtime",
+ "cq-gpu-sequence",
+ "cq-gpu-sequence-runtime",
+ "cq-sequence-rewrites",
+ "cq-storage",
+ "cuda-core",
+ "cuda-device",
+ "cuda-host",
+ "doop-mini",
+ "doop-shared",
+ "gpu-compress",
+ "gpu-compress-host",
+ "gpu-datalog-runtime",
+ "mini-linq",
+]
+
+[[package]]
+name = "doop-mini"
+version = "0.1.0"
+dependencies = [
+ "cq-datalog",
+ "cq-storage",
+ "doop-shared",
+ "mini-linq",
+]
+
+[[package]]
+name = "doop-shared"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "libc",
 ]
 
 [[package]]
@@ -710,6 +1114,16 @@ name = "equivalent"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "00d174d5400e5e8fd687ad1049e2f578285fa914201b1af7e8b112a4546bd826"
+
+[[package]]
+name = "errno"
+version = "0.3.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
+]
 
 [[package]]
 name = "foldhash"
@@ -757,6 +1171,18 @@ dependencies = [
 [[package]]
 name = "gpu-compress-host"
 version = "0.1.0"
+
+[[package]]
+name = "gpu-datalog-runtime"
+version = "0.1.0"
+dependencies = [
+ "cuda-core",
+ "cuda-device",
+ "cuda-host",
+ "gpu-device-columns",
+ "rccl-cub",
+ "rccl-memory",
+]
 
 [[package]]
 name = "gpu-device-columns"
@@ -849,6 +1275,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
+name = "home"
+version = "0.5.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc627f471c528ff0c4a49e1d5e60450c8f6461dd6d10ba9dcd3a61d3dff7728d"
+dependencies = [
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "indexmap"
 version = "2.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -860,9 +1295,9 @@ dependencies = [
 
 [[package]]
 name = "itertools"
-version = "0.13.0"
+version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
+checksum = "ba291022dbbd398a455acf126c1e341954079855bc60dfdda641363bd6922569"
 dependencies = [
  "either",
 ]
@@ -872,6 +1307,18 @@ name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
+
+[[package]]
+name = "lazy_static"
+version = "1.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "20870f649af7073d53e38067b2a84312175d56ea15217e1b15bc83506ec50afb"
+
+[[package]]
+name = "lazycell"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "830d08ce1d1d941e6b30645f1a0eb5643013d835ce3779a5fc208261dbe10f55"
 
 [[package]]
 name = "libc"
@@ -892,11 +1339,18 @@ dependencies = [
 [[package]]
 name = "libnvvm-sys"
 version = "0.2.1"
+source = "git+https://github.com/StarGazerM/cuda-oxide.git?rev=299eda41b287642ef3323144d8fef8f16fe4fbe1#299eda41b287642ef3323144d8fef8f16fe4fbe1"
 dependencies = [
  "cuda-target-spec",
  "libloading",
  "thiserror",
 ]
+
+[[package]]
+name = "linux-raw-sys"
+version = "0.4.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d26c52dbd32dccf2d10cac7725f8eae5296885fb5703b261f7d0a0739ec807ab"
 
 [[package]]
 name = "log"
@@ -964,6 +1418,7 @@ dependencies = [
 [[package]]
 name = "nvjitlink-sys"
 version = "0.2.1"
+source = "git+https://github.com/StarGazerM/cuda-oxide.git?rev=299eda41b287642ef3323144d8fef8f16fe4fbe1#299eda41b287642ef3323144d8fef8f16fe4fbe1"
 dependencies = [
  "libloading",
  "thiserror",
@@ -988,10 +1443,66 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
+name = "oracle-mini"
+version = "0.1.0"
+dependencies = [
+ "cq-datalog",
+ "cq-storage",
+ "mini-linq",
+ "oracle-shared",
+]
+
+[[package]]
+name = "oracle-mini-par"
+version = "0.1.0"
+dependencies = [
+ "cq-datalog",
+ "cq-datalog-parallel",
+ "cq-datalog-parallel-runtime",
+ "cq-storage",
+ "mini-linq",
+ "oracle-shared",
+ "rayon",
+]
+
+[[package]]
+name = "oracle-shared"
+version = "0.1.0"
+dependencies = [
+ "cq-storage",
+ "cq-testkit",
+]
+
+[[package]]
+name = "own-push"
+version = "0.0.0"
+dependencies = [
+ "cq-lang-structures",
+ "cq-physical-realization",
+ "cq-print",
+ "cq-stage",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "oxide-artifacts"
 version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "74d9a941c0c43d2dceaf25f5c9ca4c9f9cceb28dfa5e4e3cfd14e476f003e7c9"
 dependencies = [
  "object",
+]
+
+[[package]]
+name = "oxide-tile-export"
+version = "0.2.1"
+source = "git+https://github.com/StarGazerM/cuda-oxide.git?rev=299eda41b287642ef3323144d8fef8f16fe4fbe1#299eda41b287642ef3323144d8fef8f16fe4fbe1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]
@@ -1016,6 +1527,7 @@ dependencies = [
 [[package]]
 name = "ptx-parse"
 version = "0.1.0"
+source = "git+https://github.com/StarGazerM/cuda-oxide.git?rev=299eda41b287642ef3323144d8fef8f16fe4fbe1#299eda41b287642ef3323144d8fef8f16fe4fbe1"
 
 [[package]]
 name = "quote"
@@ -1033,8 +1545,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
 
 [[package]]
+name = "rayon"
+version = "1.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb39b166781f92d482534ef4b4b1b2568f42613b53e5b6c160e24cfbfa30926d"
+dependencies = [
+ "either",
+ "rayon-core",
+]
+
+[[package]]
+name = "rayon-core"
+version = "1.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
+dependencies = [
+ "crossbeam-deque",
+ "crossbeam-utils",
+]
+
+[[package]]
 name = "rccl-cub"
 version = "0.1.0"
+source = "git+https://github.com/StarGazerM/rccl.git?rev=1d33079a9b89ebe672618856f2f98afda0f74e12#1d33079a9b89ebe672618856f2f98afda0f74e12"
 dependencies = [
  "cuda-core",
  "cuda-device",
@@ -1045,6 +1578,7 @@ dependencies = [
 [[package]]
 name = "rccl-memory"
 version = "0.1.0"
+source = "git+https://github.com/StarGazerM/rccl.git?rev=1d33079a9b89ebe672618856f2f98afda0f74e12#1d33079a9b89ebe672618856f2f98afda0f74e12"
 dependencies = [
  "cuda-core",
  "cuda-device",
@@ -1054,6 +1588,7 @@ dependencies = [
 [[package]]
 name = "rccl-thrust"
 version = "0.1.0"
+source = "git+https://github.com/StarGazerM/rccl.git?rev=1d33079a9b89ebe672618856f2f98afda0f74e12#1d33079a9b89ebe672618856f2f98afda0f74e12"
 dependencies = [
  "cuda-core",
  "cuda-device",
@@ -1094,12 +1629,32 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 [[package]]
 name = "reserved-oxide-symbols"
 version = "0.2.1"
+source = "git+https://github.com/StarGazerM/cuda-oxide.git?rev=299eda41b287642ef3323144d8fef8f16fe4fbe1#299eda41b287642ef3323144d8fef8f16fe4fbe1"
+
+[[package]]
+name = "rustc-hash"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08d43f7aa6b08d49f382cde6a7982047c3426db949b1424bc4b7ec9ae12c6ce2"
 
 [[package]]
 name = "rustc-hash"
 version = "2.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6b1e7f9a428571be2dc5bc0505c13fb6bf936822b894ec87abf8a08a4e51742d"
+
+[[package]]
+name = "rustix"
+version = "0.38.44"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fdb5bc1ae2baa591800df16c9ca78619bf65c0488b41b96ccec5d11220d8c154"
+dependencies = [
+ "bitflags",
+ "errno",
+ "libc",
+ "linux-raw-sys",
+ "windows-sys 0.59.0",
+]
 
 [[package]]
 name = "ryu"
@@ -1175,6 +1730,43 @@ name = "shlex"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
+
+[[package]]
+name = "srd-doop-gpu"
+version = "0.1.0"
+dependencies = [
+ "cq-datalog",
+ "cq-gpu-datalog",
+ "cq-gpu-runtime",
+ "cq-gpu-sequence",
+ "cq-gpu-sequence-runtime",
+ "cq-sequence-rewrites",
+ "cq-storage",
+ "cuda-core",
+ "cuda-device",
+ "cuda-host",
+ "gpu-compress",
+ "gpu-compress-host",
+ "gpu-datalog-runtime",
+ "mini-linq",
+ "srd-doop-harness",
+ "srd-doop-shared",
+]
+
+[[package]]
+name = "srd-doop-harness"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "srd-doop-shared",
+]
+
+[[package]]
+name = "srd-doop-shared"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
 
 [[package]]
 name = "syn"
@@ -1325,12 +1917,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "which"
+version = "4.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "87ba24419a2078cd2b0f2ede2691b6c66d8e47836da3b6db8265ebad47afbfc7"
+dependencies = [
+ "either",
+ "home",
+ "once_cell",
+ "rustix",
+]
+
+[[package]]
 name = "winapi-util"
 version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1341,12 +1945,85 @@ checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
 
 [[package]]
 name = "windows-sys"
+version = "0.59.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e38bc4d79ed67fd075bcc251a1c39b32a1776bbe92e5bef1f0bf1f8c531853b"
+dependencies = [
+ "windows-targets",
+]
+
+[[package]]
+name = "windows-sys"
 version = "0.61.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
 dependencies = [
  "windows-link",
 ]
+
+[[package]]
+name = "windows-targets"
+version = "0.52.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9b724f72796e036ab90c1021d4780d4d3d648aca59e491e6b98e725b84e99973"
+dependencies = [
+ "windows_aarch64_gnullvm",
+ "windows_aarch64_msvc",
+ "windows_i686_gnu",
+ "windows_i686_gnullvm",
+ "windows_i686_msvc",
+ "windows_x86_64_gnu",
+ "windows_x86_64_gnullvm",
+ "windows_x86_64_msvc",
+]
+
+[[package]]
+name = "windows_aarch64_gnullvm"
+version = "0.52.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32a4622180e7a0ec044bb555404c800bc9fd9ec262ec147edd5989ccd0c02cd3"
+
+[[package]]
+name = "windows_aarch64_msvc"
+version = "0.52.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09ec2a7bb152e2252b53fa7803150007879548bc709c039df7627cabbd05d469"
+
+[[package]]
+name = "windows_i686_gnu"
+version = "0.52.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e9b5ad5ab802e97eb8e295ac6720e509ee4c243f69d781394014ebfe8bbfa0b"
+
+[[package]]
+name = "windows_i686_gnullvm"
+version = "0.52.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0eee52d38c090b3caa76c563b86c3a4bd71ef1a819287c19d586d7334ae8ed66"
+
+[[package]]
+name = "windows_i686_msvc"
+version = "0.52.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "240948bc05c5e7c6dabba28bf89d89ffce3e303022809e73deaefe4f6ec56c66"
+
+[[package]]
+name = "windows_x86_64_gnu"
+version = "0.52.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "147a5c80aabfbf0c7d901cb5895d1de30ef2907eb21fbbab29ca94c5b08b1a78"
+
+[[package]]
+name = "windows_x86_64_gnullvm"
+version = "0.52.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "24d5b23dc417412679681396f2b49f3de8c1473deb516bd34410872eff51ed0d"
+
+[[package]]
+name = "windows_x86_64_msvc"
+version = "0.52.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 
 [[package]]
 name = "winnow"

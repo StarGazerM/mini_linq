@@ -1,0 +1,24 @@
+{
+  "configs": [
+    "default",
+    "par",
+    "no-reduce",
+    "transfer",
+    "le",
+    "le_runs",
+    "hypergraph",
+    "advised"
+  ],
+  "exports": [
+    [
+      "customer",
+      "c_custkey,c_phone"
+    ],
+    [
+      "orders",
+      "o_orderkey,o_custkey"
+    ]
+  ],
+  "name": "retail_h22",
+  "sql": "SELECT DISTINCT c.c_custkey FROM customer c\nWHERE substring(c.c_phone FROM 1 FOR 2) IN ('13', '31', '23', '29', '30', '18', '17')\nAND NOT EXISTS (SELECT 1 FROM orders o WHERE o.o_custkey = c.c_custkey)"
+}

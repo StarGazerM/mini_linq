@@ -23,3 +23,16 @@ pub fn eval_round(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     )
     .into()
 }
+
+/// Exercise per-hole advice without adding a production policy parser.
+#[proc_macro]
+pub fn hole_policy(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    cq_stage::pass::<cq_lang_datalog_round::Program, cq_datalog_partition::ShardedProgram>(input.into(), |program, _| {
+        let mut program = program.clone();
+        program.schedule = program.schedule.with_policy(
+            0,
+            syn::parse_quote!(phase { seed } index { 0 } grain { [1] } inline_below { [0] }),
+        );
+        cq_datalog_partition::compile_sharded(&program)
+    }).into()
+}

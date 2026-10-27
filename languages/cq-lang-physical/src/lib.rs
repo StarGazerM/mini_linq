@@ -510,6 +510,22 @@ impl Analysis {
             _ => false,
         }
     }
+
+    /// IF-Parameter discharges closed Rust fragments at host before dispatch.
+    /// Row-dependent opaque code is never admitted by this predicate.
+    pub fn capturable(&self, operator: &Operator) -> bool {
+        match operator {
+            Operator::Bind(bind) => cq_syntax::arithmetic::capture_binding(
+                bind,
+                &self.rows[&symbol_name(&bind.input)].types,
+            ),
+            Operator::Guard(guard) => cq_syntax::arithmetic::capture_predicate(
+                &guard.condition,
+                &self.rows[&symbol_name(&guard.input)].types,
+            ),
+            _ => false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

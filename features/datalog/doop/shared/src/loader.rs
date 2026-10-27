@@ -1,4 +1,4 @@
-use crate::interner::{IStr, sym};
+use crate::interner::{IStr, res, sym};
 use std::{
     fs::File,
     io::{self, BufRead, BufReader},
@@ -76,10 +76,57 @@ pub(crate) fn load<T: Row>(path: &Path) -> io::Result<Vec<T>> {
     Ok(rows)
 }
 
+/// Materialize the join of Method_ReturnType and Method_ParamTypes, not just
+/// each raw row: repeated method IDs can contribute multiple values to either.
+pub(crate) fn method_descriptors(
+    methods: &[(IStr, IStr, IStr, IStr, IStr, IStr, i32)],
+) -> Vec<(IStr, IStr)> {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let mut projected = BTreeMap::<IStr, (BTreeSet<IStr>, BTreeSet<IStr>)>::new();
+    for &(method, _, params, _, returntype, _, _) in methods {
+        let (returns, parameters) = projected.entry(method).or_default();
+        returns.insert(returntype);
+        parameters.insert(params);
+    }
+    let mut descriptors = Vec::new();
+    for (method, (returns, parameters)) in projected {
+        for returntype in returns {
+            let returntype = res(returntype);
+            for &params in &parameters {
+                descriptors.push((method, sym(&format!("{}({})", returntype, res(params)))));
+            }
+        }
+    }
+    descriptors.sort_unstable();
+    descriptors.dedup();
+    descriptors
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::interner::res;
+
+    #[test]
+    fn descriptors_join_projections_and_deduplicate() {
+        let method = sym("method");
+        let unused = sym("");
+        let row = |params, returns| {
+            (method, unused, sym(params), unused, sym(returns), unused, 0)
+        };
+        let methods = [
+            row("int", "void"),
+            row("int", "void"),
+            row("long", "int"),
+        ];
+        let mut expected = ["void(int)", "void(long)", "int(int)", "int(long)"]
+            .map(|descriptor| (method, sym(descriptor)))
+            .to_vec();
+        expected.sort_unstable();
+        assert_eq!(method_descriptors(&methods), expected);
+        assert!(method_descriptors(&[]).is_empty());
+    }
 
     #[test]
     fn exact_columns_and_empty_strings() {

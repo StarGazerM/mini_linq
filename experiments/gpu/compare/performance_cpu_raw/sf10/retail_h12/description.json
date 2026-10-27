@@ -1,0 +1,21 @@
+{
+  "configs": [
+    "default",
+    "no-reduce",
+    "le",
+    "le_runs",
+    "advised"
+  ],
+  "exports": [
+    [
+      "orders",
+      "o_orderkey,o_orderpriority"
+    ],
+    [
+      "lineitem",
+      "l_orderkey,l_linenumber,l_shipmode,l_commitdate,l_receiptdate,l_shipdate"
+    ]
+  ],
+  "name": "retail_h12",
+  "sql": "SELECT l_shipmode,\n    CAST(SUM(CASE WHEN o_orderpriority IN ('1-URGENT', '2-HIGH') THEN 1 ELSE 0 END) AS BIGINT) AS high_line_count,\n    CAST(SUM(CASE WHEN o_orderpriority NOT IN ('1-URGENT', '2-HIGH') THEN 1 ELSE 0 END) AS BIGINT) AS low_line_count\nFROM (SELECT DISTINCT l.l_orderkey, l.l_linenumber, l.l_shipmode, l.l_commitdate,\n    l.l_receiptdate, l.l_shipdate, o.o_orderpriority\n    FROM orders o JOIN lineitem l ON o.o_orderkey = l.l_orderkey\n    WHERE l.l_shipmode IN ('MAIL', 'SHIP') AND l.l_commitdate < l.l_receiptdate\n      AND l.l_shipdate < l.l_commitdate AND l.l_receiptdate >= DATE '1994-01-01'\n      AND l.l_receiptdate < DATE '1995-01-01') AS matches\nGROUP BY l_shipmode"
+}

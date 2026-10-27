@@ -11,10 +11,9 @@ mod h01;
 
 #[test]
 fn h01_grouped_head_matches_duckdb_distinct_join() {
-    // Two different line identities have equal aggregate arguments; duplicate
-    // physical rows contribute once, distinct identities contribute twice.
+    // dbgen's (order, line) key is unique. Equal aggregate arguments on
+    // different line identities must still contribute twice.
     let raw = vec![
-        vec![1, 1, 65, 70, 200, 1250, 0],
         vec![1, 1, 65, 70, 200, 1250, 0],
         vec![1, 2, 65, 70, 200, 1250, 0],
         vec![2, 1, 78, 79, 300, 700, 0],
@@ -42,18 +41,7 @@ fn h01_grouped_head_matches_duckdb_distinct_join() {
                 })
                 .collect(),
         };
-        let actual = tpch_runtime::same_plan_answers(|config| h01::run(&data, config), h01::canonical)
-            .into_iter()
-            .map(|(flag, status, quantity, price, count)| {
-                vec![
-                    flag.as_bytes()[0] as i32,
-                    status.as_bytes()[0] as i32,
-                    i32::try_from(quantity).unwrap(),
-                    i32::try_from(price).unwrap(),
-                    i32::try_from(count).unwrap(),
-                ]
-            })
-            .collect::<Vec<_>>();
+
         let sql = format!(
             r#"WITH lineitem AS (
             SELECT c0 AS l_orderkey, c1 AS l_linenumber,
@@ -70,11 +58,25 @@ fn h01_grouped_head_matches_duckdb_distinct_join() {
             &[cq_testkit::duckdb::RelationData {
                 name: "Lineitem".into(),
                 arity: 7,
-                rows,
+                rows: rows.clone(),
             }],
             &sql,
         )
         .expect("DuckDB H01 oracle");
-        assert_answers_equal("DuckDB H01", expected, "grouped CQ H01", actual, true);
+        for config in h01::CONFIGS {
+            let actual = h01::run(&data, config)
+                .into_iter()
+                .map(|(flag, status, quantity, price, count)| {
+                    vec![
+                        flag.as_bytes()[0] as i32,
+                        status.as_bytes()[0] as i32,
+                        i32::try_from(quantity).unwrap(),
+                        i32::try_from(price).unwrap(),
+                        i32::try_from(count).unwrap(),
+                    ]
+                })
+                .collect::<Vec<_>>();
+            assert_answers_equal("DuckDB H01", &expected, config, &actual, true);
+        }
     }
 }

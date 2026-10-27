@@ -188,7 +188,8 @@ fn compile(module: &structures::Program, consumer: Option<&syn::Expr>) -> syn::R
     let body = push.emit(&name, body)?;
     let head_state = analysis.head_dedup.get(&name).map(|ty| {
         let seen = temporary("head_seen", &name);
-        quote!(let mut #seen = <#ty>::new();)
+        let constructor = cq_print::canonical_set(ty);
+        quote!(let mut #seen = #constructor;)
     });
     let statements = &push.statements;
     let (endpoint, result) = match consumer {
@@ -402,7 +403,8 @@ impl Push<'_> {
                     .map(|column| self.access(result, column)),
             );
             let ty = &self.analysis.dedup[result];
-            let initialize = quote!(let mut #seen = <#ty>::new(););
+            let constructor = cq_print::canonical_set(ty);
+            let initialize = quote!(let mut #seen = #constructor;);
             let body = self.operator(
                 result,
                 quote! {
