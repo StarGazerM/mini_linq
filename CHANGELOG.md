@@ -7,6 +7,11 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- cuda-oxide `299eda41b` / RCCL `1d33079a`: device modules with at least 16
+  kernels split into kernel groups whose `opt` and `llc` run in parallel
+  (`CUDA_OXIDE_PTX_PARTITIONS`, default available parallelism up to 16); the
+  group PTX merges into one module. DOOP: 16 groups, opt+llc 5.7 s -> ~1.2 s,
+  all 211 kernels assemble to identical SASS; release build 47 s -> 39 s.
 - GPU Datalog holes whose query reads a local of the code around `datalog!`
   (SRD DOOP's `constants`) keep the closure form; a standalone hole function
   cannot capture locals. Free names are checked with `cq_syntax::rust`, callees
