@@ -7,6 +7,11 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Rebase the Datalog scheduling/GPU work onto the combined main history.
+  Preserve query-scope cache release alongside per-pool stratum scratch
+  release, and pin cuda-oxide `e7d4a63ba` / RCCL `d4c95133` without local
+  dependency patches. GPU Datalog phase timing is opt-in; DOOP `--gpu-only`
+  skips the CPU reference while the default mode retains exact comparison.
 - GPU host overhead: arena publication without terminal fences (timing opt-in,
   `GPU-Arena-Timing`), recorded `output reserve_previous` arena protocol that
   starts from the last validated count and reruns on shortfall

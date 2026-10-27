@@ -27,10 +27,17 @@ either endpoint.
 
 The workspace pins the pushed `mini-linq/main` branches of the StarGazerM
 cuda-oxide and RCCL forks by commit, without local dependency patches.
+The declared source of truth is cuda-oxide `e7d4a63ba` and RCCL `d4c95133`;
+the local `/data/cuda-oxide` and `/data/rccl` checkouts match those pushed
+revisions. Do not add path patches: update the git pins and lockfile together.
 It uses cuda-oxide's Rust **1.99.1** SIMT toolchain, with `RUSTC_BOOTSTRAP=1`
 configured for the compiler backend. Build the backend and install `cargo-oxide`
 from that pinned fork's nested `cuda-oxide/` workspace; the backend path is
 configured in `.cargo/cuda-oxide.toml`.
+The monorepo keeps host crates at its root and device/codegen crates under
+`cuda-oxide/crates`. Rebuild the configured release backend from the pinned
+checkout with `RUSTC_BOOTSTRAP=1 cargo build --release --lib --target-dir target`
+in `cuda-oxide/crates/rustc-codegen-cuda`.
 
 The shared host bindings require CUDA 13.0 or newer. With the HPC SDK layout,
 bindgen also needs the separate cuRAND headers under `math_libs`.
