@@ -3,7 +3,7 @@
 //! Qualifying orders are filtered once; zero counts use a native CQ anti-join.
 
 pub const NAME: &str = "retail_h13";
-pub const CONFIGS: &[&str] = &["default"];
+pub const CONFIGS: &[&str] = &["default", "radix", "radix_retained"];
 pub const EXPORTS: &[(&str, &str)] = &[
     ("customer", "c_custkey"),
     ("orders", "o_orderkey,o_custkey,o_comment"),
@@ -28,7 +28,7 @@ mini_linq::relation_loaders! {
 }
 
 pub fn load(root: &std::path::Path, config: &str) -> Result<Data, Box<dyn std::error::Error>> {
-    assert_eq!(config, "default", "unknown H13 configuration");
+    assert!(CONFIGS.contains(&config), "unknown H13 configuration");
     Ok(Data {
         customer: <relation_loader!(Customer)>::parquet(
             root.join("customer.parquet"), cq_load::ParquetOptions::default(),
@@ -39,9 +39,9 @@ pub fn load(root: &std::path::Path, config: &str) -> Result<Data, Box<dyn std::e
     })
 }
 
+crate::tpch_runtime::same_plan_kernel! { $;
 #[allow(non_snake_case)]
-pub fn run(data: &Data, config: &str) -> Vec<Answer> {
-    assert_eq!(config, "default", "unknown H13 configuration");
+pub(super) fn execute(data: &Data) -> Vec<Answer> {
     let Customer = data.customer.as_slice();
     let QualifiedOrders: Vec<(i64, i64)> = data.orders.iter()
         .filter(|row| !row.2.split_once("special")
@@ -49,7 +49,7 @@ pub fn run(data: &Data, config: &str) -> Vec<Answer> {
         .map(|row| (row.0, row.1))
         .collect();
     let QualifiedOrders = QualifiedOrders.as_slice();
-    let counts = mini_linq::compile! {
+    let counts = query! {
         pipeline {}
         struct Counts;
         relation Customer(c_custkey: i64);
@@ -59,7 +59,7 @@ pub fn run(data: &Data, config: &str) -> Vec<Answer> {
             Customer(customer_key), QualifiedOrders(order_key, customer_key);
     }
     .map(|(customer_key, count)| (*customer_key, count));
-    let zeros = mini_linq::compile! {
+    let zeros = query! {
         pipeline {}
         struct Zeros;
         relation Customer(c_custkey: i64);
@@ -69,6 +69,7 @@ pub fn run(data: &Data, config: &str) -> Vec<Answer> {
     }
     .map(|(customer_key,)| (*customer_key, 0));
     counts.chain(zeros).collect()
+}
 }
 
 pub fn canonical(rows: &[Answer]) -> Vec<Vec<String>> {

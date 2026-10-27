@@ -30,9 +30,8 @@ impl Parse for Advice {
 }
 
 /// Record `stage = batch N expand` at each unstaged probe whose recorded provider
-/// exposes exact, length-known ranges: a SortedRun build, a PrefixRun prefix,
-/// a resident sorted host, or the first probe of a Smallest intersection with
-/// PrefixRun candidate builds on both sides. HashedRun buckets are not exact ranges.
+/// declares finite, exact-size expansion support, including both candidate
+/// providers of a Smallest intersection and explicitly supported host reads.
 /// Each candidate is kept only if the language's stage contract
 /// (ST-Expand/ST-Stage) accepts it; Physical and provider decisions are unchanged.
 /// `N, depth D` limits nested expansion frames on one stream (default D = 2).

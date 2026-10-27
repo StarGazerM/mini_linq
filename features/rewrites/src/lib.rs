@@ -20,18 +20,34 @@
 //! search at runtime. No default selection changes.
 //! Use `pipeline { structures = [cq_rewrites::sorted_runs]; }`.
 //!
+//! `radix_runs` instead selects `::cq_storage::RadixRun<_,_>` for explicit
+//! singleton i32/i64/u32/u64 payload builds, including owned/computed keys.
+//! Its native radix12/error32 spline narrows exact payload search, without a hash
+//! or whole-array binary fallback. Dense-domain membership can use a lazy exact
+//! presence bitmap (at most 128 KiB and one byte per distinct key); payload-only
+//! reads do not allocate it. Unsupported providers stay unchanged.
+//! Compose with `retain_lookups` to reuse exact ranges, and optionally
+//! `expand_lookups(N)` for checked segmented execution. Neither sorted storage
+//! nor range capability alone selects a merge join or GPU execution.
+//! Use `pipeline { structures = [cq_rewrites::radix_runs, cq_rewrites::retain_lookups]; }`.
+//!
 //! `retain_lookups` takes no arguments and records a `share` decision and a
 //! `repr` witness for each eligible eager semijoin followed by a probe of the
-//! same SortedRun build and preserved keys, or either singleton integral
-//! PrefixRun directory prefix of a recorded binary Smallest intersection.
-//! Both prefix witnesses force at the introducing probe. The cursor is
-//! `::cq_storage::RunCursor<'_, _>`; an existing positions representation is
-//! preserved. The Structures contract rejects witness escape across retained
-//! rows, canonicalization, opaque steps or other unsupported boundaries.
-//! HashIndex builds and probes preceding the semijoin are unchanged. Compose
-//! explicitly with
+//! same provider with declared `supports [retain]` and preserved keys. `expand`
+//! support implies `retain`; provider names do not establish either contract.
+//! Prefix witnesses force at the introducing probe. Generated cursor types are
+//! inferred with `as _`; an existing positions representation is preserved.
+//! The Structures contract rejects witness escape across retained rows,
+//! canonicalization, opaque steps or other unsupported boundaries. Providers
+//! without declared support and probes preceding the semijoin are unchanged.
+//! Compose explicitly with
 //! `pipeline { structures = [cq_rewrites::sorted_runs, cq_rewrites::retain_lookups]; }`.
 //! Neither rewrite is enabled by default.
+//! Sorted/radix selection records `supports [retain, expand, keys]`. Native
+//! payload selection records `supports [keys]` where distinct-key enumeration is
+//! implemented. `retype(r => MyProvider<_, _> supports [expand, keys])` replaces
+//! a provider and its declarations together; bare `retype` clears declarations.
+//! Retyping a live retained/staged plan must preserve its required support.
 //!
 //! ```rust
 //! let rows = [(1, 10), (1, 11), (2, 20)];
@@ -100,8 +116,10 @@
 //! assert_eq!(answer, vec![(1,10,100)]);
 //! ```
 //!
-//! `retype(selector => RustType)` replaces only recorded types. It preserves
-//! Physical, entry order, reader identities, and index levels. A bare result name
+//! `retype(selector => RustType)` replaces recorded types and clears their
+//! support declarations. Optional `supports [...]` replaces the declaration
+//! explicitly on keyed providers. It preserves Physical, entry order, reader
+//! identities, and index levels. A bare result name
 //! selects that result's built indexes, keysets and keyed host fallbacks, including
 //! supplemental candidate/membership reads. Scan, point, and range adapters keep
 //! their recorded types. `result(name)` disambiguates a result named like a kind.
@@ -122,9 +140,10 @@
 //! The type must implement `Build` and `ConservativeMembership`; the printer
 //! emits a rustc capability guard. Exact membership types qualify automatically.
 //! `join_filter(rN)` adds an exact filter when the scan has an admissible covering
-//! probe, even without default positional selection. This explicitly requires
-//! a positional host. Apply `retype` afterwards to choose another type. The
-//! Structures contract rejects missing covers, anti joins and opaque Rust in
+//! probe whose selected complete provider declares `keys`, even without default
+//! positional selection. This explicitly requires a positional host. Apply
+//! `retype` afterwards to choose another type.
+//! The Structures contract rejects missing covers, anti joins and opaque Rust in
 //! the intervening spine. Neither advice changes the exact covering probe.
 //!
 //! Keyset budget changes are explicit type rewrites. A read with an exact
@@ -287,6 +306,15 @@ pub fn sorted_runs(input: TokenStream) -> TokenStream {
         .into()
 }
 
+/// Retype eligible one-key integral payload builds to RadixSpline runs.
+/// Compose with `retain_lookups` and `expand_lookups` for explicit cursor reuse
+/// and staging. This opt-in provider selection does not select merge joins.
+#[proc_macro]
+pub fn radix_runs(input: TokenStream) -> TokenStream {
+    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), cq_rewrite_passes::radix_runs)
+        .into()
+}
+
 /// Record one-level composite scalar HashIndex providers as exact GPU hashed runs.
 /// Compose after `sorted_runs`; this opt-in rewrite leaves CPU defaults unchanged.
 #[proc_macro]
@@ -295,11 +323,11 @@ pub fn hashed_runs(input: TokenStream) -> TokenStream {
         .into()
 }
 
-/// Retain a SortedRun lookup cursor from an eager semijoin until its later probe.
+/// Retain an exact run lookup cursor from an eager semijoin until its later probe.
 ///
 /// Records checked `share` and `repr ... witness` decisions only when invoked;
 /// ordinary pipelines retain their existing lookup behavior. Compose after
-/// `sorted_runs` to make eligible payload builds expose Copy range cursors.
+/// `sorted_runs` or `radix_runs` to expose Copy range cursors on eligible builds.
 #[proc_macro]
 pub fn retain_lookups(input: TokenStream) -> TokenStream {
     cq_stage::rewrite::<cq_lang_structures::Program>(

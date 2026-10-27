@@ -1,0 +1,226 @@
+{
+  "timestamp_utc": "20261023T192442Z",
+  "platform": "macOS-27.0.1-arm64-arm-64bit",
+  "machine": "arm64",
+  "hardware": {
+    "machdep.cpu.brand_string": "Apple M3 Max",
+    "hw.memsize": "137438953472",
+    "hw.logicalcpu": "16"
+  },
+  "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin\n",
+  "compile_command": [
+    "clang++",
+    "-std=c++20",
+    "-O3",
+    "-DNDEBUG",
+    "-mcpu=native",
+    "-I/Users/stargazermiao/workspace/mini_linq/experiments/mac/index-bench/target/pgm-safe",
+    "-I/Users/stargazermiao/workspace/mini_linq/experiments/mac/index-bench/target/artifacts/RadixSpline/include",
+    "-I/Users/stargazermiao/workspace/mini_linq/experiments/mac/index-bench/target/artifacts/CHT/include",
+    "-I/Users/stargazermiao/workspace/mini_linq/experiments/mac/index-bench/target/artifacts/unordered_dense/include",
+    "/Users/stargazermiao/workspace/mini_linq/experiments/mac/index-bench/benchmark.cpp",
+    "-o",
+    "/Users/stargazermiao/workspace/mini_linq/experiments/mac/index-bench/target/index-bench"
+  ],
+  "artifacts": {
+    "bench_search": {
+      "url": "https://github.com/qyliu-hkust/bench_search.git",
+      "revision": "a028f9dc8d14156d12e94f75f972a7d34588b195",
+      "role": "PGM and PGM++ author artifact"
+    },
+    "RadixSpline": {
+      "url": "https://github.com/learnedsystems/RadixSpline.git",
+      "revision": "ab96aa59d429e7423beba2350bdcdf88952df282",
+      "role": "RadixSpline author implementation"
+    },
+    "CHT": {
+      "url": "https://github.com/stoianmihail/CHT.git",
+      "revision": "8b6f7b3641c375a34506e808db9753384c44ca26",
+      "role": "Compact Hist-Tree implementation by Mihail Stoian, not the original paper artifact"
+    },
+    "unordered_dense": {
+      "url": "https://github.com/martinus/unordered_dense.git",
+      "revision": "7c58a8b7a48e790fe72f6508eb3b46317cbba9d5",
+      "role": "Modern SIMD-group dense hash-map baseline"
+    },
+    "Libox": {
+      "url": "https://github.com/strivesnail/Libox.git",
+      "revision": "1fb5463432c1324859d831181bda5a3e719783fb",
+      "role": "LiBox author artifact, inspected but not benchmarked: unconditional x86 AVX-512 intrinsics and OpenMP"
+    }
+  },
+  "seed": 42,
+  "reps": 5,
+  "scope": "Single-thread CPU index construction and joins; no GPU timing or saturation claim",
+  "source_sha256": {
+    "benchmark.cpp": "7bf5b012d443842ab0bcbaf220927f2a700589d903da5fbe4731cae3f79b2afa",
+    "indexes.hpp": "793fb712bbe1d5864687d06653bbfc279b53ec7e07469af13b86b273519c137d",
+    "run.py": "ef69bbeec192270bc392b9e5d687bb7d6b2eaabd2d8af62e128a79b72741818b",
+    "artifacts.json": "5df89464827a72ef1d1b3c1cd05c3357bab399b695b83ce205f00c0a12fa64bb",
+    "pgm-safe-projection.patch": "b2c1bfbc0acfb4e5958249e81ec01da30fd2169cdb4cf2f72fe9a1bf6b1752f7"
+  },
+  "cases": [
+    {
+      "name": "00-uniform-k65536-q131072-h0.5-f1",
+      "command": [
+        "/Users/stargazermiao/workspace/mini_linq/experiments/mac/index-bench/target/index-bench",
+        "--keys",
+        "65536",
+        "--probes",
+        "131072",
+        "--distribution",
+        "uniform",
+        "--hit-rate",
+        "0.5",
+        "--fanout",
+        "1",
+        "--reps",
+        "5",
+        "--seed",
+        "42",
+        "--filters",
+        "bloom"
+      ],
+      "measurements": 91
+    },
+    {
+      "name": "01-uniform-k1048576-q262144-h0.5-f4",
+      "command": [
+        "/Users/stargazermiao/workspace/mini_linq/experiments/mac/index-bench/target/index-bench",
+        "--keys",
+        "1048576",
+        "--probes",
+        "262144",
+        "--distribution",
+        "uniform",
+        "--hit-rate",
+        "0.5",
+        "--fanout",
+        "4",
+        "--reps",
+        "5",
+        "--seed",
+        "42",
+        "--filters",
+        "bloom"
+      ],
+      "measurements": 91
+    },
+    {
+      "name": "02-uniform-k1048576-q262144-h0.1-f4",
+      "command": [
+        "/Users/stargazermiao/workspace/mini_linq/experiments/mac/index-bench/target/index-bench",
+        "--keys",
+        "1048576",
+        "--probes",
+        "262144",
+        "--distribution",
+        "uniform",
+        "--hit-rate",
+        "0.1",
+        "--fanout",
+        "4",
+        "--reps",
+        "5",
+        "--seed",
+        "42",
+        "--filters",
+        "bloom"
+      ],
+      "measurements": 91
+    },
+    {
+      "name": "03-uniform-k1048576-q262144-h0.9-f4",
+      "command": [
+        "/Users/stargazermiao/workspace/mini_linq/experiments/mac/index-bench/target/index-bench",
+        "--keys",
+        "1048576",
+        "--probes",
+        "262144",
+        "--distribution",
+        "uniform",
+        "--hit-rate",
+        "0.9",
+        "--fanout",
+        "4",
+        "--reps",
+        "5",
+        "--seed",
+        "42",
+        "--filters",
+        "bloom"
+      ],
+      "measurements": 91
+    },
+    {
+      "name": "04-clustered-k1048576-q262144-h0.5-f4",
+      "command": [
+        "/Users/stargazermiao/workspace/mini_linq/experiments/mac/index-bench/target/index-bench",
+        "--keys",
+        "1048576",
+        "--probes",
+        "262144",
+        "--distribution",
+        "clustered",
+        "--hit-rate",
+        "0.5",
+        "--fanout",
+        "4",
+        "--reps",
+        "5",
+        "--seed",
+        "42",
+        "--filters",
+        "bloom"
+      ],
+      "measurements": 91
+    },
+    {
+      "name": "05-clustered-k4194304-q262144-h0.5-f4",
+      "command": [
+        "/Users/stargazermiao/workspace/mini_linq/experiments/mac/index-bench/target/index-bench",
+        "--keys",
+        "4194304",
+        "--probes",
+        "262144",
+        "--distribution",
+        "clustered",
+        "--hit-rate",
+        "0.5",
+        "--fanout",
+        "4",
+        "--reps",
+        "5",
+        "--seed",
+        "42",
+        "--filters",
+        "bloom"
+      ],
+      "measurements": 91
+    },
+    {
+      "name": "06-uniform-k1048576-q262144-h0.5-f32",
+      "command": [
+        "/Users/stargazermiao/workspace/mini_linq/experiments/mac/index-bench/target/index-bench",
+        "--keys",
+        "1048576",
+        "--probes",
+        "262144",
+        "--distribution",
+        "uniform",
+        "--hit-rate",
+        "0.5",
+        "--fanout",
+        "32",
+        "--reps",
+        "5",
+        "--seed",
+        "42",
+        "--filters",
+        "bloom"
+      ],
+      "measurements": 91
+    }
+  ],
+  "complete": true
+}

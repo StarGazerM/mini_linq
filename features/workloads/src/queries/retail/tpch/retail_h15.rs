@@ -4,7 +4,7 @@
 use cq_load::{Date, Decimal, Load};
 
 pub const NAME: &str = "retail_h15";
-pub const CONFIGS: &[&str] = &["default"];
+pub const CONFIGS: &[&str] = &["default", "radix", "radix_retained"];
 pub const EXPORTS: &[(&str, &str)] = &[
     ("supplier", "s_suppkey,s_name,s_address,s_phone"),
     ("lineitem", "l_orderkey,l_linenumber,l_suppkey,l_extendedprice,l_discount,l_shipdate"),
@@ -35,7 +35,7 @@ mini_linq::relation_loaders! {
 }
 
 pub fn load(root: &std::path::Path, config: &str) -> Result<Data, Box<dyn std::error::Error>> {
-    assert_eq!(config, "default", "unknown H15 configuration");
+    assert!(CONFIGS.contains(&config), "unknown H15 configuration");
     Ok(Data {
         supplier: <relation_loader!(Supplier)>::parquet(
             root.join("supplier.parquet"), cq_load::ParquetOptions::default(),
@@ -46,14 +46,14 @@ pub fn load(root: &std::path::Path, config: &str) -> Result<Data, Box<dyn std::e
     })
 }
 
+crate::tpch_runtime::same_plan_kernel! { $;
 #[allow(non_snake_case)]
-pub fn run(data: &Data, config: &str) -> Vec<Answer> {
-    assert_eq!(config, "default", "unknown H15 configuration");
+pub(super) fn execute(data: &Data) -> Vec<Answer> {
     let Supplier = data.supplier.as_slice();
     let Lineitem = data.lineitem.as_slice();
     let start = Date::load("1996-01-01").expect("authored ISO date");
     let end = Date::load("1996-04-01").expect("authored ISO date");
-    let Revenue: Vec<(i64, i64)> = mini_linq::compile! {
+    let Revenue: Vec<(i64, i64)> = query! {
         pipeline {}
         struct RevenueBySupplier;
         relation Lineitem(l_orderkey: i64, l_linenumber: i64, l_suppkey: i64,
@@ -65,7 +65,7 @@ pub fn run(data: &Data, config: &str) -> Vec<Answer> {
             let revenue_units: i64 = price.scaled() * (100 - discount.scaled());
     }.map(|(supplier, revenue)| (*supplier, revenue)).collect();
     let Revenue = Revenue.as_slice();
-    let Maximum: Vec<(Option<i64>,)> = mini_linq::compile! {
+    let Maximum: Vec<(Option<i64>,)> = query! {
         pipeline {}
         struct MaximumRevenue;
         relation Revenue(supplier_key: i64, revenue: i64);
@@ -74,7 +74,7 @@ pub fn run(data: &Data, config: &str) -> Vec<Answer> {
     }
     .collect();
     let Maximum = Maximum.as_slice();
-    mini_linq::compile! {
+    query! {
         pipeline {}
         struct Query;
         relation Supplier(s_suppkey: i64, s_name: String, s_address: String, s_phone: String);
@@ -88,6 +88,7 @@ pub fn run(data: &Data, config: &str) -> Vec<Answer> {
     }.map(|(supplier, name, address, phone, revenue)| {
         (*supplier, name.clone(), address.clone(), phone.clone(), *revenue)
     }).collect()
+}
 }
 
 pub fn canonical(rows: &[Answer]) -> Vec<Vec<String>> {

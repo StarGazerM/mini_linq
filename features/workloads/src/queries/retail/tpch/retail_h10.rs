@@ -4,7 +4,7 @@
 use cq_load::{Date, Decimal, Load};
 
 pub const NAME: &str = "retail_h10";
-pub const CONFIGS: &[&str] = &["default"];
+pub const CONFIGS: &[&str] = &["default", "radix", "radix_retained"];
 pub const EXPORTS: &[(&str, &str)] = &[
     ("customer", "c_custkey,c_name,c_acctbal,c_nationkey,c_address,c_phone,c_comment"),
     ("orders", "o_orderkey,o_custkey,o_orderdate"),
@@ -46,7 +46,7 @@ mini_linq::relation_loaders! {
 }
 
 pub fn load(root: &std::path::Path, config: &str) -> Result<Data, Box<dyn std::error::Error>> {
-    assert_eq!(config, "default", "unknown H10 configuration");
+    assert!(CONFIGS.contains(&config), "unknown H10 configuration");
     Ok(Data {
         customer: <relation_loader!(Customer)>::parquet(
             root.join("customer.parquet"), cq_load::ParquetOptions::default(),
@@ -63,16 +63,16 @@ pub fn load(root: &std::path::Path, config: &str) -> Result<Data, Box<dyn std::e
     })
 }
 
+crate::tpch_runtime::same_plan_kernel! { $;
 #[allow(non_snake_case)]
-pub fn run(data: &Data, config: &str) -> Vec<Answer> {
-    assert_eq!(config, "default", "unknown H10 configuration");
+pub(super) fn execute(data: &Data) -> Vec<Answer> {
     let Customer = data.customer.as_slice();
     let Orders = data.orders.as_slice();
     let Lineitem = data.lineitem.as_slice();
     let Nation = data.nation.as_slice();
     let start = Date::load("1993-10-01").expect("authored ISO date");
     let end = Date::load("1994-01-01").expect("authored ISO date");
-    mini_linq::compile! {
+    query! {
         pipeline {}
         struct Query;
         relation Customer(c_custkey: i64, c_name: String, c_acctbal: Decimal,
@@ -96,6 +96,7 @@ pub fn run(data: &Data, config: &str) -> Vec<Answer> {
         (*key, name.clone(), revenue, balance, nation.clone(), address.clone(), phone.clone(), comment.clone())
     })
     .collect()
+}
 }
 
 pub fn canonical(rows: &[Answer]) -> Vec<Vec<String>> {

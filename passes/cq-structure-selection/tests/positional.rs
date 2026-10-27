@@ -41,7 +41,7 @@ fn decisions_roundtrip_and_physical_is_identical() {
 }
 #[test]
 fn lineage_and_summary_forgery_are_rejected_independently() {
-    for alteration in 0..7 {
+    for alteration in 0..4 {
         let mut target = selected();
         for e in &mut target.structures.entries {
             match (&mut e.structure, alteration) {
@@ -65,18 +65,6 @@ fn lineage_and_summary_forgery_are_rejected_independently() {
                     3,
                 ) => {
                     *build = syn::parse_quote!(j);
-                    break;
-                }
-                (Structure::Read { marker, .. }, 4) => {
-                    *marker = syn::parse_quote!(::cq_load::ColumnAt<99>);
-                    break;
-                }
-                (Structure::KeySet { ty, .. }, 5) => {
-                    *ty = syn::parse_quote!(::std::collections::HashSet<_>);
-                    break;
-                }
-                (Structure::KeySet { ty, .. }, 6) => {
-                    *ty = syn::parse_quote!(::cq_storage::AdaptiveKeySet<_,::cq_storage::BorrowedI64TupleCodec,64>);
                     break;
                 }
                 _ => {}
@@ -158,30 +146,25 @@ fn join_filter_plan(branch: bool) -> ir::Program {
 }
 
 #[test]
-fn join_filters_record_exact_type_and_covering_probe() {
+fn join_filters_preserve_coverage_and_lineage() {
     for branch in [false, true] {
         let selected = join_filter_plan(branch);
         let facts = ir::contract::check(&selected).unwrap();
         assert_eq!(facts.join_filters["l"].len(), 1);
         let filter = &facts.join_filters["l"][0];
-        assert_eq!(
-            filter.ty,
-            syn::parse_quote!(::cq_storage::AdaptiveKeySet<i64, ::cq_storage::I64Codec, 67108864>)
-        );
         assert_eq!(filter.covering, "j");
         assert_eq!(
             syn::parse2::<ir::Program>(selected.to_token_stream()).unwrap(),
             selected
         );
-        for forgery in 0..4 {
+        for forgery in 0..3 {
             let mut bad = selected.clone();
             for entry in &mut bad.structures.entries {
                 if let Structure::JoinFilter { filter, .. } = &mut entry.structure {
                     match forgery {
                         0 => filter.covering = syn::parse_quote!(out),
                         1 => filter.build = syn::parse_quote!(s),
-                        2 => filter.key = syn::parse_quote!([z]),
-                        _ => filter.marker = syn::parse_quote!(::cq_load::ColumnAt<1>),
+                        _ => filter.key = syn::parse_quote!([z]),
                     }
                 }
             }

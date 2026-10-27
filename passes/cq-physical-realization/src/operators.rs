@@ -581,11 +581,20 @@ impl<'a> Printer<'a> {
         let expand = self.analysis.expands.contains(name);
         let (lookup, payload, host): (TokenStream, Vec<String>, bool) = match &access {
             Access::Host(access) => (
-                self.host_lookup(&left, access, false, false),
+                witness.as_ref().map_or_else(
+                    || self.host_lookup(&left, access, false, false),
+                    |witness| quote!(#witness),
+                ),
                 access.payload.clone(),
                 false,
             ),
             Access::Prefix(structure, levels) => {
+                if witness.is_some() {
+                    return error(
+                        &keyed.right,
+                        "native retained prefix expansion needs a payload cursor, not a candidate-directory cursor",
+                    );
+                }
                 let all = self.levels_of(&right, structure);
                 // The opt-in binary case has exactly one remaining key,
                 // which is the entire payload of this prefix read.
@@ -612,6 +621,12 @@ impl<'a> Printer<'a> {
                 let lookup = if let Some(witness) = &witness {
                     quote!(#witness)
                 } else if expand {
+                    if self.levels_of(&right, structure).len() != 1 {
+                        return error(
+                            &keyed.right,
+                            "native segmented payload expansion requires one exact payload level",
+                        );
+                    }
                     let key = self
                         .stored_key(&right, &columns)
                         .iter()
@@ -753,17 +768,33 @@ impl<'a> Printer<'a> {
         let right = symbol_name(&keyed.right);
         let columns = sorted(&keyed.columns);
         let input = self.scan(&keyed.left)?;
-        let Access::Built(structure) = self.keyed(&keyed.right, &columns)? else {
-            return error(
-                &keyed.right,
-                "host retained lookup requires a one-level built index; PrefixRun directory witnesses require the GPU printer",
-            );
+        let lookup = match self.keyed(&keyed.right, &columns)? {
+            Access::Built(structure) => {
+                if self.levels_of(&right, &structure).len() != 1 {
+                    return error(
+                        &keyed.right,
+                        "native retained lookup requires one exact payload level",
+                    );
+                }
+                let key = self
+                    .stored_key(&right, &columns)
+                    .iter()
+                    .map(|column| self.key_field(&left, column, self.owned_key(&right, &columns)))
+                    .collect::<Vec<_>>();
+                quote!(::cq_storage::provider_contract::retain(#structure, &(#(#key,)*)))
+            }
+            Access::Host(access) => {
+                let read = self.host_retained_read(&left, &access);
+                let key = self.host_key(&left, &access);
+                quote!(::cq_storage::provider_contract::retain(#read, #key))
+            }
+            Access::Prefix(..) => {
+                return error(
+                    &keyed.right,
+                    "native retained lookup requires an exact payload cursor; candidate-prefix witnesses are unsupported",
+                );
+            }
         };
-        let key = self
-            .stored_key(&right, &columns)
-            .iter()
-            .map(|column| self.key_field(&left, column, self.owned_key(&right, &columns)))
-            .collect::<Vec<_>>();
         let mut used = self.carried(name).to_vec();
         used.extend(columns.iter().cloned());
         let pattern = self.bind_columns(&left, &used, false);
@@ -776,7 +807,7 @@ impl<'a> Printer<'a> {
         Ok(quote! {
             ::core::iter::Iterator::filter_map(#input, move |#pattern| {
                 #condition
-                let #witness: #ty = ::cq_storage::IndexRead::lookup(&#structure, &(#(#key,)*));
+                let #witness: #ty = #lookup;
                 let mut __cq_first = #witness;
                 if ::core::iter::Iterator::next(&mut __cq_first).is_some() {
                     Some(#row)

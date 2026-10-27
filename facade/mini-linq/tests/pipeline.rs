@@ -132,21 +132,6 @@ fn a_shared_host_point_read_cannot_supply_the_stream_fallback_type() {
     assert_eq!(answer, [(&1,)]);
 }
 
-#[test]
-fn ordered_host_fallback_records_must_be_ordered_admissible() {
-    let source: cq_lang_physical::Program = syn::parse_quote!(physical {
-        relation L(x:i32); relation R(x:i32);
-        l = pipe rename L@0 {x -> x}; r = pipe rename R@1 {x -> x};
-        out = pipe canon merge[x] l,r; return out as answer(x);
-    });
-    let structured = cq_structure_selection::compile(&source).unwrap();
-    let mut invalid = structured.clone();
-    let entry = invalid.structures.entries.iter_mut().find(|e| matches!(&e.structure, cq_lang_structures::Structure::Host { reader, .. } if reader == "out")).unwrap();
-    if let cq_lang_structures::Structure::Host { keyed, .. } = &mut entry.structure {
-        keyed.ty = syn::parse_quote!(::std::collections::HashSet<_>);
-    }
-    assert!(cq_lang_structures::check_rewrite(&structured, &invalid).is_err());
-}
 
 macro_rules! capture_plan {
     (pipeline {}; $($plan:tt)*) => {

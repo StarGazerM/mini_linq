@@ -97,8 +97,11 @@ mod instrument;
 mod membership;
 mod ordered;
 pub mod rows;
+mod radix_run;
+mod radix_spline;
 mod sorted_run;
 pub mod sequence;
+pub mod provider_contract;
 mod trie;
 
 pub use answers::{Answers, GroupedAnswers, SingleGroup};
@@ -110,6 +113,7 @@ pub use ordered::{
     GroupedCursor, KeyCursor, Merge, OrderedCursor, OrderedRead, Sorted, merge, sorted_by,
 };
 pub use sorted_run::{RunCursor, SortedRun};
+pub use radix_run::{RadixKey, RadixRun};
 pub use trie::Trie;
 
 mod point;
@@ -124,6 +128,7 @@ pub mod require {
         pair
     }
     pub fn seek<T: super::IndexRead>(_: T) {}
+    pub fn candidates<T: super::Candidates>(_: T) {}
     pub fn contains<K: ?Sized, T: super::ExactMembership<K>>(_: T) {}
     pub fn conservative<K: ?Sized, T: super::ConservativeMembership<K>>(_: &T) {}
     pub fn ordered<T: super::OrderedRead>(_: T) {}
@@ -140,6 +145,8 @@ pub mod require {
     impl<K> OrderedKey<K> for &K {}
     pub fn positional<T: super::PositionalRows>(_: T) {}
     pub fn block_read<H: super::BlockRead<C>, C: super::Column<H>>(_: H, _: C) {}
+    /// Check a marker's schema binding without constructing or evaluating it.
+    pub fn column_slot<const N: usize, H: super::PositionalRows, C: super::ColumnSlot<H, N>>(_: H) {}
     pub fn interval<K: Ord, T: super::ExactIntervalMembership<K>>(_: &T) {}
 }
 /// Decide Leibniz identity using the admissible column type's `==`.
@@ -238,7 +245,7 @@ pub mod stage;
 pub use adaptive::{AdaptiveKeySet, BorrowedI64TupleCodec, I64Codec, KeyCodec, NoDense};
 pub use fetch::Fetch;
 pub use positional::{
-    BlockId, BlockRead, Column, ExactIntervalMembership, Membership, Point, PositionalRows,
+    BlockId, BlockRead, Column, ColumnSlot, ExactIntervalMembership, Membership, Point, PositionalRows,
     ReadPredicate, RowId, RowPredicate, Window, read_with_filter,
 };
 pub use selection::{Selection, SelectionRows, SelectionSummary};

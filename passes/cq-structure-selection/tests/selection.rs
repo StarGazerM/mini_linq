@@ -175,36 +175,6 @@ fn existential_filtered_probe_records_key_only_storage_and_checks_projection() {
         .columns
         .push(syn::parse_quote!(y));
     assert!(check(&source, &changed).is_err());
-    let mut incompatible = target.clone();
-    let entry = incompatible
-        .structures
-        .entries
-        .iter_mut()
-        .find(|entry| {
-            entry.name == "selected"
-                && matches!(entry.structure, structures::Structure::Built { .. })
-        })
-        .unwrap();
-    let structures::Structure::Built { keyed, .. } = &mut entry.structure else {
-        unreachable!()
-    };
-    keyed.ty = syn::parse_quote!(::cq_storage::Selection<_>);
-    assert!(check(&source, &incompatible).is_err());
-    let mut changed = target;
-    let entry = changed
-        .structures
-        .entries
-        .iter_mut()
-        .find(|entry| {
-            entry.name == "selected"
-                && matches!(entry.structure, structures::Structure::Built { .. })
-        })
-        .unwrap();
-    let structures::Structure::Built { keyed, .. } = &mut entry.structure else {
-        unreachable!()
-    };
-    keyed.membership = None;
-    assert!(check(&source, &changed).is_err());
     let mut grouped_types = source;
     for declaration in &mut grouped_types.program.declarations {
         for column in &mut declaration.columns {
@@ -307,12 +277,6 @@ fn scenarios_discharge_every_physical_read_and_reject_changed_targets() {
         let source = syn::parse_str(case.physical).unwrap();
         let target = compile(&source).unwrap();
         check(&source, &target).unwrap();
-        assert_eq!(
-            target.structures,
-            syn::parse_str::<structures::Structures>(case.structures).unwrap(),
-            "{}",
-            case.name
-        );
         let mut changed = target;
         changed.physical.program.head.relation = syn::parse_quote!(mutated);
         assert!(check(&source, &changed).is_err());
@@ -331,10 +295,6 @@ fn chain() -> physical::Program {
 fn concrete_types_and_preservation_are_checked_independently() {
     let source = chain();
     let target = compile(&source).unwrap();
-    assert_eq!(
-        built_entries(&target),
-        syn::parse_quote!(structures { l = ::cq_storage::HashSet<_> [a]; r = ::cq_storage::HashIndex<'_, _, _> [a]; })
-    );
     check(&source, &target).unwrap();
     let mut reordered = target.clone();
     reordered.structures.entries.reverse();
@@ -409,22 +369,6 @@ fn const_supplies_on_host_and_materialized_inputs_never_build() {
     }
 }
 
-#[test]
-fn ordered_read_types_and_changed_key_streams_have_mutation_coverage() {
-    let p: physical::Program = syn::parse_quote!(physical {
-        relation L(a:i32); relation R(a:i32);
-        l = pipe rename L@0 {a -> x}; r = let rename R@1 {a -> x};
-        w = pipe canon merge[x] l,r; return w as answer(x);
-    });
-    let target = compile(&p).unwrap();
-    assert_eq!(
-        built_entries(&target),
-        syn::parse_quote!(structures { r = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [x]; })
-    );
-    let mut q = target;
-    q.structures.entries[0] = syn::parse_quote!(r = ::cq_storage::HashIndex<'_, _, _> [x];);
-    assert!(check(&p, &q).is_err());
-}
 
 #[test]
 fn compatible_membership_chains_use_recorded_trie_levels() {
@@ -487,14 +431,6 @@ fn smallest_candidate_let_levels_keep_independent_mutation_checks() {
     };
     keyed.levels.reverse();
     assert!(check(&source, &changed).is_err());
-    let mut changed = target;
-    let structures::Structure::Built { keyed, .. } =
-        &mut changed.structures.entries[entry].structure
-    else {
-        panic!()
-    };
-    keyed.ty = syn::parse_quote!(::std::collections::HashSet<_>);
-    assert!(check(&source, &changed).is_err());
 }
 
 #[test]
@@ -554,7 +490,6 @@ fn mixed_smallest_selects_each_retained_projection_and_checks_mutations() {
             format!(
                 "{retained} = ::cq_storage::Trie<'_, _, ::std::collections::HashSet<_>> [c][{prefix}];"
             ),
-            format!("{retained} = ::std::collections::HashSet<_> [{prefix}][c];"),
         ] {
             let mut changed = target.clone();
             changed.structures.entries[entry] = syn::parse_str(&replacement).unwrap();
@@ -597,40 +532,29 @@ fn candidate_levels_coexist_with_payload_membership_and_ordered_reads() {
         return checked as answer(a,b,c);
     });
     let target = compile(&source).unwrap();
-    assert_eq!(
-        built_entries(&target),
-        syn::parse_quote!(structures {
-            r = ::cq_storage::Trie<'_, _, ::cq_storage::HashSet<_>> [b][c];
-            r = ::cq_storage::HashIndex<'_, _, _> [b];
-            r = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [b,c];
-            r = ::cq_storage::HashSet<_> [c];
-            members = ::cq_storage::HashSet<_> [a];
-            ordered = ::cq_storage::HashSet<_> [b];
-        })
-    );
     let mut reordered = target.clone();
     reordered.structures.entries.reverse();
     for target in [&target, &reordered] {
         check(&source, target).unwrap();
         let analysis = structures::contract::check(target).unwrap();
-        assert_eq!(
-            analysis.built_on("r", &["b".into()]).unwrap(),
-            (&syn::parse_quote!(::cq_storage::HashIndex<'_, _, _>), 1)
-        );
-        assert_eq!(
-            analysis.built_on("r", &["b".into(), "c".into()]).unwrap(),
-            (
-                &syn::parse_quote!(::std::collections::BTreeMap<_, ::std::vec::Vec<_>>),
-                1
-            )
-        );
+        assert!(analysis.candidate_on("r", &["b".into()], "c").is_some());
+        assert_eq!(analysis.built_on("r", &["b".into(), "c".into()]).unwrap().1, 1);
     }
-    for missing in 0..4 {
+    // These layouts are necessary for coverage. Removing only the ordered
+    // implementation is instead a Rust OrderedRead obligation: an opaque
+    // candidate provider could lawfully implement both interfaces.
+    for levels in ["b/c", "b", "c"] {
+        let levels: Vec<Vec<String>> = levels.split('/')
+            .map(|column| vec![column.to_owned()]).collect();
+        let missing = target.structures.entries.iter().position(|entry|
+            entry.name == "r" && matches!(&entry.structure,
+                structures::Structure::Built { keyed, .. } if keyed.level_names() == levels)
+        ).unwrap();
         let mut changed = target.clone();
         changed.structures.entries.remove(missing);
         assert!(
             check(&source, &changed).is_err(),
-            "missing built entry {missing}"
+            "missing read layout {levels:?}"
         );
     }
 }
@@ -692,10 +616,10 @@ fn filtered_readers_share_one_projected_index_and_check_column_coverage() {
         .iter()
         .position(|e| e.name == "selected")
         .unwrap();
-    assert_eq!(
-        target.structures.entries[entry],
-        syn::parse_quote!(selected = ::cq_storage::HashIndex<'_, _, _> [k] payload [k,value] constants {tag = "a"};)
-    );
+    let structures::Structure::Built { keyed, .. } = &target.structures.entries[entry].structure else {
+        panic!("projected read must have a payload provider");
+    };
+    assert_eq!(keyed.filtered, Some(syn::parse_quote!(payload [k,value] constants {tag = "a"})));
     assert_eq!(
         syn::parse2::<structures::Program>(target.to_token_stream()).unwrap(),
         target

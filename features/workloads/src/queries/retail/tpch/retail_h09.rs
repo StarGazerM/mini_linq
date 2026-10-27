@@ -3,6 +3,11 @@
 // profit arithmetic, grouping, and ordering remain outside this inspired core.
 // The author evaluates the opaque string predicate on Part before the joins;
 // its written Before domain is Part alone, not a joined prefix.
+// SF1: filtered Part has 10,664 rows; its Lineitem join has 319,404.
+// This connected order keeps the large Lineitem build keyed only by part_key.
+// The PartSupp-first candidate has smaller prefix work (777,440 vs 1,607,684)
+// but builds Lineitem on a composite key; both are recorded in the Mac comparison.
+// Orders before Lineitem would form 10,664 * 1,500,000 independent pairs.
 
 crate::tpch_runtime::retail_kernel! { $;
     name "retail_h09";
@@ -25,7 +30,6 @@ WHERE p.p_name LIKE '%green%'"#;
     }
     answer(order_key: i64, part_key: i64, supplier_key: i64) :-
         Part(part_key, part_name), if part_name.contains("green"),
-        Orders(order_key),
         Lineitem(order_key, part_key, supplier_key), PartSupp(part_key, supplier_key),
-        Supplier(supplier_key, nation_key), Nation(nation_key);
+        Orders(order_key), Supplier(supplier_key, nation_key), Nation(nation_key);
 }

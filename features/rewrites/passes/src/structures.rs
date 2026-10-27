@@ -34,6 +34,7 @@ pub fn membership(source: &ir::Program, arguments: TokenStream) -> syn::Result<i
             keyed.filtered = Some(syn::parse_quote!(payload [#columns] constants {}));
         }
         keyed.membership = Some(Default::default());
+        keyed.supports = None;
         matched += 1;
     }
     if matched != 1 {
@@ -96,6 +97,7 @@ struct Retype {
     selector: Selector,
     at: Ident,
     ty: Type,
+    supports: Option<ir::ProviderSupport>,
 }
 
 impl Parse for Retype {
@@ -143,7 +145,8 @@ impl Parse for Retype {
         };
         input.parse::<Token![=>]>()?;
         let ty = input.parse()?;
-        Ok(Self { selector, at, ty })
+        let supports = if input.is_empty() { None } else { Some(input.parse()?) };
+        Ok(Self { selector, at, ty, supports })
     }
 }
 
@@ -153,6 +156,8 @@ impl Parse for Retype {
 /// Dedup includes both canon and computed-head state; rows selects buffers.
 /// `entry(N)` selects exactly one provider-bearing entry by its zero-based
 /// Structures order, including host adapters, without touching sibling entries.
+/// Retyping replaces support metadata: append `supports [...]` to declare the
+/// replacement's contracts; omitting it clears the previous provider's support.
 pub fn retype(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
     let analysis = ir::contract::check(source)?;
     let request: Retype = syn::parse2(arguments)?;
@@ -222,9 +227,18 @@ pub fn retype(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::P
             },
         };
         if matches {
+            if request.supports.is_some()
+                && !matches!(entry.structure, Structure::Built { .. } | Structure::Host { .. })
+            {
+                return Err(syn::Error::new_spanned(
+                    &request.at,
+                    "provider support requires a keyed representation",
+                ));
+            }
             match &mut entry.structure {
                 Structure::Built { keyed, .. } | Structure::Host { keyed, .. } => {
                     keyed.ty = request.ty.clone();
+                    keyed.supports = request.supports.clone();
                 }
                 Structure::Dedup { ty, .. }
                 | Structure::HeadDedup { ty, .. }
@@ -340,11 +354,33 @@ pub fn join_filter(source: &ir::Program, arguments: TokenStream) -> syn::Result<
 /// Retype one-level HashIndex payload builds with one integral key.
 /// Host fallbacks and smallest-intersection candidates retain their providers.
 pub fn sorted_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
+    select_runs(source, arguments, RunKind::Sorted)
+}
+
+/// Formal rule EXT-RadixRuns:
+/// Retype eligible singleton integral payload builds to RadixSpline runs.
+/// This selects an exact provider, not an ordered-input processing algorithm.
+pub fn radix_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
+    select_runs(source, arguments, RunKind::Radix)
+}
+
+#[derive(Clone, Copy)]
+enum RunKind {
+    Sorted,
+    Radix,
+}
+
+fn select_runs(
+    source: &ir::Program,
+    arguments: TokenStream,
+    kind: RunKind,
+) -> syn::Result<ir::Program> {
     if !arguments.is_empty() {
-        return Err(syn::Error::new_spanned(
-            arguments,
-            "sorted_runs takes no arguments",
-        ));
+        let message = match kind {
+            RunKind::Sorted => "sorted_runs takes no arguments",
+            RunKind::Radix => "radix_runs takes no arguments",
+        };
+        return Err(syn::Error::new_spanned(arguments, message));
     }
     let analysis = ir::contract::check(source)?;
     let candidates = ir::physical::candidate_prefixes(&source.physical, &analysis.physical);
@@ -381,6 +417,23 @@ pub fn sorted_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<
                 })
             })
             .collect();
+        if matches!(kind, RunKind::Radix) {
+            // Constants removed from the stored key do not make a composite
+            // read eligible: the public advice promises one logical key.
+            if columns.len() == 1 && stored.len() == 1 {
+                let mut ty = ir::ungroup_type(&analysis.physical.rows[&name].types[stored[0]]);
+                while let Type::Reference(reference) = ty {
+                    ty = ir::ungroup_type(&reference.elem);
+                }
+                if matches!(ty, Type::Path(path)
+                    if ["i32", "i64", "u32", "u64"].iter().any(|name| path.path.is_ident(name)))
+                {
+                    keyed.ty = syn::parse_quote!(::cq_storage::RadixRun<_, _>);
+                    keyed.supports = Some(syn::parse_quote!(supports [retain, expand, keys]));
+                }
+            }
+            continue;
+        }
         let computed = |result: &str| {
             analysis.physical.rows[result]
                 .computed
@@ -420,6 +473,7 @@ pub fn sorted_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<
             } else {
                 syn::parse_quote!(::cq_storage::SortedRun<_, _, ::cq_storage::BorrowedI64TupleCodec>)
             };
+            keyed.supports = Some(syn::parse_quote!(supports [retain, expand, keys]));
         }
     }
     ir::check_rewrite(source, &target)?;
@@ -467,6 +521,7 @@ pub fn hashed_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<
                 || matches!(ty, Type::Reference(r) if matches!(&*r.elem, Type::Path(p) if p.path.is_ident("str")))
         }) && keyed.filtered.is_none() {
             keyed.ty = syn::parse_quote!(::cq_gpu_runtime::HashedRun<_, _>);
+            keyed.supports = None;
         }
     }
     ir::check_rewrite(source, &target)?;

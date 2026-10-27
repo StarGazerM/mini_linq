@@ -20,6 +20,7 @@ struct Options {
     query: Option<String>,
     config: Option<String>,
     reduction_comparison: bool,
+    index_comparison: bool,
 }
 impl Options {
     fn parse(arguments: Vec<String>) -> Result<Self> {
@@ -29,11 +30,13 @@ impl Options {
         let mut query = None;
         let mut config = None;
         let mut reduction_comparison = false;
+        let mut index_comparison = false;
         let mut args = arguments.into_iter();
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--tpch" if !tpch => tpch = true,
                 "--reduction-comparison" if !reduction_comparison => reduction_comparison = true,
+                "--index-comparison" if !index_comparison => index_comparison = true,
                 "--query" if query.is_none() => {
                     query = Some(args.next().ok_or("--query requires a catalog query")?)
                 }
@@ -69,12 +72,19 @@ impl Options {
         if config.is_some() && reduction_comparison {
             return Err("--config and --reduction-comparison are mutually exclusive".into());
         }
+        if index_comparison && (config.is_some() || reduction_comparison) {
+            return Err(
+                "--index-comparison is mutually exclusive with --config and --reduction-comparison"
+                    .into(),
+            );
+        }
         Ok(Self {
             sf,
             runs,
             query,
             config,
             reduction_comparison,
+            index_comparison,
         })
     }
 }
@@ -200,6 +210,29 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
                 .configs
                 .retain(|config| matches!(config.as_str(), "default" | "no-reduce"));
         }
+    } else if options.index_comparison {
+        for query in &mut queries {
+            let mut configs = vec!["default", "radix", "radix_retained"];
+            // Host fallbacks are not retyped by radix advice. Where authored,
+            // compare explicit materialization under the same Physical plan too.
+            if query
+                .configs
+                .iter()
+                .any(|name| matches!(name.as_str(), "built_hash" | "built_radix"))
+            {
+                configs.extend(["built_hash", "built_radix"]);
+            }
+            for &config in &configs {
+                if !query.configs.iter().any(|name| name == config) {
+                    return Err(format!(
+                        "{} requires configuration {config} for --index-comparison",
+                        query.name
+                    )
+                    .into());
+                }
+            }
+            query.configs = configs.into_iter().map(str::to_owned).collect();
+        }
     } else {
         for query in &mut queries {
             query.configs.retain(|config| config != "no-reduce");
@@ -241,6 +274,9 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
     }
     if options.reduction_comparison {
         suffix.push_str("-reduction-comparison");
+    }
+    if options.index_comparison {
+        suffix.push_str("-index-comparison");
     }
     let path = bench.join(format!("tpch-{}{suffix}.tsv", options.sf));
     let pending = path.with_extension("tsv.partial");
@@ -413,6 +449,7 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
         .output()?;
     let metadata = serde_json::json!({
         "label":"TPC-H-derived", "selection":options.query, "sf":options.sf,"runs":options.runs,"warm_runs":1,
+        "config":options.config,"reduction_comparison":options.reduction_comparison,"index_comparison":options.index_comparison,
         "duckdb_version":database.version,"duckdb_default_threads":database.default_threads,
         "rustc":String::from_utf8_lossy(&rustc.stdout).trim(),
         "compile_method":"Cargo --release --timings per-query binary unit (all authored configurations); macro expansion + optimization + linking; dependency units excluded; not isolated proc-macro CPU time",
@@ -605,6 +642,7 @@ mod tests {
                 query: None,
                 config: None,
                 reduction_comparison: false,
+                index_comparison: false,
             }
         );
         assert_eq!(
@@ -640,6 +678,43 @@ mod tests {
             ],
         ] {
             assert!(parse(&args).is_err());
+        }
+    }
+
+    #[test]
+    fn index_comparison_option_boundaries() {
+        let parse = |args: &[&str]| Options::parse(args.iter().map(|s| (*s).to_owned()).collect());
+        assert_eq!(
+            parse(&[
+                "--tpch", "--sf", "1", "--runs", "5", "--query", "tpch_q06",
+                "--index-comparison",
+            ])
+            .unwrap(),
+            Options {
+                sf: "1".into(),
+                runs: 5,
+                query: Some("tpch_q06".into()),
+                config: None,
+                reduction_comparison: false,
+                index_comparison: true,
+            }
+        );
+        for conflicting in [
+            vec!["--index-comparison"],
+            vec!["--config", "default"],
+            vec!["--reduction-comparison"],
+        ] {
+            for comparison_first in [true, false] {
+                let mut args = vec!["--tpch", "--sf", "0.1"];
+                if comparison_first {
+                    args.push("--index-comparison");
+                    args.extend_from_slice(&conflicting);
+                } else {
+                    args.extend_from_slice(&conflicting);
+                    args.push("--index-comparison");
+                }
+                assert!(parse(&args).is_err());
+            }
         }
     }
 }

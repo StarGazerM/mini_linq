@@ -302,7 +302,7 @@ fn lookup_witness_and_expansion_are_refused_by_name() {
             structures {{
                 l host scan = ::core::iter::Map<_,_> [];
                 r host scan = ::core::iter::Map<_,_> [];
-                r = ::cq_storage::SortedRun<_,_> [k];
+                r = ::cq_storage::SortedRun<_,_> [k] supports [expand];
                 out canon = ::std::collections::HashSet<_>;
                 {decision}
             }}

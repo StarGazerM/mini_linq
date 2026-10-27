@@ -15,28 +15,45 @@ struct RankDirectory {
     prefixes: Vec<usize>,
 }
 
-/// A stable sorted representation of `(key, item)` occurrences.
-/// Keys require a total order consistent with Leibniz equality. Codecs obey
-/// `KeyCodec`'s injectivity/order premises; `NoDense` uses binary search only.
-/// Lookup handles borrow this value for their host lifetime, not the lifetime
-/// of a temporary reference passed to `IndexRead::lookup`.
-pub struct SortedRun<K, V, C = NoDense> {
-    keys: Vec<K>,
-    offsets: Vec<usize>,
-    items: Vec<V>,
-    rank: Option<RankDirectory>,
-    codec: C,
+/// Shared clustered payload storage; each provider owns its own lookup directory.
+pub(crate) struct RunRows<K, V> {
+    pub(crate) keys: Vec<K>,
+    pub(crate) offsets: Vec<usize>,
+    pub(crate) items: Vec<V>,
 }
 
-impl<K: Ord + Copy, V: Copy, C: KeyCodec<K>> SortedRun<K, V, C> {
-    /// Formal rule STR-SortedRun:
-    /// Stable sorting preserves each key's input occurrence order and its
-    /// multiplicity. Unique keys and adjacent offsets partition all items;
-    /// presence plus rank selects precisely the same range as binary search.
-    pub fn from_pairs(source: impl IntoIterator<Item = (K, V)>, codec: C) -> Self {
+impl<K: Ord + Copy, V> RunRows<K, V> {
+    pub(crate) fn from_pairs(source: impl IntoIterator<Item = (K, V)>) -> Self {
         crate::count!(index_builds);
         let mut pairs: Vec<_> = source.into_iter().collect();
         pairs.sort_by_key(|pair| pair.0);
+        Self::from_sorted_pairs(pairs)
+    }
+
+    /// Cache an order-preserving numeric key when sorting indirect keys.
+    /// The stable cached-key sort keeps equal-key payloads in input order.
+    /// Small, ordered, and strictly reversed inputs avoid the auxiliary key array.
+    pub(crate) fn from_pairs_cached_key(
+        source: impl IntoIterator<Item = (K, V)>,
+        mut encode: impl FnMut(&K) -> u64,
+    ) -> Self {
+        crate::count!(index_builds);
+        let mut pairs: Vec<_> = source.into_iter().collect();
+        if pairs.len() <= 32 {
+            pairs.sort_by_key(|pair| pair.0);
+        } else if !pairs.is_sorted_by(|a, b| a.0 <= b.0) {
+            if pairs.windows(2).all(|pair| pair[0].0 > pair[1].0) {
+                // Strictness is required: reversing equal keys would reverse
+                // the occurrence order promised by IndexRead.
+                pairs.reverse();
+            } else {
+                pairs.sort_by_cached_key(|pair| encode(&pair.0));
+            }
+        }
+        Self::from_sorted_pairs(pairs)
+    }
+
+    fn from_sorted_pairs(pairs: Vec<(K, V)>) -> Self {
         let distinct =
             usize::from(!pairs.is_empty()) + pairs.windows(2).filter(|p| p[0].0 != p[1].0).count();
         let mut keys = Vec::with_capacity(distinct);
@@ -53,42 +70,100 @@ impl<K: Ord + Copy, V: Copy, C: KeyCodec<K>> SortedRun<K, V, C> {
         offsets.push(items.len());
         #[cfg(feature = "counters")]
         crate::counters::build_cardinality(keys.len());
-        let rank = Self::rank_directory(&keys, codec);
         Self {
             keys,
             offsets,
             items,
-            rank,
-            codec,
         }
+    }
+}
+
+impl<K, V> RunRows<K, V> {
+    #[inline]
+    pub(crate) fn range(&self, slot: Option<usize>) -> (usize, usize) {
+        slot.map_or((self.items.len(), self.items.len()), |slot| {
+            (self.offsets[slot], self.offsets[slot + 1])
+        })
+    }
+
+    #[inline]
+    pub(crate) fn cursor(&self, slot: Option<usize>) -> RunCursor<'_, V> {
+        let (begin, end) = self.range(slot);
+        RunCursor {
+            items: &self.items[begin..end],
+            position: 0,
+        }
+    }
+}
+
+impl<K: Copy, V: Copy> RunRows<K, V> {
+    pub(crate) fn rows(&self) -> impl Iterator<Item = (K, V)> {
+        self.keys.iter().enumerate().flat_map(move |(slot, &key)| {
+            self.items[self.offsets[slot]..self.offsets[slot + 1]]
+                .iter()
+                .map(move |&item| (key, item))
+        })
+    }
+}
+
+/// A stable sorted representation of `(key, item)` occurrences.
+/// Keys require a total order consistent with Leibniz equality. Codecs obey
+/// `KeyCodec`'s injectivity/order premises; `NoDense` uses binary search only.
+/// Lookup handles borrow this value for their host lifetime, not the lifetime
+/// of a temporary reference passed to `IndexRead::lookup`.
+pub struct SortedRun<K, V, C = NoDense> {
+    rows: RunRows<K, V>,
+    rank: Option<RankDirectory>,
+    codec: C,
+}
+
+impl<K, V, C> crate::Keys for SortedRun<K, V, C> {
+    type Key = K;
+    type Iter<'a> = std::slice::Iter<'a, K> where Self: 'a;
+
+    fn key_count(&self) -> usize {
+        self.rows.keys.len()
+    }
+
+    fn distinct_keys(&self) -> Self::Iter<'_> {
+        self.rows.keys.iter()
+    }
+}
+
+impl<K: Ord + Copy, V: Copy, C: KeyCodec<K>> SortedRun<K, V, C> {
+    /// Formal rule STR-SortedRun:
+    /// Stable sorting preserves each key's input occurrence order and its
+    /// multiplicity. Unique keys and adjacent offsets partition all items;
+    /// presence plus rank selects precisely the same range as binary search.
+    pub fn from_pairs(source: impl IntoIterator<Item = (K, V)>, codec: C) -> Self {
+        let rows = RunRows::from_pairs(source);
+        let rank = Self::rank_directory(&rows.keys, codec);
+        Self { rows, rank, codec }
     }
 
     /// Number of distinct stored keys, also used by recorded join filters.
     pub fn len(&self) -> usize {
-        self.keys.len()
+        self.rows.keys.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.keys.is_empty()
+        self.rows.keys.is_empty()
     }
 
     /// Borrow the unique keys in increasing order without enumerating payloads.
     pub fn keys(&self) -> impl Iterator<Item = &K> {
-        self.keys.iter()
+        self.rows.keys.iter()
     }
 
     /// Every stored item in key order, bucket by bucket.
     pub fn items(&self) -> &[V] {
-        &self.items
+        &self.rows.items
     }
 
     /// Half-open position range of `key`'s bucket in [`Self::items`]; empty
     /// (at the end) when the key is absent. The same range `lookup` enumerates.
     pub fn range(&self, key: &K) -> (usize, usize) {
-        match self.slot(key) {
-            Some(slot) => (self.offsets[slot], self.offsets[slot + 1]),
-            None => (self.items.len(), self.items.len()),
-        }
+        self.rows.range(self.slot(key))
     }
 
     fn rank_directory(keys: &[K], codec: C) -> Option<RankDirectory> {
@@ -140,7 +215,7 @@ impl<K: Ord + Copy, V: Copy, C: KeyCodec<K>> SortedRun<K, V, C> {
             }
             Some(rank.prefixes[offset / 64] + (word & (bit - 1)).count_ones() as usize)
         } else {
-            self.keys.binary_search(key).ok()
+            self.rows.keys.binary_search(key).ok()
         }
     }
 }
@@ -189,10 +264,7 @@ impl<'a, K: Ord + Copy, V: Copy, C: KeyCodec<K>> IndexRead for &'a SortedRun<K, 
     type Cursor = RunCursor<'a, V>;
     fn lookup(&self, key: &K) -> Self::Cursor {
         crate::count!(lookups);
-        let items = self.slot(key).map_or(&[][..], |slot| {
-            &self.items[self.offsets[slot]..self.offsets[slot + 1]]
-        });
-        RunCursor { items, position: 0 }
+        self.rows.cursor(self.slot(key))
     }
 }
 
@@ -206,11 +278,7 @@ impl<K: Ord + Copy, V: Copy, C: KeyCodec<K>> ExactMembership<K> for SortedRun<K,
 impl<K: Copy, V: Copy, C> Rows for &SortedRun<K, V, C> {
     type Row = (K, V);
     fn rows(self) -> impl Iterator<Item = Self::Row> {
-        self.keys.iter().enumerate().flat_map(move |(slot, &key)| {
-            self.items[self.offsets[slot]..self.offsets[slot + 1]]
-                .iter()
-                .map(move |&item| (key, item))
-        })
+        self.rows.rows()
     }
 }
 

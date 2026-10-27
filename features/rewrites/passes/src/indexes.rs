@@ -274,6 +274,11 @@ pub fn sorted_indexes(source: &ir::Program, arguments: TokenStream) -> syn::Resu
                 ty = syn::parse_quote!(::cq_storage::Trie<'_, _, #ty>);
             }
             keyed.ty = ty;
+            keyed.supports = if payload && layout.len() == 1 {
+                Some(syn::parse_quote!(supports [keys]))
+            } else {
+                None
+            };
             replacements.push(entry);
         }
         let first = built[0];

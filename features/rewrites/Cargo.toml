@@ -27,6 +27,7 @@ cq-testkit = { version = "0.1.0", path = "../../testkit/cq-testkit" }
 cq-rewrite-test-driver = { version = "0.1.0", path = "test-driver" }
 cq-structure-selection = { version = "0.1.0", path = "../../passes/cq-structure-selection" }
 cq-storage = { version = "0.1.0", path = "../../runtime/cq-storage", features = ["counters"] }
+cq-load = { version = "0.1.0", path = "../../runtime/cq-load" }
 mini-linq = { version = "0.1.0", path = "../../facade/mini-linq" }
 proc-macro2 = "1"
 quote = "1"

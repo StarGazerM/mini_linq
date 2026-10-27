@@ -79,7 +79,7 @@ pub struct LevelNode { pub name: Ident, pub collaborative: bool, pub dynamic: bo
 
 /// Target catalogs are ordered syntax/capability data, with no target dependency here.
 pub struct Catalog { pub providers: Vec<ProviderToken>, pub codecs: Vec<CodecToken>, pub canons: Vec<CanonToken> }
-pub struct ProviderToken { pub ty: syn::Type, pub capabilities: Vec<Capability>, pub levels: Vec<Vec<String>>, pub elements: Option<Vec<syn::Type>> }
+pub struct ProviderToken { pub ty: syn::Type, pub capabilities: Vec<Capability>, pub supports: Vec<cq_lang_structures::ProviderCapability>, pub levels: Vec<Vec<String>>, pub elements: Option<Vec<syn::Type>> }
 pub struct CodecToken { pub ty: syn::Type, pub ordered: bool, pub levels: Vec<Vec<String>> }
 pub struct CanonToken { pub ty: syn::Type, pub levels: Vec<Vec<String>>, pub max_packed_bits: Option<u32> }
 

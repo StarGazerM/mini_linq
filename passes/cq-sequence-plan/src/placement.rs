@@ -853,6 +853,7 @@ mod tests {
     fn catalog(levels: Vec<Vec<String>>) -> Catalog {
         Catalog {
             providers: vec![ProviderToken {
+                supports: Vec::new(),
                 ty: syn::parse_quote!(Index),
                 capabilities: vec![Capability::Exact, Capability::Membership],
                 levels,

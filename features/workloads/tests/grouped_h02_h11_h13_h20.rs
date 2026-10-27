@@ -2,6 +2,10 @@ use cq_load::{Date, Decimal, Load};
 use cq_testkit::conformance::assert_answers_equal;
 use cq_testkit::duckdb::{RelationData, evaluate_sql};
 
+#[allow(dead_code, unused_imports, unused_macros)]
+#[path = "../src/tpch_runtime.rs"]
+mod tpch_runtime;
+
 #[allow(dead_code)]
 #[path = "../src/queries/retail/tpch/retail_h02.rs"]
 mod h02;
@@ -61,7 +65,7 @@ fn h02_minimum_preserves_ties_and_restricts_the_minimum_to_europe() {
                 unicode(address),unicode(phone),unicode(comment)
             FROM ({}) AS result(balance,supplier,nation,part,manufacturer,address,phone,comment)"#, h02::SQL);
         let expected = evaluate_sql(&[raw(rows, 3)], &sql).unwrap();
-        let actual = h02::run(&data, "default").into_iter()
+        let actual = tpch_runtime::same_plan_answers(|config| h02::run(&data, config), h02::canonical).into_iter()
             .map(|(balance, supplier, nation, part, manufacturer, address, phone, comment)| {
                 vec![integer(balance), code(&supplier), code(&nation), integer(part),
                     code(&manufacturer), code(&address), code(&phone), code(&comment)]
@@ -89,7 +93,7 @@ fn h11_threshold_is_strict_and_both_sums_preserve_supplier_identity() {
             nation(n_nationkey,n_name) AS (VALUES (1,'GERMANY'),(2,'FRANCE'))
             SELECT * FROM ({})"#, h11::SQL);
         let expected = evaluate_sql(&[raw(rows, 4)], &sql).unwrap();
-        let actual = h11::run(&data, "default").into_iter()
+        let actual = tpch_runtime::same_plan_answers(|config| h11::run(&data, config), h11::canonical).into_iter()
             .map(|(part, value)| vec![integer(part), integer(value)]).collect::<Vec<_>>();
         assert_answers_equal("DuckDB H11", expected, "staged H11", actual, true);
     }
@@ -112,13 +116,13 @@ fn h13_counts_zero_and_obeys_ordered_comment_pattern() {
                     WHEN 2 THEN 'requests special' ELSE 'specialspecialrequests' END AS o_comment
                 FROM "mini-linq/raw/0") {}"#, h13::SQL);
         let expected = evaluate_sql(&[raw(rows, 3)], &sql).unwrap();
-        let actual = h13::run(&data, "default").into_iter()
+        let actual = tpch_runtime::same_plan_answers(|config| h13::run(&data, config), h13::canonical).into_iter()
             .map(|(customer, count)| vec![integer(customer), i32::try_from(count).unwrap()])
             .collect::<Vec<_>>();
         assert_answers_equal("DuckDB H13", expected, "count plus anti-join H13", actual, true);
     }
     let empty = h13::Data { customer: vec![], orders: vec![] };
-    assert!(h13::run(&empty, "default").is_empty());
+    assert!(tpch_runtime::same_plan_answers(|config| h13::run(&empty, config), h13::canonical).is_empty());
 }
 
 #[test]
@@ -153,7 +157,7 @@ fn h20_preserves_line_identity_date_bounds_and_absent_group_null_semantics() {
                 FROM "mini-linq/raw/0")
             SELECT unicode(s_name),unicode(s_address) FROM ({})"#, h20::SQL);
         let expected = evaluate_sql(&[raw(rows, 6)], &sql).unwrap();
-        let actual = h20::run(&data, "default").into_iter()
+        let actual = tpch_runtime::same_plan_answers(|config| h20::run(&data, config), h20::canonical).into_iter()
             .map(|(name, address)| vec![code(&name), code(&address)]).collect::<Vec<_>>();
         assert_answers_equal("DuckDB H20", expected, "staged H20", actual, true);
     }
@@ -194,7 +198,7 @@ fn h15_grouped_max_preserves_all_maximum_ties_and_quarter_boundaries() {
             SELECT s_suppkey,unicode(s_name),unicode(s_address),unicode(s_phone),total_revenue
             FROM ({})"#, h15::SQL);
         let expected = evaluate_sql(&[raw(rows, 6)], &sql).unwrap();
-        let actual = h15::run(&data, "default").into_iter()
+        let actual = tpch_runtime::same_plan_answers(|config| h15::run(&data, config), h15::canonical).into_iter()
             .map(|(supplier, name, address, phone, revenue)| {
                 vec![integer(supplier), code(&name), code(&address), code(&phone), integer(revenue)]
             }).collect::<Vec<_>>();

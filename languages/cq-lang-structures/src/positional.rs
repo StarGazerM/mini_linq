@@ -209,7 +209,6 @@ pub(crate) fn entry(program: &Program, entry: &Entry, facts: &mut Analysis) -> s
             ..
         } => {
             concrete_type(ty)?;
-            admissible(ty, "membership")?;
             check_origin(origin, &name, program, facts)?;
             let columns = names(&key.columns);
             if facts.physical.modes[&name] != ModeKind::Let
@@ -264,29 +263,6 @@ pub(crate) fn entry(program: &Program, entry: &Entry, facts: &mut Analysis) -> s
             concrete_type(marker)?;
             if !origin.columns.iter().any(|c| c.column == *column) {
                 return error(column, "read column is absent from lineage");
-            }
-            if let syn::Type::Path(path) = marker {
-                if path
-                    .path
-                    .segments
-                    .last()
-                    .is_some_and(|s| s.ident == "ColumnAt")
-                {
-                    let base = symbol_name(&origin.base);
-                    let n = syn::Index::from(
-                        facts.host_layouts[&base]
-                            .iter()
-                            .position(|c| *c == symbol_name(column))
-                            .expect("checked base column"),
-                    );
-                    let expected: syn::Type = syn::parse_quote!(::cq_load::ColumnAt<#n>);
-                    if marker != &expected {
-                        return error(
-                            marker,
-                            "marker must match the recorded declaration-order column",
-                        );
-                    }
-                }
             }
             if facts
                 .reads
@@ -403,35 +379,8 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<()> {
                 "keyset requires a membership demand and recorded reusable source rows",
             );
         }
-        // Known providers cannot silently lose interval or key-layout contracts.
-        if let syn::Type::Path(p) = &set.ty {
-            if let Some(last) = p.path.segments.last() {
-                if last.ident == "AdaptiveKeySet" {
-                    let syn::PathArguments::AngleBracketed(args) = &last.arguments else {
-                        return error(&set.ty, "keyset must record its codec and bit budget");
-                    };
-                    if args.args.len() != 3
-                        || !matches!(args.args.last(), Some(syn::GenericArgument::Const(_)))
-                    {
-                        return error(&set.ty, "keyset must record its codec and const bit budget");
-                    }
-                    let expected: syn::Type = if matches!(set.ownership, KeyOwnership::Owned(_)) {
-                        syn::parse_quote!(::cq_storage::I64Codec)
-                    } else if key.len() == 1
-                        && ungroup_type(&facts.physical.rows[name].types[&key[0]])
-                            == &syn::parse_quote!(i64)
-                    {
-                        syn::parse_quote!(::cq_storage::BorrowedI64TupleCodec)
-                    } else {
-                        syn::parse_quote!(::cq_storage::NoDense)
-                    };
-                    if !matches!(&args.args[1], syn::GenericArgument::Type(t) if *t == expected || *t == syn::parse_quote!(::cq_storage::NoDense))
-                    {
-                        return error(&set.ty, "keyset codec disagrees with key ownership/layout");
-                    }
-                }
-            }
-        }
+        // Codec/key-layout and interval requirements are Rust trait obligations
+        // of the recorded provider, identical for aliases and builtin spellings.
     }
     // Formal rule STR-Read: A summary names only the existing right build of this reader, earlier in Physical.
     for (name, read) in &facts.reads {
@@ -514,7 +463,6 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<()> {
                     if !matches!(set.ownership, KeyOwnership::Owned(_)) {
                         return error(&set.ty, "scalar marker summary requires owned scalar keys");
                     }
-                    admissible(&set.ty, "interval")?;
                 } else if !facts
                     .keysets
                     .get(&(right, columns))

@@ -6,7 +6,7 @@
 use cq_load::{Date, Decimal};
 
 pub const NAME: &str = "retail_h18";
-pub const CONFIGS: &[&str] = &["default"];
+pub const CONFIGS: &[&str] = &["default", "radix", "radix_retained"];
 pub const EXPORTS: &[(&str, &str)] = &[
     ("lineitem", "l_orderkey,l_linenumber,l_quantity"),
     ("orders", "o_orderkey,o_custkey,o_orderdate,o_totalprice"),
@@ -40,7 +40,7 @@ mini_linq::relation_loaders! {
 }
 
 pub fn load(root: &std::path::Path, config: &str) -> Result<Data, Box<dyn std::error::Error>> {
-    assert_eq!(config, "default", "unknown H18 configuration");
+    assert!(CONFIGS.contains(&config), "unknown H18 configuration");
     Ok(Data {
         lineitem: <relation_loader!(Lineitem)>::parquet(
             root.join("lineitem.parquet"), cq_load::ParquetOptions::default(),
@@ -54,11 +54,11 @@ pub fn load(root: &std::path::Path, config: &str) -> Result<Data, Box<dyn std::e
     })
 }
 
+crate::tpch_runtime::same_plan_kernel! { $;
 #[allow(non_snake_case)]
-pub fn run(data: &Data, config: &str) -> Vec<Answer> {
-    assert_eq!(config, "default", "unknown H18 configuration");
+pub(super) fn execute(data: &Data) -> Vec<Answer> {
     let Lineitem = data.lineitem.as_slice();
-    let quantities: Vec<(i64, i64)> = mini_linq::compile! {
+    let quantities: Vec<(i64, i64)> = query! {
         pipeline {}
         struct Quantities;
         relation Lineitem(l_orderkey: i64, l_linenumber: i64, l_quantity: Decimal);
@@ -72,7 +72,7 @@ pub fn run(data: &Data, config: &str) -> Vec<Answer> {
     let Quantity = quantities.as_slice();
     let Orders = data.orders.as_slice();
     let Customer = data.customer.as_slice();
-    mini_linq::compile! {
+    query! {
         pipeline {}
         struct Query;
         relation Quantity(order_key: i64, sum_quantity: i64);
@@ -90,6 +90,7 @@ pub fn run(data: &Data, config: &str) -> Vec<Answer> {
         (name.clone(), *customer, *order, *date, price, *quantity)
     })
     .collect()
+}
 }
 
 pub fn canonical(rows: &[Answer]) -> Vec<Vec<String>> {

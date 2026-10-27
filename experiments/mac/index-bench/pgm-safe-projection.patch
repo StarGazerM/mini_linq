@@ -1,0 +1,25 @@
+--- a/pgm_index.h
++++ b/pgm_index.h
+@@ -320,12 +320,18 @@
+      * @return the approximate position of the specified key
+      */
+     inline size_t operator()(const K &k) const {
+-        size_t pos;
++        double projected;
+         if constexpr (std::is_same_v<K, int64_t> || std::is_same_v<K, int32_t>)
+-            pos = size_t(slope * double(std::make_unsigned_t<K>(k) - key));
++            projected = slope * double(std::make_unsigned_t<K>(k) - key);
+         else
+-            pos = size_t(slope * double(k - key));
+-        return pos + intercept;
++            projected = slope * double(k - key);
++        // Absent keys in large gaps can extrapolate beyond size_t. Saturate
++        // before conversion/addition; callers already cap at the next segment.
++        const auto limit = std::numeric_limits<size_t>::max();
++        if (projected >= double(limit))
++            return limit;
++        const size_t pos = size_t(projected);
++        return pos > limit - intercept ? limit : pos + intercept;
+     }
+ };
+ 

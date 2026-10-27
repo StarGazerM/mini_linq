@@ -292,6 +292,7 @@ class Round:
     probes: float
     touched: float = 1.0  # fraction of body blocks touched (blocked policy)
     reset: bool = False   # start a new relation (fresh index) before this round
+    build_first: bool = False  # probes require this round's absorbed rows; cannot overlap
 
 
 def datalog_synthetic(n_final: int, delta0: int, decay: float, rules: float, tail_rounds: int = 0,
@@ -338,11 +339,13 @@ def power_tail(n_final: int, delta0: int, alpha: float, rules: float, max_rounds
 
 def join_chain(tables: list[tuple[int, float]]) -> list[Round]:
     """TPC-H style: independent build/probe pairs (build rows, probes), each a fresh index."""
-    return [Round(n, p, reset=True) for n, p in tables]
+    return [Round(n, p, reset=True, build_first=True) for n, p in tables]
 
 
 def datalog_trace(path: Path, rules: float) -> list[Round]:
-    return [Round(int(r["delta"]), float(r.get("probes", rules * r["delta"])), float(r.get("touched", 1.0)))
+    return [Round(int(r["delta"]), float(r.get("probes", rules * r["delta"])),
+                  float(r.get("touched", 1.0)), reset=r.get("reset", False),
+                  build_first=r.get("build_first", False))
             for r in json.loads(path.read_text())]
 
 
@@ -373,13 +376,19 @@ def simulate(hw: Hardware, s: Structure, row: Row, rounds: list[Round], fanout: 
         if r.reset:
             lv = Levels(s.T, s.policy, base_rows)
             n = 0
-        pm, pb = probe(hw, s, row, r.probes, n, lv, fanout, hit)
-        am, ab, cbs, disp = absorb(hw, s, row, r.delta, n, lv, r.touched)
+        if r.build_first:
+            am, ab, cbs, disp = absorb(hw, s, row, r.delta, n, lv, r.touched)
+            n += r.delta
+            pm, pb = probe(hw, s, row, r.probes, n, lv, fanout, hit)
+        else:
+            pm, pb = probe(hw, s, row, r.probes, n, lv, fanout, hit)
+            am, ab, cbs, disp = absorb(hw, s, row, r.delta, n, lv, r.touched)
+            n += r.delta
         ov = cm.overhead(cbs, disp) + cp.overhead(1, 2)
         split = s.probe_proc.name != s.maint_proc.name
         if split:
             ov += cm.sync(2)
-        if overlap and split:
+        if overlap and split and not r.build_first:
             pop = OPS[s.probe_proc.name]["hash_probe" if s.hash_probe_measured else "probe"][0]
             mop = OPS[s.maint_proc.name]["merge"][0]
             pm *= hw.slowdown(pop, s.probe_proc.name, s.probe_proc.threads, mop)
@@ -393,7 +402,6 @@ def simulate(hw: Hardware, s: Structure, row: Row, rounds: list[Round], fanout: 
         res.overhead_ms += ov
         res.bytes += pb + ab
         res.rounds += 1
-        n += r.delta
     return res
 
 
@@ -444,7 +452,7 @@ def main():
     hw = Hardware(recs)
     row = Row(a.key_cols, a.payload_cols, a.width)
     if a.workload == "bulk":
-        rounds = [Round(a.n, a.probes)]
+        rounds = [Round(a.n, a.probes, build_first=True)]
     elif a.trace:
         rounds = datalog_trace(a.trace, a.rules)
     else:

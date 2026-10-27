@@ -7,7 +7,7 @@
 use cq_load::{Decimal, StringDictionary};
 
 pub const NAME: &str = "retail_h19";
-pub const CONFIGS: &[&str] = &["default"];
+pub const CONFIGS: &[&str] = &["default", "radix", "radix_retained"];
 pub const EXPORTS: &[(&str, &str)] = &[
     ("lineitem", "l_orderkey,l_linenumber,l_partkey,l_quantity,l_extendedprice,l_discount,l_shipmode,l_shipinstruct"),
     ("part", "p_partkey,p_brand,p_container,p_size"),
@@ -68,7 +68,7 @@ mini_linq::relation_loaders! {
 }
 
 pub fn load(root: &std::path::Path, config: &str) -> Result<Data, Box<dyn std::error::Error>> {
-    assert_eq!(config, "default", "unknown H19 configuration");
+    assert!(CONFIGS.contains(&config), "unknown H19 configuration");
     Ok(Data::from_strings(
         <relation_loader!(Lineitem)>::parquet(
             root.join("lineitem.parquet"), cq_load::ParquetOptions::default(),
@@ -79,9 +79,9 @@ pub fn load(root: &std::path::Path, config: &str) -> Result<Data, Box<dyn std::e
     ))
 }
 
+crate::tpch_runtime::same_plan_kernel! { $;
 #[allow(non_snake_case)]
-pub fn run(data: &Data, config: &str) -> Vec<Answer> {
-    assert_eq!(config, "default", "unknown H19 configuration");
+pub(super) fn execute(data: &Data) -> Vec<Answer> {
     let Lineitem = data.lineitem.as_slice();
     let Part = data.part.as_slice();
     let intern = |table: &str, column: &str, value: &str| -> u32 {
@@ -112,7 +112,7 @@ pub fn run(data: &Data, config: &str) -> Vec<Answer> {
     let lg_box: u32 = intern("part", "p_container", "LG BOX");
     let lg_pack: u32 = intern("part", "p_container", "LG PACK");
     let lg_pkg: u32 = intern("part", "p_container", "LG PKG");
-    mini_linq::compile! {
+    query! {
         pipeline {}
         struct Query;
         relation Lineitem(l_orderkey: i64, l_linenumber: i64, l_partkey: i64,
@@ -136,6 +136,7 @@ pub fn run(data: &Data, config: &str) -> Vec<Answer> {
             let revenue_units: i64 = price.scaled() * (100 - discount.scaled());
     }
     .collect()
+}
 }
 
 pub fn canonical(rows: &[Answer]) -> Vec<Vec<String>> {

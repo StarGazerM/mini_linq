@@ -90,6 +90,7 @@ fn catalog(machine: &Machine) -> Catalog {
     paths(&machine.root, Vec::new(), &mut levels);
     Catalog {
         providers: vec![ProviderToken {
+            supports: Vec::new(),
             ty: syn::parse_quote!(Index),
             elements: None,
             capabilities: vec![

@@ -1,9 +1,9 @@
 TPC-H-derived benchmark methodology
 
 Scope and query authorship
-The ten retail modules in src/queries/retail/tpch are independently named,
-inspired-by positive CQ kernels over dbgen tables. Their SQL peers are authored
-in each module. The pre-existing synthetic retail corpus remains unchanged.
+The current inventory contains 29 independently named retail-derived and canonical
+kernels over dbgen tables, including grouped and multistage kernels. Their SQL
+peers are authored with each module. The synthetic retail corpus is unchanged.
 The four d-prefixed kernels map their TPC-DS-inspired relation roles onto real
 TPC-H dbgen relations; each source documents the mapping. They are not TPC-DS
 queries. All filters execute inside the measured query, not during export.
@@ -35,18 +35,90 @@ Products/sums use i128 coefficients at scale four. Empty scalar SUM yields NULL.
 Every timed run must reproduce its warm answer. Two separate untimed counting executions must agree exactly.
 
 Configurations
-Each query compiles the same authored clauses in two configurations:
-- default: the written coarse binary CQ planner and default recorded Physical decisions;
-- hypergraph candidate: single-atom guard pushdown and GYO-tree semijoin
-  reduction on H03, H07, H08, D19, D27; the main written atom order is retained;
+Each query compiles the same authored clauses under named configurations:
+- default: the written/coarse CQ planner with Masks reductions and default
+  recorded Physical decisions; this is already a reduced baseline;
+- hypergraph candidate: written/coarse planning with tree reductions in
+  eligible acyclic scopes and block-aware reductions where applicable;
+  it is not uniformly "default plus Yannakakis";
 - generic_smallest candidate: fine variable-at-a-time planner, canonical
   projections and smallest intersection driver on H05, H09, H21, D72, D85;
 - generic-smallest candidate: the same Fine/canonical/smallest pass pipeline for full Q6 and Q19.
+- transfer: the CQ planner's exact forward/backward semijoin schedule, rooted
+  at the written outer stream, over its Masks reductions. This configuration
+  does not select the separate Sequence lookup_first family, a vectorized
+  blocked-Bloom RPT implementation, or RPT+ in-flight adaptive cancellation.
 All hosts are typed Vecs loaded from the same projections. This is a small
 candidate set, not an exhaustive planner search. The metadata records the
 best measured configuration for each query/scale from this set; candidates
 are not assumed faster than default. Initialization/index building is charged
 to every run; no configuration gets uncharged persistent prebuilt indexes.
+
+Explicit string predicates
+H05, H07-block, D27, and H08 bind string columns to query names and state their
+restrictions with explicit == predicates. H07-block keeps those names local to
+their respective branches. SQL, projected answers, and existing date conditions
+are unchanged; the original literal-bearing forms remain historical measurements.
+This is an authored representation choice, not a compiler reinterpretation of
+literal binding. Literal-bearing Rename retains its filtered/projected occurrence;
+recognized predicates instead permit Point/Select and const-read planning.
+Retention, keyset selection, and additional scan filters still depend on consumers.
+Compare emitted plans and measured work rather than assuming the two forms have
+the same storage or that every predicate adds a join filter.
+
+H05 order advisory
+cargo xtask bench --tpch --sf 1 --runs 5 --query retail_h05 --config advised
+selects checked order(Lineitem, Orders, Customer, Supplier, Nation, Region).
+The Supplier/customer-nation cycle is checked before Nation/Region expansion;
+the written Lineitem/Orders prerequisites of the date guard remain intact.
+Order advice leaves the authored CQ body and SQL unchanged. It is opt-in:
+default remains the control, and --index-comparison still selects its existing
+same-plan provider families. No filter-policy, provider, or compiler change is
+part of this advisory.
+
+Controlled hash/RadixSpline comparison
+cargo xtask bench --tpch --sf 1 --runs 5 --index-comparison
+selects default, radix, radix_retained for every catalog entry, including every
+stage of handwritten multistage kernels. Where built_hash/built_radix are
+authored, it also selects that matched pair (currently 17 kernels, 121 rows
+across all 29 kernels). A partially advertised built pair is an error.
+It is mutually exclusive with --config and --reduction-comparison. Radix retains
+the default logical/Physical plan and adds only cq_rewrites::radix_runs;
+radix_retained additionally requests checked lookup-witness reuse. The command
+does not select the LE planner.
+
+The provider advice affects eligible explicitly built singleton integral payload
+indexes. It does not automatically change host fallback indexes, membership-only
+structures, or composite keys. A named radix configuration can therefore be a
+no-op. Counters and plan captures must be consulted before attributing a timing
+difference to the provider. Retention is also conditional on an eligible
+semijoin/probe pair; its configuration name does not prove a changed schedule.
+
+The common retail-kernel and Q6/Q19 configuration wrappers additionally offer
+built_hash and built_radix. Both apply checked build_host_reads first, so the
+materialization policy is held fixed; only built_radix applies radix_runs.
+The full --index-comparison includes these pairs automatically. Targeted runs
+can still use --query retail_h09 --config built_hash and then --query
+retail_h09 --config built_radix. Compare the built_* rows to one another, not
+against default when attributing a difference to the provider. Unsupported
+composite payload keys remain hashed in both. The handwritten grouped-only
+wrappers do not advertise these additional configurations. Report real provider
+switches separately from advisory no-ops, using emitted builds and counters.
+
+H09 order selection on the Mac branch
+The opaque Part substring guard remains first. Local SF1 DuckDB cardinalities
+were collected for all 16 distinct prefixes among 18 connected Part-first
+left-deep orders. The minimum sum of prefix rows is Part -> PartSupp -> Supplier
+-> Nation -> Lineitem -> Orders (777,440 rows), but it requires a composite
+Lineitem index. A measured alternative, Part -> Lineitem -> PartSupp -> Orders
+-> Supplier -> Nation (1,607,684 prefix rows), is faster in the measured comparison
+and uses a single-key Lineitem index. The authored body now uses that alternative;
+SQL, predicates, and output semantics are unchanged. This is the best of the two
+measured index-shape candidates, not a claim of globally optimal execution.
+The original Part -> Orders prefix had 15,996,000,000 SF1 candidate pairs.
+Original timings, exact cardinality SQL, both candidates, and the materialized
+provider comparison are retained under experiments/mac/index-bench/results/
+tpch-m3max-2026-10-24 (relative to the repository root).
 
 Timing and memory
 Both the synthetic bench and TPC-H-derived path automatically build/run release
@@ -74,13 +146,16 @@ MiniLinq timing uses a release executable compiled with cq-storage instrumentati
 Counters are the existing cq-storage counters: hashes, index builds, lookups,
 cursor steps, row enumeration and distinct insertions. Extension aggregate
 folding and uninstrumented host operations are not covered by those counters.
+RadixRun's internal arrays and direct range traversal are not completely covered
+by legacy retained-byte/row counters. Those columns are not an apples-to-apples
+heap-footprint or memory-traffic comparison with HashIndex.
 Q6/Q19 explicitly materialize computed rows before aggregate! because the current
 aggregate extension expects borrowed measure columns. Both phases and that
 intermediate allocation are timed.
 
 Compilation
-A generated isolated binary crate per query contains both configurations plus
-the shared worker. Cargo release --timings supplies that binary unit's duration,
+A generated isolated binary crate per query contains its named configurations
+plus the shared worker. Cargo release --timings supplies that binary unit's duration,
 excluding separate dependency units. The source is freshly rewritten before
 each measurement so an up-to-date no-op build cannot report a compile time.
 This duration includes macro expansion, Rust checking, optimization/codegen and
@@ -114,11 +189,12 @@ uses the public Retention accounting companion for its owned bit allocation.
 
 Operator profiling
 ------------------
-cargo xtask profile --tpch --sf 0.1|1 [--query NAME] [--config NAME]
+cargo xtask profile --tpch --sf 0.1|1 [--query NAME] [--config NAME] [--output DIR]
 selects default when no configuration is supplied. Artifacts, raw DuckDB JSON,
-per-run counts/timings and validation witnesses go to
-/data/codex/opprofile-evidence/. The requested scale is recorded in every file;
-running a second scale replaces the named summary files. Raw runs keep the scale.
+per-run counts/timings and validation witnesses go to --output DIR, or
+/data/codex/opprofile-evidence/ when omitted. Use a writable local directory on
+macOS. The requested scale is recorded in every file; running a second scale
+replaces the named summary files. Raw runs keep the scale.
 
 cq-storage/counters selects the measured pull expression through profile_select!;
 the unselected expression disappears during macro expansion. The default pull

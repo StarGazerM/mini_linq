@@ -1,5 +1,5 @@
-//! H07's country alternatives as a core union. The Rust-free two-row derived
-//! relation can reduce Supplier and Customer before Lineitem is streamed.
+//! H07's country alternatives as a core union with explicit predicate filters.
+//! The country-pair relation can reduce Supplier and Customer before Lineitem.
 use crate::tpch_runtime::date;
 use cq_load::Date;
 
@@ -27,6 +27,12 @@ AND l.l_shipdate >= DATE '1995-01-01' AND l.l_shipdate <= DATE '1996-12-31'"#;
         Lineitem(order_key, supplier_key, ship_date), if *ship_date >= start && *ship_date <= end,
         Supplier(supplier_key, supplier_nation),
         Orders(order_key, customer_key), Customer(customer_key, customer_nation),
-        { Nation(supplier_nation, "FRANCE"), Nation(customer_nation, "GERMANY") }
-        | { Nation(supplier_nation, "GERMANY"), Nation(customer_nation, "FRANCE") };
+        {
+            Nation(supplier_nation, france_supplier_name), if france_supplier_name == "FRANCE",
+            Nation(customer_nation, germany_customer_name), if germany_customer_name == "GERMANY"
+        }
+        | {
+            Nation(supplier_nation, germany_supplier_name), if germany_supplier_name == "GERMANY",
+            Nation(customer_nation, france_customer_name), if france_customer_name == "FRANCE"
+        };
 }

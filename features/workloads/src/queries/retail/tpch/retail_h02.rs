@@ -4,7 +4,7 @@
 use cq_load::Decimal;
 
 pub const NAME: &str = "retail_h02";
-pub const CONFIGS: &[&str] = &["default"];
+pub const CONFIGS: &[&str] = &["default", "radix", "radix_retained"];
 pub const EXPORTS: &[(&str, &str)] = &[
     ("part", "p_partkey,p_mfgr,p_size,p_type"),
     ("partsupp", "ps_partkey,ps_suppkey,ps_supplycost"),
@@ -50,7 +50,7 @@ mini_linq::relation_loaders! {
 }
 
 pub fn load(root: &std::path::Path, config: &str) -> Result<Data, Box<dyn std::error::Error>> {
-    assert_eq!(config, "default", "unknown H02 configuration");
+    assert!(CONFIGS.contains(&config), "unknown H02 configuration");
     Ok(Data {
         part: <relation_loader!(Part)>::parquet(
             root.join("part.parquet"), cq_load::ParquetOptions::default(),
@@ -70,15 +70,15 @@ pub fn load(root: &std::path::Path, config: &str) -> Result<Data, Box<dyn std::e
     })
 }
 
+crate::tpch_runtime::same_plan_kernel! { $;
 #[allow(non_snake_case)]
-pub fn run(data: &Data, config: &str) -> Vec<Answer> {
-    assert_eq!(config, "default", "unknown H02 configuration");
+pub(super) fn execute(data: &Data) -> Vec<Answer> {
     let Part = data.part.as_slice();
     let Partsupp = data.partsupp.as_slice();
     let Supplier = data.supplier.as_slice();
     let Nation = data.nation.as_slice();
     let Region = data.region.as_slice();
-    let MinimumCost: Vec<(i64, Option<i64>)> = mini_linq::compile! {
+    let MinimumCost: Vec<(i64, Option<i64>)> = query! {
         pipeline {}
         struct Minimum;
         relation Partsupp(ps_partkey: i64, ps_suppkey: i64, ps_supplycost: Decimal);
@@ -97,7 +97,7 @@ pub fn run(data: &Data, config: &str) -> Vec<Answer> {
     .map(|(part_key, cost)| (*part_key, cost))
     .collect();
     let MinimumCost = MinimumCost.as_slice();
-    mini_linq::compile! {
+    query! {
         pipeline {}
         struct Query;
         relation Part(p_partkey: i64, p_mfgr: String, p_size: i32, p_type: String);
@@ -125,6 +125,7 @@ pub fn run(data: &Data, config: &str) -> Vec<Answer> {
             address.clone(), phone.clone(), comment.clone())
     })
     .collect()
+}
 }
 
 pub fn canonical(rows: &[Answer]) -> Vec<Vec<String>> {

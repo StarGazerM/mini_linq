@@ -3,7 +3,7 @@
 use cq_load::{Date, Load};
 
 pub const NAME: &str = "retail_h12";
-pub const CONFIGS: &[&str] = &["default"];
+pub const CONFIGS: &[&str] = &["default", "radix", "radix_retained"];
 pub const EXPORTS: &[(&str, &str)] = &[
     ("orders", "o_orderkey,o_orderpriority"),
     ("lineitem", "l_orderkey,l_linenumber,l_shipmode,l_commitdate,l_receiptdate,l_shipdate"),
@@ -34,7 +34,7 @@ mini_linq::relation_loaders! {
 }
 
 pub fn load(root: &std::path::Path, config: &str) -> Result<Data, Box<dyn std::error::Error>> {
-    assert_eq!(config, "default", "unknown H12 configuration");
+    assert!(CONFIGS.contains(&config), "unknown H12 configuration");
     Ok(Data {
         orders: <relation_loader!(Orders)>::parquet(
             root.join("orders.parquet"), cq_load::ParquetOptions::default(),
@@ -45,14 +45,14 @@ pub fn load(root: &std::path::Path, config: &str) -> Result<Data, Box<dyn std::e
     })
 }
 
+crate::tpch_runtime::same_plan_kernel! { $;
 #[allow(non_snake_case)]
-pub fn run(data: &Data, config: &str) -> Vec<Answer> {
-    assert_eq!(config, "default", "unknown H12 configuration");
+pub(super) fn execute(data: &Data) -> Vec<Answer> {
     let Orders = data.orders.as_slice();
     let Lineitem = data.lineitem.as_slice();
     let start = Date::load("1994-01-01").expect("authored ISO date");
     let end = Date::load("1995-01-01").expect("authored ISO date");
-    mini_linq::compile! {
+    query! {
         pipeline {}
         struct Query;
         relation Orders(o_orderkey: i64, o_orderpriority: String);
@@ -70,6 +70,7 @@ pub fn run(data: &Data, config: &str) -> Vec<Answer> {
     }
     .map(|(mode, high, low)| (mode.clone(), high, low))
     .collect()
+}
 }
 
 pub fn canonical(rows: &[Answer]) -> Vec<Vec<String>> {

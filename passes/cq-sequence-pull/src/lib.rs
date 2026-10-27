@@ -36,82 +36,106 @@ pub fn machine() -> cq_lang_sequence::Machine {
 pub fn catalog() -> cq_lang_sequence::Catalog {
     use Capability::{Exact, Membership, Ordered, Range};
     use cq_lang_sequence::{CanonToken, Catalog, CodecToken, ProviderToken};
+    use cq_lang_structures::ProviderCapability::{Expand, Keys, Retain};
 
     let levels = vec![vec!["host".into()]];
     let providers = [
         (
             syn::parse_quote!(::cq_storage::HashIndex<'_, _, _>),
             vec![Exact, Membership],
+            vec![Keys],
         ),
         (
             syn::parse_quote!(::cq_storage::Trie<'_, _, _>),
             vec![Exact, Membership],
+            vec![],
         ),
         (
             syn::parse_quote!(::cq_storage::SortedRun<_, _>),
             vec![Exact, Range, Membership],
+            vec![Retain, Expand, Keys],
         ),
         (
             syn::parse_quote!(::cq_storage::SortedRun<_, _, _>),
             vec![Exact, Range, Membership],
+            vec![Retain, Expand, Keys],
+        ),
+        (
+            syn::parse_quote!(::cq_storage::RadixRun<_, _>),
+            vec![Exact, Range, Membership],
+            vec![Retain, Expand, Keys],
         ),
         (
             syn::parse_quote!(::cq_storage::HashSet<_>),
             vec![Membership],
+            vec![],
         ),
         (
             syn::parse_quote!(::std::collections::HashSet<_>),
             vec![Membership],
+            vec![],
         ),
         (
             syn::parse_quote!(::std::collections::HashSet<_, _>),
             vec![Membership],
+            vec![],
         ),
         (
             syn::parse_quote!(::std::collections::BTreeSet<_>),
             vec![Membership, Ordered],
+            vec![],
         ),
         (
             syn::parse_quote!(::std::collections::HashMap<_, ::std::vec::Vec<_>>),
             vec![Exact, Membership],
+            vec![Keys],
         ),
         (
             syn::parse_quote!(::std::collections::HashMap<_, ::std::vec::Vec<_>, _>),
             vec![Exact, Membership],
+            vec![Keys],
         ),
         (
             syn::parse_quote!(::std::collections::BTreeMap<_, ::std::vec::Vec<_>>),
             vec![Exact, Membership, Ordered],
+            vec![Keys],
         ),
         (
             syn::parse_quote!(::cq_storage::GroupedAnswers<_, _>),
             vec![Exact, Membership],
+            vec![],
         ),
         (
             syn::parse_quote!(::cq_storage::SingleGroup<_, _>),
             vec![Exact, Membership],
+            vec![],
         ),
         (
             syn::parse_quote!(::cq_storage::dispatch::KeySet<_>),
             vec![Membership],
+            vec![],
         ),
         (
             syn::parse_quote!(::cq_storage::dispatch::KeySet<_, false>),
             vec![Membership],
+            vec![],
         ),
         (
             syn::parse_quote!(::cq_storage::dispatch::KeySet<_, true>),
             vec![Membership],
+            vec![],
         ),
         (
             syn::parse_quote!(::cq_storage::AdaptiveKeySet<_, _, _>),
             vec![Membership],
+            vec![],
         ),
     ]
     .into_iter()
-    .map(|(ty, capabilities)| ProviderToken {
+    .map(|(ty, capabilities, supports)| ProviderToken {
         ty,
         capabilities,
+        supports,
         levels: levels.clone(),
         elements: None,
     })
@@ -1057,3 +1081,4 @@ fn translate_with_profile(
             .ok_or_else(|| syn::Error::new_spanned(program, "Sequence has no output definition"))?,
     )
 }
+

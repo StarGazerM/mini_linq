@@ -1,0 +1,478 @@
+{
+  "database": "features/workloads/target/bench/data/tpch-1/dbgen.duckdb",
+  "engine": "v1.5.5",
+  "queries": [
+    {
+      "name": "base:p",
+      "rows": 200000,
+      "sql": "SELECT COUNT(*) FROM part"
+    },
+    {
+      "name": "base:l",
+      "rows": 6001215,
+      "sql": "SELECT COUNT(*) FROM lineitem"
+    },
+    {
+      "name": "base:x",
+      "rows": 800000,
+      "sql": "SELECT COUNT(*) FROM partsupp"
+    },
+    {
+      "name": "base:o",
+      "rows": 1500000,
+      "sql": "SELECT COUNT(*) FROM orders"
+    },
+    {
+      "name": "base:s",
+      "rows": 10000,
+      "sql": "SELECT COUNT(*) FROM supplier"
+    },
+    {
+      "name": "base:n",
+      "rows": 25,
+      "sql": "SELECT COUNT(*) FROM nation"
+    },
+    {
+      "name": "prefix:p",
+      "rows": 10664,
+      "sql": "SELECT COUNT(*) FROM part p WHERE (p.p_name LIKE '%green%')"
+    },
+    {
+      "name": "prefix:l,p",
+      "rows": 319404,
+      "sql": "SELECT COUNT(*) FROM lineitem l, part p WHERE (p.p_name LIKE '%green%') AND (p.p_partkey=l.l_partkey)"
+    },
+    {
+      "name": "prefix:p,x",
+      "rows": 42656,
+      "sql": "SELECT COUNT(*) FROM part p, partsupp x WHERE (p.p_name LIKE '%green%') AND (p.p_partkey=x.ps_partkey)"
+    },
+    {
+      "name": "prefix:l,o,p",
+      "rows": 319404,
+      "sql": "SELECT COUNT(*) FROM lineitem l, orders o, part p WHERE (p.p_name LIKE '%green%') AND (p.p_partkey=l.l_partkey) AND (l.l_orderkey=o.o_orderkey)"
+    },
+    {
+      "name": "prefix:l,p,s",
+      "rows": 319404,
+      "sql": "SELECT COUNT(*) FROM lineitem l, part p, supplier s WHERE (p.p_name LIKE '%green%') AND (p.p_partkey=l.l_partkey) AND (l.l_suppkey=s.s_suppkey)"
+    },
+    {
+      "name": "prefix:l,p,x",
+      "rows": 319404,
+      "sql": "SELECT COUNT(*) FROM lineitem l, part p, partsupp x WHERE (p.p_name LIKE '%green%') AND (p.p_partkey=l.l_partkey) AND (l.l_partkey=x.ps_partkey AND l.l_suppkey=x.ps_suppkey) AND (p.p_partkey=x.ps_partkey)"
+    },
+    {
+      "name": "prefix:p,s,x",
+      "rows": 42656,
+      "sql": "SELECT COUNT(*) FROM part p, supplier s, partsupp x WHERE (p.p_name LIKE '%green%') AND (p.p_partkey=x.ps_partkey) AND (x.ps_suppkey=s.s_suppkey)"
+    },
+    {
+      "name": "prefix:l,n,p,s",
+      "rows": 319404,
+      "sql": "SELECT COUNT(*) FROM lineitem l, nation n, part p, supplier s WHERE (p.p_name LIKE '%green%') AND (p.p_partkey=l.l_partkey) AND (l.l_suppkey=s.s_suppkey) AND (s.s_nationkey=n.n_nationkey)"
+    },
+    {
+      "name": "prefix:l,o,p,s",
+      "rows": 319404,
+      "sql": "SELECT COUNT(*) FROM lineitem l, orders o, part p, supplier s WHERE (p.p_name LIKE '%green%') AND (p.p_partkey=l.l_partkey) AND (l.l_orderkey=o.o_orderkey) AND (l.l_suppkey=s.s_suppkey)"
+    },
+    {
+      "name": "prefix:l,o,p,x",
+      "rows": 319404,
+      "sql": "SELECT COUNT(*) FROM lineitem l, orders o, part p, partsupp x WHERE (p.p_name LIKE '%green%') AND (p.p_partkey=l.l_partkey) AND (l.l_partkey=x.ps_partkey AND l.l_suppkey=x.ps_suppkey) AND (l.l_orderkey=o.o_orderkey) AND (p.p_partkey=x.ps_partkey)"
+    },
+    {
+      "name": "prefix:l,p,s,x",
+      "rows": 319404,
+      "sql": "SELECT COUNT(*) FROM lineitem l, part p, supplier s, partsupp x WHERE (p.p_name LIKE '%green%') AND (p.p_partkey=l.l_partkey) AND (l.l_partkey=x.ps_partkey AND l.l_suppkey=x.ps_suppkey) AND (l.l_suppkey=s.s_suppkey) AND (p.p_partkey=x.ps_partkey) AND (x.ps_suppkey=s.s_suppkey)"
+    },
+    {
+      "name": "prefix:n,p,s,x",
+      "rows": 42656,
+      "sql": "SELECT COUNT(*) FROM nation n, part p, supplier s, partsupp x WHERE (p.p_name LIKE '%green%') AND (s.s_nationkey=n.n_nationkey) AND (p.p_partkey=x.ps_partkey) AND (x.ps_suppkey=s.s_suppkey)"
+    },
+    {
+      "name": "prefix:l,n,o,p,s",
+      "rows": 319404,
+      "sql": "SELECT COUNT(*) FROM lineitem l, nation n, orders o, part p, supplier s WHERE (p.p_name LIKE '%green%') AND (p.p_partkey=l.l_partkey) AND (l.l_orderkey=o.o_orderkey) AND (l.l_suppkey=s.s_suppkey) AND (s.s_nationkey=n.n_nationkey)"
+    },
+    {
+      "name": "prefix:l,n,p,s,x",
+      "rows": 319404,
+      "sql": "SELECT COUNT(*) FROM lineitem l, nation n, part p, supplier s, partsupp x WHERE (p.p_name LIKE '%green%') AND (p.p_partkey=l.l_partkey) AND (l.l_partkey=x.ps_partkey AND l.l_suppkey=x.ps_suppkey) AND (l.l_suppkey=s.s_suppkey) AND (s.s_nationkey=n.n_nationkey) AND (p.p_partkey=x.ps_partkey) AND (x.ps_suppkey=s.s_suppkey)"
+    },
+    {
+      "name": "prefix:l,o,p,s,x",
+      "rows": 319404,
+      "sql": "SELECT COUNT(*) FROM lineitem l, orders o, part p, supplier s, partsupp x WHERE (p.p_name LIKE '%green%') AND (p.p_partkey=l.l_partkey) AND (l.l_partkey=x.ps_partkey AND l.l_suppkey=x.ps_suppkey) AND (l.l_orderkey=o.o_orderkey) AND (l.l_suppkey=s.s_suppkey) AND (p.p_partkey=x.ps_partkey) AND (x.ps_suppkey=s.s_suppkey)"
+    },
+    {
+      "name": "prefix:l,n,o,p,s,x",
+      "rows": 319404,
+      "sql": "SELECT COUNT(*) FROM lineitem l, nation n, orders o, part p, supplier s, partsupp x WHERE (p.p_name LIKE '%green%') AND (p.p_partkey=l.l_partkey) AND (l.l_partkey=x.ps_partkey AND l.l_suppkey=x.ps_suppkey) AND (l.l_orderkey=o.o_orderkey) AND (l.l_suppkey=s.s_suppkey) AND (s.s_nationkey=n.n_nationkey) AND (p.p_partkey=x.ps_partkey) AND (x.ps_suppkey=s.s_suppkey)"
+    },
+    {
+      "name": "lineitem-distinct-part",
+      "rows": 200000,
+      "sql": "SELECT COUNT(DISTINCT l_partkey) FROM lineitem"
+    },
+    {
+      "name": "lineitem-distinct-part-supplier",
+      "rows": 799541,
+      "sql": "SELECT COUNT(DISTINCT (l_partkey,l_suppkey)) FROM lineitem"
+    },
+    {
+      "name": "h09-output-distinct",
+      "rows": 319402,
+      "sql": "SELECT COUNT(*) FROM (SELECT DISTINCT l.l_orderkey,l.l_partkey,l.l_suppkey FROM lineitem l JOIN part p ON p.p_partkey=l.l_partkey JOIN partsupp x ON x.ps_partkey=l.l_partkey AND x.ps_suppkey=l.l_suppkey JOIN orders o ON o.o_orderkey=l.l_orderkey JOIN supplier s ON s.s_suppkey=l.l_suppkey JOIN nation n ON n.n_nationkey=s.s_nationkey WHERE p.p_name LIKE '%green%')"
+    }
+  ],
+  "candidate_space": "All connected left-deep orders with the opaque Part predicate kept first; no bushy orders or operator substitution",
+  "cost_model": "Sum of exact bag prefix cardinalities; does not by itself price index construction, key width, or cache effects",
+  "ranked_orders": [
+    {
+      "order": [
+        "p",
+        "x",
+        "s",
+        "n",
+        "l",
+        "o"
+      ],
+      "prefix_rows": [
+        10664,
+        42656,
+        42656,
+        42656,
+        319404,
+        319404
+      ],
+      "prefix_work": 777440
+    },
+    {
+      "order": [
+        "p",
+        "x",
+        "s",
+        "l",
+        "n",
+        "o"
+      ],
+      "prefix_rows": [
+        10664,
+        42656,
+        42656,
+        319404,
+        319404,
+        319404
+      ],
+      "prefix_work": 1054188
+    },
+    {
+      "order": [
+        "p",
+        "x",
+        "s",
+        "l",
+        "o",
+        "n"
+      ],
+      "prefix_rows": [
+        10664,
+        42656,
+        42656,
+        319404,
+        319404,
+        319404
+      ],
+      "prefix_work": 1054188
+    },
+    {
+      "order": [
+        "p",
+        "x",
+        "l",
+        "o",
+        "s",
+        "n"
+      ],
+      "prefix_rows": [
+        10664,
+        42656,
+        319404,
+        319404,
+        319404,
+        319404
+      ],
+      "prefix_work": 1330936
+    },
+    {
+      "order": [
+        "p",
+        "x",
+        "l",
+        "s",
+        "n",
+        "o"
+      ],
+      "prefix_rows": [
+        10664,
+        42656,
+        319404,
+        319404,
+        319404,
+        319404
+      ],
+      "prefix_work": 1330936
+    },
+    {
+      "order": [
+        "p",
+        "x",
+        "l",
+        "s",
+        "o",
+        "n"
+      ],
+      "prefix_rows": [
+        10664,
+        42656,
+        319404,
+        319404,
+        319404,
+        319404
+      ],
+      "prefix_work": 1330936
+    },
+    {
+      "order": [
+        "p",
+        "l",
+        "o",
+        "s",
+        "n",
+        "x"
+      ],
+      "prefix_rows": [
+        10664,
+        319404,
+        319404,
+        319404,
+        319404,
+        319404
+      ],
+      "prefix_work": 1607684
+    },
+    {
+      "order": [
+        "p",
+        "l",
+        "o",
+        "s",
+        "x",
+        "n"
+      ],
+      "prefix_rows": [
+        10664,
+        319404,
+        319404,
+        319404,
+        319404,
+        319404
+      ],
+      "prefix_work": 1607684
+    },
+    {
+      "order": [
+        "p",
+        "l",
+        "o",
+        "x",
+        "s",
+        "n"
+      ],
+      "prefix_rows": [
+        10664,
+        319404,
+        319404,
+        319404,
+        319404,
+        319404
+      ],
+      "prefix_work": 1607684
+    },
+    {
+      "order": [
+        "p",
+        "l",
+        "s",
+        "n",
+        "o",
+        "x"
+      ],
+      "prefix_rows": [
+        10664,
+        319404,
+        319404,
+        319404,
+        319404,
+        319404
+      ],
+      "prefix_work": 1607684
+    },
+    {
+      "order": [
+        "p",
+        "l",
+        "s",
+        "n",
+        "x",
+        "o"
+      ],
+      "prefix_rows": [
+        10664,
+        319404,
+        319404,
+        319404,
+        319404,
+        319404
+      ],
+      "prefix_work": 1607684
+    },
+    {
+      "order": [
+        "p",
+        "l",
+        "s",
+        "o",
+        "n",
+        "x"
+      ],
+      "prefix_rows": [
+        10664,
+        319404,
+        319404,
+        319404,
+        319404,
+        319404
+      ],
+      "prefix_work": 1607684
+    },
+    {
+      "order": [
+        "p",
+        "l",
+        "s",
+        "o",
+        "x",
+        "n"
+      ],
+      "prefix_rows": [
+        10664,
+        319404,
+        319404,
+        319404,
+        319404,
+        319404
+      ],
+      "prefix_work": 1607684
+    },
+    {
+      "order": [
+        "p",
+        "l",
+        "s",
+        "x",
+        "n",
+        "o"
+      ],
+      "prefix_rows": [
+        10664,
+        319404,
+        319404,
+        319404,
+        319404,
+        319404
+      ],
+      "prefix_work": 1607684
+    },
+    {
+      "order": [
+        "p",
+        "l",
+        "s",
+        "x",
+        "o",
+        "n"
+      ],
+      "prefix_rows": [
+        10664,
+        319404,
+        319404,
+        319404,
+        319404,
+        319404
+      ],
+      "prefix_work": 1607684
+    },
+    {
+      "order": [
+        "p",
+        "l",
+        "x",
+        "o",
+        "s",
+        "n"
+      ],
+      "prefix_rows": [
+        10664,
+        319404,
+        319404,
+        319404,
+        319404,
+        319404
+      ],
+      "prefix_work": 1607684
+    },
+    {
+      "order": [
+        "p",
+        "l",
+        "x",
+        "s",
+        "n",
+        "o"
+      ],
+      "prefix_rows": [
+        10664,
+        319404,
+        319404,
+        319404,
+        319404,
+        319404
+      ],
+      "prefix_work": 1607684
+    },
+    {
+      "order": [
+        "p",
+        "l",
+        "x",
+        "s",
+        "o",
+        "n"
+      ],
+      "prefix_rows": [
+        10664,
+        319404,
+        319404,
+        319404,
+        319404,
+        319404
+      ],
+      "prefix_work": 1607684
+    }
+  ],
+  "written_cartesian_prefix_rows": 15996000000
+}

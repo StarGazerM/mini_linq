@@ -1,6 +1,10 @@
 use cq_load::{Date, Decimal, Load};
 use cq_testkit::conformance::assert_answers_equal;
 
+#[allow(dead_code, unused_imports, unused_macros)]
+#[path = "../src/tpch_runtime.rs"]
+mod tpch_runtime;
+
 #[allow(dead_code)]
 #[path = "../src/queries/retail/tpch/retail_h01.rs"]
 mod h01;
@@ -38,7 +42,7 @@ fn h01_grouped_head_matches_duckdb_distinct_join() {
                 })
                 .collect(),
         };
-        let actual = h01::run(&data, "default")
+        let actual = tpch_runtime::same_plan_answers(|config| h01::run(&data, config), h01::canonical)
             .into_iter()
             .map(|(flag, status, quantity, price, count)| {
                 vec![

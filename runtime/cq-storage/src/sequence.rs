@@ -15,7 +15,7 @@
 //!   order reads on codes. Existing membership and exact-bucket reads keep
 //!   [`crate::ExactMembership`] and [`crate::IndexRead`].
 
-use crate::{IndexRead, KeyCodec, SortedRun};
+use crate::{IndexRead, KeyCodec, RadixKey, RadixRun, SortedRun};
 
 /// A provider whose bucket for `key` is the contiguous range
 /// `range(key)` of `items()`. Implementations keep items in key order.
@@ -28,6 +28,16 @@ pub trait RangeCursor<K: ?Sized> {
 }
 
 impl<K: Ord + Copy, V: Copy, C: KeyCodec<K>> RangeCursor<K> for SortedRun<K, V, C> {
+    type Item = V;
+    fn items(&self) -> &[V] {
+        self.items()
+    }
+    fn range(&self, key: &K) -> (usize, usize) {
+        self.range(key)
+    }
+}
+
+impl<K: RadixKey, V: Copy> RangeCursor<K> for RadixRun<K, V> {
     type Item = V;
     fn items(&self) -> &[V] {
         self.items()

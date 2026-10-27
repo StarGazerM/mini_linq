@@ -62,8 +62,8 @@ fn smallest_expand_program() -> structures::Program {
         checked = pipe canon semi eager [a,c] candidate,s;
         return checked as answer(a,b,c);
     } structures {
-        r = ::cq_gpu::PrefixRun [b][c];
-        s = ::cq_gpu::PrefixRun [a][c];
+        r = ::custom::Directory [b][c] supports [retain, expand];
+        s = DirectoryAlias [a][c] supports [expand];
         l host scan = ::core::iter::Map<_, _> [];
         r host scan = ::core::iter::Map<_, _> [];
         s host scan = ::core::iter::Map<_, _> [];
@@ -84,17 +84,17 @@ fn resident_expand_program() -> structures::Program {
     } structures {
         l host scan = ::core::iter::Map<_,_> [];
         r host scan = ::core::iter::Map<_,_> [];
-        r host p = ::cq_gpu_runtime::FrozenDeviceIndex<_> [x,y];
+        r host p = ::custom::Snapshot<_> [x,y] supports [expand];
         p canon = ::std::collections::HashSet<_>;
         p stage = batch 256 expand;
     }}
 }
 
 #[test]
-fn expansion_accepts_exact_resident_sorted_host_ranges() {
+fn expansion_accepts_declared_exact_host_cursors() {
     for provider in [
-        syn::parse_quote!(r host p = ::cq_gpu_runtime::FrozenDeviceIndex<_> [x,y];),
-        syn::parse_quote!(r host p = ::cq_gpu_runtime::FrozenDeviceIndex<_> [x][y];),
+        syn::parse_quote!(r host p = ::custom::Snapshot<_> [x,y] supports [expand];),
+        syn::parse_quote!(r host p = SnapshotAlias<_> [x][y] supports [retain, expand];),
     ] {
         let mut program = resident_expand_program();
         program.structures.entries[2] = provider;
@@ -117,7 +117,7 @@ fn composite_prefix_ranges_support_expansion_and_shared_witnesses() {
         }
         structures {
             l host scan = ::core::iter::Map<_,_> [];
-            r = ::cq_gpu_runtime::PrefixRun<_,_,Codec,0> [x][y];
+            r = ::custom::Directory<_,_> [x][y] supports [expand];
             r host scan = ::core::iter::Map<_,_> [];
             p canon = ::std::collections::HashSet<_>;
             s share = lookup r [x,y] first s force p;
@@ -129,9 +129,9 @@ fn composite_prefix_ranges_support_expansion_and_shared_witnesses() {
     assert!(facts.expands.contains("p"));
     assert!(facts.witnesses.contains_key("s"));
     for provider in [
-        syn::parse_quote!(r = ::cq_gpu_runtime::HashedRun<_,_> [x,y];),
-        syn::parse_quote!(r = ::cq_storage::HashIndex<'_,_,_> [x,y];),
-        syn::parse_quote!(r = ::cq_gpu_runtime::PrefixRun<_,_,Codec,0> [x][z][y];),
+        syn::parse_quote!(r = ::custom::Directory<_,_> [x,y];),
+        syn::parse_quote!(r = DirectoryAlias<_,_> [x,y] supports [retain];),
+        syn::parse_quote!(r = ::custom::Directory<_,_> [x][z][y] supports [expand];),
     ] {
         let mut invalid = source.clone();
         invalid.structures.entries[1] = provider;
@@ -140,10 +140,10 @@ fn composite_prefix_ranges_support_expansion_and_shared_witnesses() {
 }
 
 #[test]
-fn expansion_rejects_unproven_hosts_and_hashed_bucket_ranges() {
+fn expansion_rejects_missing_support_and_wrong_exact_keys() {
     for provider in [
-        syn::parse_quote!(r host p = ::cq_gpu_runtime::HashedRun<_,_> [x,y];),
-        syn::parse_quote!(r host p = ::other::FrozenDeviceIndex<_> [x,y];),
+        syn::parse_quote!(r host p = ::custom::Snapshot<_,_> [x,y];),
+        syn::parse_quote!(r host p = SnapshotAlias<_> [x,y] supports [retain];),
     ] {
         let mut program = resident_expand_program();
         program.structures.entries[2] = provider;
@@ -151,14 +151,14 @@ fn expansion_rejects_unproven_hosts_and_hashed_bucket_ranges() {
             .unwrap_err()
             .to_string();
         assert!(
-            error.contains("exact resident sorted host range"),
+            error.contains("declared expand support"),
             "{error}"
         );
     }
     let mut hashed = resident_expand_program();
     hashed.physical.program.definitions[1] =
         syn::parse_quote!(r = let rename R@1 {a -> x,b -> y,c -> z};);
-    hashed.structures.entries[2] = syn::parse_quote!(r = ::cq_gpu_runtime::HashedRun<_,_> [x,y];);
+    hashed.structures.entries[2] = syn::parse_quote!(r = ::custom::Index<_,_> [x,y];);
     hashed
         .structures
         .entries
@@ -167,7 +167,7 @@ fn expansion_rejects_unproven_hosts_and_hashed_bucket_ranges() {
         .unwrap_err()
         .to_string();
     assert!(
-        error.contains("exact resident sorted host range"),
+        error.contains("declared expand support"),
         "{error}"
     );
     hashed
@@ -178,7 +178,7 @@ fn expansion_rejects_unproven_hosts_and_hashed_bucket_ranges() {
 
     let mut mismatch = resident_expand_program();
     mismatch.structures.entries[2] =
-        syn::parse_quote!(r host p = ::cq_gpu_runtime::FrozenDeviceIndex<_> [x];);
+        syn::parse_quote!(r host p = ::custom::Snapshot<_> [x] supports [expand];);
     assert!(structures::contract::check(&mismatch).is_err());
 }
 
@@ -201,9 +201,9 @@ fn membership_bridge_program() -> structures::Program {
     } structures {
         selected = ::cq_storage::AdaptiveKeySet<_,::cq_storage::I64Codec,64>
             [b] membership payload [b] constants {tag = 7};
-        r = ::cq_storage::SortedRun<_,_> [a];
-        s = ::cq_storage::SortedRun<_,_> [b];
-        t = ::cq_storage::SortedRun<_,_> [c];
+        r = ::custom::ExactCursor<_,_> [a] supports [expand];
+        s = ::custom::ExactCursor<_,_> [b] supports [expand];
+        t = ::custom::ExactCursor<_,_> [c] supports [expand];
         l host scan = ::core::iter::Map<_,_> [];
         r host scan = ::core::iter::Map<_,_> [];
         m host scan = ::core::iter::Map<_,_> [];
@@ -239,7 +239,7 @@ fn stages_cross_certified_bitmap_membership_with_recorded_constants() {
     let error = structures::contract::check(&program)
         .unwrap_err()
         .to_string();
-    assert!(error.contains("SortedRun"), "{error}");
+    assert!(error.contains("declared expand support"), "{error}");
 }
 
 #[test]
@@ -341,7 +341,7 @@ fn smallest_prefix_witness_requires_preserving_chain_and_no_escape() {
 }
 
 #[test]
-fn smallest_expansion_requires_two_recorded_prefix_run_candidates() {
+fn smallest_expansion_requires_support_on_both_selected_candidates() {
     let source = smallest_expand_program();
     let facts = structures::contract::check(&source).unwrap();
     assert_eq!(facts.stages["candidate"], 256);
@@ -356,7 +356,7 @@ fn smallest_expansion_requires_two_recorded_prefix_run_candidates() {
         (1, syn::parse_quote!(s = OtherTrie [a][c];)),
         (
             0,
-            syn::parse_quote!(r = ::cq_storage::SortedRun<_, _> [b][c];),
+            syn::parse_quote!(r = DirectoryAlias<_, _> [b][c] supports [retain];),
         ),
     ] {
         let mut missing = source.clone();
@@ -365,7 +365,7 @@ fn smallest_expansion_requires_two_recorded_prefix_run_candidates() {
             .unwrap_err()
             .to_string();
         assert!(
-            error.contains("PrefixRun candidate build on both sides"),
+            error.contains("expand support on both selected two-level candidate builds"),
             "{error}"
         );
         missing.structures.entries.pop();
@@ -376,9 +376,9 @@ fn smallest_expansion_requires_two_recorded_prefix_run_candidates() {
 #[test]
 fn smallest_expansion_rejects_missing_or_misshaped_candidate_facts() {
     for (index, entry) in [
-        (0, syn::parse_quote!(r = ::cq_gpu::PrefixRun [b,c];)),
-        (1, syn::parse_quote!(s = ::cq_gpu::PrefixRun [c][a];)),
-        (1, syn::parse_quote!(s = ::cq_gpu::PrefixRun [a];)),
+        (0, syn::parse_quote!(r = ::custom::Directory [b,c] supports [expand];)),
+        (1, syn::parse_quote!(s = ::custom::Directory [c][a] supports [expand];)),
+        (1, syn::parse_quote!(s = ::custom::Directory [a] supports [expand];)),
     ] {
         let mut missing = smallest_expand_program();
         missing.structures.entries[index] = entry;
@@ -391,12 +391,7 @@ fn smallest_expansion_rejects_missing_or_misshaped_candidate_facts() {
     let mut ordinary = smallest_expand_program();
     ordinary.physical.program.definitions[3] =
         syn::parse_quote!(candidate = pipe probe first [b] l,r;);
-    assert!(
-        structures::contract::check(&ordinary)
-            .unwrap_err()
-            .to_string()
-            .contains("a payload probe must read all built levels")
-    );
+    assert!(structures::contract::check(&ordinary).is_err());
     let mut force = smallest_expand_program();
     force.physical.program.definitions[4] =
         syn::parse_quote!(checked = pipe canon probe first [a,c] candidate,s;);
@@ -833,7 +828,7 @@ fn shared_program() -> structures::Program {
         l host scan = ::core::iter::Map<_, _> [];
         b host scan = ::core::iter::Map<_, _> [];
         b rows = ::std::vec::Vec<_>;
-        b = ::cq_storage::SortedRun<_,_> [x];
+        b = ::custom::ExactCursor<_,_> [x] supports [retain, expand, keys];
         p canon = ::std::collections::HashSet<_>;
         s share = lookup b [x] first s force p;
         s repr = tuples witness { b [x] at s as ::cq_storage::RunCursor<'_, _> };
@@ -861,7 +856,7 @@ fn lookup_sharing_witness_and_expansion_are_additive() {
 }
 
 #[test]
-fn leveled_snapshot_witness_requires_identical_host_layout_and_key() {
+fn retained_snapshot_witness_requires_identical_provider_and_key() {
     let mut program: structures::Program = syn::parse_quote! { physical {
         relation L(a:i32); relation R(a:i32,b:i32);
         l = pipe rename L@0 {a -> x};
@@ -872,8 +867,8 @@ fn leveled_snapshot_witness_requires_identical_host_layout_and_key() {
     } structures {
         l host scan = ::core::iter::Map<_,_> [];
         b host scan = ::core::iter::Map<_,_> [];
-        b host s = ::cq_gpu_runtime::LeveledDeviceIndex<_,_,((::cq_gpu_runtime::FrozenKey<0>,),)> [x];
-        b host p = ::cq_gpu_runtime::LeveledDeviceIndex<_,_,((::cq_gpu_runtime::FrozenKey<0>,),)> [x];
+        b host s = ::custom::Snapshot<_,_,Layout0> [x] supports [retain, expand];
+        b host p = ::custom::Snapshot<_,_,Layout0> [x] supports [expand];
         p canon = ::std::collections::HashSet<_>;
         s share = lookup b [x] first s force p;
         s repr = tuples witness { b [x] at s as ::cq_storage::RunCursor<'_,_> };
@@ -883,7 +878,7 @@ fn leveled_snapshot_witness_requires_identical_host_layout_and_key() {
     assert!(facts.witnesses.contains_key("s"));
     assert!(facts.expands.contains("p"));
     program.structures.entries[3] = syn::parse_quote! {
-        b host p = ::cq_gpu_runtime::LeveledDeviceIndex<_,_,((::cq_gpu_runtime::FrozenKey<1>,),)> [x];
+        b host p = ::custom::Snapshot<_,_,Layout1> [x] supports [expand];
     };
     assert!(structures::contract::check(&program).is_err());
 }
@@ -942,9 +937,9 @@ fn witness_cannot_escape_into_retained_let() {
 }
 
 #[test]
-fn expand_rejects_hash_index() {
+fn retain_does_not_imply_expand() {
     let mut p = shared_program();
-    p.structures.entries[3] = syn::parse_quote!(b = ::cq_storage::HashIndex<'_,_,_> [x];);
+    p.structures.entries[3] = syn::parse_quote!(b = CursorAlias<_,_> [x] supports [retain];);
     p.structures
         .entries
         .push(syn::parse_quote!(p stage = batch 16 expand;));
@@ -952,7 +947,7 @@ fn expand_rejects_hash_index() {
         structures::contract::check(&p)
             .unwrap_err()
             .to_string()
-            .contains("range-cursor")
+            .contains("declared expand support")
     );
 }
 
@@ -1052,4 +1047,211 @@ fn discharged_host_uniqueness_does_not_survive_a_lossy_projection() {
     lossy.physical.program.definitions[1] = syn::parse_quote!(p = pipe project r keep {x};);
     lossy.physical.program.head = syn::parse_quote!(answer(x));
     assert!(structures::contract::check(&lossy).is_err());
+}
+
+#[test]
+fn provider_support_packets_roundtrip_and_expand_implies_retain_only() {
+    use structures::ProviderCapability::{Expand, Keys, Retain};
+    for text in [
+        "::custom::Provider<_,_> [y,x] supports [retain, expand, keys]",
+        "ProviderAlias [x][y] supports [expand]",
+        "ProviderAlias [x] supports [retain]",
+        "ProviderAlias [x] supports [keys]",
+        "ProviderAlias [x] supports []",
+        "ProviderAlias [x]",
+    ] {
+        let keyed: structures::Keyed = syn::parse_str(text).unwrap();
+        assert_eq!(syn::parse2::<structures::Keyed>(keyed.to_token_stream()).unwrap(), keyed);
+    }
+    let expanded: structures::Keyed = syn::parse_quote!(Alias [x] supports [expand]);
+    assert!(expanded.supports(Expand));
+    assert!(expanded.supports(Retain));
+    assert!(!expanded.supports(Keys));
+    let retained: structures::Keyed = syn::parse_quote!(Alias [x] supports [retain]);
+    assert!(retained.supports(Retain));
+    assert!(!retained.supports(Expand));
+    assert!(!retained.supports(Keys));
+    assert!(syn::parse_str::<structures::Keyed>("Alias [x] supports [unknown]").is_err());
+}
+
+#[test]
+fn support_validation_rejects_duplicates_empty_keys_and_membership_cursors() {
+    for packet in [
+        syn::parse_quote!(r = Alias [x] supports [retain, retain];),
+        syn::parse_quote!(r = Alias [x] supports [expand, expand];),
+        syn::parse_quote!(r = Alias [x] supports [keys, keys];),
+    ] {
+        let mut invalid = program();
+        invalid.structures.entries[0] = packet;
+        assert!(structures::contract::check(&invalid).unwrap_err().to_string()
+            .contains("duplicate provider capability"));
+    }
+    let mut empty = program();
+    empty.structures.entries[2] =
+        syn::parse_quote!(r host scan = Scan [] supports [keys];);
+    assert!(structures::contract::check(&empty).is_err());
+    for packet in [
+        syn::parse_quote!(selected = KeyOnly [b] supports [retain]
+            membership payload [b] constants {tag = 7};),
+        syn::parse_quote!(selected = KeyOnly [b] supports [expand]
+            membership payload [b] constants {tag = 7};),
+    ] {
+        let mut invalid = membership_bridge_program();
+        invalid.structures.entries[0] = packet;
+        assert!(structures::contract::check(&invalid).unwrap_err().to_string()
+            .contains("membership-only storage"));
+    }
+}
+
+#[test]
+fn support_follows_selected_layout_not_any_matching_type_or_prefix() {
+    use structures::ProviderCapability::{Expand, Retain};
+    let mut source = program();
+    // Both layouts answer x, but a complete key takes precedence over a prefix,
+    // even when its identical Rust type has no declared support.
+    source.structures.entries[0] =
+        syn::parse_quote!(r = SameAlias [x][y] supports [expand];);
+    source.structures.entries.push(syn::parse_quote!(r = SameAlias [x];));
+    let facts = structures::contract::check(&source).unwrap();
+    assert_eq!(facts.built_on("r", &["x".into()]).unwrap().1, 1);
+    assert!(!facts.provider_support("r", &["x".into()], None, Retain));
+    assert!(facts.provider_support("r", &["y".into(), "x".into()], None, Expand));
+    assert!(!facts.provider_support("r", &["y".into()], None, Expand));
+    assert!(!facts.provider_support("r", &["x".into()], Some("j"), Expand));
+    source.structures.entries.reverse();
+    let facts = structures::contract::check(&source).unwrap();
+    assert!(!facts.provider_support("r", &["x".into()], None, Retain));
+}
+
+#[test]
+fn abstract_sharing_does_not_require_a_retained_cursor_but_witnesses_do() {
+    let types: [syn::Type; 2] = [syn::parse_quote!(::custom::Index<_,_>), syn::parse_quote!(IndexAlias)];
+    for ty in types {
+        let mut source = shared_program();
+        source.structures.entries[3] = syn::parse_quote!(b = #ty [x];);
+        assert!(structures::contract::check(&source).unwrap_err().to_string()
+            .contains("witness requires declared retain support"));
+        source.structures.entries.pop();
+        assert!(structures::contract::check(&source).unwrap().shares.contains_key("s"));
+    }
+}
+
+#[test]
+fn host_support_is_exact_to_reader_key_and_snapshot_layout() {
+    use structures::ProviderCapability::Expand;
+    let mut source = resident_expand_program();
+    source.physical.program.definitions.insert(
+        2, syn::parse_quote!(s = pipe semi eager [x,y] l,r;),
+    );
+    source.physical.program.definitions[3] =
+        syn::parse_quote!(p = pipe canon probe first [x,y] s,r;);
+    source.structures.entries.extend([
+        syn::parse_quote!(r host s = ::custom::Snapshot<_> [x,y] supports [retain];),
+        syn::parse_quote!(s share = lookup r [x,y] first s force p;),
+        syn::parse_quote!(s repr = tuples witness { r [x,y] at s as _ };),
+    ]);
+    let facts = structures::contract::check(&source).unwrap();
+    assert!(facts.provider_support("r", &["y".into(), "x".into()], Some("p"), Expand));
+    assert!(!facts.provider_support("r", &["x".into(), "y".into()], Some("s"), Expand));
+    assert!(!facts.provider_support("r", &["x".into()], Some("p"), Expand));
+    assert!(!facts.provider_support("r", &["x".into(), "y".into()], Some("other"), Expand));
+    assert!(structures::retained_host_read(&source, "r", "s", &["y".into(), "x".into()]).is_some());
+    assert!(structures::retained_host_read(&source, "r", "s", &[]).is_none());
+    assert!(structures::retained_host_read(&source, "r", "s", &["x".into(), "x".into()]).is_none());
+    source.structures.entries[2] =
+        syn::parse_quote!(r host p = ::custom::Snapshot<_> [x][y] supports [expand];);
+    assert!(structures::contract::check(&source).unwrap_err().to_string()
+        .contains("matching retained snapshot hosts"));
+}
+
+#[test]
+fn join_filter_uses_declared_keys_and_preserves_scalar_and_totality_proofs() {
+    let source: structures::Program = syn::parse_quote! {
+        physical {
+            relation L(a:i64); relation R(a:i64,b:i64);
+            l = pipe rename L@0 {a -> x};
+            r = let rename R@1 {a -> x,b -> y};
+            p = pipe canon probe first [x] l,r;
+            return p as answer(x,y);
+        } structures {
+            l host scan = Scan [];
+            r host scan = Scan [];
+            r = ::custom::Index<_,_> [x] supports [keys];
+            p canon = Set;
+            l join_filter = Filter build r [x] covering p marker ::cq_load::ColumnAt<0>;
+        }
+    };
+    let facts = structures::contract::check(&source).unwrap();
+    assert_eq!(structures::join_filter_candidates(&source, &facts, "p").len(), 1);
+    for packet in [
+        syn::parse_quote!(r = ::custom::Index<_,_> [x];),
+        syn::parse_quote!(r = IndexAlias [x] supports [retain, expand];),
+    ] {
+        let mut missing = source.clone();
+        missing.structures.entries[2] = packet;
+        assert!(structures::contract::check(&missing).unwrap_err().to_string()
+            .contains("join filter requires"));
+    }
+    let mut alias = source.clone();
+    alias.structures.entries[2] = syn::parse_quote!(r = IndexAlias [x] supports [keys];);
+    structures::contract::check(&alias).unwrap();
+    let mut scalar = source.clone();
+    scalar.physical = syn::parse_quote! {
+        physical {
+            relation L(a:i32); relation R(a:i32,b:i32);
+            l = pipe rename L@0 {a -> x};
+            r = let rename R@1 {a -> x,b -> y};
+            p = pipe canon probe first [x] l,r;
+            return p as answer(x,y);
+        }
+    };
+    assert!(structures::contract::check(&scalar).unwrap_err().to_string()
+        .contains("join filter requires"));
+    let mut partial = source.clone();
+    partial.physical = syn::parse_quote! {
+        physical {
+            relation L(a:i64); relation R(a:i64,b:i64);
+            l = pipe rename L@0 {a -> x};
+            raw = pipe rename R@1 {a -> x,b -> y};
+            r = let bind raw with z: i64 = (1);
+            p = pipe canon probe first [x] l,r;
+            return p as answer(x,y,z);
+        }
+    };
+    partial.structures.entries[1] = syn::parse_quote!(raw host scan = Scan [];);
+    assert!(structures::contract::check(&partial).unwrap_err().to_string()
+        .contains("join filter requires"));
+    let mut lazy = source.clone();
+    lazy.physical.program.definitions[2] =
+        syn::parse_quote!(p = pipe canon probe lazy [x] l,r;);
+    assert!(structures::contract::check(&lazy).is_err());
+}
+
+#[test]
+fn candidate_support_is_independent_of_complete_payload_selection() {
+    use structures::ProviderCapability::Expand;
+    let mut source = smallest_shared_prefixes();
+    source.structures.entries.push(syn::parse_quote!(
+        r = PayloadAlias [b];
+    ));
+    let facts = structures::contract::check(&source).unwrap();
+    assert!(!facts.provider_support("r", &["b".into()], None, Expand));
+    assert!(facts.candidate_support("r", &["b".into()], "c", Expand));
+    assert!(facts.witnesses.contains_key("pre_r"));
+    assert!(facts.expands.contains("candidate"));
+    assert_eq!(facts.built_on("r", &["b".into()]).unwrap().0, &syn::parse_quote!(PayloadAlias));
+    assert_eq!(facts.candidate_on("r", &["b".into()], "c").unwrap(), &syn::parse_quote!(::custom::Directory));
+    // A capable ordinary payload cannot confer support on the directory.
+    source.structures.entries[0] = syn::parse_quote!(r = ::custom::Directory [b][c];);
+    *source.structures.entries.last_mut().unwrap() =
+        syn::parse_quote!(r = PayloadAlias [b] supports [expand];);
+    assert!(structures::contract::check(&source).is_err());
+}
+
+#[test]
+fn declared_retain_does_not_relax_eager_sharing() {
+    let mut source = shared_program();
+    source.physical.program.definitions[2] =
+        syn::parse_quote!(s = pipe semi lazy [x] l,b;);
+    assert!(structures::contract::check(&source).is_err());
 }

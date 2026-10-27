@@ -1,0 +1,9 @@
+{
+  "binary_sha256": "15d58a855188d4951577960a7c180dac0fd08a8796018fb21cfc21c99cf0b62a",
+  "command": [
+    "experiments/mac/index-bench/native/target/release/native-index-bench",
+    "1048576",
+    "262144",
+    "5"
+  ]
+}

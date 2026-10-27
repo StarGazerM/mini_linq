@@ -5,12 +5,20 @@
 //! Host key levels retain their recorded order; their flattened, sorted key set
 //! must exactly match the named read. A scan has one empty level. Printers may
 //! impose stricter representation-specific level requirements.
+//! Providers may declare `supports [retain, expand, keys]` on a keyed build or
+//! host fallback. Expansion implies retention, but neither implies ordered or
+//! contiguous access. Checks use the selected layout, never the provider's
+//! type name; generated Rust must discharge every declared capability and
+//! ordinary read trait obligation. Missing metadata grants no optimization.
 //! Smallest intersections require two candidate levels on every retained side,
 //! alongside any structures needed by other reads of the same result.
+//! Candidate reads select that exact two-level directory independently of an
+//! ordinary complete payload provider on the same prefix.
 //! The denotation is `bottom + Set`; opaque Rust binds and guards stay in their
 //! written chain. Const supplies use one point read and never justify a build.
 //! ```text
-//! Entry ::= Ident ("=" RustType ("[" Ident,* "]")+
+//! Entry ::= Ident ("=" RustType ("[" Ident,* "]")+ [Support]
+//!                | "host" Ident "=" RustType ("[" Ident,* "]")+ [Support]
 //!                | "selection" "=" RustType Origin "summary" Summary
 //!                | "keyset" "=" RustType "[" Ident,* "]" Ownership Origin
 //!                | "read" "=" "positional" Origin "column" Ident
@@ -21,6 +29,7 @@
 //!                    ["witness" "{" Ident "[" Ident,* "]" "at" Ident "as" RustType "}"]
 //!                | "share" "=" "lookup" Ident "[" Ident,* "]" "first" Ident "force" Ident
 //!                | "stage" "=" "batch" Integer ["expand"]) ";"
+//! Support ::= "supports" "[" ("retain" | "expand" | "keys"),* "]"
 //! Origin ::= "base" Ident "lineage" "{" (Ident "->" Ident),* "}"
 //! ```
 //!
@@ -90,6 +99,9 @@ pub mod kw {
     syn::custom_keyword!(witness);
     syn::custom_keyword!(at);
     syn::custom_keyword!(expand);
+    syn::custom_keyword!(supports);
+    syn::custom_keyword!(retain);
+    syn::custom_keyword!(keys);
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -225,9 +237,69 @@ pub struct Keyed {
     #[parse(parse_levels)]
     #[to_tokens(|tokens, levels| quote::TokenStreamExt::append_all(tokens, levels))]
     pub levels: Vec<Level>,
+    #[parse(parse_support)]
+    pub supports: Option<ProviderSupport>,
     pub membership: Option<kw::membership>,
     #[parse(parse_filtered)]
     pub filtered: Option<Filtered>,
+}
+
+/// Provider-authored read laws, independently of its Rust type spelling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ProviderCapability {
+    Retain,
+    Expand,
+    Keys,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub enum ProviderCapabilityToken {
+    #[parse(peek = kw::retain)]
+    Retain(kw::retain),
+    #[parse(peek = kw::expand)]
+    Expand(kw::expand),
+    #[parse(peek = kw::keys)]
+    Keys(kw::keys),
+}
+
+impl ProviderCapabilityToken {
+    pub fn capability(&self) -> ProviderCapability {
+        match self {
+            Self::Retain(_) => ProviderCapability::Retain,
+            Self::Expand(_) => ProviderCapability::Expand,
+            Self::Keys(_) => ProviderCapability::Keys,
+        }
+    }
+}
+
+/// Explicit contracts checked by generated Rust trait obligations.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct ProviderSupport {
+    pub supports_token: kw::supports,
+    #[syn(bracketed)]
+    pub bracket: token::Bracket,
+    #[syn(in = bracket)]
+    #[parse(CommaList::parse_terminated)]
+    pub capabilities: CommaList<ProviderCapabilityToken>,
+}
+
+impl ProviderSupport {
+    pub fn supports(&self, capability: ProviderCapability) -> bool {
+        self.capabilities.iter().any(|token| {
+            let declared = token.capability();
+            declared == capability
+                || capability == ProviderCapability::Retain
+                    && declared == ProviderCapability::Expand
+        })
+    }
+}
+
+fn parse_support(input: syn::parse::ParseStream<'_>) -> syn::Result<Option<ProviderSupport>> {
+    if input.peek(kw::supports) {
+        input.parse().map(Some)
+    } else {
+        Ok(None)
+    }
 }
 
 /// A filtered index retains this projected row schema. Key columns are
@@ -278,6 +350,27 @@ fn parse_levels(input: syn::parse::ParseStream<'_>) -> syn::Result<Vec<Level>> {
 }
 
 impl Keyed {
+    pub fn supports(&self, capability: ProviderCapability) -> bool {
+        self.supports.as_ref().is_some_and(|support| support.supports(capability))
+    }
+
+    fn check_support(&self) -> syn::Result<()> {
+        let Some(support) = &self.supports else { return Ok(()) };
+        if self.levels.len() > 1 && self.levels.iter().any(|level| level.columns.is_empty()) {
+            return error(support, "provider support requires nonempty levels in a multi-level layout");
+        }
+        let mut seen = BTreeSet::new();
+        for token in &support.capabilities {
+            if !seen.insert(token.capability()) {
+                return error(token, "duplicate provider capability");
+            }
+        }
+        if self.membership.is_some() && self.supports(ProviderCapability::Retain) {
+            return error(support, "membership-only storage cannot retain or expand payload cursors");
+        }
+        Ok(())
+    }
+
     /// Every column across all levels, level by level.
     pub fn columns(&self) -> impl Iterator<Item = &Ident> {
         self.levels.iter().flat_map(|l| l.columns.iter())
@@ -344,6 +437,8 @@ pub struct Analysis {
     pub built: BTreeMap<String, Vec<Built>>,
     /// Exact fallback per (host rename result, reader); scan uses the reader `scan`.
     pub fallbacks: BTreeMap<(String, String, Vec<String>), syn::Type>,
+    built_support: BTreeMap<(String, Vec<Vec<String>>), ProviderSupport>,
+    host_support: BTreeMap<(String, String, Vec<String>), ProviderSupport>,
     pub dedup: BTreeMap<String, syn::Type>,
     pub head_dedup: BTreeMap<String, syn::Type>,
     pub retained: BTreeMap<String, syn::Type>,
@@ -367,18 +462,65 @@ impl Analysis {
     /// The structure answering a read of `result` on `columns`, and how
     /// many of its levels the read applies.
     pub fn built_on(&self, result: &str, columns: &[String]) -> Option<(&syn::Type, usize)> {
+        self.selected_built(result, columns)
+            .map(|((_, ty), depth)| (ty, depth))
+    }
+
+    fn selected_built(&self, result: &str, columns: &[String]) -> Option<(&Built, usize)> {
         let mut wanted = columns.to_vec();
         wanted.sort();
-        self.built
-            .get(result)?
-            .iter()
-            .filter_map(|(levels, ty)| {
-                prefix_depth(levels, &wanted).map(|depth| (levels, ty, depth))
+        self.built.get(result)?.iter()
+            .filter_map(|built| prefix_depth(&built.0, &wanted).map(|depth| (built, depth)))
+            // Complete keys precede candidate prefixes; ties preserve entry order.
+            .min_by_key(|((levels, _), depth)| (levels.len() != *depth, levels.len()))
+    }
+
+    fn selected_candidate(&self, result: &str, prefix: &[String], column: &str) -> Option<&Built> {
+        let mut prefix = prefix.to_vec();
+        prefix.sort();
+        self.built.get(result)?.iter().find(|(levels, _)| {
+            levels.len() == 2 && levels[0] == prefix
+                && levels[1].len() == 1 && levels[1][0] == column
+        })
+    }
+
+    /// Candidate enumeration selects its exact two-level directory, not the
+    /// complete payload layout that ordinary `built_on` prefers on the prefix.
+    pub fn candidate_on(&self, result: &str, prefix: &[String], column: &str) -> Option<&syn::Type> {
+        self.selected_candidate(result, prefix, column).map(|(_, ty)| ty)
+    }
+
+    /// Declared support of the directory selected by a Smallest candidate read.
+    pub fn candidate_support(
+        &self,
+        result: &str,
+        prefix: &[String],
+        column: &str,
+        capability: ProviderCapability,
+    ) -> bool {
+        self.selected_candidate(result, prefix, column)
+            .and_then(|(levels, _)| self.built_support.get(&(result.to_owned(), levels.clone())))
+            .is_some_and(|support| support.supports(capability))
+    }
+
+    /// Declared support of the exact provider selected for this read.
+    pub fn provider_support(
+        &self,
+        result: &str,
+        columns: &[String],
+        reader: Option<&str>,
+        capability: ProviderCapability,
+    ) -> bool {
+        let support = if let Some(reader) = reader {
+            let mut columns = columns.to_vec();
+            columns.sort();
+            self.host_support.get(&(result.to_owned(), reader.to_owned(), columns))
+        } else {
+            self.selected_built(result, columns).and_then(|((levels, _), _)| {
+                self.built_support.get(&(result.to_owned(), levels.clone()))
             })
-            // Complete keys take precedence over candidate prefixes: an
-            // ordinary probe needs rows, not the next trie level.
-            .min_by_key(|(levels, _, depth)| (levels.len() != *depth, levels.len()))
-            .map(|(_, ty, depth)| (ty, depth))
+        };
+        support.is_some_and(|support| support.supports(capability))
     }
 }
 
@@ -432,6 +574,8 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
         join_filters: BTreeMap::new(),
         built: BTreeMap::new(),
         fallbacks: BTreeMap::new(),
+        built_support: BTreeMap::new(),
+        host_support: BTreeMap::new(),
         dedup: BTreeMap::new(),
         head_dedup: BTreeMap::new(),
         retained: BTreeMap::new(),
@@ -461,6 +605,9 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
             }
             Structure::Built { keyed, .. } => keyed,
             Structure::Host { reader, keyed, .. } => {
+                if reader == "scan" && keyed.supports.is_some() {
+                    return error(keyed, "provider support belongs to keyed reads, not scan adapters");
+                }
                 if keyed.filtered.is_some() || keyed.membership.is_some() {
                     return error(
                         keyed,
@@ -476,6 +623,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                     );
                 }
                 concrete_type(&keyed.ty)?;
+                keyed.check_support()?;
                 let columns = keyed.level_names();
                 if columns.is_empty() || (columns.len() > 1 && columns.iter().any(Vec::is_empty)) {
                     return error(keyed, "host fallback requires nonempty key levels");
@@ -483,21 +631,14 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 let mut read_columns = columns.concat();
                 read_columns.sort();
                 let reader_name = symbol_name(reader);
-                if let Some(read) = program
-                    .physical
-                    .program
-                    .definitions
-                    .iter()
-                    .find(|d| symbol_name(&d.name) == reader_name)
-                {
-                    match &read.operator {
-                        Operator::Probe(..) => admissible(&keyed.ty, "payload")?,
-                        Operator::Merge(..) => admissible(&keyed.ty, "ordered")?,
-                        _ => {}
+                let mut unique = BTreeSet::new();
+                for column in keyed.columns() {
+                    if !heading.contains(&symbol_name(column)) {
+                        return error(column, format!("`{name}` has no column `{column}`"));
                     }
-                }
-                if reader_name == "candidates" {
-                    admissible(&keyed.ty, "candidates")?;
+                    if !unique.insert(symbol_name(column)) {
+                        return error(column, "host fallback repeats a key column");
+                    }
                 }
 
                 let valid = if reader_name == "scan" {
@@ -523,6 +664,12 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 };
                 if !valid {
                     return error(reader, "fallback does not match a host read");
+                }
+                if let Some(support) = &keyed.supports {
+                    analysis.host_support.insert(
+                        (name.clone(), reader_name.clone(), read_columns.clone()),
+                        support.clone(),
+                    );
                 }
                 if analysis
                     .fallbacks
@@ -582,6 +729,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
             let Some(heading) = analysis.physical.headings.get(&name) else {
                 return error(&entry.name, "structure must name a Physical result");
             };
+            keyed.check_support()?;
             let mut all = BTreeSet::new();
             for column in keyed.columns() {
                 if !heading.contains(&symbol_name(column)) {
@@ -620,6 +768,9 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
             if !seen.insert((name.clone(), columns.clone())) {
                 return error(&entry.name, "duplicate structure on these columns");
             }
+            if let Some(support) = &keyed.supports {
+                analysis.built_support.insert((name.clone(), columns.clone()), support.clone());
+            }
             analysis
                 .built
                 .entry(name.clone())
@@ -629,7 +780,6 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 if keyed.levels.len() != 1 || keyed.filtered.is_none() {
                     return error(keyed, "membership storage requires one filtered key");
                 }
-                admissible(&keyed.ty, "membership")?;
                 analysis
                     .membership
                     .insert((name.clone(), keyed.level_names().concat()));
@@ -707,17 +857,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                     }
                 }
             } else {
-                let valid = analysis
-                    .built
-                    .get(&name)
-                    .into_iter()
-                    .flatten()
-                    .any(|(levels, ty)| {
-                        levels.len() == 2
-                            && levels[0] == prefix
-                            && levels[1] == [v.clone()]
-                            && admissible(ty, "candidates").is_ok()
-                    });
+                let valid = analysis.candidate_on(&name, &prefix, &v).is_some();
                 if !valid {
                     return error(
                         candidate.reader,
@@ -764,28 +904,12 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 );
             }
             if let Some((ty, depth)) = analysis.built_on(result, columns) {
-                if membership
-                    && !analysis
-                        .keysets
-                        .contains_key(&(result.clone(), columns.clone()))
-                {
-                    admissible(ty, "membership")?;
-                }
                 let payload = program.physical.program.definitions.iter().any(|d| {
                     symbol_name(&d.name) == *reader && matches!(d.operator, Operator::Probe(..))
                 });
                 if payload {
-                    if !analysis
-                        .membership
-                        .contains(&(result.clone(), columns.clone()))
-                    {
-                        admissible(ty, "payload")?;
-                    }
-                    let levels = &analysis.built[result]
-                        .iter()
-                        .find(|(levels, t)| t == ty && prefix_depth(levels, columns) == Some(depth))
-                        .expect("selected build")
-                        .0;
+                    let ((levels, _), _) = analysis.selected_built(result, columns)
+                        .expect("selected build");
                     if depth != levels.len() && !program.physical.program.definitions.iter().any(|d| symbol_name(&d.name) == *reader && matches!(&d.operator, Operator::Probe(_,k) if matches!(k.choice, Some(physical::Choice::Smallest(_))))) {
                         return error(ty, "a payload probe must read all built levels");
                     }
@@ -810,9 +934,6 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 analysis.host_read(side) || analysis.built_on(side, columns).is_some();
             let by_stream = analysis.physical.modes[side] == ModeKind::Pipe
                 && merge_key.get(side) == Some(columns);
-            if let Some((ty, _)) = analysis.built_on(side, columns) {
-                admissible(ty, "ordered")?;
-            }
             if !by_structure && !by_stream {
                 return error(
                     &module.structures_token,
@@ -980,7 +1101,7 @@ mod repr;
 pub use repr::Witness;
 pub use repr::{Repr, ReprBase, representation_bases};
 mod share;
-pub use share::{Share, leveled_host_read};
+pub use share::{Share, retained_host_read};
 mod stage;
 
 mod filtered;
@@ -998,69 +1119,3 @@ impl cq_stage::Language for Program {
     }
 }
 
-/// Reject known incompatible runtime representations; rustc checks aliases and
-/// user types against the generated trait obligations.
-fn admissible(ty: &syn::Type, need: &str) -> syn::Result<()> {
-    let syn::Type::Path(path) = ty else {
-        return Ok(());
-    };
-    let qualified = path
-        .path
-        .segments
-        .iter()
-        .map(|s| s.ident.to_string())
-        .collect::<Vec<_>>()
-        .join("::");
-    if !matches!(
-        qualified.as_str(),
-        "std::collections::HashSet"
-            | "cq_storage::HashSet"
-            | "std::collections::BTreeSet"
-            | "std::collections::HashMap"
-            | "cq_storage::HashIndex"
-            | "cq_storage::dispatch::KeySet"
-            | "cq_storage::Trie"
-            | "cq_storage::Selection"
-            | "cq_storage::AdaptiveKeySet"
-    ) {
-        return Ok(());
-    }
-    let name = path
-        .path
-        .segments
-        .last()
-        .map(|s| s.ident.to_string())
-        .unwrap_or_default();
-    let incompatible = match need {
-        "membership" => name == "Selection",
-        "interval" => matches!(
-            name.as_str(),
-            "HashIndex" | "HashMap" | "HashSet" | "BTreeSet" | "KeySet" | "Trie" | "Selection"
-        ),
-        "payload" => matches!(
-            name.as_str(),
-            "HashSet" | "BTreeSet" | "KeySet" | "Selection" | "AdaptiveKeySet"
-        ),
-        "ordered" => matches!(
-            name.as_str(),
-            "HashIndex"
-                | "HashMap"
-                | "HashSet"
-                | "BTreeSet"
-                | "KeySet"
-                | "Trie"
-                | "Selection"
-                | "AdaptiveKeySet"
-        ),
-        "candidates" => matches!(
-            name.as_str(),
-            "HashSet" | "BTreeSet" | "KeySet" | "Selection" | "AdaptiveKeySet"
-        ),
-        _ => false,
-    };
-    if incompatible {
-        error(ty, format!("recorded type is not {need}-admissible"))
-    } else {
-        Ok(())
-    }
-}

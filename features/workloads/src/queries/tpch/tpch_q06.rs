@@ -12,6 +12,10 @@ pub const EXPORTS: &[(&str, &str)] = &[(
 )];
 pub const CONFIGS: &[&str] = &[
     "default",
+    "radix",
+    "radix_retained",
+    "built_hash",
+    "built_radix",
     "no-reduce",
     "generic-smallest",
     "staged",
@@ -105,6 +109,10 @@ crate::tpch_runtime::configuration!(staged, $,
 pub fn run(data: &Data, config: &str) -> Vec<Answer> {
     match config {
         "default" => default::execute(data),
+        "radix" => radix::execute(data),
+        "radix_retained" => radix_retained::execute(data),
+        "built_hash" => built_hash::execute(data),
+        "built_radix" => built_radix::execute(data),
         "staged" => staged::execute(data),
         "no-reduce" => no_reduce::execute(data),
         "generic-smallest" => generic_smallest::execute(data),

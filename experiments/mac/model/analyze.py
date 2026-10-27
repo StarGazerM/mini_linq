@@ -30,7 +30,7 @@ SCENARIOS = {
 def rounds_for(kw):
     if "bulk" in kw:
         n, p = kw["bulk"]
-        return [model.Round(n, p)]
+        return [model.Round(n, p, build_first=True)]
     if "tc" in kw:
         n, reach, diam, fan = kw["tc"]
         return model.transitive_closure(n, reach, diam, fan)

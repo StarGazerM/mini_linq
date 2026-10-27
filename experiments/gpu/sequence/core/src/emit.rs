@@ -1198,6 +1198,18 @@ pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Exp
             "GPU Sequence translation requires checked gpu grading",
         ));
     }
+    // Structures optimizations are separate from Sequence decomposition. This
+    // target implements neither their retained witnesses nor their native
+    // staging/filter protocol; translating them as plain lookups would silently
+    // discard an authored phase decision.
+    if !analysis.structures.witnesses.is_empty()
+        || !analysis.structures.stages.is_empty()
+        || !analysis.structures.join_filters.is_empty()
+    {
+        return Err(error(
+            "T-Gpu: Structures witnesses, staging and join filters are not realized by this target; use supported Sequence scheduling or a native terminal",
+        ));
+    }
     for (_, _, level) in &analysis.collectives {
         if level.last().is_some_and(|level| level == "device") {
             return Err(error(
@@ -2685,6 +2697,18 @@ mod tests {
                 result at host.device;
             }
         }
+    }
+
+    #[test]
+    fn structures_staging_cannot_be_silently_dropped_by_target_switch() {
+        let mut program = uploaded_host_program(false);
+        let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
+        assert!(translate(&program, &analysis).is_ok());
+        program.structures.structures.entries.push(
+            syn::parse_quote!(host_input stage = batch 2;)
+        );
+        let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
+        assert!(translate(&program, &analysis).is_err());
     }
 
     #[test]

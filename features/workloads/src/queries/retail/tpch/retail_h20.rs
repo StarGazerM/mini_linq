@@ -5,7 +5,7 @@
 use cq_load::{Date, Decimal, Load};
 
 pub const NAME: &str = "retail_h20";
-pub const CONFIGS: &[&str] = &["default"];
+pub const CONFIGS: &[&str] = &["default", "radix", "radix_retained"];
 pub const EXPORTS: &[(&str, &str)] = &[
     ("part", "p_partkey,p_name"),
     ("partsupp", "ps_partkey,ps_suppkey,ps_availqty"),
@@ -49,7 +49,7 @@ mini_linq::relation_loaders! {
 }
 
 pub fn load(root: &std::path::Path, config: &str) -> Result<Data, Box<dyn std::error::Error>> {
-    assert_eq!(config, "default", "unknown H20 configuration");
+    assert!(CONFIGS.contains(&config), "unknown H20 configuration");
     Ok(Data {
         part: <relation_loader!(Part)>::parquet(
             root.join("part.parquet"), cq_load::ParquetOptions::default(),
@@ -69,9 +69,9 @@ pub fn load(root: &std::path::Path, config: &str) -> Result<Data, Box<dyn std::e
     })
 }
 
+crate::tpch_runtime::same_plan_kernel! { $;
 #[allow(non_snake_case)]
-pub fn run(data: &Data, config: &str) -> Vec<Answer> {
-    assert_eq!(config, "default", "unknown H20 configuration");
+pub(super) fn execute(data: &Data) -> Vec<Answer> {
     let Part = data.part.as_slice();
     let Partsupp = data.partsupp.as_slice();
     let Lineitem = data.lineitem.as_slice();
@@ -79,7 +79,7 @@ pub fn run(data: &Data, config: &str) -> Vec<Answer> {
     let Nation = data.nation.as_slice();
     let start = Date::load("1994-01-01").expect("authored ISO date");
     let end = Date::load("1995-01-01").expect("authored ISO date");
-    let Shipped: Vec<(i64, i64, i64)> = mini_linq::compile! {
+    let Shipped: Vec<(i64, i64, i64)> = query! {
         pipeline {}
         struct Shipments;
         relation Lineitem(l_orderkey: i64, l_linenumber: i64, l_partkey: i64,
@@ -91,7 +91,7 @@ pub fn run(data: &Data, config: &str) -> Vec<Answer> {
             let quantity_units: i64 = quantity.scaled();
     }.map(|(part, supplier, quantity)| (*part, *supplier, quantity)).collect();
     let Shipped = Shipped.as_slice();
-    mini_linq::compile! {
+    query! {
         pipeline {}
         struct Query;
         relation Part(p_partkey: i64, p_name: String);
@@ -107,6 +107,7 @@ pub fn run(data: &Data, config: &str) -> Vec<Answer> {
             Supplier(supplier_key, nation_key, supplier_name, address),
             Nation(nation_key, nation_name), if nation_name == "CANADA";
     }.map(|(name, address)| (name.clone(), address.clone())).collect()
+}
 }
 
 pub fn canonical(rows: &[Answer]) -> Vec<Vec<String>> {

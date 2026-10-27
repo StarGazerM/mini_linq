@@ -22,36 +22,43 @@ pub(crate) fn forwarding(operator: &Operator) -> bool {
     )
 }
 
-/// An explicitly recorded immutable leveled snapshot read. The provider type
-/// carries its exact layout; consumers may share only identical types and keys.
-pub fn leveled_host_read<'a>(
+/// An explicitly retained immutable host read. Both demands must record the
+/// same provider and level layout over the same host occurrence.
+pub fn retained_host_read<'a>(
     program: &'a Program,
     build: &str,
     reader: &str,
     keys: &[String],
 ) -> Option<&'a syn::Type> {
+    retained_host_keyed(program, build, reader, keys).map(|keyed| &keyed.ty)
+}
+
+fn retained_host_keyed<'a>(
+    program: &'a Program,
+    build: &str,
+    reader: &str,
+    keys: &[String],
+) -> Option<&'a Keyed> {
+    if keys.is_empty() {
+        return None;
+    }
+    let mut wanted = keys.to_vec();
+    wanted.sort();
+    if wanted.windows(2).any(|pair| pair[0] == pair[1]) {
+        return None;
+    }
     program.structures.entries.iter().find_map(|entry| {
-        let Structure::Host {
-            keyed,
-            reader: demand,
-            ..
-        } = &entry.structure
-        else {
-            return None;
-        };
-        let syn::Type::Path(path) = &keyed.ty else {
+        let Structure::Host { keyed, reader: demand, .. } = &entry.structure else {
             return None;
         };
         let mut recorded = keyed.columns().map(symbol_name).collect::<Vec<_>>();
         recorded.sort();
         (symbol_name(&entry.name) == build
             && symbol_name(demand) == reader
-            && recorded == keys
-            && path.qself.is_none()
-            && path.path.segments.len() == 2
-            && path.path.segments[0].ident == "cq_gpu_runtime"
-            && path.path.segments[1].ident == "LeveledDeviceIndex")
-            .then_some(&keyed.ty)
+            && recorded == wanted
+            && keyed.levels.iter().all(|level| !level.columns.is_empty())
+            && keyed.supports(ProviderCapability::Retain))
+            .then_some(keyed.as_ref())
     })
 }
 
@@ -82,7 +89,7 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
         let fail = || {
             syn::Error::new_spanned(
                 entry,
-                "share requires an earlier immutable payload build or matching leveled snapshot hosts, eager semi and later same-key probe on its preserving chain",
+                "share requires an earlier immutable payload build or matching retained snapshot hosts, eager semi and later same-key probe on its preserving chain",
             )
         };
         let position = |name: &str| {
@@ -97,18 +104,16 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
         ) else {
             return Err(fail());
         };
-        let leveled = leveled_host_read(program, &share.build, &share.first, &share.keys)
-            .zip(leveled_host_read(
-                program,
-                &share.build,
-                &share.force,
-                &share.keys,
-            ))
-            .is_some_and(|(first, force)| first == force)
+        let retained_host = retained_host_keyed(program, &share.build, &share.first, &share.keys)
+            .zip(retained_host_keyed(program, &share.build, &share.force, &share.keys))
+            .is_some_and(|(first, force)| {
+                first.ty == force.ty && first.level_names() == force.level_names()
+            })
+            && facts.physical.hosts.contains_key(&share.build)
             && matches!(definitions[b].operator, Operator::Rename(_));
         if name != share.first
             || !(b < s && s < p)
-            || (facts.physical.modes[&share.build] != ModeKind::Let && !leveled)
+            || (facts.physical.modes[&share.build] != ModeKind::Let && !retained_host)
         {
             return Err(fail());
         }
@@ -119,24 +124,13 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
                     .iter()
                     .any(|(build, prefix)| build == &share.build && prefix == &share.keys)
         });
-        let payload = facts.built.get(&share.build).into_iter().flatten().any(|(levels, ty)| {
-            let syn::Type::Path(path) = ty else { return false };
-            let Some(segment) = path.path.segments.last() else { return false };
-            if levels.len() == 1 && levels[0] == share.keys
-                && (segment.ident == "HashIndex" || segment.ident == "SortedRun")
-            {
-                return true;
-            }
-            segment.ident == "PrefixRun"
-                && prefix_depth(levels, &share.keys).is_some()
-                && share.keys.iter().all(|key| matches!(
-                    ungroup_type(&facts.physical.rows[&share.build].types[key]),
-                    syn::Type::Path(path) if path.qself.is_none()
-                        && ["i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize"]
-                            .iter().any(|name| path.path.is_ident(name))
-                ))
-        });
-        if !(payload || leveled)
+        let payload = if let Some(candidate) = candidate {
+            facts.candidate_on(&share.build, &share.keys, &candidate.column).is_some()
+        } else {
+            facts.selected_built(&share.build, &share.keys)
+                .is_some_and(|((levels, _), depth)| depth == levels.len())
+        };
+        if !(payload || retained_host)
             || facts
                 .membership
                 .contains(&(share.build.clone(), share.keys.clone()))

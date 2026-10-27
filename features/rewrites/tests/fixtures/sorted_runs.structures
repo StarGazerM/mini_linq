@@ -1,6 +1,6 @@
 structures {
     o = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [x];
-    r = ::cq_storage::SortedRun<_, _, ::cq_storage::BorrowedI64TupleCodec> [x];
+    r = ::cq_storage::SortedRun<_, _, ::cq_storage::BorrowedI64TupleCodec> [x] supports [retain, expand, keys];
     s = ::cq_storage::HashSet<_> [x];
     t = ::cq_storage::Trie<'_, _, ::cq_storage::HashIndex<'_, _, _>> [x][y];
     l host scan = ::core::iter::Map<_, _> [];

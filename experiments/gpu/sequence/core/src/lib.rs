@@ -69,6 +69,7 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
     Catalog {
         providers: vec![
             ProviderToken {
+                supports: Vec::new(),
                 ty: syn::parse_quote!(::cq_gpu_sequence_runtime::RangeProvider),
                 capabilities: vec![Capability::Exact, Capability::Range, Capability::Membership],
                 elements: Some(vec![
@@ -84,6 +85,7 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
                 levels: levels.clone(),
             },
             ProviderToken {
+                supports: Vec::new(),
                 ty: syn::parse_quote!(::cq_storage::SortedRun<_, _>),
                 capabilities: vec![Capability::Exact, Capability::Range, Capability::Membership],
                 elements: None,

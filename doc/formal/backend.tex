@@ -114,8 +114,8 @@ a state-dependent cursor. Probe and merge produce such cursors, so a checked
 segment cannot contain them or end after them. Retaining their output as
 \code{rows} supplies a new \emph{for} producer for a subsequent segment.
 Semi and anti are total filtering steps and may lie inside a segment.
-An explicit \code{expand} flag admits a SortedRun probe whose ranges
-have total, known lengths; unannotated probes still end the segment.
+An explicit \code{expand} flag admits a probe whose selected provider declares
+exact finite cursor expansion; unannotated probes still end the segment.
 This distinction follows the producer representation of
 Kiselyov et al.~\cite{paper-stream-fusion}; staging here specifies evaluation
 strictness, not an additional relational rewrite.
@@ -132,7 +132,7 @@ the default pipeline preserves its earlier decisions by recording them.
 
 \paragraph{By-need lookup sharing.}
 \code{r share = lookup b [K] first s force p;} names an earlier retained
-payload build or a recorded immutable leveled host snapshot, an eager semi
+payload build or a recorded immutable host snapshot, an eager semi
 with result $r=s$, and a later probe.
 \begin{mathpar}
 \Rule{ST-Share}{
@@ -143,39 +143,42 @@ with result $r=s$, and a later probe.
 }{\mathsf{share}(s)=(b,K,s,p)}
 \end{mathpar}
 Each $(b,K,s)$ has one sharing decision. Without a witness it retains
-ordinary re-evaluation. One-level HashIndex/SortedRun payloads and integral,
-complete leading PrefixRun levels qualify; membership-only builds do not.
-Leveled host reads qualify only when both demands record the same exact
-provider layout and key on the same host occurrence. Snapshot publication
-belongs to the SCC bridge, not the lookup-retention pass. An arbitrary host
-reader, a different layout, or a different key cannot establish this premise.
+ordinary re-evaluation. A retained witness additionally requires declared
+\code{retain} support (or \code{expand}, which implies it) on the selected
+payload or candidate layout; membership-only builds do not qualify.
+Host reads must declare support at both demands and record the same provider,
+layout and key on the same immutable occurrence. Snapshot publication belongs
+to the runtime owner, not this pass. A different layout or key cannot establish
+the premise. Generated witness types may be inferred; native emission checks
+Copy without choosing a concrete cursor representation.
 \begin{lemma}[Lookup coupling]
 The retained memo satisfies $\mathsf{memo}=\mathsf{lookup}_b(k)$ at both demands.
 \end{lemma}
 \begin{proof}
 Host immutability and the earlier let, or the shared snapshot lifetime,
 keep the provider unchanged. The checked chain preserves key terms.
-IndexRead's lookup law (STR-SortedRun and STR-RunRead for runs)
-therefore identifies both total reads; no partial evaluation moves.
+IndexRead's occurrence-preserving lookup law therefore identifies both total
+reads; no partial evaluation moves.
 \end{proof}
 
 \begin{mathpar}
 \Rule{ST-Expand}{
- r=\mathsf{probe}[K](l,b)\quad \mathsf{rangeCursor}(b,K)\\
+ r=\mathsf{probe}[K](l,b)\quad \mathsf{declaresExpand}(b,K)\\
  \mathsf{totalSegment}(l,r)\quad \mathsf{producer}(l):\mathsf{for}
  \quad N>0\quad\mathsf{boundaryBeforePartial}(r)
 }{r\;\mathsf{stage}=\mathsf{batch}\ N\ \mathsf{expand}\text{ is admissible}}
 \end{mathpar}
-Here rangeCursor is declared by a one-level SortedRun build, a complete
-leading prefix of a lexicographic PrefixRun, or an exact resident sorted host.
-A leveled host supplies a bounded sequence of exact ranges, one per snapshot
-run. Expansion descriptors retain each run identity together with its range;
-the same exclusive scan applies to their concatenation. Retained witnesses
-reuse these descriptors without repeating the prefix searches.
-HashedRun bucket ranges contain collisions and do not qualify. The GPU
-\code{prefix\_runs} rewrite records integral composite payload builds consumed
-by probes as singleton-level PrefixRuns before witness retention and expansion;
-the printer only consumes these checked decisions.
+The declared expansion contract supplies a Copy exact-size cursor, checked by
+the realizing backend. It does not require a sorted implementation or establish
+the single contiguous item-array contract of Sequence's Range capability.
+Smallest uses its selected two-level candidate directory, not an ordinary
+complete-key payload index on the same prefix. A target must realize the
+recorded decision and its cursor obligations or reject the unsupported access
+shape; it may not silently erase the decision when switching terminals.
+The native terminal currently rejects retained/expanded Smallest and retained
+prefix shapes it cannot realize. The CUDA Sequence terminal rejects native
+Structures witnesses, staging and join filters rather than treating them as
+ordinary device lookups. Legacy provider names grant no exception.
 A Smallest intersection records expansion only at its introducing probe.
 Its forcing read is part of that same total intersection, not an independent
 cursor; subsequent staged probes may cross it without adding a force-stage.

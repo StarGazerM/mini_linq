@@ -4,8 +4,9 @@
 \paragraph{Grammar.} Structures extends a complete Physical program.
 \begin{lstlisting}
 Structures ::= Physical structures { Entry* }
-Entry ::= r = Type [K]... [membership] [payload[P] constants{c = term, ...}];
-        | r host reader = Type [K]...;
+Entry ::= r = Type [K]... [supports [Support,...]]
+              [membership] [payload[P] constants{c = term, ...}];
+        | r host reader = Type [K]... [supports [Support,...]];
         | r rows = Type; | r canon = Type; | r head = Type;
         | r selection = Type base H lineage{a -> c, ...}
               summary (none | per_block);
@@ -20,6 +21,7 @@ Entry ::= r = Type [K]... [membership] [payload[P] constants{c = term, ...}];
                          owned [O]) [witness {b [K] at s as Type}];
         | r stage = batch N [expand];
 Predicate ::= physical | membership s [K] summary (exact | row)
+Support ::= retain | expand | keys
 \end{lstlisting}
 
 \paragraph{Contract.} $\mathsf{Entries}(t,A)$ checks the embedded Physical and:
@@ -57,12 +59,41 @@ snapshot has an explicit read; an unrecorded retained result cannot be bypassed;
 own eager semi's strictly earlier RHS build. These exact read entries cannot
 form summary cycles or name nonlocal probe filters. Exact summary requires
 an owned scalar keyset and \code{ExactIntervalMembership}; row summary uses exact membership alone;
-(9)~keysets record their concrete provider, ownership, codec and const bitmap
-budget. The initial owned layout is one \code{i64}; borrowed layouts are tuples.
-Known codecs must match that layout. Payload indexes may coexist with keysets.
-The default \code{ColumnAt<N>} marker must match declaration-order column $N$.
+(9)~keysets record their concrete provider and ownership. The default policy
+records its codec and bitmap budget in that provider type; Rust checks codec,
+key-layout and interval traits uniformly for builtin and aliased types.
+Payload indexes may coexist with keysets.
+Every positional or join-filter marker must implement \code{ColumnSlot<H,N>}
+for the declaration-order slot $N$ derived from its recorded lineage.
+Rust proves this binding even through a type alias; compatible key types alone
+cannot justify selecting a different column. No marker spelling grants it.
 Rust additionally checks positional host, marker, key, lifetime and provider
 obligations; a trait implementation must obey the storage abstraction laws.
+
+\paragraph{Provider-authored support.}
+Support is recorded with the selected provider layout, not inferred from a Rust
+type spelling. \code{retain} requires an immutable exact lookup with a Copy
+cursor; \code{expand} additionally requires an exact finite cursor length and
+implies retain. \code{keys} requires exact distinct-key enumeration through
+\code{Keys}. Duplicate declarations, support on scan adapters, and payload-cursor
+support on membership-only builds are rejected. A one-level unit key remains a
+lawful keyed read; empty levels in a multi-level layout do not confer support.
+Ordinary complete-key reads and Smallest candidate directories select different
+layouts: a capability on a payload index cannot certify a separate candidate
+directory, or conversely.
+
+These declarations do not discharge Rust trait obligations or the semantic
+provider laws. Native emission checks \code{IndexRead}, Copy,
+\code{ExactSizeIterator}, and \code{Keys} as required; ordinary payload,
+membership, interval and ordered accesses retain their own trait obligations.
+Aliases and unrelated provider names receive identical checks. Default selection
+declares support only for implementations and access paths it chooses, without
+imposing unused fallback bounds on a native host read.
+Retyping replaces the support packet; bare retyping clears it. Existing witnesses,
+expansion and filters must remain justified. Target catalogs record the same
+support data and selection preserves live obligations, while replay freezes
+both provider types and support. Neither support nor sorted storage grants
+Ordered, contiguous Sequence Range, or device placement.
 \begin{mathpar}
 \Rule{STR-Lineage}{\mathsf{singleOccurrenceSpine}(r,H)\quad
  \lambda:\mathsf{heading}(r)\hookrightarrow\mathsf{columns}(H)}
@@ -114,6 +145,17 @@ and adjacent offsets partition a contiguous payload array; lookup returns a
 Copy range cursor. Equal-key input order and multiplicity are preserved.
 Presence/rank and binary-search directory access identify the same exact
 range. This is a payload representation, not a uniqueness assertion.
+\code{RadixRun} uses the same stable clustered payload representation, but its
+directory is radix routing over a bounded-error rank spline. A total injective
+order-preserving \code{RadixKey} encoding covers owned, borrowed, and singleton
+tuple i32/i64/u32/u64 keys. Integer differences precede floating conversion;
+the final window includes a conservative rounding allowance. Exact equality
+inside that window determines the payload range, not the prediction itself.
+For membership alone, a bounded lazy presence projection may instead record
+the encoded keys in a bitmap: a bit is set iff that key occurs in $D$.
+Its word-rounded storage is at most one byte per distinct key and 128 KiB;
+sparse domains keep exact spline search. Initialization neither changes
+$(D,O,V)$ nor invalidates existing payload cursors.
 \begin{mathpar}
 \Rule{STR-SortedRun}{
  \mathsf{stableCluster}(I,K)=(D,O,V)\quad
@@ -125,6 +167,17 @@ range. This is a payload representation, not a uniqueness assertion.
  \mathsf{borrowedIntegralKey}(K)\quad\mathsf{streamReads}(b)
 }{\mathsf{retype}(b,\mathsf{SortedRun})\text{ preserves Structures}}
 
+\Rule{STR-RadixRun}{
+ \mathsf{stableCluster}(I,K)=(D,O,V)\quad \mathsf{monotoneInjective64}(K)\\
+ k\in D\Rightarrow\mathsf{rank}_D(k)\in\mathsf{window}(k)\quad
+ \mathsf{exactSearch}(D[\mathsf{window}(k)],k)
+}{\mathsf{lookup}(k)=I|_{K=k}\quad \alpha(D,O,V)=\mathsf{bag}(I)}
+
+\Rule{EXT-RadixRuns}{
+ \mathsf{oneLevelHashPayload}(b,K)\quad
+ \mathsf{singleIntegral64Key}(K)\quad\mathsf{streamReads}(b)
+}{\mathsf{retype}(b,\mathsf{RadixRun})\text{ preserves Structures}}
+
 \Rule{EXT-SortedIndexes}{
  \mathcal{K}=\{K\mid \mathsf{streamRead}(b,K)\}\quad
  \mathsf{integralKeys}(\mathcal{K})\quad
@@ -132,9 +185,11 @@ range. This is a payload representation, not a uniqueness assertion.
  \text{each chain's levels ordered by first binding in the reading stream}
 }{\mathsf{layouts}(b,\mathcal{C})\text{ preserves Physical and Structures}}
 \end{mathpar}
-The external sorted-runs rewrite changes only eligible built providers,
-not host fallbacks or smallest-intersection candidate providers. Its
-independent checker preserves Physical and rederives coverage.
+The external sorted-runs and radix-runs rewrites change only eligible built
+providers, not host fallbacks or smallest-intersection candidate providers.
+Their independent checker preserves Physical and rederives coverage.
+RadixRun declares Exact, Range, and Membership at the Sequential host level;
+it does not assert Ordered reads, already-sorted probes, or a GPU implementation.
 The sorted-indexes rewrite records which lexicographic layouts serve a built
 result's probe and semijoin reads: a fewest set of chains of read keys, each
 recorded as singleton levels. A key read by a payload probe ends its chain,
@@ -258,7 +313,7 @@ conditions and relational readers can reduce the surviving count further.
 \Rule{STR-JoinFilter}{
  j\in\{\mathsf{probe}[K](l,b),\mathsf{semi}[K](l,b)\}\ \text{eager}\quad
  k\in K\quad k:\code{i64}\quad
- \mathsf{exactKeyIndex}(b,K)\in\{\code{HashIndex},\code{SortedRun}\}\\
+ \mathsf{exactKeyIndex}(b,K)\quad\mathsf{declaresKeys}(b,K)\\
  \mathsf{exclusiveSpine}_k(s,l)\quad
  \mathsf{totalBuild}(b)\quad
  \mathsf{marker}(s,k)=C\\
@@ -272,8 +327,9 @@ Here $\mathsf{exclusiveSpine}_k$ contains only one-use pipe renames,
 projections, declarative selections and left operands of eager probes and
 semijoins, each carrying $k$, without canon or fused scopes; the scan's
 lineage maps $k$ to a host column.
-Both admitted payload providers enumerate their exact distinct keys for filter
-construction. Retyping a hash build to a sorted run preserves this premise.
+The selected provider enumerates its exact distinct keys through \code{Keys}
+for filter construction. Any lawful implementation can satisfy this premise;
+retyping must preserve the declaration and its Rust trait obligation.
 A retained-cursor probe remains an exact covering read: its earlier eager
 semi performed the same-key lookup. The original covering operator and its
 exclusive-spine proof are retained, not redirected across an opaque Rust or

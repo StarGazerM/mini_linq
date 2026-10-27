@@ -113,6 +113,132 @@ where
     }
 }
 
+/// Host dispatch whose fallback borrow survives the temporary dispatch wrapper.
+/// Unlike `Host`, constructing this wrapper does not clone a shared handle.
+pub struct BorrowedHost<'a, H, K, T, F>(
+    H,
+    &'a Lazy<T, F>,
+    std::marker::PhantomData<fn() -> K>,
+);
+
+impl<'a, H, K, T, F> BorrowedHost<'a, H, K, T, F> {
+    pub fn new(host: H, fallback: &'a Lazy<T, F>) -> Self {
+        Self(host, fallback, std::marker::PhantomData)
+    }
+}
+
+/// Select the actual read handle before proving its retained cursor obligations.
+pub trait BorrowedRead<Q> {
+    type Read: IndexRead<Key = Q>;
+    fn borrowed_read(self) -> Self::Read;
+}
+
+impl<'a, H, Q, K, T, F: FnOnce() -> T> BorrowedRead<Q>
+    for &BorrowedHost<'a, H, K, T, F>
+where
+    &'a T: IndexRead<Key = Q>,
+{
+    type Read = &'a T;
+
+    fn borrowed_read(self) -> Self::Read {
+        self.1.get()
+    }
+}
+
+impl<H, Q: OwnKey<Owned = K>, K: Eq, T, F> BorrowedRead<Q>
+    for &&BorrowedHost<'_, H, K, T, F>
+where
+    H: IndexRead<Key = K>,
+    H::Item: Columns,
+    H::Cursor: Copy,
+{
+    type Read = ColumnRead<H, Q>;
+
+    fn borrowed_read(self) -> Self::Read {
+        ColumnRead(self.0.clone(), std::marker::PhantomData)
+    }
+}
+
+/// Expansion dispatch skips a native read that cannot supply exact cursor lengths.
+pub trait ExpandedRead<Q> {
+    type Read: IndexRead<Key = Q>;
+    fn expanded_read(self) -> Self::Read;
+}
+
+impl<'a, H, Q, K, T, F: FnOnce() -> T> ExpandedRead<Q>
+    for &BorrowedHost<'a, H, K, T, F>
+where
+    &'a T: IndexRead<Key = Q>,
+{
+    type Read = &'a T;
+
+    fn expanded_read(self) -> Self::Read {
+        self.1.get()
+    }
+}
+
+impl<H, Q: OwnKey<Owned = K>, K: Eq, T, F> ExpandedRead<Q>
+    for &&BorrowedHost<'_, H, K, T, F>
+where
+    H: IndexRead<Key = K>,
+    H::Item: Columns,
+    H::Cursor: Copy + ExactSizeIterator,
+{
+    type Read = ColumnRead<H, Q>;
+
+    fn expanded_read(self) -> Self::Read {
+        ColumnRead(self.0.clone(), std::marker::PhantomData)
+    }
+}
+
+/// Normalize native host columns without changing a cursor's Copy capability.
+pub struct ColumnRead<H, Q>(H, std::marker::PhantomData<fn() -> Q>);
+
+impl<H: Clone, Q> Clone for ColumnRead<H, Q> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone(), std::marker::PhantomData)
+    }
+}
+
+impl<H, Q: OwnKey> IndexRead for ColumnRead<H, Q>
+where
+    H: IndexRead<Key = Q::Owned>,
+    H::Item: Columns,
+{
+    type Key = Q;
+    type Item = <H::Item as Columns>::Row;
+    type Cursor = ColumnCursor<H::Cursor>;
+
+    fn lookup(&self, key: &Q) -> Self::Cursor {
+        ColumnCursor(self.0.lookup(&key.own_key()))
+    }
+}
+
+/// A stateless column projection; copies only when the underlying cursor does.
+#[derive(Clone, Copy)]
+pub struct ColumnCursor<I>(I);
+
+impl<I: Iterator> Iterator for ColumnCursor<I>
+where
+    I::Item: Columns,
+{
+    type Item = <I::Item as Columns>::Row;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next().map(Columns::columns)
+    }
+
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        self.0.nth(n).map(Columns::columns)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.0.size_hint()
+    }
+}
+
+impl<I: ExactSizeIterator> ExactSizeIterator for ColumnCursor<I> where I::Item: Columns {}
+
 pub trait Contains<Q> {
     fn contains(self, key: &Q) -> bool;
 }

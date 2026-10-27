@@ -1,0 +1,1954 @@
+{
+  "rows": [
+    {
+      "query": "retail_h01",
+      "family": "ordinary",
+      "hash_configuration": "default",
+      "sorted_configuration": "radix",
+      "hash_ms": 901.393708,
+      "radix_ms": 900.19175,
+      "radix_over_hash": 0.998666556035024,
+      "radix_build_sites": 0,
+      "hash_computations_before": 0,
+      "hash_computations_after": 0,
+      "answer_rows": 4,
+      "provider_changed": false,
+      "retained_ms": 908.462542,
+      "retained_over_hash": 1.0078421159780273,
+      "retained_over_radix": 1.0091878113746322
+    },
+    {
+      "query": "retail_h02",
+      "family": "ordinary",
+      "hash_configuration": "default",
+      "sorted_configuration": "radix",
+      "hash_ms": 37.330292,
+      "radix_ms": 42.358167,
+      "radix_over_hash": 1.1346861953289837,
+      "radix_build_sites": 5,
+      "hash_computations_before": 2527545,
+      "hash_computations_after": 347436,
+      "answer_rows": 460,
+      "provider_changed": true,
+      "retained_ms": 42.0865,
+      "retained_over_hash": 1.1274088078389528,
+      "retained_over_radix": 0.9935864316319448
+    },
+    {
+      "query": "retail_h11",
+      "family": "ordinary",
+      "hash_configuration": "default",
+      "sorted_configuration": "radix",
+      "hash_ms": 13.449625,
+      "radix_ms": 13.318666,
+      "radix_over_hash": 0.9902629998977668,
+      "radix_build_sites": 1,
+      "hash_computations_before": 830659,
+      "hash_computations_after": 29819,
+      "answer_rows": 1048,
+      "provider_changed": true,
+      "retained_ms": 13.344834,
+      "retained_over_hash": 0.9922086303521475,
+      "retained_over_radix": 1.0019647613357074
+    },
+    {
+      "query": "retail_h15",
+      "family": "ordinary",
+      "hash_configuration": "default",
+      "sorted_configuration": "radix",
+      "hash_ms": 20.504,
+      "radix_ms": 20.328959,
+      "radix_over_hash": 0.9914630803745611,
+      "radix_build_sites": 0,
+      "hash_computations_before": 34334,
+      "hash_computations_after": 34334,
+      "answer_rows": 1,
+      "provider_changed": false,
+      "retained_ms": 20.511291,
+      "retained_over_hash": 1.0003555891533358,
+      "retained_over_radix": 1.0089690770688258
+    },
+    {
+      "query": "retail_h20",
+      "family": "ordinary",
+      "hash_configuration": "default",
+      "sorted_configuration": "radix",
+      "hash_ms": 143.288333,
+      "radix_ms": 141.97479099999998,
+      "radix_over_hash": 0.9908328754163117,
+      "radix_build_sites": 2,
+      "hash_computations_before": 1448823,
+      "hash_computations_after": 851315,
+      "answer_rows": 186,
+      "provider_changed": true,
+      "retained_ms": 141.861917,
+      "retained_over_hash": 0.9900451350773968,
+      "retained_over_radix": 0.999204971536109
+    },
+    {
+      "query": "retail_h06",
+      "family": "ordinary",
+      "hash_configuration": "default",
+      "sorted_configuration": "radix",
+      "hash_ms": 18.950791,
+      "radix_ms": 18.496291000000003,
+      "radix_over_hash": 0.976016832226159,
+      "radix_build_sites": 0,
+      "hash_computations_before": 0,
+      "hash_computations_after": 0,
+      "answer_rows": 1,
+      "provider_changed": false,
+      "retained_ms": 18.678875,
+      "retained_over_hash": 0.9856514696405022,
+      "retained_over_radix": 1.0098713844845975
+    },
+    {
+      "query": "retail_h10",
+      "family": "ordinary",
+      "hash_configuration": "default",
+      "sorted_configuration": "radix",
+      "hash_ms": 156.170292,
+      "radix_ms": 149.483584,
+      "radix_over_hash": 0.9571832266280197,
+      "radix_build_sites": 1,
+      "hash_computations_before": 3062270,
+      "hash_computations_after": 608831,
+      "answer_rows": 37967,
+      "provider_changed": true,
+      "retained_ms": 171.919125,
+      "retained_over_hash": 1.100843974857907,
+      "retained_over_radix": 1.1500869888161098
+    },
+    {
+      "query": "retail_h12",
+      "family": "ordinary",
+      "hash_configuration": "default",
+      "sorted_configuration": "radix",
+      "hash_ms": 79.103458,
+      "radix_ms": 78.638625,
+      "radix_over_hash": 0.9941237335035341,
+      "radix_build_sites": 0,
+      "hash_computations_before": 3365992,
+      "hash_computations_after": 3365992,
+      "answer_rows": 2,
+      "provider_changed": false,
+      "retained_ms": 78.124375,
+      "retained_over_hash": 0.9876227534831663,
+      "retained_over_radix": 0.9934605926794879
+    },
+    {
+      "query": "retail_h13",
+      "family": "ordinary",
+      "hash_configuration": "default",
+      "sorted_configuration": "radix",
+      "hash_ms": 266.53225000000003,
+      "radix_ms": 261.779792,
+      "radix_over_hash": 0.9821692947101146,
+      "radix_build_sites": 0,
+      "hash_computations_before": 3383280,
+      "hash_computations_after": 3383280,
+      "answer_rows": 150000,
+      "provider_changed": false,
+      "retained_ms": 264.796208,
+      "retained_over_hash": 0.9934865593188065,
+      "retained_over_radix": 1.0115227228845838
+    },
+    {
+      "query": "retail_h14",
+      "family": "ordinary",
+      "hash_configuration": "default",
+      "sorted_configuration": "radix",
+      "hash_ms": 24.187375,
+      "radix_ms": 23.582042,
+      "radix_over_hash": 0.9749731833239449,
+      "radix_build_sites": 0,
+      "hash_computations_before": 505355,
+      "hash_computations_after": 505355,
+      "answer_rows": 1,
+      "provider_changed": false,
+      "retained_ms": 23.609875,
+      "retained_over_hash": 0.9761239076170936,
+      "retained_over_radix": 1.0011802625065291
+    },
+    {
+      "query": "retail_h18",
+      "family": "ordinary",
+      "hash_configuration": "default",
+      "sorted_configuration": "radix",
+      "hash_ms": 460.228833,
+      "radix_ms": 424.155208,
+      "radix_over_hash": 0.9216180682013029,
+      "radix_build_sites": 0,
+      "hash_computations_before": 3714490,
+      "hash_computations_after": 3714490,
+      "answer_rows": 57,
+      "provider_changed": false,
+      "retained_ms": 418.338583,
+      "retained_over_hash": 0.9089795184562025,
+      "retained_over_radix": 0.986286564704871
+    },
+    {
+      "query": "retail_h19",
+      "family": "ordinary",
+      "hash_configuration": "default",
+      "sorted_configuration": "radix",
+      "hash_ms": 22.240792,
+      "radix_ms": 22.371292,
+      "radix_over_hash": 1.005867596801409,
+      "radix_build_sites": 0,
+      "hash_computations_before": 643749,
+      "hash_computations_after": 643749,
+      "answer_rows": 1,
+      "provider_changed": false,
+      "retained_ms": 22.717042,
+      "retained_over_hash": 1.0214133561430727,
+      "retained_over_radix": 1.015455075191902
+    },
+    {
+      "query": "retail_h04",
+      "family": "ordinary",
+      "hash_configuration": "default",
+      "sorted_configuration": "radix",
+      "hash_ms": 29.864333,
+      "radix_ms": 29.805875,
+      "radix_over_hash": 0.9980425479450689,
+      "radix_build_sites": 0,
+      "hash_computations_before": 109863,
+      "hash_computations_after": 109863,
+      "answer_rows": 52523,
+      "provider_changed": false,
+      "retained_ms": 29.891625,
+      "retained_over_hash": 1.0009138660488417,
+      "retained_over_radix": 1.0028769495946688
+    },
+    {
+      "query": "retail_h04",
+      "family": "materialized",
+      "hash_configuration": "built_hash",
+      "sorted_configuration": "built_radix",
+      "hash_ms": 29.934916,
+      "radix_ms": 29.835417,
+      "radix_over_hash": 0.9966761556972465,
+      "radix_build_sites": 0,
+      "hash_computations_before": 109863,
+      "hash_computations_after": 109863,
+      "answer_rows": 52523,
+      "provider_changed": false
+    },
+    {
+      "query": "retail_h04_not_exists",
+      "family": "ordinary",
+      "hash_configuration": "default",
+      "sorted_configuration": "radix",
+      "hash_ms": 60.243583,
+      "radix_ms": 60.200792,
+      "radix_over_hash": 0.999289700282269,
+      "radix_build_sites": 0,
+      "hash_computations_before": 3862373,
+      "hash_computations_after": 3862373,
+      "answer_rows": 4695,
+      "provider_changed": false,
+      "retained_ms": 60.458625000000005,
+      "retained_over_hash": 1.0035695420041668,
+      "retained_over_radix": 1.0042828838530895
+    },
+    {
+      "query": "retail_h04_not_exists",
+      "family": "materialized",
+      "hash_configuration": "built_hash",
+      "sorted_configuration": "built_radix",
+      "hash_ms": 59.507583,
+      "radix_ms": 59.595125,
+      "radix_over_hash": 1.0014711066319062,
+      "radix_build_sites": 0,
+      "hash_computations_before": 11859,
+      "hash_computations_after": 11859,
+      "answer_rows": 4695,
+      "provider_changed": false
+    },
+    {
+      "query": "retail_h16",
+      "family": "ordinary",
+      "hash_configuration": "default",
+      "sorted_configuration": "radix",
+      "hash_ms": 18.645666,
+      "radix_ms": 18.507959,
+      "radix_over_hash": 0.9926145303686122,
+      "radix_build_sites": 0,
+      "hash_computations_before": 1524927,
+      "hash_computations_after": 1524927,
+      "answer_rows": 118274,
+      "provider_changed": false,
+      "retained_ms": 18.046125,
+      "retained_over_hash": 0.9678455572463864,
+      "retained_over_radix": 0.9750467352991219
+    },
+    {
+      "query": "retail_h16",
+      "family": "materialized",
+      "hash_configuration": "built_hash",
+      "sorted_configuration": "built_radix",
+      "hash_ms": 18.65925,
+      "radix_ms": 11.256291,
+      "radix_over_hash": 0.6032552755335825,
+      "radix_build_sites": 1,
+      "hash_computations_before": 1406599,
+      "hash_computations_after": 347646,
+      "answer_rows": 118274,
+      "provider_changed": true
+    },
+    {
+      "query": "retail_h22",
+      "family": "ordinary",
+      "hash_configuration": "default",
+      "sorted_configuration": "radix",
+      "hash_ms": 12.162416,
+      "radix_ms": 12.083292,
+      "radix_over_hash": 0.9934943846683093,
+      "radix_build_sites": 0,
+      "hash_computations_before": 1570433,
+      "hash_computations_after": 1570433,
+      "answer_rows": 14086,
+      "provider_changed": false,
+      "retained_ms": 11.757042,
+      "retained_over_hash": 0.9666699445241801,
+      "retained_over_radix": 0.9729999076410634
+    },
+    {
+      "query": "retail_h22",
+      "family": "materialized",
+      "hash_configuration": "built_hash",
+      "sorted_configuration": "built_radix",
+      "hash_ms": 2.6599589999999997,
+      "radix_ms": 2.670375,
+      "radix_over_hash": 1.003915849830768,
+      "radix_build_sites": 0,
+      "hash_computations_before": 28418,
+      "hash_computations_after": 28418,
+      "answer_rows": 14086,
+      "provider_changed": false
+    },
+    {
+      "query": "retail_h03",
+      "family": "ordinary",
+      "hash_configuration": "default",
+      "sorted_configuration": "radix",
+      "hash_ms": 28.765292,
+      "radix_ms": 28.511042,
+      "radix_over_hash": 0.9911612230461627,
+      "radix_build_sites": 2,
+      "hash_computations_before": 1297174,
+      "hash_computations_after": 44851,
+      "answer_rows": 11620,
+      "provider_changed": true,
+      "retained_ms": 29.065958,
+      "retained_over_hash": 1.010452388246224,
+      "retained_over_radix": 1.0194631960487448
+    },
+    {
+      "query": "retail_h03",
+      "family": "materialized",
+      "hash_configuration": "built_hash",
+      "sorted_configuration": "built_radix",
+      "hash_ms": 28.681,
+      "radix_ms": 28.947916,
+      "radix_over_hash": 1.0093063700707785,
+      "radix_build_sites": 2,
+      "hash_computations_before": 1297174,
+      "hash_computations_after": 44851,
+      "answer_rows": 11620,
+      "provider_changed": true
+    },
+    {
+      "query": "retail_h05",
+      "family": "ordinary",
+      "hash_configuration": "default",
+      "sorted_configuration": "radix",
+      "hash_ms": 27.544958,
+      "radix_ms": 38.8815,
+      "radix_over_hash": 1.4115650494003296,
+      "radix_build_sites": 4,
+      "hash_computations_before": 1534819,
+      "hash_computations_after": 229989,
+      "answer_rows": 7242,
+      "provider_changed": true,
+      "retained_ms": 38.5845,
+      "retained_over_hash": 1.400782676815118,
+      "retained_over_radix": 0.9923614058099609
+    },
+    {
+      "query": "retail_h05",
+      "family": "materialized",
+      "hash_configuration": "built_hash",
+      "sorted_configuration": "built_radix",
+      "hash_ms": 29.257083,
+      "radix_ms": 39.147209,
+      "radix_over_hash": 1.3380421076154445,
+      "radix_build_sites": 4,
+      "hash_computations_before": 1534819,
+      "hash_computations_after": 229989,
+      "answer_rows": 7242,
+      "provider_changed": true
+    },
+    {
+      "query": "retail_h07",
+      "family": "ordinary",
+      "hash_configuration": "default",
+      "sorted_configuration": "radix",
+      "hash_ms": 25.445791999999997,
+      "radix_ms": 31.076667,
+      "radix_over_hash": 1.221289044569727,
+      "radix_build_sites": 5,
+      "hash_computations_before": 731757,
+      "hash_computations_after": 13088,
+      "answer_rows": 5501,
+      "provider_changed": true,
+      "retained_ms": 31.251458000000003,
+      "retained_over_hash": 1.2281581960585077,
+      "retained_over_radix": 1.0056245092178
+    },
+    {
+      "query": "retail_h07",
+      "family": "materialized",
+      "hash_configuration": "built_hash",
+      "sorted_configuration": "built_radix",
+      "hash_ms": 25.143291,
+      "radix_ms": 31.503292,
+      "radix_over_hash": 1.2529502203987535,
+      "radix_build_sites": 5,
+      "hash_computations_before": 731757,
+      "hash_computations_after": 13088,
+      "answer_rows": 5501,
+      "provider_changed": true
+    },
+    {
+      "query": "retail_h07_block",
+      "family": "ordinary",
+      "hash_configuration": "default",
+      "sorted_configuration": "radix",
+      "hash_ms": 55.000708,
+      "radix_ms": 92.643167,
+      "radix_over_hash": 1.684399535365981,
+      "radix_build_sites": 5,
+      "hash_computations_before": 4049427,
+      "hash_computations_after": 24821,
+      "answer_rows": 5501,
+      "provider_changed": true,
+      "retained_ms": 93.13975,
+      "retained_over_hash": 1.6934282009606132,
+      "retained_over_radix": 1.0053601686565832
+    },
+    {
+      "query": "retail_h07_block",
+      "family": "materialized",
+      "hash_configuration": "built_hash",
+      "sorted_configuration": "built_radix",
+      "hash_ms": 55.296667,
+      "radix_ms": 92.077584,
+      "radix_over_hash": 1.665156129572873,
+      "radix_build_sites": 5,
+      "hash_computations_before": 4049427,
+      "hash_computations_after": 24821,
+      "answer_rows": 5501,
+      "provider_changed": true
+    },
+    {
+      "query": "retail_h08",
+      "family": "ordinary",
+      "hash_configuration": "default",
+      "sorted_configuration": "radix",
+      "hash_ms": 26.516208,
+      "radix_ms": 34.06625,
+      "radix_over_hash": 1.2847330960746723,
+      "radix_build_sites": 5,
+      "hash_computations_before": 1314964,
+      "hash_computations_after": 35770,
+      "answer_rows": 2603,
+      "provider_changed": true,
+      "retained_ms": 34.377583,
+      "retained_over_hash": 1.296474329964526,
+      "retained_over_radix": 1.0091390452427258
+    },
+    {
+      "query": "retail_h08",
+      "family": "materialized",
+      "hash_configuration": "built_hash",
+      "sorted_configuration": "built_radix",
+      "hash_ms": 26.672749999999997,
+      "radix_ms": 34.890375,
+      "radix_over_hash": 1.3080906543194835,
+      "radix_build_sites": 6,
+      "hash_computations_before": 1312312,
+      "hash_computations_after": 6183,
+      "answer_rows": 2603,
+      "provider_changed": true
+    },
+    {
+      "query": "retail_h09",
+      "family": "ordinary",
+      "hash_configuration": "default",
+      "sorted_configuration": "radix",
+      "hash_ms": 490.504791,
+      "radix_ms": 481.168791,
+      "radix_over_hash": 0.9809665467671242,
+      "radix_build_sites": 0,
+      "hash_computations_before": 13373904,
+      "hash_computations_after": 13373904,
+      "answer_rows": 319402,
+      "provider_changed": false,
+      "retained_ms": 486.176125,
+      "retained_over_hash": 0.9911750790625815,
+      "retained_over_radix": 1.0104066059429861
+    },
+    {
+      "query": "retail_h09",
+      "family": "materialized",
+      "hash_configuration": "built_hash",
+      "sorted_configuration": "built_radix",
+      "hash_ms": 490.75675,
+      "radix_ms": 489.223417,
+      "radix_over_hash": 0.9968755743043778,
+      "radix_build_sites": 4,
+      "hash_computations_before": 13373904,
+      "hash_computations_after": 2815056,
+      "answer_rows": 319402,
+      "provider_changed": true
+    },
+    {
+      "query": "retail_h21_positive",
+      "family": "ordinary",
+      "hash_configuration": "default",
+      "sorted_configuration": "radix",
+      "hash_ms": 136.314209,
+      "radix_ms": 146.098417,
+      "radix_over_hash": 1.0717768754393022,
+      "radix_build_sites": 4,
+      "hash_computations_before": 8051106,
+      "hash_computations_after": 761131,
+      "answer_rows": 302284,
+      "provider_changed": true,
+      "retained_ms": 145.66891700000002,
+      "retained_over_hash": 1.0686260667073968,
+      "retained_over_radix": 0.9970602008644626
+    },
+    {
+      "query": "retail_h21_positive",
+      "family": "materialized",
+      "hash_configuration": "built_hash",
+      "sorted_configuration": "built_radix",
+      "hash_ms": 136.00079100000002,
+      "radix_ms": 145.00616599999998,
+      "radix_over_hash": 1.0662156075254001,
+      "radix_build_sites": 4,
+      "hash_computations_before": 8051106,
+      "hash_computations_after": 761131,
+      "answer_rows": 302284,
+      "provider_changed": true
+    },
+    {
+      "query": "retail_d19",
+      "family": "ordinary",
+      "hash_configuration": "default",
+      "sorted_configuration": "radix",
+      "hash_ms": 16.511875,
+      "radix_ms": 19.0975,
+      "radix_over_hash": 1.156591846776941,
+      "radix_build_sites": 3,
+      "hash_computations_before": 747279,
+      "hash_computations_after": 494925,
+      "answer_rows": 8962,
+      "provider_changed": true,
+      "retained_ms": 17.863209,
+      "retained_over_hash": 1.0818401302093192,
+      "retained_over_radix": 0.9353689749967273
+    },
+    {
+      "query": "retail_d19",
+      "family": "materialized",
+      "hash_configuration": "built_hash",
+      "sorted_configuration": "built_radix",
+      "hash_ms": 16.530833,
+      "radix_ms": 19.286083,
+      "radix_over_hash": 1.1666733914739809,
+      "radix_build_sites": 5,
+      "hash_computations_before": 747279,
+      "hash_computations_after": 23295,
+      "answer_rows": 8962,
+      "provider_changed": true
+    },
+    {
+      "query": "retail_d27",
+      "family": "ordinary",
+      "hash_configuration": "default",
+      "sorted_configuration": "radix",
+      "hash_ms": 12.823792,
+      "radix_ms": 19.999083,
+      "radix_over_hash": 1.559529583761184,
+      "radix_build_sites": 3,
+      "hash_computations_before": 269842,
+      "hash_computations_after": 801,
+      "answer_rows": 357,
+      "provider_changed": true,
+      "retained_ms": 20.054375,
+      "retained_over_hash": 1.5638412569386653,
+      "retained_over_radix": 1.0027647267627222
+    },
+    {
+      "query": "retail_d27",
+      "family": "materialized",
+      "hash_configuration": "built_hash",
+      "sorted_configuration": "built_radix",
+      "hash_ms": 12.833541,
+      "radix_ms": 19.979457999999997,
+      "radix_over_hash": 1.5568156910084283,
+      "radix_build_sites": 3,
+      "hash_computations_before": 269842,
+      "hash_computations_after": 801,
+      "answer_rows": 357,
+      "provider_changed": true
+    },
+    {
+      "query": "retail_d72_inner",
+      "family": "ordinary",
+      "hash_configuration": "default",
+      "sorted_configuration": "radix",
+      "hash_ms": 99.769375,
+      "radix_ms": 101.565417,
+      "radix_over_hash": 1.0180019369671305,
+      "radix_build_sites": 1,
+      "hash_computations_before": 3572897,
+      "hash_computations_after": 3246667,
+      "answer_rows": 5344,
+      "provider_changed": true,
+      "retained_ms": 101.576375,
+      "retained_over_hash": 1.0181117702701856,
+      "retained_over_radix": 1.0001078910550822
+    },
+    {
+      "query": "retail_d72_inner",
+      "family": "materialized",
+      "hash_configuration": "built_hash",
+      "sorted_configuration": "built_radix",
+      "hash_ms": 98.570375,
+      "radix_ms": 102.932042,
+      "radix_over_hash": 1.044249268606313,
+      "radix_build_sites": 4,
+      "hash_computations_before": 3572897,
+      "hash_computations_after": 2516294,
+      "answer_rows": 5344,
+      "provider_changed": true
+    },
+    {
+      "query": "retail_d85",
+      "family": "ordinary",
+      "hash_configuration": "default",
+      "sorted_configuration": "radix",
+      "hash_ms": 19.2645,
+      "radix_ms": 21.797417,
+      "radix_over_hash": 1.1314810662098678,
+      "radix_build_sites": 3,
+      "hash_computations_before": 812787,
+      "hash_computations_after": 551470,
+      "answer_rows": 8962,
+      "provider_changed": true,
+      "retained_ms": 21.625041,
+      "retained_over_hash": 1.1225332087518491,
+      "retained_over_radix": 0.9920919070365081
+    },
+    {
+      "query": "retail_d85",
+      "family": "materialized",
+      "hash_configuration": "built_hash",
+      "sorted_configuration": "built_radix",
+      "hash_ms": 19.223125,
+      "radix_ms": 22.684541,
+      "radix_over_hash": 1.1800652079201484,
+      "radix_build_sites": 5,
+      "hash_computations_before": 803775,
+      "hash_computations_after": 70828,
+      "answer_rows": 8962,
+      "provider_changed": true
+    },
+    {
+      "query": "tpch_q06",
+      "family": "ordinary",
+      "hash_configuration": "default",
+      "sorted_configuration": "radix",
+      "hash_ms": 17.350667,
+      "radix_ms": 17.278209,
+      "radix_over_hash": 0.9958239069425976,
+      "radix_build_sites": 0,
+      "hash_computations_before": 228844,
+      "hash_computations_after": 228844,
+      "answer_rows": 1,
+      "provider_changed": false,
+      "retained_ms": 17.419166,
+      "retained_over_hash": 1.0039479173913026,
+      "retained_over_radix": 1.0081580793472287
+    },
+    {
+      "query": "tpch_q06",
+      "family": "materialized",
+      "hash_configuration": "built_hash",
+      "sorted_configuration": "built_radix",
+      "hash_ms": 17.380083000000003,
+      "radix_ms": 17.388791,
+      "radix_over_hash": 1.000501033280451,
+      "radix_build_sites": 0,
+      "hash_computations_before": 228844,
+      "hash_computations_after": 228844,
+      "answer_rows": 1,
+      "provider_changed": false
+    },
+    {
+      "query": "tpch_q19",
+      "family": "ordinary",
+      "hash_configuration": "default",
+      "sorted_configuration": "radix",
+      "hash_ms": 14.875334,
+      "radix_ms": 15.473707999999998,
+      "radix_over_hash": 1.0402259203053859,
+      "radix_build_sites": 1,
+      "hash_computations_before": 8358,
+      "hash_computations_after": 341,
+      "answer_rows": 1,
+      "provider_changed": true,
+      "retained_ms": 15.000208,
+      "retained_over_hash": 1.008394702263492,
+      "retained_over_radix": 0.9693997069092942
+    },
+    {
+      "query": "tpch_q19",
+      "family": "materialized",
+      "hash_configuration": "built_hash",
+      "sorted_configuration": "built_radix",
+      "hash_ms": 14.812875,
+      "radix_ms": 15.242375,
+      "radix_over_hash": 1.0289950465389062,
+      "radix_build_sites": 1,
+      "hash_computations_before": 8358,
+      "hash_computations_after": 341,
+      "answer_rows": 1,
+      "provider_changed": true
+    }
+  ],
+  "summaries": [
+    {
+      "family": "ordinary",
+      "provider_changed": true,
+      "queries": 15,
+      "geometric_mean_radix_over_hash": 1.15883875984956,
+      "at_least_10_percent_faster": 0,
+      "within_10_percent": 7,
+      "more_than_10_percent_slower": 8,
+      "geometric_mean_retained_over_hash": 1.1635085265786156
+    },
+    {
+      "family": "ordinary",
+      "provider_changed": false,
+      "queries": 14,
+      "geometric_mean_radix_over_hash": 0.9858722319356695,
+      "at_least_10_percent_faster": 0,
+      "within_10_percent": 14,
+      "more_than_10_percent_slower": 0,
+      "geometric_mean_retained_over_hash": 0.9864699355234945
+    },
+    {
+      "family": "materialized",
+      "provider_changed": true,
+      "queries": 13,
+      "geometric_mean_radix_over_hash": 1.1392033909578478,
+      "at_least_10_percent_faster": 1,
+      "within_10_percent": 5,
+      "more_than_10_percent_slower": 7
+    },
+    {
+      "family": "materialized",
+      "provider_changed": false,
+      "queries": 4,
+      "geometric_mean_radix_over_hash": 1.0006376421380467,
+      "at_least_10_percent_faster": 0,
+      "within_10_percent": 4,
+      "more_than_10_percent_slower": 0
+    }
+  ],
+  "coverage": {
+    "catalog_kernels": 29,
+    "configurations": 121,
+    "timed_executions": 605,
+    "measured_runs_per_configuration": 5,
+    "sf0_1_gate": "all 121 configurations exact against DuckDB",
+    "sf1_verification": "warmup, all measured executions, and two separate counter executions exact against DuckDB",
+    "unique_queries_with_actual_provider_change": 17,
+    "changed_queries": [
+      "retail_d19",
+      "retail_d27",
+      "retail_d72_inner",
+      "retail_d85",
+      "retail_h02",
+      "retail_h03",
+      "retail_h05",
+      "retail_h07",
+      "retail_h07_block",
+      "retail_h08",
+      "retail_h09",
+      "retail_h10",
+      "retail_h11",
+      "retail_h16",
+      "retail_h20",
+      "retail_h21_positive",
+      "tpch_q19"
+    ],
+    "families_overlap": true
+  },
+  "method": "Ratios are median RadixRun time / median matched hash time. Geometric means are equal-weight per query within each family. Near parity means ratio in [0.9,1.1], not a statistical equivalence test. Provider change requires emitted RadixRun constructor sites, absent in the hash configuration; every changed pair also reduces measured hash computations. No-op pairs have no RadixRun build sites and equal hash computations. Materialized pairs are compared only to each other, not default.",
+  "provider_build_sites": {
+    "retail_d19": {
+      "built_hash": {
+        "AdaptiveKeySet": 1,
+        "HashIndex": 5
+      },
+      "built_radix": {
+        "AdaptiveKeySet": 1,
+        "RadixRun": 5
+      },
+      "default": {
+        "AdaptiveKeySet": 1,
+        "HashIndex": 5
+      },
+      "radix": {
+        "AdaptiveKeySet": 1,
+        "HashIndex": 2,
+        "RadixRun": 3
+      },
+      "radix_retained": {
+        "AdaptiveKeySet": 1,
+        "HashIndex": 2,
+        "RadixRun": 3
+      }
+    },
+    "retail_d27": {
+      "built_hash": {
+        "AdaptiveKeySet": 1,
+        "HashIndex": 3
+      },
+      "built_radix": {
+        "AdaptiveKeySet": 1,
+        "RadixRun": 3
+      },
+      "default": {
+        "AdaptiveKeySet": 1,
+        "HashIndex": 3
+      },
+      "radix": {
+        "AdaptiveKeySet": 1,
+        "RadixRun": 3
+      },
+      "radix_retained": {
+        "AdaptiveKeySet": 1,
+        "RadixRun": 3
+      }
+    },
+    "retail_d72_inner": {
+      "built_hash": {
+        "AdaptiveKeySet": 3,
+        "HashIndex": 6
+      },
+      "built_radix": {
+        "AdaptiveKeySet": 3,
+        "HashIndex": 2,
+        "RadixRun": 4
+      },
+      "default": {
+        "AdaptiveKeySet": 3,
+        "HashIndex": 6
+      },
+      "radix": {
+        "AdaptiveKeySet": 3,
+        "HashIndex": 5,
+        "RadixRun": 1
+      },
+      "radix_retained": {
+        "AdaptiveKeySet": 3,
+        "HashIndex": 5,
+        "RadixRun": 1
+      }
+    },
+    "retail_d85": {
+      "built_hash": {
+        "AdaptiveKeySet": 4,
+        "HashIndex": 6
+      },
+      "built_radix": {
+        "AdaptiveKeySet": 4,
+        "HashIndex": 1,
+        "RadixRun": 5
+      },
+      "default": {
+        "AdaptiveKeySet": 3,
+        "HashIndex": 7
+      },
+      "radix": {
+        "AdaptiveKeySet": 3,
+        "HashIndex": 4,
+        "RadixRun": 3
+      },
+      "radix_retained": {
+        "AdaptiveKeySet": 3,
+        "HashIndex": 4,
+        "RadixRun": 3
+      }
+    },
+    "retail_h01": {
+      "default": {},
+      "radix": {},
+      "radix_retained": {}
+    },
+    "retail_h02": {
+      "default": {
+        "AdaptiveKeySet": 2,
+        "HashIndex": 6
+      },
+      "radix": {
+        "AdaptiveKeySet": 2,
+        "HashIndex": 1,
+        "RadixRun": 5
+      },
+      "radix_retained": {
+        "AdaptiveKeySet": 2,
+        "HashIndex": 1,
+        "RadixRun": 5
+      }
+    },
+    "retail_h03": {
+      "built_hash": {
+        "AdaptiveKeySet": 1,
+        "HashIndex": 2
+      },
+      "built_radix": {
+        "AdaptiveKeySet": 1,
+        "RadixRun": 2
+      },
+      "default": {
+        "AdaptiveKeySet": 1,
+        "HashIndex": 2
+      },
+      "radix": {
+        "AdaptiveKeySet": 1,
+        "RadixRun": 2
+      },
+      "radix_retained": {
+        "AdaptiveKeySet": 1,
+        "RadixRun": 2
+      }
+    },
+    "retail_h04": {
+      "built_hash": {
+        "AdaptiveKeySet": 1
+      },
+      "built_radix": {
+        "AdaptiveKeySet": 1
+      },
+      "default": {
+        "AdaptiveKeySet": 1
+      },
+      "radix": {
+        "AdaptiveKeySet": 1
+      },
+      "radix_retained": {
+        "AdaptiveKeySet": 1
+      }
+    },
+    "retail_h04_not_exists": {
+      "built_hash": {},
+      "built_radix": {},
+      "default": {},
+      "radix": {},
+      "radix_retained": {}
+    },
+    "retail_h05": {
+      "built_hash": {
+        "AdaptiveKeySet": 1,
+        "HashIndex": 5
+      },
+      "built_radix": {
+        "AdaptiveKeySet": 1,
+        "HashIndex": 1,
+        "RadixRun": 4
+      },
+      "default": {
+        "AdaptiveKeySet": 1,
+        "HashIndex": 5
+      },
+      "radix": {
+        "AdaptiveKeySet": 1,
+        "HashIndex": 1,
+        "RadixRun": 4
+      },
+      "radix_retained": {
+        "AdaptiveKeySet": 1,
+        "HashIndex": 1,
+        "RadixRun": 4
+      }
+    },
+    "retail_h06": {
+      "default": {},
+      "radix": {},
+      "radix_retained": {}
+    },
+    "retail_h07": {
+      "built_hash": {
+        "AdaptiveKeySet": 3,
+        "HashIndex": 5
+      },
+      "built_radix": {
+        "AdaptiveKeySet": 3,
+        "RadixRun": 5
+      },
+      "default": {
+        "AdaptiveKeySet": 3,
+        "HashIndex": 5
+      },
+      "radix": {
+        "AdaptiveKeySet": 3,
+        "RadixRun": 5
+      },
+      "radix_retained": {
+        "AdaptiveKeySet": 3,
+        "RadixRun": 5
+      }
+    },
+    "retail_h07_block": {
+      "built_hash": {
+        "HashIndex": 8
+      },
+      "built_radix": {
+        "HashIndex": 3,
+        "RadixRun": 5
+      },
+      "default": {
+        "HashIndex": 8
+      },
+      "radix": {
+        "HashIndex": 3,
+        "RadixRun": 5
+      },
+      "radix_retained": {
+        "HashIndex": 3,
+        "RadixRun": 5
+      }
+    },
+    "retail_h08": {
+      "built_hash": {
+        "AdaptiveKeySet": 2,
+        "HashIndex": 6
+      },
+      "built_radix": {
+        "AdaptiveKeySet": 2,
+        "RadixRun": 6
+      },
+      "default": {
+        "AdaptiveKeySet": 1,
+        "HashIndex": 7
+      },
+      "radix": {
+        "AdaptiveKeySet": 1,
+        "HashIndex": 2,
+        "RadixRun": 5
+      },
+      "radix_retained": {
+        "AdaptiveKeySet": 1,
+        "HashIndex": 2,
+        "RadixRun": 5
+      }
+    },
+    "retail_h09": {
+      "built_hash": {
+        "HashIndex": 5
+      },
+      "built_radix": {
+        "HashIndex": 1,
+        "RadixRun": 4
+      },
+      "default": {
+        "HashIndex": 5
+      },
+      "radix": {
+        "HashIndex": 5
+      },
+      "radix_retained": {
+        "HashIndex": 5
+      }
+    },
+    "retail_h10": {
+      "default": {
+        "HashIndex": 3
+      },
+      "radix": {
+        "HashIndex": 2,
+        "RadixRun": 1
+      },
+      "radix_retained": {
+        "HashIndex": 2,
+        "RadixRun": 1
+      }
+    },
+    "retail_h11": {
+      "default": {
+        "AdaptiveKeySet": 1,
+        "HashIndex": 2
+      },
+      "radix": {
+        "AdaptiveKeySet": 1,
+        "HashIndex": 1,
+        "RadixRun": 1
+      },
+      "radix_retained": {
+        "AdaptiveKeySet": 1,
+        "HashIndex": 1,
+        "RadixRun": 1
+      }
+    },
+    "retail_h12": {
+      "default": {
+        "HashIndex": 1
+      },
+      "radix": {
+        "HashIndex": 1
+      },
+      "radix_retained": {
+        "HashIndex": 1
+      }
+    },
+    "retail_h13": {
+      "default": {
+        "HashIndex": 1
+      },
+      "radix": {
+        "HashIndex": 1
+      },
+      "radix_retained": {
+        "HashIndex": 1
+      }
+    },
+    "retail_h14": {
+      "default": {
+        "HashIndex": 1
+      },
+      "radix": {
+        "HashIndex": 1
+      },
+      "radix_retained": {
+        "HashIndex": 1
+      }
+    },
+    "retail_h15": {
+      "default": {
+        "HashIndex": 2
+      },
+      "radix": {
+        "HashIndex": 2
+      },
+      "radix_retained": {
+        "HashIndex": 2
+      }
+    },
+    "retail_h16": {
+      "built_hash": {
+        "HashIndex": 1
+      },
+      "built_radix": {
+        "RadixRun": 1
+      },
+      "default": {
+        "HashIndex": 1
+      },
+      "radix": {
+        "HashIndex": 1
+      },
+      "radix_retained": {
+        "HashIndex": 1
+      }
+    },
+    "retail_h18": {
+      "default": {
+        "HashIndex": 2
+      },
+      "radix": {
+        "HashIndex": 2
+      },
+      "radix_retained": {
+        "HashIndex": 2
+      }
+    },
+    "retail_h19": {
+      "default": {
+        "HashIndex": 1
+      },
+      "radix": {
+        "HashIndex": 1
+      },
+      "radix_retained": {
+        "HashIndex": 1
+      }
+    },
+    "retail_h20": {
+      "default": {
+        "AdaptiveKeySet": 1,
+        "HashIndex": 3
+      },
+      "radix": {
+        "AdaptiveKeySet": 1,
+        "HashIndex": 1,
+        "RadixRun": 2
+      },
+      "radix_retained": {
+        "AdaptiveKeySet": 1,
+        "HashIndex": 1,
+        "RadixRun": 2
+      }
+    },
+    "retail_h21_positive": {
+      "built_hash": {
+        "AdaptiveKeySet": 1,
+        "HashIndex": 4
+      },
+      "built_radix": {
+        "AdaptiveKeySet": 1,
+        "RadixRun": 4
+      },
+      "default": {
+        "AdaptiveKeySet": 1,
+        "HashIndex": 4
+      },
+      "radix": {
+        "AdaptiveKeySet": 1,
+        "RadixRun": 4
+      },
+      "radix_retained": {
+        "AdaptiveKeySet": 1,
+        "RadixRun": 4
+      }
+    },
+    "retail_h22": {
+      "built_hash": {
+        "AdaptiveKeySet": 1
+      },
+      "built_radix": {
+        "AdaptiveKeySet": 1
+      },
+      "default": {},
+      "radix": {},
+      "radix_retained": {}
+    },
+    "tpch_q06": {
+      "built_hash": {},
+      "built_radix": {},
+      "default": {},
+      "radix": {},
+      "radix_retained": {}
+    },
+    "tpch_q19": {
+      "built_hash": {
+        "AdaptiveKeySet": 1,
+        "HashIndex": 1
+      },
+      "built_radix": {
+        "AdaptiveKeySet": 1,
+        "RadixRun": 1
+      },
+      "default": {
+        "AdaptiveKeySet": 1,
+        "HashIndex": 1
+      },
+      "radix": {
+        "AdaptiveKeySet": 1,
+        "RadixRun": 1
+      },
+      "radix_retained": {
+        "AdaptiveKeySet": 1,
+        "RadixRun": 1
+      }
+    }
+  },
+  "source_inspection": {
+    "parser": "syn 2.0.119; parse complete rustc-expanded worker modules and visit concrete Build::build/from_pairs/new calls inside each selected configuration",
+    "provenance": {
+      "retail_h01": {
+        "command": [
+          "cargo",
+          "rustc",
+          "--release",
+          "--locked",
+          "--offline",
+          "--manifest-path",
+          "/Users/stargazermiao/workspace/mini_linq/features/workloads/target/bench/crates/retail_h01/Cargo.toml",
+          "--target-dir",
+          "/Users/stargazermiao/workspace/mini_linq/target/tpch-workers",
+          "--",
+          "-Zunpretty=expanded"
+        ],
+        "expanded_source_sha256": "d96c0c16fff90a3451cb58a5cb86aef22ab557edce4271681ecf1215c1e9a13e",
+        "timing_worker_sha256": "9ac01d03ed61e724cff87a187c6b3dc7472f70fbf680ad4eb76f89c787426dc4",
+        "configurations": [
+          "default",
+          "radix",
+          "radix_retained"
+        ]
+      },
+      "retail_h02": {
+        "command": [
+          "cargo",
+          "rustc",
+          "--release",
+          "--locked",
+          "--offline",
+          "--manifest-path",
+          "/Users/stargazermiao/workspace/mini_linq/features/workloads/target/bench/crates/retail_h02/Cargo.toml",
+          "--target-dir",
+          "/Users/stargazermiao/workspace/mini_linq/target/tpch-workers",
+          "--",
+          "-Zunpretty=expanded"
+        ],
+        "expanded_source_sha256": "9683b4f2aefa3a443772237e8124fa9ae76cd2be284986f91cda4cdd1b3daa79",
+        "timing_worker_sha256": "680d72ba2aba28ca24ca865b560b9e456d7c119af03255313b924617dd77da99",
+        "configurations": [
+          "default",
+          "radix",
+          "radix_retained"
+        ]
+      },
+      "retail_h11": {
+        "command": [
+          "cargo",
+          "rustc",
+          "--release",
+          "--locked",
+          "--offline",
+          "--manifest-path",
+          "/Users/stargazermiao/workspace/mini_linq/features/workloads/target/bench/crates/retail_h11/Cargo.toml",
+          "--target-dir",
+          "/Users/stargazermiao/workspace/mini_linq/target/tpch-workers",
+          "--",
+          "-Zunpretty=expanded"
+        ],
+        "expanded_source_sha256": "c4e7d39a7ca9167ab5dba8b8915da5b11e1183c0d37a9273f033277771aa72ec",
+        "timing_worker_sha256": "e9c9f613054c27609a0f77b96ceece4dac05ee6fb06c964e72be2d457f7e28c3",
+        "configurations": [
+          "default",
+          "radix",
+          "radix_retained"
+        ]
+      },
+      "retail_h15": {
+        "command": [
+          "cargo",
+          "rustc",
+          "--release",
+          "--locked",
+          "--offline",
+          "--manifest-path",
+          "/Users/stargazermiao/workspace/mini_linq/features/workloads/target/bench/crates/retail_h15/Cargo.toml",
+          "--target-dir",
+          "/Users/stargazermiao/workspace/mini_linq/target/tpch-workers",
+          "--",
+          "-Zunpretty=expanded"
+        ],
+        "expanded_source_sha256": "f13f97086e5ae939f65eab5ab27b2cf05eb33a2196e034facaec8b751560e6be",
+        "timing_worker_sha256": "7eb2c74451ae95d59c536e341cfa0cb2f7cd4714d70ac579ff0efb981c9058d2",
+        "configurations": [
+          "default",
+          "radix",
+          "radix_retained"
+        ]
+      },
+      "retail_h20": {
+        "command": [
+          "cargo",
+          "rustc",
+          "--release",
+          "--locked",
+          "--offline",
+          "--manifest-path",
+          "/Users/stargazermiao/workspace/mini_linq/features/workloads/target/bench/crates/retail_h20/Cargo.toml",
+          "--target-dir",
+          "/Users/stargazermiao/workspace/mini_linq/target/tpch-workers",
+          "--",
+          "-Zunpretty=expanded"
+        ],
+        "expanded_source_sha256": "955c26d41f81f90b588ffe285cdf1cccd0739e27268fda4ce7231e3f8b69f0e6",
+        "timing_worker_sha256": "8e1ab26f65f81006e73d8ff71dd53c7804842ab48816aa30fbb221647c4dac6c",
+        "configurations": [
+          "default",
+          "radix",
+          "radix_retained"
+        ]
+      },
+      "retail_h06": {
+        "command": [
+          "cargo",
+          "rustc",
+          "--release",
+          "--locked",
+          "--offline",
+          "--manifest-path",
+          "/Users/stargazermiao/workspace/mini_linq/features/workloads/target/bench/crates/retail_h06/Cargo.toml",
+          "--target-dir",
+          "/Users/stargazermiao/workspace/mini_linq/target/tpch-workers",
+          "--",
+          "-Zunpretty=expanded"
+        ],
+        "expanded_source_sha256": "6ff8eae3fcc2f28c0597203863b5a734e538257ce496389e7d9a9783a536c263",
+        "timing_worker_sha256": "0828eb9b4772e5f694e7cc851643fb11846c7cdb0f0f5f9ba32b697cd6db6945",
+        "configurations": [
+          "default",
+          "radix",
+          "radix_retained"
+        ]
+      },
+      "retail_h10": {
+        "command": [
+          "cargo",
+          "rustc",
+          "--release",
+          "--locked",
+          "--offline",
+          "--manifest-path",
+          "/Users/stargazermiao/workspace/mini_linq/features/workloads/target/bench/crates/retail_h10/Cargo.toml",
+          "--target-dir",
+          "/Users/stargazermiao/workspace/mini_linq/target/tpch-workers",
+          "--",
+          "-Zunpretty=expanded"
+        ],
+        "expanded_source_sha256": "c1d18c66677958c437c5fef6a96279738f95ccbdae675b02e0ab315ec32cbcbe",
+        "timing_worker_sha256": "401565d135355ad2699eecb61583a8888184e97c191cb2e06df2d1b644d9a3a3",
+        "configurations": [
+          "default",
+          "radix",
+          "radix_retained"
+        ]
+      },
+      "retail_h12": {
+        "command": [
+          "cargo",
+          "rustc",
+          "--release",
+          "--locked",
+          "--offline",
+          "--manifest-path",
+          "/Users/stargazermiao/workspace/mini_linq/features/workloads/target/bench/crates/retail_h12/Cargo.toml",
+          "--target-dir",
+          "/Users/stargazermiao/workspace/mini_linq/target/tpch-workers",
+          "--",
+          "-Zunpretty=expanded"
+        ],
+        "expanded_source_sha256": "2aa0b98e9283ad7960bdae5289f089fa82e4e67ab33673200485be8aed566d6d",
+        "timing_worker_sha256": "9027fc3fa5b6e87a52b81cff8b5d39f817b8650af27bc5de52d8222a708c548a",
+        "configurations": [
+          "default",
+          "radix",
+          "radix_retained"
+        ]
+      },
+      "retail_h13": {
+        "command": [
+          "cargo",
+          "rustc",
+          "--release",
+          "--locked",
+          "--offline",
+          "--manifest-path",
+          "/Users/stargazermiao/workspace/mini_linq/features/workloads/target/bench/crates/retail_h13/Cargo.toml",
+          "--target-dir",
+          "/Users/stargazermiao/workspace/mini_linq/target/tpch-workers",
+          "--",
+          "-Zunpretty=expanded"
+        ],
+        "expanded_source_sha256": "5b348342d01fd00a18a57e65d6fe859e6d20cd49f8af532cd954806d23cdbd6c",
+        "timing_worker_sha256": "13e54fe524ece317f5d2a020dfae107f6144e348b0638413c600a1ca1aed27f5",
+        "configurations": [
+          "default",
+          "radix",
+          "radix_retained"
+        ]
+      },
+      "retail_h14": {
+        "command": [
+          "cargo",
+          "rustc",
+          "--release",
+          "--locked",
+          "--offline",
+          "--manifest-path",
+          "/Users/stargazermiao/workspace/mini_linq/features/workloads/target/bench/crates/retail_h14/Cargo.toml",
+          "--target-dir",
+          "/Users/stargazermiao/workspace/mini_linq/target/tpch-workers",
+          "--",
+          "-Zunpretty=expanded"
+        ],
+        "expanded_source_sha256": "b23c79ce000edc1592ecee5c4305e53f16b25beb49cbdd8239fbdf9e5902093f",
+        "timing_worker_sha256": "2e2fd137420a03139de5b33c38568e21e1a25383d35e354fbd4567afcb70414b",
+        "configurations": [
+          "default",
+          "radix",
+          "radix_retained"
+        ]
+      },
+      "retail_h18": {
+        "command": [
+          "cargo",
+          "rustc",
+          "--release",
+          "--locked",
+          "--offline",
+          "--manifest-path",
+          "/Users/stargazermiao/workspace/mini_linq/features/workloads/target/bench/crates/retail_h18/Cargo.toml",
+          "--target-dir",
+          "/Users/stargazermiao/workspace/mini_linq/target/tpch-workers",
+          "--",
+          "-Zunpretty=expanded"
+        ],
+        "expanded_source_sha256": "669c53af200928a31e1fe1eb09f7d5a978d7ce978c2cf58d1f0e5ceb9785869c",
+        "timing_worker_sha256": "0da67b333d573cfd24fe57a473a524fd01311fbc8c346cdc03acdfcc54531ecc",
+        "configurations": [
+          "default",
+          "radix",
+          "radix_retained"
+        ]
+      },
+      "retail_h19": {
+        "command": [
+          "cargo",
+          "rustc",
+          "--release",
+          "--locked",
+          "--offline",
+          "--manifest-path",
+          "/Users/stargazermiao/workspace/mini_linq/features/workloads/target/bench/crates/retail_h19/Cargo.toml",
+          "--target-dir",
+          "/Users/stargazermiao/workspace/mini_linq/target/tpch-workers",
+          "--",
+          "-Zunpretty=expanded"
+        ],
+        "expanded_source_sha256": "312a9e48ca1d0f255a9cc25122f24e6e00d791155e1cec62a7c5fa0c178e7de0",
+        "timing_worker_sha256": "c3096cb80a853d30311ec9bc16bac29151a5023afd786ea2759cdc4f703b2faa",
+        "configurations": [
+          "default",
+          "radix",
+          "radix_retained"
+        ]
+      },
+      "retail_h04": {
+        "command": [
+          "cargo",
+          "rustc",
+          "--release",
+          "--locked",
+          "--offline",
+          "--manifest-path",
+          "/Users/stargazermiao/workspace/mini_linq/features/workloads/target/bench/crates/retail_h04/Cargo.toml",
+          "--target-dir",
+          "/Users/stargazermiao/workspace/mini_linq/target/tpch-workers",
+          "--",
+          "-Zunpretty=expanded"
+        ],
+        "expanded_source_sha256": "0b21c5376dedeaeb125af830839c08520ba4407e068ef65d959c180ff873a671",
+        "timing_worker_sha256": "aebd0a8735b5a1e6e2954ed4a4f18891d4d36d18553e01df17ef00dbf55f7619",
+        "configurations": [
+          "default",
+          "radix",
+          "radix_retained",
+          "built_hash",
+          "built_radix"
+        ]
+      },
+      "retail_h04_not_exists": {
+        "command": [
+          "cargo",
+          "rustc",
+          "--release",
+          "--locked",
+          "--offline",
+          "--manifest-path",
+          "/Users/stargazermiao/workspace/mini_linq/features/workloads/target/bench/crates/retail_h04_not_exists/Cargo.toml",
+          "--target-dir",
+          "/Users/stargazermiao/workspace/mini_linq/target/tpch-workers",
+          "--",
+          "-Zunpretty=expanded"
+        ],
+        "expanded_source_sha256": "377295b1d00099356f54e7133bdcea0caf2af65c4f477a499b3c6275f0ce1d89",
+        "timing_worker_sha256": "ec5cbe1759c0ed1061980f35a4faa6c7531890be522e79bb284da30e993a4dde",
+        "configurations": [
+          "default",
+          "radix",
+          "radix_retained",
+          "built_hash",
+          "built_radix"
+        ]
+      },
+      "retail_h16": {
+        "command": [
+          "cargo",
+          "rustc",
+          "--release",
+          "--locked",
+          "--offline",
+          "--manifest-path",
+          "/Users/stargazermiao/workspace/mini_linq/features/workloads/target/bench/crates/retail_h16/Cargo.toml",
+          "--target-dir",
+          "/Users/stargazermiao/workspace/mini_linq/target/tpch-workers",
+          "--",
+          "-Zunpretty=expanded"
+        ],
+        "expanded_source_sha256": "cf76f1a6ad5cc37eb1189ccbbe0c1c4b1b5c21940a97b48dbca6709b422fb168",
+        "timing_worker_sha256": "f50d84539b0597c0aabfe4d5500fccf24a5adda594e2123a51df912e440a3b5a",
+        "configurations": [
+          "default",
+          "radix",
+          "radix_retained",
+          "built_hash",
+          "built_radix"
+        ]
+      },
+      "retail_h22": {
+        "command": [
+          "cargo",
+          "rustc",
+          "--release",
+          "--locked",
+          "--offline",
+          "--manifest-path",
+          "/Users/stargazermiao/workspace/mini_linq/features/workloads/target/bench/crates/retail_h22/Cargo.toml",
+          "--target-dir",
+          "/Users/stargazermiao/workspace/mini_linq/target/tpch-workers",
+          "--",
+          "-Zunpretty=expanded"
+        ],
+        "expanded_source_sha256": "c51f3405c09ff163ebf3ba399af9b6dd3946c69fb9b705b74429515c6c7e8db2",
+        "timing_worker_sha256": "330190f69845ebc21034ae8358b6c676b62f6bc7eaf13335469c3dd4da75d175",
+        "configurations": [
+          "default",
+          "radix",
+          "radix_retained",
+          "built_hash",
+          "built_radix"
+        ]
+      },
+      "retail_h03": {
+        "command": [
+          "cargo",
+          "rustc",
+          "--release",
+          "--locked",
+          "--offline",
+          "--manifest-path",
+          "/Users/stargazermiao/workspace/mini_linq/features/workloads/target/bench/crates/retail_h03/Cargo.toml",
+          "--target-dir",
+          "/Users/stargazermiao/workspace/mini_linq/target/tpch-workers",
+          "--",
+          "-Zunpretty=expanded"
+        ],
+        "expanded_source_sha256": "9ef135d570aaa7475c04d068635c02580ba91aeb338ba2b033fc3643d0eb76f6",
+        "timing_worker_sha256": "dfe78992c6db8a98a4d14b4662177365d06759266dafa8675d5ad7d6a4370130",
+        "configurations": [
+          "default",
+          "radix",
+          "radix_retained",
+          "built_hash",
+          "built_radix"
+        ]
+      },
+      "retail_h05": {
+        "command": [
+          "cargo",
+          "rustc",
+          "--release",
+          "--locked",
+          "--offline",
+          "--manifest-path",
+          "/Users/stargazermiao/workspace/mini_linq/features/workloads/target/bench/crates/retail_h05/Cargo.toml",
+          "--target-dir",
+          "/Users/stargazermiao/workspace/mini_linq/target/tpch-workers",
+          "--",
+          "-Zunpretty=expanded"
+        ],
+        "expanded_source_sha256": "74611d66bbf990f8f6c79887acae5950d176bb5ca8129e4a80f746b3353fdb60",
+        "timing_worker_sha256": "1dce6efcbf6eb87293cb645b00c9bccc2ac845933baa11e1fda3fd51807dc638",
+        "configurations": [
+          "default",
+          "radix",
+          "radix_retained",
+          "built_hash",
+          "built_radix"
+        ]
+      },
+      "retail_h07": {
+        "command": [
+          "cargo",
+          "rustc",
+          "--release",
+          "--locked",
+          "--offline",
+          "--manifest-path",
+          "/Users/stargazermiao/workspace/mini_linq/features/workloads/target/bench/crates/retail_h07/Cargo.toml",
+          "--target-dir",
+          "/Users/stargazermiao/workspace/mini_linq/target/tpch-workers",
+          "--",
+          "-Zunpretty=expanded"
+        ],
+        "expanded_source_sha256": "994042b02d8120d4de9e3eeffbf4655560faa8dad5b120e6609f6efb49f3f906",
+        "timing_worker_sha256": "1bae8f6a4bd25d1604a224fe5bf45f4ab8b6dc1e35b0c8adef5c987010f112b5",
+        "configurations": [
+          "default",
+          "radix",
+          "radix_retained",
+          "built_hash",
+          "built_radix"
+        ]
+      },
+      "retail_h07_block": {
+        "command": [
+          "cargo",
+          "rustc",
+          "--release",
+          "--locked",
+          "--offline",
+          "--manifest-path",
+          "/Users/stargazermiao/workspace/mini_linq/features/workloads/target/bench/crates/retail_h07_block/Cargo.toml",
+          "--target-dir",
+          "/Users/stargazermiao/workspace/mini_linq/target/tpch-workers",
+          "--",
+          "-Zunpretty=expanded"
+        ],
+        "expanded_source_sha256": "4712ce4848ff78a767c9caa4b58333a0782283cd95557659cd027e8ef5387bd2",
+        "timing_worker_sha256": "62923555719ad92ca772da9571b51b0f77f6e7e3b700fe41e3721488c335577a",
+        "configurations": [
+          "default",
+          "radix",
+          "radix_retained",
+          "built_hash",
+          "built_radix"
+        ]
+      },
+      "retail_h08": {
+        "command": [
+          "cargo",
+          "rustc",
+          "--release",
+          "--locked",
+          "--offline",
+          "--manifest-path",
+          "/Users/stargazermiao/workspace/mini_linq/features/workloads/target/bench/crates/retail_h08/Cargo.toml",
+          "--target-dir",
+          "/Users/stargazermiao/workspace/mini_linq/target/tpch-workers",
+          "--",
+          "-Zunpretty=expanded"
+        ],
+        "expanded_source_sha256": "d8a49c48e6298f18ed43401b58f7ec7b6c27657875122babf6234fda23cf11eb",
+        "timing_worker_sha256": "382d6a5512b15181d32a4e85647c2b56b564543c0abfbc3653f67ceb297a3529",
+        "configurations": [
+          "default",
+          "radix",
+          "radix_retained",
+          "built_hash",
+          "built_radix"
+        ]
+      },
+      "retail_h09": {
+        "command": [
+          "cargo",
+          "rustc",
+          "--release",
+          "--locked",
+          "--offline",
+          "--manifest-path",
+          "/Users/stargazermiao/workspace/mini_linq/features/workloads/target/bench/crates/retail_h09/Cargo.toml",
+          "--target-dir",
+          "/Users/stargazermiao/workspace/mini_linq/target/tpch-workers",
+          "--",
+          "-Zunpretty=expanded"
+        ],
+        "expanded_source_sha256": "b2987f4e4c5d24d57e8bd57f60d534947635c447b05217f53ff2c9a07239bdd1",
+        "timing_worker_sha256": "c8ac63201e068c784614e6f9bd6ea1db3f3814a5822d77560d07107a39d233ed",
+        "configurations": [
+          "default",
+          "radix",
+          "radix_retained",
+          "built_hash",
+          "built_radix"
+        ]
+      },
+      "retail_h21_positive": {
+        "command": [
+          "cargo",
+          "rustc",
+          "--release",
+          "--locked",
+          "--offline",
+          "--manifest-path",
+          "/Users/stargazermiao/workspace/mini_linq/features/workloads/target/bench/crates/retail_h21_positive/Cargo.toml",
+          "--target-dir",
+          "/Users/stargazermiao/workspace/mini_linq/target/tpch-workers",
+          "--",
+          "-Zunpretty=expanded"
+        ],
+        "expanded_source_sha256": "3099dcf25f1fc9a036ecda79d2eaa915d35855695601a4dfb16f63ee2c1bd789",
+        "timing_worker_sha256": "66468dad65ec9c3e64ea8c65f7f23e3f7933cfa70f2150668e175185c6806139",
+        "configurations": [
+          "default",
+          "radix",
+          "radix_retained",
+          "built_hash",
+          "built_radix"
+        ]
+      },
+      "retail_d19": {
+        "command": [
+          "cargo",
+          "rustc",
+          "--release",
+          "--locked",
+          "--offline",
+          "--manifest-path",
+          "/Users/stargazermiao/workspace/mini_linq/features/workloads/target/bench/crates/retail_d19/Cargo.toml",
+          "--target-dir",
+          "/Users/stargazermiao/workspace/mini_linq/target/tpch-workers",
+          "--",
+          "-Zunpretty=expanded"
+        ],
+        "expanded_source_sha256": "18004625a148ba96649314b227bf9152f57c6cfa38ed3805ca675ef902797bf4",
+        "timing_worker_sha256": "d44d0eefb934933eb5fe0281766e130d3c2e09126e5698f232a7968eb164da10",
+        "configurations": [
+          "default",
+          "radix",
+          "radix_retained",
+          "built_hash",
+          "built_radix"
+        ]
+      },
+      "retail_d27": {
+        "command": [
+          "cargo",
+          "rustc",
+          "--release",
+          "--locked",
+          "--offline",
+          "--manifest-path",
+          "/Users/stargazermiao/workspace/mini_linq/features/workloads/target/bench/crates/retail_d27/Cargo.toml",
+          "--target-dir",
+          "/Users/stargazermiao/workspace/mini_linq/target/tpch-workers",
+          "--",
+          "-Zunpretty=expanded"
+        ],
+        "expanded_source_sha256": "42fa11122746bcbc756e8d4556809e47f88e733326531673c52a9ad1fe3056cf",
+        "timing_worker_sha256": "0bfacff6570c8dea2726d42eea3adaa41be0f4965a8b064ba3f6193118d19210",
+        "configurations": [
+          "default",
+          "radix",
+          "radix_retained",
+          "built_hash",
+          "built_radix"
+        ]
+      },
+      "retail_d72_inner": {
+        "command": [
+          "cargo",
+          "rustc",
+          "--release",
+          "--locked",
+          "--offline",
+          "--manifest-path",
+          "/Users/stargazermiao/workspace/mini_linq/features/workloads/target/bench/crates/retail_d72_inner/Cargo.toml",
+          "--target-dir",
+          "/Users/stargazermiao/workspace/mini_linq/target/tpch-workers",
+          "--",
+          "-Zunpretty=expanded"
+        ],
+        "expanded_source_sha256": "2a4ae8e178ecc6ef637bbc5c8c6a189bb7ae2cf433b34942a6d378ef5beffccb",
+        "timing_worker_sha256": "5b4cd4b78eab0b513c92ae6f1e3050895ac415081cf6dea6c99167fcda514e7c",
+        "configurations": [
+          "default",
+          "radix",
+          "radix_retained",
+          "built_hash",
+          "built_radix"
+        ]
+      },
+      "retail_d85": {
+        "command": [
+          "cargo",
+          "rustc",
+          "--release",
+          "--locked",
+          "--offline",
+          "--manifest-path",
+          "/Users/stargazermiao/workspace/mini_linq/features/workloads/target/bench/crates/retail_d85/Cargo.toml",
+          "--target-dir",
+          "/Users/stargazermiao/workspace/mini_linq/target/tpch-workers",
+          "--",
+          "-Zunpretty=expanded"
+        ],
+        "expanded_source_sha256": "45a93d51ac27cfcb9098cef91e20e9e2c04b6fd95794a66336735223ae5d108e",
+        "timing_worker_sha256": "0c449dd2fb4850caa2abb27a149b8bd0c13747ac0d48c0aec79695e9a1f43e36",
+        "configurations": [
+          "default",
+          "radix",
+          "radix_retained",
+          "built_hash",
+          "built_radix"
+        ]
+      },
+      "tpch_q06": {
+        "command": [
+          "cargo",
+          "rustc",
+          "--release",
+          "--locked",
+          "--offline",
+          "--manifest-path",
+          "/Users/stargazermiao/workspace/mini_linq/features/workloads/target/bench/crates/tpch_q06/Cargo.toml",
+          "--target-dir",
+          "/Users/stargazermiao/workspace/mini_linq/target/tpch-workers",
+          "--",
+          "-Zunpretty=expanded"
+        ],
+        "expanded_source_sha256": "eb67eb019105907316a6b16f21d05d1735dba165f2361e3536588d7417cb2885",
+        "timing_worker_sha256": "4d3fb50cf45fab057657115bfa4d5e57318764a5c00ee73bc2a83c4ee9a86182",
+        "configurations": [
+          "default",
+          "radix",
+          "radix_retained",
+          "built_hash",
+          "built_radix"
+        ]
+      },
+      "tpch_q19": {
+        "command": [
+          "cargo",
+          "rustc",
+          "--release",
+          "--locked",
+          "--offline",
+          "--manifest-path",
+          "/Users/stargazermiao/workspace/mini_linq/features/workloads/target/bench/crates/tpch_q19/Cargo.toml",
+          "--target-dir",
+          "/Users/stargazermiao/workspace/mini_linq/target/tpch-workers",
+          "--",
+          "-Zunpretty=expanded"
+        ],
+        "expanded_source_sha256": "23f409a6dcc14b8eb906251f81ccb3a70514995c712c5f649773ed4537bf54eb",
+        "timing_worker_sha256": "b118ceab49497ecfd4d60d7af316ef8186efb65ef8095e1358e955585d4a6131",
+        "configurations": [
+          "default",
+          "radix",
+          "radix_retained",
+          "built_hash",
+          "built_radix"
+        ]
+      }
+    },
+    "inspector_source": "use std::{collections::BTreeMap, path::Path};\nuse syn::{visit::Visit, Expr, ExprCall, Item, Type};\n\n#[derive(Default)]\nstruct Builds(BTreeMap<String, usize>);\nimpl<'ast> Visit<'ast> for Builds {\n    fn visit_expr_call(&mut self, call: &'ast ExprCall) {\n        if let Expr::Path(callee) = &*call.func {\n            if callee.path.segments.last().is_some_and(|s| s.ident == \"build\" || s.ident == \"from_pairs\" || s.ident == \"new\") {\n                let path = callee.qself.as_ref().and_then(|q| match &*q.ty {\n                    Type::Path(ty) => Some(&ty.path),\n                    _ => None,\n                }).unwrap_or(&callee.path);\n                for segment in &path.segments {\n                    let name = segment.ident.to_string();\n                    if matches!(name.as_str(), \"HashIndex\" | \"RadixRun\" | \"SortedRun\" | \"AdaptiveKeySet\" | \"PrefixRun\") {\n                        *self.0.entry(name).or_default() += 1;\n                    }\n                }\n            }\n        }\n        syn::visit::visit_expr_call(self, call);\n    }\n}\n\nfn main() {\n    let mut result = BTreeMap::new();\n    for argument in std::env::args().skip(1) {\n        let path = Path::new(&argument);\n        let text = std::fs::read_to_string(path).expect(\"read expanded Rust\");\n        let file = syn::parse_file(&text).expect(\"parse expanded Rust\");\n        let query = file.items.iter().find_map(|item| match item {\n            Item::Mod(module) if module.ident == \"query\" => module.content.as_ref(),\n            _ => None,\n        }).expect(\"generated worker has an inline query module\");\n        let mut configurations = BTreeMap::new();\n        for item in &query.1 {\n            if let Item::Mod(module) = item {\n                let name = module.ident.to_string();\n                if matches!(name.as_str(), \"default\" | \"radix\" | \"radix_retained\" | \"built_hash\" | \"built_radix\") {\n                    assert!(module.content.is_some(), \"expanded configuration is inline\");\n                    let mut builds = Builds::default();\n                    builds.visit_item_mod(module);\n                    configurations.insert(name, builds.0);\n                }\n            }\n        }\n        assert!(configurations.contains_key(\"default\") && configurations.contains_key(\"radix\"));\n        result.insert(path.file_stem().unwrap().to_string_lossy().to_string(), configurations);\n    }\n    println!(\"{}\", serde_json::to_string_pretty(&result).unwrap());\n}\n",
+    "capture_source": "import hashlib\nimport json\nimport os\nfrom pathlib import Path\nimport subprocess\n\nroot = Path(__file__).resolve().parents[2]\nbench = root / 'features/workloads/target/bench'\nreport = json.loads((bench / 'tpch-1-index-comparison.json').read_text())\nout = root / 'target/mac-broad-provider-inspection/expanded'\nout.mkdir(parents=True, exist_ok=True)\nprovenance = {}\npaths = []\nfor query in report['queries']:\n    name = query['query']\n    crate = bench / 'crates' / name\n    path = out / (name + '.rs')\n    command = ['cargo', 'rustc', '--release', '--locked', '--offline', '--manifest-path', str(crate / 'Cargo.toml'), '--target-dir', str(root / 'target/tpch-workers'), '--', '-Zunpretty=expanded']\n    with path.open('w') as source, path.with_suffix('.log').open('w') as log:\n        subprocess.run(command, cwd=root, env=dict(os.environ, RUSTC_BOOTSTRAP='1'), stdout=source, stderr=log, check=True)\n    provenance[name] = {'command':command, 'expanded_source_sha256':hashlib.sha256(path.read_bytes()).hexdigest(), 'timing_worker_sha256':hashlib.sha256((crate/'timing-worker').read_bytes()).hexdigest(), 'configurations':[c['configuration'] for c in query['configs']]}\n    paths.append(str(path))\nsubprocess.run(['cargo','build','--release','--offline','--manifest-path',str(root/'target/mac-broad-provider-inspection/Cargo.toml')],cwd=root,check=True)\ninspector = root/'target/mac-broad-provider-inspection/target/release/inspect-providers'\nresult = subprocess.check_output([str(inspector), *paths],text=True)\n(out/'provider-builds.json').write_text(result)\n(out/'provenance.json').write_text(json.dumps(provenance,indent=2)+'\\n')\nprint('Parsed generated Rust for',len(paths),'queries; captured concrete provider construction sites.')\n",
+    "inspector_manifest": "[package]\nname = \"mac-broad-provider-inspection\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[workspace]\n[dependencies]\nsyn = { version = \"=2.0.119\", features = [\"full\", \"visit\"] }\nserde_json = \"1\"\n[[bin]]\nname = \"inspect-providers\"\npath = \"main.rs\"\n"
+  }
+}

@@ -114,6 +114,7 @@ pub fn custom_indexes(input: TokenStream) -> TokenStream {
         for entry in &mut target.structures.entries {
             if let Structure::Built { keyed, .. } = &mut entry.structure {
                 keyed.ty = syn::parse_quote!(SortedIndex<_, _>);
+                keyed.supports = None;
             }
         }
         Ok(target)

@@ -32,5 +32,5 @@ pub use physical::{
     retain_streams, smallest_intersections,
 };
 pub use structures::{
-    expand_lookups, hashed_runs, join_filter, membership, retain_lookups, retype, sorted_runs,
+    expand_lookups, hashed_runs, join_filter, membership, radix_runs, retain_lookups, retype, sorted_runs,
 };

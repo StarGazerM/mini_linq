@@ -2,6 +2,10 @@ use cq_load::{Date, Decimal, Load};
 use cq_testkit::conformance::assert_answers_equal;
 use cq_testkit::duckdb::{RelationData, evaluate_sql};
 
+#[allow(dead_code, unused_imports, unused_macros)]
+#[path = "../src/tpch_runtime.rs"]
+mod tpch_runtime;
+
 #[allow(dead_code)]
 #[path = "../src/queries/retail/tpch/retail_h14.rs"]
 mod h14;
@@ -53,7 +57,7 @@ fn h14_components_preserve_identity_dates_and_empty_global_group() {
                 }.into())
             }).collect(),
         };
-        let actual = h14::run(&data, "default").into_iter()
+        let actual = tpch_runtime::same_plan_answers(|config| h14::run(&data, config), h14::canonical).into_iter()
             .map(|(promo, total)| vec![integer(promo), integer(total)]).collect::<Vec<_>>();
         let sql = format!(r#"WITH lineitem AS (
             SELECT c0 AS l_orderkey, c1 AS l_linenumber, c2 AS l_partkey,
@@ -92,7 +96,7 @@ fn h18_threshold_is_strict_and_joins_follow_identity_preserving_sum() {
             customer: customers.iter().map(|r| (r[0].into(),
                 char::from_u32(r[1] as u32).unwrap().to_string())).collect(),
         };
-        let actual = h18::run(&data, "default").into_iter()
+        let actual = tpch_runtime::same_plan_answers(|config| h18::run(&data, config), h18::canonical).into_iter()
             .map(|(name, customer, order, date, price, quantity)| vec![
                 i32::from(name.as_bytes()[0]), integer(customer), integer(order),
                 date.days_since_epoch(),
@@ -153,7 +157,7 @@ fn h19_three_branches_boundaries_shipping_and_duplicate_identity() {
                 ["Brand#12", "Brand#23", "Brand#34", "Brand#99"][r[1] as usize].into(),
                 containers[r[2] as usize].into(), r[3])).collect(),
         );
-        let actual = h19::run(&data, "default").into_iter()
+        let actual = tpch_runtime::same_plan_answers(|config| h19::run(&data, config), h19::canonical).into_iter()
             .map(|(revenue,)| vec![integer(revenue)]).collect::<Vec<_>>();
         let sql = format!(r#"WITH lineitem AS (
             SELECT c0 AS l_orderkey, c1 AS l_linenumber, c2 AS l_partkey,

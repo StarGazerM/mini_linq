@@ -29,9 +29,9 @@ pub struct JoinFilterCandidate {
 }
 
 /// Every admissible filter of `covering`, one per scalar `i64` key column:
-/// an eager probe or semijoin into a total single-level exact hash index or
-/// sorted run, whose unique keys supply the conservative filter, and whose left
-/// operand reaches a scan through an exclusive pipe spine of declarative
+/// an eager probe or semijoin into a total single-level exact provider with
+/// declared distinct-key enumeration, whose keys supply the conservative
+/// filter, and whose left operand reaches a scan through an exclusive pipe spine of declarative
 /// selections, projections and the left operands of eager probes/semijoins,
 /// carrying the key column from the scan's lineage.
 pub fn join_filter_candidates(
@@ -66,14 +66,10 @@ pub fn join_filter_candidates(
         || fused(covering)
         || facts.physical.modes[&build] != ModeKind::Let
         || !facts.physical.rows[&build].computed.is_empty()
-        || facts.built_on(&build, &columns).is_none_or(|(ty, levels)| {
-            let sorted_run = matches!(ty, syn::Type::Path(path)
-                if path.qself.is_none()
-                    && path.path.segments.len() == 2
-                    && path.path.segments[0].ident == "cq_storage"
-                    && path.path.segments[1].ident == "SortedRun");
-            levels != 1
-                || !(*ty == syn::parse_quote!(::cq_storage::HashIndex<'_, _, _>) || sorted_run)
+        || facts.membership.contains(&(build.clone(), names(&k.columns)))
+        || !facts.provider_support(&build, &columns, None, ProviderCapability::Keys)
+        || facts.selected_built(&build, &columns).is_none_or(|((levels, _), depth)| {
+            depth != 1 || levels.len() != 1
         })
     {
         return Vec::new();
@@ -199,20 +195,7 @@ pub(crate) fn check_join_filters(program: &Program, facts: &Analysis) -> syn::Re
                 );
             }
             concrete_type(&filter.ty)?;
-            let origin = &facts.lineage[scan];
-            let column = &origin.columns[key];
-            let index = syn::Index::from(
-                facts.host_layouts[&origin.base]
-                    .iter()
-                    .position(|c| c == column)
-                    .unwrap(),
-            );
-            if filter.marker != syn::parse_quote!(::cq_load::ColumnAt<#index>) {
-                return error(
-                    &filter.marker,
-                    "join filter marker must select the covered scalar key",
-                );
-            }
+            concrete_type(&filter.marker)?;
         }
     }
     Ok(())

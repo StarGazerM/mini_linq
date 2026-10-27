@@ -14,6 +14,9 @@ JOIN region r ON r.r_regionkey = n.n_regionkey
 WHERE r.r_name = 'ASIA' AND o.o_orderdate >= DATE '1994-01-01'
 AND o.o_orderdate < DATE '1995-01-01'"#;
     candidate generic_smallest;
+    // Close the Supplier/customer-nation cycle before expanding Nation/Region.
+    // Checked order advice keeps the written date-guard prerequisites intact.
+    advise plan(order(Lineitem, Orders, Customer, Supplier, Nation, Region));
     setup { let start = date("1994-01-01"); let end = date("1995-01-01"); }
     relations {
         relation Customer => customer(c_custkey: i64, c_nationkey: i32);
@@ -26,6 +29,7 @@ AND o.o_orderdate < DATE '1995-01-01'"#;
     answer(order_key: i64, supplier_key: i64, nation_key: i32) :-
         Lineitem(order_key, supplier_key),
         Orders(order_key, customer_key, order_date), if *order_date >= start && *order_date < end,
-        Customer(customer_key, nation_key), Nation(nation_key, region_key), Region(region_key, "ASIA"),
+        Customer(customer_key, nation_key), Nation(nation_key, region_key),
+        Region(region_key, region_name), if region_name == "ASIA",
         Supplier(supplier_key, nation_key);
 }

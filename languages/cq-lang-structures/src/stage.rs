@@ -66,12 +66,8 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
         .values()
         .flat_map(|group| group.members.iter())
         .collect();
-    // ST-Expand: SortedRun builds, lexicographic PrefixRun prefixes, recorded
-    // resident sorted hosts, and binary Smallest intersections expose exact
-    // ranges whose total length is known before expansion. Leveled hosts
-    // enumerate (run, range) pairs from one immutable snapshot.
-    // HashedRun bucket is only a candidate superset, so it cannot prove this
-    // obligation even though its bucket length is available.
+    // ST-Expand: The selected provider declares finite, exact-size retained
+    // cursors. This law does not confer ordering or contiguous range placement.
     let candidates = physical::candidate_prefixes(&program.physical, &facts.physical);
     let smallest_forces: BTreeSet<_> = program
         .physical
@@ -99,45 +95,26 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
         if matches!(probe.choice, Some(physical::Choice::Smallest(_))) {
             let range = candidates.iter().find(|candidate| candidate.reader == &definition.name)
                 .is_some_and(|candidate| candidate.sides.iter().all(|(side, prefix)| {
-                    facts.built.get(side).into_iter().flatten().any(|(levels, ty)| {
-                        levels.len() == 2 && levels[0] == *prefix
-                            && levels[1].len() == 1 && levels[1][0] == candidate.column
-                            && matches!(ty, syn::Type::Path(path) if path.path.segments.last().is_some_and(|segment| segment.ident == "PrefixRun"))
-                    })
+                    facts.candidate_support(side, prefix, &candidate.column, ProviderCapability::Expand)
                 }));
             if !range {
                 return error(
                     definition,
-                    "expand smallest requires a PrefixRun candidate build on both sides",
+                    "expand smallest requires declared expand support on both selected two-level candidate builds",
                 );
             }
         } else {
             let keys = names(&probe.columns);
-            let built_range = facts.built.get(&symbol_name(&probe.right)).into_iter().flatten()
-                .any(|(levels, ty)| matches!(ty, syn::Type::Path(path)
-                    if path.path.segments.last().is_some_and(|segment|
-                        (segment.ident == "SortedRun" && levels.len() == 1 && levels[0] == keys)
-                            || (segment.ident == "PrefixRun" && prefix_depth(levels, &keys).is_some()))));
-            let resident_range = program.structures.entries.iter().any(|entry| {
-                let Structure::Host { reader, keyed, .. } = &entry.structure else {
-                    return false;
-                };
-                if entry.name != probe.right || *reader != definition.name {
-                    return false;
-                }
-                let resident = matches!(&keyed.ty, syn::Type::Path(path)
-                    if path.path.segments.last().is_some_and(|segment| segment.ident == "FrozenDeviceIndex" || segment.ident == "LeveledDeviceIndex")
-                        && path.path.segments.iter().rev().nth(1).is_some_and(|segment| segment.ident == "cq_gpu_runtime"));
-                let levels = keyed.level_names();
-                let mut columns = levels.concat();
-                columns.sort();
-                resident && columns == keys && !columns.is_empty()
-                    && levels.iter().all(|level| !level.is_empty())
-            });
+            let side = symbol_name(&probe.right);
+            let built_range = facts.selected_built(&side, &keys)
+                .is_some_and(|((levels, _), depth)| depth == levels.len())
+                && facts.provider_support(&side, &keys, None, ProviderCapability::Expand);
+            let resident_range = facts.host_read(&side)
+                && facts.provider_support(&side, &keys, Some(name), ProviderCapability::Expand);
             if !built_range && !resident_range {
                 return error(
                     definition,
-                    "expand requires a SortedRun or PrefixRun range-cursor build or an exact resident sorted host range",
+                    "expand requires declared expand support on its selected exact provider",
                 );
             }
         }
