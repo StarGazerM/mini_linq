@@ -17,9 +17,10 @@
 //! set without changing RA/VO order.
 //!
 //! Rows borrow declared host columns and retain owned computed columns. The
-//! adapters bind hosts once and dispatch reusable host reads by type. Only
-//! leading declaration prefixes are eligible for native keyed reads; other
-//! reads use one lazy fallback. Built lets use their recorded Rust types.
+//! adapters bind hosts once and dispatch reusable host reads by type. Leading
+//! declaration prefixes and explicitly indexed single borrowed-key column slots
+//! can supply native reads; unsupported reads use one lazy fallback. Built lets
+//! use their recorded Rust types.
 //! Canon boundaries use the recorded dedup type before materialization
 //! or stream consumption. Merge requires ordered inputs; mixed cursors normalize
 //! key references. Host-only iterators own their shared lazy dispatch state;

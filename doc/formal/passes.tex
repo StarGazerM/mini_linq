@@ -583,13 +583,25 @@ expansion fixtures. Interfaces at the Rust boundary:
  \Gamma_H\vdash_{Rust}e}
  {d\longmapsto\code{let b = \&(e);}\quad R\mapsto b}
 
-\Rule{IF-Dispatch}{C=\{d_1,\ldots,d_k\}\quad
- H:\mathsf{ReadAt}(\tau_1,\ldots,\tau_k)}
+\Rule{IF-Dispatch}{\mathsf{nativeEligible}(H,C)\quad H:\mathsf{ReadAt}(C)}
  {\mathsf{read}(H,C)\longmapsto\mathsf{nativeRead}(H,C)}
 
-\Rule{IF-Fallback}{C\text{ is nonleading}\ \lor\ H\not:\mathsf{ReadAt}(C)}
+\Rule{IF-Fallback}{\neg\mathsf{nativeEligible}(H,C)\ \lor\ H\not:\mathsf{ReadAt}(C)}
  {\mathsf{read}(H,C)\longmapsto\mathsf{lazyOnce}(\mathsf{build}(\alpha(H),C))}
 \end{mathpar}
+For keyed host reads, $\mathsf{nativeEligible}(H,C)$ holds at a leading
+declaration prefix, or at a single nonleading borrowed-key column
+$C=\{d_{j+1}\}$ when $H:\code{IndexedColumn<j>}$. The zero-based slot is derived
+from the checked declaration and rename, not inferred from matching Rust types.
+The explicit read's key is the one-field tuple of that column's declared owned
+type; its payload supplies every other column in declaration order, with exact
+source occurrences and chronology. Its cursor borrows or pins that same
+immutable source, not a temporary dispatch wrapper. Exact membership requires
+its separate Rust trait; retention and expansion still require Copy and
+Copy plus ExactSizeIterator respectively. An unsupported slot or capability
+uses the ordinary fallback. Computed keys, multicolumn nonleading keys,
+candidate enumeration and PointLookup retain their existing paths.
+
 \begin{mathpar}
 \Rule{IF-Positional}{r\text{ has a checked positional read }(H,C,P)}
  {r\longmapsto\code{BlockRead::read}(H,C,P)\text{ then survivor row fetch}}

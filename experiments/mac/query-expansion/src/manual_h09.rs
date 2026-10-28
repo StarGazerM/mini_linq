@@ -35,6 +35,10 @@ impl Prepared {
         })
     }
 
+    pub(crate) fn source(&self) -> Option<&cq_mac::Relation> {
+        self.source.as_ref()
+    }
+
     pub fn source_bytes(&self) -> usize {
         self.source
             .as_ref()

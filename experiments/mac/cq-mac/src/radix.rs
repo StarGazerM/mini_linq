@@ -1,7 +1,7 @@
 //! GPU-built grouped RadixRun using the native storage reader verbatim.
-use super::{IndexSpec, MAX_ROWS, MacContext, MacError, Relation, platform};
+use super::{IndexSpec, MAX_ROWS, MacContext, MacError, Payload, Relation, platform};
 use cq_storage::{
-    RadixRunReadState, RadixRunView, RadixSplineMetadata, RadixSplinePoint, RunCursor,
+    IndexRead, RadixRun, RadixRunReadState, RadixRunView, RadixSplineMetadata, RadixSplinePoint, RunCursor,
 };
 use std::{fmt, rc::Rc};
 
@@ -108,7 +108,191 @@ impl MacRadixRun {
     }
 }
 
+enum SourceIndex {
+    Cpu(RadixRun<u32, u32>),
+    Gpu(MacRadixRun),
+}
+
+struct IndexedSource {
+    source: Relation,
+    index: SourceIndex,
+    values: *const i64,
+    value_count: usize,
+}
+
+/// An immutable i64 relation bound to its all-row index on `KEY_COLUMN`.
+///
+/// Both explicit preparation paths retain the original source, index original
+/// row IDs, and preserve source chronology for duplicate keys. Only indexed
+/// keys must fit u32; every source field remains full-width i64. There is no
+/// public attachment operation that could pair an index with a different source.
+/// Clones share ownership; reads never allocate, call FFI, or retain an owner.
+#[derive(Clone)]
+pub struct IndexedI64Relation<const KEY_COLUMN: usize> {
+    inner: Rc<IndexedSource>,
+}
+
+impl<const KEY_COLUMN: usize> fmt::Debug for IndexedI64Relation<KEY_COLUMN> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("IndexedI64Relation")
+            .field("key_column", &KEY_COLUMN)
+            .field("rows", &self.len())
+            .field("columns", &self.columns())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<const KEY_COLUMN: usize> IndexedI64Relation<KEY_COLUMN> {
+    // Only preparation calls this after checking the source and building its
+    // all-row index. The mapping is immutable and pinned by the source owner.
+    fn prepared(source: &Relation, values: &[i64], index: SourceIndex) -> Self {
+        Self {
+            inner: Rc::new(IndexedSource {
+                source: source.clone(),
+                index,
+                values: values.as_ptr(),
+                value_count: values.len(),
+            }),
+        }
+    }
+
+    /// Number of source rows, including duplicate keys.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.inner.source.len()
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    #[inline]
+    pub fn columns(&self) -> usize {
+        self.inner.source.columns()
+    }
+
+    /// Borrow the original row-major source without evaluating it again.
+    #[inline]
+    pub fn values(&self) -> &[i64] {
+        // Preparation caches a checked, fully initialized immutable mapping.
+        // The original Relation strongly owns that allocation for this entire
+        // borrow, including after the caller's source and context are dropped.
+        unsafe { std::slice::from_raw_parts(self.inner.values, self.inner.value_count) }
+    }
+
+    /// Borrow a full-width source row. Panics if `row_id` is out of bounds.
+    #[inline]
+    pub fn row(&self, row_id: u32) -> &[i64] {
+        let row_id = row_id as usize;
+        assert!(row_id < self.len(), "source row ID is out of bounds");
+        let columns = self.columns();
+        let start = row_id * columns;
+        &self.values()[start..start + columns]
+    }
+
+    /// Original row IDs in source order, or `None` for exact absence.
+    ///
+    /// Out-of-u32-domain probes cannot match the validated source; they never
+    /// truncate or panic. The native cursor is Copy and exact-size.
+    #[inline]
+    pub fn row_ids(&self, key: i64) -> Option<RunCursor<'_, u32>> {
+        let key = u32::try_from(key).ok()?;
+        let cursor = match &self.inner.index {
+            SourceIndex::Cpu(index) => index.lookup(&key),
+            SourceIndex::Gpu(index) => index.lookup(&key),
+        };
+        (cursor.len() != 0).then_some(cursor)
+    }
+}
+
 impl MacContext {
+    fn radix_i64_values<'a, const KEY_COLUMN: usize>(
+        &self,
+        source: &'a Relation,
+    ) -> Result<&'a [i64], MacError> {
+        if !source.inner.belongs_to(&self.inner.0) {
+            return Err(MacError::ContextMismatch);
+        }
+        if source.len() > MAX_ROWS {
+            return Err(MacError::CapacityExceeded);
+        }
+        if source.columns() == 0 || KEY_COLUMN >= source.columns() {
+            return Err(MacError::CommandFailed(
+                "i64 radix key column is outside the source shape".into(),
+            ));
+        }
+        let value_count = source
+            .len()
+            .checked_mul(source.columns())
+            .filter(|&n| n <= isize::MAX as usize / size_of::<i64>())
+            .ok_or(MacError::CapacityExceeded)?;
+        // This checks dtype and maps the source once, without inspecting keys.
+        // GPU key-domain validation remains in MCCL's device projection.
+        let values = source.i64_values()?;
+        if values.len() != value_count {
+            return Err(MacError::CommandFailed(
+                "i64 radix source has an invalid shape".into(),
+            ));
+        }
+        Ok(values)
+    }
+
+    /// Explicit GPU preparation over every source row, with device-side key
+    /// validation, projection, stable grouping, spline and radix construction.
+    /// Source ingestion is separate; non-key source fields are never narrowed.
+    pub fn prepare_radix_i64<const KEY_COLUMN: usize>(
+        &self,
+        source: &Relation,
+    ) -> Result<IndexedI64Relation<KEY_COLUMN>, MacError> {
+        let values = self.radix_i64_values::<KEY_COLUMN>(source)?;
+        let index = self.build_radix(
+            source,
+            IndexSpec {
+                key_column: KEY_COLUMN,
+                payload: Payload::RowId,
+            },
+            None,
+        )?;
+        Ok(IndexedI64Relation::prepared(
+            source,
+            values,
+            SourceIndex::Gpu(index),
+        ))
+    }
+
+    /// Explicit native CPU RadixRun baseline over exactly the same source.
+    /// Validation precedes construction; pairs stream directly into the native
+    /// builder without an intermediate projection buffer or pair-vector copy.
+    pub fn prepare_radix_i64_on_cpu<const KEY_COLUMN: usize>(
+        &self,
+        source: &Relation,
+    ) -> Result<IndexedI64Relation<KEY_COLUMN>, MacError> {
+        let values = self.radix_i64_values::<KEY_COLUMN>(source)?;
+        let columns = source.columns();
+        if values
+            .chunks_exact(columns)
+            .any(|row| u32::try_from(row[KEY_COLUMN]).is_err())
+        {
+            return Err(MacError::CommandFailed(
+                "i64 radix source key is outside the u32 domain".into(),
+            ));
+        }
+        let index = RadixRun::from_pairs(
+            values
+                .chunks_exact(columns)
+                .enumerate()
+                // Both casts were checked above: all keys fit u32, and the
+                // all-row payload count is bounded by MAX_ROWS.
+                .map(|(row_id, row)| (row[KEY_COLUMN] as u32, row_id as u32)),
+        );
+        Ok(IndexedI64Relation::prepared(
+            source,
+            values,
+            SourceIndex::Cpu(index),
+        ))
+    }
+
     /// GPU projection, stable sort, grouping, parallel spline and radix build.
     /// Source ingestion is separate; no CPU grouping or spline finishing pass.
     pub fn build_radix(

@@ -26,18 +26,27 @@ pub mod tpch_runtime {
             #[derive(Clone)]
             pub struct Data { $(pub $table: Vec<($first_ty, $($ty,)*)>,)* }
             pub type Answer = ($($out_ty,)+);
+            // Reuse the exact authored clauses and declaration order for ordinary
+            // and explicitly prepared host bindings.
+            macro_rules! with_hosts {
+                ($( $d $relation:expr ),* $d(,)?) => {{
+                    $(let $relation = $d $relation;)*
+                    $($setup)*
+                    mini_linq::compile! {
+                        pipeline {
+                            select = mini_linq::passes::select(positional($($relation),*));
+                        }
+                        struct Query;
+                        $(relation $relation($first: $first_ty $(, $column: $ty)*);)*
+                        answer($($out),+) :- $($body)*
+                    }.map(|($($out,)+)| ($(::core::clone::Clone::clone($out),)+)).collect()
+                }};
+            }
+            pub(crate) use with_hosts;
+
             #[allow(non_snake_case)]
             pub fn compiled(data: &Data) -> Vec<Answer> {
-                $(let $relation = data.$table.as_slice();)*
-                $($setup)*
-                mini_linq::compile! {
-                    pipeline {
-                        select = mini_linq::passes::select(positional($($relation),*));
-                    }
-                    struct Query;
-                    $(relation $relation($first: $first_ty $(, $column: $ty)*);)*
-                    answer($($out),+) :- $($body)*
-                }.map(|($($out,)+)| ($(::core::clone::Clone::clone($out),)+)).collect()
+                self::with_hosts!($(data.$table.as_slice()),*)
             }
         };
     }
@@ -55,6 +64,8 @@ pub mod h09 {
 pub mod fixtures;
 pub mod manual_h03;
 pub mod manual_h09;
+#[cfg(target_os = "macos")]
+pub mod compiled_h09;
 
 /// Execution evidence for the handwritten paths, not a runtime telemetry API.
 pub struct ManualResult<T> {

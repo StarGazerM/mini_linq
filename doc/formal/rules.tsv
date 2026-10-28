@@ -108,7 +108,7 @@ IF-Input	implementation	languages/cq-syntax/src/lib.rs	/// Formal rule IF-Input:
 IF-Output	implementation	runtime/cq-storage/src/answers.rs	/// Formal rule IF-Output:	Collect distinct rows into a canonical input host.
 IF-Environment	implementation	languages/cq-lang-cq/src/lib.rs	// Formal rule IF-Environment:	Check visible logical scope and leave Rust environment resolution to rustc.
 IF-Leaf	implementation	passes/cq-print/src/lib.rs	// Formal rule IF-Leaf:	Evaluate leaf expressions once under fresh bindings.
-IF-Dispatch	implementation	passes/cq-print/src/access.rs	// Formal rule IF-Dispatch:	Native access is eligible only at a leading declaration prefix.
+IF-Dispatch	implementation	passes/cq-print/src/access.rs	// Formal rule IF-Dispatch:	Native access requires a leading declaration prefix or an explicitly indexed single borrowed-key column slot, with matching Rust read capabilities and original payload order.
 IF-Fallback	implementation	runtime/cq-storage/src/dispatch.rs	/// Formal rule IF-Fallback:	Initialize a shared fallback once on first use.
 ORD-Admissible	implementation	languages/cq-syntax/src/algebra.rs	/// Formal rule ORD-Admissible:	Syntactic Eq/Ord checks; a total order consistent with Leibniz identity is trusted.
 CQ-Comparison	implementation	languages/cq-lang-cq/src/lib.rs	// Formal rule CQ-Comparison:	Bound query terms and captured constants are separate from Rust expressions.

@@ -3,12 +3,14 @@
 Status: this tree has MCCL/MLX shared-source construction, immutable CPU reads,
 and online flat/binary-carry snapshots for its existing packed u32/u32 provider.
 It also has an explicitly selected **GPU-built grouped RadixRun**, including
-parallel spline construction and stable grouped merge, using the native CPU
-reader. See [GPU-built RadixRun](#gpu-built-radixrun-2026-10-27) and the
-[shared-relation input cutover](#shared-relation-input-cutover) for the current
-APIs. Wider GPU index keys, Datalog publication integration, automatic placement
-and a Metal query backend remain separate work. Earlier measurement sections
-and command blocks retain their historical boundaries.
+parallel spline construction, stable grouped merge, and an opt-in compiled H09
+binding using the native CPU reader. See
+[compiled H09](#explicit-compiled-h09-integration-2026-10-27),
+[GPU-built RadixRun](#gpu-built-radixrun-2026-10-27), and the
+[shared-relation input cutover](#shared-relation-input-cutover) for current APIs.
+Wider GPU index keys, Datalog publication integration, automatic placement and
+a Metal query backend remain separate work. Earlier measurement sections and
+command blocks retain their historical boundaries.
 
 ## Decision
 
@@ -1761,3 +1763,149 @@ boundary/scaled executions passed exact checks. All five compiled native
 RadixRun example routes returned the same 150 answers. These are integration
 smokes, not new performance measurements; CUDA device execution was not exercised
 on this Apple-silicon host.
+
+## Explicit compiled H09 integration (2026-10-27)
+
+`experiments/mac/query-expansion::compiled_h09` now executes the actual authored
+H09 CQ through the ordinary compiler with an explicitly prepared Lineitem host.
+CPU and GPU construction return the same source-bound provider type and enter
+one concrete compiled query function. The relation declaration remains
+`Lineitem(order_key, part_key, supplier_key)`; clauses, opaque Part predicate,
+join order, remaining CPU indexes and final canonicalization are unchanged.
+The existing `manual_h09::Prepared` helper is reused for ingestion only; the new
+execution path does not call the handwritten join implementation.
+
+### Source ownership and explicit construction
+
+`MacContext::prepare_radix_i64::<KEY_COLUMN>(&source)` and
+`prepare_radix_i64_on_cpu::<KEY_COLUMN>(&source)` return
+`IndexedI64Relation<KEY_COLUMN>`. Its fields privately bind the original immutable
+i64 relation to an all-row original-row-ID index. There is no public operation
+to attach an unrelated index to another source. GPU construction uses the
+parallel grouped RadixRun; CPU construction uses native `RadixRun<u32,u32>`.
+The CPU path validates source keys before building; the GPU validates keys on
+device. Both retain full-width signed payload columns.
+
+Preparation maps the immutable source once and caches its checked mapping under
+strong ownership. Subsequent row-ID lookup and payload access perform no FFI,
+allocation, source scan or reference-count increment. Out-of-u32 probe keys are
+exact misses; invalid source keys are construction errors, never truncated or
+silently handled by a CPU fallback. These APIs require the source's originating
+context and remain thread-confined. They index all source rows, not a separately
+supplied selection with potentially different scan semantics.
+
+For H09, the typed host binds declaration slot 1 and gathers the two remaining
+columns in original order. Its shared source can outlive the original input
+handle and context. The prepared query deliberately reads that pinned Lineitem
+snapshot, not a subsequently modified `data.lineitem` vector; other relations
+are borrowed from the query's current `Data`.
+
+```rust
+use mac_query_expansion::{compiled_h09, manual_h09};
+
+let source = manual_h09::Prepared::new(&context, &data)?; // ingestion only
+let index = compiled_h09::build(
+    &context, &source, compiled_h09::Construction::Gpu,
+)?;
+let answers = compiled_h09::execute(&data, &index)?;
+```
+
+No-green demand skips source ingestion and index construction. An absent
+no-green preparation cannot later be reused for a query with green demand:
+that mismatch returns an explicit error.
+
+### Native access at an explicit nonleading column
+
+The earlier compiler selected native host reads only for leading declaration
+prefixes. H09's part-key read is nonleading and otherwise rebuilt a CPU hash
+fallback, even when the supplied host had an index on that field.
+
+`cq_storage::dispatch::IndexedColumn<N>` is now the explicit single-column
+contract. Its key is a one-field tuple of the declared owned key type; its
+payload implements `Columns` in the original order of every remaining column.
+`ColumnHost` reuses ordinary autoref dispatch, fallback ownership and cursor
+proofs. The printer derives N from the checked declaration/rename, not from
+coincidental equality of Rust field types. Prefix, computed-key, multicolumn
+nonleading, candidate and PointLookup paths retain their existing rules.
+Membership requires its separate trait, and retained/expanded reads retain
+their Copy/exact-size requirements.
+
+This is a host-read registration through a Rust capability, not a Mac-specific
+provider-name exception or a new logical operator. A host without the matching
+slot/capability still uses the recorded lazy fallback. Constructor context,
+placement and failures remain explicit outside the compiled query.
+
+### Execution proof and measurement boundaries
+
+Compiled behavioral regressions verify native probes without any fallback
+Lineitem scan, duplicate chronology, wrong-slot fallback despite equal field
+types, misses, temporary-wrapper cursor lifetimes, empty/no-green cases,
+wide signed payloads, source/context disposal and allocator churn. The old
+generated-token assertion that every nonleading read uses a single-reference
+fallback was removed rather than re-pinned to new formatting.
+
+The `compiled_h09` binary records two distinct contiguous wall intervals:
+
+- `build_query`: source ingestion is performed once and reported separately;
+  each sample builds a CPU/GPU RadixRun then executes the same compiled query.
+- `ingest_build_query`: each sample freshly prepares/ingests its source, builds
+  the index and executes the query under one outer timer.
+
+Each record also separates construction and compiled-query time. Query time
+includes remaining CPU index builds, joins, deduplication and answer collection.
+Context setup, synthetic fixture/oracle generation, validation and final
+prepared-source/index/output destruction are excluded. Fresh source does not
+mean a cold device or cold allocator. CPU/GPU order alternates, and complete
+answers are checked against the existing ordinary compiled H09 outside timing.
+
+### Recorded compiled-query results
+
+M3 Max, AC power, deterministic synthetic fixtures (not dbgen), two warmups and
+seven measured samples per provider/boundary. The six records contain 84 measured
+samples, plus separate first observations. No thermal/performance warning was
+recorded. Raw data: [compiled H09 samples](../experiments/mac/query-expansion/results/compiled-h09-m3max-20261027.json).
+
+Reused source: completed build plus compiled query, milliseconds:
+
+| Lineitem rows | CPU build | GPU build | CPU query | GPU query | CPU total | GPU total |
+|---:|---:|---:|---:|---:|---:|---:|
+| 65,539 | 1.257 | 1.297 | 3.168 | 3.413 | 4.422 | 4.719 |
+| 1,048,579 | 24.373 | 2.589 | 108.135 | 107.128 | 132.508 | 109.688 |
+| 4,194,307 | 117.909 | 9.936 | 601.716 | 594.154 | 719.633 | 601.653 |
+
+Fresh source preparation/ingestion plus build plus compiled query:
+
+| Lineitem rows | CPU total ms | GPU total ms |
+|---:|---:|---:|
+| 65,539 | 4.408 | 4.671 |
+| 1,048,579 | 133.079 | 109.545 |
+| 4,194,307 | 722.351 | 610.269 |
+
+The totals are measured outer intervals, not sums of phase medians. In the reused
+source cases, GPU construction reduces total time by 17.2% at 1M rows and 16.4%
+at 4M rows, while the 65K case is 6.7% slower. Including fresh ingestion retains
+17.7% and 15.5% reductions at the two larger sizes; the small case remains slower.
+CPU query work still dominates. These results establish an actual compiled-query
+benefit, not a universal GPU placement threshold or a whole-query speedup equal
+to the index-build speedup.
+
+The fixture and the earlier shared source remain live during fresh-source trials.
+Interpret each CPU/GPU paired boundary separately; comparing fresh and reused
+medians is not an isolated measurement of ingestion or cold residency. Allocator,
+cache and workload history and ordinary randomized residual hash indexes remain
+part of the experiment.
+
+```sh
+cargo run --release --locked --manifest-path experiments/mac/query-expansion/Cargo.toml \
+  --bin compiled_h09 -- --sizes 65539,1048579,4194307 --runs 7 \
+  --out /tmp/compiled-h09.json
+```
+
+Verification after integration: 1,071 portable workspace tests, 109 all-feature
+storage tests, 20 CQ Mac tests and five query-expansion tests passed. External
+workloads (52), Tasks (54) and push-dialect (238) tests also passed. The formal
+inventory and dependency boundaries passed; 27 reviewed public API snapshots
+were updated for the explicit-column contract. CQ Mac strict Clippy passed;
+the query-expansion check reports only its existing `manual_h09` callback
+type-complexity warning. No automatic placement or maintained-owner migration
+is implied by this opt-in compiled H09 path.

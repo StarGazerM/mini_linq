@@ -174,3 +174,59 @@ fn a_native_noncopy_cursor_uses_the_declared_retained_fallback() {
     assert_eq!(retain(read, &(&key,)).len(), 3);
     assert_eq!(builds.get(), 1);
 }
+
+#[derive(Clone)]
+struct NonLeading<H>(H);
+
+impl<H: IndexRead> cq_storage::dispatch::IndexedColumn<1> for NonLeading<H> {
+    type Read = H;
+
+    fn indexed_column(&self) -> H {
+        self.0.clone()
+    }
+}
+
+#[test]
+fn explicit_column_dispatch_retains_source_borrows_and_requires_exact_membership() {
+    use cq_storage::dispatch::{
+        BorrowedHost, ColumnHost, Contains, ExpandedRead, Host, Lazy,
+    };
+    let key = 2i64;
+    let values = [(11i64,), (11,), (12,)];
+    let native = Ledger {
+        rows: SortedRun::build(values.iter().map(|value| ((key,), value))),
+        lookups: Cell::new(0),
+    };
+    let host = NonLeading(&native);
+    let borrowed = &host;
+    let builds = Cell::new(0);
+    let fallback = Lazy::new(|| {
+        builds.set(builds.get() + 1);
+        SortedRun::<_, _>::build(values.iter().map(|value| ((&key,), (&value.0,))))
+    });
+    // Both temporary wrappers are gone before the selected cursor is consumed.
+    // Forwarding through &&host exercises generated borrowed host bindings.
+    let read = (&&BorrowedHost::<_, (i64,), _, _>::new(
+        ColumnHost::<_, 1>::new(&borrowed), &fallback,
+    )).expanded_read();
+    let cursor = retain(read, &(&key,));
+    assert_eq!(cursor.len(), 3);
+    assert_eq!(cursor.map(|(value,)| *value).collect::<Vec<_>>(), [11, 11, 12]);
+    assert_eq!(cursor.len(), 3, "a copied witness remains independently consumable");
+    assert_eq!((builds.get(), native.lookups.get()), (0, 1));
+
+    // IndexRead alone must never be taken as evidence for exact membership.
+    assert!((&&&Host::<_, (i64,), _, _>::new(
+        ColumnHost::<_, 1>::new(&host), &fallback,
+    )).contains(&(&key,)));
+    assert_eq!((builds.get(), native.lookups.get()), (1, 1));
+
+    // The same key type at another declaration slot cannot select that index.
+    let wrong = (&&BorrowedHost::<_, (i64,), _, _>::new(
+        ColumnHost::<_, 2>::new(&host), &fallback,
+    )).expanded_read();
+    assert_eq!(retain(wrong, &(&key,)).len(), 3);
+    let absent = 99i64;
+    assert_eq!(retain(wrong, &(&absent,)).len(), 0);
+    assert_eq!((builds.get(), native.lookups.get()), (1, 1));
+}

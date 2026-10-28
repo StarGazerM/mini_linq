@@ -7,6 +7,16 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Add opt-in compiled H09 execution over a source-bound GPU or native CPU
+  RadixRun. Retain full i64 Lineitem payloads with original row IDs, explicit
+  fallible construction and immutable source ownership. Both choices execute
+  the same compiled query and preserve the authored schema and join order.
+- Extend native host dispatch with an explicit `IndexedColumn<N>` contract for
+  single nonleading borrowed-key reads, preserving payload order and ordinary
+  fallback for unsupported slots/capabilities. Verify no hidden Lineitem rebuild,
+  wrong-slot safety, duplicate chronology and retained source lifetimes.
+- Record paired compiled H09 build/query and fresh-ingestion end-to-end timings,
+  including the small-input GPU loss rather than choosing an automatic threshold.
 - Consolidate active Mac work into this Git checkout under `experiments/mac/`,
   including MCCL and the CQ Mac provider; remove active sibling-checkout paths.
   Merge current mainline while preserving generic provider support, RadixRun

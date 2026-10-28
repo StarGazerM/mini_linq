@@ -1,12 +1,65 @@
 //! Stable autoref dispatch. Membership first tries the borrowed query key
 //! through a triple-reference receiver; double-reference receivers try native
-//! reads at the declared leading key type. Single-reference receivers build once.
+//! reads at a declared prefix or explicitly indexed column. Single-reference
+//! receivers build once.
 use crate::rows::{Columns, Concat, OwnKey};
 use crate::{Candidates, ExactMembership, IndexRead, OrderedCursor, OrderedRead};
 use std::cell::{OnceCell, RefCell};
 use std::collections::BTreeMap;
 use std::ops::Bound;
 use std::rc::Rc;
+
+/// An immutable native index on one explicit, zero-based declaration slot.
+///
+/// `Read::Key` must be a one-field tuple of the column's declared owned type.
+/// Its payload must implement [`Columns`] and yield every other column in
+/// original declaration order. A lookup yields every matching occurrence
+/// exactly once, in source chronology, from the same immutable relation as
+/// the host's row enumeration. The cursor must borrow or pin that relation,
+/// not this temporary handle or the dispatch wrapper.
+pub trait IndexedColumn<const COLUMN: usize>: Clone {
+    type Read: IndexRead;
+    fn indexed_column(&self) -> Self::Read;
+}
+
+impl<H: IndexedColumn<COLUMN>, const COLUMN: usize> IndexedColumn<COLUMN> for &H {
+    type Read = H::Read;
+
+    fn indexed_column(&self) -> Self::Read {
+        H::indexed_column(*self)
+    }
+}
+
+/// Select an explicitly indexed declaration slot without inferring it from
+/// a key type. Unsupported slots remain eligible for ordinary host fallback.
+#[derive(Clone)]
+pub struct ColumnHost<H, const COLUMN: usize>(H);
+
+impl<H, const COLUMN: usize> ColumnHost<H, COLUMN> {
+    pub fn new(host: H) -> Self {
+        Self(host)
+    }
+}
+
+impl<H: IndexedColumn<COLUMN>, const COLUMN: usize> IndexRead for ColumnHost<H, COLUMN> {
+    type Key = <H::Read as IndexRead>::Key;
+    type Item = <H::Read as IndexRead>::Item;
+    type Cursor = <H::Read as IndexRead>::Cursor;
+
+    fn lookup(&self, key: &Self::Key) -> Self::Cursor {
+        self.0.indexed_column().lookup(key)
+    }
+}
+
+impl<H, K: ?Sized, const COLUMN: usize> ExactMembership<K> for ColumnHost<H, COLUMN>
+where
+    H: IndexedColumn<COLUMN>,
+    H::Read: ExactMembership<K>,
+{
+    fn contains(&self, key: &K) -> bool {
+        self.0.indexed_column().contains(key)
+    }
+}
 
 /// A one-probe host read. Its fallback enumerates rows without building an index.
 pub struct PointHost<H, K, F>(H, F, std::marker::PhantomData<fn() -> K>);

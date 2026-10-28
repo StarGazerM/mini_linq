@@ -7,6 +7,8 @@ use super::*;
 pub struct HostAccess {
     pub value: Ident,
     pub prefix: bool,
+    /// Checked declaration slot for a single non-prefix key.
+    pub column: Option<usize>,
     pub fallback: Ident,
     /// This read uses a declared immutable cursor contract and a borrowed fallback.
     pub retained: bool,
@@ -54,8 +56,13 @@ impl<'a> Context<'a> {
             .map(|(t, s)| (s, t))
             .collect();
         let layout: Vec<String> = host.layout.iter().map(|c| inverse[c].clone()).collect();
-        // Formal rule IF-Dispatch: Only declaration prefixes are eligible for native reads.
+        // Formal rule IF-Dispatch: Native reads require a declaration prefix or an explicit single-column slot.
         let prefix = layout[..columns.len()].iter().all(|c| columns.contains(c));
+        let column = if !prefix && columns.len() == 1 {
+            Some(layout.iter().position(|c| c == &columns[0]).expect("checked host column"))
+        } else {
+            None
+        };
         let key = if prefix {
             layout[..columns.len()].to_vec()
         } else {
@@ -73,6 +80,7 @@ impl<'a> Context<'a> {
         HostAccess {
             value: host.value.clone(),
             prefix,
+            column,
             retained: self.analysis.fallbacks.keys().any(|(name, reader, key)| {
                 name == result && key == columns
                     && self.analysis.provider_support(
@@ -470,10 +478,10 @@ impl<'a> Context<'a> {
     /// A native or fallback handle whose cursor borrows stable query storage,
     /// not the temporary autoref-dispatch wrapper.
     pub fn host_retained_read(&self, left: &str, access: &HostAccess) -> TokenStream {
-        let value = &access.value;
+        let value = self.host_dispatch_value(access);
         let fallback = &access.fallback;
         let types: Vec<_> = self.host_key_types(left, access).collect();
-        let receiver = if access.prefix && !access.owned_key {
+        let receiver = if (access.prefix || access.column.is_some()) && !access.owned_key {
             quote!(&&::cq_storage::dispatch::BorrowedHost::<_, (#(#types,)*), _, _>::new(#value, #fallback))
         } else {
             quote!(&::cq_storage::dispatch::BorrowedHost::<_, (#(#types,)*), _, _>::new(#value, #fallback))
@@ -496,6 +504,15 @@ impl<'a> Context<'a> {
             __cq_read
         })
     }
+
+    fn host_dispatch_value(&self, access: &HostAccess) -> TokenStream {
+        let value = &access.value;
+        match access.column.filter(|_| !access.owned_key) {
+            Some(column) => quote!(::cq_storage::dispatch::ColumnHost::<_, #column>::new(#value)),
+            None => quote!(#value),
+        }
+    }
+
     pub fn host_lookup(
         &self,
         left: &str,
@@ -537,10 +554,12 @@ impl<'a> Context<'a> {
                 (#receiver).contains_owned(#key)
             });
         }
+        let value = self.host_dispatch_value(access);
+        let native = (access.prefix || access.column.is_some()) && !access.owned_key;
         let key = self.host_key(left, access);
-        let receiver = if access.prefix && !access.owned_key && negative {
+        let receiver = if native && negative {
             quote!(&&&::cq_storage::dispatch::Host::<_, (#(#types,)*), _, _>::new(#value, &#fallback))
-        } else if access.prefix && !access.owned_key {
+        } else if native {
             quote!(&&::cq_storage::dispatch::Host::<_, (#(#types,)*), _, _>::new(#value, &#fallback))
         } else {
             quote!(&::cq_storage::dispatch::Host::<_, (#(#types,)*), _, _>::new(#value, &#fallback))
