@@ -713,9 +713,17 @@ struct IndexedRows {
 impl IndexedRows {
     fn new(source: Vec<(i32, i32, i32)>) -> Self {
         let index = cq_storage::RadixRun::from_pairs(
-            source.iter().enumerate().map(|(row, value)| ((value.1,), row)),
+            source
+                .iter()
+                .enumerate()
+                .map(|(row, value)| ((value.1,), row)),
         );
-        Self { source, index, scans: Cell::new(0), reads: Cell::new(0) }
+        Self {
+            source,
+            index,
+            scans: Cell::new(0),
+            reads: Cell::new(0),
+        }
     }
 }
 
@@ -749,7 +757,9 @@ impl<'a> Iterator for IndexedCursor<'a> {
     type Item = IndexedPayload<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.rows.next().map(|row| IndexedPayload(&self.source[row]))
+        self.rows
+            .next()
+            .map(|row| IndexedPayload(&self.source[row]))
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -769,7 +779,10 @@ impl<'a> IndexRead for IndexedRead<'a> {
 
     fn lookup(&self, key: &Self::Key) -> Self::Cursor {
         self.0.reads.set(self.0.reads.get() + 1);
-        IndexedCursor { source: &self.0.source, rows: (&self.0.index).lookup(key) }
+        IndexedCursor {
+            source: &self.0.source,
+            rows: (&self.0.index).lookup(key),
+        }
     }
 }
 
@@ -802,57 +815,65 @@ fn compiled_declared_column_reads_native_source_rows_without_fallback() {
         answer(x,k,z) :- left(k), right(x,k,z),
             if { visits.borrow_mut().push((*x,*k,*z)); true };
     }.map(|(x,k,z)| (*x,*k,*z)).collect();
-    assert_eq!(result, [(10,7,100), (11,7,101), (20,8,200)]);
-    assert_eq!(*visits.borrow(), [
-        (10,7,100), (11,7,101), (10,7,100), (20,8,200),
-        (10,7,100), (11,7,101), (10,7,100),
-    ]);
+    assert_eq!(result, [(10, 7, 100), (11, 7, 101), (20, 8, 200)]);
+    assert_eq!(
+        *visits.borrow(),
+        [
+            (10, 7, 100),
+            (11, 7, 101),
+            (10, 7, 100),
+            (20, 8, 200),
+            (10, 7, 100),
+            (11, 7, 101),
+            (10, 7, 100),
+        ]
+    );
     assert_eq!((owner.scans.get(), owner.reads.get()), (0, left.len()));
 }
 
 #[test]
 fn compiled_same_typed_wrong_slot_and_computed_keys_keep_fallback() {
     let left = [(100,), (999,), (200,)];
-    let right = IndexedRows::new(vec![(10,7,100), (20,8,200), (11,7,101), (10,7,100)]);
+    let right = IndexedRows::new(vec![(10, 7, 100), (20, 8, 200), (11, 7, 101), (10, 7, 100)]);
     let result: Vec<_> = ::mini_linq::compile! {
         pipeline { plan = ::mini_linq::passes::plan(no_reduce); structures = [::core_pass_fixtures::ordered_dedup]; }
         struct WrongSlot;
         relation left(q:i32); relation right(a:i32,b:i32,c:i32);
         answer(x,y,k) :- left(k), right(x,y,k);
     }.map(|(x,y,k)| (*x,*y,*k)).collect();
-    assert_eq!(result, [(10,7,100), (20,8,200)]);
+    assert_eq!(result, [(10, 7, 100), (20, 8, 200)]);
     assert_eq!((right.scans.get(), right.reads.get()), (1, 0));
 
     let left = [(7,), (99,), (8,)];
-    let right = IndexedRows::new(vec![(10,7,100), (20,8,200)]);
+    let right = IndexedRows::new(vec![(10, 7, 100), (20, 8, 200)]);
     let result: Vec<_> = ::mini_linq::compile! {
         pipeline { plan = ::mini_linq::passes::plan(no_reduce); structures = [::core_pass_fixtures::ordered_dedup]; }
         struct ComputedColumn;
         relation left(q:i32); relation right(a:i32,b:i32,c:i32);
         answer(x,k,z) :- left(q), let k:i32 = *q, right(x,k,z);
     }.map(|(x,k,z)| (*x,k,*z)).collect();
-    assert_eq!(result, [(10,7,100), (20,8,200)]);
+    assert_eq!(result, [(10, 7, 100), (20, 8, 200)]);
     assert_eq!((right.scans.get(), right.reads.get()), (1, 0));
 }
 
 #[test]
 fn compiled_nonprefix_multikey_does_not_use_a_single_column_index() {
-    let left = [(7,100), (7,200), (8,200)];
-    let right = IndexedRows::new(vec![(10,7,100), (20,8,200), (11,7,101)]);
+    let left = [(7, 100), (7, 200), (8, 200)];
+    let right = IndexedRows::new(vec![(10, 7, 100), (20, 8, 200), (11, 7, 101)]);
     let result: Vec<_> = ::mini_linq::compile! {
         pipeline { plan = ::mini_linq::passes::plan(no_reduce); structures = [::core_pass_fixtures::ordered_dedup]; }
         struct MultiColumn;
         relation left(q:i32,r:i32); relation right(a:i32,b:i32,c:i32);
         answer(x,k,z) :- left(k,z), right(x,k,z);
     }.map(|(x,k,z)| (*x,*k,*z)).collect();
-    assert_eq!(result, [(10,7,100), (20,8,200)]);
+    assert_eq!(result, [(10, 7, 100), (20, 8, 200)]);
     assert_eq!((right.scans.get(), right.reads.get()), (1, 0));
 }
 
 #[test]
 fn compiled_explicit_column_membership_uses_only_the_matching_slot() {
     let left = [(7,), (99,), (8,)];
-    let right = IndexedRows::new(vec![(10,7,100), (20,8,200), (11,7,101)]);
+    let right = IndexedRows::new(vec![(10, 7, 100), (20, 8, 200), (11, 7, 101)]);
     let result: Vec<_> = ::mini_linq::compile! {
         pipeline { plan = ::mini_linq::passes::plan(no_reduce); structures = [::core_pass_fixtures::ordered_dedup]; }
         struct ColumnMembership;
@@ -866,7 +887,7 @@ fn compiled_explicit_column_membership_uses_only_the_matching_slot() {
 #[test]
 fn compiled_retained_column_cursor_expands_once_in_source_chronology() {
     let left = [(7,), (99,), (8,), (7,)];
-    let right = IndexedRows::new(vec![(10,7,100), (20,8,200), (11,7,101), (10,7,100)]);
+    let right = IndexedRows::new(vec![(10, 7, 100), (20, 8, 200), (11, 7, 101), (10, 7, 100)]);
     let visits = &std::cell::RefCell::new(Vec::new());
     let result: Vec<_> = ::mini_linq::passes::sequence! {
         pipeline { ::mini_linq::passes::sequential, ::mini_linq::passes::translate_pull };
@@ -890,11 +911,21 @@ fn compiled_retained_column_cursor_expands_once_in_source_chronology() {
             p stage = batch 2 expand;
             out canon = ::std::collections::HashSet<_>;
         }
-    }.map(|(x,k,z)| (*x,*k,*z)).collect();
-    assert_eq!(result, [(10,7,100), (11,7,101), (20,8,200)]);
-    assert_eq!(*visits.borrow(), [
-        (10,7,100), (11,7,101), (10,7,100), (20,8,200),
-        (10,7,100), (11,7,101), (10,7,100),
-    ]);
+    }
+    .map(|(x, k, z)| (*x, *k, *z))
+    .collect();
+    assert_eq!(result, [(10, 7, 100), (11, 7, 101), (20, 8, 200)]);
+    assert_eq!(
+        *visits.borrow(),
+        [
+            (10, 7, 100),
+            (11, 7, 101),
+            (10, 7, 100),
+            (20, 8, 200),
+            (10, 7, 100),
+            (11, 7, 101),
+            (10, 7, 100),
+        ]
+    );
     assert_eq!((right.scans.get(), right.reads.get()), (0, left.len()));
 }

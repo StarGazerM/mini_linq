@@ -369,7 +369,6 @@ fn const_supplies_on_host_and_materialized_inputs_never_build() {
     }
 }
 
-
 #[test]
 fn compatible_membership_chains_use_recorded_trie_levels() {
     let p: physical::Program = syn::parse_quote!(physical {
@@ -538,18 +537,29 @@ fn candidate_levels_coexist_with_payload_membership_and_ordered_reads() {
         check(&source, target).unwrap();
         let analysis = structures::contract::check(target).unwrap();
         assert!(analysis.candidate_on("r", &["b".into()], "c").is_some());
-        assert_eq!(analysis.built_on("r", &["b".into(), "c".into()]).unwrap().1, 1);
+        assert_eq!(
+            analysis.built_on("r", &["b".into(), "c".into()]).unwrap().1,
+            1
+        );
     }
     // These layouts are necessary for coverage. Removing only the ordered
     // implementation is instead a Rust OrderedRead obligation: an opaque
     // candidate provider could lawfully implement both interfaces.
     for levels in ["b/c", "b", "c"] {
-        let levels: Vec<Vec<String>> = levels.split('/')
-            .map(|column| vec![column.to_owned()]).collect();
-        let missing = target.structures.entries.iter().position(|entry|
-            entry.name == "r" && matches!(&entry.structure,
+        let levels: Vec<Vec<String>> = levels
+            .split('/')
+            .map(|column| vec![column.to_owned()])
+            .collect();
+        let missing = target
+            .structures
+            .entries
+            .iter()
+            .position(|entry| {
+                entry.name == "r"
+                    && matches!(&entry.structure,
                 structures::Structure::Built { keyed, .. } if keyed.level_names() == levels)
-        ).unwrap();
+            })
+            .unwrap();
         let mut changed = target.clone();
         changed.structures.entries.remove(missing);
         assert!(
@@ -616,10 +626,14 @@ fn filtered_readers_share_one_projected_index_and_check_column_coverage() {
         .iter()
         .position(|e| e.name == "selected")
         .unwrap();
-    let structures::Structure::Built { keyed, .. } = &target.structures.entries[entry].structure else {
+    let structures::Structure::Built { keyed, .. } = &target.structures.entries[entry].structure
+    else {
         panic!("projected read must have a payload provider");
     };
-    assert_eq!(keyed.filtered, Some(syn::parse_quote!(payload [k,value] constants {tag = "a"})));
+    assert_eq!(
+        keyed.filtered,
+        Some(syn::parse_quote!(payload [k,value] constants {tag = "a"}))
+    );
     assert_eq!(
         syn::parse2::<structures::Program>(target.to_token_stream()).unwrap(),
         target

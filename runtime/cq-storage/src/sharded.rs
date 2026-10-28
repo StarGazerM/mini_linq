@@ -249,14 +249,20 @@ impl<'a, I: Keys + 'a> Iterator for ShardedKeys<'a, I> {
 
 impl<I: Keys, F> Keys for Sharded<I, F> {
     type Key = I::Key;
-    type Iter<'a> = ShardedKeys<'a, I> where Self: 'a;
+    type Iter<'a>
+        = ShardedKeys<'a, I>
+    where
+        Self: 'a;
 
     fn key_count(&self) -> usize {
         self.shards.iter().map(Keys::key_count).sum()
     }
 
     fn distinct_keys(&self) -> Self::Iter<'_> {
-        ShardedKeys { shards: self.shards.iter(), current: None }
+        ShardedKeys {
+            shards: self.shards.iter(),
+            current: None,
+        }
     }
 }
 
@@ -422,14 +428,19 @@ impl<K, V> std::iter::FusedIterator for IndexKeys<'_, K, V> {}
 
 impl<K, V> Keys for Index<K, V> {
     type Key = K;
-    type Iter<'a> = IndexKeys<'a, K, V> where Self: 'a;
+    type Iter<'a>
+        = IndexKeys<'a, K, V>
+    where
+        Self: 'a;
 
     fn key_count(&self) -> usize {
         self.buckets.len()
     }
 
     fn distinct_keys(&self) -> Self::Iter<'_> {
-        IndexKeys { keys: self.buckets.keys() }
+        IndexKeys {
+            keys: self.buckets.keys(),
+        }
     }
 }
 

@@ -93,10 +93,19 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
             );
         }
         if matches!(probe.choice, Some(physical::Choice::Smallest(_))) {
-            let range = candidates.iter().find(|candidate| candidate.reader == &definition.name)
-                .is_some_and(|candidate| candidate.sides.iter().all(|(side, prefix)| {
-                    facts.candidate_support(side, prefix, &candidate.column, ProviderCapability::Expand)
-                }));
+            let range = candidates
+                .iter()
+                .find(|candidate| candidate.reader == &definition.name)
+                .is_some_and(|candidate| {
+                    candidate.sides.iter().all(|(side, prefix)| {
+                        facts.candidate_support(
+                            side,
+                            prefix,
+                            &candidate.column,
+                            ProviderCapability::Expand,
+                        )
+                    })
+                });
             if !range {
                 return error(
                     definition,
@@ -106,7 +115,8 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
         } else {
             let keys = names(&probe.columns);
             let side = symbol_name(&probe.right);
-            let built_range = facts.selected_built(&side, &keys)
+            let built_range = facts
+                .selected_built(&side, &keys)
                 .is_some_and(|((levels, _), depth)| depth == levels.len())
                 && facts.provider_support(&side, &keys, None, ProviderCapability::Expand);
             let resident_range = facts.host_read(&side)

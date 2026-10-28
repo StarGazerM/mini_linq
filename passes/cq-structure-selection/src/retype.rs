@@ -101,8 +101,17 @@ impl Parse for Retype {
         };
         input.parse::<Token![=>]>()?;
         let ty = input.parse()?;
-        let supports = if input.is_empty() { None } else { Some(input.parse()?) };
-        Ok(Self { selector, at, ty, supports })
+        let supports = if input.is_empty() {
+            None
+        } else {
+            Some(input.parse()?)
+        };
+        Ok(Self {
+            selector,
+            at,
+            ty,
+            supports,
+        })
     }
 }
 
@@ -184,7 +193,10 @@ pub fn retype(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::P
         };
         if matches {
             if request.supports.is_some()
-                && !matches!(entry.structure, Structure::Built { .. } | Structure::Host { .. })
+                && !matches!(
+                    entry.structure,
+                    Structure::Built { .. } | Structure::Host { .. }
+                )
             {
                 return Err(syn::Error::new_spanned(
                     &request.at,

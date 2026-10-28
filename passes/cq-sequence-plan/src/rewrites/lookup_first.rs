@@ -388,7 +388,12 @@ pub fn lookup_plan(source: &Program) -> syn::Result<Option<LookupPlan>> {
 pub struct LookupFirst {
     pub ty: syn::Type,
     pub supports: Option<structures::ProviderSupport>,
-    pub providers: Vec<(Ident, Vec<Ident>, syn::Type, Option<structures::ProviderSupport>)>,
+    pub providers: Vec<(
+        Ident,
+        Vec<Ident>,
+        syn::Type,
+        Option<structures::ProviderSupport>,
+    )>,
     pub order: Option<Vec<Ident>>,
     pub transfer: Option<Vec<Ident>>,
     pub early: Option<Vec<Ident>>,
@@ -409,7 +414,11 @@ impl Parse for LookupFirst {
         let ty = input.parse()?;
         let mut advice = Self {
             ty,
-            supports: if input.peek(structures::kw::supports) { Some(input.parse()?) } else { None },
+            supports: if input.peek(structures::kw::supports) {
+                Some(input.parse()?)
+            } else {
+                None
+            },
             providers: Vec::new(),
             order: None,
             transfer: None,
@@ -827,7 +836,8 @@ fn lookup_first_with(
         &[String],
         &structures::Program,
         &structures::Analysis,
-    ) -> syn::Result<(syn::Type, Option<structures::ProviderSupport>)>,
+    )
+        -> syn::Result<(syn::Type, Option<structures::ProviderSupport>)>,
 ) -> syn::Result<Option<Program>> {
     let Some(graph) = graph(checker, source)? else {
         return Err(syn::Error::new_spanned(

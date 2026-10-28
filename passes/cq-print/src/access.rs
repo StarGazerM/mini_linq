@@ -59,7 +59,12 @@ impl<'a> Context<'a> {
         // Formal rule IF-Dispatch: Native reads require a declaration prefix or an explicit single-column slot.
         let prefix = layout[..columns.len()].iter().all(|c| columns.contains(c));
         let column = if !prefix && columns.len() == 1 {
-            Some(layout.iter().position(|c| c == &columns[0]).expect("checked host column"))
+            Some(
+                layout
+                    .iter()
+                    .position(|c| c == &columns[0])
+                    .expect("checked host column"),
+            )
         } else {
             None
         };
@@ -82,15 +87,23 @@ impl<'a> Context<'a> {
             prefix,
             column,
             retained: self.analysis.fallbacks.keys().any(|(name, reader, key)| {
-                name == result && key == columns
+                name == result
+                    && key == columns
                     && self.analysis.provider_support(
-                        result, columns, Some(reader), structures::ProviderCapability::Retain,
+                        result,
+                        columns,
+                        Some(reader),
+                        structures::ProviderCapability::Retain,
                     )
             }),
             expand: self.analysis.fallbacks.keys().any(|(name, reader, key)| {
-                name == result && key == columns
+                name == result
+                    && key == columns
                     && self.analysis.provider_support(
-                        result, columns, Some(reader), structures::ProviderCapability::Expand,
+                        result,
+                        columns,
+                        Some(reader),
+                        structures::ProviderCapability::Expand,
                     )
             }),
             key,
@@ -304,8 +317,11 @@ impl<'a> Context<'a> {
             for ((name, selected, key), selected_ty) in &self.analysis.fallbacks {
                 if name == result && key == &columns {
                     guards.extend(self.provider_guards(
-                        result, std::slice::from_ref(&columns), selected_ty,
-                        Some(selected), quote!(&__cq_provider),
+                        result,
+                        std::slice::from_ref(&columns),
+                        selected_ty,
+                        Some(selected),
+                        quote!(&__cq_provider),
                     ));
                 }
             }
@@ -344,7 +360,11 @@ impl<'a> Context<'a> {
             let value = &access.value;
             let ty = self.fallback_type(result, reader, columns);
             let native_guards = self.provider_guards(
-                result, std::slice::from_ref(columns), ty, Some(reader), quote!(#value),
+                result,
+                std::slice::from_ref(columns),
+                ty,
+                Some(reader),
+                quote!(#value),
             );
             if access.prefix && access.key == *columns {
                 let types = columns.iter().map(|c| &self.infos[result].types[c]);
@@ -365,7 +385,11 @@ impl<'a> Context<'a> {
                     .map(|c| self.access(result, c));
                 let capture = self.carries_positions(result).then(|| quote!(move));
                 let guards = self.provider_guards(
-                    result, std::slice::from_ref(columns), ty, Some(reader), quote!(#name),
+                    result,
+                    std::slice::from_ref(columns),
+                    ty,
+                    Some(reader),
+                    quote!(#name),
                 );
                 self.statements.push(syn::parse_quote! {
                     let #name = &<#ty as ::cq_storage::Build<_>>::build(
@@ -373,7 +397,8 @@ impl<'a> Context<'a> {
                     );
                 });
                 self.statements.extend(guards);
-                self.statements.push(syn::parse_quote!(::cq_storage::require::ordered(#name);));
+                self.statements
+                    .push(syn::parse_quote!(::cq_storage::require::ordered(#name);));
                 self.bound = true;
             }
         }
@@ -488,12 +513,14 @@ impl<'a> Context<'a> {
         };
         let (dispatch, method, proof) = if access.expand {
             (
-                quote!(ExpandedRead), quote!(expanded_read),
+                quote!(ExpandedRead),
+                quote!(expanded_read),
                 quote!(::cq_storage::provider_contract::require_expand(&__cq_read);),
             )
         } else {
             (
-                quote!(BorrowedRead), quote!(borrowed_read),
+                quote!(BorrowedRead),
+                quote!(borrowed_read),
                 quote!(::cq_storage::provider_contract::require_retain(&__cq_read);),
             )
         };

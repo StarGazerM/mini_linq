@@ -119,7 +119,10 @@ pub struct SortedRun<K, V, C = NoDense> {
 
 impl<K, V, C> crate::Keys for SortedRun<K, V, C> {
     type Key = K;
-    type Iter<'a> = std::slice::Iter<'a, K> where Self: 'a;
+    type Iter<'a>
+        = std::slice::Iter<'a, K>
+    where
+        Self: 'a;
 
     fn key_count(&self) -> usize {
         self.rows.keys.len()

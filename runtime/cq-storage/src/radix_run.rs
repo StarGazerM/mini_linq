@@ -3,9 +3,7 @@
 //! search algorithms. Payload lookup checks exact equality in the spline window;
 //! dense-domain membership can use a bounded, lazily initialized presence bitmap.
 
-use crate::radix_spline::{
-    RadixSpline, RadixSplineMetadata, RadixSplinePoint, RadixSplineView,
-};
+use crate::radix_spline::{RadixSpline, RadixSplineMetadata, RadixSplinePoint, RadixSplineView};
 use crate::rows::Rows;
 use crate::sorted_run::RunRows;
 use crate::{Build, ExactMembership, IndexRead, RunCursor};
@@ -182,7 +180,11 @@ impl<'a, K: RadixKey, V: Copy> RadixRunView<'a, K, V> {
             keys,
             offsets,
             items,
-            directory: RadixSplineView { points, radix, metadata },
+            directory: RadixSplineView {
+                points,
+                radix,
+                metadata,
+            },
             state,
         }
     }
@@ -198,9 +200,10 @@ impl<'a, K: RadixKey, V: Copy> RadixRunView<'a, K, V> {
     /// Exact half-open payload range; missing keys return the empty terminal range.
     #[inline]
     pub fn range(&self, key: &K) -> (usize, usize) {
-        self.slot(key).map_or((self.items.len(), self.items.len()), |slot| {
-            (self.offsets[slot], self.offsets[slot + 1])
-        })
+        self.slot(key)
+            .map_or((self.items.len(), self.items.len()), |slot| {
+                (self.offsets[slot], self.offsets[slot + 1])
+            })
     }
 
     #[inline]
@@ -246,7 +249,10 @@ pub struct RadixRun<K, V> {
 
 impl<K, V> crate::Keys for RadixRun<K, V> {
     type Key = K;
-    type Iter<'a> = std::slice::Iter<'a, K> where Self: 'a;
+    type Iter<'a>
+        = std::slice::Iter<'a, K>
+    where
+        Self: 'a;
 
     fn key_count(&self) -> usize {
         self.rows.keys.len()
@@ -373,9 +379,7 @@ mod tests {
             // SAFETY: the arrays above are immutable, exactly grouped, and the
             // collinear spline/directory describe these keys with zero error.
             let view = unsafe {
-                RadixRunView::from_parts(
-                    &keys, &offsets, &items, &points, &radix, metadata, &state,
-                )
+                RadixRunView::from_parts(&keys, &offsets, &items, &points, &radix, metadata, &state)
             };
             assert_eq!(view.keys(), keys);
             assert_eq!(view.items(), items);
@@ -409,11 +413,7 @@ mod tests {
 
     #[test]
     fn borrowed_views_cover_empty_singleton_and_sparse_full_domain() {
-        for keys in [
-            Vec::new(),
-            vec![u64::MAX],
-            vec![0, 1 << 63, u64::MAX],
-        ] {
+        for keys in [Vec::new(), vec![u64::MAX], vec![0, 1 << 63, u64::MAX]] {
             let offsets: Vec<_> = (0..=keys.len()).collect();
             let items: Vec<_> = (0..keys.len()).collect();
             let spline = RadixSpline::build(keys.len(), |rank| keys[rank]);

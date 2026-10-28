@@ -249,7 +249,13 @@ impl RadixSplineView<'_> {
     /// `start..end`. Searching this slice therefore also handles absent keys.
     #[inline]
     pub(crate) fn search_bound(&self, key: u64) -> Range<usize> {
-        let RadixSplineMetadata { min_key, max_key, len, search_error, .. } = self.metadata;
+        let RadixSplineMetadata {
+            min_key,
+            max_key,
+            len,
+            search_error,
+            ..
+        } = self.metadata;
         if len == 0 {
             return 0..0;
         }
@@ -272,8 +278,7 @@ impl RadixSplineView<'_> {
         // Add the integral anchor after interpolation, retaining exact ranks
         // even when an absolute rank would no longer fit in the significand.
         let estimate = down.rank + offset.min(rank_span);
-        estimate.saturating_sub(search_error)
-            ..estimate.saturating_add(search_error + 2).min(len)
+        estimate.saturating_sub(search_error)..estimate.saturating_add(search_error + 2).min(len)
     }
 
     #[inline]

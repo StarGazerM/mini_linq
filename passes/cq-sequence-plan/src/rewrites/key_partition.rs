@@ -842,7 +842,7 @@ pub fn key_partition_in(
             // promise the inner provider's retained or expandable lookup ABI.
             let supports = keyed
                 .supports(cq_lang_sequence::structures::ProviderCapability::Keys)
-                .then(|| quote!(supports [keys]));
+                .then(|| quote!(supports[keys]));
             target.structures = cq_structure_selection::retype(
                 &target.structures,
                 quote!(entry(#entry_index) => ::cq_storage::sharded::Sharded<#ty> #supports),

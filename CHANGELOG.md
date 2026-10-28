@@ -7,6 +7,13 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Reconcile the canonical MCCL tree with its standalone upstream, preserving
+  ordered GPU hashmap, blocked Bloom filter and multiset-difference APIs alongside
+  shared-relation indexes and GPU RadixRun. Publish identical source trees from
+  the primary checkout; keep build instructions valid in both repository layouts.
+- Apply the workspace formatting reported by CI and preserve explicit autoref
+  dispatch tests with scoped receiver bindings, satisfying strict Clippy without
+  suppressing diagnostics or weakening fallback/lifetime checks.
 - Add opt-in compiled H09 execution over a source-bound GPU or native CPU
   RadixRun. Retain full i64 Lineitem payloads with original row IDs, explicit
   fallible construction and immutable source ownership. Both choices execute

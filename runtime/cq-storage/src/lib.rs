@@ -97,13 +97,13 @@ mod instrument;
 mod membership;
 mod ordered;
 pub mod parallel;
-pub mod rows;
+pub mod provider_contract;
 mod radix_run;
 mod radix_spline;
-mod sorted_run;
+pub mod rows;
 pub mod sequence;
-pub mod provider_contract;
 pub mod sharded;
+mod sorted_run;
 pub use sharded::Sharded;
 mod trie;
 
@@ -115,9 +115,9 @@ pub use membership::{ConservativeMembership, ExactMembership};
 pub use ordered::{
     GroupedCursor, KeyCursor, Merge, OrderedCursor, OrderedRead, Sorted, merge, sorted_by,
 };
-pub use sorted_run::{RunCursor, SortedRun};
 pub use radix_run::{RadixKey, RadixRun, RadixRunReadState, RadixRunView};
 pub use radix_spline::{RadixSplineMetadata, RadixSplinePoint};
+pub use sorted_run::{RunCursor, SortedRun};
 pub use trie::Trie;
 
 mod point;
@@ -150,7 +150,8 @@ pub mod require {
     pub fn positional<T: super::PositionalRows>(_: T) {}
     pub fn block_read<H: super::BlockRead<C>, C: super::Column<H>>(_: H, _: C) {}
     /// Check a marker's schema binding without constructing or evaluating it.
-    pub fn column_slot<const N: usize, H: super::PositionalRows, C: super::ColumnSlot<H, N>>(_: H) {}
+    pub fn column_slot<const N: usize, H: super::PositionalRows, C: super::ColumnSlot<H, N>>(_: H) {
+    }
     pub fn interval<K: Ord, T: super::ExactIntervalMembership<K>>(_: &T) {}
 }
 /// Decide Leibniz identity using the admissible column type's `==`.
@@ -249,8 +250,8 @@ pub mod stage;
 pub use adaptive::{AdaptiveKeySet, BorrowedI64TupleCodec, I64Codec, KeyCodec, NoDense};
 pub use fetch::Fetch;
 pub use positional::{
-    BlockId, BlockRead, Column, ColumnSlot, ExactIntervalMembership, Membership, Point, PositionalRows,
-    ReadPredicate, RowId, RowPredicate, Window, read_with_filter,
+    BlockId, BlockRead, Column, ColumnSlot, ExactIntervalMembership, Membership, Point,
+    PositionalRows, ReadPredicate, RowId, RowPredicate, Window, read_with_filter,
 };
 pub use selection::{Selection, SelectionRows, SelectionSummary};
 pub use stage::{Chunk, for_chunks};

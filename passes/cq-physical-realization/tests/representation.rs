@@ -180,8 +180,14 @@ fn retained_lookup_is_a_pruned_non_column_cursor() {
     assert!(printed.contains("stage :: segmented :: < 4"), "{printed}");
     assert!(printed.contains("__cq_witness_s"), "{printed}");
     assert!(printed.contains("AuthoredBookmark < '_ , _ >"), "{printed}");
-    assert!(printed.contains("provider_contract :: require_expand"), "{printed}");
-    assert!(printed.contains("provider_contract :: require_keys"), "{printed}");
+    assert!(
+        printed.contains("provider_contract :: require_expand"),
+        "{printed}"
+    );
+    assert!(
+        printed.contains("provider_contract :: require_keys"),
+        "{printed}"
+    );
     let mut scalar = program.clone();
     scalar
         .structures
@@ -197,9 +203,12 @@ fn retained_lookup_is_a_pruned_non_column_cursor() {
         "{printed}"
     );
     assert!(!printed.contains("stage :: segmented"), "{printed}");
-    let witness = scalar.structures.entries.iter_mut().find(|entry| {
-        matches!(entry.structure, cq_lang_structures::Structure::Repr { .. })
-    }).unwrap();
+    let witness = scalar
+        .structures
+        .entries
+        .iter_mut()
+        .find(|entry| matches!(entry.structure, cq_lang_structures::Structure::Repr { .. }))
+        .unwrap();
     *witness = syn::parse_quote!(s repr = tuples witness { r [k] at s as _ };);
     let inferred = source_tokens(&scalar).unwrap().to_string();
     assert!(inferred.contains("let __cq_witness_s : _"), "{inferred}");
@@ -263,13 +272,22 @@ fn smallest_witness_selection_is_exact_and_native_prefix_retention_is_rejected()
         "{error}"
     );
     let mut staged = program;
-    staged.structures.entries.retain(|entry| !matches!(
-        entry.structure,
-        cq_lang_structures::Structure::Repr { .. } | cq_lang_structures::Structure::Share { .. }
-    ));
-    staged.structures.entries.push(syn::parse_quote!(candidate stage = batch 4 expand;));
+    staged.structures.entries.retain(|entry| {
+        !matches!(
+            entry.structure,
+            cq_lang_structures::Structure::Repr { .. }
+                | cq_lang_structures::Structure::Share { .. }
+        )
+    });
+    staged
+        .structures
+        .entries
+        .push(syn::parse_quote!(candidate stage = batch 4 expand;));
     let error = source_tokens(&staged).unwrap_err().to_string();
-    assert!(error.contains("native smallest candidate selection"), "{error}");
+    assert!(
+        error.contains("native smallest candidate selection"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -297,7 +315,11 @@ fn retained_host_uses_borrowed_dispatch_and_consumes_the_same_cursor() {
     assert!(printed.contains("BorrowedHost"), "{printed}");
     assert!(printed.contains("expanded_read"), "{printed}");
     assert!(printed.contains("let __cq_witness_s : _"), "{printed}");
-    assert_eq!(printed.matches("provider_contract :: retain (").count(), 1, "{printed}");
+    assert_eq!(
+        printed.matches("provider_contract :: retain (").count(),
+        1,
+        "{printed}"
+    );
     assert!(printed.contains("require_expand"), "{printed}");
     assert!(printed.contains("require_keys"), "{printed}");
     assert!(printed.contains("stage :: segmented"), "{printed}");

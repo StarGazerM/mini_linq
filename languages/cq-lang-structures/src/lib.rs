@@ -352,13 +352,20 @@ fn parse_levels(input: syn::parse::ParseStream<'_>) -> syn::Result<Vec<Level>> {
 
 impl Keyed {
     pub fn supports(&self, capability: ProviderCapability) -> bool {
-        self.supports.as_ref().is_some_and(|support| support.supports(capability))
+        self.supports
+            .as_ref()
+            .is_some_and(|support| support.supports(capability))
     }
 
     fn check_support(&self) -> syn::Result<()> {
-        let Some(support) = &self.supports else { return Ok(()) };
+        let Some(support) = &self.supports else {
+            return Ok(());
+        };
         if self.levels.len() > 1 && self.levels.iter().any(|level| level.columns.is_empty()) {
-            return error(support, "provider support requires nonempty levels in a multi-level layout");
+            return error(
+                support,
+                "provider support requires nonempty levels in a multi-level layout",
+            );
         }
         let mut seen = BTreeSet::new();
         for token in &support.capabilities {
@@ -367,7 +374,10 @@ impl Keyed {
             }
         }
         if self.membership.is_some() && self.supports(ProviderCapability::Retain) {
-            return error(support, "membership-only storage cannot retain or expand payload cursors");
+            return error(
+                support,
+                "membership-only storage cannot retain or expand payload cursors",
+            );
         }
         Ok(())
     }
@@ -470,7 +480,9 @@ impl Analysis {
     fn selected_built(&self, result: &str, columns: &[String]) -> Option<(&Built, usize)> {
         let mut wanted = columns.to_vec();
         wanted.sort();
-        self.built.get(result)?.iter()
+        self.built
+            .get(result)?
+            .iter()
             .filter_map(|built| prefix_depth(&built.0, &wanted).map(|depth| (built, depth)))
             // Complete keys precede candidate prefixes; ties preserve entry order.
             .min_by_key(|((levels, _), depth)| (levels.len() != *depth, levels.len()))
@@ -480,15 +492,23 @@ impl Analysis {
         let mut prefix = prefix.to_vec();
         prefix.sort();
         self.built.get(result)?.iter().find(|(levels, _)| {
-            levels.len() == 2 && levels[0] == prefix
-                && levels[1].len() == 1 && levels[1][0] == column
+            levels.len() == 2
+                && levels[0] == prefix
+                && levels[1].len() == 1
+                && levels[1][0] == column
         })
     }
 
     /// Candidate enumeration selects its exact two-level directory, not the
     /// complete payload layout that ordinary `built_on` prefers on the prefix.
-    pub fn candidate_on(&self, result: &str, prefix: &[String], column: &str) -> Option<&syn::Type> {
-        self.selected_candidate(result, prefix, column).map(|(_, ty)| ty)
+    pub fn candidate_on(
+        &self,
+        result: &str,
+        prefix: &[String],
+        column: &str,
+    ) -> Option<&syn::Type> {
+        self.selected_candidate(result, prefix, column)
+            .map(|(_, ty)| ty)
     }
 
     /// Declared support of the directory selected by a Smallest candidate read.
@@ -515,11 +535,13 @@ impl Analysis {
         let support = if let Some(reader) = reader {
             let mut columns = columns.to_vec();
             columns.sort();
-            self.host_support.get(&(result.to_owned(), reader.to_owned(), columns))
+            self.host_support
+                .get(&(result.to_owned(), reader.to_owned(), columns))
         } else {
-            self.selected_built(result, columns).and_then(|((levels, _), _)| {
-                self.built_support.get(&(result.to_owned(), levels.clone()))
-            })
+            self.selected_built(result, columns)
+                .and_then(|((levels, _), _)| {
+                    self.built_support.get(&(result.to_owned(), levels.clone()))
+                })
         };
         support.is_some_and(|support| support.supports(capability))
     }
@@ -607,7 +629,10 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
             Structure::Built { keyed, .. } => keyed,
             Structure::Host { reader, keyed, .. } => {
                 if reader == "scan" && keyed.supports.is_some() {
-                    return error(keyed, "provider support belongs to keyed reads, not scan adapters");
+                    return error(
+                        keyed,
+                        "provider support belongs to keyed reads, not scan adapters",
+                    );
                 }
                 if keyed.filtered.is_some() || keyed.membership.is_some() {
                     return error(
@@ -770,7 +795,9 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 return error(&entry.name, "duplicate structure on these columns");
             }
             if let Some(support) = &keyed.supports {
-                analysis.built_support.insert((name.clone(), columns.clone()), support.clone());
+                analysis
+                    .built_support
+                    .insert((name.clone(), columns.clone()), support.clone());
             }
             analysis
                 .built
@@ -909,7 +936,8 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                     symbol_name(&d.name) == *reader && matches!(d.operator, Operator::Probe(..))
                 });
                 if payload {
-                    let ((levels, _), _) = analysis.selected_built(result, columns)
+                    let ((levels, _), _) = analysis
+                        .selected_built(result, columns)
                         .expect("selected build");
                     if depth != levels.len() && !program.physical.program.definitions.iter().any(|d| symbol_name(&d.name) == *reader && matches!(&d.operator, Operator::Probe(_,k) if matches!(k.choice, Some(physical::Choice::Smallest(_))))) {
                         return error(ty, "a payload probe must read all built levels");
@@ -1243,4 +1271,3 @@ impl cq_stage::Language for Program {
         check_rewrite(source, target)
     }
 }
-

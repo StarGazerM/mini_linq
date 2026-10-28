@@ -800,7 +800,6 @@ fn complete_scenarios_compile_and_execute_against_authored_answers() {
     );
 }
 
-
 #[test]
 fn point_prints_build_free_dispatch_and_canonical_lets_use_the_distinct_provider() {
     let p: structures::Program = syn::parse_quote!(physical {

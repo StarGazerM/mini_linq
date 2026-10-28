@@ -168,11 +168,7 @@ where
 
 /// Host dispatch whose fallback borrow survives the temporary dispatch wrapper.
 /// Unlike `Host`, constructing this wrapper does not clone a shared handle.
-pub struct BorrowedHost<'a, H, K, T, F>(
-    H,
-    &'a Lazy<T, F>,
-    std::marker::PhantomData<fn() -> K>,
-);
+pub struct BorrowedHost<'a, H, K, T, F>(H, &'a Lazy<T, F>, std::marker::PhantomData<fn() -> K>);
 
 impl<'a, H, K, T, F> BorrowedHost<'a, H, K, T, F> {
     pub fn new(host: H, fallback: &'a Lazy<T, F>) -> Self {
@@ -186,8 +182,7 @@ pub trait BorrowedRead<Q> {
     fn borrowed_read(self) -> Self::Read;
 }
 
-impl<'a, H, Q, K, T, F: FnOnce() -> T> BorrowedRead<Q>
-    for &BorrowedHost<'a, H, K, T, F>
+impl<'a, H, Q, K, T, F: FnOnce() -> T> BorrowedRead<Q> for &BorrowedHost<'a, H, K, T, F>
 where
     &'a T: IndexRead<Key = Q>,
 {
@@ -198,8 +193,7 @@ where
     }
 }
 
-impl<H, Q: OwnKey<Owned = K>, K: Eq, T, F> BorrowedRead<Q>
-    for &&BorrowedHost<'_, H, K, T, F>
+impl<H, Q: OwnKey<Owned = K>, K: Eq, T, F> BorrowedRead<Q> for &&BorrowedHost<'_, H, K, T, F>
 where
     H: IndexRead<Key = K>,
     H::Item: Columns,
@@ -218,8 +212,7 @@ pub trait ExpandedRead<Q> {
     fn expanded_read(self) -> Self::Read;
 }
 
-impl<'a, H, Q, K, T, F: FnOnce() -> T> ExpandedRead<Q>
-    for &BorrowedHost<'a, H, K, T, F>
+impl<'a, H, Q, K, T, F: FnOnce() -> T> ExpandedRead<Q> for &BorrowedHost<'a, H, K, T, F>
 where
     &'a T: IndexRead<Key = Q>,
 {
@@ -230,8 +223,7 @@ where
     }
 }
 
-impl<H, Q: OwnKey<Owned = K>, K: Eq, T, F> ExpandedRead<Q>
-    for &&BorrowedHost<'_, H, K, T, F>
+impl<H, Q: OwnKey<Owned = K>, K: Eq, T, F> ExpandedRead<Q> for &&BorrowedHost<'_, H, K, T, F>
 where
     H: IndexRead<Key = K>,
     H::Item: Columns,

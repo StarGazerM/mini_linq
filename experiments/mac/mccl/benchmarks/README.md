@@ -14,7 +14,7 @@ showed a consistent improvement.
 | `isolated-limiters-2026-10-15.json` | Separate merge-only/copy-only recordings; middle-60%-span filtering, counter statistics and caveats. |
 | `cached-heads-2026-10-15.txt` | Paired baseline/cached-head GPU timings. Candidate rejected; original restored. |
 | `merge-profile-raw-2026-10-15.tar.gz` | Preserved source traces, capture, verified counter template, diagnostic harnesses and AIR. Kept outside `build/` so cleaning build output does not delete this evidence. |
-| `SHA256SUMS` | Integrity checksums for those six artifacts. Run `shasum -a 256 -c benchmarks/SHA256SUMS` from the repository root. |
+| `SHA256SUMS` | Integrity checksums for those six artifacts. Run `shasum -a 256 -c benchmarks/SHA256SUMS` from the MCCL crate directory. |
 
 The raw archive includes the mixed counter trace, the isolated merge/copy traces,
 the merge/copy GPU capture, `PerformanceLimiters.tracetemplate`, the paired timing
@@ -99,8 +99,8 @@ copy benchmark. GPU sums/spans, driver scheduling and CPU wall intervals have
 different scopes and need not add. No physical DRAM counters or clock telemetry
 were collected. Previous cache limits were restored.
 
-This repository retains the 240-configuration construction matrix and matched
-raw-Metal/MCCL comparator JSON. See [methods, raw links, measured causes and limits](../../../../doc/MAC-IMPLEMENTATION.md#2026-10-26-controlled-construction-investigation).
+The mini_linq repository retains the 240-configuration construction matrix and
+matched raw-Metal/MCCL comparator JSON. See [methods, raw links, measured causes and limits](https://github.com/StarGazerM/mini_linq/blob/codex/all-answers/doc/MAC-IMPLEMENTATION.md#2026-10-26-controlled-construction-investigation).
 
 
 ## Shared-relation construction cutover, 2026-10-26
@@ -118,7 +118,7 @@ count/error publication. Exact output/directory/source validation is separate.
 The data include actual command-buffer and CPU-driver scheduling timestamps;
 these are not interchangeable with wall time or hardware DRAM counters.
 
-The [shared-source cutover](../../../../doc/MAC-IMPLEMENTATION.md#shared-relation-input-cutover)
+The [shared-source cutover](https://github.com/StarGazerM/mini_linq/blob/codex/all-answers/doc/MAC-IMPLEMENTATION.md#shared-relation-input-cutover)
 links the updated source-reuse matrix, two-column/multi-index cases and complete
 H03/H09 execution. Do not treat old per-build population times as inherent GPU
 construction costs, or compare the new boundary without including ingestion

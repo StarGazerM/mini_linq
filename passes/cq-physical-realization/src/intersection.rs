@@ -45,8 +45,12 @@ impl Printer<'_> {
         let name = symbol_name(&second.name);
         if self.analysis.expands.contains(&first_name)
             || self.analysis.expands.contains(&name)
-            || self.forcing_witness(&first_name, &symbol_name(&a.right), &ak).is_some()
-            || self.forcing_witness(&first_name, &symbol_name(&b.right), &bk).is_some()
+            || self
+                .forcing_witness(&first_name, &symbol_name(&a.right), &ak)
+                .is_some()
+            || self
+                .forcing_witness(&first_name, &symbol_name(&b.right), &bk)
+                .is_some()
         {
             return error(
                 &first.name,

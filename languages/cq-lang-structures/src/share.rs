@@ -48,7 +48,12 @@ fn retained_host_keyed<'a>(
         return None;
     }
     program.structures.entries.iter().find_map(|entry| {
-        let Structure::Host { keyed, reader: demand, .. } = &entry.structure else {
+        let Structure::Host {
+            keyed,
+            reader: demand,
+            ..
+        } = &entry.structure
+        else {
             return None;
         };
         let mut recorded = keyed.columns().map(symbol_name).collect::<Vec<_>>();
@@ -58,7 +63,7 @@ fn retained_host_keyed<'a>(
             && recorded == wanted
             && keyed.levels.iter().all(|level| !level.columns.is_empty())
             && keyed.supports(ProviderCapability::Retain))
-            .then_some(keyed.as_ref())
+        .then_some(keyed.as_ref())
     })
 }
 
@@ -105,7 +110,12 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
             return Err(fail());
         };
         let retained_host = retained_host_keyed(program, &share.build, &share.first, &share.keys)
-            .zip(retained_host_keyed(program, &share.build, &share.force, &share.keys))
+            .zip(retained_host_keyed(
+                program,
+                &share.build,
+                &share.force,
+                &share.keys,
+            ))
             .is_some_and(|(first, force)| {
                 first.ty == force.ty && first.level_names() == force.level_names()
             })
@@ -125,9 +135,12 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
                     .any(|(build, prefix)| build == &share.build && prefix == &share.keys)
         });
         let payload = if let Some(candidate) = candidate {
-            facts.candidate_on(&share.build, &share.keys, &candidate.column).is_some()
+            facts
+                .candidate_on(&share.build, &share.keys, &candidate.column)
+                .is_some()
         } else {
-            facts.selected_built(&share.build, &share.keys)
+            facts
+                .selected_built(&share.build, &share.keys)
                 .is_some_and(|((levels, _), depth)| depth == levels.len())
         };
         if !(payload || retained_host)

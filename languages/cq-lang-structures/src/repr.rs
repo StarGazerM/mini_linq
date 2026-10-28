@@ -65,24 +65,37 @@ pub(crate) fn check_witnesses(
         }
         let retained = if facts.host_read(&share.build) {
             facts.provider_support(
-                &share.build, &share.keys, Some(&share.first), ProviderCapability::Retain,
+                &share.build,
+                &share.keys,
+                Some(&share.first),
+                ProviderCapability::Retain,
             ) && facts.provider_support(
-                &share.build, &share.keys, Some(&share.force), ProviderCapability::Retain,
+                &share.build,
+                &share.keys,
+                Some(&share.force),
+                ProviderCapability::Retain,
             )
         } else if let Some(candidate) = candidates.iter().find(|candidate| {
             symbol_name(candidate.reader) == share.force
-                && candidate.sides.iter().any(|(build, prefix)| {
-                    build == &share.build && prefix == &share.keys
-                })
+                && candidate
+                    .sides
+                    .iter()
+                    .any(|(build, prefix)| build == &share.build && prefix == &share.keys)
         }) {
             facts.candidate_support(
-                &share.build, &share.keys, &candidate.column, ProviderCapability::Retain,
+                &share.build,
+                &share.keys,
+                &candidate.column,
+                ProviderCapability::Retain,
             )
         } else {
             facts.provider_support(&share.build, &share.keys, None, ProviderCapability::Retain)
         };
         if !retained {
-            return error(entry, "witness requires declared retain support on its selected provider");
+            return error(
+                entry,
+                "witness requires declared retain support on its selected provider",
+            );
         }
         let mut pending = vec![name.clone()];
         let mut visited = BTreeSet::new();

@@ -66,11 +66,13 @@ pub fn join_filter_candidates(
         || fused(covering)
         || facts.physical.modes[&build] != ModeKind::Let
         || !facts.physical.rows[&build].computed.is_empty()
-        || facts.membership.contains(&(build.clone(), names(&k.columns)))
+        || facts
+            .membership
+            .contains(&(build.clone(), names(&k.columns)))
         || !facts.provider_support(&build, &columns, None, ProviderCapability::Keys)
-        || facts.selected_built(&build, &columns).is_none_or(|((levels, _), depth)| {
-            depth != 1 || levels.len() != 1
-        })
+        || facts
+            .selected_built(&build, &columns)
+            .is_none_or(|((levels, _), depth)| depth != 1 || levels.len() != 1)
     {
         return Vec::new();
     }

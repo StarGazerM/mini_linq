@@ -905,7 +905,9 @@ fn reserve_previous_round_trips_without_claiming_capacity() {
     let p = program(quote!(a = store rows r; output reserve_previous;));
     assert_eq!(p.sequence.output, Some(OutputProtocol::ReservePrevious));
     assert_eq!(
-        OutputProtocol::ReservePrevious.to_token_stream().to_string(),
+        OutputProtocol::ReservePrevious
+            .to_token_stream()
+            .to_string(),
         "reserve_previous"
     );
     assert_eq!(syn::parse2::<Program>(p.to_token_stream()).unwrap(), p);

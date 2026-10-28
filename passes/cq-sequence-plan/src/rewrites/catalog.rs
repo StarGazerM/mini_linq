@@ -9,20 +9,30 @@ pub(crate) fn provider_support(
     membership_only: bool,
 ) -> Option<structures::ProviderSupport> {
     use structures::ProviderCapability::{Expand, Keys, Retain};
-    let capabilities: Vec<_> = token.supports.iter()
+    let capabilities: Vec<_> = token
+        .supports
+        .iter()
         .filter(|capability| !membership_only || **capability == Keys)
         .map(|capability| match capability {
             Retain => quote!(retain),
             Expand => quote!(expand),
             Keys => quote!(keys),
-        }).collect();
+        })
+        .collect();
     (!capabilities.is_empty()).then(|| syn::parse_quote!(supports [#(#capabilities),*]))
 }
 
-fn supplies_support(token: &cq_lang_sequence::ProviderToken, required: &[structures::ProviderCapability]) -> bool {
-    required.iter().all(|capability| token.supports.contains(capability)
-        || *capability == structures::ProviderCapability::Retain
-            && token.supports.contains(&structures::ProviderCapability::Expand))
+fn supplies_support(
+    token: &cq_lang_sequence::ProviderToken,
+    required: &[structures::ProviderCapability],
+) -> bool {
+    required.iter().all(|capability| {
+        token.supports.contains(capability)
+            || *capability == structures::ProviderCapability::Retain
+                && token
+                    .supports
+                    .contains(&structures::ProviderCapability::Expand)
+    })
 }
 
 /// Only live decisions constrain replacement. Unused support may change with
@@ -42,44 +52,83 @@ fn required_support(
             columns.sort();
             return columns == keys;
         }
-        analysis.built.get(name).into_iter().flatten()
-            .filter_map(|built| structures::prefix_depth(&built.0, keys).map(|depth| (built, depth)))
+        analysis
+            .built
+            .get(name)
+            .into_iter()
+            .flatten()
+            .filter_map(|built| {
+                structures::prefix_depth(&built.0, keys).map(|depth| (built, depth))
+            })
             .min_by_key(|((layout, _), depth)| (layout.len() != *depth, layout.len()))
             .is_some_and(|((layout, ty), _)| *layout == levels && *ty == keyed.ty)
     };
     let selected_candidate = |prefix: &[String], column: &str| {
-        !host && levels.len() == 2 && levels[0] == prefix && levels[1] == [column]
-            && analysis.candidate_on(name, prefix, column).is_some_and(|ty| *ty == keyed.ty)
+        !host
+            && levels.len() == 2
+            && levels[0] == prefix
+            && levels[1] == [column]
+            && analysis
+                .candidate_on(name, prefix, column)
+                .is_some_and(|ty| *ty == keyed.ty)
     };
     let candidates = structures::physical::candidate_prefixes(&source.physical, &analysis.physical);
     let mut required = Vec::new();
     if analysis.witnesses.keys().any(|first| {
         let share = &analysis.shares[first];
-        share.build == name && candidates.iter()
-            .find(|candidate| symbol_name(candidate.reader) == share.force
-                && candidate.sides.iter().any(|(build, prefix)| *build == name && *prefix == share.keys))
-            .map_or_else(|| selected(&share.keys),
-                |candidate| selected_candidate(&share.keys, &candidate.column))
+        share.build == name
+            && candidates
+                .iter()
+                .find(|candidate| {
+                    symbol_name(candidate.reader) == share.force
+                        && candidate
+                            .sides
+                            .iter()
+                            .any(|(build, prefix)| *build == name && *prefix == share.keys)
+                })
+                .map_or_else(
+                    || selected(&share.keys),
+                    |candidate| selected_candidate(&share.keys, &candidate.column),
+                )
     }) {
         required.push(Retain);
     }
     for definition in &source.physical.program.definitions {
-        if !analysis.expands.contains(&symbol_name(&definition.name)) { continue; }
-        let Operator::Probe(_, read) = &definition.operator else { continue };
+        if !analysis.expands.contains(&symbol_name(&definition.name)) {
+            continue;
+        }
+        let Operator::Probe(_, read) = &definition.operator else {
+            continue;
+        };
         let mut keys: Vec<_> = read.columns.iter().map(symbol_name).collect();
         keys.sort();
         let needed = if matches!(read.choice, Some(structures::physical::Choice::Smallest(_))) {
-            candidates.iter().filter(|candidate| candidate.reader == &definition.name)
-                .any(|candidate| candidate.sides.iter()
-                    .any(|(build, prefix)| *build == name && selected_candidate(prefix, &candidate.column)))
+            candidates
+                .iter()
+                .filter(|candidate| candidate.reader == &definition.name)
+                .any(|candidate| {
+                    candidate.sides.iter().any(|(build, prefix)| {
+                        *build == name && selected_candidate(prefix, &candidate.column)
+                    })
+                })
         } else {
             symbol_name(&read.right) == name && selected(&keys)
         };
-        if needed { required.push(Expand); break; }
+        if needed {
+            required.push(Expand);
+            break;
+        }
     }
     if analysis.join_filters.values().flatten().any(|filter| {
-        if symbol_name(&filter.build) != name { return false; }
-        source.physical.program.definitions.iter().find(|definition| definition.name == filter.covering)
+        if symbol_name(&filter.build) != name {
+            return false;
+        }
+        source
+            .physical
+            .program
+            .definitions
+            .iter()
+            .find(|definition| definition.name == filter.covering)
             .is_some_and(|definition| match &definition.operator {
                 Operator::Probe(_, read) | Operator::Semi(_, read) => {
                     let mut keys: Vec<_> = read.columns.iter().map(symbol_name).collect();
@@ -243,7 +292,9 @@ fn select(
             | Structure::Share { .. } => continue,
         };
         let support_required = match &entry.structure {
-            Structure::Built { keyed, .. } => required_support(source, &analysis, &name, keyed, false),
+            Structure::Built { keyed, .. } => {
+                required_support(source, &analysis, &name, keyed, false)
+            }
             _ => Vec::new(),
         };
         let selected = if kind == "canon" {

@@ -282,10 +282,16 @@ impl<'a> Context<'a> {
         for read in analysis.reads.values() {
             let base = symbol_name(&read.origin.base);
             let host = Self::positional_host(&base);
-            let slot = syn::Index::from(analysis.host_layouts[&base].iter()
-                .position(|column| column == &read.column).expect("checked read column"));
+            let slot = syn::Index::from(
+                analysis.host_layouts[&base]
+                    .iter()
+                    .position(|column| column == &read.column)
+                    .expect("checked read column"),
+            );
             let marker = &read.marker;
-            statements.push(syn::parse_quote!(::cq_storage::require::column_slot::<#slot, _, #marker>(#host);));
+            statements.push(
+                syn::parse_quote!(::cq_storage::require::column_slot::<#slot, _, #marker>(#host);),
+            );
         }
         for (scan, filters) in &analysis.join_filters {
             let origin = &analysis.lineage[scan];
@@ -293,8 +299,12 @@ impl<'a> Context<'a> {
             for filter in filters {
                 let key = symbol_name(filter.key.columns.first().expect("checked filter key"));
                 let column = &origin.columns[&key];
-                let slot = syn::Index::from(analysis.host_layouts[&origin.base].iter()
-                    .position(|candidate| candidate == column).expect("checked filter column"));
+                let slot = syn::Index::from(
+                    analysis.host_layouts[&origin.base]
+                        .iter()
+                        .position(|candidate| candidate == column)
+                        .expect("checked filter column"),
+                );
                 let marker = &filter.marker;
                 statements.push(syn::parse_quote!(::cq_storage::require::column_slot::<#slot, _, #marker>(#host);));
             }
@@ -823,7 +833,9 @@ impl<'a> Context<'a> {
                     }
                     _ => quote!(::core::option::Option::None),
                 };
-                statements.push(syn::parse_quote!(::cq_storage::provider_contract::require_keys(#structure);));
+                statements.push(
+                    syn::parse_quote!(::cq_storage::provider_contract::require_keys(#structure);),
+                );
                 statements.push(syn::parse_quote!(let #id = ::cq_storage::selective_build(::cq_storage::Keys::key_count(#structure), #population).then(|| #value);));
                 statements.push(syn::parse_quote!(if let ::core::option::Option::Some(__cq_filter) = &#id { ::cq_storage::require::conservative::<i64, _>(__cq_filter); }));
                 statements.push(
@@ -935,23 +947,40 @@ impl<'a> Context<'a> {
             }
             let keyed = match (&entry.structure, reader) {
                 (structures::Structure::Built { keyed, .. }, None) => keyed,
-                (structures::Structure::Host { keyed, reader: selected, .. }, Some(reader))
-                    if symbol_name(selected) == reader => keyed,
+                (
+                    structures::Structure::Host {
+                        keyed,
+                        reader: selected,
+                        ..
+                    },
+                    Some(reader),
+                ) if symbol_name(selected) == reader => keyed,
                 _ => continue,
             };
             if keyed.ty != *ty
-                || keyed.levels.iter().map(|level| sorted(&level.columns)).collect::<Vec<_>>() != levels
+                || keyed
+                    .levels
+                    .iter()
+                    .map(|level| sorted(&level.columns))
+                    .collect::<Vec<_>>()
+                    != levels
             {
                 continue;
             }
             use structures::ProviderCapability;
             if keyed.supports(ProviderCapability::Expand) {
-                guards.push(syn::parse_quote!(::cq_storage::provider_contract::require_expand(#provider);));
+                guards.push(
+                    syn::parse_quote!(::cq_storage::provider_contract::require_expand(#provider);),
+                );
             } else if keyed.supports(ProviderCapability::Retain) {
-                guards.push(syn::parse_quote!(::cq_storage::provider_contract::require_retain(#provider);));
+                guards.push(
+                    syn::parse_quote!(::cq_storage::provider_contract::require_retain(#provider);),
+                );
             }
             if keyed.supports(ProviderCapability::Keys) {
-                guards.push(syn::parse_quote!(::cq_storage::provider_contract::require_keys(#provider);));
+                guards.push(
+                    syn::parse_quote!(::cq_storage::provider_contract::require_keys(#provider);),
+                );
             }
         }
         guards
@@ -1003,7 +1032,11 @@ impl<'a> Context<'a> {
                 }
             }
         }
-        if self.candidate_reads.get(result).is_some_and(|reads| reads.iter().any(|read| read == columns)) {
+        if self
+            .candidate_reads
+            .get(result)
+            .is_some_and(|reads| reads.iter().any(|read| read == columns))
+        {
             require("candidates");
         }
         for (_, read) in physical.merge_reads.get(result).into_iter().flatten() {

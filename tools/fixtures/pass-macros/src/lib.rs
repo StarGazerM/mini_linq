@@ -137,8 +137,8 @@ pub fn ordered_indexes(input: TokenStream) -> TokenStream {
         for entry in &mut target.structures.entries {
             if let Structure::Built { keyed, .. } = &mut entry.structure {
                 keyed.ty = syn::parse_quote!(::std::collections::BTreeMap<_, ::std::vec::Vec<_>>);
-                keyed.supports = (keyed.levels.len() == 1)
-                    .then(|| syn::parse_quote!(supports [keys]));
+                keyed.supports =
+                    (keyed.levels.len() == 1).then(|| syn::parse_quote!(supports[keys]));
             }
         }
         Ok(target)

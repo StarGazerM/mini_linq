@@ -507,9 +507,10 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
             && !keyed.levels[0].columns.is_empty()
             && (keyed.ty == Need::Seek.default_type()
                 || keyed.ty == Need::Ordered.default_type()
-                || keyed.ty == syn::parse_quote!(::std::collections::HashMap<_, ::std::vec::Vec<_>>))
+                || keyed.ty
+                    == syn::parse_quote!(::std::collections::HashMap<_, ::std::vec::Vec<_>>))
         {
-            keyed.supports = Some(syn::parse_quote!(supports [keys]));
+            keyed.supports = Some(syn::parse_quote!(supports[keys]));
         }
     }
     let target = structures::Program {

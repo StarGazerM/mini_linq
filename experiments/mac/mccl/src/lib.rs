@@ -28,6 +28,17 @@ mod ffi {
     pub struct Stream {
         pub ctx: *mut c_void,
     }
+
+    #[repr(C)]
+    pub struct Bloom {
+        _private: [u8; 0],
+    }
+
+    #[repr(C)]
+    pub struct Map {
+        _private: [u8; 0],
+    }
+
     #[repr(C)]
     pub struct RadixIndex {
         pub keys: Array,
@@ -62,6 +73,7 @@ mod ffi {
         pub fn mlx_array_free(array: Array) -> c_int;
         pub fn mlx_array_eval(array: Array) -> c_int;
         pub fn mlx_array_data_uint32(array: Array) -> *const u32;
+        pub fn mlx_array_item_uint64(out: *mut u64, array: Array) -> c_int;
         pub fn mlx_array_data_int64(array: Array) -> *const i64;
         pub fn mlx_array_data_uint64(array: Array) -> *const u64;
         pub fn mlx_array_size(array: Array) -> usize;
@@ -79,7 +91,49 @@ mod ffi {
         pub fn mlx_set_cache_limit(previous: *mut usize, bytes: usize) -> c_int;
         pub fn mlx_set_wired_limit(previous: *mut usize, bytes: usize) -> c_int;
         pub fn mccl_merge_sorted_u32(out: *mut Array, a: Array, b: Array, stream: Stream) -> c_int;
+        pub fn mccl_difference_sorted_u32(
+            storage: *mut Array,
+            count: *mut Array,
+            a: Array,
+            b: Array,
+            stream: Stream,
+        ) -> c_int;
         pub fn mccl_copy_u32(out: *mut Array, a: Array, stream: Stream) -> c_int;
+        pub fn mccl_bloom_create(
+            out: *mut *mut Bloom,
+            num_blocks: u32,
+            seed: u64,
+            stream: Stream,
+        ) -> c_int;
+        pub fn mccl_bloom_free(filter: *mut Bloom) -> c_int;
+        pub fn mccl_bloom_clear(filter: *mut Bloom) -> c_int;
+        pub fn mccl_bloom_add(filter: *mut Bloom, keys: Array) -> c_int;
+        pub fn mccl_bloom_contains(out: *mut Array, filter: *mut Bloom, keys: Array) -> c_int;
+        pub fn mccl_bloom_read_words(filter: *mut Bloom, out: *mut u32, words: usize) -> c_int;
+        pub fn mccl_map_create(
+            out: *mut *mut Map,
+            capacity: u32,
+            seed: u32,
+            stream: Stream,
+        ) -> c_int;
+        pub fn mccl_map_free(map: *mut Map) -> c_int;
+        pub fn mccl_map_clear(map: *mut Map) -> c_int;
+        pub fn mccl_map_insert(
+            map: *mut Map,
+            keys: Array,
+            values: Array,
+            inserted: *mut u64,
+            full: *mut u64,
+            invalid: *mut u64,
+        ) -> c_int;
+        pub fn mccl_map_find(
+            values: *mut Array,
+            found: *mut Array,
+            map: *mut Map,
+            keys: Array,
+        ) -> c_int;
+        pub fn mccl_map_erase(map: *mut Map, keys: Array, erased: *mut u64) -> c_int;
+        pub fn mccl_map_rehash(map: *mut Map, capacity: u32) -> c_int;
         pub fn mccl_allocate_u32(
             out: *mut Array,
             shape: *const c_int,
@@ -222,8 +276,9 @@ pub struct Gpu {
 }
 
 /// An owned one-dimensional MLX u32 array, retaining its stream context.
-/// Operations are lazy until eval(), as_slice(), or to_vec(). Shared data is
-/// immutable and its lifetime is tied to this owner; no raw handles escape.
+/// Merge/copy operations are lazy until eval(), as_slice(), or to_vec(); Bloom
+/// queries are eager. Shared data is immutable and its lifetime is tied to this
+/// owner; no raw handles escape.
 pub struct U32Array {
     raw: ffi::Array,
     len: usize,
@@ -233,6 +288,284 @@ pub struct U32Array {
 impl Drop for U32Array {
     fn drop(&mut self) {
         unsafe { ffi::mlx_array_free(self.raw) };
+    }
+}
+
+/// A thread-affine blocked Bloom filter for arbitrary u32 keys.
+///
+/// Each block contains eight u32 words. The seed is fixed for the filter's lifetime.
+/// Positive queries are approximate (false positives are possible); a completed
+/// insertion never produces false negatives until the filter is cleared.
+/// Creation, insertion, clearing, and queries complete on the GPU before returning.
+/// The filter retains its context and is neither Clone, Send, nor Sync.
+pub struct BloomFilter {
+    raw: *mut ffi::Bloom,
+    num_blocks: u32,
+    seed: u64,
+    context: Gpu,
+}
+
+impl Drop for BloomFilter {
+    fn drop(&mut self) {
+        unsafe { ffi::mccl_bloom_free(self.raw) };
+    }
+}
+
+impl BloomFilter {
+    pub fn num_blocks(&self) -> u32 {
+        self.num_blocks
+    }
+
+    pub fn seed(&self) -> u64 {
+        self.seed
+    }
+
+    /// Inserts all keys, including duplicates, zero, and u32::MAX, and waits.
+    /// Keys must belong to this filter's GPU context. Empty input is accepted.
+    pub fn add(&mut self, keys: &U32Array) -> Result<()> {
+        self.context.check_context(keys)?;
+        native_status(
+            unsafe { ffi::mccl_bloom_add(self.raw, keys.raw) },
+            "insert Bloom keys",
+        )
+    }
+
+    /// Clears every bit and waits for completion, preserving the seed and size.
+    pub fn clear(&mut self) -> Result<()> {
+        native_status(
+            unsafe { ffi::mccl_bloom_clear(self.raw) },
+            "clear Bloom filter",
+        )
+    }
+
+    /// Returns completed u32 flags in key order: zero means absent, one means
+    /// possibly present. Positive results are approximate, not proof of membership.
+    /// The returned snapshot is independent of subsequent insertion or clearing.
+    pub fn contains(&self, keys: &U32Array) -> Result<U32Array> {
+        self.context.check_context(keys)?;
+        let mut out = self.context.output(keys.len);
+        native_status(
+            unsafe { ffi::mccl_bloom_contains(&mut out.raw, self.raw, keys.raw) },
+            "query Bloom filter",
+        )?;
+        Ok(out)
+    }
+
+    /// Explicitly reads the block-major eight-word-per-block bitset to the host.
+    /// This allocation and host readback are not part of insertion or querying.
+    pub fn words(&self) -> Result<Vec<u32>> {
+        let mut words = vec![0; self.num_blocks as usize * 8];
+        native_status(
+            unsafe { ffi::mccl_bloom_read_words(self.raw, words.as_mut_ptr(), words.len()) },
+            "read Bloom words",
+        )?;
+        Ok(words)
+    }
+}
+
+/// A fixed-capacity, thread-affine GPU u32-to-u32 map retaining its context.
+/// All operations complete before returning. Keys MAX and MAX-1 are reserved;
+/// every u32 value is valid. Capacity is exact, not rounded.
+pub struct HashMap {
+    raw: *mut ffi::Map,
+    capacity: u32,
+    seed: u32,
+    len: usize,
+    context: Gpu,
+}
+
+/// Completed insertion counts. Partial admission is reported, not an error.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct InsertReport {
+    /// Unique newly occupied slots (updates are not counted).
+    pub inserted: usize,
+    /// Input elements rejected because no slot was available.
+    pub full: usize,
+    /// Input elements using either reserved key.
+    pub invalid: usize,
+}
+
+/// Independent completed arrays in query order. Missing values and flags are
+/// zero; found flags are one, including when a present value is zero or MAX.
+pub struct MapLookup {
+    pub values: U32Array,
+    pub found: U32Array,
+}
+
+impl Drop for HashMap {
+    fn drop(&mut self) {
+        unsafe { ffi::mccl_map_free(self.raw) };
+    }
+}
+
+impl HashMap {
+    pub fn capacity(&self) -> u32 {
+        self.capacity
+    }
+
+    pub fn seed(&self) -> u32 {
+        self.seed
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Inserts or updates keys. For admitted duplicates, the last input value
+    /// wins. Admission order when over capacity is unspecified. Empty input is valid.
+    pub fn insert(&mut self, keys: &U32Array, values: &U32Array) -> Result<InsertReport> {
+        self.context.check_context(keys)?;
+        self.context.check_context(values)?;
+        if keys.len != values.len {
+            return Err(Error("map keys and values must have equal lengths".into()));
+        }
+        let (mut inserted, mut full, mut invalid) = (0, 0, 0);
+        native_status(
+            unsafe {
+                ffi::mccl_map_insert(
+                    self.raw,
+                    keys.raw,
+                    values.raw,
+                    &mut inserted,
+                    &mut full,
+                    &mut invalid,
+                )
+            },
+            "insert map entries",
+        )?;
+        let report = InsertReport {
+            inserted: inserted as usize,
+            full: full as usize,
+            invalid: invalid as usize,
+        };
+        self.len += report.inserted;
+        Ok(report)
+    }
+
+    /// Returns a snapshot unaffected by later map mutations or destruction.
+    /// Reserved keys always produce absent results.
+    pub fn find(&self, keys: &U32Array) -> Result<MapLookup> {
+        self.context.check_context(keys)?;
+        let mut values = self.context.output(keys.len);
+        let mut found = self.context.output(keys.len);
+        native_status(
+            unsafe { ffi::mccl_map_find(&mut values.raw, &mut found.raw, self.raw, keys.raw) },
+            "find map entries",
+        )?;
+        Ok(MapLookup { values, found })
+    }
+
+    /// Removes keys and reports unique entries erased, ignoring missing and
+    /// reserved keys. Maintenance needed for subsequent insertion is GPU-resident.
+    pub fn erase(&mut self, keys: &U32Array) -> Result<usize> {
+        self.context.check_context(keys)?;
+        let mut erased = 0;
+        native_status(
+            unsafe { ffi::mccl_map_erase(self.raw, keys.raw, &mut erased) },
+            "erase map entries",
+        )?;
+        self.len -= erased as usize;
+        Ok(erased as usize)
+    }
+
+    pub fn clear(&mut self) -> Result<()> {
+        native_status(unsafe { ffi::mccl_map_clear(self.raw) }, "clear map")?;
+        self.len = 0;
+        Ok(())
+    }
+
+    /// Rebuilds at exactly this capacity, preserving entries and seed.
+    /// Capacity smaller than len is rejected without changing the map.
+    pub fn rehash(&mut self, capacity: u32) -> Result<()> {
+        if capacity == 0 || capacity > c_int::MAX as u32 || (capacity as usize) < self.len {
+            return Err(Error("map capacity must be in len.max(1)..=INT_MAX".into()));
+        }
+        native_status(
+            unsafe { ffi::mccl_map_rehash(self.raw, capacity) },
+            "rehash map",
+        )?;
+        self.capacity = capacity;
+        Ok(())
+    }
+}
+
+/// A lazy stable sorted multiset difference, retaining its GPU context.
+///
+/// Only the first `count()` elements of its private capacity buffer are initialized.
+/// No API exposes the uninitialized tail. Neither this type nor its context is
+/// Send or Sync.
+pub struct Difference {
+    storage: ffi::Array,
+    count: ffi::Array,
+    capacity: usize,
+    _stream: Rc<StreamInner>,
+}
+
+impl Drop for Difference {
+    fn drop(&mut self) {
+        unsafe {
+            ffi::mlx_array_free(self.storage);
+            ffi::mlx_array_free(self.count);
+        }
+    }
+}
+
+impl Difference {
+    /// The storage capacity, equal to the length of A; does not evaluate the graph.
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+
+    /// Evaluates storage and count, waiting for their data and dependencies.
+    /// This does not read count onto the host or add a whole-stream barrier.
+    pub fn eval(&self) -> Result<()> {
+        clear_mlx_error();
+        mlx_status(
+            unsafe { ffi::mlx_array_eval(self.storage) },
+            "evaluate difference storage",
+        )?;
+        clear_mlx_error();
+        mlx_status(
+            unsafe { ffi::mlx_array_eval(self.count) },
+            "evaluate difference count",
+        )
+    }
+
+    /// Waits for the result, then explicitly reads the scalar count to host.
+    pub fn count(&self) -> Result<usize> {
+        self.eval()?;
+        let mut count = 0_u64;
+        clear_mlx_error();
+        mlx_status(
+            unsafe { ffi::mlx_array_item_uint64(&mut count, self.count) },
+            "read difference count",
+        )?;
+        let count =
+            usize::try_from(count).map_err(|_| Error("difference count exceeds usize".into()))?;
+        if count > self.capacity {
+            return Err(Error("difference count exceeds storage capacity".into()));
+        }
+        Ok(count)
+    }
+
+    /// Waits for the result, then copies only the initialized survivor prefix.
+    /// Reading the count and the values both explicitly transfers data to the host.
+    pub fn to_vec(&self) -> Result<Vec<u32>> {
+        let count = self.count()?;
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+        clear_mlx_error();
+        let data = unsafe { ffi::mlx_array_data_uint32(self.storage) };
+        if data.is_null() {
+            return Err(mlx_failure("read difference storage"));
+        }
+        // The native scatter initializes exactly this contiguous prefix.
+        Ok(unsafe { std::slice::from_raw_parts(data, count) }.to_vec())
     }
 }
 
@@ -246,6 +579,46 @@ impl Gpu {
         Ok(Self {
             stream: Rc::new(StreamInner(raw)),
         })
+    }
+
+    /// Creates a cleared, completed blocked Bloom filter with a fixed hash seed.
+    /// `num_blocks` must be positive and eight times this value must fit INT_MAX.
+    /// Positive membership results are approximate.
+    pub fn bloom(&self, num_blocks: u32, seed: u64) -> Result<BloomFilter> {
+        if num_blocks == 0 || num_blocks > c_int::MAX as u32 / 8 {
+            return Err(Error("Bloom blocks must be in 1..=INT_MAX/8".into()));
+        }
+        let mut filter = BloomFilter {
+            raw: ptr::null_mut(),
+            num_blocks,
+            seed,
+            context: self.clone(),
+        };
+        native_status(
+            unsafe { ffi::mccl_bloom_create(&mut filter.raw, num_blocks, seed, self.stream.0) },
+            "create Bloom filter",
+        )?;
+        Ok(filter)
+    }
+
+    /// Creates a completed empty map with exact positive capacity <= INT_MAX.
+    /// Native allocation limits may further restrict capacity.
+    pub fn hash_map(&self, capacity: u32, seed: u32) -> Result<HashMap> {
+        if capacity == 0 || capacity > c_int::MAX as u32 {
+            return Err(Error("map capacity must be in 1..=INT_MAX".into()));
+        }
+        let mut map = HashMap {
+            raw: ptr::null_mut(),
+            capacity,
+            seed,
+            len: 0,
+            context: self.clone(),
+        };
+        native_status(
+            unsafe { ffi::mccl_map_create(&mut map.raw, capacity, seed, self.stream.0) },
+            "create map",
+        )?;
+        Ok(map)
     }
 
     /// Copies host values once into an MLX-owned shared-memory array.
@@ -315,6 +688,37 @@ impl Gpu {
         native_status(
             unsafe { ffi::mccl_merge_sorted_u32(&mut out.raw, a.raw, b.raw, self.stream.0) },
             "merge sorted u32",
+        )?;
+        Ok(out)
+    }
+
+    /// Builds a lazy stable multiset difference A minus B.
+    ///
+    /// Both inputs must be sorted ascending. Each B occurrence cancels the earliest
+    /// remaining equal occurrence in A; survivors retain their original order.
+    /// Sortedness is not checked on the host. Unsorted inputs have unspecified
+    /// results but remain memory-safe. Each input length must fit INT_MAX.
+    /// Graph construction never reads the survivor count onto the host.
+    pub fn difference(&self, a: &U32Array, b: &U32Array) -> Result<Difference> {
+        self.check_context(a)?;
+        self.check_context(b)?;
+        let mut out = Difference {
+            storage: unsafe { ffi::mlx_array_new() },
+            count: unsafe { ffi::mlx_array_new() },
+            capacity: a.len,
+            _stream: Rc::clone(&self.stream),
+        };
+        native_status(
+            unsafe {
+                ffi::mccl_difference_sorted_u32(
+                    &mut out.storage,
+                    &mut out.count,
+                    a.raw,
+                    b.raw,
+                    self.stream.0,
+                )
+            },
+            "difference sorted u32",
         )?;
         Ok(out)
     }

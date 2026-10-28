@@ -150,10 +150,7 @@ fn expansion_rejects_missing_support_and_wrong_exact_keys() {
         let error = structures::contract::check(&program)
             .unwrap_err()
             .to_string();
-        assert!(
-            error.contains("declared expand support"),
-            "{error}"
-        );
+        assert!(error.contains("declared expand support"), "{error}");
     }
     let mut hashed = resident_expand_program();
     hashed.physical.program.definitions[1] =
@@ -166,10 +163,7 @@ fn expansion_rejects_missing_support_and_wrong_exact_keys() {
     let error = structures::contract::check(&hashed)
         .unwrap_err()
         .to_string();
-    assert!(
-        error.contains("declared expand support"),
-        "{error}"
-    );
+    assert!(error.contains("declared expand support"), "{error}");
     hashed
         .structures
         .entries
@@ -376,9 +370,18 @@ fn smallest_expansion_requires_support_on_both_selected_candidates() {
 #[test]
 fn smallest_expansion_rejects_missing_or_misshaped_candidate_facts() {
     for (index, entry) in [
-        (0, syn::parse_quote!(r = ::custom::Directory [b,c] supports [expand];)),
-        (1, syn::parse_quote!(s = ::custom::Directory [c][a] supports [expand];)),
-        (1, syn::parse_quote!(s = ::custom::Directory [a] supports [expand];)),
+        (
+            0,
+            syn::parse_quote!(r = ::custom::Directory [b,c] supports [expand];),
+        ),
+        (
+            1,
+            syn::parse_quote!(s = ::custom::Directory [c][a] supports [expand];),
+        ),
+        (
+            1,
+            syn::parse_quote!(s = ::custom::Directory [a] supports [expand];),
+        ),
     ] {
         let mut missing = smallest_expand_program();
         missing.structures.entries[index] = entry;
@@ -1061,7 +1064,10 @@ fn provider_support_packets_roundtrip_and_expand_implies_retain_only() {
         "ProviderAlias [x]",
     ] {
         let keyed: structures::Keyed = syn::parse_str(text).unwrap();
-        assert_eq!(syn::parse2::<structures::Keyed>(keyed.to_token_stream()).unwrap(), keyed);
+        assert_eq!(
+            syn::parse2::<structures::Keyed>(keyed.to_token_stream()).unwrap(),
+            keyed
+        );
     }
     let expanded: structures::Keyed = syn::parse_quote!(Alias [x] supports [expand]);
     assert!(expanded.supports(Expand));
@@ -1083,12 +1089,15 @@ fn support_validation_rejects_duplicates_empty_keys_and_membership_cursors() {
     ] {
         let mut invalid = program();
         invalid.structures.entries[0] = packet;
-        assert!(structures::contract::check(&invalid).unwrap_err().to_string()
-            .contains("duplicate provider capability"));
+        assert!(
+            structures::contract::check(&invalid)
+                .unwrap_err()
+                .to_string()
+                .contains("duplicate provider capability")
+        );
     }
     let mut empty = program();
-    empty.structures.entries[2] =
-        syn::parse_quote!(r host scan = Scan [] supports [keys];);
+    empty.structures.entries[2] = syn::parse_quote!(r host scan = Scan [] supports [keys];);
     assert!(structures::contract::check(&empty).is_err());
     for packet in [
         syn::parse_quote!(selected = KeyOnly [b] supports [retain]
@@ -1098,8 +1107,12 @@ fn support_validation_rejects_duplicates_empty_keys_and_membership_cursors() {
     ] {
         let mut invalid = membership_bridge_program();
         invalid.structures.entries[0] = packet;
-        assert!(structures::contract::check(&invalid).unwrap_err().to_string()
-            .contains("membership-only storage"));
+        assert!(
+            structures::contract::check(&invalid)
+                .unwrap_err()
+                .to_string()
+                .contains("membership-only storage")
+        );
     }
 }
 
@@ -1109,9 +1122,11 @@ fn support_follows_selected_layout_not_any_matching_type_or_prefix() {
     let mut source = program();
     // Both layouts answer x, but a complete key takes precedence over a prefix,
     // even when its identical Rust type has no declared support.
-    source.structures.entries[0] =
-        syn::parse_quote!(r = SameAlias [x][y] supports [expand];);
-    source.structures.entries.push(syn::parse_quote!(r = SameAlias [x];));
+    source.structures.entries[0] = syn::parse_quote!(r = SameAlias [x][y] supports [expand];);
+    source
+        .structures
+        .entries
+        .push(syn::parse_quote!(r = SameAlias [x];));
     let facts = structures::contract::check(&source).unwrap();
     assert_eq!(facts.built_on("r", &["x".into()]).unwrap().1, 1);
     assert!(!facts.provider_support("r", &["x".into()], None, Retain));
@@ -1125,14 +1140,26 @@ fn support_follows_selected_layout_not_any_matching_type_or_prefix() {
 
 #[test]
 fn abstract_sharing_does_not_require_a_retained_cursor_but_witnesses_do() {
-    let types: [syn::Type; 2] = [syn::parse_quote!(::custom::Index<_,_>), syn::parse_quote!(IndexAlias)];
+    let types: [syn::Type; 2] = [
+        syn::parse_quote!(::custom::Index<_,_>),
+        syn::parse_quote!(IndexAlias),
+    ];
     for ty in types {
         let mut source = shared_program();
         source.structures.entries[3] = syn::parse_quote!(b = #ty [x];);
-        assert!(structures::contract::check(&source).unwrap_err().to_string()
-            .contains("witness requires declared retain support"));
+        assert!(
+            structures::contract::check(&source)
+                .unwrap_err()
+                .to_string()
+                .contains("witness requires declared retain support")
+        );
         source.structures.entries.pop();
-        assert!(structures::contract::check(&source).unwrap().shares.contains_key("s"));
+        assert!(
+            structures::contract::check(&source)
+                .unwrap()
+                .shares
+                .contains_key("s")
+        );
     }
 }
 
@@ -1140,9 +1167,11 @@ fn abstract_sharing_does_not_require_a_retained_cursor_but_witnesses_do() {
 fn host_support_is_exact_to_reader_key_and_snapshot_layout() {
     use structures::ProviderCapability::Expand;
     let mut source = resident_expand_program();
-    source.physical.program.definitions.insert(
-        2, syn::parse_quote!(s = pipe semi eager [x,y] l,r;),
-    );
+    source
+        .physical
+        .program
+        .definitions
+        .insert(2, syn::parse_quote!(s = pipe semi eager [x,y] l,r;));
     source.physical.program.definitions[3] =
         syn::parse_quote!(p = pipe canon probe first [x,y] s,r;);
     source.structures.entries.extend([
@@ -1160,8 +1189,12 @@ fn host_support_is_exact_to_reader_key_and_snapshot_layout() {
     assert!(structures::retained_host_read(&source, "r", "s", &["x".into(), "x".into()]).is_none());
     source.structures.entries[2] =
         syn::parse_quote!(r host p = ::custom::Snapshot<_> [x][y] supports [expand];);
-    assert!(structures::contract::check(&source).unwrap_err().to_string()
-        .contains("matching retained snapshot hosts"));
+    assert!(
+        structures::contract::check(&source)
+            .unwrap_err()
+            .to_string()
+            .contains("matching retained snapshot hosts")
+    );
 }
 
 #[test]
@@ -1182,15 +1215,22 @@ fn join_filter_uses_declared_keys_and_preserves_scalar_and_totality_proofs() {
         }
     };
     let facts = structures::contract::check(&source).unwrap();
-    assert_eq!(structures::join_filter_candidates(&source, &facts, "p").len(), 1);
+    assert_eq!(
+        structures::join_filter_candidates(&source, &facts, "p").len(),
+        1
+    );
     for packet in [
         syn::parse_quote!(r = ::custom::Index<_,_> [x];),
         syn::parse_quote!(r = IndexAlias [x] supports [retain, expand];),
     ] {
         let mut missing = source.clone();
         missing.structures.entries[2] = packet;
-        assert!(structures::contract::check(&missing).unwrap_err().to_string()
-            .contains("join filter requires"));
+        assert!(
+            structures::contract::check(&missing)
+                .unwrap_err()
+                .to_string()
+                .contains("join filter requires")
+        );
     }
     let mut alias = source.clone();
     alias.structures.entries[2] = syn::parse_quote!(r = IndexAlias [x] supports [keys];);
@@ -1205,8 +1245,12 @@ fn join_filter_uses_declared_keys_and_preserves_scalar_and_totality_proofs() {
             return p as answer(x,y);
         }
     };
-    assert!(structures::contract::check(&scalar).unwrap_err().to_string()
-        .contains("join filter requires"));
+    assert!(
+        structures::contract::check(&scalar)
+            .unwrap_err()
+            .to_string()
+            .contains("join filter requires")
+    );
     let mut partial = source.clone();
     partial.physical = syn::parse_quote! {
         physical {
@@ -1219,11 +1263,14 @@ fn join_filter_uses_declared_keys_and_preserves_scalar_and_totality_proofs() {
         }
     };
     partial.structures.entries[1] = syn::parse_quote!(raw host scan = Scan [];);
-    assert!(structures::contract::check(&partial).unwrap_err().to_string()
-        .contains("join filter requires"));
+    assert!(
+        structures::contract::check(&partial)
+            .unwrap_err()
+            .to_string()
+            .contains("join filter requires")
+    );
     let mut lazy = source.clone();
-    lazy.physical.program.definitions[2] =
-        syn::parse_quote!(p = pipe canon probe lazy [x] l,r;);
+    lazy.physical.program.definitions[2] = syn::parse_quote!(p = pipe canon probe lazy [x] l,r;);
     assert!(structures::contract::check(&lazy).is_err());
 }
 
@@ -1239,8 +1286,14 @@ fn candidate_support_is_independent_of_complete_payload_selection() {
     assert!(facts.candidate_support("r", &["b".into()], "c", Expand));
     assert!(facts.witnesses.contains_key("pre_r"));
     assert!(facts.expands.contains("candidate"));
-    assert_eq!(facts.built_on("r", &["b".into()]).unwrap().0, &syn::parse_quote!(PayloadAlias));
-    assert_eq!(facts.candidate_on("r", &["b".into()], "c").unwrap(), &syn::parse_quote!(::custom::Directory));
+    assert_eq!(
+        facts.built_on("r", &["b".into()]).unwrap().0,
+        &syn::parse_quote!(PayloadAlias)
+    );
+    assert_eq!(
+        facts.candidate_on("r", &["b".into()], "c").unwrap(),
+        &syn::parse_quote!(::custom::Directory)
+    );
     // A capable ordinary payload cannot confer support on the directory.
     source.structures.entries[0] = syn::parse_quote!(r = ::custom::Directory [b][c];);
     *source.structures.entries.last_mut().unwrap() =
@@ -1251,7 +1304,6 @@ fn candidate_support_is_independent_of_complete_payload_selection() {
 #[test]
 fn declared_retain_does_not_relax_eager_sharing() {
     let mut source = shared_program();
-    source.physical.program.definitions[2] =
-        syn::parse_quote!(s = pipe semi lazy [x] l,b;);
+    source.physical.program.definitions[2] = syn::parse_quote!(s = pipe semi lazy [x] l,b;);
     assert!(structures::contract::check(&source).is_err());
 }

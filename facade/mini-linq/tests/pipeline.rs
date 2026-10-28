@@ -132,7 +132,6 @@ fn a_shared_host_point_read_cannot_supply_the_stream_fallback_type() {
     assert_eq!(answer, [(&1,)]);
 }
 
-
 macro_rules! capture_plan {
     (pipeline {}; $($plan:tt)*) => {
         stringify!($($plan)*)
